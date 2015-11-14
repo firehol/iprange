@@ -24,8 +24,10 @@
 #include <pthread.h>
 #include <unistd.h>
 
-// the maximum line element to read in input files
-// normally the elements are IP, IP/MASK, HOSTNAME
+/*
+ * the maximum line element to read in input files
+ * normally the elements are IP, IP/MASK, HOSTNAME
+ */
 #define MAX_INPUT_ELEMENT 255
 
 #define BINARY_HEADER_V10 "iprange binary format v1.0\n"
@@ -105,8 +107,10 @@ int split_range_disable_printing = 0;
 
 
 #ifdef SYSTEM_IP2STR
-//#warning "Using system functions for ip2str()"
-// the default system ip2str()
+/*
+ * #warning "Using system functions for ip2str()"
+ * the default system ip2str()
+ */
 
 static inline char *ip2str(in_addr_t IP) {
 	struct in_addr in;
@@ -114,12 +118,14 @@ static inline char *ip2str(in_addr_t IP) {
 	return inet_ntoa(in);
 }
 
-#else // ! SYSTEM_IP2STR
-//#warning "Using iprange internal functions for ip2str()"
+#else /* ! SYSTEM_IP2STR */
+/* #warning "Using iprange internal functions for ip2str()" */
 
-// very fast implementation of IP address printing
-// this is 30% faster than the system default (inet_ntoa() based)
-// http://stackoverflow.com/questions/1680365/integer-to-ip-address-c
+/*
+ * very fast implementation of IP address printing
+ * this is 30% faster than the system default (inet_ntoa() based)
+ * http://stackoverflow.com/questions/1680365/integer-to-ip-address-c
+ */
 
 static inline char *ip2str(in_addr_t IP) {
 	static char buf[10];
@@ -143,7 +149,7 @@ static inline char *ip2str(in_addr_t IP) {
 
 	return buf;
 }
-#endif // ! SYSTEM_IP2STR
+#endif /* ! SYSTEM_IP2STR */
 
 static inline void print_addr(in_addr_t addr, int prefix)
 {
@@ -173,8 +179,10 @@ static inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_
 {
 
 	if(unlikely(lo > hi)) {
-		// it should never happen
-		// give a log for the user to see
+		/*
+		 * it should never happen
+		 * give a log for the user to see
+		 */
 		fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip2str(lo));
 		fprintf(stderr, " end=%s\n", ip2str(hi));
 		in_addr_t t = hi;
@@ -250,9 +258,9 @@ static inline network_addr_t str_to_netaddr(char *ipstr, int *err) {
 		errno = 0;
 		prefix = strtol(prefixstr, (char **)NULL, 10);
 		if (unlikely(errno || (*prefixstr == '\0') || (prefix < 0) || (prefix > 32))) {
-			// try the netmask format
+			/* try the netmask format */
 			in_addr_t mask = ~a_to_hl(prefixstr, err);
-			//fprintf(stderr, "mask is %u (0x%08x)\n", mask, mask);
+			/*fprintf(stderr, "mask is %u (0x%08x)\n", mask, mask);*/
 			prefix = 32;
 			while((likely(mask & 0x00000001))) {
 				mask >>= 1;
@@ -310,8 +318,10 @@ static inline void print_addr_range(in_addr_t lo, in_addr_t hi)
 {
 
 	if(unlikely(lo > hi)) {
-		// it should never happen
-		// give a log for the user to see
+		/*
+		 * it should never happen
+		 * give a log for the user to see
+		 */
 		fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip2str(lo));
 		fprintf(stderr, " end=%s\n", ip2str(hi));
 		in_addr_t t = hi;
@@ -338,7 +348,7 @@ static inline void print_addr_single(in_addr_t x)
 }				/* print_addr_single() */
 
 
-// ----------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------- */
 
 #define NETADDR_INC 1024
 #define MAX_LINE 1024
@@ -347,12 +357,12 @@ static inline void print_addr_single(in_addr_t x)
 
 typedef struct ipset {
 	char filename[FILENAME_MAX+1];
-	// char name[FILENAME_MAX+1];
+	/* char name[FILENAME_MAX+1]; */
 
 	unsigned long int lines;
 	unsigned long int entries;
 	unsigned long int entries_max;
-	unsigned long int unique_ips;		// this is updated only after calling ipset_optimize()
+	unsigned long int unique_ips;		/* this is updated only after calling ipset_optimize() */
 
 	uint32_t flags;
 
@@ -393,7 +403,7 @@ static inline ipset *ipset_create(const char *filename, int entries) {
 	strncpy(ips->filename, (filename && *filename)?filename:"stdin", FILENAME_MAX);
 	ips->filename[FILENAME_MAX] = '\0';
 
-	//strcpy(ips->name, ips->filename);
+	/* strcpy(ips->name, ips->filename); */
 
 	return ips;
 }
@@ -468,19 +478,19 @@ static inline void ipset_added_entry(ipset *ips) {
 	ips->unique_ips += ips->netaddrs[entries].broadcast - ips->netaddrs[entries].addr + 1;
 
 	if(likely(ips->flags & IPSET_FLAG_OPTIMIZED && entries > 0)) {
-		// the new is just next to the last
+		/* the new is just next to the last */
 		if(unlikely(ips->netaddrs[entries].addr == (ips->netaddrs[entries - 1].broadcast + 1))) {
 			ips->netaddrs[entries - 1].broadcast = ips->netaddrs[entries].broadcast;
 			return;
 		}
 
-		// the new is after the end of the last
+		/* the new is after the end of the last */
 		if(likely(ips->netaddrs[entries].addr > ips->netaddrs[entries - 1].broadcast)) {
 			ips->entries++;
 			return;
 		}
 
-		// the new is before the beginning of the last
+		/* the new is before the beginning of the last */
 		ips->flags ^= IPSET_FLAG_OPTIMIZED;
 
 		if(unlikely(debug)) {
@@ -553,10 +563,10 @@ static inline void ipset_optimize(ipset *ips) {
 
 	if(unlikely(debug)) fprintf(stderr, "%s: Optimizing %s\n", PROG, ips->filename);
 
-	// sort it
+	/* sort it */
 	qsort((void *)ips->netaddrs, ips->entries, sizeof(network_addr_t), compar_netaddr);
 
-	// optimize it in a new space
+	/* optimize it in a new space */
 	network_addr_t *naddrs = malloc(ips->entries * sizeof(network_addr_t));
 	if(unlikely(!naddrs)) {
 		ipset_free(ips);
@@ -576,26 +586,32 @@ static inline void ipset_optimize(ipset *ips) {
 
 	in_addr_t lo = oaddrs[0].addr, hi = oaddrs[0].broadcast;
 	for (i = 1; i < n; i++) {
-		// if the broadcast of this
-		// is before the broadcast of the last
-		// then skip it = it fits entirely inside the current
+		/*
+		 * if the broadcast of this
+		 * is before the broadcast of the last
+		 * then skip it = it fits entirely inside the current
+		 */
 		if (oaddrs[i].broadcast <= hi)
 			continue;
 
-		// if the network addr of this
-		// overlaps or is adjustent to the last
-		// then merge it = extent the broadcast of the last
+		/*
+		 * if the network addr of this
+		 * overlaps or is adjustent to the last
+		 * then merge it = extent the broadcast of the last
+		 */
 		if (oaddrs[i].addr <= hi + 1) {
 			hi = oaddrs[i].broadcast;
 			continue;
 		}
 
-		// at this point we are sure the old lo, hi
-		// do not overlap and are not adjustent to the current
-		// so, add the last to the new set
+		/*
+		 * at this point we are sure the old lo, hi
+		 * do not overlap and are not adjustent to the current
+		 * so, add the last to the new set
+		 */
 		ipset_add(ips, lo, hi);
 
-		// prepare for the next loop
+		/* prepare for the next loop */
 		lo = oaddrs[i].addr;
 		hi = oaddrs[i].broadcast;
 	}
@@ -682,9 +698,9 @@ static inline ipset *ipset_diff(ipset *ips1, ipset *ips2) {
 			continue;
 		}
 
-		// they overlap
+		/* they overlap */
 
-		// add the first part
+		/* add the first part */
 		if(lo1 > lo2) {
 			ipset_add(ips, lo2, lo1 - 1);
 		}
@@ -692,7 +708,7 @@ static inline ipset *ipset_diff(ipset *ips1, ipset *ips2) {
 			ipset_add(ips, lo1, lo2 - 1);
 		}
 
-		// find the second part
+		/* find the second part */
 		if(hi1 > hi2) {
 			lo1 = hi2 + 1;
 			i2++;
@@ -713,7 +729,7 @@ static inline ipset *ipset_diff(ipset *ips1, ipset *ips2) {
 			continue;
 		}
 
-		else { // if(h1 == h2)
+		else { /* if(h1 == h2) */
 			i1++;
 			if(i1 < n1) {
 				lo1 = ips1->netaddrs[i1].addr;
@@ -803,7 +819,7 @@ static inline ipset *ipset_common(ipset *ips1, ipset *ips2) {
 			continue;
 		}
 
-		// they overlap
+		/* they overlap */
 
 		if(lo1 > lo2) lo = lo1;
 		else lo = lo2;
@@ -889,7 +905,7 @@ static inline ipset *ipset_exclude(ipset *ips1, ipset *ips2) {
 			continue;
 		}
 
-		// they overlap
+		/* they overlap */
 
 		if(lo1 < lo2) {
 			ipset_add(ips, lo1, lo2-1);
@@ -930,7 +946,7 @@ static inline ipset *ipset_exclude(ipset *ips1, ipset *ips2) {
 		ipset_add(ips, lo1, hi1);
 		i1++;
 
-		// if there are entries left in ips1, copy them
+		/* if there are entries left in ips1, copy them */
 		while(i1 < n1) {
 			ipset_add(ips, ips1->netaddrs[i1].addr, ips1->netaddrs[i1].broadcast);
 			i1++;
@@ -967,8 +983,7 @@ static inline int parse_hostname(char *line, int lineid, char *ipstr, char *ipst
 
 	char *s = line;
 
-	// skip all spaces
-
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
 	int i = 0;
@@ -981,16 +996,16 @@ static inline int parse_hostname(char *line, int lineid, char *ipstr, char *ipst
 		|| *s == '.'
 		))) ipstr[i++] = *s++;
 
-	// terminate ipstr
+	/* terminate ipstr */
 	ipstr[i] = '\0';
 
-	// skip all spaces
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
-	// the rest is comment
+	/* the rest is comment */
 	if(unlikely(*s == '#' || *s == ';')) return LINE_HAS_1_HOSTNAME;
 
-	// if we reached the end of line
+	/* if we reached the end of line */
 	if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_1_HOSTNAME;
 
 	fprintf(stderr, "%s: Ignoring text after hostname '%s' on line %d: '%s'\n", PROG, ipstr, lineid, s);
@@ -1001,83 +1016,83 @@ static inline int parse_hostname(char *line, int lineid, char *ipstr, char *ipst
 static inline int parse_line(char *line, int lineid, char *ipstr, char *ipstr2, int len) {
 	char *s = line;
 
-	// skip all spaces
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
-	// skip a line of comment
+	/* skip a line of comment */
 	if(unlikely(*s == '#' || *s == ';')) return LINE_IS_EMPTY;
 
-	// if we reached the end of line
+	/* if we reached the end of line */
 	if(unlikely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_IS_EMPTY;
 
-	// get the ip address
+	/* get the ip address */
 	int i = 0;
 	while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/')))
 		ipstr[i++] = *s++;
 
 	if(unlikely(!i)) return parse_hostname(line, lineid, ipstr, ipstr2, len);
 
-	// terminate ipstr
+	/* terminate ipstr */
 	ipstr[i] = '\0';
 
-	// skip all spaces
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
-	// the rest is comment
+	/* the rest is comment */
 	if(unlikely(*s == '#' || *s == ';')) return LINE_HAS_1_IP;
 
-	// if we reached the end of line
+	/* if we reached the end of line */
 	if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_1_IP;
 
 	if(unlikely(*s != '-')) {
-		//fprintf(stderr, "%s: Ignoring text on line %d, expected a - after %s, but found '%s'\n", PROG, lineid, ipstr, s);
-		//return LINE_HAS_1_IP;
+		/*fprintf(stderr, "%s: Ignoring text on line %d, expected a - after %s, but found '%s'\n", PROG, lineid, ipstr, s);*/
+		/*return LINE_HAS_1_IP;*/
 		return parse_hostname(line, lineid, ipstr, ipstr2, len);
 	}
 
-	// skip the -
+	/* skip the - */
 	s++;
 
-	// skip all spaces
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
-	// the rest is comment
+	/* the rest is comment */
 	if(unlikely(*s == '#' || *s == ';')) {
 		fprintf(stderr, "%s: Ignoring text on line %d, expected an ip address after -, but found '%s'\n", PROG, lineid, s);
 		return LINE_HAS_1_IP;
 	}
 
-	// if we reached the end of line
+	/* if we reached the end of line */
 	if(unlikely(*s == '\r' || *s == '\n' || *s == '\0')) {
 		fprintf(stderr, "%s: Incomplete range on line %d, expected an ip address after -, but line ended\n", PROG, lineid);
 		return LINE_HAS_1_IP;
 	}
 
-	// get the ip 2nd address
+	/* get the ip 2nd address */
 	i = 0;
 	while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/')))
 		ipstr2[i++] = *s++;
 
 	if(unlikely(!i)) {
-		//fprintf(stderr, "%s: Incomplete range on line %d, expected an ip address after -, but line ended\n", PROG, lineid);
-		//return LINE_HAS_1_IP;
+		/*fprintf(stderr, "%s: Incomplete range on line %d, expected an ip address after -, but line ended\n", PROG, lineid); */
+		/*return LINE_HAS_1_IP; */
 		return parse_hostname(line, lineid, ipstr, ipstr2, len);
 	}
 
-	// terminate ipstr
+	/* terminate ipstr */
 	ipstr2[i] = '\0';
 
-	// skip all spaces
+	/* skip all spaces */
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
-	// the rest is comment
+	/* the rest is comment */
 	if(unlikely(*s == '#' || *s == ';')) return LINE_HAS_2_IPS;
 
-	// if we reached the end of line
+	/* if we reached the end of line */
 	if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_2_IPS;
 
-	//fprintf(stderr, "%s: Ignoring text on line %d, after the second ip address: '%s'\n", PROG, lineid, s);
-	//return LINE_HAS_2_IPS;
+	/*fprintf(stderr, "%s: Ignoring text on line %d, after the second ip address: '%s'\n", PROG, lineid, s); */
+	/*return LINE_HAS_2_IPS; */
 	return parse_hostname(line, lineid, ipstr, ipstr2, len);
 }
 
@@ -1266,7 +1281,7 @@ void dns_request_add(DNSREQ *d)
 	pending = dns_requests_pending;
 	dns_unlock_requests();
 
-	// do we have start a new thread?
+	/* do we have start a new thread? */
 	if(pending > (unsigned long)dns_threads && dns_threads < dns_threads_max) {
 		if(unlikely(debug))
 			fprintf(stderr, "%s: Creating new DNS thread\n", PROG);
@@ -1285,7 +1300,7 @@ void dns_request_add(DNSREQ *d)
 		dns_threads++;
 	}
 
-	// signal the childs we have a new request for them
+	/* signal the childs we have a new request for them */
 	pthread_mutex_lock(&dns_mut);
 	pthread_cond_signal(&dns_cond);
 	pthread_mutex_unlock(&dns_mut);
@@ -1326,7 +1341,7 @@ void dns_request_done(DNSREQ *d, int added)
 void dns_request_failed(DNSREQ *d, int added, int gai_error)
 {
 	switch(gai_error) {
-		case EAI_AGAIN: // The name server returned a temporary failure indication.  Try again later.
+		case EAI_AGAIN: /* The name server returned a temporary failure indication.  Try again later. */
 			if(d->tries > 0) {
 				if(!dns_silent)
 					fprintf(stderr, "%s: DNS: '%s' will be retried: %s\n", PROG, d->hostname, gai_strerror(gai_error));
@@ -1352,18 +1367,18 @@ void dns_request_failed(DNSREQ *d, int added, int gai_error)
 			return;
 			break;
 
-		case EAI_SOCKTYPE: // The requested socket type is not supported.
-		case EAI_SERVICE: // The requested service is not available for the requested socket type.
-		case EAI_MEMORY: // Out of memory.
-		case EAI_BADFLAGS: // hints.ai_flags contains invalid flags; or, hints.ai_flags included AI_CANONNAME and name was NULL.
+		case EAI_SOCKTYPE: /* The requested socket type is not supported. */
+		case EAI_SERVICE: /* The requested service is not available for the requested socket type. */
+		case EAI_MEMORY: /* Out of memory. */
+		case EAI_BADFLAGS: /* hints.ai_flags contains invalid flags; or, hints.ai_flags included AI_CANONNAME and name was NULL. */
 			fprintf(stderr, "%s: DNS: '%s' error: %s\n", PROG, d->hostname, gai_strerror(gai_error));
 			dns_request_done(d, added);
 			return;
 			break;
 
-		case EAI_NONAME: // The node or service is not known
-		case EAI_FAIL:   // The name server returned a permanent failure indication.
-		case EAI_FAMILY: // The requested address family is not supported.
+		case EAI_NONAME: /* The node or service is not known */
+		case EAI_FAIL:   /* The name server returned a permanent failure indication. */
+		case EAI_FAMILY: /* The requested address family is not supported. */
 		default:
 			if(!dns_silent)
 				fprintf(stderr, "%s: DNS: '%s' failed permanently: %s\n", PROG, d->hostname, gai_strerror(gai_error));
@@ -1386,8 +1401,10 @@ DNSREQ *dns_request_get(void)
 {
 	DNSREQ *ret = NULL;
 
-	//if(unlikely(debug))
-	//	fprintf(stderr, "%s: DNS THREAD waiting for DNS REQUEST\n", PROG);
+	/*
+	 * if(unlikely(debug))
+	 * fprintf(stderr, "%s: DNS THREAD waiting for DNS REQUEST\n", PROG);
+	 */
 
 	while(!ret) {
 		if(dns_requests) {
@@ -1422,15 +1439,19 @@ void *dns_thread_resolve(void *ptr)
 {
 	if(ptr) { ; }
 
-	//if(unlikely(debug))
-	//	fprintf(stderr, "%s: DNS THREAD created\n", PROG);
+	/*
+	 * if(unlikely(debug))
+	 *	fprintf(stderr, "%s: DNS THREAD created\n", PROG);
+	 */
 
 	DNSREQ *d;
 	while((d = dns_request_get())) {
 		int added = 0;
 
-		//if(unlikely(debug))
-		//	fprintf(stderr, "%s: DNS THREAD resolving DNS REQUEST for '%s'\n", PROG, d->hostname);
+		/*
+		 * if(unlikely(debug))
+		 *	fprintf(stderr, "%s: DNS THREAD resolving DNS REQUEST for '%s'\n", PROG, d->hostname);
+		 */
 
 		int r;
 		struct addrinfo *result, *rp, hints;
@@ -1498,8 +1519,10 @@ void dns_process_replies(ipset *ips)
 
 	dns_lock_replies();
 	while(dns_replies) {
-		//if(unlikely(debug))
-		//	fprintf(stderr, "%s: Got DNS REPLY '%s'\n", PROG, ip2str(dns_replies->ip));
+		/*
+		 * if(unlikely(debug))
+		 *	fprintf(stderr, "%s: Got DNS REPLY '%s'\n", PROG, ip2str(dns_replies->ip));
+		 */
 
 		ipset_add(ips, dns_replies->ip, dns_replies->ip);
 
@@ -1521,11 +1544,13 @@ void dns_process_replies(ipset *ips)
 
 void dns_request(ipset *ips, char *hostname)
 {
-	// dequeue if possible
+	/* dequeue if possible */
 	dns_process_replies(ips);
 
-	//if(unlikely(debug))
-	//	fprintf(stderr, "%s: Adding DNS REQUEST for '%s'\n", PROG, hostname);
+	/*
+	 * if(unlikely(debug))
+	 *	fprintf(stderr, "%s: Adding DNS REQUEST for '%s'\n", PROG, hostname);
+	 */
 
 	DNSREQ *d = malloc(sizeof(DNSREQ) + strlen(hostname) + 1);
 	if(!d) goto cleanup;
@@ -1533,7 +1558,7 @@ void dns_request(ipset *ips, char *hostname)
 	strcpy(d->hostname, hostname);
 	d->tries = 20;
 
-	// add the request to the queue
+	/* add the request to the queue */
 	dns_request_add(d);
 
 	return;
@@ -1608,10 +1633,10 @@ ipset *ipset_load(const char *filename) {
 		}
 	}
 
-	// load it
+	/* load it */
 	if(unlikely(debug)) fprintf(stderr, "%s: Loading from %s\n", PROG, ips->filename);
 
-	// it will be removed, if the loaded ipset is not optimized on disk
+	/* it will be removed, if the loaded ipset is not optimized on disk */
 	ips->flags |= IPSET_FLAG_OPTIMIZED;
 
 	int lineid = 0;
@@ -1636,22 +1661,22 @@ ipset *ipset_load(const char *filename) {
 
 		switch(parse_line(line, lineid, ipstr, ipstr2, MAX_INPUT_ELEMENT)) {
 			case LINE_IS_INVALID:
-				// cannot read line
+				/* cannot read line */
 				fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
 				break;
 
 			case LINE_IS_EMPTY:
-				// nothing on this line
+				/* nothing on this line */
 				break;
 
 			case LINE_HAS_1_IP:
-				// 1 IP on this line
+				/* 1 IP on this line */
 				if(unlikely(!ipset_add_ipstr(ips, ipstr)))
 					fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
 				break;
 
 			case LINE_HAS_2_IPS:
-				// 2 IPs in range on this line
+				/* 2 IPs in range on this line */
 				{
 					int err = 0;
 					in_addr_t lo, hi;
@@ -1673,7 +1698,7 @@ ipset *ipset_load(const char *filename) {
 				if(unlikely(debug))
 					fprintf(stderr, "%s: DNS resolution for hostname '%s' from line %d of file %s.\n", PROG, ipstr, lineid, ips->filename);
 
-				// resolve_hostname(ips, ipstr);
+				/* resolve_hostname(ips, ipstr); */
 				dns_request(ips, ipstr);
 				break;
 
@@ -1692,10 +1717,12 @@ ipset *ipset_load(const char *filename) {
 
 	if(unlikely(debug)) fprintf(stderr, "%s: Loaded %s %s\n", PROG, (ips->flags & IPSET_FLAG_OPTIMIZED)?"optimized":"non-optimized", ips->filename);
 
-	//if(unlikely(!ips->entries)) {
-	//	free(ips);
-	//	return NULL;
-	//}
+	/*
+	 * if(unlikely(!ips->entries)) {
+	 *	free(ips);
+	 *	return NULL;
+	 * }
+	 */
 
 	return ips;
 }
@@ -1720,19 +1747,19 @@ void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 
 	int i, n = ips->entries, total = 0, acceptable, iterations = 0, initial = 0, eliminated = 0;
 
-	// reset the prefix counters
+	/* reset the prefix counters */
 	for(i = 0; i <= 32; i++)
 		prefix_counters[i] = 0;
 
-	// disable printing
+	/* disable printing */
 	split_range_disable_printing = 1;
 
-	// find how many prefixes are there
+	/* find how many prefixes are there */
 	if(unlikely(debug)) fprintf(stderr, "\nCounting prefixes in %s\n", ips->filename);
 	for(i = 0; i < n ;i++)
 		split_range(0, 0, ips->netaddrs[i].addr, ips->netaddrs[i].broadcast);
 
-	// count them
+	/* count them */
 	if(unlikely(debug)) fprintf(stderr, "Break down by prefix:\n");
 	total = 0;
 	for(i = 0; i <= 32 ;i++) {
@@ -1745,16 +1772,16 @@ void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 	}
 	if(unlikely(debug)) fprintf(stderr, "Total %d entries generated\n", total);
 
-	// find the upper limit
+	/* find the upper limit */
 	acceptable = total * acceptable_increase / 100;
 	if(acceptable < min_accepted) acceptable = min_accepted;
 	if(unlikely(debug)) fprintf(stderr, "Acceptable is to reach %d entries by reducing prefixes\n", acceptable);
 
-	// reduce the possible prefixes
+	/* reduce the possible prefixes */
 	while(total < acceptable) {
 		iterations++;
 
-		// find the prefix with the least increase
+		/* find the prefix with the least increase */
 		int min = -1, to = -1, min_increase = acceptable * 10, j, multiplier, increase;
 		for(i = 0; i <= 31 ;i++) {
 			if(!prefix_counters[i] || !prefix_enabled[i]) continue;
@@ -1802,11 +1829,11 @@ void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 
 	if(unlikely(debug)) fprintf(stderr, "\nEliminated %d out of %d prefixes (%d remain in the final set).\n\n", eliminated, initial, initial - eliminated);
 
-	// reset the prefix counters
+	/* reset the prefix counters */
 	for(i = 0; i <= 32; i++)
 		prefix_counters[i] = 0;
 
-	// enable printing
+	/* enable printing */
 	split_range_disable_printing = 0;
 }
 
@@ -1839,7 +1866,7 @@ void ipset_print(ipset *ips, int print) {
 
 	switch(print) {
 		case PRINT_CIDR:
-			// reset the prefix counters
+			/* reset the prefix counters */
 			for(i = 0; i <= 32; i++)
 				prefix_counters[i] = 0;
 
@@ -1881,7 +1908,7 @@ void ipset_print(ipset *ips, int print) {
 			break;
 	}
 
-	// print prefix break down
+	/* print prefix break down */
 	if(unlikely(debug)) {
 		int prefixes = 0;
 
@@ -1948,7 +1975,7 @@ static inline ipset *ipset_copy(ipset *ips1) {
 	ipset *ips = ipset_create(ips1->filename, ips1->entries);
 	if(unlikely(!ips)) return NULL;
 
-	//strcpy(ips->name, ips1->name);
+	/*strcpy(ips->name, ips1->name); */
 	memcpy(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries * sizeof(network_addr_t));
 
 	ips->entries = ips1->entries;
@@ -1990,28 +2017,29 @@ static inline ipset *ipset_combine(ipset *ips1, ipset *ips2) {
  *
  */
 
-//int ipset_histogram(ipset *ips, const char *path) {
-	// make sure the path exists
-	// if this is the first time:
-	//  - create a directory for this ipset, in path
-	//  - create the 'new' directory inside this ipset path
-	//  - assume the 'latest' is empty
-	//  - keep the starting date
-	//  - print an empty histogram
-	// save in 'new' the IPs of current excluding the 'latest'
-	// save 'current' as 'latest'
-	// assume the histogram is complete
-	// for each file in 'new'
-	//  - if the file is <= to histogram start date, the histogram is incomplete
-	//  - calculate the hours passed to the 'current'
-	//  - find the IPs in this file common to 'current' = 'stillthere'
-	//  - find the IPs in this file not in 'stillthere' = 'removed'
-	//  - if there are IPs in 'removed', add an entry to the retention histogram
-	//  - if there are no IPs in 'stillthere', delete the file
-	//  - else replace the file with the contents of 'stillthere'
-//
-//	return 0;
-//}
+/*
+int ipset_histogram(ipset *ips, const char *path) {
+	make sure the path exists
+	if this is the first time:
+	 - create a directory for this ipset, in path
+	 - create the 'new' directory inside this ipset path
+	 - assume the 'latest' is empty
+	 - keep the starting date
+	 - print an empty histogram
+	save in 'new' the IPs of current excluding the 'latest'
+	save 'current' as 'latest'
+	assume the histogram is complete
+	for each file in 'new'
+	 - if the file is <= to histogram start date, the histogram is incomplete
+	 - calculate the hours passed to the 'current'
+	 - find the IPs in this file common to 'current' = 'stillthere'
+	 - find the IPs in this file not in 'stillthere' = 'removed'
+	 - if there are IPs in 'removed', add an entry to the retention histogram
+	 - if there are no IPs in 'stillthere', delete the file
+	 - else replace the file with the contents of 'stillthere'
+	return 0;
+}
+*/
 
 
 /* ----------------------------------------------------------------------------
@@ -2094,15 +2122,17 @@ void usage(const char *me) {
 		"		allow increasing the entries above PERCENT, if\n"
 		"		they are below ENTRIES\n"
 		"		(the internal default ENTRIES is 16384)\n"
-//		"\n"
-//		"	--histogram\n"
-//		"		> IPSET HISTOGRAM mode\n"
-//		"		maintain histogram data for ipset and dump current\n"
-//		"		status\n"
-//		"\n"
-//		"	--histogram-dir PATH\n"
-//		"		> IPSET HISTOGRAM mode\n"
-//		"		the directory to keep histogram data\n"
+/*
+		"\n"
+		"	--histogram\n"
+		"		> IPSET HISTOGRAM mode\n"
+		"		maintain histogram data for ipset and dump current\n"
+		"		status\n"
+		"\n"
+		"	--histogram-dir PATH\n"
+		"		> IPSET HISTOGRAM mode\n"
+		"		the directory to keep histogram data\n"
+*/
 		"\n"
 		"\n"
 		"	--------------------------------------------------------------\n"
@@ -2314,10 +2344,10 @@ void usage(const char *me) {
 #define MODE_COMMON 8
 #define MODE_EXCLUDE_NEXT 9
 #define MODE_DIFF 10
-//#define MODE_HISTOGRAM 11
+/*#define MODE_HISTOGRAM 11 */
 
 int main(int argc, char **argv) {
-//	char histogram_dir[FILENAME_MAX + 1] = "/var/lib/iprange";
+/*	char histogram_dir[FILENAME_MAX + 1] = "/var/lib/iprange"; */
 
 	struct timeval start_dt, load_dt, print_dt, stop_dt;
 	gettimeofday(&start_dt, NULL);
@@ -2457,13 +2487,15 @@ int main(int argc, char **argv) {
 		else if(!strcmp(argv[i], "--count-unique-all")) {
 			mode = MODE_COUNT_UNIQUE_ALL;
 		}
-//		else if(!strcmp(argv[i], "--histogram")) {
-//			mode = MODE_HISTOGRAM;
-//		}
-//		else if(i+1 < argc && !strcmp(argv[i], "--histogram-dir")) {
-//			mode = MODE_HISTOGRAM;
-//			strncpy(histogram_dir, argv[++i], FILENAME_MAX);
-//		}
+/*
+		else if(!strcmp(argv[i], "--histogram")) {
+			mode = MODE_HISTOGRAM;
+		}
+		else if(i+1 < argc && !strcmp(argv[i], "--histogram-dir")) {
+			mode = MODE_HISTOGRAM;
+			strncpy(histogram_dir, argv[++i], FILENAME_MAX);
+		}
+*/
 		else if(!strcmp(argv[i], "--help")
 			|| !strcmp(argv[i], "-h")) {
 			usage(argv[0]);
@@ -2551,8 +2583,10 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	// if no ipset was given on the command line
-	// assume stdin
+	/*
+	 * if no ipset was given on the command line
+	 * assume stdin
+	 */
 
 	if(!root) {
 		first = root = ipset_load(NULL);
@@ -2565,13 +2599,13 @@ int main(int argc, char **argv) {
 	gettimeofday(&load_dt, NULL);
 
 	if(mode == MODE_COMBINE || mode == MODE_REDUCE || mode == MODE_COUNT_UNIQUE_MERGED) {
-		// for debug mode to show something meaningful
+		/* for debug mode to show something meaningful */
 		strcpy(root->filename, "combined ipset");
 
 		for(ips = root->next; ips ;ips = ips->next)
 			ipset_merge(root, ips);
 
-		// ipset_optimize(root);
+		/* ipset_optimize(root); */
 		if(mode == MODE_REDUCE) ipset_reduce(root, ipset_reduce_factor, ipset_reduce_min_accepted);
 
 		gettimeofday(&print_dt, NULL);
@@ -2590,7 +2624,7 @@ int main(int argc, char **argv) {
 			exit(1);
 		}
 
-		// ipset_optimize_all(root);
+		/* ipset_optimize_all(root); */
 
 		ipset *common = NULL, *ips2 = NULL;
 
@@ -2635,7 +2669,7 @@ int main(int argc, char **argv) {
 
 		if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
 
-		// ipset_optimize_all(root);
+		/* ipset_optimize_all(root); */
 
 		ipset *ips2;
 		for(ips = root; ips ;ips = ips->next) {
@@ -2673,8 +2707,8 @@ int main(int argc, char **argv) {
 
 		if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
 
-		// ipset_optimize_all(root);
-		// ipset_optimize_all(second);
+		/* ipset_optimize_all(root); */
+		/* ipset_optimize_all(second); */
 
 		ipset *ips2;
 		for(ips = root; ips ;ips = ips->next) {
@@ -2710,7 +2744,7 @@ int main(int argc, char **argv) {
 
 		if(unlikely(header)) printf("name,entries,unique_ips,common_ips\n");
 
-		// ipset_optimize_all(root);
+		/* ipset_optimize_all(root); */
 
 		for(ips = root; ips ;ips = ips->next) {
 			if(ips == first) continue;
@@ -2743,12 +2777,12 @@ int main(int argc, char **argv) {
 			exit(1);
 		}
 
-		// merge them
+		/* merge them */
 		for(ips = root->next; ips ;ips = ips->next)
 			ipset_merge(root, ips);
 
-		// ipset_optimize(root);
-		// ipset_optimize_all(second);
+		/* ipset_optimize(root); */
+		/* ipset_optimize_all(second); */
 
 		ipset *excluded = root;
 		root = root->next;
@@ -2775,11 +2809,13 @@ int main(int argc, char **argv) {
 		}
 		gettimeofday(&print_dt, NULL);
 	}
-//	else if(mode == MODE_HISTOGRAM) {
-//		for(ips = root; ips ;ips = ips->next) {
-//			ipset_histogram(ips, histogram_dir);
-//		}
-//	}
+/*
+	else if(mode == MODE_HISTOGRAM) {
+		for(ips = root; ips ;ips = ips->next) {
+			ipset_histogram(ips, histogram_dir);
+		}
+	}
+*/
 	else {
 		fprintf(stderr, "%s: Unknown mode.\n", PROG);
 		exit(1);
