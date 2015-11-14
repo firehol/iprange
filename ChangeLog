@@ -1,0 +1,34 @@
+iprange (1.0.0)
+
+2015-11-12 Costa Tsaousis (costa@tsaousis.gr)
+ - added logic to retry temporary DNS failures
+2015-11-11 Costa Tsaousis (costa@tsaousis.gr)
+ - added --diff to find the differences between ipsets
+2015-11-05 Costa Tsaousis (costa@tsaousis.gr)
+ - added threaded DNS resolution of hostnames
+2015-11-05 Costa Tsaousis (costa@tsaousis.gr)
+ - better error handling when parsing input files
+ - optimized printing using internal ip2str() implementation
+ - added DNS resolution of hostnames
+2015-06-06 Costa Tsaousis (costa@tsaousis.gr)
+ - added support for loading multiple sets
+ - added support for merging multiple files
+ - added support for comparing ipsets (all-to-all, one-to-all)
+ - added support for parsing IP ranges from the input file
+   (much like -s did for a single range)
+ - added support for parsing netmasks
+ - added support for min prefix generated
+ - added support for generated only specific prefixes
+ - added support for reducing the prefixes for iptables ipsets
+ - the output is now always optimized (reduced / merged)
+ - removed option -s (convert a single IP range to CIDR)
+ - added support for finding the common IPs in multiple files
+ - added timings
+ - added verbose output
+2015-05-31 Costa Tsaousis (costa@tsaousis.gr)
+ - added -C option to report count of unique IPs
+ - some optimizations to speed it up by 10% - 20%
+2004-10-16 Paul Townsend (alpha alpha beta at purdue dot edu)
+ - more general input/output formatting
+2003 Gabriel L. Somlo, the original author of iprange.c core
+ - found at http://www.cs.colostate.edu/~somlo/iprange.c

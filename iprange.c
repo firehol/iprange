@@ -1,79 +1,15 @@
-/* iprange
- *
- * FireHOL - A firewall for humans...
- *
- * FireHOL Copyright
- *
- *      Copyright (C) 2003-2015 Costa Tsaousis <costa@tsaousis.gr>
- *      Copyright (C) 2012-2015 Phil Whineray <phil@sanewall.org>
- *
- * Original iprange.c Copyright:
- *
- *      Copyright (C) 2003 Gabriel L. Somlo
- *
- *      comment by Costa Tsaousis:
- *      An excellent work by Gabriel Somlo for loading and merging CIDRs.
- *      I have built all the features this tool provides on top of the
- *      original work of Gabriel.
- *
- *  License
- *
- *      This program is free software; you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License as published by
- *      the Free Software Foundation; either version 2 of the License, or
- *      (at your option) any later version.
- *
- *      This program is distributed in the hope that it will be useful,
- *      but WITHOUT ANY WARRANTY; without even the implied warranty of
- *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *      GNU General Public License for more details.
- *
- *      You should have received a copy of the GNU General Public License
- *      along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- *      See the file COPYING for details.
- *
- * To compile:
- *   gcc -o iprange iprange.c -O2 -Wall -lpthread
- *
- * CHANGELOG:
- *  2003 Gabriel L. Somlo, the original author of iprange.c core
- *   - found at http://www.cs.colostate.edu/~somlo/iprange.c
- *  2004-10-16 Paul Townsend (alpha alpha beta at purdue dot edu)
- *   - more general input/output formatting
- *  2015-05-31 Costa Tsaousis (costa@tsaousis.gr)
- *   - added -C option to report count of unique IPs
- *   - some optimizations to speed it up by 10% - 20%
- *  2015-06-06 Costa Tsaousis (costa@tsaousis.gr)
- *   - added support for loading multiple sets
- *   - added support for merging multiple files
- *   - added support for comparing ipsets (all-to-all, one-to-all)
- *   - added support for parsing IP ranges from the input file
- *     (much like -s did for a single range)
- *   - added support for parsing netmasks
- *   - added support for min prefix generated
- *   - added support for generated only specific prefixes
- *   - added support for reducing the prefixes for iptables ipsets
- *   - the output is now always optimized (reduced / merged)
- *   - removed option -s (convert a single IP range to CIDR)
- *   - added support for finding the common IPs in multiple files
- *   - added timings
- *   - added verbose output
- * 2015-11-05 Costa Tsaousis (costa@tsaousis.gr)
- *   - better error handling when parsing input files
- *   - optimized printing using internal ip2str() implementation
- *   - added DNS resolution of hostnames
- * 2015-11-05 Costa Tsaousis (costa@tsaousis.gr)
- *   - added threaded DNS resolution of hostnames
- * 2015-11-11 Costa Tsaousis (costa@tsaousis.gr)
- *   - added --diff to find the differences between ipsets
- * 2015-11-12 Costa Tsaousis (costa@tsaousis.gr)
- *   - added logic to retry temporary DNS failures
- *   
+/*
+ * Copyright (C) 2003-2015 Costa Tsaousis <costa@tsaousis.gr>
+ * Copyright (C) 2012-2015 Phil Whineray <phil@sanewall.org>
+ * Copyright (C) 2003 Gabriel L. Somlo
  */
-
 #ifdef HAVE_CONFIG_H
 #include <config.h>
+#endif
+#if defined(HAVE_INTTYPES_H)
+#include <inttypes.h>
+#elif defined(HAVE_STDINT_H)
+#include <stdint.h>
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,20 +27,6 @@
 // the maximum line element to read in input files
 // normally the elements are IP, IP/MASK, HOSTNAME
 #define MAX_INPUT_ELEMENT 255
-
-#ifdef __GNUC__
-// gcc branch optimization
-// #warning "Using GCC branch optimizations"
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)     __builtin_expect(!!(x), 0)
-#else
-#define likely(x)       (x)
-#define unlikely(x)     (x)
-#endif
-
-// if set, use MODE_COMMON to compare files
-// this is 20 times faster than MODE COMBINE
-#define COMPARE_WITH_COMMON 1
 
 #define BINARY_HEADER_V10 "iprange binary format v1.0\n"
 uint32_t endianess = 0x1A2B3C4D;
@@ -2102,11 +2024,7 @@ void usage(const char *me) {
 	fprintf(stderr, "\n"
 		"iprange\n"
 		"manage IP ranges\n"
-#ifdef VERSION
-		"version: " VERSION " ($Id: 8de62265ac795ec920e0c30e94763cb6ac2571cb $)\n"
-#else
-		"version: $Id: 8de62265ac795ec920e0c30e94763cb6ac2571cb $\n"
-#endif
+		"version: " VERSION "\n"
 		"\n"
 		"Original,   Copyright (C) 2003 Gabriel L. Somlo\n"
 		"Adapted,    Copyright (C) 2004 Paul Townsend\n"

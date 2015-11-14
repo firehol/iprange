@@ -1,0 +1,32 @@
+Summary:	Manage ip ranges
+Name:		@PACKAGE_NAME@
+Version:	@PACKAGE_RPM_VERSION@
+Release:	@PACKAGE_RPM_RELEASE@%{?release_suffix}%{?dist}
+License:	GPLv2+
+URL:		http://firehol.org
+Source:		%{name}-@PACKAGE_VERSION@.tar.bz2
+
+BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+
+%description
+Manage ip ranges.
+
+%prep
+%setup -q -n %{name}-@PACKAGE_VERSION@
+
+%build
+%configure \
+	--docdir="%{_docdir}/%{name}-%{version}" \
+	%{?conf}
+make %{?_smp_mflags}
+
+%install
+rm -rf "%{buildroot}"
+make %{?_smp_mflags} install DESTDIR="%{buildroot}"
+
+%files
+%{_sbindir}/iprange
+
+%changelog
+* Sun Nov 15 2015 Alon Bar-Lev <alonbl@redhat.com> - 1.0.0-1
+- Initial add.
