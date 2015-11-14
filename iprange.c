@@ -392,7 +392,7 @@ static inline ipset *ipset_create(const char *filename, int entries) {
 
 	strncpy(ips->filename, (filename && *filename)?filename:"stdin", FILENAME_MAX);
 	ips->filename[FILENAME_MAX] = '\0';
-	
+
 	//strcpy(ips->name, ips->filename);
 
 	return ips;
@@ -661,7 +661,7 @@ static inline ipset *ipset_diff(ipset *ips1, ipset *ips2) {
 		lo2 = ips2->netaddrs[0].addr,
 		hi1 = ips1->netaddrs[0].broadcast,
 		hi2 = ips2->netaddrs[0].broadcast;
-	
+
 	while(i1 < n1 && i2 < n2) {
 		if(lo1 > hi2) {
 			ipset_add(ips, lo2, hi2);
@@ -702,7 +702,7 @@ static inline ipset *ipset_diff(ipset *ips1, ipset *ips2) {
 			}
 			continue;
 		}
-		
+
 		else if(hi2 > hi1) {
 			lo2 = hi1 + 1;
 			i1++;
@@ -783,7 +783,7 @@ static inline ipset *ipset_common(ipset *ips1, ipset *ips2) {
 		hi1 = ips1->netaddrs[0].broadcast,
 		hi2 = ips2->netaddrs[0].broadcast,
 		lo, hi;
-	
+
 	while(i1 < n1 && i2 < n2) {
 		if(lo1 > hi2) {
 			i2++;
@@ -824,7 +824,7 @@ static inline ipset *ipset_common(ipset *ips1, ipset *ips2) {
 				hi2 = ips2->netaddrs[i2].broadcast;
 			}
 		}
-		
+
 		ipset_add(ips, lo, hi);
 	}
 
@@ -867,7 +867,7 @@ static inline ipset *ipset_exclude(ipset *ips1, ipset *ips2) {
 		lo2 = ips2->netaddrs[0].addr,
 		hi1 = ips1->netaddrs[0].broadcast,
 		hi2 = ips2->netaddrs[0].broadcast;
-	
+
 	while(i1 < n1 && i2 < n2) {
 		if(lo1 > hi2) {
 			i2++;
@@ -966,8 +966,9 @@ static inline int parse_hostname(char *line, int lineid, char *ipstr, char *ipst
 	if(ipstr2) { ; }
 
 	char *s = line;
-	
+
 	// skip all spaces
+
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
 	int i = 0;
@@ -999,7 +1000,7 @@ static inline int parse_hostname(char *line, int lineid, char *ipstr, char *ipst
 
 static inline int parse_line(char *line, int lineid, char *ipstr, char *ipstr2, int len) {
 	char *s = line;
-	
+
 	// skip all spaces
 	while(unlikely(*s == ' ' || *s == '\t')) s++;
 
@@ -1271,7 +1272,7 @@ void dns_request_add(DNSREQ *d)
 			fprintf(stderr, "%s: Creating new DNS thread\n", PROG);
 
 		pthread_t thread;
-		
+
 		if(pthread_create(&thread, NULL, dns_thread_resolve, NULL)) {
 			fprintf(stderr, "%s: Cannot create DNS thread.\n", PROG);
 			return;
@@ -1329,16 +1330,16 @@ void dns_request_failed(DNSREQ *d, int added, int gai_error)
 			if(d->tries > 0) {
 				if(!dns_silent)
 					fprintf(stderr, "%s: DNS: '%s' will be retried: %s\n", PROG, d->hostname, gai_strerror(gai_error));
-			
+
 				d->tries--;
-				
+
 				dns_lock_requests();
 				d->next = dns_requests;
 				dns_requests = d;
 				dns_requests_retries++;
 				dns_replies_found += added;
 				dns_unlock_requests();
-				
+
 				return;
 			}
 			dns_request_done(d, added);
@@ -1433,7 +1434,7 @@ void *dns_thread_resolve(void *ptr)
 
 		int r;
 		struct addrinfo *result, *rp, hints;
-		
+
 		hints.ai_family = AF_INET;
 		hints.ai_socktype = SOCK_DGRAM;
 		hints.ai_flags = 0;
@@ -1763,7 +1764,7 @@ void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 
 				increase = prefix_counters[i] * (multiplier - 1);
 				if(unlikely(debug)) fprintf(stderr, "		> Examining merging prefix %d to %d (increase by %d)\n", i, j, increase);
-				
+
 				if(increase < min_increase) {
 					min_increase = increase;
 					min = i;
@@ -1977,7 +1978,7 @@ static inline ipset *ipset_combine(ipset *ips1, ipset *ips2) {
 	memcpy(&ips->netaddrs[ips1->entries], &ips2->netaddrs[0], ips2->entries * sizeof(network_addr_t));
 
 	ips->entries = ips1->entries + ips2->entries;
-	ips->lines = ips1->lines + ips2->lines;	
+	ips->lines = ips1->lines + ips2->lines;
 
 	return ips;
 }
@@ -2401,17 +2402,17 @@ int main(int argc, char **argv) {
 			ipset_reduce_min_accepted = atoi(argv[++i]);
 			mode = MODE_REDUCE;
 		}
-		else if(!strcmp(argv[i], "--optimize") 
-			|| !strcmp(argv[i], "--combine") 
-			|| !strcmp(argv[i], "--merge") 
-			|| !strcmp(argv[i], "--union") 
+		else if(!strcmp(argv[i], "--optimize")
+			|| !strcmp(argv[i], "--combine")
+			|| !strcmp(argv[i], "--merge")
+			|| !strcmp(argv[i], "--union")
 			|| !strcmp(argv[i], "--union-all")
-			|| !strcmp(argv[i], "-J") 
+			|| !strcmp(argv[i], "-J")
 			) {
 			mode = MODE_COMBINE;
 		}
-		else if(!strcmp(argv[i], "--common") 
-			|| !strcmp(argv[i], "--intersect") 
+		else if(!strcmp(argv[i], "--common")
+			|| !strcmp(argv[i], "--intersect")
 			|| !strcmp(argv[i], "--intersect-all")) {
 			mode = MODE_COMMON;
 		}
@@ -2612,11 +2613,11 @@ int main(int argc, char **argv) {
 		for(ips = root->next; ips ;ips = ips->next)
 			ipset_merge(root, ips);
 		if(root->next) strcpy(root->filename, "ipset A");
-		
+
 		for(ips = second->next; ips ;ips = ips->next)
 			ipset_merge(second, ips);
 		if(second->next) strcpy(root->filename, "ipset B");
-		
+
 		ips = ipset_diff(root, second);
 
 		gettimeofday(&print_dt, NULL);
@@ -2633,9 +2634,9 @@ int main(int argc, char **argv) {
 		}
 
 		if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
-		
+
 		// ipset_optimize_all(root);
-		
+
 		ipset *ips2;
 		for(ips = root; ips ;ips = ips->next) {
 			for(ips2 = ips; ips2 ;ips2 = ips2->next) {
@@ -2674,7 +2675,7 @@ int main(int argc, char **argv) {
 
 		// ipset_optimize_all(root);
 		// ipset_optimize_all(second);
-		
+
 		ipset *ips2;
 		for(ips = root; ips ;ips = ips->next) {
 			for(ips2 = second; ips2 ;ips2 = ips2->next) {
@@ -2706,11 +2707,11 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "%s: two ipsets at least are needed to be compared.\n", PROG);
 			exit(1);
 		}
-		
+
 		if(unlikely(header)) printf("name,entries,unique_ips,common_ips\n");
 
 		// ipset_optimize_all(root);
-		
+
 		for(ips = root; ips ;ips = ips->next) {
 			if(ips == first) continue;
 
@@ -2768,7 +2769,7 @@ int main(int argc, char **argv) {
 		if(unlikely(header)) printf("name,entries,unique_ips\n");
 
 		ipset_optimize_all(root);
-		
+
 		for(ips = root; ips ;ips = ips->next) {
 			printf("%s,%lu,%lu\n", ips->filename, ips->lines, ips->unique_ips);
 		}
