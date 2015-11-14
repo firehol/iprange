@@ -31,17 +31,17 @@
 #define MAX_INPUT_ELEMENT 255
 
 #define BINARY_HEADER_V10 "iprange binary format v1.0\n"
-uint32_t endianess = 0x1A2B3C4D;
+static uint32_t endianess = 0x1A2B3C4D;
 
 static char *PROG;
-int debug = 0;
-int cidr_use_network = 1;
-int default_prefix = 32;
+static int debug;
+static int cidr_use_network = 1;
+static int default_prefix = 32;
 
-char *print_prefix_ips  = "";
-char *print_prefix_nets = "";
-char *print_suffix_ips  = "";
-char *print_suffix_nets = "";
+static char *print_prefix_ips = "";
+static char *print_prefix_nets = "";
+static char *print_suffix_ips = "";
+static char *print_suffix_nets = "";
 
 /*---------------------------------------------------------------------*/
 /* network address type: one field for the net address, one for prefix */
@@ -101,9 +101,9 @@ static inline in_addr_t network(in_addr_t addr, int prefix)
 /* Print out a 32-bit address in A.B.C.D/M format */
 /*------------------------------------------------*/
 
-int prefix_counters[33] = { 0 };
-int prefix_enabled[33] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
-int split_range_disable_printing = 0;
+static int prefix_counters[33];
+static int prefix_enabled[] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+static int split_range_disable_printing;
 
 
 #ifdef SYSTEM_IP2STR
@@ -1242,23 +1242,23 @@ typedef struct dnsrep {
 	struct dnsrep *next;
 } DNSREP;
 
-DNSREQ *dns_requests = NULL;
-DNSREP *dns_replies = NULL;
-int dns_threads = 0;
-int dns_threads_max = 5;
-int dns_silent = 0;
-int dns_progress = 0;
-unsigned long dns_requests_pending = 0;
-unsigned long dns_requests_made = 0;
-unsigned long dns_requests_finished = 0;
-unsigned long dns_requests_retries = 0;
-unsigned long dns_replies_found = 0;
-unsigned long dns_replies_failed = 0;
+static DNSREQ *dns_requests;
+static DNSREP *dns_replies;
+static int dns_threads;
+static int dns_threads_max = 5;
+static int dns_silent;
+static int dns_progress;
+static unsigned long dns_requests_pending;
+static unsigned long dns_requests_made;
+static unsigned long dns_requests_finished;
+static unsigned long dns_requests_retries;
+static unsigned long dns_replies_found;
+static unsigned long dns_replies_failed;
 
-pthread_mutex_t dns_mut = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t dns_cond = PTHREAD_COND_INITIALIZER;
-pthread_rwlock_t dns_requests_rwlock = PTHREAD_RWLOCK_INITIALIZER;
-pthread_rwlock_t dns_replies_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_mutex_t dns_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t dns_cond = PTHREAD_COND_INITIALIZER;
+static pthread_rwlock_t dns_requests_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_rwlock_t dns_replies_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 
 void dns_lock_requests(void)   { pthread_rwlock_wrlock(&dns_requests_rwlock); }
 void dns_unlock_requests(void) { pthread_rwlock_unlock(&dns_requests_rwlock); }
