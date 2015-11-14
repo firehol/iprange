@@ -293,7 +293,7 @@ static inline network_addr_t str_to_netaddr(char *ipstr, int *err) {
 /* compare two network_addr_t structures; used with qsort() */
 /* sort in increasing order by address, then by prefix.     */
 /*----------------------------------------------------------*/
-int compar_netaddr(const void *p1, const void *p2)
+static int compar_netaddr(const void *p1, const void *p2)
 {
 
 	network_addr_t *na1 = (network_addr_t *) p1, *na2 = (network_addr_t *) p2;
@@ -630,7 +630,7 @@ static inline void ipset_optimize(ipset *ips) {
 	free(oaddrs);
 }
 
-unsigned long int ipset_unique_ips(ipset *ips) {
+static unsigned long int ipset_unique_ips(ipset *ips) {
 	if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
 		ipset_optimize(ips);
 
@@ -1107,7 +1107,7 @@ static inline int parse_line(char *line, int lineid, char *ipstr, char *ipstr2, 
  *
  */
 
-int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
+static int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
 	char buffer[MAX_LINE + 1], *s;
 	unsigned long entries, bytes, lines, unique_ips;
 	uint32_t endian;
@@ -1211,7 +1211,7 @@ int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
 	return 0;
 }
 
-void ipset_save_binary_v10(ipset *ips) {
+static void ipset_save_binary_v10(ipset *ips) {
 	if(!ips->entries) return;
 
 	fprintf(stdout, BINARY_HEADER_V10);
@@ -1265,7 +1265,7 @@ void dns_unlock_requests(void) { pthread_rwlock_unlock(&dns_requests_rwlock); }
 void dns_lock_replies(void)    { pthread_rwlock_wrlock(&dns_replies_rwlock); }
 void dns_unlock_replies(void)  { pthread_rwlock_unlock(&dns_replies_rwlock); }
 
-void *dns_thread_resolve(void *ptr);
+static void *dns_thread_resolve(void *ptr);
 
 
 /* ----------------------------------------------------------------------------
@@ -1275,7 +1275,7 @@ void *dns_thread_resolve(void *ptr);
  *
  */
 
-void dns_request_add(DNSREQ *d)
+static void dns_request_add(DNSREQ *d)
 {
 	unsigned long pending;
 
@@ -1322,7 +1322,7 @@ void dns_request_add(DNSREQ *d)
  *
  */
 
-void dns_request_done(DNSREQ *d, int added)
+static void dns_request_done(DNSREQ *d, int added)
 {
 	dns_lock_requests();
 	dns_requests_pending--;
@@ -1345,7 +1345,7 @@ void dns_request_done(DNSREQ *d, int added)
  *
  */
 
-void dns_request_failed(DNSREQ *d, int added, int gai_error)
+static void dns_request_failed(DNSREQ *d, int added, int gai_error)
 {
 	switch(gai_error) {
 		case EAI_AGAIN: /* The name server returned a temporary failure indication.  Try again later. */
@@ -1404,7 +1404,7 @@ void dns_request_failed(DNSREQ *d, int added, int gai_error)
  *
  */
 
-DNSREQ *dns_request_get(void)
+static DNSREQ *dns_request_get(void)
 {
 	DNSREQ *ret = NULL;
 
@@ -1442,7 +1442,7 @@ DNSREQ *dns_request_get(void)
  *
  */
 
-void *dns_thread_resolve(void *ptr)
+static void *dns_thread_resolve(void *ptr)
 {
 	DNSREQ *d;
 
@@ -1524,7 +1524,7 @@ void *dns_thread_resolve(void *ptr)
  *
  */
 
-void dns_process_replies(ipset *ips)
+static void dns_process_replies(ipset *ips)
 {
 	if(!dns_replies) return;
 
@@ -1555,7 +1555,7 @@ void dns_process_replies(ipset *ips)
  *
  */
 
-void dns_request(ipset *ips, char *hostname)
+static void dns_request(ipset *ips, char *hostname)
 {
 	DNSREQ *d;
 
@@ -1590,7 +1590,7 @@ cleanup:
  *
  */
 
-void dns_done(ipset *ips)
+static void dns_done(ipset *ips)
 {
 	unsigned long dots = 40, shown = 0, should_show = 0;
 
@@ -1635,7 +1635,7 @@ void dns_done(ipset *ips)
  *
  */
 
-ipset *ipset_load(const char *filename) {
+static ipset *ipset_load(const char *filename) {
 	FILE *fp = stdin;
 	int lineid = 0;
 	char line[MAX_LINE + 1], ipstr[MAX_INPUT_ELEMENT + 1], ipstr2[MAX_INPUT_ELEMENT + 1];
@@ -1757,7 +1757,7 @@ ipset *ipset_load(const char *filename) {
  * this function does not alter the given ipset and it does not print it
  */
 
-void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
+static void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 	int i, n = ips->entries, total = 0, acceptable, iterations = 0, initial = 0, eliminated = 0;
 
 	if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
@@ -1868,7 +1868,7 @@ void ipset_reduce(ipset *ips, int acceptable_increase, int min_accepted) {
 #define PRINT_SINGLE_IPS 3
 #define PRINT_BINARY 4
 
-void ipset_print(ipset *ips, int print) {
+static void ipset_print(ipset *ips, int print) {
 	int i, n = ips->entries;
 	unsigned long int total = 0;
 
@@ -2073,7 +2073,7 @@ int ipset_histogram(ipset *ips, const char *path) {
  *
  */
 
-void usage(const char *me) {
+static void usage(const char *me) {
 	fprintf(stderr, "\n"
 		"iprange\n"
 		"manage IP ranges\n"
