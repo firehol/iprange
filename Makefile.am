@@ -20,3 +20,5 @@ sbin_PROGRAMS = iprange
 dist_noinst_DATA = iprange.spec
 
 iprange_SOURCES = iprange.c
+
+EXTRA_DIST = README.md
