@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2015 Alon Bar-Lev <alon.barlev@gmail.com>
 #
-AUTOMAKE_OPTIONS=foreign dist-bzip2 1.10
+AUTOMAKE_OPTIONS=foreign dist-xz dist-bzip2 1.10
 ACLOCAL_AMFLAGS = -I m4
 
 MAINTAINERCLEANFILES= \
