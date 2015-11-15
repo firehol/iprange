@@ -63,7 +63,7 @@ fi
 
 if test "${enable_pedantic}" = "yes"; then
 	enable_strict="yes"
-	CFLAGS="${CFLAGS} -pedantic -Wall -Wextra -Wpointer-arith -Wsign-compare -Wno-unused-parameter -Wno-unused-function"
+	CFLAGS="${CFLAGS} -pedantic -Wall -Wextra"
 fi
 AC_CONFIG_FILES([
 	Makefile
