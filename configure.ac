@@ -71,4 +71,4 @@ AC_CONFIG_FILES([
 ])
 AC_OUTPUT
 
-test "${with_compare_with_common}" != "yes" && AC_MSG_WARN([COMPARE_WITH_COMMON is not enabled. You should enable it, as it is a lot faster.]) || :
+test "${with_compare_with_common}" != "yes" && AC_MSG_WARN([compare-with-common is not enabled. You should enable it, as it is a lot faster.]) || :
