@@ -2320,6 +2320,9 @@ static void usage(const char *me) {
 		"	-v\n"
 		"		be verbose on stderr\n"
 		"\n"
+		"	--version\n"
+		"		print version\n"
+		"\n"
 		"	--help\n"
 		"	-h\n"
 		"		print this message\n"
@@ -2355,6 +2358,19 @@ static void usage(const char *me) {
 		"		any number of files can be given\n"
 		"\n"
 		, me, dns_threads_max);
+	exit(1);
+}
+
+
+/* ----------------------------------------------------------------------------
+ * version()
+ *
+ * print version for the user
+ *
+ */
+
+static void version() {
+	fprintf(stdout, "%s\n", VERSION);
 	exit(1);
 }
 
@@ -2521,6 +2537,9 @@ int main(int argc, char **argv) {
 			strncpy(histogram_dir, argv[++i], FILENAME_MAX);
 		}
 */
+		else if(!strcmp(argv[i], "--version")) {
+			version();
+		}
 		else if(!strcmp(argv[i], "--help")
 			|| !strcmp(argv[i], "-h")) {
 			usage(argv[0]);
