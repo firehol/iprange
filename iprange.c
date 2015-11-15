@@ -24,6 +24,10 @@
 #include <pthread.h>
 #include <unistd.h>
 
+#ifndef COMPARE_WITH_COMMON
+#warning "COMPARE_WITH_COMMON is not enabled. You should enable it, as it is a lot faster."
+#endif
+
 /*
  * the maximum line element to read in input files
  * normally the elements are IP, IP/MASK, HOSTNAME
