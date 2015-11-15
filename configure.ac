@@ -70,3 +70,5 @@ AC_CONFIG_FILES([
 	iprange.spec
 ])
 AC_OUTPUT
+
+test "${with_compare_with_common}" != "yes" && AC_MSG_WARN([COMPARE_WITH_COMMON is not enabled. You should enable it, as it is a lot faster.]) || :
