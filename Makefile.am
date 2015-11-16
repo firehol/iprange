@@ -16,7 +16,7 @@ MAINTAINERCLEANFILES= \
 	$(srcdir)/m4/ltoptions.m4 \
 	$(srcdir)/pkcs11-helper.spec $(srcdir)/config-w32-vc.h
 
-sbin_PROGRAMS = iprange
+bin_PROGRAMS = iprange
 dist_noinst_DATA = iprange.spec
 
 iprange_SOURCES = iprange.c
