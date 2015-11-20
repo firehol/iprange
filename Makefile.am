@@ -21,4 +21,8 @@ dist_noinst_DATA = iprange.spec
 
 iprange_SOURCES = iprange.c
 
-EXTRA_DIST = README.md
+EXTRA_DIST = \
+	.gitignore \
+	README.md \
+	iprange-9999.ebuild \
+	$(NULL)
