@@ -1268,6 +1268,14 @@ void dns_unlock_replies(void)  { pthread_rwlock_unlock(&dns_replies_rwlock); }
 static void *dns_thread_resolve(void *ptr);
 
 
+static void dns_signal_threats(void)
+{
+	/* signal the childs we have a new request for them */
+	pthread_mutex_lock(&dns_mut);
+	pthread_cond_signal(&dns_cond);
+	pthread_mutex_unlock(&dns_mut);
+}
+
 /* ----------------------------------------------------------------------------
  * dns_request_add()
  *
@@ -1307,10 +1315,7 @@ static void dns_request_add(DNSREQ *d)
 		dns_threads++;
 	}
 
-	/* signal the childs we have a new request for them */
-	pthread_mutex_lock(&dns_mut);
-	pthread_cond_signal(&dns_cond);
-	pthread_mutex_unlock(&dns_mut);
+	dns_signal_threats();
 }
 
 
@@ -1553,6 +1558,25 @@ static void dns_process_replies(ipset *ips)
  * attempt to resolv a hostname
  * the result (one or more) will be appended to the ipset supplied
  *
+ * this is asynchronous - it will just queue the request and spawn worker
+ * threats to do the DNS resolution.
+ *
+ * the IPs will be added to the ipset, either at the next call to this
+ * function, or by calling dns_done().
+ *
+ * So, to use it:
+ * 1. call dns_request() to request dns resolutions (any number)
+ * 2. call dns_done() when you finish requesting hostnames
+ * 3. the resolved IPs are in the ipset you supplied
+ *
+ * All ipset manipulation is done at this threat, so if control is
+ * outside the above 2 functions, you are free to do whatever you like
+ * with the ipset.
+ *
+ * Important: you cannot use dns_request() and dns_done() with more
+ * than 1 ipset at the same time. The resulting IPs will be multiplexed.
+ * When you call dns_done() on one ipset, you can proceed with the next.
+ *
  */
 
 static void dns_request(ipset *ips, char *hostname)
@@ -1611,7 +1635,10 @@ static void dns_done(ipset *ips)
 
 		dns_process_replies(ips);
 
-		if(dns_requests_pending) sleep(1);
+		if(dns_requests_pending) {
+			dns_signal_threats();
+			sleep(1);
+		}
 	}
 
 	if(unlikely(debug))
