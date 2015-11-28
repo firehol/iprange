@@ -19,8 +19,13 @@ Installation from tar-file
 Installation from git
 ---------------------
 
-
 ~~~~
 ./autogen.sh
 ./configure && make && make install
+~~~~
+
+When working with git, copy the hooks to the cloned folder:
+
+~~~~
+cp hooks/* .git/hooks
 ~~~~

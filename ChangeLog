@@ -1,4 +1,10 @@
-iprange (1.0.0)
+iprange (1.0.1) - 2015-11-28
+
+ - resolved a case with dns resolution, where all theats were waiting
+   without resolving the IPs
+ - packaging improvements
+
+iprange (1.0.0) - 2015-11-15
 
 2015-11-12 Costa Tsaousis (costa@tsaousis.gr)
  - added logic to retry temporary DNS failures
