@@ -25,4 +25,5 @@ EXTRA_DIST = \
 	.gitignore \
 	README.md \
 	iprange-9999.ebuild \
+        autogen.sh \
 	$(NULL)

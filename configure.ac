@@ -5,13 +5,22 @@ AC_PREREQ(2.60)
 
 define([VERSION_MAJOR], [1])
 define([VERSION_MINOR], [0])
-define([VERSION_FIX], [0])
+define([VERSION_FIX], [1])
 define([VERSION_NUMBER], VERSION_MAJOR[.]VERSION_MINOR[.]VERSION_FIX)
 define([VERSION_SUFFIX], [_master])
 
+dnl Set to "1" for a first RPM release of a new version
+PACKAGE_RPM_RELEASE="0.0.$(echo VERSION_SUFFIX | sed s/^_//)"
+
 AC_INIT([iprange], VERSION_NUMBER[]VERSION_SUFFIX)
+
+AM_MAINTAINER_MODE([disable])
+if test x"$USE_MAINTAINER_MODE" = xyes; then
+AC_MSG_NOTICE(***************** MAINTAINER MODE *****************)
+PACKAGE_BUILT_DATE=$(date '+%d %b %Y')
+fi
+
 PACKAGE_RPM_VERSION="VERSION_NUMBER"
-PACKAGE_RPM_RELEASE="0.0.$(echo VERSION_SUFFIX | sed 's/^_//')"
 AC_SUBST([PACKAGE_RPM_VERSION])
 AC_SUBST([PACKAGE_RPM_RELEASE])
 

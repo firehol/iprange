@@ -24,3 +24,7 @@ stamp-h1
 
 iprange
 iprange.spec
+
+*.tar.gz
+*.tar.bz2
+*.tar.xz
