@@ -1640,6 +1640,7 @@ static void dns_done(ipset *ips)
 			sleep(1);
 		}
 	}
+	dns_process_replies(ips);
 
 	if(unlikely(debug))
 		fprintf(stderr, "%s: DNS: made %lu DNS requests, failed %lu, retries: %lu, IPs got %lu, threads used %d of %d\n", PROG, dns_requests_made, dns_replies_failed, dns_requests_retries, dns_replies_found, dns_threads, dns_threads_max);
