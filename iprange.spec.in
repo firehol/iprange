@@ -28,6 +28,9 @@ make %{?_smp_mflags} install DESTDIR="%{buildroot}"
 %{_sbindir}/iprange
 
 %changelog
+* Sat Nov 28 2015 Phil Whineray <phil@firehol.org> - 1.0.2-1
+- Bugfix release
+
 * Sat Nov 28 2015 Phil Whineray <phil@firehol.org> - 1.0.1-1
 - Release new version
 

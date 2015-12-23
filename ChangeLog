@@ -1,3 +1,7 @@
+iprange (1.0.2) - 2015-12-23
+
+ - bugfix: last batch of dns host resolutions were being lost from results
+
 iprange (1.0.1) - 2015-11-28
 
  - resolved a case with dns resolution, where all theats were waiting
