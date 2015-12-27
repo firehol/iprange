@@ -14,10 +14,17 @@ MAINTAINERCLEANFILES= \
 	$(srcdir)/m4/ltsugar.m4 $(srcdir)/m4/libtool.m4 \
 	$(srcdir)/m4/ltversion.m4 $(srcdir)/m4/lt~obsolete.m4 \
 	$(srcdir)/m4/ltoptions.m4 \
-	$(srcdir)/pkcs11-helper.spec $(srcdir)/config-w32-vc.h
+	$(srcdir)/pkcs11-helper.spec $(srcdir)/config-w32-vc.h \
+	iprange.1
+
+AM_H2MFLAGS = \
+	--no-info
+
+iprange_DESCRIPTION = "manage IP ranges"
 
 bin_PROGRAMS = iprange
 dist_noinst_DATA = iprange.spec
+man_MANS = iprange.1
 
 iprange_SOURCES = iprange.c
 
@@ -25,5 +32,15 @@ EXTRA_DIST = \
 	.gitignore \
 	README.md \
 	iprange-9999.ebuild \
-        autogen.sh \
+  autogen.sh \
+	iprange.1 \
 	$(NULL)
+
+%.1: %
+	$(HELP2MAN) \
+			-s 1 \
+			$(AM_H2MFLAGS) \
+			-I $(top_srcdir)/$*.h2m \
+			-n $(if $($(subst -,_,$*)_DESCRIPTION), $($(subst -,_,$*)_DESCRIPTION), "manual page for $*") \
+			-o $@ \
+		$(top_builddir)/$<
