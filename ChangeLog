@@ -4,7 +4,7 @@ iprange (1.0.2) - 2015-12-23
 
 iprange (1.0.1) - 2015-11-28
 
- - resolved a case with dns resolution, where all theats were waiting
+ - resolved a case with dns resolution, where all threads were waiting
    without resolving the IPs
  - packaging improvements
 

@@ -1268,7 +1268,7 @@ void dns_unlock_replies(void)  { pthread_rwlock_unlock(&dns_replies_rwlock); }
 static void *dns_thread_resolve(void *ptr);
 
 
-static void dns_signal_threats(void)
+static void dns_signal_threads(void)
 {
 	/* signal the childs we have a new request for them */
 	pthread_mutex_lock(&dns_mut);
@@ -1315,7 +1315,7 @@ static void dns_request_add(DNSREQ *d)
 		dns_threads++;
 	}
 
-	dns_signal_threats();
+	dns_signal_threads();
 }
 
 
@@ -1559,7 +1559,7 @@ static void dns_process_replies(ipset *ips)
  * the result (one or more) will be appended to the ipset supplied
  *
  * this is asynchronous - it will just queue the request and spawn worker
- * threats to do the DNS resolution.
+ * threads to do the DNS resolution.
  *
  * the IPs will be added to the ipset, either at the next call to this
  * function, or by calling dns_done().
@@ -1569,7 +1569,7 @@ static void dns_process_replies(ipset *ips)
  * 2. call dns_done() when you finish requesting hostnames
  * 3. the resolved IPs are in the ipset you supplied
  *
- * All ipset manipulation is done at this threat, so if control is
+ * All ipset manipulation is done at this thread, so if control is
  * outside the above 2 functions, you are free to do whatever you like
  * with the ipset.
  *
@@ -1636,7 +1636,7 @@ static void dns_done(ipset *ips)
 		dns_process_replies(ips);
 
 		if(dns_requests_pending) {
-			dns_signal_threats();
+			dns_signal_threads();
 			sleep(1);
 		}
 	}
