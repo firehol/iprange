@@ -31,7 +31,7 @@
 #define MAX_INPUT_ELEMENT 255
 
 #define BINARY_HEADER_V10 "iprange binary format v1.0\n"
-static uint32_t endianess = 0x1A2B3C4D;
+static uint32_t endianness = 0x1A2B3C4D;
 
 static char *PROG;
 static int debug;
@@ -1180,8 +1180,8 @@ static int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
 	}
 
 	loaded = fread(&endian, sizeof(uint32_t), 1, fp);
-	if(endian != endianess) {
-		fprintf(stderr, "%s: %s: incompatible endianess\n", PROG, ips->filename);
+	if(endian != endianness) {
+		fprintf(stderr, "%s: %s: incompatible endianness\n", PROG, ips->filename);
 		return 1;
 	}
 
@@ -1222,7 +1222,7 @@ static void ipset_save_binary_v10(ipset *ips) {
 	fprintf(stdout, "bytes %lu\n", (sizeof(network_addr_t) * ips->entries) + sizeof(uint32_t));
 	fprintf(stdout, "lines %lu\n", ips->entries);
 	fprintf(stdout, "unique ips %lu\n", ips->unique_ips);
-	fwrite(&endianess, sizeof(uint32_t), 1, stdout);
+	fwrite(&endianness, sizeof(uint32_t), 1, stdout);
 	fwrite(ips->netaddrs, sizeof(network_addr_t), ips->entries, stdout);
 }
 
@@ -2274,7 +2274,7 @@ static void usage(const char *me) {
 		"		print binary data\n"
 		"		this is the fastest way to print a large ipset\n"
 		"		the result can be read by iprange on the same\n"
-		"		architecture (no conversion of endianess)\n"
+		"		architecture (no conversion of endianness)\n"
 		"\n"
 		"	--print-prefix STRING\n"
 		"		print STRING before each IP, range or CIDR\n"
