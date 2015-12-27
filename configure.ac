@@ -32,6 +32,7 @@ AM_INIT_AUTOMAKE
 AC_CANONICAL_HOST
 AC_PROG_CC
 AC_PROG_INSTALL
+AC_PATH_PROG([HELP2MAN],[help2man])
 AC_ARG_ENABLE(
 	[pedantic],
 	[AS_HELP_STRING([--enable-pedantic], [enable pedantic compiler warnings])],
