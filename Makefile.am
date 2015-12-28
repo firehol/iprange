@@ -32,7 +32,7 @@ EXTRA_DIST = \
 	.gitignore \
 	README.md \
 	iprange-9999.ebuild \
-  autogen.sh \
+	autogen.sh \
 	iprange.1 \
 	$(NULL)
 

@@ -4,6 +4,7 @@
 *.o
 *.in
 *~
+*.1
 
 Makefile
 aclocal.m4
