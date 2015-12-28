@@ -24,7 +24,10 @@ iprange_DESCRIPTION = "manage IP ranges"
 
 bin_PROGRAMS = iprange
 dist_noinst_DATA = iprange.spec
+
+if ENABLE_MAN
 man_MANS = iprange.1
+endif
 
 iprange_SOURCES = iprange.c
 
@@ -33,9 +36,10 @@ EXTRA_DIST = \
 	README.md \
 	iprange-9999.ebuild \
 	autogen.sh \
-	iprange.1 \
+	$(man_MANS) \
 	$(NULL)
 
+if MAINTAINER_MODE
 %.1: %
 	$(HELP2MAN) \
 			-s 1 \
@@ -44,3 +48,4 @@ EXTRA_DIST = \
 			-n $(if $($(subst -,_,$*)_DESCRIPTION), $($(subst -,_,$*)_DESCRIPTION), "manual page for $*") \
 			-o $@ \
 		$(top_builddir)/$<
+endif
