@@ -1212,6 +1212,9 @@ static int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
 }
 
 static void ipset_save_binary_v10(ipset *ips) {
+	// it is crucial not to generate any output
+	// if the ipset is empty:
+	// the caller may do 'test -s file' to check it
 	if(!ips->entries) return;
 
 	fprintf(stdout, BINARY_HEADER_V10);
@@ -1257,17 +1260,23 @@ static unsigned long dns_replies_failed;
 
 static pthread_mutex_t dns_mut = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t dns_cond = PTHREAD_COND_INITIALIZER;
-static pthread_rwlock_t dns_requests_rwlock = PTHREAD_RWLOCK_INITIALIZER;
-static pthread_rwlock_t dns_replies_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_mutex_t dns_requests_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t dns_replies_mut = PTHREAD_MUTEX_INITIALIZER;
 
-void dns_lock_requests(void)   { pthread_rwlock_wrlock(&dns_requests_rwlock); }
-void dns_unlock_requests(void) { pthread_rwlock_unlock(&dns_requests_rwlock); }
-void dns_lock_replies(void)    { pthread_rwlock_wrlock(&dns_replies_rwlock); }
-void dns_unlock_replies(void)  { pthread_rwlock_unlock(&dns_replies_rwlock); }
+void dns_lock_requests(void)   { pthread_mutex_lock(&dns_requests_mut); }
+void dns_unlock_requests(void) { pthread_mutex_unlock(&dns_requests_mut); }
+void dns_lock_replies(void)    { pthread_mutex_lock(&dns_replies_mut); }
+void dns_unlock_replies(void)  { pthread_mutex_unlock(&dns_replies_mut); }
 
-static void *dns_thread_resolve(void *ptr);
+// the threads waiting for requests
+void dns_thread_wait_for_requests(void) {
+	pthread_mutex_lock(&dns_mut);
+	while(!dns_requests)
+		pthread_cond_wait(&dns_cond, &dns_mut);
+	pthread_mutex_unlock(&dns_mut);
+}
 
-
+// the master signals the threads for new requests
 static void dns_signal_threads(void)
 {
 	/* signal the childs we have a new request for them */
@@ -1275,6 +1284,9 @@ static void dns_signal_threads(void)
 	pthread_cond_signal(&dns_cond);
 	pthread_mutex_unlock(&dns_mut);
 }
+
+
+static void *dns_thread_resolve(void *ptr);
 
 /* ----------------------------------------------------------------------------
  * dns_request_add()
@@ -1430,10 +1442,7 @@ static DNSREQ *dns_request_get(void)
 			if(ret) return ret;
 		}
 
-		pthread_mutex_lock(&dns_mut);
-		while(!dns_requests)
-			pthread_cond_wait(&dns_cond, &dns_mut);
-		pthread_mutex_unlock(&dns_mut);
+		dns_thread_wait_for_requests();
 	}
 
 	return ret;
@@ -1908,7 +1917,7 @@ static void ipset_print(ipset *ips, int print) {
 		return;
 	}
 
-	if(unlikely(debug)) fprintf(stderr, "%s: Printing %s having %lu entries, %lu unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
+	if(unlikely(debug)) fprintf(stderr, "%s: Printing %s with %lu ranges, %lu unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
 
 	switch(print) {
 		case PRINT_CIDR:
