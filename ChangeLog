@@ -1,3 +1,7 @@
+iprange (1.0.3) - 2016-10-16
+
+ - speedup: used high speed mutex instead of read/write locks, for speed
+
 iprange (1.0.2) - 2015-12-23
 
  - bugfix: last batch of dns host resolutions were being lost from results
