@@ -1,6 +1,11 @@
-# Use precise (trusty missing help2man)
-#  https://github.com/travis-ci/apt-package-whitelist/blob/master/ubuntu-trusty
 dist: precise
+## Use docker image for speed
+## When pandoc whitelisted:
+##  https://github.com/travis-ci/apt-package-whitelist/blob/master/ubuntu-trusty
+## Issue here:
+##  https://github.com/travis-ci/apt-package-whitelist/issues/3762
+#sudo: false
+#group: beta
 #
 # C includes autotools and make by default
 language: c
@@ -9,11 +14,40 @@ language: c
 addons:
   apt:
     packages:
+    - gnupg
     - help2man
 #
+# Setup environment
+before_install:
+ # Decrypt our private files for CI use only
+ - openssl aes-256-cbc -K $encrypted_df4daddc19fe_key -iv $encrypted_df4daddc19fe_iv -in .travis/travis_rsa.enc -out .travis/travis_rsa -d
+ - eval "$(ssh-agent -s)"        # start the ssh agent
+ - chmod 600 .travis/travis_rsa  # add our key
+ - ssh-add .travis/travis_rsa    # add our key
+ - rm -f .travis/travis_rsa      # remove to prevent leaks
+ # WARNING: Any changes to the above 5 lines should be monitored closely
+ - ssh-keyscan -H firehol.org >> ~/.ssh/known_hosts
+#
 # Run
-script:
- # Run the commit hooks before building
+before_script:
+ - gpg --import packaging/gpg.keys
+ # Run the commit hooks in case the developer didn't
  - git diff 4b825dc642cb6eb9a060e54bf8d69288fbee4904 | ./packaging/check-files -
- # Build the packaged tar file, then the final files and run any tests we can
+script:
  - fakeroot ./packaging/git-build && ./configure && make check
+#
+# Deploy as required
+after_success:
+  - for i in *.tar.*; do md5sum -b $i > $i.md5; sha512sum -b $i > $i.sha; done
+  - "case \"$TRAVIS_BRANCH\" in master|stable-*) if [ $TRAVIS_PULL_REQUEST = false -a \"$TRAVIS_TAG\" = \"\" ]; then ssh travis@firehol.org mkdir -p uploads/iprange/$TRAVIS_BRANCH/ && scp -p *.tar.* travis@firehol.org:uploads/iprange/$TRAVIS_BRANCH/ && ssh travis@firehol.org touch uploads/iprange/$TRAVIS_BRANCH/complete.txt; fi;; esac"
+deploy:
+  # Upload results to GitHub (tag only)
+  - provider: releases
+    api_key:
+      secure: YCihjfd0Znxnc1rtuEuu7D0JAL6T/unKrJuBUBHRlRrWwdZU0tM/8J3cc49VZeP/mOAy4OiEy7dZOS5CQsSMlK0O0gxP/w/sqGJu+kFiRRLsIuq630Wp6TDb6SyHUBHWW5HSq0PQav1k3ISVEg22QDOQVFr9BsPW4XkSAyWcJgcdhch07LUd3tI80leZ4TWEZzfzasAcOPl/SR7CWjo4nV0aAclxKSwr4xYhNPLcAYgI/WLT2G+XSsOwzYclE7cyEsKLVrV1/Y8crmQ6ANUhvSWGk51K26jrGU5BvdMu4uhtFZshxVpwaU4mkQSG5LO0ZYmurRSOQ4SjsXx/bkMiT9j9zvvHiEnBKi/XP67fcdfrmlx2Nj5t2GO0ann0iPj7tSBxS1UnLtpTVwAgwZSqjRvGW7NqLMC7ooYFS9BLE/PraVr21K9/jskYSyWysQpdNdzJmWw51+RefELJI4kiALk3UpvbTGFUrBlBI9G+IzKoQjYLN3hoPusy4IUu7HtLDx76dqcJ30DyPRQihFjMEjQX3zXEaTsZHrB3Q0A8BagapLIi0cBwlVI8uZUrA7Gep7z3kLhaDXcz3OvaPflXrIpIcjYZ5D2gDeZI1S+gPeT9rpcOfbK/yCqjcXDBQoGEVFvRqSSlVdrlSZ9xkzM7LwagSBHVFYHyC6727Sf8xrY=
+    skip_cleanup: true
+    file_glob: true
+    file: "iprange*.tar.*"
+    on:
+      repo: firehol/iprange
+      tags: true
