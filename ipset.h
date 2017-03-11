@@ -88,7 +88,7 @@ static inline void ipset_added_entry(ipset *ips) {
             in_addr_t last_to   = ips->netaddrs[ips->entries - 1].broadcast;
 
             char buf[IP2STR_MAX_LEN + 1];
-            fprintf(stderr, "%s: NON-OPTIMIZED %s at line %lu, entry %lu, last was %s (%u) - ", PROG, ips->filename, ips->lines, ips->entries, ip2str_r(buf, last_from), last_from);
+            fprintf(stderr, "%s: NON-OPTIMIZED %s at line %zu, entry %zu, last was %s (%u) - ", PROG, ips->filename, ips->lines, ips->entries, ip2str_r(buf, last_from), last_from);
             fprintf(stderr, "%s (%u), new is ", ip2str_r(buf, last_to), last_to);
             fprintf(stderr, "%s (%u) - ", ip2str_r(buf, new_from), new_from);
             fprintf(stderr, "%s (%u)\n", ip2str_r(buf, new_to), new_to);

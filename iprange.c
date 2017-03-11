@@ -594,7 +594,7 @@ int main(int argc, char **argv) {
 
         else if(mode == MODE_COUNT_UNIQUE_MERGED) {
             if(unlikely(header)) printf("entries,unique_ips\n");
-            printf("%lu,%lu\n", root->lines, ipset_unique_ips(root));
+            printf("%zu,%zu\n", root->lines, ipset_unique_ips(root));
         }
     }
     else if(mode == MODE_COMMON) {
@@ -664,7 +664,7 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
                     exit(1);
                 }
-                fprintf(stdout, "%s,%s,%lu,%lu,%lu,%lu,%lu,%lu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, ips->unique_ips + ips2->unique_ips - comips->unique_ips, comips->unique_ips);
+                fprintf(stdout, "%s,%s,%zu,%zu,%zu,%zu,%zu,%zu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, ips->unique_ips + ips2->unique_ips - comips->unique_ips, comips->unique_ips);
                 ipset_free(comips);
 #else
                 comips = ipset_combine(ips, ips2);
@@ -674,7 +674,7 @@ int main(int argc, char **argv) {
                 }
 
                 ipset_optimize(comips);
-                fprintf(stdout, "%s,%s,%lu,%lu,%lu,%lu,%lu,%lu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, comips->unique_ips, ips->unique_ips + ips2->unique_ips - comips->unique_ips);
+                fprintf(stdout, "%s,%s,%zu,%zu,%zu,%zu,%zu,%zu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, comips->unique_ips, ips->unique_ips + ips2->unique_ips - comips->unique_ips);
                 ipset_free(comips);
 #endif
             }
@@ -702,7 +702,7 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
                     exit(1);
                 }
-                fprintf(stdout, "%s,%s,%lu,%lu,%lu,%lu,%lu,%lu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, ips->unique_ips + ips2->unique_ips - common->unique_ips, common->unique_ips);
+                fprintf(stdout, "%s,%s,%zu,%zu,%zu,%zu,%zu,%zu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, ips->unique_ips + ips2->unique_ips - common->unique_ips, common->unique_ips);
                 ipset_free(common);
 #else
                 ipset *combined = ipset_combine(ips, ips2);
@@ -712,7 +712,7 @@ int main(int argc, char **argv) {
                 }
 
                 ipset_optimize(combined);
-                fprintf(stdout, "%s,%s,%lu,%lu,%lu,%lu,%lu,%lu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, combined->unique_ips, ips->unique_ips + ips2->unique_ips - combined->unique_ips);
+                fprintf(stdout, "%s,%s,%zu,%zu,%zu,%zu,%zu,%zu\n", ips->filename, ips2->filename, ips->lines, ips2->lines, ips->unique_ips, ips2->unique_ips, combined->unique_ips, ips->unique_ips + ips2->unique_ips - combined->unique_ips);
                 ipset_free(combined);
 #endif
             }
@@ -740,7 +740,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "%s: Cannot find the comips IPs of ipset %s and %s\n", PROG, ips->filename, first->filename);
                 exit(1);
             }
-            printf("%s,%lu,%lu,%lu\n", ips->filename, ips->lines, ips->unique_ips, comips->unique_ips);
+            printf("%s,%zu,%zu,%zu\n", ips->filename, ips->lines, ips->unique_ips, comips->unique_ips);
             ipset_free(comips);
 #else
             comips = ipset_combine(ips, first);
@@ -750,7 +750,7 @@ int main(int argc, char **argv) {
             }
 
             ipset_optimize(comips);
-            printf("%s,%lu,%lu,%lu\n", ips->filename, ips->lines, ips->unique_ips, ips->unique_ips + first->unique_ips - comips->unique_ips);
+            printf("%s,%zu,%zu,%zu\n", ips->filename, ips->lines, ips->unique_ips, ips->unique_ips + first->unique_ips - comips->unique_ips);
             ipset_free(comips);
 #endif
         }
@@ -792,7 +792,7 @@ int main(int argc, char **argv) {
         ipset_optimize_all(root);
 
         for(ips = root; ips ;ips = ips->next) {
-            printf("%s,%lu,%lu\n", ips->filename, ips->lines, ips->unique_ips);
+            printf("%s,%zu,%zu\n", ips->filename, ips->lines, ips->unique_ips);
         }
         gettimeofday(&print_dt, NULL);
     }

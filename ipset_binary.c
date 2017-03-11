@@ -125,11 +125,11 @@ void ipset_save_binary_v10(ipset *ips) {
     fprintf(stdout, BINARY_HEADER_V10);
     if(ips->flags & IPSET_FLAG_OPTIMIZED) fprintf(stdout, "optimized\n");
     else fprintf(stdout, "non-optimized\n");
-    fprintf(stdout, "record size %lu\n", (unsigned long)sizeof(network_addr_t));
-    fprintf(stdout, "records %lu\n", ips->entries);
-    fprintf(stdout, "bytes %lu\n", (sizeof(network_addr_t) * ips->entries) + sizeof(uint32_t));
-    fprintf(stdout, "lines %lu\n", ips->entries);
-    fprintf(stdout, "unique ips %lu\n", ips->unique_ips);
+    fprintf(stdout, "record size %zu\n", sizeof(network_addr_t));
+    fprintf(stdout, "records %zu\n", ips->entries);
+    fprintf(stdout, "bytes %zu\n", (sizeof(network_addr_t) * ips->entries) + sizeof(uint32_t));
+    fprintf(stdout, "lines %zu\n", ips->entries);
+    fprintf(stdout, "unique ips %zu\n", ips->unique_ips);
     fwrite(&endianness, sizeof(uint32_t), 1, stdout);
     fwrite(ips->netaddrs, sizeof(network_addr_t), ips->entries, stdout);
 }

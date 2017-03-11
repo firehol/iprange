@@ -50,8 +50,8 @@ void ipset_reduce(ipset *ips, size_t acceptable_increase, size_t min_accepted) {
 
     /* reduce the possible prefixes */
     while(total < acceptable) {
-        ssize_t min = -1, to = -1, j;
-        size_t min_increase = acceptable * 10, multiplier, increase, old_to_counters;
+        ssize_t min = -1, to = -1;
+        size_t j, min_increase = acceptable * 10, multiplier, increase, old_to_counters;
 
         iterations++;
 

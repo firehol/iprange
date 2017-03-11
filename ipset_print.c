@@ -71,7 +71,6 @@ inline void print_addr_single(in_addr_t x) {
  */
 
 inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_t hi, void (*print)(in_addr_t, int)) {
-    char buf[IP2STR_MAX_LEN + 1];
     in_addr_t bc, lower_half, upper_half;
 
     if(unlikely(lo > hi)) {
@@ -80,6 +79,7 @@ inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_t hi, v
          * give a log for the user to see
          */
         in_addr_t t = hi;
+        char buf[IP2STR_MAX_LEN + 1];
         fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip2str_r(buf, lo));
         fprintf(stderr, " end=%s\n", ip2str_r(buf, hi));
         hi = lo;
@@ -138,7 +138,7 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
         return;
     }
 
-    if(unlikely(debug)) fprintf(stderr, "%s: Printing %s with %lu ranges, %lu unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
+    if(unlikely(debug)) fprintf(stderr, "%s: Printing %s with %zu ranges, %zu unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
 
     switch(print) {
         case PRINT_CIDR:
@@ -192,7 +192,7 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
 
         if (print == PRINT_CIDR) {
 
-            fprintf(stderr, "\n%lu printed CIDRs, break down by prefix:\n", total);
+            fprintf(stderr, "\n%zu printed CIDRs, break down by prefix:\n", total);
 
             total = 0;
             for(i = 0; i <= 32 ;i++) {
@@ -211,7 +211,7 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
             else if (print == PRINT_SINGLE_IPS) units = "IPs";
             else units = "ranges";
 
-            fprintf(stderr, "\ntotals: %lu lines read, %lu distinct IP ranges found, %d CIDR prefixes, %lu %s printed, %lu unique IPs\n", ips->lines, ips->entries, prefixes, total, units, ips->unique_ips);
+            fprintf(stderr, "\ntotals: %zu lines read, %zu distinct IP ranges found, %d CIDR prefixes, %zu %s printed, %zu unique IPs\n", ips->lines, ips->entries, prefixes, total, units, ips->unique_ips);
         }
     }
 }
