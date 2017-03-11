@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2003-2015 Costa Tsaousis <costa@tsaousis.gr>
- * Copyright (C) 2012-2015 Phil Whineray <phil@sanewall.org>
+ * Copyright (C) 2003-2017 Costa Tsaousis <costa@tsaousis.gr>
+ * Copyright (C) 2012-2017 Phil Whineray <phil@sanewall.org>
  * Copyright (C) 2003 Gabriel L. Somlo
  */
 #include <iprange.h>
@@ -296,7 +296,7 @@ static void usage(const char *me) {
 static void version() {
     fprintf(stdout,
         "iprange " VERSION "\n"
-        "Copyright (C) 2015 Costa Tsaousis for FireHOL (Refactored)\n"
+        "Copyright (C) 2015-2017 Costa Tsaousis for FireHOL (Refactored and extended)\n"
         "Copyright (C) 2004 Paul Townsend (Adapted)\n"
         "Copyright (C) 2003 Gabriel L. Somlo (Original)\n"
         "\n"
