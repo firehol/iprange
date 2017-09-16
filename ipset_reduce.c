@@ -16,10 +16,12 @@ size_t prefix_counters[33];
  */
 
 void ipset_reduce(ipset *ips, size_t acceptable_increase, size_t min_accepted) {
-    size_t i, n = ips->entries, total = 0, acceptable, iterations = 0, initial = 0, eliminated = 0;
+    size_t i, n, total = 0, acceptable, iterations = 0, initial = 0, eliminated = 0;
 
     if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
         ipset_optimize(ips);
+
+    n = ips->entries;
 
     /* reset the prefix counters */
     for(i = 0; i <= 32; i++)
