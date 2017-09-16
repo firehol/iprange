@@ -16,6 +16,7 @@ addons:
     packages:
     - gnupg
     - help2man
+    - fakeroot
 #
 # Setup environment
 before_install:
