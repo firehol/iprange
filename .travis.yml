@@ -1,11 +1,6 @@
-dist: precise
-## Use docker image for speed
-## When pandoc whitelisted:
-##  https://github.com/travis-ci/apt-package-whitelist/blob/master/ubuntu-trusty
-## Issue here:
-##  https://github.com/travis-ci/apt-package-whitelist/issues/3762
-#sudo: false
-#group: beta
+dist: trusty
+# Use docker image for speed
+sudo: false
 #
 # C includes autotools and make by default
 language: c
