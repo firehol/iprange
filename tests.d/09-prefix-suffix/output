@@ -1,0 +1,4 @@
+add 10.0.0.1 nomatch
+add 172.16.1.0/28 nomatch
+add 192.168.1.0/24 nomatch
+add 250.250.250.250 nomatch

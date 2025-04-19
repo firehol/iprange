@@ -598,6 +598,7 @@ ipset *ipset_load(const char *filename) {
         fp = fopen(filename, "r");
         if (unlikely(!fp)) {
             fprintf(stderr, "%s: %s - %s\n", PROG, filename, strerror(errno));
+            ipset_free(ips);
             return NULL;
         }
     }
@@ -610,6 +611,12 @@ ipset *ipset_load(const char *filename) {
 
     if(!fgets(line, MAX_LINE, fp)) {
         if(likely(fp != stdin)) fclose(fp);
+        /* Empty file - if not stdin, consider it an error */
+        if(likely(filename && *filename)) {
+            if(unlikely(debug)) fprintf(stderr, "%s: File %s is empty\n", PROG, filename);
+            ipset_free(ips);
+            return NULL;
+        }
         return ips;
     }
 
@@ -695,3 +702,4 @@ ipset *ipset_load(const char *filename) {
 
     return ips;
 }
+

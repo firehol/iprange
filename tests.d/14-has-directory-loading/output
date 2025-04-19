@@ -1,0 +1,2 @@
+iprange --has-directory-loading OK
+iprange --has-filelist-loading OK

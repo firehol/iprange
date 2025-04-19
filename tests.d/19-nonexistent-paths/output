@@ -1,0 +1,7 @@
+=== Test 1: Non-existent file ===
+192.168.1.1
+FAILED: Should have shown error for non-existent file
+=== Test 2: Non-existent directory ===
+PASSED: Correctly handled non-existent directory
+=== Test 3: Valid file works ===
+192.168.1.1
