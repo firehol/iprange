@@ -349,6 +349,7 @@ int main(int argc, char **argv) {
     size_t ipset_reduce_factor = 120;
     size_t ipset_reduce_min_accepted = 16384;
     int ret = 0, quiet = 0;
+    int inputs = 0;
 
     ipset *root = NULL, *ips = NULL, *first = NULL, *second = NULL;
     int i, mode = MODE_COMBINE, header = 0, read_second = 0;
@@ -565,9 +566,8 @@ int main(int argc, char **argv) {
         }
         else {
             if(!strcmp(argv[i], "-")) {
-                ips = ipset_load(NULL);
-                
-                if(!ips) {
+                inputs++;
+                if(!(ips = ipset_load(NULL))) {
                     fprintf(stderr, "%s: Cannot load ipset from stdin\n", PROG);
                     exit(1);
                 }
@@ -585,6 +585,8 @@ int main(int argc, char **argv) {
                 }
             }
             else if(argv[i][0] == '@') {
+                inputs++;
+
                 /* Handle @filename as a file list or directory */
                 const char *listname = argv[i] + 1;  /* Skip the @ character */
                 struct stat st;
@@ -629,11 +631,10 @@ int main(int argc, char **argv) {
                             fprintf(stderr, "%s: Loading file %s from directory %s\n", PROG, entry->d_name, listname);
                         
                         /* Load the file as an independent ipset */
-                        ips = ipset_load(filepath);
-                        if(!ips) {
+                        if(!(ips = ipset_load(filepath))) {
                             fprintf(stderr, "%s: Cannot load file %s from directory %s\n", 
                                     PROG, filepath, listname);
-                            continue;
+                            exit(1);
                         }
                         
                         files_loaded = 1;
@@ -700,11 +701,10 @@ int main(int argc, char **argv) {
                             fprintf(stderr, "%s: Loading file %s from list (line %d)\n", PROG, s, lineid);
                         
                         /* Load the file as an independent ipset */
-                        ips = ipset_load(s);
-                        if(!ips) {
+                        if(!(ips = ipset_load(s))) {
                             fprintf(stderr, "%s: Cannot load file %s from list %s (line %d)\n", 
                                     PROG, s, listname, lineid);
-                            continue;
+                            exit(1);
                         }
                         
                         files_loaded = 1;
@@ -736,11 +736,10 @@ int main(int argc, char **argv) {
                 }
             }
             else {
-                ips = ipset_load(argv[i]);
-                
-                if(!ips) {
+                inputs++;
+                if(!(ips = ipset_load(argv[i]))) {
                     fprintf(stderr, "%s: Cannot load ipset: %s\n", PROG, argv[i]);
-                    continue; /* Continue with other arguments instead of exiting */
+                    exit(1);
                 }
                 
                 if(read_second) {
@@ -760,21 +759,21 @@ int main(int argc, char **argv) {
 
     /*
      * if no ipset was given on the command line
-     * assume stdin, but only if no other filenames were specified
+     * assume stdin, regardless of whether other options were specified
      */
 
-    if(!root && argc <= 1) {
+    if(!inputs) {
         if(unlikely(debug))
-            fprintf(stderr, "%s: No inputs provided, reading from stdin\n", PROG);
-            
-        first = root = ipset_load(NULL);
-        if(!root) {
-            fprintf(stderr, "%s: No ipsets to merge.\n", PROG);
+            fprintf(stderr, "%s: No input files provided, reading from stdin\n", PROG);
+
+        if(!(first = root = ipset_load(NULL))) {
+            fprintf(stderr, "%s: Cannot load ipset from stdin\n", PROG);
             exit(1);
         }
     }
-    else if(!root) {
-        /* We had parameters but still ended up with no valid ipsets */
+
+    if(!root) {
+        // impossible situation since we fail if no ipset is loaded
         fprintf(stderr, "%s: No valid ipsets to merge from the provided inputs.\n", PROG);
         exit(1);
     }

@@ -610,13 +610,13 @@ ipset *ipset_load(const char *filename) {
     ips->flags |= IPSET_FLAG_OPTIMIZED;
 
     if(!fgets(line, MAX_LINE, fp)) {
-        if(likely(fp != stdin)) fclose(fp);
-        /* Empty file - if not stdin, consider it an error */
-        if(likely(filename && *filename)) {
-            if(unlikely(debug)) fprintf(stderr, "%s: File %s is empty\n", PROG, filename);
-            ipset_free(ips);
-            return NULL;
-        }
+        if(likely(fp != stdin))
+            fclose(fp);
+
+        /* For normal files, an empty file is valid too (return empty ipset) */
+        if(unlikely(debug))
+            fprintf(stderr, "%s: %s is empty\n", PROG, filename && *filename?filename:"stdin");
+
         return ips;
     }
 
