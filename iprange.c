@@ -4,6 +4,8 @@
  * Copyright (C) 2003 Gabriel L. Somlo
  */
 #include <iprange.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 char *PROG;
 int debug;
@@ -236,6 +238,8 @@ static void usage(const char *me) {
         "Other options:\n"
         "	--has-compare\n"
         "	--has-reduce\n"
+        "	--has-filelist-loading\n"
+        "	--has-directory-loading\n"
         "		Exits with 0,\n"
         "		other versions of iprange will exit with 1.\n"
         "		Use this option in scripts to find if this\n"
@@ -261,6 +265,23 @@ static void usage(const char *me) {
         "		Each filename can be followed by [as NAME]\n"
         "		to change its name in the CSV output.\n"
         "		If no filename is given, stdin is assumed.\n"
+        "\n"
+        "	> @filename\n"
+        "		A file list containing filenames, one per line.\n"
+        "		Each file in the list is loaded as an individual ipset.\n"
+        "		Comments starting with # or ; are ignored.\n"
+        "		Empty lines are ignored.\n"
+        "		Multiple @filename parameters can be used.\n"
+        "		@filename works with all modes and respects the positional\n"
+        "		nature of the parameters.\n"
+        "\n"
+        "	> @directory\n"
+        "		If @filename refers to a directory, all files in that directory\n"
+        "		will be loaded, each as an individual ipset.\n"
+        "		Subdirectories are ignored.\n"
+        "		Multiple @directory parameters can be used.\n"
+        "		@directory works with all modes and respects the positional\n"
+        "		nature of the parameters.\n"
         "\n"
         "		Files may contain any or all of the following:\n"
         "		(1) comments starting with hashes (#) or semicolons (;);\n"
@@ -537,42 +558,225 @@ int main(int argc, char **argv) {
             fprintf(stderr, "yes, compare and reduce is present.\n");
             exit(0);
         }
+        else if(!strcmp(argv[i], "--has-filelist-loading")
+            || !strcmp(argv[i], "--has-directory-loading")) {
+            fprintf(stderr, "yes, @filename and @directory support is present.\n");
+            exit(0);
+        }
         else {
-            if(!strcmp(argv[i], "-"))
+            if(!strcmp(argv[i], "-")) {
                 ips = ipset_load(NULL);
-            else
-                ips = ipset_load(argv[i]);
-
-            if(!ips) {
-                fprintf(stderr, "%s: Cannot load ipset: %s\n", PROG, argv[i]);
-                exit(1);
+                
+                if(!ips) {
+                    fprintf(stderr, "%s: Cannot load ipset from stdin\n", PROG);
+                    exit(1);
+                }
+                
+                if(read_second) {
+                    ips->next = second;
+                    second = ips;
+                    if(ips->next) ips->next->prev = ips;
+                }
+                else {
+                    if(!first) first = ips;
+                    ips->next = root;
+                    root = ips;
+                    if(ips->next) ips->next->prev = ips;
+                }
             }
+            else if(argv[i][0] == '@') {
+                /* Handle @filename as a file list or directory */
+                const char *listname = argv[i] + 1;  /* Skip the @ character */
+                struct stat st;
+                
+                if(stat(listname, &st) != 0) {
+                    fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
+                    exit(1);
+                }
+                
+                /* Check if it's a directory */
+                if(S_ISDIR(st.st_mode)) {
+                    DIR *dir;
+                    struct dirent *entry;
+                    
+                    if(unlikely(debug)) 
+                        fprintf(stderr, "%s: Loading files from directory %s\n", PROG, listname);
+                    
+                    dir = opendir(listname);
+                    if(!dir) {
+                        fprintf(stderr, "%s: Cannot open directory: %s - %s\n", PROG, listname, strerror(errno));
+                        exit(1);
+                    }
+                    
+                    /* Flag to track if we loaded any files */
+                    int files_loaded = 0;
 
-            if(read_second) {
-                ips->next = second;
-                second = ips;
-                if(ips->next) ips->next->prev = ips;
+                    /* Read all files from the directory */
+                    while((entry = readdir(dir))) {
+                        /* Skip "." and ".." */
+                        if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+                            continue;
+                        
+                        /* Create full path */
+                        char filepath[FILENAME_MAX + 1];
+                        snprintf(filepath, FILENAME_MAX, "%s/%s", listname, entry->d_name);
+                        
+                        /* Skip subdirectories */
+                        if(stat(filepath, &st) != 0 || S_ISDIR(st.st_mode))
+                            continue;
+                            
+                        if(unlikely(debug)) 
+                            fprintf(stderr, "%s: Loading file %s from directory %s\n", PROG, entry->d_name, listname);
+                        
+                        /* Load the file as an independent ipset */
+                        ips = ipset_load(filepath);
+                        if(!ips) {
+                            fprintf(stderr, "%s: Cannot load file %s from directory %s\n", 
+                                    PROG, filepath, listname);
+                            continue;
+                        }
+                        
+                        files_loaded = 1;
+                        
+                        /* Add the ipset to the appropriate chain */
+                        if(read_second) {
+                            ips->next = second;
+                            second = ips;
+                            if(ips->next) ips->next->prev = ips;
+                        }
+                        else {
+                            if(!first) first = ips;
+                            ips->next = root;
+                            root = ips;
+                            if(ips->next) ips->next->prev = ips;
+                        }
+                    }
+                    
+                    closedir(dir);
+                    
+                    /* Handle empty directory case */
+                    if(!files_loaded) {
+                        if(unlikely(debug))
+                            fprintf(stderr, "%s: Directory %s is empty or contains no valid files\n", PROG, listname);
+                        
+                        /* Report an error for empty directory */
+                        fprintf(stderr, "%s: No valid files found in directory: %s\n", PROG, listname);
+                    }
+                }
+                else {
+                    /* Handle as a file list */
+                    FILE *fp;
+                    char line[MAX_LINE + 1];
+                    int lineid = 0;
+                    
+                    if(unlikely(debug)) 
+                        fprintf(stderr, "%s: Loading files from list %s\n", PROG, listname);
+                    
+                    fp = fopen(listname, "r");
+                    if(!fp) {
+                        fprintf(stderr, "%s: Cannot open file list: %s - %s\n", PROG, listname, strerror(errno));
+                        exit(1);
+                    }
+                    
+                    /* Flag to track if we loaded any files */
+                    int files_loaded = 0;
+
+                    /* Read each line and load the corresponding file */
+                    while(fgets(line, MAX_LINE, fp)) {
+                        lineid++;
+                        
+                        /* Skip empty lines and comments */
+                        char *s = line;
+                        while(*s && (*s == ' ' || *s == '\t')) s++;
+                        if(*s == '\n' || *s == '\r' || *s == '\0' || *s == '#' || *s == ';')
+                            continue;
+                            
+                        /* Remove trailing newlines/whitespace */
+                        char *end = s + strlen(s) - 1;
+                        while(end > s && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
+                            *end-- = '\0';
+                            
+                        if(unlikely(debug)) 
+                            fprintf(stderr, "%s: Loading file %s from list (line %d)\n", PROG, s, lineid);
+                        
+                        /* Load the file as an independent ipset */
+                        ips = ipset_load(s);
+                        if(!ips) {
+                            fprintf(stderr, "%s: Cannot load file %s from list %s (line %d)\n", 
+                                    PROG, s, listname, lineid);
+                            continue;
+                        }
+                        
+                        files_loaded = 1;
+                        
+                        /* Add the ipset to the appropriate chain */
+                        if(read_second) {
+                            ips->next = second;
+                            second = ips;
+                            if(ips->next) ips->next->prev = ips;
+                        }
+                        else {
+                            if(!first) first = ips;
+                            ips->next = root;
+                            root = ips;
+                            if(ips->next) ips->next->prev = ips;
+                        }
+                    }
+                    
+                    fclose(fp);
+                    
+                    /* Handle empty file list case */
+                    if(!files_loaded) {
+                        if(unlikely(debug))
+                            fprintf(stderr, "%s: File list %s is empty or contains no valid entries\n", PROG, listname);
+                        
+                        /* Report an error for empty file list */
+                        fprintf(stderr, "%s: No valid files found in file list: %s\n", PROG, listname);
+                    }
+                }
             }
             else {
-                if(!first) first = ips;
-                ips->next = root;
-                root = ips;
-                if(ips->next) ips->next->prev = ips;
+                ips = ipset_load(argv[i]);
+                
+                if(!ips) {
+                    fprintf(stderr, "%s: Cannot load ipset: %s\n", PROG, argv[i]);
+                    continue; /* Continue with other arguments instead of exiting */
+                }
+                
+                if(read_second) {
+                    ips->next = second;
+                    second = ips;
+                    if(ips->next) ips->next->prev = ips;
+                }
+                else {
+                    if(!first) first = ips;
+                    ips->next = root;
+                    root = ips;
+                    if(ips->next) ips->next->prev = ips;
+                }
             }
         }
     }
 
     /*
      * if no ipset was given on the command line
-     * assume stdin
+     * assume stdin, but only if no other filenames were specified
      */
 
-    if(!root) {
+    if(!root && argc <= 1) {
+        if(unlikely(debug))
+            fprintf(stderr, "%s: No inputs provided, reading from stdin\n", PROG);
+            
         first = root = ipset_load(NULL);
         if(!root) {
             fprintf(stderr, "%s: No ipsets to merge.\n", PROG);
             exit(1);
         }
+    }
+    else if(!root) {
+        /* We had parameters but still ended up with no valid ipsets */
+        fprintf(stderr, "%s: No valid ipsets to merge from the provided inputs.\n", PROG);
+        exit(1);
     }
 
     gettimeofday(&load_dt, NULL);

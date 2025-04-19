@@ -1,0 +1,7 @@
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+input3,input2,3,3,33,33,66,0
+input3,input1,3,3,33,33,66,0
+input3,stdin,3,1,33,1,34,0
+input2,input1,3,3,33,33,50,16
+input2,stdin,3,1,33,1,34,0
+input1,stdin,3,1,33,1,34,0

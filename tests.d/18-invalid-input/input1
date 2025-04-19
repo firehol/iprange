@@ -1,0 +1,6 @@
+# Valid IP
+192.168.1.1
+# Invalid IP
+999.999.999.999
+# Valid IP again
+10.0.0.1

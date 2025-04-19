@@ -1,0 +1,7 @@
+# Input with various IP formats
+192.168.1.1
+10.0.0.0/24
+172.16.1.1 - 172.16.1.10
+# Some IPv4 in various formats
+192.168.2.0/255.255.255.0
+10.1.0.1
