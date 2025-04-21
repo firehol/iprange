@@ -8,8 +8,8 @@ jobs:
       - name: Extract tag/branch variables
         shell: bash
         run: |
-           echo "##[set-output name=tag;]$(echo ${GITHUB_REF#refs/tags/}|grep -v '/')"
-           echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/}|grep -v '/')"
+           echo "tag=$(echo ${GITHUB_REF#refs/tags/}|grep -v '/')" >> $GITHUB_OUTPUT
+           echo "branch=$(echo ${GITHUB_REF#refs/heads/}|grep -v '/')" >> $GITHUB_OUTPUT
         id: extract
       outputs:
          tag: ${{ steps.extract.outputs.tag }}
@@ -20,7 +20,7 @@ jobs:
       name: Build package
       needs: prep
       steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Set up build tools
         run: ./.github/workflows/setup.sh
       - name: Server-side run of commit hooks in case developer skipped them
@@ -34,7 +34,7 @@ jobs:
             ./packaging/gpg-recv-key costa@tsaousis.gr "4DFF 624A E564 3B51 2872  1F40 29CA 3358 89B9 A863"
             git fetch --tags -f
         env:
-           KEYSERVER: pool.sks-keyservers.net
+           KEYURL: https://keyserver.ubuntu.com/pks/lookup?exact=on&op=get&search=
       - name: Run build
         run: fakeroot ./packaging/git-build && ./configure && make check
         env:
@@ -47,7 +47,7 @@ jobs:
               sha512sum -b $i > $i.sha
            done
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
            name: build-artifacts
            path: |
@@ -69,7 +69,7 @@ jobs:
             || startsWith( needs.prep.outputs.branch, 'stable-' ) ) }}
       steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4.1.7
         with:
            name: build-artifacts
       - name: Setup SSH
@@ -80,8 +80,8 @@ jobs:
            eval "$(ssh-agent)"
            if ssh-add firehol_org_publish_key; then
               echo "Key added: setting agent environment"
-              echo "##[set-output name=ssh_agent_pid;]$SSH_AGENT_PID"
-              echo "##[set-output name=ssh_auth_sock;]$SSH_AUTH_SOCK"
+              echo "ssh_agent_pid=$SSH_AGENT_PID" >> $GITHUB_OUTPUT
+              echo "ssh_auth_sock=$SSH_AUTH_SOCK" >> $GITHUB_OUTPUT
               mkdir -p $HOME/.ssh
               chmod 700 $HOME/.ssh
               echo PasswordAuthentication=no >> $HOME/.ssh/config
@@ -135,7 +135,7 @@ jobs:
       if: ${{ needs.prep.outputs.tag != '' }}
       steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4.1.7
         with:
            name: build-artifacts
       - name: Create Release
