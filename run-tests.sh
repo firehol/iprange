@@ -13,21 +13,26 @@ IPRANGE_BIN=${IPRANGE_BIN:-$IPRANGE_LINK}
 
 ORIGINAL_IPRANGE_STATE="missing"
 ORIGINAL_IPRANGE_TARGET=""
+ORIGINAL_IPRANGE_BACKUP=""
 IPRANGE_LINK_CHANGED=0
 
 cleanup() {
-    rm -rf "$TEMP_DIR"
-
     if [ "$IPRANGE_BIN" != "$IPRANGE_LINK" ] && [ "$IPRANGE_LINK_CHANGED" -eq 1 ]; then
         case "$ORIGINAL_IPRANGE_STATE" in
             symlink)
                 ln -sfn "$ORIGINAL_IPRANGE_TARGET" "$IPRANGE_LINK"
+                ;;
+            file)
+                rm -f "$IPRANGE_LINK"
+                mv "$ORIGINAL_IPRANGE_BACKUP" "$IPRANGE_LINK"
                 ;;
             missing)
                 rm -f "$IPRANGE_LINK"
                 ;;
         esac
     fi
+
+    rm -rf "$TEMP_DIR"
 }
 
 trap cleanup EXIT
@@ -50,8 +55,9 @@ prepare_iprange_link() {
         ORIGINAL_IPRANGE_STATE="symlink"
         ORIGINAL_IPRANGE_TARGET=$(readlink "$IPRANGE_LINK")
     elif [ -e "$IPRANGE_LINK" ]; then
-        echo -e "${RED}Error: cannot replace existing non-symlink $IPRANGE_LINK${NC}"
-        exit 1
+        ORIGINAL_IPRANGE_STATE="file"
+        ORIGINAL_IPRANGE_BACKUP="$TEMP_DIR/original-iprange"
+        mv "$IPRANGE_LINK" "$ORIGINAL_IPRANGE_BACKUP"
     fi
 
     ln -sfn "$IPRANGE_BIN" "$IPRANGE_LINK"

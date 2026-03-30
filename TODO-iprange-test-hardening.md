@@ -10,6 +10,7 @@ User requirements:
 - Prove each bug with a test before fixing it.
 - Do not fix anything that has not been proven with a test first.
 - Perform a complete code review as part of the work.
+- Fix all actionable Copilot PR review comments too, after validating them and adding proof coverage where that is practical.
 
 # Analysis
 
@@ -86,6 +87,7 @@ User decisions already made:
 - Scope includes comprehensive feature coverage, targeted regression tests for proven bugs, and source fixes only for bugs reproduced by tests.
 - Fix the 4 additional proven findings from the post-fix audit as part of this task, but still only after adding tests that prove them.
 - Proceed with the next evidence-driven round on the remaining findings: prove/fix the `ipset_optimize()` OOM path if reproducible, investigate the DNS threading claim with tooling/stress before changing it, and do not patch the weaker `strcpy` / `lineid` claims without proof.
+- Fix all Copilot PR review comments too, not only the clearly broken ones.
 
 Pending decisions:
 - None identified yet.
@@ -98,6 +100,9 @@ Decisions made for the next fixes:
 - DNS worker creation failure must fail the current load cleanly without leaving pending requests behind or hanging in `dns_done()`.
 - Numeric-leading dotted hostnames that fit the existing hostname grammar must remain valid hostname input; the parser hardening should only block truly malformed IP/CIDR/range syntax.
 - Plain out-of-tree builds must work even if the source tree previously had in-tree build artifacts, or at minimum the build system must avoid treating source-tree object files as valid prerequisites for VPATH builds.
+- Test harnesses should work with an existing real top-level `./iprange` binary instead of hard-failing, as long as the original file is preserved and restored safely after the run.
+- Avoid unnecessary runtime dependencies in tests when the same coverage can be achieved with shell or base system tooling.
+- Sanitizer/build runners should pick job parallelism portably, with fallback when `nproc` is unavailable.
 
 # Plan
 
@@ -125,6 +130,13 @@ Decisions made for the next fixes:
     - VPATH/out-of-tree builds still succeed after the source tree has been dirtied by a prior in-tree build
 17. Implement only the fixes proven by those two new regressions.
 18. Re-run the full verification stack again after those fixes.
+19. Address all Copilot PR comments:
+    - prove and fix `IPRANGE_BIN` propagation through the automake `check-local` -> `run-build-tests.sh` path,
+    - prove and fix `run-tests.sh` support for an existing non-symlink `./iprange`,
+    - remove the Perl dependency from `tests.d/59-binary-semantic-validation`,
+    - prove and fix portable job-count fallback in `run-sanitizer-tests.sh`,
+    - correct the `size_t` diagnostic format in `ipset_binary.c`.
+20. Re-run the relevant harness/build verification and then the broader CI-equivalent paths again.
 
 Implemented test work:
 - Extended `run-tests.sh` to support multiple test roots and explicit binary selection.
@@ -227,6 +239,12 @@ Current next-step analysis:
     - `tests.build.d/01-without-compare-with-common` copied configured-tree outputs (`Makefile`, `config.h`, `config.status`) into the temporary source snapshot, so out-of-tree `configure` aborted with `source directory already configured; run "make distclean" there first`.
     - `tests.build.d/02-vpath-build-after-in-tree-build` was reproduced locally by first dirtying the source tree with `./configure --disable-man && make -j1 iprange`. In that state, the temporary source snapshot also carried `local-build-objects.stamp` from the earlier in-tree build. During the temp VPATH build, GNU make reused that stale source-side stamp, so the fake source-tree `*.o` files stayed newer and the build skipped local compilation, failing directly at link time with missing `iprange.o`, `ipset.o`, and the rest.
   - Local verification also exposed a harness-cleanup bug in `run-tests.sh`: when `IPRANGE_BIN` points to another binary and a real non-symlink `./iprange` already exists, `prepare_iprange_link()` aborts as intended, but the `cleanup()` trap still treats the original state as `missing` and removes the real top-level `./iprange` file on exit. This is proven by rebuilding `./iprange`, running `IPRANGE_BIN="$PWD/build-default/iprange" ./run-tests.sh`, observing the expected refusal (`cannot replace existing non-symlink ...`), and then seeing that `./iprange` has been deleted.
+- Latest Copilot review-thread findings on PR `#37`:
+  - `ipset_binary.c` still prints a `size_t` value with `%lu` in one diagnostic. That is harmless on the current Linux runner, but it is a real portability bug on platforms where `size_t` is not `unsigned long`.
+  - `Makefile.am` still does not propagate `IPRANGE_BIN` to `run-build-tests.sh` from `check-local`, so VPATH `make check` still depends on source-root `./iprange` state.
+  - `run-tests.sh` is safe after the cleanup fix, but it still hard-fails if a real non-symlink `./iprange` exists. The desired behavior is to preserve and restore the original file and still run against the requested binary.
+  - `tests.d/59-binary-semantic-validation/cmd.sh` still uses Perl for binary fixture generation. This is avoidable.
+  - `run-sanitizer-tests.sh` still assumes `nproc` exists and needs a portable CPU-count fallback.
 
 # Implied Decisions
 
@@ -250,6 +268,8 @@ Current next-step analysis:
 - If a generic existing test is close but does not prove the exact stdout field order, empty-stdout behavior, or exit-code meaning that `update-ipsets` depends on, add a dedicated compatibility regression instead of assuming coverage.
 - The build-test source snapshot must be clean from configured-tree outputs and build-local stamp artifacts. Otherwise the harness stops testing the intended out-of-tree behavior and starts reproducing CI pollution from earlier in-tree configure/build steps.
 - The test harness must never remove a real top-level `./iprange` binary when it aborts while trying to switch binaries for a test run. Cleanup must only restore state that was actually changed by the harness.
+- The test harness should preserve and restore an existing top-level `./iprange` file when running against another binary, not just fail safely.
+- Portability-only issues that the current Linux runtime cannot manifest directly may be proven with source-level regression checks when the defect is purely about generated diagnostics or platform-specific type widths.
 
 # Testing Requirements
 
@@ -271,6 +291,11 @@ Current next-step analysis:
   - Re-run `./run-build-tests.sh` after the harness fix and confirm both build tests pass from that configured-tree state.
   - Re-run `make -C build-default check` so the automake `check-local` path exercises the updated build-test harness.
   - Re-run `IPRANGE_BIN="$PWD/build-default/iprange" ./run-tests.sh` from a state where a real top-level `./iprange` exists and confirm the harness refuses safely without deleting it.
+- Copilot follow-up verification requirements:
+  - Add a regression that proves `run-tests.sh` can use an external binary while preserving and restoring a real top-level `./iprange` file.
+  - Add a regression that proves out-of-tree `make check` works without a source-root `./iprange` because `IPRANGE_BIN` is propagated through `run-build-tests.sh`.
+  - Add a regression that proves `run-sanitizer-tests.sh` falls back cleanly when `nproc` is unavailable.
+  - Re-run `tests.d/59-binary-semantic-validation` after removing the Perl dependency and confirm behavior is unchanged.
 - Additional regression coverage for:
   - malformed binary files lying about `lines` / `unique ips`,
   - malformed binary files claiming `optimized` while containing duplicate or overlapping records,
@@ -363,6 +388,29 @@ Latest verification notes:
   - `./run-sanitizer-tests.sh` passed with 5/5 sanitizer CLI tests, 5/5 unit tests, and 1/1 TSAN tests.
   - `make -C build-default check` passed.
   - `make -C build-default check-sanitizers` passed.
+- Proven with new Copilot follow-up regressions before implementation:
+  - `tests.build.d/03-run-tests-safe-refusal` failed because `run-tests.sh` still aborted on an existing non-symlink top-level `iprange` instead of preserving/restoring it and proceeding with the requested external binary.
+  - `tests.build.d/04-make-check-propagates-iprange-bin` failed because `check-local` did not pass `IPRANGE_BIN` through to `run-build-tests.sh`.
+  - `tests.build.d/05-sanitizer-job-fallback` failed because `run-sanitizer-tests.sh` used a bare `-j` after `nproc` failed, instead of a portable explicit fallback count from `getconf`.
+  - `tests.build.d/06-binary-bytes-format-size_t` failed because `ipset_binary.c` still used `%lu` for a `size_t` diagnostic.
+- Implemented for the Copilot follow-up:
+  - `run-tests.sh` now backs up an existing non-symlink top-level `iprange`, swaps in the requested external binary for the duration of the run, and restores the original file on cleanup.
+  - `Makefile.am` now propagates `IPRANGE_BIN='$(abs_builddir)/iprange'` to `run-build-tests.sh` from `check-local`.
+  - `run-sanitizer-tests.sh` now:
+    - chooses job counts portably via `nproc`, then `getconf _NPROCESSORS_ONLN`, then `1`,
+    - excludes configured-tree outputs and `local-build-objects.stamp` from its temporary source snapshot for the same reasons already fixed in the build-test harness.
+  - `tests.d/59-binary-semantic-validation/cmd.sh` now generates binary fixtures in shell via explicit little-endian byte emission, removing the Perl dependency while preserving coverage.
+  - `ipset_binary.c` now uses `%zu` for the `bytes` diagnostic.
+- Final verification after the Copilot follow-up:
+  - `tests.build.d/03-run-tests-safe-refusal/cmd.sh`
+  - `tests.build.d/04-make-check-propagates-iprange-bin/cmd.sh`
+  - `tests.build.d/05-sanitizer-job-fallback/cmd.sh`
+  - `tests.build.d/06-binary-bytes-format-size_t/cmd.sh`
+  - `tests.d/59-binary-semantic-validation/cmd.sh`
+  - `./run-build-tests.sh` passed with 6/6 tests.
+  - `./run-sanitizer-tests.sh` passed with 5/5 sanitizer CLI tests, 6/6 unit tests, and 1/1 TSAN tests.
+  - `IPRANGE_BIN="$PWD/build-default/iprange" ./run-tests.sh` passed with 71/71 tests while preserving/restoring the source-root `./iprange`.
+  - `./configure --disable-man && make -j1 iprange && make check` passed from the source root, which is the same high-level path GitHub Actions uses after `packaging/git-build`.
 - Final analyzer status after this round:
   - `clang --analyze -DHAVE_CONFIG_H -Ibuild-default -I. ipset_binary.c ipset_load.c iprange.c` still reports only the same 3 dead stores in `dns_done()` and the same low-confidence `unix.Stream` warning on the hostname-request path.
   - `gcc -fanalyzer` remains clean on the reviewed files.

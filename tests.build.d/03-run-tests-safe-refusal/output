@@ -1,1 +1,1 @@
-# OK: run-tests refusal keeps the existing iprange file intact
+# OK: run-tests preserves and restores an existing iprange file

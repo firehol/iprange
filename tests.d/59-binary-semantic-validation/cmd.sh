@@ -3,6 +3,16 @@
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
+write_u32_le() {
+    local value=$1
+
+    printf '%b' "$(printf '\\%03o\\%03o\\%03o\\%03o' \
+        $(( value        & 255 )) \
+        $(( (value >> 8) & 255 )) \
+        $(( (value >> 16) & 255 )) \
+        $(( (value >> 24) & 255 )))"
+}
+
 write_binary() {
     local path="$1"
     local optimized="$2"
@@ -19,9 +29,10 @@ write_binary() {
         printf 'bytes %s\n' $((4 + (records * 8)))
         printf 'lines %s\n' "$lines"
         printf 'unique ips %s\n' "$unique"
-        perl -e 'print pack("V", 0x1A2B3C4D)'
+        write_u32_le 0x1A2B3C4D
         while [ $# -gt 0 ]; do
-            perl -e "print pack('V', $1), pack('V', $2)"
+            write_u32_le "$1"
+            write_u32_le "$2"
             shift 2
         done
     } >"$path"

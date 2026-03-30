@@ -270,7 +270,7 @@ int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
 
     expected_bytes = (sizeof(network_addr_t) * entries) + sizeof(uint32_t);
     if(bytes != expected_bytes) {
-        fprintf(stderr, "%s: %s invalid number of bytes, found %lu, expected %zu.\n", PROG, ips->filename, bytes, expected_bytes);
+        fprintf(stderr, "%s: %s invalid number of bytes, found %zu, expected %zu.\n", PROG, ips->filename, bytes, expected_bytes);
         return 1;
     }
 

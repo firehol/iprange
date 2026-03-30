@@ -8,25 +8,26 @@ trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/tests.d/min"
 cp "$script_dir/../../run-tests.sh" "$tmpdir/run-tests.sh"
 
-printf '#!/bin/sh\nexit 0\n' >"$tmpdir/iprange"
+printf '#!/bin/sh\necho original-iprange\n' >"$tmpdir/iprange"
 chmod +x "$tmpdir/iprange"
 
-printf '#!/bin/sh\nexit 0\n' >"$tmpdir/other-iprange"
+printf '#!/bin/sh\necho external-iprange\n' >"$tmpdir/other-iprange"
 chmod +x "$tmpdir/other-iprange"
 
 printf '#!/bin/sh\nexit 0\n' >"$tmpdir/tests.d/min/cmd.sh"
 chmod +x "$tmpdir/tests.d/min/cmd.sh"
 
 : >"$tmpdir/tests.d/min/output"
+original_contents=$(cat "$tmpdir/iprange")
 
-if IPRANGE_BIN="$tmpdir/other-iprange" TEST_DIRS=tests.d "$tmpdir/run-tests.sh" >"$log" 2>&1; then
-    echo "run-tests.sh unexpectedly succeeded"
+if ! IPRANGE_BIN="$tmpdir/other-iprange" TEST_DIRS=tests.d "$tmpdir/run-tests.sh" >"$log" 2>&1; then
+    echo "run-tests.sh failed unexpectedly"
     cat "$log"
     exit 1
 fi
 
-if ! grep -q 'cannot replace existing non-symlink' "$log"; then
-    echo "run-tests.sh did not report the expected refusal"
+if ! grep -q 'Passed tests: 1' "$log"; then
+    echo "run-tests.sh did not complete the embedded test successfully"
     cat "$log"
     exit 1
 fi
@@ -37,4 +38,10 @@ if [ ! -f "$tmpdir/iprange" ] || [ -L "$tmpdir/iprange" ]; then
     exit 1
 fi
 
-echo "# OK: run-tests refusal keeps the existing iprange file intact"
+if [ "$(cat "$tmpdir/iprange")" != "$original_contents" ]; then
+    echo "run-tests.sh did not restore the original iprange file contents"
+    cat "$log"
+    exit 1
+fi
+
+echo "# OK: run-tests preserves and restores an existing iprange file"
