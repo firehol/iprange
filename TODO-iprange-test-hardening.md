@@ -448,6 +448,15 @@ Latest verification notes:
     - `./run-sanitizer-tests.sh` passed with 5/5 sanitizer CLI tests, 6/6 unit tests, and 1/1 TSAN tests
     - `make -C build-default check` passed
     - `make -C build-default check-sanitizers` passed
+  - CI follow-up after publishing PR #37:
+    - GitHub Actions failed in `Build package` on `tests.d/45-broken-pipe-output`.
+    - Root cause: the test expected a single stdout line only, but on the GitHub runner `iprange` also emitted `iprange: cannot write binary output: Broken pipe` on stderr, and the shell harness compares combined stdout/stderr.
+    - Fix: `tests.d/45-broken-pipe-output/cmd.sh` now captures the pipeline stderr internally and asserts the real contract that matters:
+      - the pipeline must return non-zero on broken pipe
+      - the test output itself must stay stable across runner-specific stderr behavior
+    - Re-verified with:
+      - `cd tests.d/45-broken-pipe-output && ./cmd.sh`
+      - `make -C build-default check`
 
 # Documentation Updates Required
 
