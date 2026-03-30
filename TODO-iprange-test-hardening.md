@@ -221,6 +221,12 @@ Current next-step analysis:
   - `ipset_copy.c` still trusts `ips1->entries` blindly and can trigger a heap-buffer-overflow on invalid internal state, just like the earlier `ipset_combine()` / `ipset_merge()` bugs.
   - User-facing `entries` columns still report `ips->lines`, so crafted binary metadata can still forge visible counts even after payload validation.
   - DNS hostname resolution failures still do not affect process exit status; unresolved hostnames are logged, but the command still exits `0` and may print `0,0` counts.
+- Latest CI follow-up on PR `#37`:
+  - First CI follow-up failure was in `tests.d/45-broken-pipe-output`: GitHub Actions emitted an extra stderr line (`iprange: cannot write binary output: Broken pipe`) while the harness compares combined stdout+stderr. That was fixed by capturing pipeline stderr inside the test and asserting only the real contract: non-zero exit on broken pipe.
+  - After that fix, GitHub Actions still failed in `run-build-tests.sh`:
+    - `tests.build.d/01-without-compare-with-common` copied configured-tree outputs (`Makefile`, `config.h`, `config.status`) into the temporary source snapshot, so out-of-tree `configure` aborted with `source directory already configured; run "make distclean" there first`.
+    - `tests.build.d/02-vpath-build-after-in-tree-build` was reproduced locally by first dirtying the source tree with `./configure --disable-man && make -j1 iprange`. In that state, the temporary source snapshot also carried `local-build-objects.stamp` from the earlier in-tree build. During the temp VPATH build, GNU make reused that stale source-side stamp, so the fake source-tree `*.o` files stayed newer and the build skipped local compilation, failing directly at link time with missing `iprange.o`, `ipset.o`, and the rest.
+  - Local verification also exposed a harness-cleanup bug in `run-tests.sh`: when `IPRANGE_BIN` points to another binary and a real non-symlink `./iprange` already exists, `prepare_iprange_link()` aborts as intended, but the `cleanup()` trap still treats the original state as `missing` and removes the real top-level `./iprange` file on exit. This is proven by rebuilding `./iprange`, running `IPRANGE_BIN="$PWD/build-default/iprange" ./run-tests.sh`, observing the expected refusal (`cannot replace existing non-symlink ...`), and then seeing that `./iprange` has been deleted.
 
 # Implied Decisions
 
@@ -242,6 +248,8 @@ Current next-step analysis:
 - DNS hostname resolution failures are fatal for the current input. If any requested hostname cannot be resolved, the command must fail non-zero instead of silently succeeding with an empty or partial result.
 - Compatibility with `update-ipsets` is defined by the current observed behavior of `../firehol/sbin/update-ipsets`, not by historical `iprange` behavior in isolation.
 - If a generic existing test is close but does not prove the exact stdout field order, empty-stdout behavior, or exit-code meaning that `update-ipsets` depends on, add a dedicated compatibility regression instead of assuming coverage.
+- The build-test source snapshot must be clean from configured-tree outputs and build-local stamp artifacts. Otherwise the harness stops testing the intended out-of-tree behavior and starts reproducing CI pollution from earlier in-tree configure/build steps.
+- The test harness must never remove a real top-level `./iprange` binary when it aborts while trying to switch binaries for a test run. Cleanup must only restore state that was actually changed by the harness.
 
 # Testing Requirements
 
@@ -258,6 +266,11 @@ Current next-step analysis:
 - Additional regression coverage for:
   - numeric-leading dotted hostnames reaching the hostname/DNS path,
   - dirty-source-tree out-of-tree builds succeeding without depending on source-tree object files.
+- CI follow-up verification requirements:
+  - Reproduce the GitHub Actions build-test failure locally by first dirtying the source tree with an in-tree `./configure --disable-man && make -j1 iprange`.
+  - Re-run `./run-build-tests.sh` after the harness fix and confirm both build tests pass from that configured-tree state.
+  - Re-run `make -C build-default check` so the automake `check-local` path exercises the updated build-test harness.
+  - Re-run `IPRANGE_BIN="$PWD/build-default/iprange" ./run-tests.sh` from a state where a real top-level `./iprange` exists and confirm the harness refuses safely without deleting it.
 - Additional regression coverage for:
   - malformed binary files lying about `lines` / `unique ips`,
   - malformed binary files claiming `optimized` while containing duplicate or overlapping records,
@@ -457,6 +470,32 @@ Latest verification notes:
     - Re-verified with:
       - `cd tests.d/45-broken-pipe-output && ./cmd.sh`
       - `make -C build-default check`
+  - CI follow-up after publishing commit `26aea98`:
+    - PR `#37` still has a failing `Build package` job after the broken-pipe test stabilization.
+    - Next step is to inspect the latest Actions logs again, reproduce the current failure locally, and patch only the CI-specific breakage if it is test-only.
+  - Latest CI root cause after inspecting the new failing runs:
+    - the main CLI suite now passes 71/71 in GitHub Actions.
+    - the failure has moved to `run-build-tests.sh`, specifically both `tests.build.d` cases.
+    - `tests.build.d/01-without-compare-with-common` fails in CI because it configures directly against a source directory that has already been configured earlier in the workflow, triggering:
+      - `configure: error: source directory already configured; run "make distclean" there first`
+    - `tests.build.d/02-vpath-build-after-in-tree-build` still fails in CI with the original symptom:
+      - link step runs without local object compilation
+      - `/usr/bin/ld: cannot find iprange.o` and the rest of the objects
+    - next step is to inspect the build-test harness/scripts and make them match the CI environment exactly before changing core build logic again.
+  - Implemented for the CI follow-up:
+    - `tests.build.d/01-without-compare-with-common` now excludes configured-tree outputs (`Makefile`, `config.h`, `config.log`, `config.status`, `config.cache`, `iprange.spec`, `stamp-h1`) and the build-local `local-build-objects.stamp` from the temporary source snapshot.
+    - `tests.build.d/02-vpath-build-after-in-tree-build` now excludes the same configured/build-local artifacts, so the temp VPATH build no longer inherits stale source-side state from an earlier in-tree build.
+    - added `tests.build.d/03-run-tests-safe-refusal` to prove that `run-tests.sh` does not delete an existing non-symlink `iprange` file when it aborts while trying to switch binaries.
+    - `run-tests.sh` now restores/removes the top-level `iprange` link only if it actually changed it during setup.
+  - Reproduced and verified locally after the fix:
+    - first reproduced the CI state with:
+      - `./configure --disable-man`
+      - `make -j1 iprange`
+    - then verified:
+      - `./run-build-tests.sh`
+      - `tests.build.d/03-run-tests-safe-refusal/cmd.sh`
+      - `make -j1 iprange && make check`
+    - result: all passed, including the exact source-root `make check` path used in GitHub Actions.
 
 # Documentation Updates Required
 

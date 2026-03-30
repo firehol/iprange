@@ -13,11 +13,12 @@ IPRANGE_BIN=${IPRANGE_BIN:-$IPRANGE_LINK}
 
 ORIGINAL_IPRANGE_STATE="missing"
 ORIGINAL_IPRANGE_TARGET=""
+IPRANGE_LINK_CHANGED=0
 
 cleanup() {
     rm -rf "$TEMP_DIR"
 
-    if [ "$IPRANGE_BIN" != "$IPRANGE_LINK" ]; then
+    if [ "$IPRANGE_BIN" != "$IPRANGE_LINK" ] && [ "$IPRANGE_LINK_CHANGED" -eq 1 ]; then
         case "$ORIGINAL_IPRANGE_STATE" in
             symlink)
                 ln -sfn "$ORIGINAL_IPRANGE_TARGET" "$IPRANGE_LINK"
@@ -54,6 +55,7 @@ prepare_iprange_link() {
     fi
 
     ln -sfn "$IPRANGE_BIN" "$IPRANGE_LINK"
+    IPRANGE_LINK_CHANGED=1
 }
 
 run_test() {

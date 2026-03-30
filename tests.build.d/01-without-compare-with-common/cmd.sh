@@ -17,6 +17,14 @@ tar \
     --exclude='./*.o' \
     --exclude='./iprange' \
     --exclude='./*.plist' \
+    --exclude='./Makefile' \
+    --exclude='./config.h' \
+    --exclude='./config.log' \
+    --exclude='./config.status' \
+    --exclude='./config.cache' \
+    --exclude='./iprange.spec' \
+    --exclude='./local-build-objects.stamp' \
+    --exclude='./stamp-h1' \
     -C "$srcroot" -cf - . | tar -C "$srcdir" -xf -
 
 if [ ! -x "$srcdir/configure" ]; then
