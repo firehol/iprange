@@ -11,6 +11,7 @@ User requirements:
 - Do not fix anything that has not been proven with a test first.
 - Perform a complete code review as part of the work.
 - Fix all actionable Copilot PR review comments too, after validating them and adding proof coverage where that is practical.
+- Answer and resolve the remaining Copilot PR review threads after the fixes are in the branch.
 
 # Analysis
 
@@ -88,6 +89,7 @@ User decisions already made:
 - Fix the 4 additional proven findings from the post-fix audit as part of this task, but still only after adding tests that prove them.
 - Proceed with the next evidence-driven round on the remaining findings: prove/fix the `ipset_optimize()` OOM path if reproducible, investigate the DNS threading claim with tooling/stress before changing it, and do not patch the weaker `strcpy` / `lineid` claims without proof.
 - Fix all Copilot PR review comments too, not only the clearly broken ones.
+- Reply to and resolve the remaining Copilot review threads on PR `#37`.
 
 Pending decisions:
 - None identified yet.
@@ -137,6 +139,7 @@ Decisions made for the next fixes:
     - prove and fix portable job-count fallback in `run-sanitizer-tests.sh`,
     - correct the `size_t` diagnostic format in `ipset_binary.c`.
 20. Re-run the relevant harness/build verification and then the broader CI-equivalent paths again.
+21. Fetch the current unresolved Copilot review threads on PR `#37`, reply with concrete evidence of the fixes, and resolve the threads.
 
 Implemented test work:
 - Extended `run-tests.sh` to support multiple test roots and explicit binary selection.
@@ -296,6 +299,7 @@ Current next-step analysis:
   - Add a regression that proves out-of-tree `make check` works without a source-root `./iprange` because `IPRANGE_BIN` is propagated through `run-build-tests.sh`.
   - Add a regression that proves `run-sanitizer-tests.sh` falls back cleanly when `nproc` is unavailable.
   - Re-run `tests.d/59-binary-semantic-validation` after removing the Perl dependency and confirm behavior is unchanged.
+  - After publishing the fixes, fetch the latest unresolved Copilot threads again and confirm each thread is either replied to and resolved or explicitly still actionable.
 - Additional regression coverage for:
   - malformed binary files lying about `lines` / `unique ips`,
   - malformed binary files claiming `optimized` while containing duplicate or overlapping records,
