@@ -1,0 +1,8 @@
+# count-unique-all
+name,entries,unique_ips
+TMP/dir/a-first,1,2
+TMP/dir/z-last,1,1
+# compare-next
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+TMP/dir/a-first,TMP/direct,1,1,2,1,2,1
+TMP/dir/z-last,TMP/direct,1,1,1,1,1,1

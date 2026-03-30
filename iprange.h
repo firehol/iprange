@@ -41,9 +41,9 @@ typedef struct network_addr {
 static inline in_addr_t set_bit(in_addr_t addr, int bitno, int val) {
 
     if (val)
-        return (addr | (1 << (32 - bitno)));
+        return (addr | (1U << (32 - bitno)));
     else
-        return (addr & ~(1 << (32 - bitno)));
+        return (addr & ~(1U << (32 - bitno)));
 
 }				/* set_bit() */
 
@@ -55,7 +55,7 @@ static inline in_addr_t netmask(int prefix) {
     if (prefix == 0)
         return (~((in_addr_t) - 1));
     else
-        return (in_addr_t)(~((1 << (32 - prefix)) - 1));
+        return (in_addr_t)(~((1U << (32 - prefix)) - 1U));
 
 }				/* netmask() */
 
@@ -150,13 +150,13 @@ static inline network_addr_t str2netaddr(char *ipstr, int *err) {
 static inline char *ip2str_r(char *buf, in_addr_t IP) {
     int i, k;
     for(i = 0, k = 0; i < 4; i++) {
-        char c0 = (char)(((((IP & (0xff << ((3 - i) * 8))) >> ((3 - i) * 8))) / 100) + 0x30);
+        char c0 = (char)(((((IP & (0xffU << ((3 - i) * 8))) >> ((3 - i) * 8))) / 100U) + 0x30);
         if(c0 != '0') *(buf + k++) = c0;
 
-        char c1 = (char)((((((IP & (0xff << ((3 - i) * 8))) >> ((3 - i) * 8))) % 100) / 10) + 0x30);
+        char c1 = (char)((((((IP & (0xffU << ((3 - i) * 8))) >> ((3 - i) * 8))) % 100U) / 10U) + 0x30);
         if(!(c1 == '0' && c0 == '0')) *(buf + k++) = c1;
 
-        *(buf + k) = (char)((((((IP & (0xff << ((3 - i) * 8)))) >> ((3 - i) * 8))) % 10) + 0x30);
+        *(buf + k) = (char)((((((IP & (0xffU << ((3 - i) * 8)))) >> ((3 - i) * 8))) % 10U) + 0x30);
         k++;
 
         if(i < 3) *(buf + k++) = '.';

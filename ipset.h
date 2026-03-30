@@ -12,7 +12,7 @@ typedef struct ipset {
     size_t lines;
     size_t entries;
     size_t entries_max;
-    size_t unique_ips;		/* this is updated only after calling ipset_optimize() */
+    uint64_t unique_ips;		/* this is updated only after calling ipset_optimize() */
 
     uint32_t flags;
 
@@ -28,7 +28,17 @@ extern void ipset_free_all(ipset *ips);
 
 extern size_t prefix_counters[33];
 
-extern size_t ipset_unique_ips(ipset *ips);
+extern uint64_t ipset_unique_ips(ipset *ips);
+
+static inline int ipset_entries_allocation_overflows(size_t entries) {
+    return (entries > (SIZE_MAX / sizeof(network_addr_t)));
+}
+
+static inline int ipset_size_add_overflows(size_t left, size_t right, size_t *sum) {
+    if(unlikely(left > (SIZE_MAX - right))) return 1;
+    *sum = left + right;
+    return 0;
+}
 
 
 /* ----------------------------------------------------------------------------
@@ -62,7 +72,7 @@ static inline void ipset_added_entry(ipset *ips) {
     size_t entries = ips->entries;
 
     ips->lines++;
-    ips->unique_ips += ips->netaddrs[entries].broadcast - ips->netaddrs[entries].addr + 1;
+    ips->unique_ips += (uint64_t)ips->netaddrs[entries].broadcast - (uint64_t)ips->netaddrs[entries].addr + UINT64_C(1);
 
     if(likely(ips->flags & IPSET_FLAG_OPTIMIZED && entries > 0)) {
         // the new is just next to the last

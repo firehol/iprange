@@ -1,0 +1,3 @@
+name,entries,unique_ips,common_ips
+overlap,1,512,256
+isolated,1,256,0

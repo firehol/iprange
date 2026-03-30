@@ -1,0 +1,1 @@
+# OK: malformed digit-prefixed input is rejected without DNS fallback

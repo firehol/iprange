@@ -15,6 +15,11 @@ ipset *ipset_create(const char *filename, size_t entries) {
 
     if(entries < IPSET_ENTRIES_INCREASE_STEP) entries = IPSET_ENTRIES_INCREASE_STEP;
 
+    if(unlikely(ipset_entries_allocation_overflows(entries))) {
+        free(ips);
+        return NULL;
+    }
+
     ips->netaddrs = malloc(entries * sizeof(network_addr_t));
     if(!ips->netaddrs) {
         free(ips);
@@ -63,24 +68,42 @@ void ipset_free(ipset *ips) {
  */
 
 void ipset_free_all(ipset *ips) {
-    if(ips->prev) {
-        ips->prev->next = NULL;
-        ipset_free_all(ips->prev);
+    ipset *prev, *next;
+
+    if(!ips) return;
+
+    prev = ips->prev;
+    next = ips->next;
+
+    if(prev) {
+        prev->next = NULL;
+        ips->prev = NULL;
+        ipset_free_all(prev);
     }
 
-    if(ips->next) {
-        ips->next->prev = NULL;
-        ipset_free_all(ips->next);
+    if(next) {
+        next->prev = NULL;
+        ips->next = NULL;
+        ipset_free_all(next);
     }
 
-    ipset_free(ips);
+    free(ips->netaddrs);
+    free(ips);
 }
 
 
 void ipset_grow_internal(ipset *ips, size_t free_entries_needed) {
+    size_t increase;
+    size_t new_entries_max;
 
     // make sure we allocate at least IPSET_ENTRIES_INCREASE_STEP entries
-    ips->entries_max += (free_entries_needed < IPSET_ENTRIES_INCREASE_STEP)?IPSET_ENTRIES_INCREASE_STEP:free_entries_needed;
+    increase = (free_entries_needed < IPSET_ENTRIES_INCREASE_STEP)?IPSET_ENTRIES_INCREASE_STEP:free_entries_needed;
+    if(unlikely(ipset_size_add_overflows(ips->entries_max, increase, &new_entries_max) || ipset_entries_allocation_overflows(new_entries_max))) {
+        fprintf(stderr, "%s: Cannot grow ipset %s safely beyond %zu entries\n", PROG, ips->filename, ips->entries_max);
+        exit(1);
+    }
+
+    ips->entries_max = new_entries_max;
 
     ips->netaddrs = realloc(ips->netaddrs, ips->entries_max * sizeof(network_addr_t));
     if(unlikely(!ips->netaddrs)) {
@@ -90,7 +113,7 @@ void ipset_grow_internal(ipset *ips, size_t free_entries_needed) {
 }
 
 
-inline size_t ipset_unique_ips(ipset *ips) {
+inline uint64_t ipset_unique_ips(ipset *ips) {
     if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
         ipset_optimize(ips);
 
@@ -127,5 +150,3 @@ int ipset_histogram(ipset *ips, const char *path) {
     return 0;
 }
 */
-
-

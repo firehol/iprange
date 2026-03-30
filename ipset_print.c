@@ -138,7 +138,7 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
         return;
     }
 
-    if(unlikely(debug)) fprintf(stderr, "%s: Printing %s with %zu ranges, %zu unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
+    if(unlikely(debug)) fprintf(stderr, "%s: Printing %s with %zu ranges, %" PRIu64 " unique IPs\n", PROG, ips->filename, ips->entries, ips->unique_ips);
 
     switch(print) {
         case PRINT_CIDR:
@@ -211,7 +211,7 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
             else if (print == PRINT_SINGLE_IPS) units = "IPs";
             else units = "ranges";
 
-            fprintf(stderr, "\ntotals: %zu lines read, %zu distinct IP ranges found, %d CIDR prefixes, %zu %s printed, %zu unique IPs\n", ips->lines, ips->entries, prefixes, total, units, ips->unique_ips);
+            fprintf(stderr, "\ntotals: %zu lines read, %zu distinct IP ranges found, %d CIDR prefixes, %zu %s printed, %" PRIu64 " unique IPs\n", ips->lines, ips->entries, prefixes, total, units, ips->unique_ips);
         }
     }
 }
