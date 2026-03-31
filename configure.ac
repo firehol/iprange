@@ -41,7 +41,7 @@ AC_SUBST([PACKAGE_RPM_RELEASE])
 AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
-AC_CONFIG_SRCDIR([iprange.c])
+AC_CONFIG_SRCDIR([src/iprange.c])
 AM_INIT_AUTOMAKE
 AC_CANONICAL_HOST
 AC_PROG_CC
@@ -90,7 +90,7 @@ if test "${enable_pedantic}" = "yes"; then
 fi
 AC_CONFIG_FILES([
 	Makefile
-	iprange.spec
+	packaging/iprange.spec
 ])
 AC_OUTPUT
 

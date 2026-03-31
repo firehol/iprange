@@ -19,18 +19,18 @@ read -r -a EXTRA_CFLAGS <<< "$TEST_CFLAGS"
 read -r -a EXTRA_LDFLAGS <<< "$TEST_LDFLAGS"
 
 PROJECT_SOURCES=(
-    "$ROOT_DIR/ipset.c"
-    "$ROOT_DIR/ipset_binary.c"
-    "$ROOT_DIR/ipset_combine.c"
-    "$ROOT_DIR/ipset_common.c"
-    "$ROOT_DIR/ipset_copy.c"
-    "$ROOT_DIR/ipset_diff.c"
-    "$ROOT_DIR/ipset_exclude.c"
-    "$ROOT_DIR/ipset_load.c"
-    "$ROOT_DIR/ipset_merge.c"
-    "$ROOT_DIR/ipset_optimize.c"
-    "$ROOT_DIR/ipset_print.c"
-    "$ROOT_DIR/ipset_reduce.c"
+    "$ROOT_DIR/src/ipset.c"
+    "$ROOT_DIR/src/ipset_binary.c"
+    "$ROOT_DIR/src/ipset_combine.c"
+    "$ROOT_DIR/src/ipset_common.c"
+    "$ROOT_DIR/src/ipset_copy.c"
+    "$ROOT_DIR/src/ipset_diff.c"
+    "$ROOT_DIR/src/ipset_exclude.c"
+    "$ROOT_DIR/src/ipset_load.c"
+    "$ROOT_DIR/src/ipset_merge.c"
+    "$ROOT_DIR/src/ipset_optimize.c"
+    "$ROOT_DIR/src/ipset_print.c"
+    "$ROOT_DIR/src/ipset_reduce.c"
 )
 
 cleanup() {
@@ -68,6 +68,7 @@ run_unit_test() {
         -DHAVE_CONFIG_H \
         -I"$BUILD_DIR" \
         -I"$ROOT_DIR" \
+        -I"$ROOT_DIR/src" \
         -pthread \
         "${EXTRA_CFLAGS[@]}" \
         "$src" \

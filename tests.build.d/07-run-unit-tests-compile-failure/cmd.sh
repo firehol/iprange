@@ -8,7 +8,7 @@ root="$tmpdir/root"
 fakebin="$tmpdir/bin"
 log="$tmpdir/run-unit-tests.log"
 
-mkdir -p "$root/tests.unit" "$fakebin"
+mkdir -p "$root/src" "$root/tests.unit" "$fakebin"
 
 cp "$script_dir/../../run-unit-tests.sh" "$root/run-unit-tests.sh"
 
@@ -16,20 +16,20 @@ cat >"$root/config.h" <<'EOF'
 /* synthetic config */
 EOF
 
-cat >"$root/ipset.c" <<'EOF'
+cat >"$root/src/ipset.c" <<'EOF'
 /* stub */
 EOF
-cp "$root/ipset.c" "$root/ipset_binary.c"
-cp "$root/ipset.c" "$root/ipset_combine.c"
-cp "$root/ipset.c" "$root/ipset_common.c"
-cp "$root/ipset.c" "$root/ipset_copy.c"
-cp "$root/ipset.c" "$root/ipset_diff.c"
-cp "$root/ipset.c" "$root/ipset_exclude.c"
-cp "$root/ipset.c" "$root/ipset_load.c"
-cp "$root/ipset.c" "$root/ipset_merge.c"
-cp "$root/ipset.c" "$root/ipset_optimize.c"
-cp "$root/ipset.c" "$root/ipset_print.c"
-cp "$root/ipset.c" "$root/ipset_reduce.c"
+cp "$root/src/ipset.c" "$root/src/ipset_binary.c"
+cp "$root/src/ipset.c" "$root/src/ipset_combine.c"
+cp "$root/src/ipset.c" "$root/src/ipset_common.c"
+cp "$root/src/ipset.c" "$root/src/ipset_copy.c"
+cp "$root/src/ipset.c" "$root/src/ipset_diff.c"
+cp "$root/src/ipset.c" "$root/src/ipset_exclude.c"
+cp "$root/src/ipset.c" "$root/src/ipset_load.c"
+cp "$root/src/ipset.c" "$root/src/ipset_merge.c"
+cp "$root/src/ipset.c" "$root/src/ipset_optimize.c"
+cp "$root/src/ipset.c" "$root/src/ipset_print.c"
+cp "$root/src/ipset.c" "$root/src/ipset_reduce.c"
 
 cat >"$root/tests.unit/broken.c" <<'EOF'
 int main(void) { return 0; }
