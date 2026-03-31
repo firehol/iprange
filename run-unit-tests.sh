@@ -64,7 +64,7 @@ run_unit_test() {
 
     echo -e "${YELLOW}Running unit test: $name${NC}"
 
-    "$CC_BIN" \
+    if ! "$CC_BIN" \
         -DHAVE_CONFIG_H \
         -I"$BUILD_DIR" \
         -I"$ROOT_DIR" \
@@ -73,7 +73,10 @@ run_unit_test() {
         "$src" \
         "${PROJECT_SOURCES[@]}" \
         "${EXTRA_LDFLAGS[@]}" \
-        -o "$bin"
+        -o "$bin"; then
+        echo -e "${RED}Unit test build failed${NC}"
+        return 1
+    fi
 
     ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1:abort_on_error=1} \
     UBSAN_OPTIONS=${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=1} \

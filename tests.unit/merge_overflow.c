@@ -13,6 +13,7 @@ int main(void)
     size_t original_entries;
     size_t original_lines;
     uint32_t original_flags;
+    int rc;
 
     if(!to || !add) return 2;
 
@@ -29,7 +30,9 @@ int main(void)
     original_lines = to->lines;
     original_flags = to->flags;
 
-    ipset_merge(to, add);
+    rc = ipset_merge(to, add);
+
+    if(rc == 0) return 1;
 
     if(to->entries != original_entries) return 1;
     if(to->lines != original_lines) return 1;

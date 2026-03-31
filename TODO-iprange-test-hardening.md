@@ -12,6 +12,7 @@ User requirements:
 - Perform a complete code review as part of the work.
 - Fix all actionable Copilot PR review comments too, after validating them and adding proof coverage where that is practical.
 - Answer and resolve the remaining Copilot PR review threads after the fixes are in the branch.
+- Repeat the same process for any new Copilot PR review comments until there are no unresolved actionable Copilot threads left.
 
 # Analysis
 
@@ -90,6 +91,7 @@ User decisions already made:
 - Proceed with the next evidence-driven round on the remaining findings: prove/fix the `ipset_optimize()` OOM path if reproducible, investigate the DNS threading claim with tooling/stress before changing it, and do not patch the weaker `strcpy` / `lineid` claims without proof.
 - Fix all Copilot PR review comments too, not only the clearly broken ones.
 - Reply to and resolve the remaining Copilot review threads on PR `#37`.
+- Reply to and resolve any newly added Copilot review threads on PR `#37` as they appear.
 
 Pending decisions:
 - None identified yet.
@@ -105,6 +107,8 @@ Decisions made for the next fixes:
 - Test harnesses should work with an existing real top-level `./iprange` binary instead of hard-failing, as long as the original file is preserved and restored safely after the run.
 - Avoid unnecessary runtime dependencies in tests when the same coverage can be achieved with shell or base system tooling.
 - Sanitizer/build runners should pick job parallelism portably, with fallback when `nproc` is unavailable.
+- Unit-test harness failures must distinguish compile/link failures from test-runtime failures, so broken test sources or toolchains do not masquerade as exit-127 runtime errors.
+- Overflow-regression unit tests must assert both the failing API return code and state preservation, not only the preserved in-memory state.
 
 # Plan
 
@@ -140,6 +144,8 @@ Decisions made for the next fixes:
     - correct the `size_t` diagnostic format in `ipset_binary.c`.
 20. Re-run the relevant harness/build verification and then the broader CI-equivalent paths again.
 21. Fetch the current unresolved Copilot review threads on PR `#37`, reply with concrete evidence of the fixes, and resolve the threads.
+22. Re-check PR `#37` for any newly added Copilot review threads, address them with code/tests if needed, and resolve them after verification.
+23. Address the latest 2 Copilot comments on commit `414ef9a` by strengthening `tests.unit/merge_overflow.c` and by proving/fixing `run-unit-tests.sh` compile-failure reporting.
 
 Implemented test work:
 - Extended `run-tests.sh` to support multiple test roots and explicit binary selection.
@@ -161,6 +167,7 @@ Implemented test work:
 - Added 2 more CLI regressions under `tests.d/` for numeric-leading hyphen hostname parsing and malformed CIDR-like input rejection.
 - Added 3 more CLI regressions under `tests.d/` for malformed hostname-like input rejection, strict numeric CLI validation, and malformed binary metadata validation.
 - Added 1 more build regression under `tests.build.d/` for out-of-tree builds after the source tree already contains top-level object files.
+- Added 1 more build regression under `tests.build.d/` for `run-unit-tests.sh` compiler-failure handling.
 
 Implemented fixes after test proof:
 - Replaced signed shift operations with unsigned arithmetic in `iprange.h`.
@@ -197,6 +204,8 @@ Implemented fixes after test proof:
   - malformed hostnames with trailing junk such as `foo!bar`, `foo/bar`, and `foo bar` are rejected instead of being truncated to `foo`.
 - Added strict numeric parsing in `iprange.c` for `--min-prefix`, `--default-prefix`, `--dns-threads`, `--ipset-reduce`, and `--reduce-entries`, so invalid or partial numeric input now fails fast.
 - Added strict binary metadata parsing in `ipset_binary.c`, rejecting malformed numeric fields instead of accepting partial parses such as `record size 8garbage` or `records 0x10`.
+- Strengthened `tests.unit/merge_overflow.c` so it asserts `ipset_merge()` returns failure on the overflow-rejection path.
+- Fixed `run-unit-tests.sh` so compiler failures are reported immediately as build failures instead of falling through to missing-binary runtime errors.
 
 Residual issues intentionally not changed yet:
 - The `strcpy`-vs-`strncpy` concern still appears to be a fragility/style report rather than a demonstrated overflow path in this checkout, so it remains intentionally unchanged.
@@ -248,6 +257,9 @@ Current next-step analysis:
   - `run-tests.sh` is safe after the cleanup fix, but it still hard-fails if a real non-symlink `./iprange` exists. The desired behavior is to preserve and restore the original file and still run against the requested binary.
   - `tests.d/59-binary-semantic-validation/cmd.sh` still uses Perl for binary fixture generation. This is avoidable.
   - `run-sanitizer-tests.sh` still assumes `nproc` exists and needs a portable CPU-count fallback.
+- Latest Copilot follow-up review on PR `#37` after commit `414ef9a`:
+  - `tests.unit/merge_overflow.c` was still too weak because it did not assert that `ipset_merge()` actually returned failure on overflow.
+  - `run-unit-tests.sh` continued after compiler failure and usually surfaced a misleading runtime failure (`Exit code 127`) instead of clearly reporting a build-step failure.
 
 # Implied Decisions
 
@@ -300,6 +312,9 @@ Current next-step analysis:
   - Add a regression that proves `run-sanitizer-tests.sh` falls back cleanly when `nproc` is unavailable.
   - Re-run `tests.d/59-binary-semantic-validation` after removing the Perl dependency and confirm behavior is unchanged.
   - After publishing the fixes, fetch the latest unresolved Copilot threads again and confirm each thread is either replied to and resolved or explicitly still actionable.
+- Additional Copilot follow-up verification requirements:
+  - Strengthen `tests.unit/merge_overflow.c` so it explicitly fails if `ipset_merge()` returns success on an overflow path.
+  - Add a build regression that proves `run-unit-tests.sh` surfaces compiler failures as build failures instead of falling through to a fake runtime failure.
 - Additional regression coverage for:
   - malformed binary files lying about `lines` / `unique ips`,
   - malformed binary files claiming `optimized` while containing duplicate or overlapping records,
