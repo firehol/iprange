@@ -126,9 +126,10 @@ get_configure_ac_rpmrel() {
 }
 
 get_spec_version() {
-  get_staged_file -o "$1".spec.in
-  test -f $MYTMP/files/"$1".spec.in || return 0 # Spec file is optional
-  sed -n -e '1,/^%changelog/d' -e '/^*/{s/.*- \([0-9].*\)/\1/p;q}' "$1".spec.in
+  local spec_template="packaging/$1.spec.in"
+  get_staged_file -o "$spec_template"
+  test -f "$MYTMP/files/$spec_template" || return 0 # Spec file is optional
+  sed -n -e '1,/^%changelog/d' -e '/^*/{s/.*- \([0-9].*\)/\1/p;q}' "$MYTMP/files/$spec_template"
 }
 
 splitver() {
@@ -223,7 +224,7 @@ check_versions() {
       -o $specmin -ne $clogmin \
       -o $specfix -ne $clogfix ]
     then
-      echo "Main version of $package.spec.in ($specver) differs from ChangeLog ($clogver)"
+      echo "Main version of packaging/$package.spec.in ($specver) differs from ChangeLog ($clogver)"
       status=1
     fi
   fi
@@ -263,7 +264,7 @@ check_versions() {
       local confrpmrel=`get_configure_ac_rpmrel`
       if [ "$specsfx" != "$confrpmrel" ]
       then
-        echo "%changelog suffix in $package.spec.in ($specsfx) differs from configure.ac PACKAGE_RPM_RELEASE ($confrpmrel)"
+        echo "%changelog suffix in packaging/$package.spec.in ($specsfx) differs from configure.ac PACKAGE_RPM_RELEASE ($confrpmrel)"
         status=1
       fi
     fi

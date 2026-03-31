@@ -41,12 +41,13 @@ if ! "${CC:-clang}" \
     -DHAVE_CONFIG_H \
     -I"$BUILD_DIR" \
     -I../.. \
+    -I../../src \
     -fsanitize=address,undefined \
     -g -O1 -fno-omit-frame-pointer \
     -Dmalloc=test_malloc \
     "$tmpdir/oom.c" \
-    ../../ipset.c \
-    ../../ipset_optimize.c \
+    ../../src/ipset.c \
+    ../../src/ipset_optimize.c \
     -o "$tmpdir/oom"; then
     echo "# ERROR: failed to build optimize OOM harness"
     exit 1

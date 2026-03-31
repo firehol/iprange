@@ -2,7 +2,9 @@
 .libs
 
 *.o
+*.plist
 *.in
+!packaging/iprange.spec.in
 *~
 *.1
 
@@ -25,6 +27,7 @@ stamp-h1
 
 iprange
 iprange.spec
+packaging/iprange.spec
 
 *.tar.gz
 *.tar.bz2

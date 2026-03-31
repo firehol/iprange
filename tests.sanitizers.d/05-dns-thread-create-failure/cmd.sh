@@ -57,22 +57,23 @@ if ! "${CC:-clang}" \
     -DHAVE_CONFIG_H \
     -I"$BUILD_DIR" \
     -I../.. \
+    -I../../src \
     -pthread \
     -fsanitize=address,undefined \
     -g -O1 -fno-omit-frame-pointer \
     "$tmpdir/dns_create_fail.c" \
-    ../../ipset.c \
-    ../../ipset_binary.c \
-    ../../ipset_combine.c \
-    ../../ipset_common.c \
-    ../../ipset_copy.c \
-    ../../ipset_diff.c \
-    ../../ipset_exclude.c \
-    ../../ipset_load.c \
-    ../../ipset_merge.c \
-    ../../ipset_optimize.c \
-    ../../ipset_print.c \
-    ../../ipset_reduce.c \
+    ../../src/ipset.c \
+    ../../src/ipset_binary.c \
+    ../../src/ipset_combine.c \
+    ../../src/ipset_common.c \
+    ../../src/ipset_copy.c \
+    ../../src/ipset_diff.c \
+    ../../src/ipset_exclude.c \
+    ../../src/ipset_load.c \
+    ../../src/ipset_merge.c \
+    ../../src/ipset_optimize.c \
+    ../../src/ipset_print.c \
+    ../../src/ipset_reduce.c \
     -o "$tmpdir/dns_create_fail"; then
     echo "# ERROR: failed to build DNS thread-create harness"
     exit 1

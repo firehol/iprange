@@ -1,8 +1,9 @@
 #
 # Copyright (C) 2015 Alon Bar-Lev <alon.barlev@gmail.com>
 #
-AUTOMAKE_OPTIONS=foreign dist-xz dist-bzip2 1.10
+AUTOMAKE_OPTIONS=foreign dist-xz dist-bzip2 1.10 subdir-objects
 ACLOCAL_AMFLAGS = -I m4
+AM_CPPFLAGS = -I$(srcdir)/src
 
 MAINTAINERCLEANFILES= \
 	config.log config.status \
@@ -23,55 +24,55 @@ AM_H2MFLAGS = \
 iprange_DESCRIPTION = "manage IP ranges"
 
 bin_PROGRAMS = iprange
-dist_noinst_DATA = iprange.spec
+dist_noinst_DATA = packaging/iprange.spec
 
 if ENABLE_MAN
 man_MANS = iprange.1
 endif
 
 iprange_SOURCES = \
-	iprange.c \
-	iprange.h \
-	ipset.c \
-	ipset.h \
-	ipset_binary.c \
-	ipset_binary.h \
-	ipset_combine.c \
-	ipset_combine.h \
-	ipset_common.c \
-	ipset_common.h \
-	ipset_copy.c \
-	ipset_copy.h \
-	ipset_diff.c \
-	ipset_diff.h \
-	ipset_exclude.c \
-	ipset_exclude.h \
-	ipset_load.c \
-	ipset_load.h \
-	ipset_merge.c \
-	ipset_merge.h \
-	ipset_optimize.c \
-	ipset_optimize.h \
-	ipset_print.c \
-	ipset_print.h \
-	ipset_reduce.c \
-	ipset_reduce.h \
+	src/iprange.c \
+	src/iprange.h \
+	src/ipset.c \
+	src/ipset.h \
+	src/ipset_binary.c \
+	src/ipset_binary.h \
+	src/ipset_combine.c \
+	src/ipset_combine.h \
+	src/ipset_common.c \
+	src/ipset_common.h \
+	src/ipset_copy.c \
+	src/ipset_copy.h \
+	src/ipset_diff.c \
+	src/ipset_diff.h \
+	src/ipset_exclude.c \
+	src/ipset_exclude.h \
+	src/ipset_load.c \
+	src/ipset_load.h \
+	src/ipset_merge.c \
+	src/ipset_merge.h \
+	src/ipset_optimize.c \
+	src/ipset_optimize.h \
+	src/ipset_print.c \
+	src/ipset_print.h \
+	src/ipset_reduce.c \
+	src/ipset_reduce.h \
 	$(NULL)
 
 VPATH_LOCAL_OBJECTS = \
-	iprange.$(OBJEXT) \
-	ipset.$(OBJEXT) \
-	ipset_binary.$(OBJEXT) \
-	ipset_combine.$(OBJEXT) \
-	ipset_common.$(OBJEXT) \
-	ipset_copy.$(OBJEXT) \
-	ipset_diff.$(OBJEXT) \
-	ipset_exclude.$(OBJEXT) \
-	ipset_load.$(OBJEXT) \
-	ipset_merge.$(OBJEXT) \
-	ipset_optimize.$(OBJEXT) \
-	ipset_print.$(OBJEXT) \
-	ipset_reduce.$(OBJEXT)
+	src/iprange.$(OBJEXT) \
+	src/ipset.$(OBJEXT) \
+	src/ipset_binary.$(OBJEXT) \
+	src/ipset_combine.$(OBJEXT) \
+	src/ipset_common.$(OBJEXT) \
+	src/ipset_copy.$(OBJEXT) \
+	src/ipset_diff.$(OBJEXT) \
+	src/ipset_exclude.$(OBJEXT) \
+	src/ipset_load.$(OBJEXT) \
+	src/ipset_merge.$(OBJEXT) \
+	src/ipset_optimize.$(OBJEXT) \
+	src/ipset_print.$(OBJEXT) \
+	src/ipset_reduce.$(OBJEXT)
 
 LOCAL_OBJECT_STAMP = local-build-objects.stamp
 BUILT_SOURCES = $(LOCAL_OBJECT_STAMP)
@@ -90,7 +91,8 @@ $(VPATH_LOCAL_OBJECTS): $(LOCAL_OBJECT_STAMP)
 EXTRA_DIST = \
 	.gitignore \
 	README.md \
-	iprange-9999.ebuild \
+	packaging/iprange.spec.in \
+	packaging/iprange-9999.ebuild \
 	autogen.sh \
 	run-tests.sh \
 	run-build-tests.sh \

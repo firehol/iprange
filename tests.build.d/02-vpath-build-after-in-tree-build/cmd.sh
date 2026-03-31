@@ -14,15 +14,19 @@ tar \
     --exclude='./build-asan' \
     --exclude='./build-tsan' \
     --exclude='./.deps' \
+    --exclude='./src/.deps' \
     --exclude='./*.o' \
+    --exclude='./src/*.o' \
     --exclude='./iprange' \
     --exclude='./*.plist' \
+    --exclude='./src/*.plist' \
     --exclude='./Makefile' \
     --exclude='./config.h' \
     --exclude='./config.log' \
     --exclude='./config.status' \
     --exclude='./config.cache' \
     --exclude='./iprange.spec' \
+    --exclude='./packaging/iprange.spec' \
     --exclude='./local-build-objects.stamp' \
     --exclude='./stamp-h1' \
     -C "$srcroot" -cf - . | tar -C "$srcdir" -xf -
@@ -33,6 +37,8 @@ if [ ! -x "$srcdir/configure" ]; then
         exit 1
     }
 fi
+
+mkdir -p "$srcdir/src"
 
 for object in \
     iprange.o \
@@ -48,7 +54,7 @@ for object in \
     ipset_optimize.o \
     ipset_print.o \
     ipset_reduce.o; do
-    : >"$srcdir/$object"
+    : >"$srcdir/src/$object"
 done
 
 mkdir -p "$tmpdir/build"
