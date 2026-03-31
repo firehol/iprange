@@ -1,0 +1,1 @@
+# OK: run-sanitizer-tests falls back when nproc is unavailable

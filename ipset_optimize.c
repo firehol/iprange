@@ -38,11 +38,18 @@ inline void ipset_optimize(ipset *ips) {
     in_addr_t lo, hi;
 
     if(unlikely(ips->flags & IPSET_FLAG_OPTIMIZED)) {
-        fprintf(stderr, "%s: Is already optimized %s\n", PROG, ips->filename);
+        if(unlikely(debug))
+            fprintf(stderr, "%s: Is already optimized %s\n", PROG, ips->filename);
         return;
     }
 
     if(unlikely(debug)) fprintf(stderr, "%s: Optimizing %s\n", PROG, ips->filename);
+
+    if(unlikely(n == 0)) {
+        ips->flags |= IPSET_FLAG_OPTIMIZED;
+        ips->unique_ips = 0;
+        return;
+    }
 
     /* sort it */
     qsort((void *)ips->netaddrs, ips->entries, sizeof(network_addr_t), compar_netaddr);
@@ -50,8 +57,7 @@ inline void ipset_optimize(ipset *ips) {
     /* optimize it in a new space */
     naddrs = malloc(ips->entries * sizeof(network_addr_t));
     if(unlikely(!naddrs)) {
-        ipset_free(ips);
-        fprintf(stderr, "%s: Cannot allocate memory (%zu bytes)\n", PROG, ips->entries * sizeof(network_addr_t));
+        fprintf(stderr, "%s: Cannot allocate memory (%zu bytes)\n", PROG, n * sizeof(network_addr_t));
         exit(1);
     }
 
@@ -59,8 +65,6 @@ inline void ipset_optimize(ipset *ips) {
     ips->entries = 0;
     ips->unique_ips = 0;
     ips->lines = 0;
-
-    if(!n) return;
 
     lo = oaddrs[0].addr;
     hi = oaddrs[0].broadcast;

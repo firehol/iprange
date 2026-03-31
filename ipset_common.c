@@ -28,6 +28,12 @@ inline ipset *ipset_common(ipset *ips1, ipset *ips2) {
     n1 = ips1->entries;
     n2 = ips2->entries;
 
+    if(unlikely(n1 == 0 || n2 == 0)) {
+        ips->lines = ips1->lines + ips2->lines;
+        ips->flags |= IPSET_FLAG_OPTIMIZED;
+        return ips;
+    }
+
     lo1 = ips1->netaddrs[0].addr;
     lo2 = ips2->netaddrs[0].addr;
     hi1 = ips1->netaddrs[0].broadcast;
@@ -82,5 +88,4 @@ inline ipset *ipset_common(ipset *ips1, ipset *ips2) {
 
     return ips;
 }
-
 

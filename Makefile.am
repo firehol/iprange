@@ -58,13 +58,59 @@ iprange_SOURCES = \
 	ipset_reduce.h \
 	$(NULL)
 
+VPATH_LOCAL_OBJECTS = \
+	iprange.$(OBJEXT) \
+	ipset.$(OBJEXT) \
+	ipset_binary.$(OBJEXT) \
+	ipset_combine.$(OBJEXT) \
+	ipset_common.$(OBJEXT) \
+	ipset_copy.$(OBJEXT) \
+	ipset_diff.$(OBJEXT) \
+	ipset_exclude.$(OBJEXT) \
+	ipset_load.$(OBJEXT) \
+	ipset_merge.$(OBJEXT) \
+	ipset_optimize.$(OBJEXT) \
+	ipset_print.$(OBJEXT) \
+	ipset_reduce.$(OBJEXT)
+
+LOCAL_OBJECT_STAMP = local-build-objects.stamp
+BUILT_SOURCES = $(LOCAL_OBJECT_STAMP)
+CLEANFILES = $(LOCAL_OBJECT_STAMP)
+
+# GNU make uses VPATH for both prerequisites and targets. If the source tree
+# contains stale in-tree object files, an out-of-tree build can skip local
+# compilation and fail at link time. A build-local stamp created after configure
+# keeps local object targets newer than any pre-existing source-tree objects.
+$(LOCAL_OBJECT_STAMP):
+	@rm -f $@
+	@touch $@
+
+$(VPATH_LOCAL_OBJECTS): $(LOCAL_OBJECT_STAMP)
+
 EXTRA_DIST = \
 	.gitignore \
 	README.md \
 	iprange-9999.ebuild \
 	autogen.sh \
+	run-tests.sh \
+	run-build-tests.sh \
+	run-unit-tests.sh \
+	run-sanitizer-tests.sh \
+	tests.d \
+	tests.build.d \
+	tests.sanitizers.d \
+	tests.unit \
 	$(man_MANS) \
 	$(NULL)
+
+check-local:
+	IPRANGE_BIN='$(abs_builddir)/iprange' $(SHELL) $(top_srcdir)/run-tests.sh
+	IPRANGE_BIN='$(abs_builddir)/iprange' $(SHELL) $(top_srcdir)/run-build-tests.sh
+
+check-sanitizers:
+	$(SHELL) $(top_srcdir)/run-sanitizer-tests.sh
+
+.PHONY: check-sanitizers
 
 if MAINTAINER_MODE
 %.1: %

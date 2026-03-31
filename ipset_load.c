@@ -28,11 +28,73 @@ typedef enum ipset_line_type {
     LINE_HAS_1_HOSTNAME = 3
 } IPSET_LINE_TYPE;
 
+static inline int token_looks_ip_like(const char *token)
+{
+    return (strchr(token, '.') || strchr(token, '/'));
+}
+
+static inline int is_hostname_char(char c)
+{
+    return (
+        (c >= '0' && c <= '9')
+        || (c >= 'a' && c <= 'z')
+        || (c >= 'A' && c <= 'Z')
+        || c == '_'
+        || c == '-'
+        || c == '.'
+    );
+}
+
+static inline int token_is_complete_ipv4_candidate(const char *token)
+{
+    int dots = 0;
+    int digits_in_part = 0;
+    const char *s;
+
+    if(strchr(token, '/')) return 1;
+
+    for(s = token; *s; s++) {
+        if(*s >= '0' && *s <= '9') {
+            digits_in_part++;
+            continue;
+        }
+
+        if(*s == '.' && digits_in_part) {
+            dots++;
+            digits_in_part = 0;
+            continue;
+        }
+
+        return 0;
+    }
+
+    return (dots == 3 && digits_in_part);
+}
+
+static inline int line_is_hostname_candidate(const char *line)
+{
+    const char *s = line;
+    int has_chars = 0;
+
+    while(*s == ' ' || *s == '\t') s++;
+
+    while(is_hostname_char(*s)) {
+        has_chars = 1;
+        s++;
+    }
+
+    if(unlikely(!has_chars)) return 0;
+
+    while(*s == ' ' || *s == '\t') s++;
+
+    return (*s == '#' || *s == ';' || *s == '\r' || *s == '\n' || *s == '\0');
+}
+
 static inline IPSET_LINE_TYPE parse_hostname(char *line, int lineid, char *ipstr, char *ipstr2, int len) {
     char *s = line;
     int i = 0;
 
-    if(ipstr2) { ; }
+    if(ipstr2 || lineid) { ; }
 
     /* skip all spaces */
     while(unlikely(*s == ' ' || *s == '\t')) s++;
@@ -46,6 +108,8 @@ static inline IPSET_LINE_TYPE parse_hostname(char *line, int lineid, char *ipstr
             || *s == '.'
     ))) ipstr[i++] = *s++;
 
+    if(unlikely(!i)) return LINE_IS_INVALID;
+
     /* terminate ipstr */
     ipstr[i] = '\0';
 
@@ -58,14 +122,14 @@ static inline IPSET_LINE_TYPE parse_hostname(char *line, int lineid, char *ipstr
     /* if we reached the end of line */
     if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_1_HOSTNAME;
 
-    fprintf(stderr, "%s: Ignoring text after hostname '%s' on line %d: '%s'\n", PROG, ipstr, lineid, s);
-
-    return LINE_HAS_1_HOSTNAME;
+    return LINE_IS_INVALID;
 }
 
 static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, char *ipstr2, int len) {
     char *s = line;
     int i = 0;
+    int ip_like = 0;
+    int hostname_candidate = 0;
 
     /* skip all spaces */
     while(unlikely(*s == ' ' || *s == '\t')) s++;
@@ -84,6 +148,8 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
 
     /* terminate ipstr */
     ipstr[i] = '\0';
+    ip_like = token_looks_ip_like(ipstr);
+    hostname_candidate = line_is_hostname_candidate(line);
 
     /* skip all spaces */
     while(unlikely(*s == ' ' || *s == '\t')) s++;
@@ -95,9 +161,10 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
     if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_1_IP;
 
     if(unlikely(*s != '-')) {
-        /*fprintf(stderr, "%s: Ignoring text on line %d, expected a - after %s, but found '%s'\n", PROG, lineid, ipstr, s);*/
-        /*return LINE_HAS_1_IP;*/
-        return parse_hostname(line, lineid, ipstr, ipstr2, len);
+        if(strchr(ipstr, '/')) return LINE_IS_INVALID;
+        if(ip_like && token_is_complete_ipv4_candidate(ipstr)) return LINE_IS_INVALID;
+        if(hostname_candidate) return parse_hostname(line, lineid, ipstr, ipstr2, len);
+        return LINE_IS_INVALID;
     }
 
     /* skip the - */
@@ -124,9 +191,9 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
         ipstr2[i++] = *s++;
 
     if(unlikely(!i)) {
-        /*fprintf(stderr, "%s: Incomplete range on line %d, expected an ip address after -, but line ended\n", PROG, lineid); */
-        /*return LINE_HAS_1_IP; */
-        return parse_hostname(line, lineid, ipstr, ipstr2, len);
+        if(!strchr(ipstr, '/') && !token_is_complete_ipv4_candidate(ipstr) && hostname_candidate)
+            return parse_hostname(line, lineid, ipstr, ipstr2, len);
+        return LINE_IS_INVALID;
     }
 
     /* terminate ipstr */
@@ -141,9 +208,10 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
     /* if we reached the end of line */
     if(likely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_HAS_2_IPS;
 
-    /*fprintf(stderr, "%s: Ignoring text on line %d, after the second ip address: '%s'\n", PROG, lineid, s); */
-    /*return LINE_HAS_2_IPS; */
-    return parse_hostname(line, lineid, ipstr, ipstr2, len);
+    if(!strchr(ipstr, '/') && !token_is_complete_ipv4_candidate(ipstr) && hostname_candidate)
+        return parse_hostname(line, lineid, ipstr, ipstr2, len);
+
+    return LINE_IS_INVALID;
 }
 
 /* ----------------------------------------------------------------------------
@@ -174,7 +242,6 @@ static unsigned long dns_requests_retries;
 static unsigned long dns_replies_found;
 static unsigned long dns_replies_failed;
 
-static pthread_mutex_t dns_mut = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t dns_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t dns_requests_mut = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t dns_replies_mut = PTHREAD_MUTEX_INITIALIZER;
@@ -184,21 +251,38 @@ void dns_unlock_requests(void) { pthread_mutex_unlock(&dns_requests_mut); }
 void dns_lock_replies(void)    { pthread_mutex_lock(&dns_replies_mut); }
 void dns_unlock_replies(void)  { pthread_mutex_unlock(&dns_replies_mut); }
 
+static void dns_reset_stats(void)
+{
+    dns_lock_requests();
+    dns_requests = NULL;
+    dns_requests_pending = 0;
+    dns_requests_made = 0;
+    dns_requests_finished = 0;
+    dns_requests_retries = 0;
+    dns_replies_found = 0;
+    dns_replies_failed = 0;
+    dns_unlock_requests();
+
+    dns_lock_replies();
+    dns_replies = NULL;
+    dns_unlock_replies();
+}
+
 // the threads waiting for requests
 void dns_thread_wait_for_requests(void) {
-    pthread_mutex_lock(&dns_mut);
+    dns_lock_requests();
     while(!dns_requests)
-        pthread_cond_wait(&dns_cond, &dns_mut);
-    pthread_mutex_unlock(&dns_mut);
+        pthread_cond_wait(&dns_cond, &dns_requests_mut);
+    dns_unlock_requests();
 }
 
 // the master signals the threads for new requests
 static void dns_signal_threads(void)
 {
     /* signal the childs we have a new request for them */
-    pthread_mutex_lock(&dns_mut);
+    dns_lock_requests();
     pthread_cond_signal(&dns_cond);
-    pthread_mutex_unlock(&dns_mut);
+    dns_unlock_requests();
 }
 
 
@@ -211,7 +295,7 @@ static void *dns_thread_resolve(void *ptr);
  *
  */
 
-static void dns_request_add(DNSREQ *d)
+static int dns_request_add(DNSREQ *d)
 {
     unsigned long pending;
 
@@ -233,17 +317,26 @@ static void dns_request_add(DNSREQ *d)
 
         if(pthread_create(&thread, NULL, dns_thread_resolve, NULL)) {
             fprintf(stderr, "%s: Cannot create DNS thread.\n", PROG);
-            return;
-        }
-        else if(pthread_detach(thread)) {
-            fprintf(stderr, "%s: Cannot detach DNS thread.\n", PROG);
-            return;
-        }
+            if(dns_threads == 0) {
+                dns_lock_requests();
+                dns_requests = d->next;
+                dns_requests_pending--;
+                dns_requests_made--;
+                dns_unlock_requests();
 
-        dns_threads++;
+                free(d);
+                return -1;
+            }
+        }
+        else {
+            dns_threads++;
+            if(pthread_detach(thread))
+                fprintf(stderr, "%s: Cannot detach DNS thread.\n", PROG);
+        }
     }
 
     dns_signal_threads();
+    return 0;
 }
 
 
@@ -342,16 +435,14 @@ static DNSREQ *dns_request_get(void)
      */
 
     while(!ret) {
+        dns_lock_requests();
         if(dns_requests) {
-            dns_lock_requests();
-            if(dns_requests) {
-                ret = dns_requests;
-                dns_requests = dns_requests->next;
-                ret->next = NULL;
-            }
-            dns_unlock_requests();
-            if(ret) continue;
+            ret = dns_requests;
+            dns_requests = dns_requests->next;
+            ret->next = NULL;
         }
+        dns_unlock_requests();
+        if(ret) continue;
 
         dns_thread_wait_for_requests();
     }
@@ -453,9 +544,13 @@ static void *dns_thread_resolve(void *ptr)
 
 static void dns_process_replies(ipset *ips)
 {
-    if(!dns_replies) return;
-
     dns_lock_replies();
+
+    if(!dns_replies) {
+        dns_unlock_replies();
+        return;
+    }
+
     while(dns_replies) {
         DNSREP *p;
 
@@ -502,7 +597,7 @@ static void dns_process_replies(ipset *ips)
  *
  */
 
-static void dns_request(ipset *ips, char *hostname)
+static int dns_request(ipset *ips, char *hostname)
 {
     DNSREQ *d;
 
@@ -521,12 +616,14 @@ static void dns_request(ipset *ips, char *hostname)
     d->tries = 20;
 
     /* add the request to the queue */
-    dns_request_add(d);
+    if(dns_request_add(d))
+        return -1;
 
-    return;
+    return 0;
 
     cleanup:
     fprintf(stderr, "%s: out of memory, while trying to resolv '%s'\n", PROG, hostname);
+    return -1;
 }
 
 
@@ -537,19 +634,38 @@ static void dns_request(ipset *ips, char *hostname)
  *
  */
 
-static void dns_done(ipset *ips)
+static int dns_done(ipset *ips)
 {
     unsigned long dots = 40, shown = 0, should_show = 0;
+    unsigned long pending, made, finished, retries, replies_found, replies_failed;
 
     if(ips) { ; }
 
-    if(!dns_requests_made) return;
+    dns_lock_requests();
+    made = dns_requests_made;
+    dns_unlock_requests();
 
-    while(dns_requests_pending) {
+    if(!made) {
+        dns_reset_stats();
+        return 0;
+    }
+
+    while(1) {
+        dns_lock_requests();
+        pending = dns_requests_pending;
+        made = dns_requests_made;
+        finished = dns_requests_finished;
+        retries = dns_requests_retries;
+        replies_found = dns_replies_found;
+        replies_failed = dns_replies_failed;
+        dns_unlock_requests();
+
+        if(!pending) break;
+
         if(unlikely(debug))
-            fprintf(stderr, "%s: DNS: waiting %lu DNS resolutions to finish...\n", PROG, dns_requests_pending);
+            fprintf(stderr, "%s: DNS: waiting %lu DNS resolutions to finish...\n", PROG, pending);
         else if(dns_progress) {
-            should_show = dots * dns_requests_finished / dns_requests_made;
+            should_show = dots * finished / made;
             for(; shown < should_show; shown++) {
                 if(!(shown % 10)) fprintf(stderr, "%lu%%", shown * 100 / dots);
                 else fprintf(stderr, ".");
@@ -558,15 +674,22 @@ static void dns_done(ipset *ips)
 
         dns_process_replies(ips);
 
-        if(dns_requests_pending) {
+        if(pending) {
             dns_signal_threads();
             sleep(1);
         }
     }
     dns_process_replies(ips);
 
+    dns_lock_requests();
+    made = dns_requests_made;
+    retries = dns_requests_retries;
+    replies_found = dns_replies_found;
+    replies_failed = dns_replies_failed;
+    dns_unlock_requests();
+
     if(unlikely(debug))
-        fprintf(stderr, "%s: DNS: made %lu DNS requests, failed %lu, retries: %lu, IPs got %lu, threads used %d of %d\n", PROG, dns_requests_made, dns_replies_failed, dns_requests_retries, dns_replies_found, dns_threads, dns_threads_max);
+        fprintf(stderr, "%s: DNS: made %lu DNS requests, failed %lu, retries: %lu, IPs got %lu, threads used %d of %d\n", PROG, made, replies_failed, retries, replies_found, dns_threads, dns_threads_max);
     else if(dns_progress) {
         for(; shown <= dots; shown++) {
             if(!(shown % 10)) fprintf(stderr, "%lu%%", shown * 100 / dots);
@@ -574,6 +697,9 @@ static void dns_done(ipset *ips)
         }
         fprintf(stderr, "\n");
     }
+
+    dns_reset_stats();
+    return (replies_failed != 0);
 }
 
 /* ----------------------------------------------------------------------------
@@ -589,6 +715,7 @@ static void dns_done(ipset *ips)
 ipset *ipset_load(const char *filename) {
     FILE *fp = stdin;
     int lineid = 0;
+    int parse_errors = 0;
     char line[MAX_LINE + 1], ipstr[MAX_INPUT_ELEMENT + 1], ipstr2[MAX_INPUT_ELEMENT + 1];
     ipset *ips = ipset_create((filename && *filename)?filename:"stdin", 0);
 
@@ -640,6 +767,7 @@ ipset *ipset_load(const char *filename) {
             case LINE_IS_INVALID:
                 /* cannot read line */
                 fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
+                parse_errors = 1;
                 break;
 
             case LINE_IS_EMPTY:
@@ -648,8 +776,10 @@ ipset *ipset_load(const char *filename) {
 
             case LINE_HAS_1_IP:
                 /* 1 IP on this line */
-                if(unlikely(!ipset_add_ipstr(ips, ipstr)))
+                if(unlikely(!ipset_add_ipstr(ips, ipstr))) {
                     fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
+                    parse_errors = 1;
+                }
                 break;
 
             case LINE_HAS_2_IPS:
@@ -662,6 +792,7 @@ ipset *ipset_load(const char *filename) {
                 if(likely(!err)) netaddr2 = str2netaddr(ipstr2, &err);
                 if(unlikely(err)) {
                     fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
+                    parse_errors = 1;
                     continue;
                 }
 
@@ -676,7 +807,12 @@ ipset *ipset_load(const char *filename) {
                     fprintf(stderr, "%s: DNS resolution for hostname '%s' from line %d of file %s.\n", PROG, ipstr, lineid, ips->filename);
 
                 /* resolve_hostname(ips, ipstr); */
-                dns_request(ips, ipstr);
+                if(unlikely(dns_request(ips, ipstr))) {
+                    if(likely(fp != stdin)) fclose(fp);
+                    dns_reset_stats();
+                    ipset_free(ips);
+                    return NULL;
+                }
                 break;
 
             default:
@@ -687,9 +823,17 @@ ipset *ipset_load(const char *filename) {
 
     if(likely(fp != stdin)) fclose(fp);
 
-    dns_done(ips);
+    if(unlikely(dns_done(ips))) {
+        ipset_free(ips);
+        return NULL;
+    }
 
     if(unlikely(!ips)) return NULL;
+
+    if(unlikely(parse_errors)) {
+        ipset_free(ips);
+        return NULL;
+    }
 
     if(unlikely(debug)) fprintf(stderr, "%s: Loaded %s %s\n", PROG, (ips->flags & IPSET_FLAG_OPTIMIZED)?"optimized":"non-optimized", ips->filename);
 
@@ -702,4 +846,3 @@ ipset *ipset_load(const char *filename) {
 
     return ips;
 }
-

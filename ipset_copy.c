@@ -12,6 +12,11 @@ inline ipset *ipset_copy(ipset *ips1) {
 
     if(unlikely(debug)) fprintf(stderr, "%s: Copying %s\n", PROG, ips1->filename);
 
+    if(unlikely(ips1->entries > ips1->entries_max)) {
+        fprintf(stderr, "%s: Cannot copy ipset %s because it has an invalid internal entry count\n", PROG, ips1->filename);
+        return NULL;
+    }
+
     ips = ipset_create(ips1->filename, ips1->entries);
     if(unlikely(!ips)) return NULL;
 
@@ -25,5 +30,4 @@ inline ipset *ipset_copy(ipset *ips1) {
 
     return ips;
 }
-
 

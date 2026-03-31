@@ -1,0 +1,1 @@
+# OK: DNS thread-create failure fails cleanly without hanging
