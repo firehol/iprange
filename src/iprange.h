@@ -181,4 +181,16 @@ static inline char *ip2str_r(char *buf, in_addr_t IP) {
 #include "ipset_print.h"
 #include "ipset_reduce.h"
 
+/* operation modes — shared between iprange.c and iprange6_main.c */
+#define MODE_COMBINE 1
+#define MODE_COMPARE 2
+#define MODE_COMPARE_FIRST 3
+#define MODE_COMPARE_NEXT 4
+#define MODE_COUNT_UNIQUE_MERGED 5
+#define MODE_COUNT_UNIQUE_ALL 6
+#define MODE_REDUCE 7
+#define MODE_COMMON 8
+#define MODE_EXCLUDE_NEXT 9
+#define MODE_DIFF 10
+
 #endif //IPRANGE_IPRANGE_H

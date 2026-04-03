@@ -1,0 +1,7 @@
+# Mapped IPv6 converted to IPv4:
+10.0.0.1
+# Mapped IPv6 with uppercase F:
+192.168.1.1
+# Multiple mapped with regular IPv4:
+10.0.0.1
+10.0.0.2/31

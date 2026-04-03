@@ -1,4 +1,9 @@
 #include "iprange.h"
+#include "iprange6.h"
+#include "ipset6_binary.h"
+
+extern int active_family;
+extern unsigned long ipv6_dropped_in_ipv4_mode;
 
 /*
  * the maximum line element to read in input files
@@ -760,14 +765,55 @@ ipset *ipset_load(const char *filename) {
         return ips;
     }
 
+    if(unlikely(!strcmp(line, BINARY_HEADER_V20))) {
+        fprintf(stderr, "%s: %s: IPv6 binary file cannot be loaded in IPv4 mode (use -6)\n", PROG, ips->filename);
+        ipset_free(ips);
+        if(likely(fp != stdin)) fclose(fp);
+        return NULL;
+    }
+
     do {
         lineid++;
 
         switch(parse_line(line, lineid, ipstr, ipstr2, MAX_INPUT_ELEMENT)) {
             case LINE_IS_INVALID:
+            {
+                /* check if this is an IPv6 line in IPv4 mode:
+                 * must have at least two colons (a:b or ::x) to be plausible IPv6 */
+                char *colon = strchr(line, ':');
+                char *colon2 = colon ? strchr(colon + 1, ':') : NULL;
+                if(colon2 && active_family != 6) {
+                    /* try to extract IPv4 from mapped IPv6 (::ffff:x.x.x.x) */
+                    char *s = line;
+                    while(*s == ' ' || *s == '\t') s++;
+                    if(s[0] == ':' && s[1] == ':' && (s[2] == 'f' || s[2] == 'F')
+                       && (s[3] == 'f' || s[3] == 'F') && (s[4] == 'f' || s[4] == 'F')
+                       && (s[5] == 'f' || s[5] == 'F') && s[6] == ':') {
+                        /* extract the IPv4 part after ::ffff: */
+                        char v4str[MAX_INPUT_ELEMENT + 1];
+                        int vi = 0;
+                        char *v4 = s + 7;
+                        while(vi < MAX_INPUT_ELEMENT && ((*v4 >= '0' && *v4 <= '9') || *v4 == '.' || *v4 == '/'))
+                            v4str[vi++] = *v4++;
+                        v4str[vi] = '\0';
+
+                        /* skip trailing whitespace/comment */
+                        while(*v4 == ' ' || *v4 == '\t') v4++;
+                        if(vi > 0 && (*v4 == '\0' || *v4 == '\n' || *v4 == '\r' || *v4 == '#' || *v4 == ';')) {
+                            if(ipset_add_ipstr(ips, v4str))
+                                break; /* successfully converted mapped IPv6 to IPv4 */
+                        }
+                    }
+
+                    /* non-mapped IPv6: drop gracefully with counter */
+                    ipv6_dropped_in_ipv4_mode++;
+                    break;
+                }
+
                 /* cannot read line */
                 fprintf(stderr, "%s: Cannot understand line No %d from %s: %s\n", PROG, lineid, ips->filename, line);
                 parse_errors = 1;
+            }
                 break;
 
             case LINE_IS_EMPTY:
@@ -833,6 +879,11 @@ ipset *ipset_load(const char *filename) {
     if(unlikely(parse_errors)) {
         ipset_free(ips);
         return NULL;
+    }
+
+    if(ipv6_dropped_in_ipv4_mode > 0) {
+        fprintf(stderr, "%s: %s: %lu IPv6 entries dropped (use -6 for IPv6 mode)\n", PROG, ips->filename, ipv6_dropped_in_ipv4_mode);
+        ipv6_dropped_in_ipv4_mode = 0;
     }
 
     if(unlikely(debug)) fprintf(stderr, "%s: Loaded %s %s\n", PROG, (ips->flags & IPSET_FLAG_OPTIMIZED)?"optimized":"non-optimized", ips->filename);

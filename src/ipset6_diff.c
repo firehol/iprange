@@ -4,7 +4,7 @@
 
 inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
     ipset6 *ips;
-    unsigned long int n1, n2, i1 = 0, i2 = 0;
+    size_t n1, n2, i1 = 0, i2 = 0;
     ipv6_addr_t lo1, lo2, hi1, hi2;
 
     if(unlikely(!(ips1->flags & IPSET_FLAG_OPTIMIZED)))
@@ -78,20 +78,28 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
             ipset6_add_ip_range(ips, lo1, lo2 - 1);
 
         if(hi1 > hi2) {
-            lo1 = hi2 + 1;
-            i2++;
+            if(hi2 == IPV6_ADDR_MAX) { i1++; i2++; }
+            else { lo1 = hi2 + 1; i2++; }
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
                 hi2 = ips2->netaddrs[i2].broadcast;
             }
+            if(i1 < n1 && lo1 > hi1) {
+                lo1 = ips1->netaddrs[i1].addr;
+                hi1 = ips1->netaddrs[i1].broadcast;
+            }
             continue;
         }
         else if(hi2 > hi1) {
-            lo2 = hi1 + 1;
-            i1++;
+            if(hi1 == IPV6_ADDR_MAX) { i1++; i2++; }
+            else { lo2 = hi1 + 1; i1++; }
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
                 hi1 = ips1->netaddrs[i1].broadcast;
+            }
+            if(i2 < n2 && lo2 > hi2) {
+                lo2 = ips2->netaddrs[i2].addr;
+                hi2 = ips2->netaddrs[i2].broadcast;
             }
             continue;
         }

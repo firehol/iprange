@@ -111,17 +111,21 @@ static inline network_addr6_t str2netaddr6(char *ipstr, int *err) {
     ipv6_addr_t addr;
 
     if((prefixstr = strchr(ipstr, '/'))) {
+        char *endptr = NULL;
+        long parsed_prefix;
         *prefixstr = '\0';
         prefixstr++;
         errno = 0;
-        prefix = atoi(prefixstr);
-        if(unlikely(errno || (*prefixstr == '\0') || prefix < 0 || prefix > 128)) {
+        parsed_prefix = strtol(prefixstr, &endptr, 10);
+        if(unlikely(errno || !endptr || endptr == prefixstr || *endptr != '\0'
+                    || parsed_prefix < 0 || parsed_prefix > 128)) {
             if(err) (*err)++;
             fprintf(stderr, "%s: Invalid IPv6 prefix /%s\n", PROG, prefixstr);
             netaddr.addr = 0;
             netaddr.broadcast = 0;
             return netaddr;
         }
+        prefix = (int)parsed_prefix;
     }
 
     if(!str_to_ipv6(ipstr, &addr)) {

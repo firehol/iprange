@@ -4,7 +4,7 @@
 
 inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
     ipset6 *ips;
-    unsigned long int n1, n2, i1 = 0, i2 = 0;
+    size_t n1, n2, i1 = 0, i2 = 0;
     ipv6_addr_t lo1, lo2, hi1, hi2;
 
     if(unlikely(!(ips1->flags & IPSET_FLAG_OPTIMIZED)))
@@ -87,7 +87,18 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
             }
         }
         else {
-            lo1 = hi2 + 1;
+            /* hi2 + 1 would overflow if hi2 == IPV6_ADDR_MAX, but that means
+             * ips2 covers everything from lo1..max, so nothing remains in ips1 */
+            if(hi2 == IPV6_ADDR_MAX) {
+                i1++;
+                if(i1 < n1) {
+                    lo1 = ips1->netaddrs[i1].addr;
+                    hi1 = ips1->netaddrs[i1].broadcast;
+                }
+            }
+            else {
+                lo1 = hi2 + 1;
+            }
             i2++;
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;

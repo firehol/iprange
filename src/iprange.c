@@ -284,6 +284,7 @@ static void usage(const char *me) {
         "	--has-reduce\n"
         "	--has-filelist-loading\n"
         "	--has-directory-loading\n"
+        "	--has-ipv6\n"
         "		Exits with 0,\n"
         "		other versions of iprange will exit with 1.\n"
         "		Use this option in scripts to find if this\n"
@@ -384,17 +385,6 @@ static void ipset_chain_append(ipset **head, ipset **tail, ipset *ips)
     *tail = ips;
 }
 
-static void ipset6_chain_append(ipset6 **head, ipset6 **tail, ipset6 *ips)
-{
-    ips->next = NULL;
-    ips->prev = *tail;
-
-    if(*tail) (*tail)->next = ips;
-    else *head = ips;
-
-    *tail = ips;
-}
-
 static int compare_pathnames(const void *left, const void *right)
 {
     const char * const *a = left;
@@ -448,16 +438,6 @@ static void free_pathnames(char **files, size_t entries)
     free(files);
 }
 
-#define MODE_COMBINE 1
-#define MODE_COMPARE 2
-#define MODE_COMPARE_FIRST 3
-#define MODE_COMPARE_NEXT 4
-#define MODE_COUNT_UNIQUE_MERGED 5
-#define MODE_COUNT_UNIQUE_ALL 6
-#define MODE_REDUCE 7
-#define MODE_COMMON 8
-#define MODE_EXCLUDE_NEXT 9
-#define MODE_DIFF 10
 /*#define MODE_HISTOGRAM 11 */
 
 int main(int argc, char **argv) {
@@ -497,12 +477,14 @@ int main(int argc, char **argv) {
             }
         }
         else if(i+1 < argc && !strcmp(argv[i], "--min-prefix")) {
+            if(active_family == 6) { i++; continue; } /* handled by iprange6_run */
             int j;
             int min_prefix = (int)parse_long_option_or_die("--min-prefix", argv[++i], 1, 32, "It must be between 1 and 32.");
             for(j = 0; j < min_prefix; j++)
                 prefix_enabled[j] = 0;
         }
         else if(i+1 < argc && !strcmp(argv[i], "--prefixes")) {
+            if(active_family == 6) { i++; continue; } /* handled by iprange6_run */
             char *s = NULL, *e = argv[++i];
             int j;
 
@@ -530,6 +512,7 @@ int main(int argc, char **argv) {
                !strcmp(argv[i], "--default-prefix")
             || !strcmp(argv[i], "-p")
             )) {
+            if(active_family == 6) { i++; continue; } /* IPv6 always uses 128 as default */
             const char *option = argv[i];
             const char *value = argv[++i];
             default_prefix = (int)parse_long_option_or_die(option, value, 0, 32, "It must be between 0 and 32.");

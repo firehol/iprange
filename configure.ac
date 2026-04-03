@@ -73,6 +73,10 @@ CC="${PTHREAD_CC}"
 AC_TYPE_UINT32_T
 AC_C_INLINE
 
+AC_CHECK_TYPE([__uint128_t], [],
+  [AC_MSG_ERROR([Your compiler does not support __uint128_t, required for IPv6 support.])],
+  [/* no includes needed */])
+
 test "${with_compare_with_common}" = "yes" && AC_DEFINE([COMPARE_WITH_COMMON], [1], [compare settings])
 test "${with_system_ip2str}" = "yes" && AC_DEFINE([SYSTEM_IP2STR], [1], [ip2str settings])
 

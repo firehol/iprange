@@ -495,6 +495,10 @@ ipset6 *ipset6_load(const char *filename) {
         return ips;
     }
 
+    /* strip UTF-8 BOM if present on first line */
+    if((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF)
+        memmove(line, line + 3, strlen(line + 3) + 1);
+
     /* check for binary headers */
     if(!strcmp(line, BINARY_HEADER_V20)) {
         if(ipset6_load_binary_v20(fp, ips, 1)) {

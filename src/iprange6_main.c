@@ -64,13 +64,57 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
     int i, read_second = 0, inputs = 0, ret = 0;
     char u128buf[40];
 
-    /* re-scan argv for file arguments and positional operators */
+    /* re-scan argv for file arguments, positional operators, and IPv6-relevant options */
     for(i = 1; i < argc; i++) {
+        /* handle --min-prefix for IPv6 (0..128) */
+        if(i+1 < argc && !strcmp(argv[i], "--min-prefix")) {
+            int j;
+            char *end = NULL;
+            long val;
+            errno = 0;
+            val = strtol(argv[++i], &end, 10);
+            if(errno || !end || end == argv[i] || *end != '\0' || val < 1 || val > 128) {
+                fprintf(stderr, "%s: Invalid value '%s' for --min-prefix. It must be between 1 and 128.\n", PROG, argv[i]);
+                exit(1);
+            }
+            for(j = 0; j < (int)val; j++)
+                prefix6_enabled[j] = 0;
+            continue;
+        }
+
+        /* handle --prefixes for IPv6 (1..128) */
+        if(i+1 < argc && !strcmp(argv[i], "--prefixes")) {
+            char *s = NULL, *e = argv[++i];
+            int j;
+            for(j = 0; j < 128; j++)
+                prefix6_enabled[j] = 0;
+            while(e && *e && e != s) {
+                s = e;
+                j = (int)strtol(s, &e, 10);
+                if(j <= 0 || j > 128) {
+                    fprintf(stderr, "%s: Only prefixes from 1 to 128 can be set. %d is invalid.\n", PROG, j);
+                    exit(1);
+                }
+                prefix6_enabled[j] = 1;
+                if(*e == ',' || *e == ' ') e++;
+            }
+            if(e && *e) {
+                fprintf(stderr, "%s: Invalid prefix '%s'\n", PROG, e);
+                exit(1);
+            }
+            continue;
+        }
+
+        /* handle --default-prefix for IPv6 (0..128) */
+        if(i+1 < argc && (!strcmp(argv[i], "--default-prefix") || !strcmp(argv[i], "-p"))) {
+            /* already parsed in main() for IPv4 range (0..32); we just skip the value here
+             * since the IPv6 parser always uses 128 as default prefix */
+            i++;
+            continue;
+        }
+
         /* skip options that take a value */
         if(i+1 < argc && (!strcmp(argv[i], "as")
-            || !strcmp(argv[i], "--min-prefix")
-            || !strcmp(argv[i], "--prefixes")
-            || !strcmp(argv[i], "--default-prefix") || !strcmp(argv[i], "-p")
             || !strcmp(argv[i], "--ipset-reduce") || !strcmp(argv[i], "--reduce-factor")
             || !strcmp(argv[i], "--ipset-reduce-entries") || !strcmp(argv[i], "--reduce-entries")
             || !strcmp(argv[i], "--print-prefix")
@@ -275,17 +319,6 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
     }
 
     /* --- mode execution (mirrors the IPv4 logic in main()) --- */
-
-    #define MODE_COMBINE 1
-    #define MODE_COMPARE 2
-    #define MODE_COMPARE_FIRST 3
-    #define MODE_COMPARE_NEXT 4
-    #define MODE_COUNT_UNIQUE_MERGED 5
-    #define MODE_COUNT_UNIQUE_ALL 6
-    #define MODE_REDUCE 7
-    #define MODE_COMMON 8
-    #define MODE_EXCLUDE_NEXT 9
-    #define MODE_DIFF 10
 
     if(mode == MODE_COMBINE || mode == MODE_REDUCE || mode == MODE_COUNT_UNIQUE_MERGED) {
         strcpy(root->filename, "combined ipset");

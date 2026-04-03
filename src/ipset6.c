@@ -36,6 +36,7 @@ ipset6 *ipset6_create(const char *filename, size_t entries) {
 }
 
 void ipset6_free(ipset6 *ips) {
+    if(!ips) return;
     if(ips->next) ips->next->prev = ips->prev;
     if(ips->prev) ips->prev->next = ips->next;
 

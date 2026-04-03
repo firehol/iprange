@@ -4,7 +4,7 @@
 
 inline ipset6 *ipset6_common(ipset6 *ips1, ipset6 *ips2) {
     ipset6 *ips;
-    unsigned long int n1, n2, i1 = 0, i2 = 0;
+    size_t n1, n2, i1 = 0, i2 = 0;
     ipv6_addr_t lo1, lo2, hi1, hi2, lo, hi;
 
     if(unlikely(!(ips1->flags & IPSET_FLAG_OPTIMIZED)))

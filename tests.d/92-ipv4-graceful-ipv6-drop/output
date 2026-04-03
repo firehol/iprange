@@ -1,0 +1,7 @@
+# Exit code should be 0:
+rc=0
+# Output should contain only IPv4:
+10.0.0.1
+10.0.0.2
+# Warning should mention dropped count:
+PASS: warning printed

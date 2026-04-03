@@ -230,6 +230,11 @@ int ipset6_load_binary_v20(FILE *fp, ipset6 *ips, int first_line_missing) {
         return 1;
     }
 
+    if(unique_ips < entries && unique_ips != 0) {
+        fprintf(stderr, "%s: %s: unique IPs cannot be less than entries (%zu)\n", PROG, ips->filename, entries);
+        return 1;
+    }
+
     if(lines < entries) {
         fprintf(stderr, "%s: %s: lines (%zu) cannot be less than entries (%zu)\n", PROG, ips->filename, lines, entries);
         return 1;

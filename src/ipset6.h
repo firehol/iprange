@@ -51,22 +51,44 @@ static inline void ipset6_grow(ipset6 *ips, size_t free_entries_needed) {
 
 static inline void ipset6_added_entry(ipset6 *ips) {
     size_t entries = ips->entries;
+    ipv6_addr_t lo = ips->netaddrs[entries].addr;
+    ipv6_addr_t hi = ips->netaddrs[entries].broadcast;
 
     ips->lines++;
-    ips->unique_ips += (__uint128_t)ips->netaddrs[entries].broadcast - (__uint128_t)ips->netaddrs[entries].addr + 1;
+
+    /* overflow-safe unique_ips: 2^128 doesn't fit in __uint128_t, saturate at max */
+    if(lo == 0 && hi == IPV6_ADDR_MAX)
+        ips->unique_ips = IPV6_ADDR_MAX;
+    else {
+        __uint128_t size = hi - lo + 1;
+        if(ips->unique_ips > IPV6_ADDR_MAX - size)
+            ips->unique_ips = IPV6_ADDR_MAX;
+        else
+            ips->unique_ips += size;
+    }
 
     if(likely(ips->flags & IPSET_FLAG_OPTIMIZED && entries > 0)) {
-        if(unlikely(ips->netaddrs[entries].addr == (ips->netaddrs[entries - 1].broadcast + 1))) {
-            ips->netaddrs[entries - 1].broadcast = ips->netaddrs[entries].broadcast;
+        /* overflow-safe adjacency: broadcast + 1 wraps at IPV6_ADDR_MAX */
+        if(unlikely(ips->netaddrs[entries - 1].broadcast != IPV6_ADDR_MAX &&
+                    lo == (ips->netaddrs[entries - 1].broadcast + 1))) {
+            ips->netaddrs[entries - 1].broadcast = hi;
             return;
         }
 
-        if(likely(ips->netaddrs[entries].addr > ips->netaddrs[entries - 1].broadcast)) {
+        if(likely(lo > ips->netaddrs[entries - 1].broadcast)) {
             ips->entries++;
             return;
         }
 
         ips->flags &= ~IPSET_FLAG_OPTIMIZED;
+
+        if(unlikely(debug)) {
+            char buf[IP6STR_MAX_LEN + 1];
+            fprintf(stderr, "%s: NON-OPTIMIZED %s at line %zu, entry %zu, last was %s - ", PROG, ips->filename, ips->lines, ips->entries, ip6str_r(buf, ips->netaddrs[entries - 1].addr));
+            fprintf(stderr, "%s, new is ", ip6str_r(buf, ips->netaddrs[entries - 1].broadcast));
+            fprintf(stderr, "%s - ", ip6str_r(buf, lo));
+            fprintf(stderr, "%s\n", ip6str_r(buf, hi));
+        }
     }
 
     ips->entries++;
