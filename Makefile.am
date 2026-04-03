@@ -33,8 +33,25 @@ endif
 iprange_SOURCES = \
 	src/iprange.c \
 	src/iprange.h \
+	src/iprange6.h \
+	src/iprange6_main.c \
 	src/ipset.c \
 	src/ipset.h \
+	src/ipset6.c \
+	src/ipset6.h \
+	src/ipset6_binary.c \
+	src/ipset6_binary.h \
+	src/ipset6_combine.c \
+	src/ipset6_common.c \
+	src/ipset6_copy.c \
+	src/ipset6_diff.c \
+	src/ipset6_exclude.c \
+	src/ipset6_load.c \
+	src/ipset6_load.h \
+	src/ipset6_merge.c \
+	src/ipset6_optimize.c \
+	src/ipset6_print.c \
+	src/ipset6_print.h \
 	src/ipset_binary.c \
 	src/ipset_binary.h \
 	src/ipset_combine.c \
@@ -61,7 +78,19 @@ iprange_SOURCES = \
 
 VPATH_LOCAL_OBJECTS = \
 	src/iprange.$(OBJEXT) \
+	src/iprange6_main.$(OBJEXT) \
 	src/ipset.$(OBJEXT) \
+	src/ipset6.$(OBJEXT) \
+	src/ipset6_binary.$(OBJEXT) \
+	src/ipset6_combine.$(OBJEXT) \
+	src/ipset6_common.$(OBJEXT) \
+	src/ipset6_copy.$(OBJEXT) \
+	src/ipset6_diff.$(OBJEXT) \
+	src/ipset6_exclude.$(OBJEXT) \
+	src/ipset6_load.$(OBJEXT) \
+	src/ipset6_merge.$(OBJEXT) \
+	src/ipset6_optimize.$(OBJEXT) \
+	src/ipset6_print.$(OBJEXT) \
 	src/ipset_binary.$(OBJEXT) \
 	src/ipset_combine.$(OBJEXT) \
 	src/ipset_common.$(OBJEXT) \

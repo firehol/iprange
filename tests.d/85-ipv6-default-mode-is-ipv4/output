@@ -1,0 +1,8 @@
+# Default mode still parses IPv4:
+10.0.0.1
+# Explicit -4 works same as default:
+10.0.0.1
+# Default mode count:
+1,256
+# Explicit -4 count:
+1,256

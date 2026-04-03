@@ -1,6 +1,6 @@
 # iprange
 
-`iprange` is a fast command-line tool for reading, normalizing, comparing, and exporting IPv4 address sets.
+`iprange` is a fast command-line tool for reading, normalizing, comparing, and exporting IPv4 and IPv6 address sets.
 
 It understands single IPs, CIDRs, netmasks, numeric IPs, ranges, and hostnames. You can use it to merge blocklists, compute intersections or exclusions, generate data for `ipset restore`, or compare multiple IP sets as CSV.
 
@@ -23,11 +23,26 @@ It understands single IPs, CIDRs, netmasks, numeric IPs, ranges, and hostnames. 
 - numeric IPs
 - hostnames
 
+In IPv6 mode (`-6`), it additionally accepts:
+
+- IPv6 addresses
+  - `2001:db8::1`
+- IPv6 CIDRs
+  - `2001:db8::/32`
+- IPv6 ranges
+  - `2001:db8::1 - 2001:db8::ff`
+- compressed and full notation
+  - `::1`, `2001:0db8:0000:0000:0000:0000:0000:0001`
+- IPv4-mapped IPv6
+  - `::ffff:10.0.0.1`
+- plain IPv4 (normalized to `::ffff:x.x.x.x` in IPv6 mode)
+
 Important input behavior:
 
 - Hostnames are resolved in parallel.
 - Comments after `#` or `;` are ignored.
-- Parsing uses `inet_aton()`, so octal and hex forms are accepted too.
+- In IPv4 mode (default), parsing uses `inet_aton()`, so octal and hex forms are accepted too.
+- In IPv6 mode, parsing uses `inet_pton(AF_INET6)`.
 - Inputs can come from `stdin`, files, file lists, or directory expansion.
 
 ## Main modes
@@ -96,6 +111,33 @@ Generate `ipset restore`-style lines:
 ```bash
 iprange --print-prefix 'add myset ' --print-suffix '' blocklist.txt
 ```
+
+## Address family
+
+By default, `iprange` operates in IPv4 mode. Use `-6` / `--ipv6` for IPv6:
+
+```bash
+# IPv6 merge
+iprange -6 blocklist-v6.txt
+
+# IPv6 count
+iprange -6 -C blocklist-v6.txt
+
+# IPv4 input normalized to mapped IPv6
+echo "10.0.0.1" | iprange -6
+# output: ::ffff:10.0.0.1
+
+# Explicit IPv4 mode (same as default)
+iprange -4 blocklist.txt
+```
+
+Key rules:
+- Without `-4` or `-6`, text input defaults to IPv4 mode.
+- In IPv6 mode, plain IPv4 input is accepted and normalized to `::ffff:x.x.x.x`.
+- Operations between IPv4 and IPv6 datasets are not supported.
+- Mixed-family range endpoints (e.g., `10.0.0.1 - 2001:db8::1`) are invalid.
+- Binary files declare their family in the header.
+- Feature detection: `iprange --has-ipv6` exits with 0 if IPv6 is supported.
 
 ## Build and install
 

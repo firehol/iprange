@@ -1,0 +1,10 @@
+# Single IPv6 roundtrip:
+2001:db8::1
+# Multiple IPv6 roundtrip:
+2001:db8::1
+2001:db8::2
+fe80::1
+# IPv6 binary count roundtrip:
+1,79228162514264337593543950336
+# Mapped IPv4 binary roundtrip:
+::ffff:10.0.0.1
