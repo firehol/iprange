@@ -1,0 +1,17 @@
+# Optimize preserves max-adjacent pair:
+255.255.255.254/31
+# Binary round-trip of max address:
+255.255.255.255
+# Binary round-trip of max /31:
+255.255.255.254/31
+# Exclude max from max /24:
+255.255.255.254
+# Exclude everything except max:
+255.255.255.255
+# Count of /31 at max:
+1,2
+# Single IP output of max /30:
+255.255.255.252
+255.255.255.253
+255.255.255.254
+255.255.255.255

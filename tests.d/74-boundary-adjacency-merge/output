@@ -1,0 +1,23 @@
+# Adjacent at bottom (0.0.0.0 + 0.0.0.1 merge to /31):
+0.0.0.0/31
+# Adjacent at top (255.255.255.254 + 255.255.255.255 merge to /31):
+255.255.255.254/31
+# Four at bottom merge to /30:
+0.0.0.0/30
+# Four at top merge to /30:
+255.255.255.252/30
+# Exclude top from full range:
+255.255.255.248/30
+255.255.255.252/31
+255.255.255.254
+# Exclude bottom from full range:
+0.0.0.1
+0.0.0.2/31
+0.0.0.4/30
+# Common of {0,max} and {max}:
+255.255.255.255
+# Diff of {0} vs {max}:
+0.0.0.0
+255.255.255.255
+# Count adjacent merge at top:
+1,2
