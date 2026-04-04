@@ -366,7 +366,7 @@ To skip the man page: `./configure --disable-man`
 | Directory | Contents |
 |-----------|----------|
 | `src/` | C sources and headers |
-| `docs/` | Detailed documentation |
+| `wiki/` | Documentation (synced to GitHub wiki) |
 | `packaging/` | Spec template, ebuild, release tooling |
 | `tests.d/` | CLI regression tests |
 | `tests.build.d/` | Build and layout regressions |
@@ -376,14 +376,14 @@ To skip the man page: `./configure --disable-man`
 
 ## Documentation
 
-Detailed guides in the [`docs/`](docs/) directory:
+Detailed guides in the [`wiki/`](wiki/) directory (also published to the [GitHub wiki](https://github.com/firehol/iprange/wiki)):
 
-- [Input formats](docs/input-formats.md) — every accepted format, file lists, directories, binary
-- [Output formats](docs/output-formats.md) — CIDR, ranges, single IPs, binary, CSV, prefix/suffix
-- [Operations](docs/operations.md) — merge, intersect, exclude, diff, reduce, compare, count
-- [IPv6 support](docs/ipv6.md) — address family, normalization, cross-family rules
-- [DNS resolution](docs/dns-resolution.md) — threading, retry, configuration
-- [Optimizing ipsets for iptables](docs/ipset-reduce.md) — prefix reduction with examples
+- [Input formats](wiki/input-formats.md) — every accepted format, file lists, directories, binary
+- [Output formats](wiki/output-formats.md) — CIDR, ranges, single IPs, binary, CSV, prefix/suffix
+- [Operations](wiki/operations.md) — merge, intersect, exclude, diff, reduce, compare, count
+- [IPv6 support](wiki/ipv6.md) — address family, normalization, cross-family rules
+- [DNS resolution](wiki/dns-resolution.md) — threading, retry, configuration
+- [Optimizing ipsets for iptables](wiki/ipset-reduce.md) — prefix reduction with examples
 
 ## Getting help
 
