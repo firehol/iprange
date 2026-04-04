@@ -1,0 +1,11 @@
+# IPv4 address becomes mapped IPv6:
+::ffff:10.0.0.1
+# Explicit mapped IPv6 preserved:
+::ffff:10.0.0.1
+# IPv4 and explicit mapped merge:
+::ffff:10.0.0.1
+# IPv4 CIDR becomes mapped range:
+::ffff:10.0.0.0/126
+# Mixed IPv4 and IPv6 merge:
+::ffff:10.0.0.1
+2001:db8::1

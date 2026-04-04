@@ -1,0 +1,9 @@
+# Small range single IPs:
+2001:db8::
+2001:db8::1
+2001:db8::2
+2001:db8::3
+# Single IP output:
+2001:db8::1
+# Range output:
+2001:db8::1-2001:db8::3

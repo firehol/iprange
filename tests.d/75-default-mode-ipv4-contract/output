@@ -1,0 +1,18 @@
+# Default prefix is /32:
+1,1
+# Default merge of standard dotted-quad:
+192.168.1.0/24
+192.168.2.0/24
+# Default count-unique-all:
+name,entries,unique_ips
+setA,1,256
+setB,1,256
+# Default compare-next:
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+setA,setB,1,1,256,256,512,0
+# Default range parsing:
+10.0.0.1-10.0.0.10
+# Default CIDR with netmask notation:
+1,256
+# Default --dont-fix-network:
+10.0.0.5-10.0.0.255

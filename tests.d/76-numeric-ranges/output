@@ -1,0 +1,16 @@
+# Integer range:
+10.0.0.0/30
+# Octal range:
+10.0.0.0/30
+# Mixed numeric: octal start, dotted end:
+10.0.0.0/30
+# Two-part range:
+10.0.0.0/30
+# Integer CIDR:
+10.0.0.0/30
+# Octal CIDR count:
+1,256
+# Integer zero with prefix 0:
+1,4294967296
+# Large integer as single IP:
+192.168.1.1

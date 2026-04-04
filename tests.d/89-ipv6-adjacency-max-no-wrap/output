@@ -1,0 +1,5 @@
+# Two distinct addresses (max and zero) stay separate:
+::
+ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# Count should be 2, not 2^128:
+2,2

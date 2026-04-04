@@ -1,0 +1,15 @@
+# Full /128:
+2001:db8::1
+# /126 block:
+2001:db8::/126
+# /64 block:
+2001:db8:1::/64
+# Range to CIDRs:
+2001:db8::1
+2001:db8::2/127
+2001:db8::4/127
+2001:db8::6
+# Compressed notation:
+::1
+# Full notation:
+2001:db8::1

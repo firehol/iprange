@@ -4,6 +4,11 @@
  * Copyright (C) 2003 Gabriel L. Somlo
  */
 #include <iprange.h>
+#include <iprange6.h>
+#include <ipset6.h>
+#include <ipset6_print.h>
+#include <ipset6_binary.h>
+#include <ipset6_load.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <limits.h>
@@ -12,6 +17,17 @@ char *PROG;
 int debug;
 int cidr_use_network = 1;
 int default_prefix = 32;
+
+/* address family: 0 = default (IPv4), 4 = explicit IPv4, 6 = explicit IPv6 */
+int active_family = 0;
+
+/* count of IPv6 lines dropped in IPv4 mode (for one-time warning) */
+unsigned long ipv6_dropped_in_ipv4_mode = 0;
+
+/* forward declaration for IPv6 mode execution */
+extern int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
+                        int header, int quiet, size_t ipset_reduce_factor,
+                        size_t ipset_reduce_min_accepted);
 
 static inline uint64_t ipset_report_unique_ips(ipset *ips, size_t *entries)
 {
@@ -36,6 +52,25 @@ static void usage(const char *me) {
         "\n"
         "Options:\n"
         "multiple options are aliases\n"
+        "\n"
+        "Address family:\n"
+        "	--ipv4\n"
+        "	-4\n"
+        "		> Force IPv4 mode.\n"
+        "		Only IPv4 addresses are accepted.\n"
+        "		IPv4-mapped IPv6 (::ffff:x.x.x.x) is\n"
+        "		converted back to IPv4. All other IPv6 input\n"
+        "		is dropped with a single warning.\n"
+        "		This is the default for text input.\n"
+        "\n"
+        "	--ipv6\n"
+        "	-6\n"
+        "		> Force IPv6 mode.\n"
+        "		Both IPv6 and IPv4 addresses are accepted.\n"
+        "		IPv4 input is normalized to IPv4-mapped IPv6\n"
+        "		(::ffff:x.x.x.x). Hostnames are resolved for\n"
+        "		both AAAA and A records.\n"
+        "\n"
         "\n"
         "CIDR output modes:\n"
         "	--optimize\n"
@@ -249,6 +284,7 @@ static void usage(const char *me) {
         "	--has-reduce\n"
         "	--has-filelist-loading\n"
         "	--has-directory-loading\n"
+        "	--has-ipv6\n"
         "		Exits with 0,\n"
         "		other versions of iprange will exit with 1.\n"
         "		Use this option in scripts to find if this\n"
@@ -402,16 +438,6 @@ static void free_pathnames(char **files, size_t entries)
     free(files);
 }
 
-#define MODE_COMBINE 1
-#define MODE_COMPARE 2
-#define MODE_COMPARE_FIRST 3
-#define MODE_COMPARE_NEXT 4
-#define MODE_COUNT_UNIQUE_MERGED 5
-#define MODE_COUNT_UNIQUE_ALL 6
-#define MODE_REDUCE 7
-#define MODE_COMMON 8
-#define MODE_EXCLUDE_NEXT 9
-#define MODE_DIFF 10
 /*#define MODE_HISTOGRAM 11 */
 
 int main(int argc, char **argv) {
@@ -451,12 +477,14 @@ int main(int argc, char **argv) {
             }
         }
         else if(i+1 < argc && !strcmp(argv[i], "--min-prefix")) {
+            if(active_family == 6) { i++; continue; } /* handled by iprange6_run */
             int j;
             int min_prefix = (int)parse_long_option_or_die("--min-prefix", argv[++i], 1, 32, "It must be between 1 and 32.");
             for(j = 0; j < min_prefix; j++)
                 prefix_enabled[j] = 0;
         }
         else if(i+1 < argc && !strcmp(argv[i], "--prefixes")) {
+            if(active_family == 6) { i++; continue; } /* handled by iprange6_run */
             char *s = NULL, *e = argv[++i];
             int j;
 
@@ -484,6 +512,7 @@ int main(int argc, char **argv) {
                !strcmp(argv[i], "--default-prefix")
             || !strcmp(argv[i], "-p")
             )) {
+            if(active_family == 6) { i++; continue; } /* IPv6 always uses 128 as default */
             const char *option = argv[i];
             const char *value = argv[++i];
             default_prefix = (int)parse_long_option_or_die(option, value, 0, 32, "It must be between 0 and 32.");
@@ -506,6 +535,14 @@ int main(int argc, char **argv) {
             ipset_reduce_min_accepted = parse_size_option_or_die(option, value, 0, SIZE_MAX, "It must be a non-negative integer.");
             mode = MODE_REDUCE;
         }
+        else if(!strcmp(argv[i], "--ipv4")
+            || !strcmp(argv[i], "-4")) {
+            active_family = 4;
+        }
+        else if(!strcmp(argv[i], "--ipv6")
+            || !strcmp(argv[i], "-6")) {
+            active_family = 6;
+        }
         else if(!strcmp(argv[i], "--optimize")
             || !strcmp(argv[i], "--combine")
             || !strcmp(argv[i], "--merge")
@@ -526,7 +563,7 @@ int main(int argc, char **argv) {
             || !strcmp(argv[i], "--complement")) {
             mode = MODE_EXCLUDE_NEXT;
             read_second = 1;
-            if(!root) {
+            if(active_family != 6 && !root) {
                 fprintf(stderr, "%s: An ipset is needed before --except\n", PROG);
                 exit(1);
             }
@@ -535,7 +572,7 @@ int main(int argc, char **argv) {
             || !strcmp(argv[i], "--diff-next")) {
             mode = MODE_DIFF;
             read_second = 1;
-            if(!root) {
+            if(active_family != 6 && !root) {
                 fprintf(stderr, "%s: An ipset is needed before --diff\n", PROG);
                 exit(1);
             }
@@ -549,7 +586,7 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i], "--compare-next")) {
             mode = MODE_COMPARE_NEXT;
             read_second = 1;
-            if(!root) {
+            if(active_family != 6 && !root) {
                 fprintf(stderr, "%s: An ipset is needed before --compare-next\n", PROG);
                 exit(1);
             }
@@ -639,7 +676,23 @@ int main(int argc, char **argv) {
             fprintf(stderr, "yes, @filename and @directory support is present.\n");
             exit(0);
         }
+        else if(!strcmp(argv[i], "--has-ipv6")) {
+            fprintf(stderr, "yes, IPv6 support is present.\n");
+            exit(0);
+        }
         else {
+            /* In IPv6 mode, skip IPv4 loading — iprange6_run() handles it */
+            if(active_family == 6) {
+                /* still need to handle 'as NAME' and positional state, but skip loading */
+                if(strcmp(argv[i], "-") != 0 && argv[i][0] != '@') {
+                    /* skip 'as NAME' after regular files */
+                    if(i+1 < argc && !strcmp(argv[i+1], "as") && i+2 < argc)
+                        i += 2;
+                }
+                inputs++;
+                continue;
+            }
+
             if(!strcmp(argv[i], "-")) {
                 inputs++;
                 if(!(ips = ipset_load(NULL))) {
@@ -840,6 +893,14 @@ int main(int argc, char **argv) {
                 }
             }
         }
+    }
+
+    /* IPv6 mode: delegate to the IPv6 execution path */
+    if(active_family == 6) {
+        gettimeofday(&load_dt, NULL);
+        ret = iprange6_run(argc, argv, mode, print, header, quiet,
+                           ipset_reduce_factor, ipset_reduce_min_accepted);
+        exit(ret);
     }
 
     /*

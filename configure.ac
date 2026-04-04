@@ -73,6 +73,10 @@ CC="${PTHREAD_CC}"
 AC_TYPE_UINT32_T
 AC_C_INLINE
 
+AC_CHECK_TYPE([__uint128_t], [],
+  [AC_MSG_ERROR([Your compiler does not support __uint128_t, required for IPv6 support.])],
+  [/* no includes needed */])
+
 test "${with_compare_with_common}" = "yes" && AC_DEFINE([COMPARE_WITH_COMMON], [1], [compare settings])
 test "${with_system_ip2str}" = "yes" && AC_DEFINE([SYSTEM_IP2STR], [1], [ip2str settings])
 
@@ -82,6 +86,20 @@ if test "${GCC}" = "yes"; then
 else
 	AC_DEFINE_UNQUOTED([likely(x)], [(x)], [gcc branch optimization])
 	AC_DEFINE_UNQUOTED([unlikely(x)], [(x)], [gcc branch optimization])
+fi
+
+dnl Use -O3 and LTO for GCC
+if test "${GCC}" = "yes"; then
+	CFLAGS=$(echo "${CFLAGS}" | sed 's/-O[[0-9s]]*/-O3/g')
+	case "${CFLAGS}" in
+		*-O*) ;;
+		*) CFLAGS="${CFLAGS} -O3" ;;
+	esac
+	case "${CFLAGS}" in
+		*-flto*) ;;
+		*) CFLAGS="${CFLAGS} -flto"
+		   LDFLAGS="${LDFLAGS} -flto" ;;
+	esac
 fi
 
 if test "${enable_pedantic}" = "yes"; then

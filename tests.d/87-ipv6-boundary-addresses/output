@@ -1,0 +1,14 @@
+# All zeros:
+::
+# Loopback:
+::1
+# All ones (ffff:...:ffff):
+ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# Full range:
+::/0
+# Link-local:
+fe80::1
+# Adjacent at bottom:
+::/127
+# Count /1 (half the IPv6 space):
+1,170141183460469231731687303715884105728

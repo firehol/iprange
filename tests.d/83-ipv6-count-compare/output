@@ -1,0 +1,13 @@
+# Count unique merged:
+1,2
+# Count unique all:
+name,entries,unique_ips
+netA,1,1208925819614629174706176
+netB,1,1208925819614629174706176
+# Compare-next:
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+netA,netB,1,1,1208925819614629174706176,1208925819614629174706176,2417851639229258349412352,0
+# /128 count:
+1,1
+# /64 count:
+1,18446744073709551616

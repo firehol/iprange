@@ -1,0 +1,2 @@
+# Mixed-family range should be rejected:
+PASS: mixed-family range rejected

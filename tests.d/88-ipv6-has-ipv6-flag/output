@@ -1,0 +1,2 @@
+yes, IPv6 support is present.
+PASS: --has-ipv6 exits with 0
