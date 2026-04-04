@@ -175,6 +175,7 @@ static inline char *ip2str_r(char *buf, in_addr_t IP) {
 #include "ipset_copy.h"
 #include "ipset_diff.h"
 #include "ipset_exclude.h"
+#include "ipset_dns.h"
 #include "ipset_load.h"
 #include "ipset_merge.h"
 #include "ipset_optimize.h"

@@ -45,6 +45,8 @@ iprange_SOURCES = \
 	src/ipset6_common.c \
 	src/ipset6_copy.c \
 	src/ipset6_diff.c \
+	src/ipset6_dns.c \
+	src/ipset6_dns.h \
 	src/ipset6_exclude.c \
 	src/ipset6_load.c \
 	src/ipset6_load.h \
@@ -62,6 +64,8 @@ iprange_SOURCES = \
 	src/ipset_copy.h \
 	src/ipset_diff.c \
 	src/ipset_diff.h \
+	src/ipset_dns.c \
+	src/ipset_dns.h \
 	src/ipset_exclude.c \
 	src/ipset_exclude.h \
 	src/ipset_load.c \
@@ -86,6 +90,7 @@ VPATH_LOCAL_OBJECTS = \
 	src/ipset6_common.$(OBJEXT) \
 	src/ipset6_copy.$(OBJEXT) \
 	src/ipset6_diff.$(OBJEXT) \
+	src/ipset6_dns.$(OBJEXT) \
 	src/ipset6_exclude.$(OBJEXT) \
 	src/ipset6_load.$(OBJEXT) \
 	src/ipset6_merge.$(OBJEXT) \
@@ -96,6 +101,7 @@ VPATH_LOCAL_OBJECTS = \
 	src/ipset_common.$(OBJEXT) \
 	src/ipset_copy.$(OBJEXT) \
 	src/ipset_diff.$(OBJEXT) \
+	src/ipset_dns.$(OBJEXT) \
 	src/ipset_exclude.$(OBJEXT) \
 	src/ipset_load.$(OBJEXT) \
 	src/ipset_merge.$(OBJEXT) \

@@ -76,7 +76,8 @@ static inline void ipset_added_entry(ipset *ips) {
 
     if(likely(ips->flags & IPSET_FLAG_OPTIMIZED && entries > 0)) {
         // the new is just next to the last
-        if(unlikely(ips->netaddrs[entries].addr == (ips->netaddrs[entries - 1].broadcast + 1))) {
+        if(unlikely(ips->netaddrs[entries - 1].broadcast != UINT32_MAX &&
+                    ips->netaddrs[entries].addr == (ips->netaddrs[entries - 1].broadcast + 1))) {
             ips->netaddrs[entries - 1].broadcast = ips->netaddrs[entries].broadcast;
             return;
         }
