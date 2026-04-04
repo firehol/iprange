@@ -6,12 +6,23 @@ For 1 million input lines, a merge completes in under a second.
 
 ## Documentation
 
+### Operations
+
+- [Merge / Union](merge.md) — merge all inputs into one optimized set (default mode)
+- [Intersection](intersect.md) — find IPs common to all inputs
+- [Complement / Exclude](exclude.md) — remove one set from another
+- [Symmetric Difference](diff.md) — find IPs in either set but not both
+- [Reduce Prefixes](reduce.md) — reduce CIDR prefix diversity for firewall performance
+- [Compare](compare.md) — compare sets pairwise as CSV (all, first, next)
+- [Count Unique](count-unique.md) — count entries and unique IPs as CSV
+
+### Reference
+
 - [Input formats](input-formats.md) — every accepted format, file lists, directories, binary input
 - [Output formats](output-formats.md) — CIDR, ranges, single IPs, binary, CSV, prefix/suffix strings
-- [Operations](operations.md) — merge, intersect, exclude, diff, reduce, compare, count
 - [IPv6 support](ipv6.md) — address family selection, normalization, cross-family rules
 - [DNS resolution](dns-resolution.md) — parallel threading, retry, configuration
-- [Optimizing ipsets for iptables](ipset-reduce.md) — prefix reduction tutorial with examples
+- [Optimizing ipsets for iptables](ipset-reduce.md) — extended tutorial with real-world examples
 
 ## Quick reference
 

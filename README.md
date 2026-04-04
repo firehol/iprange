@@ -378,12 +378,11 @@ To skip the man page: `./configure --disable-man`
 
 Detailed guides in the [`wiki/`](wiki/) directory (also published to the [GitHub wiki](https://github.com/firehol/iprange/wiki)):
 
-- [Input formats](wiki/input-formats.md) — every accepted format, file lists, directories, binary
-- [Output formats](wiki/output-formats.md) — CIDR, ranges, single IPs, binary, CSV, prefix/suffix
-- [Operations](wiki/operations.md) — merge, intersect, exclude, diff, reduce, compare, count
-- [IPv6 support](wiki/ipv6.md) — address family, normalization, cross-family rules
-- [DNS resolution](wiki/dns-resolution.md) — threading, retry, configuration
-- [Optimizing ipsets for iptables](wiki/ipset-reduce.md) — prefix reduction with examples
+**Operations** — one page per operation with verified examples:
+[Merge](wiki/merge.md) | [Intersection](wiki/intersect.md) | [Exclude](wiki/exclude.md) | [Diff](wiki/diff.md) | [Reduce](wiki/reduce.md) | [Compare](wiki/compare.md) | [Count](wiki/count-unique.md)
+
+**Reference:**
+[Input formats](wiki/input-formats.md) | [Output formats](wiki/output-formats.md) | [IPv6](wiki/ipv6.md) | [DNS resolution](wiki/dns-resolution.md) | [Ipset optimization](wiki/ipset-reduce.md)
 
 ## Getting help
 
