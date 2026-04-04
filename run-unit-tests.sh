@@ -25,6 +25,7 @@ PROJECT_SOURCES=(
     "$ROOT_DIR/src/ipset_common.c"
     "$ROOT_DIR/src/ipset_copy.c"
     "$ROOT_DIR/src/ipset_diff.c"
+    "$ROOT_DIR/src/ipset_dns.c"
     "$ROOT_DIR/src/ipset_exclude.c"
     "$ROOT_DIR/src/ipset_load.c"
     "$ROOT_DIR/src/ipset_merge.c"
