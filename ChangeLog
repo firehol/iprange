@@ -1,3 +1,26 @@
+iprange (2.0.0) - 2026-04-04
+
+ - feature: full IPv6 support with --ipv4/-4 and --ipv6/-6 family flags
+ - feature: IPv4 input normalized to ::ffff:x.x.x.x in IPv6 mode
+ - feature: IPv4-mapped IPv6 converted back to IPv4 in IPv4 mode
+ - feature: IPv6 DNS resolution (both AAAA and A records)
+ - feature: IPv6 binary format v2.0 with family-aware header
+ - feature: --has-ipv6 feature detection flag
+ - feature: @filename file list and @directory loading
+ - feature: --has-filelist-loading and --has-directory-loading flags
+ - feature: -O3 and LTO enabled for GCC builds
+ - bugfix: UINT32_MAX boundary overflow in ipset_added_entry() and
+   ipset_optimize() — ranges at 255.255.255.255 no longer incorrectly
+   merge with ranges at 0.0.0.0 (#28)
+ - bugfix: IPv6 diff algorithm stale variables at address space boundary
+ - bugfix: strict numeric parsing for --ipset-reduce value (#24)
+ - refactor: DNS thread pool extracted into ipset_dns.c/h (IPv4) and
+   ipset6_dns.c/h (IPv6)
+ - refactor: load files are now pure text parsers
+ - docs: comprehensive README, wiki pages for every operation with
+   verified examples
+ - tests: 93 CLI tests (22 new IPv6), 7 build, 5 sanitizer, 6 unit, 1 TSAN
+
 iprange (1.0.4) - 2017-09-16
 
  - bugfix: fix invalid size of ipset while reducing non-optimized ipsets #18

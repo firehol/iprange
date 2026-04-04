@@ -28,6 +28,9 @@ make %{?_smp_mflags} install DESTDIR="%{buildroot}"
 %{_sbindir}/iprange
 
 %changelog
+* Fri Apr 04 2026 Costa Tsaousis <costa@netdata.cloud> - 2.0.0-1
+- IPv6 support, UINT32_MAX boundary fix, code reorganization
+
 * Sat Sep 16 2017 Phil Whineray <phil@firehol.org> - 1.0.4-1
 - Bugfix release
 
