@@ -15,6 +15,8 @@ char *PROG = "dns-create-fail";
 int debug;
 int cidr_use_network = 1;
 int default_prefix = 32;
+int active_family = 0;
+unsigned long ipv6_dropped_in_ipv4_mode = 0;
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg) {
     (void)thread;
@@ -68,6 +70,7 @@ if ! "${CC:-clang}" \
     ../../src/ipset_common.c \
     ../../src/ipset_copy.c \
     ../../src/ipset_diff.c \
+    ../../src/ipset_dns.c \
     ../../src/ipset_exclude.c \
     ../../src/ipset_load.c \
     ../../src/ipset_merge.c \

@@ -84,7 +84,7 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
                 lo2 = ips2->netaddrs[i2].addr;
                 hi2 = ips2->netaddrs[i2].broadcast;
             }
-            if(i1 < n1 && lo1 > hi1) {
+            if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
                 hi1 = ips1->netaddrs[i1].broadcast;
             }
@@ -97,7 +97,7 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
                 lo1 = ips1->netaddrs[i1].addr;
                 hi1 = ips1->netaddrs[i1].broadcast;
             }
-            if(i2 < n2 && lo2 > hi2) {
+            if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
                 hi2 = ips2->netaddrs[i2].broadcast;
             }
