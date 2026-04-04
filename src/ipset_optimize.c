@@ -82,7 +82,7 @@ inline void ipset_optimize(ipset *ips) {
          * overlaps or is adjustent to the last
          * then merge it = extent the broadcast of the last
          */
-        if (oaddrs[i].addr <= hi + 1) {
+        if (oaddrs[i].addr <= hi || (hi != UINT32_MAX && oaddrs[i].addr == hi + 1)) {
             hi = oaddrs[i].broadcast;
             continue;
         }

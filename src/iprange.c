@@ -13,6 +13,23 @@ int debug;
 int cidr_use_network = 1;
 int default_prefix = 32;
 
+#define MODE_COMBINE 1
+#define MODE_COMPARE 2
+#define MODE_COMPARE_FIRST 3
+#define MODE_COMPARE_NEXT 4
+#define MODE_COUNT_UNIQUE_MERGED 5
+#define MODE_COUNT_UNIQUE_ALL 6
+#define MODE_REDUCE 7
+#define MODE_COMMON 8
+#define MODE_EXCLUDE_NEXT 9
+#define MODE_DIFF 10
+/*#define MODE_HISTOGRAM 11 */
+
+
+/* =========================================================================
+ * helpers
+ * ========================================================================= */
+
 static inline uint64_t ipset_report_unique_ips(ipset *ips, size_t *entries)
 {
     uint64_t unique_ips = ipset_unique_ips(ips);
@@ -21,12 +38,84 @@ static inline uint64_t ipset_report_unique_ips(ipset *ips, size_t *entries)
     return unique_ips;
 }
 
-/* ----------------------------------------------------------------------------
- * usage()
- *
- * print help for the user
- *
- */
+static void ipset_chain_append(ipset **head, ipset **tail, ipset *ips)
+{
+    ips->next = NULL;
+    ips->prev = *tail;
+
+    if(*tail) (*tail)->next = ips;
+    else *head = ips;
+
+    *tail = ips;
+}
+
+static int compare_pathnames(const void *left, const void *right)
+{
+    const char * const *a = left;
+    const char * const *b = right;
+
+    return strcmp(*a, *b);
+}
+
+static void invalid_option_value(const char *option, const char *value, const char *expected)
+{
+    fprintf(stderr, "%s: Invalid value '%s' for %s. %s\n", PROG, value, option, expected);
+    exit(1);
+}
+
+static long parse_long_option_or_die(const char *option, const char *value, long min, long max, const char *expected)
+{
+    char *end = NULL;
+    long parsed;
+
+    errno = 0;
+    parsed = strtol(value, &end, 10);
+    if(errno || !end || end == value || *end != '\0' || parsed < min || parsed > max)
+        invalid_option_value(option, value, expected);
+
+    return parsed;
+}
+
+static size_t parse_size_option_or_die(const char *option, const char *value, size_t min, size_t max, const char *expected)
+{
+    char *end = NULL;
+    unsigned long long parsed;
+
+    if(!value || *value < '0' || *value > '9')
+        invalid_option_value(option, value?value:"", expected);
+
+    errno = 0;
+    parsed = strtoull(value, &end, 10);
+    if(errno || !end || end == value || *end != '\0' || parsed < min || parsed > max)
+        invalid_option_value(option, value, expected);
+
+    return (size_t)parsed;
+}
+
+static void free_pathnames(char **files, size_t entries)
+{
+    size_t i;
+
+    for(i = 0; i < entries; i++)
+        free(files[i]);
+
+    free(files);
+}
+
+/* merge all ipsets in a chain into the first one */
+static void merge_chain(ipset *root) {
+    ipset *ips;
+    for(ips = root->next; ips ;ips = ips->next)
+        if(unlikely(ipset_merge(root, ips))) {
+            fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, root->filename);
+            exit(1);
+        }
+}
+
+
+/* =========================================================================
+ * usage and version
+ * ========================================================================= */
 
 static void usage(const char *me) {
     fprintf(stdout,
@@ -315,14 +404,6 @@ static void usage(const char *me) {
     exit(0);
 }
 
-
-/* ----------------------------------------------------------------------------
- * version()
- *
- * print version for the user
- *
- */
-
 static void version() {
     fprintf(stdout,
         "iprange " VERSION "\n"
@@ -338,81 +419,482 @@ static void version() {
     exit(0);
 }
 
-static void ipset_chain_append(ipset **head, ipset **tail, ipset *ips)
+
+/* =========================================================================
+ * input loading helpers
+ * ========================================================================= */
+
+static void chain_ipset(ipset *ips, int read_second,
+                        ipset **root, ipset **root_last,
+                        ipset **second, ipset **second_last,
+                        ipset **first)
 {
-    ips->next = NULL;
-    ips->prev = *tail;
-
-    if(*tail) (*tail)->next = ips;
-    else *head = ips;
-
-    *tail = ips;
+    if(read_second)
+        ipset_chain_append(second, second_last, ips);
+    else {
+        if(!*first) *first = ips;
+        ipset_chain_append(root, root_last, ips);
+    }
 }
 
-static int compare_pathnames(const void *left, const void *right)
+static void load_stdin(int read_second,
+                       ipset **root, ipset **root_last,
+                       ipset **second, ipset **second_last,
+                       ipset **first)
 {
-    const char * const *a = left;
-    const char * const *b = right;
-
-    return strcmp(*a, *b);
+    ipset *ips = ipset_load(NULL);
+    if(!ips) {
+        fprintf(stderr, "%s: Cannot load ipset from stdin\n", PROG);
+        exit(1);
+    }
+    chain_ipset(ips, read_second, root, root_last, second, second_last, first);
 }
 
-static void invalid_option_value(const char *option, const char *value, const char *expected)
+static void load_file(const char *filename, int read_second,
+                      ipset **root, ipset **root_last,
+                      ipset **second, ipset **second_last,
+                      ipset **first)
 {
-    fprintf(stderr, "%s: Invalid value '%s' for %s. %s\n", PROG, value, option, expected);
-    exit(1);
+    ipset *ips = ipset_load(filename);
+    if(!ips) {
+        fprintf(stderr, "%s: Cannot load ipset: %s\n", PROG, filename);
+        exit(1);
+    }
+    chain_ipset(ips, read_second, root, root_last, second, second_last, first);
 }
 
-static long parse_long_option_or_die(const char *option, const char *value, long min, long max, const char *expected)
+static void load_directory(const char *listname, int read_second,
+                           ipset **root, ipset **root_last,
+                           ipset **second, ipset **second_last,
+                           ipset **first)
 {
-    char *end = NULL;
-    long parsed;
+    DIR *dir;
+    struct dirent *entry;
+    struct stat st;
+    char **files = NULL;
+    size_t files_allocated = 0, files_collected = 0, j;
 
-    errno = 0;
-    parsed = strtol(value, &end, 10);
-    if(errno || !end || end == value || *end != '\0' || parsed < min || parsed > max)
-        invalid_option_value(option, value, expected);
+    if(unlikely(debug))
+        fprintf(stderr, "%s: Loading files from directory %s\n", PROG, listname);
 
-    return parsed;
+    dir = opendir(listname);
+    if(!dir) {
+        fprintf(stderr, "%s: Cannot open directory: %s - %s\n", PROG, listname, strerror(errno));
+        exit(1);
+    }
+
+    /* Read all files from the directory */
+    while((entry = readdir(dir))) {
+        /* Skip "." and ".." */
+        if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+
+        /* Create full path */
+        char filepath[FILENAME_MAX + 1];
+        snprintf(filepath, FILENAME_MAX, "%s/%s", listname, entry->d_name);
+
+        /* Auto-discovery should only consume regular files. */
+        if(stat(filepath, &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+
+        if(files_collected == files_allocated) {
+            size_t next_allocated = (files_allocated)?files_allocated * 2:16;
+            char **tmp = realloc(files, next_allocated * sizeof(*files));
+
+            if(!tmp) {
+                closedir(dir);
+                free_pathnames(files, files_collected);
+                fprintf(stderr, "%s: Cannot allocate memory for directory listing %s\n", PROG, listname);
+                exit(1);
+            }
+
+            files = tmp;
+            files_allocated = next_allocated;
+        }
+
+        files[files_collected] = strdup(filepath);
+        if(!files[files_collected]) {
+            closedir(dir);
+            free_pathnames(files, files_collected);
+            fprintf(stderr, "%s: Cannot allocate memory for directory entry %s\n", PROG, filepath);
+            exit(1);
+        }
+
+        files_collected++;
+    }
+
+    closedir(dir);
+
+    /* Handle empty directory case */
+    if(!files_collected) {
+        free(files);
+        if(unlikely(debug))
+            fprintf(stderr, "%s: Directory %s is empty or contains no valid files\n", PROG, listname);
+
+        /* Report an error for empty directory */
+        fprintf(stderr, "%s: No valid files found in directory: %s\n", PROG, listname);
+        exit(1);
+    }
+
+    qsort(files, files_collected, sizeof(*files), compare_pathnames);
+
+    for(j = 0; j < files_collected; j++) {
+        if(unlikely(debug))
+            fprintf(stderr, "%s: Loading file %s from directory %s\n", PROG, files[j], listname);
+
+        ipset *ips = ipset_load(files[j]);
+        if(!ips) {
+            fprintf(stderr, "%s: Cannot load file %s from directory %s\n",
+                    PROG, files[j], listname);
+            free_pathnames(files, files_collected);
+            exit(1);
+        }
+
+        chain_ipset(ips, read_second, root, root_last, second, second_last, first);
+    }
+
+    free_pathnames(files, files_collected);
 }
 
-static size_t parse_size_option_or_die(const char *option, const char *value, size_t min, size_t max, const char *expected)
+static void load_filelist(const char *listname, int read_second,
+                          ipset **root, ipset **root_last,
+                          ipset **second, ipset **second_last,
+                          ipset **first)
 {
-    char *end = NULL;
-    unsigned long long parsed;
+    FILE *fp;
+    char line[MAX_LINE + 1];
+    int lineid = 0;
 
-    if(!value || *value < '0' || *value > '9')
-        invalid_option_value(option, value?value:"", expected);
+    if(unlikely(debug))
+        fprintf(stderr, "%s: Loading files from list %s\n", PROG, listname);
 
-    errno = 0;
-    parsed = strtoull(value, &end, 10);
-    if(errno || !end || end == value || *end != '\0' || parsed < min || parsed > max)
-        invalid_option_value(option, value, expected);
+    fp = fopen(listname, "r");
+    if(!fp) {
+        fprintf(stderr, "%s: Cannot open file list: %s - %s\n", PROG, listname, strerror(errno));
+        exit(1);
+    }
 
-    return (size_t)parsed;
+    /* Flag to track if we loaded any files */
+    int files_loaded = 0;
+
+    /* Read each line and load the corresponding file */
+    while(fgets(line, MAX_LINE, fp)) {
+        lineid++;
+
+        /* Skip empty lines and comments */
+        char *s = line;
+        while(*s && (*s == ' ' || *s == '\t')) s++;
+        if(*s == '\n' || *s == '\r' || *s == '\0' || *s == '#' || *s == ';')
+            continue;
+
+        /* Remove trailing newlines/whitespace */
+        char *end = s + strlen(s) - 1;
+        while(end > s && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
+            *end-- = '\0';
+
+        if(unlikely(debug))
+            fprintf(stderr, "%s: Loading file %s from list (line %d)\n", PROG, s, lineid);
+
+        /* Load the file as an independent ipset */
+        ipset *ips = ipset_load(s);
+        if(!ips) {
+            fprintf(stderr, "%s: Cannot load file %s from list %s (line %d)\n",
+                    PROG, s, listname, lineid);
+            exit(1);
+        }
+
+        files_loaded = 1;
+
+        chain_ipset(ips, read_second, root, root_last, second, second_last, first);
+    }
+
+    fclose(fp);
+
+    /* Handle empty file list case */
+    if(!files_loaded) {
+        if(unlikely(debug))
+            fprintf(stderr, "%s: File list %s is empty or contains no valid entries\n", PROG, listname);
+
+        /* Report an error for empty file list */
+        fprintf(stderr, "%s: No valid files found in file list: %s\n", PROG, listname);
+        exit(1);
+    }
 }
 
-static void free_pathnames(char **files, size_t entries)
+static void load_at_source(const char *listname, int read_second,
+                           ipset **root, ipset **root_last,
+                           ipset **second, ipset **second_last,
+                           ipset **first)
 {
-    size_t i;
+    struct stat st;
 
-    for(i = 0; i < entries; i++)
-        free(files[i]);
+    if(stat(listname, &st) != 0) {
+        fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
+        exit(1);
+    }
 
-    free(files);
+    if(S_ISDIR(st.st_mode))
+        load_directory(listname, read_second, root, root_last, second, second_last, first);
+    else
+        load_filelist(listname, read_second, root, root_last, second, second_last, first);
 }
 
-#define MODE_COMBINE 1
-#define MODE_COMPARE 2
-#define MODE_COMPARE_FIRST 3
-#define MODE_COMPARE_NEXT 4
-#define MODE_COUNT_UNIQUE_MERGED 5
-#define MODE_COUNT_UNIQUE_ALL 6
-#define MODE_REDUCE 7
-#define MODE_COMMON 8
-#define MODE_EXCLUDE_NEXT 9
-#define MODE_DIFF 10
-/*#define MODE_HISTOGRAM 11 */
+
+/* =========================================================================
+ * mode execution functions
+ * ========================================================================= */
+
+static int execute_combine(ipset *root, IPSET_PRINT_CMD print,
+                           size_t reduce_factor, size_t reduce_min_accepted,
+                           int mode, int header)
+{
+    /* for debug mode to show something meaningful */
+    strcpy(root->filename, "combined ipset");
+
+    merge_chain(root);
+
+    if(mode == MODE_REDUCE) ipset_reduce(root, reduce_factor, reduce_min_accepted);
+
+    if(mode == MODE_COMBINE || mode == MODE_REDUCE)
+        ipset_print(root, print);
+
+    else if(mode == MODE_COUNT_UNIQUE_MERGED) {
+        uint64_t unique_ips = ipset_report_unique_ips(root, NULL);
+        if(unlikely(header)) printf("entries,unique_ips\n");
+        printf("%zu,%" PRIu64 "\n", root->entries, unique_ips);
+    }
+
+    return 0;
+}
+
+static int execute_common(ipset *root, IPSET_PRINT_CMD print)
+{
+    ipset *common = NULL, *ips, *ips2;
+
+    if(!root->next) {
+        fprintf(stderr, "%s: two ipsets at least are needed to be compared to find their common IPs.\n", PROG);
+        exit(1);
+    }
+
+    common = ipset_common(root, root->next);
+    for(ips = root->next->next; ips ;ips = ips->next) {
+        ips2 = ipset_common(common, ips);
+        ipset_free(common);
+        common = ips2;
+    }
+
+    ipset_print(common, print);
+    return 0;
+}
+
+static int execute_diff(ipset *root, ipset *second, IPSET_PRINT_CMD print, int quiet)
+{
+    ipset *ips;
+
+    if(!root || !second) {
+        fprintf(stderr, "%s: two ipsets at least are needed to be diffed.\n", PROG);
+        exit(1);
+    }
+
+    merge_chain(root);
+    if(root->next) strcpy(root->filename, "ipset A");
+
+    for(ips = second->next; ips ;ips = ips->next)
+        if(unlikely(ipset_merge(second, ips))) {
+            fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, second->filename);
+            exit(1);
+        }
+    if(second->next) strcpy(second->filename, "ipset B");
+
+    ips = ipset_diff(root, second);
+
+    if(!quiet) ipset_print(ips, print);
+
+    return ips->unique_ips ? 1 : 0;
+}
+
+static int execute_compare(ipset *root, int header)
+{
+    ipset *ips, *ips2;
+
+    if(!root->next) {
+        fprintf(stderr, "%s: two ipsets at least are needed to be compared.\n", PROG);
+        exit(1);
+    }
+
+    if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
+
+    ipset_optimize_all(root);
+
+    for(ips = root; ips ;ips = ips->next) {
+        for(ips2 = ips; ips2 ;ips2 = ips2->next) {
+            ipset *comips;
+            size_t entries1, entries2;
+            uint64_t unique1 = ipset_report_unique_ips(ips, &entries1);
+            uint64_t unique2 = ipset_report_unique_ips(ips2, &entries2);
+
+            if(ips == ips2) continue;
+
+#ifdef COMPARE_WITH_COMMON
+            comips = ipset_common(ips, ips2);
+            if(!comips) {
+                fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
+                exit(1);
+            }
+            fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - comips->unique_ips, comips->unique_ips);
+            ipset_free(comips);
+#else
+            comips = ipset_combine(ips, ips2);
+            if(!comips) {
+                fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, ips2->filename);
+                exit(1);
+            }
+
+            ipset_optimize(comips);
+            fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, comips->unique_ips, unique1 + unique2 - comips->unique_ips);
+            ipset_free(comips);
+#endif
+        }
+    }
+
+    return 0;
+}
+
+static int execute_compare_next(ipset *root, ipset *second, int header)
+{
+    ipset *ips, *ips2;
+
+    if(!second) {
+        fprintf(stderr, "%s: no files given after the --compare-next parameter.\n", PROG);
+        exit(1);
+    }
+
+    if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
+
+    ipset_optimize_all(root);
+    ipset_optimize_all(second);
+
+    for(ips = root; ips ;ips = ips->next) {
+        for(ips2 = second; ips2 ;ips2 = ips2->next) {
+            size_t entries1, entries2;
+            uint64_t unique1 = ipset_report_unique_ips(ips, &entries1);
+            uint64_t unique2 = ipset_report_unique_ips(ips2, &entries2);
+#ifdef COMPARE_WITH_COMMON
+            ipset *common = ipset_common(ips, ips2);
+            if(!common) {
+                fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
+                exit(1);
+            }
+            fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - common->unique_ips, common->unique_ips);
+            ipset_free(common);
+#else
+            ipset *combined = ipset_combine(ips, ips2);
+            if(!combined) {
+                fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, ips2->filename);
+                exit(1);
+            }
+
+            ipset_optimize(combined);
+            fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, combined->unique_ips, unique1 + unique2 - combined->unique_ips);
+            ipset_free(combined);
+#endif
+        }
+    }
+
+    return 0;
+}
+
+static int execute_compare_first(ipset *root, ipset *first, int header)
+{
+    ipset *ips;
+
+    if(!root->next) {
+        fprintf(stderr, "%s: two ipsets at least are needed to be compared.\n", PROG);
+        exit(1);
+    }
+
+    if(unlikely(header)) printf("name,entries,unique_ips,common_ips\n");
+
+    ipset_optimize_all(root);
+
+    for(ips = root; ips ;ips = ips->next) {
+        ipset *comips;
+        size_t entries;
+        uint64_t unique_ips = ipset_report_unique_ips(ips, &entries);
+
+        if(ips == first) continue;
+
+#ifdef COMPARE_WITH_COMMON
+        comips = ipset_common(ips, first);
+        if(!comips) {
+            fprintf(stderr, "%s: Cannot find the comips IPs of ipset %s and %s\n", PROG, ips->filename, first->filename);
+            exit(1);
+        }
+        printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, comips->unique_ips);
+        ipset_free(comips);
+#else
+        comips = ipset_combine(ips, first);
+        if(!comips) {
+            fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, first->filename);
+            exit(1);
+        }
+
+        ipset_optimize(comips);
+        printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, unique_ips + first->unique_ips - comips->unique_ips);
+        ipset_free(comips);
+#endif
+    }
+
+    return 0;
+}
+
+static int execute_exclude_next(ipset *root, ipset *second, IPSET_PRINT_CMD print)
+{
+    ipset *ips, *excluded;
+
+    if(!second) {
+        fprintf(stderr, "%s: no files given after the --exclude-next parameter.\n", PROG);
+        exit(1);
+    }
+
+    /* merge them */
+    merge_chain(root);
+
+    excluded = root;
+    root = root->next;
+    for(ips = second; ips ;ips = ips->next) {
+        ipset *tmp = ipset_exclude(excluded, ips);
+        if(!tmp) {
+            fprintf(stderr, "%s: Cannot exclude the IPs of ipset %s from %s\n", PROG, ips->filename, excluded->filename);
+            exit(1);
+        }
+
+        ipset_free(excluded);
+        excluded = tmp;
+    }
+    ipset_print(excluded, print);
+    return 0;
+}
+
+static int execute_count_unique_all(ipset *root, int header)
+{
+    ipset *ips;
+
+    if(unlikely(header)) printf("name,entries,unique_ips\n");
+
+    ipset_optimize_all(root);
+
+    for(ips = root; ips ;ips = ips->next) {
+        printf("%s,%zu,%" PRIu64 "\n", ips->filename, ips->entries, ips->unique_ips);
+    }
+
+    return 0;
+}
+
+
+/* =========================================================================
+ * main
+ * ========================================================================= */
 
 int main(int argc, char **argv) {
 /*	char histogram_dir[FILENAME_MAX + 1] = "/var/lib/iprange"; */
@@ -424,7 +906,7 @@ int main(int argc, char **argv) {
     int ret = 0, quiet = 0;
     int inputs = 0;
 
-    ipset *root = NULL, *root_last = NULL, *ips = NULL, *first = NULL, *second = NULL, *second_last = NULL;
+    ipset *root = NULL, *root_last = NULL, *first = NULL, *second = NULL, *second_last = NULL;
     int i, mode = MODE_COMBINE, header = 0, read_second = 0;
     IPSET_PRINT_CMD print = PRINT_CIDR;
 
@@ -642,202 +1124,15 @@ int main(int argc, char **argv) {
         else {
             if(!strcmp(argv[i], "-")) {
                 inputs++;
-                if(!(ips = ipset_load(NULL))) {
-                    fprintf(stderr, "%s: Cannot load ipset from stdin\n", PROG);
-                    exit(1);
-                }
-
-                if(read_second)
-                    ipset_chain_append(&second, &second_last, ips);
-                else {
-                    if(!first) first = ips;
-                    ipset_chain_append(&root, &root_last, ips);
-                }
+                load_stdin(read_second, &root, &root_last, &second, &second_last, &first);
             }
             else if(argv[i][0] == '@') {
                 inputs++;
-
-                /* Handle @filename as a file list or directory */
-                const char *listname = argv[i] + 1;  /* Skip the @ character */
-                struct stat st;
-                
-                if(stat(listname, &st) != 0) {
-                    fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
-                    exit(1);
-                }
-                
-                /* Check if it's a directory */
-                if(S_ISDIR(st.st_mode)) {
-                    DIR *dir;
-                    struct dirent *entry;
-                    char **files = NULL;
-                    size_t files_allocated = 0, files_collected = 0, j;
-
-                    if(unlikely(debug)) 
-                        fprintf(stderr, "%s: Loading files from directory %s\n", PROG, listname);
-                    
-                    dir = opendir(listname);
-                    if(!dir) {
-                        fprintf(stderr, "%s: Cannot open directory: %s - %s\n", PROG, listname, strerror(errno));
-                        exit(1);
-                    }
-
-                    /* Read all files from the directory */
-                    while((entry = readdir(dir))) {
-                        /* Skip "." and ".." */
-                        if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
-                            continue;
-                        
-                        /* Create full path */
-                        char filepath[FILENAME_MAX + 1];
-                        snprintf(filepath, FILENAME_MAX, "%s/%s", listname, entry->d_name);
-                        
-                        /* Auto-discovery should only consume regular files. */
-                        if(stat(filepath, &st) != 0 || !S_ISREG(st.st_mode))
-                            continue;
-
-                        if(files_collected == files_allocated) {
-                            size_t next_allocated = (files_allocated)?files_allocated * 2:16;
-                            char **tmp = realloc(files, next_allocated * sizeof(*files));
-
-                            if(!tmp) {
-                                closedir(dir);
-                                free_pathnames(files, files_collected);
-                                fprintf(stderr, "%s: Cannot allocate memory for directory listing %s\n", PROG, listname);
-                                exit(1);
-                            }
-
-                            files = tmp;
-                            files_allocated = next_allocated;
-                        }
-
-                        files[files_collected] = strdup(filepath);
-                        if(!files[files_collected]) {
-                            closedir(dir);
-                            free_pathnames(files, files_collected);
-                            fprintf(stderr, "%s: Cannot allocate memory for directory entry %s\n", PROG, filepath);
-                            exit(1);
-                        }
-
-                        files_collected++;
-                    }
-                    
-                    closedir(dir);
-                    
-                    /* Handle empty directory case */
-                    if(!files_collected) {
-                        free(files);
-                        if(unlikely(debug))
-                            fprintf(stderr, "%s: Directory %s is empty or contains no valid files\n", PROG, listname);
-                        
-                        /* Report an error for empty directory */
-                        fprintf(stderr, "%s: No valid files found in directory: %s\n", PROG, listname);
-                        exit(1);
-                    }
-
-                    qsort(files, files_collected, sizeof(*files), compare_pathnames);
-
-                    for(j = 0; j < files_collected; j++) {
-                        if(unlikely(debug))
-                            fprintf(stderr, "%s: Loading file %s from directory %s\n", PROG, files[j], listname);
-
-                        if(!(ips = ipset_load(files[j]))) {
-                            fprintf(stderr, "%s: Cannot load file %s from directory %s\n",
-                                    PROG, files[j], listname);
-                            free_pathnames(files, files_collected);
-                            exit(1);
-                        }
-
-                        if(read_second)
-                            ipset_chain_append(&second, &second_last, ips);
-                        else {
-                            if(!first) first = ips;
-                            ipset_chain_append(&root, &root_last, ips);
-                        }
-                    }
-
-                    free_pathnames(files, files_collected);
-                }
-                else {
-                    /* Handle as a file list */
-                    FILE *fp;
-                    char line[MAX_LINE + 1];
-                    int lineid = 0;
-                    
-                    if(unlikely(debug)) 
-                        fprintf(stderr, "%s: Loading files from list %s\n", PROG, listname);
-                    
-                    fp = fopen(listname, "r");
-                    if(!fp) {
-                        fprintf(stderr, "%s: Cannot open file list: %s - %s\n", PROG, listname, strerror(errno));
-                        exit(1);
-                    }
-                    
-                    /* Flag to track if we loaded any files */
-                    int files_loaded = 0;
-
-                    /* Read each line and load the corresponding file */
-                    while(fgets(line, MAX_LINE, fp)) {
-                        lineid++;
-                        
-                        /* Skip empty lines and comments */
-                        char *s = line;
-                        while(*s && (*s == ' ' || *s == '\t')) s++;
-                        if(*s == '\n' || *s == '\r' || *s == '\0' || *s == '#' || *s == ';')
-                            continue;
-                            
-                        /* Remove trailing newlines/whitespace */
-                        char *end = s + strlen(s) - 1;
-                        while(end > s && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
-                            *end-- = '\0';
-                            
-                        if(unlikely(debug)) 
-                            fprintf(stderr, "%s: Loading file %s from list (line %d)\n", PROG, s, lineid);
-                        
-                        /* Load the file as an independent ipset */
-                        if(!(ips = ipset_load(s))) {
-                            fprintf(stderr, "%s: Cannot load file %s from list %s (line %d)\n", 
-                                    PROG, s, listname, lineid);
-                            exit(1);
-                        }
-                        
-                        files_loaded = 1;
-                        
-                        /* Add the ipset to the appropriate chain */
-                        if(read_second)
-                            ipset_chain_append(&second, &second_last, ips);
-                        else {
-                            if(!first) first = ips;
-                            ipset_chain_append(&root, &root_last, ips);
-                        }
-                    }
-                    
-                    fclose(fp);
-                    
-                    /* Handle empty file list case */
-                    if(!files_loaded) {
-                        if(unlikely(debug))
-                            fprintf(stderr, "%s: File list %s is empty or contains no valid entries\n", PROG, listname);
-                        
-                        /* Report an error for empty file list */
-                        fprintf(stderr, "%s: No valid files found in file list: %s\n", PROG, listname);
-                        exit(1);
-                    }
-                }
+                load_at_source(argv[i] + 1, read_second, &root, &root_last, &second, &second_last, &first);
             }
             else {
                 inputs++;
-                if(!(ips = ipset_load(argv[i]))) {
-                    fprintf(stderr, "%s: Cannot load ipset: %s\n", PROG, argv[i]);
-                    exit(1);
-                }
-                
-                if(read_second)
-                    ipset_chain_append(&second, &second_last, ips);
-                else {
-                    if(!first) first = ips;
-                    ipset_chain_append(&root, &root_last, ips);
-                }
+                load_file(argv[i], read_second, &root, &root_last, &second, &second_last, &first);
             }
         }
     }
@@ -866,258 +1161,48 @@ int main(int argc, char **argv) {
 
     gettimeofday(&load_dt, NULL);
 
-        if(mode == MODE_COMBINE || mode == MODE_REDUCE || mode == MODE_COUNT_UNIQUE_MERGED) {
-        /* for debug mode to show something meaningful */
-        strcpy(root->filename, "combined ipset");
+    /* execute the selected mode */
+    switch(mode) {
+        case MODE_COMBINE:
+        case MODE_REDUCE:
+        case MODE_COUNT_UNIQUE_MERGED:
+            ret = execute_combine(root, print, ipset_reduce_factor, ipset_reduce_min_accepted, mode, header);
+            break;
 
-        for(ips = root->next; ips ;ips = ips->next)
-            if(unlikely(ipset_merge(root, ips))) {
-                fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, root->filename);
-                exit(1);
-            }
+        case MODE_COMMON:
+            ret = execute_common(root, print);
+            break;
 
-        /* ipset_optimize(root); */
-        if(mode == MODE_REDUCE) ipset_reduce(root, ipset_reduce_factor, ipset_reduce_min_accepted);
+        case MODE_DIFF:
+            ret = execute_diff(root, second, print, quiet);
+            break;
 
-        gettimeofday(&print_dt, NULL);
+        case MODE_COMPARE:
+            ret = execute_compare(root, header);
+            break;
 
-        if(mode == MODE_COMBINE || mode == MODE_REDUCE)
-            ipset_print(root, print);
+        case MODE_COMPARE_NEXT:
+            ret = execute_compare_next(root, second, header);
+            break;
 
-        else if(mode == MODE_COUNT_UNIQUE_MERGED) {
-            uint64_t unique_ips = ipset_report_unique_ips(root, NULL);
-            if(unlikely(header)) printf("entries,unique_ips\n");
-            printf("%zu,%" PRIu64 "\n", root->entries, unique_ips);
-        }
-    }
-    else if(mode == MODE_COMMON) {
-        ipset *common = NULL, *ips2 = NULL;
+        case MODE_COMPARE_FIRST:
+            ret = execute_compare_first(root, first, header);
+            break;
 
-        if(!root->next) {
-            fprintf(stderr, "%s: two ipsets at least are needed to be compared to find their common IPs.\n", PROG);
+        case MODE_EXCLUDE_NEXT:
+            ret = execute_exclude_next(root, second, print);
+            break;
+
+        case MODE_COUNT_UNIQUE_ALL:
+            ret = execute_count_unique_all(root, header);
+            break;
+
+        default:
+            fprintf(stderr, "%s: Unknown mode.\n", PROG);
             exit(1);
-        }
-
-        /* ipset_optimize_all(root); */
-
-        common = ipset_common(root, root->next);
-        for(ips = root->next->next; ips ;ips = ips->next) {
-            ips2 = ipset_common(common, ips);
-            ipset_free(common);
-            common = ips2;
-        }
-
-        gettimeofday(&print_dt, NULL);
-        ipset_print(common, print);
-    }
-    else if(mode == MODE_DIFF) {
-        if(!root || !second) {
-            fprintf(stderr, "%s: two ipsets at least are needed to be diffed.\n", PROG);
-            exit(1);
-        }
-
-        for(ips = root->next; ips ;ips = ips->next)
-            if(unlikely(ipset_merge(root, ips))) {
-                fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, root->filename);
-                exit(1);
-            }
-        if(root->next) strcpy(root->filename, "ipset A");
-
-        for(ips = second->next; ips ;ips = ips->next)
-            if(unlikely(ipset_merge(second, ips))) {
-                fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, second->filename);
-                exit(1);
-            }
-        if(second->next) strcpy(second->filename, "ipset B");
-
-        ips = ipset_diff(root, second);
-
-        gettimeofday(&print_dt, NULL);
-        if(!quiet) ipset_print(ips, print);
-        gettimeofday(&print_dt, NULL);
-
-        if(ips->unique_ips) ret = 1;
-        else ret = 0;
-    }
-    else if(mode == MODE_COMPARE) {
-        ipset *ips2;
-
-        if(!root->next) {
-            fprintf(stderr, "%s: two ipsets at least are needed to be compared.\n", PROG);
-            exit(1);
-        }
-
-        if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
-
-        ipset_optimize_all(root);
-
-        for(ips = root; ips ;ips = ips->next) {
-            for(ips2 = ips; ips2 ;ips2 = ips2->next) {
-                ipset *comips;
-                size_t entries1, entries2;
-                uint64_t unique1 = ipset_report_unique_ips(ips, &entries1);
-                uint64_t unique2 = ipset_report_unique_ips(ips2, &entries2);
-
-                if(ips == ips2) continue;
-
-#ifdef COMPARE_WITH_COMMON
-                comips = ipset_common(ips, ips2);
-                if(!comips) {
-                    fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
-                    exit(1);
-                }
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - comips->unique_ips, comips->unique_ips);
-                ipset_free(comips);
-#else
-                comips = ipset_combine(ips, ips2);
-                if(!comips) {
-                    fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, ips2->filename);
-                    exit(1);
-                }
-
-                ipset_optimize(comips);
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, comips->unique_ips, unique1 + unique2 - comips->unique_ips);
-                ipset_free(comips);
-#endif
-            }
-        }
-        gettimeofday(&print_dt, NULL);
-    }
-    else if(mode == MODE_COMPARE_NEXT) {
-        ipset *ips2;
-
-        if(!second) {
-            fprintf(stderr, "%s: no files given after the --compare-next parameter.\n", PROG);
-            exit(1);
-        }
-
-        if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
-
-        ipset_optimize_all(root);
-        ipset_optimize_all(second);
-
-        for(ips = root; ips ;ips = ips->next) {
-            for(ips2 = second; ips2 ;ips2 = ips2->next) {
-                size_t entries1, entries2;
-                uint64_t unique1 = ipset_report_unique_ips(ips, &entries1);
-                uint64_t unique2 = ipset_report_unique_ips(ips2, &entries2);
-#ifdef COMPARE_WITH_COMMON
-                ipset *common = ipset_common(ips, ips2);
-                if(!common) {
-                    fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
-                    exit(1);
-                }
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - common->unique_ips, common->unique_ips);
-                ipset_free(common);
-#else
-                ipset *combined = ipset_combine(ips, ips2);
-                if(!combined) {
-                    fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, ips2->filename);
-                    exit(1);
-                }
-
-                ipset_optimize(combined);
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, combined->unique_ips, unique1 + unique2 - combined->unique_ips);
-                ipset_free(combined);
-#endif
-            }
-        }
-        gettimeofday(&print_dt, NULL);
-    }
-    else if(mode == MODE_COMPARE_FIRST) {
-        if(!root->next) {
-            fprintf(stderr, "%s: two ipsets at least are needed to be compared.\n", PROG);
-            exit(1);
-        }
-
-        if(unlikely(header)) printf("name,entries,unique_ips,common_ips\n");
-
-        ipset_optimize_all(root);
-
-        for(ips = root; ips ;ips = ips->next) {
-            ipset *comips;
-            size_t entries;
-            uint64_t unique_ips = ipset_report_unique_ips(ips, &entries);
-
-            if(ips == first) continue;
-
-#ifdef COMPARE_WITH_COMMON
-            comips = ipset_common(ips, first);
-            if(!comips) {
-                fprintf(stderr, "%s: Cannot find the comips IPs of ipset %s and %s\n", PROG, ips->filename, first->filename);
-                exit(1);
-            }
-            printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, comips->unique_ips);
-            ipset_free(comips);
-#else
-            comips = ipset_combine(ips, first);
-            if(!comips) {
-                fprintf(stderr, "%s: Cannot merge ipset %s and %s\n", PROG, ips->filename, first->filename);
-                exit(1);
-            }
-
-            ipset_optimize(comips);
-            printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, unique_ips + first->unique_ips - comips->unique_ips);
-            ipset_free(comips);
-#endif
-        }
-        gettimeofday(&print_dt, NULL);
-    }
-    else if(mode == MODE_EXCLUDE_NEXT) {
-        ipset *excluded;
-
-        if(!second) {
-            fprintf(stderr, "%s: no files given after the --exclude-next parameter.\n", PROG);
-            exit(1);
-        }
-
-        /* merge them */
-        for(ips = root->next; ips ;ips = ips->next)
-            if(unlikely(ipset_merge(root, ips))) {
-                fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, root->filename);
-                exit(1);
-            }
-
-        /* ipset_optimize(root); */
-        /* ipset_optimize_all(second); */
-
-        excluded = root;
-        root = root->next;
-        for(ips = second; ips ;ips = ips->next) {
-            ipset *tmp = ipset_exclude(excluded, ips);
-            if(!tmp) {
-                fprintf(stderr, "%s: Cannot exclude the IPs of ipset %s from %s\n", PROG, ips->filename, excluded->filename);
-                exit(1);
-            }
-
-            ipset_free(excluded);
-            excluded = tmp;
-        }
-        gettimeofday(&print_dt, NULL);
-        ipset_print(excluded, print);
-    }
-    else if(mode == MODE_COUNT_UNIQUE_ALL) {
-        if(unlikely(header)) printf("name,entries,unique_ips\n");
-
-        ipset_optimize_all(root);
-
-        for(ips = root; ips ;ips = ips->next) {
-            printf("%s,%zu,%" PRIu64 "\n", ips->filename, ips->entries, ips->unique_ips);
-        }
-        gettimeofday(&print_dt, NULL);
-    }
-/*
-    else if(mode == MODE_HISTOGRAM) {
-        for(ips = root; ips ;ips = ips->next) {
-            ipset_histogram(ips, histogram_dir);
-        }
-    }
-*/
-    else {
-        fprintf(stderr, "%s: Unknown mode.\n", PROG);
-        exit(1);
     }
 
+    gettimeofday(&print_dt, NULL);
     gettimeofday(&stop_dt, NULL);
     if(debug)
         fprintf(stderr, "completed in %0.5f seconds (read %0.5f + think %0.5f + speak %0.5f)\n"

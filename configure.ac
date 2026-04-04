@@ -84,6 +84,20 @@ else
 	AC_DEFINE_UNQUOTED([unlikely(x)], [(x)], [gcc branch optimization])
 fi
 
+dnl Use -O3 and LTO for GCC
+if test "${GCC}" = "yes"; then
+	CFLAGS=$(echo "${CFLAGS}" | sed 's/-O[[0-9s]]*/-O3/g')
+	case "${CFLAGS}" in
+		*-O*) ;;
+		*) CFLAGS="${CFLAGS} -O3" ;;
+	esac
+	case "${CFLAGS}" in
+		*-flto*) ;;
+		*) CFLAGS="${CFLAGS} -flto"
+		   LDFLAGS="${LDFLAGS} -flto" ;;
+	esac
+fi
+
 if test "${enable_pedantic}" = "yes"; then
 	enable_strict="yes"
 	CFLAGS="${CFLAGS} -pedantic -Wall -Wextra"

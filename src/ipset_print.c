@@ -121,6 +121,66 @@ inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_t hi, v
 
 
 /* ----------------------------------------------------------------------------
+ * per-mode output functions
+ */
+
+static size_t ipset_print_cidr(ipset *ips) {
+    size_t i, n, total = 0;
+
+    /* reset the prefix counters */
+    for(i = 0; i <= 32; i++)
+        prefix_counters[i] = 0;
+
+    n = ips->entries;
+    for(i = 0; i < n ;i++)
+        total += split_range(0, 0, ips->netaddrs[i].addr, ips->netaddrs[i].broadcast, print_addr);
+
+    return total;
+}
+
+static size_t ipset_print_single_ips(ipset *ips) {
+    size_t i, n, total = 0;
+
+    n = ips->entries;
+    for(i = 0; i < n ;i++) {
+        in_addr_t x, start = ips->netaddrs[i].addr, end = ips->netaddrs[i].broadcast;
+        if(unlikely(start > end)) {
+            char buf[IP2STR_MAX_LEN + 1];
+            fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip2str_r(buf, start));
+            fprintf(stderr, " end=%s\n", ip2str_r(buf, end));
+            x = end;
+            end = start;
+            start = x;
+        }
+        if(unlikely(end - start > (256 * 256 * 256))) {
+            char buf[IP2STR_MAX_LEN + 1];
+            fprintf(stderr, "%s: too big range eliminated start=%s", PROG, ip2str_r(buf, start));
+            fprintf(stderr, " end=%s gives %lu IPs\n", ip2str_r(buf, end), (unsigned long)(end - start));
+            continue;
+        }
+        for( x = start ; x >= start && x <= end ; x++ ) {
+            print_addr_single(x);
+            total++;
+        }
+    }
+
+    return total;
+}
+
+static size_t ipset_print_ranges(ipset *ips) {
+    size_t i, n, total = 0;
+
+    n = ips->entries;
+    for(i = 0; i < n ;i++) {
+        print_addr_range(ips->netaddrs[i].addr, ips->netaddrs[i].broadcast);
+        total++;
+    }
+
+    return total;
+}
+
+
+/* ----------------------------------------------------------------------------
  * ipset_print()
  *
  * print the ipset given to stdout
@@ -128,7 +188,7 @@ inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_t hi, v
  */
 
 void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
-    size_t i, n, total = 0;
+    size_t total;
 
     if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
         ipset_optimize(ips);
@@ -142,53 +202,22 @@ void ipset_print(ipset *ips, IPSET_PRINT_CMD print) {
 
     switch(print) {
         case PRINT_CIDR:
-            /* reset the prefix counters */
-            for(i = 0; i <= 32; i++)
-                prefix_counters[i] = 0;
-
-            n = ips->entries;
-            for(i = 0; i < n ;i++)
-                total += split_range(0, 0, ips->netaddrs[i].addr, ips->netaddrs[i].broadcast, print_addr);
-
+            total = ipset_print_cidr(ips);
             break;
 
         case PRINT_SINGLE_IPS:
-            n = ips->entries;
-            for(i = 0; i < n ;i++) {
-                in_addr_t x, start = ips->netaddrs[i].addr, end = ips->netaddrs[i].broadcast;
-                if(unlikely(start > end)) {
-                    char buf[IP2STR_MAX_LEN + 1];
-                    fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip2str_r(buf, start));
-                    fprintf(stderr, " end=%s\n", ip2str_r(buf, end));
-                    x = end;
-                    end = start;
-                    start = x;
-                }
-                if(unlikely(end - start > (256 * 256 * 256))) {
-                    char buf[IP2STR_MAX_LEN + 1];
-                    fprintf(stderr, "%s: too big range eliminated start=%s", PROG, ip2str_r(buf, start));
-                    fprintf(stderr, " end=%s gives %lu IPs\n", ip2str_r(buf, end), (unsigned long)(end - start));
-                    continue;
-                }
-                for( x = start ; x >= start && x <= end ; x++ ) {
-                    print_addr_single(x);
-                    total++;
-                }
-            }
+            total = ipset_print_single_ips(ips);
             break;
 
         default:
-            n = ips->entries;
-            for(i = 0; i < n ;i++) {
-                print_addr_range(ips->netaddrs[i].addr, ips->netaddrs[i].broadcast);
-                total++;
-            }
+            total = ipset_print_ranges(ips);
             break;
     }
 
     /* print prefix break down */
     if(unlikely(debug)) {
         int prefixes = 0;
+        size_t i;
 
         if (print == PRINT_CIDR) {
 
