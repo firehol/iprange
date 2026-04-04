@@ -32,6 +32,7 @@ jobs:
         run: |
             ./packaging/gpg-recv-key phil@firehol.org "0762 9FF7 89EA 6156 012F  9F50 C406 9602 1359 9237"
             ./packaging/gpg-recv-key costa@tsaousis.gr "4DFF 624A E564 3B51 2872  1F40 29CA 3358 89B9 A863"
+            ./packaging/gpg-recv-key costa@netdata.cloud "43BE 16F6 D4C7 E31B A5B9  617B 3A4F 28E9 63D2 8A1F"
             git fetch --tags -f
         env:
            KEYURL: https://keyserver.ubuntu.com/pks/lookup?exact=on&op=get&search=
