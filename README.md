@@ -366,12 +366,24 @@ To skip the man page: `./configure --disable-man`
 | Directory | Contents |
 |-----------|----------|
 | `src/` | C sources and headers |
+| `docs/` | Detailed documentation |
 | `packaging/` | Spec template, ebuild, release tooling |
 | `tests.d/` | CLI regression tests |
 | `tests.build.d/` | Build and layout regressions |
 | `tests.sanitizers.d/` | Sanitizer CLI regressions |
 | `tests.tsan.d/` | TSAN regressions |
 | `tests.unit/` | Unit-style internal harnesses |
+
+## Documentation
+
+Detailed guides in the [`docs/`](docs/) directory:
+
+- [Input formats](docs/input-formats.md) — every accepted format, file lists, directories, binary
+- [Output formats](docs/output-formats.md) — CIDR, ranges, single IPs, binary, CSV, prefix/suffix
+- [Operations](docs/operations.md) — merge, intersect, exclude, diff, reduce, compare, count
+- [IPv6 support](docs/ipv6.md) — address family, normalization, cross-family rules
+- [DNS resolution](docs/dns-resolution.md) — threading, retry, configuration
+- [Optimizing ipsets for iptables](docs/ipset-reduce.md) — prefix reduction with examples
 
 ## Getting help
 
