@@ -136,7 +136,10 @@ EXTRA_DIST = \
 	tests.d \
 	tests.build.d \
 	tests.sanitizers.d \
+	tests.tsan.d \
 	tests.unit \
+	wiki \
+	cmake \
 	$(man_MANS) \
 	$(NULL)
 
