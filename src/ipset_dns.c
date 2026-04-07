@@ -147,6 +147,8 @@ static void dns_request_failed(DNSREQ *d, int added, int gai_error)
                 dns_unlock_requests();
                 return;
             }
+            if(!dns_silent)
+                fprintf(stderr, "%s: DNS: '%s' failed permanently after retries: %s\n", PROG, d->hostname, gai_strerror(gai_error));
             dns_request_done(d, added);
             return;
 
