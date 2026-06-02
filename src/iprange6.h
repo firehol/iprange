@@ -2,10 +2,11 @@
 #define IPRANGE_IPRANGE6_H
 
 #include "iprange.h"
+#include "uint128.h"
 #include <string.h>
 
 /* IPv6 address type: 128-bit unsigned integer in host byte order */
-typedef __uint128_t ipv6_addr_t;
+typedef uint128_t ipv6_addr_t;
 
 /* IPv6 network address type: one field for the net address, one for broadcast */
 typedef struct network_addr6 {
@@ -14,11 +15,11 @@ typedef struct network_addr6 {
 } network_addr6_t;
 
 /* Maximum IPv6 address */
-#define IPV6_ADDR_MAX ((ipv6_addr_t)((__uint128_t)(-1)))
+#define IPV6_ADDR_MAX U128_MAX
 
 /* IPv4-mapped IPv6 prefix: ::ffff:0:0/96 */
-#define IPV6_MAPPED_PREFIX ((ipv6_addr_t)0xFFFF00000000ULL)
-#define IPV6_MAPPED_MASK   ((ipv6_addr_t)0xFFFFFFFFULL)
+#define IPV6_MAPPED_PREFIX (u128_from_u64(0xFFFF00000000ULL))
+#define IPV6_MAPPED_MASK   (u128_from_u64(0xFFFFFFFFULL))
 
 #define IP6STR_MAX_LEN 46
 
@@ -28,18 +29,18 @@ typedef struct network_addr6 {
 /*----------------------------------------------------------------------*/
 
 static inline ipv6_addr_t in6_addr_to_ipv6(const struct in6_addr *in6) {
-    ipv6_addr_t result = 0;
+    ipv6_addr_t result = U128_ZERO;
     int i;
     for(i = 0; i < 16; i++)
-        result = (result << 8) | in6->s6_addr[i];
+        result = u128_or(u128_shl(result, 8), u128_from_u64(in6->s6_addr[i]));
     return result;
 }
 
 static inline void ipv6_to_in6_addr(ipv6_addr_t addr, struct in6_addr *in6) {
     int i;
     for(i = 15; i >= 0; i--) {
-        in6->s6_addr[i] = (uint8_t)(addr & 0xFF);
-        addr >>= 8;
+        in6->s6_addr[i] = (uint8_t)u128_lo64(addr);
+        addr = u128_shr(addr, 8);
     }
 }
 
@@ -48,24 +49,24 @@ static inline void ipv6_to_in6_addr(ipv6_addr_t addr, struct in6_addr *in6) {
 /*----------------------------------------------*/
 static inline ipv6_addr_t netmask6(int prefix) {
     if(prefix == 0)
-        return (ipv6_addr_t)0;
+        return U128_ZERO;
     if(prefix >= 128)
         return IPV6_ADDR_MAX;
-    return IPV6_ADDR_MAX << (128 - prefix);
+    return u128_shl(U128_MAX, 128 - prefix);
 }
 
 /*----------------------------------------------------*/
 /* Compute broadcast address given address and prefix  */
 /*----------------------------------------------------*/
 static inline ipv6_addr_t broadcast6(ipv6_addr_t addr, int prefix) {
-    return addr | ~netmask6(prefix);
+    return u128_or(addr, u128_not(netmask6(prefix)));
 }
 
 /*--------------------------------------------------*/
 /* Compute network address given address and prefix  */
 /*--------------------------------------------------*/
 static inline ipv6_addr_t network6(ipv6_addr_t addr, int prefix) {
-    return addr & netmask6(prefix);
+    return u128_and(addr, netmask6(prefix));
 }
 
 /*------------------------------------------------------------------*/
@@ -73,9 +74,9 @@ static inline ipv6_addr_t network6(ipv6_addr_t addr, int prefix) {
 /*------------------------------------------------------------------*/
 static inline ipv6_addr_t set_bit6(ipv6_addr_t addr, int bitno, int val) {
     if(val)
-        return addr | ((__uint128_t)1 << (128 - bitno));
+        return u128_or(addr, u128_shl(U128_ONE, 128 - bitno));
     else
-        return addr & ~((__uint128_t)1 << (128 - bitno));
+        return u128_and(addr, u128_not(u128_shl(U128_ONE, 128 - bitno)));
 }
 
 /*-----------------------------------------------------------*/
@@ -121,8 +122,8 @@ static inline network_addr6_t str2netaddr6(char *ipstr, int *err) {
                     || parsed_prefix < 0 || parsed_prefix > 128)) {
             if(err) (*err)++;
             fprintf(stderr, "%s: Invalid IPv6 prefix /%s\n", PROG, prefixstr);
-            netaddr.addr = 0;
-            netaddr.broadcast = 0;
+            netaddr.addr = U128_ZERO;
+            netaddr.broadcast = U128_ZERO;
             return netaddr;
         }
         prefix = (int)parsed_prefix;
@@ -131,8 +132,8 @@ static inline network_addr6_t str2netaddr6(char *ipstr, int *err) {
     if(!str_to_ipv6(ipstr, &addr)) {
         if(err) (*err)++;
         fprintf(stderr, "%s: Invalid IPv6 address %s\n", PROG, ipstr);
-        netaddr.addr = 0;
-        netaddr.broadcast = 0;
+        netaddr.addr = U128_ZERO;
+        netaddr.broadcast = U128_ZERO;
         return netaddr;
     }
 
@@ -149,21 +150,21 @@ static inline network_addr6_t str2netaddr6(char *ipstr, int *err) {
 /* Check if an IPv6 address is IPv4-mapped (::ffff:x.x.x.x)  */
 /*-----------------------------------------------------------*/
 static inline int is_ipv4_mapped(ipv6_addr_t addr) {
-    return (addr >> 32) == 0xFFFF;
+    return u128_eq(u128_shr(addr, 32), u128_from_u64(0xFFFF));
 }
 
 /*-----------------------------------------------------------*/
 /* Convert IPv4 to IPv4-mapped IPv6                           */
 /*-----------------------------------------------------------*/
 static inline ipv6_addr_t ipv4_to_mapped6(in_addr_t ipv4) {
-    return IPV6_MAPPED_PREFIX | (ipv6_addr_t)ipv4;
+    return u128_or(IPV6_MAPPED_PREFIX, u128_from_u64(ipv4));
 }
 
 /*-----------------------------------------------------------*/
 /* Extract IPv4 from IPv4-mapped IPv6                         */
 /*-----------------------------------------------------------*/
 static inline in_addr_t mapped6_to_ipv4(ipv6_addr_t addr) {
-    return (in_addr_t)(addr & IPV6_MAPPED_MASK);
+    return (in_addr_t)u128_lo64(u128_and(addr, IPV6_MAPPED_MASK));
 }
 
 /*-----------------------------------------------------------*/
@@ -171,18 +172,18 @@ static inline in_addr_t mapped6_to_ipv4(ipv6_addr_t addr) {
 /* Returns pointer to start of number within buf               */
 /* buf must be at least 40 bytes                               */
 /*-----------------------------------------------------------*/
-static inline char *u128_to_dec(char *buf, size_t buflen, __uint128_t val) {
+static inline char *u128_to_dec(char *buf, size_t buflen, uint128_t val) {
     char *p = buf + buflen - 1;
     *p = '\0';
 
-    if(val == 0) {
+    if(u128_is_zero(val)) {
         *(--p) = '0';
         return p;
     }
 
-    while(val > 0) {
-        *(--p) = '0' + (char)(val % 10);
-        val /= 10;
+    while(!u128_is_zero(val)) {
+        *(--p) = '0' + (char)u128_mod10(val);
+        val = u128_div10(val);
     }
     return p;
 }

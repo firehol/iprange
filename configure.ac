@@ -73,8 +73,9 @@ CC="${PTHREAD_CC}"
 AC_TYPE_UINT32_T
 AC_C_INLINE
 
-AC_CHECK_TYPE([__uint128_t], [],
-  [AC_MSG_ERROR([Your compiler does not support __uint128_t, required for IPv6 support.])],
+AC_CHECK_TYPE([__uint128_t],
+  [AC_MSG_NOTICE([Native __uint128_t detected — using hardware 128-bit integers for IPv6])],
+  [AC_MSG_NOTICE([__uint128_t not available — using portable 128-bit arithmetic for IPv6])],
   [/* no includes needed */])
 
 test "${with_compare_with_common}" = "yes" && AC_DEFINE([COMPARE_WITH_COMMON], [1], [compare settings])

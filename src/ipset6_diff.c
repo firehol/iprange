@@ -53,7 +53,7 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
     hi2 = ips2->netaddrs[0].broadcast;
 
     while(i1 < n1 && i2 < n2) {
-        if(lo1 > hi2) {
+        if(u128_gt(lo1, hi2)) {
             ipset6_add_ip_range(ips, lo2, hi2);
             i2++;
             if(i2 < n2) {
@@ -62,7 +62,7 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
             }
             continue;
         }
-        if(lo2 > hi1) {
+        if(u128_gt(lo2, hi1)) {
             ipset6_add_ip_range(ips, lo1, hi1);
             i1++;
             if(i1 < n1) {
@@ -72,14 +72,14 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
             continue;
         }
 
-        if(lo1 > lo2)
-            ipset6_add_ip_range(ips, lo2, lo1 - 1);
-        else if(lo2 > lo1)
-            ipset6_add_ip_range(ips, lo1, lo2 - 1);
+        if(u128_gt(lo1, lo2))
+            ipset6_add_ip_range(ips, lo2, u128_dec(lo1));
+        else if(u128_gt(lo2, lo1))
+            ipset6_add_ip_range(ips, lo1, u128_dec(lo2));
 
-        if(hi1 > hi2) {
-            if(hi2 == IPV6_ADDR_MAX) { i1++; i2++; }
-            else { lo1 = hi2 + 1; i2++; }
+        if(u128_gt(hi1, hi2)) {
+            if(u128_eq(hi2, IPV6_ADDR_MAX)) { i1++; i2++; }
+            else { lo1 = u128_inc(hi2); i2++; }
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
                 hi2 = ips2->netaddrs[i2].broadcast;
@@ -90,9 +90,9 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
             }
             continue;
         }
-        else if(hi2 > hi1) {
-            if(hi1 == IPV6_ADDR_MAX) { i1++; i2++; }
-            else { lo2 = hi1 + 1; i1++; }
+        else if(u128_gt(hi2, hi1)) {
+            if(u128_eq(hi1, IPV6_ADDR_MAX)) { i1++; i2++; }
+            else { lo2 = u128_inc(hi1); i1++; }
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
                 hi1 = ips1->netaddrs[i1].broadcast;

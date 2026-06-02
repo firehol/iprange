@@ -41,7 +41,7 @@ inline void print_addr6(ipv6_addr_t addr, int prefix) {
 inline void print_addr6_range(ipv6_addr_t lo, ipv6_addr_t hi) {
     char buf[IP6STR_MAX_LEN + 1];
 
-    if(unlikely(lo > hi)) {
+    if(unlikely(u128_gt(lo, hi))) {
         ipv6_addr_t t = hi;
         fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip6str_r(buf, lo));
         fprintf(stderr, " end=%s\n", ip6str_r(buf, hi));
@@ -49,7 +49,7 @@ inline void print_addr6_range(ipv6_addr_t lo, ipv6_addr_t hi) {
         lo = t;
     }
 
-    if(lo == hi) {
+    if(u128_eq(lo, hi)) {
         printf("%s%s-", print_prefix_ips, ip6str_r(buf, lo));
         printf("%s%s\n", ip6str_r(buf, hi), print_suffix_ips);
     }
@@ -72,7 +72,7 @@ inline void print_addr6_single(ipv6_addr_t x) {
 inline int split_range6(ipv6_addr_t addr, int prefix, ipv6_addr_t lo, ipv6_addr_t hi, void (*print)(ipv6_addr_t, int)) {
     ipv6_addr_t bc, lower_half, upper_half;
 
-    if(unlikely(lo > hi)) {
+    if(unlikely(u128_gt(lo, hi))) {
         ipv6_addr_t t = hi;
         char buf[IP6STR_MAX_LEN + 1];
         fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip6str_r(buf, lo));
@@ -88,13 +88,13 @@ inline int split_range6(ipv6_addr_t addr, int prefix, ipv6_addr_t lo, ipv6_addr_
 
     bc = broadcast6(addr, prefix);
 
-    if(unlikely(lo < addr || hi > bc)) {
+    if(unlikely(u128_lt(lo, addr) || u128_gt(hi, bc))) {
         char buf[IP6STR_MAX_LEN + 1];
         fprintf(stderr, "%s: Out of range limits for IPv6 network %s/%d\n", PROG, ip6str_r(buf, addr), prefix);
         return 0;
     }
 
-    if(lo == addr && hi == bc && prefix6_enabled[prefix]) {
+    if(u128_eq(lo, addr) && u128_eq(hi, bc) && prefix6_enabled[prefix]) {
         print(addr, prefix);
         return 1;
     }
@@ -103,9 +103,9 @@ inline int split_range6(ipv6_addr_t addr, int prefix, ipv6_addr_t lo, ipv6_addr_
     lower_half = addr;
     upper_half = set_bit6(addr, prefix, 1);
 
-    if(hi < upper_half)
+    if(u128_lt(hi, upper_half))
         return split_range6(lower_half, prefix, lo, hi, print);
-    else if(lo >= upper_half)
+    else if(u128_ge(lo, upper_half))
         return split_range6(upper_half, prefix, lo, hi, print);
     else
         return (
@@ -136,7 +136,7 @@ void ipset6_print(ipset6 *ips, IPSET_PRINT_CMD print) {
 
             n = ips->entries;
             for(i = 0; i < n; i++)
-                total += split_range6((__uint128_t)0, 0, ips->netaddrs[i].addr, ips->netaddrs[i].broadcast, print_addr6);
+                total += split_range6(U128_ZERO, 0, ips->netaddrs[i].addr, ips->netaddrs[i].broadcast, print_addr6);
             break;
 
         case PRINT_SINGLE_IPS:
@@ -146,7 +146,7 @@ void ipset6_print(ipset6 *ips, IPSET_PRINT_CMD print) {
                 ipv6_addr_t end = ips->netaddrs[i].broadcast;
                 ipv6_addr_t x;
 
-                if(unlikely(start > end)) {
+                if(unlikely(u128_gt(start, end))) {
                     char buf[IP6STR_MAX_LEN + 1];
                     fprintf(stderr, "%s: WARNING: invalid range reversed start=%s", PROG, ip6str_r(buf, start));
                     fprintf(stderr, " end=%s\n", ip6str_r(buf, end));
@@ -154,13 +154,13 @@ void ipset6_print(ipset6 *ips, IPSET_PRINT_CMD print) {
                     end = start;
                     start = x;
                 }
-                if(unlikely(end - start > IPV6_SINGLE_IP_CAP)) {
+                if(unlikely(u128_gt(u128_sub(end, start), u128_from_u64(IPV6_SINGLE_IP_CAP)))) {
                     char buf[IP6STR_MAX_LEN + 1];
                     fprintf(stderr, "%s: too big range eliminated start=%s", PROG, ip6str_r(buf, start));
                     fprintf(stderr, " end=%s\n", ip6str_r(buf, end));
                     continue;
                 }
-                for(x = start; x >= start && x <= end; x++) {
+                for(x = start; u128_ge(x, start) && u128_le(x, end); x = u128_inc(x)) {
                     print_addr6_single(x);
                     total++;
                 }

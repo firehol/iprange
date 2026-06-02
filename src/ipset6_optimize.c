@@ -6,10 +6,10 @@ static int compar_netaddr6(const void *p1, const void *p2) {
     const network_addr6_t *na1 = (const network_addr6_t *)p1;
     const network_addr6_t *na2 = (const network_addr6_t *)p2;
 
-    if(na1->addr < na2->addr) return -1;
-    if(na1->addr > na2->addr) return 1;
-    if(na1->broadcast > na2->broadcast) return -1;
-    if(na1->broadcast < na2->broadcast) return 1;
+    if(u128_lt(na1->addr, na2->addr)) return -1;
+    if(u128_gt(na1->addr, na2->addr)) return 1;
+    if(u128_gt(na1->broadcast, na2->broadcast)) return -1;
+    if(u128_lt(na1->broadcast, na2->broadcast)) return 1;
     return 0;
 }
 
@@ -25,7 +25,7 @@ inline void ipset6_optimize(ipset6 *ips) {
 
     if(unlikely(n == 0)) {
         ips->flags |= IPSET_FLAG_OPTIMIZED;
-        ips->unique_ips = 0;
+        ips->unique_ips = U128_ZERO;
         return;
     }
 
@@ -39,17 +39,17 @@ inline void ipset6_optimize(ipset6 *ips) {
 
     ips->netaddrs = naddrs;
     ips->entries = 0;
-    ips->unique_ips = 0;
+    ips->unique_ips = U128_ZERO;
     ips->lines = 0;
 
     lo = oaddrs[0].addr;
     hi = oaddrs[0].broadcast;
     for(i = 1; i < n; i++) {
-        if(oaddrs[i].broadcast <= hi)
+        if(u128_le(oaddrs[i].broadcast, hi))
             continue;
 
         /* overflow-safe adjacency check: hi + 1 would overflow if hi == max */
-        if(oaddrs[i].addr <= hi || (hi != IPV6_ADDR_MAX && oaddrs[i].addr == hi + 1)) {
+        if(u128_le(oaddrs[i].addr, hi) || (!u128_eq(hi, IPV6_ADDR_MAX) && u128_eq(oaddrs[i].addr, u128_inc(hi)))) {
             hi = oaddrs[i].broadcast;
             continue;
         }
