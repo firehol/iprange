@@ -130,4 +130,4 @@ Binary files (produced by `--print-binary`) are auto-detected by their header li
 
 Loading a binary file of the wrong family is an error. In IPv4 mode, an IPv6 binary file is rejected. In IPv6 mode, an IPv4 binary file is rejected.
 
-Binary files are architecture-specific (no endianness conversion). They are intended as a same-machine cache, not a portable interchange format.
+Binary files are endianness-specific (no byte-order conversion). They are intended as a same-machine cache, not a portable interchange format.
