@@ -5,16 +5,8 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 file="$tmpdir/fake-lines.bin"
 
-{
-    printf 'iprange binary format v1.0\n'
-    printf 'optimized\n'
-    printf 'record size 8\n'
-    printf 'records 1\n'
-    printf 'bytes 12\n'
-    printf 'lines 999\n'
-    printf 'unique ips 1\n'
-    perl -e 'print pack("V", 0x1A2B3C4D), pack("V", 0x04030201), pack("V", 0x04030201)'
-} >"$file"
+printf '4.3.2.1\n' | ../../iprange --print-binary >"$file"
+perl -0pi -e 's/lines 1\n/lines 999\n/' "$file"
 
 ../../iprange "$file" --count-unique --header >"$tmpdir/count.out" 2>"$tmpdir/count.err"
 rc=$?
