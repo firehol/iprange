@@ -19,7 +19,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Install test dependencies
         run: |
@@ -50,10 +50,9 @@ jobs:
       CODACY_ORGANIZATION_PROVIDER: gh
       CODACY_USERNAME: firehol
       CODACY_PROJECT_NAME: iprange
-      CODACY_REPORTER_VERSION: 14.1.3
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Install coverage dependencies
         run: |
@@ -80,7 +79,7 @@ jobs:
           lcov --summary coverage.info --ignore-errors inconsistent,corrupt
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: coverage-lcov
           path: coverage.info
@@ -89,7 +88,16 @@ jobs:
       - name: Upload coverage to Codacy
         if: env.CODACY_API_TOKEN != ''
         run: |
-          bash <(curl -Ls https://raw.githubusercontent.com/codacy/codacy-coverage-reporter/54617baa57421746d0afa3df32127d3dd40f3786/get.sh) report -r coverage.info
+          curl -fsSLO https://artifacts.codacy.com/bin/codacy-coverage-reporter/14.1.3/codacy-coverage-reporter-linux
+          curl -fsSLO https://github.com/codacy/codacy-coverage-reporter/releases/download/14.1.3/codacy-coverage-reporter-linux.SHA512SUM
+          sha512sum -c codacy-coverage-reporter-linux.SHA512SUM
+          chmod +x codacy-coverage-reporter-linux
+          ./codacy-coverage-reporter-linux report \
+            --api-token "$CODACY_API_TOKEN" \
+            --organization-provider "$CODACY_ORGANIZATION_PROVIDER" \
+            --username "$CODACY_USERNAME" \
+            --project-name "$CODACY_PROJECT_NAME" \
+            -r coverage.info
 
   codacy-local-analysis:
     name: Codacy local analysis ratchet
@@ -103,11 +111,11 @@ jobs:
       CODACY_MAX_ERRORS: '6'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Install Codacy Analysis CLI
         run: |
-          npm install -g @codacy/analysis-cli
+          npm install -g @codacy/analysis-cli@0.8.0
 
       - name: Run Codacy local analysis
         run: |
@@ -142,7 +150,7 @@ jobs:
 
       - name: Upload Codacy analysis artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codacy-analysis
           path: codacy-analysis.json
