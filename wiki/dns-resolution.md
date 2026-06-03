@@ -39,6 +39,7 @@ After all resolutions complete, if any hostname permanently failed, the entire l
 ## Hostname detection
 
 A line is treated as a hostname when:
+
 - It contains only hostname-valid characters (alphanumeric, dot, hyphen, underscore)
 - It does not look like a valid IP address or CIDR
 - It appears alone on the line (optionally followed by a comment)

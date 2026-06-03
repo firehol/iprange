@@ -71,6 +71,7 @@ iprange cache.bin
 ```
 
 Binary files include:
+
 - A header line identifying the format version (v1.0 for IPv4, v2.0 for IPv6)
 - Metadata: family, optimization flag, record count, unique IP count
 - An endianness marker

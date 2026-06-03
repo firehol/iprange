@@ -45,9 +45,9 @@ Before reduction — 3 prefixes:
 
 ```
 $ iprange -v input.txt 2>&1 | grep -E 'prefix|totals'
-	- prefix /23 counts 1 entries
-	- prefix /24 counts 1 entries
-	- prefix /25 counts 1 entries
+    - prefix /23 counts 1 entries
+    - prefix /24 counts 1 entries
+    - prefix /25 counts 1 entries
 totals: 12 lines read, 1 distinct IP ranges found, 3 CIDR prefixes, 3 CIDRs printed, 896 unique IPs
 ```
 
@@ -56,7 +56,7 @@ After `--ipset-reduce 50` — 1 prefix:
 ```
 $ iprange -v --ipset-reduce 50 input.txt 2>&1 | grep -E 'prefix|totals|Eliminated'
 Eliminated 2 out of 3 prefixes (1 remain in the final set).
-	- prefix /25 counts 7 entries
+    - prefix /25 counts 7 entries
 totals: 12 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 7 CIDRs printed, 896 unique IPs
 ```
 

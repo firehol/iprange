@@ -7,6 +7,7 @@ Merge all files before `--except`, then remove all IPs matched by the files afte
 ## How it works
 
 This is a **positional** operation:
+
 1. All files before `--except` are merged into set **A**
 2. Each file after `--except` is subtracted from A, one by one
 3. The result is the IPs in A that are not in any of the subtracted sets

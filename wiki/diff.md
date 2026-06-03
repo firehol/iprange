@@ -7,6 +7,7 @@ Print the IPs that exist in either A or B, but **not both**.
 ## How it works
 
 This is a **positional** operation:
+
 1. All files before `--diff` are merged into set **A**
 2. All files after `--diff` are merged into set **B**
 3. The output is (A - B) union (B - A) — the XOR of the two sets

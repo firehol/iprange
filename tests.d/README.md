@@ -19,6 +19,7 @@ To run all tests, use the master test script from the main directory:
 ```
 
 The script will:
+
 1. Run each test's `cmd.sh` script
 2. Capture the output
 3. Compare it with the expected output in the `output` file

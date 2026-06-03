@@ -6,7 +6,7 @@ For 1 million input lines, a merge completes in under a second.
 
 ## Documentation
 
-### Operations
+### Operation guides
 
 - [Merge / Union](merge.md) — merge all inputs into one optimized set (default mode)
 - [Intersection](intersect.md) — find IPs common to all inputs

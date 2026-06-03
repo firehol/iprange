@@ -18,6 +18,7 @@ max(current_entries * (1 + PERCENT / 100), ENTRIES)
 ```
 
 This design works well across all netset sizes:
+
 - Small netsets (hundreds of entries) are scaled up to ENTRIES
 - Large netsets (hundreds of thousands) are scaled by PERCENT
 

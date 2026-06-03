@@ -198,11 +198,10 @@ static DNSREQ *dns_request_get(void)
 
 static void *dns_thread_resolve(void *ptr)
 {
-    DNSREQ *d;
-
-    if(ptr) { ; }
+    (void)ptr;
 
     for(;;) {
+        DNSREQ *d;
         int added = 0;
 
         int r;
@@ -283,7 +282,7 @@ static void dns_process_replies(ipset *ips)
     dns_unlock_replies();
 }
 
-int dns_request(ipset *ips, char *hostname)
+int dns_request(ipset *ips, const char *hostname)
 {
     DNSREQ *d;
     size_t hostname_len;
@@ -320,8 +319,8 @@ int dns_request(ipset *ips, char *hostname)
 
 int dns_done(ipset *ips)
 {
-    unsigned long dots = 40, shown = 0, should_show = 0;
-    unsigned long pending, made, finished, retries, replies_found, replies_failed;
+    unsigned long dots = 40, shown = 0;
+    unsigned long made;
 
     if(ips) { ; }
 
@@ -335,13 +334,12 @@ int dns_done(ipset *ips)
     }
 
     while(1) {
+        unsigned long pending, finished;
+
         dns_lock_requests();
         pending = dns_requests_pending;
         made = dns_requests_made;
         finished = dns_requests_finished;
-        retries = dns_requests_retries;
-        replies_found = dns_replies_found;
-        replies_failed = dns_replies_failed;
         dns_unlock_requests();
 
         if(!pending) break;
@@ -349,7 +347,8 @@ int dns_done(ipset *ips)
         if(unlikely(debug))
             fprintf(stderr, "%s: DNS: waiting %lu DNS resolutions to finish...\n", PROG, pending);
         else if(dns_progress) {
-            should_show = dots * finished / made;
+            unsigned long should_show = dots * finished / made;
+
             for(; shown < should_show; shown++) {
                 if(!(shown % 10)) fprintf(stderr, "%lu%%", shown * 100 / dots);
                 else fprintf(stderr, ".");
@@ -358,12 +357,12 @@ int dns_done(ipset *ips)
 
         dns_process_replies(ips);
 
-        if(pending) {
-            dns_signal_threads();
-            sleep(1);
-        }
+        dns_signal_threads();
+        sleep(1);
     }
     dns_process_replies(ips);
+
+    unsigned long retries, replies_found, replies_failed;
 
     dns_lock_requests();
     made = dns_requests_made;

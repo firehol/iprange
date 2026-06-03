@@ -18,10 +18,9 @@ and post-release update.
 Programs and packages with specific needs should create extra
 `whatever.functions` and supporting scripts in a subdirectory.
 
-
 Making a release
 ----------------
-`
+
 Just update ChangeLog and configure.ac to specify a suitable version
 suffix:
 
@@ -31,6 +30,7 @@ suffix:
 
 If it is a final release and there is a package.spec.in, add a new
 entry to the top of the %changelog section and update:
+
     PACKAGE_RPM_RELEASE="1"
 
 The hooks will take over and if everything is OK will tag the release
@@ -40,10 +40,8 @@ for further development.
 The release is not pushed out automatically, so if you want to undo
 it, run:
 
-~~~~
-git reset --hard HEAD^^
-git tag -d vx.y.z
-~~~~
+    git reset --hard HEAD^^
+    git tag -d vx.y.z
 
 Otherwise you can just push the results; the script outputs the required
 instructions upon success.

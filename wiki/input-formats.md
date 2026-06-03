@@ -4,7 +4,7 @@
 
 ## IPv4 (default mode)
 
-### Addresses and CIDRs
+### IPv4 addresses and CIDRs
 
 | Format | Example | Expansion |
 |--------|---------|-----------|
@@ -22,7 +22,7 @@ By default, CIDRs are normalized to the network address: `1.1.1.17/24` is read a
 
 The default prefix for bare IPs (no `/` suffix) is /32. Change with `--default-prefix N`.
 
-### Ranges
+### IPv4 ranges
 
 | Format | Example | Meaning |
 |--------|---------|---------|
@@ -32,7 +32,7 @@ The default prefix for bare IPs (no `/` suffix) is /32. Change with `--default-p
 
 The dash can have optional spaces around it.
 
-### Hostnames
+### IPv4 hostnames
 
 Hostnames (one per line) are resolved via parallel DNS queries. In IPv4 mode, only A records are resolved. If a hostname resolves to multiple IPs, all are added.
 
@@ -40,7 +40,7 @@ See [DNS resolution](dns-resolution.md) for threading and configuration.
 
 ## IPv6 (`-6` mode)
 
-### Addresses and CIDRs
+### IPv6 addresses and CIDRs
 
 | Format | Example | Notes |
 |--------|---------|-------|
@@ -53,11 +53,11 @@ See [DNS resolution](dns-resolution.md) for threading and configuration.
 
 IPv6 parsing uses `inet_pton(AF_INET6)`.
 
-### Ranges
+### IPv6 ranges
 
 IPv6 ranges use the same `addr1 - addr2` syntax. Both endpoints must be the same address family — a range like `10.0.0.1 - 2001:db8::1` is rejected as a mixed-family error.
 
-### Hostnames
+### IPv6 hostnames
 
 In IPv6 mode, hostnames are resolved for both AAAA and A records. A-record results are normalized to IPv4-mapped IPv6 (`::ffff:x.x.x.x`).
 
@@ -125,6 +125,7 @@ iprange --compare --header file1.txt as "Blocklist A" file2.txt as "Blocklist B"
 ## Binary input
 
 Binary files (produced by `--print-binary`) are auto-detected by their header line:
+
 - IPv4 binary: format v1.0
 - IPv6 binary: format v2.0
 

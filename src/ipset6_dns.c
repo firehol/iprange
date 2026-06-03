@@ -161,10 +161,10 @@ static DNSREQ6 *dns6_request_get(void)
 
 static void *dns6_thread_resolve(void *ptr)
 {
-    DNSREQ6 *d;
     (void)ptr;
 
     for(;;) {
+        DNSREQ6 *d;
         int added = 0;
         int r;
         struct addrinfo *result, *rp;
@@ -230,7 +230,7 @@ static void dns6_process_replies(ipset6 *ips)
     pthread_mutex_unlock(&dns6_replies_mut);
 }
 
-int dns6_request(ipset6 *ips, char *hostname)
+int dns6_request(ipset6 *ips, const char *hostname)
 {
     DNSREQ6 *d;
     size_t hostname_len;
@@ -266,7 +266,7 @@ int dns6_request(ipset6 *ips, char *hostname)
 
 int dns6_done(ipset6 *ips)
 {
-    unsigned long pending, made;
+    unsigned long made;
 
     pthread_mutex_lock(&dns6_requests_mut);
     made = dns6_requests_made;
@@ -278,6 +278,8 @@ int dns6_done(ipset6 *ips)
     }
 
     while(1) {
+        unsigned long pending;
+
         pthread_mutex_lock(&dns6_requests_mut);
         pending = dns6_requests_pending;
         pthread_mutex_unlock(&dns6_requests_mut);
