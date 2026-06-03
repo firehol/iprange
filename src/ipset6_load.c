@@ -179,7 +179,7 @@ static network_addr6_t parse_address6(char *ipstr, int *err) {
  * - Hostnames are resolved for both AAAA and A records
  */
 ipset6 *ipset6_load(const char *filename) {
-    FILE *fp = stdin;
+    FILE *fp = NULL;
     int lineid = 0;
     int parse_errors = 0;
     char line[MAX_LINE + 1], ipstr[MAX_INPUT_ELEMENT6 + 1], ipstr2[MAX_INPUT_ELEMENT6 + 1];
@@ -194,6 +194,9 @@ ipset6 *ipset6_load(const char *filename) {
             ipset6_free(ips);
             return NULL;
         }
+    }
+    else {
+        fp = stdin;
     }
 
     if(unlikely(debug)) fprintf(stderr, "%s: Loading from %s (IPv6 mode)\n", PROG, ips->filename);

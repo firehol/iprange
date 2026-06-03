@@ -230,16 +230,17 @@ static void dns6_process_replies(ipset6 *ips)
 int dns6_request(ipset6 *ips, char *hostname)
 {
     DNSREQ6 *d;
+    size_t hostname_len = strlen(hostname) + 1;
 
     dns6_process_replies(ips);
 
-    d = malloc(sizeof(DNSREQ6) + strlen(hostname) + 1);
+    d = malloc(sizeof(DNSREQ6) + hostname_len);
     if(!d) {
         fprintf(stderr, "%s: out of memory, while trying to resolve '%s'\n", PROG, hostname);
         return -1;
     }
 
-    strcpy(d->hostname, hostname);
+    memcpy(d->hostname, hostname, hostname_len);
     d->tries = 20;
 
     if(dns6_request_add(d))

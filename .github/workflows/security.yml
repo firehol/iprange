@@ -99,61 +99,49 @@ jobs:
             --project-name "$CODACY_PROJECT_NAME" \
             -r coverage.info
 
-  codacy-local-analysis:
-    name: Codacy local analysis ratchet
+  static-analysis:
+    name: Static analysis ratchet
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     permissions:
       contents: read
-    env:
-      CODACY_API_TOKEN: ${{ secrets.CODACY_API_TOKEN }}
-      CODACY_MAX_ISSUES: '2681'
-      CODACY_MAX_ERRORS: '6'
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - name: Install Codacy Analysis CLI
-        env:
-          npm_config_registry: https://registry.npmjs.org/
+      - name: Install static analysis dependencies
         run: |
-          npm ci --prefix .github/codacy-analysis --ignore-scripts --no-audit --no-fund
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cppcheck \
+            flawfinder
 
-      - name: Run Codacy local analysis
+      - name: Run cppcheck
         run: |
-          .github/codacy-analysis/node_modules/.bin/codacy-analysis init --remote gh firehol iprange
-          set +e
-          .github/codacy-analysis/node_modules/.bin/codacy-analysis analyze --install-dependencies --output-format json --output codacy-analysis.json
-          analysis_status=$?
-          set -e
-          if [ ! -f codacy-analysis.json ]; then
-            exit "$analysis_status"
-          fi
-          node <<'NODE'
-          const fs = require('fs');
-          const report = JSON.parse(fs.readFileSync('codacy-analysis.json', 'utf8'));
-          const issues = Array.isArray(report.issues) ? report.issues.length : 0;
-          const errors = Array.isArray(report.errors) ? report.errors.length : 0;
-          const maxIssues = Number(process.env.CODACY_MAX_ISSUES);
-          const maxErrors = Number(process.env.CODACY_MAX_ERRORS);
-          console.log(`Codacy local analysis issues: ${issues}`);
-          console.log(`Allowed baseline: ${maxIssues}`);
-          console.log(`Codacy local analysis errors: ${errors}`);
-          console.log(`Allowed error baseline: ${maxErrors}`);
-          if (issues > maxIssues) {
-            console.error(`Codacy issue count increased by ${issues - maxIssues}.`);
-            process.exit(1);
-          }
-          if (errors > maxErrors) {
-            console.error(`Codacy analysis error count increased by ${errors - maxErrors}.`);
-            process.exit(1);
-          }
-          NODE
+          cppcheck \
+            --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --inline-suppr \
+            --suppress=missingIncludeSystem \
+            --suppress=resourceLeak:src/ipset_load.c \
+            --suppress=resourceLeak:src/ipset6_load.c \
+            '-DVERSION="ci"' \
+            src 2> cppcheck.log
 
-      - name: Upload Codacy analysis artifact
+      - name: Run flawfinder
+        run: |
+          flawfinder \
+            --minlevel=4 \
+            --error-level=4 \
+            --dataonly \
+            --quiet \
+            src > flawfinder.log
+
+      - name: Upload static analysis artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: codacy-analysis
-          path: codacy-analysis.json
+          name: static-analysis
+          path: |
+            cppcheck.log
+            flawfinder.log
           retention-days: 14

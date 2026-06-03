@@ -300,7 +300,7 @@ int ipset_load_binary_v10(FILE *fp, ipset *ips, int first_line_missing) {
     loaded = fread(&ips->netaddrs[ips->entries], sizeof(network_addr_t), entries, fp);
 
     if(loaded != entries) {
-        fprintf(stderr, "%s: %s: expected to load %lu entries, loaded %zu\n", PROG, ips->filename, entries, loaded);
+        fprintf(stderr, "%s: %s: expected to load %zu entries, loaded %zu\n", PROG, ips->filename, entries, loaded);
         return 1;
     }
 
@@ -331,7 +331,7 @@ void ipset_save_binary_v10(ipset *ips) {
     // the caller may do 'test -s file' to check it
     if(!ips->entries) return;
 
-    if(fprintf(stdout, BINARY_HEADER_V10) < 0) binary_write_failed();
+    if(fputs(BINARY_HEADER_V10, stdout) == EOF) binary_write_failed();
     if(ips->flags & IPSET_FLAG_OPTIMIZED) {
         if(fprintf(stdout, "optimized\n") < 0) binary_write_failed();
     }

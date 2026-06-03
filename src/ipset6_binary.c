@@ -275,7 +275,7 @@ void ipset6_save_binary_v20(ipset6 *ips) {
 
     if(!ips->entries) return;
 
-    if(fprintf(stdout, BINARY_HEADER_V20) < 0) binary6_write_failed();
+    if(fputs(BINARY_HEADER_V20, stdout) == EOF) binary6_write_failed();
     if(fprintf(stdout, "ipv6\n") < 0) binary6_write_failed();
     if(ips->flags & IPSET_FLAG_OPTIMIZED) {
         if(fprintf(stdout, "optimized\n") < 0) binary6_write_failed();

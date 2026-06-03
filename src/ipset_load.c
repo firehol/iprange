@@ -231,7 +231,7 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
  */
 
 ipset *ipset_load(const char *filename) {
-    FILE *fp = stdin;
+    FILE *fp = NULL;
     int lineid = 0;
     int parse_errors = 0;
     char line[MAX_LINE + 1], ipstr[MAX_INPUT_ELEMENT + 1], ipstr2[MAX_INPUT_ELEMENT + 1];
@@ -246,6 +246,9 @@ ipset *ipset_load(const char *filename) {
             ipset_free(ips);
             return NULL;
         }
+    }
+    else {
+        fp = stdin;
     }
 
     /* load it */

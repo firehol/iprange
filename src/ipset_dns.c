@@ -284,13 +284,14 @@ static void dns_process_replies(ipset *ips)
 int dns_request(ipset *ips, char *hostname)
 {
     DNSREQ *d;
+    size_t hostname_len = strlen(hostname) + 1;
 
     dns_process_replies(ips);
 
-    d = malloc(sizeof(DNSREQ) + strlen(hostname) + 1);
+    d = malloc(sizeof(DNSREQ) + hostname_len);
     if(!d) goto cleanup;
 
-    strcpy(d->hostname, hostname);
+    memcpy(d->hostname, hostname, hostname_len);
     d->tries = 20;
 
     if(dns_request_add(d))
