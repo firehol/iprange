@@ -24,7 +24,7 @@ inline int ipset6_merge(ipset6 *to, ipset6 *add) {
 
     ipset6_grow(to, add->entries);
 
-    memcpy(&to->netaddrs[to->entries], &add->netaddrs[0], add->entries * sizeof(network_addr6_t));
+    ipset6_copy_entries(&to->netaddrs[to->entries], &add->netaddrs[0], add->entries);
 
     to->entries = total_entries;
     to->lines = total_lines;

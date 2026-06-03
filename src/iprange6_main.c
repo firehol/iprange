@@ -49,6 +49,47 @@ static uint128_t ipset6_report_unique_ips(ipset6 *ips, size_t *entries)
     return unique_ips;
 }
 
+static void iprange6_csv_write_compare_row(const char *name1, const char *name2,
+                                           size_t entries1, size_t entries2,
+                                           uint128_t unique1, uint128_t unique2,
+                                           uint128_t combined_ips, uint128_t common_ips) {
+    char u128buf[40];
+
+    iprange_csv_write_field(stdout, name1);
+    fputc(',', stdout);
+    iprange_csv_write_field(stdout, name2);
+    printf(",%zu,%zu,", entries1, entries2);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), unique1), stdout);
+    fputc(',', stdout);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), unique2), stdout);
+    fputc(',', stdout);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), combined_ips), stdout);
+    fputc(',', stdout);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), common_ips), stdout);
+    fputc('\n', stdout);
+}
+
+static void iprange6_csv_write_count_row(const char *name, size_t entries,
+                                         uint128_t unique_ips, uint128_t common_ips) {
+    char u128buf[40];
+
+    iprange_csv_write_field(stdout, name);
+    printf(",%zu,", entries);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), unique_ips), stdout);
+    fputc(',', stdout);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), common_ips), stdout);
+    fputc('\n', stdout);
+}
+
+static void iprange6_csv_write_unique_row(const char *name, size_t entries, uint128_t unique_ips) {
+    char u128buf[40];
+
+    iprange_csv_write_field(stdout, name);
+    printf(",%zu,", entries);
+    fputs(u128_to_dec(u128buf, sizeof(u128buf), unique_ips), stdout);
+    fputc('\n', stdout);
+}
+
 /*
  * iprange6_run() - execute IPv6 mode
  *
@@ -233,7 +274,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
             }
             else {
                 /* file list */
-                FILE *fp = fopen(listname, "r");
+                FILE *fp = iprange_fopen_read(listname);
                 char line[MAX_LINE + 1];
                 int lineid = 0, files_loaded = 0;
 
@@ -284,8 +325,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
 
         /* handle 'as NAME' */
         if(i+1 < argc && !strcmp(argv[i+1], "as") && i+2 < argc) {
-            strncpy(ips6->filename, argv[i+2], FILENAME_MAX);
-            ips6->filename[FILENAME_MAX] = '\0';
+            ipset6_set_filename(ips6, argv[i+2]);
             i += 2;
         }
 
@@ -314,7 +354,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
     /* --- mode execution (mirrors the IPv4 logic in main()) --- */
 
     if(mode == MODE_COMBINE || mode == MODE_REDUCE || mode == MODE_COUNT_UNIQUE_MERGED) {
-        strcpy(root->filename, "combined ipset");
+        ipset6_set_filename(root, "combined ipset");
 
         for(ips6 = root->next; ips6; ips6 = ips6->next)
             if(unlikely(ipset6_merge(root, ips6))) {
@@ -362,14 +402,14 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                 fprintf(stderr, "%s: Cannot merge ipset %s\n", PROG, ips6->filename);
                 exit(1);
             }
-        if(root->next) strcpy(root->filename, "ipset A");
+        if(root->next) ipset6_set_filename(root, "ipset A");
 
         for(ips6 = second->next; ips6; ips6 = ips6->next)
             if(unlikely(ipset6_merge(second, ips6))) {
                 fprintf(stderr, "%s: Cannot merge ipset %s\n", PROG, ips6->filename);
                 exit(1);
             }
-        if(second->next) strcpy(second->filename, "ipset B");
+        if(second->next) ipset6_set_filename(second, "ipset B");
 
         ips6 = ipset6_diff(root, second);
         if(!quiet) ipset6_print(ips6, print);
@@ -405,11 +445,9 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                 }
 
                 ipset6_optimize(comips);
-                printf("%s,%s,%zu,%zu,%s,", ips6->filename, ips2->filename, entries1, entries2,
-                    u128_to_dec(u128buf, sizeof(u128buf), unique1));
-                printf("%s,", u128_to_dec(u128buf, sizeof(u128buf), unique2));
-                printf("%s,", u128_to_dec(u128buf, sizeof(u128buf), comips->unique_ips));
-                printf("%s\n", u128_to_dec(u128buf, sizeof(u128buf), u128_sub(u128_add(unique1, unique2), comips->unique_ips)));
+                iprange6_csv_write_compare_row(ips6->filename, ips2->filename, entries1, entries2,
+                                               unique1, unique2, comips->unique_ips,
+                                               u128_sub(u128_add(unique1, unique2), comips->unique_ips));
                 ipset6_free(comips);
             }
         }
@@ -440,11 +478,9 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                 }
 
                 ipset6_optimize(combined);
-                printf("%s,%s,%zu,%zu,%s,", ips6->filename, ips2->filename, entries1, entries2,
-                    u128_to_dec(u128buf, sizeof(u128buf), unique1));
-                printf("%s,", u128_to_dec(u128buf, sizeof(u128buf), unique2));
-                printf("%s,", u128_to_dec(u128buf, sizeof(u128buf), combined->unique_ips));
-                printf("%s\n", u128_to_dec(u128buf, sizeof(u128buf), u128_sub(u128_add(unique1, unique2), combined->unique_ips)));
+                iprange6_csv_write_compare_row(ips6->filename, ips2->filename, entries1, entries2,
+                                               unique1, unique2, combined->unique_ips,
+                                               u128_sub(u128_add(unique1, unique2), combined->unique_ips));
                 ipset6_free(combined);
             }
         }
@@ -472,9 +508,8 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
             }
 
             ipset6_optimize(comips);
-            printf("%s,%zu,%s,", ips6->filename, entries,
-                u128_to_dec(u128buf, sizeof(u128buf), unique_ips));
-            printf("%s\n", u128_to_dec(u128buf, sizeof(u128buf), u128_sub(u128_add(unique_ips, first->unique_ips), comips->unique_ips)));
+            iprange6_csv_write_count_row(ips6->filename, entries, unique_ips,
+                                         u128_sub(u128_add(unique_ips, first->unique_ips), comips->unique_ips));
             ipset6_free(comips);
         }
     }
@@ -510,8 +545,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
         ipset6_optimize_all(root);
 
         for(ips6 = root; ips6; ips6 = ips6->next) {
-            printf("%s,%zu,%s\n", ips6->filename, ips6->entries,
-                u128_to_dec(u128buf, sizeof(u128buf), ips6->unique_ips));
+            iprange6_csv_write_unique_row(ips6->filename, ips6->entries, ips6->unique_ips);
         }
     }
     else {

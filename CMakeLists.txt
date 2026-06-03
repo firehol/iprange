@@ -16,6 +16,21 @@ include(CheckIncludeFile)
 check_include_file(inttypes.h HAVE_INTTYPES_H)
 check_include_file(stdint.h HAVE_STDINT_H)
 
+include(CheckCSourceCompiles)
+set(IPRANGE_CMAKE_REQUIRED_DEFINITIONS "${CMAKE_REQUIRED_DEFINITIONS}")
+set(CMAKE_REQUIRED_DEFINITIONS "-D_FILE_OFFSET_BITS=64" "-D_TIME_BITS=64")
+check_c_source_compiles("
+#include <sys/stat.h>
+#include <time.h>
+typedef char time_t_must_be_64_bits[(sizeof(time_t) >= 8) ? 1 : -1];
+int main(void) {
+    struct stat st;
+    return sizeof(st.st_mtime) >= 8 ? 0 : 1;
+}
+" HAVE_64BIT_TIME_WITH_FEATURE_MACROS)
+set(CMAKE_REQUIRED_DEFINITIONS "${IPRANGE_CMAKE_REQUIRED_DEFINITIONS}")
+unset(IPRANGE_CMAKE_REQUIRED_DEFINITIONS)
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/config.h
@@ -61,6 +76,12 @@ target_compile_definitions(iprange PRIVATE
     COMPARE_WITH_COMMON=1
     VERSION="${PROJECT_VERSION}"
 )
+if(HAVE_64BIT_TIME_WITH_FEATURE_MACROS)
+    target_compile_definitions(iprange PRIVATE
+        _FILE_OFFSET_BITS=64
+        _TIME_BITS=64
+    )
+endif()
 target_compile_options(iprange PRIVATE
     -Wall -Wextra -Wformat-signedness -Werror=format-security
 )

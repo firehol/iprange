@@ -34,10 +34,7 @@ ipset *ipset_create(const char *filename, size_t entries) {
     ips->prev = NULL;
     ips->flags = 0;
 
-    strncpy(ips->filename, (filename && *filename)?filename:"stdin", FILENAME_MAX);
-    ips->filename[FILENAME_MAX] = '\0';
-
-    /* strcpy(ips->name, ips->filename); */
+    ipset_set_filename(ips, filename);
 
     return ips;
 }

@@ -46,6 +46,24 @@ AM_INIT_AUTOMAKE
 AC_CANONICAL_HOST
 AC_PROG_CC
 AC_PROG_INSTALL
+AC_SYS_LARGEFILE
+AC_CACHE_CHECK([for 64-bit time_t support with feature macros], [iprange_cv_time_bits_64],
+  [AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([[
+#define _FILE_OFFSET_BITS 64
+#define _TIME_BITS 64
+#include <sys/stat.h>
+#include <time.h>
+typedef char time_t_must_be_64_bits[(sizeof(time_t) >= 8) ? 1 : -1];
+    ]], [[
+struct stat st;
+return sizeof(st.st_mtime) >= 8 ? 0 : 1;
+    ]])],
+    [iprange_cv_time_bits_64=yes],
+    [iprange_cv_time_bits_64=no])])
+AS_IF([test "$iprange_cv_time_bits_64" = yes],
+  [AC_DEFINE([_FILE_OFFSET_BITS], [64], [Number of bits in a file offset, on hosts where this is settable.])
+   AC_DEFINE([_TIME_BITS], [64], [Number of bits in time_t, on hosts where this is settable.])])
 AC_ARG_ENABLE(
 	[pedantic],
 	[AS_HELP_STRING([--enable-pedantic], [enable pedantic compiler warnings])],

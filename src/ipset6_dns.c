@@ -166,10 +166,10 @@ static void *dns6_thread_resolve(void *ptr)
     while((d = dns6_request_get())) {
         int added = 0;
         int r;
-        struct addrinfo *result, *rp, hints;
+        struct addrinfo *result, *rp;
+        struct addrinfo hints = {0};
 
         /* resolve both IPv4 and IPv6 */
-        memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_DGRAM;
 
@@ -240,7 +240,7 @@ int dns6_request(ipset6 *ips, char *hostname)
         return -1;
     }
 
-    memcpy(d->hostname, hostname, hostname_len);
+    iprange_copy_bytes(d->hostname, hostname, hostname_len);
     d->tries = 20;
 
     if(dns6_request_add(d))

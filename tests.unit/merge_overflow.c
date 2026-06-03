@@ -19,9 +19,6 @@ int main(void)
 
     if(!to || !add) return 2;
 
-    memset(to->netaddrs, 0, to->entries_max * sizeof(network_addr_t));
-    memset(add->netaddrs, 0, add->entries_max * sizeof(network_addr_t));
-
     to->entries = SIZE_MAX - 2048;
     to->lines = 7;
     to->flags = IPSET_FLAG_OPTIMIZED;

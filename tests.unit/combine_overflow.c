@@ -16,9 +16,6 @@ int main(void)
 
     if(!a || !b) return 2;
 
-    memset(a->netaddrs, 0, a->entries_max * sizeof(network_addr_t));
-    memset(b->netaddrs, 0, b->entries_max * sizeof(network_addr_t));
-
     a->entries = SIZE_MAX - 2048;
     b->entries = 4096;
 

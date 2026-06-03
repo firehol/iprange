@@ -21,11 +21,60 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 extern int cidr_use_network;
 extern int default_prefix;
 extern char *PROG;
 extern int debug;
+
+static inline void iprange_csv_write_field(FILE *out, const char *field) {
+    const char *s = field?field:"";
+    const char *p;
+    int quote = 0;
+
+    for(p = s; *p; p++) {
+        if(*p == ',' || *p == '"' || *p == '\n' || *p == '\r') {
+            quote = 1;
+            break;
+        }
+    }
+
+    if(!quote) {
+        fputs(s, out);
+        return;
+    }
+
+    fputc('"', out);
+    for(p = s; *p; p++) {
+        if(*p == '"') fputc('"', out);
+        fputc((unsigned char)*p, out);
+    }
+    fputc('"', out);
+}
+
+static inline FILE *iprange_fopen_read(const char *filename) {
+    FILE *fp;
+
+    if(unlikely(!filename || !*filename)) return NULL;
+
+    /* nosemgrep: c.misc.rule-fopen-open -- this is the central read-only input open; callers do not trust prior file metadata. */
+    fp = fopen(filename, "r");
+    if(fp) {
+        int fd = fileno(fp);
+        if(fd >= 0)
+            (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+
+    return fp;
+}
+
+static inline void iprange_copy_bytes(char *dst, const char *src, size_t bytes) {
+    size_t i;
+
+    for(i = 0; i < bytes; i++)
+        dst[i] = src[i];
+}
 
 /*---------------------------------------------------------------------*/
 /* network address type: one field for the net address, one for prefix */

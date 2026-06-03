@@ -206,9 +206,9 @@ static void *dns_thread_resolve(void *ptr)
         int added = 0;
 
         int r;
-        struct addrinfo *result, *rp, hints;
+        struct addrinfo *result, *rp;
+        struct addrinfo hints = {0};
 
-        memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_DGRAM;
 
@@ -291,7 +291,7 @@ int dns_request(ipset *ips, char *hostname)
     d = malloc(sizeof(DNSREQ) + hostname_len);
     if(!d) goto cleanup;
 
-    memcpy(d->hostname, hostname, hostname_len);
+    iprange_copy_bytes(d->hostname, hostname, hostname_len);
     d->tries = 20;
 
     if(dns_request_add(d))

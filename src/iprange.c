@@ -37,6 +37,28 @@ static inline uint64_t ipset_report_unique_ips(ipset *ips, size_t *entries)
     return unique_ips;
 }
 
+static void iprange_csv_write_compare_row(const char *name1, const char *name2,
+                                          size_t entries1, size_t entries2,
+                                          uint64_t unique1, uint64_t unique2,
+                                          uint64_t combined_ips, uint64_t common_ips) {
+    iprange_csv_write_field(stdout, name1);
+    fputc(',', stdout);
+    iprange_csv_write_field(stdout, name2);
+    fprintf(stdout, ",%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+            entries1, entries2, unique1, unique2, combined_ips, common_ips);
+}
+
+static void iprange_csv_write_count_row(const char *name, size_t entries,
+                                        uint64_t unique_ips, uint64_t common_ips) {
+    iprange_csv_write_field(stdout, name);
+    fprintf(stdout, ",%zu,%" PRIu64 ",%" PRIu64 "\n", entries, unique_ips, common_ips);
+}
+
+static void iprange_csv_write_unique_row(const char *name, size_t entries, uint64_t unique_ips) {
+    iprange_csv_write_field(stdout, name);
+    fprintf(stdout, ",%zu,%" PRIu64 "\n", entries, unique_ips);
+}
+
 /* ----------------------------------------------------------------------------
  * usage()
  *
@@ -465,14 +487,12 @@ int main(int argc, char **argv) {
         if(i+1 < argc && !strcmp(argv[i], "as")) {
             if(!read_second) {
                 if(root_last) {
-                    strncpy(root_last->filename, argv[++i], FILENAME_MAX);
-                    root_last->filename[FILENAME_MAX] = '\0';
+                    ipset_set_filename(root_last, argv[++i]);
                 }
             }
             else {
                 if(second_last) {
-                    strncpy(second_last->filename, argv[++i], FILENAME_MAX);
-                    second_last->filename[FILENAME_MAX] = '\0';
+                    ipset_set_filename(second_last, argv[++i]);
                 }
             }
         }
@@ -598,15 +618,6 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i], "--count-unique-all")) {
             mode = MODE_COUNT_UNIQUE_ALL;
         }
-/*
-        else if(!strcmp(argv[i], "--histogram")) {
-            mode = MODE_HISTOGRAM;
-        }
-        else if(i+1 < argc && !strcmp(argv[i], "--histogram-dir")) {
-            mode = MODE_HISTOGRAM;
-            strncpy(histogram_dir, argv[++i], FILENAME_MAX);
-        }
-*/
         else if(!strcmp(argv[i], "--version")) {
             version();
         }
@@ -812,7 +823,7 @@ int main(int argc, char **argv) {
                     if(unlikely(debug)) 
                         fprintf(stderr, "%s: Loading files from list %s\n", PROG, listname);
                     
-                    fp = fopen(listname, "r");
+                    fp = iprange_fopen_read(listname);
                     if(!fp) {
                         fprintf(stderr, "%s: Cannot open file list: %s - %s\n", PROG, listname, strerror(errno));
                         exit(1);
@@ -921,7 +932,7 @@ int main(int argc, char **argv) {
 
         if(mode == MODE_COMBINE || mode == MODE_REDUCE || mode == MODE_COUNT_UNIQUE_MERGED) {
         /* for debug mode to show something meaningful */
-        strcpy(root->filename, "combined ipset");
+        ipset_set_filename(root, "combined ipset");
 
         for(ips = root->next; ips ;ips = ips->next)
             if(unlikely(ipset_merge(root, ips))) {
@@ -974,14 +985,14 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, root->filename);
                 exit(1);
             }
-        if(root->next) strcpy(root->filename, "ipset A");
+        if(root->next) ipset_set_filename(root, "ipset A");
 
         for(ips = second->next; ips ;ips = ips->next)
             if(unlikely(ipset_merge(second, ips))) {
                 fprintf(stderr, "%s: Cannot merge ipset %s into %s\n", PROG, ips->filename, second->filename);
                 exit(1);
             }
-        if(second->next) strcpy(second->filename, "ipset B");
+        if(second->next) ipset_set_filename(second, "ipset B");
 
         ips = ipset_diff(root, second);
 
@@ -1019,7 +1030,8 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
                     exit(1);
                 }
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - comips->unique_ips, comips->unique_ips);
+                iprange_csv_write_compare_row(ips->filename, ips2->filename, entries1, entries2,
+                                              unique1, unique2, unique1 + unique2 - comips->unique_ips, comips->unique_ips);
                 ipset_free(comips);
 #else
                 comips = ipset_combine(ips, ips2);
@@ -1029,7 +1041,8 @@ int main(int argc, char **argv) {
                 }
 
                 ipset_optimize(comips);
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, comips->unique_ips, unique1 + unique2 - comips->unique_ips);
+                iprange_csv_write_compare_row(ips->filename, ips2->filename, entries1, entries2,
+                                              unique1, unique2, comips->unique_ips, unique1 + unique2 - comips->unique_ips);
                 ipset_free(comips);
 #endif
             }
@@ -1060,7 +1073,8 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "%s: Cannot find the common IPs of ipset %s and %s\n", PROG, ips->filename, ips2->filename);
                     exit(1);
                 }
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, unique1 + unique2 - common->unique_ips, common->unique_ips);
+                iprange_csv_write_compare_row(ips->filename, ips2->filename, entries1, entries2,
+                                              unique1, unique2, unique1 + unique2 - common->unique_ips, common->unique_ips);
                 ipset_free(common);
 #else
                 ipset *combined = ipset_combine(ips, ips2);
@@ -1070,7 +1084,8 @@ int main(int argc, char **argv) {
                 }
 
                 ipset_optimize(combined);
-                fprintf(stdout, "%s,%s,%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n", ips->filename, ips2->filename, entries1, entries2, unique1, unique2, combined->unique_ips, unique1 + unique2 - combined->unique_ips);
+                iprange_csv_write_compare_row(ips->filename, ips2->filename, entries1, entries2,
+                                              unique1, unique2, combined->unique_ips, unique1 + unique2 - combined->unique_ips);
                 ipset_free(combined);
 #endif
             }
@@ -1100,7 +1115,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "%s: Cannot find the comips IPs of ipset %s and %s\n", PROG, ips->filename, first->filename);
                 exit(1);
             }
-            printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, comips->unique_ips);
+            iprange_csv_write_count_row(ips->filename, entries, unique_ips, comips->unique_ips);
             ipset_free(comips);
 #else
             comips = ipset_combine(ips, first);
@@ -1110,7 +1125,7 @@ int main(int argc, char **argv) {
             }
 
             ipset_optimize(comips);
-            printf("%s,%zu,%" PRIu64 ",%" PRIu64 "\n", ips->filename, entries, unique_ips, unique_ips + first->unique_ips - comips->unique_ips);
+            iprange_csv_write_count_row(ips->filename, entries, unique_ips, unique_ips + first->unique_ips - comips->unique_ips);
             ipset_free(comips);
 #endif
         }
@@ -1155,7 +1170,7 @@ int main(int argc, char **argv) {
         ipset_optimize_all(root);
 
         for(ips = root; ips ;ips = ips->next) {
-            printf("%s,%zu,%" PRIu64 "\n", ips->filename, ips->entries, ips->unique_ips);
+            iprange_csv_write_unique_row(ips->filename, ips->entries, ips->unique_ips);
         }
         gettimeofday(&print_dt, NULL);
     }

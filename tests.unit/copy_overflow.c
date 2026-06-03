@@ -14,7 +14,6 @@ int main(void)
 
     if(!src) return 2;
 
-    memset(src->netaddrs, 0, src->entries_max * sizeof(network_addr_t));
     src->entries = src->entries_max + 4096;
     src->lines = src->entries;
 

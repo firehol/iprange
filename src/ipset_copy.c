@@ -20,8 +20,7 @@ inline ipset *ipset_copy(ipset *ips1) {
     ips = ipset_create(ips1->filename, ips1->entries);
     if(unlikely(!ips)) return NULL;
 
-    /*strcpy(ips->name, ips1->name); */
-    memcpy(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries * sizeof(network_addr_t));
+    ipset_copy_entries(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries);
 
     ips->entries = ips1->entries;
     ips->unique_ips = ips1->unique_ips;
@@ -30,4 +29,3 @@ inline ipset *ipset_copy(ipset *ips1) {
 
     return ips;
 }
-

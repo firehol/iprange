@@ -26,8 +26,8 @@ inline ipset6 *ipset6_combine(ipset6 *ips1, ipset6 *ips2) {
     ips = ipset6_create("combined", total_entries);
     if(unlikely(!ips)) return NULL;
 
-    memcpy(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries * sizeof(network_addr6_t));
-    memcpy(&ips->netaddrs[ips1->entries], &ips2->netaddrs[0], ips2->entries * sizeof(network_addr6_t));
+    ipset6_copy_entries(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries);
+    ipset6_copy_entries(&ips->netaddrs[ips1->entries], &ips2->netaddrs[0], ips2->entries);
 
     ips->entries = total_entries;
     ips->lines = total_lines;

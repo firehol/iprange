@@ -15,7 +15,7 @@ inline ipset6 *ipset6_copy(ipset6 *ips1) {
     ips = ipset6_create(ips1->filename, ips1->entries);
     if(unlikely(!ips)) return NULL;
 
-    memcpy(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries * sizeof(network_addr6_t));
+    ipset6_copy_entries(&ips->netaddrs[0], &ips1->netaddrs[0], ips1->entries);
 
     ips->entries = ips1->entries;
     ips->unique_ips = ips1->unique_ips;

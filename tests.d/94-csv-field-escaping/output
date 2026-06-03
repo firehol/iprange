@@ -1,0 +1,14 @@
+# IPv4 count-unique-all:
+name,entries,unique_ips
+"alpha,set",1,1
+"beta""set",1,1
+# IPv4 compare-next:
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+"alpha,set","beta""set",1,1,1,1,2,0
+# IPv6 count-unique-all:
+name,entries,unique_ips
+"v6,alpha",1,1
+"v6""beta",1,1
+# IPv6 compare-next:
+name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips
+"v6,alpha","v6""beta",1,1,1,1,2,0

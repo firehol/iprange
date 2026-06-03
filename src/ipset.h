@@ -22,6 +22,19 @@ typedef struct ipset {
     network_addr_t *netaddrs;
 } ipset;
 
+static inline void ipset_set_filename(ipset *ips, const char *filename) {
+    if(unlikely(!ips)) return;
+
+    snprintf(ips->filename, sizeof(ips->filename), "%s", (filename && *filename)?filename:"stdin");
+}
+
+static inline void ipset_copy_entries(network_addr_t *dst, const network_addr_t *src, size_t entries) {
+    size_t i;
+
+    for(i = 0; i < entries; i++)
+        dst[i] = src[i];
+}
+
 extern ipset *ipset_create(const char *filename, size_t entries);
 extern void ipset_free(ipset *ips);
 extern void ipset_free_all(ipset *ips);

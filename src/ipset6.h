@@ -19,6 +19,19 @@ typedef struct ipset6 {
     network_addr6_t *netaddrs;
 } ipset6;
 
+static inline void ipset6_set_filename(ipset6 *ips, const char *filename) {
+    if(unlikely(!ips)) return;
+
+    snprintf(ips->filename, sizeof(ips->filename), "%s", (filename && *filename)?filename:"stdin");
+}
+
+static inline void ipset6_copy_entries(network_addr6_t *dst, const network_addr6_t *src, size_t entries) {
+    size_t i;
+
+    for(i = 0; i < entries; i++)
+        dst[i] = src[i];
+}
+
 extern ipset6 *ipset6_create(const char *filename, size_t entries);
 extern void ipset6_free(ipset6 *ips);
 extern void ipset6_free_all(ipset6 *ips);

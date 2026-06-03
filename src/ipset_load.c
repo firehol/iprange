@@ -240,7 +240,7 @@ ipset *ipset_load(const char *filename) {
     if(unlikely(!ips)) return NULL;
 
     if (likely(filename && *filename)) {
-        fp = fopen(filename, "r");
+        fp = iprange_fopen_read(filename);
         if (unlikely(!fp)) {
             fprintf(stderr, "%s: %s - %s\n", PROG, filename, strerror(errno));
             ipset_free(ips);

@@ -93,7 +93,7 @@ static int binary_validate_payload(ipset *ips, int header_optimized, size_t entr
             return 1;
         }
 
-        memcpy(tmp, &ips->netaddrs[ips->entries], entries * sizeof(network_addr_t));
+        ipset_copy_entries(tmp, &ips->netaddrs[ips->entries], entries);
         qsort(tmp, entries, sizeof(network_addr_t), compare_network_addr_binary);
 
         lo = tmp[0].addr;

@@ -32,7 +32,7 @@ inline int ipset_merge(ipset *to, ipset *add) {
 
     ipset_grow(to, add->entries);
 
-    memcpy(&to->netaddrs[to->entries], &add->netaddrs[0], add->entries * sizeof(network_addr_t));
+    ipset_copy_entries(&to->netaddrs[to->entries], &add->netaddrs[0], add->entries);
 
     to->entries = total_entries;
     to->lines = total_lines;

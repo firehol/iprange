@@ -51,8 +51,7 @@ int main(void) {
     ipset *one;
     ipset *result;
 
-    strncpy(empty.filename, "empty", FILENAME_MAX);
-    empty.filename[FILENAME_MAX] = '\0';
+    ipset_set_filename(&empty, "empty");
     empty.flags = IPSET_FLAG_OPTIMIZED;
     empty.netaddrs = NULL;
 
