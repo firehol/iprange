@@ -1,0 +1,9 @@
+{
+  "name": "iprange-codacy-analysis",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@codacy/analysis-cli": "0.8.1"
+  }
+}

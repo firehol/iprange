@@ -8,3 +8,12 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: npm
+    directory: /.github/codacy-analysis
+    schedule:
+      interval: weekly
+    groups:
+      codacy-analysis:
+        patterns:
+          - "*"

@@ -114,14 +114,16 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Install Codacy Analysis CLI
+        env:
+          npm_config_registry: https://registry.npmjs.org/
         run: |
-          npm install -g @codacy/analysis-cli@0.8.0
+          npm ci --prefix .github/codacy-analysis --ignore-scripts --no-audit --no-fund
 
       - name: Run Codacy local analysis
         run: |
-          codacy-analysis init --remote gh firehol iprange
+          .github/codacy-analysis/node_modules/.bin/codacy-analysis init --remote gh firehol iprange
           set +e
-          codacy-analysis analyze --install-dependencies --output-format json --output codacy-analysis.json
+          .github/codacy-analysis/node_modules/.bin/codacy-analysis analyze --install-dependencies --output-format json --output codacy-analysis.json
           analysis_status=$?
           set -e
           if [ ! -f codacy-analysis.json ]; then
