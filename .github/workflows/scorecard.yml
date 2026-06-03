@@ -39,6 +39,6 @@ jobs:
           retention-days: 14
 
       - name: Upload Scorecard to code scanning
-        uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d
+        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463
         with:
           sarif_file: results.sarif
