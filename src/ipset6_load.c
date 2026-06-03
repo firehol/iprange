@@ -152,8 +152,8 @@ static network_addr6_t parse_address6(char *ipstr, int *err) {
     else if(addr_class == 4) {
         network_addr_t v4 = str2netaddr(ipstr, err);
         if(*err) {
-            netaddr.addr = 0;
-            netaddr.broadcast = 0;
+            netaddr.addr = U128_ZERO;
+            netaddr.broadcast = U128_ZERO;
             return netaddr;
         }
 
@@ -164,8 +164,8 @@ static network_addr6_t parse_address6(char *ipstr, int *err) {
 
     if(err) (*err)++;
     fprintf(stderr, "%s: Cannot parse address: %s\n", PROG, ipstr);
-    netaddr.addr = 0;
-    netaddr.broadcast = 0;
+    netaddr.addr = U128_ZERO;
+    netaddr.broadcast = U128_ZERO;
     return netaddr;
 }
 
@@ -275,8 +275,8 @@ ipset6 *ipset6_load(const char *filename) {
                     continue;
                 }
 
-                ipv6_addr_t lo = (net1.addr < net2.addr) ? net1.addr : net2.addr;
-                ipv6_addr_t hi = (net1.broadcast > net2.broadcast) ? net1.broadcast : net2.broadcast;
+                ipv6_addr_t lo = u128_lt(net1.addr, net2.addr) ? net1.addr : net2.addr;
+                ipv6_addr_t hi = u128_gt(net1.broadcast, net2.broadcast) ? net1.broadcast : net2.broadcast;
                 ipset6_add_ip_range(ips, lo, hi);
             }
                 break;

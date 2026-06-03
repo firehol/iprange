@@ -67,7 +67,7 @@ IPv6 uses binary format v2.0 (IPv4 uses v1.0). The formats are not interchangeab
 | v1.0 | IPv4 | 4 bytes per address | `iprange binary format v1.0` |
 | v2.0 | IPv6 | 16 bytes per address | `iprange binary format v2.0` |
 
-Binary files are auto-detected by their header. Same-architecture only (no endianness conversion).
+Binary files are auto-detected by their header. Same-endianness only (no byte-order conversion).
 
 ## Examples
 
@@ -95,6 +95,6 @@ iprange -6 --compare --header v6-a.txt v6-b.txt v6-c.txt
 
 ## Internal representation
 
-IPv6 addresses are stored as `__uint128_t` (128-bit unsigned integer). This requires GCC or Clang with `__uint128_t` support. The `configure` script checks for this at build time.
+IPv6 addresses are stored as a 128-bit unsigned integer. Builds use native `__uint128_t` when the compiler provides it, and fall back to portable `{hi, lo}` arithmetic on platforms without native 128-bit integers.
 
 All set operations (merge, common, exclude, diff, optimize) have dedicated IPv6 implementations that operate on 128-bit address pairs, following the same algorithms as the IPv4 versions.

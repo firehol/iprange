@@ -34,6 +34,7 @@ iprange_SOURCES = \
 	src/iprange.c \
 	src/iprange.h \
 	src/iprange6.h \
+	src/uint128.h \
 	src/iprange6_main.c \
 	src/ipset.c \
 	src/ipset.h \

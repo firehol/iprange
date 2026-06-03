@@ -5,8 +5,10 @@ find_package(Threads REQUIRED)
 
 include(CheckTypeSize)
 check_type_size("__uint128_t" UINT128_SIZE LANGUAGE C)
-if(NOT HAVE_UINT128_SIZE)
-    message(FATAL_ERROR "Compiler does not support __uint128_t, required for IPv6")
+if(HAVE_UINT128_SIZE)
+    message(STATUS "Native __uint128_t detected — using hardware 128-bit integers for IPv6")
+else()
+    message(STATUS "__uint128_t not available — using portable 128-bit arithmetic for IPv6")
 endif()
 
 # Generate config.h with the defines the source expects

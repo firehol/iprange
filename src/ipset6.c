@@ -24,7 +24,7 @@ ipset6 *ipset6_create(const char *filename, size_t entries) {
     ips->lines = 0;
     ips->entries = 0;
     ips->entries_max = entries;
-    ips->unique_ips = 0;
+    ips->unique_ips = U128_ZERO;
     ips->next = NULL;
     ips->prev = NULL;
     ips->flags = 0;
@@ -87,7 +87,7 @@ void ipset6_grow_internal(ipset6 *ips, size_t free_entries_needed) {
     }
 }
 
-inline __uint128_t ipset6_unique_ips(ipset6 *ips) {
+inline uint128_t ipset6_unique_ips(ipset6 *ips) {
     if(unlikely(!(ips->flags & IPSET_FLAG_OPTIMIZED)))
         ipset6_optimize(ips);
 

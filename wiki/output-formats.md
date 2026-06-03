@@ -76,7 +76,7 @@ Binary files include:
 - An endianness marker
 - Raw address-pair records
 
-Binary files are **architecture-specific** — they use native byte order and are intended as a same-machine cache. Do not transfer between machines with different endianness.
+Binary files are **endianness-specific**: they use native byte order and are intended as a same-machine cache. Do not transfer between machines with different endianness.
 
 ## CSV output
 

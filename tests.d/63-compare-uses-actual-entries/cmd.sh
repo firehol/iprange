@@ -6,16 +6,8 @@ trap 'rm -rf "$tmpdir"' EXIT
 binary="$tmpdir/fake-lines.bin"
 text="$tmpdir/text.txt"
 
-{
-    printf 'iprange binary format v1.0\n'
-    printf 'optimized\n'
-    printf 'record size 8\n'
-    printf 'records 1\n'
-    printf 'bytes 12\n'
-    printf 'lines 999\n'
-    printf 'unique ips 1\n'
-    perl -e 'print pack("V", 0x1A2B3C4D), pack("V", 0x04030201), pack("V", 0x04030201)'
-} >"$binary"
+printf '4.3.2.1\n' | ../../iprange --print-binary >"$binary"
+perl -0pi -e 's/lines 1\n/lines 999\n/' "$binary"
 
 printf '4.3.2.5\n' >"$text"
 

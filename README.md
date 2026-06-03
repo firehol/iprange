@@ -206,7 +206,7 @@ Enumerates every individual IP. Ranges larger than 16,777,216 IPs (256^3) are sk
 
 ### Binary (`--print-binary`)
 
-Fast machine-readable format for the same architecture (no endianness conversion). Use for caching and fast round-trips:
+Fast machine-readable format for machines with the same endianness (no byte-order conversion). Use for caching and fast round-trips:
 ```bash
 iprange --print-binary blocklist.txt > cache.bin
 iprange cache.bin  # reads binary, outputs CIDR

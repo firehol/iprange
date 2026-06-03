@@ -33,7 +33,7 @@ inline ipset6 *ipset6_common(ipset6 *ips1, ipset6 *ips2) {
     hi2 = ips2->netaddrs[0].broadcast;
 
     while(i1 < n1 && i2 < n2) {
-        if(lo1 > hi2) {
+        if(u128_gt(lo1, hi2)) {
             i2++;
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
@@ -42,7 +42,7 @@ inline ipset6 *ipset6_common(ipset6 *ips1, ipset6 *ips2) {
             continue;
         }
 
-        if(lo2 > hi1) {
+        if(u128_gt(lo2, hi1)) {
             i1++;
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
@@ -51,9 +51,9 @@ inline ipset6 *ipset6_common(ipset6 *ips1, ipset6 *ips2) {
             continue;
         }
 
-        lo = (lo1 > lo2) ? lo1 : lo2;
+        lo = u128_gt(lo1, lo2) ? lo1 : lo2;
 
-        if(hi1 < hi2) {
+        if(u128_lt(hi1, hi2)) {
             hi = hi1;
             i1++;
             if(i1 < n1) {

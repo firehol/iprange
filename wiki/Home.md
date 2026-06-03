@@ -60,7 +60,7 @@ iprange [options] file1 file2 ...
 | *(default)* | CIDR (`10.0.0.0/24`) |
 | `-j` / `--print-ranges` | Ranges (`10.0.0.0-10.0.0.255`) |
 | `-1` / `--print-single-ips` | One IP per line |
-| `--print-binary` | Binary (same-architecture cache) |
+| `--print-binary` | Binary (same-endianness cache) |
 
 ### Feature detection
 

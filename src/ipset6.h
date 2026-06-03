@@ -9,7 +9,7 @@ typedef struct ipset6 {
     size_t lines;
     size_t entries;
     size_t entries_max;
-    __uint128_t unique_ips;
+    uint128_t unique_ips;
 
     uint32_t flags;
 
@@ -25,7 +25,7 @@ extern void ipset6_free_all(ipset6 *ips);
 
 extern size_t prefix6_counters[129];
 
-extern __uint128_t ipset6_unique_ips(ipset6 *ips);
+extern uint128_t ipset6_unique_ips(ipset6 *ips);
 
 static inline int ipset6_entries_allocation_overflows(size_t entries) {
     return (entries > (SIZE_MAX / sizeof(network_addr6_t)));
@@ -56,26 +56,26 @@ static inline void ipset6_added_entry(ipset6 *ips) {
 
     ips->lines++;
 
-    /* overflow-safe unique_ips: 2^128 doesn't fit in __uint128_t, saturate at max */
-    if(lo == 0 && hi == IPV6_ADDR_MAX)
+    /* overflow-safe unique_ips: 2^128 doesn't fit in uint128_t, saturate at max */
+    if(u128_is_zero(lo) && u128_eq(hi, IPV6_ADDR_MAX))
         ips->unique_ips = IPV6_ADDR_MAX;
     else {
-        __uint128_t size = hi - lo + 1;
-        if(ips->unique_ips > IPV6_ADDR_MAX - size)
+        uint128_t size = u128_add(u128_sub(hi, lo), U128_ONE);
+        if(u128_gt(ips->unique_ips, u128_sub(IPV6_ADDR_MAX, size)))
             ips->unique_ips = IPV6_ADDR_MAX;
         else
-            ips->unique_ips += size;
+            ips->unique_ips = u128_add(ips->unique_ips, size);
     }
 
     if(likely(ips->flags & IPSET_FLAG_OPTIMIZED && entries > 0)) {
         /* overflow-safe adjacency: broadcast + 1 wraps at IPV6_ADDR_MAX */
-        if(unlikely(ips->netaddrs[entries - 1].broadcast != IPV6_ADDR_MAX &&
-                    lo == (ips->netaddrs[entries - 1].broadcast + 1))) {
+        if(unlikely(!u128_eq(ips->netaddrs[entries - 1].broadcast, IPV6_ADDR_MAX) &&
+                    u128_eq(lo, u128_inc(ips->netaddrs[entries - 1].broadcast)))) {
             ips->netaddrs[entries - 1].broadcast = hi;
             return;
         }
 
-        if(likely(lo > ips->netaddrs[entries - 1].broadcast)) {
+        if(likely(u128_gt(lo, ips->netaddrs[entries - 1].broadcast))) {
             ips->entries++;
             return;
         }

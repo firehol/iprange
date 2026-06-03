@@ -43,7 +43,7 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
     hi2 = ips2->netaddrs[0].broadcast;
 
     while(i1 < n1 && i2 < n2) {
-        if(lo1 > hi2) {
+        if(u128_gt(lo1, hi2)) {
             i2++;
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
@@ -52,7 +52,7 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
             continue;
         }
 
-        if(lo2 > hi1) {
+        if(u128_gt(lo2, hi1)) {
             ipset6_add_ip_range(ips, lo1, hi1);
             i1++;
             if(i1 < n1) {
@@ -62,12 +62,12 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
             continue;
         }
 
-        if(lo1 < lo2) {
-            ipset6_add_ip_range(ips, lo1, lo2 - 1);
+        if(u128_lt(lo1, lo2)) {
+            ipset6_add_ip_range(ips, lo1, u128_dec(lo2));
             lo1 = lo2;
         }
 
-        if(hi1 == hi2) {
+        if(u128_eq(hi1, hi2)) {
             i1++;
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
@@ -79,7 +79,7 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
                 hi2 = ips2->netaddrs[i2].broadcast;
             }
         }
-        else if(hi1 < hi2) {
+        else if(u128_lt(hi1, hi2)) {
             i1++;
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
@@ -89,7 +89,7 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
         else {
             /* hi2 + 1 would overflow if hi2 == IPV6_ADDR_MAX, but that means
              * ips2 covers everything from lo1..max, so nothing remains in ips1 */
-            if(hi2 == IPV6_ADDR_MAX) {
+            if(u128_eq(hi2, IPV6_ADDR_MAX)) {
                 i1++;
                 if(i1 < n1) {
                     lo1 = ips1->netaddrs[i1].addr;
@@ -97,7 +97,7 @@ inline ipset6 *ipset6_exclude(ipset6 *ips1, ipset6 *ips2) {
                 }
             }
             else {
-                lo1 = hi2 + 1;
+                lo1 = u128_inc(hi2);
             }
             i2++;
             if(i2 < n2) {

@@ -10,15 +10,15 @@ static void binary6_write_failed(void) {
     exit(1);
 }
 
-static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t entries, __uint128_t expected_unique_ips, int *payload_is_optimized)
+static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t entries, uint128_t expected_unique_ips, int *payload_is_optimized)
 {
     size_t i;
-    __uint128_t actual_unique_ips = 0;
+    uint128_t actual_unique_ips = U128_ZERO;
 
     *payload_is_optimized = 1;
 
     if(!entries) {
-        if(unlikely(expected_unique_ips != 0)) {
+        if(unlikely(!u128_is_zero(expected_unique_ips))) {
             fprintf(stderr, "%s: %s: unique IPs do not match the binary payload\n", PROG, ips->filename);
             return 1;
         }
@@ -26,7 +26,7 @@ static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t en
     }
 
     for(i = 0; i < entries; i++) {
-        if(unlikely(ips->netaddrs[ips->entries + i].addr > ips->netaddrs[ips->entries + i].broadcast)) {
+        if(unlikely(u128_gt(ips->netaddrs[ips->entries + i].addr, ips->netaddrs[ips->entries + i].broadcast))) {
             fprintf(stderr, "%s: %s: invalid binary record %zu has addr > broadcast\n", PROG, ips->filename, i + 1);
             return 1;
         }
@@ -36,9 +36,9 @@ static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t en
         network_addr6_t *prev = &ips->netaddrs[ips->entries + i - 1];
         network_addr6_t *curr = &ips->netaddrs[ips->entries + i];
 
-        if(curr->addr < prev->addr
-           || curr->addr <= prev->broadcast
-           || (prev->broadcast != IPV6_ADDR_MAX && curr->addr == (prev->broadcast + 1))) {
+        if(u128_lt(curr->addr, prev->addr)
+           || u128_le(curr->addr, prev->broadcast)
+           || (!u128_eq(prev->broadcast, IPV6_ADDR_MAX) && u128_eq(curr->addr, u128_inc(prev->broadcast)))) {
             *payload_is_optimized = 0;
             break;
         }
@@ -46,8 +46,8 @@ static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t en
 
     if(*payload_is_optimized) {
         for(i = 0; i < entries; i++) {
-            __uint128_t size = ips->netaddrs[ips->entries + i].broadcast - ips->netaddrs[ips->entries + i].addr + 1;
-            actual_unique_ips += size;
+            uint128_t size = u128_add(u128_sub(ips->netaddrs[ips->entries + i].broadcast, ips->netaddrs[ips->entries + i].addr), U128_ONE);
+            actual_unique_ips = u128_add(actual_unique_ips, size);
         }
     }
     else {
@@ -57,7 +57,7 @@ static int binary6_validate_payload(ipset6 *ips, int header_optimized, size_t en
         actual_unique_ips = expected_unique_ips;
     }
 
-    if(unlikely(expected_unique_ips != actual_unique_ips)) {
+    if(unlikely(!u128_eq(expected_unique_ips, actual_unique_ips))) {
         fprintf(stderr, "%s: %s: unique IPs do not match the binary payload\n", PROG, ips->filename);
         return 1;
     }
@@ -91,9 +91,9 @@ static int parse_binary6_size_field(ipset6 *ips, const char *field, const char *
     return 0;
 }
 
-static int parse_binary6_u128_field(ipset6 *ips, const char *field, const char *value, __uint128_t *parsed_value)
+static int parse_binary6_u128_field(ipset6 *ips, const char *field, const char *value, uint128_t *parsed_value)
 {
-    __uint128_t result = 0;
+    uint128_t result = U128_ZERO;
     const char *s = value;
 
     if(!s || *s < '0' || *s > '9') {
@@ -102,9 +102,9 @@ static int parse_binary6_u128_field(ipset6 *ips, const char *field, const char *
     }
 
     while(*s >= '0' && *s <= '9') {
-        __uint128_t prev = result;
-        result = result * 10 + (*s - '0');
-        if(unlikely(result < prev)) {
+        uint128_t prev = result;
+        result = u128_add(u128_mul_u64(result, 10), u128_from_u64(*s - '0'));
+        if(unlikely(u128_lt(result, prev))) {
             fprintf(stderr, "%s: %s: %s value overflow\n", PROG, ips->filename, field);
             return 1;
         }
@@ -123,7 +123,7 @@ static int parse_binary6_u128_field(ipset6 *ips, const char *field, const char *
 int ipset6_load_binary_v20(FILE *fp, ipset6 *ips, int first_line_missing) {
     char buffer[MAX_LINE + 1], *s;
     size_t entries, bytes, lines, expected_bytes, record_size;
-    __uint128_t unique_ips;
+    uint128_t unique_ips;
     uint32_t endian;
     size_t loaded;
     int header_optimized = 0;
@@ -230,7 +230,7 @@ int ipset6_load_binary_v20(FILE *fp, ipset6 *ips, int first_line_missing) {
         return 1;
     }
 
-    if(unique_ips < entries && unique_ips != 0) {
+    if(u128_lt(unique_ips, u128_from_u64(entries)) && !u128_is_zero(unique_ips)) {
         fprintf(stderr, "%s: %s: unique IPs cannot be less than entries (%zu)\n", PROG, ips->filename, entries);
         return 1;
     }
@@ -263,7 +263,7 @@ int ipset6_load_binary_v20(FILE *fp, ipset6 *ips, int first_line_missing) {
 
     ips->entries += loaded;
     ips->lines += lines;
-    ips->unique_ips += unique_ips;
+    ips->unique_ips = u128_add(ips->unique_ips, unique_ips);
     ips->flags &= ~IPSET_FLAG_OPTIMIZED;
     if(header_optimized && payload_is_optimized) ips->flags |= IPSET_FLAG_OPTIMIZED;
 
