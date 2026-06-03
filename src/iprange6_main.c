@@ -161,23 +161,12 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
         else if(argv[i][0] == '@') {
             const char *listname = argv[i] + 1;
             struct stat st;
+            DIR *dir = opendir(listname);
 
-            if(stat(listname, &st) != 0) {
-                fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
-                exit(1);
-            }
-
-            if(S_ISDIR(st.st_mode)) {
-                DIR *dir;
+            if(dir) {
                 struct dirent *entry;
                 char **files = NULL;
                 size_t files_allocated = 0, files_collected = 0, j;
-
-                dir = opendir(listname);
-                if(!dir) {
-                    fprintf(stderr, "%s: Cannot open directory: %s - %s\n", PROG, listname, strerror(errno));
-                    exit(1);
-                }
 
                 while((entry = readdir(dir))) {
                     if(!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
@@ -237,6 +226,10 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                 }
                 free_pathnames6(files, files_collected);
                 continue;
+            }
+            else if(errno != ENOTDIR) {
+                fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
+                exit(1);
             }
             else {
                 /* file list */

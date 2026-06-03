@@ -6,6 +6,8 @@ on:
     paths:
       - 'wiki/**'
 
+permissions: {}
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -13,10 +15,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Checkout wiki
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ github.repository }}.wiki
           path: wiki-repo

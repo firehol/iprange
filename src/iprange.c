@@ -713,27 +713,15 @@ int main(int argc, char **argv) {
                 /* Handle @filename as a file list or directory */
                 const char *listname = argv[i] + 1;  /* Skip the @ character */
                 struct stat st;
-                
-                if(stat(listname, &st) != 0) {
-                    fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
-                    exit(1);
-                }
-                
-                /* Check if it's a directory */
-                if(S_ISDIR(st.st_mode)) {
-                    DIR *dir;
+                DIR *dir = opendir(listname);
+
+                if(dir) {
                     struct dirent *entry;
                     char **files = NULL;
                     size_t files_allocated = 0, files_collected = 0, j;
 
                     if(unlikely(debug)) 
                         fprintf(stderr, "%s: Loading files from directory %s\n", PROG, listname);
-                    
-                    dir = opendir(listname);
-                    if(!dir) {
-                        fprintf(stderr, "%s: Cannot open directory: %s - %s\n", PROG, listname, strerror(errno));
-                        exit(1);
-                    }
 
                     /* Read all files from the directory */
                     while((entry = readdir(dir))) {
@@ -810,6 +798,10 @@ int main(int argc, char **argv) {
                     }
 
                     free_pathnames(files, files_collected);
+                }
+                else if(errno != ENOTDIR) {
+                    fprintf(stderr, "%s: Cannot access %s: %s\n", PROG, listname, strerror(errno));
+                    exit(1);
                 }
                 else {
                     /* Handle as a file list */
