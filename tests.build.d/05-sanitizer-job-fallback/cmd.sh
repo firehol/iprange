@@ -1,7 +1,7 @@
 #!/bin/bash
 
 tmpdir=$(mktemp -d)
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 trap 'rm -rf "$tmpdir"' EXIT
 
 root="$tmpdir/root"

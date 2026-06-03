@@ -202,12 +202,14 @@ static void *dns_thread_resolve(void *ptr)
 
     if(ptr) { ; }
 
-    while((d = dns_request_get())) {
+    for(;;) {
         int added = 0;
 
         int r;
         struct addrinfo *result, *rp;
         struct addrinfo hints = {0};
+
+        d = dns_request_get();
 
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_DGRAM;
@@ -284,9 +286,21 @@ static void dns_process_replies(ipset *ips)
 int dns_request(ipset *ips, char *hostname)
 {
     DNSREQ *d;
-    size_t hostname_len = strlen(hostname) + 1;
+    size_t hostname_len;
 
     dns_process_replies(ips);
+
+    if(unlikely(!hostname)) {
+        fprintf(stderr, "%s: DNS: empty hostname request\n", PROG);
+        return -1;
+    }
+
+    hostname_len = iprange_cstrnlen(hostname, MAX_INPUT_ELEMENT + 1);
+    if(unlikely(!hostname_len || hostname_len > MAX_INPUT_ELEMENT)) {
+        fprintf(stderr, "%s: DNS: hostname is empty or too long\n", PROG);
+        return -1;
+    }
+    hostname_len++;
 
     d = malloc(sizeof(DNSREQ) + hostname_len);
     if(!d) goto cleanup;

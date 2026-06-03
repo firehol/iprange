@@ -5,8 +5,6 @@
 #include "ipset6_dns.h"
 #include "ipset6_load.h"
 
-#define MAX_INPUT_ELEMENT6 256
-
 /* address family for the current invocation */
 extern int active_family;
 extern unsigned long ipv6_dropped_in_ipv4_mode;
@@ -209,8 +207,10 @@ ipset6 *ipset6_load(const char *filename) {
     }
 
     /* strip UTF-8 BOM if present on first line */
-    if((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF)
-        memmove(line, line + 3, strlen(line + 3) + 1);
+    if((unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF) {
+        size_t line_len = iprange_cstrnlen(line + 3, MAX_LINE - 2);
+        memmove(line, line + 3, line_len + 1);
+    }
 
     /* check for binary headers */
     if(!strcmp(line, BINARY_HEADER_V20)) {

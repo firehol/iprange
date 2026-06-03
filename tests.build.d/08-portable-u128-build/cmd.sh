@@ -4,7 +4,7 @@ set -euo pipefail
 
 tmpdir=$(mktemp -d)
 log="$tmpdir/build.log"
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 srcroot=$(cd "$script_dir/../.." && pwd)
 srcdir="$tmpdir/src"
 builddir="$tmpdir/build"

@@ -25,9 +25,7 @@ if [ -s "$tmpdir/err" ]; then
     exit 1
 fi
 
-cat >"$tmpdir/expected" <<EOF
-$tmpdir/a,$tmpdir/b,1,1,2,2,3,1
-EOF
+printf '%s,%s,1,1,2,2,3,1\n' "$tmpdir/a" "$tmpdir/b" >"$tmpdir/expected"
 
 if ! diff -u "$tmpdir/expected" "$tmpdir/out"; then
     echo "# ERROR: --compare CSV contract changed"

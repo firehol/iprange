@@ -201,7 +201,6 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
         }
         else if(argv[i][0] == '@') {
             const char *listname = argv[i] + 1;
-            struct stat st;
             DIR *dir = opendir(listname);
 
             if(dir) {
@@ -216,7 +215,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                     char filepath[FILENAME_MAX + 1];
                     snprintf(filepath, FILENAME_MAX, "%s/%s", listname, entry->d_name);
 
-                    if(stat(filepath, &st) != 0 || !S_ISREG(st.st_mode))
+                    if(!iprange_is_regular_file(filepath))
                         continue;
 
                     if(files_collected == files_allocated) {
@@ -289,9 +288,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
                     while(*s == ' ' || *s == '\t') s++;
                     if(*s == '\n' || *s == '\r' || *s == '\0' || *s == '#' || *s == ';')
                         continue;
-                    char *end = s + strlen(s) - 1;
-                    while(end > s && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
-                        *end-- = '\0';
+                    iprange_trim_trailing_whitespace(s);
 
                     if(!(ips6 = ipset6_load(s))) {
                         fprintf(stderr, "%s: Cannot load file %s from list %s (line %d)\n", PROG, s, listname, lineid);

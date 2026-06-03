@@ -2,7 +2,7 @@
 
 tmpdir=$(mktemp -d)
 log="$tmpdir/build.log"
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 srcroot=$(cd "$script_dir/../.." && pwd)
 srcdir="$tmpdir/src"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -57,7 +57,7 @@ EOF
 chmod +x "$srcdir/run-build-tests.sh"
 
 mkdir -p "$tmpdir/build"
-cd "$tmpdir/build"
+cd "$tmpdir/build" || exit 1
 
 if ! "$srcdir/configure" --disable-man >"$log" 2>&1; then
     cat "$log"

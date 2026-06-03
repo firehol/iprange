@@ -39,7 +39,7 @@ if [ ! -x "$srcdir/configure" ]; then
 fi
 
 mkdir -p "$tmpdir/build"
-cd "$tmpdir/build"
+cd "$tmpdir/build" || exit 1
 
 if ! "$srcdir/configure" --disable-man --without-compare-with-common >"$log" 2>&1; then
     cat "$log"

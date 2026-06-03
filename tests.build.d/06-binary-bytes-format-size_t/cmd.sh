@@ -1,6 +1,6 @@
 #!/bin/bash
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 srcfile="$script_dir/../../src/ipset_binary.c"
 
 if ! grep -Fq 'invalid number of bytes, found %zu, expected %zu.' "$srcfile"; then

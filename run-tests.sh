@@ -5,7 +5,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 TEMP_DIR=$(mktemp -d)
 TEST_DIRS=${TEST_DIRS:-tests.d}
 IPRANGE_LINK="$ROOT_DIR/iprange"
@@ -101,8 +101,7 @@ run_test() {
         return 1
     fi
 
-    diff --ignore-all-space --ignore-blank-lines --text -u "$expected_output" "$temp_output" > "$temp_diff"
-    if [ $? -ne 0 ]; then
+    if ! diff --ignore-all-space --ignore-blank-lines --text -u "$expected_output" "$temp_output" > "$temp_diff"; then
         echo -e "${RED}Test failed: Output does not match expected output${NC}"
         echo -e "${RED}Diff:${NC}"
         cat "$temp_diff"

@@ -98,7 +98,7 @@ inline ipset *ipset_exclude(ipset *ips1, ipset *ips2) {
                 hi1 = ips1->netaddrs[i1].broadcast;
             }
         }
-        else if(hi1 > hi2) {
+        else {
             lo1 = hi2 + 1;
             i2++;
             if(i2 < n2) {
@@ -123,4 +123,3 @@ inline ipset *ipset_exclude(ipset *ips1, ipset *ips2) {
     ips->flags |= IPSET_FLAG_OPTIMIZED;
     return ips;
 }
-

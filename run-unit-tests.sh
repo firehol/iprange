@@ -7,7 +7,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 BUILD_DIR=${BUILD_DIR:-$(pwd)}
 UNIT_TESTS_DIR=${UNIT_TESTS_DIR:-tests.unit}
 WORK_DIR=$(mktemp -d)

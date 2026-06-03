@@ -33,15 +33,15 @@ if [ -s "$tmpdir/compare.err" ] || [ -s "$tmpdir/count.err" ]; then
     exit 1
 fi
 
-cat >"$tmpdir/expected.compare" <<EOF
-$tmpdir/latest,$tmpdir/new/100,1,1,1,2,2,1
-$tmpdir/latest,$tmpdir/new/200,1,1,1,1,2,0
-EOF
+{
+    printf '%s,%s,1,1,1,2,2,1\n' "$tmpdir/latest" "$tmpdir/new/100"
+    printf '%s,%s,1,1,1,1,2,0\n' "$tmpdir/latest" "$tmpdir/new/200"
+} >"$tmpdir/expected.compare"
 
-cat >"$tmpdir/expected.count" <<EOF
-$tmpdir/new/100,1,2
-$tmpdir/new/200,1,1
-EOF
+{
+    printf '%s,1,2\n' "$tmpdir/new/100"
+    printf '%s,1,1\n' "$tmpdir/new/200"
+} >"$tmpdir/expected.count"
 
 if ! diff -u "$tmpdir/expected.compare" "$tmpdir/compare.out"; then
     echo "# ERROR: compare-next @directory CSV contract changed"

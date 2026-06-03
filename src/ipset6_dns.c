@@ -1,6 +1,7 @@
 #include "iprange.h"
 #include "iprange6.h"
 #include "ipset6.h"
+#include "ipset6_load.h"
 
 /* ----------------------------------------------------------------------------
  * hostname resolution — IPv6 DNS thread pool
@@ -163,11 +164,13 @@ static void *dns6_thread_resolve(void *ptr)
     DNSREQ6 *d;
     (void)ptr;
 
-    while((d = dns6_request_get())) {
+    for(;;) {
         int added = 0;
         int r;
         struct addrinfo *result, *rp;
         struct addrinfo hints = {0};
+
+        d = dns6_request_get();
 
         /* resolve both IPv4 and IPv6 */
         hints.ai_family = AF_UNSPEC;
@@ -230,9 +233,21 @@ static void dns6_process_replies(ipset6 *ips)
 int dns6_request(ipset6 *ips, char *hostname)
 {
     DNSREQ6 *d;
-    size_t hostname_len = strlen(hostname) + 1;
+    size_t hostname_len;
 
     dns6_process_replies(ips);
+
+    if(unlikely(!hostname)) {
+        fprintf(stderr, "%s: DNS: empty hostname request\n", PROG);
+        return -1;
+    }
+
+    hostname_len = iprange_cstrnlen(hostname, MAX_INPUT_ELEMENT6 + 1);
+    if(unlikely(!hostname_len || hostname_len > MAX_INPUT_ELEMENT6)) {
+        fprintf(stderr, "%s: DNS: hostname is empty or too long\n", PROG);
+        return -1;
+    }
+    hostname_len++;
 
     d = malloc(sizeof(DNSREQ6) + hostname_len);
     if(!d) {
@@ -271,10 +286,8 @@ int dns6_done(ipset6 *ips)
 
         dns6_process_replies(ips);
 
-        if(pending) {
-            dns6_signal_threads();
-            sleep(1);
-        }
+        dns6_signal_threads();
+        sleep(1);
     }
     dns6_process_replies(ips);
 

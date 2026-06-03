@@ -2,7 +2,7 @@
 
 set -e
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 WORK_DIR=$(mktemp -d)
 SRC_DIR="$WORK_DIR/src"
 BUILD_DIR="$WORK_DIR/build-asan"
@@ -79,8 +79,8 @@ mkdir -p "$TSAN_BUILD_DIR"
     make -j"$(get_make_jobs)"
 )
 
-BUILD_DIR="$BUILD_DIR" TEST_DIRS="tests.sanitizers.d" IPRANGE_BIN="$BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"
-BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="$SAN_LDFLAGS" "$ROOT_DIR/run-unit-tests.sh"
+env BUILD_DIR="$BUILD_DIR" TEST_DIRS="tests.sanitizers.d" IPRANGE_BIN="$BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"
+env BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="$SAN_LDFLAGS" "$ROOT_DIR/run-unit-tests.sh"
 
 (
     cd "$TSAN_BUILD_DIR"
@@ -91,4 +91,4 @@ BUILD_DIR="$BUILD_DIR" CC="$CC_BIN" TEST_CFLAGS="$SAN_CFLAGS" TEST_LDFLAGS="$SAN
     make -j"$(get_make_jobs)"
 )
 
-BUILD_DIR="$TSAN_BUILD_DIR" TEST_DIRS="tests.tsan.d" IPRANGE_BIN="$TSAN_BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"
+env BUILD_DIR="$TSAN_BUILD_DIR" TEST_DIRS="tests.tsan.d" IPRANGE_BIN="$TSAN_BUILD_DIR/iprange" "$ROOT_DIR/run-tests.sh"

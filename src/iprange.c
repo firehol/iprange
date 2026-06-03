@@ -44,19 +44,19 @@ static void iprange_csv_write_compare_row(const char *name1, const char *name2,
     iprange_csv_write_field(stdout, name1);
     fputc(',', stdout);
     iprange_csv_write_field(stdout, name2);
-    fprintf(stdout, ",%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-            entries1, entries2, unique1, unique2, combined_ips, common_ips);
+    printf(",%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+           entries1, entries2, unique1, unique2, combined_ips, common_ips);
 }
 
 static void iprange_csv_write_count_row(const char *name, size_t entries,
                                         uint64_t unique_ips, uint64_t common_ips) {
     iprange_csv_write_field(stdout, name);
-    fprintf(stdout, ",%zu,%" PRIu64 ",%" PRIu64 "\n", entries, unique_ips, common_ips);
+    printf(",%zu,%" PRIu64 ",%" PRIu64 "\n", entries, unique_ips, common_ips);
 }
 
 static void iprange_csv_write_unique_row(const char *name, size_t entries, uint64_t unique_ips) {
     iprange_csv_write_field(stdout, name);
-    fprintf(stdout, ",%zu,%" PRIu64 "\n", entries, unique_ips);
+    printf(",%zu,%" PRIu64 "\n", entries, unique_ips);
 }
 
 /* ----------------------------------------------------------------------------
@@ -723,7 +723,6 @@ int main(int argc, char **argv) {
 
                 /* Handle @filename as a file list or directory */
                 const char *listname = argv[i] + 1;  /* Skip the @ character */
-                struct stat st;
                 DIR *dir = opendir(listname);
 
                 if(dir) {
@@ -745,7 +744,7 @@ int main(int argc, char **argv) {
                         snprintf(filepath, FILENAME_MAX, "%s/%s", listname, entry->d_name);
                         
                         /* Auto-discovery should only consume regular files. */
-                        if(stat(filepath, &st) != 0 || !S_ISREG(st.st_mode))
+                        if(!iprange_is_regular_file(filepath))
                             continue;
 
                         if(files_collected == files_allocated) {
@@ -842,10 +841,7 @@ int main(int argc, char **argv) {
                         if(*s == '\n' || *s == '\r' || *s == '\0' || *s == '#' || *s == ';')
                             continue;
                             
-                        /* Remove trailing newlines/whitespace */
-                        char *end = s + strlen(s) - 1;
-                        while(end > s && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t'))
-                            *end-- = '\0';
+                        iprange_trim_trailing_whitespace(s);
                             
                         if(unlikely(debug)) 
                             fprintf(stderr, "%s: Loading file %s from list (line %d)\n", PROG, s, lineid);

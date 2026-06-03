@@ -2,7 +2,7 @@
 
 tmpdir=$(mktemp -d)
 log="$tmpdir/run-tests.log"
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 trap 'rm -rf "$tmpdir"' EXIT
 
 mkdir -p "$tmpdir/tests.d/min"

@@ -119,7 +119,7 @@ static inline uint128_t u128_sub(uint128_t a, uint128_t b) {
 static inline uint128_t u128_inc(uint128_t a) {
     uint128_t r;
     r.lo = a.lo + 1;
-    r.hi = a.hi + (r.lo == 0);
+    r.hi = a.hi + (a.lo == UINT64_MAX);
     return r;
 }
 
