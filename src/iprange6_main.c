@@ -389,7 +389,7 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
         ipset6_print(common, print);
     }
     else if(mode == MODE_DIFF) {
-        if(!root || !second) {
+        if(!second) {
             fprintf(stderr, "%s: two ipsets at least are needed to be diffed.\n", PROG);
             exit(1);
         }

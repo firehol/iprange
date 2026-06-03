@@ -71,11 +71,11 @@ static inline FILE *iprange_fopen_read(const char *filename) {
 }
 
 static inline int iprange_is_regular_file(const char *path) {
+    /* cppcheck-suppress y2038-unsafe-call -- build probes request 64-bit time_t; only st_mode is read here. */
     struct stat st;
 
     if(unlikely(!path || !*path)) return 0;
 
-    /* cppcheck-suppress y2038-unsafe-call -- build probes request 64-bit time_t; only st_mode is read here. */
     return stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
