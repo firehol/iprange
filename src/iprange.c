@@ -37,6 +37,24 @@ static inline uint64_t ipset_report_unique_ips(ipset *ips, size_t *entries)
     return unique_ips;
 }
 
+static void iprange_write_uintmax(FILE *out, uintmax_t value) {
+    char buf[sizeof(value) * CHAR_BIT / 3 + 3];
+    char *p = buf + sizeof(buf);
+
+    *--p = '\0';
+    do {
+        *--p = (char)('0' + (value % 10));
+        value /= 10;
+    } while(value);
+
+    fputs(p, out);
+}
+
+static void iprange_csv_write_uintmax(FILE *out, uintmax_t value) {
+    fputc(',', out);
+    iprange_write_uintmax(out, value);
+}
+
 static void iprange_csv_write_compare_row(const char *name1, const char *name2,
                                           size_t entries1, size_t entries2,
                                           uint64_t unique1, uint64_t unique2,
@@ -44,19 +62,29 @@ static void iprange_csv_write_compare_row(const char *name1, const char *name2,
     iprange_csv_write_field(stdout, name1);
     fputc(',', stdout);
     iprange_csv_write_field(stdout, name2);
-    printf(",%zu,%zu,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-           entries1, entries2, unique1, unique2, combined_ips, common_ips);
+    iprange_csv_write_uintmax(stdout, entries1);
+    iprange_csv_write_uintmax(stdout, entries2);
+    iprange_csv_write_uintmax(stdout, unique1);
+    iprange_csv_write_uintmax(stdout, unique2);
+    iprange_csv_write_uintmax(stdout, combined_ips);
+    iprange_csv_write_uintmax(stdout, common_ips);
+    fputc('\n', stdout);
 }
 
 static void iprange_csv_write_count_row(const char *name, size_t entries,
                                         uint64_t unique_ips, uint64_t common_ips) {
     iprange_csv_write_field(stdout, name);
-    printf(",%zu,%" PRIu64 ",%" PRIu64 "\n", entries, unique_ips, common_ips);
+    iprange_csv_write_uintmax(stdout, entries);
+    iprange_csv_write_uintmax(stdout, unique_ips);
+    iprange_csv_write_uintmax(stdout, common_ips);
+    fputc('\n', stdout);
 }
 
 static void iprange_csv_write_unique_row(const char *name, size_t entries, uint64_t unique_ips) {
     iprange_csv_write_field(stdout, name);
-    printf(",%zu,%" PRIu64 "\n", entries, unique_ips);
+    iprange_csv_write_uintmax(stdout, entries);
+    iprange_csv_write_uintmax(stdout, unique_ips);
+    fputc('\n', stdout);
 }
 
 /* ----------------------------------------------------------------------------
@@ -946,8 +974,10 @@ int main(int argc, char **argv) {
 
         else if(mode == MODE_COUNT_UNIQUE_MERGED) {
             uint64_t unique_ips = ipset_report_unique_ips(root, NULL);
-            if(unlikely(header)) printf("entries,unique_ips\n");
-            printf("%zu,%" PRIu64 "\n", root->entries, unique_ips);
+            if(unlikely(header)) fputs("entries,unique_ips\n", stdout);
+            iprange_write_uintmax(stdout, root->entries);
+            iprange_csv_write_uintmax(stdout, unique_ips);
+            fputc('\n', stdout);
         }
     }
     else if(mode == MODE_COMMON) {
@@ -1007,7 +1037,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
+        if(unlikely(header)) fputs("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n", stdout);
 
         ipset_optimize_all(root);
 
@@ -1053,7 +1083,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        if(unlikely(header)) printf("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n");
+        if(unlikely(header)) fputs("name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\n", stdout);
 
         ipset_optimize_all(root);
         ipset_optimize_all(second);
@@ -1094,7 +1124,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
-        if(unlikely(header)) printf("name,entries,unique_ips,common_ips\n");
+        if(unlikely(header)) fputs("name,entries,unique_ips,common_ips\n", stdout);
 
         ipset_optimize_all(root);
 
@@ -1161,7 +1191,7 @@ int main(int argc, char **argv) {
         ipset_print(excluded, print);
     }
     else if(mode == MODE_COUNT_UNIQUE_ALL) {
-        if(unlikely(header)) printf("name,entries,unique_ips\n");
+        if(unlikely(header)) fputs("name,entries,unique_ips\n", stdout);
 
         ipset_optimize_all(root);
 
