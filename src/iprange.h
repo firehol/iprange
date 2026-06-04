@@ -71,13 +71,13 @@ static inline FILE *iprange_fopen_read(const char *filename) {
 }
 
 static inline int iprange_is_regular_file(const char *path) {
-    /* cppcheck-suppress-begin y2038-unsafe-call -- build probes request 64-bit time_t; only st_mode is read here. */
+    /* cppcheck-suppress y2038-unsafe-call -- build probes request 64-bit time_t; only st_mode is read here. */
     struct stat st;
 
     if(unlikely(!path || !*path)) return 0;
 
+    /* cppcheck-suppress y2038-unsafe-call -- callers need file type only, not timestamps. */
     int ret = stat(path, &st) == 0 && S_ISREG(st.st_mode);
-    /* cppcheck-suppress-end y2038-unsafe-call */
     return ret;
 }
 

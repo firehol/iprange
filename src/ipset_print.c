@@ -108,15 +108,24 @@ inline int split_range(in_addr_t addr, int prefix, in_addr_t lo, in_addr_t hi, v
     lower_half = addr;
     upper_half = set_bit(addr, prefix, 1);
 
-    if (hi < upper_half)
+    if (hi < upper_half) {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 32 levels. */
         return split_range(lower_half, prefix, lo, hi, print);
-    else if (lo >= upper_half)
+    }
+    else if (lo >= upper_half) {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 32 levels. */
         return split_range(upper_half, prefix, lo, hi, print);
-    else
+    }
+    else {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 32 levels. */
+        int lower = split_range(lower_half, prefix, lo, broadcast(lower_half, prefix), print);
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 32 levels. */
+        int upper = split_range(upper_half, prefix, upper_half, hi, print);
         return (
-                split_range(lower_half, prefix, lo, broadcast(lower_half, prefix), print) +
-                split_range(upper_half, prefix, upper_half, hi, print)
+                lower +
+                upper
         );
+    }
 }
 
 

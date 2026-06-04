@@ -103,15 +103,24 @@ inline int split_range6(ipv6_addr_t addr, int prefix, ipv6_addr_t lo, ipv6_addr_
     lower_half = addr;
     upper_half = set_bit6(addr, prefix, 1);
 
-    if(u128_lt(hi, upper_half))
+    if(u128_lt(hi, upper_half)) {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 128 levels. */
         return split_range6(lower_half, prefix, lo, hi, print);
-    else if(u128_ge(lo, upper_half))
+    }
+    else if(u128_ge(lo, upper_half)) {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 128 levels. */
         return split_range6(upper_half, prefix, lo, hi, print);
-    else
+    }
+    else {
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 128 levels. */
+        int lower = split_range6(lower_half, prefix, lo, broadcast6(lower_half, prefix), print);
+        /* cppcheck-suppress misra-c2012-17.2 -- CIDR splitting is bounded to 128 levels. */
+        int upper = split_range6(upper_half, prefix, upper_half, hi, print);
         return (
-            split_range6(lower_half, prefix, lo, broadcast6(lower_half, prefix), print) +
-            split_range6(upper_half, prefix, upper_half, hi, print)
+            lower +
+            upper
         );
+    }
 }
 
 void ipset6_print(ipset6 *ips, IPSET_PRINT_CMD print) {

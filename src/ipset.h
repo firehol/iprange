@@ -16,7 +16,9 @@ typedef struct ipset {
 
     uint32_t flags;
 
+    /* cppcheck-suppress unusedStructMember -- linked by command assembly across translation units. */
     struct ipset *next;
+    /* cppcheck-suppress unusedStructMember -- linked by command assembly across translation units. */
     struct ipset *prev;
 
     network_addr_t *netaddrs;
