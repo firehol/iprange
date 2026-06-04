@@ -15,8 +15,11 @@ jobs:
     name: OpenSSF Scorecard
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: read
       id-token: write
+      issues: read
+      pull-requests: read
       security-events: write
     steps:
       - name: Checkout repository
