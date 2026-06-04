@@ -44,27 +44,20 @@ void ipset6_free(ipset6 *ips) {
 }
 
 void ipset6_free_all(ipset6 *ips) {
-    ipset6 *prev, *next;
+    ipset6 *head, *next;
 
     if(!ips) return;
 
-    prev = ips->prev;
-    next = ips->next;
+    head = ips;
+    while(head->prev)
+        head = head->prev;
 
-    if(prev) {
-        prev->next = NULL;
-        ips->prev = NULL;
-        ipset6_free_all(prev);
+    while(head) {
+        next = head->next;
+        free(head->netaddrs);
+        free(head);
+        head = next;
     }
-
-    if(next) {
-        next->prev = NULL;
-        ips->next = NULL;
-        ipset6_free_all(next);
-    }
-
-    free(ips->netaddrs);
-    free(ips);
 }
 
 void ipset6_grow_internal(ipset6 *ips, size_t free_entries_needed) {

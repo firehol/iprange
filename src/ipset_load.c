@@ -111,7 +111,11 @@ static inline IPSET_LINE_TYPE parse_hostname(char *line, int lineid, char *ipstr
             || *s == '_'
             || *s == '-'
             || *s == '.'
-    ))) ipstr[i++] = *s++;
+    ))) {
+        ipstr[i] = *s;
+        i++;
+        s++;
+    }
 
     if(unlikely(!i)) return LINE_IS_INVALID;
 
@@ -146,8 +150,11 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
     if(unlikely(*s == '\r' || *s == '\n' || *s == '\0')) return LINE_IS_EMPTY;
 
     /* get the ip address */
-    while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/')))
-        ipstr[i++] = *s++;
+    while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/'))) {
+        ipstr[i] = *s;
+        i++;
+        s++;
+    }
 
     if(unlikely(!i)) return parse_hostname(line, lineid, ipstr, ipstr2, len);
 
@@ -192,8 +199,11 @@ static inline IPSET_LINE_TYPE parse_line(char *line, int lineid, char *ipstr, ch
 
     /* get the ip 2nd address */
     i = 0;
-    while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/')))
-        ipstr2[i++] = *s++;
+    while(likely(i < len && ((*s >= '0' && *s <= '9') || *s == '.' || *s == '/'))) {
+        ipstr2[i] = *s;
+        i++;
+        s++;
+    }
 
     if(unlikely(!i)) {
         if(!strchr(ipstr, '/') && !token_is_complete_ipv4_candidate(ipstr) && hostname_candidate)
@@ -309,8 +319,11 @@ ipset *ipset_load(const char *filename) {
                         char v4str[MAX_INPUT_ELEMENT + 1];
                         int vi = 0;
                         char *v4 = s + 7;
-                        while(vi < MAX_INPUT_ELEMENT && ((*v4 >= '0' && *v4 <= '9') || *v4 == '.' || *v4 == '/'))
-                            v4str[vi++] = *v4++;
+                        while(vi < MAX_INPUT_ELEMENT && ((*v4 >= '0' && *v4 <= '9') || *v4 == '.' || *v4 == '/')) {
+                            v4str[vi] = *v4;
+                            vi++;
+                            v4++;
+                        }
                         v4str[vi] = '\0';
 
                         /* skip trailing whitespace/comment */
@@ -379,6 +392,7 @@ ipset *ipset_load(const char *filename) {
             default:
                 fprintf(stderr, "%s: Cannot understand result code. This is an internal error.\n", PROG);
                 exit(1);
+                break;
         }
     } while(likely(ips && fgets(line, MAX_LINE, fp)));
 

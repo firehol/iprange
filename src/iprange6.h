@@ -177,12 +177,14 @@ static inline char *u128_to_dec(char *buf, size_t buflen, uint128_t val) {
     *p = '\0';
 
     if(u128_is_zero(val)) {
-        *(--p) = '0';
+        p--;
+        *p = '0';
         return p;
     }
 
     while(!u128_is_zero(val)) {
-        *(--p) = '0' + (char)u128_mod10(val);
+        p--;
+        *p = '0' + (char)u128_mod10(val);
         val = u128_div10(val);
     }
     return p;

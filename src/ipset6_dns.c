@@ -133,6 +133,7 @@ static void dns6_request_failed(DNSREQ6 *d, int added, int gai_error)
                 fprintf(stderr, "%s: DNS: '%s' failed: %s\n", PROG, d->hostname, gai_strerror(gai_error));
             dns6_request_done(d, added);
             return;
+            break;
     }
 }
 

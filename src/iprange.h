@@ -245,18 +245,29 @@ static inline network_addr_t str2netaddr(char *ipstr, int *err) {
 static inline char *ip2str_r(char *buf, in_addr_t IP) {
     int i, k;
     for(i = 0, k = 0; i < 4; i++) {
-        char c0 = (char)(((((IP & (0xffU << ((3 - i) * 8))) >> ((3 - i) * 8))) / 100U) + 0x30);
-        if(c0 != '0') *(buf + k++) = c0;
+        unsigned int shift = (unsigned int)((3 - i) * 8);
+        unsigned int octet = (unsigned int)((IP >> shift) & 0xffU);
+        char c0 = (char)((octet / 100U) + 0x30);
+        if(c0 != '0') {
+            buf[k] = c0;
+            k++;
+        }
 
-        char c1 = (char)((((((IP & (0xffU << ((3 - i) * 8))) >> ((3 - i) * 8))) % 100U) / 10U) + 0x30);
-        if(!(c1 == '0' && c0 == '0')) *(buf + k++) = c1;
+        char c1 = (char)(((octet % 100U) / 10U) + 0x30);
+        if(!(c1 == '0' && c0 == '0')) {
+            buf[k] = c1;
+            k++;
+        }
 
-        *(buf + k) = (char)((((((IP & (0xffU << ((3 - i) * 8)))) >> ((3 - i) * 8))) % 10U) + 0x30);
+        buf[k] = (char)((octet % 10U) + 0x30);
         k++;
 
-        if(i < 3) *(buf + k++) = '.';
+        if(i < 3) {
+            buf[k] = '.';
+            k++;
+        }
     }
-    *(buf + k) = 0;
+    buf[k] = 0;
 
     return buf;
 }

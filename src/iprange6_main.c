@@ -125,8 +125,10 @@ int iprange6_run(int argc, char **argv, int mode, IPSET_PRINT_CMD print,
 
         /* handle --prefixes for IPv6 (1..128) */
         if(i+1 < argc && !strcmp(argv[i], "--prefixes")) {
-            char *s = NULL, *e = argv[++i];
+            char *s = NULL, *e;
             int j;
+            i++;
+            e = argv[i];
             for(j = 0; j < 128; j++)
                 prefix6_enabled[j] = 0;
             while(e && *e && e != s) {

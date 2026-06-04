@@ -70,7 +70,9 @@ static inline IPSET6_LINE_TYPE parse_line6(char *line, int lineid, char *ipstr, 
     /* scan first token: accept IPv6 chars (hex digits, colons, dots, slash) */
     while(i < len && is_ipv6_char(*s)) {
         if(*s == ':') has_colon = 1;
-        ipstr[i++] = *s++;
+        ipstr[i] = *s;
+        i++;
+        s++;
     }
 
     /* if no chars matched in the IPv6 set, try hostname */
@@ -78,8 +80,11 @@ static inline IPSET6_LINE_TYPE parse_line6(char *line, int lineid, char *ipstr, 
         i = 0;
         s = line;
         while(*s == ' ' || *s == '\t') s++;
-        while(i < len && is_hostname_char6(*s))
-            ipstr[i++] = *s++;
+        while(i < len && is_hostname_char6(*s)) {
+            ipstr[i] = *s;
+            i++;
+            s++;
+        }
         if(!i) return LINE6_IS_INVALID;
         ipstr[i] = '\0';
         while(*s == ' ' || *s == '\t') s++;
@@ -100,8 +105,11 @@ static inline IPSET6_LINE_TYPE parse_line6(char *line, int lineid, char *ipstr, 
             i = 0;
             s = line;
             while(*s == ' ' || *s == '\t') s++;
-            while(i < len && is_hostname_char6(*s))
-                ipstr[i++] = *s++;
+            while(i < len && is_hostname_char6(*s)) {
+                ipstr[i] = *s;
+                i++;
+                s++;
+            }
             if(i) {
                 ipstr[i] = '\0';
                 while(*s == ' ' || *s == '\t') s++;
@@ -123,8 +131,11 @@ static inline IPSET6_LINE_TYPE parse_line6(char *line, int lineid, char *ipstr, 
 
     /* scan second token */
     i = 0;
-    while(i < len && is_ipv6_char(*s))
-        ipstr2[i++] = *s++;
+    while(i < len && is_ipv6_char(*s)) {
+        ipstr2[i] = *s;
+        i++;
+        s++;
+    }
 
     if(!i) return LINE6_IS_INVALID;
     ipstr2[i] = '\0';
@@ -299,6 +310,7 @@ ipset6 *ipset6_load(const char *filename) {
             default:
                 fprintf(stderr, "%s: Cannot understand result code. This is an internal error.\n", PROG);
                 exit(1);
+                break;
         }
     } while(likely(ips && fgets(line, MAX_LINE, fp)));
 

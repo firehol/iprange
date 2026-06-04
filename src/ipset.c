@@ -65,27 +65,20 @@ void ipset_free(ipset *ips) {
  */
 
 void ipset_free_all(ipset *ips) {
-    ipset *prev, *next;
+    ipset *head, *next;
 
     if(!ips) return;
 
-    prev = ips->prev;
-    next = ips->next;
+    head = ips;
+    while(head->prev)
+        head = head->prev;
 
-    if(prev) {
-        prev->next = NULL;
-        ips->prev = NULL;
-        ipset_free_all(prev);
+    while(head) {
+        next = head->next;
+        free(head->netaddrs);
+        free(head);
+        head = next;
     }
-
-    if(next) {
-        next->prev = NULL;
-        ips->next = NULL;
-        ipset_free_all(next);
-    }
-
-    free(ips->netaddrs);
-    free(ips);
 }
 
 

@@ -6,7 +6,8 @@
 /*----------------------------------------------------------*/
 int compar_netaddr(const void *p1, const void *p2) {
 
-    network_addr_t *na1 = (network_addr_t *) p1, *na2 = (network_addr_t *) p2;
+    const network_addr_t *na1 = (const network_addr_t *)p1;
+    const network_addr_t *na2 = (const network_addr_t *)p2;
 
     if (na1->addr < na2->addr)
         return (-1);
