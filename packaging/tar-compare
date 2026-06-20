@@ -41,6 +41,7 @@ diff -r "$1" $MYTMP/unpack/* | grep "^Only" | sed \
 	-e '/: \.gitattributes$/d' \
 	-e '/: \.gitignore$/d' \
 	-e '/: \.github$/d' \
+	-e '/: \.codacy\.yml$/d' \
 	-e '/: \.travis$/d' \
 	-e '/: \.travis.yml$/d' \
 	-e '/: config\.log$/d' \
