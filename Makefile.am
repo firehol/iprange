@@ -127,6 +127,7 @@ $(VPATH_LOCAL_OBJECTS): $(LOCAL_OBJECT_STAMP)
 EXTRA_DIST = \
 	.gitignore \
 	README.md \
+	SECURITY.md \
 	packaging/iprange.spec.in \
 	packaging/iprange-9999.ebuild \
 	autogen.sh \
