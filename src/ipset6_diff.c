@@ -77,29 +77,23 @@ inline ipset6 *ipset6_diff(ipset6 *ips1, ipset6 *ips2) {
         else if(u128_gt(lo2, lo1))
             ipset6_add_ip_range(ips, lo1, u128_dec(lo2));
 
+        /* ips1's range extends past ips2's: keep ips1's remainder, advance ips2 only.
+           hi1 > hi2 implies hi2 < IPV6_ADDR_MAX, so the increment cannot overflow. */
         if(u128_gt(hi1, hi2)) {
-            if(u128_eq(hi2, IPV6_ADDR_MAX)) { i1++; i2++; }
-            else { lo1 = u128_inc(hi2); i2++; }
+            lo1 = u128_inc(hi2);
+            i2++;
             if(i2 < n2) {
                 lo2 = ips2->netaddrs[i2].addr;
                 hi2 = ips2->netaddrs[i2].broadcast;
-            }
-            if(i1 < n1) {
-                lo1 = ips1->netaddrs[i1].addr;
-                hi1 = ips1->netaddrs[i1].broadcast;
             }
             continue;
         }
         else if(u128_gt(hi2, hi1)) {
-            if(u128_eq(hi1, IPV6_ADDR_MAX)) { i1++; i2++; }
-            else { lo2 = u128_inc(hi1); i1++; }
+            lo2 = u128_inc(hi1);
+            i1++;
             if(i1 < n1) {
                 lo1 = ips1->netaddrs[i1].addr;
                 hi1 = ips1->netaddrs[i1].broadcast;
-            }
-            if(i2 < n2) {
-                lo2 = ips2->netaddrs[i2].addr;
-                hi2 = ips2->netaddrs[i2].broadcast;
             }
             continue;
         }
