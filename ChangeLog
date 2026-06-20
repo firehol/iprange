@@ -1,3 +1,10 @@
+iprange (2.1.1) - 2026-06-20
+
+ - bugfix: IPv6 symmetric difference (--diff) no longer includes
+   addresses present in both sets (#55)
+ - tests: added IPv6 multi-input set-operation tests covering merge,
+   common, exclude, diff, count-unique and compare
+
 iprange (2.1.0) - 2026-06-16
 
  - portability: IPv6 now works on 32-bit platforms without native
