@@ -1,3 +1,5 @@
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/099e991d9c794b2cb5be1a3e8d835cf6)](https://app.codacy.com/gh/firehol/iprange/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade) [![Codacy Badge](https://app.codacy.com/project/badge/Coverage/099e991d9c794b2cb5be1a3e8d835cf6)](https://app.codacy.com/gh/firehol/iprange/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_coverage)
+
 # iprange
 
 `iprange` is a fast command-line tool for managing IPv4 and IPv6 address sets. It reads IP addresses, CIDRs, ranges, and hostnames in any combination, normalizes them into optimal non-overlapping sets, and performs set operations (union, intersection, difference, complement). It can also compare sets as CSV, reduce prefix diversity for firewall performance, and produce binary output for fast round-trips.
