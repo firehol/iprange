@@ -28,6 +28,9 @@ make %{?_smp_mflags} install DESTDIR="%{buildroot}"
 %{_sbindir}/iprange
 
 %changelog
+* Tue Jun 16 2026 Costa Tsaousis <costa@netdata.cloud> - 2.1.0-1
+- IPv6 on 32-bit platforms, DNS EAI_AGAIN message, security/CI hardening
+
 * Fri Apr 04 2026 Costa Tsaousis <costa@netdata.cloud> - 2.0.0-1
 - IPv6 support, UINT32_MAX boundary fix, code reorganization
 

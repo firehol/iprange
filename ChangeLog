@@ -1,3 +1,17 @@
+iprange (2.1.0) - 2026-06-16
+
+ - portability: IPv6 now works on 32-bit platforms without native
+   __uint128_t, using portable 128-bit arithmetic (#45)
+ - bugfix: DNS resolution prints a failure message when EAI_AGAIN
+   retries are exhausted (#43)
+ - security: added SECURITY.md vulnerability reporting policy
+ - quality: continuous sanitizer suite (AddressSanitizer,
+   UndefinedBehaviorSanitizer, ThreadSanitizer), code coverage, and a
+   static-analysis ratchet (cppcheck, flawfinder), plus CodeQL and
+   OpenSSF Scorecard in CI
+ - tests: endian-neutral binary fixtures and portable uint128 build
+   coverage
+
 iprange (2.0.0) - 2026-04-04
 
  - feature: full IPv6 support with --ipv4/-4 and --ipv6/-6 family flags
