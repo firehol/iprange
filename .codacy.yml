@@ -1,0 +1,27 @@
+---
+exclude_paths:
+  - "tests.build.d/02-vpath-build-after-in-tree-build/cmd.sh"
+  - "tests.build.d/08-portable-u128-build/cmd.sh"
+engines:
+  duplication:
+    exclude_paths:
+      - "run-build-tests.sh"
+      - "run-sanitizer-tests.sh"
+      - "run-tests.sh"
+      - "run-unit-tests.sh"
+      - "tests.build.d/**"
+      - "tests.d/**"
+      - "tests.sanitizers.d/**"
+      - "tests.tsan.d/**"
+      - "tests.unit/**"
+  metric:
+    exclude_paths:
+      - "run-build-tests.sh"
+      - "run-sanitizer-tests.sh"
+      - "run-tests.sh"
+      - "run-unit-tests.sh"
+      - "tests.build.d/**"
+      - "tests.d/**"
+      - "tests.sanitizers.d/**"
+      - "tests.tsan.d/**"
+      - "tests.unit/**"
