@@ -39,6 +39,10 @@ impl Value {
         if self.type_id == 0 {
             return Err(Error::InvalidInput("value type_id 0 is reserved/invalid"));
         }
+        // byte_length is a u32 on disk — reject rather than silently truncate.
+        if self.bytes.len() > u32::MAX as usize {
+            return Err(Error::InvalidInput("value bytes length exceeds u32"));
+        }
         if self.type_id == 1 {
             if self.bytes.is_empty() || self.bytes.len() % 4 != 0 {
                 return Err(Error::InvalidInput(
@@ -141,6 +145,15 @@ impl<K: IpKey> Writer<K> {
         // the fields are `String`.)
         if self.license_flags & !spec::LICENSE_FLAG_DONT_REDISTRIBUTE != 0 {
             return Err(Error::InvalidInput("license_flags sets reserved bits"));
+        }
+        // each feed-meta field length is a u32 on disk — reject rather than truncate.
+        let fm = &self.feed_meta;
+        for field in [
+            &fm.name, &fm.category, &fm.maintainer, &fm.maintainer_url, &fm.source_url, &fm.license,
+        ] {
+            if field.len() > u32::MAX as usize {
+                return Err(Error::InvalidInput("feed-meta field length exceeds u32"));
+            }
         }
 
         // (1) sort by start.

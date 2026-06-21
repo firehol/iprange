@@ -18,10 +18,14 @@ type FeedMeta struct {
 	License       string
 }
 
-func (m FeedMeta) validateUTF8() error {
+func (m FeedMeta) validate() error {
 	for _, f := range []string{m.Name, m.Category, m.Maintainer, m.MaintainerURL, m.SourceURL, m.License} {
 		if !utf8.ValidString(f) {
 			return errInvalidInput("feed-meta field is not valid UTF-8")
+		}
+		// each field length is a uint32 on disk — reject rather than truncate.
+		if uint64(len(f)) > uint64(^uint32(0)) {
+			return errInvalidInput("feed-meta field length exceeds u32")
 		}
 	}
 	return nil
@@ -48,6 +52,10 @@ type Value struct {
 func (v *Value) validate() error {
 	if v.TypeID == 0 {
 		return errInvalidInput("value type_id 0 is reserved/invalid")
+	}
+	// byte_length is a uint32 on disk — reject rather than silently truncate.
+	if uint64(len(v.Bytes)) > uint64(^uint32(0)) {
+		return errInvalidInput("value bytes length exceeds u32")
 	}
 	if v.TypeID == 1 {
 		if len(v.Bytes) == 0 || len(v.Bytes)%4 != 0 {
@@ -123,7 +131,7 @@ func (w *Writer[K]) Build() ([]byte, error) {
 	// Reject inputs the reader would refuse, so a Go-built file is never one Rust
 	// would refuse to build: feed-meta MUST be valid UTF-8 (§7), and license_flags
 	// MUST NOT set reserved bits (§7). (Rust's String guarantees the former.)
-	if err := w.meta.validateUTF8(); err != nil {
+	if err := w.meta.validate(); err != nil {
 		return nil, err
 	}
 	if w.license&^licenseFlagDontRedist != 0 {

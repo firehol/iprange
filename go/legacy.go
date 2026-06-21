@@ -24,10 +24,8 @@ const (
 	legacyMagicV6 = "iprange binary format v2.0"
 )
 
-var (
-	legacyMarkerLE = [4]byte{0x4D, 0x3C, 0x2B, 0x1A} // 0x1A2B3C4D little-endian
-	legacyMarkerBE = [4]byte{0x1A, 0x2B, 0x3C, 0x4D}
-)
+// legacyMarkerLE is 0x1A2B3C4D written little-endian — the only accepted marker.
+var legacyMarkerLE = [4]byte{0x4D, 0x3C, 0x2B, 0x1A}
 
 // ParseLegacy parses a legacy binary file or returns an error.
 func ParseLegacy(b []byte) (*Legacy, error) {
@@ -117,16 +115,12 @@ func ParseLegacy(b []byte) (*Legacy, error) {
 	if pos+4 > len(b) {
 		return nil, errInvalidInput("legacy truncated before marker")
 	}
+	// Only little-endian is accepted: the legacy C tool refuses cross-endian files
+	// and §14 of the v3 spec rejects a big-endian marker. Real legacy files are LE.
 	var marker [4]byte
 	copy(marker[:], b[pos:pos+4])
-	var le bool
-	switch marker {
-	case legacyMarkerLE:
-		le = true
-	case legacyMarkerBE:
-		le = false
-	default:
-		return nil, errInvalidInput("legacy endianness marker invalid")
+	if marker != legacyMarkerLE {
+		return nil, errInvalidInput("legacy file is not little-endian (big-endian rejected, matching the C tool and §14)")
 	}
 	pos += 4
 
@@ -138,23 +132,23 @@ func ParseLegacy(b []byte) (*Legacy, error) {
 
 	res := &Legacy{IsV6: isV6, Optimized: optimized, Lines: lines, UniqueIPs: uniqueStr}
 	if isV6 {
-		if err := parseLegacyV6(res, body, int(records), le, optimized, uniqueStr); err != nil {
+		if err := parseLegacyV6(res, body, int(records), optimized, uniqueStr); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := parseLegacyV4(res, body, int(records), le, optimized, uniqueStr); err != nil {
+		if err := parseLegacyV4(res, body, int(records), optimized, uniqueStr); err != nil {
 			return nil, err
 		}
 	}
 	return res, nil
 }
 
-func parseLegacyV4(res *Legacy, body []byte, n int, le, optimized bool, uniqueStr string) error {
+func parseLegacyV4(res *Legacy, body []byte, n int, optimized bool, uniqueStr string) error {
 	ranges := make([][2]Ipv4Key, 0, n)
 	for i := 0; i < n; i++ {
 		r := body[i*8 : i*8+8]
-		addr := rdU32(r[0:4], le)
-		bcast := rdU32(r[4:8], le)
+		addr := le32(r[0:4])
+		bcast := le32(r[4:8])
 		if addr > bcast {
 			return errInvariant("legacy record addr > broadcast")
 		}
@@ -187,12 +181,12 @@ func parseLegacyV4(res *Legacy, body []byte, n int, le, optimized bool, uniqueSt
 	return nil
 }
 
-func parseLegacyV6(res *Legacy, body []byte, n int, le, optimized bool, uniqueStr string) error {
+func parseLegacyV6(res *Legacy, body []byte, n int, optimized bool, uniqueStr string) error {
 	ranges := make([][2]Ipv6Key, 0, n)
 	for i := 0; i < n; i++ {
 		r := body[i*32 : i*32+32]
-		addr := rdV6(r[0:16], le)
-		bcast := rdV6(r[16:32], le)
+		addr := rdV6(r[0:16])
+		bcast := rdV6(r[16:32])
 		if addr.cmp(bcast) > 0 {
 			return errInvariant("legacy record addr > broadcast")
 		}
@@ -227,37 +221,20 @@ func parseLegacyV6(res *Legacy, body []byte, n int, le, optimized bool, uniqueSt
 	return nil
 }
 
-// rdV6 reads a legacy 16-byte IPv6 address into a v3 hi-then-lo key (transposition).
-func rdV6(b []byte, le bool) Ipv6Key {
-	if le {
-		// little-endian writer stores {lo, hi}: bytes 0-7 = lo, 8-15 = hi.
-		return Ipv6Key{Hi: rdU64(b[8:16], true), Lo: rdU64(b[0:8], true)}
-	}
-	// big-endian writer stores {hi, lo}: bytes 0-7 = hi, 8-15 = lo.
-	return Ipv6Key{Hi: rdU64(b[0:8], false), Lo: rdU64(b[8:16], false)}
+// rdV6 reads a legacy 16-byte little-endian IPv6 address into a v3 hi-then-lo key.
+// Legacy little-endian stores {lo, hi} (bytes 0-7 = lo, 8-15 = hi), the opposite of
+// v3's key, so this transposes the halves.
+func rdV6(b []byte) Ipv6Key {
+	return Ipv6Key{Hi: le64(b[8:16]), Lo: le64(b[0:8])}
 }
 
-func rdU32(b []byte, le bool) uint32 {
-	if le {
-		return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
-	}
-	return uint32(b[3]) | uint32(b[2])<<8 | uint32(b[1])<<16 | uint32(b[0])<<24
-}
-
-func rdU64(b []byte, le bool) uint64 {
-	if le {
-		return le64(b)
-	}
-	return be64(b)
+func le32(b []byte) uint32 {
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }
 
 func le64(b []byte) uint64 {
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
-}
-func be64(b []byte) uint64 {
-	return uint64(b[7]) | uint64(b[6])<<8 | uint64(b[5])<<16 | uint64(b[4])<<24 |
-		uint64(b[3])<<32 | uint64(b[2])<<40 | uint64(b[1])<<48 | uint64(b[0])<<56
 }
 
 func v6Big(k Ipv6Key) *big.Int {

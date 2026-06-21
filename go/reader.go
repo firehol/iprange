@@ -436,6 +436,10 @@ func (r *Reader) FeedMeta() (FeedMetaView, error) {
 		fields[i] = string(s)
 		pos += flen
 	}
+	// no trailing bytes after the 6 fields (exact-length, like index/values).
+	if pos != len(b) {
+		return FeedMetaView{}, errStructural("feed-meta section length not exact")
+	}
 	return FeedMetaView{
 		Name: fields[0], Category: fields[1], Maintainer: fields[2],
 		MaintainerURL: fields[3], SourceURL: fields[4], License: fields[5],

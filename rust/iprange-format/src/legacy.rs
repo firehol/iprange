@@ -17,7 +17,6 @@ use crate::key::{Ipv4Key, Ipv6Key};
 const MAGIC_V4: &str = "iprange binary format v1.0";
 const MAGIC_V6: &str = "iprange binary format v2.0";
 const MARKER_LE: [u8; 4] = [0x4D, 0x3C, 0x2B, 0x1A]; // 0x1A2B3C4D written little-endian
-const MARKER_BE: [u8; 4] = [0x1A, 0x2B, 0x3C, 0x4D];
 
 /// A parsed legacy file: the IP family with its inclusive `[start, end]` ranges plus
 /// the header metadata. Ranges are in file order (sorted+disjoint when `optimized`).
@@ -97,45 +96,46 @@ pub fn parse(bytes: &[u8]) -> Result<Legacy> {
         return Err(Error::InvalidInput("legacy lines < records"));
     }
 
-    // endianness marker.
+    // endianness marker. Only little-endian is accepted: the legacy C tool refuses
+    // cross-endian files, and §14 of the v3 spec rejects a big-endian marker. Real
+    // legacy files come from x86-64 (little-endian); we never need the BE path.
     let marker = bytes.get(pos..pos + 4).ok_or(Error::InvalidInput("legacy truncated before marker"))?;
-    let le = if marker == MARKER_LE {
-        true
-    } else if marker == MARKER_BE {
-        false
-    } else {
-        return Err(Error::InvalidInput("legacy endianness marker invalid"));
-    };
+    if marker != MARKER_LE {
+        return Err(Error::InvalidInput(
+            "legacy file is not little-endian (big-endian rejected, matching the C tool and §14)",
+        ));
+    }
     pos += 4;
 
-    // records must be exactly the remaining bytes (no trailing data).
+    // records must be exactly the remaining bytes (no trailing data). Compute in u64
+    // so `records` is never truncated by a 32-bit `usize` before the multiply.
     let body = &bytes[pos..];
-    let need = (records as usize)
-        .checked_mul(record_size as usize)
+    let need = records
+        .checked_mul(record_size)
         .ok_or(Error::Overflow("legacy payload size"))?;
-    if body.len() != need {
+    if body.len() as u64 != need {
         return Err(Error::InvalidInput("legacy payload length mismatch / trailing data"));
     }
 
     if is_v6 {
         let unique_ips: u128 = unique_str.parse().map_err(|_| Error::InvalidInput("legacy unique ips not a u128"))?;
-        let ranges = parse_v6_records(body, records as usize, le)?;
+        let ranges = parse_v6_records(body, records as usize)?;
         validate_v6(&ranges, optimized, unique_ips)?;
         Ok(Legacy::V6 { optimized, unique_ips, lines, ranges })
     } else {
         let unique_ips: u64 = unique_str.parse().map_err(|_| Error::InvalidInput("legacy unique ips not a u64"))?;
-        let ranges = parse_v4_records(body, records as usize, le)?;
+        let ranges = parse_v4_records(body, records as usize)?;
         validate_v4(&ranges, optimized, unique_ips)?;
         Ok(Legacy::V4 { optimized, unique_ips, lines, ranges })
     }
 }
 
-fn parse_v4_records(body: &[u8], n: usize, le: bool) -> Result<Vec<(Ipv4Key, Ipv4Key)>> {
+fn parse_v4_records(body: &[u8], n: usize) -> Result<Vec<(Ipv4Key, Ipv4Key)>> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let b = &body[i * 8..i * 8 + 8];
-        let addr = rd_u32(&b[0..4], le);
-        let bcast = rd_u32(&b[4..8], le);
+        let addr = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let bcast = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
         if addr > bcast {
             return Err(Error::Invariant("legacy record addr > broadcast"));
         }
@@ -144,12 +144,12 @@ fn parse_v4_records(body: &[u8], n: usize, le: bool) -> Result<Vec<(Ipv4Key, Ipv
     Ok(out)
 }
 
-fn parse_v6_records(body: &[u8], n: usize, le: bool) -> Result<Vec<(Ipv6Key, Ipv6Key)>> {
+fn parse_v6_records(body: &[u8], n: usize) -> Result<Vec<(Ipv6Key, Ipv6Key)>> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let b = &body[i * 32..i * 32 + 32];
-        let addr = rd_v6(&b[0..16], le);
-        let bcast = rd_v6(&b[16..32], le);
+        let addr = rd_v6(&b[0..16]);
+        let bcast = rd_v6(&b[16..32]);
         if addr > bcast {
             return Err(Error::Invariant("legacy record addr > broadcast"));
         }
@@ -158,26 +158,17 @@ fn parse_v6_records(body: &[u8], n: usize, le: bool) -> Result<Vec<(Ipv6Key, Ipv
     Ok(out)
 }
 
-/// Read a legacy 16-byte IPv6 address into a v3 `hi`-then-`lo` key (the transposition).
-fn rd_v6(b: &[u8], le: bool) -> Ipv6Key {
-    if le {
-        // little-endian writer stores {lo, hi}: bytes 0-7 = lo, 8-15 = hi.
-        Ipv6Key { hi: rd_u64(&b[8..16], true), lo: rd_u64(&b[0..8], true) }
-    } else {
-        // big-endian writer stores {hi, lo}: bytes 0-7 = hi, 8-15 = lo.
-        Ipv6Key { hi: rd_u64(&b[0..8], false), lo: rd_u64(&b[8..16], false) }
-    }
+/// Read a legacy 16-byte little-endian IPv6 address into a v3 `hi`-then-`lo` key. The
+/// legacy little-endian layout stores `{lo, hi}` (bytes 0–7 = `lo`, 8–15 = `hi`), the
+/// opposite of v3's key, so this transposes the halves.
+fn rd_v6(b: &[u8]) -> Ipv6Key {
+    Ipv6Key { hi: u64_le(&b[8..16]), lo: u64_le(&b[0..8]) }
 }
 
-fn rd_u32(b: &[u8], le: bool) -> u32 {
-    let a = [b[0], b[1], b[2], b[3]];
-    if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
-}
-
-fn rd_u64(b: &[u8], le: bool) -> u64 {
+fn u64_le(b: &[u8]) -> u64 {
     let mut a = [0u8; 8];
     a.copy_from_slice(&b[0..8]);
-    if le { u64::from_le_bytes(a) } else { u64::from_be_bytes(a) }
+    u64::from_le_bytes(a)
 }
 
 fn validate_v4(ranges: &[(Ipv4Key, Ipv4Key)], optimized: bool, unique_ips: u64) -> Result<()> {

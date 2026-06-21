@@ -106,6 +106,11 @@ impl<'a> Reader<'a> {
     pub fn feed_meta(&self) -> Result<FeedMetaView<'a>> {
         let (off, len) = self.feed_meta;
         let b = &self.bytes[off..off + len];
+        // The section must hold at least the u32 count — guard before reading it, so a
+        // crafted short feed-meta section is rejected, not an out-of-bounds panic.
+        if b.len() < 4 {
+            return Err(Error::Structural("feed-meta section shorter than its count field"));
+        }
         let count = u32_le(b, 0);
         if count < spec::FEED_META_FIELD_COUNT {
             return Err(Error::Structural("feed-meta field_count < 6"));
@@ -127,6 +132,10 @@ impl<'a> Reader<'a> {
             *f = core::str::from_utf8(&b[pos..pos + flen])
                 .map_err(|_| Error::Invariant("feed-meta field is not valid UTF-8"))?;
             pos += flen;
+        }
+        // no trailing bytes after the 6 fields (exact-length, like index/values).
+        if pos != len {
+            return Err(Error::Structural("feed-meta section length not exact"));
         }
         Ok(FeedMetaView {
             name: fields[0],
@@ -585,7 +594,10 @@ fn validate_membership_set(b: &[u8]) -> Result<()> {
 /// Memory-mapped file reader (Unix). Implements the §15 mmap-safety steps:
 /// `O_NOFOLLOW` open, `fstat` the open fd, refuse non-regular/sparse files, re-`fstat`
 /// after mapping to catch replacement, and probe the last byte to surface truncation.
-#[cfg(feature = "mmap")]
+///
+/// Gated on `unix`: the safety steps use Unix-only syscalls, so the `mmap` feature is
+/// a no-op on non-Unix targets (the crate still builds; use [`Reader::open`] on bytes).
+#[cfg(all(feature = "mmap", unix))]
 pub mod mmap {
     use super::*;
     use std::fs::File;
@@ -807,6 +819,57 @@ mod tests {
         let mut w = Writer::<Ipv4Key>::new(meta(), 0b10, 0); // reserved bit set
         w.add_range(Ipv4Key(1), Ipv4Key(2), None).unwrap();
         assert!(matches!(w.build(), Err(Error::InvalidInput(_))));
+    }
+
+    // Hand-build a structurally-consistent empty v4 file whose feed-meta section is
+    // exactly `fm` bytes (offsets, lengths, and section hashes all correct).
+    fn craft_v4_with_feed_meta(fm: &[u8]) -> Vec<u8> {
+        use crate::wire::{DirEntry, Header, IndexSubHeader};
+        let hash = |b: &[u8]| -> [u8; 32] { Sha256::digest(b).into() };
+        let index_bytes = IndexSubHeader { record_size: 12, key_width: 4, record_count: 0 }.encode();
+        let dir_end = 72 + 3 * spec::DIR_ENTRY_SIZE as u64;
+        let fm_off = spec::align_up(dir_end, 8).unwrap();
+        let fm_len = fm.len() as u64;
+        let idx_off = spec::align_up(fm_off + fm_len, 16).unwrap();
+        let idx_len = index_bytes.len() as u64;
+        let sig_off = spec::align_up(idx_off + idx_len, 8).unwrap();
+        let header = Header {
+            version_minor: 0, header_size: 72, flags: 0, file_size: sig_off,
+            directory_offset: 72, directory_count: 3, license_flags: 0, entry_count: 0,
+            generation_unixtime: 0, unique_ip_count_lo: 0, unique_ip_count_hi: 0,
+        };
+        let entries = [
+            DirEntry { kind: 1, flags: 1, offset: fm_off, length: fm_len, align: 8, hash: hash(fm) },
+            DirEntry { kind: 2, flags: 1, offset: idx_off, length: idx_len, align: 16, hash: hash(&index_bytes) },
+            DirEntry { kind: 5, flags: 0, offset: sig_off, length: 0, align: 8, hash: hash(&[]) },
+        ];
+        let mut out = header.encode().to_vec();
+        for e in &entries {
+            out.extend_from_slice(&e.encode());
+        }
+        out.resize(fm_off as usize, 0);
+        out.extend_from_slice(fm);
+        out.resize(idx_off as usize, 0);
+        out.extend_from_slice(&index_bytes);
+        out.resize(sig_off as usize, 0);
+        out
+    }
+
+    #[test]
+    fn reader_rejects_short_feed_meta_without_panic() {
+        // feed-meta length 0 (< 4) — must be REJECTED, not an out-of-bounds panic
+        // (regression for the round-2 P1). The file is otherwise fully consistent.
+        let bytes = craft_v4_with_feed_meta(&[]);
+        assert!(matches!(Reader::open(&bytes), Err(Error::Structural(_))));
+        // a well-formed hand-built feed-meta (count 6 + 6 empty fields) opens fine.
+        let mut fm = 6u32.to_le_bytes().to_vec();
+        for _ in 0..6 {
+            fm.extend_from_slice(&0u32.to_le_bytes());
+        }
+        assert!(Reader::open(&craft_v4_with_feed_meta(&fm)).is_ok());
+        // trailing bytes after the 6 fields violate the exact-length rule.
+        fm.push(0);
+        assert!(matches!(Reader::open(&craft_v4_with_feed_meta(&fm)), Err(Error::Structural(_))));
     }
 
     #[test]

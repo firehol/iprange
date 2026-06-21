@@ -55,11 +55,13 @@ begins at the byte **immediately after** the final header line's `\n`.
 
 `0x1A2B3C4D` written in the writer's native order:
 - on-disk `4D 3C 2B 1A` ⇒ **little-endian** writer (the real-world case: x86-64),
-- on-disk `1A 2B 3C 4D` ⇒ **big-endian** writer.
+- on-disk `1A 2B 3C 4D` ⇒ big-endian writer.
 
-A portable reader reads the 4 bytes, picks the source endianness, and decodes all
-record integers in that endianness. The legacy loader only accepts a marker matching
-its own host; our reader accepts both.
+**Only little-endian is accepted.** The legacy C loader refuses a marker that does
+not match its own host, and `binary-format-v3.md` §14 rejects a big-endian marker;
+real legacy artifacts come from x86-64. Our readers therefore accept only
+`4D 3C 2B 1A` and reject anything else (no big-endian code path — it would be
+untested). Record integers are decoded little-endian.
 
 ### Records
 
