@@ -354,10 +354,14 @@ SIGNATURE (over header + catalog + per-section hashes)
   owned by `update-ipsets`, so membership sets stay consistent across files and
   versions.
 
-Rough cost: ~430 feeds via a bundle = ~430 cache-cold probes/IP (tens of µs);
-merged index = 1–2 cache misses (~100–200 ns). ~2 orders of magnitude — the
-difference between viable and non-viable per-flow annotation. *(Estimate, not
-measured.)*
+Direction: one merged index is far cheaper than N separate per-feed searches, so
+the merged approach is right. **CORRECTION (design review):** the earlier absolute
+figures here were wrong. A plain binary search over a merged index of *millions to
+tens of millions* of ranges is **~20+ cache misses (µs-scale when cold)**, not
+"1–2 / ~100–200 ns", and the merged file may be **~1–2 GB**, not "tens of MB". So
+a lookup **accelerator** (e.g. a direct-indexed first stage) is likely **required**
+for per-flow real-time speed, not optional. **Measure at full (~430-feed) scale
+before committing.** *(Estimates — must be measured.)*
 
 A concatenated **bundle** may still be kept as a separate *distribution* artifact
 (download many named feeds at once), but it is not what the annotator queries.

@@ -293,6 +293,68 @@ Format refinements from prior art (Step 1 inputs):
   zero-alloc); optional DIR-24-8-style v4 accel / Poptrie v6 are additive under the
   directory (no format break) — defer.
 
+### Design-review outcomes & decisions (2026-06-21)
+
+Seven external reviewers (codex/gpt-5.5, glm, minimax, kimi, mimo, deepseek, qwen)
+reviewed the design + SOWs. Strong consensus. Costa's decisions on their findings:
+
+Costa's decisions:
+
+- **Keep two full libraries (Rust + Go), including the full writer + operations in
+  Go.** Both update-ipsets and Netdata must *write*/combine the unified format
+  (Netdata combines multiple sources locally for fast lookup), so a Go writer is
+  required; external calls complicate things.
+- **Attempt-then-decide on Go speed:** build full Go, measure vs Rust early. If Go
+  is 2–5× slower on the heavy operations, **drop Go as a writer** and seriously
+  consider **porting update-ipsets to Rust** (preferred over external calls).
+  Decide on real numbers. Behavioral parity (identical results) is mandatory
+  regardless; speed parity is the goal, conceded only if measurements force it.
+- **Signatures: the format must support them, but signing is deferred** (low
+  priority now). Reserve the signature section/fields from day one; do NOT build
+  signing or key management in Step 1. Later: iplists.firehol.org signs published
+  files; the iprange CLI + SDK gain sign/verify options; users sign/verify their own.
+
+Accepted reviewer fixes (fold into spec + plan):
+
+- Write the **complete byte-level format spec first**, as a gate before any code
+  (exact field offsets/sizes — NOT "native struct layout"). Little-endian, with a
+  small byte-swap penalty noted for big-endian targets (s390x/MIPS/PowerPC).
+- **Correct the over-optimistic lookup estimate.** Plain binary search over
+  millions of ranges is ~20+ cache misses (µs cold), not 1–2 (~100–200 ns); the
+  merged file may be ~1–2 GB, not "tens of MB". **Measure at full (~430-feed) scale
+  before committing**; the v4/v6 lookup accelerator is likely **required**, not
+  optional.
+- Resolve the **mmap-vs-verification** contradiction: verify the whole file once at
+  download/install, then trust the local file (no per-lookup / whole-index
+  re-hash). Mandate atomic publish + verify-from-the-same-handle.
+- **Go has no native 128-bit integer** — IPv6 in Go needs an explicit `{hi,lo}`
+  type with manual ops; drop the "written once in both languages" claim for Go.
+- Lock **O3 = explicit {start,end,value_id}** and **O4 = interned sorted id-lists**
+  (needed to write the format spec).
+- Specify the interval map precisely: inclusive ranges (match legacy), sort
+  tie-break, coalescing rules, gap semantics, value (V) serialization + type-id +
+  skip-unknown, interning collision-safety, deterministic ordering (byte-identical
+  output), IPv6 count saturation.
+- Add **resource limits + overflow-safe bounds checks** to the format (max
+  file/section/entry sizes) even with signing deferred — malformed input must never
+  crash or over-allocate.
+- **Re-slice Step 1** (too big): byte-level spec → Rust writer+reader+tests → Go
+  library (measured vs Rust) → legacy read. **Rust first, then Go.** Build the
+  shared conformance/benchmark harness early.
+- Write a one-paragraph **"why a custom format, not FlatBuffers/Cap'n Proto/MMDB"**
+  justification in the spec.
+
+Deferred / open: feed-id registry details (note: interning feed *names* avoids a
+global registry — evaluate); dont_redistribute enforcement vs metadata-only (legal
+call); signing + key management; the Rust-port-of-update-ipsets decision (gated on
+Go speed measurements).
+
+Separate quick win (not part of this work): update-ipsets runs single-threaded by
+config (`max_ingest_workers: 1`) — raising it is a large, near-free speed-up.
+
+Note: the design spec (§0 supersedes affected sections) and SOW-0002 (Step 1) will
+be refreshed/re-sliced to match the above as the next step.
+
 ## Plan
 
 Rust-core build, in three steps (each its own SOW; **Step 1 = SOW-0002**):
