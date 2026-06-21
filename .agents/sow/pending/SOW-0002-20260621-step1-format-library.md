@@ -4,6 +4,19 @@
 
 Status: open
 
+Sub-state (2026-06-21): **1A COMPLETE** (format locked, `bb05b7e`) and **1B
+COMPLETE** — the Rust reference library `rust/iprange-format` is feature-complete:
+writer + all three reader modes (metadata-only, mmap read-only, owned-mutable
+`to_writer`), the shared language-neutral conformance corpus (`conformance/`), and
+the robustness suite. 48 tests pass (36 lib + 1 conformance + 11 robustness); clippy
+clean; all lib tests pass under Miri (no UB); the reader core builds `no_std` without
+`alloc`. Commits `59df113` (types+writer), `720abec` (reader), `f2937cf` (corpus),
+`c74885d` (robustness + owned-mutable). **Owned-mutable** (a 1D item) landed early
+with 1B. **Remaining: 1C** (pure-Go library matching Rust byte-for-byte + the early
+Rust-vs-Go speed check) and **the legacy-read part of 1D**. Next: **1C — Go**.
+
+---
+
 Sub-state: **Sub-step 1A (lock the format) COMPLETE — format LOCKED after 12
 external-review rounds** on 2026-06-21 (rounds 3–12 unbiased / no fix-list, per
 user; per the P0/P1/P2 iteration policy below). Byte layout frozen since round 3
