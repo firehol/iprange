@@ -4,16 +4,25 @@
 
 Status: open
 
-Sub-state (2026-06-21): **1A COMPLETE** (format locked, `bb05b7e`) and **1B
-COMPLETE** — the Rust reference library `rust/iprange-format` is feature-complete:
-writer + all three reader modes (metadata-only, mmap read-only, owned-mutable
-`to_writer`), the shared language-neutral conformance corpus (`conformance/`), and
-the robustness suite. 48 tests pass (36 lib + 1 conformance + 11 robustness); clippy
-clean; all lib tests pass under Miri (no UB); the reader core builds `no_std` without
-`alloc`. Commits `59df113` (types+writer), `720abec` (reader), `f2937cf` (corpus),
-`c74885d` (robustness + owned-mutable). **Owned-mutable** (a 1D item) landed early
-with 1B. **Remaining: 1C** (pure-Go library matching Rust byte-for-byte + the early
-Rust-vs-Go speed check) and **the legacy-read part of 1D**. Next: **1C — Go**.
+Sub-state (2026-06-21): **1A, 1B, and 1C COMPLETE.** 1A = format locked (`bb05b7e`).
+1B = Rust reference library `rust/iprange-format` (writer + 3 reader modes, corpus,
+robustness; 48 tests, clippy clean, Miri-clean, reader core `no_std`). 1C = pure-Go
+library `go/` (no cgo, no third-party deps): writer + reader (metadata-only,
+validated read, owned-mutable `ToWriter`), Go conformance harness, unit + panic-safety
+tests. **Cross-language byte-identity PROVEN** — the Go writer reproduces all 7 Rust
+goldens byte-for-byte and matches the 4 reject classes across the shared
+`conformance/` corpus.
+
+**Early Rust-vs-Go speed check** (identical LCG workload, both release; busy
+workstation, ~±30% run-to-run noise): build Rust ~53–59 vs Go ~93 ns/range
+(**Go ≈1.7×**); lookup Rust ~30 vs Go ~57 ns/op (**Go ≈1.9×**). Both emit the same
+2,249,880-byte file. Go is **under the SOW-0001 2× "drop the Go writer" threshold** →
+**keep the Go writer** (decision pending Costa's confirmation). Benches:
+`rust .../tests/speed.rs` (`#[ignore]`) + `go TestSpeedReport`, same workload.
+
+Commits: `59df113`/`720abec`/`f2937cf`/`c74885d` (1B), this commit (1C). **Owned-
+mutable** (a 1D item) landed with 1B/1C. **Remaining: the legacy-read part of 1D**
+(read legacy v1/v2 for migration). Next: **1D legacy read**, then close the SOW.
 
 ---
 
