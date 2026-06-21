@@ -1,0 +1,13 @@
+{
+  "name": "reject-full-v6-space",
+  "description": "A single range covering the whole IPv6 space has size 2^128, unrepresentable (§5).",
+  "ip_version": "v6",
+  "feed_meta": { "name": "bad", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "::", "end": "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "value": null }
+  ],
+  "expect": "reject",
+  "reject_class": "InvalidInput"
+}

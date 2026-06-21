@@ -1,0 +1,19 @@
+{
+  "name": "v4-single-range",
+  "description": "One IPv4 range, no value.",
+  "ip_version": "v4",
+  "feed_meta": {
+    "name": "firehol_level1",
+    "category": "attacks",
+    "maintainer": "FireHOL",
+    "maintainer_url": "https://iplists.firehol.org/",
+    "source_url": "https://example.org/list.netset",
+    "license": "GPL-2.0-or-later"
+  },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "10.0.0.0", "end": "10.0.0.255", "value": null }
+  ],
+  "expect": "bytes"
+}

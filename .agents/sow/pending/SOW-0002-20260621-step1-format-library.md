@@ -200,8 +200,22 @@ Decisions (approved 2026-06-21, after round 10):
 - **D11 — Build order inside 1B:** (a) on-disk types + byte (de)serialization, with
   the spec's worked examples as the first test vectors → (b) writer (streaming +
   header backpatch) → (c) reader 3 modes (metadata-only, mmap read-only,
-  owned-mutable) → (d) **language-neutral** shared conformance corpus under
-  `rust/conformance/` (later consumed by Go) → (e) fuzz/negative + Miri.
+  owned-mutable) → (d) **language-neutral** shared conformance corpus (later consumed
+  by Go) → (e) fuzz/negative + Miri.
+  - Refinement: the corpus lives at **top-level `conformance/`** (not under `rust/`),
+    since it is shared by both language implementations (Option A, JSON manifests):
+    `conformance/cases/<name>.json` + `conformance/golden/<name>.iprbin`
+    (Rust-produced goldens) + `conformance/README.md` (schema, for the Go harness).
+
+### 1B progress (2026-06-21)
+
+- (a) types + (b) writer committed `59df113`; (c) reader committed `720abec`;
+  (d) conformance corpus this commit. Writer + reader round-trip; **byte layout
+  verified** against the spec (header hex-dump matches field-for-field); 34 unit
+  tests + the conformance harness (11 cases: 7 golden, 4 reject) pass; clippy clean;
+  reader core builds `no_std` without `alloc`.
+- Remaining: **owned-mutable** reader mode (records into a `Vec` for editing);
+  **(e) fuzz/negative + Miri**; then close the SOW.
 
 > Release note (future): `rust/`+`go/` trees must be reconciled with `make dist` /
 > `packaging/tar-compare` before the next iprange release (EXTRA_DIST or a filter),

@@ -1,0 +1,13 @@
+{
+  "name": "v4-two-ranges-one-value",
+  "description": "Two disjoint ranges; the second carries an opaque value (type_id 2).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "mixed", "category": "abuse", "license": "MIT" },
+  "license_flags": 1,
+  "generation_unixtime": 1700000123,
+  "ranges": [
+    { "start": "11.0.0.0", "end": "11.0.0.15", "value": { "type_id": 2, "bytes_hex": "07" } },
+    { "start": "10.0.0.0", "end": "10.0.0.255", "value": null }
+  ],
+  "expect": "bytes"
+}

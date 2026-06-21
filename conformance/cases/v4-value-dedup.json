@@ -1,0 +1,13 @@
+{
+  "name": "v4-value-dedup",
+  "description": "Two non-contiguous ranges with byte-identical values share one value_id.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "dedup", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "10.0.0.0", "end": "10.0.0.255", "value": { "type_id": 2, "bytes_hex": "deadbeef" } },
+    { "start": "192.0.2.0", "end": "192.0.2.255", "value": { "type_id": 2, "bytes_hex": "deadbeef" } }
+  ],
+  "expect": "bytes"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "v4-coalesce-adjacent",
+  "description": "Two contiguous same-value (sentinel) ranges must coalesce into one record.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "coalesce", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "10.0.0.0", "end": "10.0.0.255", "value": null },
+    { "start": "10.0.1.0", "end": "10.0.1.255", "value": null }
+  ],
+  "expect": "bytes"
+}

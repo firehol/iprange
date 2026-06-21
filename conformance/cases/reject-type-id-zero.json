@@ -1,0 +1,13 @@
+{
+  "name": "reject-type-id-zero",
+  "description": "value type_id 0 is reserved/invalid (§10).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "bad", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "10.0.0.0", "end": "10.0.0.0", "value": { "type_id": 0, "bytes_hex": "01" } }
+  ],
+  "expect": "reject",
+  "reject_class": "InvalidInput"
+}

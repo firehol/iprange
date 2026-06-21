@@ -1,0 +1,13 @@
+{
+  "name": "v6-membership-set",
+  "description": "type_id 1 membership set: two strictly-ascending LE u32 feed-ids (1, 5).",
+  "ip_version": "v6",
+  "feed_meta": { "name": "members", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "2001:db8:1::", "end": "2001:db8:1::ff",
+      "value": { "type_id": 1, "bytes_hex": "0100000005000000" } }
+  ],
+  "expect": "bytes"
+}

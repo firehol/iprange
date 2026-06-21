@@ -1,0 +1,10 @@
+{
+  "name": "v4-empty",
+  "description": "An IPv4 file with no ranges: feed-meta + empty index + empty signature.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "empty", "category": "test" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [],
+  "expect": "bytes"
+}

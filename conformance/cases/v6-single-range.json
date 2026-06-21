@@ -1,0 +1,12 @@
+{
+  "name": "v6-single-range",
+  "description": "One IPv6 range exercising the hi-then-lo key layout.",
+  "ip_version": "v6",
+  "feed_meta": { "name": "v6", "category": "test", "license": "GPL-2.0-or-later" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "ranges": [
+    { "start": "2001:db8::", "end": "2001:db8::ffff", "value": null }
+  ],
+  "expect": "bytes"
+}
