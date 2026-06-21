@@ -431,6 +431,57 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// Owned-mutable mode: load a validated file back into an editable [`Writer`] so a
+/// caller can add/remove ranges and re-serialize. Because the file's records are
+/// already sorted+coalesced, loading and immediately rebuilding is byte-idempotent.
+#[cfg(feature = "alloc")]
+impl Reader<'_> {
+    /// Reconstruct an editable IPv4 [`Writer`] from this file (`Err` if not IPv4).
+    pub fn to_writer_v4(&self) -> Result<crate::writer::Writer<Ipv4Key>> {
+        if self.ip_version != IpVersion::V4 {
+            return Err(Error::Structural("to_writer_v4 on a non-IPv4 file"));
+        }
+        self.to_writer::<Ipv4Key>()
+    }
+
+    /// Reconstruct an editable IPv6 [`Writer`] from this file (`Err` if not IPv6).
+    pub fn to_writer_v6(&self) -> Result<crate::writer::Writer<Ipv6Key>> {
+        if self.ip_version != IpVersion::V6 {
+            return Err(Error::Structural("to_writer_v6 on a non-IPv6 file"));
+        }
+        self.to_writer::<Ipv6Key>()
+    }
+
+    fn to_writer<K: IpKey>(&self) -> Result<crate::writer::Writer<K>> {
+        use crate::writer::{FeedMeta, Value, Writer};
+        let fm = self.feed_meta()?;
+        let meta = FeedMeta {
+            name: fm.name.into(),
+            category: fm.category.into(),
+            maintainer: fm.maintainer.into(),
+            maintainer_url: fm.maintainer_url.into(),
+            source_url: fm.source_url.into(),
+            license: fm.license.into(),
+        };
+        let mut w = Writer::<K>::new(meta, self.header.license_flags, self.header.generation_unixtime);
+        let (off, len) = self.index_records;
+        let recs = &self.bytes[off..off + len];
+        let mut i = 0usize;
+        while i < recs.len() {
+            let r = crate::wire::Record::<K>::decode(&recs[i..])?;
+            let value = if r.value_id == spec::VALUE_ID_NONE {
+                None
+            } else {
+                let v = self.value(r.value_id).ok_or(Error::Invariant("dangling value_id"))?;
+                Some(Value { type_id: v.type_id, bytes: v.bytes.to_vec() })
+            };
+            w.add_range(r.start, r.end, value)?;
+            i += K::RECORD_SIZE;
+        }
+        Ok(w)
+    }
+}
+
 /// Canonical-position rank: signature (kind 5) sorts last; every other kind ranks by
 /// its numeric value (which is exactly the §4/§8 band order, with reserved 4/6
 /// between 3 and 7).
@@ -582,6 +633,30 @@ mod tests {
         assert_eq!(fm.name, "firehol_level1");
         assert_eq!(fm.category, "attacks");
         assert_eq!(fm.license, "GPL-2.0");
+    }
+
+    #[test]
+    fn owned_mutable_reload_is_byte_idempotent() {
+        let bytes = build_v4();
+        let r = Reader::open(&bytes).unwrap();
+        // Load -> rebuild with no edits must reproduce the exact same file.
+        let rebuilt = r.to_writer_v4().unwrap().build().unwrap();
+        assert_eq!(rebuilt, bytes, "reload+rebuild must be byte-idempotent");
+    }
+
+    #[test]
+    fn owned_mutable_edit_then_rebuild() {
+        let bytes = build_v4();
+        let r = Reader::open(&bytes).unwrap();
+        let mut w = r.to_writer_v4().unwrap();
+        // Add a new disjoint range, rebuild, and confirm it reads back with the edit.
+        w.add_range(Ipv4Key(0x0c00_0000), Ipv4Key(0x0c00_0000), None).unwrap();
+        let edited = w.build().unwrap();
+        let r2 = Reader::open(&edited).unwrap();
+        assert_eq!(r2.record_count(), 3);
+        assert!(r2.lookup_v4(Ipv4Key(0x0c00_0000)).unwrap().is_some());
+        // original ranges still present.
+        assert!(r2.lookup_v4(Ipv4Key(0x0a00_0080)).unwrap().is_some());
     }
 
     #[test]
