@@ -417,9 +417,11 @@ func (r *Reader) FeedMeta() (FeedMetaView, error) {
 	if r.hdr.versionMinor == 0 && count != feedMetaFieldCount {
 		return FeedMetaView{}, errStructural("feed-meta field_count != 6 for v3.0")
 	}
+	// Read all `count` declared fields, keeping the 6 this version knows and skipping
+	// any a future minor version added (additive forward-compat, §7).
 	pos := 4
 	var fields [6]string
-	for i := 0; i < 6; i++ {
+	for i := 0; i < int(count); i++ {
 		if pos+4 > len(b) {
 			return FeedMetaView{}, errStructural("feed-meta field length runs past section")
 		}
@@ -428,14 +430,16 @@ func (r *Reader) FeedMeta() (FeedMetaView, error) {
 		if pos+flen > len(b) {
 			return FeedMetaView{}, errStructural("feed-meta field bytes run past section")
 		}
-		s := b[pos : pos+flen]
-		if !utf8.Valid(s) {
-			return FeedMetaView{}, errInvariant("feed-meta field is not valid UTF-8")
+		if i < 6 {
+			s := b[pos : pos+flen]
+			if !utf8.Valid(s) {
+				return FeedMetaView{}, errInvariant("feed-meta field is not valid UTF-8")
+			}
+			fields[i] = string(s)
 		}
-		fields[i] = string(s)
 		pos += flen
 	}
-	// no trailing bytes after the 6 fields (exact-length, like index/values).
+	// exact-length: no trailing garbage after the declared fields (like index/values).
 	if pos != len(b) {
 		return FeedMetaView{}, errStructural("feed-meta section length not exact")
 	}

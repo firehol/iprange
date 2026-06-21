@@ -118,9 +118,11 @@ impl<'a> Reader<'a> {
         if self.header.version_minor == 0 && count != spec::FEED_META_FIELD_COUNT {
             return Err(Error::Structural("feed-meta field_count != 6 for v3.0"));
         }
+        // Read all `count` declared fields, keeping the 6 this version knows and
+        // skipping any a future minor version added (additive forward-compat, §7).
         let mut pos = 4usize;
         let mut fields: [&str; 6] = [""; 6];
-        for f in fields.iter_mut() {
+        for i in 0..count {
             if pos + 4 > len {
                 return Err(Error::Structural("feed-meta field length runs past section"));
             }
@@ -129,11 +131,16 @@ impl<'a> Reader<'a> {
             if pos + flen > len {
                 return Err(Error::Structural("feed-meta field bytes run past section"));
             }
-            *f = core::str::from_utf8(&b[pos..pos + flen])
-                .map_err(|_| Error::Invariant("feed-meta field is not valid UTF-8"))?;
+            if (i as usize) < 6 {
+                // only the known fields are exposed (and UTF-8-validated); extra
+                // future fields are skipped without interpreting their bytes.
+                fields[i as usize] = core::str::from_utf8(&b[pos..pos + flen])
+                    .map_err(|_| Error::Invariant("feed-meta field is not valid UTF-8"))?;
+            }
             pos += flen;
         }
-        // no trailing bytes after the 6 fields (exact-length, like index/values).
+        // exact-length: no trailing garbage after the declared fields (like
+        // index/values). This still rejects junk while allowing future extra fields.
         if pos != len {
             return Err(Error::Structural("feed-meta section length not exact"));
         }
@@ -832,6 +839,10 @@ mod tests {
     // Hand-build a structurally-consistent empty v4 file whose feed-meta section is
     // exactly `fm` bytes (offsets, lengths, and section hashes all correct).
     fn craft_v4_with_feed_meta(fm: &[u8]) -> Vec<u8> {
+        craft_v4_with_feed_meta_ver(fm, 0)
+    }
+
+    fn craft_v4_with_feed_meta_ver(fm: &[u8], version_minor: u16) -> Vec<u8> {
         use crate::wire::{DirEntry, Header, IndexSubHeader};
         let hash = |b: &[u8]| -> [u8; 32] { Sha256::digest(b).into() };
         let index_bytes = IndexSubHeader { record_size: 12, key_width: 4, record_count: 0 }.encode();
@@ -842,7 +853,7 @@ mod tests {
         let idx_len = index_bytes.len() as u64;
         let sig_off = spec::align_up(idx_off + idx_len, 8).unwrap();
         let header = Header {
-            version_minor: 0, header_size: 72, flags: 0, file_size: sig_off,
+            version_minor, header_size: 72, flags: 0, file_size: sig_off,
             directory_offset: 72, directory_count: 3, license_flags: 0, entry_count: 0,
             generation_unixtime: 0, unique_ip_count_lo: 0, unique_ip_count_hi: 0,
         };
@@ -878,6 +889,25 @@ mod tests {
         // trailing bytes after the 6 fields violate the exact-length rule.
         fm.push(0);
         assert!(matches!(Reader::open(&craft_v4_with_feed_meta(&fm)), Err(Error::Structural(_))));
+    }
+
+    #[test]
+    fn reader_accepts_future_extra_feed_meta_fields() {
+        // A future v3.1 file may declare >6 feed-meta fields; a v3.0 reader reads the
+        // 6 it knows and skips the extras (additive forward-compat, §7).
+        let mut fm = 8u32.to_le_bytes().to_vec(); // 8 fields
+        for i in 0..8u32 {
+            fm.extend_from_slice(&1u32.to_le_bytes()); // each field: 1 byte
+            fm.push(b'a' + i as u8);
+        }
+        let bytes = craft_v4_with_feed_meta_ver(&fm, 1); // version_minor = 1
+        let r = Reader::open(&bytes).unwrap();
+        let v = r.feed_meta().unwrap();
+        assert_eq!(v.name, "a"); // field 0
+        assert_eq!(v.license, "f"); // field 5; fields 6,7 skipped
+        // but a v3.0 file (version_minor 0) with >6 fields is still rejected.
+        let v0 = craft_v4_with_feed_meta(&fm);
+        assert!(Reader::open(&v0).is_err());
     }
 
     #[test]
