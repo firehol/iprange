@@ -1,0 +1,21 @@
+[package]
+name = "iprange-format"
+version = "0.0.0"
+description = "Reader/writer for the iprange v3 portable binary threat-intel format"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std", "mmap"]
+# `std`: enables the filesystem/owned reader and writer helpers. The on-disk types,
+# key arithmetic, and (de)serialization core stay usable without it (core + alloc).
+std = ["alloc"]
+alloc = []
+# `mmap`: the zero-copy memory-mapped read-only reader (pulls in memmap2).
+mmap = ["std", "dep:memmap2"]
+
+[dependencies]
+sha2 = { workspace = true }
+memmap2 = { workspace = true, optional = true }

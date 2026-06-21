@@ -189,6 +189,24 @@ Decisions (approved 2026-06-21, after round 10):
   by the two implementations + shared conformance corpus (code is the strongest
   remaining oracle for cross-impl divergence).
 
+### 1B kickoff decisions (approved 2026-06-21 — format locked at `bb05b7e`)
+
+- **D9 — Rust + Go live in top-level `rust/` and `go/` dirs** (isolated from the
+  autotools/C build in `src/`). `rust/` is a Cargo **workspace**; one crate now:
+  **`iprange-format`** (v3 reader+writer). The Rust→C library (`cdylib`/`staticlib` +
+  `cbindgen`) and the engine (Step 2) come later as separate workspace crates.
+- **D10 — Minimal deps:** `sha2` (section hashes) + `memmap2` (mmap reader); pure
+  Rust, no C deps; core types `no_std`-friendly where practical.
+- **D11 — Build order inside 1B:** (a) on-disk types + byte (de)serialization, with
+  the spec's worked examples as the first test vectors → (b) writer (streaming +
+  header backpatch) → (c) reader 3 modes (metadata-only, mmap read-only,
+  owned-mutable) → (d) **language-neutral** shared conformance corpus under
+  `rust/conformance/` (later consumed by Go) → (e) fuzz/negative + Miri.
+
+> Release note (future): `rust/`+`go/` trees must be reconciled with `make dist` /
+> `packaging/tar-compare` before the next iprange release (EXTRA_DIST or a filter),
+> per the parent `~/src/firehol/AGENTS.md` release process. Not a 1B blocker.
+
 ## Plan
 
 See Pre-Implementation Gate → sub-steps 1A–1D.

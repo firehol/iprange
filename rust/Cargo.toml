@@ -1,0 +1,25 @@
+# iprange Rust workspace.
+# Step 1 (this SOW): `iprange-format` — the v3 binary-format reader+writer.
+# Later: a Rust->C library (cdylib/staticlib + cbindgen) and the processing engine
+# (Step 2) join as additional workspace members.
+[workspace]
+resolver = "2"
+members = ["iprange-format"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.74"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/firehol/iprange"
+
+[workspace.dependencies]
+# default-features off keeps sha2 no_std (its `digest`/`Sha256` API needs no std).
+sha2 = { version = "0.10", default-features = false }
+memmap2 = "0.9"
+
+# Release-profile: the format library is on the hot path for consumers (netflow,
+# network-viewer). Keep overflow checks on in debug; rely on the spec's overflow-safe
+# arithmetic (checked_* / widening) for correctness, not on profile settings.
+[profile.release]
+opt-level = 3
+lto = "thin"
