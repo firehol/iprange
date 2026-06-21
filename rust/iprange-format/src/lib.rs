@@ -23,6 +23,7 @@ extern crate alloc;
 
 pub mod error;
 pub mod key;
+pub mod reader;
 pub mod spec;
 pub mod wire;
 
@@ -31,6 +32,7 @@ pub mod writer;
 
 pub use error::{Error, Result};
 pub use key::{Ipv4Key, Ipv6Key};
+pub use reader::{FeedMetaView, Hit, Reader, ValueRef};
 pub use spec::IpVersion;
 
 #[cfg(feature = "alloc")]

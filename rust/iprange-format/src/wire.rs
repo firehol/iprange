@@ -14,15 +14,15 @@ use crate::key::IpKey;
 use crate::spec::{self, IpVersion};
 
 #[inline]
-fn u16_le(b: &[u8], at: usize) -> u16 {
+pub(crate) fn u16_le(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
 }
 #[inline]
-fn u32_le(b: &[u8], at: usize) -> u32 {
+pub(crate) fn u32_le(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 #[inline]
-fn u64_le(b: &[u8], at: usize) -> u64 {
+pub(crate) fn u64_le(b: &[u8], at: usize) -> u64 {
     let mut x = [0u8; 8];
     x.copy_from_slice(&b[at..at + 8]);
     u64::from_le_bytes(x)
