@@ -11,6 +11,41 @@ first consumers.
 
 ---
 
+## 0. Architecture update (2026-06-21) — SUPERSEDES affected sections below
+
+After grounding in the C oracle + prior art, the language architecture changed.
+Where this section conflicts with §2/§7/§8/§11 below, **this section wins**; those
+sections are pending a full refresh. Authoritative decision record:
+`.agents/sow/pending/SOW-0001-20260621-iprange-engine-and-binary-format.md`.
+
+- **Two full native libraries — Rust and Go — with 100% feature parity.** Both
+  implement the complete engine (format + set algebra + lookup). Rust also produces
+  a **C library** (`cdylib`/`staticlib` + cbindgen) so C consumers use Rust. The Go
+  library is **pure Go, no cgo** (hard constraint). **Native C is dropped**; legacy
+  C survives only as the **behavioral oracle** for the conformance corpus, then
+  retires. Rust is the reference; Go must match it (and the oracle).
+- **Consumers:** `netflow.plugin` (Rust) → Rust library; `network-viewer.plugin`
+  (C) → Rust's C library; `go.d.plugin` (Go) + `update-ipsets` (Go) → the Go
+  library. Go consumers need the **full** operations, not just lookups — hence a
+  full Go library.
+- **Parity risk (real):** Go (garbage collector, less low-level control) may
+  struggle to hit the 5–10% band against Rust on the heaviest set algebra; the
+  shared test corpus + benchmark harness surfaces this per operation.
+- **v4/v6 are unified** via generics over an integer width (`u32`/`u128`) in both
+  languages — written once per library, not duplicated.
+- **Format:** little-endian + natural alignment (sections cast directly to
+  `u32[]`/`u128[]`); typed-section **directory** `{kind, offset:u64, length,
+  sha256}`; **Ed25519** signature over header+directory; **bounds-check structure →
+  verify signature → read** ("signed ≠ safe"). Lookup = sorted-range binary search
+  baseline (optional DIR-24-8 v4 / Poptrie v6 accel are additive — deferred).
+- **Build order = three steps:** (1) format library, (2) processing engine,
+  (3) backwards-compatible CLI. Step 1 = `SOW-0002`.
+
+The interval-map core (§3), format layout (§4), metadata tiers (§5), and multi-feed
+design (§6) below remain valid as written.
+
+---
+
 ## 1. Purpose (fit-for-purpose)
 
 Add **threat intelligence to Netdata**. Netdata's NetFlow, L2/L3/L7 topologies,

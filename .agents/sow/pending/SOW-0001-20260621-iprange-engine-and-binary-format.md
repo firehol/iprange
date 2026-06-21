@@ -4,7 +4,7 @@
 
 Status: open
 
-Sub-state: Design captured in spec; awaiting (a) grounding in the C oracle and (b) per-phase plan approval before any implementation. No code started.
+Sub-state: Decisions locked (Rust-core engine; native C dropped; pure-Go reader/lookup, NO cgo in go.d.plugin). Restructured into 3 steps; Step 1 = SOW-0002 (pending). No code started.
 
 ## Requirements
 
@@ -88,14 +88,76 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: blocked
+Status: resolved — decisions locked (see "Implications And Decisions"); per-step
+implementation gates live in the step SOWs (Step 1 = SOW-0002).
 
-Blocked on: (1) grounding in the C `iprange` oracle (operations, in-memory model,
-IPv6 handling, test/harness structure, library-shape); (2) user approval of the
-Phase-1 plan. Implementation must not begin until this gate is filled from that
-grounding and the user approves. The remaining gate fields (affected contracts,
-patterns to reuse, blast radius, ordered implementation plan, validation plan)
-will be completed from the C-oracle read.
+Grounding complete (2026-06-21): 5 parallel analyses of the C oracle + external
+prior art.
+
+Problem / root-cause model:
+
+- The engine is a **generalization of the existing C `iprange`**, not a ground-up
+  build. The oracle already (a) stores sets as sorted, coalesced, disjoint
+  inclusive ranges (`network_addr_t {addr,broadcast}` u32, `src/iprange.h:122-125`;
+  `ipset.netaddrs[]`, `src/ipset.h:8-25`); (b) is **dual-stack** via a
+  hand-duplicated `*6` family over `uint128_t` (`src/uint128.h`,
+  `src/iprange6.h:12-15`); (c) ships a binary (de)serializer
+  (`src/ipset_binary.c`, `src/ipset6_binary.c`). Gaps vs. target: the format
+  container, mmap/zero-copy, signing, the interval-map value, and the
+  multi-language libraries + harness.
+
+Evidence reviewed (5 analyses, file:line):
+
+- Data model & ops: flat range arrays; `optimize` = qsort+sweep
+  (`src/ipset_optimize.c:35-108`); `merge`/`combine` = concat; `common`/`exclude`/
+  `diff` = linear two-pointer sweeps (`src/ipset_common.c:12-90`,
+  `src/ipset_exclude.c:12-125`, `src/ipset_diff.c:12-150`); `reduce` = prefix
+  histogram, IPv4-only (`src/ipset_reduce.c`). No range carries a value today.
+- Binary format: ASCII pseudo-header + **raw native-endian struct dump**; v1.0 v4
+  (8B), v2.0 v6 (32B); **no mmap** (heap deserialize, `src/ipset_binary.c:298-300`),
+  **no checksum/signature**, no directory/skip-unknown.
+- Build/lib-shape: one `iprange` binary, **no library artifacts** (`Makefile.am:26`,
+  `CMakeLists.txt:69`); set algebra already takes `ipset*` + returns owned;
+  blockers = ~15 globals, deep `exit()`/stderr (`src/ipset.c:91-102`), stdout
+  coupling (`src/ipset_print.c`), global single-instance DNS pool
+  (`src/ipset_dns.c:33-35`), leaks-by-design.
+- Tests: `tests.d/` (100) already black-box + binary-swappable (`run-tests.sh`,
+  `IPRANGE_BIN`); whitespace-insensitive today; `tests.unit/` white-box C-only;
+  **no benchmark harness exists**.
+- Prior art: MMDB (offset-relative, fixed-endian, metadata-trailer-by-marker,
+  mmap zero-copy); FlatBuffers/Cap'n Proto (front section directory, 8B alignment,
+  ignore-unknown, **bounds-check-before-trust**); protobuf/wasm conformance
+  (golden corpus + thin long-lived per-language driver, errors/skips first-class);
+  lookup = **sorted-range binary search** baseline (matches iprange output) +
+  optional DXR-lite v4 fast path.
+
+Affected contracts and surfaces:
+
+- New: the portable binary format (public artifact contract); the C/Rust/Go
+  library APIs; the conformance corpus + benchmark harness; SDK consumers.
+- Existing (must stay green): the CLI verb/flag surface (`src/iprange.c`,
+  `src/iprange6_main.c`) + its 100-test suite; the legacy v1.0/v2.0 binary format
+  (read-compat decision needed).
+
+Existing patterns to reuse:
+
+- The inclusive-range record encoding + metadata semantics (`ipset_binary.c`) as
+  the INDEX payload.
+- `optimize`'s sort+sweep and the op sweeps as interval-map split/merge sites
+  (~5 sites).
+- `uint128.h` as the generic-width seam for v4/v6 unification.
+- `tests.d/` as the shared conformance corpus; `run-tests.sh` `IPRANGE_BIN` hook.
+
+Risk and blast radius:
+
+- v4/v6 hand-duplication multiplies every core change ×2 unless unified (D-A).
+- libification refactors (globals→ctx, ~84 `exit()` sites→errors, stdout→callback,
+  DNS lifecycle) are wide in C (D-E).
+- **Signed ≠ safe**: a signed file still needs structural bounds-checking before
+  offsets are trusted (FlatBuffers CVE class; Cap'n Proto traversal limits) —
+  verify structure → verify signature → read.
+- Go parity on compute-heavy set algebra (5–10% band; I/O-bound ops are fine).
+- Legacy binary format read-compatibility.
 
 Sensitive data handling plan:
 
@@ -103,6 +165,65 @@ Sensitive data handling plan:
   Durable artifacts here cite only non-identifying measurements and generic host
   descriptions; host/endpoint/credential details stay in the parent
   `~/src/firehol/AGENTS.md`, never in this public repo.
+
+Implementation plan (Phase 1 — pending decisions; each chunk → detail in a Phase-1 SOW):
+
+1. Resolve D-A/D-B/D-E; write the portable format spec (sectioned, signed, mmap,
+   fixed-endian, dual-stack) reusing the existing record encoding.
+2. C: format reader (mmap, sorted-range zero-alloc lookup, structural
+   bounds-check) + writer (streaming + header backpatch); refactor scope per D-E.
+3. Generalize the range structure with an interned `value_id` at the ~5
+   coalescing/boundary sites; unify v4/v6 per D-A.
+4. Conformance harness: reuse `tests.d/` for CLI byte-identical (drop whitespace
+   flags) + JSON-lines op-level driver with per-language failure lists + 4-bucket
+   reporting.
+5. Benchmark harness: deterministic large corpora; wall-time + RSS + per-language
+   alloc; 5–10% parity gate.
+6. Rust then Go to green against the corpus + within the perf band (C = oracle).
+
+Validation plan:
+
+- 3-way byte-identical conformance over `tests.d/` (+ op-level driver corpus).
+- Benchmark parity within 5–10%; alloc/RSS reported.
+- Format reader fuzzing/bounds-check (malformed + hostile offsets); signature
+  verification tests.
+- Round-trip + mmap zero-copy tests; existing ASan/MSan/TSan suites.
+
+Artifact impact plan:
+
+- AGENTS.md: add project skills once the harness/build workflow is concrete.
+- Specs: refresh `design-iprange-engine.md` with grounding refinements after
+  decisions land (endianness, lookup structure, v4/v6 unification, signed≠safe).
+- Runtime project skills: candidates — conformance/bench harness; C build/sanitizer;
+  format invariants — once concrete.
+- End-user docs: `wiki/` updates when the format/CLI surface changes.
+- SOW lifecycle: split Phase 1 into an executable SOW once decisions are made.
+
+Open-source reference evidence:
+
+- maxmind/MaxMind-DB (spec) + maxmind/libmaxminddb; oschwald/maxminddb-golang.
+- google/flatbuffers (internals; issues #9040, #8002); capnproto/capnproto.
+- protocolbuffers/protobuf (`conformance/`); WebAssembly/testsuite + WebAssembly/wabt.
+- Lookup: DPDK/dpdk (`lib/lpm/`), DXR (Zec/Rizzo/Mikuc), Poptrie (Asai/Ohara
+  SIGCOMM'15), SAIL.
+- (Commits to be pinned when used as implementation evidence in the Phase-1 SOW.)
+
+Open decisions (block a `ready` gate; need user input):
+
+- **D-A — v4/v6 unification:** unify behind a generic integer width (one algorithm,
+  `uint128.h` seam) vs keep the hand-duplicated `*6` family. Rec: unify.
+- **D-B — Endianness:** fixed **little-endian** (native on x86/ARM → true
+  zero-copy) vs big-endian (MMDB/network precedent). Rec: little-endian.
+- **D-C — Conformance harness:** reuse `tests.d/` (CLI byte-identical) + add a
+  JSON-lines op-level driver, vs build fresh. Rec: reuse + extend.
+- **D-D — stderr/diagnostic parity:** require Rust/Go to reproduce C's diagnostic
+  wording verbatim vs relax conformance to exit-code + structured result.
+  Rec: structured result.
+- **D-E — C libification scope/sequence:** reader-lib first (small–medium) then
+  full set-algebra lib (large), refactoring existing C in place vs a fresh C
+  engine. Rec: reader-lib first, refactor in place, staged.
+- **O3 — index representation:** explicit `{start,end,value_id}` (rec) vs breakpoints.
+- **O4 — membership-set encoding:** interned sorted id-lists (rec) vs bitset.
 
 ## Implications And Decisions
 
@@ -125,18 +246,79 @@ Open (low-level, settle at implementation):
 - O3: index representation — explicit `{start,end,value_id}` recommended.
 - O4: membership-set encoding — interned sorted id-lists recommended.
 
+### Decisions locked post-grounding (2026-06-21)
+
+**Language architecture pivot — Rust is the single engine; native C is dropped.**
+
+- **N-1 (revised 2026-06-21 per Costa):** **Two full native libraries — Rust and
+  Go — with 100% feature parity.** Both implement the complete engine (format + set
+  algebra + lookup). Rust also produces a C library (`cdylib`/`staticlib` +
+  cbindgen) so C consumers use Rust. The Go library is **pure Go, no cgo** (hard
+  constraint). Consumers: `netflow.plugin` (Rust) + `network-viewer.plugin` (C, via
+  Rust's C library) → Rust; `go.d.plugin` (Go) + `update-ipsets` (Go) → Go. Go
+  consumers need full operations, not just lookups.
+- **N-2:** legacy C `iprange` retained only as the **behavioral oracle** to seed
+  the golden conformance corpus, then retired.
+- **N-3:** **cgo is NOT acceptable for `go.d.plugin`.** It is acceptable for the
+  `update-ipsets` server (not `go.d.plugin`); the producer may call the Rust engine
+  via cgo, or stay pure-Go by subprocessing the Rust `iprange` CLI. Producer
+  mechanism deferred to the update-ipsets adoption SOW.
+- **N-4:** format reader has three modes — metadata-only, mmap read-only view,
+  owned-mutable — and reads both the new format and legacy v1.0/v2.0.
+
+Revisions to the original spec decisions:
+
+- D-1 (3 native libs) → **2 full native libs: Rust + Go, 100% parity; C via Rust's
+  C library** (native C dropped).
+- D-3 (parity) → parity is **Rust ↔ Go across ALL operations** (5–10% target). The
+  heavy set-algebra parity is a **real risk for Go** (GC); the shared harness tracks
+  it per operation; if an op can't reach 5–10%, surface numbers and decide.
+- D-6 (oracle) → legacy C = retiring oracle; **Rust = reference impl**.
+- **D-A = unify** (trivial in Rust via generics over an `Ip` trait `u32`/`u128`).
+- **D-B = little-endian** + natural alignment (sections cast to `u32[]`/`u128[]`,
+  zero byte-swap on x86/ARM).
+- **D-C = reuse `tests.d/` + op-level driver** (protobuf-style length-prefixed
+  stdin/stdout, spawn-once-loop; `TIME` command reuses the pipe for benchmarks).
+- **D-D = structured result** (exit-code + canonical output; no verbatim diagnostics).
+- **O3 = explicit `{start,end,value_id}`. O4 = interned sorted id-lists.**
+
+Format refinements from prior art (Step 1 inputs):
+
+- Front magic+version+endianness → typed-section **directory** `{kind, offset:u64,
+  length, sha256}` → 8/16-byte-aligned sections → metadata/signature trailer.
+- **Ed25519** over header+directory (per-section sha256 → verify + mmap a single
+  section without hashing the whole file). **Signed ≠ safe**: bounds-check structure
+  → verify signature → read.
+- Lookup = **sorted disjoint ranges + binary search** baseline (uniform v4/v6, mmap
+  zero-alloc); optional DIR-24-8-style v4 accel / Poptrie v6 are additive under the
+  directory (no format break) — defer.
+
 ## Plan
 
-1. Phase 1 — engine + single-feed format (C oracle) + conformance/benchmark
-   harness; Rust + Go to green within 5–10%.
-2. Phase 2 — merged multi-feed format (catalog + merged index + per-feed dossiers
-   + feed-id registry).
-3. Phase 3 — update-ipsets adoption: replace `pkg/iprange`; migrate overlap
-   matrix, then age/retention. (Independent quick win: raise `max_ingest_workers`.)
-4. Phase 4 — update-ipsets SDK (Rust + Go) embedding `iprange`.
-5. Phase 5 — Netdata consumes the SDK → real-time IP annotation.
+Rust-core build, in three steps (each its own SOW; **Step 1 = SOW-0002**):
 
-Each phase will get its own SOW (or this SOW split) before implementation.
+1. **Step 1 — Format library** (Rust): read + write the portable sectioned/signed
+   binary format; three read modes (metadata-only, mmap read-only, owned-mutable);
+   reads legacy v1.0/v2.0 too. → `SOW-0002`.
+2. **Step 2 — Processing engine** (Rust): `IntervalMap<V>` over a generic `Ip`
+   width (u32/u128); set operations (optimize/merge/intersect/exclude/diff/reduce/
+   compare) generalized with interned per-range values.
+3. **Step 3 — iprange CLI** (Rust): backwards-compatible with the legacy C CLI
+   (verbs/flags/output/exit codes + legacy binary read), validated byte-for-byte
+   against the legacy C oracle via `tests.d/`.
+
+Each of the three steps is built in **both Rust and Go** (Rust as the reference,
+Go to match), producing identical files and results. Cross-cutting: the shared
+conformance + benchmark harness (same tests run on both libraries); the C library
+that Rust exposes for the C consumer.
+
+Downstream (later SOWs, intent unchanged):
+
+4. Merged multi-feed format (catalog + merged index + per-feed dossiers + feed-id
+   registry).
+5. update-ipsets adoption (replace `pkg/iprange`; overlap matrix, then retention;
+   independent quick win: raise `max_ingest_workers`).
+6. update-ipsets SDK (Rust + Go, both full) → Netdata consumes it.
 
 ## Execution Log
 
@@ -146,6 +328,13 @@ Each phase will get its own SOW (or this SOW split) before implementation.
 - Investigated `update-ipsets` (4 subagents, excluding `pkg/iprange`) + measured
   the live daemon's per-phase profile.
 - Authored the design spec; bootstrapped repo (cross-tool files) and SOW system.
+- Grounded in the C `iprange` oracle + external prior art (5 parallel analyses:
+  data model, binary format, build/lib-shape, tests/harness, prior-art). Filled
+  the Pre-Implementation Gate; surfaced decisions D-A..D-E.
+- Locked the architecture: **Rust-core engine; native C dropped (Rust C ABI for C
+  consumers); pure-Go reader/lookup with NO cgo in go.d.plugin**. Recorded
+  N-1..N-4; resolved D-A..D-E/O3/O4. Restructured into 3 steps; created SOW-0002
+  (Step 1 — format library).
 - No implementation started.
 
 ## Validation
@@ -162,8 +351,11 @@ Pending.
 
 ## Followup
 
-- Next action: ground in the C `iprange` oracle, then fill the Pre-Implementation
-  Gate and split Phase 1 into an executable SOW.
+- Grounding done (2026-06-21). Next action: user decides the open gate decisions
+  (D-A v4/v6 unification, D-B endianness, D-C conformance harness, D-D stderr
+  parity, D-E C libification scope, O3 index rep, O4 set encoding). Then split
+  Phase 1 into an executable SOW with a `ready` gate and refresh the design spec
+  with the grounding refinements.
 
 ## Regression Log
 
