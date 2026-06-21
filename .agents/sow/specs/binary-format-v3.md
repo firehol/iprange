@@ -40,12 +40,14 @@ the *slot* is reserved, §11).
 
 - **Scalar integers** (`u8/u16/u32/u64`) are **little-endian**. (Native on x86/ARM;
   big-endian hosts byte-swap scalars — a small, documented penalty.)
-- **IP keys are stored as fixed-width big-endian (network-order) byte arrays**:
-  4 bytes for IPv4, 16 bytes for IPv6. **Comparison is bytewise (memcmp-order),
-  which equals numeric order.** This is identical in C/Rust/Go and needs **no
-  128-bit integer type** on the lookup hot path — directly avoiding Go's missing
-  `u128`. (128-bit arithmetic is only needed producer-side for counts; Rust uses
-  `u128`, Go uses a `{hi,lo}` helper.)  ← **KEY DECISION (review me).**
+- **IP keys are stored as fixed-width little-endian integers and compared
+  numerically:** IPv4 = one `u32`; IPv6 = two `u64` — `hi` then `lo`, where `hi` is
+  the most-significant 64 bits. A 128-bit comparison is "compare `hi`, then on a tie
+  compare `lo`" — **two plain integer comparisons, no 128-bit type required**
+  (handles Go's missing `u128`), and byte-identical across C/Rust/Go. (128-bit
+  *arithmetic* — only producer-side, for unique-IP counts — uses `u128` in Rust and
+  a `{hi,lo}` helper in Go.)  ← **KEY DECISION (confirmed 2026-06-21: integer-pair
+  compare, not bytewise — per Costa).**
 - **Ranges are inclusive** on both ends `[start, end]` (matches legacy C
   `network_addr_t{addr,broadcast}`). A single IP is `start==end`.
 - **Alignment:** every section begins at an offset that is a multiple of its
@@ -148,8 +150,8 @@ Each record (IPv4: 16 bytes; IPv6: 40 bytes):
 
 | Field | v4 size | v6 size | Notes |
 |---|---:|---:|---|
-| `start` | 4 | 16 | big-endian IP (network order) |
-| `end` | 4 | 16 | big-endian IP, inclusive |
+| `start` | 4 | 16 | little-endian; v4 = `u32`; v6 = `u64 hi` then `u64 lo` |
+| `end` | 4 | 16 | same encoding; inclusive |
 | `value_id` | 4 | 4 | index into the values table (`0xFFFFFFFF` = no value / "present, no label") |
 | `pad` | 4 | 4 | =0 (keeps 8/16-byte alignment) |
 
@@ -159,8 +161,8 @@ Normative invariants (a reader MUST verify; a writer MUST guarantee):
   merged). Tie-break/secondary sort: by `end` then `value_id` (deterministic →
   byte-identical output across implementations).
 - `start <= end` for every record.
-- a point lookup = bytewise binary search for the record whose `[start,end]`
-  contains the key.
+- a point lookup = numeric binary search (compare `hi` then `lo` for v6) for the
+  record whose `[start,end]` contains the key.
 
 **Unique-IP count overflow (IPv6):** the true count can reach `2^128`, which does
 not fit in 64 bits. The header carries `unique_ip_count_lo` (low 64 bits) plus a
@@ -233,14 +235,14 @@ A reader MUST, before trusting anything:
 ## 16. Reader modes (recap)
 
 - **metadata-only:** header + directory + feed-meta (front pages only).
-- **mmap read-only:** map index (+values), bytewise binary-search lookups,
-  zero allocation on the hot path.
+- **mmap read-only:** map index (+values), numeric binary-search lookups
+  (compare `hi` then `lo` for v6), zero allocation on the hot path.
 - **owned-mutable:** parse into in-memory structures for editing/rewriting.
 
 ## 17. Open items (need a decision or measurement)
 
-- Key-storage of IP keys big-endian + bytewise compare (§3) — confirm. *(Rec: yes;
-  it removes the Go u128 problem on the hot path.)*
+- IP keys as little-endian integer pairs, compared numerically (§3) — **confirmed
+  (per Costa, 2026-06-21).**
 - Exact caps in §15 (defaults).
 - Whether legacy read is in Step 1 or deferred.
 - Phase-2 feed identity: numeric registry vs interned names (§13).

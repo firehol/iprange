@@ -32,8 +32,9 @@ Facts (from SOW-0001 decisions + design review):
   cgo); native C dropped (Rust exposes a C library for C consumers).
 - The format spec is the gate; it is drafted and must be reviewed/locked first.
 - Signing is deferred — only the signature **slot** is reserved.
-- IP keys are stored big-endian and compared bytewise → **no 128-bit integer
-  needed on the lookup hot path** (handles Go's missing `u128`).
+- IP keys are little-endian integers compared numerically (v6 = two `u64`, `hi`
+  then `lo`) → **no 128-bit integer needed on the lookup hot path** (handles Go's
+  missing `u128`).
 
 Unknowns: a few format sub-decisions flagged "OPEN" in the format spec §17.
 
@@ -44,8 +45,9 @@ Go matches. Signing is **not** implemented (slot reserved only).
 
 - Format spec `binary-format-v3.md` reviewed and locked.
 - **Writer:** streaming body + fixed-header backpatch; sections; little-endian
-  scalars; big-endian IP keys; dual-stack; reserves the (empty) signature section.
-- **Reader, three modes:** metadata-only · mmap read-only (zero-alloc bytewise
+  scalars; little-endian integer IP keys; dual-stack; reserves the (empty)
+  signature section.
+- **Reader, three modes:** metadata-only · mmap read-only (zero-alloc numeric
   binary-search lookups) · owned-mutable.
 - **Safety (normative, format spec §15):** structural bounds-checks with
   overflow-safe arithmetic + resource caps; malformed/hostile input never crashes
@@ -75,7 +77,7 @@ in SOW-0001's gate; the format contract is now `binary-format-v3.md`.
 Implementation plan (re-sliced; Rust first, then Go):
 
 - **1A — Lock the format.** Review `binary-format-v3.md`; resolve its §17 OPEN
-  items (confirm big-endian-key/bytewise-compare; set caps; legacy-read timing).
+  items (set caps; legacy-read timing — IP-key integer-pair compare is confirmed).
   No code. *(This SOW's prerequisite; the draft exists.)*
 - **1B — Rust library (reference).** Writer (streaming + backpatch) + reader
   (metadata-only, mmap read-only) + structural validation/caps + tests
@@ -103,8 +105,8 @@ Open decisions: format-spec §17 items (resolve in 1A). No others block starting
 ## Implications And Decisions
 
 Inherits SOW-0001's locked decisions + the 2026-06-21 review outcomes. Signing
-deferred (slot reserved). Big-endian IP keys + bytewise compare is the key new
-sub-decision (format spec §3) — confirm in 1A.
+deferred (slot reserved). IP keys as little-endian integer pairs compared
+numerically (format spec §3) is confirmed (per Costa, 2026-06-21).
 
 ## Plan
 
