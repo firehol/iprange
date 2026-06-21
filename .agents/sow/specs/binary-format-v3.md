@@ -224,20 +224,40 @@ record dump). Big-endian-written legacy files were already rejected by the C too
 v3 reader inherits that limit (documented). Legacy support is read-only and may be
 deferred to a later step.
 
-## 15. Resource limits & safety (normative — even with signing deferred)
+## 15. Safety & integrity (normative — even with signing deferred)
+
+**No artificial size limits.** The format supports files as large as the user
+wants — that is the point of mmap. There is **no maximum** on IPs, ranges,
+sections, or file size. Safety comes from **consistency with the real file size,
+not from arbitrary caps.**
 
 A reader MUST, before trusting anything:
-- `fstat`; refuse non-regular files; reject if real size ≠ `file_size`.
-- enforce caps (configurable, with safe defaults): max file size, max
-  `directory_count`, max section length, max `entry_count`, max value-table size.
-- check every `offset`/`length` with **overflow-safe** arithmetic
-  (`offset + length` must not overflow and must be ≤ `file_size`); reject
-  overlapping sections; check alignment.
-- only after structural checks pass, map/read sections. Verify the whole file once
-  at download/install; then trust the local immutable file (no per-lookup
-  re-hash). Publishers MUST publish atomically (temp file → fsync → rename).
-- a malformed file must **never** crash, over-allocate, or read out of bounds
+- `fstat` the file; refuse non-regular files; require the header `file_size` to
+  equal the actual size.
+- Validate every `offset`/`length`/count with **overflow-safe arithmetic**, each
+  required to fit within the **actual file size**: `offset + length` must not
+  overflow and must be ≤ real size; `directory_count × 56 ≤ size`;
+  `entry_count × record_size == index_length`. A claim the bytes don't back up is
+  rejected — this bounds everything to reality with **no fixed ceiling**.
+- **Never pre-allocate from an unverified claimed count.** In mmap mode nothing is
+  allocated for the data (the file is mapped and accessed in-bounds), so a genuine
+  huge file is fine and a lying header is harmless. In owned-mutable mode, size
+  allocations only from counts already validated against the real file size, and
+  grow incrementally.
+- Reject overlapping sections; check alignment.
+- Only after structural checks pass, map/read sections. (When signing lands:)
+  verify the whole file once at download/install, then trust the local immutable
+  file. Publishers MUST publish atomically (temp file → fsync → rename).
+- A malformed file must **never** crash, over-allocate, or read out of bounds
   (fuzzed in tests).
+
+A consumer MAY set an **optional** self-imposed ceiling for its environment (e.g.
+a small IoT device), but the **default is unlimited**.
+
+**Platform note (not a format limit):** on 32-bit hosts the virtual address space
+(~2–3 GB) limits how much can be mmap'd at once; such hosts use a pread/windowed
+fallback for very large files. On 64-bit hosts (the norm) there is no practical
+limit.
 
 ## 16. Reader modes (recap)
 
@@ -250,8 +270,9 @@ A reader MUST, before trusting anything:
 
 - IP keys as little-endian integer pairs, compared numerically (§3) — **confirmed
   (per Costa, 2026-06-21).**
-- Exact caps in §15 (defaults).
-- Whether legacy read is in Step 1 or deferred.
+- Size caps (§15) — **resolved (per Costa): no artificial caps; bounded only by
+  the real file size; optional per-consumer ceiling, default unlimited.**
+- Legacy read timing — **resolved (default): deferred to last (sub-step 1D).**
 - Phase-2 feed identity: numeric registry vs interned names (§13).
 - **Index layout: records (array-of-structs) vs columns (struct-of-arrays).** SoA
   = separate `starts[]`, `ends[]`, `value_ids[]` arrays, so a binary search scans
