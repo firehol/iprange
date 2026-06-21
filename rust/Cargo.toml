@@ -16,6 +16,7 @@ repository = "https://github.com/firehol/iprange"
 # default-features off keeps sha2 no_std (its `digest`/`Sha256` API needs no std).
 sha2 = { version = "0.10", default-features = false }
 memmap2 = "0.9"
+libc = "0.2"
 
 # Release-profile: the format library is on the hot path for consumers (netflow,
 # network-viewer). Keep overflow checks on in debug; rely on the spec's overflow-safe

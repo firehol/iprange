@@ -3,6 +3,7 @@ package iprangeformat
 import (
 	"crypto/sha256"
 	"slices"
+	"unicode/utf8"
 )
 
 // FeedMeta holds the six feed-meta fields (§7), in order. Strings must be valid
@@ -15,6 +16,15 @@ type FeedMeta struct {
 	MaintainerURL string
 	SourceURL     string
 	License       string
+}
+
+func (m FeedMeta) validateUTF8() error {
+	for _, f := range []string{m.Name, m.Category, m.Maintainer, m.MaintainerURL, m.SourceURL, m.License} {
+		if !utf8.ValidString(f) {
+			return errInvalidInput("feed-meta field is not valid UTF-8")
+		}
+	}
+	return nil
 }
 
 func (m FeedMeta) encode() []byte {
@@ -110,6 +120,16 @@ func valueKey(v *Value) string {
 func (w *Writer[K]) Build() ([]byte, error) {
 	var zero K
 
+	// Reject inputs the reader would refuse, so a Go-built file is never one Rust
+	// would refuse to build: feed-meta MUST be valid UTF-8 (§7), and license_flags
+	// MUST NOT set reserved bits (§7). (Rust's String guarantees the former.)
+	if err := w.meta.validateUTF8(); err != nil {
+		return nil, err
+	}
+	if w.license&^licenseFlagDontRedist != 0 {
+		return nil, errInvalidInput("license_flags sets reserved bits")
+	}
+
 	// (1) sort by start (starts are unique once disjointness is enforced below).
 	rs := slices.Clone(w.ranges)
 	slices.SortFunc(rs, func(a, b rangeInput[K]) int { return a.start.cmp(b.start) })
@@ -153,10 +173,11 @@ func (w *Writer[K]) Build() ([]byte, error) {
 			if id, seen := dedup[key]; seen {
 				valueID = id
 			} else {
-				id := uint32(len(valuesOrder))
-				if id == valueIDNone {
+				// reject before the uint32 cast can wrap (>= sentinel is too many).
+				if uint64(len(valuesOrder)) >= uint64(valueIDNone) {
 					return nil, errInvalidInput("more than 2^32-1 distinct values")
 				}
+				id := uint32(len(valuesOrder))
 				dedup[key] = id
 				valuesOrder = append(valuesOrder, r.value)
 				valueID = id

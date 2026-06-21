@@ -60,6 +60,7 @@ dependencies = [
 name = "iprange-format"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "memmap2",
  "serde",
  "serde_json",

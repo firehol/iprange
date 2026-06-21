@@ -136,6 +136,13 @@ impl<K: IpKey> Writer<K> {
 
     /// Produce the complete v3 file bytes, or an error if the input is not encodable.
     pub fn build(mut self) -> Result<Vec<u8>> {
+        // license_flags MUST NOT set reserved bits (§7) — fail at write time rather
+        // than emit a file the reader rejects. (Feed-meta is UTF-8 by construction:
+        // the fields are `String`.)
+        if self.license_flags & !spec::LICENSE_FLAG_DONT_REDISTRIBUTE != 0 {
+            return Err(Error::InvalidInput("license_flags sets reserved bits"));
+        }
+
         // (1) sort by start.
         self.ranges.sort_by(|a, b| a.0.cmp(&b.0));
 

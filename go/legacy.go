@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/big"
 	"strconv"
+	"unicode/utf8"
 )
 
 // Legacy is a parsed legacy iprange binary file (v1.0 IPv4 / v2.0 IPv6), read for
@@ -163,6 +164,9 @@ func parseLegacyV4(res *Legacy, body []byte, n int, le, optimized bool, uniqueSt
 	if !okp {
 		return errInvalidInput("legacy unique ips not a number")
 	}
+	if unique.Sign() < 0 || unique.BitLen() > 64 {
+		return errInvalidInput("legacy v4 unique ips exceeds u64") // matches Rust's u64 parse
+	}
 	if big.NewInt(int64(len(ranges))).Cmp(unique) > 0 {
 		return errInvalidInput("legacy unique ips < records")
 	}
@@ -197,6 +201,9 @@ func parseLegacyV6(res *Legacy, body []byte, n int, le, optimized bool, uniqueSt
 	unique, okp := new(big.Int).SetString(uniqueStr, 10)
 	if !okp {
 		return errInvalidInput("legacy unique ips not a number")
+	}
+	if unique.Sign() < 0 || unique.BitLen() > 128 {
+		return errInvalidInput("legacy v6 unique ips exceeds u128") // matches Rust's u128 parse
 	}
 	if big.NewInt(int64(len(ranges))).Cmp(unique) > 0 {
 		return errInvalidInput("legacy unique ips < records")
@@ -268,8 +275,12 @@ func readLegacyLine(b []byte, pos *int) (string, error) {
 	if nl < 0 {
 		return "", errInvalidInput("legacy header line missing newline")
 	}
+	line := b[start : start+nl]
+	if !utf8.Valid(line) {
+		return "", errInvalidInput("legacy header line not UTF-8")
+	}
 	*pos = start + nl + 1
-	return string(b[start : start+nl]), nil
+	return string(line), nil
 }
 
 func stripPrefix(line, prefix string) (string, bool) {

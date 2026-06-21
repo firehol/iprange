@@ -186,7 +186,9 @@ mod tests {
         assert_eq!(align_up(17, 8), Some(24));
         // overflow guard: prev_end > MAX - (align-1) is unrepresentable.
         assert_eq!(align_up(MAX_U64, 16), None);
-        assert_eq!(align_up(MAX_U64 - 15, 16), Some(MAX_U64 - 15)); // already aligned? no
+        // MAX-15 (0xFFFF..F0) is already 16-aligned and is the largest representable
+        // input (== MAX-(align-1)), so it maps to itself rather than overflowing.
+        assert_eq!(align_up(MAX_U64 - 15, 16), Some(MAX_U64 - 15));
     }
 
     #[test]

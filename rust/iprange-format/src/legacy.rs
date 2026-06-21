@@ -211,10 +211,12 @@ fn validate_v6(ranges: &[(Ipv6Key, Ipv6Key)], optimized: bool, unique_ips: u128)
             if w > 0 && s <= ranges[w - 1].1 {
                 return Err(Error::Invariant("legacy optimized records not sorted/disjoint"));
             }
-            // size = e - s + 1; the full-space single range would overflow u128 — the
-            // legacy format can express it, but our v3 writer rejects it later anyway.
-            let size = e.to_u128().wrapping_sub(s.to_u128()).wrapping_add(1);
-            sum = sum.wrapping_add(size);
+            // size = e - s + 1, checked. e >= s holds (per-record check), so the
+            // subtraction cannot underflow; only the full IPv6 space overflows +1.
+            let size = (e.to_u128() - s.to_u128())
+                .checked_add(1)
+                .ok_or(Error::InvalidInput("legacy range covers the entire IPv6 space"))?;
+            sum = sum.checked_add(size).ok_or(Error::Overflow("legacy unique ips sum"))?;
         }
         if sum != unique_ips {
             return Err(Error::InvalidInput("legacy unique ips != sum of ranges"));

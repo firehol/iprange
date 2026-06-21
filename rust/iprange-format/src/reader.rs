@@ -324,7 +324,7 @@ impl<'a> Reader<'a> {
             values_count = validate_values(&bytes[voff as usize..(voff + vlen) as usize])?;
         }
 
-        Ok(Reader {
+        let r = Reader {
             bytes,
             header,
             ip_version,
@@ -333,7 +333,12 @@ impl<'a> Reader<'a> {
             record_count: sub.record_count,
             values: sections.values.map(|(o, l)| (o as usize, l as usize)),
             values_count,
-        })
+        };
+        // step 7: validate feed-meta content eagerly, so both open() and
+        // open_metadata_only() are a complete structural gate (not deferred to the
+        // feed_meta() accessor).
+        r.feed_meta()?;
+        Ok(r)
     }
 
     /// Step 11 — per-record safety walk in a single forward pass.
@@ -350,6 +355,7 @@ impl<'a> Reader<'a> {
         let mut walked = 0u64;
         let mut prev_end: Option<K> = None;
         let mut any_value = false;
+        let mut unique: u128 = 0; // recomputed unique-IP count (§5 SHOULD)
         let mut i = 0usize;
         while i < recs.len() {
             let r = crate::wire::Record::<K>::decode(&recs[i..])?; // checks v6 pad==0
@@ -368,12 +374,26 @@ impl<'a> Reader<'a> {
                 }
                 any_value = true;
             }
+            // accumulate the unique-IP count; a full-IPv6-space range is
+            // unrepresentable in the 128-bit header, so reject it.
+            let size = K::range_size(r.start, r.end)
+                .ok_or(Error::Invariant("range covers the entire IPv6 space"))?;
+            unique = unique
+                .checked_add(size)
+                .ok_or(Error::Overflow("unique_ip_count recompute"))?;
             prev_end = Some(r.end);
             walked += 1;
             i += K::RECORD_SIZE;
         }
         if walked != self.record_count {
             return Err(Error::Invariant("walked record count != entry_count"));
+        }
+        // recomputed unique-IP count MUST match the header (catches header-field
+        // corruption that section hashes — which do not cover the header — cannot).
+        let header_unique =
+            (u128::from(self.header.unique_ip_count_hi) << 64) | u128::from(self.header.unique_ip_count_lo);
+        if unique != header_unique {
+            return Err(Error::Invariant("unique_ip_count != recomputed sum"));
         }
         // "used ⇒ present" is covered above (value_id < values_count, which is 0 when
         // the section is absent). Reject a non-sentinel use with no values section.
@@ -531,8 +551,8 @@ fn validate_values(b: &[u8]) -> Result<u32> {
         if pos + blen > b.len() {
             return Err(Error::Structural("values entry bytes past section"));
         }
-        if type_id == 1 && (blen == 0 || blen % 4 != 0) {
-            return Err(Error::Invariant("type_id 1 membership set malformed"));
+        if type_id == 1 {
+            validate_membership_set(&b[pos..pos + blen])?;
         }
         pos += blen;
     }
@@ -542,12 +562,35 @@ fn validate_values(b: &[u8]) -> Result<u32> {
     Ok(count)
 }
 
-/// Memory-mapped file reader (the §15 open/`fstat`/probe safety lives here).
+/// Validate a `type_id == 1` membership set (§10): non-empty, a multiple of 4 bytes,
+/// and strictly-ascending little-endian `u32` feed-ids. A reader MUST enforce this on
+/// untrusted files — the writer guarantees it, but a hand-crafted file might not.
+fn validate_membership_set(b: &[u8]) -> Result<()> {
+    if b.is_empty() || b.len() % 4 != 0 {
+        return Err(Error::Invariant("type_id 1 membership set malformed"));
+    }
+    let mut prev: Option<u32> = None;
+    for chunk in b.chunks_exact(4) {
+        let id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        if let Some(p) = prev {
+            if id <= p {
+                return Err(Error::Invariant("type_id 1 feed-ids not strictly ascending"));
+            }
+        }
+        prev = Some(id);
+    }
+    Ok(())
+}
+
+/// Memory-mapped file reader (Unix). Implements the §15 mmap-safety steps:
+/// `O_NOFOLLOW` open, `fstat` the open fd, refuse non-regular/sparse files, re-`fstat`
+/// after mapping to catch replacement, and probe the last byte to surface truncation.
 #[cfg(feature = "mmap")]
 pub mod mmap {
     use super::*;
     use std::fs::File;
-    use std::os::unix::fs::FileExt;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
     use std::path::Path;
 
     /// An mmap'd file whose bytes can be handed to [`Reader::open`].
@@ -557,30 +600,44 @@ pub mod mmap {
     }
 
     impl MmapFile {
-        /// Open and map `path` read-only, applying the §15 mmap-safety steps: `fstat`
-        /// the open fd, refuse non-regular files, and probe the last byte after
-        /// mapping so a truncation surfaces here rather than on a hot lookup.
-        ///
-        /// (Symlink hardening via `O_NOFOLLOW`/`openat2` and hole detection are TODO
-        /// for the next pass; this is the minimal safe-open. See §15.)
+        /// Open and map `path` read-only with the §15 mmap-safety steps. On any
+        /// safety failure (symlink, sparse hole, truncation, or replacement during
+        /// open) it returns an error; the caller can fall back to reading the file
+        /// into a `Vec<u8>` and using [`Reader::open`]. The caller remains responsible
+        /// for a trusted parent directory (hardlinks / intermediate symlinks).
         pub fn open(path: &Path) -> Result<MmapFile> {
-            let file = File::open(path)?;
+            // O_NOFOLLOW refuses an attacker-controlled symlink at the final component.
+            let file = File::options()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(path)?;
+            let fd = file.as_raw_fd();
+            // fstat the OPEN fd (never re-stat by path) — TOCTOU-safe.
             let meta = file.metadata()?;
-            if !meta.is_file() {
+            if !meta.file_type().is_file() {
                 return Err(Error::Structural("not a regular file"));
             }
             let len = meta.len();
             if len < u64::from(spec::HEADER_SIZE) {
-                return Err(Error::FileTooShort {
-                    need: u64::from(spec::HEADER_SIZE),
-                    have: len,
-                });
+                return Err(Error::FileTooShort { need: u64::from(spec::HEADER_SIZE), have: len });
             }
-            // SAFETY: we keep the File alive via the mapping's fd; the file is opened
-            // read-only. We treat the bytes as immutable input and never write.
+            // Hole detection: a hole inside a mapped section SIGBUSes despite bounds
+            // checks. SEEK_HOLE from 0 must report the first hole at EOF (== len).
+            // SAFETY: fd is a valid open descriptor for the lifetime of `file`.
+            let hole = unsafe { libc::lseek(fd, 0, libc::SEEK_HOLE) };
+            if hole < 0 || hole as u64 != len {
+                return Err(Error::Structural("sparse file (hole) — read via bytes, not mmap"));
+            }
+            // SAFETY: read-only mapping of a file we treat as immutable; never written.
             let map = unsafe { memmap2::Mmap::map(&file)? };
-            // Probe the last byte so a post-fstat truncation faults here (catchable),
-            // not on a later lookup. pread past EOF returns 0 (§15).
+            // Re-fstat after mapping: reject if size/inode/device changed (the file was
+            // replaced between the first fstat and the mmap).
+            let meta2 = file.metadata()?;
+            if meta2.len() != len || meta2.ino() != meta.ino() || meta2.dev() != meta.dev() {
+                return Err(Error::Structural("file changed during mmap (TOCTOU)"));
+            }
+            // Probe the last mapped byte: a residual truncation faults here (catchable),
+            // not on a hot lookup. pread past EOF returns 0, not SIGBUS — check the count.
             let mut b = [0u8; 1];
             match file.read_at(&mut b, len - 1) {
                 Ok(1) => {}
@@ -696,13 +753,60 @@ mod tests {
     }
 
     #[test]
-    fn tamper_index_byte_fails_hash() {
+    fn tamper_index_byte_rejected() {
         let bytes = build_v4();
         let h = Reader::open(&bytes).unwrap();
         let idx_off = h.index_records.0;
         let mut bytes2 = bytes.clone();
-        bytes2[idx_off] ^= 0xff; // flip a record byte; hash must fail
+        bytes2[idx_off] ^= 0xff; // flip a record's start byte
+        // The safety walk (sortedness / recomputed unique-IP count) catches this
+        // before the hash step; either way the file MUST be rejected.
+        assert!(Reader::open(&bytes2).is_err());
+    }
+
+    #[test]
+    fn tamper_value_byte_fails_hash() {
+        // A flipped byte inside an opaque (type_id 2) value passes the structural
+        // walk (which doesn't inspect value content) and is caught by §15 step 12.
+        let bytes = build_v4(); // second range carries a type_id 2 value {7}
+        let r = Reader::open(&bytes).unwrap();
+        let (voff, _vlen) = r.values.expect("values section present");
+        let mut bytes2 = bytes.clone();
+        // values layout: count(4) | type_id(4) | byte_length(4) | bytes... — so the
+        // first entry's payload byte is at voff+12.
+        bytes2[voff + 12] ^= 0xff;
         assert!(matches!(Reader::open(&bytes2), Err(Error::IntegrityFailed(_))));
+    }
+
+    #[test]
+    fn reader_rejects_non_ascending_membership_set() {
+        let mut w = Writer::<Ipv4Key>::new(meta(), 0, 0);
+        let body = [1u32.to_le_bytes(), 5u32.to_le_bytes()].concat(); // ascending ids
+        w.add_range(Ipv4Key(10), Ipv4Key(20), Some(Value { type_id: 1, bytes: body })).unwrap();
+        let bytes = w.build().unwrap();
+        let r = Reader::open(&bytes).unwrap();
+        let (voff, _) = r.values.expect("values present");
+        // payload (count4|type4|len4|bytes) ids at voff+12 (id0) and voff+16 (id1);
+        // rewrite to [5, 1] (non-ascending) — validate_values (pre-hash) must reject.
+        let mut b2 = bytes.clone();
+        b2[voff + 12] = 5;
+        b2[voff + 16] = 1;
+        assert!(matches!(Reader::open(&b2), Err(Error::Invariant(_))));
+    }
+
+    #[test]
+    fn reader_rejects_corrupted_unique_count() {
+        let bytes = build_v4();
+        let mut b2 = bytes.clone();
+        b2[56] ^= 0xff; // unique_ip_count_lo (header offset 56) — header is not hashed
+        assert!(matches!(Reader::open(&b2), Err(Error::Invariant(_))));
+    }
+
+    #[test]
+    fn writer_rejects_reserved_license_flags() {
+        let mut w = Writer::<Ipv4Key>::new(meta(), 0b10, 0); // reserved bit set
+        w.add_range(Ipv4Key(1), Ipv4Key(2), None).unwrap();
+        assert!(matches!(w.build(), Err(Error::InvalidInput(_))));
     }
 
     #[test]

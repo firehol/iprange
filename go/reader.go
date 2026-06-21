@@ -257,6 +257,11 @@ func parseStructure(b []byte) (*Reader, error) {
 
 	r.feedMetaOff = int(feedMeta[0])
 	r.feedMetaLen = int(feedMeta[1])
+	// step 7: validate feed-meta content eagerly so both Open and OpenMetadataOnly
+	// are a complete structural gate (not deferred to the FeedMeta accessor).
+	if _, err := r.FeedMeta(); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -275,6 +280,7 @@ func walkIndex[K ipKey[K]](r *Reader) error {
 	var prevEnd K
 	havePrev := false
 	anyValue := false
+	var uniqLo, uniqHi uint64 // recomputed unique-IP count (§5 SHOULD)
 	for i := 0; i < len(recs); i += rs {
 		rec, err := decodeRecord[K](recs[i:])
 		if err != nil {
@@ -292,12 +298,25 @@ func walkIndex[K ipKey[K]](r *Reader) error {
 			}
 			anyValue = true
 		}
+		szLo, szHi, ok := rec.start.rangeSize(rec.end)
+		if !ok {
+			return errInvariant("range covers the entire IPv6 space")
+		}
+		var of bool
+		uniqLo, uniqHi, of = add128(uniqLo, uniqHi, szLo, szHi)
+		if of {
+			return errOverflow("unique_ip_count recompute")
+		}
 		prevEnd = rec.end
 		havePrev = true
 		walked++
 	}
 	if walked != r.recordCount {
 		return errInvariant("walked record count != entry_count")
+	}
+	// recomputed unique-IP count MUST match the header (the header is not hashed).
+	if uniqLo != r.hdr.uniqueIPCountLo || uniqHi != r.hdr.uniqueIPCountHi {
+		return errInvariant("unique_ip_count != recomputed sum")
 	}
 	if anyValue && !r.valuesPresent {
 		return errStructural("value_id used but no values section")
@@ -445,8 +464,10 @@ func validateValues(b []byte) (uint32, error) {
 		if pos+blen > len(b) {
 			return 0, errStructural("values entry bytes past section")
 		}
-		if typeID == 1 && (blen == 0 || blen%4 != 0) {
-			return 0, errInvariant("type_id 1 membership set malformed")
+		if typeID == 1 {
+			if err := validateMembershipSet(b[pos : pos+blen]); err != nil {
+				return 0, err
+			}
 		}
 		pos += blen
 	}
@@ -454,6 +475,24 @@ func validateValues(b []byte) (uint32, error) {
 		return 0, errStructural("values section length not exact")
 	}
 	return count, nil
+}
+
+// validateMembershipSet enforces the §10 type_id==1 rule on an untrusted file:
+// non-empty, a multiple of 4 bytes, strictly-ascending little-endian u32 feed-ids.
+func validateMembershipSet(b []byte) error {
+	if len(b) == 0 || len(b)%4 != 0 {
+		return errInvariant("type_id 1 membership set malformed")
+	}
+	var prev uint32
+	first := true
+	for i := 0; i < len(b); i += 4 {
+		id := le.Uint32(b[i:])
+		if !first && id <= prev {
+			return errInvariant("type_id 1 feed-ids not strictly ascending")
+		}
+		prev, first = id, false
+	}
+	return nil
 }
 
 // ToWriterV4 reconstructs an editable IPv4 Writer from this file (owned-mutable).

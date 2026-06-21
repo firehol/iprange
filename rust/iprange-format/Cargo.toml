@@ -13,12 +13,14 @@ default = ["std", "mmap"]
 # key arithmetic, and (de)serialization core stay usable without it (core + alloc).
 std = ["alloc"]
 alloc = []
-# `mmap`: the zero-copy memory-mapped read-only reader (pulls in memmap2).
-mmap = ["std", "dep:memmap2"]
+# `mmap`: the zero-copy memory-mapped read-only reader (Unix; pulls in memmap2 + libc
+# for the §15 O_NOFOLLOW / hole-detection / fstat hardening).
+mmap = ["std", "dep:memmap2", "dep:libc"]
 
 [dependencies]
 sha2 = { workspace = true }
 memmap2 = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 # Test-only: the conformance harness parses the language-neutral JSON manifests.
 # These do NOT affect the shipped library's dependency set.
