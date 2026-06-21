@@ -30,6 +30,9 @@ pub mod wire;
 #[cfg(feature = "alloc")]
 pub mod writer;
 
+#[cfg(feature = "alloc")]
+pub mod legacy;
+
 pub use error::{Error, Result};
 pub use key::{Ipv4Key, Ipv6Key};
 pub use reader::{FeedMetaView, Hit, Reader, ValueRef};

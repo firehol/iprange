@@ -59,4 +59,12 @@ cross-language byte-identity guard.
 
 Add `cases/<name>.json`, run the regenerate command once to mint
 `golden/<name>.iprbin` (for `bytes` cases), eyeball the result, then commit both.
-The Go harness (added with the Go implementation) reads the same files.
+The Go harness reads the same files.
+
+## Legacy fixtures (`legacy/`)
+
+`legacy/<name>.bin` are **real** `iprange --print-binary` outputs (legacy v1.0 IPv4 /
+v2.0 IPv6), each with a `legacy/<name>.json` manifest listing the expected decoded
+ranges and header metadata. Both the Rust (`tests/legacy.rs`) and Go
+(`legacy_test.go`) legacy readers parse these and must agree, then migrate them to v3
+and read the result back. Format: `.agents/sow/specs/legacy-binary-format.md`.

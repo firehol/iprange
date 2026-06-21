@@ -20,9 +20,17 @@ workstation, ~±30% run-to-run noise): build Rust ~53–59 vs Go ~93 ns/range
 **keep the Go writer** (decision pending Costa's confirmation). Benches:
 `rust .../tests/speed.rs` (`#[ignore]`) + `go TestSpeedReport`, same workload.
 
-Commits: `59df113`/`720abec`/`f2937cf`/`c74885d` (1B), this commit (1C). **Owned-
-mutable** (a 1D item) landed with 1B/1C. **Remaining: the legacy-read part of 1D**
-(read legacy v1/v2 for migration). Next: **1D legacy read**, then close the SOW.
+Commits: `59df113`/`720abec`/`f2937cf`/`c74885d` (1B), `db39f1a` (1C).
+
+**1D COMPLETE — all of Step 1 is implemented.** Legacy read: a verified spec
+(`.agents/sow/specs/legacy-binary-format.md`) of the legacy v1.0/v2.0
+`iprange --print-binary` format; **real fixtures** generated from the built legacy C
+`iprange` (`conformance/legacy/*.bin` + JSON manifests); Rust (`src/legacy.rs`) and Go
+(`go/legacy.go`) legacy readers that parse those real artifacts to identical ranges
+(incl. the v6 lo↔hi transposition) and migrate them to v3. Owned-mutable landed with
+1B/1C. **Step 1 status: 1A+1B+1C+1D all done; cross-language byte-identity proven.**
+Pending: offer the external-reviewer panel on the complete library, then formally
+close the SOW (Validation/Outcome/Lessons).
 
 ---
 
@@ -228,6 +236,18 @@ Decisions (approved 2026-06-21, after round 10):
     since it is shared by both language implementations (Option A, JSON manifests):
     `conformance/cases/<name>.json` + `conformance/golden/<name>.iprbin`
     (Rust-produced goldens) + `conformance/README.md` (schema, for the Go harness).
+
+### 1C/1D decisions (approved 2026-06-21)
+
+- **D12 — Keep the Go writer.** The early speed check put Go at ~1.7× (build) /
+  ~1.9× (lookup) of Rust — under the SOW-0001 2× "drop Go writer" threshold. Full
+  Go parity (read + write) is retained.
+- **D13 — License stays `GPL-2.0-or-later`** (matches the iprange repo). Not switching
+  to a permissive SDK license at this time.
+- **D14 — Do 1D legacy read.** Implement reading the **legacy iprange v2.0 binary
+  format** (`--print-binary` output: text header `BINARY_HEADER_V20` + endianness
+  marker + fixed records, per `src/ipset_binary.c` / `src/ipset6_binary.c`) for
+  migration, in both Rust and Go, validated by a shared corpus of legacy fixtures.
 
 ### 1B progress (2026-06-21)
 

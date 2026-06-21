@@ -1,0 +1,13 @@
+{
+  "name": "v4-optimized",
+  "ip_version": "v4",
+  "file": "v4-optimized.bin",
+  "optimized": true,
+  "unique_ips": "528",
+  "lines": 3,
+  "ranges": [
+    { "start": "10.0.0.0", "end": "10.0.0.255" },
+    { "start": "11.0.0.0", "end": "11.0.0.15" },
+    { "start": "192.0.2.0", "end": "192.0.2.255" }
+  ]
+}

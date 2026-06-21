@@ -1,0 +1,12 @@
+{
+  "name": "v6-optimized",
+  "ip_version": "v6",
+  "file": "v6-optimized.bin",
+  "optimized": true,
+  "unique_ips": "65792",
+  "lines": 2,
+  "ranges": [
+    { "start": "2001:db8::", "end": "2001:db8::ffff" },
+    { "start": "2001:db8:1::", "end": "2001:db8:1::ff" }
+  ]
+}

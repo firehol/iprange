@@ -1,0 +1,11 @@
+{
+  "name": "v4-single",
+  "ip_version": "v4",
+  "file": "v4-single.bin",
+  "optimized": true,
+  "unique_ips": "256",
+  "lines": 1,
+  "ranges": [
+    { "start": "203.0.113.0", "end": "203.0.113.255" }
+  ]
+}
