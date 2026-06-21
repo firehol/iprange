@@ -48,6 +48,12 @@ the *slot* is reserved, §11).
   *arithmetic* — only producer-side, for unique-IP counts — uses `u128` in Rust and
   a `{hi,lo}` helper in Go.)  ← **KEY DECISION (confirmed 2026-06-21: integer-pair
   compare, not bytewise — per Costa).**
+- **One family per file; IPv4 is NEVER widened to 128-bit.** The header
+  `ip_version` flag fixes the family: an IPv4 file uses 4-byte keys throughout, an
+  IPv6 file uses 16-byte keys. "Unify v4/v6" means the *algorithm* is written once
+  and specialized per width by the compiler (Rust/Go generics) — it does **not**
+  mean storing IPv4 as 128-bit. The common IPv4 case stays compact and cache-dense
+  (this mirrors the legacy C `ipset` vs `ipset6` split).
 - **Ranges are inclusive** on both ends `[start, end]` (matches legacy C
   `network_addr_t{addr,broadcast}`). A single IP is `start==end`.
 - **Alignment:** every section begins at an offset that is a multiple of its
@@ -146,14 +152,15 @@ skip-unknown rule (§6).
 Index sub-header (32 bytes): `u32 record_size`, `u32 key_width` (4 or 16),
 `u64 record_count`, `u64 value_table_section_kind` (=3), `u64 reserved`.
 
-Each record (IPv4: 16 bytes; IPv6: 40 bytes):
+Each record (**IPv4: 12 bytes; IPv6: 40 bytes**) — IPv4 keys are 32-bit, never
+widened:
 
 | Field | v4 size | v6 size | Notes |
 |---|---:|---:|---|
 | `start` | 4 | 16 | little-endian; v4 = `u32`; v6 = `u64 hi` then `u64 lo` |
 | `end` | 4 | 16 | same encoding; inclusive |
 | `value_id` | 4 | 4 | index into the values table (`0xFFFFFFFF` = no value / "present, no label") |
-| `pad` | 4 | 4 | =0 (keeps 8/16-byte alignment) |
+| `pad` | 0 | 4 | v4 needs none (4-byte aligned); v6 pads to 8-byte alignment |
 
 Normative invariants (a reader MUST verify; a writer MUST guarantee):
 - records sorted by `start` ascending; **disjoint** (no overlap); for the
@@ -246,3 +253,8 @@ A reader MUST, before trusting anything:
 - Exact caps in §15 (defaults).
 - Whether legacy read is in Step 1 or deferred.
 - Phase-2 feed identity: numeric registry vs interned names (§13).
+- **Index layout: records (array-of-structs) vs columns (struct-of-arrays).** SoA
+  = separate `starts[]`, `ends[]`, `value_ids[]` arrays, so a binary search scans
+  only the dense `starts[]` (16 IPv4 starts per 64-byte cache line) and reads
+  `end`/`value_id` once at the hit. Better cache use (esp. IPv4) at the cost of a
+  slightly more complex layout. Decide via the early benchmark (1B/1C).
