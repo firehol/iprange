@@ -153,6 +153,11 @@ fn parse_v6_records(body: &[u8], n: usize) -> Result<Vec<(Ipv6Key, Ipv6Key)>> {
         if addr > bcast {
             return Err(Error::Invariant("legacy record addr > broadcast"));
         }
+        // a full-IPv6-space range (size 2^128) is unrepresentable in v3 — reject it
+        // here so both languages fail at the legacy layer, not at migration.
+        if addr.hi == 0 && addr.lo == 0 && bcast.hi == u64::MAX && bcast.lo == u64::MAX {
+            return Err(Error::InvalidInput("legacy range covers the entire IPv6 space"));
+        }
         out.push((addr, bcast));
     }
     Ok(out)
@@ -237,4 +242,44 @@ fn parse_prefixed(line: &str, prefix: &str) -> Result<u64> {
     strip_prefix(line, prefix)?
         .parse()
         .map_err(|_| Error::InvalidInput("legacy header numeric field malformed"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal legacy v2.0 file with a single record [addr16 || bcast16].
+    fn legacy_v6(unique: &str, addr: [u8; 16], bcast: [u8; 16]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 1\nbytes 36\nlines 1\nunique ips ");
+        b.extend_from_slice(unique.as_bytes());
+        b.push(b'\n');
+        b.extend_from_slice(&MARKER_LE);
+        b.extend_from_slice(&addr);
+        b.extend_from_slice(&bcast);
+        b
+    }
+
+    #[test]
+    fn rejects_full_ipv6_space() {
+        // full space [::, ffff:..:ffff]: legacy saturates the count to 2^128-1.
+        let bytes = legacy_v6(
+            "340282366920938463463374607431768211455",
+            [0u8; 16],
+            [0xFFu8; 16],
+        );
+        assert!(matches!(parse(&bytes), Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn rejects_big_endian_marker() {
+        let mut bytes = legacy_v6("256", [0u8; 16], {
+            let mut e = [0u8; 16];
+            e[0] = 0xff; // lo low byte -> a tiny non-zero range end
+            e
+        });
+        let marker_off = bytes.len() - 32 - 4;
+        bytes[marker_off..marker_off + 4].copy_from_slice(&[0x1A, 0x2B, 0x3C, 0x4D]); // BE marker
+        assert!(matches!(parse(&bytes), Err(Error::InvalidInput(_))));
+    }
 }

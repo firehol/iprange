@@ -216,7 +216,10 @@ func (w *Writer[K]) Build() ([]byte, error) {
 	sections = append(sections, sect{kindSignature, nil}) // empty, last
 
 	directoryCount := uint32(len(sections))
-	dirBytesLen := uint64(directoryCount) * dirEntrySize
+	dirBytesLen, ok := mul64(uint64(directoryCount), dirEntrySize)
+	if !ok {
+		return nil, errOverflow("directory size")
+	}
 	cursor, ok := add64(headerSize, dirBytesLen)
 	if !ok {
 		return nil, errOverflow("directory end")

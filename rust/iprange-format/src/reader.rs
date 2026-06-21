@@ -637,8 +637,16 @@ pub mod mmap {
             // checks. SEEK_HOLE from 0 must report the first hole at EOF (== len).
             // SAFETY: fd is a valid open descriptor for the lifetime of `file`.
             let hole = unsafe { libc::lseek(fd, 0, libc::SEEK_HOLE) };
-            if hole < 0 || hole as u64 != len {
-                return Err(Error::Structural("sparse file (hole) — read via bytes, not mmap"));
+            if hole < 0 {
+                // SEEK_HOLE unsupported on this filesystem (e.g. EINVAL/ENXIO). Per
+                // §15, a reader without hole detection MUST not mmap — the caller
+                // should read the file into a Vec and use Reader::open instead.
+                return Err(Error::Structural(
+                    "hole detection unavailable on this filesystem — use Reader::open on bytes, not mmap",
+                ));
+            }
+            if hole as u64 != len {
+                return Err(Error::Structural("sparse file (hole detected) — use Reader::open on bytes, not mmap"));
             }
             // SAFETY: read-only mapping of a file we treat as immutable; never written.
             let map = unsafe { memmap2::Mmap::map(&file)? };

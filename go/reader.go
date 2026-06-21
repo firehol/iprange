@@ -126,7 +126,6 @@ func parseStructure(b []byte) (*Reader, error) {
 	r := &Reader{bytes: b, hdr: hdr, ipVer: ipVer}
 	var feedMeta, index, signature *[2]uint64 // (offset, length)
 	var values *[2]uint64
-	dupMandatory := map[uint32]bool{}
 	prevEnd := dirEnd
 	var prevRank uint64
 	for i := uint64(0); i < dirCount; i++ {
@@ -175,30 +174,30 @@ func parseStructure(b []byte) (*Reader, error) {
 			return nil, errStructural("sections not in canonical order")
 		}
 		prevRank = rank
+		// Track the known sections; a non-nil slot means a duplicate of that kind.
 		loc := &[2]uint64{e.offset, e.length}
 		switch e.kind {
 		case kindFeedMeta:
-			if dupMandatory[e.kind] {
+			if feedMeta != nil {
 				return nil, errStructural("duplicate mandatory section")
 			}
 			feedMeta = loc
 		case kindIndex:
-			if dupMandatory[e.kind] {
+			if index != nil {
 				return nil, errStructural("duplicate mandatory section")
 			}
 			index = loc
 		case kindValues:
-			if dupMandatory[e.kind] {
+			if values != nil {
 				return nil, errStructural("duplicate mandatory section")
 			}
 			values = loc
 		case kindSignature:
-			if dupMandatory[e.kind] {
+			if signature != nil {
 				return nil, errStructural("duplicate mandatory section")
 			}
 			signature = loc
 		}
-		dupMandatory[e.kind] = true
 		prevEnd = end
 	}
 	if prevEnd != hdr.fileSize {

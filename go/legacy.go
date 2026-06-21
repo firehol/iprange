@@ -190,6 +190,11 @@ func parseLegacyV6(res *Legacy, body []byte, n int, optimized bool, uniqueStr st
 		if addr.cmp(bcast) > 0 {
 			return errInvariant("legacy record addr > broadcast")
 		}
+		// a full-IPv6-space range (size 2^128) is unrepresentable in v3 — reject it
+		// here so both languages fail at the legacy layer, not at migration.
+		if addr.Hi == 0 && addr.Lo == 0 && bcast.Hi == maxUint64 && bcast.Lo == maxUint64 {
+			return errInvalidInput("legacy range covers the entire IPv6 space")
+		}
 		ranges = append(ranges, [2]Ipv6Key{addr, bcast})
 	}
 	unique, okp := new(big.Int).SetString(uniqueStr, 10)

@@ -59,3 +59,37 @@ func TestWriterRejectsInvalidUTF8FeedMeta(t *testing.T) {
 		t.Fatal("expected rejection of invalid-UTF-8 feed-meta")
 	}
 }
+
+func legacyV6Bytes(unique string, addr, bcast [16]byte) []byte {
+	var b []byte
+	b = append(b, []byte("iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 1\nbytes 36\nlines 1\nunique ips ")...)
+	b = append(b, unique...)
+	b = append(b, '\n')
+	b = append(b, 0x4D, 0x3C, 0x2B, 0x1A) // LE marker
+	b = append(b, addr[:]...)
+	b = append(b, bcast[:]...)
+	return b
+}
+
+func TestLegacyRejectsFullV6Space(t *testing.T) {
+	var addr, bcast [16]byte
+	for i := range bcast {
+		bcast[i] = 0xFF
+	}
+	// full space [::, ffff:..:ffff]; legacy saturates unique to 2^128-1.
+	b := legacyV6Bytes("340282366920938463463374607431768211455", addr, bcast)
+	if _, err := ParseLegacy(b); err == nil {
+		t.Fatal("expected rejection of full IPv6 space at the legacy layer")
+	}
+}
+
+func TestLegacyRejectsBigEndianMarker(t *testing.T) {
+	var addr, bcast [16]byte
+	bcast[0] = 0xff
+	b := legacyV6Bytes("256", addr, bcast)
+	mo := len(b) - 32 - 4
+	b[mo], b[mo+1], b[mo+2], b[mo+3] = 0x1A, 0x2B, 0x3C, 0x4D // BE marker
+	if _, err := ParseLegacy(b); err == nil {
+		t.Fatal("expected rejection of big-endian marker")
+	}
+}
