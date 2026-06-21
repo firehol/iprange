@@ -33,11 +33,14 @@ sections are pending a full refresh. Authoritative decision record:
   shared test corpus + benchmark harness surfaces this per operation.
 - **v4/v6 are unified** via generics over an integer width (`u32`/`u128`) in both
   languages — written once per library, not duplicated.
-- **Format:** little-endian + natural alignment (sections cast directly to
-  `u32[]`/`u128[]`); typed-section **directory** `{kind, offset:u64, length,
-  sha256}`; **Ed25519** signature over header+directory; **bounds-check structure →
-  verify signature → read** ("signed ≠ safe"). Lookup = sorted-range binary search
-  baseline (optional DIR-24-8 v4 / Poptrie v6 accel are additive — deferred).
+- **Format:** little-endian; IP keys are integer pairs compared numerically (v6 =
+  two `u64` **hi-then-lo**, so a v6 key is **NOT** castable to a native `u128`; v4
+  `u32[]` may be cast only on an endianness-matching, suitably-aligned host —
+  otherwise parse field-by-field); typed-section **directory** `{kind, offset:u64,
+  length, sha256}`; **Ed25519** signature over header+directory; **bounds-check
+  structure → verify signature → read** ("signed ≠ safe"). Lookup = sorted-range
+  binary search baseline (optional DIR-24-8 v4 / Poptrie v6 accel are additive —
+  deferred). Authoritative byte-level contract: `binary-format-v3.md`.
 - **Build order = three steps:** (1) format library, (2) processing engine,
   (3) backwards-compatible CLI. Step 1 = `SOW-0002`.
 

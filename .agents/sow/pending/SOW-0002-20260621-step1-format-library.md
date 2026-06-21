@@ -4,9 +4,19 @@
 
 Status: open
 
-Sub-state: Re-sliced after the design review. Byte-level format spec drafted
-(`.agents/sow/specs/binary-format-v3.md`). Awaiting user go-ahead to implement.
-No code started. Parent: SOW-0001.
+Sub-state: **Sub-step 1A (lock the format) COMPLETE — format LOCKED after 12
+external-review rounds** on 2026-06-21 (rounds 3–12 unbiased / no fix-list, per
+user; per the P0/P1/P2 iteration policy below). Byte layout frozen since round 3
+(header 72, dir entry 72, index sub-header 32, v4 record 12, v6 record 40 —
+re-verified every round, 12×). Convergence: **0 P0 since round 6**; rounds 10–12 all
+0 P0 with only clarity/forward-compat/implementer-guidance findings; **round 12
+unanimous "ready to implement" across all 5 reviewers** (glm, deepseek, minimax,
+qwen, mimo). Signing (§11) and phase-2 multi-feed (§13) are explicitly NON-NORMATIVE
+/ out-of-scope for v3.0. Residual implementer-guidance (Rust `#[repr(C,packed)]` /
+`read_unaligned`, C-consumer packing, O(N)-walk cost notes, the binary-search/
+coalescing pseudocode) is deferred to **1B** where the two implementations + shared
+conformance corpus validate it empirically. Next: **1B — Rust library** (path D8
+Option 2). Parent: SOW-0001.
 
 ## Requirements
 
@@ -108,6 +118,77 @@ Inherits SOW-0001's locked decisions + the 2026-06-21 review outcomes. Signing
 deferred (slot reserved). IP keys as little-endian integer pairs compared
 numerically (format spec §3) is confirmed (per Costa, 2026-06-21).
 
+### Format spec external review + decisions (2026-06-21)
+
+`binary-format-v3.md` was reviewed by 5 external reviewers (glm, minimax, kimi,
+deepseek, qwen; mimo produced no usable output). Consensus: the **design is
+sound** (sectioned, little-endian, mmap-first, two-`u64` IPv6 compare verified
+against legacy C `uint128.h` — nothing on the hot path needs 128-bit; no-caps
+safety model correct), but the **spec was not yet lockable** — two independent
+implementations would not have produced byte-identical files. ~7 critical + ~14
+high gaps, almost all one-line normative fixes; one real bug (the §15 size check
+ignored the 32-byte index sub-header) and one factual error about legacy
+unique-IP overflow behavior (verified in round 2: legacy C is inconsistent — the
+in-memory IPv4 counter wraps, the IPv6 counter saturates at 2^128−1, the binary
+loader rejects; v3 sidesteps all three by representing the exact 128-bit count).
+
+User decisions (approved 2026-06-21), implemented in the spec rewrite that locks
+sub-step 1A:
+
+- **D1 — Section hash = full 32 bytes now** (directory entry 56→72 B). Permanent,
+  signing-ready; avoids a later breaking change. (Was 16-byte truncated SHA-256
+  = only 2^64 resistance, inadequate for a signed feed.)
+- **D2 — Add `unique_ip_count_hi` (u64) to the header** (header 64→72 B), so an
+  IPv6 count ≥ 2^64 is machine-readable; deletes the dangling "plus a flag".
+- **D3 — Lock array-of-structs (AoS) for v3.0** and **reserve section kind 6
+  (lookup-accelerator)** so a future SoA / DIR-24-8 / Poptrie layout is additive
+  (no format break). Closes the §17 open item that blocked the lock.
+- **D4 — Put machine-readable `license_flags` (bit0 `dont_redistribute`) in the
+  header** (repurposing the former `reserved0` at offset 36) so consumers gate
+  redistribution without parsing the body; the human-readable `license` token
+  string stays in feed-meta. Reconciles the design-spec Tier-0 intent.
+- **D5 — Remove the "strings" section from v3** (kind 4 → reserved); nothing uses
+  it in v3 (feed-meta and values are inline length-prefixed).
+- **D6 — Drop the header `optimized` flag** (bit1 → reserved=0); the index is
+  always sorted+coalesced, so the flag carried no information.
+
+Mechanical determinism/safety fixes applied in the same rewrite (no user
+decision needed): all reserved/pad fields MUST be zero (and are rejected if not);
+`value_id` bounds check; corrected §15 size check (`32 + record_count ×
+record_size == index.length`); `header.entry_count == index.record_count`;
+`align` validation (power of two, 8..4096); mandated canonical section order +
+minimum-padding rule; IPv6 coalescing defined incl. the `2^128-1` boundary;
+deterministic `value_id` assignment (sweep the sorted+coalesced index); dropped
+the redundant `value_table_section_kind`; "packed, no compiler padding" note +
+explicit IPv6 key byte layout; directory-region bounds/sortedness/non-overlap +
+verify index/values hashes at load; required-vs-optional sections + reject
+duplicate mandatory sections; values `type_id` registry (1 = membership set);
+signature `must_understand=0`; `header_size >= 72` guard; corrected the legacy
+overflow claim; mmap fd-not-path / atomic-rename / SIGBUS safety note.
+
+Validation: re-run the same 6 reviewers on the revised spec (same scope + fix
+notes), iterate until clean, before declaring 1A locked.
+
+### Review iteration policy + two more decisions (2026-06-21)
+
+Per Costa: **repeat unbiased reviews until a round yields only P3 findings; every
+P0/P1/P2 MUST be fixed before implementation** (P0=Critical, P1=High, P2=Medium,
+P3=Low). Reviews are not a waste — they de-risk a format three languages must agree
+on byte-for-byte. (Captured in memory `iterate-reviews-until-only-p3`.)
+
+Decisions (approved 2026-06-21, after round 10):
+- **D7 — `type_id=1` stays usable in v3.0 (Option 1).** The format library treats
+  value content as **opaque caller-supplied bytes**; byte-identical is defined over
+  identical input *bytes*. The feed-id *mapping/registry* (semantic) is the engine's
+  (Step 2) / phase-2 concern, not the format's. (Rejected the stricter "reject
+  `type_id=1` in v3.0" because it would strip the values/attribute machinery — the
+  format's key value-add — from v3.0; the single-process update-ipsets use case can
+  use it today with its own consistent mapping.)
+- **D8 — Path = Option 2:** a couple more focused unbiased rounds to drain genuine
+  P1/P2, then start **1B (Rust)**; residual clarity items are validated empirically
+  by the two implementations + shared conformance corpus (code is the strongest
+  remaining oracle for cross-impl divergence).
+
 ## Plan
 
 See Pre-Implementation Gate → sub-steps 1A–1D.
@@ -117,6 +198,25 @@ See Pre-Implementation Gate → sub-steps 1A–1D.
 ### 2026-06-21
 - Drafted; then re-sliced after the 7-reviewer design review. Byte-level format
   spec drafted (`binary-format-v3.md`). No code started.
+- **Format lock (sub-step 1A).** Ran the external reviewer panel over
+  `binary-format-v3.md` across **7 rounds** (glm, deepseek, minimax, qwen, mimo;
+  kimi dropped after repeated empty runs). Rounds 1–2 used a fix-list prompt;
+  rounds 3–7 used a clean from-scratch prompt (no fix-list) at the user's direction,
+  to keep each read unbiased. Outcome by round (real byte-contract findings, all
+  fixed): R1 ≈ 7 critical + 14 high (structural/safety); R2 confirmed 20/20 fixes
+  (one legacy-overflow factual correction); R3 ≈ 8 determinism gaps; R4 ≈ 3
+  (`header_size` pin, band ordering, lookup-disjoint) — a full-rewrite here
+  introduced one contradiction; R5 ≈ 4 subtler (interning tuple, full-space
+  overflow, circular sort key, the rewrite's trailing-header contradiction); R6 = 1
+  new (`must_understand` per known kind) + deferred-scope criticals; R7 = 2
+  procedure/wording (coalesce-on-content, safety-walk-vs-hash). Byte layout frozen
+  and re-verified every round. Lessons: (a) **surgical edits + own end-to-end
+  re-read** beat full rewrites — the round-4 rewrite caused the only self-inflicted
+  contradiction; (b) **unbiased (no fix-list) prompts** surfaced the determinism
+  gaps the verify-the-fixes framing masked; (c) detailing **deferred** signing in
+  §11 kept attracting "incomplete" findings until §11/§13 were explicitly marked
+  non-normative. Format **LOCKED**; design-spec `design-iprange-engine.md` §0
+  doc-synced (the stale "cast to u128" claim). Ready for 1B (Rust).
 
 ## Validation
 
