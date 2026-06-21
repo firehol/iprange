@@ -1,0 +1,60 @@
+# Guards the iprange v3 format libraries (rust/ + go/) against any host-endian
+# regression. The on-disk format is always little-endian; both libraries use
+# explicit little-endian (de)serialization that must byte-swap correctly on a
+# big-endian host. We prove that on s390x (big-endian): Rust under Miri (which
+# emulates target endianness) and Go cross-compiled and run under qemu-s390x.
+name: Big-endian
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - 'go/**'
+      - 'conformance/**'
+      - '.github/workflows/big-endian.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - 'go/**'
+      - 'conformance/**'
+      - '.github/workflows/big-endian.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  big-endian:
+    name: s390x reader/writer parity
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Install qemu-user-static (s390x emulation)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user-static
+
+      - name: Install Rust nightly + Miri
+        run: |
+          rustup toolchain install nightly --profile minimal --component miri,rust-src
+          rustup default nightly
+
+      - name: Rust — Miri on big-endian (s390x)
+        working-directory: rust
+        run: |
+          cargo miri test --target s390x-unknown-linux-gnu \
+            -p iprange-format --no-default-features --features std --lib
+
+      - name: Go — full suite under qemu-s390x (big-endian)
+        working-directory: go
+        env:
+          CGO_ENABLED: '0'
+          GOARCH: s390x
+          GOOS: linux
+        run: |
+          go test -exec qemu-s390x-static -count=1 ./...
