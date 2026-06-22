@@ -379,10 +379,24 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   documents the schema. The **Go port runs the same file**.
 - Verified: 45 lib tests + conformance pass; clippy `--all-features -D warnings` clean.
 
-Next: Step 2 — the **Go port** (`v4/go`): foundation + reader + writer + os, its own
-oracle, and the shared conformance corpus + byte-level **cross-read** goldens (Go reads
-Rust-written `.iprdb`, Rust reads Go-written). Then `export_v3` (§13) + fuzz; then
-external review to PRODUCTION GRADE.
+**2026-06-22 — Step 1g + Step 2: robustness/fuzz + Go port (done, verified).**
+- Robustness/fuzz (committed `f7fa67e`): `Reader::open`/`open_image` over truncations +
+  5000 bit-flips + arbitrary buffers never panic/loop/OOB; data-region flips are
+  detected or ignored, never silently accepted as a different tree.
+- **Go port** (`v4/go`, module `github.com/firehol/iprange/v4/go`, ~3584 lines): a
+  faithful translation of the Rust reference, mirroring v3/go idioms — pure-Go core
+  (no cgo, no deps), explicit little-endian (D8), `os.go` (unix) uses
+  `golang.org/x/sys`. Same layering: spec/crc32c/key/record/wire/node/reader/writer/os.
+  `FileWriter.Commit` uses the same dirty-page + two-fsync double-meta protocol.
+- **Verified by me** (not trusting the agent's report): `go build`/`go vet`/`gofmt -l`
+  clean; `go test ./...` green (fresh + `-race`); 14 behavioral conformance sub-cases;
+  oracle 6000 v4 + 3000 v6 ops; **cross-read** — the Go reader reads all 14 Rust-written
+  `.iprdb` goldens and matches `expect_scan` (proven adversarially: corrupting a golden
+  makes Go reject it with `ChecksumFailed`). The §12 cross-read criterion is met.
+
+Next: Step 3 — `export_v3` (§13, v4 → the v3 snapshot writer); then **external review**
+(glm/minimax/mimo/kimi/qwen/deepseek) of the complete Rust+Go implementation, iterating
+to the unanimous **PRODUCTION GRADE** vote.
 
 ## Validation
 
