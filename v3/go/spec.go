@@ -1,6 +1,6 @@
 // Package iprangeformat reads and writes the iprange v3 portable binary
 // threat-intel format. It is a pure-Go implementation that is byte-identical to the
-// Rust reference (rust/iprange-format); both pass the shared conformance corpus.
+// Rust reference (v3/rust/iprange-format); both pass the shared conformance corpus.
 //
 // The on-disk contract is specified in .agents/sow/specs/binary-format-v3.md.
 package iprangeformat

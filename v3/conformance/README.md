@@ -73,7 +73,7 @@ ranges within one feed must be disjoint, else the case is a `reject`.
 ## Running (Rust)
 
 ```
-cd rust && cargo test -p iprange-format --test conformance        # verify
+cd v3/rust && cargo test -p iprange-format --test conformance        # verify
 REGENERATE_GOLDENS=1 cargo test -p iprange-format --test conformance  # (re)write goldens
 ```
 

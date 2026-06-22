@@ -1,4 +1,4 @@
-# Guards the iprange v3 format libraries (rust/ + go/) against any host-endian
+# Guards the iprange v3 format libraries (v3/rust/ + v3/go/) against any host-endian
 # regression. The on-disk format is always little-endian; both libraries use
 # explicit little-endian (de)serialization that must byte-swap correctly on a
 # big-endian host. We prove that on s390x (big-endian): Rust under Miri (which
@@ -9,16 +9,16 @@ on:
   push:
     branches: [master]
     paths:
-      - 'rust/**'
-      - 'go/**'
-      - 'conformance/**'
+      - 'v3/rust/**'
+      - 'v3/go/**'
+      - 'v3/conformance/**'
       - '.github/workflows/big-endian.yml'
   pull_request:
     branches: [master]
     paths:
-      - 'rust/**'
-      - 'go/**'
-      - 'conformance/**'
+      - 'v3/rust/**'
+      - 'v3/go/**'
+      - 'v3/conformance/**'
       - '.github/workflows/big-endian.yml'
   workflow_dispatch:
 
@@ -45,13 +45,13 @@ jobs:
           rustup default nightly
 
       - name: Rust — Miri on big-endian (s390x)
-        working-directory: rust
+        working-directory: v3/rust
         run: |
           cargo miri test --target s390x-unknown-linux-gnu \
             -p iprange-format --no-default-features --features std --lib
 
       - name: Go — full suite under qemu-s390x (big-endian)
-        working-directory: go
+        working-directory: v3/go
         env:
           CGO_ENABLED: '0'
           GOARCH: s390x

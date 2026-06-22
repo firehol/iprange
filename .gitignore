@@ -34,5 +34,7 @@ packaging/iprange.spec
 *.tar.xz
 
 # Rust / Go workspaces (multi-language engine — Step 1+)
-rust/target/
-go/bin/
+v3/rust/target/
+v3/go/bin/
+v4/rust/target/
+v4/go/bin/
