@@ -301,8 +301,29 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   first delegated this to produced a narrative but made zero tool calls — created
   nothing; caught by a filesystem check, then built directly. Lesson recorded.)
 
-Next: Step 1b — the **reader** (mmap + pread fallback, flock(SH), §5.1 bootstrap +
-meta selection, recursive `validate_node`, `lookup`/`scan`).
+**2026-06-22 — Step 1b-i: reader core (byte-slice; done, green).**
+- `node.rs` — zero-copy `LeafView`/`BranchView` page views (offset arithmetic only).
+- `reader.rs` — `Reader::open(&[u8])`:
+  - §5.1 bootstrap: `select_active_meta` + `classify` (3-class — torn discard / intact-
+    incompatible fail-closed / valid; higher `txn_id` wins, static-identity agreement).
+  - §9 step 2 geometry: `total_pages` range, overflow-checked `total_pages·page_size`,
+    file-size multiple/≥, `tree_height ≤ 32`, height↔root consistency, root in range.
+  - §9 step 4 recursive `validate_node` (inherited `[lo,hi]`, depth/cycle defense,
+    page_type↔depth, leaf/branch occupancy, separators strictly increasing, children
+    distinct + in range, tail-zero, cross-leaf disjointness via threaded `prev_to`) +
+    the exact `record_count` check (§9 step 5).
+  - `lookup` (binary-search descent + leaf search), `scan` (in-order re-descend, D3);
+    both return the **borrowed** scope (zero-copy). Family-checked public API.
+- All zero-alloc: validation/scan recursion is bounded by `tree_height ≤ 32` (native
+  stack, no heap); hostile input is rejected with a typed error, never panics/OOB.
+- Verified: **29/29 tests pass** (10 new reader tests: single-leaf + two-level lookup/
+  scan, empty tree, torn-inactive-meta recovery, both-metas-corrupt reject,
+  incompatible-major fail-closed, unsorted-leaf reject, record_count mismatch, family
+  mismatch, truncation); clippy `-D warnings` clean; no_std build clean.
+
+Next: Step 1b-ii — the **OS layer** (open `O_NOFOLLOW|O_CLOEXEC`, `fstat`, `SEEK_HOLE`,
+`mmap` `MAP_SHARED`, `flock(LOCK_SH)`, §10/§11 hardening) wrapping this core; then the
+**writer** (COW B+tree, double-meta commit).
 
 ## Validation
 

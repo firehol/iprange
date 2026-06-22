@@ -31,12 +31,15 @@
 pub mod crc32c;
 pub mod error;
 pub mod key;
+pub mod node;
+pub mod reader;
 pub mod record;
 pub mod spec;
 pub mod wire;
 
 pub use error::{Error, Result};
 pub use key::{IpKey, Ipv4Key, Ipv6Key};
+pub use reader::Reader;
 pub use record::RecordRef;
 pub use spec::IpVersion;
 pub use wire::Meta;
