@@ -21,6 +21,7 @@ use core::marker::PhantomData;
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::node::{BranchView, LeafView};
+use crate::reader::Reader;
 use crate::record;
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::wire::{finalize_checksum, Meta, PageHeader};
@@ -78,6 +79,39 @@ impl<K: IpKey> Writer<K> {
         w.write_meta(0, 1, created_unixtime);
         w.write_meta(1, 0, created_unixtime);
         w
+    }
+
+    /// Open an existing committed image for mutation (§6.2): **fully validate** it with
+    /// the reader's §9 checks (the writer also reads untrusted bytes), then derive the
+    /// in-memory free set (§7) by walking the reachable tree. The image MUST have no
+    /// trailing pages beyond `total_pages` (the OS layer truncates those before calling).
+    pub fn open_image(image: Vec<u8>) -> Result<Writer<K>> {
+        let meta = {
+            let r = Reader::open(&image)?;
+            if K::VERSION != r.version() {
+                return Err(Error::InvalidInput("writer family mismatch"));
+            }
+            r.active_meta()
+        };
+        let record_size = spec::record_size(K::WIDTH as u8, meta.scope_width);
+        let mut w = Writer {
+            image,
+            active_meta: meta.pgno,
+            root_pgno: meta.root_pgno,
+            tree_height: meta.tree_height,
+            record_count: meta.record_count,
+            scope_width: meta.scope_width as usize,
+            record_size: record_size as usize,
+            leaf_max: spec::leaf_max(record_size),
+            branch_max: spec::branch_max(K::WIDTH as u8),
+            created_unixtime: meta.created_unixtime,
+            txn_id: meta.txn_id,
+            free: Vec::new(),
+            freed_this_txn: Vec::new(),
+            _k: PhantomData,
+        };
+        w.free = w.derive_free_set();
+        Ok(w)
     }
 
     /// `set([from,to]) = scope` unconditionally (§8, D11): clears the range, then
@@ -362,6 +396,31 @@ impl<K: IpKey> Writer<K> {
     #[inline]
     fn free_page(&mut self, pgno: u32) {
         self.freed_this_txn.push(pgno);
+    }
+
+    /// Derive the free set (§7): pages in `[2, total_pages)` not reachable from the
+    /// root. The image is already validated, so the walk is bounded and safe.
+    fn derive_free_set(&self) -> Vec<u32> {
+        let total = self.image.len() / PAGE_SIZE;
+        let mut used = vec![false; total];
+        used[0] = true; // META-A
+        used[1] = true; // META-B
+        if self.root_pgno != 0 {
+            self.mark_reachable(self.root_pgno, 1, &mut used);
+        }
+        (2..total as u32).filter(|&p| !used[p as usize]).collect()
+    }
+
+    fn mark_reachable(&self, pgno: u32, depth: u32, used: &mut [bool]) {
+        used[pgno as usize] = true;
+        if depth < self.tree_height {
+            let page = self.page(pgno);
+            let count = PageHeader::decode(page).entry_count as usize;
+            let b = BranchView::<K>::new(page, count);
+            for j in 0..b.child_count() {
+                self.mark_reachable(b.child(j), depth + 1, used);
+            }
+        }
     }
 
     // --- range mutation internals ---
@@ -819,6 +878,45 @@ mod tests {
         r.scan_v4(|f, t, s| got.push((f.0, t.0, s[0]))).unwrap();
         assert_eq!(got, oracle);
         assert_eq!(r.record_count(), oracle.len() as u64);
+    }
+
+    #[test]
+    fn reopen_validates_and_mutates() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        for i in 0..500u32 {
+            w.set(k(i * 10), k(i * 10 + 3), &[1]).unwrap();
+        }
+        w.commit(1);
+        let img = w.into_image();
+
+        // Reopen the committed image, derive the free set, mutate, recommit.
+        let mut w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.record_count(), 500);
+        for i in 0..250u32 {
+            w2.delete(k(i * 10), k(i * 10 + 3)).unwrap();
+        }
+        w2.set(k(99_999), k(100_000), &[7]).unwrap();
+        w2.commit(2);
+
+        let img2 = w2.into_image();
+        let r = Reader::open(&img2).unwrap();
+        assert_eq!(r.record_count(), 251); // 250 survivors + 1 new
+        assert_eq!(r.lookup_v4(k(2500)).unwrap(), Some(&[1u8][..])); // i=250 survives
+        assert_eq!(r.lookup_v4(k(5)).unwrap(), None); // i=0 deleted
+        assert_eq!(r.lookup_v4(k(99_999)).unwrap(), Some(&[7u8][..]));
+    }
+
+    #[test]
+    fn open_image_rejects_corruption() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(2), &[1]).unwrap();
+        w.commit(1);
+        let mut img = w.into_image();
+        // Corrupt the active meta's checksum-covered bytes ⇒ both metas can't both be
+        // valid / reachable tree mismatch ⇒ open_image must reject.
+        let n = img.len();
+        img[n - 100] ^= 0xFF; // a leaf-page byte
+        assert!(Writer::<Ipv4Key>::open_image(img).is_err());
     }
 
     #[test]

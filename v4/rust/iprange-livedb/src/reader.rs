@@ -105,6 +105,12 @@ impl<'a> Reader<'a> {
         self.meta.root_pgno == 0
     }
 
+    /// The validated active meta (for the writer's `open_image`, §6.2).
+    #[inline]
+    pub(crate) fn active_meta(&self) -> Meta {
+        self.meta
+    }
+
     /// Point lookup (IPv4). Errors if the file is not IPv4.
     #[inline]
     pub fn lookup_v4(&self, ip: Ipv4Key) -> Result<Option<&'a [u8]>> {
