@@ -166,6 +166,28 @@ func TestOpenImageRejectsCorruption(t *testing.T) {
 	}
 }
 
+func TestOpenImageRefusesNewerMinor(t *testing.T) {
+	w := CreateV4(1, 0)
+	must(t, w.Set(wk(1), wk(2), []byte{1}))
+	must(t, w.Commit(1))
+	img := append([]byte(nil), w.Image()...)
+	// Bump BOTH metas' version_minor to 1 (they share static identity) and re-checksum:
+	// a forward-compat file the reader accepts read-only, but the writer must refuse to
+	// mutate (§5.1). version_minor is a little-endian u16, so 1 -> bytes {1, 0}.
+	for p := 0; p < 2; p++ {
+		page := img[p*pageSize : (p+1)*pageSize]
+		page[metaVersionMinor] = 1
+		page[metaVersionMinor+1] = 0
+		finalizeChecksum(page)
+	}
+	if _, err := Open(img); err != nil {
+		t.Fatalf("reader must accept a newer minor (forward-compat): %v", err)
+	}
+	if _, err := OpenImageV4(img); err == nil {
+		t.Fatal("writer must refuse to mutate a newer-minor file")
+	}
+}
+
 // --- crash recovery (§6.3) ---
 
 func TestCrashBeforeMetaFlipKeepsOldTree(t *testing.T) {

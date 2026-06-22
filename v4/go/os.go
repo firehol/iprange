@@ -49,6 +49,12 @@ func flockExclusive(fd int, wait time.Duration) error {
 // MmapReader is a read-only mmap of a v4 file, holding LOCK_SH for its lifetime (§11).
 // Call Reader once and reuse the returned *Reader for many queries. Close releases the
 // mapping and the lock.
+//
+// Lock contract (§11): the mmap'd bytes are only valid while mapped under the lock, so an
+// MmapReader necessarily holds LOCK_SH across the caller's queries. This is the read
+// session's locked window — follow the open -> read -> Close model and keep it
+// short-lived; a writer's LOCK_EX is blocked while any reader holds LOCK_SH, so do not
+// retain an idle MmapReader.
 type MmapReader struct {
 	file *os.File // keeps the fd (and the shared lock) alive
 	data []byte   // the mmap'd bytes

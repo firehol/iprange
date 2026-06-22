@@ -417,8 +417,29 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   clean, no-default-features clean; Go build/vet/gofmt clean, full suite green (incl. the
   4 new Go robustness tests + cross-read of the 2 new goldens). Goldens dir 264 KB total.
 
-Next: re-run the full panel (with a directive prompt so kimi/minimax produce explicit
-verdicts) + fix-notes until **unanimous PRODUCTION GRADE**; then `export_v3` (§13).
+**2026-06-23 — Step 3: review rounds 2 & 3 + fixes (done, green).**
+- Round 2 (full panel): **4 explicit PRODUCTION GRADE** (mimo/deepseek/qwen/glm), all F1–F8
+  confirmed; glm found 1 valid P2 (meta reserved-tail not zero-checked) → fixed (commit
+  `eb3d01f`): classify rejects a non-zero `[meta_size, page_size)`, checking the file's
+  `meta_size` (forward-compat). kimi/minimax inconclusive (budget).
+- Round 3 (lean): glm **PRODUCTION GRADE**, confirmed the meta-tail fix, found 2 more
+  valid P2s → fixed: (a) the 2^32-page guard overflowed on 32-bit targets (now u64 math,
+  both langs); (b) the writer didn't refuse a `version_minor > 0` file for mutation —
+  committing would drop the newer minor's fields and corrupt it (§5.1) → `open_image`
+  now refuses (reader still accepts read-only). Plus a doc note on the `MmapReader`
+  LOCK_SH-during-reads contract (§11). New tests both langs.
+- **Reviewer-capability note:** kimi (kimi-k2.7) produced no usable output across 4
+  attempts; minimax (m3-coder) reasons carefully but never emits a final verdict within
+  its timeout (its partial analysis consistently found the code correct). Both are
+  incapable of completing a verdict for a review of this scale — a tooling limit, not a
+  finding. The 4 reviewers that **can** complete the review are unanimous PRODUCTION GRADE.
+- Verified after each fix: Rust 47 lib + conformance + 4 robustness, clippy
+  `--all-features -D warnings` clean, no-default-features clean; Go build/vet/gofmt + full
+  suite green.
+
+Open decision for the user: literal 6/6 unanimity is blocked only by kimi/minimax's
+inability to emit a verdict (zero blockers found by anyone). Next regardless: `export_v3`
+(§13) to close the SOW.
 
 ## Validation
 

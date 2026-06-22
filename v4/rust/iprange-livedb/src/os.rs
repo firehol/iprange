@@ -55,6 +55,12 @@ fn flock_exclusive(fd: i32, wait: Duration) -> Result<()> {
 
 /// A read-only `mmap` of a v4 file, holding `LOCK_SH` for its lifetime (§11). Call
 /// [`reader`](Self::reader) once and reuse the returned [`Reader`] for many queries.
+///
+/// **Lock contract (§11):** the mmap'd bytes are only valid while mapped under the lock,
+/// so an `MmapReader` necessarily holds `LOCK_SH` across the caller's queries. This *is*
+/// the read session's locked window — follow the **open → read → drop** model and keep it
+/// short-lived; a writer's `LOCK_EX` is blocked while any reader holds `LOCK_SH`, so do
+/// not retain an idle `MmapReader`.
 #[derive(Debug)]
 pub struct MmapReader {
     _file: File, // keeps the fd (and the shared lock) alive

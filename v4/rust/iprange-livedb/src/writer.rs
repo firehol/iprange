@@ -97,6 +97,15 @@ impl<K: IpKey> Writer<K> {
             }
             r.active_meta()
         };
+        // The writer implements exactly version_minor 0. It MUST refuse to mutate a file
+        // of a minor it does not fully implement (§5.1): committing would write a
+        // minor-0 meta and drop the newer minor's trailing fields. (The reader still
+        // accepts such files read-only — forward-compat.)
+        if meta.version_minor != spec::VERSION_MINOR {
+            return Err(Error::InvalidInput(
+                "writer cannot mutate a newer version_minor file",
+            ));
+        }
         // Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the
         // committed total_pages is authoritative and reachable pages are all below it.
         image.truncate(meta.total_pages as usize * PAGE_SIZE);
@@ -443,7 +452,9 @@ impl<K: IpKey> Writer<K> {
         if let Some(p) = self.free.pop() {
             Ok(p)
         } else {
-            if self.image.len() / PAGE_SIZE >= (1usize << 32) {
+            // u64 math so the `1 << 32` literal and the comparison are valid on 32-bit
+            // targets (where `usize` is 32-bit and `1usize << 32` would overflow).
+            if (self.image.len() / PAGE_SIZE) as u64 >= (1u64 << 32) {
                 return Err(Error::InvalidInput(
                     "file would exceed the 2^32-page limit",
                 ));
@@ -1042,6 +1053,31 @@ mod tests {
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), 2);
         assert_eq!(r.lookup_v4(k(2)).unwrap(), Some(&[2u8][..]));
+    }
+
+    #[test]
+    fn open_image_refuses_newer_minor() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(2), &[1]).unwrap();
+        w.commit(1).unwrap();
+        let mut img = w.into_image();
+        // Bump BOTH metas' version_minor to 1 (they share static identity) and
+        // re-checksum: a forward-compat file the reader accepts read-only, but which the
+        // writer MUST refuse to mutate (§5.1).
+        for p in 0..2 {
+            let page = &mut img[p * PAGE_SIZE..(p + 1) * PAGE_SIZE];
+            page[spec::META_VERSION_MINOR..spec::META_VERSION_MINOR + 2]
+                .copy_from_slice(&1u16.to_le_bytes());
+            finalize_checksum(page);
+        }
+        assert!(Reader::open(&img).is_ok(), "reader accepts a newer minor (forward-compat)");
+        assert!(
+            matches!(
+                Writer::<Ipv4Key>::open_image(img),
+                Err(Error::InvalidInput(_))
+            ),
+            "writer must refuse to mutate a newer-minor file"
+        );
     }
 
     #[test]

@@ -104,6 +104,13 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		return nil, errInvalidInput("writer family mismatch")
 	}
 	m := r.meta
+	// The writer implements exactly versionMinor 0. It MUST refuse to mutate a file of a
+	// minor it does not fully implement (§5.1): committing would write a minor-0 meta and
+	// drop the newer minor's trailing fields. (The reader still accepts such files
+	// read-only — forward-compat.)
+	if m.versionMinor != versionMinor {
+		return nil, errInvalidInput("writer cannot mutate a newer version_minor file")
+	}
 	// Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the committed
 	// total_pages is authoritative and reachable pages are all below it.
 	image = image[:int(m.totalPages)*pageSize]
@@ -468,7 +475,9 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 		w.free = w.free[:n-1]
 		return p, nil
 	}
-	if len(w.image)/pageSize >= (1 << 32) {
+	// uint64 so the `1 << 32` constant and the comparison are valid on 32-bit targets
+	// (where `int` is 32-bit and the constant would overflow it).
+	if uint64(len(w.image)/pageSize) >= 1<<32 {
 		return 0, errInvalidInput("file would exceed the 2^32-page limit")
 	}
 	p := uint32(len(w.image) / pageSize)
