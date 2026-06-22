@@ -38,6 +38,23 @@ fn corpus() -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
 
+fn golden_path(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/files")
+        .join(format!("{name}.iprdb"))
+}
+
+/// Write the committed image as a cross-read golden when `REGENERATE_GOLDENS` is set;
+/// otherwise (when the golden exists) it is read back and verified by the caller. The
+/// Go port reads these same files (cross-read, §12).
+fn maybe_write_golden(name: &str, img: &[u8]) {
+    if std::env::var_os("REGENERATE_GOLDENS").is_some() {
+        let p = golden_path(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, img).unwrap();
+    }
+}
+
 #[test]
 fn behavioral_conformance() {
     let cases: Vec<Case> = serde_json::from_str(&corpus()).expect("parse cases.json");
@@ -78,6 +95,15 @@ fn run_v4(c: &Case) {
             .map(<[u8]>::to_vec);
         assert_eq!(&g, want, "lookup {ip} mismatch: {}", c.name);
     }
+
+    maybe_write_golden(&c.name, &img);
+    if let Ok(bytes) = std::fs::read(golden_path(&c.name)) {
+        let gr = Reader::open(&bytes).unwrap();
+        let mut ggot = Vec::new();
+        gr.scan_v4(|f, t, s| ggot.push((f.0.to_string(), t.0.to_string(), s.to_vec())))
+            .unwrap();
+        assert_eq!(ggot, c.expect_scan, "golden cross-read mismatch: {}", c.name);
+    }
 }
 
 fn run_v6(c: &Case) {
@@ -108,5 +134,16 @@ fn run_v6(c: &Case) {
             .unwrap()
             .map(<[u8]>::to_vec);
         assert_eq!(&g, want, "lookup {ip} mismatch: {}", c.name);
+    }
+
+    maybe_write_golden(&c.name, &img);
+    if let Ok(bytes) = std::fs::read(golden_path(&c.name)) {
+        let gr = Reader::open(&bytes).unwrap();
+        let mut ggot = Vec::new();
+        gr.scan_v6(|f, t, s| {
+            ggot.push((f.to_u128().to_string(), t.to_u128().to_string(), s.to_vec()))
+        })
+        .unwrap();
+        assert_eq!(ggot, c.expect_scan, "golden cross-read mismatch: {}", c.name);
     }
 }
