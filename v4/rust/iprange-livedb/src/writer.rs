@@ -49,6 +49,7 @@ pub struct Writer<K: IpKey> {
     txn_id: u64,
     free: Vec<u32>,           // pages reusable by the current txn
     freed_this_txn: Vec<u32>, // pages freed since the last commit (reusable next txn, D7)
+    dirty: Vec<u32>,          // data pages written this txn (for the OS layer's pwrite set)
     _k: PhantomData<K>,
 }
 
@@ -73,6 +74,7 @@ impl<K: IpKey> Writer<K> {
             txn_id: 1,
             free: Vec::new(),
             freed_this_txn: Vec::new(),
+            dirty: Vec::new(),
             _k: PhantomData,
         };
         // META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -85,7 +87,7 @@ impl<K: IpKey> Writer<K> {
     /// the reader's §9 checks (the writer also reads untrusted bytes), then derive the
     /// in-memory free set (§7) by walking the reachable tree. The image MUST have no
     /// trailing pages beyond `total_pages` (the OS layer truncates those before calling).
-    pub fn open_image(image: Vec<u8>) -> Result<Writer<K>> {
+    pub fn open_image(mut image: Vec<u8>) -> Result<Writer<K>> {
         let meta = {
             let r = Reader::open(&image)?;
             if K::VERSION != r.version() {
@@ -93,6 +95,9 @@ impl<K: IpKey> Writer<K> {
             }
             r.active_meta()
         };
+        // Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the
+        // committed total_pages is authoritative and reachable pages are all below it.
+        image.truncate(meta.total_pages as usize * PAGE_SIZE);
         let record_size = spec::record_size(K::WIDTH as u8, meta.scope_width);
         let mut w = Writer {
             image,
@@ -108,6 +113,7 @@ impl<K: IpKey> Writer<K> {
             txn_id: meta.txn_id,
             free: Vec::new(),
             freed_this_txn: Vec::new(),
+            dirty: Vec::new(),
             _k: PhantomData,
         };
         w.free = w.derive_free_set();
@@ -201,17 +207,35 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    /// Commit the accumulated mutations: write the new state into the inactive meta and
-    /// flip it (§6.3). After this the image is a valid v4 file whose active meta is the
-    /// new tree, and pages freed by this txn become reusable (D7).
+    /// Commit the accumulated mutations in memory: write the new state into the inactive
+    /// meta and flip it (§6.3), reclaiming pages freed by this txn (D7) and clearing the
+    /// dirty set. After this the image is a valid v4 file whose active meta is the new
+    /// tree. (The OS layer uses [`commit_meta`](Self::commit_meta) + [`take_dirty`] to
+    /// stage the two-fsync on-disk commit instead.)
     pub fn commit(&mut self, updated_unixtime: u64) {
+        self.commit_meta(updated_unixtime);
+        self.dirty.clear();
+    }
+
+    /// Write the new meta into the inactive page and flip it (the in-memory half of the
+    /// commit, §6.3); returns the page number (0 or 1) just written so the OS layer can
+    /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). The
+    /// caller is responsible for the dirty set (`take_dirty`) and the durability barriers.
+    pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> u32 {
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
         self.write_meta(inactive, self.txn_id, updated_unixtime);
         self.active_meta = inactive;
-        // Pages freed by this txn back the now-stale tree no longer; reclaim them.
         let mut freed = core::mem::take(&mut self.freed_this_txn);
         self.free.append(&mut freed);
+        inactive
+    }
+
+    /// Take the set of data pages written since the last commit (for the OS layer's
+    /// Barrier-1 `pwrite`s). Within one txn each page is written at most once (freed
+    /// pages are not reused until the next txn), so there are no duplicates.
+    pub(crate) fn take_dirty(&mut self) -> Vec<u32> {
+        core::mem::take(&mut self.dirty)
     }
 
     /// Borrow the current image bytes (valid v4 file after a `commit`).
@@ -312,6 +336,7 @@ impl<K: IpKey> Writer<K> {
 
     fn write_leaf(&mut self, records: &[OwnedRecord<K>]) -> u32 {
         let pgno = self.alloc_page();
+        self.dirty.push(pgno);
         let base = pgno as usize * PAGE_SIZE;
         self.image[base..base + PAGE_SIZE].fill(0);
         PageHeader::write(
@@ -331,6 +356,7 @@ impl<K: IpKey> Writer<K> {
     fn write_branch(&mut self, seps: &[K], children: &[u32]) -> u32 {
         debug_assert_eq!(children.len(), seps.len() + 1);
         let pgno = self.alloc_page();
+        self.dirty.push(pgno);
         let base = pgno as usize * PAGE_SIZE;
         self.image[base..base + PAGE_SIZE].fill(0);
         PageHeader::write(

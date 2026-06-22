@@ -352,10 +352,26 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   (retention's common case) are effectively `O(log n)`. Documented; a single-pass
   `O(log n + k)` range path is a possible later optimization (SOW-0005).
 
-Next: Step 1d — the **OS layer** (file open `O_NOFOLLOW|O_CLOEXEC`, `fstat`, `SEEK_HOLE`,
-`mmap` reader, `pread`/`pwrite`+`fsync` writer with the two commit barriers, `flock`,
-writer `open` of an existing file + derived free-set), crash-injection tests, then
-`export_v3`; then the conformance corpus + fuzz; then the Go port.
+**2026-06-22 — Step 1d: OS file layer (done, green).**
+- Writer hooks: `dirty` page set + `take_dirty`/`commit_meta` (split the in-memory
+  commit so the OS layer can stage the two-barrier on-disk commit); `open_image`
+  reclaims trailing pages (§6.4).
+- `os.rs` (Unix, `os` feature; memmap2 + libc):
+  - `MmapReader::open` — `O_NOFOLLOW|O_CLOEXEC`, `flock(LOCK_SH)`, `fstat` the fd,
+    `SEEK_HOLE` hole-detection, `mmap` `MAP_SHARED`, re-`fstat` (TOCTOU), last-byte
+    probe (§10). `reader()` → validated `Reader` over the map.
+  - `FileWriter` — `flock(LOCK_EX)` with bounded-wait retry (§11); `create` (O_EXCL +
+    durable initial image), `open` (pread the image → `Writer::open_image`), `set`/
+    `delete`, and `commit` = `pwrite` dirty pages → **fsync (Barrier 1)** → `pwrite`
+    the inactive meta → **fsync (Barrier 2)** (§6.3).
+- Verified: **42/42 tests** (create→commit→mmap-read of 1000 records; reopen→mutate→
+  recommit; exclusive-lock mutual exclusion; `O_NOFOLLOW` symlink reject; too-short
+  reject). clippy `--all-features -D warnings` clean; full feature-build matrix clean.
+
+Next: Step 1e — **crash-injection** recovery tests (interrupt a commit at each barrier
+→ defined surviving tree) + `export_v3` (§13); then the language-neutral **conformance
+corpus** + fuzz; then the **Go port** (cross-read); then external review to PRODUCTION
+GRADE.
 
 ## Validation
 

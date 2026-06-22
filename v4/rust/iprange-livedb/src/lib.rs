@@ -43,6 +43,12 @@ pub mod wire;
 #[cfg(feature = "alloc")]
 pub mod writer;
 
+/// The Unix file layer (mmap reader + pread/pwrite writer with `flock` and the §10
+/// hardening). Unix-only; on other targets use [`Reader`] over bytes and [`Writer`]
+/// over an in-memory image.
+#[cfg(all(feature = "os", unix))]
+pub mod os;
+
 pub use error::{Error, Result};
 pub use key::{IpKey, Ipv4Key, Ipv6Key};
 pub use reader::Reader;

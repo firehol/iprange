@@ -8,11 +8,14 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["std"]
-# `std`: the filesystem reader/writer (mmap, flock, pwrite/fsync) — added in later
-# increments. The on-disk types, CRC32C, key arithmetic, and (de)serialization core
-# stay usable without it (core, plus `alloc` once the writer needs owned buffers).
+default = ["std", "os"]
+# `std`: the in-memory writer + reader over byte slices.
 std = ["alloc"]
 alloc = []
+# `os`: the Unix file layer — mmap reader (memmap2) and the pread/pwrite+fsync+flock
+# writer (libc) with the §10 O_NOFOLLOW / hole-detection / fstat hardening.
+os = ["std", "dep:memmap2", "dep:libc"]
 
 [dependencies]
+memmap2 = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
