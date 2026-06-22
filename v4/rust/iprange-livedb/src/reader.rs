@@ -459,6 +459,13 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
     if m.record_size != spec::record_size(m.key_width, m.scope_width) {
         return Err(Error::Structural("record_size mismatch"));
     }
+    // The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check
+    // the FILE's `meta_size` (not the reader's constant): a future minor declares a
+    // larger `meta_size`, so this skips that minor's appended fields and only enforces
+    // the still-reserved region beyond them — staying forward-compatible (§5.1).
+    if page[m.meta_size as usize..].iter().any(|&b| b != 0) {
+        return Err(Error::NonZeroReserved("meta tail"));
+    }
     Ok(Some(m))
 }
 
@@ -742,6 +749,21 @@ mod tests {
         assert!(matches!(
             Reader::open(&file[..PAGE_SIZE]),
             Err(Error::FileTooShort { .. })
+        ));
+    }
+
+    #[test]
+    fn meta_tail_nonzero_rejected() {
+        // A crafted non-zero byte in the active meta's reserved tail [meta_size,
+        // page_size), with the CRC recomputed, must be rejected (§5/§9).
+        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1])];
+        let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
+        let page = &mut file[..PAGE_SIZE]; // meta-A (active, txn 2)
+        page[spec::META_SIZE as usize + 7] = 0xAB;
+        crate::wire::finalize_checksum(page);
+        assert!(matches!(
+            Reader::open(&file),
+            Err(Error::NonZeroReserved(_))
         ));
     }
 }

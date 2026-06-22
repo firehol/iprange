@@ -409,6 +409,15 @@ func classify(page []byte, expectedPgno uint32) (meta, bool, error) {
 	if m.recordSize != recordSize(m.keyWidth, m.scopeWidth) {
 		return meta{}, false, errStructural("record_size mismatch")
 	}
+	// The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check the
+	// FILE's metaSize (not the constant): a future minor declares a larger metaSize, so
+	// this skips that minor's appended fields and only enforces the still-reserved region
+	// beyond them — staying forward-compatible (§5.1).
+	for _, b := range page[m.metaSize:] {
+		if b != 0 {
+			return meta{}, false, errNonZeroReserved("meta tail")
+		}
+	}
 	return m, true, nil
 }
 

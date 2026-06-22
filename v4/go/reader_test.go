@@ -264,3 +264,14 @@ func TestNonMultipleOfPageSizeRejects(t *testing.T) {
 		t.Fatalf("expected FileSizeMismatch, got %v", err)
 	}
 }
+
+func TestMetaTailNonzeroRejected(t *testing.T) {
+	// A crafted non-zero byte in the active meta's reserved tail [metaSize, pageSize),
+	// with the CRC recomputed, must be rejected (§5/§9).
+	file := buildSingleLeaf(V4, 1, []v4rec{{10, 20, []byte{1}}})
+	file[metaSize+7] = 0xAB // meta-A (active, txn 2) reserved tail
+	finalizeChecksum(file[:pageSize])
+	if _, err := Open(file); errorClass(err) != "NonZeroReserved" {
+		t.Fatalf("expected NonZeroReserved for meta tail, got %v", err)
+	}
+}
