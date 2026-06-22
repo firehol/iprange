@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
 Sub-state: v4 design spec drafted (`.agents/sow/specs/design-iprange-v4-livedb.md`);
 **locked through an external reviewer panel** of seven independent reviewers,
@@ -218,15 +218,59 @@ D1–D10 locked (spec §3); M1–M6 measured (spec §3 + SOW-0005); O1–O3 pend
 
 ## Validation
 
-Pending (review lock).
+Acceptance criteria evidence:
+- Complete v4 design spec rated **READY TO IMPLEMENT** by the reliable external
+  reviewer panel (R1–R4) — unanimous in round 9, R1 (strictest) with zero findings
+  of any severity. Locked status recorded in `design-iprange-v4-livedb.md`.
+- D1–D12 locked; M1–M4 marked measured (SOW-0005); O1–O3 resolved (behavioral +
+  cross‑read conformance; `set` unconditional/opaque scope; C via Rust).
+
+Review evidence:
+- 9 unbiased review rounds, same scope each round + a fix list. Findings shrank
+  monotonically (R1: ~8 P1 → 0). Two reviewers (R5/R6) and a third tool truncated/
+  timed out intermittently and were treated as non‑voting; the lock rests on the four
+  reliable producers. A self‑inflicted round‑7 regression (branch off‑by‑one) was
+  caught by the round‑8 confirm pass — validating the iterate‑to‑clean process.
+
+Sensitive data gate:
+- Durable artifacts contain no secrets/credentials/customer data. Per user decision,
+  external‑reviewer **tool identities were anonymized to R1–R7** in all committed SOW
+  artifacts before push (FireHOL infra/credentials never appear here).
+
+Artifact maintenance gate:
+- AGENTS.md: no change (SOW workflow unchanged).
+- Specs: **new** `.agents/sow/specs/design-iprange-v4-livedb.md` (the deliverable).
+- Runtime project skills: none (deferred per SOW-0001 decision; the conformance/
+  benchmark harness skill is a candidate once the implementation exists).
+- End‑user/operator docs: none affected (no shipped behavior yet; v4 is design‑only).
+- SOW lifecycle: completed + moved to `done/`; implementation tracked by SOW‑0007.
+
+Spec update: the v4 spec is the artifact. Project skills/docs: unaffected (design only).
+
+Follow‑up mapping:
+- v4 implementation → **SOW-0007** (Go reference + Rust port + conformance/crash/fuzz).
+- Cosmetic P3s from round 9 (worked examples, a field label) → folded into SOW-0007.
+- M1–M4 tunables → SOW-0005 (perf). Test patterns → SOW-0004.
 
 ## Outcome
 
-Pending.
+The iprange **v4 live‑DB on‑disk format is LOCKED** (`design-iprange-v4-livedb.md`)
+after 9 external review rounds reaching reviewer consensus READY TO IMPLEMENT. It is a
+portable, mmap'd, mutable copy‑on‑write B+tree of fixed‑size `[from, to, scope]`
+records that fixes update‑ipsets retention (O(log n) removal, no cohort scan; O(log
+n + k) page writes, no full rebuild; dataset may exceed RAM). Committed + pushed
+(`d930330`). Implementation is SOW‑0007.
 
 ## Lessons Extracted
 
-Pending.
+- **Adversarial confirm passes catch your own regressions.** A round‑7 "improvement"
+  (adding a branch upper bound) introduced an off‑by‑one that three reviewers caught
+  in round 8. Never lock on the round that introduced the last change.
+- **Delegate, don't re‑specify.** The §13 v3‑export contract converged only once it
+  stopped re‑deriving v3's rules and instead delegated to the already‑locked v3 writer.
+- **Separate "torn" from "incompatible" in bootstrap.** Fail‑closed on an intact‑but‑
+  unsupported meta; discard only genuinely torn ones.
+- **Treat flaky review tools as non‑voting**, not blocking — lock on the reliable set.
 
 ## Followup
 
