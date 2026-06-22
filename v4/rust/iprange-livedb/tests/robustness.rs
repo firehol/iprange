@@ -17,7 +17,7 @@ fn valid_file() -> Vec<u8> {
     for i in (0..2000u32).step_by(5) {
         w.delete(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2)).unwrap(); // frees pages
     }
-    w.commit(0);
+    w.commit(0).unwrap();
     w.into_image()
 }
 

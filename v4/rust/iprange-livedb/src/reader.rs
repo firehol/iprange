@@ -107,6 +107,7 @@ impl<'a> Reader<'a> {
 
     /// The validated active meta (for the writer's `open_image`, §6.2).
     #[inline]
+    #[cfg_attr(not(feature = "os"), allow(dead_code))]
     pub(crate) fn active_meta(&self) -> Meta {
         self.meta
     }

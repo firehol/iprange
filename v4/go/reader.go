@@ -1,5 +1,7 @@
 package iprangedb
 
+import "bytes"
+
 // The v4 reader: open over an in-memory image, validate per §9, and query.
 //
 // Open selects the active meta (§5.1 bootstrap), checks geometry (§9 step 2), and fully
@@ -352,7 +354,7 @@ func selectActiveMeta(b []byte) (meta, error) {
 	default:
 		sa := b[metaStaticStart:metaStaticEnd]
 		sb := b[pageSize+metaStaticStart : pageSize+metaStaticEnd]
-		if !bytesEqual(sa, sb) {
+		if !bytes.Equal(sa, sb) {
 			return meta{}, errStructural("metas disagree on static identity")
 		}
 		// Higher txn_id active; on an (illegal) tie pick pgno 0 (== ma).
@@ -446,17 +448,4 @@ func branchDescend[K ipKey[K]](branch branchView[K], ip K) int {
 		}
 	}
 	return lo
-}
-
-// bytesEqual reports whether two byte slices are equal.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

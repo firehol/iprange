@@ -50,6 +50,7 @@ pub struct Writer<K: IpKey> {
     free: Vec<u32>,           // pages reusable by the current txn
     freed_this_txn: Vec<u32>, // pages freed since the last commit (reusable next txn, D7)
     dirty: Vec<u32>,          // data pages written this txn (for the OS layer's pwrite set)
+    committed_pages: usize,   // on-disk page count as of the last commit (grown-region boundary)
     _k: PhantomData<K>,
 }
 
@@ -75,6 +76,7 @@ impl<K: IpKey> Writer<K> {
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
+            committed_pages: 2, // the two metas, both written by create
             _k: PhantomData,
         };
         // META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -114,6 +116,7 @@ impl<K: IpKey> Writer<K> {
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
+            committed_pages: meta.total_pages as usize, // committed on-disk page count
             _k: PhantomData,
         };
         w.free = w.derive_free_set();
@@ -130,13 +133,13 @@ impl<K: IpKey> Writer<K> {
         if scope.len() != self.scope_width {
             return Err(Error::InvalidInput("set scope width mismatch"));
         }
-        self.delete_range(from, to);
+        self.delete_range(from, to)?;
         let (mut nf, mut nt) = (from, to);
         // Coalesce with a same-scope neighbour ending at from-1.
         if let Some(fm1) = from.checked_dec() {
             if let Some((lf, lt, ls)) = self.lookup_covering(fm1) {
                 if lt == fm1 && ls == scope {
-                    self.tree_delete(lf);
+                    self.tree_delete(lf)?;
                     nf = lf;
                 }
             }
@@ -145,7 +148,7 @@ impl<K: IpKey> Writer<K> {
         if let Some(tp1) = to.checked_inc() {
             if let Some((rf, rt, rs)) = self.lookup_covering(tp1) {
                 if rf == tp1 && rs == scope {
-                    self.tree_delete(rf);
+                    self.tree_delete(rf)?;
                     nt = rt;
                 }
             }
@@ -160,8 +163,7 @@ impl<K: IpKey> Writer<K> {
         if to < from {
             return Err(Error::InvalidInput("delete from > to"));
         }
-        self.delete_range(from, to);
-        Ok(())
+        self.delete_range(from, to)
     }
 
     /// In-order scan of the (pending) tree: `f(from, to, scope)` per record. Zero-alloc.
@@ -187,18 +189,18 @@ impl<K: IpKey> Writer<K> {
             scope: scope.to_vec(),
         };
         if self.root_pgno == 0 {
-            let p = self.write_leaf(core::slice::from_ref(&rec));
+            let p = self.write_leaf(core::slice::from_ref(&rec))?;
             self.root_pgno = p;
             self.tree_height = 1;
         } else {
-            let (new_root, split) = self.cow_insert(self.root_pgno, 1, rec);
+            let (new_root, split) = self.cow_insert(self.root_pgno, 1, rec)?;
             match split {
                 None => self.root_pgno = new_root,
                 Some((sep, right)) => {
                     if self.tree_height >= spec::TREE_HEIGHT_MAX {
                         return Err(Error::InvalidInput("tree would exceed TREE_HEIGHT_MAX"));
                     }
-                    self.root_pgno = self.write_branch(&[sep], &[new_root, right]);
+                    self.root_pgno = self.write_branch(&[sep], &[new_root, right])?;
                     self.tree_height += 1;
                 }
             }
@@ -211,31 +213,54 @@ impl<K: IpKey> Writer<K> {
     /// meta and flip it (§6.3), reclaiming pages freed by this txn (D7) and clearing the
     /// dirty set. After this the image is a valid v4 file whose active meta is the new
     /// tree. (The OS layer uses [`commit_meta`](Self::commit_meta) + [`take_dirty`] to
-    /// stage the two-fsync on-disk commit instead.)
-    pub fn commit(&mut self, updated_unixtime: u64) {
-        self.commit_meta(updated_unixtime);
+    /// stage the two-fsync on-disk commit instead.) Errors only if `txn_id` is exhausted.
+    pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
+        self.commit_meta(updated_unixtime)?;
         self.dirty.clear();
+        Ok(())
     }
 
     /// Write the new meta into the inactive page and flip it (the in-memory half of the
     /// commit, §6.3); returns the page number (0 or 1) just written so the OS layer can
     /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). The
     /// caller is responsible for the dirty set (`take_dirty`) and the durability barriers.
-    pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> u32 {
+    /// Refuses to commit if `txn_id` would reach `u64::MAX` (§6.3; unreachable in
+    /// practice).
+    pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> Result<u32> {
+        if self.txn_id == u64::MAX {
+            return Err(Error::InvalidInput("txn_id exhausted"));
+        }
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
         self.write_meta(inactive, self.txn_id, updated_unixtime);
         self.active_meta = inactive;
         let mut freed = core::mem::take(&mut self.freed_this_txn);
         self.free.append(&mut freed);
-        inactive
+        // The file is now this long on disk after the OS layer's `set_len`; the next txn's
+        // grown region starts here.
+        self.committed_pages = self.image.len() / PAGE_SIZE;
+        Ok(inactive)
     }
 
-    /// Take the set of data pages written since the last commit (for the OS layer's
-    /// Barrier-1 `pwrite`s). Within one txn each page is written at most once (freed
-    /// pages are not reused until the next txn), so there are no duplicates.
+    /// Take the set of data pages the OS layer must `pwrite` at Barrier 1. A page written
+    /// then freed again within the same txn is an orphan the new meta never references, so
+    /// pwriting it is wasted I/O — **except** if it lies in the file's newly-grown region
+    /// (`pgno >= committed_pages`): the OS layer `set_len`s the file to the new length, so
+    /// every offset up to it MUST be backed by real bytes or the mmap reader rejects a
+    /// sparse hole (§10). We therefore drop a freed page only when it already existed on
+    /// disk before this txn (`pgno < committed_pages`). Within one txn each page is written
+    /// at most once (freed pages are not reused until the next txn), so no duplicates.
+    #[cfg_attr(not(feature = "os"), allow(dead_code))]
     pub(crate) fn take_dirty(&mut self) -> Vec<u32> {
-        core::mem::take(&mut self.dirty)
+        let dirty = core::mem::take(&mut self.dirty);
+        if self.freed_this_txn.is_empty() {
+            return dirty;
+        }
+        let boundary = self.committed_pages as u32;
+        dirty
+            .into_iter()
+            .filter(|&p| p >= boundary || !self.freed_this_txn.contains(&p))
+            .collect()
     }
 
     /// Borrow the current image bytes (valid v4 file after a `commit`).
@@ -260,7 +285,12 @@ impl<K: IpKey> Writer<K> {
 
     /// Recursive COW insert. Returns the new subtree pgno and, on overflow, a
     /// `(separator, right_pgno)` split for the parent to absorb.
-    fn cow_insert(&mut self, pgno: u32, depth: u32, rec: OwnedRecord<K>) -> (u32, Option<(K, u32)>) {
+    fn cow_insert(
+        &mut self,
+        pgno: u32,
+        depth: u32,
+        rec: OwnedRecord<K>,
+    ) -> Result<(u32, Option<(K, u32)>)> {
         if depth == self.tree_height {
             let mut recs = self.read_leaf(pgno);
             self.free_page(pgno);
@@ -271,7 +301,7 @@ impl<K: IpKey> Writer<K> {
             let (mut seps, mut children) = self.read_branch(pgno);
             self.free_page(pgno);
             let i = seps.partition_point(|s| *s <= rec.from);
-            let (new_child, split) = self.cow_insert(children[i], depth + 1, rec);
+            let (new_child, split) = self.cow_insert(children[i], depth + 1, rec)?;
             children[i] = new_child;
             if let Some((sep, right)) = split {
                 seps.insert(i, sep);
@@ -283,27 +313,27 @@ impl<K: IpKey> Writer<K> {
 
     /// Write `records` as one leaf, or split into two if over `leaf_max`. Returns the
     /// (primary pgno, optional split).
-    fn emit_leaf(&mut self, records: &[OwnedRecord<K>]) -> (u32, Option<(K, u32)>) {
+    fn emit_leaf(&mut self, records: &[OwnedRecord<K>]) -> Result<(u32, Option<(K, u32)>)> {
         if records.len() <= self.leaf_max {
-            (self.write_leaf(records), None)
+            Ok((self.write_leaf(records)?, None))
         } else {
             let mid = records.len() / 2;
-            let lp = self.write_leaf(&records[..mid]);
-            let rp = self.write_leaf(&records[mid..]);
-            (lp, Some((records[mid].from, rp)))
+            let lp = self.write_leaf(&records[..mid])?;
+            let rp = self.write_leaf(&records[mid..])?;
+            Ok((lp, Some((records[mid].from, rp))))
         }
     }
 
     /// Write a branch, or split into two (promoting the middle separator) if over
     /// `branch_max`.
-    fn emit_branch(&mut self, seps: &[K], children: &[u32]) -> (u32, Option<(K, u32)>) {
+    fn emit_branch(&mut self, seps: &[K], children: &[u32]) -> Result<(u32, Option<(K, u32)>)> {
         if seps.len() <= self.branch_max {
-            (self.write_branch(seps, children), None)
+            Ok((self.write_branch(seps, children)?, None))
         } else {
             let mid = seps.len() / 2;
-            let lp = self.write_branch(&seps[..mid], &children[..mid + 1]);
-            let rp = self.write_branch(&seps[mid + 1..], &children[mid + 1..]);
-            (lp, Some((seps[mid], rp)))
+            let lp = self.write_branch(&seps[..mid], &children[..mid + 1])?;
+            let rp = self.write_branch(&seps[mid + 1..], &children[mid + 1..])?;
+            Ok((lp, Some((seps[mid], rp))))
         }
     }
 
@@ -334,8 +364,8 @@ impl<K: IpKey> Writer<K> {
         (seps, children)
     }
 
-    fn write_leaf(&mut self, records: &[OwnedRecord<K>]) -> u32 {
-        let pgno = self.alloc_page();
+    fn write_leaf(&mut self, records: &[OwnedRecord<K>]) -> Result<u32> {
+        let pgno = self.alloc_page()?;
         self.dirty.push(pgno);
         let base = pgno as usize * PAGE_SIZE;
         self.image[base..base + PAGE_SIZE].fill(0);
@@ -350,12 +380,12 @@ impl<K: IpKey> Writer<K> {
             record::write::<K>(&mut self.image[off..off + self.record_size], r.from, r.to, &r.scope);
         }
         finalize_checksum(&mut self.image[base..base + PAGE_SIZE]);
-        pgno
+        Ok(pgno)
     }
 
-    fn write_branch(&mut self, seps: &[K], children: &[u32]) -> u32 {
+    fn write_branch(&mut self, seps: &[K], children: &[u32]) -> Result<u32> {
         debug_assert_eq!(children.len(), seps.len() + 1);
-        let pgno = self.alloc_page();
+        let pgno = self.alloc_page()?;
         self.dirty.push(pgno);
         let base = pgno as usize * PAGE_SIZE;
         self.image[base..base + PAGE_SIZE].fill(0);
@@ -375,7 +405,7 @@ impl<K: IpKey> Writer<K> {
             self.image[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
         }
         finalize_checksum(&mut self.image[base..base + PAGE_SIZE]);
-        pgno
+        Ok(pgno)
     }
 
     fn write_meta(&mut self, pgno: u32, txn_id: u64, updated_unixtime: u64) {
@@ -407,14 +437,20 @@ impl<K: IpKey> Writer<K> {
         &self.image[base..base + PAGE_SIZE]
     }
 
-    /// Allocate a page: reuse a freed page (from a prior txn) or grow the image.
-    fn alloc_page(&mut self) -> u32 {
+    /// Allocate a page: reuse a freed page (from a prior txn) or grow the image. Refuses
+    /// to grow past the `2^32`-page limit (§6.4) rather than wrap the `u32` pgno.
+    fn alloc_page(&mut self) -> Result<u32> {
         if let Some(p) = self.free.pop() {
-            p
+            Ok(p)
         } else {
+            if self.image.len() / PAGE_SIZE >= (1usize << 32) {
+                return Err(Error::InvalidInput(
+                    "file would exceed the 2^32-page limit",
+                ));
+            }
             let p = (self.image.len() / PAGE_SIZE) as u32;
             self.image.resize(self.image.len() + PAGE_SIZE, 0);
-            p
+            Ok(p)
         }
     }
 
@@ -453,18 +489,19 @@ impl<K: IpKey> Writer<K> {
 
     /// Remove everything overlapping `[from, to]`, re-inserting the parts of straddling
     /// records that fall outside (left `[rf, from-1]`, right `[to+1, rt]`).
-    fn delete_range(&mut self, from: K, to: K) {
+    fn delete_range(&mut self, from: K, to: K) -> Result<()> {
         while let Some((rf, rt, scope)) = self.any_overlap(from, to) {
-            self.tree_delete(rf);
+            self.tree_delete(rf)?;
             if rf < from {
                 let fm1 = from.checked_dec().expect("from > rf >= family_min");
-                let _ = self.insert(rf, fm1, &scope);
+                self.insert(rf, fm1, &scope)?;
             }
             if rt > to {
                 let tp1 = to.checked_inc().expect("to < rt <= family_max");
-                let _ = self.insert(tp1, rt, &scope);
+                self.insert(tp1, rt, &scope)?;
             }
         }
+        Ok(())
     }
 
     /// Any record overlapping `[from, to]` (or `None`). The covering record of `from`
@@ -483,9 +520,9 @@ impl<K: IpKey> Writer<K> {
 
     /// Delete the record whose `from == key` (rebalancing on underflow; collapsing the
     /// root). Returns whether a record was removed.
-    fn tree_delete(&mut self, key: K) -> bool {
+    fn tree_delete(&mut self, key: K) -> Result<bool> {
         if self.root_pgno == 0 || !self.contains_from(key) {
-            return false;
+            return Ok(false);
         }
         if self.tree_height == 1 {
             let mut recs = self.read_leaf(self.root_pgno);
@@ -496,10 +533,10 @@ impl<K: IpKey> Writer<K> {
                 self.root_pgno = 0;
                 self.tree_height = 0;
             } else {
-                self.root_pgno = self.write_leaf(&recs);
+                self.root_pgno = self.write_leaf(&recs)?;
             }
         } else {
-            let (new_root, _uf) = self.cow_delete(self.root_pgno, 1, key);
+            let (new_root, _uf) = self.cow_delete(self.root_pgno, 1, key)?;
             self.root_pgno = new_root;
             // Collapse a root branch that fell to a single child (height shrinks).
             while self.tree_height > 1 {
@@ -515,13 +552,13 @@ impl<K: IpKey> Writer<K> {
             }
         }
         self.record_count -= 1;
-        true
+        Ok(true)
     }
 
     /// Recursive COW delete. Returns `(new_pgno, underflowed)` — underflow = an empty
     /// leaf or a single-child branch, which the parent (or `tree_delete` at the root)
     /// repairs.
-    fn cow_delete(&mut self, pgno: u32, depth: u32, key: K) -> (u32, bool) {
+    fn cow_delete(&mut self, pgno: u32, depth: u32, key: K) -> Result<(u32, bool)> {
         if depth == self.tree_height {
             let mut recs = self.read_leaf(pgno);
             self.free_page(pgno);
@@ -529,25 +566,31 @@ impl<K: IpKey> Writer<K> {
             if pos < recs.len() && recs[pos].from == key {
                 recs.remove(pos);
             }
-            let p = self.write_leaf(&recs);
-            (p, recs.is_empty())
+            let p = self.write_leaf(&recs)?;
+            Ok((p, recs.is_empty()))
         } else {
             let (mut seps, mut children) = self.read_branch(pgno);
             self.free_page(pgno);
             let i = seps.partition_point(|s| *s <= key);
-            let (nc, child_uf) = self.cow_delete(children[i], depth + 1, key);
+            let (nc, child_uf) = self.cow_delete(children[i], depth + 1, key)?;
             children[i] = nc;
             if child_uf {
-                self.rebalance(&mut seps, &mut children, i, depth + 1);
+                self.rebalance(&mut seps, &mut children, i, depth + 1)?;
             }
-            let p = self.write_branch(&seps, &children);
-            (p, children.len() < 2)
+            let p = self.write_branch(&seps, &children)?;
+            Ok((p, children.len() < 2))
         }
     }
 
     /// Merge an underflowed `children[i]` with an adjacent sibling and re-emit (1 or 2
     /// nodes), patching `seps`/`children`. Balance-preserving.
-    fn rebalance(&mut self, seps: &mut Vec<K>, children: &mut Vec<u32>, i: usize, child_depth: u32) {
+    fn rebalance(
+        &mut self,
+        seps: &mut Vec<K>,
+        children: &mut Vec<u32>,
+        i: usize,
+        child_depth: u32,
+    ) -> Result<()> {
         let (l, r, sep_idx) = if i > 0 { (i - 1, i, i - 1) } else { (i, i + 1, i) };
         let (p, split) = if child_depth == self.tree_height {
             let mut recs = self.read_leaf(children[l]);
@@ -555,7 +598,7 @@ impl<K: IpKey> Writer<K> {
             recs.append(&mut rr);
             self.free_page(children[l]);
             self.free_page(children[r]);
-            self.emit_leaf(&recs)
+            self.emit_leaf(&recs)?
         } else {
             let (mut s1, mut c1) = self.read_branch(children[l]);
             let (mut s2, mut c2) = self.read_branch(children[r]);
@@ -564,7 +607,7 @@ impl<K: IpKey> Writer<K> {
             s1.push(seps[sep_idx]);
             s1.append(&mut s2);
             c1.append(&mut c2);
-            self.emit_branch(&s1, &c1)
+            self.emit_branch(&s1, &c1)?
         };
         match split {
             None => {
@@ -578,6 +621,7 @@ impl<K: IpKey> Writer<K> {
                 seps[sep_idx] = newsep;
             }
         }
+        Ok(())
     }
 
     // --- read-path queries over the pending tree ---
@@ -684,7 +728,10 @@ impl<K: IpKey> Writer<K> {
             let b = BranchView::<K>::new(bpage, bcount);
             if ci + 1 < b.child_count() {
                 let mut p = b.child(ci + 1);
-                loop {
+                // Leftmost descent, bounded by TREE_HEIGHT_MAX so a malformed tree can
+                // never loop (the writer only operates on validated trees, so the cap is
+                // never reached in practice — it is a defensive termination guarantee).
+                for _ in 0..spec::TREE_HEIGHT_MAX {
                     let pp = self.page(p);
                     if PageHeader::decode(pp).page_type == spec::PAGE_TYPE_LEAF {
                         break;
@@ -743,7 +790,7 @@ mod tests {
     #[test]
     fn create_empty_round_trips() {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
-        w.commit(0);
+        w.commit(0).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert!(r.is_empty());
@@ -757,7 +804,7 @@ mod tests {
         w.insert(k(10), k(20), &[1]).unwrap();
         w.insert(k(30), k(40), &[2]).unwrap();
         w.insert(k(5), k(8), &[3]).unwrap(); // inserts before the others
-        w.commit(0);
+        w.commit(0).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), 3);
@@ -780,7 +827,7 @@ mod tests {
             w.insert(k(base), k(base + 4), &[(i & 0xff) as u8, (i >> 8) as u8])
                 .unwrap();
         }
-        w.commit(0);
+        w.commit(0).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap(); // full validation of the whole tree
         assert_eq!(r.record_count(), n as u64);
@@ -811,13 +858,13 @@ mod tests {
         for i in 0..200u32 {
             w.insert(k(i * 10), k(i * 10 + 1), &[i as u8]).unwrap();
         }
-        w.commit(1);
+        w.commit(1).unwrap();
         let pages_after_first = w.image().len() / PAGE_SIZE;
         // A second txn that inserts more; freed pages from txn 1 are now reusable.
         for i in 200..260u32 {
             w.insert(k(i * 10), k(i * 10 + 1), &[i as u8]).unwrap();
         }
-        w.commit(2);
+        w.commit(2).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), 260);
@@ -897,7 +944,7 @@ mod tests {
         }
 
         // The whole on-disk structure must pass the reader's full validation.
-        w.commit(0);
+        w.commit(0).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         let mut got = Vec::new();
@@ -912,7 +959,7 @@ mod tests {
         for i in 0..500u32 {
             w.set(k(i * 10), k(i * 10 + 3), &[1]).unwrap();
         }
-        w.commit(1);
+        w.commit(1).unwrap();
         let img = w.into_image();
 
         // Reopen the committed image, derive the free set, mutate, recommit.
@@ -922,7 +969,7 @@ mod tests {
             w2.delete(k(i * 10), k(i * 10 + 3)).unwrap();
         }
         w2.set(k(99_999), k(100_000), &[7]).unwrap();
-        w2.commit(2);
+        w2.commit(2).unwrap();
 
         let img2 = w2.into_image();
         let r = Reader::open(&img2).unwrap();
@@ -936,7 +983,7 @@ mod tests {
     fn open_image_rejects_corruption() {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
         w.set(k(1), k(2), &[1]).unwrap();
-        w.commit(1);
+        w.commit(1).unwrap();
         let mut img = w.into_image();
         // Corrupt the active meta's checksum-covered bytes ⇒ both metas can't both be
         // valid / reachable tree mismatch ⇒ open_image must reject.
@@ -952,7 +999,7 @@ mod tests {
     fn crash_before_meta_flip_keeps_old_tree() {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
         w.set(k(1), k(1), &[1]).unwrap();
-        w.commit(1); // T1 = {[1,1]=1} durable
+        w.commit(1).unwrap(); // T1 = {[1,1]=1} durable
         // A second txn writes new data pages but is NOT committed (crash before the
         // meta flip): the active meta still points at T1; the new pages are orphans.
         w.set(k(2), k(2), &[2]).unwrap();
@@ -967,9 +1014,9 @@ mod tests {
     fn crash_with_torn_new_meta_falls_back_to_old() {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
         w.set(k(1), k(1), &[1]).unwrap();
-        w.commit(1); // T1
+        w.commit(1).unwrap(); // T1
         w.set(k(2), k(2), &[2]).unwrap();
-        w.commit(2); // T2 = {[1,1]=1, [2,2]=2}; active meta = the page just written
+        w.commit(2).unwrap(); // T2 = {[1,1]=1, [2,2]=2}; active meta = the page just written
         let mut img = w.into_image();
         // Tear the active (higher-txn) meta — corrupt a checksum-covered byte, as a
         // crash mid-write of Barrier 2 would. The reader MUST fall back to the previous
@@ -988,9 +1035,9 @@ mod tests {
     fn committed_new_meta_yields_new_tree() {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
         w.set(k(1), k(1), &[1]).unwrap();
-        w.commit(1);
+        w.commit(1).unwrap();
         w.set(k(2), k(2), &[2]).unwrap();
-        w.commit(2); // crash *after* Barrier 2 ⇒ the new tree is durable
+        w.commit(2).unwrap(); // crash *after* Barrier 2 ⇒ the new tree is durable
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), 2);
@@ -1031,7 +1078,7 @@ mod tests {
             let want: Vec<(u32, u8)> = oracle.iter().map(|r| (r.0, r.2)).collect();
             assert_eq!(got, want, "v6 writer/oracle diverged at step {step}");
         }
-        w.commit(0);
+        w.commit(0).unwrap();
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), oracle.len() as u64);

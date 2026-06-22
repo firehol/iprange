@@ -78,8 +78,13 @@ fn run_v4(c: &Case) {
             "delete" => w.delete(from, to).unwrap(),
             o => panic!("case {}: bad op {o}", c.name),
         }
+        // Commit per op: realistic usage, and reclaims this txn's COW garbage (D7) so
+        // the committed golden stays compact instead of accumulating one page per set.
+        w.commit(0).unwrap();
     }
-    w.commit(0);
+    if c.ops.is_empty() {
+        w.commit(0).unwrap();
+    }
     let img = w.into_image();
     let r = Reader::open(&img).unwrap();
 
@@ -116,8 +121,13 @@ fn run_v6(c: &Case) {
             "delete" => w.delete(from, to).unwrap(),
             o => panic!("case {}: bad op {o}", c.name),
         }
+        // Commit per op: realistic usage, and reclaims this txn's COW garbage (D7) so
+        // the committed golden stays compact instead of accumulating one page per set.
+        w.commit(0).unwrap();
     }
-    w.commit(0);
+    if c.ops.is_empty() {
+        w.commit(0).unwrap();
+    }
     let img = w.into_image();
     let r = Reader::open(&img).unwrap();
 

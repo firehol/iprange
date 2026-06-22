@@ -130,8 +130,13 @@ func runConfV4(t *testing.T, c *ccase) {
 		default:
 			t.Fatalf("bad op %q", op.Op)
 		}
+		// Commit per op: realistic, and reclaims this txn's COW garbage (D7) so the
+		// committed golden stays compact instead of one page per set.
+		must(t, w.Commit(0))
 	}
-	w.Commit(0)
+	if len(c.Ops) == 0 {
+		must(t, w.Commit(0))
+	}
 	img := w.Image()
 	r, err := Open(img)
 	if err != nil {
@@ -166,8 +171,11 @@ func runConfV6(t *testing.T, c *ccase) {
 		default:
 			t.Fatalf("bad op %q", op.Op)
 		}
+		must(t, w.Commit(0))
 	}
-	w.Commit(0)
+	if len(c.Ops) == 0 {
+		must(t, w.Commit(0))
+	}
 	img := w.Image()
 	r, err := Open(img)
 	if err != nil {

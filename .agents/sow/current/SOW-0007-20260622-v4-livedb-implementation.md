@@ -394,9 +394,31 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   `.iprdb` goldens and matches `expect_scan` (proven adversarially: corrupting a golden
   makes Go reject it with `ChecksumFailed`). The §12 cross-read criterion is met.
 
-Next: Step 3 — `export_v3` (§13, v4 → the v3 snapshot writer); then **external review**
-(glm/minimax/mimo/kimi/qwen/deepseek) of the complete Rust+Go implementation, iterating
-to the unanimous **PRODUCTION GRADE** vote.
+**2026-06-22 — Step 3: external review round 1 + fixes (done, green).**
+- Ran all 6 reviewers (glm/minimax/mimo/kimi/qwen/deepseek) on the spec + both
+  implementations. **4 explicit PRODUCTION GRADE** (deepseek, mimo, qwen, glm); kimi +
+  minimax inconclusive (ran tests / hex-dumped a golden — confirming the on-disk bytes
+  match the spec — but wrote no verdict). **Zero blockers; nobody voted NOT PRODUCTION
+  GRADE.** All findings were unreachable-edge spec gaps, error-propagation hygiene, two
+  test-coverage gaps, and polish.
+- Applied all 12 consolidated fixes (Rust + Go, behaviorally identical):
+  - txn_id overflow guard (§6.3); `alloc_page` refuses growth past 2^32 pages (§6.4,
+    made the allocator fallible and propagated `Result`/`error` through the COW chain);
+    `delete_range` propagates `insert` errors; OS commit skips pwrite of pages written-
+    then-freed in the same txn (added `committed_pages` so it never creates a sparse
+    hole — the naive filter would; caught by the OS tests); `lookup_ge` descent bounded
+    by `TREE_HEIGHT_MAX`; Rust `#[cfg(not(os))] allow(dead_code)`; Go `bytes.Equal` /
+    `clear()` / `Image()` aliasing doc.
+  - Test gaps: added `branch_root_many` (multi-level **branch-root** tree) and
+    `full_ipv6_space` conformance cases + cross-read goldens; ported the 4 robustness/
+    fuzz tests to Go. Made the conformance harness commit **per op** (realistic; reclaims
+    COW garbage so the branch-root golden is 28 KB, not 3 MB; goldens regenerated).
+- Verified: Rust 45 lib + conformance + 4 robustness, clippy `--all-features -D warnings`
+  clean, no-default-features clean; Go build/vet/gofmt clean, full suite green (incl. the
+  4 new Go robustness tests + cross-read of the 2 new goldens). Goldens dir 264 KB total.
+
+Next: re-run the full panel (with a directive prompt so kimi/minimax produce explicit
+verdicts) + fix-notes until **unanimous PRODUCTION GRADE**; then `export_v3` (§13).
 
 ## Validation
 

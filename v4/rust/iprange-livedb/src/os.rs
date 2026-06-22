@@ -194,7 +194,7 @@ impl<K: IpKey> FileWriter<K> {
                 .write_all_at(&self.w.image()[off..off + PAGE_SIZE], off as u64)?;
         }
         self.file.sync_all()?; // Barrier 1: data durable before the meta references it
-        let inactive = self.w.commit_meta(updated_unixtime);
+        let inactive = self.w.commit_meta(updated_unixtime)?;
         let off = inactive as usize * PAGE_SIZE;
         self.file
             .write_all_at(&self.w.image()[off..off + PAGE_SIZE], off as u64)?;

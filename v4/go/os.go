@@ -256,7 +256,10 @@ func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
 	if err := fw.file.Sync(); err != nil { // Barrier 1: data durable before the meta references it
 		return errf("Io", "fsync barrier 1: "+err.Error())
 	}
-	inactive := fw.w.commitMeta(updatedUnixtime)
+	inactive, err := fw.w.commitMeta(updatedUnixtime)
+	if err != nil {
+		return err
+	}
 	img = fw.w.Image()
 	off := int(inactive) * pageSize
 	if _, err := fw.file.WriteAt(img[off:off+pageSize], int64(off)); err != nil {

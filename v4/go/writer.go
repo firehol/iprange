@@ -1,5 +1,7 @@
 package iprangedb
 
+import "bytes"
+
 // The v4 writer: copy-on-write B+tree mutation with a double-meta atomic commit
 // (§6, §7, §8).
 //
@@ -39,6 +41,7 @@ type Writer[K ipKey[K]] struct {
 	free            []uint32 // pages reusable by the current txn
 	freedThisTxn    []uint32 // pages freed since the last commit (reusable next txn, D7)
 	dirty           []uint32 // data pages written this txn (for the OS layer's pwrite set)
+	committedPages  int      // on-disk page count as of the last commit (grown-region boundary)
 }
 
 // CreateV4 creates a fresh empty IPv4 DB (see createWriter).
@@ -69,6 +72,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: createdUnixtime,
 		txnID:           1,
+		committedPages:  2, // the two metas, both written by create
 	}
 	// META-A active (txn 1), META-B (txn 0); identical static identity.
 	w.writeMeta(0, 1, createdUnixtime)
@@ -116,6 +120,7 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: m.createdUnixtime,
 		txnID:           m.txnID,
+		committedPages:  int(m.totalPages), // committed on-disk page count
 	}
 	w.free = w.deriveFreeSet()
 	return w, nil
@@ -131,13 +136,17 @@ func (w *Writer[K]) Set(from, to K, scope []byte) error {
 	if len(scope) != w.scopeWidth {
 		return errInvalidInput("set scope width mismatch")
 	}
-	w.deleteRange(from, to)
+	if err := w.deleteRange(from, to); err != nil {
+		return err
+	}
 	nf, nt := from, to
 	// Coalesce with a same-scope neighbour ending at from-1.
 	if fm1, ok := from.checkedDec(); ok {
 		if lf, lt, ls, found := w.lookupCovering(fm1); found {
-			if lt.cmp(fm1) == 0 && bytesEqual(ls, scope) {
-				w.treeDelete(lf)
+			if lt.cmp(fm1) == 0 && bytes.Equal(ls, scope) {
+				if _, err := w.treeDelete(lf); err != nil {
+					return err
+				}
 				nf = lf
 			}
 		}
@@ -145,8 +154,10 @@ func (w *Writer[K]) Set(from, to K, scope []byte) error {
 	// Coalesce with a same-scope neighbour starting at to+1.
 	if tp1, ok := to.checkedInc(); ok {
 		if rf, rt, rs, found := w.lookupCovering(tp1); found {
-			if rf.cmp(tp1) == 0 && bytesEqual(rs, scope) {
-				w.treeDelete(rf)
+			if rf.cmp(tp1) == 0 && bytes.Equal(rs, scope) {
+				if _, err := w.treeDelete(rf); err != nil {
+					return err
+				}
 				nt = rt
 			}
 		}
@@ -160,8 +171,7 @@ func (w *Writer[K]) Delete(from, to K) error {
 	if to.cmp(from) < 0 {
 		return errInvalidInput("delete from > to")
 	}
-	w.deleteRange(from, to)
-	return nil
+	return w.deleteRange(from, to)
 }
 
 // Scan calls f(from, to, scope) per record over the (pending) tree, in key order.
@@ -173,13 +183,18 @@ func (w *Writer[K]) Scan(f func(from, to K, scope []byte)) {
 
 // Commit writes the new state into the inactive meta and flips it (§6.3), reclaiming
 // pages freed by this txn (D7) and clearing the dirty set. After this the image is a valid
-// v4 file whose active meta is the new tree.
-func (w *Writer[K]) Commit(updatedUnixtime uint64) {
-	w.commitMeta(updatedUnixtime)
+// v4 file whose active meta is the new tree. It errors only if txn_id is exhausted.
+func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
+	if _, err := w.commitMeta(updatedUnixtime); err != nil {
+		return err
+	}
 	w.dirty = w.dirty[:0]
+	return nil
 }
 
-// Image returns the current image bytes (a valid v4 file after a Commit).
+// Image returns the current image bytes (a valid v4 file after a Commit). The returned
+// slice ALIASES the writer's internal buffer; callers MUST NOT modify it (a later
+// mutation/commit will read and overwrite these bytes). Copy it if you need to retain it.
 func (w *Writer[K]) Image() []byte { return w.image }
 
 // RecordCount returns the number of records in the (pending) tree.
@@ -187,23 +202,55 @@ func (w *Writer[K]) RecordCount() uint64 { return w.recordCount }
 
 // commitMeta writes the new meta into the inactive page and flips it (the in-memory half
 // of the commit, §6.3); it returns the page number (0 or 1) just written so the OS layer
-// can pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7).
-func (w *Writer[K]) commitMeta(updatedUnixtime uint64) uint32 {
+// can pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). It
+// refuses to commit if txn_id would reach math.MaxUint64 (§6.3; unreachable in practice).
+func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
+	if w.txnID == maxUint64 {
+		return 0, errInvalidInput("txn_id exhausted")
+	}
 	inactive := 1 - w.activeMeta
 	w.txnID++
 	w.writeMeta(inactive, w.txnID, updatedUnixtime)
 	w.activeMeta = inactive
 	w.free = append(w.free, w.freedThisTxn...)
 	w.freedThisTxn = w.freedThisTxn[:0]
-	return inactive
+	// The file is now this long on disk after the OS layer's truncate; the next txn's
+	// grown region starts here.
+	w.committedPages = len(w.image) / pageSize
+	return inactive, nil
 }
 
-// takeDirty returns the set of data pages written since the last commit (for the OS
-// layer's Barrier-1 pwrites). Within one txn each page is written at most once.
+// takeDirty returns the data pages the OS layer must pwrite at Barrier 1. A page written
+// then freed again within the same txn is an orphan the new meta never references, so
+// pwriting it is wasted I/O — except if it lies in the file's newly-grown region
+// (pgno >= committedPages): the OS layer truncates the file to the new length, so every
+// offset up to it MUST be backed by real bytes or the mmap reader rejects a sparse hole
+// (§10). We therefore drop a freed page only when it already existed on disk before this
+// txn (pgno < committedPages). Within one txn each page is written at most once.
 func (w *Writer[K]) takeDirty() []uint32 {
 	d := w.dirty
 	w.dirty = nil
-	return d
+	if len(w.freedThisTxn) == 0 {
+		return d
+	}
+	boundary := uint32(w.committedPages)
+	out := d[:0]
+	for _, p := range d {
+		if p >= boundary || !containsU32(w.freedThisTxn, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// containsU32 reports whether s contains v.
+func containsU32(s []uint32, v uint32) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // insert inserts a disjoint record [from, to] = scope (the caller guarantees it does not
@@ -217,18 +264,28 @@ func (w *Writer[K]) insert(from, to K, scope []byte) error {
 	}
 	rec := ownedRecord[K]{from: from, to: to, scope: cloneBytes(scope)}
 	if w.rootPgno == 0 {
-		p := w.writeLeaf([]ownedRecord[K]{rec})
+		p, err := w.writeLeaf([]ownedRecord[K]{rec})
+		if err != nil {
+			return err
+		}
 		w.rootPgno = p
 		w.treeHeight = 1
 	} else {
-		newRoot, sep, right, split := w.cowInsert(w.rootPgno, 1, rec)
+		newRoot, sep, right, split, err := w.cowInsert(w.rootPgno, 1, rec)
+		if err != nil {
+			return err
+		}
 		if !split {
 			w.rootPgno = newRoot
 		} else {
 			if w.treeHeight >= treeHeightMax {
 				return errInvalidInput("tree would exceed TREE_HEIGHT_MAX")
 			}
-			w.rootPgno = w.writeBranch([]K{sep}, []uint32{newRoot, right})
+			root, err := w.writeBranch([]K{sep}, []uint32{newRoot, right})
+			if err != nil {
+				return err
+			}
+			w.rootPgno = root
 			w.treeHeight++
 		}
 	}
@@ -240,7 +297,7 @@ func (w *Writer[K]) insert(from, to K, scope []byte) error {
 
 // cowInsert is the recursive COW insert. It returns the new subtree pgno and, on
 // overflow, a (separator, right_pgno) split (split=true) for the parent to absorb.
-func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool) {
+func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
 	if depth == w.treeHeight {
 		recs := w.readLeaf(pgno)
 		w.freePage(pgno)
@@ -251,7 +308,10 @@ func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno u
 	seps, children := w.readBranch(pgno)
 	w.freePage(pgno)
 	i := partitionIdx(len(seps), func(j int) bool { return seps[j].cmp(rec.from) <= 0 })
-	nc, csep, cright, csplit := w.cowInsert(children[i], depth+1, rec)
+	nc, csep, cright, csplit, cerr := w.cowInsert(children[i], depth+1, rec)
+	if cerr != nil {
+		return 0, sep, 0, false, cerr
+	}
 	children[i] = nc
 	if csplit {
 		seps = insertKey(seps, i, csep)
@@ -261,26 +321,40 @@ func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno u
 }
 
 // emitLeaf writes records as one leaf, or splits into two if over leaf_max.
-func (w *Writer[K]) emitLeaf(records []ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool) {
+func (w *Writer[K]) emitLeaf(records []ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
 	if len(records) <= w.leafMax {
-		return w.writeLeaf(records), sep, 0, false
+		p, e := w.writeLeaf(records)
+		return p, sep, 0, false, e
 	}
 	mid := len(records) / 2
-	lp := w.writeLeaf(records[:mid])
-	rp := w.writeLeaf(records[mid:])
-	return lp, records[mid].from, rp, true
+	lp, e := w.writeLeaf(records[:mid])
+	if e != nil {
+		return 0, sep, 0, false, e
+	}
+	rp, e := w.writeLeaf(records[mid:])
+	if e != nil {
+		return 0, sep, 0, false, e
+	}
+	return lp, records[mid].from, rp, true, nil
 }
 
 // emitBranch writes a branch, or splits into two (promoting the middle separator) if over
 // branch_max.
-func (w *Writer[K]) emitBranch(seps []K, children []uint32) (newPgno uint32, sep K, right uint32, split bool) {
+func (w *Writer[K]) emitBranch(seps []K, children []uint32) (newPgno uint32, sep K, right uint32, split bool, err error) {
 	if len(seps) <= w.branchMax {
-		return w.writeBranch(seps, children), sep, 0, false
+		p, e := w.writeBranch(seps, children)
+		return p, sep, 0, false, e
 	}
 	mid := len(seps) / 2
-	lp := w.writeBranch(seps[:mid], children[:mid+1])
-	rp := w.writeBranch(seps[mid+1:], children[mid+1:])
-	return lp, seps[mid], rp, true
+	lp, e := w.writeBranch(seps[:mid], children[:mid+1])
+	if e != nil {
+		return 0, sep, 0, false, e
+	}
+	rp, e := w.writeBranch(seps[mid+1:], children[mid+1:])
+	if e != nil {
+		return 0, sep, 0, false, e
+	}
+	return lp, seps[mid], rp, true, nil
 }
 
 // --- page I/O over the in-memory image ---
@@ -312,8 +386,11 @@ func (w *Writer[K]) readBranch(pgno uint32) ([]K, []uint32) {
 	return seps, children
 }
 
-func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) uint32 {
-	pgno := w.allocPage()
+func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) (uint32, error) {
+	pgno, err := w.allocPage()
+	if err != nil {
+		return 0, err
+	}
 	w.dirty = append(w.dirty, pgno)
 	base := int(pgno) * pageSize
 	page := w.image[base : base+pageSize]
@@ -326,11 +403,14 @@ func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) uint32 {
 		recordWrite[K](page[off:off+w.recordSize], r.from, r.to, r.scope)
 	}
 	finalizeChecksum(page)
-	return pgno
+	return pgno, nil
 }
 
-func (w *Writer[K]) writeBranch(seps []K, children []uint32) uint32 {
-	pgno := w.allocPage()
+func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
+	pgno, err := w.allocPage()
+	if err != nil {
+		return 0, err
+	}
 	w.dirty = append(w.dirty, pgno)
 	base := int(pgno) * pageSize
 	page := w.image[base : base+pageSize]
@@ -348,7 +428,7 @@ func (w *Writer[K]) writeBranch(seps []K, children []uint32) uint32 {
 		le.PutUint32(page[sepOff+width:], children[i+1])
 	}
 	finalizeChecksum(page)
-	return pgno
+	return pgno, nil
 }
 
 func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
@@ -380,16 +460,20 @@ func (w *Writer[K]) page(pgno uint32) []byte {
 	return w.image[base : base+pageSize]
 }
 
-// allocPage allocates a page: reuse a freed page (from a prior txn) or grow the image.
-func (w *Writer[K]) allocPage() uint32 {
+// allocPage allocates a page: reuse a freed page (from a prior txn) or grow the image. It
+// refuses to grow past the 2^32-page limit (§6.4) rather than wrap the u32 pgno.
+func (w *Writer[K]) allocPage() (uint32, error) {
 	if n := len(w.free); n > 0 {
 		p := w.free[n-1]
 		w.free = w.free[:n-1]
-		return p
+		return p, nil
+	}
+	if len(w.image)/pageSize >= (1 << 32) {
+		return 0, errInvalidInput("file would exceed the 2^32-page limit")
 	}
 	p := uint32(len(w.image) / pageSize)
 	w.image = append(w.image, make([]byte, pageSize)...)
-	return p
+	return p, nil
 }
 
 // freePage marks a page freed by the current txn (reusable only after this txn commits,
@@ -433,20 +517,26 @@ func (w *Writer[K]) markReachable(pgno, depth uint32, used []bool) {
 
 // deleteRange removes everything overlapping [from, to], re-inserting the parts of
 // straddling records that fall outside (left [rf, from-1], right [to+1, rt]).
-func (w *Writer[K]) deleteRange(from, to K) {
+func (w *Writer[K]) deleteRange(from, to K) error {
 	for {
 		rf, rt, scope, found := w.anyOverlap(from, to)
 		if !found {
-			return
+			return nil
 		}
-		w.treeDelete(rf)
+		if _, err := w.treeDelete(rf); err != nil {
+			return err
+		}
 		if rf.cmp(from) < 0 {
 			fm1, _ := from.checkedDec() // from > rf >= family_min
-			_ = w.insert(rf, fm1, scope)
+			if err := w.insert(rf, fm1, scope); err != nil {
+				return err
+			}
 		}
 		if rt.cmp(to) > 0 {
 			tp1, _ := to.checkedInc() // to < rt <= family_max
-			_ = w.insert(tp1, rt, scope)
+			if err := w.insert(tp1, rt, scope); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -467,9 +557,9 @@ func (w *Writer[K]) anyOverlap(from, to K) (rf, rt K, scope []byte, found bool) 
 
 // treeDelete deletes the record whose from == key (rebalancing on underflow; collapsing
 // the root). It returns whether a record was removed.
-func (w *Writer[K]) treeDelete(key K) bool {
+func (w *Writer[K]) treeDelete(key K) (bool, error) {
 	if w.rootPgno == 0 || !w.containsFrom(key) {
-		return false
+		return false, nil
 	}
 	if w.treeHeight == 1 {
 		recs := w.readLeaf(w.rootPgno)
@@ -480,10 +570,17 @@ func (w *Writer[K]) treeDelete(key K) bool {
 			w.rootPgno = 0
 			w.treeHeight = 0
 		} else {
-			w.rootPgno = w.writeLeaf(recs)
+			p, err := w.writeLeaf(recs)
+			if err != nil {
+				return false, err
+			}
+			w.rootPgno = p
 		}
 	} else {
-		newRoot, _ := w.cowDelete(w.rootPgno, 1, key)
+		newRoot, _, err := w.cowDelete(w.rootPgno, 1, key)
+		if err != nil {
+			return false, err
+		}
 		w.rootPgno = newRoot
 		// Collapse a root branch that fell to a single child (height shrinks).
 		for w.treeHeight > 1 {
@@ -499,13 +596,13 @@ func (w *Writer[K]) treeDelete(key K) bool {
 		}
 	}
 	w.recordCount--
-	return true
+	return true, nil
 }
 
 // cowDelete is the recursive COW delete. It returns (new_pgno, underflowed) — underflow =
 // an empty leaf or a single-child branch, which the parent (or treeDelete at the root)
 // repairs.
-func (w *Writer[K]) cowDelete(pgno, depth uint32, key K) (uint32, bool) {
+func (w *Writer[K]) cowDelete(pgno, depth uint32, key K) (uint32, bool, error) {
 	if depth == w.treeHeight {
 		recs := w.readLeaf(pgno)
 		w.freePage(pgno)
@@ -513,24 +610,36 @@ func (w *Writer[K]) cowDelete(pgno, depth uint32, key K) (uint32, bool) {
 		if pos < len(recs) && recs[pos].from.cmp(key) == 0 {
 			recs = removeRecord(recs, pos)
 		}
-		p := w.writeLeaf(recs)
-		return p, len(recs) == 0
+		p, err := w.writeLeaf(recs)
+		if err != nil {
+			return 0, false, err
+		}
+		return p, len(recs) == 0, nil
 	}
 	seps, children := w.readBranch(pgno)
 	w.freePage(pgno)
 	i := partitionIdx(len(seps), func(j int) bool { return seps[j].cmp(key) <= 0 })
-	nc, childUF := w.cowDelete(children[i], depth+1, key)
+	nc, childUF, err := w.cowDelete(children[i], depth+1, key)
+	if err != nil {
+		return 0, false, err
+	}
 	children[i] = nc
 	if childUF {
-		seps, children = w.rebalance(seps, children, i, depth+1)
+		seps, children, err = w.rebalance(seps, children, i, depth+1)
+		if err != nil {
+			return 0, false, err
+		}
 	}
-	p := w.writeBranch(seps, children)
-	return p, len(children) < 2
+	p, err := w.writeBranch(seps, children)
+	if err != nil {
+		return 0, false, err
+	}
+	return p, len(children) < 2, nil
 }
 
 // rebalance merges an underflowed children[i] with an adjacent sibling and re-emits (1 or
 // 2 nodes), patching seps/children. Balance-preserving.
-func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uint32) ([]K, []uint32) {
+func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uint32) ([]K, []uint32, error) {
 	var l, r, sepIdx int
 	if i > 0 {
 		l, r, sepIdx = i-1, i, i-1
@@ -540,13 +649,14 @@ func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uin
 	var p, p2 uint32
 	var newsep K
 	var split bool
+	var err error
 	if childDepth == w.treeHeight {
 		recs := w.readLeaf(children[l])
 		rr := w.readLeaf(children[r])
 		recs = append(recs, rr...)
 		w.freePage(children[l])
 		w.freePage(children[r])
-		p, newsep, p2, split = w.emitLeaf(recs)
+		p, newsep, p2, split, err = w.emitLeaf(recs)
 	} else {
 		s1, c1 := w.readBranch(children[l])
 		s2, c2 := w.readBranch(children[r])
@@ -555,7 +665,10 @@ func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uin
 		s1 = append(s1, seps[sepIdx])
 		s1 = append(s1, s2...)
 		c1 = append(c1, c2...)
-		p, newsep, p2, split = w.emitBranch(s1, c1)
+		p, newsep, p2, split, err = w.emitBranch(s1, c1)
+	}
+	if err != nil {
+		return nil, nil, err
 	}
 	if !split {
 		children[l] = p
@@ -566,7 +679,7 @@ func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uin
 		children[r] = p2
 		seps[sepIdx] = newsep
 	}
-	return seps, children
+	return seps, children, nil
 }
 
 // --- read-path queries over the pending tree ---
@@ -678,7 +791,10 @@ func (w *Writer[K]) lookupGE(key K) (from, to K, scope []byte, found bool) {
 		b := newBranchView[K](bpage, bcount)
 		if fr.ci+1 < b.childCount() {
 			p := b.child(fr.ci + 1)
-			for {
+			// Leftmost descent, bounded by treeHeightMax so a malformed tree can never
+			// loop (the writer only operates on validated trees, so the cap is never
+			// reached in practice — it is a defensive termination guarantee).
+			for d := uint32(0); d < treeHeightMax; d++ {
 				pp := w.page(p)
 				if decodePageHeader(pp).pageType == pageTypeLeaf {
 					break

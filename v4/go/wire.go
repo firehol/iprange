@@ -77,9 +77,7 @@ type meta struct {
 // header (page_type=1, entry_count=0, pgno), magic, version_major, every field at its
 // §5.1 offset, then finalize the checksum. page MUST be exactly pageSize bytes.
 func (m *meta) encodeInto(page []byte) {
-	for i := range page {
-		page[i] = 0
-	}
+	clear(page)
 	writePageHeader(page, pageTypeMeta, 0, m.pgno)
 	copy(page[metaMagic:metaMagic+8], magic[:])
 	le.PutUint16(page[metaVersionMajor:], versionMajor)
