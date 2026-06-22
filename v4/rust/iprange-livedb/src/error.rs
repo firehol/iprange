@@ -63,6 +63,13 @@ pub enum Error {
     /// width, wrong key family, or growth past the `2^32`-page / `TREE_HEIGHT_MAX`
     /// limit). §8.
     InvalidInput(&'static str),
+    /// The v4 state cannot be expressed as a v3 snapshot: the v3 writer rejected the
+    /// exported `(range, value)` stream (§13 — `unique_ip_count` reaches `2^128`, the
+    /// distinct `(type_id, value)` pairs exceed v3's values-table cap, or the caller's
+    /// `type_id` / `scope` is not a conforming v3 value). Carries the v3 writer's
+    /// reason. Distinct from a corrupt-v4 or family-mismatch error, which are normal.
+    #[cfg(all(feature = "alloc", feature = "export-v3"))]
+    ExportUnrepresentable(alloc::string::String),
     /// An underlying I/O error (only with `std`).
     #[cfg(feature = "std")]
     Io(std::io::Error),
@@ -87,6 +94,10 @@ impl fmt::Display for Error {
             Error::ChecksumFailed(w) => write!(f, "page checksum failed: {w}"),
             Error::Incompatible(w) => write!(f, "incompatible (fail closed): {w}"),
             Error::InvalidInput(w) => write!(f, "invalid writer input: {w}"),
+            #[cfg(all(feature = "alloc", feature = "export-v3"))]
+            Error::ExportUnrepresentable(w) => {
+                write!(f, "v4 state not representable as a v3 snapshot: {w}")
+            }
             #[cfg(feature = "std")]
             Error::Io(e) => write!(f, "io error: {e}"),
         }

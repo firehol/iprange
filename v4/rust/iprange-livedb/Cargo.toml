@@ -15,10 +15,15 @@ alloc = []
 # `os`: the Unix file layer — mmap reader (memmap2) and the pread/pwrite+fsync+flock
 # writer (libc) with the §10 O_NOFOLLOW / hole-detection / fstat hardening.
 os = ["std", "dep:memmap2", "dep:libc"]
+# `export-v3`: the v4 -> v3 snapshot bridge (§13). Opt-in so the core stays free of the
+# v3 crate dependency; pulls in the sibling v3 writer to seal the export.
+export-v3 = ["std", "dep:iprange-format"]
 
 [dependencies]
 memmap2 = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
+# The v3 snapshot writer (§13 export target). Optional, gated behind `export-v3`.
+iprange-format = { path = "../../../v3/rust/iprange-format", optional = true }
 
 # Test-only: the conformance harness parses the shared language-neutral cases.json.
 [dev-dependencies]

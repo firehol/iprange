@@ -7,4 +7,10 @@ module github.com/firehol/iprange/v4/go
 
 go 1.23
 
-require golang.org/x/sys v0.30.0
+require (
+	github.com/firehol/iprange/v3/go v0.0.0
+	golang.org/x/sys v0.30.0
+)
+
+// The v3 snapshot writer is the §13 export target. Use the in-repo sibling module.
+replace github.com/firehol/iprange/v3/go => ../../v3/go

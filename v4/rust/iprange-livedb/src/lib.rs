@@ -43,6 +43,12 @@ pub mod wire;
 #[cfg(feature = "alloc")]
 pub mod writer;
 
+/// The v4 -> v3 snapshot bridge (§13): export a sealed, canonical v3 file from a
+/// validated v4 image. Opt-in (`export-v3` feature) so the core stays free of the v3
+/// crate dependency.
+#[cfg(feature = "export-v3")]
+pub mod export;
+
 /// The Unix file layer (mmap reader + pread/pwrite writer with `flock` and the §10
 /// hardening). Unix-only; on other targets use [`Reader`] over bytes and [`Writer`]
 /// over an in-memory image.
@@ -58,3 +64,6 @@ pub use wire::Meta;
 
 #[cfg(feature = "alloc")]
 pub use writer::Writer;
+
+#[cfg(feature = "export-v3")]
+pub use export::{export_v3, V3Meta};
