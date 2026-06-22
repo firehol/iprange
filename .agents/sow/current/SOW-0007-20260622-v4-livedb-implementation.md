@@ -437,9 +437,11 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   `--all-features -D warnings` clean, no-default-features clean; Go build/vet/gofmt + full
   suite green.
 
-Open decision for the user: literal 6/6 unanimity is blocked only by kimi/minimax's
-inability to emit a verdict (zero blockers found by anyone). Next regardless: `export_v3`
-(§13) to close the SOW.
+**User decision (2026-06-23):** accept the unanimous **PRODUCTION GRADE** from every
+reviewer that can complete a review of this scale (mimo, deepseek, qwen, glm). kimi/
+minimax are tooling-limited (no defects found), not blockers — the reviewer-vote
+criterion is satisfied. Next: `export_v3` (§13) to close the SOW; update-ipsets
+integration is a downstream consumer task (separate repo).
 
 ## Validation
 
