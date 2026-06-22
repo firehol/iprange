@@ -336,9 +336,26 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   ordered scan correct) and multi-commit page reuse. clippy `-D warnings` clean;
   no_std+alloc and core-only builds clean.
 
-Next: Step 1c-ii — `delete` (underflow merge/borrow, root collapse) + range `set`/
-`delete` (boundary trim + coalesce) composed on `insert`/`delete`, validated by a
-random-op **oracle** (in-memory interval map). Then the OS file/flock/mmap layer.
+**2026-06-22 — Step 1c-ii: writer range set/delete + oracle (done, green).**
+- `writer.rs` — full range mutation (§8): `set` (clear range + insert + same-scope
+  coalesce), `delete` (straddle split, boundary trim, interior removal), `scan`.
+  Internals: `cow_delete` (recursive COW delete) + `rebalance` (sibling-merge,
+  balance-preserving, re-split on overflow) + root collapse; cursor-based `lookup_ge`
+  successor (no sibling pointers, D3), `lookup_covering`, `contains_from`. `insert`
+  made private (the disjoint building block); public API is `set`/`delete`.
+- **Oracle** (the correctness backbone): random `set`/`delete` sequences compared to an
+  independent in-memory interval map after **every** op (scan + `record_count`), then
+  final `Reader::open` full-validation. v4: 6000 ops; v6: 3000 ops (exercises 16-byte
+  keys / 20-byte branch entries through splits/merges). Both pass.
+- Verified: **35/35 tests**; clippy `-D warnings` clean; no_std+alloc + core builds clean.
+- Complexity: range ops `O(k log n)` (k = overlapping records) — point/small-range ops
+  (retention's common case) are effectively `O(log n)`. Documented; a single-pass
+  `O(log n + k)` range path is a possible later optimization (SOW-0005).
+
+Next: Step 1d — the **OS layer** (file open `O_NOFOLLOW|O_CLOEXEC`, `fstat`, `SEEK_HOLE`,
+`mmap` reader, `pread`/`pwrite`+`fsync` writer with the two commit barriers, `flock`,
+writer `open` of an existing file + derived free-set), crash-injection tests, then
+`export_v3`; then the conformance corpus + fuzz; then the Go port.
 
 ## Validation
 

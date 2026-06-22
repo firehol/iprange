@@ -8,10 +8,11 @@
 //! the new state into the **inactive** meta and flips it (§6.3). A crash leaves the
 //! file as old-or-new, never torn (the active meta only points at durable pages).
 //!
-//! This increment implements **create**, the COW B+tree `insert` primitive (with leaf
-//! split and root growth), and `commit`. Range `set` / `delete` (which compose
-//! `insert` with trimming/coalescing) and underflow merge/borrow land next; the OS
-//! file/flock layer wraps this core.
+//! Implements **create**, range `set` / `delete` (§8) over a COW B+tree (leaf/branch
+//! split + root growth on insert; sibling-merge + root-collapse on delete), `scan`,
+//! and `commit`. `set` / `delete` compose a disjoint-`insert` primitive with boundary
+//! trimming and same-scope coalescing. The OS file/`flock`/`mmap` layer wraps this
+//! core (next increment).
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -79,11 +80,61 @@ impl<K: IpKey> Writer<K> {
         w
     }
 
+    /// `set([from,to]) = scope` unconditionally (§8, D11): clears the range, then
+    /// inserts `[from,to,scope]` coalescing with byte-equal-scope adjacent neighbours.
+    /// `O(k log n)` (k = records overlapping the range).
+    pub fn set(&mut self, from: K, to: K, scope: &[u8]) -> Result<()> {
+        if to < from {
+            return Err(Error::InvalidInput("set from > to"));
+        }
+        if scope.len() != self.scope_width {
+            return Err(Error::InvalidInput("set scope width mismatch"));
+        }
+        self.delete_range(from, to);
+        let (mut nf, mut nt) = (from, to);
+        // Coalesce with a same-scope neighbour ending at from-1.
+        if let Some(fm1) = from.checked_dec() {
+            if let Some((lf, lt, ls)) = self.lookup_covering(fm1) {
+                if lt == fm1 && ls == scope {
+                    self.tree_delete(lf);
+                    nf = lf;
+                }
+            }
+        }
+        // Coalesce with a same-scope neighbour starting at to+1.
+        if let Some(tp1) = to.checked_inc() {
+            if let Some((rf, rt, rs)) = self.lookup_covering(tp1) {
+                if rf == tp1 && rs == scope {
+                    self.tree_delete(rf);
+                    nt = rt;
+                }
+            }
+        }
+        self.insert(nf, nt, scope)
+    }
+
+    /// `delete([from,to])`: make the range absent (§8). Splits a straddling record,
+    /// trims boundaries, removes records fully inside; a wholly-absent range is a no-op.
+    /// `O(k log n)`.
+    pub fn delete(&mut self, from: K, to: K) -> Result<()> {
+        if to < from {
+            return Err(Error::InvalidInput("delete from > to"));
+        }
+        self.delete_range(from, to);
+        Ok(())
+    }
+
+    /// In-order scan of the (pending) tree: `f(from, to, scope)` per record. Zero-alloc.
+    pub fn scan<F: FnMut(K, K, &[u8])>(&self, mut f: F) {
+        if self.root_pgno != 0 {
+            self.scan_node(self.root_pgno, 1, &mut f);
+        }
+    }
+
     /// Insert a **disjoint** record `[from, to] = scope` (the caller guarantees it does
-    /// not overlap an existing range and `from` is unique). The building block for
-    /// `set` (range `set` / `delete` compose this with trimming/coalescing — next
-    /// increment). COW: touches `O(log n)` pages.
-    pub fn insert(&mut self, from: K, to: K, scope: &[u8]) -> Result<()> {
+    /// not overlap an existing range and `from` is unique). The COW building block for
+    /// `set` / `delete`. Touches `O(log n)` pages.
+    fn insert(&mut self, from: K, to: K, scope: &[u8]) -> Result<()> {
         if to < from {
             return Err(Error::InvalidInput("insert from > to"));
         }
@@ -312,6 +363,274 @@ impl<K: IpKey> Writer<K> {
     fn free_page(&mut self, pgno: u32) {
         self.freed_this_txn.push(pgno);
     }
+
+    // --- range mutation internals ---
+
+    /// Remove everything overlapping `[from, to]`, re-inserting the parts of straddling
+    /// records that fall outside (left `[rf, from-1]`, right `[to+1, rt]`).
+    fn delete_range(&mut self, from: K, to: K) {
+        while let Some((rf, rt, scope)) = self.any_overlap(from, to) {
+            self.tree_delete(rf);
+            if rf < from {
+                let fm1 = from.checked_dec().expect("from > rf >= family_min");
+                let _ = self.insert(rf, fm1, &scope);
+            }
+            if rt > to {
+                let tp1 = to.checked_inc().expect("to < rt <= family_max");
+                let _ = self.insert(tp1, rt, &scope);
+            }
+        }
+    }
+
+    /// Any record overlapping `[from, to]` (or `None`). The covering record of `from`
+    /// (single-leaf) else the successor of `from` if it starts within the range.
+    fn any_overlap(&self, from: K, to: K) -> Option<(K, K, Vec<u8>)> {
+        if let Some(r) = self.lookup_covering(from) {
+            return Some(r);
+        }
+        if let Some(r) = self.lookup_ge(from) {
+            if r.0 <= to {
+                return Some(r);
+            }
+        }
+        None
+    }
+
+    /// Delete the record whose `from == key` (rebalancing on underflow; collapsing the
+    /// root). Returns whether a record was removed.
+    fn tree_delete(&mut self, key: K) -> bool {
+        if self.root_pgno == 0 || !self.contains_from(key) {
+            return false;
+        }
+        if self.tree_height == 1 {
+            let mut recs = self.read_leaf(self.root_pgno);
+            self.free_page(self.root_pgno);
+            let pos = recs.partition_point(|r| r.from < key);
+            recs.remove(pos);
+            if recs.is_empty() {
+                self.root_pgno = 0;
+                self.tree_height = 0;
+            } else {
+                self.root_pgno = self.write_leaf(&recs);
+            }
+        } else {
+            let (new_root, _uf) = self.cow_delete(self.root_pgno, 1, key);
+            self.root_pgno = new_root;
+            // Collapse a root branch that fell to a single child (height shrinks).
+            while self.tree_height > 1 {
+                let page = self.page(self.root_pgno);
+                let sep_count = PageHeader::decode(page).entry_count as usize;
+                if sep_count >= 1 {
+                    break;
+                }
+                let only = BranchView::<K>::new(page, 0).child(0);
+                self.free_page(self.root_pgno);
+                self.root_pgno = only;
+                self.tree_height -= 1;
+            }
+        }
+        self.record_count -= 1;
+        true
+    }
+
+    /// Recursive COW delete. Returns `(new_pgno, underflowed)` — underflow = an empty
+    /// leaf or a single-child branch, which the parent (or `tree_delete` at the root)
+    /// repairs.
+    fn cow_delete(&mut self, pgno: u32, depth: u32, key: K) -> (u32, bool) {
+        if depth == self.tree_height {
+            let mut recs = self.read_leaf(pgno);
+            self.free_page(pgno);
+            let pos = recs.partition_point(|r| r.from < key);
+            if pos < recs.len() && recs[pos].from == key {
+                recs.remove(pos);
+            }
+            let p = self.write_leaf(&recs);
+            (p, recs.is_empty())
+        } else {
+            let (mut seps, mut children) = self.read_branch(pgno);
+            self.free_page(pgno);
+            let i = seps.partition_point(|s| *s <= key);
+            let (nc, child_uf) = self.cow_delete(children[i], depth + 1, key);
+            children[i] = nc;
+            if child_uf {
+                self.rebalance(&mut seps, &mut children, i, depth + 1);
+            }
+            let p = self.write_branch(&seps, &children);
+            (p, children.len() < 2)
+        }
+    }
+
+    /// Merge an underflowed `children[i]` with an adjacent sibling and re-emit (1 or 2
+    /// nodes), patching `seps`/`children`. Balance-preserving.
+    fn rebalance(&mut self, seps: &mut Vec<K>, children: &mut Vec<u32>, i: usize, child_depth: u32) {
+        let (l, r, sep_idx) = if i > 0 { (i - 1, i, i - 1) } else { (i, i + 1, i) };
+        let (p, split) = if child_depth == self.tree_height {
+            let mut recs = self.read_leaf(children[l]);
+            let mut rr = self.read_leaf(children[r]);
+            recs.append(&mut rr);
+            self.free_page(children[l]);
+            self.free_page(children[r]);
+            self.emit_leaf(&recs)
+        } else {
+            let (mut s1, mut c1) = self.read_branch(children[l]);
+            let (mut s2, mut c2) = self.read_branch(children[r]);
+            self.free_page(children[l]);
+            self.free_page(children[r]);
+            s1.push(seps[sep_idx]);
+            s1.append(&mut s2);
+            c1.append(&mut c2);
+            self.emit_branch(&s1, &c1)
+        };
+        match split {
+            None => {
+                children[l] = p;
+                children.remove(r);
+                seps.remove(sep_idx);
+            }
+            Some((newsep, p2)) => {
+                children[l] = p;
+                children[r] = p2;
+                seps[sep_idx] = newsep;
+            }
+        }
+    }
+
+    // --- read-path queries over the pending tree ---
+
+    fn scan_node<F: FnMut(K, K, &[u8])>(&self, pgno: u32, depth: u32, f: &mut F) {
+        let page = self.page(pgno);
+        let count = PageHeader::decode(page).entry_count as usize;
+        if depth == self.tree_height {
+            let leaf = LeafView::<K>::new(page, count, self.record_size);
+            for i in 0..count {
+                let rec = leaf.record(i);
+                f(rec.from(), rec.to(), rec.scope());
+            }
+        } else {
+            let branch = BranchView::<K>::new(page, count);
+            for j in 0..branch.child_count() {
+                self.scan_node(branch.child(j), depth + 1, f);
+            }
+        }
+    }
+
+    /// The leaf page that would contain `key` (0 if empty).
+    fn descend_to_leaf(&self, key: K) -> u32 {
+        if self.root_pgno == 0 {
+            return 0;
+        }
+        let mut pgno = self.root_pgno;
+        let mut depth = 1;
+        while depth < self.tree_height {
+            let page = self.page(pgno);
+            let count = PageHeader::decode(page).entry_count as usize;
+            let b = BranchView::<K>::new(page, count);
+            let i = partition_idx(count, |j| b.sep(j) <= key);
+            pgno = b.child(i);
+            depth += 1;
+        }
+        pgno
+    }
+
+    /// The record covering `key` (`from <= key <= to`). Single-leaf.
+    fn lookup_covering(&self, key: K) -> Option<(K, K, Vec<u8>)> {
+        let pgno = self.descend_to_leaf(key);
+        if pgno == 0 {
+            return None;
+        }
+        let page = self.page(pgno);
+        let count = PageHeader::decode(page).entry_count as usize;
+        let leaf = LeafView::<K>::new(page, count, self.record_size);
+        let pos = partition_idx(count, |i| leaf.record(i).from() <= key);
+        if pos == 0 {
+            return None;
+        }
+        let r = leaf.record(pos - 1);
+        if key <= r.to() {
+            Some((r.from(), r.to(), r.scope().to_vec()))
+        } else {
+            None
+        }
+    }
+
+    /// Whether a record with exactly `from == key` exists.
+    fn contains_from(&self, key: K) -> bool {
+        let pgno = self.descend_to_leaf(key);
+        if pgno == 0 {
+            return false;
+        }
+        let page = self.page(pgno);
+        let count = PageHeader::decode(page).entry_count as usize;
+        let leaf = LeafView::<K>::new(page, count, self.record_size);
+        let pos = partition_idx(count, |i| leaf.record(i).from() < key);
+        pos < count && leaf.record(pos).from() == key
+    }
+
+    /// The record with the smallest `from >= key` (successor), via a cursor that walks
+    /// to the next leaf when needed (no sibling pointers, D3).
+    fn lookup_ge(&self, key: K) -> Option<(K, K, Vec<u8>)> {
+        if self.root_pgno == 0 {
+            return None;
+        }
+        let mut stack: Vec<(u32, usize)> = Vec::new();
+        let mut pgno = self.root_pgno;
+        let mut depth = 1;
+        while depth < self.tree_height {
+            let page = self.page(pgno);
+            let count = PageHeader::decode(page).entry_count as usize;
+            let b = BranchView::<K>::new(page, count);
+            let i = partition_idx(count, |j| b.sep(j) <= key);
+            stack.push((pgno, i));
+            pgno = b.child(i);
+            depth += 1;
+        }
+        let page = self.page(pgno);
+        let count = PageHeader::decode(page).entry_count as usize;
+        let leaf = LeafView::<K>::new(page, count, self.record_size);
+        let pos = partition_idx(count, |i| leaf.record(i).from() < key);
+        if pos < count {
+            let r = leaf.record(pos);
+            return Some((r.from(), r.to(), r.scope().to_vec()));
+        }
+        // No record >= key in this leaf; ascend to the nearest next child, descend left.
+        while let Some((bp, ci)) = stack.pop() {
+            let bpage = self.page(bp);
+            let bcount = PageHeader::decode(bpage).entry_count as usize;
+            let b = BranchView::<K>::new(bpage, bcount);
+            if ci + 1 < b.child_count() {
+                let mut p = b.child(ci + 1);
+                loop {
+                    let pp = self.page(p);
+                    if PageHeader::decode(pp).page_type == spec::PAGE_TYPE_LEAF {
+                        break;
+                    }
+                    let cnt = PageHeader::decode(pp).entry_count as usize;
+                    p = BranchView::<K>::new(pp, cnt).child(0);
+                }
+                let lpage = self.page(p);
+                let lcount = PageHeader::decode(lpage).entry_count as usize;
+                let r = LeafView::<K>::new(lpage, lcount, self.record_size).record(0);
+                return Some((r.from(), r.to(), r.scope().to_vec()));
+            }
+        }
+        None
+    }
+}
+
+/// `partition_point` over an index range `[0, count)`: the number of indices for which
+/// `pred` (monotone true-then-false) holds — i.e. the first index where it is false.
+#[inline]
+fn partition_idx<P: Fn(usize) -> bool>(count: usize, pred: P) -> usize {
+    let (mut lo, mut hi) = (0usize, count);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
 }
 
 impl<K: IpKey> core::fmt::Debug for Writer<K> {
@@ -419,5 +738,126 @@ mod tests {
         assert_eq!(r.record_count(), 260);
         assert_eq!(r.lookup_v4(k(2550)).unwrap(), Some(&[255u8][..]));
         assert!(pages_after_first >= 2); // sanity: the file grew at least past the metas
+    }
+
+    // --- the oracle: random set/delete vs. an independent in-memory interval map ---
+
+    fn oracle_delete(o: &mut Vec<(u32, u32, u8)>, from: u32, to: u32) {
+        let mut out = Vec::with_capacity(o.len() + 2);
+        for &(rf, rt, sc) in o.iter() {
+            if rt < from || rf > to {
+                out.push((rf, rt, sc)); // no overlap
+            } else {
+                if rf < from {
+                    out.push((rf, from - 1, sc));
+                }
+                if rt > to {
+                    out.push((to + 1, rt, sc));
+                }
+            }
+        }
+        *o = out;
+    }
+
+    fn oracle_set(o: &mut Vec<(u32, u32, u8)>, from: u32, to: u32, scope: u8) {
+        oracle_delete(o, from, to);
+        let (mut nf, mut nt) = (from, to);
+        if from > 0 {
+            if let Some(idx) = o.iter().position(|r| r.1 == from - 1 && r.2 == scope) {
+                nf = o[idx].0;
+                o.remove(idx);
+            }
+        }
+        if to < u32::MAX {
+            if let Some(idx) = o.iter().position(|r| r.0 == to + 1 && r.2 == scope) {
+                nt = o[idx].1;
+                o.remove(idx);
+            }
+        }
+        let pos = o.partition_point(|r| r.0 < nf);
+        o.insert(pos, (nf, nt, scope));
+    }
+
+    #[test]
+    fn oracle_random_set_delete_v4() {
+        // Deterministic LCG so failures reproduce. Small key space ⇒ heavy overlap,
+        // splits, merges, straddles, coalescing.
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut rng = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let mut oracle: Vec<(u32, u32, u8)> = Vec::new();
+        let span = 250u32;
+
+        for step in 0..6000u32 {
+            let (a, b) = (rng() % span, rng() % span);
+            let (from, to) = if a <= b { (a, b) } else { (b, a) };
+            if rng() & 1 == 0 {
+                let scope = (rng() % 4) as u8;
+                w.set(k(from), k(to), &[scope]).unwrap();
+                oracle_set(&mut oracle, from, to, scope);
+            } else {
+                w.delete(k(from), k(to)).unwrap();
+                oracle_delete(&mut oracle, from, to);
+            }
+            let mut got = Vec::new();
+            w.scan(|f, t, s| got.push((f.0, t.0, s[0])));
+            assert_eq!(got, oracle, "writer/oracle diverged at step {step}");
+            assert_eq!(w.record_count(), oracle.len() as u64, "count at step {step}");
+        }
+
+        // The whole on-disk structure must pass the reader's full validation.
+        w.commit(0);
+        let img = w.into_image();
+        let r = Reader::open(&img).unwrap();
+        let mut got = Vec::new();
+        r.scan_v4(|f, t, s| got.push((f.0, t.0, s[0]))).unwrap();
+        assert_eq!(got, oracle);
+        assert_eq!(r.record_count(), oracle.len() as u64);
+    }
+
+    #[test]
+    fn oracle_random_set_delete_v6() {
+        // Same oracle, IPv6 keys (16-byte records / 20-byte branch entries) — exercises
+        // the v6 leaf/branch offset arithmetic through splits and merges.
+        use crate::key::Ipv6Key;
+        let k6 = |n: u32| Ipv6Key { hi: 0, lo: n as u64 };
+        let mut state = 0x0fed_cba9_8765_4321u64;
+        let mut rng = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as u32
+        };
+
+        let mut w = Writer::<Ipv6Key>::create(3, 0);
+        let mut oracle: Vec<(u32, u32, u8)> = Vec::new();
+        let span = 200u32;
+
+        for step in 0..3000u32 {
+            let (a, b) = (rng() % span, rng() % span);
+            let (from, to) = if a <= b { (a, b) } else { (b, a) };
+            if rng() & 1 == 0 {
+                let scope = (rng() % 3) as u8;
+                w.set(k6(from), k6(to), &[scope, scope, scope]).unwrap();
+                oracle_set(&mut oracle, from, to, scope);
+            } else {
+                w.delete(k6(from), k6(to)).unwrap();
+                oracle_delete(&mut oracle, from, to);
+            }
+            let mut got = Vec::new();
+            w.scan(|f, _t, s| got.push((f.lo as u32, s[0])));
+            let want: Vec<(u32, u8)> = oracle.iter().map(|r| (r.0, r.2)).collect();
+            assert_eq!(got, want, "v6 writer/oracle diverged at step {step}");
+        }
+        w.commit(0);
+        let img = w.into_image();
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), oracle.len() as u64);
     }
 }
