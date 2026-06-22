@@ -945,6 +945,58 @@ mod tests {
         assert!(Writer::<Ipv4Key>::open_image(img).is_err());
     }
 
+    // --- crash recovery (§6.3): construct each post-crash on-disk state, verify the
+    //     reader recovers old-or-new, never torn ---
+
+    #[test]
+    fn crash_before_meta_flip_keeps_old_tree() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(1), &[1]).unwrap();
+        w.commit(1); // T1 = {[1,1]=1} durable
+        // A second txn writes new data pages but is NOT committed (crash before the
+        // meta flip): the active meta still points at T1; the new pages are orphans.
+        w.set(k(2), k(2), &[2]).unwrap();
+        let img = w.image().to_vec();
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), 1);
+        assert_eq!(r.lookup_v4(k(1)).unwrap(), Some(&[1u8][..]));
+        assert_eq!(r.lookup_v4(k(2)).unwrap(), None); // uncommitted set is invisible
+    }
+
+    #[test]
+    fn crash_with_torn_new_meta_falls_back_to_old() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(1), &[1]).unwrap();
+        w.commit(1); // T1
+        w.set(k(2), k(2), &[2]).unwrap();
+        w.commit(2); // T2 = {[1,1]=1, [2,2]=2}; active meta = the page just written
+        let mut img = w.into_image();
+        // Tear the active (higher-txn) meta — corrupt a checksum-covered byte, as a
+        // crash mid-write of Barrier 2 would. The reader MUST fall back to the previous
+        // valid meta and recover T1 intact (its pages were freed but not yet reused).
+        let txn0 = Meta::decode(&img[..PAGE_SIZE]).txn_id;
+        let txn1 = Meta::decode(&img[PAGE_SIZE..2 * PAGE_SIZE]).txn_id;
+        let active = if txn0 >= txn1 { 0 } else { 1 };
+        img[active * PAGE_SIZE + 64] ^= 0xFF;
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), 1); // recovered T1
+        assert_eq!(r.lookup_v4(k(1)).unwrap(), Some(&[1u8][..]));
+        assert_eq!(r.lookup_v4(k(2)).unwrap(), None);
+    }
+
+    #[test]
+    fn committed_new_meta_yields_new_tree() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(1), &[1]).unwrap();
+        w.commit(1);
+        w.set(k(2), k(2), &[2]).unwrap();
+        w.commit(2); // crash *after* Barrier 2 ⇒ the new tree is durable
+        let img = w.into_image();
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), 2);
+        assert_eq!(r.lookup_v4(k(2)).unwrap(), Some(&[2u8][..]));
+    }
+
     #[test]
     fn oracle_random_set_delete_v6() {
         // Same oracle, IPv6 keys (16-byte records / 20-byte branch entries) — exercises
