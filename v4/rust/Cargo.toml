@@ -1,0 +1,21 @@
+# iprange v4 Rust workspace.
+# The v4 **live mutable on-disk DB** (`design-iprange-v4-livedb.md`, LOCKED). Member
+# `iprange-livedb` is the Rust **reference** implementation and the C-facing library
+# (decision O3). Built bottom-up: foundation -> reader -> writer -> v3 export.
+# Distinct from the v3 snapshot workspace under ../v3/rust.
+[workspace]
+resolver = "2"
+members = ["iprange-livedb"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.74"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/firehol/iprange"
+
+[workspace.dependencies]
+# The mmap reader (a later increment) pulls in memmap2 + libc for the §10
+# O_NOFOLLOW / hole-detection / fstat hardening and flock(2). Pinned here; not yet
+# referenced by any member (the foundation has no external dependencies).
+memmap2 = "0.9"
+libc = "0.2"

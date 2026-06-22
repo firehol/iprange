@@ -1,0 +1,18 @@
+[package]
+name = "iprange-livedb"
+version = "0.0.0"
+description = "Reader/writer for the iprange v4 live mutable on-disk DB format"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["std"]
+# `std`: the filesystem reader/writer (mmap, flock, pwrite/fsync) — added in later
+# increments. The on-disk types, CRC32C, key arithmetic, and (de)serialization core
+# stay usable without it (core, plus `alloc` once the writer needs owned buffers).
+std = ["alloc"]
+alloc = []
+
+[dependencies]

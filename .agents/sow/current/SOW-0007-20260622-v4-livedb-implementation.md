@@ -282,7 +282,27 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   incremental-build cache with the old `CARGO_MANIFEST_DIR` baked in — gone after
   `cargo clean`). `git grep` confirms zero stale old-path references in tracked files.
 
-Next: Step 1 — scaffold and build the Rust v4 reference engine under `v4/`.
+**2026-06-22 — Step 1a: Rust v4 foundation layer (done, green).**
+- `v4/rust/` workspace + `v4/rust/iprange-livedb/` crate, mirroring the v3 crate's
+  idioms (no_std core, `std`/`alloc` features, `IpKey` trait, typed `Error`, the
+  `spec`/`wire` LE split). Modules (~1163 src lines incl. tests):
+  - `spec.rs` — every v4 constant + the §5.1 meta byte offsets + geometry
+    (`record_size`/`leaf_max`/`branch_max`) with a contiguity self-check.
+  - `crc32c.rs` — CRC32C/Castagnoli (D9), const table, `page_checksum`/`verify_page`
+    (whole-page span with the checksum field zeroed; high-32-bits-zero rule). Spec
+    vector `crc32c("123456789") == 0xE3069283` verified.
+  - `key.rs` — `Ipv4Key`/`Ipv6Key` (numeric order, §4 `u128_inc`/`dec` boundaries).
+  - `record.rs` — zero-copy `RecordRef` + `write`; `scope` always borrowed (D11).
+  - `wire.rs` — unaligned LE primitives (D8), `PageHeader`, `Meta` (de)serializer +
+    the **meta byte-offset anchor test** (every §5.1 field at its exact offset).
+  - `error.rs` — typed reject errors.
+- Verified: build clean; **19/19 unit tests pass**; `clippy --all-targets -D warnings`
+  clean; no_std build (`--no-default-features --features alloc`) clean. (The fork I
+  first delegated this to produced a narrative but made zero tool calls — created
+  nothing; caught by a filesystem check, then built directly. Lesson recorded.)
+
+Next: Step 1b — the **reader** (mmap + pread fallback, flock(SH), §5.1 bootstrap +
+meta selection, recursive `validate_node`, `lookup`/`scan`).
 
 ## Validation
 
