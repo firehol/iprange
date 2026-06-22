@@ -19,3 +19,8 @@ os = ["std", "dep:memmap2", "dep:libc"]
 [dependencies]
 memmap2 = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
+
+# Test-only: the conformance harness parses the shared language-neutral cases.json.
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

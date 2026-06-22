@@ -1,0 +1,151 @@
+[
+  {
+    "name": "empty",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [],
+    "expect_scan": [],
+    "expect_lookup": [["5", null]]
+  },
+  {
+    "name": "single",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [{"op": "set", "from": "10", "to": "20", "scope": [1]}],
+    "expect_scan": [["10", "20", [1]]],
+    "expect_lookup": [["9", null], ["10", [1]], ["15", [1]], ["20", [1]], ["21", null]]
+  },
+  {
+    "name": "split_middle",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "100", "scope": [1]},
+      {"op": "set", "from": "40", "to": "50", "scope": [2]}
+    ],
+    "expect_scan": [["1", "39", [1]], ["40", "50", [2]], ["51", "100", [1]]],
+    "expect_lookup": [["39", [1]], ["40", [2]], ["50", [2]], ["51", [1]]]
+  },
+  {
+    "name": "coalesce_adjacent_same_scope",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "10", "scope": [7]},
+      {"op": "set", "from": "11", "to": "20", "scope": [7]}
+    ],
+    "expect_scan": [["1", "20", [7]]],
+    "expect_lookup": [["10", [7]], ["11", [7]]]
+  },
+  {
+    "name": "no_coalesce_across_gap",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "10", "scope": [7]},
+      {"op": "set", "from": "12", "to": "20", "scope": [7]}
+    ],
+    "expect_scan": [["1", "10", [7]], ["12", "20", [7]]],
+    "expect_lookup": [["11", null]]
+  },
+  {
+    "name": "no_coalesce_different_scope",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "10", "scope": [1]},
+      {"op": "set", "from": "11", "to": "20", "scope": [2]}
+    ],
+    "expect_scan": [["1", "10", [1]], ["11", "20", [2]]],
+    "expect_lookup": []
+  },
+  {
+    "name": "overwrite_same_range",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "10", "scope": [1]},
+      {"op": "set", "from": "1", "to": "10", "scope": [2]}
+    ],
+    "expect_scan": [["1", "10", [2]]],
+    "expect_lookup": [["5", [2]]]
+  },
+  {
+    "name": "delete_interior",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "100", "scope": [1]},
+      {"op": "delete", "from": "40", "to": "50"}
+    ],
+    "expect_scan": [["1", "39", [1]], ["51", "100", [1]]],
+    "expect_lookup": [["39", [1]], ["45", null], ["51", [1]]]
+  },
+  {
+    "name": "delete_whole_tree",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "100", "scope": [1]},
+      {"op": "delete", "from": "1", "to": "100"}
+    ],
+    "expect_scan": [],
+    "expect_lookup": [["50", null]]
+  },
+  {
+    "name": "delete_absent_is_noop",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "1", "to": "10", "scope": [1]},
+      {"op": "delete", "from": "100", "to": "200"}
+    ],
+    "expect_scan": [["1", "10", [1]]],
+    "expect_lookup": []
+  },
+  {
+    "name": "scope_width_zero_presence",
+    "family": "v4",
+    "scope_width": 0,
+    "ops": [
+      {"op": "set", "from": "1", "to": "5", "scope": []},
+      {"op": "set", "from": "6", "to": "10", "scope": []}
+    ],
+    "expect_scan": [["1", "10", []]],
+    "expect_lookup": [["3", []], ["11", null]]
+  },
+  {
+    "name": "full_ipv4_space",
+    "family": "v4",
+    "scope_width": 1,
+    "ops": [{"op": "set", "from": "0", "to": "4294967295", "scope": [9]}],
+    "expect_scan": [["0", "4294967295", [9]]],
+    "expect_lookup": [["0", [9]], ["2147483648", [9]], ["4294967295", [9]]]
+  },
+  {
+    "name": "v6_basic",
+    "family": "v6",
+    "scope_width": 2,
+    "ops": [
+      {"op": "set", "from": "0", "to": "100", "scope": [1, 1]},
+      {"op": "set", "from": "200", "to": "300", "scope": [2, 2]}
+    ],
+    "expect_scan": [["0", "100", [1, 1]], ["200", "300", [2, 2]]],
+    "expect_lookup": [["50", [1, 1]], ["150", null], ["250", [2, 2]]]
+  },
+  {
+    "name": "v6_high_bits_split",
+    "family": "v6",
+    "scope_width": 1,
+    "ops": [
+      {"op": "set", "from": "42540766411282592856903984951653826560", "to": "42540766411282592856903984951653826570", "scope": [3]},
+      {"op": "set", "from": "42540766411282592856903984951653826564", "to": "42540766411282592856903984951653826565", "scope": [4]}
+    ],
+    "expect_scan": [
+      ["42540766411282592856903984951653826560", "42540766411282592856903984951653826563", [3]],
+      ["42540766411282592856903984951653826564", "42540766411282592856903984951653826565", [4]],
+      ["42540766411282592856903984951653826566", "42540766411282592856903984951653826570", [3]]
+    ],
+    "expect_lookup": [["42540766411282592856903984951653826564", [4]]]
+  }
+]

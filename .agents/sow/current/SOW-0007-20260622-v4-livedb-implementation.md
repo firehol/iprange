@@ -368,10 +368,21 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   recommit; exclusive-lock mutual exclusion; `O_NOFOLLOW` symlink reject; too-short
   reject). clippy `--all-features -D warnings` clean; full feature-build matrix clean.
 
-Next: Step 1e — **crash-injection** recovery tests (interrupt a commit at each barrier
-→ defined surviving tree) + `export_v3` (§13); then the language-neutral **conformance
-corpus** + fuzz; then the **Go port** (cross-read); then external review to PRODUCTION
-GRADE.
+**2026-06-22 — Step 1e/1f: crash recovery + behavioral conformance corpus (done).**
+- Crash recovery (committed `dfc062f`): 3 tests reconstruct each post-crash on-disk
+  state (before flip / torn new meta / after Barrier 2) and verify old-or-new recovery.
+- **Conformance corpus** (`v4/conformance/cases.json`, language-neutral): 14 behavioral
+  cases (single/split/coalesce/no-coalesce/overwrite/delete-interior/delete-all/absent-
+  delete-noop/presence-map/full-IPv4/v6-basic/v6-high-bit-split). Keys are decimal
+  strings (u32 / u128) for JSON precision safety + easy Go parsing. Rust harness
+  `tests/conformance.rs` runs ops → commit → reader scan + lookups vs expected. README
+  documents the schema. The **Go port runs the same file**.
+- Verified: 45 lib tests + conformance pass; clippy `--all-features -D warnings` clean.
+
+Next: Step 2 — the **Go port** (`v4/go`): foundation + reader + writer + os, its own
+oracle, and the shared conformance corpus + byte-level **cross-read** goldens (Go reads
+Rust-written `.iprdb`, Rust reads Go-written). Then `export_v3` (§13) + fuzz; then
+external review to PRODUCTION GRADE.
 
 ## Validation
 
