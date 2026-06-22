@@ -12,6 +12,9 @@ var magic = [8]byte{'I', 'P', 'R', 'A', 'N', 'G', 'E', '3'}
 const (
 	versionMajor uint16 = 3
 	versionMinor uint16 = 0
+	// versionMinorMerged is v3.1: a multi-feed merged file (§13). version_minor==1 ⟺
+	// a catalog section is present ⟺ the file is merged (§13.1).
+	versionMinorMerged uint16 = 1
 
 	headerSize        = 72 // fixed for v3.0
 	dirEntrySize      = 72
@@ -31,6 +34,7 @@ const (
 	kindFeedMeta  uint32 = 1
 	kindIndex     uint32 = 2
 	kindValues    uint32 = 3
+	kindCatalog   uint32 = 4 // per-feed identity catalog (merged file, v3.1 §13.2)
 	kindSignature uint32 = 5
 )
 
@@ -52,7 +56,7 @@ func kindAlign(kind uint32) (uint64, bool) {
 	switch kind {
 	case kindIndex:
 		return 16, true
-	case kindFeedMeta, kindValues, kindSignature:
+	case kindFeedMeta, kindValues, kindCatalog, kindSignature:
 		return 8, true
 	default:
 		return 0, false
@@ -65,7 +69,7 @@ func kindFlags(kind uint32) uint32 {
 	switch kind {
 	case kindFeedMeta, kindIndex, kindValues:
 		return dirFlagMustUnderstand
-	default: // signature
+	default: // signature (5) and catalog (4): must_understand = 0
 		return 0
 	}
 }

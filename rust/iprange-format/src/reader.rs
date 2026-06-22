@@ -20,6 +20,7 @@ struct Sections {
     feed_meta: Option<(u64, u64)>,
     index: Option<(u64, u64)>,
     values: Option<(u64, u64)>,
+    catalog: Option<(u64, u64)>,
     signature: Option<(u64, u64)>,
 }
 
@@ -34,6 +35,8 @@ pub struct Reader<'a> {
     record_count: u64,
     values: Option<(usize, usize)>,
     values_count: u32,
+    catalog: Option<(usize, usize)>,
+    catalog_feed_count: u32,
 }
 
 /// Result of a lookup: the IP is present, and its associated value (if any).
@@ -69,6 +72,15 @@ pub struct FeedMetaView<'a> {
     pub license: &'a str,
 }
 
+/// One catalog entry of a v3.1 merged file (§13.2): a feed's stable id and identity.
+#[derive(Clone, Copy, Debug)]
+pub struct CatalogEntry<'a> {
+    /// The feed's stable id (referenced by `type_id == 1` membership-set values).
+    pub feed_id: u32,
+    /// The feed's identity (the six §7 fields).
+    pub meta: FeedMetaView<'a>,
+}
+
 impl<'a> Reader<'a> {
     /// Open and **fully validate** an untrusted file (§15 steps 1–13): structure,
     /// the per-record safety walk, and section-hash verification. On success, lookups
@@ -77,6 +89,10 @@ impl<'a> Reader<'a> {
         let r = Self::parse_structure(bytes)?;
         r.walk_records()?; // step 11 (safety walk)
         r.verify_hashes()?; // step 12 (integrity; SHOULD-at-load, we always do it here)
+                            // §13.5 merged-file semantic checks (catalog-aware; a no-op for a single-feed
+                            // file, and skipped on a no-alloc build, which reads merged files degraded).
+        #[cfg(feature = "alloc")]
+        r.check_merged_invariants()?;
         Ok(r)
     }
 
@@ -109,14 +125,20 @@ impl<'a> Reader<'a> {
         // The section must hold at least the u32 count — guard before reading it, so a
         // crafted short feed-meta section is rejected, not an out-of-bounds panic.
         if b.len() < 4 {
-            return Err(Error::Structural("feed-meta section shorter than its count field"));
+            return Err(Error::Structural(
+                "feed-meta section shorter than its count field",
+            ));
         }
         let count = u32_le(b, 0);
         if count < spec::FEED_META_FIELD_COUNT {
             return Err(Error::Structural("feed-meta field_count < 6"));
         }
-        if self.header.version_minor == 0 && count != spec::FEED_META_FIELD_COUNT {
-            return Err(Error::Structural("feed-meta field_count != 6 for v3.0"));
+        if self.header.version_minor <= spec::VERSION_MINOR_MERGED
+            && count != spec::FEED_META_FIELD_COUNT
+        {
+            return Err(Error::Structural(
+                "feed-meta field_count != 6 for v3.0/v3.1",
+            ));
         }
         // Read all `count` declared fields, keeping the 6 this version knows and
         // skipping any a future minor version added (additive forward-compat, §7).
@@ -124,7 +146,9 @@ impl<'a> Reader<'a> {
         let mut fields: [&str; 6] = [""; 6];
         for i in 0..count {
             if pos + 4 > len {
-                return Err(Error::Structural("feed-meta field length runs past section"));
+                return Err(Error::Structural(
+                    "feed-meta field length runs past section",
+                ));
             }
             let flen = u32_le(b, pos) as usize;
             pos += 4;
@@ -276,13 +300,21 @@ impl<'a> Reader<'a> {
             // expected offset = align_up(prev_end, align): pins padding + non-overlap.
             let expected = spec::align_up(prev_end, e.align).ok_or(Error::Overflow("offset"))?;
             if e.offset != expected {
-                return Err(Error::Structural("section offset != align_up(prev_end, align)"));
+                return Err(Error::Structural(
+                    "section offset != align_up(prev_end, align)",
+                ));
             }
             // inter-region padding (prev_end..offset) MUST be zero.
-            if bytes[prev_end as usize..e.offset as usize].iter().any(|&x| x != 0) {
+            if bytes[prev_end as usize..e.offset as usize]
+                .iter()
+                .any(|&x| x != 0)
+            {
                 return Err(Error::NonZeroReserved("inter-region padding"));
             }
-            let end = e.offset.checked_add(e.length).ok_or(Error::Overflow("section end"))?;
+            let end = e
+                .offset
+                .checked_add(e.length)
+                .ok_or(Error::Overflow("section end"))?;
             if end > real_size {
                 return Err(Error::Structural("section extends past file"));
             }
@@ -301,12 +333,28 @@ impl<'a> Reader<'a> {
             return Err(Error::Structural("trailing bytes after last section"));
         }
         // required sections present.
-        let feed_meta = sections.feed_meta.ok_or(Error::Structural("missing feed-meta"))?;
+        let feed_meta = sections
+            .feed_meta
+            .ok_or(Error::Structural("missing feed-meta"))?;
         let index = sections.index.ok_or(Error::Structural("missing index"))?;
-        let signature = sections.signature.ok_or(Error::Structural("missing signature"))?;
+        let signature = sections
+            .signature
+            .ok_or(Error::Structural("missing signature"))?;
         // signature length 0 in v3.0 (step 10).
         if header.version_minor == 0 && signature.1 != 0 {
             return Err(Error::Structural("signature length != 0 in v3.0"));
+        }
+
+        // §15 step 6 — merged-file signalling: `version_minor == 1` ⟺ a catalog
+        // (kind 4) is present ⟺ the file is merged (§13.1). This crate knows kind 4,
+        // so it MUST enforce both directions (a v3.0 reader, which does not, reads a
+        // merged file as a single-feed index with opaque membership values — degraded).
+        let merged = sections.catalog.is_some();
+        if merged && header.version_minor != spec::VERSION_MINOR_MERGED {
+            return Err(Error::Structural("catalog section in a non-v3.1 file"));
+        }
+        if header.version_minor == spec::VERSION_MINOR_MERGED && !merged {
+            return Err(Error::Structural("version_minor 1 file without a catalog"));
         }
 
         // step 7: feed-meta is validated lazily by feed_meta(); validate it now once.
@@ -327,7 +375,9 @@ impl<'a> Reader<'a> {
             return Err(Error::Overflow("record_count * record_size"));
         }
         if spec::INDEX_SUBHEADER_SIZE as u64 + sub.record_count * rsz != idx_len {
-            return Err(Error::Structural("index length != 32 + record_count*record_size"));
+            return Err(Error::Structural(
+                "index length != 32 + record_count*record_size",
+            ));
         }
         let index_records = (
             (idx_off + spec::INDEX_SUBHEADER_SIZE as u64) as usize,
@@ -340,6 +390,17 @@ impl<'a> Reader<'a> {
             values_count = validate_values(&bytes[voff as usize..(voff + vlen) as usize])?;
         }
 
+        // step 9b: catalog structure (if present), §13.2. Structural only — the §13.5
+        // semantic checks (all-values-type_id-1 + membership↔catalog cross-reference)
+        // run in open() (catalog-aware, alloc).
+        let mut catalog_feed_count = 0u32;
+        if let Some((coff, clen)) = sections.catalog {
+            catalog_feed_count = validate_catalog(
+                &bytes[coff as usize..(coff + clen) as usize],
+                header.version_minor,
+            )?;
+        }
+
         let r = Reader {
             bytes,
             header,
@@ -349,6 +410,8 @@ impl<'a> Reader<'a> {
             record_count: sub.record_count,
             values: sections.values.map(|(o, l)| (o as usize, l as usize)),
             values_count,
+            catalog: sections.catalog.map(|(o, l)| (o as usize, l as usize)),
+            catalog_feed_count,
         };
         // step 7: validate feed-meta content eagerly, so both open() and
         // open_metadata_only() are a complete structural gate (not deferred to the
@@ -406,8 +469,8 @@ impl<'a> Reader<'a> {
         }
         // recomputed unique-IP count MUST match the header (catches header-field
         // corruption that section hashes — which do not cover the header — cannot).
-        let header_unique =
-            (u128::from(self.header.unique_ip_count_hi) << 64) | u128::from(self.header.unique_ip_count_lo);
+        let header_unique = (u128::from(self.header.unique_ip_count_hi) << 64)
+            | u128::from(self.header.unique_ip_count_lo);
         if unique != header_unique {
             return Err(Error::Invariant("unique_ip_count != recomputed sum"));
         }
@@ -499,7 +562,11 @@ impl Reader<'_> {
             source_url: fm.source_url.into(),
             license: fm.license.into(),
         };
-        let mut w = Writer::<K>::new(meta, self.header.license_flags, self.header.generation_unixtime);
+        let mut w = Writer::<K>::new(
+            meta,
+            self.header.license_flags,
+            self.header.generation_unixtime,
+        );
         let (off, len) = self.index_records;
         let recs = &self.bytes[off..off + len];
         let mut i = 0usize;
@@ -508,13 +575,132 @@ impl Reader<'_> {
             let value = if r.value_id == spec::VALUE_ID_NONE {
                 None
             } else {
-                let v = self.value(r.value_id).ok_or(Error::Invariant("dangling value_id"))?;
-                Some(Value { type_id: v.type_id, bytes: v.bytes.to_vec() })
+                let v = self
+                    .value(r.value_id)
+                    .ok_or(Error::Invariant("dangling value_id"))?;
+                Some(Value {
+                    type_id: v.type_id,
+                    bytes: v.bytes.to_vec(),
+                })
             };
             w.add_range(r.start, r.end, value)?;
             i += K::RECORD_SIZE;
         }
         Ok(w)
+    }
+}
+
+/// Catalog-aware reads and the §13.5 merged-file semantic validation (require `alloc`).
+#[cfg(feature = "alloc")]
+impl<'a> Reader<'a> {
+    /// The per-feed catalog of a v3.1 merged file (§13.2), in ascending `feed_id`
+    /// order. `Err` if the file is not merged (has no catalog). Resolve a membership
+    /// set's feed-ids against this to name the feeds covering an IP (§13.4).
+    pub fn catalog(&self) -> Result<alloc::vec::Vec<CatalogEntry<'a>>> {
+        let (off, len) = self
+            .catalog
+            .ok_or(Error::Structural("not a merged file (no catalog)"))?;
+        let b = &self.bytes[off..off + len];
+        let field_count = u32_le(b, 4);
+        let mut out = alloc::vec::Vec::with_capacity(self.catalog_feed_count as usize);
+        let mut pos = 8usize;
+        for _ in 0..self.catalog_feed_count {
+            let feed_id = u32_le(b, pos);
+            pos += 4;
+            // bounds + UTF-8 were verified by validate_catalog() at open time.
+            let mut fields: [&str; 6] = [""; 6];
+            for fi in 0..field_count {
+                let flen = u32_le(b, pos) as usize;
+                pos += 4;
+                if (fi as usize) < 6 {
+                    fields[fi as usize] = core::str::from_utf8(&b[pos..pos + flen])
+                        .map_err(|_| Error::Invariant("catalog field is not valid UTF-8"))?;
+                }
+                pos += flen;
+            }
+            out.push(CatalogEntry {
+                feed_id,
+                meta: FeedMetaView {
+                    name: fields[0],
+                    category: fields[1],
+                    maintainer: fields[2],
+                    maintainer_url: fields[3],
+                    source_url: fields[4],
+                    license: fields[5],
+                },
+            });
+        }
+        Ok(out)
+    }
+
+    /// §13.5 — for a merged file (catalog present): every values entry is
+    /// `type_id == 1` with all its feed-ids resolvable in the catalog, and every index
+    /// record is non-sentinel. A no-op for a single-feed file.
+    fn check_merged_invariants(&self) -> Result<()> {
+        if self.catalog.is_none() {
+            return Ok(());
+        }
+        let ids = self.catalog_feed_ids();
+        // (a) every values entry is type_id == 1 with feed-ids present in the catalog.
+        if let Some((voff, vlen)) = self.values {
+            let b = &self.bytes[voff..voff + vlen];
+            let mut pos = 4usize;
+            for _ in 0..self.values_count {
+                let type_id = u32_le(b, pos);
+                let blen = u32_le(b, pos + 4) as usize;
+                let body = &b[pos + 8..pos + 8 + blen];
+                if type_id != 1 {
+                    return Err(Error::Invariant("merged-file value is not type_id 1"));
+                }
+                for chunk in body.chunks_exact(4) {
+                    let id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                    if ids.binary_search(&id).is_err() {
+                        return Err(Error::Invariant("membership feed-id not in catalog"));
+                    }
+                }
+                pos += 8 + blen;
+            }
+        }
+        // (b) every index record references a value (non-sentinel).
+        match self.ip_version {
+            IpVersion::V4 => self.check_non_sentinel::<Ipv4Key>(),
+            IpVersion::V6 => self.check_non_sentinel::<Ipv6Key>(),
+        }
+    }
+
+    /// Collect the catalog feed-ids (already strictly ascending, validated at open).
+    fn catalog_feed_ids(&self) -> alloc::vec::Vec<u32> {
+        let mut ids = alloc::vec::Vec::with_capacity(self.catalog_feed_count as usize);
+        if let Some((off, len)) = self.catalog {
+            let b = &self.bytes[off..off + len];
+            let field_count = u32_le(b, 4);
+            let mut pos = 8usize;
+            for _ in 0..self.catalog_feed_count {
+                ids.push(u32_le(b, pos));
+                pos += 4;
+                for _ in 0..field_count {
+                    let flen = u32_le(b, pos) as usize;
+                    pos += 4 + flen;
+                }
+            }
+        }
+        ids
+    }
+
+    fn check_non_sentinel<K: IpKey>(&self) -> Result<()> {
+        let (off, len) = self.index_records;
+        let recs = &self.bytes[off..off + len];
+        let mut i = 0usize;
+        while i < recs.len() {
+            let value_id = u32_le(recs, i + 2 * K::WIDTH);
+            if value_id == spec::VALUE_ID_NONE {
+                return Err(Error::Invariant(
+                    "merged-file record has no value (sentinel)",
+                ));
+            }
+            i += K::RECORD_SIZE;
+        }
+        Ok(())
     }
 }
 
@@ -534,6 +720,7 @@ fn record_section(s: &mut Sections, kind: u32, offset: u64, length: u64) -> Resu
         Some(SectionKind::FeedMeta) => &mut s.feed_meta,
         Some(SectionKind::Index) => &mut s.index,
         Some(SectionKind::Values) => &mut s.values,
+        Some(SectionKind::Catalog) => &mut s.catalog,
         Some(SectionKind::Signature) => &mut s.signature,
         None => return Ok(()), // unknown/optional kind: not tracked
     };
@@ -590,12 +777,71 @@ fn validate_membership_set(b: &[u8]) -> Result<()> {
         let id = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         if let Some(p) = prev {
             if id <= p {
-                return Err(Error::Invariant("type_id 1 feed-ids not strictly ascending"));
+                return Err(Error::Invariant(
+                    "type_id 1 feed-ids not strictly ascending",
+                ));
             }
         }
         prev = Some(id);
     }
     Ok(())
+}
+
+/// Validate a catalog section's structure (§13.2 / §15 step 9b) and return `feed_count`:
+/// `feed_count ≥ 1`; `field_count ≥ 6` (`== 6` for v3.0/v3.1); strictly-ascending
+/// `feed_id`s; every field length within the section; the six known fields well-formed
+/// UTF-8 (§7); exact section length. Structural only — the membership↔catalog
+/// cross-reference is a §13.5 semantic check (see `check_merged_invariants`).
+fn validate_catalog(b: &[u8], version_minor: u16) -> Result<u32> {
+    if b.len() < 8 {
+        return Err(Error::Structural("catalog shorter than its header"));
+    }
+    let feed_count = u32_le(b, 0);
+    if feed_count == 0 {
+        return Err(Error::Structural("catalog feed_count 0"));
+    }
+    let field_count = u32_le(b, 4);
+    if field_count < spec::FEED_META_FIELD_COUNT {
+        return Err(Error::Structural("catalog field_count < 6"));
+    }
+    if version_minor <= spec::VERSION_MINOR_MERGED && field_count != spec::FEED_META_FIELD_COUNT {
+        return Err(Error::Structural("catalog field_count != 6 for v3.1"));
+    }
+    let mut pos = 8usize;
+    let mut prev_id: Option<u32> = None;
+    for _ in 0..feed_count {
+        if pos + 4 > b.len() {
+            return Err(Error::Structural("catalog feed_id past section"));
+        }
+        let feed_id = u32_le(b, pos);
+        pos += 4;
+        if let Some(p) = prev_id {
+            if feed_id <= p {
+                return Err(Error::Structural("catalog feed_ids not strictly ascending"));
+            }
+        }
+        prev_id = Some(feed_id);
+        for fi in 0..field_count {
+            if pos + 4 > b.len() {
+                return Err(Error::Structural("catalog field length past section"));
+            }
+            let flen = u32_le(b, pos) as usize;
+            pos += 4;
+            if pos + flen > b.len() {
+                return Err(Error::Structural("catalog field bytes past section"));
+            }
+            // the six known fields MUST be valid UTF-8 (§7/§13.2); extras are skipped.
+            if fi < spec::FEED_META_FIELD_COUNT {
+                core::str::from_utf8(&b[pos..pos + flen])
+                    .map_err(|_| Error::Invariant("catalog field is not valid UTF-8"))?;
+            }
+            pos += flen;
+        }
+    }
+    if pos != b.len() {
+        return Err(Error::Structural("catalog section length not exact"));
+    }
+    Ok(feed_count)
 }
 
 /// Memory-mapped file reader (Unix). Implements the §15 mmap-safety steps:
@@ -638,7 +884,10 @@ pub mod mmap {
             }
             let len = meta.len();
             if len < u64::from(spec::HEADER_SIZE) {
-                return Err(Error::FileTooShort { need: u64::from(spec::HEADER_SIZE), have: len });
+                return Err(Error::FileTooShort {
+                    need: u64::from(spec::HEADER_SIZE),
+                    have: len,
+                });
             }
             // Hole detection: a hole inside a mapped section SIGBUSes despite bounds
             // checks. SEEK_HOLE from 0 must report the first hole at EOF (== len).
@@ -653,7 +902,9 @@ pub mod mmap {
                 ));
             }
             if hole as u64 != len {
-                return Err(Error::Structural("sparse file (hole detected) — use Reader::open on bytes, not mmap"));
+                return Err(Error::Structural(
+                    "sparse file (hole detected) — use Reader::open on bytes, not mmap",
+                ));
             }
             // SAFETY: read-only mapping of a file we treat as immutable; never written.
             let map = unsafe { memmap2::Mmap::map(&file)? };
@@ -668,7 +919,11 @@ pub mod mmap {
             let mut b = [0u8; 1];
             match file.read_at(&mut b, len - 1) {
                 Ok(1) => {}
-                _ => return Err(Error::Structural("file truncated after fstat (probe failed)")),
+                _ => {
+                    return Err(Error::Structural(
+                        "file truncated after fstat (probe failed)",
+                    ))
+                }
             }
             Ok(MmapFile { map })
         }
@@ -697,11 +952,15 @@ mod tests {
 
     fn build_v4() -> Vec<u8> {
         let mut w = Writer::<Ipv4Key>::new(meta(), spec::LICENSE_FLAG_DONT_REDISTRIBUTE, 1700);
-        w.add_range(Ipv4Key(0x0a00_0000), Ipv4Key(0x0a00_00ff), None).unwrap();
+        w.add_range(Ipv4Key(0x0a00_0000), Ipv4Key(0x0a00_00ff), None)
+            .unwrap();
         w.add_range(
             Ipv4Key(0x0b00_0000),
             Ipv4Key(0x0b00_000f),
-            Some(Value { type_id: 2, bytes: vec![7] }),
+            Some(Value {
+                type_id: 2,
+                bytes: vec![7],
+            }),
         )
         .unwrap();
         w.build().unwrap()
@@ -734,7 +993,8 @@ mod tests {
         let r = Reader::open(&bytes).unwrap();
         let mut w = r.to_writer_v4().unwrap();
         // Add a new disjoint range, rebuild, and confirm it reads back with the edit.
-        w.add_range(Ipv4Key(0x0c00_0000), Ipv4Key(0x0c00_0000), None).unwrap();
+        w.add_range(Ipv4Key(0x0c00_0000), Ipv4Key(0x0c00_0000), None)
+            .unwrap();
         let edited = w.build().unwrap();
         let r2 = Reader::open(&edited).unwrap();
         assert_eq!(r2.record_count(), 3);
@@ -776,7 +1036,10 @@ mod tests {
         let mut bytes = build_v4();
         let n = bytes.len();
         bytes.truncate(n - 1); // now file_size header != real size
-        assert!(matches!(Reader::open(&bytes), Err(Error::FileSizeMismatch { .. })));
+        assert!(matches!(
+            Reader::open(&bytes),
+            Err(Error::FileSizeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -786,8 +1049,8 @@ mod tests {
         let idx_off = h.index_records.0;
         let mut bytes2 = bytes.clone();
         bytes2[idx_off] ^= 0xff; // flip a record's start byte
-        // The safety walk (sortedness / recomputed unique-IP count) catches this
-        // before the hash step; either way the file MUST be rejected.
+                                 // The safety walk (sortedness / recomputed unique-IP count) catches this
+                                 // before the hash step; either way the file MUST be rejected.
         assert!(Reader::open(&bytes2).is_err());
     }
 
@@ -802,14 +1065,25 @@ mod tests {
         // values layout: count(4) | type_id(4) | byte_length(4) | bytes... — so the
         // first entry's payload byte is at voff+12.
         bytes2[voff + 12] ^= 0xff;
-        assert!(matches!(Reader::open(&bytes2), Err(Error::IntegrityFailed(_))));
+        assert!(matches!(
+            Reader::open(&bytes2),
+            Err(Error::IntegrityFailed(_))
+        ));
     }
 
     #[test]
     fn reader_rejects_non_ascending_membership_set() {
         let mut w = Writer::<Ipv4Key>::new(meta(), 0, 0);
         let body = [1u32.to_le_bytes(), 5u32.to_le_bytes()].concat(); // ascending ids
-        w.add_range(Ipv4Key(10), Ipv4Key(20), Some(Value { type_id: 1, bytes: body })).unwrap();
+        w.add_range(
+            Ipv4Key(10),
+            Ipv4Key(20),
+            Some(Value {
+                type_id: 1,
+                bytes: body,
+            }),
+        )
+        .unwrap();
         let bytes = w.build().unwrap();
         let r = Reader::open(&bytes).unwrap();
         let (voff, _) = r.values.expect("values present");
@@ -845,7 +1119,12 @@ mod tests {
     fn craft_v4_with_feed_meta_ver(fm: &[u8], version_minor: u16) -> Vec<u8> {
         use crate::wire::{DirEntry, Header, IndexSubHeader};
         let hash = |b: &[u8]| -> [u8; 32] { Sha256::digest(b).into() };
-        let index_bytes = IndexSubHeader { record_size: 12, key_width: 4, record_count: 0 }.encode();
+        let index_bytes = IndexSubHeader {
+            record_size: 12,
+            key_width: 4,
+            record_count: 0,
+        }
+        .encode();
         let dir_end = 72 + 3 * spec::DIR_ENTRY_SIZE as u64;
         let fm_off = spec::align_up(dir_end, 8).unwrap();
         let fm_len = fm.len() as u64;
@@ -853,14 +1132,43 @@ mod tests {
         let idx_len = index_bytes.len() as u64;
         let sig_off = spec::align_up(idx_off + idx_len, 8).unwrap();
         let header = Header {
-            version_minor, header_size: 72, flags: 0, file_size: sig_off,
-            directory_offset: 72, directory_count: 3, license_flags: 0, entry_count: 0,
-            generation_unixtime: 0, unique_ip_count_lo: 0, unique_ip_count_hi: 0,
+            version_minor,
+            header_size: 72,
+            flags: 0,
+            file_size: sig_off,
+            directory_offset: 72,
+            directory_count: 3,
+            license_flags: 0,
+            entry_count: 0,
+            generation_unixtime: 0,
+            unique_ip_count_lo: 0,
+            unique_ip_count_hi: 0,
         };
         let entries = [
-            DirEntry { kind: 1, flags: 1, offset: fm_off, length: fm_len, align: 8, hash: hash(fm) },
-            DirEntry { kind: 2, flags: 1, offset: idx_off, length: idx_len, align: 16, hash: hash(&index_bytes) },
-            DirEntry { kind: 5, flags: 0, offset: sig_off, length: 0, align: 8, hash: hash(&[]) },
+            DirEntry {
+                kind: 1,
+                flags: 1,
+                offset: fm_off,
+                length: fm_len,
+                align: 8,
+                hash: hash(fm),
+            },
+            DirEntry {
+                kind: 2,
+                flags: 1,
+                offset: idx_off,
+                length: idx_len,
+                align: 16,
+                hash: hash(&index_bytes),
+            },
+            DirEntry {
+                kind: 5,
+                flags: 0,
+                offset: sig_off,
+                length: 0,
+                align: 8,
+                hash: hash(&[]),
+            },
         ];
         let mut out = header.encode().to_vec();
         for e in &entries {
@@ -888,26 +1196,31 @@ mod tests {
         assert!(Reader::open(&craft_v4_with_feed_meta(&fm)).is_ok());
         // trailing bytes after the 6 fields violate the exact-length rule.
         fm.push(0);
-        assert!(matches!(Reader::open(&craft_v4_with_feed_meta(&fm)), Err(Error::Structural(_))));
+        assert!(matches!(
+            Reader::open(&craft_v4_with_feed_meta(&fm)),
+            Err(Error::Structural(_))
+        ));
     }
 
     #[test]
     fn reader_accepts_future_extra_feed_meta_fields() {
-        // A future v3.1 file may declare >6 feed-meta fields; a v3.0 reader reads the
-        // 6 it knows and skips the extras (additive forward-compat, §7).
+        // A future header-extending minor (v3.2+) may declare >6 feed-meta fields; a
+        // v3.1 reader reads the 6 it knows and skips the extras (additive forward-compat,
+        // §7). v3.0 AND v3.1 both pin field_count == 6, so the future minor is `2`.
         let mut fm = 8u32.to_le_bytes().to_vec(); // 8 fields
         for i in 0..8u32 {
             fm.extend_from_slice(&1u32.to_le_bytes()); // each field: 1 byte
             fm.push(b'a' + i as u8);
         }
-        let bytes = craft_v4_with_feed_meta_ver(&fm, 1); // version_minor = 1
+        let bytes = craft_v4_with_feed_meta_ver(&fm, 2); // version_minor = 2 (future)
         let r = Reader::open(&bytes).unwrap();
         let v = r.feed_meta().unwrap();
         assert_eq!(v.name, "a"); // field 0
         assert_eq!(v.license, "f"); // field 5; fields 6,7 skipped
-        // but a v3.0 file (version_minor 0) with >6 fields is still rejected.
-        let v0 = craft_v4_with_feed_meta(&fm);
-        assert!(Reader::open(&v0).is_err());
+                                    // a v3.0 file (version_minor 0) with >6 fields is still rejected (pinned to 6).
+        assert!(Reader::open(&craft_v4_with_feed_meta(&fm)).is_err());
+        // and a v3.1 file (version_minor 1) with >6 fields is rejected too.
+        assert!(Reader::open(&craft_v4_with_feed_meta_ver(&fm, 1)).is_err());
     }
 
     #[test]
@@ -920,13 +1233,31 @@ mod tests {
     #[test]
     fn round_trip_v6() {
         let mut w = Writer::<Ipv6Key>::new(meta(), 0, 1);
-        let a = Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0 };
-        let b = Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0xffff };
+        let a = Ipv6Key {
+            hi: 0x2001_0db8_0000_0000,
+            lo: 0,
+        };
+        let b = Ipv6Key {
+            hi: 0x2001_0db8_0000_0000,
+            lo: 0xffff,
+        };
         w.add_range(a, b, None).unwrap();
         let bytes = w.build().unwrap();
         let r = Reader::open(&bytes).unwrap();
         assert_eq!(r.ip_version(), IpVersion::V6);
-        assert!(r.lookup_v6(Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0x100 }).unwrap().is_some());
-        assert!(r.lookup_v6(Ipv6Key { hi: 0x2001_0db8_0000_0001, lo: 0 }).unwrap().is_none());
+        assert!(r
+            .lookup_v6(Ipv6Key {
+                hi: 0x2001_0db8_0000_0000,
+                lo: 0x100
+            })
+            .unwrap()
+            .is_some());
+        assert!(r
+            .lookup_v6(Ipv6Key {
+                hi: 0x2001_0db8_0000_0001,
+                lo: 0
+            })
+            .unwrap()
+            .is_none());
     }
 }

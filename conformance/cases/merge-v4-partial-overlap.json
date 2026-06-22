@@ -1,0 +1,13 @@
+{
+  "name": "merge-v4-partial-overlap",
+  "description": "Two feeds (id 1, 5) partially overlap, producing {1}, {1,5}, {5}.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged", "category": "combined", "license": "GPL-2.0-or-later" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 5, "feed_meta": { "name": "bravo", "category": "abuse" }, "ranges": [ { "start": "10.0.0.5", "end": "10.0.0.15" } ] },
+    { "feed_id": 1, "feed_meta": { "name": "alpha", "category": "attacks" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.10" } ] }
+  ],
+  "expect": "bytes"
+}

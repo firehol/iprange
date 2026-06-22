@@ -85,22 +85,43 @@ pub struct FeedMeta {
 }
 
 impl FeedMeta {
-    fn encode(&self) -> Vec<u8> {
-        let fields = [
+    /// The six fields in §7/§13.2 order.
+    fn fields(&self) -> [&alloc::string::String; 6] {
+        [
             &self.name,
             &self.category,
             &self.maintainer,
             &self.maintainer_url,
             &self.source_url,
             &self.license,
-        ];
-        let mut out = Vec::new();
-        out.extend_from_slice(&spec::FEED_META_FIELD_COUNT.to_le_bytes());
-        for f in fields {
+        ]
+    }
+
+    /// Append the six length-prefixed UTF-8 fields (no count prefix). Shared by the
+    /// feed-meta section (§7) and by each catalog entry (§13.2), so both encode an
+    /// identity block identically.
+    pub(crate) fn encode_fields(&self, out: &mut Vec<u8>) {
+        for f in self.fields() {
             let b = f.as_bytes();
             out.extend_from_slice(&(b.len() as u32).to_le_bytes());
             out.extend_from_slice(b);
         }
+    }
+
+    /// Reject a field whose byte length exceeds the `u32` length prefix (§7/§13.2).
+    pub(crate) fn check_field_lengths(&self) -> Result<()> {
+        for f in self.fields() {
+            if f.len() > u32::MAX as usize {
+                return Err(Error::InvalidInput("feed-meta field length exceeds u32"));
+            }
+        }
+        Ok(())
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&spec::FEED_META_FIELD_COUNT.to_le_bytes());
+        self.encode_fields(&mut out);
         out
     }
 }
@@ -138,8 +159,22 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    /// Produce the complete v3 file bytes, or an error if the input is not encodable.
-    pub fn build(mut self) -> Result<Vec<u8>> {
+    /// Produce the complete single-feed v3 file bytes (`version_minor == 0`, no
+    /// catalog), or an error if the input is not encodable.
+    pub fn build(self) -> Result<Vec<u8>> {
+        self.build_inner(spec::VERSION_MINOR, None)
+    }
+
+    /// Shared assembly for single-feed and v3.1 **merged** files. `version_minor` and
+    /// the optional `catalog` section (kind 4, placed canonically after values, §13)
+    /// are the only differences; the merge constructor ([`crate::merge`]) supplies the
+    /// elementary-interval ranges and the catalog bytes, then reuses this exact path so
+    /// the sort/coalesce/intern/assemble machinery — and thus byte-identity — is shared.
+    pub(crate) fn build_inner(
+        mut self,
+        version_minor: u16,
+        catalog: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>> {
         // license_flags MUST NOT set reserved bits (§7) — fail at write time rather
         // than emit a file the reader rejects. (Feed-meta is UTF-8 by construction:
         // the fields are `String`.)
@@ -147,14 +182,7 @@ impl<K: IpKey> Writer<K> {
             return Err(Error::InvalidInput("license_flags sets reserved bits"));
         }
         // each feed-meta field length is a u32 on disk — reject rather than truncate.
-        let fm = &self.feed_meta;
-        for field in [
-            &fm.name, &fm.category, &fm.maintainer, &fm.maintainer_url, &fm.source_url, &fm.license,
-        ] {
-            if field.len() > u32::MAX as usize {
-                return Err(Error::InvalidInput("feed-meta field length exceeds u32"));
-            }
-        }
+        self.feed_meta.check_field_lengths()?;
 
         // (1) sort by start.
         self.ranges.sort_by(|a, b| a.0.cmp(&b.0));
@@ -165,7 +193,9 @@ impl<K: IpKey> Writer<K> {
         for (start, end, value) in self.ranges.into_iter() {
             if let Some((_, last_end, last_val)) = coalesced.last_mut() {
                 if start <= *last_end {
-                    return Err(Error::InvalidInput("overlapping input ranges (not disjoint)"));
+                    return Err(Error::InvalidInput(
+                        "overlapping input ranges (not disjoint)",
+                    ));
                 }
                 // contiguous + same content => extend the current run.
                 if *last_val == value && last_end.checked_inc() == Some(start) {
@@ -232,6 +262,9 @@ impl<K: IpKey> Writer<K> {
         if let Some(v) = values_bytes {
             sections.push((SectionKind::Values, v));
         }
+        if let Some(cat) = catalog {
+            sections.push((SectionKind::Catalog, cat)); // kind 4, after values (§13.2/§4)
+        }
         sections.push((SectionKind::Signature, Vec::new())); // empty, last
 
         let directory_count = sections.len() as u32;
@@ -262,7 +295,9 @@ impl<K: IpKey> Writer<K> {
                 hash,
             });
             placed.push((offset, bytes));
-            cursor = offset.checked_add(length).ok_or(Error::Overflow("section end"))?;
+            cursor = offset
+                .checked_add(length)
+                .ok_or(Error::Overflow("section end"))?;
         }
         let file_size = cursor;
 
@@ -271,7 +306,7 @@ impl<K: IpKey> Writer<K> {
         let unique_hi = (unique >> 64) as u64;
 
         let header = Header {
-            version_minor: spec::VERSION_MINOR,
+            version_minor,
             header_size: spec::HEADER_SIZE,
             flags: K::VERSION.flag_bit(),
             file_size,
@@ -367,14 +402,22 @@ mod tests {
         w.add_range(Ipv4Key(21), Ipv4Key(30), None).unwrap(); // contiguous, same (None)
         let bytes = w.build().unwrap();
         let h = Header::decode(&bytes).unwrap();
-        assert_eq!(h.entry_count, 1, "two contiguous same-value ranges coalesce to 1");
+        assert_eq!(
+            h.entry_count, 1,
+            "two contiguous same-value ranges coalesce to 1"
+        );
         assert_eq!(h.unique_ip_count_lo, 21); // 10..=30
     }
 
     #[test]
     fn no_coalesce_different_value() {
         let mut w = Writer::<Ipv4Key>::new(meta(), 0, 0);
-        let v = |b: u32| Some(Value { type_id: 2, bytes: b.to_le_bytes().to_vec() });
+        let v = |b: u32| {
+            Some(Value {
+                type_id: 2,
+                bytes: b.to_le_bytes().to_vec(),
+            })
+        };
         w.add_range(Ipv4Key(10), Ipv4Key(20), v(1)).unwrap();
         w.add_range(Ipv4Key(21), Ipv4Key(30), v(2)).unwrap(); // contiguous, different value
         let bytes = w.build().unwrap();
@@ -394,7 +437,10 @@ mod tests {
     #[test]
     fn value_dedup_assigns_same_id() {
         let mut w = Writer::<Ipv4Key>::new(meta(), 0, 0);
-        let v = Some(Value { type_id: 2, bytes: vec![1, 2, 3, 4] });
+        let v = Some(Value {
+            type_id: 2,
+            bytes: vec![1, 2, 3, 4],
+        });
         w.add_range(Ipv4Key(10), Ipv4Key(20), v.clone()).unwrap();
         w.add_range(Ipv4Key(100), Ipv4Key(200), v).unwrap(); // same content, not contiguous
         let bytes = w.build().unwrap();
@@ -415,8 +461,15 @@ mod tests {
     fn deterministic_same_input_same_bytes() {
         let mk = || {
             let mut w = Writer::<Ipv4Key>::new(meta(), 0, 1234);
-            w.add_range(Ipv4Key(100), Ipv4Key(200), Some(Value { type_id: 2, bytes: vec![9] }))
-                .unwrap();
+            w.add_range(
+                Ipv4Key(100),
+                Ipv4Key(200),
+                Some(Value {
+                    type_id: 2,
+                    bytes: vec![9],
+                }),
+            )
+            .unwrap();
             w.add_range(Ipv4Key(10), Ipv4Key(20), None).unwrap(); // added out of order
             w.build().unwrap()
         };

@@ -76,7 +76,9 @@ pub fn parse(bytes: &[u8]) -> Result<Legacy> {
     let record_size = parse_prefixed(read_line(bytes, &mut pos)?, "record size ")?;
     let expect_rs: u64 = if is_v6 { 32 } else { 8 };
     if record_size != expect_rs {
-        return Err(Error::InvalidInput("legacy record size mismatch for family"));
+        return Err(Error::InvalidInput(
+            "legacy record size mismatch for family",
+        ));
     }
     let records = parse_prefixed(read_line(bytes, &mut pos)?, "records ")?;
     let bytes_field = parse_prefixed(read_line(bytes, &mut pos)?, "bytes ")?;
@@ -99,7 +101,9 @@ pub fn parse(bytes: &[u8]) -> Result<Legacy> {
     // endianness marker. Only little-endian is accepted: the legacy C tool refuses
     // cross-endian files, and §14 of the v3 spec rejects a big-endian marker. Real
     // legacy files come from x86-64 (little-endian); we never need the BE path.
-    let marker = bytes.get(pos..pos + 4).ok_or(Error::InvalidInput("legacy truncated before marker"))?;
+    let marker = bytes
+        .get(pos..pos + 4)
+        .ok_or(Error::InvalidInput("legacy truncated before marker"))?;
     if marker != MARKER_LE {
         return Err(Error::InvalidInput(
             "legacy file is not little-endian (big-endian rejected, matching the C tool and §14)",
@@ -114,19 +118,35 @@ pub fn parse(bytes: &[u8]) -> Result<Legacy> {
         .checked_mul(record_size)
         .ok_or(Error::Overflow("legacy payload size"))?;
     if body.len() as u64 != need {
-        return Err(Error::InvalidInput("legacy payload length mismatch / trailing data"));
+        return Err(Error::InvalidInput(
+            "legacy payload length mismatch / trailing data",
+        ));
     }
 
     if is_v6 {
-        let unique_ips: u128 = unique_str.parse().map_err(|_| Error::InvalidInput("legacy unique ips not a u128"))?;
+        let unique_ips: u128 = unique_str
+            .parse()
+            .map_err(|_| Error::InvalidInput("legacy unique ips not a u128"))?;
         let ranges = parse_v6_records(body, records as usize)?;
         validate_v6(&ranges, optimized, unique_ips)?;
-        Ok(Legacy::V6 { optimized, unique_ips, lines, ranges })
+        Ok(Legacy::V6 {
+            optimized,
+            unique_ips,
+            lines,
+            ranges,
+        })
     } else {
-        let unique_ips: u64 = unique_str.parse().map_err(|_| Error::InvalidInput("legacy unique ips not a u64"))?;
+        let unique_ips: u64 = unique_str
+            .parse()
+            .map_err(|_| Error::InvalidInput("legacy unique ips not a u64"))?;
         let ranges = parse_v4_records(body, records as usize)?;
         validate_v4(&ranges, optimized, unique_ips)?;
-        Ok(Legacy::V4 { optimized, unique_ips, lines, ranges })
+        Ok(Legacy::V4 {
+            optimized,
+            unique_ips,
+            lines,
+            ranges,
+        })
     }
 }
 
@@ -156,7 +176,9 @@ fn parse_v6_records(body: &[u8], n: usize) -> Result<Vec<(Ipv6Key, Ipv6Key)>> {
         // a full-IPv6-space range (size 2^128) is unrepresentable in v3 — reject it
         // here so both languages fail at the legacy layer, not at migration.
         if addr.hi == 0 && addr.lo == 0 && bcast.hi == u64::MAX && bcast.lo == u64::MAX {
-            return Err(Error::InvalidInput("legacy range covers the entire IPv6 space"));
+            return Err(Error::InvalidInput(
+                "legacy range covers the entire IPv6 space",
+            ));
         }
         out.push((addr, bcast));
     }
@@ -167,7 +189,10 @@ fn parse_v6_records(body: &[u8], n: usize) -> Result<Vec<(Ipv6Key, Ipv6Key)>> {
 /// legacy little-endian layout stores `{lo, hi}` (bytes 0–7 = `lo`, 8–15 = `hi`), the
 /// opposite of v3's key, so this transposes the halves.
 fn rd_v6(b: &[u8]) -> Ipv6Key {
-    Ipv6Key { hi: u64_le(&b[8..16]), lo: u64_le(&b[0..8]) }
+    Ipv6Key {
+        hi: u64_le(&b[8..16]),
+        lo: u64_le(&b[0..8]),
+    }
 }
 
 fn u64_le(b: &[u8]) -> u64 {
@@ -185,7 +210,9 @@ fn validate_v4(ranges: &[(Ipv4Key, Ipv4Key)], optimized: bool, unique_ips: u64) 
         for w in 0..ranges.len() {
             let (s, e) = ranges[w];
             if w > 0 && s.0 <= ranges[w - 1].1 .0 {
-                return Err(Error::Invariant("legacy optimized records not sorted/disjoint"));
+                return Err(Error::Invariant(
+                    "legacy optimized records not sorted/disjoint",
+                ));
             }
             sum += u128::from(e.0 - s.0) + 1;
         }
@@ -205,14 +232,20 @@ fn validate_v6(ranges: &[(Ipv6Key, Ipv6Key)], optimized: bool, unique_ips: u128)
         for w in 0..ranges.len() {
             let (s, e) = ranges[w];
             if w > 0 && s <= ranges[w - 1].1 {
-                return Err(Error::Invariant("legacy optimized records not sorted/disjoint"));
+                return Err(Error::Invariant(
+                    "legacy optimized records not sorted/disjoint",
+                ));
             }
             // size = e - s + 1, checked. e >= s holds (per-record check), so the
             // subtraction cannot underflow; only the full IPv6 space overflows +1.
             let size = (e.to_u128() - s.to_u128())
                 .checked_add(1)
-                .ok_or(Error::InvalidInput("legacy range covers the entire IPv6 space"))?;
-            sum = sum.checked_add(size).ok_or(Error::Overflow("legacy unique ips sum"))?;
+                .ok_or(Error::InvalidInput(
+                    "legacy range covers the entire IPv6 space",
+                ))?;
+            sum = sum
+                .checked_add(size)
+                .ok_or(Error::Overflow("legacy unique ips sum"))?;
         }
         if sum != unique_ips {
             return Err(Error::InvalidInput("legacy unique ips != sum of ranges"));

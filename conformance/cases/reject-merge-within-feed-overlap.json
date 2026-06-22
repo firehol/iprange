@@ -1,0 +1,13 @@
+{
+  "name": "reject-merge-within-feed-overlap",
+  "description": "Overlapping ranges within a single feed are not encodable (§13.3).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1, "feed_meta": { "name": "alpha" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.20" }, { "start": "10.0.0.10", "end": "10.0.0.30" } ] }
+  ],
+  "expect": "reject",
+  "reject_class": "InvalidInput"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "merge-v6-overlap",
+  "description": "IPv6 merge: two feeds overlap, producing {1},{1,9},{9}.",
+  "ip_version": "v6",
+  "feed_meta": { "name": "merged-v6" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1, "feed_meta": { "name": "alpha" }, "ranges": [ { "start": "2001:db8:1::", "end": "2001:db8:1::ff" } ] },
+    { "feed_id": 9, "feed_meta": { "name": "bravo" }, "ranges": [ { "start": "2001:db8:1::80", "end": "2001:db8:1::1ff" } ] }
+  ],
+  "expect": "bytes"
+}

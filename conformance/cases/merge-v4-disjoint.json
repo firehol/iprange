@@ -1,0 +1,13 @@
+{
+  "name": "merge-v4-disjoint",
+  "description": "Two feeds with a gap: {1} on [0,10], no record on the gap, {5} on [100,200].",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged", "category": "combined" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1, "feed_meta": { "name": "alpha" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.10" } ] },
+    { "feed_id": 5, "feed_meta": { "name": "bravo" }, "ranges": [ { "start": "10.0.0.100", "end": "10.0.0.200" } ] }
+  ],
+  "expect": "bytes"
+}

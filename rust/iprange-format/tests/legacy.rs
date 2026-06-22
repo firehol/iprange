@@ -45,12 +45,26 @@ fn legacy_corpus() {
     for mpath in &manifests {
         let m: Manifest = serde_json::from_str(&fs::read_to_string(mpath).unwrap()).unwrap();
         let bytes = fs::read(dir.join(&m.file)).unwrap();
-        let parsed = legacy::parse(&bytes).unwrap_or_else(|e| panic!("{}: parse failed: {e}", m.name));
+        let parsed =
+            legacy::parse(&bytes).unwrap_or_else(|e| panic!("{}: parse failed: {e}", m.name));
 
         match (&m.ip_version[..], parsed) {
-            ("v4", Legacy::V4 { optimized, unique_ips, lines, ranges }) => {
+            (
+                "v4",
+                Legacy::V4 {
+                    optimized,
+                    unique_ips,
+                    lines,
+                    ranges,
+                },
+            ) => {
                 assert_eq!(optimized, m.optimized, "{}: optimized", m.name);
-                assert_eq!(unique_ips.to_string(), m.unique_ips, "{}: unique_ips", m.name);
+                assert_eq!(
+                    unique_ips.to_string(),
+                    m.unique_ips,
+                    "{}: unique_ips",
+                    m.name
+                );
                 assert_eq!(lines, m.lines, "{}: lines", m.name);
                 assert_eq!(ranges.len(), m.ranges.len(), "{}: range count", m.name);
                 for (got, want) in ranges.iter().zip(&m.ranges) {
@@ -60,9 +74,22 @@ fn legacy_corpus() {
                 }
                 migrate_v4_and_check(&m, &ranges);
             }
-            ("v6", Legacy::V6 { optimized, unique_ips, lines, ranges }) => {
+            (
+                "v6",
+                Legacy::V6 {
+                    optimized,
+                    unique_ips,
+                    lines,
+                    ranges,
+                },
+            ) => {
                 assert_eq!(optimized, m.optimized, "{}: optimized", m.name);
-                assert_eq!(unique_ips.to_string(), m.unique_ips, "{}: unique_ips", m.name);
+                assert_eq!(
+                    unique_ips.to_string(),
+                    m.unique_ips,
+                    "{}: unique_ips",
+                    m.name
+                );
                 assert_eq!(lines, m.lines, "{}: lines", m.name);
                 assert_eq!(ranges.len(), m.ranges.len(), "{}: range count", m.name);
                 for (got, want) in ranges.iter().zip(&m.ranges) {
@@ -78,7 +105,11 @@ fn legacy_corpus() {
 }
 
 fn meta(name: &str) -> FeedMeta {
-    FeedMeta { name: name.into(), category: "migrated".into(), ..Default::default() }
+    FeedMeta {
+        name: name.into(),
+        category: "migrated".into(),
+        ..Default::default()
+    }
 }
 
 fn migrate_v4_and_check(m: &Manifest, ranges: &[(Ipv4Key, Ipv4Key)]) {
@@ -88,10 +119,19 @@ fn migrate_v4_and_check(m: &Manifest, ranges: &[(Ipv4Key, Ipv4Key)]) {
     }
     let v3 = w.build().unwrap();
     let r = Reader::open(&v3).unwrap();
-    assert_eq!(r.record_count(), ranges.len() as u64, "{}: migrated record count", m.name);
+    assert_eq!(
+        r.record_count(),
+        ranges.len() as u64,
+        "{}: migrated record count",
+        m.name
+    );
     // every legacy range's start is present in the migrated v3 file.
     for &(s, _) in ranges {
-        assert!(r.lookup_v4(s).unwrap().is_some(), "{}: migrated lookup", m.name);
+        assert!(
+            r.lookup_v4(s).unwrap().is_some(),
+            "{}: migrated lookup",
+            m.name
+        );
     }
 }
 
@@ -102,8 +142,17 @@ fn migrate_v6_and_check(m: &Manifest, ranges: &[(Ipv6Key, Ipv6Key)]) {
     }
     let v3 = w.build().unwrap();
     let r = Reader::open(&v3).unwrap();
-    assert_eq!(r.record_count(), ranges.len() as u64, "{}: migrated record count", m.name);
+    assert_eq!(
+        r.record_count(),
+        ranges.len() as u64,
+        "{}: migrated record count",
+        m.name
+    );
     for &(s, _) in ranges {
-        assert!(r.lookup_v6(s).unwrap().is_some(), "{}: migrated lookup", m.name);
+        assert!(
+            r.lookup_v6(s).unwrap().is_some(),
+            "{}: migrated lookup",
+            m.name
+        );
     }
 }

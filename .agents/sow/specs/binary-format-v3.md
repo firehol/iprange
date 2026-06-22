@@ -1,9 +1,11 @@
 # iprange binary format v3 — byte-level specification
 
-**Status:** Normative contract (revised through four external review rounds on
-2026-06-21). This is the gate before any code: it defines the on-disk bytes
-precisely so the Rust and Go libraries produce **byte-identical** files. Decisions
-D1–D6 (recorded in `.agents/sow/pending/SOW-0002-...md`) are folded in.
+**Status:** Normative contract. v3.0 (single-feed) was locked through four external
+review rounds on 2026-06-21; **v3.1 (interleaved multi-feed, §13) was added 2026-06-21
+(SOW-0003) and is being re-locked via external review.** This is the gate before any
+code: it defines the on-disk bytes precisely so the Rust and Go libraries produce
+**byte-identical** files. Decisions D1–D6 (SOW-0002) and the multi-feed decisions
+(SOW-0003) are folded in.
 
 Conformance language: **MUST / MUST NOT / SHOULD / MAY** are normative. A reader
 that accepts a file violating a MUST is non-conforming; a writer that emits one is
@@ -15,13 +17,14 @@ the file.
 logical inputs** MUST emit the same file bytes. Identical logical inputs means: the
 same set of ranges; the same per-range **value bytes** (the caller supplies the exact
 value content — the format treats it as opaque, see §10); and the same
-externally-supplied metadata *bytes* (feed-meta field bytes, `license_flags`,
-`generation_unixtime`). All other on-disk values (`entry_count`, `unique_ip_count_*`,
+externally-supplied metadata (the address family `ip_version` (§5); feed-meta field
+bytes; `license_flags`; `generation_unixtime`). All other on-disk values (`entry_count`, `unique_ip_count_*`,
 `value_id` assignment, section offsets/padding, hashes) are **derived
-deterministically** by the rules below. The format does **not** own any *semantic*
-mapping (e.g. which feed a membership-set id denotes): that is the engine's (Step 2) /
-phase-2 concern; a stable cross-producer feed-id registry is a phase-2 deliverable
-(§13). A **writer library MUST NOT** normalize, trim, case-fold, re-encode, or
+deterministically** by the rules below. In a **v3.1 merged file** the
+`feed_id → feed-identity` mapping is carried **in the file** (the catalog section,
+§13) and the stable `feed_id` assignment is a **caller input** (part of "identical
+logical inputs" above); a v3.0 single-feed file owns no such semantic mapping — a
+`type_id == 1` membership id is then caller-opaque (§10). A **writer library MUST NOT** normalize, trim, case-fold, re-encode, or
 otherwise transform caller-supplied value or metadata bytes — it emits them verbatim
 (validating only structure, §7/§10) or rejects invalid input; its public API MUST
 document this.
@@ -39,10 +42,10 @@ self-describing + extensible (skip-unknown sections); reusable across C/Rust/Go;
 **byte-identical across independent implementations**; safe against
 malformed/hostile input; ready to carry a signature later.
 
-Non-goals (v3, now): compression (may add as a section kind later); the merged
-multi-feed file (phase 2, §13); the actual signing/key management (deferred — only
-the *slot* is reserved, §11); a lookup accelerator (kind 6 is reserved, layout
-deferred, §8/§17).
+Non-goals (v3.0): compression (may add as a section kind later); the actual
+signing/key management (deferred — only the *slot* is reserved, §11); a lookup
+accelerator (kind 6 is reserved, layout deferred, §8/§17). (The **interleaved
+multi-feed merged file** is **in scope as v3.1** — additive over v3.0, §13.)
 
 ## 2. Why a custom format (not FlatBuffers / Cap'n Proto / MMDB)
 
@@ -108,10 +111,11 @@ deferred, §8/§17).
   reader MUST reject any non-zero reserved/pad: header `flags` bits 1–15, header
   `license_flags` bits 1–31, directory-entry `flags` bits 1–31, directory-entry
   `reserved`, index sub-header `reserved`, and the v6 record `pad` (one per record).
-  (Trailing header bytes `[72, header_size)` are NOT zero-checked: in a
-  `version_minor > 0` file they may be defined fields a v3.0 reader does not know, so
-  zero-checking them would break additive forward-compatibility — see §12. For
-  `version_minor == 0` there are no trailing bytes because `header_size == 72`.)
+  (Trailing header bytes `[72, header_size)` are NOT zero-checked: in a future
+  header-extending minor (`version_minor ≥ 2`) they may be defined fields a v3.0/v3.1
+  reader does not know, so zero-checking them would break additive forward-compatibility
+  — see §12. For `version_minor ∈ {0, 1}` there are no trailing bytes because
+  `header_size == 72` — v3.1 adds the catalog as a section, not header fields.)
 - **Inter-region padding** (the alignment gap before/between sections, including the
   gap between the directory and the first section) MUST be written `0x00` by the
   writer and is **not** covered by any section hash. A reader MUST reject non-zero
@@ -157,6 +161,7 @@ deferred, §8/§17).
 [ SECTION: feed-meta] kind 1; align 8
 [ SECTION: index    ] kind 2; align 16 (the hot path)
 [ SECTION: values   ] kind 3; align 8; present iff used
+[ SECTION: catalog  ] kind 4; align 8; present iff merged (v3.1, §13)
 [ SECTION: (7–15)…  ] future core sections, ascending kind                  [later]
 [ SECTION: metrics… ] kinds 16–63, ascending kind                          [later]
 [ SECTION: prose…   ] kinds 64–1023, ascending kind                        [later]
@@ -166,16 +171,16 @@ deferred, §8/§17).
 Ordering rules (a writer MUST follow; a reader MUST verify):
 - `directory_offset == header_size`; the directory immediately follows the header.
 - Sections appear in this total order: by **canonical band** — core (kinds 1–6:
-  feed-meta 1, index 2, values 3, and reserved 4 and 6 — by ascending kind, between 3
-  and 7, if a future version ever uses them), future-core (7–15), metrics (16–63),
+  feed-meta 1, index 2, values 3, catalog 4 (v3.1, §13), and reserved 6 — by ascending
+  kind, between 3 and 7), future-core (7–15), metrics (16–63),
   prose (64–1023), vendor (1024+), then the signature (kind 5) **last** (kind 5 is the
   sole exception to ascending-kind order — it is placed last because, once signing
   lands, it signs the directory and so must be finalized after every other section).
   Within a band, sections are ordered by **ascending `kind`**; multiple sections of
   the **same** kind keep the caller-supplied relative order (part of the
   byte-identical contract only when the caller's input is identical). This pins the
-  canonical position of every kind (incl. reserved 4/6) so a future version cannot
-  diverge.
+  canonical position of every kind (incl. catalog 4 and reserved 6) so a future version
+  cannot diverge.
 - Each section's `offset` = `align_up(prev_end, align)` (§3). No over-padding.
 - A zero-length section (the v3 signature, `length=0`) still occupies its canonical
   position; its `offset = align_up(prev_end, align)`, MUST be ≤ `file_size`, and it
@@ -190,10 +195,13 @@ Ordering rules (a writer MUST follow; a reader MUST verify):
   `value_id != 0xFFFFFFFF`. A reader does NOT require the reverse: a values section
   present but unreferenced is wasteful, not invalid (the "used ⇒ present" direction is
   enforced by the `value_id` bounds check, §9/§15). When present, `count` ≥ 1.
+- Optional, at most one: catalog (4) — present **iff** the file is a v3.1 merged file
+  (§13); its presence is what marks the file merged.
 - Optional/later: future-core (7–15), metrics (16–63), prose (64–1023),
   vendor (1024+). Optional kinds MAY repeat.
 - A reader MUST reject a file missing a required section or containing more than one
-  section of any mandatory kind (1, 2, 3, 5).
+  section of any singleton kind (1, 2, 3, 4, 5): kinds 1/2/5 are always required and
+  single, kind 3 is single when present, kind 4 is single when present.
 
 ## 5. Header (fixed 72 bytes at offset 0)
 
@@ -265,7 +273,8 @@ Total = 72 bytes. Variable-length identity lives in feed-meta (§7).
 - A reader MUST reject if `magic != "IPRANGE3"` (compared **bytewise** — 8 ASCII
   bytes, not interpreted as a scalar, so it is endianness-independent),
   `version_major != 3`, `header_size % 8 != 0`, or `header_size < 72`. For
-  `version_minor == 0`, `header_size` MUST equal 72 (reject otherwise). A reader MUST
+  `version_minor ∈ {0, 1}`, `header_size` MUST equal 72 (reject otherwise — v3.1 adds
+  no header fields, §13). A reader MUST
   accept any `version_minor` (`u16`), applying skip-unknown to sections and to
   trailing header fields `[72, header_size)` it does not recognize (those bytes are
   NOT zero-checked — they may be defined fields of a newer minor version; §3, §12).
@@ -303,8 +312,9 @@ At `directory_offset` (== `header_size`), `directory_count` entries, each **fixe
   apply.
 - **`flags` is fully determined by `kind` (byte-identical):** for every known kind
   the `flags` value is fixed — `must_understand = 1` for the required core sections
-  (kinds 1 feed-meta, 2 index, 3 values) and `must_understand = 0` for the signature
-  (kind 5); all other `flags` bits are 0. A writer MUST emit exactly these values; a
+  (kinds 1 feed-meta, 2 index, 3 values) and `must_understand = 0` for the catalog
+  (kind 4, §13) and the signature (kind 5); all other `flags` bits are 0. A writer
+  MUST emit exactly these values; a
   reader MUST reject a known-kind entry whose `flags` differ. (This removes the only
   writer freedom in the directory-entry bytes; without it two writers could diverge.)
 - Unknown **or reserved** `kind`: treated as unknown — skip if `must_understand=0`;
@@ -346,8 +356,8 @@ field is length-prefixed, so a reader that knows fewer fields skips unknown trai
 fields by reading their lengths. Future minor versions append fields and raise
 `field_count` (a v3.N reader reads the 6 fields it knows by 0-based index 0..5, then
 skips extras by length). A reader MUST reject if `field_count < 6` (for
-`version_minor == 0`, reject if `!= 6`) or if any declared length runs past the
-section.
+`version_minor ∈ {0, 1}`, reject if `!= 6` — v3.1 adds the catalog but no feed-meta
+fields) or if any declared length runs past the section.
 
 Field semantics: `name` (human-readable feed name); `category`;
 `maintainer`/`maintainer_url`; `source_url` (the original threat-intel source URL);
@@ -382,7 +392,7 @@ attacker-influenced.
 | 1 | feed-meta | v3 | 8 |
 | 2 | index (interval map) | v3 | 16 |
 | 3 | values (interned value table) | v3 | 8 |
-| 4 | reserved (was "strings"; never emitted in v3) | reserved | — |
+| 4 | catalog (per-feed identity; merged file) | v3.1 | 8 |
 | 5 | signature | v3 (reserved, empty) | 8 |
 | 6 | lookup-accelerator (DIR-24-8 / Poptrie / SoA) | reserved (layout deferred, §17) | TBD |
 | 7–15 | reserved for future core sections | reserved | TBD |
@@ -402,9 +412,10 @@ disagree (until then the kind is never emitted). Sections in the metrics (16–6
 prose (64–1023), and vendor (1024+) bands MUST carry `must_understand = 0` (they are
 optional/skip-on-unknown; anything genuinely required needs a `version_minor`/major
 that pins it per §12), and a reader MUST reject a section in those bands whose
-`must_understand = 1`. Kind 4 was reserved (not a separate "strings" table — feed-meta
-and values are inline length-prefixed, so no string table is needed) and was never
-emitted by any v3 file, so it is safe to repurpose in a future version.
+`must_understand = 1`. Kind 4 (reserved through v3.0 — feed-meta and values are inline length-prefixed, so
+no separate "strings" table was ever needed) is allocated by **v3.1** as the `catalog`
+section (§13); no v3.0 file ever emitted it, so the allocation is a clean additive
+minor bump.
 
 ## 9. index section (kind = 2, align 16) — the interval map
 
@@ -430,7 +441,11 @@ zero and is covered by the section hash.
 
 **Writer input & invariants.** The format writer's input is an already-disjoint set
 of `(range, value)` pairs — resolving overlapping input ranges that carry conflicting
-values is the **engine's** responsibility (Step 2), not the byte format's. A format
+values is the **engine's** responsibility (Step 2), not the byte format's. (The one
+exception is the v3.1 multi-feed **merge constructor**, §13.3 — a distinct writer
+entry point that takes N single-feed range lists which MAY overlap *across* feeds and
+resolves the overlap by union into a `type_id == 1` membership set, never by choosing
+between conflicting values.) A format
 writer **MUST reject** (typed error, no file emitted) input it cannot reduce to a
 sorted, disjoint, coalesced form — i.e. input containing overlapping ranges — rather
 than silently emit a file the reader would reject. Given a consistent input set, the
@@ -573,8 +588,9 @@ identical caller input). **Writer obligation:** a writer MUST validate a
 `type_id == 1` value before emitting it (`byte_length % 4 == 0` and ids strictly
 ascending) and reject invalid input as a writer-side error — mirroring the §7 UTF-8
 rule, so two writers cannot diverge (one rejecting, one interning verbatim). The
-*meaning* of a `type_id == 1` membership set — i.e. a stable feed-id registry — is a
-phase-2 concern (§13) and is not defined or required by v3.0.
+*meaning* of a `type_id == 1` membership id depends on the file: in a **v3.1 merged
+file** the ids are `feed_id`s resolved against the in-file catalog (§13); in a
+single-feed file they are **caller-opaque** (v3.0 defines no registry for them).
 
 ## 11. signature section (kind = 5, align 8) — RESERVED, deferred
 
@@ -646,7 +662,7 @@ authenticity** (§15 threat model).
   accesses a trailing field only when the file's `version_minor` ≥ that field's
   introduction (otherwise the field is treated as absent). Readers MUST use
   `header_size` (not the constant 72) and MUST require `header_size >= 72`; for
-  `version_minor == 0` it MUST be exactly 72. Trailing header bytes `[72, header_size)` belonging to a newer minor
+  `version_minor ∈ {0, 1}` it MUST be exactly 72. Trailing header bytes `[72, header_size)` belonging to a newer minor
   version are **skipped, not zero-checked** — they may be defined fields the reader
   does not know, so zero-checking them would break additive forward-compatibility.
 - The header carries only small, fixed-width, machine-readable fields. Large or
@@ -654,21 +670,238 @@ authenticity** (§15 threat model).
   in sections, keeping `header_size` within the `u16` range.
 - Directory entries and index records are fixed-size for all v3.x; growing them
   requires a `version_major` bump.
+- **v3.1 (the first minor bump) is the worked example of these rules:** it adds the
+  `catalog` section (kind 4, `must_understand = 0`, §13) and **no** header fields, so
+  `header_size` stays 72; an older v3.0 reader skips the catalog and reads the merged
+  file as a single-feed index whose values are opaque `type_id == 1` membership sets
+  (degraded but valid). For `version_minor ∈ {0, 1}`, `header_size` MUST equal 72.
 
-## 13. Multi-feed merged file (phase 2 — NON-NORMATIVE outline)
+## 13. Multi-feed merged file (v3.1 — normative)
 
-> **This section is a non-normative outline of phase 2 — OUT OF SCOPE for v3.0.** The
-> normative multi-feed contract (including the byte-identical rules for overlapping
-> input feeds and the feed-id mapping) is specified when phase 2 is designed; v3.0
-> conformance does not depend on it.
+> v3.1 adds the **interleaved multi-feed merged file**: one v3 file whose interval
+> map covers the union of many input feeds, each range recording the **set of feeds**
+> that cover it. It is **purely additive** over v3.0 — a new section kind 4
+> (`catalog`) and `version_minor = 1`; **no v3.0 on-disk byte changes**. A v3.0 reader reads a
+> merged file as an ordinary single-index file whose values are opaque `type_id == 1`
+> membership sets (it skips the `must_understand = 0` catalog, §6/§12) — a valid
+> degraded read. All v3.0 rules (header, directory, index, values, safety §15) apply
+> unchanged; this section adds only the catalog, the merge constructor, and the
+> merged-file invariants.
 
-Adds a `catalog` section and a **merged index** whose `value_id` points to a
-membership set (type_id 1) — one lookup returns all memberships. Same machinery.
-New kinds are allocated from §8 at design time. For byte-identical multi-feed output
-the caller will need to supply a stable feed-id mapping and a defined rule for
-overlapping input feeds (both deferred to the phase-2 design). Open: feed-id
-registry vs interning names; build cost; cold-lookup speed (the kind-6 accelerator
-is likely required — measure first).
+### 13.1 What a merged file is
+
+- A merged file is a v3 file with `version_major = 3`, `version_minor = 1`,
+  `header_size = 72` (v3.1 defines **no** new header fields), that contains a
+  **catalog** section (kind 4). **The presence of the catalog is the sole signal that
+  the file is merged** — there is deliberately no header flag (a header `flags` bit
+  would make a v3.0 reader reject the file under §15 step 2, breaking additive
+  forward-compat §12).
+- **`version_minor == 1` ⟺ catalog present ⟺ merged (writer MUST; byte-identity).** A
+  writer MUST emit `version_minor == 1` **only** for merged files (those containing a
+  catalog) and MUST emit `version_minor == 0` for single-feed files (which MUST NOT
+  contain a catalog). This closes the last writer freedom in the `version_minor` field
+  (offset 10): without it, a v3.1 library could emit a single-feed file as either
+  `version_minor`, diverging from a v3.0 writer's bytes for identical logical input.
+  The matching reader rejections (a `version_minor == 1` file with no catalog; a
+  `version_minor == 0` file carrying a kind-4 section) are §15 step 6 — a v3.0 reader,
+  which does not know kind 4, cannot perform them and reads either as degraded
+  single-feed.
+- The header `unique_ip_count` (§5) of a merged file is the **cardinality of the union**
+  of all feeds' ranges — each IP counted **once**, regardless of how many feeds cover
+  it (the §5 formula `Σ (end_i − start_i + 1)` over the disjoint elementary intervals
+  yields exactly this), **not** the sum of per-feed sizes.
+- Its interval map (kind 2 index) is built over the **union** of all input feeds'
+  ranges, split into **elementary intervals** (§13.3). **Every** index record carries
+  a **non-sentinel** `value_id` referencing a `type_id == 1` membership set (§10) — the
+  strictly-ascending list of the `feed_id`s that cover that interval. A merged file
+  MUST NOT contain a record with `value_id == 0xFFFFFFFF` (every range in a merged file
+  is in ≥ 1 feed) and MUST NOT reference a value whose `type_id != 1`; its values section
+  MUST contain **only** `type_id == 1` entries (the merge constructor produces only
+  membership sets, so unreferenced foreign entries cannot occur). (An empty merged
+  index — `record_count = 0`, all input feeds empty — is valid and carries no values
+  section, §4.)
+- `ip_version` (header `flags` bit0) is uniform as in v3.0: a merged file is all-IPv4
+  or all-IPv6 (a dual-stack producer emits two merged files).
+- feed-meta (kind 1, required) carries the **merged artifact's own** identity (e.g.
+  the bundle name); the per-feed identities live in the catalog.
+
+### 13.2 catalog section (kind = 4, align 8, `must_understand = 0`)
+
+The catalog is the **in-file** `feed_id → feed-identity` registry (decision: a
+self-describing, portable artifact — the merged file is meaningful standalone).
+
+```
+u32 feed_count                   ; number of feeds; reader MUST reject if 0
+u32 field_count                  ; identity fields per feed; MUST be 6 for version_minor == 1 (≥ 6 for a future minor)
+repeat feed_count times:         ; entries tightly packed, in ascending feed_id order
+    u32 feed_id                  ; this feed's stable id; strictly ascending across entries (hence unique)
+    repeat field_count times:
+        u32 length               ; byte count of the UTF-8 value (0 = empty)
+        u8  bytes[length]        ; UTF-8, written verbatim — §7 encoding/determinism rules apply identically
+```
+
+- The six v3.1 identity fields are, in order, the **same** as feed-meta (§7): `name`,
+  `category`, `maintainer`, `maintainer_url`, `source_url`, `license`. Field semantics
+  and the verbatim / well-formed-UTF-8 / no-normalization writer and reader rules are
+  **exactly §7's**, applied per feed (a reader MUST reject invalid UTF-8 in any field;
+  renderers MUST treat the fields as untrusted).
+- `feed_id` is any `u32`. Entries MUST be ordered by **strictly ascending** `feed_id`
+  (a total order, no duplicates) — making the catalog deterministic and
+  binary-searchable for `feed_id → identity`. All `u32` values are valid `feed_id`s,
+  including `0` and `0xFFFFFFFF` — there is **no** sentinel `feed_id`; the `0xFFFFFFFF`
+  sentinel is a *`value_id`* in the index (§9), a different field at a different layer.
+- **Stable ids (decision 3a):** `feed_id`s are **caller-assigned and stable** — once a
+  feed has an id that id is fixed for the feed's life and **never reused** for a
+  different feed. Removing a feed drops its catalog entry and its id from every
+  membership set; the other feeds' ids are unchanged. The format stores the ids the
+  caller supplies; **it does not assign or renumber them**. (Positional / order-derived
+  ids are non-conforming: inserting or removing a feed would renumber the rest and
+  break historical comparability of merged files across runs.)
+- A catalog `feed_id` **need not** be referenced by any membership set (a feed that
+  contributed no surviving ranges — e.g. fully subtracted — is wasteful but valid,
+  mirroring the §4 "values present but unreferenced" rule). Conversely, every `feed_id`
+  referenced by a membership set MUST have a catalog entry (§13.5).
+- Section `length` MUST equal exactly `4 + 4 + Σ_feeds(4 + Σ_fields(4 + length_i))` —
+  no trailing padding. **Forward-compat:** a future minor MAY raise `field_count`; a
+  v3.1 reader reads the 6 fields it knows (0-based index 0..5) and skips extra trailing
+  fields by their declared length, exactly as §7.
+- **Canonical position & flags:** the catalog sorts at kind 4 — after values (3),
+  before the signature (5, which is last) — per the §4 ascending-kind core-band order.
+  `flags` is fixed at `must_understand = 0` (§6).
+
+### 13.3 The merge (k-way) — deterministic constructor
+
+The format library provides a **multi-feed merge** constructor (decision S2(c)): it
+takes the input feeds and produces the merged file. It is a **fully-determined**
+operation — there is no value conflict to resolve (the membership set *is* the result
+of an overlap) — which is why it lives in the format library, not the general
+set-algebra engine (Step 2). It is a **distinct entry point** from the §9 single-feed
+writer, with a different input contract: cross-feed overlap is **expected**, not
+rejected.
+
+**Input.** An unordered set of feeds; each feed is `(feed_id, identity, ranges)` where
+`ranges` is a single-feed **value-less** range list (a plain IP set — a feed carries
+**no** per-range values; the membership set is the only value, assigned by the sweep in
+step 2), **normalized exactly as the §9 single-feed writer normalizes its input** — the
+library sorts and coalesces it (because the ranges are value-less, §9 coalescing merges
+**every** contiguous neighbour, so no intra-feed `end + 1 == next start` adjacency can
+survive — this is what step 3 relies on), and **rejects overlapping ranges within one
+feed** (a typed error). Ranges of **different** feeds MAY overlap
+arbitrarily — that cross-feed overlap is the whole point, resolved into membership by
+the sweep (step 2). The constructor takes the merged file's target **address family**
+(`ip_version`, §5) as an explicit input and MUST reject any feed whose ranges are of a
+different family (the merged file is all-IPv4 or all-IPv6, §13.1 — a mismatch is a typed
+error); because `ip_version` is supplied, the family (and the index `key_width`) is
+fixed even when **all** feeds are empty — no vacuous ambiguity. The constructor MUST
+also reject a duplicate `feed_id` or `feed_count == 0`. (Per-feed normalization and the
+sweep output are both canonical, so the input feed ordering does not affect the output
+bytes.)
+
+**Algorithm (normative outcome — any implementation reproducing these exact bytes
+conforms).** Produce the on-disk records by a boundary sweep:
+1. Compute the **boundary addresses**: the **set** (deduplicated, sorted ascending
+   numerically — hi-then-lo for v6) of every address at which some feed range *starts*
+   (`start`) or *becomes inactive* (`end + 1`). A feed range whose `end` is the family
+   maximum `family_max` (`0xFFFFFFFF` v4 / all-ones v6) contributes **no** `end + 1`
+   boundary (the §9 family-maximum rule: never compute `end + 1` at the maximum; for v6
+   `end + 1` uses `u128_inc`, §3) — it stays active through the last address. Two feeds
+   that start at the same address contribute that address **once** (it is a set). If no
+   feed has any range (all feeds empty), the boundary set is empty and the merge emits
+   **no** records — a valid empty merged index (§13.1).
+2. The boundary addresses partition the key space into **elementary intervals**: for each
+   consecutive pair `b_i < b_{i+1}`, the interval `[b_i, b_{i+1} − 1]`; and for the
+   **last** boundary `b_last`, the **terminal interval** `[b_last, family_max]`. Over a
+   single elementary interval `[p, q]` (its endpoints — `p = b_i, q = b_{i+1} − 1` for a
+   regular interval, `p = b_last, q = family_max` for the terminal one) the **active set**
+   `S` is constant and equals exactly `{ feed : feed.start ≤ a ≤ feed.end }` for any
+   address `a` in `[p, q]` (the inclusive-`[start, end]` membership — well-defined and
+   **independent of intra-address event order**: every event at a boundary is reflected in
+   `S` from that boundary onward). For each elementary interval whose `S` is **non-empty**,
+   emit one record `[p, q]` whose value is the `type_id == 1` membership set listing the
+   ids of `S` in **strictly ascending** order (LE `u32`, §10); intervals with empty `S`
+   (addresses covered by no feed) emit **no** record. (The terminal interval
+   `[b_last, family_max]` has a **non-empty active set** exactly when some feed reaches the
+   family maximum — this is how such a feed's final record is emitted despite contributing
+   no `end + 1` boundary; in every other case `b_last` is an `end + 1` that empties `S`, so
+   the terminal interval emits nothing.)
+3. The emitted records are, by construction, sorted, disjoint, and already
+   **coalesced** under §9: two consecutive emitted records always differ in membership
+   set (a boundary exists precisely because the active set changed), so no §9
+   same-value-and-contiguous merge remains — where "differ in membership set" is §10's
+   content-addressed equality over the full `(type_id, byte_length, bytes)` tuple, and
+   since every value is a `type_id == 1` set of strictly-ascending ids, equal feed-sets
+   serialize identically. (Each feed's input being coalesced
+   guarantees no `end + 1 == next start` self-adjacency *within* a feed, so the sweep
+   introduces no spurious boundary.)
+4. `value_id`s are assigned by the §10 ascending-record sweep (first-seen distinct
+   membership set → next id); the catalog is emitted from the feeds sorted by `feed_id`
+   (§13.2); feed-meta (§7) carries the merged artifact's own identity. All **header**
+   fields are set as for any v3 writer (§5): the **computed** fields `entry_count` and
+   `unique_ip_count_*` are derived from the emitted records — with §5's IPv6 overflow
+   rejection (reject if the union's `Σ (end_i − start_i + 1)` exceeds `2^128 − 1`,
+   overflow-checked) — and the **caller-supplied** `generation_unixtime` and
+   `license_flags` describe the merged artifact (one value each, distinct from the
+   per-feed catalog identities).
+
+**Byte-identity (extends the §0 contract).** Two conforming merge constructors given
+**identical logical inputs** — the same feeds, the same `feed_id` assignment, the same
+per-feed range lists and identity bytes, the same target `ip_version`, and the same
+merged-artifact feed-meta bytes, `generation_unixtime`, and `license_flags` — MUST emit
+byte-identical files. Every derived value (elementary-interval boundaries,
+membership-set contents, `value_id` assignment, catalog order, section offsets,
+hashes) is fixed by the rules above. (Theoretical bound, mirroring §10's
+distinct-values rejection: a writer MUST reject input producing a membership set whose
+serialized `byte_length` would exceed `2^32 − 1` — an elementary interval covered by
+more than `(2^32 − 1) / 4` feeds; there is no realistic path to this, as the catalog
+alone would dwarf any feasible `file_size`.)
+
+### 13.4 Lookup (membership query)
+
+A point lookup over a merged file is the ordinary §9 numeric binary search; the
+returned record's `type_id == 1` value **is** the set of `feed_id`s containing the key
+(a not-found result ⇒ the key is in no feed). A v3.1 reader resolves each `feed_id` to
+its identity via a binary search over the catalog's ascending `feed_id`s (§13.2). This
+answers update-ipsets' "which feeds contain this IP" in **one** index lookup + one
+membership decode, replacing a per-feed scan, and is the single-mmap-lookup primitive
+the Netdata SDK consumes. Cold-lookup cost over a large merged index is the §17
+concern, addressed additively by the reserved kind-6 accelerator (decision 4a: binary
+search now; accelerator reserved, layout deferred — measure at full scale first).
+
+### 13.5 Validation (v3.1 reader — in addition to §15)
+
+The catalog's **structural** validity (`feed_count ≥ 1`; `field_count ≥ 6`, `== 6` for
+`version_minor == 1`; strictly-ascending `feed_id`s; each field length within the
+section and well-formed UTF-8; exact section length) is the **mandatory §15 step-9b**
+check. A reader that interprets the catalog (kind 4) MUST then enforce the merged-file
+**semantics** (skippable under the §15 verify-once opt-in, like the safety walk):
+- **Merged-file invariant:** in a file that has a catalog, **every** index record's
+  `value_id` is non-sentinel and references a `type_id == 1` value, **and every entry in
+  the values section — referenced or not — has `type_id == 1`** (the reader enforcement
+  of §13.1's "values section MUST contain only `type_id == 1`"; a single pass over the
+  values section, which §15 step 9 already traverses). (The §15 **step-9** values check
+  already validated each membership set's structure per §10 — non-empty,
+  `byte_length % 4 == 0`, strictly-ascending ids; the §15 step-11 record walk validates
+  `value_id` range and record ordering, **not** value-type content.) Reject a sentinel
+  record, a non-`type_id == 1` referenced value, or **any** values entry whose
+  `type_id != 1`.
+- **Cross-reference:** every `feed_id` appearing in any membership set MUST have a
+  catalog entry. Reject an unresolvable membership id. (Implementation: build a hash set
+  or sorted array of catalog `feed_id`s once, then test each membership id against it —
+  O(C + M×F) rather than O(M×F·log C) for M records, F ids per set, C feeds.)
+
+A v3.0 reader (or any reader not interpreting kind 4) skips the catalog and reads the
+file as a single-feed index with **opaque** `type_id == 1` values — a conforming
+degraded read (it performs none of the v3.1-semantic checks above).
+
+### 13.6 Relationship to §9 and the engine
+
+The merge constructor (§13.3) is the **only** v3 writer entry point whose input ranges
+may overlap; it resolves overlap by **union into a membership set**, never by choosing
+between conflicting values. General set algebra over arbitrary interned values
+(intersect/exclude/diff with value semantics) remains the Step-2 engine's job (§9's
+"overlap resolution is the engine's responsibility" still holds for that general case).
+The engine MAY later reuse or supersede this constructor; the on-disk result is
+identical either way.
 
 ## 14. Legacy read (migration)
 
@@ -720,7 +953,8 @@ Reader validation order:
    small to contain a header).
 2. Read the first 8 bytes; if `magic != "IPRANGE3"` (bytewise), reject. If
    `version_major != 3`, reject. If `header_size % 8 != 0` or `header_size < 72`,
-   reject; for `version_minor == 0`, reject if `header_size != 72`. If
+   reject; for `version_minor ∈ {0, 1}`, reject if `header_size != 72` (matches §5; a
+   future `version_minor ≥ 2` defines its own `header_size`). If
    `real_size < header_size`, reject (file shorter than its own header). Verify header
    `flags` bits 1–15 and `license_flags` bits 1–31 are zero. (Trailing header bytes
    `[72, header_size)` of a newer-minor file are skipped, not zero-checked — §3/§12.)
@@ -740,24 +974,45 @@ Reader validation order:
    `must_understand = 1`, reject.
 6. Enforce canonical order + bands; for each section verify
    `offset == align_up(prev_end, align)` (compute `align_up` overflow-safe — reject
-   if `prev_end > MaxUint64 − (align − 1)`); verify required-section presence and
-   no-duplicate-mandatory (§4). Verify all inter-region padding (including the gap
-   before the first section) is zero, and that the highest-offset section ends
+   if `prev_end > MaxUint64 − (align − 1)`). Verify **every required section is present**
+   (feed-meta 1, index 2, signature 5) and that **no singleton kind (1, 2, 3, 4, 5)
+   appears more than once** (§4); an unknown or reserved section with
+   `must_understand = 0` is **accepted and skipped** and does **not** violate the
+   required-section check — this is exactly what lets a v3.0 reader accept a v3.1 merged
+   file (it skips the unknown catalog). **Merged-file signalling (a catalog-aware /
+   v3.1 reader MUST; a v3.0 reader cannot, and reads degraded):** `version_minor == 1` ⟺
+   a catalog (kind 4) is present ⟺ the file is merged (§13.1) — so reject a
+   `version_minor == 1` file with **no** catalog, and reject a `version_minor == 0` file
+   that **contains** a kind-4 section. Verify all inter-region padding (including the
+   gap before the first section) is zero, and that the highest-offset section ends
    exactly at `file_size`. (The "values present iff used" linkage needs index data
    and is enforced by the per-record `value_id` bounds check in step 11, not here.)
-7. feed-meta (kind 1): `field_count` (≥ 6; `== 6` for `version_minor == 0`); each
+7. feed-meta (kind 1): `field_count` (≥ 6; `== 6` for `version_minor ∈ {0, 1}`); each
    declared length within the section; section length equals the exact computed size.
 8. index (kind 2): sub-header `reserved` zero; `key_width ∈ {4,16}`; `record_size`
    matches `key_width` (12↔4, 40↔16) and header `ip_version`;
    `record_count == header.entry_count`. Reject if `record_count > (MaxUint64 − 32)
    / record_size`, then verify `32 + record_count × record_size == length`.
 9. values (kind 3): if present, `count ≥ 1`, walk entries (`type_id != 0`;
-   `byte_length` within section; overflow-safe), section length equals the exact
+   `byte_length` within section; overflow-safe) and **apply each entry's type-specific
+   rule (§10)** — for `type_id == 1` reject `byte_length == 0`, `byte_length % 4 != 0`,
+   or ids that are not strictly ascending; section length equals the exact
    computed size. (The "values present iff used" linkage is enforced by the
    per-record `value_id` bounds check in step 11 — with `count = 0` when the section
    is absent, any non-sentinel `value_id` is rejected, so "used ⇒ present" needs no
    separate full-index scan here and is skipped under verify-once. A values section
    present but unreferenced is wasteful, not invalid.)
+9b. catalog (kind 4, merged files — present only in v3.1 merged files): if present,
+    `feed_count ≥ 1`; `field_count ≥ 6` (`== 6` for `version_minor == 1`); walk
+    `feed_count` entries — each `feed_id` (a 4-byte read) and each of the `field_count`
+    fields (a 4-byte length prefix + its bytes) checked against the **remaining** section
+    bytes, each `feed_id` strictly greater than the previous (the running offset
+    accumulation is overflow-safe per the §15 overflow rule), each field well-formed
+    UTF-8 (§7); section length equals the exact computed size. (The
+    merged-file **semantic** checks — every index record non-sentinel and
+    `type_id == 1`, and every membership `feed_id` present in the catalog — are §13.5,
+    performed by a catalog-aware reader after this structural pass; a v3.0 reader skips
+    kind 4 entirely.)
 10. signature (kind 5): if `version_minor == 0`, `length` MUST be 0; if
     `version_minor > 0`, an empty section means "unsigned" and a non-empty section
     is handled per §11.
@@ -774,8 +1029,8 @@ Reader validation order:
 12. **Integrity / authenticity** (complementary to step 11, not a substitute):
     section-hash verification is corruption detection — SHOULD-at-load for unsigned
     files, covering **every section present** (each directory entry: feed-meta, index,
-    values, signature in v3.0, and any future-version section), or skipped under
-    verify-once. For **signed** files, signature verification plus section-hash
+    values, signature in v3.0, the catalog in v3.1 merged files, and any future-version
+    section), or skipped under verify-once. For **signed** files, signature verification plus section-hash
     verification is MUST-at-load (§11) and authenticates the content. **On any
     section-hash mismatch (or signature-verification failure) the reader MUST reject
     the file** and MUST NOT return results from a section whose hash did not verify.
@@ -784,12 +1039,17 @@ Reader validation order:
 The numbered order is a logical dependency order, not a rigid execution sequence: an
 implementation MAY reorder data-dependent checks (e.g. evaluate the step-9
 values-iff-used cross-check during the step-8 index scan) **provided no untrusted
-bytes are trusted before the structural check that governs them**.
+bytes are trusted before the structural check that governs them**. For a v3.1 merged
+file, the §13.5 **semantic** checks (the merged-file invariant + the membership↔catalog
+cross-reference) run **after** step 11 — they need the validated catalog (9b), the
+validated values (9), and the walked index records (11) — and are skippable under
+verify-once alongside steps 11/12.
 
 **Verify-once opt-in:** a reader library MUST default to verifying section hashes
 (or performing the per-record walk) at load. The verify-once-at-install
-optimization — skipping steps 11 **and 12** because integrity was established
-out-of-band — MUST be an explicit caller opt-in (e.g. a `trust_verified` flag), and
+optimization — skipping steps 11 **and 12** (and, for merged files, the §13.5 semantic
+checks) because integrity was established out-of-band — MUST be an explicit caller
+opt-in (e.g. a `trust_verified` flag), and
 the library's docs MUST state the caller's responsibility to verify at install. That
 install-time verification **MUST itself have performed full section-hash (or, for
 signed files, signature) verification** plus the structural+record checks — skipping
@@ -817,7 +1077,9 @@ size with a backdated `mtime`.)
 **Overflow rule:** every `count × size` and `offset + length` MUST use
 checked/widened arithmetic; any overflow ⇒ reject. (Go silently wraps `u64`: before
 `a × b` check `a > MaxUint64 / b`; before `a + b` check `a > MaxUint64 − b`. Applies
-to `directory_count × 72`, `record_count × record_size`, and the values walk.)
+to `directory_count × 72`, `record_count × record_size`, the values walk, and the
+catalog walk (per entry: the `feed_id` read plus the `field_count` length-prefixed
+fields, accumulated overflow-safe).)
 
 **Allocation rule:** never pre-allocate from an unverified count. mmap mode
 allocates nothing for data. owned-mutable sizes only from counts validated against
@@ -877,8 +1139,10 @@ ASan/Miri).
   most cache-dense layout for v4; an SoA / DIR-24-8 / Poptrie accelerator will be
   added under kind 6 (additive) once benchmarked (1B/1C).
 - **Compression** (a §1 non-goal for v3.0) may be added as a section kind later.
-- **Phase-2 feed identity** (§13): registry vs interned names; the stable feed-id
-  mapping the byte-identical contract requires.
+- **Feed identity** is now specified in **v3.1** (§13: an in-file catalog with
+  caller-supplied stable `feed_id`s) — no longer open. The remaining merged-file open
+  item is purely performance: cold-lookup speed over a large merged index, addressed
+  additively by the kind-6 accelerator above (measure at full ~430-feed scale first).
 - **Legacy read timing** (§14): deferred to sub-step 1D.
 - **Signed variant details** (§11): `algo_id`/`key_id` header growth, the
   zero-the-hash signing procedure, replay/nonce handling, key management.

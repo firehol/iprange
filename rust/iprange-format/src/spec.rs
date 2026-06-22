@@ -8,8 +8,11 @@ pub const MAGIC: [u8; 8] = *b"IPRANGE3";
 
 /// Major version. A reader MUST reject any other major (§5/§12).
 pub const VERSION_MAJOR: u16 = 3;
-/// Minor version emitted by this crate (the v3.0 contract).
+/// Minor version for a single-feed file (the v3.0 contract).
 pub const VERSION_MINOR: u16 = 0;
+/// Minor version for a multi-feed merged file (v3.1, §13). A merged file
+/// (`version_minor == 1`) MUST contain a catalog section, and vice versa (§13.1).
+pub const VERSION_MINOR_MERGED: u16 = 1;
 
 /// Fixed header size for v3.0 (§5). For `version_minor == 0` it MUST be exactly this.
 pub const HEADER_SIZE: u16 = 72;
@@ -56,6 +59,8 @@ pub enum SectionKind {
     Index = 2,
     /// kind 3 — interned value table (align 8; present iff used).
     Values = 3,
+    /// kind 4 — per-feed identity catalog (align 8; present iff merged, v3.1 §13.2).
+    Catalog = 4,
     /// kind 5 — reserved signature slot, empty in v3 (align 8); placed last.
     Signature = 5,
 }
@@ -71,7 +76,10 @@ impl SectionKind {
     pub const fn align(self) -> u64 {
         match self {
             SectionKind::Index => 16,
-            SectionKind::FeedMeta | SectionKind::Values | SectionKind::Signature => 8,
+            SectionKind::FeedMeta
+            | SectionKind::Values
+            | SectionKind::Catalog
+            | SectionKind::Signature => 8,
         }
     }
 
@@ -83,7 +91,8 @@ impl SectionKind {
             SectionKind::FeedMeta | SectionKind::Index | SectionKind::Values => {
                 DIR_FLAG_MUST_UNDERSTAND
             }
-            SectionKind::Signature => 0,
+            // Catalog (§13.2) and Signature are skip-on-unknown: `must_understand = 0`.
+            SectionKind::Catalog | SectionKind::Signature => 0,
         }
     }
 
@@ -93,6 +102,7 @@ impl SectionKind {
             1 => Some(SectionKind::FeedMeta),
             2 => Some(SectionKind::Index),
             3 => Some(SectionKind::Values),
+            4 => Some(SectionKind::Catalog),
             5 => Some(SectionKind::Signature),
             _ => None,
         }
@@ -165,7 +175,11 @@ mod tests {
     fn sha256_empty_matches_library() {
         use sha2::{Digest, Sha256};
         let got = Sha256::digest([]);
-        assert_eq!(got.as_slice(), &SHA256_EMPTY, "SHA-256(\"\") constant is wrong");
+        assert_eq!(
+            got.as_slice(),
+            &SHA256_EMPTY,
+            "SHA-256(\"\") constant is wrong"
+        );
     }
 
     #[test]
@@ -175,7 +189,10 @@ mod tests {
         assert_eq!(SectionKind::Index.flags(), DIR_FLAG_MUST_UNDERSTAND);
         assert_eq!(SectionKind::Signature.flags(), 0);
         assert_eq!(SectionKind::from_id(2), Some(SectionKind::Index));
-        assert_eq!(SectionKind::from_id(4), None); // reserved
+        assert_eq!(SectionKind::from_id(4), Some(SectionKind::Catalog)); // v3.1 catalog
+        assert_eq!(SectionKind::Catalog.align(), 8);
+        assert_eq!(SectionKind::Catalog.flags(), 0); // must_understand = 0 (§13.2)
+        assert_eq!(SectionKind::from_id(6), None); // reserved accelerator
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 Language-neutral fixtures that pin the **byte-identical** contract of the v3 binary
 format (`.agents/sow/specs/binary-format-v3.md`). Every conforming writer
-(Rust today, Go next) given a case's logical input MUST produce the exact golden
+(Rust and Go) given a case's logical input MUST produce the exact golden
 bytes; every conforming reader MUST accept a `bytes` golden and reject every
 `reject` case.
 
@@ -43,6 +43,32 @@ conformance/
 - **value** is `null` (the sentinel "present, no value") or `{type_id, bytes_hex}`.
   `bytes_hex` is the opaque value bytes, lower-case hex, no separators.
 - **license_flags** / **generation_unixtime** map straight to the header fields.
+
+### Multi-feed merge cases (v3.1)
+
+A case with a top-level `feeds` array is built via the **merge constructor**
+(`MergeWriter`, §13.3) instead of the single-feed writer, producing a v3.1 interleaved
+merged file (catalog + membership index). Provide `feeds` in place of `ranges`:
+
+```json
+{
+  "name": "merge-v4-partial-overlap",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },          // the merged artifact's own identity
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1,                            // stable u32 id (catalog key, §13.2)
+      "feed_meta": { "name": "alpha" },        // this feed's identity
+      "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.10" } ] }  // value-less
+  ],
+  "expect": "bytes"
+}
+```
+
+Feeds may be listed in any order (the writer sorts by `feed_id`); ranges of different
+feeds may overlap (that overlap becomes membership). `feed_id`s must be unique and
+ranges within one feed must be disjoint, else the case is a `reject`.
 
 ## Running (Rust)
 

@@ -1,0 +1,14 @@
+{
+  "name": "reject-merge-duplicate-feed-id",
+  "description": "Two feeds sharing a feed_id are not encodable (§13.2 catalog is strictly ascending).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1, "feed_meta": { "name": "alpha" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.10" } ] },
+    { "feed_id": 1, "feed_meta": { "name": "bravo" }, "ranges": [ { "start": "10.0.0.20", "end": "10.0.0.30" } ] }
+  ],
+  "expect": "reject",
+  "reject_class": "InvalidInput"
+}

@@ -44,15 +44,16 @@ func craftV4FeedMeta(fm []byte, versionMinor uint16) []byte {
 }
 
 func TestReaderAcceptsFutureExtraFeedMetaFields(t *testing.T) {
-	// A future v3.1 file may declare >6 feed-meta fields; a v3.0 reader reads the 6
-	// it knows and skips the extras (additive forward-compat, §7).
+	// A future header-extending minor (v3.2+) may declare >6 feed-meta fields; a v3.1
+	// reader reads the 6 it knows and skips the extras (additive forward-compat, §7).
+	// v3.0 AND v3.1 both pin field_count == 6, so the future minor is 2.
 	var fm []byte
 	fm = le.AppendUint32(fm, 8) // 8 fields
 	for i := 0; i < 8; i++ {
 		fm = le.AppendUint32(fm, 1) // each field: 1 byte
 		fm = append(fm, byte('a'+i))
 	}
-	r, err := Open(craftV4FeedMeta(fm, 1)) // version_minor = 1
+	r, err := Open(craftV4FeedMeta(fm, 2)) // version_minor = 2 (future)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +64,13 @@ func TestReaderAcceptsFutureExtraFeedMetaFields(t *testing.T) {
 	if v.Name != "a" || v.License != "f" { // field 5; fields 6,7 skipped
 		t.Fatalf("feed-meta = %+v", v)
 	}
-	// a v3.0 file (version_minor 0) with >6 fields is still rejected.
+	// a v3.0 file (version_minor 0) with >6 fields is still rejected (pinned to 6).
 	if _, err := Open(craftV4FeedMeta(fm, 0)); err == nil {
 		t.Fatal("v3.0 file with >6 feed-meta fields should be rejected")
+	}
+	// and a v3.1 file (version_minor 1) with >6 fields is rejected too.
+	if _, err := Open(craftV4FeedMeta(fm, 1)); err == nil {
+		t.Fatal("v3.1 file with >6 feed-meta fields should be rejected")
 	}
 }
 

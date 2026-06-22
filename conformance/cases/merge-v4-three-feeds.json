@@ -1,0 +1,14 @@
+{
+  "name": "merge-v4-three-feeds",
+  "description": "A=[1,50] B=[20,80] C=[60,100]: five elementary intervals {A},{A,B},{B},{B,C},{C}.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 1,
+  "generation_unixtime": 1700009999,
+  "feeds": [
+    { "feed_id": 10, "feed_meta": { "name": "a", "category": "attacks" }, "ranges": [ { "start": "0.0.0.1", "end": "0.0.0.50" } ] },
+    { "feed_id": 20, "feed_meta": { "name": "b", "category": "abuse" }, "ranges": [ { "start": "0.0.0.20", "end": "0.0.0.80" } ] },
+    { "feed_id": 30, "feed_meta": { "name": "c", "category": "malware" }, "ranges": [ { "start": "0.0.0.60", "end": "0.0.0.100" } ] }
+  ],
+  "expect": "bytes"
+}

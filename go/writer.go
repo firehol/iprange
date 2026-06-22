@@ -18,8 +18,13 @@ type FeedMeta struct {
 	License       string
 }
 
+// fields returns the six §7/§13.2 fields in order.
+func (m FeedMeta) fields() []string {
+	return []string{m.Name, m.Category, m.Maintainer, m.MaintainerURL, m.SourceURL, m.License}
+}
+
 func (m FeedMeta) validate() error {
-	for _, f := range []string{m.Name, m.Category, m.Maintainer, m.MaintainerURL, m.SourceURL, m.License} {
+	for _, f := range m.fields() {
 		if !utf8.ValidString(f) {
 			return errInvalidInput("feed-meta field is not valid UTF-8")
 		}
@@ -31,15 +36,20 @@ func (m FeedMeta) validate() error {
 	return nil
 }
 
-func (m FeedMeta) encode() []byte {
-	fields := []string{m.Name, m.Category, m.Maintainer, m.MaintainerURL, m.SourceURL, m.License}
-	out := make([]byte, 0, 4+len(fields)*4)
-	out = le.AppendUint32(out, feedMetaFieldCount)
-	for _, f := range fields {
+// appendFields appends the six length-prefixed UTF-8 fields (no count prefix), shared
+// by the feed-meta section (§7) and each catalog entry (§13.2).
+func (m FeedMeta) appendFields(out []byte) []byte {
+	for _, f := range m.fields() {
 		out = le.AppendUint32(out, uint32(len(f)))
 		out = append(out, f...)
 	}
 	return out
+}
+
+func (m FeedMeta) encode() []byte {
+	out := make([]byte, 0, 4+6*4)
+	out = le.AppendUint32(out, feedMetaFieldCount)
+	return m.appendFields(out)
 }
 
 // Value is an opaque per-range value (§10). type_id 0 is invalid; type_id 1 is a
@@ -124,8 +134,17 @@ func valueKey(v *Value) string {
 	return string(k[:]) + string(v.Bytes)
 }
 
-// Build produces the complete v3 file bytes, or an error if not encodable.
+// Build produces the complete single-feed v3 file bytes (version_minor 0, no catalog),
+// or an error if not encodable.
 func (w *Writer[K]) Build() ([]byte, error) {
+	return w.buildInner(versionMinor, nil)
+}
+
+// buildInner is the shared assembly for single-feed and v3.1 merged files. verMinor
+// and the optional catalog section (kind 4, placed after values, §13) are the only
+// differences; the merge constructor (merge.go) supplies the elementary-interval
+// ranges and catalog bytes, reusing this exact path so byte-identity is shared.
+func (w *Writer[K]) buildInner(verMinor uint16, catalog []byte) ([]byte, error) {
 	var zero K
 
 	// Reject inputs the reader would refuse, so a Go-built file is never one Rust
@@ -213,6 +232,9 @@ func (w *Writer[K]) Build() ([]byte, error) {
 	if valuesBytes != nil {
 		sections = append(sections, sect{kindValues, valuesBytes})
 	}
+	if catalog != nil {
+		sections = append(sections, sect{kindCatalog, catalog}) // kind 4, after values (§13.2/§4)
+	}
 	sections = append(sections, sect{kindSignature, nil}) // empty, last
 
 	directoryCount := uint32(len(sections))
@@ -255,7 +277,7 @@ func (w *Writer[K]) Build() ([]byte, error) {
 	fileSize := cursor
 
 	h := &header{
-		versionMinor:    versionMinor,
+		versionMinor:    verMinor,
 		headerSize:      headerSize,
 		flags:           ipVersionFlag(zero),
 		fileSize:        fileSize,

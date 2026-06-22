@@ -374,13 +374,18 @@ Go to match), producing identical files and results. Cross-cutting: the shared
 conformance + benchmark harness (same tests run on both libraries); the C library
 that Rust exposes for the C consumer.
 
-Downstream (later SOWs, intent unchanged):
+Downstream (later SOWs):
 
-4. Merged multi-feed format (catalog + merged index + per-feed dossiers + feed-id
-   registry).
-5. update-ipsets adoption (replace `pkg/iprange`; overlap matrix, then retention;
+4. ~~Merged multi-feed format (catalog + merged index + feed-id registry).~~ **DONE —
+   SOW-0003** (pulled ahead of Step 2 per Costa, 2026-06-22): the interleaved multi-feed
+   merged file is now normative **v3.1** (§13), implemented byte-identically in Rust + Go
+   with a passing conformance corpus. Per-feed dossiers (markdown) remain a separate,
+   non-format concern (update-ipsets web output), not part of the binary format.
+5. **Step 2 — processing engine** (now next): set operations + the optimized multi-way
+   producer / N×N overlap matrix, built on the frozen v3.0+v3.1 format contract.
+6. update-ipsets adoption (replace `pkg/iprange`; overlap matrix, then retention;
    independent quick win: raise `max_ingest_workers`).
-6. update-ipsets SDK (Rust + Go, both full) → Netdata consumes it.
+7. update-ipsets SDK (Rust + Go, both full) → Netdata consumes it.
 
 ## Execution Log
 

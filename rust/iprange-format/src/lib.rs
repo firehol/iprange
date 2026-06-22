@@ -31,12 +31,18 @@ pub mod wire;
 pub mod writer;
 
 #[cfg(feature = "alloc")]
+pub mod merge;
+
+#[cfg(feature = "alloc")]
 pub mod legacy;
 
 pub use error::{Error, Result};
 pub use key::{Ipv4Key, Ipv6Key};
-pub use reader::{FeedMetaView, Hit, Reader, ValueRef};
+pub use reader::{CatalogEntry, FeedMetaView, Hit, Reader, ValueRef};
 pub use spec::IpVersion;
+
+#[cfg(feature = "alloc")]
+pub use merge::{MergeFeed, MergeWriter};
 
 #[cfg(feature = "alloc")]
 pub use writer::{FeedMeta, Value, Writer};

@@ -12,7 +12,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use iprange_format::error::Error;
-use iprange_format::{FeedMeta, Ipv4Key, Ipv6Key, Reader, Value, Writer};
+use iprange_format::{FeedMeta, Ipv4Key, Ipv6Key, MergeWriter, Reader, Value, Writer};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -27,10 +27,23 @@ struct Case {
     #[serde(default)]
     license_flags: u32,
     generation_unixtime: u64,
+    #[serde(default)]
     ranges: Vec<RangeSpec>,
+    /// Multi-feed merge input (v3.1). If non-empty, the case is built via `MergeWriter`.
+    #[serde(default)]
+    feeds: Vec<FeedSpec>,
     expect: String,
     #[serde(default)]
     reject_class: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct FeedSpec {
+    feed_id: u32,
+    #[serde(default)]
+    feed_meta: Meta,
+    #[serde(default)]
+    ranges: Vec<RangeSpec>,
 }
 
 #[derive(Deserialize, Default)]
@@ -93,22 +106,65 @@ fn value_of(r: &RangeSpec) -> Option<Value> {
     })
 }
 
+fn v4(s: &str) -> Ipv4Key {
+    Ipv4Key(u32::from(s.parse::<Ipv4Addr>().expect("v4 addr")))
+}
+fn v6(s: &str) -> Ipv6Key {
+    Ipv6Key::from_u128(u128::from(s.parse::<Ipv6Addr>().expect("v6 addr")))
+}
+
 fn build_v4(case: &Case) -> Result<Vec<u8>, Error> {
-    let mut w = Writer::<Ipv4Key>::new(feed_meta(&case.feed_meta), case.license_flags, case.generation_unixtime);
+    if !case.feeds.is_empty() {
+        let mut m = MergeWriter::<Ipv4Key>::new(
+            feed_meta(&case.feed_meta),
+            case.license_flags,
+            case.generation_unixtime,
+        );
+        for f in &case.feeds {
+            let ranges = f
+                .ranges
+                .iter()
+                .map(|r| (v4(&r.start), v4(&r.end)))
+                .collect();
+            m.add_feed(f.feed_id, feed_meta(&f.feed_meta), ranges)?;
+        }
+        return m.build();
+    }
+    let mut w = Writer::<Ipv4Key>::new(
+        feed_meta(&case.feed_meta),
+        case.license_flags,
+        case.generation_unixtime,
+    );
     for r in &case.ranges {
-        let s = Ipv4Key(u32::from(r.start.parse::<Ipv4Addr>().expect("v4 start")));
-        let e = Ipv4Key(u32::from(r.end.parse::<Ipv4Addr>().expect("v4 end")));
-        w.add_range(s, e, value_of(r))?;
+        w.add_range(v4(&r.start), v4(&r.end), value_of(r))?;
     }
     w.build()
 }
 
 fn build_v6(case: &Case) -> Result<Vec<u8>, Error> {
-    let mut w = Writer::<Ipv6Key>::new(feed_meta(&case.feed_meta), case.license_flags, case.generation_unixtime);
+    if !case.feeds.is_empty() {
+        let mut m = MergeWriter::<Ipv6Key>::new(
+            feed_meta(&case.feed_meta),
+            case.license_flags,
+            case.generation_unixtime,
+        );
+        for f in &case.feeds {
+            let ranges = f
+                .ranges
+                .iter()
+                .map(|r| (v6(&r.start), v6(&r.end)))
+                .collect();
+            m.add_feed(f.feed_id, feed_meta(&f.feed_meta), ranges)?;
+        }
+        return m.build();
+    }
+    let mut w = Writer::<Ipv6Key>::new(
+        feed_meta(&case.feed_meta),
+        case.license_flags,
+        case.generation_unixtime,
+    );
     for r in &case.ranges {
-        let s = Ipv6Key::from_u128(u128::from(r.start.parse::<Ipv6Addr>().expect("v6 start")));
-        let e = Ipv6Key::from_u128(u128::from(r.end.parse::<Ipv6Addr>().expect("v6 end")));
-        w.add_range(s, e, value_of(r))?;
+        w.add_range(v6(&r.start), v6(&r.end), value_of(r))?;
     }
     w.build()
 }
@@ -139,7 +195,10 @@ fn conformance_corpus() {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
     entries.sort();
-    assert!(!entries.is_empty(), "no conformance cases found in {cases_dir:?}");
+    assert!(
+        !entries.is_empty(),
+        "no conformance cases found in {cases_dir:?}"
+    );
 
     let mut checked = 0usize;
     for path in &entries {
@@ -167,12 +226,16 @@ fn conformance_corpus() {
                     fs::write(&golden, &bytes).unwrap();
                 } else {
                     let want = fs::read(&golden).unwrap_or_else(|e| {
-                        panic!("{}: missing golden {golden:?} ({e}); run REGENERATE_GOLDENS=1", case.name)
+                        panic!(
+                            "{}: missing golden {golden:?} ({e}); run REGENERATE_GOLDENS=1",
+                            case.name
+                        )
                     });
                     assert_eq!(bytes, want, "{}: output differs from golden", case.name);
                 }
                 // A bytes golden must also read back and parse cleanly.
-                Reader::open(&bytes).unwrap_or_else(|e| panic!("{}: reader rejected own output: {e}", case.name));
+                Reader::open(&bytes)
+                    .unwrap_or_else(|e| panic!("{}: reader rejected own output: {e}", case.name));
             }
             other => panic!("{}: unknown expect {other:?}", case.name),
         }

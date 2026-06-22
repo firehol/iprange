@@ -35,6 +35,11 @@ pub trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// coalescing-invariant check, and MUST pre-check the maximum (this does).
     fn checked_inc(self) -> Option<Self>;
 
+    /// `self - 1`, or `None` if `self` is the family minimum (`0.0.0.0` / `::`).
+    /// The v3.1 merge sweep uses it to close an elementary interval at the address
+    /// just before the next boundary (§13.3).
+    fn checked_dec(self) -> Option<Self>;
+
     /// The number of addresses in the inclusive range `[start, self]` as `u128`
     /// (`self − start + 1`), or `None` if the count is unrepresentable in `u128`
     /// (only the full IPv6 space `[::, ffff:…:ffff]`, whose size is `2^128`, §5).
@@ -67,6 +72,11 @@ impl IpKey for Ipv4Key {
     #[inline]
     fn checked_inc(self) -> Option<Self> {
         self.0.checked_add(1).map(Ipv4Key)
+    }
+
+    #[inline]
+    fn checked_dec(self) -> Option<Self> {
+        self.0.checked_sub(1).map(Ipv4Key)
     }
 
     #[inline]
@@ -153,6 +163,25 @@ impl IpKey for Ipv6Key {
     }
 
     #[inline]
+    fn checked_dec(self) -> Option<Self> {
+        // `u128_dec` (§3): borrow from hi when lo underflows; None at the minimum.
+        if self == Self::MIN {
+            return None;
+        }
+        Some(if self.lo == 0 {
+            Ipv6Key {
+                hi: self.hi - 1,
+                lo: u64::MAX,
+            }
+        } else {
+            Ipv6Key {
+                hi: self.hi,
+                lo: self.lo - 1,
+            }
+        })
+    }
+
+    #[inline]
     fn range_size(start: Self, end: Self) -> Option<u128> {
         debug_assert!(start <= end);
         // size = end - start + 1, checked. The only unrepresentable case is the full
@@ -182,7 +211,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // lo, little-endian
         ];
-        assert_eq!(buf, expected, "IPv6 key on-disk bytes must match the spec example");
+        assert_eq!(
+            buf, expected,
+            "IPv6 key on-disk bytes must match the spec example"
+        );
         assert_eq!(Ipv6Key::read_le(&buf), k, "round-trip");
         assert_eq!(k.to_u128(), 0x2001_0db8_0000_0000_0000_0000_0000_0001);
     }
@@ -201,7 +233,10 @@ mod tests {
     fn ipv6_numeric_order_not_bytewise() {
         // hi dominates: a smaller lo with a larger hi is greater.
         let a = Ipv6Key { hi: 1, lo: 0 };
-        let b = Ipv6Key { hi: 0, lo: u64::MAX };
+        let b = Ipv6Key {
+            hi: 0,
+            lo: u64::MAX,
+        };
         assert!(a > b, "compare hi then lo, not raw bytes");
         assert_eq!(a.to_u128(), 1u128 << 64);
         assert!(a.to_u128() > b.to_u128());
@@ -210,7 +245,11 @@ mod tests {
     #[test]
     fn checked_inc_v6_carry_and_max() {
         assert_eq!(
-            Ipv6Key { hi: 5, lo: u64::MAX }.checked_inc(),
+            Ipv6Key {
+                hi: 5,
+                lo: u64::MAX
+            }
+            .checked_inc(),
             Some(Ipv6Key { hi: 6, lo: 0 }),
             "carry from lo into hi"
         );
@@ -218,7 +257,11 @@ mod tests {
             Ipv6Key { hi: 0, lo: 41 }.checked_inc(),
             Some(Ipv6Key { hi: 0, lo: 42 })
         );
-        assert_eq!(Ipv6Key::MAX.checked_inc(), None, "no +1 at the family maximum");
+        assert_eq!(
+            Ipv6Key::MAX.checked_inc(),
+            None,
+            "no +1 at the family maximum"
+        );
     }
 
     #[test]

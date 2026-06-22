@@ -15,13 +15,21 @@ impl Lcg {
         Lcg(seed ^ 0x9e37_79b9_7f4a_7c15)
     }
     fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
 }
 
 fn meta() -> FeedMeta {
-    FeedMeta { name: "firehol_level1".into(), category: "attacks".into(), license: "GPL-2.0".into(), ..Default::default() }
+    FeedMeta {
+        name: "firehol_level1".into(),
+        category: "attacks".into(),
+        license: "GPL-2.0".into(),
+        ..Default::default()
+    }
 }
 
 #[test]

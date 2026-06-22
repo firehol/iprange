@@ -1,0 +1,13 @@
+{
+  "name": "merge-v4-terminal-max",
+  "description": "A feed reaching the family maximum emits its terminal-interval record (no end+1 boundary).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 3, "feed_meta": { "name": "tail" }, "ranges": [ { "start": "255.255.255.254", "end": "255.255.255.255" } ] },
+    { "feed_id": 8, "feed_meta": { "name": "head" }, "ranges": [ { "start": "0.0.0.0", "end": "0.0.0.0" } ] }
+  ],
+  "expect": "bytes"
+}

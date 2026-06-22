@@ -1,0 +1,13 @@
+{
+  "name": "merge-v4-empty",
+  "description": "All feeds empty: a valid merged file with a catalog, an empty index, and no values section.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 1, "feed_meta": { "name": "alpha" }, "ranges": [] },
+    { "feed_id": 2, "feed_meta": { "name": "bravo" }, "ranges": [] }
+  ],
+  "expect": "bytes"
+}

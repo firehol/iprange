@@ -2,6 +2,7 @@ package iprangeformat
 
 import (
 	"crypto/sha256"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -56,6 +57,11 @@ type Reader struct {
 	valuesLen     int
 	valuesPresent bool
 	valuesCount   uint32
+
+	catalogOff       int
+	catalogLen       int
+	catalogPresent   bool
+	catalogFeedCount uint32
 }
 
 // Open fully validates an untrusted file (§15 steps 1–13) and returns a reader.
@@ -68,6 +74,10 @@ func Open(b []byte) (*Reader, error) {
 		return nil, err
 	}
 	if err := r.verifyHashes(); err != nil {
+		return nil, err
+	}
+	// §13.5 merged-file semantic checks (catalog-aware; a no-op for a single-feed file).
+	if err := r.checkMergedInvariants(); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -125,7 +135,7 @@ func parseStructure(b []byte) (*Reader, error) {
 
 	r := &Reader{bytes: b, hdr: hdr, ipVer: ipVer}
 	var feedMeta, index, signature *[2]uint64 // (offset, length)
-	var values *[2]uint64
+	var values, catalog *[2]uint64
 	prevEnd := dirEnd
 	var prevRank uint64
 	for i := uint64(0); i < dirCount; i++ {
@@ -192,6 +202,11 @@ func parseStructure(b []byte) (*Reader, error) {
 				return nil, errStructural("duplicate mandatory section")
 			}
 			values = loc
+		case kindCatalog:
+			if catalog != nil {
+				return nil, errStructural("duplicate mandatory section")
+			}
+			catalog = loc
 		case kindSignature:
 			if signature != nil {
 				return nil, errStructural("duplicate mandatory section")
@@ -214,6 +229,17 @@ func parseStructure(b []byte) (*Reader, error) {
 	}
 	if hdr.versionMinor == 0 && signature[1] != 0 {
 		return nil, errStructural("signature length != 0 in v3.0")
+	}
+
+	// §15 step 6 — merged-file signalling: version_minor==1 ⟺ a catalog (kind 4) is
+	// present ⟺ the file is merged (§13.1). This package knows kind 4, so it enforces
+	// both directions (a v3.0 reader, which does not, reads a merged file degraded).
+	merged := catalog != nil
+	if merged && hdr.versionMinor != versionMinorMerged {
+		return nil, errStructural("catalog section in a non-v3.1 file")
+	}
+	if hdr.versionMinor == versionMinorMerged && !merged {
+		return nil, errStructural("version_minor 1 file without a catalog")
 	}
 
 	// index sub-header (§8).
@@ -252,6 +278,19 @@ func parseStructure(b []byte) (*Reader, error) {
 		r.valuesOff = int(values[0])
 		r.valuesLen = int(values[1])
 		r.valuesCount = count
+	}
+
+	// catalog section (§13.2 / §15 step 9b) — structural only; the §13.5 semantic
+	// checks run in Open() (checkMergedInvariants).
+	if catalog != nil {
+		feedCount, err := validateCatalog(b[catalog[0]:catalog[0]+catalog[1]], hdr.versionMinor)
+		if err != nil {
+			return nil, err
+		}
+		r.catalogPresent = true
+		r.catalogOff = int(catalog[0])
+		r.catalogLen = int(catalog[1])
+		r.catalogFeedCount = feedCount
 	}
 
 	r.feedMetaOff = int(feedMeta[0])
@@ -414,8 +453,8 @@ func (r *Reader) FeedMeta() (FeedMetaView, error) {
 	if count < feedMetaFieldCount {
 		return FeedMetaView{}, errStructural("feed-meta field_count < 6")
 	}
-	if r.hdr.versionMinor == 0 && count != feedMetaFieldCount {
-		return FeedMetaView{}, errStructural("feed-meta field_count != 6 for v3.0")
+	if r.hdr.versionMinor <= versionMinorMerged && count != feedMetaFieldCount {
+		return FeedMetaView{}, errStructural("feed-meta field_count != 6 for v3.0/v3.1")
 	}
 	// Read all `count` declared fields, keeping the 6 this version knows and skipping
 	// any a future minor version added (additive forward-compat, §7).
@@ -545,4 +584,174 @@ func toWriter[K ipKey[K]](r *Reader, mk func(FeedMeta, uint32, uint64) *Writer[K
 		}
 	}
 	return w, nil
+}
+
+// CatalogEntry is one catalog entry of a v3.1 merged file (§13.2): a feed's stable id
+// and identity.
+type CatalogEntry struct {
+	FeedID uint32
+	Meta   FeedMetaView
+}
+
+// Catalog returns the per-feed catalog of a v3.1 merged file (§13.2), in ascending
+// feed_id order. Returns an error if the file is not merged (has no catalog). Resolve
+// a membership set's feed-ids against this to name the feeds covering an IP (§13.4).
+func (r *Reader) Catalog() ([]CatalogEntry, error) {
+	if !r.catalogPresent {
+		return nil, errStructural("not a merged file (no catalog)")
+	}
+	b := r.bytes[r.catalogOff : r.catalogOff+r.catalogLen]
+	fieldCount := le.Uint32(b[4:])
+	out := make([]CatalogEntry, 0, r.catalogFeedCount)
+	pos := 8
+	for i := uint32(0); i < r.catalogFeedCount; i++ {
+		feedID := le.Uint32(b[pos:])
+		pos += 4
+		// bounds + UTF-8 were verified by validateCatalog at open time.
+		var fields [6]string
+		for fi := uint32(0); fi < fieldCount; fi++ {
+			flen := int(le.Uint32(b[pos:]))
+			pos += 4
+			if fi < 6 {
+				s := b[pos : pos+flen]
+				if !utf8.Valid(s) {
+					return nil, errInvariant("catalog field is not valid UTF-8")
+				}
+				fields[fi] = string(s)
+			}
+			pos += flen
+		}
+		out = append(out, CatalogEntry{
+			FeedID: feedID,
+			Meta: FeedMetaView{
+				Name: fields[0], Category: fields[1], Maintainer: fields[2],
+				MaintainerURL: fields[3], SourceURL: fields[4], License: fields[5],
+			},
+		})
+	}
+	return out, nil
+}
+
+// checkMergedInvariants runs the §13.5 merged-file semantic checks: for a merged file
+// (catalog present) every values entry is type_id==1 with feed-ids resolvable in the
+// catalog, and every index record is non-sentinel. A no-op for a single-feed file.
+func (r *Reader) checkMergedInvariants() error {
+	if !r.catalogPresent {
+		return nil
+	}
+	ids := r.catalogFeedIDs()
+	// (a) every values entry is type_id==1 with feed-ids present in the catalog.
+	if r.valuesPresent {
+		b := r.bytes[r.valuesOff : r.valuesOff+r.valuesLen]
+		pos := 4
+		for i := uint32(0); i < r.valuesCount; i++ {
+			typeID := le.Uint32(b[pos:])
+			blen := int(le.Uint32(b[pos+4:]))
+			body := b[pos+8 : pos+8+blen]
+			if typeID != 1 {
+				return errInvariant("merged-file value is not type_id 1")
+			}
+			for j := 0; j < len(body); j += 4 {
+				id := le.Uint32(body[j:])
+				if _, found := slices.BinarySearch(ids, id); !found {
+					return errInvariant("membership feed-id not in catalog")
+				}
+			}
+			pos += 8 + blen
+		}
+	}
+	// (b) every index record references a value (non-sentinel).
+	if r.ipVer == ipV4 {
+		return checkNonSentinel[Ipv4Key](r)
+	}
+	return checkNonSentinel[Ipv6Key](r)
+}
+
+// catalogFeedIDs collects the catalog feed-ids (already strictly ascending, validated).
+func (r *Reader) catalogFeedIDs() []uint32 {
+	ids := make([]uint32, 0, r.catalogFeedCount)
+	if !r.catalogPresent {
+		return ids
+	}
+	b := r.bytes[r.catalogOff : r.catalogOff+r.catalogLen]
+	fieldCount := le.Uint32(b[4:])
+	pos := 8
+	for i := uint32(0); i < r.catalogFeedCount; i++ {
+		ids = append(ids, le.Uint32(b[pos:]))
+		pos += 4
+		for fi := uint32(0); fi < fieldCount; fi++ {
+			flen := int(le.Uint32(b[pos:]))
+			pos += 4 + flen
+		}
+	}
+	return ids
+}
+
+func checkNonSentinel[K ipKey[K]](r *Reader) error {
+	var zero K
+	rs := zero.recordSize()
+	w := zero.width()
+	recs := r.bytes[r.indexRecOff : r.indexRecOff+r.indexRecLen]
+	for i := 0; i < len(recs); i += rs {
+		if le.Uint32(recs[i+2*w:]) == valueIDNone {
+			return errInvariant("merged-file record has no value (sentinel)")
+		}
+	}
+	return nil
+}
+
+// validateCatalog validates a catalog section's structure (§13.2 / §15 step 9b) and
+// returns feed_count: feed_count ≥ 1; field_count ≥ 6 (== 6 for v3.0/v3.1); strictly
+// ascending feed_ids; every field within the section; the six known fields valid UTF-8;
+// exact section length. Structural only — the membership↔catalog cross-reference is a
+// §13.5 semantic check (checkMergedInvariants).
+func validateCatalog(b []byte, versionMinor uint16) (uint32, error) {
+	if len(b) < 8 {
+		return 0, errStructural("catalog shorter than its header")
+	}
+	feedCount := le.Uint32(b[0:])
+	if feedCount == 0 {
+		return 0, errStructural("catalog feed_count 0")
+	}
+	fieldCount := le.Uint32(b[4:])
+	if fieldCount < feedMetaFieldCount {
+		return 0, errStructural("catalog field_count < 6")
+	}
+	if versionMinor <= versionMinorMerged && fieldCount != feedMetaFieldCount {
+		return 0, errStructural("catalog field_count != 6 for v3.1")
+	}
+	pos := 8
+	var prevID uint32
+	havePrev := false
+	for i := uint32(0); i < feedCount; i++ {
+		if pos+4 > len(b) {
+			return 0, errStructural("catalog feed_id past section")
+		}
+		feedID := le.Uint32(b[pos:])
+		pos += 4
+		if havePrev && feedID <= prevID {
+			return 0, errStructural("catalog feed_ids not strictly ascending")
+		}
+		prevID, havePrev = feedID, true
+		for fi := uint32(0); fi < fieldCount; fi++ {
+			if pos+4 > len(b) {
+				return 0, errStructural("catalog field length past section")
+			}
+			flen := int(le.Uint32(b[pos:]))
+			pos += 4
+			if pos+flen > len(b) {
+				return 0, errStructural("catalog field bytes past section")
+			}
+			if fi < feedMetaFieldCount {
+				if !utf8.Valid(b[pos : pos+flen]) {
+					return 0, errInvariant("catalog field is not valid UTF-8")
+				}
+			}
+			pos += flen
+		}
+	}
+	if pos != len(b) {
+		return 0, errStructural("catalog section length not exact")
+	}
+	return feedCount, nil
 }

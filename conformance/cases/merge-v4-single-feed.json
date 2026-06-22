@@ -1,0 +1,12 @@
+{
+  "name": "merge-v4-single-feed",
+  "description": "A merged file with a single feed (degenerate; catalog has one entry).",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 42, "feed_meta": { "name": "solo", "category": "attacks", "maintainer": "FireHOL" }, "ranges": [ { "start": "203.0.113.0", "end": "203.0.113.255" } ] }
+  ],
+  "expect": "bytes"
+}

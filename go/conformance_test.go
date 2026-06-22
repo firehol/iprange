@@ -20,8 +20,15 @@ type tcase struct {
 	LicenseFlags   uint32   `json:"license_flags"`
 	GenerationUnix uint64   `json:"generation_unixtime"`
 	Ranges         []trange `json:"ranges"`
+	Feeds          []tfeed  `json:"feeds"` // multi-feed merge input (v3.1)
 	Expect         string   `json:"expect"`
 	RejectClass    string   `json:"reject_class"`
+}
+
+type tfeed struct {
+	FeedID   uint32   `json:"feed_id"`
+	FeedMeta tmeta    `json:"feed_meta"`
+	Ranges   []trange `json:"ranges"`
 }
 
 type tmeta struct {
@@ -83,6 +90,9 @@ func v6Key(s string) (Ipv6Key, error) {
 }
 
 func buildCase(c *tcase) ([]byte, error) {
+	if len(c.Feeds) > 0 {
+		return buildMergeCase(c)
+	}
 	switch c.IPVersion {
 	case "v4":
 		w := NewWriterV4(feedMeta(c.FeedMeta), c.LicenseFlags, c.GenerationUnix)
@@ -124,6 +134,53 @@ func buildCase(c *tcase) ([]byte, error) {
 			}
 		}
 		return w.Build()
+	default:
+		return nil, errStructural("unknown ip_version " + c.IPVersion)
+	}
+}
+
+func buildMergeCase(c *tcase) ([]byte, error) {
+	switch c.IPVersion {
+	case "v4":
+		m := NewMergeWriterV4(feedMeta(c.FeedMeta), c.LicenseFlags, c.GenerationUnix)
+		for _, f := range c.Feeds {
+			ranges := make([][2]Ipv4Key, 0, len(f.Ranges))
+			for _, r := range f.Ranges {
+				s, err := v4Key(r.Start)
+				if err != nil {
+					return nil, err
+				}
+				e, err := v4Key(r.End)
+				if err != nil {
+					return nil, err
+				}
+				ranges = append(ranges, [2]Ipv4Key{s, e})
+			}
+			if err := m.AddFeed(f.FeedID, feedMeta(f.FeedMeta), ranges); err != nil {
+				return nil, err
+			}
+		}
+		return m.Build()
+	case "v6":
+		m := NewMergeWriterV6(feedMeta(c.FeedMeta), c.LicenseFlags, c.GenerationUnix)
+		for _, f := range c.Feeds {
+			ranges := make([][2]Ipv6Key, 0, len(f.Ranges))
+			for _, r := range f.Ranges {
+				s, err := v6Key(r.Start)
+				if err != nil {
+					return nil, err
+				}
+				e, err := v6Key(r.End)
+				if err != nil {
+					return nil, err
+				}
+				ranges = append(ranges, [2]Ipv6Key{s, e})
+			}
+			if err := m.AddFeed(f.FeedID, feedMeta(f.FeedMeta), ranges); err != nil {
+				return nil, err
+			}
+		}
+		return m.Build()
 	default:
 		return nil, errStructural("unknown ip_version " + c.IPVersion)
 	}

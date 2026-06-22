@@ -10,10 +10,13 @@ import (
 // return the concrete key type. All methods are unexported: keys are package
 // mechanics, and the exported API takes the concrete Ipv4Key / Ipv6Key.
 type ipKey[T any] interface {
+	comparable // both key types are comparable; lets the merge sweep use them as map keys
 	writeLE(buf []byte)
 	readLE(buf []byte) T
 	cmp(o T) int // <0, 0, >0 numeric
 	checkedInc() (T, bool)
+	checkedDec() (T, bool) // self-1, ok=false at the family minimum (merge sweep, §13.3)
+	maxKey() T             // the family maximum (all-ones), for the terminal interval (§13.3)
 	width() int
 	recordSize() int
 	// rangeSize returns the count of [self, end] inclusive as a 128-bit (lo, hi),
@@ -45,6 +48,13 @@ func (k Ipv4Key) checkedInc() (Ipv4Key, bool) {
 	}
 	return k + 1, true
 }
+func (k Ipv4Key) checkedDec() (Ipv4Key, bool) {
+	if k == 0 {
+		return 0, false
+	}
+	return k - 1, true
+}
+func (Ipv4Key) maxKey() Ipv4Key { return ^Ipv4Key(0) }
 func (k Ipv4Key) rangeSize(end Ipv4Key) (uint64, uint64, bool) {
 	return uint64(end-k) + 1, 0, true // max 2^32, fits uint64
 }
@@ -92,6 +102,15 @@ func (k Ipv6Key) checkedInc() (Ipv6Key, bool) {
 	hi := k.Hi + c
 	return Ipv6Key{Hi: hi, Lo: lo}, true
 }
+func (k Ipv6Key) checkedDec() (Ipv6Key, bool) {
+	if k.Hi == 0 && k.Lo == 0 {
+		return Ipv6Key{}, false
+	}
+	lo, borrow := bits.Sub64(k.Lo, 1, 0)
+	hi := k.Hi - borrow
+	return Ipv6Key{Hi: hi, Lo: lo}, true
+}
+func (Ipv6Key) maxKey() Ipv6Key { return Ipv6Key{Hi: maxUint64, Lo: maxUint64} }
 func (k Ipv6Key) rangeSize(end Ipv6Key) (uint64, uint64, bool) {
 	if k.Hi == 0 && k.Lo == 0 && end.Hi == maxUint64 && end.Lo == maxUint64 {
 		return 0, 0, false // full space, size 2^128

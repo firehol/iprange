@@ -1,0 +1,13 @@
+{
+  "name": "merge-v4-identical-feeds",
+  "description": "Two feeds covering the same range produce one record {2,7}.",
+  "ip_version": "v4",
+  "feed_meta": { "name": "merged" },
+  "license_flags": 0,
+  "generation_unixtime": 1700000000,
+  "feeds": [
+    { "feed_id": 2, "feed_meta": { "name": "alpha" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.255" } ] },
+    { "feed_id": 7, "feed_meta": { "name": "bravo" }, "ranges": [ { "start": "10.0.0.0", "end": "10.0.0.255" } ] }
+  ],
+  "expect": "bytes"
+}

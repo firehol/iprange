@@ -247,7 +247,11 @@ impl IndexSubHeader {
         let key_width = u32_le(b, 4);
         match (key_width, record_size) {
             (4, 12) | (16, 40) => {}
-            _ => return Err(Error::Structural("index sub-header record_size/key_width mismatch")),
+            _ => {
+                return Err(Error::Structural(
+                    "index sub-header record_size/key_width mismatch",
+                ))
+            }
         }
         Ok(IndexSubHeader {
             record_size,
@@ -292,7 +296,11 @@ impl<K: IpKey> Record<K> {
         if src[pad_off..K::RECORD_SIZE].iter().any(|&x| x != 0) {
             return Err(Error::NonZeroReserved("v6 record pad"));
         }
-        Ok(Record { start, end, value_id })
+        Ok(Record {
+            start,
+            end,
+            value_id,
+        })
     }
 }
 
@@ -362,7 +370,10 @@ mod tests {
         assert!(matches!(Header::decode(&b), Err(Error::BadMagic)));
         let mut b = zero_header().encode();
         put_u16(&mut b, 8, 4); // version_major 4
-        assert!(matches!(Header::decode(&b), Err(Error::UnsupportedMajor(4))));
+        assert!(matches!(
+            Header::decode(&b),
+            Err(Error::UnsupportedMajor(4))
+        ));
     }
 
     #[test]
@@ -410,8 +421,14 @@ mod tests {
     #[test]
     fn record_round_trip_v6_pad_zero() {
         let r = Record::<Ipv6Key> {
-            start: Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0 },
-            end: Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0xffff },
+            start: Ipv6Key {
+                hi: 0x2001_0db8_0000_0000,
+                lo: 0,
+            },
+            end: Ipv6Key {
+                hi: 0x2001_0db8_0000_0000,
+                lo: 0xffff,
+            },
             value_id: spec::VALUE_ID_NONE,
         };
         let mut buf = [0u8; 40];
