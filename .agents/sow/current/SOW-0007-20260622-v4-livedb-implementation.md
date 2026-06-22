@@ -321,9 +321,24 @@ performance bar** (lean / speed / zero-alloc / minimal-I/O, reviewer vote
   incompatible-major fail-closed, unsorted-leaf reject, record_count mismatch, family
   mismatch, truncation); clippy `-D warnings` clean; no_std build clean.
 
-Next: Step 1b-ii — the **OS layer** (open `O_NOFOLLOW|O_CLOEXEC`, `fstat`, `SEEK_HOLE`,
-`mmap` `MAP_SHARED`, `flock(LOCK_SH)`, §10/§11 hardening) wrapping this core; then the
-**writer** (COW B+tree, double-meta commit).
+**2026-06-22 — Step 1c-i: writer COW insert + commit (done, green).**
+- `writer.rs` — `Writer<K>` (alloc-gated), in-memory file image (emulates the
+  pread/pwrite model the OS layer will use):
+  - `create` (two metas, empty tree); `insert(from,to,scope)` — the COW B+tree
+    building block: recursive copy-on-write descent, leaf split + branch split +
+    root growth (height++), old pages freed-by-this-txn (D7).
+  - `commit` — writes the new state into the **inactive** meta and flips it (§6.3);
+    reclaims freed pages for the next txn. `into_image`/`image` expose the file.
+  - Derived free-set maintained in-memory across txns; alloc reuses freed pages or
+    grows the image.
+- Verified: **33/33 tests** incl. `many_inserts_force_splits_and_validate` (5000
+  disjoint records → multi-level tree → `Reader::open` full-validates → lookups +
+  ordered scan correct) and multi-commit page reuse. clippy `-D warnings` clean;
+  no_std+alloc and core-only builds clean.
+
+Next: Step 1c-ii — `delete` (underflow merge/borrow, root collapse) + range `set`/
+`delete` (boundary trim + coalesce) composed on `insert`/`delete`, validated by a
+random-op **oracle** (in-memory interval map). Then the OS file/flock/mmap layer.
 
 ## Validation
 

@@ -28,6 +28,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 pub mod crc32c;
 pub mod error;
 pub mod key;
@@ -37,9 +40,15 @@ pub mod record;
 pub mod spec;
 pub mod wire;
 
+#[cfg(feature = "alloc")]
+pub mod writer;
+
 pub use error::{Error, Result};
 pub use key::{IpKey, Ipv4Key, Ipv6Key};
 pub use reader::Reader;
 pub use record::RecordRef;
 pub use spec::IpVersion;
 pub use wire::Meta;
+
+#[cfg(feature = "alloc")]
+pub use writer::Writer;
