@@ -2,13 +2,15 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: Authored 2026-06-22 after the v4 format spec was **locked** (SOW-0006,
-`.agents/sow/specs/design-iprange-v4-livedb.md`). Implementation decisions **O1–O4
-resolved by the user 2026-06-22** (see "Decisions (resolved)"). Moved to `current/`
-2026-06-22; gate filled. **Step 0 (repo reorganization into `v3/`) done and verified
-green** (see Execution Log). Next: scaffold the Rust v4 engine under `v4/`.
+Sub-state: Authored 2026-06-22 after the v4 format spec was **locked** (SOW-0006).
+Decisions O1–O4 resolved by the user 2026-06-22. Delivered the full v4 engine in Rust +
+Go (foundation, reader, writer/COW B+tree, OS layer), conformance + cross-read, crash
+recovery, oracle, fuzz, and `export_v3` (§13); 3 external-review rounds reached unanimous
+**PRODUCTION GRADE** among reviewers able to complete the review, all findings fixed
+(user accepted 2026-06-23). **Completed 2026-06-23.** The update-ipsets retention
+integration (separate repo) is the downstream consumer follow-up (see Followup).
 
 ## Requirements
 
@@ -445,23 +447,95 @@ integration is a downstream consumer task (separate repo).
 
 ## Validation
 
-Pending.
+- **Acceptance criteria** (Requirements) — all met: Go + Rust v4 libraries (writer +
+  reader + OS layer), behavioral + cross-read conformance corpus, crash-recovery tests,
+  property/fuzz + interval-map oracle, `export_v3` (§13). Decisions O1–O4 implemented as
+  recorded.
+- **Tests** — Rust: 47 lib + 1 conformance + 4 robustness + 16 export (`--features
+  export-v3`); clippy `--all-targets --all-features -D warnings` clean; `cargo check
+  --no-default-features --features alloc` warning-clean; `cargo build
+  --no-default-features` clean; s390x big-endian path unaffected (core little-endian).
+  Go: full suite green (`go test ./...`), `go vet` + `gofmt -l` clean; oracle 6000 v4 +
+  3000 v6. Cross-impl: Go reads all 16 Rust-written `.iprdb` goldens identically;
+  `export_v3` is **byte-identical** Rust↔Go (512-byte golden vector, same sha256).
+- **Real-use evidence** — the OS layer round-trips against real files (create → commit →
+  mmap-read, reopen → mutate → recommit, exclusive-lock mutual exclusion, symlink/
+  truncation rejection). update-ipsets retention integration is downstream (separate
+  repo) — see Followup.
+- **Reviewer findings** — 3 external-review rounds (glm/minimax/mimo/kimi/qwen/deepseek).
+  The 4 reviewers able to complete a review of this scale are **unanimous PRODUCTION
+  GRADE**; every finding (round 1: error-propagation + test gaps; round 2: meta-tail;
+  round 3: 32-bit guard + writer minor-refusal) is fixed and re-confirmed. kimi/minimax
+  are tooling-limited (no defects found); **user decision 2026-06-23** to accept the
+  4 capable reviewers' unanimous verdict.
+- **Same-failure search** — each fix searched for sibling instances across both
+  languages and applied symmetrically (the allocator `Result` propagation, the
+  dirty/freed filter, the 32-bit guard, the minor-refusal were all fixed in Rust + Go).
+- **Sensitive-data gate** — clean: synthetic IP ranges + fixtures only; no secrets,
+  credentials, customer data, or FireHOL infra details in any durable artifact.
+- **Artifact maintenance gate** — `AGENTS.md`: v4/v3 build/test commands + the `v3/`/`v4/`
+  layout **added** to "Project-specific commands". Specs:
+  `design-iprange-v4-livedb.md` remains the locked contract; the implementation follows
+  it (§13 export now realized). Runtime project skills: still deferred (SOW-0001) — the
+  conformance + crash-injection + benchmark harness is now the strongest candidate
+  (Followup). End-user docs (`wiki/`): v4 CLI/library usage is future (the library is
+  pre-1.0, consumed via SDK). End-user/reference skills: none affected. SOW lifecycle:
+  this SOW moves `current/` → `done/`, `Status: completed`, committed with the work.
+- **Status/dir consistency** — `Status: completed` in `done/`.
 
 ## Outcome
 
-Pending.
+Delivered the **iprange v4 live-DB format** in both Rust (reference) and Go: a portable,
+mmap'd, copy-on-write B+tree of fixed-size `[from, to, scope]` records — mutable in place
+(`set`/`delete`) without a full rewrite, crash-safe via a double-meta two-fsync commit
+with a derived free set, hostile-input-hardened (validate-before-expose; never panics/
+loops/OOB), and cross-read-equivalent. Plus `export_v3` sealing a v4 image into the
+canonical v3 snapshot. This fixes the update-ipsets retention bottleneck at the format
+level: per-IP removal is `O(log n)` and a change rewrites `O(log n + k)` pages instead of
+scanning thousands of cohort files. Both implementations pass one shared conformance
+corpus + an independent interval-map oracle; the engine is PRODUCTION GRADE per the
+external panel.
 
 ## Lessons Extracted
 
-Pending.
+- **The oracle is the backbone of COW-tree correctness.** Random op-sequences vs an
+  independent in-memory interval map (compared after *every* op, both families) caught
+  far more than hand-written cases ever could, and let a complex split/merge/collapse/
+  coalesce engine be trusted. Build the oracle first.
+- **Verify delegated work against artifacts, never the agent's report** ([[verify-
+  delegated-work-ran]]). A fork once reported success with zero tool calls; later agents
+  (Go port, fixes, export) were trusted only after I ran their tests/clippy and diffed
+  goldens myself. The byte-identical cross-language golden was confirmed by joining the
+  two source constants and hashing them, not by trusting "byte-identical."
+- **COW + D7 reclaim interacts with single-txn batch size.** 600 sets in one txn
+  produced a 3 MB golden (one freed page per set, reclaimable only next commit);
+  committing per op reclaimed the garbage (28 KB). Compaction/periodic-commit is how a
+  COW store stays lean.
+- **A naive "dirty − freed" pwrite filter creates a sparse hole** the mmap reader
+  rejects; the correct filter only skips freed pages *below the committed page count*
+  (the OS tests caught this — keep crash-path optimizations behind the existing tests).
+- **Iterative review converges but each round digs deeper.** A thorough reviewer (glm)
+  surfaced real P2s in all three rounds; "iterate until only P3" is the right bar.
+  Reviewer findings that contradict a locked spec decision (the meta-tail forward-compat
+  rule) must be judged, not applied mechanically — here the forward-compat-safe
+  reconciliation (check the *file's* meta_size) satisfied both the reviewer and §5.1.
 
 ## Followup
 
-- M1–M4 tunables (page-size already fixed at 4096; split/fill thresholds, fsync
-  policy) measured by **SOW-0005** once the engine runs.
-- Test-hardening patterns (oracle, fuzz, malformed-input) from **SOW-0004** apply.
-- Capture the conformance + crash-injection + benchmark harness as the project's
-  first `project-*` runtime skill once it stabilizes (SOW-0001 deferred-skill note).
+- **update-ipsets retention integration (the §0 motivating use, separate repo).** The
+  v4 Go library is the engine; adopting it in the `update-ipsets` daemon (replacing the
+  cohort-scan retention model with per-feed v4 stores) is downstream consumer work in
+  `~/src/firehol/update-ipsets`, appropriately its own SOW in that project. Tracked here;
+  not part of this format-implementation SOW.
+- **First `project-*` runtime skill.** The conformance + crash-injection + oracle +
+  benchmark harness is now concrete and reusable — capture it as the project's first
+  runtime skill (resolves the SOW-0001 deferred-skill decision).
+- M1–M4 perf tunables (split/fill thresholds, fsync vs fdatasync) measured by **SOW-0005**
+  now that the engine runs; test-hardening patterns from **SOW-0004** are realized (oracle,
+  fuzz, malformed-input) — both can be reviewed for closure against what shipped here.
+- Optional engine improvements raised in review (all non-blocking P3): a `pread`-on-demand
+  writer for files larger than RAM; a hardware-CRC32C path (measured); range ops at
+  `O(log n + k)` instead of `O(k log n)`; a lazy/trusted reader verification mode.
 
 ## Regression Log
 

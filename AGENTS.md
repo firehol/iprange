@@ -336,6 +336,19 @@ Test:
 > Many untracked `build-*/` directories and autotools-generated files exist in the
 > working tree. Never `git add -A`/`git add .`; add specific files by name.
 
+**Multi-language format libraries** (the C CLI is the legacy `iprange`; the binary
+formats live in language libraries):
+
+- `v3/` — the sealed v3 snapshot format. Rust: `cargo test --manifest-path v3/rust/Cargo.toml`;
+  Go: `go -C v3/go test ./...`. Shared corpus in `v3/conformance/`.
+- `v4/` — the v4 **live mutable DB** (`iprange-livedb`). Rust:
+  `cargo test --manifest-path v4/rust/Cargo.toml` (add `--features export-v3` for the
+  v3 bridge; `--features os` is default for the mmap/flock file layer);
+  `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features -- -D warnings`.
+  Go: `go -C v4/go test ./...`. Shared corpus + cross-read goldens in `v4/conformance/`
+  (regenerate with `REGENERATE_GOLDENS=1 cargo test --manifest-path v4/rust/Cargo.toml
+  --test conformance`).
+
 ### Project-specific overrides
 
 - **FireHOL-wide operational knowledge** (servers d1 and iplists, deployment,
