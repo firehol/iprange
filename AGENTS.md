@@ -347,7 +347,11 @@ formats live in language libraries):
   `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features -- -D warnings`.
   Go: `go -C v4/go test ./...`. Shared corpus + cross-read goldens in `v4/conformance/`
   (regenerate with `REGENERATE_GOLDENS=1 cargo test --manifest-path v4/rust/Cargo.toml
-  --test conformance`).
+  --test conformance` — and `--test metadata_conformance` for the v4.1 scope/KV goldens).
+  The **v4.1** additions — the read-only **cursor + standard SDK helpers** (SOW-0008) and the
+  **per-scope metadata system** (scope table + per-scope KV; SOW-0009) — live in the same crate
+  (Go: `v4/go`) and run under the commands above; both are additive (v4.0 readers skip the
+  metadata, v4.0 writers refuse a v4.1 file).
 
 ### Project-specific overrides
 

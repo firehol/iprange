@@ -2,7 +2,7 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
 Sub-state: Authored 2026-06-23. Implementation started 2026-06-24 (Rust reference).
 Design recorded in `design-iprange-v4-scope-api.md` (§ "v4.1 additions", parts C/D).
@@ -62,8 +62,18 @@ runs). A negative test (byte-flip in a `.go` golden) made Rust's cross-read fail
 `ChecksumFailed`, proving the cross-read genuinely validates the other language's bytes.
 `README.md` documents the corpus + bidirectional goldens.
 
-**Remaining:** PRODUCTION-GRADE external review (glm, minimax, mimo, kimi, qwen, deepseek);
-fix findings; then mark `completed` + commit (with SOW-0008).
+**Review + fixes (2026-06-25):** Round-1 external panel — **4/4 capable reviewers PRODUCTION
+GRADE, zero P0/P1** (mimo, deepseek, glm, qwen; kimi also gave a full review; minimax produced
+no usable output). Findings handled: **kimi P2a** (`rebuild_scope_table` registry loss) verified
+a **false positive** (it restores `self.scopes` before propagating the error); **kimi P2b**
+(`rebuild_dirty_kv` loses buffered KV + partially applies on a `build_kv_tree` failure) **fixed**
+— the writer poisons on a commit-rebuild error so a failed commit cannot continue with
+indeterminate state (the on-disk meta is unwritten and stays the last valid commit); **glm P2**
+(validate materialized each overflow value to UTF-8-check it) **fixed** — streaming UTF-8
+validation with a ≤3-byte carry across pages (constant memory); P3 parity/cosmetic nits fixed.
+Committed `ff5f783` and **re-verified by the assistant** (see Validation). The post-fix re-review
+panel was **infra-blocked** (all 6 reviewers timed out — nova/litellm saturated); tracked in
+Followup. **Completed 2026-06-25.**
 
 One v4.0-core relaxation was required (recorded here): the reader's static-identity
 cross-check (§5.1) now **excludes `version_minor`/`meta_size`** (offsets 26–30), because the
@@ -225,3 +235,70 @@ implementation-defined (M-class): scope-table and KV-tree fanout, and the inline
 value threshold (which **must be fixed** so Rust and Go produce identical trees — §C.4).
 `name` is **fixed-256** (true seek); per-scope KV is **unbounded** (bulk-loaded B+tree,
 no cap).
+
+## Validation
+
+- **Acceptance criteria** — met: per-scope scope-table registry (`scope_define`/`drop`/`list`/
+  `name`, seekable `name`/`version`/`type`, caller-bumped `version`) + unbounded per-scope KV
+  (`meta_set`/`get`/`delete`/`list`, overflow chains, `FILE` target = scope 0); v4.0→v4.1 minor
+  bump with forward-compat (old reader skips metadata; old writer refuses v4.1) + in-place
+  upgrade; reader-side metadata reads (shared-lock path); Rust + Go.
+- **Tests (re-verified by the assistant, not trusting the implementer/fork)** — Rust: lib **85 /
+  97** (`--features export-v3`), conformance 1, metadata-conformance 2, robustness/fuzz **11**
+  (incl. scope-table + KV + overflow + structural-mutation-with-CRC-restamp), clippy
+  `--all-targets --all-features -D warnings` clean, `fmt --check` clean, `no_std` + `no_std+alloc`
+  clean. Go: `test ./...`, `vet`, `gofmt -l` clean; **`test -race -count=1` (421s) clean**. The
+  fixes added +6 Rust tests (streaming-UTF-8 boundary straddle / invalid-split / incomplete-at-end;
+  poisoned-writer) and Go equivalents.
+- **Cross-read conformance** — 6 metadata golden pairs (`meta_*.{r,go}.iprdb`) **byte-identical**
+  (md5-verified) and read by both readers (Rust-reads-Go, Go-reads-Rust); a byte-flip negative
+  test fails as `ChecksumFailed`. Goldens are **unchanged by the fixes** (the fixes touch the
+  validate/commit paths only, not the on-disk encoding).
+- **Real-use** — write→commit→reopen round-trips for scopes + KV; a value spanning an overflow
+  chain; v4.0↔v4.1 upgrade and drop-all-returns-to-v4.0; `FILE(0)` dataset metadata.
+- **Reviewer findings + handling** — see the Status "Review + fixes" note: round-1 4/4 capable
+  PRODUCTION GRADE; **kimi P2a** false positive (no change); **kimi P2b** fixed (writer poison on
+  failed commit); **glm P2** fixed (streaming UTF-8 validation); P3 nits fixed. Post-fix re-review
+  **infra-blocked** (6/6 timed out, nova/litellm saturated) — Followup. The PRODUCTION-GRADE
+  verdict rests on round-1 + this re-verification.
+- **Same-failure search** — every fix applied symmetrically in Rust + Go (the poison flag + guard;
+  the streaming overflow validator; the `scope::find` loop-bound parity; the Go 32-bit div_ceil
+  safety).
+- **Sensitive data gate:** clean — synthetic ranges/fixtures only; no secrets, credentials,
+  customer data, or FireHOL infra details. (Callers MAY store secrets in KV — that is caller
+  policy and out of the engine's scope.)
+- **Artifact maintenance gate** — specs updated: `design-iprange-v4-scope-api.md` §C/§D (the
+  metadata design) and `design-iprange-v4-livedb.md` §5.1 (the cross-meta static-identity
+  relaxation). `AGENTS.md` v4 build/test commands cover the metadata crate (same crate/module —
+  no new command; the `metadata_conformance` test joins the existing conformance regen path). No
+  end-user docs (pre-1.0 library consumed via the SDK); no project skills affected.
+- **Status/dir consistency:** `Status: completed` in `done/`.
+
+## Outcome
+
+Delivered the **v4.1 self-describing metadata system** in Rust + Go: a per-scope scope-table
+registry (with the hot `name`/`version`/`type` fields seekable) + an unbounded per-scope KV store
+(overflow chains), as an additive v4.0→v4.1 minor bump that old readers skip and old writers
+refuse, with an in-place upgrade. Byte-identical on-disk encoding across languages, hostile-input
+hardened (validate-before-expose, **streaming** constant-memory UTF-8 validation, overflow
+cycle/length defenses, a file-wide page-disjointness bitset), and crash-safe (the writer poisons
+rather than continue after a failed-commit rebuild). PRODUCTION GRADE per round-1 + assistant
+re-verification.
+
+## Lessons Extracted
+
+- A delegated fork can do the work but lose its final report to a backend rate-limit; verify the
+  filesystem + tests + goldens directly rather than trusting the report.
+- Streaming validation of untrusted variable-length values (constant memory) is worth the
+  incremental-UTF-8 complexity for a format consumed at scale — gated by boundary-straddle tests.
+- The §5.1 in-place-upgrade relaxation (excluding `version_minor`/`meta_size` from the cross-meta
+  identity check) is safe **only** because both fields stay per-meta CRC-protected + range-validated
+  and the higher-`txn_id` meta is authoritative — recorded so it is not "simplified" away later.
+
+## Followup
+
+- **Re-run the post-fix external review panel** when the nova/litellm backend recovers (round-1 was
+  clean; the fix re-review timed out on a saturated backend). Joint with SOW-0008. If it surfaces a
+  real P0/P1/P2, reopen via the regression process.
+- Caller-side modules (retention, multi-feed comparison, geo) consume this metadata downstream
+  (separate repos/SOWs).

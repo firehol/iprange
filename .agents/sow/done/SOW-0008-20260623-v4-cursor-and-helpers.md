@@ -2,15 +2,14 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: First of the v4.1 additions — a read-only API on the locked v4 core (**no
-on-disk format change**); prerequisite for SOW-0009 and the caller-side modules. **Rust
-reference implemented 2026-06-24** (`v4/rust/iprange-livedb/src/cursor.rs`: `Cursor`
-seek/first/last/next/prev/current + the standard helpers `query_ranges[_merged]`,
-`query_cidrs[_merged]`, `count_ips`, `count_cidrs`; selector = caller predicate over opaque
-scope; canonical-minimal-cover CIDR); 58 lib tests + clippy `-D warnings` green. **Remaining:
-the Go mirror + shared cross-read conformance**, then the PRODUCTION-GRADE review.
+Sub-state: First of the v4.1 additions — a read-only cursor API + standard SDK helpers on the
+locked v4 core (**no on-disk format change**). Delivered in **Rust + Go** with shared
+conformance; committed `69c607f`. External review round-1: **4/4 capable reviewers PRODUCTION
+GRADE** (zero P0/P1). Review fixes (jointly with SOW-0009) committed `ff5f783` and re-verified.
+The post-fix re-review panel was **infra-blocked** (nova/litellm saturated — tracked in
+Followup). **Completed 2026-06-25.**
 
 ## Requirements
 
@@ -146,3 +145,51 @@ None — generic engine API; no secrets, no FireHOL infra details.
 
 None — all resolved (see Design decisions). Remaining choices are implementation-defined
 (M-class): the cursor-stack representation and the visitor signature shape.
+
+## Validation
+
+- **Acceptance criteria** — met: ordered cursor (`seek`/`first`/`last`/`next`/`prev`/`current`)
+  + standard SDK helpers (`query_ranges[_merged]`, `query_cidrs[_merged]`, `count_ips`,
+  `count_cidrs`), selectors as caller predicates over opaque scope, canonical minimal-cover
+  CIDR, in **Rust + Go** with shared conformance. No on-disk format change.
+- **Tests (re-verified by the assistant, not trusting the implementer)** — Rust: lib 85 / 97
+  (`--features export-v3`), conformance + metadata-conformance + robustness/fuzz green; clippy
+  `--all-targets --all-features -D warnings` clean; `fmt --check` clean; `no_std` and
+  `no_std+alloc` builds clean. Go: `test ./...`, `vet`, `gofmt -l` clean; `test -race -count=1`
+  clean (421s). Cursor + helper goldens value-identical Rust↔Go.
+- **Reviewer findings** — shipped and reviewed jointly with SOW-0009 (commit `69c607f`; fixes
+  `ff5f783`). Round-1 external panel: **4/4 capable reviewers PRODUCTION GRADE, zero P0/P1**
+  (mimo, deepseek, glm, qwen; minimax produced no usable output). No cursor/helper-specific
+  finding; acted-on findings were in the metadata/KV/writer code (see SOW-0009 Validation).
+  Post-fix re-review: **infra-blocked** (all 6 reviewers timed out — nova/litellm saturated);
+  tracked in Followup. The PRODUCTION-GRADE verdict rests on round-1 + the re-verification above.
+- **Same-failure search** — the parity nit (`scope::find` descent-loop bound) was fixed
+  symmetrically in Rust + Go.
+- **Sensitive data gate:** clean — synthetic ranges/fixtures only; no secrets, credentials,
+  customer data, or FireHOL infra details in any durable artifact.
+- **Artifact maintenance gate** — `design-iprange-v4-scope-api.md` §A/§B specify the cursor +
+  helpers; `AGENTS.md` v4 build/test commands already cover this crate (cursor/helpers live in
+  the same module — no new command needed). No end-user docs (pre-1.0 library consumed via the
+  SDK); no project skills affected.
+- **Status/dir consistency:** `Status: completed` in `done/`.
+
+## Outcome
+
+Delivered the v4 ordered **cursor** + **standard SDK helpers** in Rust + Go — the mechanism
+that lets callers build retention, multi-feed comparison, and geo modules externally, with no
+retention/comparison/geo policy in iprange and `scope` kept opaque. Purely additive to the
+locked v4 core (no byte-format change). PRODUCTION GRADE per round-1 + assistant re-verification.
+
+## Lessons Extracted
+
+- A parallel implementation session can race ahead of the design discussion; verify the
+  filesystem/git state before acting, to avoid clobbering uncommitted parallel work.
+- The cursor's mutate-during-open contract (commit invalidates open cursors; reads bind to the
+  committed root) is the single primitive that keeps higher-level modules out of the format.
+
+## Followup
+
+- **Re-run the post-fix external review panel** when the nova/litellm backend recovers (round-1
+  was clean; the fix re-review timed out on a saturated backend). Joint with SOW-0009.
+- Caller-side modules (retention, comparison, geo) are downstream consumer work (separate
+  repos/SOWs), built on this cursor + helpers.
