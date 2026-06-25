@@ -745,6 +745,8 @@ pub(crate) fn validate(
     }
     let mut leaf_depth: Option<u32> = None;
     let mut prev_key: Option<Vec<u8>> = None;
+    // Root covers all keys; `lo` is the inclusive lower bound (empty = the minimum, since
+    // keys are non-empty), `hi` the exclusive upper bound (None = +infinity).
     validate_node(
         bytes,
         root_pgno,
@@ -753,6 +755,8 @@ pub(crate) fn validate(
         visited,
         &mut leaf_depth,
         &mut prev_key,
+        b"",
+        None,
     )
 }
 
@@ -765,6 +769,8 @@ fn validate_node(
     visited: &mut [bool],
     leaf_depth: &mut Option<u32>,
     prev_key: &mut Option<Vec<u8>>,
+    lo: &[u8],
+    hi: Option<&[u8]>,
 ) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("kv path deeper than TREE_HEIGHT_MAX"));
@@ -804,6 +810,15 @@ fn validate_node(
             for i in 0..count {
                 let hdr = leaf.entry_hdr(i)?;
                 check_key(hdr.key)?;
+                // Within the node's routing interval [lo, hi) (hi exclusive; None = +inf).
+                if hdr.key < lo {
+                    return Err(Error::Invariant("kv key below node bound"));
+                }
+                if let Some(h) = hi {
+                    if hdr.key >= h {
+                        return Err(Error::Invariant("kv key at/above node bound"));
+                    }
+                }
                 // Globally strictly increasing keys (sorted + disjoint across the tree).
                 if let Some(p) = prev_key {
                     if hdr.key <= p.as_slice() {
@@ -850,11 +865,20 @@ fn validate_node(
                 return Err(Error::Structural("kv branch slot directory overflows page"));
             }
             let b = KvBranchView::new(page, count);
-            // Separators strictly increasing.
+            // Separators in bound and strictly increasing: lo < sep[0] < … < sep[count-1],
+            // and (when hi is set) sep[count-1] < hi.
             let mut prev_sep: Option<Vec<u8>> = None;
             for i in 0..count {
                 let (sep, _) = b.sep(i)?;
                 check_key(sep)?;
+                if sep <= lo {
+                    return Err(Error::Invariant("kv separator <= lo"));
+                }
+                if let Some(h) = hi {
+                    if sep >= h {
+                        return Err(Error::Invariant("kv separator >= hi"));
+                    }
+                }
                 if let Some(p) = &prev_sep {
                     if sep <= p.as_slice() {
                         return Err(Error::Invariant("kv separators not increasing"));
@@ -869,7 +893,13 @@ fn validate_node(
                     return Err(Error::Structural("kv child pgno out of range"));
                 }
             }
+            // Recurse with separator-derived bounds so each child's keys are confined to its
+            // routing interval (child[0]=[lo, sep[0]); child[i]=[sep[i-1], sep[i]); child
+            // [count]=[sep[count-1], hi)). Without this a file with valid CRCs but mismatched
+            // separators would misroute lookups (mirrors the IP-tree validator, reader.rs).
             for j in 0..=count {
+                let child_lo = if j == 0 { lo } else { b.sep(j - 1)?.0 };
+                let child_hi = if j == count { hi } else { Some(b.sep(j)?.0) };
                 validate_node(
                     bytes,
                     b.child(j)?,
@@ -878,6 +908,8 @@ fn validate_node(
                     visited,
                     leaf_depth,
                     prev_key,
+                    child_lo,
+                    child_hi,
                 )?;
             }
             Ok(())

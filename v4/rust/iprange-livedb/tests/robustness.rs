@@ -431,6 +431,155 @@ fn duplicate_child_in_kv_branch_rejected() {
 }
 
 #[test]
+fn scope_branch_separator_misroute_rejected() {
+    // codex Finding 3: a scope-table branch whose separator no longer matches the child
+    // boundaries. Separators stay strictly increasing and every CRC is valid, but a lookup
+    // would misroute. The validator must confine each child's ids to its separator-derived
+    // bound and reject (parity with the IP-tree validator).
+    let mut w = Writer::<Ipv4Key>::create(1, 0);
+    for s in 0..40u32 {
+        w.scope_define(format!("scope-{s}").as_bytes()).unwrap();
+    }
+    w.commit(0).unwrap();
+    let mut file = w.into_image();
+    let total = file.len() / PAGE_SIZE;
+
+    let branch = (2..total)
+        .find(|&p| {
+            page_type(&file, p) == spec::PAGE_TYPE_SCOPE_BRANCH && entry_count(&file, p) >= 1
+        })
+        .expect("a scope branch with >= 1 separator");
+    // Shrink separator 0 to id 1: child[0] (the leftmost leaf, ids >= 1) now exceeds its
+    // bound [lo, sep0-1] = [0, 0], yet sep0 = 1 is still > lo and < sep1, so the only failing
+    // check is the new separator-derived bound check (the old validator accepted this).
+    let sep0_off = branch * PAGE_SIZE + spec::PAGE_HEADER_SIZE + 4; // after child[0] (u32)
+    file[sep0_off..sep0_off + 4].copy_from_slice(&1u32.to_le_bytes());
+    restamp(&mut file, branch);
+
+    assert!(
+        Reader::open(&file).is_err(),
+        "scope branch with a mismatched separator must be rejected"
+    );
+}
+
+#[test]
+fn kv_branch_separator_misroute_rejected() {
+    // codex Finding 3 (KV side): a KV branch whose separator key is shifted below its child's
+    // real key range. Separators stay strictly increasing and CRCs are valid, but child[0]'s
+    // keys would now fall at/above the (shrunken) separator → misroute. Must be rejected.
+    let mut w = Writer::<Ipv4Key>::create(1, 0);
+    let id = w.scope_define(b"s").unwrap();
+    for i in 0..400u32 {
+        let key = format!("key-{i:08}-{}", "x".repeat(200));
+        w.meta_set(id, key.as_bytes(), 0, b"v").unwrap();
+    }
+    w.commit(0).unwrap();
+    let mut file = w.into_image();
+    let total = file.len() / PAGE_SIZE;
+
+    let branch = (2..total)
+        .find(|&p| page_type(&file, p) == spec::PAGE_TYPE_KV_BRANCH && entry_count(&file, p) >= 1)
+        .expect("a KV branch with >= 1 separator");
+    // Decrement the first byte of separator 0's key ("key-…" → "jey-…"): still a valid,
+    // strictly-smaller key (so separators stay increasing), but now below every key in
+    // child[0], so child[0]'s keys fall at/above the node's upper bound → reject.
+    let sep_off = kv_slot_off(&file, branch, 0, true);
+    let key_off = sep_off + 2; // skip sep_len (u16)
+    file[key_off] -= 1;
+    restamp(&mut file, branch);
+
+    assert!(
+        Reader::open(&file).is_err(),
+        "KV branch with a mismatched separator must be rejected"
+    );
+}
+
+#[test]
+fn overflow_total_len_u64_max_rejected() {
+    // Patch a KV overflow entry's value_total_len to u64::MAX: a naive div_ceil
+    // `(total+payload-1)/payload` wraps to a tiny page count, slips past the chain-length cap,
+    // and returns a truncated value on a checksum-valid file. The overflow-safe div_ceil must
+    // reject it. Mirrors the Go robustness test (cross-language coverage parity).
+    let mut file = {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let id = w.scope_define(b"s").unwrap();
+        let big: Vec<u8> = (0..6000u32).map(|i| (i * 3) as u8).collect();
+        w.meta_set(id, b"k", 9, &big).unwrap();
+        w.commit(0).unwrap();
+        w.into_image()
+    };
+    assert!(Reader::open(&file).is_ok(), "valid overflow file rejected");
+    let total = file.len() / PAGE_SIZE;
+    let leaf = (2..total)
+        .find(|&p| page_type(&file, p) == spec::PAGE_TYPE_KV_LEAF)
+        .expect("a KV leaf");
+    // Entry 0 layout: key_len(2) · key · type(4) · value_kind(1) · first_pgno(4) · total_len(8).
+    let e = kv_slot_off(&file, leaf, 0, false);
+    let key_len = u16::from_le_bytes([file[e], file[e + 1]]) as usize;
+    let kind_off = e + 2 + key_len + 4;
+    assert_eq!(
+        file[kind_off],
+        spec::KV_VALUE_OVERFLOW,
+        "entry 0 must be an overflow entry"
+    );
+    let total_len_off = kind_off + 1 + 4; // skip value_kind(1) + first_pgno(4)
+    file[total_len_off..total_len_off + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+    restamp(&mut file, leaf);
+    assert!(
+        Reader::open(&file).is_err(),
+        "overflow value_total_len = u64::MAX must be rejected"
+    );
+}
+
+#[test]
+fn shared_kv_root_across_scopes_rejected() {
+    // Two scope records sharing one kv_root ⇒ the file-wide page-disjointness walk reaches the
+    // same KV subtree twice ⇒ structural error (F2). Mirrors the Go robustness test.
+    let mut file = {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        let b = w.scope_define(b"b").unwrap();
+        w.meta_set(a, b"ka", 0, b"va").unwrap();
+        w.meta_set(b, b"kb", 0, b"vb").unwrap();
+        w.commit(0).unwrap();
+        w.into_image()
+    };
+    assert!(
+        Reader::open(&file).is_ok(),
+        "valid two-scope-KV file rejected"
+    );
+    let total = file.len() / PAGE_SIZE;
+    let leaf = (2..total)
+        .find(|&p| page_type(&file, p) == spec::PAGE_TYPE_SCOPE_LEAF)
+        .expect("a scope leaf");
+    // Records are sorted by id; scope a (id 1) is record 0, scope b (id 2) is record 1.
+    let rec = |i: usize| leaf * PAGE_SIZE + spec::PAGE_HEADER_SIZE + i * spec::SCOPE_RECORD_SIZE;
+    let id0 = u32::from_le_bytes([
+        file[rec(0)],
+        file[rec(0) + 1],
+        file[rec(0) + 2],
+        file[rec(0) + 3],
+    ]);
+    let id1 = u32::from_le_bytes([
+        file[rec(1)],
+        file[rec(1) + 1],
+        file[rec(1) + 2],
+        file[rec(1) + 3],
+    ]);
+    assert!(id0 < id1, "scope records sorted by id (got {id0}, {id1})");
+    // Copy record 0's kv_root into record 1 — both records now point at the same KV tree.
+    let r0 = rec(0) + spec::SCOPE_REC_KV_ROOT;
+    let r1 = rec(1) + spec::SCOPE_REC_KV_ROOT;
+    let root0 = [file[r0], file[r0 + 1], file[r0 + 2], file[r0 + 3]];
+    file[r1..r1 + 4].copy_from_slice(&root0);
+    restamp(&mut file, leaf);
+    assert!(
+        Reader::open(&file).is_err(),
+        "shared kv_root across two scopes must be rejected (F2)"
+    );
+}
+
+#[test]
 fn f1_lone_last_child_kv_round_trips() {
     // F1: build a KV tree whose branch level would (pre-fix) leave a final node with a single
     // child. ~1 KiB keys ⇒ low branch fanout, so a careful entry count forces the remainder-1

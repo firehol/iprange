@@ -240,6 +240,66 @@ func (fw *FileWriter[K]) Set(from, to K, scope []byte) error { return fw.w.Set(f
 // Delete applies delete([from,to]) (§8). Not durable until Commit.
 func (fw *FileWriter[K]) Delete(from, to K) error { return fw.w.Delete(from, to) }
 
+// --- v4.1 scope registry + per-scope metadata (§C) ---
+//
+// Thin delegations to the inner writer so the daemon can mutate scope/metadata on the live DB
+// (scope-api spec: "writer = the daemon"). Buffered like range edits; the new scope-table/KV
+// pages are built into the image at Commit and made durable with the data at Barrier 1 (see
+// Commit / rebuildCommitState).
+
+// ScopeDefine defines a new scope, returning its scope_id (§C.2). Not durable until Commit.
+func (fw *FileWriter[K]) ScopeDefine(name []byte) (uint32, error) { return fw.w.ScopeDefine(name) }
+
+// ScopeDrop drops a defined scope from the registry (§C.2). Not durable until Commit.
+func (fw *FileWriter[K]) ScopeDrop(scopeID uint32) (bool, error) { return fw.w.ScopeDrop(scopeID) }
+
+// ScopeName returns a defined scope's name (§C.2).
+func (fw *FileWriter[K]) ScopeName(scopeID uint32) ([]byte, bool) { return fw.w.ScopeName(scopeID) }
+
+// ScopeList returns all defined scopes ascending by id (§C.2).
+func (fw *FileWriter[K]) ScopeList() []ScopeEntry { return fw.w.ScopeList() }
+
+// ScopeVersion returns a scope's version counter (§C.2).
+func (fw *FileWriter[K]) ScopeVersion(scopeID uint32) (uint64, bool) {
+	return fw.w.ScopeVersion(scopeID)
+}
+
+// ScopeSetVersion sets a scope's version counter (§C.2). Not durable until Commit.
+func (fw *FileWriter[K]) ScopeSetVersion(scopeID uint32, version uint64) (bool, error) {
+	return fw.w.ScopeSetVersion(scopeID, version)
+}
+
+// ScopeBumpVersion increments a scope's version counter (§C.2). Not durable until Commit.
+func (fw *FileWriter[K]) ScopeBumpVersion(scopeID uint32) (bool, error) {
+	return fw.w.ScopeBumpVersion(scopeID)
+}
+
+// ScopeType returns a scope's opaque type byte (§C.2).
+func (fw *FileWriter[K]) ScopeType(scopeID uint32) (uint8, bool) { return fw.w.ScopeType(scopeID) }
+
+// ScopeSetType sets a scope's opaque type byte (§C.2). Not durable until Commit.
+func (fw *FileWriter[K]) ScopeSetType(scopeID uint32, typ uint8) (bool, error) {
+	return fw.w.ScopeSetType(scopeID, typ)
+}
+
+// MetaSet sets key = (type, value) on target (0 = FILE, §C.4). Not durable until Commit.
+func (fw *FileWriter[K]) MetaSet(target uint32, key []byte, typ uint32, value []byte) error {
+	return fw.w.MetaSet(target, key, typ, value)
+}
+
+// MetaGet gets key on target as (type, value) (§C.4).
+func (fw *FileWriter[K]) MetaGet(target uint32, key []byte) (typ uint32, value []byte, found bool, err error) {
+	return fw.w.MetaGet(target, key)
+}
+
+// MetaDelete deletes key on target (§C.7). Not durable until Commit.
+func (fw *FileWriter[K]) MetaDelete(target uint32, key []byte) (Changed, error) {
+	return fw.w.MetaDelete(target, key)
+}
+
+// MetaList lists (key, type, value) on target, ordered by key (§C.4).
+func (fw *FileWriter[K]) MetaList(target uint32) ([]MetaEntry, error) { return fw.w.MetaList(target) }
+
 // RecordCount returns the records in the (pending) tree.
 func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
 
@@ -247,6 +307,26 @@ func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
 // new meta, fsync (Barrier 2). On any error the txn is abandoned with no acknowledged
 // commit; recovery is automatic on the next open.
 func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
+	// Build the scope-table / KV metadata pages into the image BEFORE collecting the dirty set,
+	// so they are pwritten and made durable at Barrier 1 alongside every other data page (§6.3).
+	// Doing this after takeDirty (the previous order) stranded them: the flipped meta referenced
+	// pages that were never written → a corrupt file on reopen.
+	if err := fw.w.rebuildCommitState(); err != nil {
+		return err
+	}
+	// From here the in-memory writer is partially advanced; poison it on any failure so a
+	// half-applied txn can never be observed or reused (the on-disk file stays the last
+	// committed valid state, recovered automatically on the next open).
+	if err := fw.commitDurable(updatedUnixtime); err != nil {
+		fw.w.poison()
+		return err
+	}
+	return nil
+}
+
+// commitDurable is the on-disk half of Commit, run after the metadata rebuild: pwrite the data
+// pages, fsync (Barrier 1), finalize + pwrite the meta page, fsync (Barrier 2).
+func (fw *FileWriter[K]) commitDurable(updatedUnixtime uint64) error {
 	dirty := fw.w.takeDirty()
 	// Grow / reclaim trailing to match the in-memory image length.
 	if err := fw.file.Truncate(int64(len(fw.w.Image()))); err != nil {
@@ -262,10 +342,7 @@ func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
 	if err := fw.file.Sync(); err != nil { // Barrier 1: data durable before the meta references it
 		return errf("Io", "fsync barrier 1: "+err.Error())
 	}
-	inactive, err := fw.w.commitMeta(updatedUnixtime)
-	if err != nil {
-		return err
-	}
+	inactive := fw.w.finishCommitMeta(updatedUnixtime)
 	img = fw.w.Image()
 	off := int(inactive) * pageSize
 	if _, err := fw.file.WriteAt(img[off:off+pageSize], int64(off)); err != nil {

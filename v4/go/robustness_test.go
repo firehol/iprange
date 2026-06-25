@@ -435,6 +435,74 @@ func TestDuplicateKVBranchChildRejected(t *testing.T) {
 	}
 }
 
+// TestScopeBranchSeparatorMisrouteRejected (codex Finding 3): a scope-table branch whose
+// separator no longer matches the child boundaries. Separators stay strictly increasing and
+// CRCs valid, but a lookup would misroute. The validator must confine each child's ids to its
+// separator-derived bound and reject (parity with the IP-tree validator).
+func TestScopeBranchSeparatorMisrouteRejected(t *testing.T) {
+	w := CreateV4(1, 0)
+	for i := 0; i < scopeLeafMax()*2+1; i++ {
+		_, err := w.ScopeDefine([]byte(strconv.Itoa(i)))
+		must(t, err)
+	}
+	must(t, w.Commit(1))
+	img := append([]byte(nil), w.Image()...)
+	if _, err := Open(img); err != nil {
+		t.Fatalf("valid multi-level scope table rejected: %v", err)
+	}
+	brPgno := findPageOfType(img, pageTypeScopeBranch)
+	if brPgno == 0 {
+		t.Fatal("no scope branch found (table not multi-level)")
+	}
+	page := pageOf(img, brPgno)
+	// Shrink separator 0 to id 1: child[0] (leftmost leaf, ids >= 1) now exceeds its bound
+	// [lo, sep0-1] = [0, 0], yet sep0 = 1 stays > lo and < sep1 — only the new bound check
+	// fails (the old validator accepted this). sep[0] id follows the leftmost child u32.
+	le.PutUint32(page[pageHeaderSize+4:], 1)
+	finalizeChecksum(page)
+	if _, err := Open(img); err == nil {
+		t.Fatal("scope branch with a mismatched separator accepted")
+	} else if _, ok := err.(*Error); !ok {
+		t.Fatalf("scope misroute: non-typed error %T: %v", err, err)
+	}
+}
+
+// TestKVBranchSeparatorMisrouteRejected (codex Finding 3, KV side): a KV branch whose separator
+// key is shifted below its child's real key range. Separators stay strictly increasing and CRCs
+// valid, but child[0]'s keys would now fall at/above the (shrunken) separator → misroute.
+func TestKVBranchSeparatorMisrouteRejected(t *testing.T) {
+	w := CreateV4(1, 0)
+	a, err := w.ScopeDefine([]byte("a"))
+	must(t, err)
+	for i := 0; i < 400; i++ { // many entries ⇒ a multi-level KV tree with branch nodes
+		must(t, w.MetaSet(a, []byte("k"+strconv.Itoa(i)), 0, []byte(strconv.Itoa(i))))
+	}
+	must(t, w.Commit(1))
+	img := append([]byte(nil), w.Image()...)
+	if _, err := Open(img); err != nil {
+		t.Fatalf("valid multi-level KV tree rejected: %v", err)
+	}
+	brPgno := findPageOfType(img, pageTypeKVBranch)
+	if brPgno == 0 {
+		t.Fatal("no KV branch found (tree not multi-level)")
+	}
+	page := pageOf(img, brPgno)
+	count := int(decodePageHeader(page).entryCount)
+	bv := newKVBranchView(page, count)
+	off, err := bv.slot(0)
+	must(t, err)
+	// Decrement the first byte of separator 0's key ("k…" → "j…"): still a valid, strictly-
+	// smaller key (separators stay increasing), but below every key in child[0] (all start
+	// "k"), so child[0]'s keys fall at/above the node bound → reject. off+2 skips sep_len (u16).
+	page[off+2]--
+	finalizeChecksum(page)
+	if _, err := Open(img); err == nil {
+		t.Fatal("KV branch with a mismatched separator accepted")
+	} else if _, ok := err.(*Error); !ok {
+		t.Fatalf("kv misroute: non-typed error %T: %v", err, err)
+	}
+}
+
 // kvBranchFanout / kvLeafFanout compute the FIXED bulk-load fanout for keys of one fixed
 // length L (so a deterministic entry count can force a branch level onto the lone-last-child
 // remainder). They mirror buildKVTree's greedy packers for the constant-size case.

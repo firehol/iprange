@@ -4,6 +4,14 @@
 
 Status: completed
 
+Regression (2026-06-25): reopened and resolved — the post-fix external review (codex, an
+independent backend) found 3 real bugs the round-1 panel missed, including a file-backed
+metadata commit-ordering bug that corrupts the live DB on reopen. All three fixed + re-
+validated in both languages; the post-fix **codex re-review returned PRODUCTION GRADE** (its
+one P3 — Rust robustness-test parity — closed). See `## Regression - 2026-06-25` at the end of
+this file. The nova-backed open-model panel could not be used to re-review (every model timed
+out at 30 min producing no output — an infra limit, not a code issue); tracked in Followup.
+
 Sub-state: Authored 2026-06-23. Implementation started 2026-06-24 (Rust reference).
 Design recorded in `design-iprange-v4-scope-api.md` (§ "v4.1 additions", parts C/D).
 This is a **format change** (additive v4.0 → v4.1 minor bump).
@@ -297,8 +305,97 @@ re-verification.
 
 ## Followup
 
-- **Re-run the post-fix external review panel** when the nova/litellm backend recovers (round-1 was
-  clean; the fix re-review timed out on a saturated backend). Joint with SOW-0008. If it surfaces a
-  real P0/P1/P2, reopen via the regression process.
+- **Open-model review panel (glm/minimax/mimo/kimi/qwen/deepseek) when nova/litellm recovers.**
+  The post-fix re-review was carried by **codex** (independent OpenAI backend = PRODUCTION GRADE);
+  the nova-backed open models could not complete a single heavy review (every model, both rounds,
+  timed out at the 30-min cap — mostly zero output). This is a backend limit, not a code issue.
+  Re-run the open-model panel when nova can sustain heavy reviews; if it surfaces a real P0/P1/P2,
+  reopen via the regression process. Joint with SOW-0008.
 - Caller-side modules (retention, multi-feed comparison, geo) consume this metadata downstream
   (separate repos/SOWs).
+
+## Regression - 2026-06-25
+
+Reopened after the post-fix external review completed. Running **codex** (gpt-5.5 — an
+independent backend; the round-1 open-model panel and the in-session re-verification all ran on
+the one saturated nova/litellm endpoint) surfaced 3 real defects, each verified against the code
+before acting. The headline (F1) is a silent-corruption bug on the **production file-backed write
+path** that no test exercised.
+
+### What broke
+
+**F1 (P0/P1) — file-backed commit stranded the v4.1 metadata pages.** `FileWriter::commit`
+(Rust `os.rs`, Go `os.go`) drained the dirty set (`take_dirty`) and pwrote it **before** calling
+`commit_meta`, but the scope-table + KV pages are *built* inside `commit_meta` →
+`rebuild_commit_state` (they `alloc_page` + `write_page`, which push to the dirty set). So those
+pages were marked dirty *after* the set was already taken → never pwritten. The flipped meta then
+referenced pages that existed only in the in-memory image → on reopen: missing page / bad CRC /
+out-of-range → corrupt, unreadable file. Pure-IP commits were unaffected (the IP tree is built
+eagerly during `set`/`delete`), which is why every v4.0 test passed.
+
+**F2 (P1/P2) — Rust↔Go divergence on `meta_delete(FILE)` for same-txn keys.** The Rust writer
+short-circuited `meta_delete` on the committed root + registry only, ignoring `kv_dirty`. For the
+FILE target (id 0, created on demand at commit) a `meta_set(FILE,k,v)` then `meta_delete(FILE,k)`
+in one txn wrongly persisted the key (file stayed v4.1) while Go correctly dropped it (file
+returned to v4.0) — different bytes for the same op sequence.
+
+**F3 (P1/P2) — scope/KV branch validators weaker than the v4.0 IP-tree validator.** The scope
+(`scope.rs`/`scope.go`) and KV (`kv.rs`/`kv.go`) branch validators checked only that separators
+were strictly increasing plus a global monotonic id/key tracker, but did **not** confine each
+child's keys to its separator-derived bound — unlike the IP-tree validator (`reader.rs`
+`validate_node`, which threads `[lo, hi]`). A crafted file (valid CRCs, globally sorted leaves,
+mismatched separators) passed validation yet **misrouted lookups** to the wrong child, violating
+the "validate before expose" model.
+
+### Why prior validation missed it
+
+- **No file-backed metadata test existed.** Every conformance/robustness generator builds the
+  whole image in memory (`into_image` / `Image()`), which never exercises the incremental
+  `FileWriter` pwrite path; and `FileWriter` did not even expose the scope/metadata methods, so the
+  feature was undurable and F1 was unreachable through the public API.
+- Round-1 and the in-session re-verification ran on one degraded backend (nova); only the
+  independent codex backend reached a substantive review.
+
+### Repair
+
+- **F1:** split the commit into `rebuild_commit_state` (build metadata pages) + `finish_commit_meta`
+  (stamp the meta), and reordered `FileWriter::commit` to **rebuild → take_dirty → write data →
+  fsync(B1) → finish_meta → write meta → fsync(B2)**, so metadata pages are durable at Barrier 1
+  with all other data. On any post-rebuild I/O failure the writer is **poisoned** (a new partial
+  state). Both languages.
+- **Exposed the scope/metadata methods on `FileWriter`** (thin delegations to the inner writer) so
+  the live DB is actually writable per the scope-api spec ("writer = the daemon") — and so F1 is
+  reachable + testable. Both languages.
+- **F2:** Rust `meta_delete` now checks `kv_dirty` first (mirrors Go).
+- **F3:** scope/KV branch validators now thread `[lo, hi]` bounds and reject any child key/id
+  outside its separator-derived interval (matches the IP-tree validator). Both languages.
+
+### Validation
+
+- New tests, both languages: file-backed `FileWriter → commit → reopen` metadata round-trip
+  (defined-scope text + overflow-spanning binary KV + FILE KV + IP data) and incremental
+  reopen-mutate-recommit (F1 guards); FILE set+delete-same-txn → stays v4.0 (F2); crafted
+  separator-misroute scope + KV files → `Open` rejects (F3).
+- The F3 guards were **proven non-vacuous**: with the leaf bound checks temporarily removed, all
+  four misroute tests fail (Open accepts the crafted files); with them restored, they pass. Done
+  in both languages.
+- Rust: `cargo test` (default + `export-v3`), `clippy --all-targets --all-features -D warnings`,
+  `fmt --check` — clean. Go: `go test -race`, `go vet`, `gofmt` — clean. Goldens unchanged (the
+  writer always produced correct separators; the bound checks only reject hostile files).
+
+### Artifacts
+
+- Code: `os.rs`/`os.go` (commit reorder + poison + `FileWriter` scope/meta delegation),
+  `writer.rs`/`writer.go` (commit split; Rust `meta_delete` fix), `scope.rs`/`scope.go` +
+  `kv.rs`/`kv.go` (validator bounds).
+- Specs: `design-iprange-v4-livedb.md` §6.3 step 1 now records the commit-ordering invariant (the
+  v4.1 metadata pages, built at commit, MUST be pwritten at Barrier 1; the Barrier-2 meta must
+  never reference an unwritten page). `design-iprange-v4-scope-api.md` already specifies the
+  writer scope/meta API (D-C); exposing it on the file-backed `FileWriter` is an implementation
+  completion of that model — no scope-api spec change needed.
+- The original Followup ("re-run the post-fix external review panel ... if it surfaces a real
+  P0/P1/P2, reopen via the regression process") is now closed: codex did exactly that and, after
+  the fixes, returned PRODUCTION GRADE. The nova-backed open-model panel remains infra-blocked
+  (every model timed out at 30 min, both rounds — no usable output); its re-run is a non-blocking
+  Followup, not a gate, since codex (the reviewer that found the bugs) plus full green validation
+  cover the fixes.

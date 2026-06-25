@@ -294,8 +294,27 @@ impl<K: IpKey> Writer<K> {
 
     /// The commit's metadata rebuild phase (§C.2/§C.4): bulk-rebuild each dirty target's KV
     /// tree (switching its `kv_root` in the registry), then the scope table if it changed.
-    /// Performs irreversible page alloc/free; on error the caller poisons the writer.
-    fn rebuild_commit_state(&mut self) -> Result<()> {
+    /// This allocates and writes the new scope-table/KV pages into the image (marking them
+    /// dirty) and frees the old ones. The OS layer MUST call this **before** [`take_dirty`]
+    /// (`take_dirty`) so those metadata pages are pwritten and made durable at Barrier 1 like
+    /// every other data page (§6.3); the in-memory [`commit`](Self::commit) path reaches it
+    /// via [`commit_meta`](Self::commit_meta). Performs irreversible page alloc/free, so a
+    /// mid-phase failure leaves the allocator/registry indeterminate: the writer is poisoned
+    /// (the on-disk file stays the last committed valid state) and the caller must discard and
+    /// reopen. Refuses if `txn_id` is exhausted (§6.3; unreachable in practice).
+    pub(crate) fn rebuild_commit_state(&mut self) -> Result<()> {
+        self.ensure_usable()?;
+        if self.txn_id == u64::MAX {
+            return Err(Error::InvalidInput("txn_id exhausted"));
+        }
+        if let Err(e) = self.rebuild_commit_state_inner() {
+            self.poisoned = true;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn rebuild_commit_state_inner(&mut self) -> Result<()> {
         // KV first: this switches the affected scopes' `kv_root`s in the registry, so the
         // scope-table rebuild below carries the new roots. Frees old KV + overflow pages.
         self.rebuild_dirty_kv()?;
@@ -306,25 +325,12 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    /// Write the new meta into the inactive page and flip it (the in-memory half of the
-    /// commit, §6.3); returns the page number (0 or 1) just written so the OS layer can
-    /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). The
-    /// caller is responsible for the dirty set (`take_dirty`) and the durability barriers.
-    /// Refuses to commit if `txn_id` would reach `u64::MAX` (§6.3; unreachable in
-    /// practice).
-    pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> Result<u32> {
-        self.ensure_usable()?;
-        if self.txn_id == u64::MAX {
-            return Err(Error::InvalidInput("txn_id exhausted"));
-        }
-        // The rebuild phase performs irreversible page alloc/free as it goes, so a mid-phase
-        // failure leaves the in-memory allocator/registry indeterminate. Poison the writer on
-        // any such error: the on-disk meta is still unwritten (the file is the last committed
-        // valid state), so the caller must discard and reopen.
-        if let Err(e) = self.rebuild_commit_state() {
-            self.poisoned = true;
-            return Err(e);
-        }
+    /// Finalize the commit: write the new meta into the inactive page and flip it (the commit
+    /// point, §6.3); returns the page number (0 or 1) just written so the OS layer can
+    /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). MUST be
+    /// called after [`rebuild_commit_state`](Self::rebuild_commit_state) and, on the OS path,
+    /// after the data-page Barrier 1, so the meta never references an unwritten page.
+    pub(crate) fn finish_commit_meta(&mut self, updated_unixtime: u64) -> u32 {
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
         self.write_meta(inactive, self.txn_id, updated_unixtime);
@@ -334,7 +340,25 @@ impl<K: IpKey> Writer<K> {
         // The file is now this long on disk after the OS layer's `set_len`; the next txn's
         // grown region starts here.
         self.committed_pages = self.image.len() / PAGE_SIZE;
-        Ok(inactive)
+        inactive
+    }
+
+    /// In-memory commit half: rebuild the metadata pages then finalize the meta in one step
+    /// (no separate page barrier — the whole image is the unit, §6.3). The OS layer instead
+    /// interleaves [`rebuild_commit_state`](Self::rebuild_commit_state) / [`take_dirty`]
+    /// (`take_dirty`) / [`finish_commit_meta`](Self::finish_commit_meta) around its two fsync
+    /// barriers.
+    pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> Result<u32> {
+        self.rebuild_commit_state()?;
+        Ok(self.finish_commit_meta(updated_unixtime))
+    }
+
+    /// Poison the writer after a failed durable commit (the OS layer calls this when I/O fails
+    /// between the metadata rebuild and the commit point): the in-memory state is partially
+    /// advanced and must not be reused. The on-disk file remains the last committed valid
+    /// state, recovered automatically on the next open.
+    pub(crate) fn poison(&mut self) {
+        self.poisoned = true;
     }
 
     /// Take the set of data pages the OS layer must `pwrite` at Barrier 1. A page written
@@ -633,8 +657,12 @@ impl<K: IpKey> Writer<K> {
     pub fn meta_delete(&mut self, target: u32, key: &[u8]) -> Result<Changed> {
         self.ensure_usable()?;
         kv::check_key(key)?;
-        // Deleting on a non-existent target is a no-op (nothing to delete).
-        if self.target_kv_root(target).is_none() && self.scope_idx_any(target).is_none() {
+        // Deleting on a non-existent target is a no-op (nothing to delete). A target with KV
+        // buffered this txn (`kv_dirty`) is live even before it has a committed record — e.g.
+        // a FILE key set then deleted in the same txn — so it must NOT short-circuit (parity
+        // with the Go writer; otherwise the set+delete pair would wrongly persist the key and
+        // keep the file at v4.1 instead of reverting to v4.0).
+        if !self.kv_dirty.contains_key(&target) && self.scope_idx_any(target).is_none() {
             return Ok(Changed::Unchanged);
         }
         let entries = self.kv_load_dirty(target)?;
@@ -2242,6 +2270,32 @@ mod tests {
         let active = active_meta_of(&img);
         assert_eq!(active.scope_table_root, 0);
         assert_eq!(active.version_minor, spec::VERSION_MINOR);
+        assert!(Reader::open(&img).is_ok());
+    }
+
+    #[test]
+    fn kv_file_set_then_delete_same_txn_is_noop() {
+        // codex Finding 2 (Rust↔Go parity): setting a FILE key then deleting it in the SAME
+        // txn must leave the file at v4.0 — the key never persists. The Rust writer used to
+        // short-circuit meta_delete on the not-yet-committed FILE target (it checked only the
+        // committed root + registry, not `kv_dirty`) and wrongly kept the key; Go was correct.
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.meta_set(spec::FILE_SCOPE_ID, b"k", 0, b"v").unwrap();
+        assert_eq!(
+            w.meta_delete(spec::FILE_SCOPE_ID, b"k").unwrap(),
+            Changed::Changed
+        );
+        // Deleting again (now genuinely absent) is a clean no-op.
+        assert_eq!(
+            w.meta_delete(spec::FILE_SCOPE_ID, b"k").unwrap(),
+            Changed::Unchanged
+        );
+        w.commit(1).unwrap();
+        assert!(w.meta_list(spec::FILE_SCOPE_ID).unwrap().is_empty());
+        let img = w.image().to_vec();
+        let active = active_meta_of(&img);
+        assert_eq!(active.scope_table_root, 0, "no metadata should persist");
+        assert_eq!(active.version_minor, spec::VERSION_MINOR, "must stay v4.0");
         assert!(Reader::open(&img).is_ok());
     }
 

@@ -384,6 +384,38 @@ func TestKVManySetsOneRebuildAndFileEmptyReturnsV40(t *testing.T) {
 	}
 }
 
+func TestKVFileSetThenDeleteSameTxnIsNoop(t *testing.T) {
+	// codex Finding 2 (Rust↔Go parity): setting a FILE key then deleting it in the SAME txn
+	// must leave the file at v4.0 — the key never persists. Go already handled the not-yet-
+	// committed FILE target via kvDirty; this is the cross-language regression guard (the Rust
+	// writer was the one that wrongly kept the key).
+	w := CreateV4(1, 0)
+	must(t, w.MetaSet(fileScopeID, []byte("k"), 0, []byte("v")))
+	if c, err := w.MetaDelete(fileScopeID, []byte("k")); err != nil || c != ChangedYes {
+		t.Fatalf("delete of dirty FILE key = %v, %v; want ChangedYes", c, err)
+	}
+	if c, err := w.MetaDelete(fileScopeID, []byte("k")); err != nil || c != Unchanged {
+		t.Fatalf("second delete = %v, %v; want Unchanged", c, err)
+	}
+	must(t, w.Commit(1))
+	list, err := w.MetaList(fileScopeID)
+	must(t, err)
+	if len(list) != 0 {
+		t.Fatalf("FILE list len = %d, want 0", len(list))
+	}
+	img := append([]byte(nil), w.Image()...)
+	active := activeMetaOf(img)
+	if active.scopeTableRoot != 0 {
+		t.Fatalf("scope_table_root = %d, want 0 (no metadata)", active.scopeTableRoot)
+	}
+	if active.versionMinor != versionMinor {
+		t.Fatalf("minor = %d, want %d (stay v4.0)", active.versionMinor, versionMinor)
+	}
+	if _, err := Open(img); err != nil {
+		t.Fatalf("file rejected: %v", err)
+	}
+}
+
 // TestUTF8StreamValidation exercises the incremental UTF-8 validator used by the streaming
 // overflow validate path: a multibyte char straddling a chunk (= overflow-page payload)
 // boundary, invalid bytes split across it, and a value ending mid-sequence.

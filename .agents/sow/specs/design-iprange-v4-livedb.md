@@ -341,6 +341,12 @@ MUST NOT hold the lock during downstream processing (§11).
 Target the **inactive** meta (lower `txn_id`).
 1. `pwrite` every new/COW'd data page (correct CRC32C + self‑pgno). If the file must
    grow, extend it (`ftruncate`) and place new pages in the growth.
+   **(v4.1)** "data page" here includes the scope‑table and per‑scope KV pages, which the
+   writer *builds* at commit time (bulk‑rebuild, §C.2/§C.4). They MUST be constructed
+   **before** the dirty‑page set for this step is collected, so they are pwritten and made
+   durable at Barrier 1 like any other page. The Barrier‑2 meta must never reference a page
+   that was not written in step 1 — else reopen sees a missing / bad‑CRC / out‑of‑range page
+   and the file is rejected as corrupt.
 2. **Barrier 1:** `fsync` (data durable before the meta references it).
 3. Construct the new meta **in memory** (the whole `page_size` bytes, tail
    `[meta_size, page_size)` zero‑filled) and `pwrite` it to the inactive meta page in

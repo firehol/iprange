@@ -801,11 +801,13 @@ func validateKV(b []byte, rootPgno uint32, totalPages uint64, vis *pageVisitor) 
 	haveLeafDepth := false
 	var prevKey []byte
 	havePrevKey := false
-	return validateKVNode(b, rootPgno, 1, totalPages, vis, &leafDepth, &haveLeafDepth, &prevKey, &havePrevKey)
+	// Root covers all keys; lo is the inclusive lower bound (nil/empty = the minimum, since
+	// keys are non-empty), hi the exclusive upper bound (nil = +infinity).
+	return validateKVNode(b, rootPgno, 1, totalPages, vis, &leafDepth, &haveLeafDepth, &prevKey, &havePrevKey, nil, nil)
 }
 
 func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVisitor,
-	leafDepth *uint32, haveLeafDepth *bool, prevKey *[]byte, havePrevKey *bool) error {
+	leafDepth *uint32, haveLeafDepth *bool, prevKey *[]byte, havePrevKey *bool, lo, hi []byte) error {
 	if depth > treeHeightMax {
 		return errInvariant("kv path deeper than TREE_HEIGHT_MAX")
 	}
@@ -852,6 +854,13 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			if err := checkKey(hdr.key); err != nil {
 				return err
 			}
+			// Within the node's routing interval [lo, hi) (hi exclusive; nil = +inf).
+			if bytes.Compare(hdr.key, lo) < 0 {
+				return errInvariant("kv key below node bound")
+			}
+			if hi != nil && bytes.Compare(hdr.key, hi) >= 0 {
+				return errInvariant("kv key at/above node bound")
+			}
 			// Globally strictly increasing keys (sorted + disjoint across the tree).
 			if *havePrevKey && bytes.Compare(hdr.key, *prevKey) <= 0 {
 				return errInvariant("kv keys not sorted/disjoint")
@@ -885,7 +894,8 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			return errStructural("kv branch slot directory overflows page")
 		}
 		br := newKVBranchView(page, count)
-		// Separators strictly increasing.
+		// Separators in bound and strictly increasing: lo < sep[0] < … < sep[count-1], and
+		// (when hi is set) sep[count-1] < hi.
 		var prevSep []byte
 		havePrevSep := false
 		for i := 0; i < count; i++ {
@@ -895,6 +905,12 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			}
 			if err := checkKey(sep); err != nil {
 				return err
+			}
+			if bytes.Compare(sep, lo) <= 0 {
+				return errInvariant("kv separator <= lo")
+			}
+			if hi != nil && bytes.Compare(sep, hi) >= 0 {
+				return errInvariant("kv separator >= hi")
 			}
 			if havePrevSep && bytes.Compare(sep, prevSep) <= 0 {
 				return errInvariant("kv separators not increasing")
@@ -912,12 +928,32 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 				return errStructural("kv child pgno out of range")
 			}
 		}
+		// Recurse with separator-derived bounds so each child's keys are confined to its routing
+		// interval (child[0]=[lo, sep[0]); child[i]=[sep[i-1], sep[i]); child[count]=[sep[count-1],
+		// hi)). Without this a file with valid CRCs but mismatched separators would misroute
+		// lookups (mirrors the IP-tree validator).
 		for j := 0; j <= count; j++ {
 			c, err := br.child(j)
 			if err != nil {
 				return err
 			}
-			if err := validateKVNode(b, c, depth+1, totalPages, vis, leafDepth, haveLeafDepth, prevKey, havePrevKey); err != nil {
+			childLo := lo
+			if j > 0 {
+				s, _, err := br.sep(j - 1)
+				if err != nil {
+					return err
+				}
+				childLo = s
+			}
+			childHi := hi
+			if j < count {
+				s, _, err := br.sep(j)
+				if err != nil {
+					return err
+				}
+				childHi = s
+			}
+			if err := validateKVNode(b, c, depth+1, totalPages, vis, leafDepth, haveLeafDepth, prevKey, havePrevKey, childLo, childHi); err != nil {
 				return err
 			}
 		}

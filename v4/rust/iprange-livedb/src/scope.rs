@@ -173,6 +173,7 @@ pub(crate) fn validate(
     }
     let mut leaf_depth: Option<u32> = None;
     let mut prev_id: Option<u32> = None;
+    // Root covers the whole id space; separators narrow it per child (FILE id 0 is the min).
     validate_node(
         bytes,
         root_pgno,
@@ -181,6 +182,8 @@ pub(crate) fn validate(
         visited,
         &mut leaf_depth,
         &mut prev_id,
+        0,
+        u32::MAX,
     )
 }
 
@@ -193,6 +196,8 @@ fn validate_node(
     visited: &mut [bool],
     leaf_depth: &mut Option<u32>,
     prev_id: &mut Option<u32>,
+    lo: u32,
+    hi: u32,
 ) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("scope path deeper than TREE_HEIGHT_MAX"));
@@ -234,6 +239,9 @@ fn validate_node(
             for i in 0..count {
                 leaf.validate_at(i)?;
                 let id = leaf.id(i);
+                if id < lo || id > hi {
+                    return Err(Error::Invariant("scope id outside node bound"));
+                }
                 if let Some(p) = *prev_id {
                     if id <= p {
                         return Err(Error::Invariant("scope ids not sorted/disjoint"));
@@ -257,9 +265,16 @@ fn validate_node(
             {
                 return Err(Error::NonZeroReserved("scope branch tail"));
             }
+            // Separators in bound and strictly increasing: lo < sep[0] < … < sep[s-1] <= hi.
             let mut prev_sep: Option<u32> = None;
             for i in 0..s {
                 let sep = b.sep(i).0;
+                if sep <= lo {
+                    return Err(Error::Invariant("scope separator <= lo"));
+                }
+                if sep > hi {
+                    return Err(Error::Invariant("scope separator > hi"));
+                }
                 if let Some(p) = prev_sep {
                     if sep <= p {
                         return Err(Error::Invariant("scope separators not increasing"));
@@ -273,17 +288,40 @@ fn validate_node(
                     return Err(Error::Structural("scope child pgno out of range"));
                 }
             }
-            for j in 0..b.child_count() {
+            // Recurse with separator-derived bounds, confining each child's ids to its routing
+            // interval (child[0]=[lo, sep[0]-1]; child[i]=[sep[i-1], sep[i]-1]; child[s]=
+            // [sep[s-1], hi]). Mirrors the IP-tree validator (reader.rs); without it a file
+            // with valid CRCs but mismatched separators would misroute lookups.
+            let mut lower = lo;
+            for i in 0..s {
+                let sep = b.sep(i).0;
+                let upper = sep
+                    .checked_sub(1)
+                    .ok_or(Error::Invariant("scope separator has no predecessor"))?;
                 validate_node(
                     bytes,
-                    b.child(j),
+                    b.child(i),
                     depth + 1,
                     total_pages,
                     visited,
                     leaf_depth,
                     prev_id,
+                    lower,
+                    upper,
                 )?;
+                lower = sep;
             }
+            validate_node(
+                bytes,
+                b.child(s),
+                depth + 1,
+                total_pages,
+                visited,
+                leaf_depth,
+                prev_id,
+                lower,
+                hi,
+            )?;
             Ok(())
         }
         _ => Err(Error::Structural("unexpected page_type in scope table")),

@@ -920,10 +920,6 @@ func (w *Writer[K]) totalPages() uint64 {
 	return uint64(len(w.image) / pageSize)
 }
 
-// commitMeta writes the new meta into the inactive page and flips it (the in-memory half
-// of the commit, §6.3); it returns the page number (0 or 1) just written so the OS layer
-// can pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). It
-// refuses to commit if txn_id would reach math.MaxUint64 (§6.3; unreachable in practice).
 // ensureUsable refuses to operate on a writer poisoned by a failed commit (see poisoned):
 // the in-memory allocator state is indeterminate, so the caller must discard and reopen.
 func (w *Writer[K]) ensureUsable() error {
@@ -934,10 +930,30 @@ func (w *Writer[K]) ensureUsable() error {
 }
 
 // rebuildCommitState runs the commit's metadata rebuild phase (§C.2/§C.4): bulk-rebuild each
-// dirty target's KV tree FIRST (switching its kv_root in the registry, so the scope-table
-// rebuild carries the new roots; frees old KV + overflow pages), then the scope table if it
-// changed. Performs irreversible page alloc/free; on error the caller poisons the writer.
+// dirty target's KV tree (switching its kv_root in the registry, so the scope-table rebuild
+// carries the new roots; frees old KV + overflow pages), then the scope table if it changed.
+// This allocates and writes the new scope-table/KV pages into the image (marking them dirty)
+// and frees the old ones. The OS layer MUST call this BEFORE takeDirty so those metadata pages
+// are pwritten and made durable at Barrier 1 like every other data page (§6.3); the in-memory
+// Commit path reaches it via commitMeta. Performs irreversible page alloc/free, so a mid-phase
+// failure leaves the allocator/registry indeterminate: the writer is poisoned (the on-disk file
+// stays the last committed valid state) and the caller must discard and reopen. Refuses if
+// txn_id is exhausted (§6.3; unreachable in practice).
 func (w *Writer[K]) rebuildCommitState() error {
+	if err := w.ensureUsable(); err != nil {
+		return err
+	}
+	if w.txnID == maxUint64 {
+		return errInvalidInput("txn_id exhausted")
+	}
+	if err := w.rebuildCommitStateInner(); err != nil {
+		w.poisoned = true
+		return err
+	}
+	return nil
+}
+
+func (w *Writer[K]) rebuildCommitStateInner() error {
 	if err := w.rebuildDirtyKV(); err != nil {
 		return err
 	}
@@ -950,21 +966,12 @@ func (w *Writer[K]) rebuildCommitState() error {
 	return nil
 }
 
-func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
-	if err := w.ensureUsable(); err != nil {
-		return 0, err
-	}
-	if w.txnID == maxUint64 {
-		return 0, errInvalidInput("txn_id exhausted")
-	}
-	// The rebuild phase performs irreversible page alloc/free as it goes, so a mid-phase
-	// failure leaves the in-memory allocator/registry indeterminate. Poison the writer on any
-	// such error: the on-disk meta is still unwritten (the file is the last committed valid
-	// state), so the caller must discard and reopen.
-	if err := w.rebuildCommitState(); err != nil {
-		w.poisoned = true
-		return 0, err
-	}
+// finishCommitMeta finalizes the commit: write the new meta into the inactive page and flip it
+// (the commit point, §6.3); it returns the page number (0 or 1) just written so the OS layer can
+// pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). MUST be called
+// after rebuildCommitState and, on the OS path, after the data-page Barrier 1, so the meta never
+// references an unwritten page.
+func (w *Writer[K]) finishCommitMeta(updatedUnixtime uint64) uint32 {
 	inactive := 1 - w.activeMeta
 	w.txnID++
 	w.writeMeta(inactive, w.txnID, updatedUnixtime)
@@ -974,7 +981,24 @@ func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
 	// The file is now this long on disk after the OS layer's truncate; the next txn's
 	// grown region starts here.
 	w.committedPages = len(w.image) / pageSize
-	return inactive, nil
+	return inactive
+}
+
+// commitMeta is the in-memory commit half: rebuild the metadata pages then finalize the meta in
+// one step (no separate page barrier — the whole image is the unit, §6.3). The OS layer instead
+// interleaves rebuildCommitState / takeDirty / finishCommitMeta around its two fsync barriers.
+func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
+	if err := w.rebuildCommitState(); err != nil {
+		return 0, err
+	}
+	return w.finishCommitMeta(updatedUnixtime), nil
+}
+
+// poison marks the writer unusable after a failed durable commit (the OS layer calls this when
+// I/O fails between the metadata rebuild and the commit point): the in-memory state is partially
+// advanced and must not be reused. The on-disk file remains the last committed valid state.
+func (w *Writer[K]) poison() {
+	w.poisoned = true
 }
 
 // takeDirty returns the data pages the OS layer must pwrite at Barrier 1. A page written

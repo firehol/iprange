@@ -138,11 +138,12 @@ func validateScopeTable(bytes []byte, rootPgno uint32, totalPages uint64, vis *p
 	haveLeafDepth := false
 	var prevID uint32
 	havePrevID := false
-	return validateScopeNode(bytes, rootPgno, 1, totalPages, vis, &leafDepth, &haveLeafDepth, &prevID, &havePrevID)
+	// Root covers the whole id space; separators narrow it per child (FILE id 0 is the min).
+	return validateScopeNode(bytes, rootPgno, 1, totalPages, vis, &leafDepth, &haveLeafDepth, &prevID, &havePrevID, 0, ^uint32(0))
 }
 
 func validateScopeNode(bytes []byte, pgno, depth uint32, totalPages uint64, vis *pageVisitor,
-	leafDepth *uint32, haveLeafDepth *bool, prevID *uint32, havePrevID *bool) error {
+	leafDepth *uint32, haveLeafDepth *bool, prevID *uint32, havePrevID *bool, lo, hi uint32) error {
 	if depth > treeHeightMax {
 		return errInvariant("scope path deeper than TREE_HEIGHT_MAX")
 	}
@@ -188,6 +189,9 @@ func validateScopeNode(bytes []byte, pgno, depth uint32, totalPages uint64, vis 
 				return err
 			}
 			id := leaf.id(i)
+			if id < lo || id > hi {
+				return errInvariant("scope id outside node bound")
+			}
 			if *havePrevID && id <= *prevID {
 				return errInvariant("scope ids not sorted/disjoint")
 			}
@@ -206,10 +210,17 @@ func validateScopeNode(bytes []byte, pgno, depth uint32, totalPages uint64, vis 
 				return errNonZeroReserved("scope branch tail")
 			}
 		}
+		// Separators in bound and strictly increasing: lo < sep[0] < … < sep[s-1] <= hi.
 		var prevSep uint32
 		havePrevSep := false
 		for i := 0; i < s; i++ {
 			sep := uint32(b.sep(i))
+			if sep <= lo {
+				return errInvariant("scope separator <= lo")
+			}
+			if sep > hi {
+				return errInvariant("scope separator > hi")
+			}
 			if havePrevSep && sep <= prevSep {
 				return errInvariant("scope separators not increasing")
 			}
@@ -223,11 +234,22 @@ func validateScopeNode(bytes []byte, pgno, depth uint32, totalPages uint64, vis 
 				return errStructural("scope child pgno out of range")
 			}
 		}
-		for j := 0; j < childCount; j++ {
-			if err := validateScopeNode(bytes, b.child(j), depth+1, totalPages, vis,
-				leafDepth, haveLeafDepth, prevID, havePrevID); err != nil {
+		// Recurse with separator-derived bounds, confining each child's ids to its routing
+		// interval (child[0]=[lo, sep[0]-1]; child[i]=[sep[i-1], sep[i]-1]; child[s]=[sep[s-1],
+		// hi]). Mirrors the IP-tree validator; without it a file with valid CRCs but mismatched
+		// separators would misroute lookups. sep > lo >= 0 ⇒ sep >= 1, so sep-1 cannot underflow.
+		lower := lo
+		for i := 0; i < s; i++ {
+			sep := uint32(b.sep(i))
+			if err := validateScopeNode(bytes, b.child(i), depth+1, totalPages, vis,
+				leafDepth, haveLeafDepth, prevID, havePrevID, lower, sep-1); err != nil {
 				return err
 			}
+			lower = sep
+		}
+		if err := validateScopeNode(bytes, b.child(s), depth+1, totalPages, vis,
+			leafDepth, haveLeafDepth, prevID, havePrevID, lower, hi); err != nil {
+			return err
 		}
 		return nil
 	default:
