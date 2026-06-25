@@ -68,6 +68,11 @@ type Writer[K ipKey[K]] struct {
 	freedThisTxn   []uint32 // pages freed since the last commit (reusable next txn, D7)
 	dirty          []uint32 // data pages written this txn (for the OS layer's pwrite set)
 	committedPages int      // on-disk page count as of the last commit (grown-region boundary)
+	// poisoned is set if the commit rebuild phase fails: page alloc/free is irreversible, so
+	// the in-memory allocator/registry is then indeterminate. The on-disk meta is unwritten
+	// (the file is the last committed valid state), so the writer must be discarded and
+	// reopened. Every mutating op + Commit refuses once poisoned.
+	poisoned bool
 }
 
 // CreateV4 creates a fresh empty IPv4 DB (see createWriter).
@@ -186,6 +191,9 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 // range, then inserts [from,to,scope] coalescing with byte-equal-scope adjacent
 // neighbours. O(k log n) (k = records overlapping the range).
 func (w *Writer[K]) Set(from, to K, scope []byte) error {
+	if err := w.ensureUsable(); err != nil {
+		return err
+	}
 	if to.cmp(from) < 0 {
 		return errInvalidInput("set from > to")
 	}
@@ -224,6 +232,9 @@ func (w *Writer[K]) Set(from, to K, scope []byte) error {
 // Delete makes [from,to] absent (§8). It splits a straddling record, trims boundaries,
 // removes records fully inside; a wholly-absent range is a no-op. O(k log n).
 func (w *Writer[K]) Delete(from, to K) error {
+	if err := w.ensureUsable(); err != nil {
+		return err
+	}
 	if to.cmp(from) < 0 {
 		return errInvalidInput("delete from > to")
 	}
@@ -263,6 +274,9 @@ func (w *Writer[K]) RecordCount() uint64 { return w.recordCount }
 // reused after a drop (§C.2). name is UTF-8, <= 256 bytes (need not be unique). The first
 // metadata write upgrades the file to v4.1 at commit.
 func (w *Writer[K]) ScopeDefine(name []byte) (uint32, error) {
+	if err := w.ensureUsable(); err != nil {
+		return 0, err
+	}
 	if len(name) > scopeNameMax {
 		return 0, errInvalidInput("scope name > 256 bytes")
 	}
@@ -295,6 +309,9 @@ func (w *Writer[K]) ScopeDefine(name []byte) (uint32, error) {
 // carrying it are NOT touched (caller policy, §C.2). ScopeDrop(0) (FILE) is rejected. It
 // returns whether the scope existed.
 func (w *Writer[K]) ScopeDrop(scopeID uint32) (bool, error) {
+	if err := w.ensureUsable(); err != nil {
+		return false, err
+	}
 	if scopeID == fileScopeID {
 		return false, errInvalidInput("cannot drop the FILE scope (0)")
 	}
@@ -344,6 +361,9 @@ func (w *Writer[K]) ScopeVersion(scopeID uint32) (uint64, bool) {
 // ScopeSetVersion sets the scope's version (caller-bumped, §C.3). It returns whether the
 // scope existed.
 func (w *Writer[K]) ScopeSetVersion(scopeID uint32, version uint64) (bool, error) {
+	if err := w.ensureUsable(); err != nil {
+		return false, err
+	}
 	i, ok := w.scopePos(scopeID)
 	if !ok {
 		return false, nil
@@ -356,6 +376,9 @@ func (w *Writer[K]) ScopeSetVersion(scopeID uint32, version uint64) (bool, error
 // ScopeBumpVersion increments the scope's version (saturating). It returns whether the scope
 // existed.
 func (w *Writer[K]) ScopeBumpVersion(scopeID uint32) (bool, error) {
+	if err := w.ensureUsable(); err != nil {
+		return false, err
+	}
 	i, ok := w.scopePos(scopeID)
 	if !ok {
 		return false, nil
@@ -378,6 +401,9 @@ func (w *Writer[K]) ScopeType(scopeID uint32) (uint8, bool) {
 // ScopeSetType sets the scope's opaque type byte (the engine does not interpret it, §C.2).
 // It returns whether the scope existed.
 func (w *Writer[K]) ScopeSetType(scopeID uint32, typ uint8) (bool, error) {
+	if err := w.ensureUsable(); err != nil {
+		return false, err
+	}
 	i, ok := w.scopePos(scopeID)
 	if !ok {
 		return false, nil
@@ -544,6 +570,9 @@ const (
 // for type == 0, the whole value (UTF-8, no NUL) → InvalidInput on violation (§C.7). A
 // non-existent non-FILE target → InvalidInput.
 func (w *Writer[K]) MetaSet(target uint32, key []byte, typ uint32, value []byte) error {
+	if err := w.ensureUsable(); err != nil {
+		return err
+	}
 	if err := checkKey(key); err != nil {
 		return err
 	}
@@ -593,6 +622,9 @@ func (w *Writer[K]) MetaGet(target uint32, key []byte) (typ uint32, value []byte
 // MetaDelete deletes key on target. It returns ChangedYes if a key was removed, Unchanged if
 // it was absent (a no-op success, §C.7). It buffers the change; rebuilt at commit.
 func (w *Writer[K]) MetaDelete(target uint32, key []byte) (Changed, error) {
+	if err := w.ensureUsable(); err != nil {
+		return Unchanged, err
+	}
 	if err := checkKey(key); err != nil {
 		return Unchanged, err
 	}
@@ -892,23 +924,46 @@ func (w *Writer[K]) totalPages() uint64 {
 // of the commit, §6.3); it returns the page number (0 or 1) just written so the OS layer
 // can pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). It
 // refuses to commit if txn_id would reach math.MaxUint64 (§6.3; unreachable in practice).
+// ensureUsable refuses to operate on a writer poisoned by a failed commit (see poisoned):
+// the in-memory allocator state is indeterminate, so the caller must discard and reopen.
+func (w *Writer[K]) ensureUsable() error {
+	if w.poisoned {
+		return errState("writer poisoned by a failed commit; discard and reopen")
+	}
+	return nil
+}
+
+// rebuildCommitState runs the commit's metadata rebuild phase (§C.2/§C.4): bulk-rebuild each
+// dirty target's KV tree FIRST (switching its kv_root in the registry, so the scope-table
+// rebuild carries the new roots; frees old KV + overflow pages), then the scope table if it
+// changed. Performs irreversible page alloc/free; on error the caller poisons the writer.
+func (w *Writer[K]) rebuildCommitState() error {
+	if err := w.rebuildDirtyKV(); err != nil {
+		return err
+	}
+	if w.scopeDirty {
+		if err := w.rebuildScopeTable(); err != nil {
+			return err
+		}
+		w.scopeDirty = false
+	}
+	return nil
+}
+
 func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
+	if err := w.ensureUsable(); err != nil {
+		return 0, err
+	}
 	if w.txnID == maxUint64 {
 		return 0, errInvalidInput("txn_id exhausted")
 	}
-	// Rebuild each dirty target's KV tree FIRST (§C.4): this switches the affected scopes'
-	// kv_roots in the registry, so the subsequent scope-table rebuild carries the new roots.
-	// Frees the old KV + overflow pages (reclaimed next txn).
-	if err := w.rebuildDirtyKV(); err != nil {
+	// The rebuild phase performs irreversible page alloc/free as it goes, so a mid-phase
+	// failure leaves the in-memory allocator/registry indeterminate. Poison the writer on any
+	// such error: the on-disk meta is still unwritten (the file is the last committed valid
+	// state), so the caller must discard and reopen.
+	if err := w.rebuildCommitState(); err != nil {
+		w.poisoned = true
 		return 0, err
-	}
-	// Rebuild the scope table from the in-memory registry if it changed this txn (§C.2:
-	// bulk-rebuild; reads stay O(log) on the committed tree). Frees the old tree's pages.
-	if w.scopeDirty {
-		if err := w.rebuildScopeTable(); err != nil {
-			return 0, err
-		}
-		w.scopeDirty = false
 	}
 	inactive := 1 - w.activeMeta
 	w.txnID++

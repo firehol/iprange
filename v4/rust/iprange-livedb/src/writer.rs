@@ -75,6 +75,11 @@ pub struct Writer<K: IpKey> {
     freed_this_txn: Vec<u32>, // pages freed since the last commit (reusable next txn, D7)
     dirty: Vec<u32>,          // data pages written this txn (for the OS layer's pwrite set)
     committed_pages: usize,   // on-disk page count as of the last commit (grown-region boundary)
+    // Set if the commit rebuild phase fails: page alloc/free is irreversible, so the
+    // in-memory allocator/registry is then indeterminate. The on-disk meta is unwritten (the
+    // file is the last committed valid state), so the writer must be discarded and reopened.
+    // Every mutating op + commit refuses once poisoned.
+    poisoned: bool,
     _k: PhantomData<K>,
 }
 
@@ -106,6 +111,7 @@ impl<K: IpKey> Writer<K> {
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
             committed_pages: 2, // the two metas, both written by create
+            poisoned: false,
             _k: PhantomData,
         };
         // META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -168,6 +174,7 @@ impl<K: IpKey> Writer<K> {
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
             committed_pages: meta.total_pages as usize, // committed on-disk page count
+            poisoned: false,
             _k: PhantomData,
         };
         w.free = w.derive_free_set();
@@ -178,6 +185,7 @@ impl<K: IpKey> Writer<K> {
     /// inserts `[from,to,scope]` coalescing with byte-equal-scope adjacent neighbours.
     /// `O(k log n)` (k = records overlapping the range).
     pub fn set(&mut self, from: K, to: K, scope: &[u8]) -> Result<()> {
+        self.ensure_usable()?;
         if to < from {
             return Err(Error::InvalidInput("set from > to"));
         }
@@ -211,6 +219,7 @@ impl<K: IpKey> Writer<K> {
     /// trims boundaries, removes records fully inside; a wholly-absent range is a no-op.
     /// `O(k log n)`.
     pub fn delete(&mut self, from: K, to: K) -> Result<()> {
+        self.ensure_usable()?;
         if to < from {
             return Err(Error::InvalidInput("delete from > to"));
         }
@@ -271,6 +280,32 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
+    /// Refuse to operate on a writer poisoned by a failed commit (see the `poisoned` field):
+    /// the in-memory allocator state is indeterminate, so the caller must discard and reopen.
+    #[inline]
+    fn ensure_usable(&self) -> Result<()> {
+        if self.poisoned {
+            return Err(Error::State(
+                "writer poisoned by a failed commit; discard and reopen",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The commit's metadata rebuild phase (§C.2/§C.4): bulk-rebuild each dirty target's KV
+    /// tree (switching its `kv_root` in the registry), then the scope table if it changed.
+    /// Performs irreversible page alloc/free; on error the caller poisons the writer.
+    fn rebuild_commit_state(&mut self) -> Result<()> {
+        // KV first: this switches the affected scopes' `kv_root`s in the registry, so the
+        // scope-table rebuild below carries the new roots. Frees old KV + overflow pages.
+        self.rebuild_dirty_kv()?;
+        if self.scope_dirty {
+            self.rebuild_scope_table()?;
+            self.scope_dirty = false;
+        }
+        Ok(())
+    }
+
     /// Write the new meta into the inactive page and flip it (the in-memory half of the
     /// commit, §6.3); returns the page number (0 or 1) just written so the OS layer can
     /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). The
@@ -278,18 +313,17 @@ impl<K: IpKey> Writer<K> {
     /// Refuses to commit if `txn_id` would reach `u64::MAX` (§6.3; unreachable in
     /// practice).
     pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> Result<u32> {
+        self.ensure_usable()?;
         if self.txn_id == u64::MAX {
             return Err(Error::InvalidInput("txn_id exhausted"));
         }
-        // Rebuild each dirty target's KV tree FIRST (§C.4): this switches the affected
-        // scopes' `kv_root`s in the registry, so the subsequent scope-table rebuild carries
-        // the new roots. Frees the old KV + overflow pages (reclaimed next txn).
-        self.rebuild_dirty_kv()?;
-        // Rebuild the scope table from the in-memory registry if it changed this txn
-        // (§C.2: bulk-rebuild; reads stay O(log) on the committed tree). Frees old pages.
-        if self.scope_dirty {
-            self.rebuild_scope_table()?;
-            self.scope_dirty = false;
+        // The rebuild phase performs irreversible page alloc/free as it goes, so a mid-phase
+        // failure leaves the in-memory allocator/registry indeterminate. Poison the writer on
+        // any such error: the on-disk meta is still unwritten (the file is the last committed
+        // valid state), so the caller must discard and reopen.
+        if let Err(e) = self.rebuild_commit_state() {
+            self.poisoned = true;
+            return Err(e);
         }
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
@@ -349,6 +383,7 @@ impl<K: IpKey> Writer<K> {
     /// monotonic and never reused after a drop (§C.2). `name` is UTF-8, `<= 256` bytes
     /// (need not be unique). The first metadata write upgrades the file to v4.1 at commit.
     pub fn scope_define(&mut self, name: &[u8]) -> Result<u32> {
+        self.ensure_usable()?;
         if name.len() > spec::SCOPE_NAME_MAX {
             return Err(Error::InvalidInput("scope name > 256 bytes"));
         }
@@ -376,6 +411,7 @@ impl<K: IpKey> Writer<K> {
     /// NOT touched (caller policy, §C.2). `scope_drop(0)` (FILE) is rejected. Returns
     /// whether the scope existed.
     pub fn scope_drop(&mut self, scope_id: u32) -> Result<bool> {
+        self.ensure_usable()?;
         if scope_id == spec::FILE_SCOPE_ID {
             return Err(Error::InvalidInput("cannot drop the FILE scope (0)"));
         }
@@ -419,6 +455,7 @@ impl<K: IpKey> Writer<K> {
 
     /// Set the scope's `version` (caller-bumped, §C.3). Returns whether it existed.
     pub fn scope_set_version(&mut self, scope_id: u32, version: u64) -> Result<bool> {
+        self.ensure_usable()?;
         match self.scope_pos(scope_id) {
             Some(i) => {
                 self.scopes[i].version = version;
@@ -431,6 +468,7 @@ impl<K: IpKey> Writer<K> {
 
     /// Increment the scope's `version` (saturating). Returns whether it existed.
     pub fn scope_bump_version(&mut self, scope_id: u32) -> Result<bool> {
+        self.ensure_usable()?;
         match self.scope_pos(scope_id) {
             Some(i) => {
                 self.scopes[i].version = self.scopes[i].version.saturating_add(1);
@@ -449,6 +487,7 @@ impl<K: IpKey> Writer<K> {
     /// Set the scope's opaque `type` byte (engine does not interpret it, §C.2). Returns
     /// whether it existed.
     pub fn scope_set_type(&mut self, scope_id: u32, type_: u8) -> Result<bool> {
+        self.ensure_usable()?;
         match self.scope_pos(scope_id) {
             Some(i) => {
                 self.scopes[i].type_ = type_;
@@ -550,6 +589,7 @@ impl<K: IpKey> Writer<K> {
     /// 1..=1024, no NUL) and, for `type == 0`, the whole `value` (UTF-8, no NUL) →
     /// `InvalidInput` on violation (§C.7). A non-existent non-FILE `target` → `InvalidInput`.
     pub fn meta_set(&mut self, target: u32, key: &[u8], type_: u32, value: &[u8]) -> Result<()> {
+        self.ensure_usable()?;
         kv::check_key(key)?;
         kv::check_text_value(type_, value)?;
         self.require_target(target)?;
@@ -591,6 +631,7 @@ impl<K: IpKey> Writer<K> {
     /// Delete `key` on `target`. Returns `Changed` if a key was removed, `Unchanged` if it
     /// was absent (a no-op success, §C.7). Buffers the change; rebuilt at commit.
     pub fn meta_delete(&mut self, target: u32, key: &[u8]) -> Result<Changed> {
+        self.ensure_usable()?;
         kv::check_key(key)?;
         // Deleting on a non-existent target is a no-op (nothing to delete).
         if self.target_kv_root(target).is_none() && self.scope_idx_any(target).is_none() {
@@ -2202,5 +2243,48 @@ mod tests {
         assert_eq!(active.scope_table_root, 0);
         assert_eq!(active.version_minor, spec::VERSION_MINOR);
         assert!(Reader::open(&img).is_ok());
+    }
+
+    #[test]
+    fn poisoned_writer_refuses_ops_and_leaves_disk_unchanged() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(10), k(20), &[1]).unwrap();
+        w.commit(0).unwrap();
+        let committed = w.image().to_vec(); // the last committed on-disk state
+                                            // Simulate a failed-commit poison (the rebuild phase does irreversible page work).
+        w.poisoned = true;
+        // Every mutating op + commit now refuses with State, mutating nothing.
+        assert!(matches!(w.set(k(30), k(40), &[2]), Err(Error::State(_))));
+        assert!(matches!(w.delete(k(10), k(15)), Err(Error::State(_))));
+        assert!(matches!(w.scope_define(b"x"), Err(Error::State(_))));
+        assert!(matches!(w.meta_set(0, b"k", 0, b"v"), Err(Error::State(_))));
+        assert!(matches!(w.commit(0), Err(Error::State(_))));
+        // The on-disk image is byte-identical to the last commit and reopens as that state.
+        assert_eq!(w.image(), committed.as_slice());
+        let r = Reader::open(&committed).unwrap();
+        assert_eq!(r.lookup_v4(k(15)).unwrap(), Some(&[1u8][..]));
+    }
+
+    #[test]
+    fn overflow_text_value_multibyte_straddles_page_boundary() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let s = w.scope_define(b"feed").unwrap();
+        // A 3-byte € (E2 82 AC) placed so its lead byte is the last byte of the first overflow
+        // page's payload and its continuations open the second page. The value exceeds the
+        // inline cap, so it is stored as an overflow chain and validate streams it.
+        let mut value = vec![b'a'; spec::OVERFLOW_PAYLOAD - 1];
+        value.extend_from_slice("€".as_bytes());
+        value.extend_from_slice(b"tail");
+        assert!(value.len() > spec::KV_INLINE_MAX, "value must overflow");
+        w.meta_set(s, b"k", spec::KV_TYPE_TEXT, &value).unwrap();
+        w.commit(0).unwrap();
+        let img = w.image().to_vec();
+        // Reader::open runs the streaming validate over the boundary-straddling char.
+        let r = Reader::open(&img).unwrap();
+        // The read path still materializes the exact value.
+        assert_eq!(
+            r.meta_get(s, b"k").unwrap(),
+            Some((spec::KV_TYPE_TEXT, value))
+        );
     }
 }

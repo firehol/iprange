@@ -37,6 +37,7 @@ func errInvariant(msg string) *Error         { return errf("Invariant", msg) }
 func errChecksumFailed(where string) *Error  { return errf("ChecksumFailed", where) }
 func errIncompatible(where string) *Error    { return errf("Incompatible", where) }
 func errInvalidInput(msg string) *Error      { return errf("InvalidInput", msg) }
+func errState(msg string) *Error             { return errf("State", msg) }
 
 // errorClass returns the Class of a *Error, or "unknown" for any other error.
 func errorClass(err error) string {

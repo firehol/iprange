@@ -67,9 +67,9 @@ const (
 	// scope_table_root); a v4.1 reader rejects an unknown page_type.
 	pageTypeScopeBranch uint8 = 4 // scope-table branch (internal) page
 	pageTypeScopeLeaf   uint8 = 5 // scope-table leaf (fixed scopeRecordSize-byte headers)
-	pageTypeKVBranch    uint8 = 6 // per-scope KV branch page (reserved for the KV task)
-	pageTypeKVLeaf      uint8 = 7 // per-scope KV leaf page (reserved for the KV task)
-	pageTypeOverflow    uint8 = 8 // KV overflow page (reserved for the KV task)
+	pageTypeKVBranch    uint8 = 6 // per-scope KV branch page (variable-length separators, slot directory)
+	pageTypeKVLeaf      uint8 = 7 // per-scope KV leaf page (variable-length entries, slot directory)
+	pageTypeOverflow    uint8 = 8 // KV overflow page (chained payload for a large value)
 )
 
 // Meta page field offsets within the page, after the 16-byte header (§5.1).

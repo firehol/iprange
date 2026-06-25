@@ -63,6 +63,12 @@ pub enum Error {
     /// width, wrong key family, or growth past the `2^32`-page / `TREE_HEIGHT_MAX`
     /// limit). §8.
     InvalidInput(&'static str),
+    /// The writer was poisoned by a failed commit: the commit's rebuild phase performs
+    /// irreversible page alloc/free, so on a mid-phase error the in-memory allocator/registry
+    /// state is indeterminate. The on-disk meta is unwritten — the file is still the last
+    /// committed valid state — so the writer must be discarded and reopened. Every mutating
+    /// op and commit refuses once poisoned.
+    State(&'static str),
     /// The v4 state cannot be expressed as a v3 snapshot: the v3 writer rejected the
     /// exported `(range, value)` stream (§13 — `unique_ip_count` reaches `2^128`, the
     /// distinct `(type_id, value)` pairs exceed v3's values-table cap, or the caller's
@@ -94,6 +100,7 @@ impl fmt::Display for Error {
             Error::ChecksumFailed(w) => write!(f, "page checksum failed: {w}"),
             Error::Incompatible(w) => write!(f, "incompatible (fail closed): {w}"),
             Error::InvalidInput(w) => write!(f, "invalid writer input: {w}"),
+            Error::State(w) => write!(f, "invalid writer state: {w}"),
             #[cfg(all(feature = "alloc", feature = "export-v3"))]
             Error::ExportUnrepresentable(w) => {
                 write!(f, "v4 state not representable as a v3 snapshot: {w}")

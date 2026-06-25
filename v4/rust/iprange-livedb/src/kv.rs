@@ -358,6 +358,167 @@ fn read_overflow(
     Ok(out)
 }
 
+/// Streaming structural walk of an overflow chain for the **validate** path (§C.5): the same
+/// checks as [`read_overflow`] (pgno range, revisit/cycle via the shared `visited` bitset,
+/// per-page CRC, page_type, self-pgno, reserved, read-by-count budget, and a last page that
+/// terminates the chain with a zero tail) but it does **not** materialize the value — peak
+/// extra memory is O(1), not O(value). When `text` (type 0), each page payload chunk is
+/// checked for NUL and fed to an incremental UTF-8 validator (a multibyte char may straddle a
+/// page boundary), so a text value is validated without ever holding the whole value.
+fn validate_overflow_value(
+    bytes: &[u8],
+    first: u32,
+    total: u64,
+    total_pages: u64,
+    visited: &mut [bool],
+    text: bool,
+) -> Result<()> {
+    if total == 0 {
+        return Err(Error::Structural("kv overflow chain for empty value"));
+    }
+    let payload = spec::OVERFLOW_PAYLOAD as u64;
+    let want_pages = total.div_ceil(payload);
+    if want_pages > total_pages {
+        return Err(Error::Structural("kv overflow chain longer than file"));
+    }
+    let mut pgno = first;
+    let mut utf8 = Utf8Stream::new();
+    for step in 0..want_pages {
+        if !pgno_in_range(pgno, total_pages) {
+            return Err(Error::Structural("kv overflow pgno out of range"));
+        }
+        if visited[pgno as usize] {
+            return Err(Error::Structural("kv overflow chain revisits a page"));
+        }
+        visited[pgno as usize] = true;
+        let page = page_at(bytes, pgno);
+        if !crc32c::verify_page(page) {
+            return Err(Error::ChecksumFailed("kv overflow page"));
+        }
+        let h = PageHeader::decode(page);
+        if h.page_type != spec::PAGE_TYPE_OVERFLOW {
+            return Err(Error::Structural("kv overflow wrong page_type"));
+        }
+        if h.reserved != 0 {
+            return Err(Error::NonZeroReserved("kv overflow header reserved"));
+        }
+        if h.pgno != pgno {
+            return Err(Error::Structural("kv overflow self-pgno mismatch"));
+        }
+        let next = u32_le(page, spec::OVERFLOW_NEXT_PGNO);
+        let remaining = total - step * payload;
+        let take = remaining.min(payload) as usize;
+        let body = PAGE_HEADER_SIZE + 4;
+        if text {
+            let chunk = &page[body..body + take];
+            if chunk.contains(&0) {
+                return Err(Error::Invariant("kv text value contains NUL"));
+            }
+            utf8.feed(chunk)?;
+        }
+        let is_last = step + 1 == want_pages;
+        if is_last {
+            if next != 0 {
+                return Err(Error::Structural("kv overflow chain longer than length"));
+            }
+            if page[body + take..].iter().any(|&b| b != 0) {
+                return Err(Error::NonZeroReserved("kv overflow last-page tail"));
+            }
+        } else {
+            if next == 0 {
+                return Err(Error::Structural("kv overflow chain shorter than length"));
+            }
+            pgno = next;
+        }
+    }
+    if text {
+        utf8.finish()?;
+    }
+    Ok(())
+}
+
+/// Incremental UTF-8 validator (no allocation): feed payload chunks in order. A multibyte
+/// sequence may straddle a chunk boundary, so up to 3 trailing bytes of an incomplete-but-
+/// valid prefix are carried to the next chunk; [`finish`](Self::finish) rejects a value that
+/// ends mid-sequence. Equivalent accept/reject to `from_utf8` over the whole value.
+struct Utf8Stream {
+    carry: [u8; 3],
+    carry_len: usize,
+}
+
+impl Utf8Stream {
+    fn new() -> Self {
+        Utf8Stream {
+            carry: [0; 3],
+            carry_len: 0,
+        }
+    }
+
+    fn feed(&mut self, chunk: &[u8]) -> Result<()> {
+        let mut data = chunk;
+        if self.carry_len > 0 {
+            // Complete the carried partial char from the front of this chunk. `carry[0]` is a
+            // valid multibyte lead (`from_utf8` flagged the prior tail as incomplete-but-valid),
+            // so its expected length is known; a char is ≤4 bytes, spanning at most two chunks.
+            let need = utf8_seq_len(self.carry[0])?;
+            let take = (need - self.carry_len).min(data.len());
+            let mut buf = [0u8; 4];
+            buf[..self.carry_len].copy_from_slice(&self.carry[..self.carry_len]);
+            buf[self.carry_len..self.carry_len + take].copy_from_slice(&data[..take]);
+            let have = self.carry_len + take;
+            if have < need {
+                // This chunk was shorter than the missing bytes (a tiny last page); still partial.
+                self.carry[..have].copy_from_slice(&buf[..have]);
+                self.carry_len = have;
+                return Ok(());
+            }
+            if core::str::from_utf8(&buf[..need]).is_err() {
+                return Err(Error::Invariant("kv text value not valid UTF-8"));
+            }
+            self.carry_len = 0;
+            data = &data[take..];
+        }
+        match core::str::from_utf8(data) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // A definite error (error_len Some) is invalid; otherwise the trailing bytes
+                // from valid_up_to are an incomplete-but-valid prefix to carry (must be ≤3).
+                if e.error_len().is_some() {
+                    return Err(Error::Invariant("kv text value not valid UTF-8"));
+                }
+                let rest = &data[e.valid_up_to()..];
+                if rest.len() > 3 {
+                    return Err(Error::Invariant("kv text value not valid UTF-8"));
+                }
+                self.carry[..rest.len()].copy_from_slice(rest);
+                self.carry_len = rest.len();
+                Ok(())
+            }
+        }
+    }
+
+    fn finish(&self) -> Result<()> {
+        if self.carry_len != 0 {
+            return Err(Error::Invariant("kv text value not valid UTF-8"));
+        }
+        Ok(())
+    }
+}
+
+/// Expected byte length (2..=4) of a UTF-8 sequence from its lead byte; error for a non-lead
+/// or invalid lead.
+fn utf8_seq_len(lead: u8) -> Result<usize> {
+    if lead & 0b1110_0000 == 0b1100_0000 {
+        Ok(2)
+    } else if lead & 0b1111_0000 == 0b1110_0000 {
+        Ok(3)
+    } else if lead & 0b1111_1000 == 0b1111_0000 {
+        Ok(4)
+    } else {
+        Err(Error::Invariant("kv text value not valid UTF-8"))
+    }
+}
+
 // --- read path: get / list ---
 
 /// Look up `key` in the KV tree rooted at `root_pgno` (already validated). Returns the
@@ -650,23 +811,33 @@ fn validate_node(
                     }
                 }
                 *prev_key = Some(hdr.key.to_vec());
-                // Reassemble + text-validate the WHOLE value (§C.4/§C.5). The shared
+                // Validate the value WITHOUT materializing an overflow-spanning one
+                // (§C.4/§C.5): text (type 0) must be NUL-free valid UTF-8. The shared
                 // `visited` marks each overflow page so a chain aliased by another entry
                 // (the glm PoC wrong-answer bug, F2) is rejected.
-                let value = match (hdr.inline, hdr.overflow) {
-                    (Some(v), None) => v.to_vec(),
+                let text = hdr.type_ == spec::KV_TYPE_TEXT;
+                match (hdr.inline, hdr.overflow) {
+                    (Some(v), None) => {
+                        if text {
+                            if v.contains(&0) {
+                                return Err(Error::Invariant("kv text value contains NUL"));
+                            }
+                            if core::str::from_utf8(v).is_err() {
+                                return Err(Error::Invariant("kv text value not valid UTF-8"));
+                            }
+                        }
+                    }
                     (None, Some((first, total))) => {
-                        read_overflow(bytes, first, total, total_pages, Some(&mut *visited))?
+                        validate_overflow_value(
+                            bytes,
+                            first,
+                            total,
+                            total_pages,
+                            &mut *visited,
+                            text,
+                        )?;
                     }
                     _ => return Err(Error::Structural("kv entry descriptor")),
-                };
-                if hdr.type_ == spec::KV_TYPE_TEXT {
-                    if value.contains(&0) {
-                        return Err(Error::Invariant("kv text value contains NUL"));
-                    }
-                    if core::str::from_utf8(&value).is_err() {
-                        return Err(Error::Invariant("kv text value not valid UTF-8"));
-                    }
                 }
             }
             Ok(())
@@ -868,4 +1039,62 @@ fn put_u64(out: &mut [u8], p: &mut usize, v: u64) {
 fn put_bytes(out: &mut [u8], p: &mut usize, v: &[u8]) {
     out[*p..*p + v.len()].copy_from_slice(v);
     *p += v.len();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Feed each chunk in order (chunks model successive overflow-page payloads), then finish;
+    // returns Err if any feed or finish rejects — i.e. the streaming verdict over the value.
+    fn run(chunks: &[&[u8]]) -> Result<()> {
+        let mut s = Utf8Stream::new();
+        for c in chunks {
+            s.feed(c)?;
+        }
+        s.finish()
+    }
+
+    #[test]
+    fn utf8_stream_ascii_and_whole_chars() {
+        assert!(run(&[&b"hello world"[..]]).is_ok());
+        assert!(run(&[&b"caf\xC3\xA9"[..]]).is_ok()); // café in one chunk
+        assert!(run(&["€ end".as_bytes()]).is_ok());
+        assert!(run(&[&[][..]]).is_ok()); // empty chunk
+    }
+
+    #[test]
+    fn utf8_stream_valid_split_2_3_4_byte() {
+        // 2-byte é = C3 A9 straddling the chunk boundary.
+        assert!(run(&[&b"ab\xC3"[..], &b"\xA9cd"[..]]).is_ok());
+        // 3-byte € = E2 82 AC split after 1 and after 2 bytes.
+        assert!(run(&[&b"x\xE2"[..], &b"\x82\xACy"[..]]).is_ok());
+        assert!(run(&[&b"x\xE2\x82"[..], &b"\xACy"[..]]).is_ok());
+        // 4-byte 😀 = F0 9F 98 80 split at each interior boundary.
+        assert!(run(&[&b"\xF0"[..], &b"\x9F\x98\x80"[..]]).is_ok());
+        assert!(run(&[&b"\xF0\x9F"[..], &b"\x98\x80"[..]]).is_ok());
+        assert!(run(&[&b"\xF0\x9F\x98"[..], &b"\x80"[..]]).is_ok());
+    }
+
+    #[test]
+    fn utf8_stream_invalid_split_rejected() {
+        // E2 (3-byte lead) then 0x28 ('(') is not a continuation ⇒ invalid across the boundary.
+        assert!(run(&[&b"x\xE2"[..], &b"\x28y"[..]]).is_err());
+        // Overlong E0 80 80 (second byte must be A0..BF), split.
+        assert!(run(&[&b"\xE0"[..], &b"\x80\x80"[..]]).is_err());
+        // Lone continuation byte at a chunk start.
+        assert!(run(&[&b"ok"[..], &b"\x80more"[..]]).is_err());
+        // Surrogate ED A0 80 (invalid in UTF-8), split.
+        assert!(run(&[&b"\xED"[..], &b"\xA0\x80"[..]]).is_err());
+    }
+
+    #[test]
+    fn utf8_stream_incomplete_at_end_rejected() {
+        // Value ends mid 3-byte char (only the lead present).
+        assert!(run(&[&b"hi\xE2"[..]]).is_err());
+        // Lead + one continuation across chunks, missing the third byte.
+        assert!(run(&[&b"hi\xE2"[..], &b"\x82"[..]]).is_err());
+        // 4-byte char missing its last byte.
+        assert!(run(&[&b"\xF0\x9F\x98"[..]]).is_err());
+    }
 }

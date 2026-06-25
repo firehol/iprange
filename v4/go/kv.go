@@ -402,6 +402,178 @@ func readOverflow(b []byte, first uint32, total uint64, totalPages uint64, vis *
 	return out, nil
 }
 
+// validateOverflowValue is the streaming structural walk of an overflow chain for the validate
+// path (§C.5): the same checks as readOverflow (pgno range, revisit/cycle via the shared
+// visitor, per-page CRC, page_type, self-pgno, reserved, read-by-count budget, last-page
+// next==0 + zero tail) but it does NOT materialize the value — peak extra memory is O(1), not
+// O(value). When text (type 0), each page payload chunk is checked for NUL and fed to an
+// incremental UTF-8 validator (a multibyte char may straddle a page boundary).
+func validateOverflowValue(b []byte, first uint32, total uint64, totalPages uint64, vis *pageVisitor, text bool) error {
+	if total == 0 {
+		return errStructural("kv overflow chain for empty value")
+	}
+	payload := uint64(overflowPayload)
+	wantPages := total / payload
+	if total%payload != 0 {
+		wantPages++
+	}
+	if wantPages > totalPages {
+		return errStructural("kv overflow chain longer than file")
+	}
+	pgno := first
+	var u utf8Stream
+	for step := uint64(0); step < wantPages; step++ {
+		if !pgnoInRange(pgno, totalPages) {
+			return errStructural("kv overflow pgno out of range")
+		}
+		if err := vis.mark(pgno); err != nil {
+			return err
+		}
+		page := kvPageAt(b, pgno)
+		if !verifyPage(page) {
+			return errChecksumFailed("kv overflow page")
+		}
+		h := decodePageHeader(page)
+		if h.pageType != pageTypeOverflow {
+			return errStructural("kv overflow wrong page_type")
+		}
+		if h.reserved != 0 {
+			return errNonZeroReserved("kv overflow header reserved")
+		}
+		if h.pgno != pgno {
+			return errStructural("kv overflow self-pgno mismatch")
+		}
+		next := le.Uint32(page[overflowNextPgno:])
+		remaining := total - step*payload
+		take := remaining
+		if take > payload {
+			take = payload
+		}
+		body := pageHeaderSize + 4
+		if text {
+			chunk := page[body : body+int(take)]
+			if bytes.IndexByte(chunk, 0) >= 0 {
+				return errInvariant("kv text value contains NUL")
+			}
+			if err := u.feed(chunk); err != nil {
+				return err
+			}
+		}
+		if step+1 == wantPages {
+			if next != 0 {
+				return errStructural("kv overflow chain longer than length")
+			}
+			for _, x := range page[body+int(take):] {
+				if x != 0 {
+					return errNonZeroReserved("kv overflow last-page tail")
+				}
+			}
+		} else {
+			if next == 0 {
+				return errStructural("kv overflow chain shorter than length")
+			}
+			pgno = next
+		}
+	}
+	if text {
+		if err := u.finish(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// utf8Stream is an incremental UTF-8 validator (no allocation): feed payload chunks in order.
+// A multibyte sequence may straddle a chunk boundary, so up to 3 trailing bytes of an
+// incomplete-but-valid prefix are carried; finish rejects a value ending mid-sequence.
+// Equivalent accept/reject to utf8.Valid over the whole value.
+type utf8Stream struct {
+	carry [3]byte
+	n     int
+}
+
+func (u *utf8Stream) feed(chunk []byte) error {
+	data := chunk
+	if u.n > 0 {
+		// Complete the carried partial char from the front of this chunk. carry[0] is a valid
+		// multibyte lead (the prior tail was incomplete-but-valid), so its length is known; a
+		// char is ≤4 bytes, spanning at most two chunks.
+		need := utf8SeqLen(u.carry[0])
+		if need == 0 {
+			return errInvariant("kv text value not valid UTF-8")
+		}
+		take := need - u.n
+		if take > len(data) {
+			take = len(data)
+		}
+		var buf [4]byte
+		m := copy(buf[:], u.carry[:u.n])
+		m += copy(buf[m:need], data[:take])
+		if m < need {
+			// This chunk was shorter than the missing bytes (a tiny last page); still partial.
+			copy(u.carry[:], buf[:m])
+			u.n = m
+			return nil
+		}
+		if !utf8.Valid(buf[:need]) {
+			return errInvariant("kv text value not valid UTF-8")
+		}
+		u.n = 0
+		data = data[take:]
+	}
+	i := validUTF8Prefix(data)
+	if i < len(data) {
+		rest := data[i:]
+		// rest[0] is the first non-validating byte: a full (but invalid) rune ⇒ reject; an
+		// incomplete-but-valid prefix (≤3 bytes) ⇒ carry to the next chunk.
+		if utf8.FullRune(rest) || len(rest) > 3 {
+			return errInvariant("kv text value not valid UTF-8")
+		}
+		copy(u.carry[:], rest)
+		u.n = len(rest)
+	}
+	return nil
+}
+
+func (u *utf8Stream) finish() error {
+	if u.n != 0 {
+		return errInvariant("kv text value not valid UTF-8")
+	}
+	return nil
+}
+
+// utf8SeqLen returns the expected length (2..=4) of a UTF-8 sequence from its lead byte, or 0
+// for a non-lead / invalid lead.
+func utf8SeqLen(lead byte) int {
+	switch {
+	case lead&0xE0 == 0xC0:
+		return 2
+	case lead&0xF0 == 0xE0:
+		return 3
+	case lead&0xF8 == 0xF0:
+		return 4
+	default:
+		return 0
+	}
+}
+
+// validUTF8Prefix returns the length of the longest prefix of b that is valid UTF-8.
+func validUTF8Prefix(b []byte) int {
+	i := 0
+	for i < len(b) {
+		if b[i] < utf8.RuneSelf {
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRune(b[i:])
+		if r == utf8.RuneError && size == 1 {
+			break // invalid or incomplete at i
+		}
+		i += size
+	}
+	return i
+}
+
 // --- read path: get / list ---
 
 // kvGet looks up key in the KV tree rooted at rootPgno (already validated). It returns the
@@ -686,20 +858,22 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			}
 			*prevKey = cloneBytes(hdr.key)
 			*havePrevKey = true
-			// Reassemble + text-validate the WHOLE value (§C.4/§C.5). The overflow chain (if
-			// any) is walked through the file-wide visitor, so a chain page shared with any
-			// other entry/chain/tree is rejected (F2).
-			value, err := materializeValue(b, hdr, totalPages, vis)
-			if err != nil {
+			// Validate the value WITHOUT materializing an overflow-spanning one (§C.4/§C.5):
+			// text (type 0) must be NUL-free valid UTF-8. The overflow chain (if any) is
+			// walked through the file-wide visitor, so a chain page shared with any other
+			// entry/chain/tree is rejected (F2).
+			text := hdr.typ == kvTypeText
+			if hdr.inlineOK {
+				if text {
+					if bytes.IndexByte(hdr.inline, 0) >= 0 {
+						return errInvariant("kv text value contains NUL")
+					}
+					if !utf8.Valid(hdr.inline) {
+						return errInvariant("kv text value not valid UTF-8")
+					}
+				}
+			} else if err := validateOverflowValue(b, hdr.first, hdr.total, totalPages, vis, text); err != nil {
 				return err
-			}
-			if hdr.typ == kvTypeText {
-				if bytes.IndexByte(value, 0) >= 0 {
-					return errInvariant("kv text value contains NUL")
-				}
-				if !utf8.Valid(value) {
-					return errInvariant("kv text value not valid UTF-8")
-				}
 			}
 		}
 		return nil

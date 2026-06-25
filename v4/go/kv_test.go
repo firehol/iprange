@@ -383,3 +383,76 @@ func TestKVManySetsOneRebuildAndFileEmptyReturnsV40(t *testing.T) {
 		t.Fatalf("file rejected after FILE drop-all: %v", err)
 	}
 }
+
+// TestUTF8StreamValidation exercises the incremental UTF-8 validator used by the streaming
+// overflow validate path: a multibyte char straddling a chunk (= overflow-page payload)
+// boundary, invalid bytes split across it, and a value ending mid-sequence.
+func TestUTF8StreamValidation(t *testing.T) {
+	run := func(chunks ...[]byte) error {
+		var u utf8Stream
+		for _, c := range chunks {
+			if err := u.feed(c); err != nil {
+				return err
+			}
+		}
+		return u.finish()
+	}
+	okCases := [][][]byte{
+		{[]byte("hello world")}, {[]byte("café")}, {[]byte("€ end")}, {[]byte{}},
+		{[]byte("ab\xC3"), []byte("\xA9cd")},     // 2-byte é split
+		{[]byte("x\xE2"), []byte("\x82\xACy")},   // 3-byte € split after 1
+		{[]byte("x\xE2\x82"), []byte("\xACy")},   // 3-byte € split after 2
+		{[]byte("\xF0"), []byte("\x9F\x98\x80")}, // 4-byte 😀 split after 1
+		{[]byte("\xF0\x9F\x98"), []byte("\x80")}, // 4-byte 😀 split after 3
+	}
+	for i, c := range okCases {
+		if err := run(c...); err != nil {
+			t.Fatalf("ok case %d rejected: %v", i, err)
+		}
+	}
+	badCases := [][][]byte{
+		{[]byte("x\xE2"), []byte("\x28y")},   // E2 then '(' — not a continuation
+		{[]byte("\xE0"), []byte("\x80\x80")}, // overlong E0 80 80
+		{[]byte("ok"), []byte("\x80more")},   // lone continuation
+		{[]byte("\xED"), []byte("\xA0\x80")}, // surrogate ED A0 80
+		{[]byte("hi\xE2")},                   // incomplete 3-byte at end
+		{[]byte("hi\xE2"), []byte("\x82")},   // incomplete across chunks at end
+		{[]byte("\xF0\x9F\x98")},             // incomplete 4-byte at end
+	}
+	for i, c := range badCases {
+		if err := run(c...); err == nil {
+			t.Fatalf("bad case %d accepted", i)
+		}
+	}
+}
+
+// TestOverflowTextValueMultibyteStraddlesPageBoundary places a 3-byte € so its lead byte ends
+// the first overflow page and its continuations open the second; validate (on Open) must
+// stream-accept it, and the value round-trips.
+func TestOverflowTextValueMultibyteStraddlesPageBoundary(t *testing.T) {
+	w := CreateV4(1, 0)
+	s, err := w.ScopeDefine([]byte("feed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := append([]byte{}, bytes.Repeat([]byte("a"), overflowPayload-1)...)
+	value = append(value, "€"...) // E2 82 AC straddling the page boundary
+	value = append(value, "tail"...)
+	if len(value) <= kvInlineMax {
+		t.Fatal("value must overflow")
+	}
+	if err := w.MetaSet(s, []byte("k"), kvTypeText, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	img := append([]byte(nil), w.Image()...)
+	if _, err := Open(img); err != nil {
+		t.Fatalf("open rejected valid boundary-straddling value: %v", err)
+	}
+	typ, got, found := metaGetOK(t, w, s, []byte("k"))
+	if !found || typ != kvTypeText || !bytes.Equal(got, value) {
+		t.Fatalf("round-trip mismatch: found=%v typ=%d", found, typ)
+	}
+}

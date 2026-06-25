@@ -262,3 +262,39 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// TestPoisonedWriterRefusesOps verifies that once the writer is poisoned (a failed commit
+// rebuild), every mutating op and Commit refuses with a State error and the on-disk image is
+// untouched — still the last committed state.
+func TestPoisonedWriterRefusesOps(t *testing.T) {
+	w := CreateV4(1, 0)
+	if err := w.Set(wk(10), wk(20), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	committed := append([]byte(nil), w.Image()...)
+	w.poisoned = true // simulate a failed-commit poison (rebuild does irreversible page work)
+	check := func(name string, err error) {
+		if errorClass(err) != "State" {
+			t.Fatalf("%s: expected State error, got %v", name, err)
+		}
+	}
+	check("Set", w.Set(wk(30), wk(40), []byte{2}))
+	check("Delete", w.Delete(wk(10), wk(15)))
+	_, e := w.ScopeDefine([]byte("x"))
+	check("ScopeDefine", e)
+	check("MetaSet", w.MetaSet(0, []byte("k"), 0, []byte("v")))
+	check("Commit", w.Commit(0))
+	if string(w.Image()) != string(committed) {
+		t.Fatal("on-disk image changed after poisoned ops")
+	}
+	r, err := Open(committed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RecordCount() != 1 {
+		t.Fatalf("committed record lost: %d", r.RecordCount())
+	}
+}

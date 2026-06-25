@@ -288,7 +288,9 @@ func findScopeByID(b []byte, rootPgno uint32, totalPages uint64, id uint32) (sco
 		return scopeRec{}, false, nil
 	}
 	pgno := rootPgno
-	for depth := uint32(1); depth <= treeHeightMax; depth++ {
+	// Bound the descent by treeHeightMax+1 (depths 0..=treeHeightMax), matching Rust
+	// scope::find and both kv-get loops; validate rejects any path deeper than treeHeightMax.
+	for depth := uint32(0); depth <= treeHeightMax; depth++ {
 		// Defense-in-depth: range-check every descended pgno (mirrors Rust scope::find).
 		// On a validated image this never fires, but it guarantees no OOB slice if ever
 		// called on unvalidated bytes.

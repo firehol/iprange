@@ -9,8 +9,9 @@ package iprangedb
 // fixed [treeHeightMax]frame, no per-step heap) and re-descends at leaf boundaries.
 //
 // Seek(key) positions at the successor — the first record with from >= key. Next/Prev step
-// in key order; Current reads the positioned record. The struct is a value type, so callers
-// (and the helpers here) snapshot a position cheaply by copying it.
+// in key order; Current reads the positioned record. The struct is small and cheaply
+// copyable, so the helpers here snapshot a position by copying it internally; CursorV4 /
+// CursorV6 hand the caller a *Cursor.
 //
 // Helpers take a selector predicate func(scope) bool over the opaque scope bytes — the
 // engine never interprets scope (D11) — and stream results to a visitor that returns an
