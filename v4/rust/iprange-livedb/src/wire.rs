@@ -134,6 +134,10 @@ pub struct Meta {
     pub txn_id: u64,
     /// `updated_unixtime` (caller-supplied per commit).
     pub updated_unixtime: u64,
+    /// `scope_table_root` (u32, v4.1 only — §C.1). 0 = no metadata (or v4.0). At v4.0
+    /// (`meta_size == 90`) `decode` reports 0 and `encode_into` writes 0 (keeping the
+    /// reserved tail zero); at v4.1 (`meta_size == 94`) it holds the scope-table root pgno.
+    pub scope_table_root: u32,
 }
 
 impl Meta {
@@ -162,6 +166,8 @@ impl Meta {
         put_u64(page, spec::META_RECORD_COUNT, self.record_count);
         put_u64(page, spec::META_TXN_ID, self.txn_id);
         put_u64(page, spec::META_UPDATED_UNIXTIME, self.updated_unixtime);
+        // v4.1: `scope_table_root` at offset 90. 0 for v4.0 (keeps the reserved tail zero).
+        put_u32(page, spec::META_SCOPE_TABLE_ROOT, self.scope_table_root);
         finalize_checksum(page);
     }
 
@@ -185,6 +191,12 @@ impl Meta {
             record_count: u64_le(page, spec::META_RECORD_COUNT),
             txn_id: u64_le(page, spec::META_TXN_ID),
             updated_unixtime: u64_le(page, spec::META_UPDATED_UNIXTIME),
+            // v4.1 trailing field; absent (reported 0) at v4.0 (`meta_size == 90`).
+            scope_table_root: if u16_le(page, spec::META_META_SIZE) >= spec::META_SIZE_V41 {
+                u32_le(page, spec::META_SCOPE_TABLE_ROOT)
+            } else {
+                0
+            },
         }
     }
 }
@@ -226,6 +238,7 @@ mod tests {
             record_count: 0x3132_3334_3536_3738,
             txn_id: 0x4142_4344_4546_4748,
             updated_unixtime: 0x5152_5354_5556_5758,
+            scope_table_root: 0,
         }
     }
 
@@ -234,7 +247,10 @@ mod tests {
         let m = sample_meta();
         let mut page = [0u8; spec::PAGE_SIZE];
         m.encode_into(&mut page);
-        assert!(crc32c::verify_page(&page), "encoded meta is self-consistent");
+        assert!(
+            crc32c::verify_page(&page),
+            "encoded meta is self-consistent"
+        );
         assert_eq!(Meta::decode(&page), m, "round-trip");
 
         let h = PageHeader::decode(&page);
@@ -270,14 +286,20 @@ mod tests {
         assert_eq!(p[spec::META_KEY_WIDTH], 16);
         assert_eq!(p[spec::META_SCOPE_WIDTH], 4);
         assert_eq!(u32_le(&p, spec::META_RECORD_SIZE), 36);
-        assert_eq!(u64_le(&p, spec::META_CREATED_UNIXTIME), 0x1122_3344_5566_7788);
+        assert_eq!(
+            u64_le(&p, spec::META_CREATED_UNIXTIME),
+            0x1122_3344_5566_7788
+        );
         // dynamic state
         assert_eq!(u32_le(&p, spec::META_ROOT_PGNO), 0x0A0B_0C0D);
         assert_eq!(u32_le(&p, spec::META_TREE_HEIGHT), 0x1112_1314);
         assert_eq!(u64_le(&p, spec::META_TOTAL_PAGES), 0x2122_2324_2526_2728);
         assert_eq!(u64_le(&p, spec::META_RECORD_COUNT), 0x3132_3334_3536_3738);
         assert_eq!(u64_le(&p, spec::META_TXN_ID), 0x4142_4344_4546_4748);
-        assert_eq!(u64_le(&p, spec::META_UPDATED_UNIXTIME), 0x5152_5354_5556_5758);
+        assert_eq!(
+            u64_le(&p, spec::META_UPDATED_UNIXTIME),
+            0x5152_5354_5556_5758
+        );
 
         // exact little-endian byte check for one multi-byte field (created_unixtime).
         assert_eq!(

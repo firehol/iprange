@@ -1,6 +1,24 @@
 package iprangedb
 
-import "bytes"
+import (
+	"bytes"
+	"unicode/utf8"
+)
+
+// ScopeEntry is one entry returned by Writer.ScopeList: a scope's id and its name (a copy).
+type ScopeEntry struct {
+	ID   uint32
+	Name []byte
+}
+
+// MetaEntry is one KV entry returned by Writer.MetaList: (key, type, value). value is the
+// whole reassembled value (inline or overflow-spanning); type == 0 is validated text. All
+// three slices are owned copies.
+type MetaEntry struct {
+	Key   []byte
+	Type  uint32
+	Value []byte
+}
 
 // The v4 writer: copy-on-write B+tree mutation with a double-meta atomic commit
 // (§6, §7, §8).
@@ -38,10 +56,18 @@ type Writer[K ipKey[K]] struct {
 	branchMax       int
 	createdUnixtime uint64
 	txnID           uint64
-	free            []uint32 // pages reusable by the current txn
-	freedThisTxn    []uint32 // pages freed since the last commit (reusable next txn, D7)
-	dirty           []uint32 // data pages written this txn (for the OS layer's pwrite set)
-	committedPages  int      // on-disk page count as of the last commit (grown-region boundary)
+	scopeTableRoot  uint32     // v4.1 metadata (§C.1); 0 = no metadata (file stays v4.0)
+	scopes          []scopeRec // in-memory registry (sorted by id), bulk-rebuilt at commit
+	nextScopeID     uint32     // monotonic; never reuses a dropped id (§C.2)
+	scopeDirty      bool       // registry changed since the last commit → rebuild needed
+	// kvDirty holds each dirty target's full entry set (sorted by key), loaded lazily from
+	// its committed kv_root on first mutation and bulk-rebuilt at commit (§C.4). target =
+	// scope_id (0 = FILE). Absent = clean (read straight from disk).
+	kvDirty        map[uint32][]kvEntry
+	free           []uint32 // pages reusable by the current txn
+	freedThisTxn   []uint32 // pages freed since the last commit (reusable next txn, D7)
+	dirty          []uint32 // data pages written this txn (for the OS layer's pwrite set)
+	committedPages int      // on-disk page count as of the last commit (grown-region boundary)
 }
 
 // CreateV4 creates a fresh empty IPv4 DB (see createWriter).
@@ -72,6 +98,9 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: createdUnixtime,
 		txnID:           1,
+		scopeTableRoot:  0,
+		nextScopeID:     1, // 0 is reserved for the FILE target (§C.2)
+		kvDirty:         make(map[uint32][]kvEntry),
 		committedPages:  2, // the two metas, both written by create
 	}
 	// META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -104,16 +133,32 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		return nil, errInvalidInput("writer family mismatch")
 	}
 	m := r.meta
-	// The writer implements exactly versionMinor 0. It MUST refuse to mutate a file of a
-	// minor it does not fully implement (§5.1): committing would write a minor-0 meta and
-	// drop the newer minor's trailing fields. (The reader still accepts such files
-	// read-only — forward-compat.)
-	if m.versionMinor != versionMinor {
+	// The writer implements up to versionMinor 1 (the v4.1 metadata system). It MUST refuse
+	// to mutate a file of a newer minor it does not fully implement (§5.1/§C.6): committing
+	// would drop the newer minor's trailing fields. (The reader still accepts such files
+	// read-only — forward-compat.) A v4.0 file (minor 0) is opened as-is and stays v4.0 until
+	// the first metadata write upgrades it (§C.6).
+	if m.versionMinor > versionMinorMetadata {
 		return nil, errInvalidInput("writer cannot mutate a newer version_minor file")
 	}
 	// Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the committed
 	// total_pages is authoritative and reachable pages are all below it.
 	image = image[:int(m.totalPages)*pageSize]
+	// Load the committed scope registry into memory (validated by Open above).
+	scopes, err := loadAllScopes(image, m.scopeTableRoot)
+	if err != nil {
+		return nil, err
+	}
+	// Next id = max existing id + 1 (saturating), or 1 when empty. Monotonic, never reused.
+	nextScopeID := uint32(1)
+	if n := len(scopes); n > 0 {
+		maxID := scopes[n-1].id // scopes are sorted ascending by id
+		if maxID == maxUint32 {
+			nextScopeID = maxUint32
+		} else {
+			nextScopeID = maxID + 1
+		}
+	}
 	recSize := recordSize(uint8(zero.width()), m.scopeWidth)
 	w := &Writer[K]{
 		image:           image,
@@ -127,6 +172,10 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: m.createdUnixtime,
 		txnID:           m.txnID,
+		scopeTableRoot:  m.scopeTableRoot,
+		scopes:          scopes,
+		nextScopeID:     nextScopeID,
+		kvDirty:         make(map[uint32][]kvEntry),
 		committedPages:  int(m.totalPages), // committed on-disk page count
 	}
 	w.free = w.deriveFreeSet()
@@ -207,6 +256,638 @@ func (w *Writer[K]) Image() []byte { return w.image }
 // RecordCount returns the number of records in the (pending) tree.
 func (w *Writer[K]) RecordCount() uint64 { return w.recordCount }
 
+// --- v4.1 scope registry (§C.2) ---
+
+// ScopeDefine defines a new scope, returning its scope_id (>= 1; 0 is reserved for FILE,
+// never returned). version starts at 0, type at 0, no KV. scope_ids are monotonic and never
+// reused after a drop (§C.2). name is UTF-8, <= 256 bytes (need not be unique). The first
+// metadata write upgrades the file to v4.1 at commit.
+func (w *Writer[K]) ScopeDefine(name []byte) (uint32, error) {
+	if len(name) > scopeNameMax {
+		return 0, errInvalidInput("scope name > 256 bytes")
+	}
+	if !utf8.Valid(name) {
+		return 0, errInvalidInput("scope name not valid UTF-8")
+	}
+	if w.nextScopeID == fileScopeID {
+		return 0, errInvalidInput("scope_id space exhausted")
+	}
+	id := w.nextScopeID
+	if id == maxUint32 {
+		// Reserve the exhausted state: the next define wraps to 0 (FILE) and is rejected.
+		w.nextScopeID = fileScopeID
+	} else {
+		w.nextScopeID = id + 1
+	}
+	// Monotonic ids ⇒ appending at the end keeps scopes sorted by id.
+	w.scopes = append(w.scopes, scopeRec{
+		id:      id,
+		version: 0,
+		typ:     0,
+		name:    cloneBytes(name),
+		kvRoot:  0,
+	})
+	w.scopeDirty = true
+	return id, nil
+}
+
+// ScopeDrop drops a scope: it removes the scope's metadata (header + KV) only — IP records
+// carrying it are NOT touched (caller policy, §C.2). ScopeDrop(0) (FILE) is rejected. It
+// returns whether the scope existed.
+func (w *Writer[K]) ScopeDrop(scopeID uint32) (bool, error) {
+	if scopeID == fileScopeID {
+		return false, errInvalidInput("cannot drop the FILE scope (0)")
+	}
+	i, ok := w.scopePos(scopeID)
+	if !ok {
+		return false, nil
+	}
+	// Free the dropped scope's KV tree + overflow pages (§C.2 / §C.5). Its committed kv_root
+	// is authoritative; any buffered KV for this target is discarded too (the scope is gone).
+	w.freeKVTree(w.scopes[i].kvRoot)
+	delete(w.kvDirty, scopeID)
+	w.scopes = append(w.scopes[:i], w.scopes[i+1:]...)
+	w.scopeDirty = true
+	return true, nil
+}
+
+// ScopeName returns the scope's name (UTF-8 bytes) and whether it exists. A missing scope
+// returns (nil, false) — mirroring Rust's Ok(None), per Go convention (like LookupV4).
+func (w *Writer[K]) ScopeName(scopeID uint32) ([]byte, bool) {
+	if i, ok := w.scopePos(scopeID); ok {
+		return cloneBytes(w.scopes[i].name), true
+	}
+	return nil, false
+}
+
+// ScopeList returns all defined scopes as (id, name), ascending by scope_id. The FILE target
+// (scope_id 0) is a dataset-metadata target, not a defined scope, so it is excluded (§C.2).
+func (w *Writer[K]) ScopeList() []ScopeEntry {
+	out := make([]ScopeEntry, 0, len(w.scopes))
+	for i := range w.scopes {
+		if w.scopes[i].id == fileScopeID {
+			continue
+		}
+		out = append(out, ScopeEntry{ID: w.scopes[i].id, Name: cloneBytes(w.scopes[i].name)})
+	}
+	return out
+}
+
+// ScopeVersion returns the scope's version and whether it exists.
+func (w *Writer[K]) ScopeVersion(scopeID uint32) (uint64, bool) {
+	if i, ok := w.scopePos(scopeID); ok {
+		return w.scopes[i].version, true
+	}
+	return 0, false
+}
+
+// ScopeSetVersion sets the scope's version (caller-bumped, §C.3). It returns whether the
+// scope existed.
+func (w *Writer[K]) ScopeSetVersion(scopeID uint32, version uint64) (bool, error) {
+	i, ok := w.scopePos(scopeID)
+	if !ok {
+		return false, nil
+	}
+	w.scopes[i].version = version
+	w.scopeDirty = true
+	return true, nil
+}
+
+// ScopeBumpVersion increments the scope's version (saturating). It returns whether the scope
+// existed.
+func (w *Writer[K]) ScopeBumpVersion(scopeID uint32) (bool, error) {
+	i, ok := w.scopePos(scopeID)
+	if !ok {
+		return false, nil
+	}
+	if w.scopes[i].version != maxUint64 {
+		w.scopes[i].version++
+	}
+	w.scopeDirty = true
+	return true, nil
+}
+
+// ScopeType returns the scope's opaque type byte and whether it exists.
+func (w *Writer[K]) ScopeType(scopeID uint32) (uint8, bool) {
+	if i, ok := w.scopePos(scopeID); ok {
+		return w.scopes[i].typ, true
+	}
+	return 0, false
+}
+
+// ScopeSetType sets the scope's opaque type byte (the engine does not interpret it, §C.2).
+// It returns whether the scope existed.
+func (w *Writer[K]) ScopeSetType(scopeID uint32, typ uint8) (bool, error) {
+	i, ok := w.scopePos(scopeID)
+	if !ok {
+		return false, nil
+	}
+	w.scopes[i].typ = typ
+	w.scopeDirty = true
+	return true, nil
+}
+
+// scopePos returns the index of a defined scope in the registry (binary search) and whether
+// it was found. The FILE target (scope_id 0) is never a defined scope, so registry
+// getters/setters miss it (§C.2).
+func (w *Writer[K]) scopePos(scopeID uint32) (int, bool) {
+	if scopeID == fileScopeID {
+		return 0, false
+	}
+	return w.scopeIdxAny(scopeID)
+}
+
+// scopeIdxAny returns the index of any scope record by id, INCLUDING FILE (scope_id 0) — used
+// by the KV layer, which targets FILE as well as defined scopes.
+func (w *Writer[K]) scopeIdxAny(scopeID uint32) (int, bool) {
+	lo, hi := 0, len(w.scopes)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if w.scopes[mid].id < scopeID {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < len(w.scopes) && w.scopes[lo].id == scopeID {
+		return lo, true
+	}
+	return 0, false
+}
+
+// rebuildScopeTable rebuilds the scope table from the in-memory registry at commit (§C.2):
+// free the old tree's pages (reclaimed next txn) and bulk-build a fresh one. It sets
+// scopeTableRoot (0 when empty → the file stays/returns to byte-compatible v4.0, §C.6).
+func (w *Writer[K]) rebuildScopeTable() error {
+	var old []uint32
+	collectScopePages(w.image, w.scopeTableRoot, &old)
+	for _, p := range old {
+		w.freePage(p)
+	}
+	root, err := w.buildScopeTree(w.scopes)
+	if err != nil {
+		return err
+	}
+	w.scopeTableRoot = root
+	return nil
+}
+
+// buildScopeTree bulk-builds a scope-table B+tree from scopes (sorted by id) into freshly
+// allocated pages; it returns the new root pgno (0 if empty). Leaves fill to scopeLeafMax;
+// branches use each child subtree's first id as a separator (shape is impl-defined).
+func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
+	if len(scopes) == 0 {
+		return 0, nil
+	}
+	buf := make([]byte, pageSize)
+	leafMaxN := scopeLeafMax()
+	// level holds (pgno, firstID) for each node at the current level.
+	type node struct {
+		pgno    uint32
+		firstID uint32
+	}
+	var level []node
+	for start := 0; start < len(scopes); start += leafMaxN {
+		end := start + leafMaxN
+		if end > len(scopes) {
+			end = len(scopes)
+		}
+		chunk := scopes[start:end]
+		pgno, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		writeScopeLeaf(buf, pgno, chunk)
+		w.writePage(pgno, buf)
+		level = append(level, node{pgno: pgno, firstID: chunk[0].id})
+	}
+	height := uint32(1)
+	fanout := scopeBranchMax() + 1 // max children per branch (separators + 1)
+	for len(level) > 1 {
+		if height >= treeHeightMax {
+			return 0, errInvalidInput("scope table would exceed TREE_HEIGHT_MAX")
+		}
+		var next []node
+		for _, chunk := range packChildren(level, fanout) {
+			pgno, err := w.allocPage()
+			if err != nil {
+				return 0, err
+			}
+			children := make([]uint32, len(chunk))
+			seps := make([]uint32, 0, len(chunk)-1)
+			for i, c := range chunk {
+				children[i] = c.pgno
+				if i > 0 {
+					seps = append(seps, c.firstID)
+				}
+			}
+			writeScopeBranch(buf, pgno, seps, children)
+			w.writePage(pgno, buf)
+			next = append(next, node{pgno: pgno, firstID: chunk[0].firstID})
+		}
+		level = next
+		height++
+	}
+	return level[0].pgno, nil
+}
+
+// packChildren splits children into branch-node groups of <= fanout each, rebalancing so the
+// FINAL group never has a single child (F1): a lone-last-child branch has 0 separators, which
+// the reader's validator rejects (count < 1). fanout (max children) is >= 4 for both metadata
+// trees, so the combined last two groups (stride+1 children) split into two groups of >= 2.
+// The caller guarantees len(children) >= 2 (the branch level only runs while > 1 node remains).
+func packChildren[T any](children []T, fanout int) [][]T {
+	n := len(children)
+	var groups [][]T
+	for start := 0; start < n; start += fanout {
+		end := start + fanout
+		if end > n {
+			end = n
+		}
+		groups = append(groups, children[start:end])
+	}
+	// If the last group has exactly one child, steal one from the previous group (which keeps
+	// >= fanout-1 >= 2). len(groups) >= 2 here because n >= 2 and a single full group cannot
+	// leave a remainder.
+	if last := len(groups) - 1; last >= 1 && len(groups[last]) == 1 {
+		prev := groups[last-1]
+		groups[last-1] = prev[:len(prev)-1]
+		groups[last] = children[len(children)-2:]
+	}
+	return groups
+}
+
+// writePage copies a fully-built page into the image and records it dirty (for the OS pwrite
+// set).
+func (w *Writer[K]) writePage(pgno uint32, page []byte) {
+	base := int(pgno) * pageSize
+	copy(w.image[base:base+pageSize], page)
+	w.dirty = append(w.dirty, pgno)
+}
+
+// --- v4.1 per-scope KV (§C.4) ---
+
+// Changed reports what MetaDelete did, mirroring Rust's Changed enum (§C.7). false = no
+// change (the key was absent — a no-op success).
+type Changed bool
+
+const (
+	// Unchanged: no key was removed (a no-op success, §C.7).
+	Unchanged Changed = false
+	// ChangedYes: a key was removed.
+	ChangedYes Changed = true
+)
+
+// MetaSet sets key = (type, value) on target (target = scope_id, 0 = FILE). It buffers the
+// change in memory; the target's KV tree is bulk-rebuilt at the next Commit. Many MetaSet on
+// one target in one txn ⇒ ONE rebuild (§C.4). It validates key (UTF-8, 1..=1024, no NUL) and,
+// for type == 0, the whole value (UTF-8, no NUL) → InvalidInput on violation (§C.7). A
+// non-existent non-FILE target → InvalidInput.
+func (w *Writer[K]) MetaSet(target uint32, key []byte, typ uint32, value []byte) error {
+	if err := checkKey(key); err != nil {
+		return err
+	}
+	if err := checkTextValue(typ, value); err != nil {
+		return err
+	}
+	if err := w.requireTarget(target); err != nil {
+		return err
+	}
+	entries, err := w.kvLoadDirty(target)
+	if err != nil {
+		return err
+	}
+	pos := partitionIdx(len(entries), func(i int) bool { return bytes.Compare(entries[i].key, key) < 0 })
+	newEntry := kvEntry{key: cloneBytes(key), typ: typ, value: cloneBytes(value)}
+	if pos < len(entries) && bytes.Equal(entries[pos].key, key) {
+		entries[pos] = newEntry // replace in place (key already present)
+	} else {
+		entries = insertKVEntry(entries, pos, newEntry)
+	}
+	w.kvDirty[target] = entries
+	return nil
+}
+
+// MetaGet gets key on target as (type, value) (the whole reassembled value) and found=true,
+// or found=false if absent (§C.7). It reads the buffered set if the target is dirty this txn,
+// else descends the committed KV tree. A non-existent non-FILE target → found=false.
+func (w *Writer[K]) MetaGet(target uint32, key []byte) (typ uint32, value []byte, found bool, err error) {
+	if err := checkKey(key); err != nil {
+		return 0, nil, false, err
+	}
+	if entries, ok := w.kvDirty[target]; ok {
+		pos := partitionIdx(len(entries), func(i int) bool { return bytes.Compare(entries[i].key, key) < 0 })
+		if pos < len(entries) && bytes.Equal(entries[pos].key, key) {
+			e := entries[pos]
+			return e.typ, cloneBytes(e.value), true, nil
+		}
+		return 0, nil, false, nil
+	}
+	root, ok := w.targetKVRoot(target)
+	if !ok {
+		return 0, nil, false, nil
+	}
+	return kvGet(w.image, root, key, w.totalPages())
+}
+
+// MetaDelete deletes key on target. It returns ChangedYes if a key was removed, Unchanged if
+// it was absent (a no-op success, §C.7). It buffers the change; rebuilt at commit.
+func (w *Writer[K]) MetaDelete(target uint32, key []byte) (Changed, error) {
+	if err := checkKey(key); err != nil {
+		return Unchanged, err
+	}
+	// Deleting on a non-existent target is a no-op (nothing to delete).
+	if _, dirty := w.kvDirty[target]; !dirty {
+		if _, ok := w.scopeIdxAny(target); !ok {
+			return Unchanged, nil
+		}
+	}
+	entries, err := w.kvLoadDirty(target)
+	if err != nil {
+		return Unchanged, err
+	}
+	pos := partitionIdx(len(entries), func(i int) bool { return bytes.Compare(entries[i].key, key) < 0 })
+	if pos < len(entries) && bytes.Equal(entries[pos].key, key) {
+		entries = removeKVEntry(entries, pos)
+		w.kvDirty[target] = entries
+		return ChangedYes, nil
+	}
+	w.kvDirty[target] = entries
+	return Unchanged, nil
+}
+
+// MetaList lists every (key, type, value) on target, ordered by key (§C.4). It reads the
+// buffered set if dirty this txn, else the committed KV tree. A non-existent target → an empty
+// list.
+func (w *Writer[K]) MetaList(target uint32) ([]MetaEntry, error) {
+	if entries, ok := w.kvDirty[target]; ok {
+		out := make([]MetaEntry, 0, len(entries))
+		for i := range entries {
+			out = append(out, MetaEntry{Key: cloneBytes(entries[i].key), Type: entries[i].typ, Value: cloneBytes(entries[i].value)})
+		}
+		return out, nil
+	}
+	var out []MetaEntry
+	if root, ok := w.targetKVRoot(target); ok {
+		var entries []kvEntry
+		if err := kvList(w.image, root, w.totalPages(), &entries); err != nil {
+			return nil, err
+		}
+		out = make([]MetaEntry, 0, len(entries))
+		for i := range entries {
+			out = append(out, MetaEntry{Key: entries[i].key, Type: entries[i].typ, Value: entries[i].value})
+		}
+	}
+	return out, nil
+}
+
+// targetKVRoot returns the committed kv_root of target and whether the target has a record.
+// FILE (scope_id 0) is looked up like any scope record.
+func (w *Writer[K]) targetKVRoot(target uint32) (uint32, bool) {
+	if i, ok := w.scopeIdxAny(target); ok {
+		return w.scopes[i].kvRoot, true
+	}
+	return 0, false
+}
+
+// requireTarget validates that a KV mutation target exists. FILE (scope_id 0) is always valid
+// (it is created on demand). A non-existent defined scope → InvalidInput (§C.7 — a write to a
+// scope that was never defined is caller error).
+func (w *Writer[K]) requireTarget(target uint32) error {
+	if target == fileScopeID {
+		return nil
+	}
+	if _, ok := w.scopePos(target); ok {
+		return nil
+	}
+	return errInvalidInput("meta_set on undefined scope")
+}
+
+// kvLoadDirty returns the target's buffered entry set, loading it from the committed KV tree
+// on first touch this txn (O(n_kv) once). Subsequent mutations operate in memory.
+func (w *Writer[K]) kvLoadDirty(target uint32) ([]kvEntry, error) {
+	if entries, ok := w.kvDirty[target]; ok {
+		return entries, nil
+	}
+	var entries []kvEntry
+	if root, ok := w.targetKVRoot(target); ok {
+		if err := kvList(w.image, root, w.totalPages(), &entries); err != nil {
+			return nil, err
+		}
+	}
+	w.kvDirty[target] = entries
+	return entries, nil
+}
+
+// rebuildDirtyKV rebuilds every dirty target's KV tree at commit (§C.4): for each, free the
+// old KV + overflow pages, bulk-build a fresh balanced tree from the sorted buffered entries,
+// and switch the target's kv_root. It creates a FILE (scope_id 0) record on demand the first
+// time FILE gets KV; drops a record's KV (kv_root = 0) when it becomes empty. It marks the
+// registry dirty so the scope table picks up the new roots.
+func (w *Writer[K]) rebuildDirtyKV() error {
+	if len(w.kvDirty) == 0 {
+		return nil
+	}
+	// Process targets in id order for determinism (page-allocation order). The set is small.
+	targets := make([]uint32, 0, len(w.kvDirty))
+	for t := range w.kvDirty {
+		targets = append(targets, t)
+	}
+	sortU32(targets)
+	for _, target := range targets {
+		entries := w.kvDirty[target]
+		oldRoot, _ := w.targetKVRoot(target)
+		w.freeKVTree(oldRoot)
+		newRoot, err := w.buildKVTree(entries)
+		if err != nil {
+			return err
+		}
+		w.setTargetKVRoot(target, newRoot)
+	}
+	w.kvDirty = make(map[uint32][]kvEntry)
+	return nil
+}
+
+// setTargetKVRoot sets a target's kv_root, creating the FILE record on demand and removing a
+// record that becomes empty metadata. It marks the registry dirty (the scope table must
+// rebuild).
+func (w *Writer[K]) setTargetKVRoot(target, newRoot uint32) {
+	if i, ok := w.scopeIdxAny(target); ok {
+		if target == fileScopeID && newRoot == 0 {
+			// FILE carries only KV; with none it has no metadata → drop its record so an
+			// all-empty file returns to byte-compatible v4.0 (§C.6).
+			w.scopes = append(w.scopes[:i], w.scopes[i+1:]...)
+		} else {
+			w.scopes[i].kvRoot = newRoot
+		}
+	} else if newRoot != 0 && target == fileScopeID {
+		// Only FILE is auto-created (a defined scope always has a record already). The
+		// target == fileScopeID guard mirrors Rust's debug_assert: a non-FILE target without a
+		// record must never reach here (meta_set rejects undefined scopes), so refuse to insert
+		// a bogus record rather than trust the invariant silently.
+		// FILE record: no name/type/version, just the KV root. Insert sorted (id 0 sorts first).
+		pos := partitionIdx(len(w.scopes), func(i int) bool { return w.scopes[i].id < target })
+		w.scopes = insertScopeRec(w.scopes, pos, scopeRec{id: target, kvRoot: newRoot})
+	}
+	w.scopeDirty = true
+}
+
+// freeKVTree frees a KV tree's pages (the tree + all overflow chains) into this txn's freed
+// set (reclaimed next txn, D7). root == 0 is a no-op.
+func (w *Writer[K]) freeKVTree(root uint32) {
+	if root == 0 {
+		return
+	}
+	var pages []uint32
+	collectKVPages(w.image, root, w.totalPages(), &pages)
+	for _, p := range pages {
+		w.freePage(p)
+	}
+}
+
+// buildKVTree bulk-builds a balanced KV B+tree from entries (sorted, key-unique) into freshly
+// allocated pages; it returns the new root pgno (0 if empty). Large values are written to
+// overflow chains first; leaves pack entries greedily by encoded size, branches by separator
+// size — the shape is implementation-defined (§C.4/§D).
+func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	// 1) Turn each entry into a leaf slot, writing overflow chains for large values.
+	slots := make([]leafSlot, 0, len(entries))
+	for i := range entries {
+		e := entries[i]
+		if len(e.value) <= kvInlineMax {
+			slots = append(slots, leafSlot{key: e.key, typ: e.typ, value: e.value})
+		} else {
+			first, err := w.writeOverflowChain(e.value)
+			if err != nil {
+				return 0, err
+			}
+			slots = append(slots, leafSlot{key: e.key, typ: e.typ, overflow: true, firstPgno: first, totalLen: uint64(len(e.value))})
+		}
+	}
+	// 2) Pack leaves greedily (each leaf keeps >= 1 slot; the spec geometry guarantees the
+	//    largest single inline entry + its slot fits a fresh leaf body).
+	buf := make([]byte, pageSize)
+	type node struct {
+		pgno     uint32
+		firstKey []byte
+	}
+	var level []node
+	for i := 0; i < len(slots); {
+		used := 0
+		j := i
+		for j < len(slots) {
+			add := slots[j].footprint()
+			if j > i && used+add > kvPageBody {
+				break
+			}
+			used += add
+			j++
+		}
+		pgno, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		writeKVLeaf(buf, pgno, slots[i:j])
+		w.writePage(pgno, buf)
+		level = append(level, node{pgno: pgno, firstKey: cloneBytes(slots[i].slotKey())})
+		i = j
+	}
+	// 3) Build branch levels until a single root remains.
+	height := uint32(1)
+	for len(level) > 1 {
+		if height >= treeHeightMax {
+			return 0, errInvalidInput("kv tree would exceed TREE_HEIGHT_MAX")
+		}
+		// Greedily compute node boundaries: each branch is a leftmost child (a fixed u32, no
+		// separator) + as many (sep, child) slot entries as fit the body. bounds holds the
+		// start index of each node into level; node k spans level[bounds[k] : bounds[k+1]].
+		bounds := []int{0}
+		for i := 0; i < len(level); {
+			body := kvPageBody - 4 // leftmost-child u32 consumes 4 body bytes
+			used := 0
+			j := i + 1
+			for j < len(level) {
+				add := kvBranchSepSize(len(level[j].firstKey)) + kvSlotSize
+				if used+add > body {
+					break
+				}
+				used += add
+				j++
+			}
+			bounds = append(bounds, j)
+			i = j
+		}
+		// F1: a final branch with a single child (leftmost only, 0 separators) is rejected by
+		// the reader's validator (count < 1). When the last node would be lone, move one child
+		// from the previous node into it (the previous keeps >= 2: greedy fits >= 2, and a
+		// next-to-last node holds >= 2 children whenever a remainder exists). Recurs naturally
+		// up the tree because every level re-runs this loop.
+		if k := len(bounds) - 1; k >= 2 && bounds[k]-bounds[k-1] == 1 {
+			bounds[k-1] = bounds[k] - 2
+		}
+		next := make([]node, 0, len(bounds)-1)
+		for k := 0; k+1 < len(bounds); k++ {
+			lo, hi := bounds[k], bounds[k+1]
+			leftmost := level[lo].pgno
+			seps := make([]branchSep, 0, hi-lo-1)
+			for j := lo + 1; j < hi; j++ {
+				seps = append(seps, branchSep{sep: level[j].firstKey, child: level[j].pgno})
+			}
+			pgno, err := w.allocPage()
+			if err != nil {
+				return 0, err
+			}
+			writeKVBranch(buf, pgno, leftmost, seps)
+			w.writePage(pgno, buf)
+			next = append(next, node{pgno: pgno, firstKey: level[lo].firstKey})
+		}
+		level = next
+		height++
+	}
+	return level[0].pgno, nil
+}
+
+// writeOverflowChain writes value to a fresh overflow page chain; it returns the first page's
+// pgno. It splits into ceil(len/overflow_payload) pages, each pointing to the next (last → 0),
+// §D.
+func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
+	payload := overflowPayload
+	n := (len(value) + payload - 1) / payload // value is non-empty (caller checked vs kvInlineMax)
+	// Allocate all pages up front so each can reference the next.
+	pgnos := make([]uint32, n)
+	for k := 0; k < n; k++ {
+		p, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		pgnos[k] = p
+	}
+	buf := make([]byte, pageSize)
+	for k := 0; k < n; k++ {
+		start := k * payload
+		end := start + payload
+		if end > len(value) {
+			end = len(value)
+		}
+		var next uint32
+		if k+1 < n {
+			next = pgnos[k+1]
+		}
+		writeOverflow(buf, pgnos[k], next, value[start:end])
+		w.writePage(pgnos[k], buf)
+	}
+	return pgnos[0], nil
+}
+
+// totalPages returns the current logical page count of the in-memory image (for KV bounds
+// checks).
+func (w *Writer[K]) totalPages() uint64 {
+	return uint64(len(w.image) / pageSize)
+}
+
 // commitMeta writes the new meta into the inactive page and flips it (the in-memory half
 // of the commit, §6.3); it returns the page number (0 or 1) just written so the OS layer
 // can pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). It
@@ -214,6 +895,20 @@ func (w *Writer[K]) RecordCount() uint64 { return w.recordCount }
 func (w *Writer[K]) commitMeta(updatedUnixtime uint64) (uint32, error) {
 	if w.txnID == maxUint64 {
 		return 0, errInvalidInput("txn_id exhausted")
+	}
+	// Rebuild each dirty target's KV tree FIRST (§C.4): this switches the affected scopes'
+	// kv_roots in the registry, so the subsequent scope-table rebuild carries the new roots.
+	// Frees the old KV + overflow pages (reclaimed next txn).
+	if err := w.rebuildDirtyKV(); err != nil {
+		return 0, err
+	}
+	// Rebuild the scope table from the in-memory registry if it changed this txn (§C.2:
+	// bulk-rebuild; reads stay O(log) on the committed tree). Frees the old tree's pages.
+	if w.scopeDirty {
+		if err := w.rebuildScopeTable(); err != nil {
+			return 0, err
+		}
+		w.scopeDirty = false
 	}
 	inactive := 1 - w.activeMeta
 	w.txnID++
@@ -440,10 +1135,17 @@ func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
 
 func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
 	var zero K
+	// A file with metadata is v4.1 (minor 1, meta_size 94); with none it stays
+	// byte-compatible v4.0 (minor 0, meta_size 90) — the upgrade-on-first-write and
+	// stays-v4.0-when-empty rule (§C.6).
+	verMinor, mSize := versionMinor, metaSize
+	if w.scopeTableRoot != 0 {
+		verMinor, mSize = versionMinorMetadata, metaSizeV41
+	}
 	m := meta{
 		pgno:            pgno,
-		versionMinor:    0,
-		metaSize:        metaSize,
+		versionMinor:    verMinor,
+		metaSize:        mSize,
 		pageSize:        pageSize,
 		checksumAlgo:    checksumAlgoCRC32C,
 		flags:           zero.version().flag(),
@@ -457,6 +1159,7 @@ func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
 		recordCount:     w.recordCount,
 		txnID:           txnID,
 		updatedUnixtime: updatedUnixtime,
+		scopeTableRoot:  w.scopeTableRoot,
 	}
 	base := int(pgno) * pageSize
 	m.encodeInto(w.image[base : base+pageSize])
@@ -500,6 +1203,23 @@ func (w *Writer[K]) deriveFreeSet() []uint32 {
 	used[1] = true // META-B
 	if w.rootPgno != 0 {
 		w.markReachable(w.rootPgno, 1, used)
+	}
+	// The v4.1 scope table is also reachable (§C.5): its pages must not be reallocated.
+	if w.scopeTableRoot != 0 {
+		var sp []uint32
+		collectScopePages(w.image, w.scopeTableRoot, &sp)
+		for _, p := range sp {
+			used[p] = true
+		}
+	}
+	// Every scope's KV tree + its overflow chains are reachable too (§C.5): walk each
+	// committed kv_root (incl. FILE's, if persisted) into the used set.
+	var kp []uint32
+	for i := range w.scopes {
+		collectKVPages(w.image, w.scopes[i].kvRoot, uint64(total), &kp)
+	}
+	for _, p := range kp {
+		used[p] = true
 	}
 	var free []uint32
 	for p := 2; p < total; p++ {
@@ -879,4 +1599,36 @@ func cloneBytes(b []byte) []byte {
 	out := make([]byte, len(b))
 	copy(out, b)
 	return out
+}
+
+func insertKVEntry(s []kvEntry, i int, v kvEntry) []kvEntry {
+	s = append(s, kvEntry{})
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	return s
+}
+
+func removeKVEntry(s []kvEntry, i int) []kvEntry {
+	copy(s[i:], s[i+1:])
+	return s[:len(s)-1]
+}
+
+func insertScopeRec(s []scopeRec, i int, v scopeRec) []scopeRec {
+	s = append(s, scopeRec{})
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	return s
+}
+
+// sortU32 sorts a small u32 slice ascending (insertion sort; the KV-dirty target set is tiny).
+func sortU32(s []uint32) {
+	for i := 1; i < len(s); i++ {
+		v := s[i]
+		j := i - 1
+		for j >= 0 && s[j] > v {
+			s[j+1] = s[j]
+			j--
+		}
+		s[j+1] = v
+	}
 }

@@ -275,3 +275,31 @@ func TestMetaTailNonzeroRejected(t *testing.T) {
 		t.Fatalf("expected NonZeroReserved for meta tail, got %v", err)
 	}
 }
+
+// TestMinor1MetaSizePinned checks F7: at version_minor == 1 the reader requires meta_size
+// exactly 94 (the v4.1 size), mirroring the minor-0 rule. A minor-1 meta declaring any other
+// (otherwise in-range) meta_size is rejected as BadMetaSize even with a valid CRC.
+func TestMinor1MetaSizePinned(t *testing.T) {
+	// A real v4.1 file: any metadata write upgrades it to minor 1 / meta_size 94.
+	w := CreateV4(1, 0)
+	if _, err := w.ScopeDefine([]byte("s")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.Commit(1))
+	img := append([]byte(nil), w.Image()...)
+	if activeMetaOf(img).versionMinor != versionMinorMetadata {
+		t.Fatalf("expected a v4.1 file, got minor %d", activeMetaOf(img).versionMinor)
+	}
+	// Patch BOTH metas' meta_size away from 94 (still in [90, page_size]) keeping minor 1,
+	// re-stamp each CRC. Both must be rejected (neither classifies as valid).
+	for _, badSize := range []uint16{90, 92, 95, 100} {
+		g := append([]byte(nil), img...)
+		for p := 0; p < 2; p++ {
+			le.PutUint16(g[p*pageSize+metaMetaSize:], badSize)
+			finalizeChecksum(g[p*pageSize : (p+1)*pageSize])
+		}
+		if _, err := Open(g); errorClass(err) != "BadMetaSize" {
+			t.Fatalf("minor1 meta_size=%d: expected BadMetaSize, got %v", badSize, err)
+		}
+	}
+}

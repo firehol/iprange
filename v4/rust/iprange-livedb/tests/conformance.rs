@@ -107,7 +107,11 @@ fn run_v4(c: &Case) {
         let mut ggot = Vec::new();
         gr.scan_v4(|f, t, s| ggot.push((f.0.to_string(), t.0.to_string(), s.to_vec())))
             .unwrap();
-        assert_eq!(ggot, c.expect_scan, "golden cross-read mismatch: {}", c.name);
+        assert_eq!(
+            ggot, c.expect_scan,
+            "golden cross-read mismatch: {}",
+            c.name
+        );
     }
 }
 
@@ -132,10 +136,8 @@ fn run_v6(c: &Case) {
     let r = Reader::open(&img).unwrap();
 
     let mut got = Vec::new();
-    r.scan_v6(|f, t, s| {
-        got.push((f.to_u128().to_string(), t.to_u128().to_string(), s.to_vec()))
-    })
-    .unwrap();
+    r.scan_v6(|f, t, s| got.push((f.to_u128().to_string(), t.to_u128().to_string(), s.to_vec())))
+        .unwrap();
     assert_eq!(got, c.expect_scan, "scan mismatch: {}", c.name);
 
     for (ip, want) in &c.expect_lookup {
@@ -154,6 +156,10 @@ fn run_v6(c: &Case) {
             ggot.push((f.to_u128().to_string(), t.to_u128().to_string(), s.to_vec()))
         })
         .unwrap();
-        assert_eq!(ggot, c.expect_scan, "golden cross-read mismatch: {}", c.name);
+        assert_eq!(
+            ggot, c.expect_scan,
+            "golden cross-read mismatch: {}",
+            c.name
+        );
     }
 }

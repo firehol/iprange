@@ -14,17 +14,33 @@
 //! trimming and same-scope coalescing. The OS file/`flock`/`mmap` layer wraps this
 //! core (next increment).
 
+use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use crate::error::{Error, Result};
 use crate::key::IpKey;
+use crate::kv::{self, BranchSep, KvEntry, LeafSlot};
 use crate::node::{BranchView, LeafView};
 use crate::reader::Reader;
 use crate::record;
+use crate::scope::{self, ScopeRec};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::wire::{finalize_checksum, Meta, PageHeader};
+
+/// What `meta_delete` did, mirroring the registry's `Changed`/`Unchanged` convention (§C.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Changed {
+    /// The store changed (a key was deleted).
+    Changed,
+    /// No change (the key was absent) — a no-op success (§C.7).
+    Unchanged,
+}
+
+/// One KV entry as returned by [`Writer::meta_list`]: `(key, type, value)`. `value` is the
+/// whole reassembled value (inline or overflow-spanning); `type == 0` is validated text.
+pub type MetaEntry = (Vec<u8>, u32, Vec<u8>);
 
 /// An owned record, materialized from a leaf for the duration of a COW op.
 struct OwnedRecord<K: IpKey> {
@@ -47,6 +63,14 @@ pub struct Writer<K: IpKey> {
     branch_max: usize,
     created_unixtime: u64,
     txn_id: u64,
+    scope_table_root: u32, // v4.1 metadata (§C.1); 0 = no metadata (file stays v4.0)
+    scopes: Vec<ScopeRec>, // in-memory registry (sorted by id, may include FILE id 0), rebuilt at commit
+    next_scope_id: u32,    // monotonic; never reuses a dropped id (§C.2)
+    scope_dirty: bool,     // registry changed since the last commit → rebuild needed
+    // Per-target buffered KV (§C.4): a dirty target's full entry set (sorted by key),
+    // loaded lazily from its committed `kv_root` on first mutation and bulk-rebuilt at
+    // commit. `target = scope_id` (`0` = FILE). Absent = clean (read straight from disk).
+    kv_dirty: BTreeMap<u32, Vec<KvEntry>>,
     free: Vec<u32>,           // pages reusable by the current txn
     freed_this_txn: Vec<u32>, // pages freed since the last commit (reusable next txn, D7)
     dirty: Vec<u32>,          // data pages written this txn (for the OS layer's pwrite set)
@@ -73,6 +97,11 @@ impl<K: IpKey> Writer<K> {
             branch_max: spec::branch_max(K::WIDTH as u8),
             created_unixtime,
             txn_id: 1,
+            scope_table_root: 0,
+            scopes: Vec::new(),
+            next_scope_id: 1, // 0 is reserved for the FILE target (§C.2)
+            scope_dirty: false,
+            kv_dirty: BTreeMap::new(),
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
@@ -97,11 +126,12 @@ impl<K: IpKey> Writer<K> {
             }
             r.active_meta()
         };
-        // The writer implements exactly version_minor 0. It MUST refuse to mutate a file
-        // of a minor it does not fully implement (§5.1): committing would write a
-        // minor-0 meta and drop the newer minor's trailing fields. (The reader still
-        // accepts such files read-only — forward-compat.)
-        if meta.version_minor != spec::VERSION_MINOR {
+        // The writer implements up to version_minor 1 (the v4.1 metadata system). It MUST
+        // refuse to mutate a file of a newer minor it does not fully implement (§5.1/§C.6):
+        // committing would drop the newer minor's trailing fields. (The reader still
+        // accepts such files read-only — forward-compat.) A v4.0 file (minor 0) is opened
+        // as-is and stays v4.0 until the first metadata write upgrades it (§C.6).
+        if meta.version_minor > spec::VERSION_MINOR_METADATA {
             return Err(Error::InvalidInput(
                 "writer cannot mutate a newer version_minor file",
             ));
@@ -109,6 +139,13 @@ impl<K: IpKey> Writer<K> {
         // Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the
         // committed total_pages is authoritative and reachable pages are all below it.
         image.truncate(meta.total_pages as usize * PAGE_SIZE);
+        // Load the committed scope registry into memory (validated by `Reader::open` above).
+        let scopes = scope::load_all(&image, meta.scope_table_root)?;
+        let next_scope_id = scopes
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .map_or(1, |m| m.saturating_add(1));
         let record_size = spec::record_size(K::WIDTH as u8, meta.scope_width);
         let mut w = Writer {
             image,
@@ -122,6 +159,11 @@ impl<K: IpKey> Writer<K> {
             branch_max: spec::branch_max(K::WIDTH as u8),
             created_unixtime: meta.created_unixtime,
             txn_id: meta.txn_id,
+            scope_table_root: meta.scope_table_root,
+            scopes,
+            next_scope_id,
+            scope_dirty: false,
+            kv_dirty: BTreeMap::new(),
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
@@ -239,6 +281,16 @@ impl<K: IpKey> Writer<K> {
         if self.txn_id == u64::MAX {
             return Err(Error::InvalidInput("txn_id exhausted"));
         }
+        // Rebuild each dirty target's KV tree FIRST (§C.4): this switches the affected
+        // scopes' `kv_root`s in the registry, so the subsequent scope-table rebuild carries
+        // the new roots. Frees the old KV + overflow pages (reclaimed next txn).
+        self.rebuild_dirty_kv()?;
+        // Rebuild the scope table from the in-memory registry if it changed this txn
+        // (§C.2: bulk-rebuild; reads stay O(log) on the committed tree). Frees old pages.
+        if self.scope_dirty {
+            self.rebuild_scope_table()?;
+            self.scope_dirty = false;
+        }
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
         self.write_meta(inactive, self.txn_id, updated_unixtime);
@@ -288,6 +340,550 @@ impl<K: IpKey> Writer<K> {
     #[inline]
     pub fn record_count(&self) -> u64 {
         self.record_count
+    }
+
+    // --- v4.1 scope registry (§C.2) ---
+
+    /// Define a new scope, returning its `scope_id` (`>= 1`; `0` is reserved for FILE,
+    /// never returned). `version` starts at 0, `type` at 0, no KV. `scope_id`s are
+    /// monotonic and never reused after a drop (§C.2). `name` is UTF-8, `<= 256` bytes
+    /// (need not be unique). The first metadata write upgrades the file to v4.1 at commit.
+    pub fn scope_define(&mut self, name: &[u8]) -> Result<u32> {
+        if name.len() > spec::SCOPE_NAME_MAX {
+            return Err(Error::InvalidInput("scope name > 256 bytes"));
+        }
+        if core::str::from_utf8(name).is_err() {
+            return Err(Error::InvalidInput("scope name not valid UTF-8"));
+        }
+        if self.next_scope_id == spec::FILE_SCOPE_ID {
+            return Err(Error::InvalidInput("scope_id space exhausted"));
+        }
+        let id = self.next_scope_id;
+        self.next_scope_id = self.next_scope_id.wrapping_add(1);
+        // Monotonic ids ⇒ pushing at the end keeps `scopes` sorted by id.
+        self.scopes.push(ScopeRec {
+            id,
+            version: 0,
+            type_: 0,
+            name: name.to_vec(),
+            kv_root: 0,
+        });
+        self.scope_dirty = true;
+        Ok(id)
+    }
+
+    /// Drop a scope: remove its metadata (header + KV) only — IP records carrying it are
+    /// NOT touched (caller policy, §C.2). `scope_drop(0)` (FILE) is rejected. Returns
+    /// whether the scope existed.
+    pub fn scope_drop(&mut self, scope_id: u32) -> Result<bool> {
+        if scope_id == spec::FILE_SCOPE_ID {
+            return Err(Error::InvalidInput("cannot drop the FILE scope (0)"));
+        }
+        match self.scope_pos(scope_id) {
+            Some(i) => {
+                // Free the dropped scope's KV tree + overflow pages (§C.2 / §C.5). Its
+                // committed `kv_root` is authoritative; any buffered KV for this target is
+                // discarded too (the scope is gone).
+                let kv_root = self.scopes[i].kv_root;
+                self.free_kv_tree(kv_root);
+                self.kv_dirty.remove(&scope_id);
+                self.scopes.remove(i);
+                self.scope_dirty = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// The scope's `name` (UTF-8 bytes), or `None` if it does not exist.
+    pub fn scope_name(&self, scope_id: u32) -> Option<Vec<u8>> {
+        self.scope_pos(scope_id)
+            .map(|i| self.scopes[i].name.clone())
+    }
+
+    /// All defined scopes as `(scope_id, name)`, ascending by `scope_id`. The FILE target
+    /// (`scope_id 0`) is a dataset-metadata target, not a defined scope, so it is excluded
+    /// even when it carries KV (§C.2).
+    pub fn scope_list(&self) -> Vec<(u32, Vec<u8>)> {
+        self.scopes
+            .iter()
+            .filter(|r| r.id != spec::FILE_SCOPE_ID)
+            .map(|r| (r.id, r.name.clone()))
+            .collect()
+    }
+
+    /// The scope's `version`, or `None` if it does not exist.
+    pub fn scope_version(&self, scope_id: u32) -> Option<u64> {
+        self.scope_pos(scope_id).map(|i| self.scopes[i].version)
+    }
+
+    /// Set the scope's `version` (caller-bumped, §C.3). Returns whether it existed.
+    pub fn scope_set_version(&mut self, scope_id: u32, version: u64) -> Result<bool> {
+        match self.scope_pos(scope_id) {
+            Some(i) => {
+                self.scopes[i].version = version;
+                self.scope_dirty = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Increment the scope's `version` (saturating). Returns whether it existed.
+    pub fn scope_bump_version(&mut self, scope_id: u32) -> Result<bool> {
+        match self.scope_pos(scope_id) {
+            Some(i) => {
+                self.scopes[i].version = self.scopes[i].version.saturating_add(1);
+                self.scope_dirty = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// The scope's opaque `type` byte, or `None` if it does not exist.
+    pub fn scope_type(&self, scope_id: u32) -> Option<u8> {
+        self.scope_pos(scope_id).map(|i| self.scopes[i].type_)
+    }
+
+    /// Set the scope's opaque `type` byte (engine does not interpret it, §C.2). Returns
+    /// whether it existed.
+    pub fn scope_set_type(&mut self, scope_id: u32, type_: u8) -> Result<bool> {
+        match self.scope_pos(scope_id) {
+            Some(i) => {
+                self.scopes[i].type_ = type_;
+                self.scope_dirty = true;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// Index of a **defined** scope in the registry (binary search). The FILE target
+    /// (`scope_id 0`) is never a defined scope, so registry getters/setters miss it even
+    /// when it is persisted in `scopes` carrying dataset KV (§C.2).
+    fn scope_pos(&self, scope_id: u32) -> Option<usize> {
+        if scope_id == spec::FILE_SCOPE_ID {
+            return None;
+        }
+        self.scope_idx_any(scope_id)
+    }
+
+    /// Index of any scope record by id, **including** FILE (`scope_id 0`) — used by the KV
+    /// layer, which targets FILE as well as defined scopes.
+    fn scope_idx_any(&self, scope_id: u32) -> Option<usize> {
+        self.scopes.binary_search_by_key(&scope_id, |r| r.id).ok()
+    }
+
+    /// Rebuild the scope table from the in-memory registry at commit (§C.2): free the old
+    /// tree's pages (reclaimed next txn) and bulk-build a fresh one. Sets `scope_table_root`
+    /// (0 when empty → the file stays/returns to byte-compatible v4.0, §C.6).
+    fn rebuild_scope_table(&mut self) -> Result<()> {
+        let mut old = Vec::new();
+        scope::collect_pages(&self.image, self.scope_table_root, &mut old);
+        for p in old {
+            self.free_page(p);
+        }
+        let scopes = core::mem::take(&mut self.scopes);
+        let root = self.build_scope_tree(&scopes);
+        self.scopes = scopes;
+        self.scope_table_root = root?;
+        Ok(())
+    }
+
+    /// Bulk-build a scope-table B+tree from `scopes` (sorted by id) into freshly allocated
+    /// pages; returns the new root pgno (0 if empty). Leaves fill to `scope_leaf_max`;
+    /// branches use each child subtree's first id as a separator (shape is impl-defined).
+    fn build_scope_tree(&mut self, scopes: &[ScopeRec]) -> Result<u32> {
+        if scopes.is_empty() {
+            return Ok(0);
+        }
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let leaf_max = spec::scope_leaf_max();
+        let mut level: Vec<(u32, u32)> = Vec::new();
+        for chunk in scopes.chunks(leaf_max) {
+            let pgno = self.alloc_page()?;
+            scope::write_scope_leaf(&mut buf, pgno, chunk);
+            self.write_page(pgno, &buf);
+            level.push((pgno, chunk[0].id));
+        }
+        let mut height = 1u32;
+        let fanout = spec::scope_branch_max() + 1;
+        while level.len() > 1 {
+            if height >= spec::TREE_HEIGHT_MAX {
+                return Err(Error::InvalidInput(
+                    "scope table would exceed TREE_HEIGHT_MAX",
+                ));
+            }
+            let mut next: Vec<(u32, u32)> = Vec::new();
+            // Group children into branch nodes by `fanout`, then rebalance so the FINAL
+            // node never has a lone child (F1): a branch MUST have >= 2 children
+            // (validator rejects `count < 1`). `fanout >= 3` for the scope branch, so the
+            // split of the last `fanout + 1` children is always >= 2 per node.
+            for (start, end) in branch_group_bounds(level.len(), fanout) {
+                let chunk = &level[start..end];
+                let pgno = self.alloc_page()?;
+                let children: Vec<u32> = chunk.iter().map(|&(p, _)| p).collect();
+                let seps: Vec<u32> = chunk.iter().skip(1).map(|&(_, id)| id).collect();
+                scope::write_scope_branch(&mut buf, pgno, &seps, &children);
+                self.write_page(pgno, &buf);
+                next.push((pgno, chunk[0].1));
+            }
+            level = next;
+            height += 1;
+        }
+        Ok(level[0].0)
+    }
+
+    /// Copy a fully-built page into the image and record it dirty (for the OS pwrite set).
+    fn write_page(&mut self, pgno: u32, page: &[u8]) {
+        let base = pgno as usize * PAGE_SIZE;
+        self.image[base..base + PAGE_SIZE].copy_from_slice(page);
+        self.dirty.push(pgno);
+    }
+
+    // --- v4.1 per-scope KV (§C.4) ---
+
+    /// Set `key = (type, value)` on `target` (`target = scope_id`, `0` = FILE). Buffers the
+    /// change in memory; the target's KV tree is bulk-rebuilt at the next `commit`. Many
+    /// `meta_set` on one target in one txn ⇒ ONE rebuild (§C.4). Validates `key` (UTF-8,
+    /// 1..=1024, no NUL) and, for `type == 0`, the whole `value` (UTF-8, no NUL) →
+    /// `InvalidInput` on violation (§C.7). A non-existent non-FILE `target` → `InvalidInput`.
+    pub fn meta_set(&mut self, target: u32, key: &[u8], type_: u32, value: &[u8]) -> Result<()> {
+        kv::check_key(key)?;
+        kv::check_text_value(type_, value)?;
+        self.require_target(target)?;
+        let entries = self.kv_load_dirty(target)?;
+        let pos = entries.partition_point(|e| e.key.as_slice() < key);
+        let new = KvEntry {
+            key: key.to_vec(),
+            type_,
+            value: value.to_vec(),
+        };
+        if pos < entries.len() && entries[pos].key == key {
+            entries[pos] = new; // replace in place (key already present)
+        } else {
+            entries.insert(pos, new);
+        }
+        Ok(())
+    }
+
+    /// Get `key` on `target` as `(type, value)` (the whole reassembled value), or
+    /// `Ok(None)` if absent (§C.7). Reads the buffered set if the target is dirty this txn,
+    /// else descends the committed KV tree. A non-existent non-FILE `target` → `Ok(None)`.
+    pub fn meta_get(&self, target: u32, key: &[u8]) -> Result<Option<(u32, Vec<u8>)>> {
+        kv::check_key(key)?;
+        if let Some(entries) = self.kv_dirty.get(&target) {
+            let pos = entries.partition_point(|e| e.key.as_slice() < key);
+            if pos < entries.len() && entries[pos].key == key {
+                let e = &entries[pos];
+                return Ok(Some((e.type_, e.value.clone())));
+            }
+            return Ok(None);
+        }
+        let root = match self.target_kv_root(target) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        kv::get(&self.image, root, key, self.total_pages())
+    }
+
+    /// Delete `key` on `target`. Returns `Changed` if a key was removed, `Unchanged` if it
+    /// was absent (a no-op success, §C.7). Buffers the change; rebuilt at commit.
+    pub fn meta_delete(&mut self, target: u32, key: &[u8]) -> Result<Changed> {
+        kv::check_key(key)?;
+        // Deleting on a non-existent target is a no-op (nothing to delete).
+        if self.target_kv_root(target).is_none() && self.scope_idx_any(target).is_none() {
+            return Ok(Changed::Unchanged);
+        }
+        let entries = self.kv_load_dirty(target)?;
+        let pos = entries.partition_point(|e| e.key.as_slice() < key);
+        if pos < entries.len() && entries[pos].key == key {
+            entries.remove(pos);
+            Ok(Changed::Changed)
+        } else {
+            Ok(Changed::Unchanged)
+        }
+    }
+
+    /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). Reads the
+    /// buffered set if dirty this txn, else the committed KV tree. A non-existent target →
+    /// an empty list.
+    pub fn meta_list(&self, target: u32) -> Result<Vec<MetaEntry>> {
+        if let Some(entries) = self.kv_dirty.get(&target) {
+            return Ok(entries
+                .iter()
+                .map(|e| (e.key.clone(), e.type_, e.value.clone()))
+                .collect());
+        }
+        let mut out = Vec::new();
+        if let Some(root) = self.target_kv_root(target) {
+            let mut entries = Vec::new();
+            kv::list(&self.image, root, self.total_pages(), &mut entries)?;
+            out = entries
+                .into_iter()
+                .map(|e| (e.key, e.type_, e.value))
+                .collect();
+        }
+        Ok(out)
+    }
+
+    /// The committed `kv_root` of `target` (`None` if the target has no record). FILE
+    /// (`scope_id 0`) is looked up like any scope record.
+    fn target_kv_root(&self, target: u32) -> Option<u32> {
+        self.scope_idx_any(target).map(|i| self.scopes[i].kv_root)
+    }
+
+    /// Validate that a KV mutation target exists. FILE (`scope_id 0`) is always valid (it
+    /// is created on demand). A non-existent defined scope → `InvalidInput` (§C.7 — a write
+    /// to a scope that was never defined is caller error).
+    fn require_target(&self, target: u32) -> Result<()> {
+        if target == spec::FILE_SCOPE_ID {
+            return Ok(());
+        }
+        if self.scope_pos(target).is_some() {
+            Ok(())
+        } else {
+            Err(Error::InvalidInput("meta_set on undefined scope"))
+        }
+    }
+
+    /// Borrow the target's buffered entry set, loading it from the committed KV tree on
+    /// first touch this txn (`O(n_kv)` once). Subsequent mutations operate in memory.
+    fn kv_load_dirty(&mut self, target: u32) -> Result<&mut Vec<KvEntry>> {
+        if !self.kv_dirty.contains_key(&target) {
+            let mut entries = Vec::new();
+            if let Some(root) = self.target_kv_root(target) {
+                kv::list(&self.image, root, self.total_pages(), &mut entries)?;
+            }
+            self.kv_dirty.insert(target, entries);
+        }
+        Ok(self.kv_dirty.get_mut(&target).expect("just inserted"))
+    }
+
+    /// Rebuild every dirty target's KV tree at commit (§C.4): for each, free the old KV +
+    /// overflow pages, bulk-build a fresh balanced tree from the sorted buffered entries,
+    /// and switch the target's `kv_root`. Creates a FILE (`scope_id 0`) record on demand
+    /// the first time FILE gets KV; drops a record's KV (`kv_root = 0`) when it becomes
+    /// empty. Marks the registry dirty so the scope table picks up the new roots.
+    fn rebuild_dirty_kv(&mut self) -> Result<()> {
+        if self.kv_dirty.is_empty() {
+            return Ok(());
+        }
+        let targets = core::mem::take(&mut self.kv_dirty);
+        for (target, entries) in targets {
+            let old_root = self.target_kv_root(target).unwrap_or(0);
+            self.free_kv_tree(old_root);
+            let new_root = self.build_kv_tree(&entries)?;
+            self.set_target_kv_root(target, new_root);
+        }
+        Ok(())
+    }
+
+    /// Set a target's `kv_root`, creating the FILE record on demand and removing a record
+    /// that becomes empty metadata. Marks the registry dirty (the scope table must rebuild).
+    fn set_target_kv_root(&mut self, target: u32, new_root: u32) {
+        match self.scope_idx_any(target) {
+            Some(i) => {
+                if target == spec::FILE_SCOPE_ID && new_root == 0 {
+                    // FILE carries only KV; with none it has no metadata → drop its record
+                    // so an all-empty file returns to byte-compatible v4.0 (§C.6).
+                    self.scopes.remove(i);
+                } else {
+                    self.scopes[i].kv_root = new_root;
+                }
+            }
+            None => {
+                if new_root != 0 {
+                    debug_assert_eq!(target, spec::FILE_SCOPE_ID, "only FILE is auto-created");
+                    // FILE record: no name/type/version, just the KV root. Insert sorted
+                    // (id 0 sorts first).
+                    let pos = self.scopes.partition_point(|r| r.id < target);
+                    self.scopes.insert(
+                        pos,
+                        ScopeRec {
+                            id: target,
+                            version: 0,
+                            type_: 0,
+                            name: Vec::new(),
+                            kv_root: new_root,
+                        },
+                    );
+                }
+            }
+        }
+        self.scope_dirty = true;
+    }
+
+    /// Free a KV tree's pages (the tree + all overflow chains) into this txn's freed set
+    /// (reclaimed next txn, D7). `root == 0` is a no-op.
+    fn free_kv_tree(&mut self, root: u32) {
+        if root == 0 {
+            return;
+        }
+        let mut pages = Vec::new();
+        kv::collect_pages(&self.image, root, self.total_pages(), &mut pages);
+        for p in pages {
+            self.free_page(p);
+        }
+    }
+
+    /// Bulk-build a balanced KV B+tree from `entries` (sorted, key-unique) into freshly
+    /// allocated pages; returns the new root pgno (0 if empty). Large values are written to
+    /// overflow chains first; leaves pack entries greedily by encoded size, branches by
+    /// separator size — the shape is implementation-defined (§C.4/§D).
+    fn build_kv_tree(&mut self, entries: &[KvEntry]) -> Result<u32> {
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        // 1) Turn each entry into a leaf slot, writing overflow chains for large values.
+        let mut slots: Vec<LeafSlot> = Vec::with_capacity(entries.len());
+        for e in entries {
+            if e.value.len() <= spec::KV_INLINE_MAX {
+                slots.push(LeafSlot::Inline {
+                    key: e.key.clone(),
+                    type_: e.type_,
+                    value: e.value.clone(),
+                });
+            } else {
+                let first = self.write_overflow_chain(&e.value)?;
+                slots.push(LeafSlot::Overflow {
+                    key: e.key.clone(),
+                    type_: e.type_,
+                    first_pgno: first,
+                    total_len: e.value.len() as u64,
+                });
+            }
+        }
+        // 2) Pack leaves greedily (each leaf keeps >= 1 slot; the spec geometry guarantees
+        //    the largest single inline entry + its slot fits a fresh leaf body).
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut level: Vec<(u32, Vec<u8>)> = Vec::new(); // (pgno, first key of subtree)
+        let mut i = 0usize;
+        while i < slots.len() {
+            let mut used = 0usize;
+            let mut j = i;
+            while j < slots.len() {
+                let add = slots[j].footprint();
+                if j > i && used + add > spec::KV_PAGE_BODY {
+                    break;
+                }
+                used += add;
+                j += 1;
+            }
+            let pgno = self.alloc_page()?;
+            kv::write_kv_leaf(&mut buf, pgno, &slots[i..j]);
+            self.write_page(pgno, &buf);
+            level.push((pgno, slots[i].key().to_vec()));
+            i = j;
+        }
+        // 3) Build branch levels until a single root remains.
+        let mut height = 1u32;
+        while level.len() > 1 {
+            if height >= spec::TREE_HEIGHT_MAX {
+                return Err(Error::InvalidInput("kv tree would exceed TREE_HEIGHT_MAX"));
+            }
+            let next = self.emit_kv_branch_level(&level, &mut buf)?;
+            level = next;
+            height += 1;
+        }
+        Ok(level[0].0)
+    }
+
+    /// Build one KV branch level from `level` (the lower level's `(pgno, first_key)`),
+    /// returning the parent level. Children are packed greedily by separator byte size; the
+    /// final node is rebalanced so it never holds a single child (F1): a branch MUST have at
+    /// least two children (the validator rejects `count < 1`). When the greedy split would
+    /// leave a lone last child, one child is moved from the previous (full) node into it — the
+    /// previous keeps at least two (a full KV branch holds several children even with
+    /// max-size keys).
+    fn emit_kv_branch_level(
+        &mut self,
+        level: &[(u32, Vec<u8>)],
+        buf: &mut [u8],
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
+        // Phase 1: greedy group boundaries as `[start, end)` index ranges (each >= 1 child).
+        let body = spec::KV_PAGE_BODY - 4; // the leftmost-child `u32` consumes 4 body bytes
+        let mut groups: Vec<(usize, usize)> = Vec::new();
+        let mut i = 0usize;
+        while i < level.len() {
+            let mut used = 0usize;
+            let mut j = i + 1;
+            while j < level.len() {
+                let add = spec::kv_branch_sep_size(level[j].1.len()) + spec::KV_SLOT_SIZE;
+                if used + add > body {
+                    break;
+                }
+                used += add;
+                j += 1;
+            }
+            groups.push((i, j));
+            i = j;
+        }
+        // Phase 2: if the final node would be a lone child, steal one from the previous
+        // node so both end up with >= 2 children. The previous node is FULL (its greedy loop
+        // stopped because the singleton's separator did not fit), and a full KV branch holds
+        // at least four children: the largest separator is `kv_branch_sep_size(KV_KEY_MAX) +
+        // KV_SLOT_SIZE` = 1032 bytes and the body is `KV_PAGE_BODY - 4` = 4076, so >= 3
+        // separators (>= 4 children) always fit. Hence stealing one leaves the previous with
+        // at least three — never a new lone child.
+        if groups.len() >= 2 {
+            let last = groups.len() - 1;
+            if groups[last].1 - groups[last].0 == 1 {
+                let prev = last - 1;
+                debug_assert!(
+                    groups[prev].1 - groups[prev].0 >= 4,
+                    "a full KV branch holds >= 4 children (KV_KEY_MAX caps the separator size)"
+                );
+                groups[prev].1 -= 1;
+                groups[last].0 -= 1;
+            }
+        }
+        // Phase 3: emit each group.
+        let mut next: Vec<(u32, Vec<u8>)> = Vec::with_capacity(groups.len());
+        for (start, end) in groups {
+            let leftmost = level[start].0;
+            let seps: Vec<BranchSep> = level[start + 1..end]
+                .iter()
+                .map(|(child, sep)| BranchSep {
+                    sep: sep.clone(),
+                    child: *child,
+                })
+                .collect();
+            let pgno = self.alloc_page()?;
+            kv::write_kv_branch(buf, pgno, leftmost, &seps);
+            self.write_page(pgno, buf);
+            next.push((pgno, level[start].1.clone()));
+        }
+        Ok(next)
+    }
+
+    /// Write `value` to a fresh overflow page chain; returns the first page's pgno. Splits
+    /// into `ceil(len/overflow_payload)` pages, each pointing to the next (last → 0), §D.
+    fn write_overflow_chain(&mut self, value: &[u8]) -> Result<u32> {
+        debug_assert!(!value.is_empty());
+        let payload = spec::OVERFLOW_PAYLOAD;
+        let n = value.len().div_ceil(payload);
+        // Allocate all pages up front so each can reference the next.
+        let mut pgnos = Vec::with_capacity(n);
+        for _ in 0..n {
+            pgnos.push(self.alloc_page()?);
+        }
+        let mut buf = vec![0u8; PAGE_SIZE];
+        for (k, &pgno) in pgnos.iter().enumerate() {
+            let start = k * payload;
+            let end = (start + payload).min(value.len());
+            let next = if k + 1 < n { pgnos[k + 1] } else { 0 };
+            kv::write_overflow(&mut buf, pgno, next, &value[start..end]);
+            self.write_page(pgno, &buf);
+        }
+        Ok(pgnos[0])
+    }
+
+    /// The current logical page count of the in-memory image (for KV bounds checks).
+    #[inline]
+    fn total_pages(&self) -> u64 {
+        (self.image.len() / PAGE_SIZE) as u64
     }
 
     // --- COW internals ---
@@ -386,7 +982,12 @@ impl<K: IpKey> Writer<K> {
         );
         for (i, r) in records.iter().enumerate() {
             let off = base + PAGE_HEADER_SIZE + i * self.record_size;
-            record::write::<K>(&mut self.image[off..off + self.record_size], r.from, r.to, &r.scope);
+            record::write::<K>(
+                &mut self.image[off..off + self.record_size],
+                r.from,
+                r.to,
+                &r.scope,
+            );
         }
         finalize_checksum(&mut self.image[base..base + PAGE_SIZE]);
         Ok(pgno)
@@ -418,10 +1019,18 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn write_meta(&mut self, pgno: u32, txn_id: u64, updated_unixtime: u64) {
+        // A file with metadata is v4.1 (minor 1, meta_size 94); with none it stays
+        // byte-compatible v4.0 (minor 0, meta_size 90) — the upgrade-on-first-write and
+        // stays-v4.0-when-empty rule (§C.6).
+        let (version_minor, meta_size) = if self.scope_table_root != 0 {
+            (spec::VERSION_MINOR_METADATA, spec::META_SIZE_V41)
+        } else {
+            (spec::VERSION_MINOR, spec::META_SIZE)
+        };
         let meta = Meta {
             pgno,
-            version_minor: 0,
-            meta_size: spec::META_SIZE,
+            version_minor,
+            meta_size,
             page_size: PAGE_SIZE as u32,
             checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
             flags: K::VERSION.flag(),
@@ -435,6 +1044,7 @@ impl<K: IpKey> Writer<K> {
             record_count: self.record_count,
             txn_id,
             updated_unixtime,
+            scope_table_root: self.scope_table_root,
         };
         let base = pgno as usize * PAGE_SIZE;
         meta.encode_into(&mut self.image[base..base + PAGE_SIZE]);
@@ -455,9 +1065,7 @@ impl<K: IpKey> Writer<K> {
             // u64 math so the `1 << 32` literal and the comparison are valid on 32-bit
             // targets (where `usize` is 32-bit and `1usize << 32` would overflow).
             if (self.image.len() / PAGE_SIZE) as u64 >= (1u64 << 32) {
-                return Err(Error::InvalidInput(
-                    "file would exceed the 2^32-page limit",
-                ));
+                return Err(Error::InvalidInput("file would exceed the 2^32-page limit"));
             }
             let p = (self.image.len() / PAGE_SIZE) as u32;
             self.image.resize(self.image.len() + PAGE_SIZE, 0);
@@ -480,6 +1088,23 @@ impl<K: IpKey> Writer<K> {
         used[1] = true; // META-B
         if self.root_pgno != 0 {
             self.mark_reachable(self.root_pgno, 1, &mut used);
+        }
+        // The v4.1 scope table is also reachable (§C.5): its pages must not be reallocated.
+        if self.scope_table_root != 0 {
+            let mut sp = Vec::new();
+            scope::collect_pages(&self.image, self.scope_table_root, &mut sp);
+            for p in sp {
+                used[p as usize] = true;
+            }
+        }
+        // Every scope's KV tree + its overflow chains are reachable too (§C.5): walk each
+        // committed `kv_root` (incl. FILE's, if persisted) into the used set.
+        let mut kp = Vec::new();
+        for rec in &self.scopes {
+            kv::collect_pages(&self.image, rec.kv_root, total as u64, &mut kp);
+        }
+        for p in kp {
+            used[p as usize] = true;
         }
         (2..total as u32).filter(|&p| !used[p as usize]).collect()
     }
@@ -602,7 +1227,11 @@ impl<K: IpKey> Writer<K> {
         i: usize,
         child_depth: u32,
     ) -> Result<()> {
-        let (l, r, sep_idx) = if i > 0 { (i - 1, i, i - 1) } else { (i, i + 1, i) };
+        let (l, r, sep_idx) = if i > 0 {
+            (i - 1, i, i - 1)
+        } else {
+            (i, i + 1, i)
+        };
         let (p, split) = if child_depth == self.tree_height {
             let mut recs = self.read_leaf(children[l]);
             let mut rr = self.read_leaf(children[r]);
@@ -758,6 +1387,31 @@ impl<K: IpKey> Writer<K> {
         }
         None
     }
+}
+
+/// Group `n` children into fixed-`fanout` branch nodes as `[start, end)` index ranges,
+/// rebalancing so the FINAL node never has a single child (F1): a branch MUST have >= 2
+/// children. When `n % fanout == 1` (the last `chunks(fanout)` group would be a lone
+/// child), the last full group and that singleton — `fanout + 1` children total — are
+/// split into `ceil((fanout+1)/2)` and `floor((fanout+1)/2)`, both >= 2 since
+/// `fanout >= 3`. `n >= 2` (only called when a branch level is built).
+fn branch_group_bounds(n: usize, fanout: usize) -> Vec<(usize, usize)> {
+    debug_assert!(n >= 2 && fanout >= 3);
+    let mut bounds = Vec::new();
+    let mut start = 0usize;
+    while start < n {
+        let remaining = n - start;
+        let take = if remaining > fanout && remaining - fanout < 2 {
+            // The next-but-last group would leave a lone last child; split the tail
+            // (`fanout + 1` children) evenly so both halves have >= 2.
+            remaining.div_ceil(2)
+        } else {
+            fanout.min(remaining)
+        };
+        bounds.push((start, start + take));
+        start += take;
+    }
+    bounds
 }
 
 /// `partition_point` over an index range `[0, count)`: the number of indices for which
@@ -951,7 +1605,11 @@ mod tests {
             let mut got = Vec::new();
             w.scan(|f, t, s| got.push((f.0, t.0, s[0])));
             assert_eq!(got, oracle, "writer/oracle diverged at step {step}");
-            assert_eq!(w.record_count(), oracle.len() as u64, "count at step {step}");
+            assert_eq!(
+                w.record_count(),
+                oracle.len() as u64,
+                "count at step {step}"
+            );
         }
 
         // The whole on-disk structure must pass the reader's full validation.
@@ -1011,8 +1669,8 @@ mod tests {
         let mut w = Writer::<Ipv4Key>::create(1, 0);
         w.set(k(1), k(1), &[1]).unwrap();
         w.commit(1).unwrap(); // T1 = {[1,1]=1} durable
-        // A second txn writes new data pages but is NOT committed (crash before the
-        // meta flip): the active meta still points at T1; the new pages are orphans.
+                              // A second txn writes new data pages but is NOT committed (crash before the
+                              // meta flip): the active meta still points at T1; the new pages are orphans.
         w.set(k(2), k(2), &[2]).unwrap();
         let img = w.image().to_vec();
         let r = Reader::open(&img).unwrap();
@@ -1061,16 +1719,20 @@ mod tests {
         w.set(k(1), k(2), &[1]).unwrap();
         w.commit(1).unwrap();
         let mut img = w.into_image();
-        // Bump BOTH metas' version_minor to 1 (they share static identity) and
-        // re-checksum: a forward-compat file the reader accepts read-only, but which the
-        // writer MUST refuse to mutate (§5.1).
+        // Bump BOTH metas' version_minor to 2 — a minor NEWER than this writer implements
+        // (it implements up to 1, the v4.1 metadata system). Re-checksum: a forward-compat
+        // file the reader accepts read-only, but which the writer MUST refuse to mutate
+        // (§5.1/§C.6).
         for p in 0..2 {
             let page = &mut img[p * PAGE_SIZE..(p + 1) * PAGE_SIZE];
             page[spec::META_VERSION_MINOR..spec::META_VERSION_MINOR + 2]
-                .copy_from_slice(&1u16.to_le_bytes());
+                .copy_from_slice(&2u16.to_le_bytes());
             finalize_checksum(page);
         }
-        assert!(Reader::open(&img).is_ok(), "reader accepts a newer minor (forward-compat)");
+        assert!(
+            Reader::open(&img).is_ok(),
+            "reader accepts a newer minor (forward-compat)"
+        );
         assert!(
             matches!(
                 Writer::<Ipv4Key>::open_image(img),
@@ -1085,7 +1747,10 @@ mod tests {
         // Same oracle, IPv6 keys (16-byte records / 20-byte branch entries) — exercises
         // the v6 leaf/branch offset arithmetic through splits and merges.
         use crate::key::Ipv6Key;
-        let k6 = |n: u32| Ipv6Key { hi: 0, lo: n as u64 };
+        let k6 = |n: u32| Ipv6Key {
+            hi: 0,
+            lo: n as u64,
+        };
         let mut state = 0x0fed_cba9_8765_4321u64;
         let mut rng = || {
             state = state
@@ -1118,5 +1783,424 @@ mod tests {
         let img = w.into_image();
         let r = Reader::open(&img).unwrap();
         assert_eq!(r.record_count(), oracle.len() as u64);
+    }
+
+    // --- v4.1 scope registry tests ---
+
+    fn active_meta_of(img: &[u8]) -> Meta {
+        let a = Meta::decode(&img[..PAGE_SIZE]);
+        let b = Meta::decode(&img[PAGE_SIZE..2 * PAGE_SIZE]);
+        if b.txn_id > a.txn_id {
+            b
+        } else {
+            a
+        }
+    }
+
+    #[test]
+    fn scope_registry_roundtrip() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"feed-a").unwrap();
+        let b = w.scope_define(b"feed-b").unwrap();
+        assert_eq!((a, b), (1, 2)); // monotonic; 0 reserved for FILE
+        w.scope_set_type(a, 2).unwrap();
+        w.scope_bump_version(a).unwrap();
+        w.scope_bump_version(a).unwrap();
+        w.scope_set_version(b, 100).unwrap();
+        w.set(k(10), k(20), &[7]).unwrap(); // IP tree coexists
+        w.commit(1).unwrap();
+        let img = w.into_image();
+
+        let r = Reader::open(&img).unwrap(); // validates the v4.1 file incl. scope table
+        assert_eq!(r.lookup_v4(k(15)).unwrap(), Some(&[7u8][..]));
+
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.scope_name(a), Some(b"feed-a".to_vec()));
+        assert_eq!(w2.scope_name(b), Some(b"feed-b".to_vec()));
+        assert_eq!(w2.scope_type(a), Some(2));
+        assert_eq!(w2.scope_version(a), Some(2));
+        assert_eq!(w2.scope_version(b), Some(100));
+        assert_eq!(w2.scope_list().len(), 2);
+        assert_eq!(w2.scope_name(999), None);
+    }
+
+    #[test]
+    fn metadata_upgrades_to_v41_and_empty_stays_v40() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.set(k(1), k(2), &[1]).unwrap();
+        w.commit(1).unwrap();
+        let img = w.image().to_vec();
+        let active = active_meta_of(&img);
+        assert_eq!(active.version_minor, spec::VERSION_MINOR); // no metadata ⇒ v4.0
+        assert_eq!(active.scope_table_root, 0);
+
+        let _ = w.scope_define(b"x").unwrap();
+        w.commit(2).unwrap();
+        let img = w.into_image();
+        let active = active_meta_of(&img);
+        assert_eq!(active.version_minor, spec::VERSION_MINOR_METADATA);
+        assert_eq!(active.meta_size, spec::META_SIZE_V41);
+        assert!(active.scope_table_root >= 2);
+        assert!(Reader::open(&img).is_ok());
+    }
+
+    #[test]
+    fn dropping_all_scopes_returns_to_v40() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        w.commit(1).unwrap();
+        w.scope_drop(a).unwrap();
+        w.commit(2).unwrap();
+        let img = w.into_image();
+        let active = active_meta_of(&img);
+        assert_eq!(active.scope_table_root, 0);
+        assert_eq!(active.version_minor, spec::VERSION_MINOR);
+        assert!(Reader::open(&img).is_ok());
+    }
+
+    #[test]
+    fn scope_drop_removes_metadata_and_rejects_file_scope() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        let b = w.scope_define(b"b").unwrap();
+        assert!(matches!(
+            w.scope_drop(spec::FILE_SCOPE_ID),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(w.scope_drop(a).unwrap());
+        assert!(!w.scope_drop(a).unwrap()); // already gone
+        let c = w.scope_define(b"c").unwrap();
+        assert_eq!(c, 3); // dropped id 1 is NOT reused
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.scope_name(a), None);
+        assert_eq!(w2.scope_name(b), Some(b"b".to_vec()));
+        assert_eq!(w2.scope_name(c), Some(b"c".to_vec()));
+    }
+
+    #[test]
+    fn many_scopes_force_scope_tree_and_validate() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let n = 100u32; // > scope_leaf_max (14) ⇒ a multi-level scope tree
+        for i in 0..n {
+            let name = alloc::format!("scope-{i}");
+            let id = w.scope_define(name.as_bytes()).unwrap();
+            assert_eq!(id, i + 1);
+            w.scope_set_version(id, i as u64).unwrap();
+        }
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        Reader::open(&img).unwrap(); // full validation of the multi-level scope tree
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.scope_list().len(), n as usize);
+        assert_eq!(w2.scope_name(50), Some(b"scope-49".to_vec()));
+        assert_eq!(w2.scope_version(100), Some(99));
+    }
+
+    #[test]
+    fn scope_name_validation() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        assert!(matches!(
+            w.scope_define(&[0xff, 0xfe]),
+            Err(Error::InvalidInput(_))
+        )); // not UTF-8
+        assert!(matches!(
+            w.scope_define(&[b'a'; 257]),
+            Err(Error::InvalidInput(_))
+        )); // too long
+        assert!(w.scope_define(&[b'a'; 256]).is_ok()); // exactly 256 OK
+    }
+
+    // --- v4.1 per-scope KV tests (§C.4) ---
+
+    #[test]
+    fn kv_crud_and_reopen_roundtrip() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"feed-a").unwrap();
+        // KV on a defined scope and on FILE (target 0).
+        w.meta_set(a, b"license", 0, b"MIT").unwrap();
+        w.meta_set(a, b"category", 0, b"malware").unwrap();
+        w.meta_set(spec::FILE_SCOPE_ID, b"dataset", 0, b"blocklist-ipsets")
+            .unwrap();
+        // Binary (non-zero type) value stored unchecked.
+        w.meta_set(a, b"blob", 7, &[0u8, 1, 2, 0xff]).unwrap();
+        w.set(k(10), k(20), &[1]).unwrap(); // IP tree coexists
+        w.commit(1).unwrap();
+        let img = w.into_image();
+
+        let r = Reader::open(&img).unwrap(); // validates KV trees too
+        assert_eq!(r.lookup_v4(k(15)).unwrap(), Some(&[1u8][..]));
+
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(
+            w2.meta_get(a, b"license").unwrap(),
+            Some((0, b"MIT".to_vec()))
+        );
+        assert_eq!(
+            w2.meta_get(a, b"category").unwrap(),
+            Some((0, b"malware".to_vec()))
+        );
+        assert_eq!(
+            w2.meta_get(spec::FILE_SCOPE_ID, b"dataset").unwrap(),
+            Some((0, b"blocklist-ipsets".to_vec()))
+        );
+        assert_eq!(
+            w2.meta_get(a, b"blob").unwrap(),
+            Some((7, vec![0u8, 1, 2, 0xff]))
+        );
+        // Ordered list.
+        let listed: Vec<Vec<u8>> = w2.meta_list(a).unwrap().into_iter().map(|e| e.0).collect();
+        assert_eq!(
+            listed,
+            vec![b"blob".to_vec(), b"category".to_vec(), b"license".to_vec()]
+        );
+    }
+
+    #[test]
+    fn kv_overwrite_and_delete() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        w.meta_set(a, b"k", 0, b"v1").unwrap();
+        w.meta_set(a, b"k", 0, b"v2").unwrap(); // overwrite same key
+        assert_eq!(w.meta_get(a, b"k").unwrap(), Some((0, b"v2".to_vec())));
+        // delete present -> Changed; absent -> Unchanged.
+        assert_eq!(w.meta_delete(a, b"k").unwrap(), Changed::Changed);
+        assert_eq!(w.meta_get(a, b"k").unwrap(), None);
+        assert_eq!(w.meta_delete(a, b"k").unwrap(), Changed::Unchanged);
+        assert_eq!(w.meta_delete(a, b"never").unwrap(), Changed::Unchanged);
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.meta_get(a, b"k").unwrap(), None);
+    }
+
+    #[test]
+    fn kv_large_value_overflow_chain() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        // A multi-page value (3+ overflow pages). Non-zero type so arbitrary bytes are OK.
+        let big: Vec<u8> = (0..(spec::OVERFLOW_PAYLOAD * 2 + 123))
+            .map(|i| (i * 31 + 7) as u8)
+            .collect();
+        w.meta_set(a, b"payload", 9, &big).unwrap();
+        // A value exactly on the inline/overflow boundary stays inline; one past it spills.
+        let on_boundary = vec![0xABu8; spec::KV_INLINE_MAX];
+        let past_boundary = vec![0xCDu8; spec::KV_INLINE_MAX + 1];
+        w.meta_set(a, b"edge_in", 1, &on_boundary).unwrap();
+        w.meta_set(a, b"edge_out", 1, &past_boundary).unwrap();
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.meta_get(a, b"payload").unwrap(), Some((9, big)));
+        assert_eq!(w2.meta_get(a, b"edge_in").unwrap(), Some((1, on_boundary)));
+        assert_eq!(
+            w2.meta_get(a, b"edge_out").unwrap(),
+            Some((1, past_boundary))
+        );
+    }
+
+    #[test]
+    fn kv_empty_value_roundtrips() {
+        // A zero-length value is valid (stored inline) for both text and binary types.
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        w.meta_set(a, b"empty-text", 0, b"").unwrap();
+        w.meta_set(a, b"empty-bin", 3, b"").unwrap();
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(
+            w2.meta_get(a, b"empty-text").unwrap(),
+            Some((0, Vec::new()))
+        );
+        assert_eq!(w2.meta_get(a, b"empty-bin").unwrap(), Some((3, Vec::new())));
+    }
+
+    #[test]
+    fn kv_many_entries_force_multi_level_tree() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        let n = 2000u32;
+        for i in 0..n {
+            let key = alloc::format!("key-{i:06}");
+            let val = alloc::format!("value-for-{i}");
+            w.meta_set(a, key.as_bytes(), 0, val.as_bytes()).unwrap();
+        }
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        Reader::open(&img).unwrap(); // full validation of the multi-level KV tree
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.meta_list(a).unwrap().len(), n as usize);
+        // spot-check across the tree
+        for &i in &[0u32, 1, 777, 1999] {
+            let key = alloc::format!("key-{i:06}");
+            let val = alloc::format!("value-for-{i}");
+            assert_eq!(
+                w2.meta_get(a, key.as_bytes()).unwrap(),
+                Some((0, val.into_bytes())),
+                "i={i}"
+            );
+        }
+        // entries are returned in key order
+        let keys: Vec<Vec<u8>> = w2.meta_list(a).unwrap().into_iter().map(|e| e.0).collect();
+        assert!(keys.windows(2).all(|w| w[0] < w[1]), "keys sorted");
+    }
+
+    #[test]
+    fn kv_type0_utf8_validation() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        // type==0 rejects invalid UTF-8 / NUL (inline).
+        assert!(matches!(
+            w.meta_set(a, b"x", 0, &[0xff, 0xfe]),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            w.meta_set(a, b"x", 0, b"has\0nul"),
+            Err(Error::InvalidInput(_))
+        ));
+        // type==0 rejects invalid bytes even when the value spans an overflow chain.
+        let mut bad_big = vec![b'a'; spec::OVERFLOW_PAYLOAD + 10];
+        bad_big[spec::OVERFLOW_PAYLOAD + 5] = 0xff; // invalid UTF-8 byte past page 1
+        assert!(matches!(
+            w.meta_set(a, b"x", 0, &bad_big),
+            Err(Error::InvalidInput(_))
+        ));
+        // valid UTF-8 text accepted; non-zero type stores arbitrary bytes unchecked.
+        w.meta_set(a, b"ok", 0, "héllo-✓".as_bytes()).unwrap();
+        w.meta_set(a, b"bin", 5, &[0xff, 0x00, 0xfe]).unwrap();
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(
+            w2.meta_get(a, b"ok").unwrap(),
+            Some((0, "héllo-✓".as_bytes().to_vec()))
+        );
+        assert_eq!(
+            w2.meta_get(a, b"bin").unwrap(),
+            Some((5, vec![0xff, 0x00, 0xfe]))
+        );
+    }
+
+    #[test]
+    fn kv_key_validation_and_missing() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        assert!(matches!(
+            w.meta_set(a, b"", 0, b"v"),
+            Err(Error::InvalidInput(_))
+        )); // empty key
+        assert!(matches!(
+            w.meta_set(a, &[b'k'; 1025], 0, b"v"),
+            Err(Error::InvalidInput(_))
+        )); // > 1024
+        assert!(matches!(
+            w.meta_set(a, b"a\0b", 0, b"v"),
+            Err(Error::InvalidInput(_))
+        )); // NUL in key
+        assert!(matches!(
+            w.meta_set(a, &[0xff, 0xfe], 0, b"v"),
+            Err(Error::InvalidInput(_))
+        )); // non-UTF-8 key
+        assert!(w.meta_set(a, &[b'k'; 1024], 0, b"v").is_ok()); // exactly 1024 OK
+                                                                // missing key -> Ok(None)
+        assert_eq!(w.meta_get(a, b"absent").unwrap(), None);
+        // meta_set on an undefined scope -> InvalidInput
+        assert!(matches!(
+            w.meta_set(999, b"k", 0, b"v"),
+            Err(Error::InvalidInput(_))
+        ));
+        // FILE target is always valid.
+        assert!(w.meta_set(spec::FILE_SCOPE_ID, b"k", 0, b"v").is_ok());
+    }
+
+    #[test]
+    fn kv_rewrite_reuses_freed_pages() {
+        // The KV rebuild frees the old KV+overflow pages at commit (into `freed_this_txn`),
+        // which D7 reclaims only at the FOLLOWING commit (so a reader on the old meta keeps
+        // a stable snapshot). So a steady-state rewrite stops growing the file after the
+        // second rewrite reuses the pages freed by the first (mirrors the IP-tree reclaim
+        // test, where the freeing/alloc straddle two commits).
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        let rewrite = |w: &mut Writer<Ipv4Key>, txn: u64| {
+            for i in 0..500u32 {
+                let key = alloc::format!("k{i:04}");
+                w.meta_set(a, key.as_bytes(), 1, &vec![(i & 0xff) as u8; 600])
+                    .unwrap();
+            }
+            w.commit(txn).unwrap();
+        };
+        rewrite(&mut w, 1);
+        rewrite(&mut w, 2); // frees txn1's KV pages (reclaimable from txn 3 on)
+        let pages_after_second = w.image().len() / PAGE_SIZE;
+        rewrite(&mut w, 3); // reuses pages freed at commit 2
+        let pages_after_third = w.image().len() / PAGE_SIZE;
+        assert!(
+            pages_after_third <= pages_after_second + 4,
+            "steady-state KV rewrite must reuse freed pages: {pages_after_second} -> {pages_after_third}"
+        );
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.meta_list(a).unwrap().len(), 500);
+    }
+
+    #[test]
+    fn kv_scope_drop_frees_kv_and_overflow() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        let a = w.scope_define(b"a").unwrap();
+        let b = w.scope_define(b"b").unwrap();
+        // Give `a` a big KV (forces overflow pages), `b` a small one.
+        w.meta_set(a, b"big", 1, &vec![0x5Au8; spec::OVERFLOW_PAYLOAD * 2])
+            .unwrap();
+        w.meta_set(b, b"small", 0, b"x").unwrap();
+        w.commit(1).unwrap();
+        // Drop `a`: its KV + overflow pages are freed at commit 2 (reclaimable from commit
+        // 3 on, per D7). Then add data that must reuse them by commit 3.
+        w.scope_drop(a).unwrap();
+        w.commit(2).unwrap();
+        let pages_after_drop = w.image().len() / PAGE_SIZE;
+        for i in 0..40u32 {
+            w.meta_set(b, alloc::format!("n{i}").as_bytes(), 1, &[7u8; 100])
+                .unwrap();
+        }
+        w.commit(3).unwrap();
+        let pages_after_refill = w.image().len() / PAGE_SIZE;
+        assert!(
+            pages_after_refill <= pages_after_drop + 2,
+            "dropped scope's KV/overflow must be reused: {pages_after_drop} -> {pages_after_refill}"
+        );
+        let img = w.into_image();
+        let w2 = Writer::<Ipv4Key>::open_image(img).unwrap();
+        assert_eq!(w2.scope_name(a), None);
+        assert_eq!(w2.meta_get(b, b"small").unwrap(), Some((0, b"x".to_vec())));
+        assert_eq!(w2.meta_get(a, b"big").unwrap(), None); // a is gone
+    }
+
+    #[test]
+    fn kv_many_sets_one_rebuild_and_file_empty_returns_v40() {
+        // Many meta_set on FILE in one txn must persist (one rebuild), and a file whose
+        // only metadata is later removed returns to v4.0.
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.meta_set(spec::FILE_SCOPE_ID, b"a", 0, b"1").unwrap();
+        w.meta_set(spec::FILE_SCOPE_ID, b"b", 0, b"2").unwrap();
+        w.meta_set(spec::FILE_SCOPE_ID, b"c", 0, b"3").unwrap();
+        w.commit(1).unwrap();
+        let img = w.image().to_vec();
+        let active = active_meta_of(&img);
+        assert_eq!(active.version_minor, spec::VERSION_MINOR_METADATA);
+        assert_eq!(w.meta_list(spec::FILE_SCOPE_ID).unwrap().len(), 3);
+
+        // Delete all FILE keys -> FILE record dropped -> back to v4.0.
+        w.meta_delete(spec::FILE_SCOPE_ID, b"a").unwrap();
+        w.meta_delete(spec::FILE_SCOPE_ID, b"b").unwrap();
+        w.meta_delete(spec::FILE_SCOPE_ID, b"c").unwrap();
+        w.commit(2).unwrap();
+        let img = w.into_image();
+        let active = active_meta_of(&img);
+        assert_eq!(active.scope_table_root, 0);
+        assert_eq!(active.version_minor, spec::VERSION_MINOR);
+        assert!(Reader::open(&img).is_ok());
     }
 }

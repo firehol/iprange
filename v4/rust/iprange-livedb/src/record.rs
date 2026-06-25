@@ -74,7 +74,12 @@ mod tests {
         let sz = record_size(4, 4) as usize; // 12
         let mut buf = [0u8; 12];
         let scope = [0xAA, 0xBB, 0xCC, 0xDD];
-        write::<Ipv4Key>(&mut buf[..sz], Ipv4Key(0x0a00_0000), Ipv4Key(0x0a00_00ff), &scope);
+        write::<Ipv4Key>(
+            &mut buf[..sz],
+            Ipv4Key(0x0a00_0000),
+            Ipv4Key(0x0a00_00ff),
+            &scope,
+        );
         let r = RecordRef::<Ipv4Key>::new(&buf[..sz]);
         assert_eq!(r.from(), Ipv4Key(0x0a00_0000));
         assert_eq!(r.to(), Ipv4Key(0x0a00_00ff));

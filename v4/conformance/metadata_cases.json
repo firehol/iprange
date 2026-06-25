@@ -1,0 +1,119 @@
+[
+  {
+    "name": "meta_v40_empty",
+    "family": "v4",
+    "scope_width": 1,
+    "ip_ops": [{"op": "set", "from": "10", "to": "20", "scope": [1]}],
+    "scopes": [],
+    "file_kv": [],
+    "expect_scopes": [],
+    "expect_file_kv": []
+  },
+  {
+    "name": "meta_basic",
+    "family": "v4",
+    "scope_width": 1,
+    "ip_ops": [{"op": "set", "from": "100", "to": "200", "scope": [1]}],
+    "scopes": [
+      {
+        "name": "feed-a",
+        "set_version": 5,
+        "set_type": 1,
+        "kv": [
+          {"key": "license", "type": 0, "value_hex": "4d4954"},
+          {"key": "blob", "type": 2, "value_hex": "00ff10"}
+        ]
+      },
+      {"name": "feed-b", "kv": []}
+    ],
+    "file_kv": [{"key": "dataset", "type": 0, "value_hex": "66697265686f6c"}],
+    "expect_scopes": [
+      {
+        "id": 1,
+        "name": "feed-a",
+        "version": 5,
+        "type": 1,
+        "kv": [
+          {"key": "blob", "type": 2, "value_hex": "00ff10"},
+          {"key": "license", "type": 0, "value_hex": "4d4954"}
+        ]
+      },
+      {"id": 2, "name": "feed-b", "version": 0, "type": 0, "kv": []}
+    ],
+    "expect_file_kv": [{"key": "dataset", "type": 0, "value_hex": "66697265686f6c"}]
+  },
+  {
+    "name": "meta_overflow",
+    "family": "v4",
+    "scope_width": 0,
+    "ip_ops": [],
+    "scopes": [
+      {
+        "name": "big",
+        "set_version": 1,
+        "set_type": 0,
+        "kv": [
+          {"key": "small", "type": 0, "value_hex": "6869"},
+          {"key": "huge", "type": 0, "value_fill": {"byte": 65, "len": 5000}},
+          {"key": "bin", "type": 9, "value_fill": {"byte": 171, "len": 4096}}
+        ]
+      }
+    ],
+    "file_kv": [],
+    "expect_scopes": [
+      {
+        "id": 1,
+        "name": "big",
+        "version": 1,
+        "type": 0,
+        "kv": [
+          {"key": "bin", "type": 9, "value_fill": {"byte": 171, "len": 4096}},
+          {"key": "huge", "type": 0, "value_fill": {"byte": 65, "len": 5000}},
+          {"key": "small", "type": 0, "value_hex": "6869"}
+        ]
+      }
+    ],
+    "expect_file_kv": []
+  },
+  {
+    "name": "meta_v6",
+    "family": "v6",
+    "scope_width": 2,
+    "ip_ops": [{"op": "set", "from": "1", "to": "1000", "scope": [7, 7]}],
+    "scopes": [
+      {
+        "name": "v6feed",
+        "set_version": 3,
+        "set_type": 2,
+        "kv": [{"key": "note", "type": 0, "value_hex": "68656c6c6f"}]
+      }
+    ],
+    "file_kv": [{"key": "src", "type": 1, "value_hex": "74657374"}],
+    "expect_scopes": [
+      {
+        "id": 1,
+        "name": "v6feed",
+        "version": 3,
+        "type": 2,
+        "kv": [{"key": "note", "type": 0, "value_hex": "68656c6c6f"}]
+      }
+    ],
+    "expect_file_kv": [{"key": "src", "type": 1, "value_hex": "74657374"}]
+  },
+  {
+    "name": "meta_file_only",
+    "family": "v4",
+    "scope_width": 1,
+    "ip_ops": [{"op": "set", "from": "5", "to": "5", "scope": [9]}],
+    "scopes": [],
+    "file_kv": [
+      {"key": "a", "type": 0, "value_hex": "31"},
+      {"key": "b", "type": 0, "value_hex": "32"}
+    ],
+    "expect_scopes": [],
+    "expect_file_kv": [
+      {"key": "a", "type": 0, "value_hex": "31"},
+      {"key": "b", "type": 0, "value_hex": "32"}
+    ]
+  }
+]

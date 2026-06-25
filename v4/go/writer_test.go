@@ -171,12 +171,13 @@ func TestOpenImageRefusesNewerMinor(t *testing.T) {
 	must(t, w.Set(wk(1), wk(2), []byte{1}))
 	must(t, w.Commit(1))
 	img := append([]byte(nil), w.Image()...)
-	// Bump BOTH metas' version_minor to 1 (they share static identity) and re-checksum:
-	// a forward-compat file the reader accepts read-only, but the writer must refuse to
-	// mutate (§5.1). version_minor is a little-endian u16, so 1 -> bytes {1, 0}.
+	// Bump BOTH metas' version_minor to 2 — a minor NEWER than this writer implements (it
+	// implements up to 1, the v4.1 metadata system) — and re-checksum: a forward-compat
+	// file the reader accepts read-only, but the writer must refuse to mutate (§5.1/§C.6).
+	// version_minor is a little-endian u16, so 2 -> bytes {2, 0}.
 	for p := 0; p < 2; p++ {
 		page := img[p*pageSize : (p+1)*pageSize]
-		page[metaVersionMinor] = 1
+		page[metaVersionMinor] = 2
 		page[metaVersionMinor+1] = 0
 		finalizeChecksum(page)
 	}

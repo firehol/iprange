@@ -244,7 +244,16 @@ metas share identical static fields written at creation, §6.3.)
 older reader skips `[meta_size, page_size)`). The reader compares the static
 region `[16,50)`
 **only among checksum‑valid metas**; if two valid metas disagree on any static
-field, reject (corrupt). A checksum‑*invalid* meta is ignored (e.g. a torn inactive
+field, reject (corrupt) — **except `version_minor` `[26,28)` and `meta_size`
+`[28,30)`**, which an in‑place minor upgrade (e.g. v4.0→v4.1, scope‑api §C.6)
+legitimately leaves differing between the two metas during the transition (the new
+minor is written into the inactive meta first, so the older meta still carries the
+old minor until it is next overwritten). Those two fields stay per‑meta
+CRC‑protected and range‑validated (`90 ≤ meta_size ≤ page_size`, and `meta_size ==
+90` at `version_minor == 0`), and the active = higher‑`txn_id` meta is authoritative,
+so excluding them from the cross‑meta identity check opens no hole; the rest of
+`[16,50)` (i.e. `[16,26)` and `[30,50)`) MUST still match byte‑for‑byte. A
+checksum‑*invalid* meta is ignored (e.g. a torn inactive
 meta after a killed commit), **not** a reason to reject the file. Active = the valid
 meta with the higher `txn_id`; on an (illegal) tie, pgno 0; if neither is valid,
 reject. `entry_count` MUST be 0 for a meta page.

@@ -108,7 +108,9 @@ impl MmapReader {
         }
         let mut probe = [0u8; 1];
         if !matches!(file.read_at(&mut probe, len - 1), Ok(1)) {
-            return Err(Error::Structural("file truncated after fstat (probe failed)"));
+            return Err(Error::Structural(
+                "file truncated after fstat (probe failed)",
+            ));
         }
         Ok(MmapReader { _file: file, map })
     }
@@ -223,10 +225,7 @@ mod tests {
     fn temp_path(tag: &str) -> std::path::PathBuf {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "iprange-v4-{tag}-{}-{n}.iprdb",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("iprange-v4-{tag}-{}-{n}.iprdb", std::process::id()))
     }
 
     fn k(n: u32) -> Ipv4Key {
@@ -237,10 +236,10 @@ mod tests {
     fn create_commit_mmap_read() {
         let path = temp_path("ccr");
         {
-            let mut fw =
-                FileWriter::<Ipv4Key>::create(&path, 1, 0, DEFAULT_LOCK_WAIT).unwrap();
+            let mut fw = FileWriter::<Ipv4Key>::create(&path, 1, 0, DEFAULT_LOCK_WAIT).unwrap();
             for i in 0..1000u32 {
-                fw.set(k(i * 10), k(i * 10 + 3), &[(i & 0xff) as u8]).unwrap();
+                fw.set(k(i * 10), k(i * 10 + 3), &[(i & 0xff) as u8])
+                    .unwrap();
             }
             fw.commit(0).unwrap();
         } // drop releases LOCK_EX
@@ -257,8 +256,7 @@ mod tests {
     fn reopen_mutate_recommit() {
         let path = temp_path("rmr");
         {
-            let mut fw =
-                FileWriter::<Ipv4Key>::create(&path, 1, 0, DEFAULT_LOCK_WAIT).unwrap();
+            let mut fw = FileWriter::<Ipv4Key>::create(&path, 1, 0, DEFAULT_LOCK_WAIT).unwrap();
             // Non-adjacent ranges (gaps) so same-scope records don't coalesce.
             for i in 0..400u32 {
                 fw.set(k(i * 10), k(i * 10 + 3), &[1]).unwrap();
@@ -287,7 +285,10 @@ mod tests {
         let fw1 = FileWriter::<Ipv4Key>::create(&path, 1, 0, DEFAULT_LOCK_WAIT).unwrap();
         // A second writer cannot acquire LOCK_EX while the first holds it.
         let r = FileWriter::<Ipv4Key>::open(&path, Duration::from_millis(150));
-        assert!(r.is_err(), "second writer must not acquire the exclusive lock");
+        assert!(
+            r.is_err(),
+            "second writer must not acquire the exclusive lock"
+        );
         drop(fw1); // release
         let _ = FileWriter::<Ipv4Key>::open(&path, DEFAULT_LOCK_WAIT).unwrap(); // now succeeds
         let _ = std::fs::remove_file(&path);

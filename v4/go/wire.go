@@ -71,6 +71,10 @@ type meta struct {
 	recordCount     uint64
 	txnID           uint64
 	updatedUnixtime uint64
+	// scopeTableRoot (u32, v4.1 only — §C.1). 0 = no metadata (or v4.0). At v4.0
+	// (meta_size == 90) decodeMeta reports 0 and encodeInto writes 0 (keeping the reserved
+	// tail zero); at v4.1 (meta_size == 94) it holds the scope-table root pgno.
+	scopeTableRoot uint32
 }
 
 // encodeInto serializes into a full pageSize page buffer: zero-fill, write the page
@@ -96,6 +100,8 @@ func (m *meta) encodeInto(page []byte) {
 	le.PutUint64(page[metaRecordCount:], m.recordCount)
 	le.PutUint64(page[metaTxnID:], m.txnID)
 	le.PutUint64(page[metaUpdatedUnixtime:], m.updatedUnixtime)
+	// v4.1: scope_table_root at offset 90. 0 for v4.0 (keeps the reserved tail zero).
+	le.PutUint32(page[metaScopeTableRoot:], m.scopeTableRoot)
 	finalizeChecksum(page)
 }
 
@@ -120,7 +126,18 @@ func decodeMeta(page []byte) meta {
 		recordCount:     le.Uint64(page[metaRecordCount:]),
 		txnID:           le.Uint64(page[metaTxnID:]),
 		updatedUnixtime: le.Uint64(page[metaUpdatedUnixtime:]),
+		// v4.1 trailing field; absent (reported 0) at v4.0 (meta_size == 90).
+		scopeTableRoot: decodeScopeTableRoot(page),
 	}
+}
+
+// decodeScopeTableRoot reads scope_table_root only when the file declares a v4.1+ meta_size
+// (>= 94); a v4.0 file (meta_size 90) reports 0 (the field lies in its reserved tail, §C.1).
+func decodeScopeTableRoot(page []byte) uint32 {
+	if le.Uint16(page[metaMetaSize:]) >= metaSizeV41 {
+		return le.Uint32(page[metaScopeTableRoot:])
+	}
+	return 0
 }
 
 // readMagic reads the file magic from a page ([16, 24)). The bootstrap uses this before

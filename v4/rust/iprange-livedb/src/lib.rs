@@ -32,6 +32,7 @@
 extern crate alloc;
 
 pub mod crc32c;
+pub mod cursor;
 pub mod error;
 pub mod key;
 pub mod node;
@@ -42,6 +43,15 @@ pub mod wire;
 
 #[cfg(feature = "alloc")]
 pub mod writer;
+
+/// The v4.1 scope table (§C.2, §D): the per-scope metadata registry. Requires `alloc`.
+#[cfg(feature = "alloc")]
+pub mod scope;
+
+/// The v4.1 per-scope KV store (§C.4, §D): a slot-directory B+tree behind each scope's
+/// `kv_root`. Requires `alloc`.
+#[cfg(feature = "alloc")]
+pub(crate) mod kv;
 
 /// The v4 -> v3 snapshot bridge (§13): export a sealed, canonical v3 file from a
 /// validated v4 image. Opt-in (`export-v3` feature) so the core stays free of the v3
@@ -55,6 +65,7 @@ pub mod export;
 #[cfg(all(feature = "os", unix))]
 pub mod os;
 
+pub use cursor::Cursor;
 pub use error::{Error, Result};
 pub use key::{IpKey, Ipv4Key, Ipv6Key};
 pub use reader::Reader;
@@ -63,7 +74,7 @@ pub use spec::IpVersion;
 pub use wire::Meta;
 
 #[cfg(feature = "alloc")]
-pub use writer::Writer;
+pub use writer::{Changed, MetaEntry, Writer};
 
 #[cfg(feature = "export-v3")]
 pub use export::{export_v3, V3Meta};

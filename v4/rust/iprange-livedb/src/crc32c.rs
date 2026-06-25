@@ -106,7 +106,11 @@ mod tests {
         // Writing the computed sum into the field and recomputing must be stable, and
         // mutating ONLY the checksum field must not change the computed value.
         page[PH_CHECKSUM..PH_CHECKSUM + 8].copy_from_slice(&sum.to_le_bytes());
-        assert_eq!(page_checksum(&page), sum, "checksum field excluded from the span");
+        assert_eq!(
+            page_checksum(&page),
+            sum,
+            "checksum field excluded from the span"
+        );
         assert!(verify_page(&page));
     }
 

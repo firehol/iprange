@@ -56,9 +56,9 @@ pub struct V3Meta {
 pub fn export_v3(v4_bytes: &[u8], type_id: u32, meta: V3Meta) -> Result<Vec<u8>> {
     let reader = Reader::open(v4_bytes)?;
     match reader.version() {
-        IpVersion::V4 => export_inner::<Ipv4Key, V3Ipv4Key, _>(&reader, type_id, meta, |k| {
-            V3Ipv4Key(k.0)
-        }),
+        IpVersion::V4 => {
+            export_inner::<Ipv4Key, V3Ipv4Key, _>(&reader, type_id, meta, |k| V3Ipv4Key(k.0))
+        }
         IpVersion::V6 => export_inner::<Ipv6Key, V3Ipv6Key, _>(&reader, type_id, meta, |k| {
             V3Ipv6Key { hi: k.hi, lo: k.lo }
         }),
@@ -79,7 +79,8 @@ where
     F: Fn(K4) -> K3,
 {
     let scope_width = reader.scope_width();
-    let mut writer = V3Writer::<K3>::new(meta.feed_meta, meta.license_flags, meta.generation_unixtime);
+    let mut writer =
+        V3Writer::<K3>::new(meta.feed_meta, meta.license_flags, meta.generation_unixtime);
 
     // A v3 `add_range` error inside the scan closure is captured here and short-circuits
     // the scan (the closure cannot return a `Result`). Mapped to ExportUnrepresentable.
@@ -147,8 +148,12 @@ mod tests {
     fn v4_image_v6(scope_width: u8, ranges: &[(u64, u64, &[u8])]) -> Vec<u8> {
         let mut w = V4Writer::<Ipv6Key>::create(scope_width, 0);
         for &(from, to, scope) in ranges {
-            w.set(Ipv6Key { hi: 0, lo: from }, Ipv6Key { hi: 0, lo: to }, scope)
-                .unwrap();
+            w.set(
+                Ipv6Key { hi: 0, lo: from },
+                Ipv6Key { hi: 0, lo: to },
+                scope,
+            )
+            .unwrap();
         }
         w.commit(0).unwrap();
         w.into_image()
@@ -212,8 +217,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v6_scope_width_4() {
-        let ranges: &[(u64, u64, &[u8])] =
-            &[(10, 20, &[9, 9, 9, 9]), (1000, 2000, &[8, 8, 8, 8])];
+        let ranges: &[(u64, u64, &[u8])] = &[(10, 20, &[9, 9, 9, 9]), (1000, 2000, &[8, 8, 8, 8])];
         let img = v4_image_v6(4, ranges);
         let type_id = 2u32;
         let v3 = export_v3(&img, type_id, meta()).unwrap();
@@ -278,7 +282,11 @@ mod tests {
         let v3 = export_v3(&img, 1, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         // [10,60] (merged) + [100,110] = 2 records.
-        assert_eq!(r.record_count(), 2, "contiguous same-scope coalesced to one");
+        assert_eq!(
+            r.record_count(),
+            2,
+            "contiguous same-scope coalesced to one"
+        );
         // the merged span is fully covered and resolves to the shared scope.
         for ip in [10u32, 40, 41, 60] {
             let hit = r.lookup_v4(V3Ipv4Key(ip)).unwrap().expect("present");
@@ -299,7 +307,10 @@ mod tests {
         assert_eq!(r.record_count(), 2);
         let a = r.lookup_v4(V3Ipv4Key(15)).unwrap().unwrap();
         let b = r.lookup_v4(V3Ipv4Key(150)).unwrap().unwrap();
-        assert_eq!(a.value_id, b.value_id, "byte-equal scopes interned to one id");
+        assert_eq!(
+            a.value_id, b.value_id,
+            "byte-equal scopes interned to one id"
+        );
     }
 
     // --- ExportUnrepresentable: the v3 writer rejects the stream ---
@@ -345,8 +356,7 @@ mod tests {
 
     #[test]
     fn export_is_deterministic() {
-        let ranges: &[(u32, u32, &[u8])] =
-            &[(10, 20, &[1, 0, 0, 0]), (100, 200, &[2, 0, 0, 0])];
+        let ranges: &[(u32, u32, &[u8])] = &[(10, 20, &[1, 0, 0, 0]), (100, 200, &[2, 0, 0, 0])];
         let a = export_v3(&v4_image_v4(4, ranges), 9, meta()).unwrap();
         let b = export_v3(&v4_image_v4(4, ranges), 9, meta()).unwrap();
         assert_eq!(a, b, "same v4 input -> byte-identical v3 snapshot");
@@ -401,6 +411,10 @@ mod tests {
         w.set(Ipv4Key(100), Ipv4Key(200), &[3, 0, 0, 0]).unwrap();
         w.commit(0).unwrap();
         let out = export_v3(&w.into_image(), 7, m).unwrap();
-        assert_eq!(out, decode_hex(CROSS_GOLDEN_HEX), "cross-language golden vector");
+        assert_eq!(
+            out,
+            decode_hex(CROSS_GOLDEN_HEX),
+            "cross-language golden vector"
+        );
     }
 }

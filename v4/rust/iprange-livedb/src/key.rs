@@ -37,6 +37,17 @@ pub trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// `self - 1`, or `None` if `self` is `family_min` (§4). Used to left-trim at
     /// `from − 1`.
     fn checked_dec(self) -> Option<Self>;
+
+    /// Bit width of the family: 32 (IPv4) or 128 (IPv6). Used by CIDR decomposition.
+    const BITS: u32;
+
+    /// Widen the key to `u128` for CIDR decomposition (an output path, not the hot
+    /// compare path). The value occupies the low [`BITS`](Self::BITS) bits.
+    fn to_u128(self) -> u128;
+
+    /// Narrow a `u128` (its low [`BITS`](Self::BITS) bits) back to a key — the inverse of
+    /// [`to_u128`](Self::to_u128) for in-range values.
+    fn from_u128(v: u128) -> Self;
 }
 
 /// An IPv4 address as a big-endian-valued `u32` (e.g. `192.0.2.1` = `0xC000_0201`),
@@ -68,6 +79,18 @@ impl IpKey for Ipv4Key {
     #[inline]
     fn checked_dec(self) -> Option<Self> {
         self.0.checked_sub(1).map(Ipv4Key)
+    }
+
+    const BITS: u32 = 32;
+
+    #[inline]
+    fn to_u128(self) -> u128 {
+        self.0 as u128
+    }
+
+    #[inline]
+    fn from_u128(v: u128) -> Self {
+        Ipv4Key(v as u32)
     }
 }
 
@@ -163,6 +186,21 @@ impl IpKey for Ipv6Key {
             }
         })
     }
+
+    const BITS: u32 = 128;
+
+    #[inline]
+    fn to_u128(self) -> u128 {
+        ((self.hi as u128) << 64) | (self.lo as u128)
+    }
+
+    #[inline]
+    fn from_u128(v: u128) -> Self {
+        Ipv6Key {
+            hi: (v >> 64) as u64,
+            lo: v as u64,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -182,7 +220,10 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // lo, little-endian
         ];
-        assert_eq!(buf, expected, "IPv6 key on-disk bytes must match the encoding");
+        assert_eq!(
+            buf, expected,
+            "IPv6 key on-disk bytes must match the encoding"
+        );
         assert_eq!(Ipv6Key::read_le(&buf), k, "round-trip");
         assert_eq!(k.to_u128(), 0x2001_0db8_0000_0000_0000_0000_0000_0001);
     }

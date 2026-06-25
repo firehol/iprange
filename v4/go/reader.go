@@ -70,7 +70,44 @@ func Open(b []byte) (*Reader, error) {
 	if err := r.validateTree(); err != nil {
 		return nil, err
 	}
+	if err := r.validateScopeTableTree(); err != nil {
+		return nil, err
+	}
 	return r, nil
+}
+
+// validateScopeTableTree validates the v4.1 metadata (§C.5) before exposing the reader: the
+// scope table, then every scope's per-scope KV tree (incl. its overflow chains). It
+// range-checks every kv_root/child/overflow pgno, enforces TREE_HEIGHT_MAX, checks sorted +
+// disjoint keys, page-type + self-pgno + CRC32C, overflow read-by-count, and rejects type == 0
+// values that are not valid UTF-8 over the whole reassembled value. A v4.0 file has
+// scope_table_root == 0 (no metadata) and this is a no-op.
+func (r *Reader) validateScopeTableTree() error {
+	root := r.meta.scopeTableRoot
+	if root == 0 {
+		return nil
+	}
+	// F2: a single file-wide visitor threads through the scope table AND every per-scope KV
+	// tree AND every overflow chain. The first visit marks a page; any second visit (a shared
+	// overflow chain, a duplicate child pgno, or any other aliasing) is a structural error.
+	// This proves the metadata page-forest disjoint + acyclic and subsumes the per-node
+	// duplicate-child check. total_pages was bounded by Open (>= 2, <= 2^32, file-backed).
+	vis := &pageVisitor{visited: make([]bool, r.meta.totalPages)}
+	if err := validateScopeTable(r.bytes, root, r.meta.totalPages, vis); err != nil {
+		return err
+	}
+	// Each scope record's kv_root is a separate B+tree (§C.4). The scope table is now
+	// validated, so loading the records is bounded and safe.
+	recs, err := loadAllScopes(r.bytes, root)
+	if err != nil {
+		return err
+	}
+	for i := range recs {
+		if err := validateKV(r.bytes, recs[i].kvRoot, r.meta.totalPages, vis); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Version returns the file's IP family.
@@ -125,6 +162,118 @@ func (r *Reader) ScanV6(f func(from, to Ipv6Key, scope []byte)) error {
 		readerScanNode[Ipv6Key](r, r.meta.rootPgno, 1, f)
 	}
 	return nil
+}
+
+// --- v4.1 metadata reads (§C.2/§C.4) ---
+//
+// These mirror the Writer's metadata getters but descend the on-disk committed scope table
+// and per-scope KV trees (validated at Open), so a read-only shared-lock consumer reads a
+// self-describing file's metadata. A v4.0 image (scope_table_root == 0) returns the empty/
+// not-found result everywhere. All reads go through the bounds-safe byte views.
+
+// scopeByID resolves one scope record from the committed scope tree, ignoring an error (the
+// tree was validated at Open, so a descent error means not-found from a caller's view).
+func (r *Reader) scopeByID(id uint32) (scopeRec, bool) {
+	rec, found, err := findScopeByID(r.bytes, r.meta.scopeTableRoot, r.meta.totalPages, id)
+	if err != nil {
+		return scopeRec{}, false
+	}
+	return rec, found
+}
+
+// ScopeName returns the scope's name (UTF-8 bytes, a copy) and whether it exists. A missing
+// scope returns (nil, false). Mirrors Writer.ScopeName.
+func (r *Reader) ScopeName(scopeID uint32) ([]byte, bool) {
+	if scopeID == fileScopeID {
+		return nil, false
+	}
+	if rec, ok := r.scopeByID(scopeID); ok {
+		return cloneBytes(rec.name), true
+	}
+	return nil, false
+}
+
+// ScopeList returns all defined scopes as (id, name), ascending by scope_id. The FILE target
+// (scope_id 0) is a dataset-metadata target, not a defined scope, so it is excluded (§C.2).
+// Mirrors Writer.ScopeList.
+func (r *Reader) ScopeList() []ScopeEntry {
+	recs, err := loadAllScopes(r.bytes, r.meta.scopeTableRoot)
+	if err != nil {
+		return nil
+	}
+	out := make([]ScopeEntry, 0, len(recs))
+	for i := range recs {
+		if recs[i].id == fileScopeID {
+			continue
+		}
+		out = append(out, ScopeEntry{ID: recs[i].id, Name: cloneBytes(recs[i].name)})
+	}
+	return out
+}
+
+// ScopeVersion returns the scope's version and whether it exists. Mirrors Writer.ScopeVersion.
+func (r *Reader) ScopeVersion(scopeID uint32) (uint64, bool) {
+	if scopeID == fileScopeID {
+		return 0, false
+	}
+	if rec, ok := r.scopeByID(scopeID); ok {
+		return rec.version, true
+	}
+	return 0, false
+}
+
+// ScopeType returns the scope's opaque type byte and whether it exists. Mirrors Writer.ScopeType.
+func (r *Reader) ScopeType(scopeID uint32) (uint8, bool) {
+	if scopeID == fileScopeID {
+		return 0, false
+	}
+	if rec, ok := r.scopeByID(scopeID); ok {
+		return rec.typ, true
+	}
+	return 0, false
+}
+
+// targetKVRoot returns the committed kv_root of target and whether the target has a record.
+// FILE (scope_id 0) is looked up like any scope record. Mirrors Writer.targetKVRoot.
+func (r *Reader) targetKVRoot(target uint32) (uint32, bool) {
+	rec, ok := r.scopeByID(target)
+	if !ok {
+		return 0, false
+	}
+	return rec.kvRoot, true
+}
+
+// MetaGet gets key on target as (type, value) (the whole reassembled value) and found=true, or
+// found=false if absent (§C.7). target = scope_id, 0 = FILE. A non-existent target → found=false.
+// Mirrors Writer.MetaGet, descending the committed KV tree.
+func (r *Reader) MetaGet(target uint32, key []byte) (typ uint32, value []byte, found bool, err error) {
+	if err := checkKey(key); err != nil {
+		return 0, nil, false, err
+	}
+	root, ok := r.targetKVRoot(target)
+	if !ok {
+		return 0, nil, false, nil
+	}
+	return kvGet(r.bytes, root, key, r.meta.totalPages)
+}
+
+// MetaList lists every (key, type, value) on target, ordered by key (§C.4). A non-existent
+// target → an empty list. Mirrors Writer.MetaList, descending the committed KV tree.
+func (r *Reader) MetaList(target uint32) ([]MetaEntry, error) {
+	var out []MetaEntry
+	root, ok := r.targetKVRoot(target)
+	if !ok {
+		return out, nil
+	}
+	var entries []kvEntry
+	if err := kvList(r.bytes, root, r.meta.totalPages, &entries); err != nil {
+		return nil, err
+	}
+	out = make([]MetaEntry, 0, len(entries))
+	for i := range entries {
+		out = append(out, MetaEntry{Key: entries[i].key, Type: entries[i].typ, Value: entries[i].value})
+	}
+	return out, nil
 }
 
 // --- internals ---
@@ -352,9 +501,18 @@ func selectActiveMeta(b []byte) (meta, error) {
 	case !aok && bok:
 		return mb, nil
 	default:
-		sa := b[metaStaticStart:metaStaticEnd]
-		sb := b[pageSize+metaStaticStart : pageSize+metaStaticEnd]
-		if !bytes.Equal(sa, sb) {
+		// Both valid metas MUST agree on the static identity region [16,50) — EXCEPT
+		// version_minor (26) and meta_size (28): a v4.0→v4.1 in-place upgrade (§C.6) writes
+		// the new minor/meta_size into one meta while the other still holds the old values,
+		// so they legitimately differ there during the transition (the active/higher-txn_id
+		// meta is authoritative, and each field is still CRC-protected). The rest of the
+		// static identity must match byte-for-byte. Ranges: [16,26) and [30,50)
+		// (metaPageSize == 30 is the field after meta_size).
+		loA := b[metaStaticStart:metaVersionMinor]
+		loB := b[pageSize+metaStaticStart : pageSize+metaVersionMinor]
+		hiA := b[metaPageSize:metaStaticEnd]
+		hiB := b[pageSize+metaPageSize : pageSize+metaStaticEnd]
+		if !bytes.Equal(loA, loB) || !bytes.Equal(hiA, hiB) {
 			return meta{}, errStructural("metas disagree on static identity")
 		}
 		// Higher txn_id active; on an (illegal) tie pick pgno 0 (== ma).
@@ -400,6 +558,12 @@ func classify(page []byte, expectedPgno uint32) (meta, bool, error) {
 		return meta{}, false, errBadMetaSize(m.metaSize)
 	}
 	if m.versionMinor == 0 && m.metaSize != metaSize {
+		return meta{}, false, errBadMetaSize(m.metaSize)
+	}
+	// v4.1 declares exactly meta_size 94 (F7): pin it like the minor-0 rule. minor >= 2
+	// keeps the >= 90 + tail-skip path, so a future minor declaring a larger meta_size
+	// stays forward-compatible.
+	if m.versionMinor == versionMinorMetadata && m.metaSize != metaSizeV41 {
 		return meta{}, false, errBadMetaSize(m.metaSize)
 	}
 	expectKW := ipVersionFromFlagBit(m.flags).keyWidth()

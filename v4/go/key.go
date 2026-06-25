@@ -21,6 +21,10 @@ type ipKey[T any] interface {
 	maxKey() T             // the family maximum (all-ones)
 	width() int
 	version() IPVersion
+	// CIDR-math helpers (§v4.1.B), not on the hot compare path.
+	bitWidth() int      // address bits: 32 (IPv4) or 128 (IPv6)
+	toU128() Uint128    // numeric value widened to 128 bits
+	fromU128(Uint128) T // construct from a 128-bit value (low bits per width)
 }
 
 // Ipv4Key is an IPv4 address as a big-endian-valued uint32 (192.0.2.1 = 0xC0000201),
@@ -58,6 +62,10 @@ func (k Ipv4Key) checkedDec() (Ipv4Key, bool) {
 	}
 	return k - 1, true
 }
+
+func (Ipv4Key) bitWidth() int              { return 32 }
+func (k Ipv4Key) toU128() Uint128          { return Uint128{Hi: 0, Lo: uint64(k)} }
+func (Ipv4Key) fromU128(v Uint128) Ipv4Key { return Ipv4Key(uint32(v.Lo)) }
 
 // Ipv6Key is an IPv6 address as (Hi, Lo) uint64 — Hi is the most-significant 64 bits.
 // Stored as Hi little-endian then Lo little-endian (§4). Compared Hi then Lo, which is
@@ -120,4 +128,9 @@ func (k Ipv6Key) checkedDec() (Ipv6Key, bool) {
 	return Ipv6Key{Hi: k.Hi - borrow, Lo: lo}, true
 }
 
+func (Ipv6Key) bitWidth() int              { return 128 }
+func (k Ipv6Key) toU128() Uint128          { return Uint128{Hi: k.Hi, Lo: k.Lo} }
+func (Ipv6Key) fromU128(v Uint128) Ipv6Key { return Ipv6Key{Hi: v.Hi, Lo: v.Lo} }
+
 const maxUint64 = ^uint64(0)
+const maxUint32 = ^uint32(0)

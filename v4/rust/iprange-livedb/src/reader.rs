@@ -9,6 +9,7 @@
 //! validated structure, returning the borrowed `scope` (zero-copy, D11).
 
 use crate::crc32c;
+use crate::cursor::Cursor;
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::node::{BranchView, LeafView};
@@ -52,10 +53,7 @@ impl<'a> Reader<'a> {
             });
         }
         if have < needed {
-            return Err(Error::FileTooShort {
-                need: needed,
-                have,
-            });
+            return Err(Error::FileTooShort { need: needed, have });
         }
         if meta.tree_height > spec::TREE_HEIGHT_MAX {
             return Err(Error::Structural("tree_height > 32"));
@@ -78,7 +76,42 @@ impl<'a> Reader<'a> {
             branch_max: spec::branch_max(meta.key_width),
         };
         reader.validate_tree()?;
+        reader.validate_scope_table()?;
         Ok(reader)
+    }
+
+    /// Validate the v4.1 metadata (§C.5) before exposing the reader: the scope table, then
+    /// every scope's per-scope KV tree (incl. its overflow chains). A v4.0 file has
+    /// `scope_table_root == 0` (no metadata) and this is a no-op. Without `alloc` the reader
+    /// fails closed on a metadata-bearing file (it cannot walk the scope structures).
+    fn validate_scope_table(&self) -> Result<()> {
+        let root = self.meta.scope_table_root;
+        if root == 0 {
+            return Ok(());
+        }
+        #[cfg(feature = "alloc")]
+        {
+            // One file-wide page-disjointness bitset (F2) shared by the scope-table walk,
+            // every per-scope KV tree, and every overflow chain: a page reached twice — a
+            // duplicate child pgno, an aliased subtree, or a shared overflow chain across two
+            // KV entries (the glm PoC wrong-answer bug) — is structural corruption. This
+            // makes the whole v4.1 metadata page forest provably disjoint and acyclic.
+            let mut visited = alloc::vec![false; self.meta.total_pages as usize];
+            crate::scope::validate(self.bytes, root, self.meta.total_pages, &mut visited)?;
+            // Each scope record's `kv_root` is a separate B+tree (§C.4): walk and validate
+            // it (range-check pgnos, sorted+disjoint keys, height bound, per-page CRC32C,
+            // overflow read-by-count, type==0 text), sharing `visited`. The scope table is
+            // now validated, so loading the records is bounded and safe.
+            let recs = crate::scope::load_all(self.bytes, root)?;
+            for rec in &recs {
+                crate::kv::validate(self.bytes, rec.kv_root, self.meta.total_pages, &mut visited)?;
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "alloc"))]
+        {
+            Err(Error::Incompatible("v4.1 metadata requires alloc"))
+        }
     }
 
     /// The file's IP family.
@@ -103,6 +136,35 @@ impl<'a> Reader<'a> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.meta.root_pgno == 0
+    }
+
+    /// Open an ordered [`Cursor`] over this validated image for `seek`/`next`/`prev`
+    /// traversal and the standard helpers (§v4.1.A/B). Errors on a key-family mismatch.
+    pub fn cursor<K: IpKey>(&self) -> Result<Cursor<'_, 'a, K>> {
+        if K::VERSION != self.version {
+            return Err(Error::InvalidInput("cursor key family mismatch"));
+        }
+        Ok(Cursor::new(self))
+    }
+
+    // --- cursor support (validated tree; pgnos already checked by the open-time walk) ---
+
+    /// The active root page number (0 = empty tree).
+    #[inline]
+    pub(crate) fn root_pgno(&self) -> u32 {
+        self.meta.root_pgno
+    }
+
+    /// The tree height (0 = empty; the leaf level equals the height).
+    #[inline]
+    pub(crate) fn tree_height(&self) -> u32 {
+        self.meta.tree_height
+    }
+
+    /// The fixed per-record size in bytes (`2·key_width + scope_width`).
+    #[inline]
+    pub(crate) fn record_size_bytes(&self) -> usize {
+        self.record_size
     }
 
     /// The validated active meta (for the writer's `open_image`, §6.2).
@@ -157,13 +219,126 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
+    // --- v4.1 metadata reads (§C, mirror the Writer's read API) ---
+    //
+    // Read-only, shared-lock consumers (the `MmapReader` path) descend the **on-disk
+    // committed tree** validated at `open` (no in-memory registry). A v4.0 file has
+    // `scope_table_root == 0` ⇒ no metadata ⇒ empty/`None`, never an error or a panic. All
+    // descents go through the existing bounds-safe byte functions in `scope`/`kv`.
+
+    /// All defined scopes as `(scope_id, name)`, ascending by `scope_id`. The FILE target
+    /// (`scope_id 0`) is a dataset-metadata target, not a defined scope, so it is excluded
+    /// even when it carries KV (§C.2). Mirrors [`Writer::scope_list`].
+    #[cfg(feature = "alloc")]
+    pub fn scope_list(&self) -> alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)> {
+        let root = self.meta.scope_table_root;
+        if root == 0 {
+            return alloc::vec::Vec::new();
+        }
+        // The tree was validated at `open`, so `load_all` cannot fail here; treat any error
+        // as no metadata rather than panicking.
+        match crate::scope::load_all(self.bytes, root) {
+            Ok(recs) => recs
+                .into_iter()
+                .filter(|r| r.id != spec::FILE_SCOPE_ID)
+                .map(|r| (r.id, r.name))
+                .collect(),
+            Err(_) => alloc::vec::Vec::new(),
+        }
+    }
+
+    /// The scope's `name` (UTF-8 bytes), or `None` if it does not exist. The FILE target
+    /// (`scope_id 0`) is never a defined scope, so it returns `None`. Mirrors
+    /// [`Writer::scope_name`].
+    #[cfg(feature = "alloc")]
+    pub fn scope_name(&self, scope_id: u32) -> Option<alloc::vec::Vec<u8>> {
+        self.scope_rec(scope_id).map(|r| r.name)
+    }
+
+    /// The scope's `version`, or `None` if it does not exist. Mirrors [`Writer::scope_version`].
+    #[cfg(feature = "alloc")]
+    pub fn scope_version(&self, scope_id: u32) -> Option<u64> {
+        self.scope_rec(scope_id).map(|r| r.version)
+    }
+
+    /// The scope's opaque `type` byte, or `None` if it does not exist. Mirrors
+    /// [`Writer::scope_type`].
+    #[cfg(feature = "alloc")]
+    pub fn scope_type(&self, scope_id: u32) -> Option<u8> {
+        self.scope_rec(scope_id).map(|r| r.type_)
+    }
+
+    /// Get `key` on `target` as `(type, value)` (the whole reassembled value), or
+    /// `Ok(None)` if absent (§C.7). Resolves the target's committed `kv_root` (`target == 0`
+    /// ⇒ the FILE record), then descends its KV tree. A non-existent target or
+    /// `kv_root == 0` ⇒ `Ok(None)`. Mirrors [`Writer::meta_get`].
+    #[cfg(feature = "alloc")]
+    pub fn meta_get(&self, target: u32, key: &[u8]) -> Result<Option<(u32, alloc::vec::Vec<u8>)>> {
+        crate::kv::check_key(key)?;
+        let root = match self.target_kv_root(target)? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        crate::kv::get(self.bytes, root, key, self.meta.total_pages)
+    }
+
+    /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). A non-existent
+    /// target or `kv_root == 0` ⇒ an empty list. Mirrors [`Writer::meta_list`].
+    #[cfg(feature = "alloc")]
+    pub fn meta_list(&self, target: u32) -> Result<alloc::vec::Vec<crate::writer::MetaEntry>> {
+        let mut out = alloc::vec::Vec::new();
+        if let Some(root) = self.target_kv_root(target)? {
+            let mut entries = alloc::vec::Vec::new();
+            crate::kv::list(self.bytes, root, self.meta.total_pages, &mut entries)?;
+            out = entries
+                .into_iter()
+                .map(|e| (e.key, e.type_, e.value))
+                .collect();
+        }
+        Ok(out)
+    }
+
+    /// The committed per-scope record for a **defined** scope (the FILE target `scope_id 0`
+    /// is excluded, mirroring the Writer's `scope_pos`). `scope_table_root == 0` (a v4.0
+    /// file) ⇒ `None`. The tree was validated at `open`, so any descent error here is
+    /// treated as "not found" rather than panicking.
+    #[cfg(feature = "alloc")]
+    fn scope_rec(&self, scope_id: u32) -> Option<crate::scope::ScopeRec> {
+        if scope_id == spec::FILE_SCOPE_ID {
+            return None;
+        }
+        crate::scope::find(
+            self.bytes,
+            self.meta.scope_table_root,
+            self.meta.total_pages,
+            scope_id,
+        )
+        .ok()
+        .flatten()
+    }
+
+    /// The committed `kv_root` of `target` (`None` if the target has no record or no KV).
+    /// FILE (`scope_id 0`) is looked up like any scope record. Mirrors the Writer's
+    /// `target_kv_root` over the on-disk tree.
+    #[cfg(feature = "alloc")]
+    fn target_kv_root(&self, target: u32) -> Result<Option<u32>> {
+        let root = self.meta.scope_table_root;
+        if root == 0 {
+            return Ok(None);
+        }
+        match crate::scope::find(self.bytes, root, self.meta.total_pages, target)? {
+            Some(rec) if rec.kv_root != 0 => Ok(Some(rec.kv_root)),
+            _ => Ok(None),
+        }
+    }
+
     // --- internals ---
 
     /// The `pgno`-th page. `pgno < total_pages` is guaranteed by the caller (geometry +
     /// the validate walk check every pgno before access), and `total_pages·page_size <=
     /// bytes.len()` was checked in `open`, so the slice is always in bounds.
     #[inline]
-    fn page_bytes(&self, pgno: u32) -> &'a [u8] {
+    pub(crate) fn page_bytes(&self, pgno: u32) -> &'a [u8] {
         let bytes: &'a [u8] = self.bytes;
         let off = pgno as usize * spec::PAGE_SIZE;
         &bytes[off..off + spec::PAGE_SIZE]
@@ -396,10 +571,19 @@ fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
         (None, None) => Err(Error::Structural("no valid meta page")),
         (Some(m), None) | (None, Some(m)) => Ok(m),
         (Some(ma), Some(mb)) => {
-            let sa = &bytes[spec::META_STATIC_START..spec::META_STATIC_END];
-            let sb = &bytes
-                [spec::PAGE_SIZE + spec::META_STATIC_START..spec::PAGE_SIZE + spec::META_STATIC_END];
-            if sa != sb {
+            // Both valid metas MUST agree on the static identity region [16,50) — EXCEPT
+            // `version_minor` (26) and `meta_size` (28): a v4.0→v4.1 in-place upgrade (§C.6)
+            // writes the new minor into one meta while the other still holds the old minor,
+            // so they legitimately differ there during the transition (the active/higher-
+            // `txn_id` meta is authoritative, and each field is still CRC-protected). The
+            // rest of the static identity must match byte-for-byte. Ranges: [16,26) and
+            // [30,50) (`META_PAGE_SIZE` == 30 is the field after `meta_size`).
+            let pa = spec::PAGE_SIZE;
+            let lo_a = &bytes[spec::META_STATIC_START..spec::META_VERSION_MINOR];
+            let lo_b = &bytes[pa + spec::META_STATIC_START..pa + spec::META_VERSION_MINOR];
+            let hi_a = &bytes[spec::META_PAGE_SIZE..spec::META_STATIC_END];
+            let hi_b = &bytes[pa + spec::META_PAGE_SIZE..pa + spec::META_STATIC_END];
+            if lo_a != lo_b || hi_a != hi_b {
                 return Err(Error::Structural("metas disagree on static identity"));
             }
             // Higher txn_id active; on an (illegal) tie pick pgno 0 (== ma).
@@ -449,7 +633,13 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
     if m.meta_size < spec::META_SIZE || m.meta_size as usize > spec::PAGE_SIZE {
         return Err(Error::BadMetaSize(m.meta_size));
     }
-    if m.version_minor == 0 && m.meta_size != spec::META_SIZE {
+    // Pin the exact `meta_size` for each known minor (F7): v4.0 is 90, v4.1 is 94. A future
+    // minor (>= 2) may declare a larger `meta_size` for genuine forward-compat (the reserved
+    // tail beyond it is still zero-checked below), so it keeps the `>= 90` floor only.
+    if m.version_minor == spec::VERSION_MINOR && m.meta_size != spec::META_SIZE {
+        return Err(Error::BadMetaSize(m.meta_size));
+    }
+    if m.version_minor == spec::VERSION_MINOR_METADATA && m.meta_size != spec::META_SIZE_V41 {
         return Err(Error::BadMetaSize(m.meta_size));
     }
     let expect_kw = IpVersion::from_flag_bit(m.flags).key_width();
@@ -548,6 +738,7 @@ mod tests {
             record_count,
             txn_id: txn,
             updated_unixtime: 0,
+            scope_table_root: 0,
         }
     }
 
@@ -621,8 +812,7 @@ mod tests {
 
     #[test]
     fn single_leaf_lookup_and_scan() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] =
-            &[(v4(10), v4(20), &[1]), (v4(30), v4(40), &[2])];
+        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1]), (v4(30), v4(40), &[2])];
         let file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
         let r = Reader::open(&file).unwrap();
         assert_eq!(r.version(), IpVersion::V4);
@@ -639,7 +829,8 @@ mod tests {
         assert_eq!(r.lookup_v4(v4(41)).unwrap(), None); // after all
 
         let mut seen = Vec::new();
-        r.scan_v4(|f, t, s| seen.push((f.0, t.0, s.to_vec()))).unwrap();
+        r.scan_v4(|f, t, s| seen.push((f.0, t.0, s.to_vec())))
+            .unwrap();
         assert_eq!(seen, vec![(10, 20, vec![1]), (30, 40, vec![2])]);
     }
 
@@ -657,8 +848,7 @@ mod tests {
 
     #[test]
     fn two_level_lookup_crosses_leaves() {
-        let left: &[(Ipv4Key, Ipv4Key, &[u8])] =
-            &[(v4(10), v4(20), &[1]), (v4(50), v4(60), &[2])];
+        let left: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1]), (v4(50), v4(60), &[2])];
         let right: &[(Ipv4Key, Ipv4Key, &[u8])] =
             &[(v4(100), v4(110), &[3]), (v4(200), v4(210), &[4])];
         let file = build_two_level::<Ipv4Key>(IpVersion::V4, 1, v4(100), left, right);
@@ -700,16 +890,19 @@ mod tests {
         let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
         // Set version_major = 5 on the active meta and re-checksum ⇒ class 2 reject.
         let page = &mut file[..PAGE_SIZE];
-        page[spec::META_VERSION_MAJOR..spec::META_VERSION_MAJOR + 2].copy_from_slice(&5u16.to_le_bytes());
+        page[spec::META_VERSION_MAJOR..spec::META_VERSION_MAJOR + 2]
+            .copy_from_slice(&5u16.to_le_bytes());
         finalize_checksum(page);
-        assert!(matches!(Reader::open(&file), Err(Error::UnsupportedMajor(5))));
+        assert!(matches!(
+            Reader::open(&file),
+            Err(Error::UnsupportedMajor(5))
+        ));
     }
 
     #[test]
     fn malformed_unsorted_leaf_rejects() {
         // Records written out of order ⇒ the validate walk rejects.
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] =
-            &[(v4(30), v4(40), &[2]), (v4(10), v4(20), &[1])];
+        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(30), v4(40), &[2]), (v4(10), v4(20), &[1])];
         let file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
         assert!(matches!(Reader::open(&file), Err(Error::Invariant(_))));
     }
@@ -720,7 +913,8 @@ mod tests {
         let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
         // Claim 5 records; the walk finds 1 ⇒ reject.
         let page = &mut file[..PAGE_SIZE];
-        page[spec::META_RECORD_COUNT..spec::META_RECORD_COUNT + 8].copy_from_slice(&5u64.to_le_bytes());
+        page[spec::META_RECORD_COUNT..spec::META_RECORD_COUNT + 8]
+            .copy_from_slice(&5u64.to_le_bytes());
         finalize_checksum(page);
         assert!(matches!(Reader::open(&file), Err(Error::Invariant(_))));
     }
@@ -765,5 +959,159 @@ mod tests {
             Reader::open(&file),
             Err(Error::NonZeroReserved(_))
         ));
+    }
+
+    // --- v4.1 metadata reads on the Reader (descend the on-disk committed tree) ---
+
+    #[cfg(feature = "alloc")]
+    mod metadata {
+        use super::*;
+        use crate::writer::Writer;
+
+        /// Build a v4.1 image with scopes (names/versions/types) + KV on a scope and on
+        /// FILE(0), one IP record, and a large overflow-spanning value. Returns the committed
+        /// image and the two scope ids so the test can read them back via both APIs.
+        fn build_meta_image() -> (Vec<u8>, u32, u32) {
+            let mut w = Writer::<Ipv4Key>::create(1, 0);
+            let a = w.scope_define(b"feed-a").unwrap();
+            let b = w.scope_define(b"feed-b").unwrap();
+            w.scope_set_type(a, 7).unwrap();
+            w.scope_bump_version(a).unwrap();
+            w.scope_bump_version(a).unwrap();
+            w.scope_set_version(b, 100).unwrap();
+            // KV on scope a (text + binary types) and on FILE(0).
+            w.meta_set(a, b"region", spec::KV_TYPE_TEXT, b"eu-west")
+                .unwrap();
+            w.meta_set(a, b"weight", 9, &[0xde, 0xad, 0xbe, 0xef])
+                .unwrap();
+            // A value larger than the inline cap forces an overflow chain (§C.5).
+            let big = vec![0x5au8; spec::KV_INLINE_MAX + spec::OVERFLOW_PAYLOAD + 17];
+            w.meta_set(a, b"blob", 1, &big).unwrap();
+            w.meta_set(
+                spec::FILE_SCOPE_ID,
+                b"source",
+                spec::KV_TYPE_TEXT,
+                b"firehol",
+            )
+            .unwrap();
+            w.set(v4(10), v4(20), &[7]).unwrap(); // IP tree coexists
+            w.commit(1).unwrap();
+            (w.into_image(), a, b)
+        }
+
+        /// The Reader's scope/metadata reads must return exactly what the Writer returns for
+        /// the same committed image (API symmetry, on-disk vs in-memory registry).
+        #[test]
+        fn reader_matches_writer() {
+            let (img, a, b) = build_meta_image();
+            let w = Writer::<Ipv4Key>::open_image(img.clone()).unwrap();
+            let r = Reader::open(&img).unwrap();
+
+            // scope_list: same (id, name) set, FILE(0) excluded by both.
+            assert_eq!(r.scope_list(), w.scope_list());
+            assert_eq!(
+                r.scope_list(),
+                vec![(a, b"feed-a".to_vec()), (b, b"feed-b".to_vec())]
+            );
+
+            // Per-scope header fields.
+            for id in [a, b] {
+                assert_eq!(r.scope_name(id), w.scope_name(id));
+                assert_eq!(r.scope_version(id), w.scope_version(id));
+                assert_eq!(r.scope_type(id), w.scope_type(id));
+            }
+            assert_eq!(r.scope_name(a), Some(b"feed-a".to_vec()));
+            assert_eq!(r.scope_type(a), Some(7));
+            assert_eq!(r.scope_version(a), Some(2));
+            assert_eq!(r.scope_version(b), Some(100));
+
+            // meta_get on a scope: text, binary, and overflow-spanning values.
+            for key in [&b"region"[..], b"weight", b"blob"] {
+                assert_eq!(r.meta_get(a, key).unwrap(), w.meta_get(a, key).unwrap());
+            }
+            assert_eq!(
+                r.meta_get(a, b"region").unwrap(),
+                Some((spec::KV_TYPE_TEXT, b"eu-west".to_vec()))
+            );
+            // The big value round-trips identically across the overflow chain.
+            let big = vec![0x5au8; spec::KV_INLINE_MAX + spec::OVERFLOW_PAYLOAD + 17];
+            assert_eq!(r.meta_get(a, b"blob").unwrap(), Some((1u32, big)));
+
+            // meta_list on the scope: same ordered set as the Writer.
+            assert_eq!(r.meta_list(a).unwrap(), w.meta_list(a).unwrap());
+            let keys: Vec<Vec<u8>> = r
+                .meta_list(a)
+                .unwrap()
+                .into_iter()
+                .map(|(k, _, _)| k)
+                .collect();
+            assert_eq!(
+                keys,
+                vec![b"blob".to_vec(), b"region".to_vec(), b"weight".to_vec()]
+            );
+
+            // FILE(0) target works on both APIs (and is not a "defined scope").
+            assert_eq!(
+                r.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap(),
+                Some((spec::KV_TYPE_TEXT, b"firehol".to_vec()))
+            );
+            assert_eq!(
+                r.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap(),
+                w.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap()
+            );
+            assert_eq!(
+                r.meta_list(spec::FILE_SCOPE_ID).unwrap(),
+                w.meta_list(spec::FILE_SCOPE_ID).unwrap()
+            );
+            assert_eq!(r.scope_name(spec::FILE_SCOPE_ID), None); // FILE is not a defined scope
+        }
+
+        /// A missing scope id / missing key ⇒ None / empty (mirrors the Writer + §C.7).
+        #[test]
+        fn missing_scope_and_key() {
+            let (img, a, _b) = build_meta_image();
+            let r = Reader::open(&img).unwrap();
+
+            assert_eq!(r.scope_name(999), None);
+            assert_eq!(r.scope_version(999), None);
+            assert_eq!(r.scope_type(999), None);
+            // Missing key on an existing scope ⇒ None / no entry.
+            assert_eq!(r.meta_get(a, b"nope").unwrap(), None);
+            // Missing target ⇒ None / empty list.
+            assert_eq!(r.meta_get(999, b"region").unwrap(), None);
+            assert!(r.meta_list(999).unwrap().is_empty());
+        }
+
+        /// A v4.0 image (no metadata) ⇒ scope_list empty, meta_get None — never a panic.
+        #[test]
+        fn v40_image_has_no_metadata() {
+            let mut w = Writer::<Ipv4Key>::create(1, 0);
+            w.set(v4(1), v4(2), &[1]).unwrap();
+            w.commit(1).unwrap();
+            let img = w.into_image();
+            let r = Reader::open(&img).unwrap();
+            assert!(r.scope_list().is_empty());
+            assert_eq!(r.scope_name(1), None);
+            assert_eq!(r.scope_version(1), None);
+            assert_eq!(r.scope_type(1), None);
+            assert_eq!(r.meta_get(1, b"k").unwrap(), None);
+            assert_eq!(r.meta_get(spec::FILE_SCOPE_ID, b"k").unwrap(), None);
+            assert!(r.meta_list(1).unwrap().is_empty());
+            assert!(r.meta_list(spec::FILE_SCOPE_ID).unwrap().is_empty());
+        }
+
+        /// A scope with no KV ⇒ meta_get None / meta_list empty (kv_root == 0), even though
+        /// the scope itself exists in the table.
+        #[test]
+        fn scope_without_kv() {
+            let mut w = Writer::<Ipv4Key>::create(1, 0);
+            let a = w.scope_define(b"noKV").unwrap();
+            w.commit(1).unwrap();
+            let img = w.into_image();
+            let r = Reader::open(&img).unwrap();
+            assert_eq!(r.scope_name(a), Some(b"noKV".to_vec()));
+            assert_eq!(r.meta_get(a, b"region").unwrap(), None);
+            assert!(r.meta_list(a).unwrap().is_empty());
+        }
     }
 }
