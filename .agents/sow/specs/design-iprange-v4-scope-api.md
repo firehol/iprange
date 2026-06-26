@@ -405,6 +405,14 @@ chain from `first_pgno`, truncated to `value_total_len`. The chain is read **by 
 (§C.5): exactly `ceil(value_total_len / overflow_payload)` pages; a revisit, cycle, or
 length mismatch → `Corruption`.
 
+**Canonical packing (anti-wrong-answer).** A KV leaf/branch page MUST be canonically packed:
+the free gap between the slot directory and the entry heap is all zero, and the `entry_count`
+entries tile `[heap_start, page_size)` exactly (no gap, no overlap). The reader MUST reject any
+violation. Without this, a checksum-valid file could shrink `entry_count` (orphaning a slot +
+heap entry) or shorten an inline value (leaving stale heap bytes) and be read as a *different*
+valid view — a wrong answer. (The IP-tree and scope-table fixed-record pages get the same
+guarantee from their tail/unused-slot zero check.)
+
 **Conformance.** This page/entry encoding is normative so either implementation can read the
 other's pages (**cross-read**). Tree **shape** — fanout, split points, inline/overflow
 threshold, bulk-load order — is **implementation-defined** (as for the v4.0 IP tree);

@@ -493,4 +493,27 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn mmap_rejects_non_regular_file() {
+        // A directory: O_RDONLY|O_NOFOLLOW opens it (the final component is a real dir, not a
+        // symlink), but the fstat `is_file()` guard (§10) rejects it before any mmap — a typed
+        // `Structural`, never a panic / SIGBUS. Covers the "not a regular file" reject path.
+        let dir = temp_path("nonreg-dir");
+        std::fs::create_dir(&dir).unwrap();
+        let r = MmapReader::open(&dir);
+        let _ = std::fs::remove_dir(&dir);
+        assert!(matches!(r, Err(Error::Structural(_))), "got {r:?}");
+    }
+
+    // The remaining §10 mmap-hardening rejects are environment-dependent and not
+    // deterministically unit-testable here, so they are exercised via code review + the
+    // structural error returns rather than a unit test:
+    //   - sparse hole inside the mapped range (SEEK_HOLE != len): requires the FS to actually
+    //     punch/keep a hole, which is filesystem- and allocator-dependent (tmpfs/ext4 differ);
+    //   - SEEK_HOLE unavailable (lseek returns < 0): requires a filesystem without hole
+    //     detection, which cannot be forced on the test host;
+    //   - TOCTOU re-fstat mismatch (len/ino/dev changed between fstat and mmap) and the
+    //     last-byte probe (truncation after fstat): require a concurrent racing writer, so any
+    //     unit test would be inherently flaky.
 }

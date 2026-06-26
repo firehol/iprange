@@ -17,7 +17,6 @@ func (e *Error) Error() string { return e.Class + ": " + e.Msg }
 func errf(class, msg string) *Error { return &Error{Class: class, Msg: msg} }
 
 // Constructors, one per Rust Error variant used by this package.
-func errBadMagic() *Error { return errf("BadMagic", "not IPRANGE4") }
 func errUnsupportedMajor(v uint16) *Error {
 	return errf("UnsupportedMajor", fmt.Sprintf("version_major %d (expected 4)", v))
 }

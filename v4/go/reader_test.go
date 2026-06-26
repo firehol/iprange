@@ -202,9 +202,8 @@ func TestBothMetasCorruptRejects(t *testing.T) {
 	file := buildSingleLeaf(V4, 1, []v4rec{{10, 20, []byte{1}}})
 	file[200] ^= 0xFF
 	file[pageSize+200] ^= 0xFF
-	if _, err := Open(file); errorClass(err) != "Structural" {
-		t.Fatalf("expected Structural, got %v", err)
-	}
+	// Both meta CRCs now fail ⇒ no meta classifies as valid (exact message, not just the class).
+	mustRejectMsg(t, file, "Structural", "no valid meta page", "both metas corrupt")
 }
 
 func TestIncompatibleMajorFailsClosed(t *testing.T) {
@@ -218,11 +217,9 @@ func TestIncompatibleMajorFailsClosed(t *testing.T) {
 }
 
 func TestMalformedUnsortedLeafRejects(t *testing.T) {
-	// Records written out of order -> the validate walk rejects.
+	// Records written out of order -> the validate walk rejects (exact message, not just the class).
 	file := buildSingleLeaf(V4, 1, []v4rec{{30, 40, []byte{2}}, {10, 20, []byte{1}}})
-	if _, err := Open(file); errorClass(err) != "Invariant" {
-		t.Fatalf("expected Invariant, got %v", err)
-	}
+	mustRejectMsg(t, file, "Invariant", "leaf records not sorted/disjoint", "unsorted leaf records")
 }
 
 func TestRecordCountMismatchRejects(t *testing.T) {
@@ -230,9 +227,8 @@ func TestRecordCountMismatchRejects(t *testing.T) {
 	page := file[:pageSize]
 	le.PutUint64(page[metaRecordCount:], 5)
 	finalizeChecksum(page)
-	if _, err := Open(file); errorClass(err) != "Invariant" {
-		t.Fatalf("expected Invariant, got %v", err)
-	}
+	// The full-pass walk counts 1 record vs the declared 5 (exact message, not just the class).
+	mustRejectMsg(t, file, "Invariant", "record_count mismatch", "record_count mismatch")
 }
 
 func TestLookupFamilyMismatchErrors(t *testing.T) {
@@ -271,9 +267,8 @@ func TestMetaTailNonzeroRejected(t *testing.T) {
 	file := buildSingleLeaf(V4, 1, []v4rec{{10, 20, []byte{1}}})
 	file[metaSize+7] = 0xAB // meta-A (active, txn 2) reserved tail
 	finalizeChecksum(file[:pageSize])
-	if _, err := Open(file); errorClass(err) != "NonZeroReserved" {
-		t.Fatalf("expected NonZeroReserved for meta tail, got %v", err)
-	}
+	// The active meta's reserved tail must be zero (exact message, not just the class).
+	mustRejectMsg(t, file, "NonZeroReserved", "meta tail", "meta tail nonzero")
 }
 
 // TestMinor1MetaSizePinned checks F7: at version_minor == 1 the reader requires meta_size

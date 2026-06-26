@@ -254,3 +254,14 @@ func TestMmapRejectsTooShort(t *testing.T) {
 		t.Fatalf("expected FileTooShort, got %v", err)
 	}
 }
+
+// TestMmapRejectsNonRegularFile points OpenMmap at a directory: it opens (O_RDONLY) and locks,
+// but the fstat S_IFMT check rejects a non-regular file before mapping (§10), never SIGBUS or a
+// bogus read. (The writer's openFileWriter has the same guard, but O_RDWR on a directory fails
+// with EISDIR first, so a directory cannot exercise that path; this MmapReader test covers the
+// "not a regular file" Structural reject.)
+func TestMmapRejectsNonRegularFile(t *testing.T) {
+	if _, err := OpenMmap(t.TempDir()); errorClass(err) != "Structural" {
+		t.Fatalf("expected Structural for a directory, got %v", err)
+	}
+}

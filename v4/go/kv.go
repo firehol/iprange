@@ -2,6 +2,7 @@ package iprangedb
 
 import (
 	"bytes"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -780,6 +781,49 @@ func collectOverflow(b []byte, first uint32, total uint64, totalPages uint64, ou
 	}
 }
 
+// kvCanonicalPacking enforces canonical packing of a KV slot-directory page (§D), closing a
+// wrong-answer hole: the per-entry parse stops at `count`, so a CRC-valid page that shrinks
+// entry_count (stale slot/heap bytes ignored) or shrinks an entry's length (leftover heap bytes
+// ignored) would otherwise be accepted as a different, smaller view. Two checks make the layout
+// the unique encoding of its entries: (1) the free gap between the slot directory and the entry
+// heap MUST be all-zero — a dropped entry_count leaves its now-orphaned slot byte(s) in this gap;
+// (2) the entries MUST tile the heap exactly from heap_start to PAGE_SIZE with no hole or overlap
+// — a shrunk key/value/sep length leaves an uncovered heap byte. spans holds each entry's
+// [start, end) in slot order; it is non-empty (a leaf/branch with count >= 1 is enforced before
+// this call). slotDirEnd is the first byte past the slot directory (every entry start lies at or
+// after it, already range-checked by slot()).
+func kvCanonicalPacking(page []byte, slotDirEnd int, spans [][2]int, gapMsg, tileMsg string) error {
+	heapStart := spans[0][0]
+	for _, s := range spans {
+		if s[0] < heapStart {
+			heapStart = s[0]
+		}
+	}
+	// (1) The free gap [slotDirEnd, heapStart) MUST be zero (a shrunk entry_count strands its
+	// stale slot here; the writer fill(0)s the whole page before packing).
+	for _, x := range page[slotDirEnd:heapStart] {
+		if x != 0 {
+			return errNonZeroReserved(gapMsg)
+		}
+	}
+	// (2) The entries MUST tile [heap_start, PAGE_SIZE) exactly: sorted by start, contiguous, no
+	// gap or overlap (a shrunk length leaves an uncovered byte; an inflated one overlaps).
+	sorted := append([][2]int(nil), spans...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i][0] < sorted[j][0] })
+	if sorted[0][0] != heapStart {
+		return errStructural(tileMsg)
+	}
+	for k := 0; k+1 < len(sorted); k++ {
+		if sorted[k][1] != sorted[k+1][0] {
+			return errStructural(tileMsg)
+		}
+	}
+	if sorted[len(sorted)-1][1] != pageSize {
+		return errStructural(tileMsg)
+	}
+	return nil
+}
+
 // --- reader validation (§C.5, never-panic) ---
 
 // validateKV recursively validates a KV subtree (reader §9 for §D): per-page CRC32C,
@@ -846,11 +890,23 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			return errStructural("kv leaf slot directory overflows page")
 		}
 		leaf := newKVLeafView(page, count)
+		spans := make([][2]int, 0, count)
 		for i := 0; i < count; i++ {
+			start, err := leaf.slot(i)
+			if err != nil {
+				return err
+			}
 			hdr, err := leaf.entryHdr(i)
 			if err != nil {
 				return err
 			}
+			// Record this entry's heap extent for the canonical-packing check below. The span
+			// equals the cursor advance entryHdr made, recomputed from the writer's size helpers.
+			span := kvOverflowEntrySize(len(hdr.key))
+			if hdr.inlineOK {
+				span = kvInlineEntrySize(len(hdr.key), len(hdr.inline))
+			}
+			spans = append(spans, [2]int{start, start + span})
 			if err := checkKey(hdr.key); err != nil {
 				return err
 			}
@@ -885,6 +941,12 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 				return err
 			}
 		}
+		// Canonical packing: the free gap is zero and the entries tile the heap exactly, so a
+		// shrunk entry_count or value/key length cannot pass as a smaller view (§D wrong-answer).
+		if err := kvCanonicalPacking(page, pageHeaderSize+count*kvSlotSize, spans,
+			"kv leaf free gap not zero", "kv leaf entries not canonically packed"); err != nil {
+			return err
+		}
 		return nil
 	case pageTypeKVBranch:
 		if count < 1 {
@@ -898,11 +960,18 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 		// (when hi is set) sep[count-1] < hi.
 		var prevSep []byte
 		havePrevSep := false
+		spans := make([][2]int, 0, count)
 		for i := 0; i < count; i++ {
+			start, err := br.slot(i)
+			if err != nil {
+				return err
+			}
 			sep, _, err := br.sep(i)
 			if err != nil {
 				return err
 			}
+			// Record this separator's heap extent for the canonical-packing check below.
+			spans = append(spans, [2]int{start, start + kvBranchSepSize(len(sep))})
 			if err := checkKey(sep); err != nil {
 				return err
 			}
@@ -917,6 +986,13 @@ func validateKVNode(b []byte, pgno, depth uint32, totalPages uint64, vis *pageVi
 			}
 			prevSep = cloneBytes(sep)
 			havePrevSep = true
+		}
+		// Canonical packing (same invariant as the leaf): the free gap after the slot directory
+		// is zero and the separators tile the heap exactly. The leftmost-child u32 occupies
+		// [PAGE_HEADER_SIZE, KV_BRANCH_DIR_START) and is part of the header region, not the gap.
+		if err := kvCanonicalPacking(page, kvBranchDirStart+count*kvSlotSize, spans,
+			"kv branch free gap not zero", "kv branch entries not canonically packed"); err != nil {
+			return err
 		}
 		// Children in range.
 		for j := 0; j <= count; j++ {

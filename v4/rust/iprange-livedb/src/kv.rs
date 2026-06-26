@@ -217,6 +217,50 @@ impl<'a> KvBranchView<'a> {
 /// The KV branch slot directory starts after the header **and** the leftmost-child `u32`.
 const KV_BRANCH_DIR_START: usize = PAGE_HEADER_SIZE + 4;
 
+/// Enforce canonical packing of a KV slot-directory page (§D), closing the wrong-answer hole
+/// where a CRC-valid file shrinks `entry_count` (stale slot/heap bytes ignored) or shrinks an
+/// inline value length (leftover heap bytes ignored) and is accepted as a different view.
+/// Unlike the fixed-record IP-tree/scope-table pages (which enforce a single tail-zero region),
+/// a slot-directory page has a slot directory at the front and a variable-length entry heap at
+/// the back, so canonicality has two parts:
+///   1. the free gap `[slot_dir_end, heap_start)` (everything between the slot directory and
+///      the lowest entry) MUST be entirely zero — a shrunk `entry_count` leaves the dropped
+///      slot and its entry bytes in this gap, non-zero; and
+///   2. the entries MUST tile `[heap_start, PAGE_SIZE)` EXACTLY — contiguous, no gaps, ending at
+///      `PAGE_SIZE` — so a shrunk key/value/separator length (a shorter entry) leaves an
+///      uncovered heap byte the writer never produces.
+///
+/// `spans` is `(start, end)` per entry: `start` is its slot's byte offset, `end = start +`
+/// encoded entry size. The caller guarantees `count >= 1` (leaf/branch occupancy), and every
+/// `start >= slot_dir_end` and `end <= PAGE_SIZE` (the slot/cursor range checks), so the slice
+/// and arithmetic below cannot panic.
+fn check_canonical_packing(
+    page: &[u8],
+    slot_dir_end: usize,
+    mut spans: Vec<(usize, usize)>,
+    free_gap_msg: &'static str,
+    tiling_msg: &'static str,
+) -> Result<()> {
+    let heap_start = spans.iter().map(|&(s, _)| s).min().unwrap_or(PAGE_SIZE);
+    // (1) The free gap between the slot directory and the entry heap MUST be zero.
+    if page[slot_dir_end..heap_start].iter().any(|&b| b != 0) {
+        return Err(Error::NonZeroReserved(free_gap_msg));
+    }
+    // (2) The entries MUST tile [heap_start, PAGE_SIZE) with no gap or overlap.
+    spans.sort_unstable_by_key(|&(s, _)| s);
+    let mut expect = heap_start;
+    for &(s, e) in &spans {
+        if s != expect {
+            return Err(Error::Structural(tiling_msg));
+        }
+        expect = e;
+    }
+    if expect != PAGE_SIZE {
+        return Err(Error::Structural(tiling_msg));
+    }
+    Ok(())
+}
+
 // --- bounds-safe cursor reads over a single page ---
 
 #[inline]
@@ -807,7 +851,10 @@ fn validate_node(
                 return Err(Error::Structural("kv leaf slot directory overflows page"));
             }
             let leaf = KvLeafView::new(page, count);
+            // (start, end) of each entry's heap bytes, for the canonical-packing check below.
+            let mut spans: Vec<(usize, usize)> = Vec::with_capacity(count);
             for i in 0..count {
+                let start = leaf.slot(i)?;
                 let hdr = leaf.entry_hdr(i)?;
                 check_key(hdr.key)?;
                 // Within the node's routing interval [lo, hi) (hi exclusive; None = +inf).
@@ -829,9 +876,10 @@ fn validate_node(
                 // Validate the value WITHOUT materializing an overflow-spanning one
                 // (§C.4/§C.5): text (type 0) must be NUL-free valid UTF-8. The shared
                 // `visited` marks each overflow page so a chain aliased by another entry
-                // (the glm PoC wrong-answer bug, F2) is rejected.
+                // (the glm PoC wrong-answer bug, F2) is rejected. Each arm yields the entry's
+                // encoded size so the canonical-packing check can verify the heap tiles exactly.
                 let text = hdr.type_ == spec::KV_TYPE_TEXT;
-                match (hdr.inline, hdr.overflow) {
+                let span = match (hdr.inline, hdr.overflow) {
                     (Some(v), None) => {
                         if text {
                             if v.contains(&0) {
@@ -841,6 +889,7 @@ fn validate_node(
                                 return Err(Error::Invariant("kv text value not valid UTF-8"));
                             }
                         }
+                        spec::kv_inline_entry_size(hdr.key.len(), v.len())
                     }
                     (None, Some((first, total))) => {
                         validate_overflow_value(
@@ -851,10 +900,23 @@ fn validate_node(
                             &mut *visited,
                             text,
                         )?;
+                        spec::kv_overflow_entry_size(hdr.key.len())
                     }
                     _ => return Err(Error::Structural("kv entry descriptor")),
-                }
+                };
+                spans.push((start, start + span));
             }
+            // Canonical packing: free gap zero + entries tile the heap exactly (§D). Without
+            // this a CRC-valid file could shrink entry_count or an inline value and be accepted
+            // as a different view.
+            let slot_dir_end = PAGE_HEADER_SIZE + count * spec::KV_SLOT_SIZE;
+            check_canonical_packing(
+                page,
+                slot_dir_end,
+                spans,
+                "kv leaf free gap not zero",
+                "kv leaf entries not canonically packed",
+            )?;
             Ok(())
         }
         spec::PAGE_TYPE_KV_BRANCH => {
@@ -868,7 +930,10 @@ fn validate_node(
             // Separators in bound and strictly increasing: lo < sep[0] < … < sep[count-1],
             // and (when hi is set) sep[count-1] < hi.
             let mut prev_sep: Option<Vec<u8>> = None;
+            // (start, end) of each separator's heap bytes, for the canonical-packing check.
+            let mut spans: Vec<(usize, usize)> = Vec::with_capacity(count);
             for i in 0..count {
+                let start = b.slot(i)?;
                 let (sep, _) = b.sep(i)?;
                 check_key(sep)?;
                 if sep <= lo {
@@ -885,7 +950,19 @@ fn validate_node(
                     }
                 }
                 prev_sep = Some(sep.to_vec());
+                spans.push((start, start + spec::kv_branch_sep_size(sep.len())));
             }
+            // Canonical packing: free gap zero + separators tile the heap exactly (§D). The
+            // leftmost-child u32 lives in [PAGE_HEADER_SIZE, KV_BRANCH_DIR_START) and is part of
+            // the header region, NOT the free gap, so the gap starts at slot_dir_end.
+            let slot_dir_end = KV_BRANCH_DIR_START + count * spec::KV_SLOT_SIZE;
+            check_canonical_packing(
+                page,
+                slot_dir_end,
+                spans,
+                "kv branch free gap not zero",
+                "kv branch entries not canonically packed",
+            )?;
             // Children in range.
             for j in 0..=count {
                 let c = b.child(j)?;

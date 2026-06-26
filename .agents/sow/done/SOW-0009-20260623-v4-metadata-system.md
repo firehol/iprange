@@ -399,3 +399,45 @@ the "validate before expose" model.
   (every model timed out at 30 min, both rounds — no usable output); its re-run is a non-blocking
   Followup, not a gate, since codex (the reviewer that found the bugs) plus full green validation
   cover the fixes.
+
+## Regression - 2026-06-26
+
+A second wrong-answer hole in this SOW's KV validator was found during SOW-0010 (corruption-test
+hardening) by the external reviewer (codex) and fixed here.
+
+### What broke
+
+The per-scope KV slot-directory pages (page types 6/7) were validated by parsing exactly
+`entry_count` entries and returning Ok — with NO check that the page is canonically packed. Unlike
+the IP-tree and scope-table fixed-record pages (which enforce tail-zero), KV pages had no
+unused-region / heap-consumed check. So a checksum-valid file could shrink a KV-leaf `entry_count`
+(orphaning a slot + its heap entry) or shorten an inline value length (leaving stale heap bytes) and
+be **accepted as a different view** — a wrong answer. Proven empirically: a file with a KV leaf's
+`entry_count` cut 3→2 was accepted and read back 2 entries. Both languages (same validator design).
+
+### Why prior validation missed it
+
+The SOW-0009 KV validator + tests covered structural bounds and the F2 page-disjointness walk, but
+never asserted canonical packing; the writer always packs canonically, so no positive test exposed
+the gap, and the early SOW-0010 no-wrong-answer fuzz had excluded KV `entry_count`/heap bytes as
+"data-authority" (too broad an exclusion).
+
+### Repair (validator-only; no format / golden change)
+
+Added a canonical-packing check to the KV validator — Rust `kv.rs` `check_canonical_packing`, Go
+`kv.go` `kvCanonicalPacking`, called for both leaf and branch in the validate walk: reject unless
+(a) the free gap between the slot directory and the entry heap is all zero, and (b) the entries tile
+`[heap_start, page_size)` exactly (no gap/overlap). The existing value validation (inline/overflow
+UTF-8/NUL) is preserved. The writer already produces canonical pages, so conformance + metadata
+goldens stay byte-identical (no regeneration). Recorded in `design-iprange-v4-scope-api.md`
+("Canonical packing (anti-wrong-answer)").
+
+### Validation
+
+My own probes confirm the exact 3→2 `entry_count` shrink now rejects (`NonZeroReserved "kv … free
+gap not zero"`) in both languages; value/key/separator-length shrink rejects via the tiling check.
+Full suites green (Rust 89 lib + 111 robustness ×2 + clippy/fmt; Go + `go test -race` + vet/gofmt);
+conformance + metadata goldens byte-identical; non-vacuity proven (revert the check → the test
+fails). The dedicated canonical-packing tests — and the full exhaustive corruption-test suite that
+uncovered this — live in **SOW-0010**, which the same reviewer (codex, independent backend) certified
+`COMPLETE CORRUPTION TESTS - 100% COVERAGE - PRODUCTION GRADE`.

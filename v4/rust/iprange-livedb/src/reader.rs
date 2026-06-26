@@ -881,7 +881,12 @@ mod tests {
         let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
         file[200] ^= 0xFF; // meta-A data
         file[PAGE_SIZE + 200] ^= 0xFF; // meta-B data
-        assert!(matches!(Reader::open(&file), Err(Error::Structural(_))));
+                                       // Both metas fail CRC ⇒ neither is selectable ⇒ exact "no valid meta page".
+        match Reader::open(&file) {
+            Err(Error::Structural(m)) => assert_eq!(m, "no valid meta page"),
+            Err(e) => panic!("expected Structural(\"no valid meta page\"), got {e:?}"),
+            Ok(_) => panic!("expected rejection, but opened OK"),
+        }
     }
 
     #[test]
@@ -904,7 +909,11 @@ mod tests {
         // Records written out of order ⇒ the validate walk rejects.
         let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(30), v4(40), &[2]), (v4(10), v4(20), &[1])];
         let file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
-        assert!(matches!(Reader::open(&file), Err(Error::Invariant(_))));
+        match Reader::open(&file) {
+            Err(Error::Invariant(m)) => assert_eq!(m, "leaf records not sorted/disjoint"),
+            Err(e) => panic!("expected Invariant(\"leaf records not sorted/disjoint\"), got {e:?}"),
+            Ok(_) => panic!("expected rejection, but opened OK"),
+        }
     }
 
     #[test]
@@ -916,7 +925,11 @@ mod tests {
         page[spec::META_RECORD_COUNT..spec::META_RECORD_COUNT + 8]
             .copy_from_slice(&5u64.to_le_bytes());
         finalize_checksum(page);
-        assert!(matches!(Reader::open(&file), Err(Error::Invariant(_))));
+        match Reader::open(&file) {
+            Err(Error::Invariant(m)) => assert_eq!(m, "record_count mismatch"),
+            Err(e) => panic!("expected Invariant(\"record_count mismatch\"), got {e:?}"),
+            Ok(_) => panic!("expected rejection, but opened OK"),
+        }
     }
 
     #[test]
@@ -955,10 +968,11 @@ mod tests {
         let page = &mut file[..PAGE_SIZE]; // meta-A (active, txn 2)
         page[spec::META_SIZE as usize + 7] = 0xAB;
         crate::wire::finalize_checksum(page);
-        assert!(matches!(
-            Reader::open(&file),
-            Err(Error::NonZeroReserved(_))
-        ));
+        match Reader::open(&file) {
+            Err(Error::NonZeroReserved(m)) => assert_eq!(m, "meta tail"),
+            Err(e) => panic!("expected NonZeroReserved(\"meta tail\"), got {e:?}"),
+            Ok(_) => panic!("expected rejection, but opened OK"),
+        }
     }
 
     // --- v4.1 metadata reads on the Reader (descend the on-disk committed tree) ---

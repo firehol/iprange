@@ -19,8 +19,6 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// `magic != "IPRANGE4"` (compared bytewise, §5.1).
-    BadMagic,
     /// `version_major` is not 4 (§5.1 forward-compat).
     UnsupportedMajor(u16),
     /// `meta_size` is < 90, > `page_size`, or (for `version_minor == 0`) not exactly
@@ -84,7 +82,6 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::BadMagic => f.write_str("bad magic (not IPRANGE4)"),
             Error::UnsupportedMajor(v) => write!(f, "unsupported version_major {v} (expected 4)"),
             Error::BadMetaSize(s) => write!(f, "invalid meta_size {s}"),
             Error::FileTooShort { need, have } => {
