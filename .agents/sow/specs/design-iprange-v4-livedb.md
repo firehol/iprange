@@ -200,7 +200,7 @@ v4.0 byte offsets (within the page; `page_size = 4096`):
 # --- dynamic state (differs per commit) ---
 @50  root_pgno        : u32   (0 = empty tree)
 @54  tree_height      : u32   (0 = empty; else levels, leaf level = 1)
-@58  total_pages      : u64   (logical page count; 2 ≤ total_pages ≤ 2^32)
+@58  total_pages      : u64   (logical page count; 2 ≤ total_pages < 2^32; bound is u32-storable)
 @66  record_count     : u64   (UNVERIFIED hint; reader MUST NOT allocate/bound from it)
 @74  txn_id           : u64   (monotonic; higher valid = active)
 @82  updated_unixtime : u64   (caller-supplied per commit; for deterministic tests)
@@ -311,7 +311,7 @@ Reader‑enforced minimums: every branch ≥ 2 children; reachable leaf ≥ 1 re
 empty tree is `root_pgno = 0` (no root page). A writer SHOULD keep non‑root nodes
 ≥ half‑full (standard B+tree, M3) for efficiency; the reader does **not** reject a
 non‑empty underfull node (conformance is behavioral). **`tree_height` MUST be ≤
-`TREE_HEIGHT_MAX = 32`** — a conservative hard cap (`u32` pgno ⇒ ≤ 2^32 pages, so even
+`TREE_HEIGHT_MAX = 32`** — a conservative hard cap (`u32` pgno ⇒ < 2^32 pages, so even
 at the degenerate minimum branch fanout of 2 the height cannot exceed ~32; a balanced
 tree at realistic fanout is ≤ 6). A reader MUST reject `tree_height > 32` and MUST
 treat descending deeper than `tree_height` as a hard error (cycle defense, §9); a
@@ -458,7 +458,7 @@ Order:
 1. Bootstrap; validate both metas; select the active one (§5.1).
 2. Geometry: `page_size == 4096` (v4.0); family/`key_width`/`scope_width`/
    `record_size` cross‑checks; `meta_size` rules; file size `== m·page_size` and `≥
-   total_pages·page_size`; `2 ≤ total_pages ≤ 2^32`; **overflow‑checked**
+   total_pages·page_size`; `2 ≤ total_pages < 2^32`; **overflow‑checked**
    `total_pages·page_size`; `tree_height`/`root_pgno` consistency (`height == 0 ⇔ root
    == 0`; non‑empty `root_pgno ∈ [2, total_pages)`); `tree_height ≤ 32`. (The root's
    `page_type` is checked against its depth in the recursive walk below — step 4 —
@@ -530,7 +530,11 @@ Any violation ⇒ reject (typed error; discard partial state; expose nothing).
   MUST **fully allocate** every referenced page (never a sparse hole). **Both** reader
   and writer open with `O_NOFOLLOW | O_CLOEXEC` and `fstat` the **fd** (not the path).
   **Readers `mmap` read‑only with `MAP_SHARED`** (so a concurrently‑opened reader sees
-  a consistent file image under the lock); the writer does not mmap.
+  a consistent file image under the lock). The **writer also `mmap`s the committed
+  range read‑only** (`PROT_READ`) to avoid loading the full file into heap memory;
+  dirty pages are COW'd into a private buffer pool and written via `pwrite` at commit
+  time. The writer does **not** use `MAP_SHARED` + `PROT_WRITE` — committed pages are
+  never modified in place before the commit point.
 - Reader open MUST: reject non‑regular files; detect sparse holes via `SEEK_HOLE`
   and, if a hole is in the mapped range, **not mmap** (reject or fall back to
   `pread`); re‑`fstat` after `mmap` and reject on size/inode change; probe the last

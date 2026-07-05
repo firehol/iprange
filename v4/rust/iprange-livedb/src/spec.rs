@@ -35,7 +35,7 @@ pub const PAGE_SIZE: usize = 4096;
 pub const CHECKSUM_ALGO_CRC32C: u8 = 1;
 
 /// Hard cap on `tree_height` (§5.3): even at the degenerate minimum branch fanout of
-/// 2, a `u32`-pgno file (≤ 2^32 pages) cannot exceed ~32 levels. A reader MUST reject
+/// 2, a `u32`-pgno file (< 2^32 pages) cannot exceed ~32 levels. A reader MUST reject
 /// `tree_height > 32` and treat descending deeper as a hard error (cycle defense, §9).
 pub const TREE_HEIGHT_MAX: u32 = 32;
 
@@ -101,7 +101,7 @@ pub const META_CREATED_UNIXTIME: usize = 42;
 pub const META_ROOT_PGNO: usize = 50;
 /// `tree_height` (u32) — 0 = empty; leaf level = 1.
 pub const META_TREE_HEIGHT: usize = 54;
-/// `total_pages` (u64) — logical page count; `2 <= total_pages <= 2^32`.
+/// `total_pages` (u64) — logical page count; `2 <= total_pages < 2^32`.
 pub const META_TOTAL_PAGES: usize = 58;
 /// `record_count` (u64) — UNVERIFIED hint; a reader MUST NOT size an allocation from it.
 pub const META_RECORD_COUNT: usize = 66;

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func tempPath(t *testing.T, tag string) string {
@@ -67,8 +69,12 @@ func TestReopenMutateRecommit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if fw.RecordCount() != 400 {
-			t.Fatalf("reopen count = %d", fw.RecordCount())
+		rc, err := fw.RecordCount()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc != 400 {
+			t.Fatalf("reopen count = %d", rc)
 		}
 		must(t, fw.Delete(wk(0), wk(1999))) // removes i = 0..=199 (200 records)
 		must(t, fw.Set(wk(100000), wk(100000), []byte{9}))
@@ -263,5 +269,494 @@ func TestMmapRejectsTooShort(t *testing.T) {
 func TestMmapRejectsNonRegularFile(t *testing.T) {
 	if _, err := OpenMmap(t.TempDir()); errorClass(err) != "Structural" {
 		t.Fatalf("expected Structural for a directory, got %v", err)
+	}
+}
+
+func TestMmapWriterNoFullFileHeapCopy(t *testing.T) {
+	// Prove that openFileWriter uses mmapPageStore (not a full-file []byte copy).
+	path := tempPath(t, "noheap")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5000; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3)), []byte{byte(i & 0xff)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	fw2, err := OpenFileWriterV4(path, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verify the store is NOT a vecPageStore (which would hold the full file in heap).
+	if _, ok := fw2.w.store.(*vecPageStore); ok {
+		t.Fatal("mmap-backed writer must not use vecPageStore")
+	}
+	rc2, err := fw2.RecordCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc2 != 5000 {
+		t.Fatalf("expected 5000 records, got %d", rc2)
+	}
+	_ = fw2.Close()
+}
+
+func TestMmapWriterGrowthAndRemap(t *testing.T) {
+	// Verify that the mmap-backed writer correctly grows the file and remaps.
+	// Both create and open are now mmap-backed, so we can start with create
+	// and grow directly.
+	path := tempPath(t, "growth")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verify the store is mmap-backed even after create.
+	if _, ok := fw.w.store.(*vecPageStore); ok {
+		t.Fatal("must be mmap-backed after create")
+	}
+	mmapLenBefore := fw.mmapLen
+	if mmapLenBefore != int64(2*pageSize) {
+		t.Fatalf("initial file must be 2 meta pages, got mmapLen=%d", mmapLenBefore)
+	}
+
+	// First txn: insert enough to grow past the initial 2 pages.
+	for i := 0; i < 2000; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3)), []byte{byte(i & 0xff)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	pagesAfterFirst := fw.w.store.totalPages()
+	mmapLenAfterFirst := fw.mmapLen
+	if pagesAfterFirst <= 2 {
+		t.Fatal("file must have grown past meta pages")
+	}
+	if mmapLenAfterFirst <= mmapLenBefore {
+		t.Fatal("mmapLen must have increased after first commit (remap happened)")
+	}
+
+	// Second txn: insert more, forcing further growth and remap.
+	for i := 2000; i < 4000; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3)), []byte{byte(i & 0xff)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(1); err != nil {
+		t.Fatal(err)
+	}
+	pagesAfterSecond := fw.w.store.totalPages()
+	mmapLenAfterSecond := fw.mmapLen
+	if pagesAfterSecond <= pagesAfterFirst {
+		t.Fatal("file must have grown further")
+	}
+	if mmapLenAfterSecond <= mmapLenAfterFirst {
+		t.Fatal("mmapLen must have increased after second commit (remap happened)")
+	}
+	rc3, err := fw.RecordCount()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc3 != 4000 {
+		t.Fatalf("expected 4000 records, got %d", rc3)
+	}
+	_ = fw.Close()
+
+	// Reopen and verify through MmapReader.
+	mr, err := OpenMmap(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := mr.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RecordCount() != 4000 {
+		t.Fatalf("expected 4000 records after reopen, got %d", r.RecordCount())
+	}
+	_ = mr.Close()
+}
+
+func TestMmapWriterReuseFreedPages(t *testing.T) {
+	// Verify that the mmap-backed writer reuses freed pages (D7).
+	path := tempPath(t, "reuse")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2000; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3)), []byte{byte(i & 0xff)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete half (frees pages into freedThisTxn, reclaimed at commit 2).
+	for i := 0; i < 1000; i++ {
+		if err := fw.Delete(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(1); err != nil {
+		t.Fatal(err)
+	}
+	pagesAfterDelete := fw.w.store.totalPages()
+
+	// Reinsert — should reuse pages freed at commit 1.
+	for i := 0; i < 1000; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10+50000)), Ipv4Key(uint32(i*10+3+50000)), []byte{5}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(2); err != nil {
+		t.Fatal(err)
+	}
+	pagesAfterReinsert := fw.w.store.totalPages()
+	if pagesAfterReinsert > pagesAfterDelete+10 {
+		t.Fatalf("freed pages must be reused: %d -> %d", pagesAfterDelete, pagesAfterReinsert)
+	}
+	_ = fw.Close()
+}
+
+func TestMmapWriterCloseReleasesLock(t *testing.T) {
+	// Regression: Close() must release LOCK_EX so another writer can open.
+	path := tempPath(t, "close-lock")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Now should be able to open (lock was released by Close).
+	fw2, err := OpenFileWriterV4(path, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fw2.Close()
+}
+
+func TestMmapWriterRejectsTotalPagesOverflow(t *testing.T) {
+	// Regression: a file with total_pages > 2^32 must be rejected.
+	path := tempPath(t, "overflow")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	// Patch the active meta's total_pages to exceed 2^32.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m0 := decodeMeta(data[:pageSize])
+	m1 := decodeMeta(data[pageSize:])
+	active := 0
+	if m1.txnID > m0.txnID {
+		active = 1
+	}
+	base := active * pageSize
+	// total_pages is at offset 48 in the meta (u64 little-endian).
+	le.PutUint64(data[base+48:base+56], 1<<33)
+	// Re-checksum the page so selectActiveMeta accepts it.
+	finalizeChecksum(data[base : base+pageSize])
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenFileWriterV4(path, DefaultLockWait); err == nil {
+		t.Fatal("writer must reject total_pages > 2^32")
+	}
+}
+
+func TestMmapWriterRejectsCorruptMeta(t *testing.T) {
+	// Verify that openFileWriter rejects a file with both metas corrupt.
+	path := tempPath(t, "corrupt-meta")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	// Corrupt both meta pages.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[64] ^= 0xFF
+	data[pageSize+64] ^= 0xFF
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenFileWriterV4(path, DefaultLockWait); err == nil {
+		t.Fatal("writer must reject file with both metas corrupt")
+	}
+}
+
+func TestMmapWriterRejectsTotalPagesZero(t *testing.T) {
+	// Regression: writer-open must reject total_pages < 2 before any mutation.
+	path := tempPath(t, "tp-zero")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	// Patch the active meta's total_pages to 0, re-checksum.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m0 := decodeMeta(data[:pageSize])
+	m1 := decodeMeta(data[pageSize:])
+	active := 0
+	if m1.txnID > m0.txnID {
+		active = 1
+	}
+	base := active * pageSize
+	le.PutUint64(data[base+48:base+56], 0)
+	finalizeChecksum(data[base : base+pageSize])
+	fileLen := len(data)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenFileWriterV4(path, DefaultLockWait); err == nil {
+		t.Fatal("writer must reject total_pages == 0")
+	}
+	// Verify the file was NOT truncated.
+	if fi, _ := os.Stat(path); int(fi.Size()) != fileLen {
+		t.Fatalf("writer must not truncate file on reject: %d -> %d", fileLen, fi.Size())
+	}
+}
+
+func TestMmapWriterRejectsTotalPagesEq2Pow32(t *testing.T) {
+	// Regression: writer-open must reject total_pages >= 2^32 (wraps u32).
+	path := tempPath(t, "tp-2pow32")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m0 := decodeMeta(data[:pageSize])
+	m1 := decodeMeta(data[pageSize:])
+	active := 0
+	if m1.txnID > m0.txnID {
+		active = 1
+	}
+	base := active * pageSize
+	le.PutUint64(data[base+48:base+56], 1<<32)
+	finalizeChecksum(data[base : base+pageSize])
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := OpenFileWriterV4(path, DefaultLockWait); err == nil {
+		t.Fatal("writer must reject total_pages == 2^32")
+	}
+}
+
+func TestMmapWriterOpsFailAfterClose(t *testing.T) {
+	// Regression: Set/Commit after Close() must fail (no LOCK_EX).
+	path := tempPath(t, "ops-after-close")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Operations after Close must fail.
+	if err := fw.Set(Ipv4Key(20), Ipv4Key(30), []byte{2}); err == nil {
+		t.Fatal("Set after Close must fail")
+	}
+	if err := fw.Commit(1); err == nil {
+		t.Fatal("Commit after Close must fail")
+	}
+}
+
+func TestMmapWriterPageAfterCloseReturnsZero(t *testing.T) {
+	// Regression: page() after Close() must return zero page, not panic.
+	path := tempPath(t, "page-after-close")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	// Reopen with mmap-backed writer, close, then check page() returns zero.
+	fw2, err := OpenFileWriterV4(path, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	page := fw2.w.store.page(0)
+	if len(page) != pageSize {
+		t.Fatalf("page length %d != %d", len(page), pageSize)
+	}
+	for i, b := range page {
+		if b != 0 {
+			t.Fatalf("page[%d] = %d, expected 0 after close", i, b)
+		}
+	}
+}
+
+func TestMmapWriterRepairsTrailingSparsePages(t *testing.T) {
+	// Regression: a file with trailing sparse pages (from a crashed growth) must
+	// be repaired after commit so readers can open it.
+	path := tempPath(t, "trailing-sparse")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		if err := fw.Set(Ipv4Key(uint32(i*10)), Ipv4Key(uint32(i*10+3)), []byte{byte(i & 0xff)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	// Extend the file with sparse pages (simulate a crashed growth).
+	sparseLen := int64(fw.w.store.totalPages()*uint64(pageSize)) * 2
+	if err := unix.Ftruncate(int(fw.file.Fd()), sparseLen); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw.Close()
+
+	// A reader must reject the sparse file.
+	if _, err := OpenMmap(path); err == nil {
+		t.Fatal("reader must reject sparse file")
+	}
+
+	// Open with writer (mmap-backed), do a small commit.
+	fw2, err := OpenFileWriterV4(path, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw2.Set(Ipv4Key(9999), Ipv4Key(9999), []byte{99}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw2.Commit(1); err != nil {
+		t.Fatal(err)
+	}
+	_ = fw2.Close()
+
+	// After commit, the trailing sparse pages must be gone — reader can open.
+	mr, err := OpenMmap(path)
+	if err != nil {
+		t.Fatal("reader must be able to open after commit repair: " + err.Error())
+	}
+	r, err := mr.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RecordCount() != 101 {
+		t.Fatalf("expected 101 records, got %d", r.RecordCount())
+	}
+	_ = mr.Close()
+}
+
+func TestMmapWriterScopeMetaFailAfterClose(t *testing.T) {
+	// Regression: scope/meta mutators must fail after Close().
+	path := tempPath(t, "scope-after-close")
+	fw, err := CreateFileWriterV4(path, 1, 0, DefaultLockWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Set(Ipv4Key(1), Ipv4Key(10), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := fw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fw.ScopeDefine([]byte("x")); err == nil {
+		t.Fatal("ScopeDefine after Close must fail")
+	}
+	if _, err := fw.ScopeSetVersion(1, 1); err == nil {
+		t.Fatal("ScopeSetVersion after Close must fail")
+	}
+	if _, err := fw.ScopeBumpVersion(1); err == nil {
+		t.Fatal("ScopeBumpVersion after Close must fail")
+	}
+	if _, err := fw.ScopeSetType(1, 1); err == nil {
+		t.Fatal("ScopeSetType after Close must fail")
+	}
+	if err := fw.MetaSet(0, []byte("k"), 0, []byte("v")); err == nil {
+		t.Fatal("MetaSet after Close must fail")
+	}
+	if _, err := fw.MetaDelete(0, []byte("k")); err == nil {
+		t.Fatal("MetaDelete after Close must fail")
+	}
+	// Read methods must also fail after close (mmap is unmapped).
+	if _, _, _, err := fw.MetaGet(0, []byte("k")); err == nil {
+		t.Fatal("MetaGet after Close must fail")
+	}
+	if _, err := fw.MetaList(0); err == nil {
+		t.Fatal("MetaList after Close must fail")
+	}
+	if _, err := fw.RecordCount(); err == nil {
+		t.Fatal("RecordCount after Close must fail")
+	}
+	if _, err := fw.ScopeDrop(999); err == nil {
+		t.Fatal("ScopeDrop after Close must fail")
 	}
 }

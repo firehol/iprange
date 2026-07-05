@@ -45,7 +45,7 @@ type ownedRecord[K ipKey[K]] struct {
 // Writer is a single-writer COW B+tree over an in-memory file image. It is generic over
 // the key width (fixed per file). Commit makes the accumulated mutations durable+atomic.
 type Writer[K ipKey[K]] struct {
-	image           []byte
+	store           pageStore
 	activeMeta      uint32 // physical meta page (0 or 1) currently active
 	rootPgno        uint32
 	treeHeight      uint32
@@ -92,7 +92,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 	var zero K
 	recSize := recordSize(uint8(zero.width()), scopeWidth)
 	w := &Writer[K]{
-		image:           make([]byte, 2*pageSize),
+		store:           newVecPageStore(make([]byte, 2*pageSize)),
 		activeMeta:      0,
 		rootPgno:        0,
 		treeHeight:      0,
@@ -149,8 +149,9 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 	// Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the committed
 	// total_pages is authoritative and reachable pages are all below it.
 	image = image[:int(m.totalPages)*pageSize]
+	store := newVecPageStore(image)
 	// Load the committed scope registry into memory (validated by Open above).
-	scopes, err := loadAllScopes(image, m.scopeTableRoot)
+	scopes, err := loadAllScopes(store.committedBytes(), m.scopeTableRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +167,7 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 	}
 	recSize := recordSize(uint8(zero.width()), m.scopeWidth)
 	w := &Writer[K]{
-		image:           image,
+		store:           store,
 		activeMeta:      m.pgno,
 		rootPgno:        m.rootPgno,
 		treeHeight:      m.treeHeight,
@@ -182,6 +183,58 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
 		committedPages:  int(m.totalPages), // committed on-disk page count
+	}
+	w.free = w.deriveFreeSet()
+	return w, nil
+}
+
+// openWithStore opens an existing image from a page store. The store must already contain
+// the committed state (e.g., from an mmap). Validates the tree and derives the free set.
+func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
+	bytes := store.committedBytes()
+	r, err := Open(bytes)
+	if err != nil {
+		return nil, err
+	}
+	var zero K
+	if zero.version() != r.version {
+		return nil, errInvalidInput("writer family mismatch")
+	}
+	m := r.meta
+	if m.versionMinor > versionMinorMetadata {
+		return nil, errInvalidInput("writer cannot mutate a newer version_minor file")
+	}
+	scopes, err := loadAllScopes(bytes, m.scopeTableRoot)
+	if err != nil {
+		return nil, err
+	}
+	nextScopeID := uint32(1)
+	if n := len(scopes); n > 0 {
+		maxID := scopes[n-1].id
+		if maxID == maxUint32 {
+			nextScopeID = maxUint32
+		} else {
+			nextScopeID = maxID + 1
+		}
+	}
+	recSize := recordSize(uint8(zero.width()), m.scopeWidth)
+	w := &Writer[K]{
+		store:           store,
+		activeMeta:      m.pgno,
+		rootPgno:        m.rootPgno,
+		treeHeight:      m.treeHeight,
+		recordCount:     m.recordCount,
+		scopeWidth:      int(m.scopeWidth),
+		recordSize:      int(recSize),
+		leafMax:         leafMax(recSize),
+		branchMax:       branchMax(uint8(zero.width())),
+		createdUnixtime: m.createdUnixtime,
+		txnID:           m.txnID,
+		scopeTableRoot:  m.scopeTableRoot,
+		scopes:          scopes,
+		nextScopeID:     nextScopeID,
+		kvDirty:         make(map[uint32][]kvEntry),
+		committedPages:  int(m.totalPages),
 	}
 	w.free = w.deriveFreeSet()
 	return w, nil
@@ -251,7 +304,12 @@ func (w *Writer[K]) Scan(f func(from, to K, scope []byte)) {
 // Commit writes the new state into the inactive meta and flips it (§6.3), reclaiming
 // pages freed by this txn (D7) and clearing the dirty set. After this the image is a valid
 // v4 file whose active meta is the new tree. It errors only if txn_id is exhausted.
+// NOTE: Commit is only valid for vecPageStore-backed writers. mmapPageStore-backed writers
+// must use FileWriter.Commit (which handles the two-fsync protocol).
 func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
+	if _, ok := w.store.(*vecPageStore); !ok {
+		return errInvalidInput("Writer.Commit is only valid for vecPageStore; use FileWriter.Commit for mmap-backed writers")
+	}
 	if _, err := w.commitMeta(updatedUnixtime); err != nil {
 		return err
 	}
@@ -259,10 +317,19 @@ func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
 	return nil
 }
 
-// Image returns the current image bytes (a valid v4 file after a Commit). The returned
-// slice ALIASES the writer's internal buffer; callers MUST NOT modify it (a later
-// mutation/commit will read and overwrite these bytes). Copy it if you need to retain it.
-func (w *Writer[K]) Image() []byte { return w.image }
+// Image returns the current image bytes (a valid v4 file after a Commit). For vecPageStore:
+// returns the slice directly (zero-cost). For mmapPageStore: returns a copy of committedBytes()
+// (the mmap is PROT_READ — returning it directly would SIGSEGV on modification).
+func (w *Writer[K]) Image() []byte {
+	if img, ok := w.store.(*vecPageStore); ok {
+		return img.image
+	}
+	// mmapPageStore: return a copy to avoid SIGSEGV (the mmap is PROT_READ).
+	bytes := w.store.committedBytes()
+	out := make([]byte, len(bytes))
+	copy(out, bytes)
+	return out
+}
 
 // RecordCount returns the number of records in the (pending) tree.
 func (w *Writer[K]) RecordCount() uint64 { return w.recordCount }
@@ -446,7 +513,7 @@ func (w *Writer[K]) scopeIdxAny(scopeID uint32) (int, bool) {
 // scopeTableRoot (0 when empty → the file stays/returns to byte-compatible v4.0, §C.6).
 func (w *Writer[K]) rebuildScopeTable() error {
 	var old []uint32
-	collectScopePages(w.image, w.scopeTableRoot, &old)
+	collectScopePages(w.store.committedBytes(), w.scopeTableRoot, &old)
 	for _, p := range old {
 		w.freePage(p)
 	}
@@ -465,7 +532,6 @@ func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
 	if len(scopes) == 0 {
 		return 0, nil
 	}
-	buf := make([]byte, pageSize)
 	leafMaxN := scopeLeafMax()
 	// level holds (pgno, firstID) for each node at the current level.
 	type node struct {
@@ -483,8 +549,9 @@ func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		writeScopeLeaf(buf, pgno, chunk)
-		w.writePage(pgno, buf)
+		page := w.store.writePageMut(pgno)
+		writeScopeLeaf(page, pgno, chunk)
+		w.dirty = append(w.dirty, pgno)
 		level = append(level, node{pgno: pgno, firstID: chunk[0].id})
 	}
 	height := uint32(1)
@@ -507,8 +574,9 @@ func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
 					seps = append(seps, c.firstID)
 				}
 			}
-			writeScopeBranch(buf, pgno, seps, children)
-			w.writePage(pgno, buf)
+			page := w.store.writePageMut(pgno)
+			writeScopeBranch(page, pgno, seps, children)
+			w.dirty = append(w.dirty, pgno)
 			next = append(next, node{pgno: pgno, firstID: chunk[0].firstID})
 		}
 		level = next
@@ -541,14 +609,6 @@ func packChildren[T any](children []T, fanout int) [][]T {
 		groups[last] = children[len(children)-2:]
 	}
 	return groups
-}
-
-// writePage copies a fully-built page into the image and records it dirty (for the OS pwrite
-// set).
-func (w *Writer[K]) writePage(pgno uint32, page []byte) {
-	base := int(pgno) * pageSize
-	copy(w.image[base:base+pageSize], page)
-	w.dirty = append(w.dirty, pgno)
 }
 
 // --- v4.1 per-scope KV (§C.4) ---
@@ -616,7 +676,7 @@ func (w *Writer[K]) MetaGet(target uint32, key []byte) (typ uint32, value []byte
 	if !ok {
 		return 0, nil, false, nil
 	}
-	return kvGet(w.image, root, key, w.totalPages())
+	return kvGet(w.store.committedBytes(), root, key, w.totalPages())
 }
 
 // MetaDelete deletes key on target. It returns ChangedYes if a key was removed, Unchanged if
@@ -662,7 +722,7 @@ func (w *Writer[K]) MetaList(target uint32) ([]MetaEntry, error) {
 	var out []MetaEntry
 	if root, ok := w.targetKVRoot(target); ok {
 		var entries []kvEntry
-		if err := kvList(w.image, root, w.totalPages(), &entries); err != nil {
+		if err := kvList(w.store.committedBytes(), root, w.totalPages(), &entries); err != nil {
 			return nil, err
 		}
 		out = make([]MetaEntry, 0, len(entries))
@@ -703,7 +763,7 @@ func (w *Writer[K]) kvLoadDirty(target uint32) ([]kvEntry, error) {
 	}
 	var entries []kvEntry
 	if root, ok := w.targetKVRoot(target); ok {
-		if err := kvList(w.image, root, w.totalPages(), &entries); err != nil {
+		if err := kvList(w.store.committedBytes(), root, w.totalPages(), &entries); err != nil {
 			return nil, err
 		}
 	}
@@ -771,7 +831,7 @@ func (w *Writer[K]) freeKVTree(root uint32) {
 		return
 	}
 	var pages []uint32
-	collectKVPages(w.image, root, w.totalPages(), &pages)
+	collectKVPages(w.store.committedBytes(), root, w.totalPages(), &pages)
 	for _, p := range pages {
 		w.freePage(p)
 	}
@@ -801,7 +861,6 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 	}
 	// 2) Pack leaves greedily (each leaf keeps >= 1 slot; the spec geometry guarantees the
 	//    largest single inline entry + its slot fits a fresh leaf body).
-	buf := make([]byte, pageSize)
 	type node struct {
 		pgno     uint32
 		firstKey []byte
@@ -822,8 +881,9 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		writeKVLeaf(buf, pgno, slots[i:j])
-		w.writePage(pgno, buf)
+		page := w.store.writePageMut(pgno)
+		writeKVLeaf(page, pgno, slots[i:j])
+		w.dirty = append(w.dirty, pgno)
 		level = append(level, node{pgno: pgno, firstKey: cloneBytes(slots[i].slotKey())})
 		i = j
 	}
@@ -872,8 +932,9 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 			if err != nil {
 				return 0, err
 			}
-			writeKVBranch(buf, pgno, leftmost, seps)
-			w.writePage(pgno, buf)
+			page := w.store.writePageMut(pgno)
+			writeKVBranch(page, pgno, leftmost, seps)
+			w.dirty = append(w.dirty, pgno)
 			next = append(next, node{pgno: pgno, firstKey: level[lo].firstKey})
 		}
 		level = next
@@ -897,7 +958,6 @@ func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
 		}
 		pgnos[k] = p
 	}
-	buf := make([]byte, pageSize)
 	for k := 0; k < n; k++ {
 		start := k * payload
 		end := start + payload
@@ -908,8 +968,9 @@ func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
 		if k+1 < n {
 			next = pgnos[k+1]
 		}
-		writeOverflow(buf, pgnos[k], next, value[start:end])
-		w.writePage(pgnos[k], buf)
+		page := w.store.writePageMut(pgnos[k])
+		writeOverflow(page, pgnos[k], next, value[start:end])
+		w.dirty = append(w.dirty, pgnos[k])
 	}
 	return pgnos[0], nil
 }
@@ -917,7 +978,7 @@ func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
 // totalPages returns the current logical page count of the in-memory image (for KV bounds
 // checks).
 func (w *Writer[K]) totalPages() uint64 {
-	return uint64(len(w.image) / pageSize)
+	return w.store.totalPages()
 }
 
 // ensureUsable refuses to operate on a writer poisoned by a failed commit (see poisoned):
@@ -980,7 +1041,7 @@ func (w *Writer[K]) finishCommitMeta(updatedUnixtime uint64) uint32 {
 	w.freedThisTxn = w.freedThisTxn[:0]
 	// The file is now this long on disk after the OS layer's truncate; the next txn's
 	// grown region starts here.
-	w.committedPages = len(w.image) / pageSize
+	w.committedPages = int(w.store.totalPages())
 	return inactive
 }
 
@@ -1014,24 +1075,22 @@ func (w *Writer[K]) takeDirty() []uint32 {
 	if len(w.freedThisTxn) == 0 {
 		return d
 	}
+	// Build a set for O(1) lookup. Clone — do NOT drain! finishCommitMeta reads
+	// freedThisTxn to move freed pages into the free list.
+	freed := make(map[uint32]struct{}, len(w.freedThisTxn))
+	for _, p := range w.freedThisTxn {
+		freed[p] = struct{}{}
+	}
 	boundary := uint32(w.committedPages)
 	out := d[:0]
 	for _, p := range d {
-		if p >= boundary || !containsU32(w.freedThisTxn, p) {
+		if p >= boundary {
+			out = append(out, p)
+		} else if _, ok := freed[p]; !ok {
 			out = append(out, p)
 		}
 	}
 	return out
-}
-
-// containsU32 reports whether s contains v.
-func containsU32(s []uint32, v uint32) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // insert inserts a disjoint record [from, to] = scope (the caller guarantees it does not
@@ -1173,8 +1232,7 @@ func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) (uint32, error) {
 		return 0, err
 	}
 	w.dirty = append(w.dirty, pgno)
-	base := int(pgno) * pageSize
-	page := w.image[base : base+pageSize]
+	page := w.store.writePageMut(pgno)
 	for i := range page {
 		page[i] = 0
 	}
@@ -1193,8 +1251,7 @@ func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
 		return 0, err
 	}
 	w.dirty = append(w.dirty, pgno)
-	base := int(pgno) * pageSize
-	page := w.image[base : base+pageSize]
+	page := w.store.writePageMut(pgno)
 	for i := range page {
 		page[i] = 0
 	}
@@ -1234,22 +1291,24 @@ func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
 		createdUnixtime: w.createdUnixtime,
 		rootPgno:        w.rootPgno,
 		treeHeight:      w.treeHeight,
-		totalPages:      uint64(len(w.image) / pageSize),
+		totalPages:      w.store.totalPages(),
 		recordCount:     w.recordCount,
 		txnID:           txnID,
 		updatedUnixtime: updatedUnixtime,
 		scopeTableRoot:  w.scopeTableRoot,
 	}
-	base := int(pgno) * pageSize
-	m.encodeInto(w.image[base : base+pageSize])
+	page := w.store.writePageMut(pgno)
+	m.encodeInto(page)
 }
 
+// page returns the bytes for pgno. The returned slice MUST NOT be written to — for
+// mmapPageStore the mmap is PROT_READ and writing causes SIGSEGV. Use writePageMut for
+// mutable access.
 func (w *Writer[K]) page(pgno uint32) []byte {
-	base := int(pgno) * pageSize
-	return w.image[base : base+pageSize]
+	return w.store.page(pgno)
 }
 
-// allocPage allocates a page: reuse a freed page (from a prior txn) or grow the image. It
+// allocPage allocates a page: reuse a freed page (from a prior txn) or grow the store. It
 // refuses to grow past the 2^32-page limit (§6.4) rather than wrap the u32 pgno.
 func (w *Writer[K]) allocPage() (uint32, error) {
 	if n := len(w.free); n > 0 {
@@ -1257,14 +1316,10 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 		w.free = w.free[:n-1]
 		return p, nil
 	}
-	// uint64 so the `1 << 32` constant and the comparison are valid on 32-bit targets
-	// (where `int` is 32-bit and the constant would overflow it).
-	if uint64(len(w.image)/pageSize) >= 1<<32 {
+	if w.store.totalPages() >= (uint64(1)<<32)-1 {
 		return 0, errInvalidInput("file would exceed the 2^32-page limit")
 	}
-	p := uint32(len(w.image) / pageSize)
-	w.image = append(w.image, make([]byte, pageSize)...)
-	return p, nil
+	return w.store.allocPage(), nil
 }
 
 // freePage marks a page freed by the current txn (reusable only after this txn commits,
@@ -1276,7 +1331,8 @@ func (w *Writer[K]) freePage(pgno uint32) {
 // deriveFreeSet derives the free set (§7): pages in [2, total_pages) not reachable from
 // the root. The image is already validated, so the walk is bounded and safe.
 func (w *Writer[K]) deriveFreeSet() []uint32 {
-	total := len(w.image) / pageSize
+	bytes := w.store.committedBytes()
+	total := len(bytes) / pageSize
 	used := make([]bool, total)
 	used[0] = true // META-A
 	used[1] = true // META-B
@@ -1286,7 +1342,7 @@ func (w *Writer[K]) deriveFreeSet() []uint32 {
 	// The v4.1 scope table is also reachable (§C.5): its pages must not be reallocated.
 	if w.scopeTableRoot != 0 {
 		var sp []uint32
-		collectScopePages(w.image, w.scopeTableRoot, &sp)
+		collectScopePages(bytes, w.scopeTableRoot, &sp)
 		for _, p := range sp {
 			used[p] = true
 		}
@@ -1295,7 +1351,7 @@ func (w *Writer[K]) deriveFreeSet() []uint32 {
 	// committed kv_root (incl. FILE's, if persisted) into the used set.
 	var kp []uint32
 	for i := range w.scopes {
-		collectKVPages(w.image, w.scopes[i].kvRoot, uint64(total), &kp)
+		collectKVPages(bytes, w.scopes[i].kvRoot, uint64(total), &kp)
 	}
 	for _, p := range kp {
 		used[p] = true
@@ -1566,11 +1622,14 @@ func (w *Writer[K]) lookupGE(key K) (from, to K, scope []byte, found bool) {
 	if w.rootPgno == 0 {
 		return from, to, nil, false
 	}
+	// Fixed stack (mirrors Cursor): avoids per-call heap allocation on the
+	// set/delete hot path. treeHeightMax (32) is the format's hard cap.
 	type frame struct {
 		pgno uint32
 		ci   int
 	}
-	var stack []frame
+	var stack [treeHeightMax]frame
+	stackLen := 0
 	pgno := w.rootPgno
 	depth := uint32(1)
 	for depth < w.treeHeight {
@@ -1578,7 +1637,8 @@ func (w *Writer[K]) lookupGE(key K) (from, to K, scope []byte, found bool) {
 		count := int(decodePageHeader(page).entryCount)
 		b := newBranchView[K](page, count)
 		i := partitionIdx(count, func(j int) bool { return b.sep(j).cmp(key) <= 0 })
-		stack = append(stack, frame{pgno: pgno, ci: i})
+		stack[stackLen] = frame{pgno: pgno, ci: i}
+		stackLen++
 		pgno = b.child(i)
 		depth++
 	}
@@ -1591,9 +1651,9 @@ func (w *Writer[K]) lookupGE(key K) (from, to K, scope []byte, found bool) {
 		return rec.from(), rec.to(), cloneBytes(rec.scope()), true
 	}
 	// No record >= key in this leaf; ascend to the nearest next child, descend left.
-	for len(stack) > 0 {
-		fr := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+	for stackLen > 0 {
+		stackLen--
+		fr := stack[stackLen]
 		bpage := w.page(fr.pgno)
 		bcount := int(decodePageHeader(bpage).entryCount)
 		b := newBranchView[K](bpage, bcount)

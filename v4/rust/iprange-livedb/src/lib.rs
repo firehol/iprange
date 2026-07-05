@@ -44,6 +44,9 @@ pub mod wire;
 #[cfg(feature = "alloc")]
 pub mod writer;
 
+#[cfg(feature = "alloc")]
+pub(crate) mod page_store;
+
 /// The v4.1 scope table (§C.2, §D): the per-scope metadata registry. Requires `alloc`.
 #[cfg(feature = "alloc")]
 pub mod scope;

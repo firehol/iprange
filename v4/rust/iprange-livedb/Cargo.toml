@@ -18,10 +18,14 @@ os = ["std", "dep:memmap2", "dep:libc"]
 # `export-v3`: the v4 -> v3 snapshot bridge (§13). Opt-in so the core stays free of the
 # v3 crate dependency; pulls in the sibling v3 writer to seal the export.
 export-v3 = ["std", "dep:iprange-format"]
+# `slow-tests`: enable long-running robustness fuzz tests (~53s). Not in default.
+# Run with: cargo test --features slow-tests
+slow-tests = []
 
 [dependencies]
 memmap2 = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
 # The v3 snapshot writer (§13 export target). Optional, gated behind `export-v3`.
 iprange-format = { path = "../../../v3/rust/iprange-format", optional = true }
 
@@ -29,3 +33,17 @@ iprange-format = { path = "../../../v3/rust/iprange-format", optional = true }
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Quick tests (default): conformance + metadata_conformance (~0.1s each).
+[[test]]
+name = "conformance"
+required-features = ["std"]
+
+[[test]]
+name = "metadata_conformance"
+required-features = ["std"]
+
+# Slow tests (~53s): robustness fuzz. Run with: cargo test --features slow-tests
+[[test]]
+name = "robustness"
+required-features = ["slow-tests"]

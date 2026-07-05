@@ -263,6 +263,56 @@ func must(t *testing.T, err error) {
 	}
 }
 
+type fullPageStore struct{}
+
+func (s *fullPageStore) page(pgno uint32) []byte {
+	panic("page() must not be called")
+}
+
+func (s *fullPageStore) writePageMut(pgno uint32) []byte {
+	panic("writePageMut() must not be called")
+}
+
+func (s *fullPageStore) writePage(pgno uint32, data []byte) {
+	panic("writePage() must not be called")
+}
+
+func (s *fullPageStore) allocPage() uint32 {
+	panic("allocPage() must not be called after the guard rejects growth")
+}
+
+func (s *fullPageStore) totalPages() uint64 {
+	return (uint64(1) << 32) - 1
+}
+
+func (s *fullPageStore) truncate(pages uint32) {
+	panic("truncate() must not be called")
+}
+
+func (s *fullPageStore) committedBytes() []byte {
+	return nil
+}
+
+func (s *fullPageStore) pageData(pgno uint32) []byte {
+	panic("pageData() must not be called")
+}
+
+func (s *fullPageStore) clearDirty() {}
+
+func (s *fullPageStore) remap(fd uintptr, newSize int64) error {
+	return nil
+}
+
+func (s *fullPageStore) close() {}
+
+func TestAllocPageRejectsBeforeU32Wrap(t *testing.T) {
+	w := CreateV4(1, 0)
+	w.store = &fullPageStore{}
+	if _, err := w.allocPage(); errorClass(err) != "InvalidInput" {
+		t.Fatalf("expected InvalidInput, got %v", err)
+	}
+}
+
 // TestPoisonedWriterRefusesOps verifies that once the writer is poisoned (a failed commit
 // rebuild), every mutating op and Commit refuses with a State error and the on-disk image is
 // untouched — still the last committed state.

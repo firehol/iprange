@@ -324,7 +324,20 @@ Build (autotools):
 
 Build (CMake): `cmake -S . -B build-cmake && cmake --build build-cmake` (see `CMakeLists.txt`).
 
-Test:
+Test (Rust v4):
+
+```bash
+cargo test --manifest-path v4/rust/Cargo.toml          # quick tests (~1s, 103 tests)
+cargo test --manifest-path v4/rust/Cargo.toml --features slow-tests  # includes robustness fuzz (~53s)
+```
+
+Test (Go v4):
+
+```bash
+go -C v4/go test ./...
+```
+
+Legacy C tests (not v4):
 
 ```bash
 ./run-tests.sh            # canonical test suite (tests.d/)

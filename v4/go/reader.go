@@ -34,7 +34,7 @@ func Open(b []byte) (*Reader, error) {
 
 	// Geometry (§9 step 2). page_size/key_width/record_size/meta_size were cross-checked
 	// in classify; here: page-count, file size, height/root.
-	if m.totalPages < 2 || m.totalPages > (uint64(1)<<32) {
+	if m.totalPages < 2 || m.totalPages >= (uint64(1)<<32) {
 		return nil, errStructural("total_pages out of range")
 	}
 	// Overflow-checked total_pages*page_size.
@@ -91,7 +91,7 @@ func (r *Reader) validateScopeTableTree() error {
 	// tree AND every overflow chain. The first visit marks a page; any second visit (a shared
 	// overflow chain, a duplicate child pgno, or any other aliasing) is a structural error.
 	// This proves the metadata page-forest disjoint + acyclic and subsumes the per-node
-	// duplicate-child check. total_pages was bounded by Open (>= 2, <= 2^32, file-backed).
+	// duplicate-child check. total_pages was bounded by Open (>= 2, < 2^32, file-backed).
 	vis := &pageVisitor{visited: make([]bool, r.meta.totalPages)}
 	if err := validateScopeTable(r.bytes, root, r.meta.totalPages, vis); err != nil {
 		return err

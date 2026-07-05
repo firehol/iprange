@@ -38,7 +38,7 @@ impl<'a> Reader<'a> {
 
         // Geometry (§9 step 2). `page_size`/`key_width`/`record_size`/`meta_size` were
         // cross-checked in classify; here: page-count, file size, height/root.
-        if meta.total_pages < 2 || meta.total_pages > (1u64 << 32) {
+        if meta.total_pages < 2 || meta.total_pages >= (1u64 << 32) {
             return Err(Error::Structural("total_pages out of range"));
         }
         let needed = meta
@@ -558,7 +558,7 @@ impl<'a> Reader<'a> {
 /// independently; class 2 (intact-but-incompatible) on either rejects the file; class 1
 /// (torn/not-a-meta) is discarded; among the valid metas the higher `txn_id` wins
 /// (tie → pgno 0). Both valid metas MUST agree on the static identity region.
-fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
+pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
     if bytes.len() < 2 * spec::PAGE_SIZE {
         return Err(Error::FileTooShort {
             need: (2 * spec::PAGE_SIZE) as u64,

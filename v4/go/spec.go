@@ -43,7 +43,7 @@ const (
 	checksumAlgoCRC32C uint8 = 1
 
 	// treeHeightMax is the hard cap on tree_height (§5.3): even at the degenerate minimum
-	// branch fanout of 2, a u32-pgno file (<= 2^32 pages) cannot exceed ~32 levels. A
+	// branch fanout of 2, a u32-pgno file (< 2^32 pages) cannot exceed ~32 levels. A
 	// reader MUST reject tree_height > 32 and treat descending deeper as a hard error.
 	treeHeightMax uint32 = 32
 )
@@ -87,7 +87,7 @@ const (
 	metaCreatedUnixtime = 42 // created_unixtime (u64): static; identical in both metas
 	metaRootPgno        = 50 // root_pgno (u32): 0 = empty tree. First dynamic field.
 	metaTreeHeight      = 54 // tree_height (u32): 0 = empty; leaf level = 1
-	metaTotalPages      = 58 // total_pages (u64): 2 <= total_pages <= 2^32
+	metaTotalPages      = 58 // total_pages (u64): 2 <= total_pages < 2^32
 	metaRecordCount     = 66 // record_count (u64): UNVERIFIED hint; never size an allocation from it
 	metaTxnID           = 74 // txn_id (u64): monotonic; the checksum-valid meta with the higher value is active
 	metaUpdatedUnixtime = 82 // updated_unixtime (u64): caller-supplied per commit

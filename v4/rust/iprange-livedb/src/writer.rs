@@ -1,12 +1,12 @@
 //! The v4 writer: copy-on-write B+tree mutation with a double-meta atomic commit
 //! (§6, §7, §8).
 //!
-//! This is the in-memory writer core: it owns the whole file image as a growable
-//! buffer and emulates the `pread`/`pwrite` model the OS layer (a later increment)
-//! uses against a real file — every mutated node is **copied** to a freshly allocated
-//! page (the old page is freed-by-this-txn, D7) up to a new root, and `commit` writes
-//! the new state into the **inactive** meta and flips it (§6.3). A crash leaves the
-//! file as old-or-new, never torn (the active meta only points at durable pages).
+//! This writer core is page-store backed: pure API use keeps a growable `Vec<u8>`, while
+//! the OS layer can wrap the same COW logic around an mmap-backed store. Every mutated node
+//! is **copied** to a freshly allocated page (the old page is freed-by-this-txn, D7) up to
+//! a new root, and `commit` writes the new state into the **inactive** meta and flips it
+//! (§6.3). A crash leaves the file as old-or-new, never torn (the active meta only points at
+//! durable pages).
 //!
 //! Implements **create**, range `set` / `delete` (§8) over a COW B+tree (leaf/branch
 //! split + root growth on insert; sibling-merge + root-collapse on delete), `scan`,
@@ -14,15 +14,19 @@
 //! trimming and same-scope coalescing. The OS file/`flock`/`mmap` layer wraps this
 //! core (next increment).
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use rustc_hash::FxHashSet;
+
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::kv::{self, BranchSep, KvEntry, LeafSlot};
 use crate::node::{BranchView, LeafView};
+use crate::page_store::{PageStore, VecPageStore};
 use crate::reader::Reader;
 use crate::record;
 use crate::scope::{self, ScopeRec};
@@ -52,7 +56,7 @@ struct OwnedRecord<K: IpKey> {
 /// A single-writer COW B+tree over an in-memory file image. Generic over the key width
 /// (fixed per file). `commit` makes the accumulated mutations durable and atomic.
 pub struct Writer<K: IpKey> {
-    image: Vec<u8>,
+    pub(crate) store: Box<dyn PageStore>,
     active_meta: u32, // physical meta page (0 or 1) currently active
     root_pgno: u32,
     tree_height: u32,
@@ -89,9 +93,9 @@ impl<K: IpKey> Writer<K> {
     /// file's lifetime (§4). Mutations are not durable until `commit`.
     pub fn create(scope_width: u8, created_unixtime: u64) -> Writer<K> {
         let record_size = spec::record_size(K::WIDTH as u8, scope_width);
-        let image = vec![0u8; 2 * PAGE_SIZE];
+        let store: Box<dyn PageStore> = Box::new(VecPageStore::new(vec![0u8; 2 * PAGE_SIZE]));
         let mut w = Writer {
-            image,
+            store,
             active_meta: 0,
             root_pgno: 0,
             tree_height: 0,
@@ -124,7 +128,7 @@ impl<K: IpKey> Writer<K> {
     /// the reader's §9 checks (the writer also reads untrusted bytes), then derive the
     /// in-memory free set (§7) by walking the reachable tree. The image MUST have no
     /// trailing pages beyond `total_pages` (the OS layer truncates those before calling).
-    pub fn open_image(mut image: Vec<u8>) -> Result<Writer<K>> {
+    pub fn open_image(image: Vec<u8>) -> Result<Writer<K>> {
         let meta = {
             let r = Reader::open(&image)?;
             if K::VERSION != r.version() {
@@ -144,9 +148,11 @@ impl<K: IpKey> Writer<K> {
         }
         // Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the
         // committed total_pages is authoritative and reachable pages are all below it.
+        let mut image = image;
         image.truncate(meta.total_pages as usize * PAGE_SIZE);
+        let store: Box<dyn PageStore> = Box::new(VecPageStore::new(image));
         // Load the committed scope registry into memory (validated by `Reader::open` above).
-        let scopes = scope::load_all(&image, meta.scope_table_root)?;
+        let scopes = scope::load_all(store.committed_bytes(), meta.scope_table_root)?;
         let next_scope_id = scopes
             .iter()
             .map(|r| r.id)
@@ -154,7 +160,7 @@ impl<K: IpKey> Writer<K> {
             .map_or(1, |m| m.saturating_add(1));
         let record_size = spec::record_size(K::WIDTH as u8, meta.scope_width);
         let mut w = Writer {
-            image,
+            store,
             active_meta: meta.pgno,
             root_pgno: meta.root_pgno,
             tree_height: meta.tree_height,
@@ -174,6 +180,59 @@ impl<K: IpKey> Writer<K> {
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
             committed_pages: meta.total_pages as usize, // committed on-disk page count
+            poisoned: false,
+            _k: PhantomData,
+        };
+        w.free = w.derive_free_set();
+        Ok(w)
+    }
+
+    /// Open an existing image from a page store. The store must already contain
+    /// the committed state (e.g., from an mmap). Validates the tree and derives
+    /// the free set.
+    #[allow(dead_code)]
+    pub(crate) fn open_with_store(store: Box<dyn PageStore>) -> Result<Writer<K>> {
+        let bytes = store.committed_bytes();
+        let meta = {
+            let r = Reader::open(bytes)?;
+            if K::VERSION != r.version() {
+                return Err(Error::InvalidInput("writer family mismatch"));
+            }
+            r.active_meta()
+        };
+        if meta.version_minor > spec::VERSION_MINOR_METADATA {
+            return Err(Error::InvalidInput(
+                "writer cannot mutate a newer version_minor file",
+            ));
+        }
+        let scopes = scope::load_all(bytes, meta.scope_table_root)?;
+        let next_scope_id = scopes
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .map_or(1, |m| m.saturating_add(1));
+        let record_size = spec::record_size(K::WIDTH as u8, meta.scope_width);
+        let mut w = Writer {
+            store,
+            active_meta: meta.pgno,
+            root_pgno: meta.root_pgno,
+            tree_height: meta.tree_height,
+            record_count: meta.record_count,
+            scope_width: meta.scope_width as usize,
+            record_size: record_size as usize,
+            leaf_max: spec::leaf_max(record_size),
+            branch_max: spec::branch_max(K::WIDTH as u8),
+            created_unixtime: meta.created_unixtime,
+            txn_id: meta.txn_id,
+            scope_table_root: meta.scope_table_root,
+            scopes,
+            next_scope_id,
+            scope_dirty: false,
+            kv_dirty: BTreeMap::new(),
+            free: Vec::new(),
+            freed_this_txn: Vec::new(),
+            dirty: Vec::new(),
+            committed_pages: meta.total_pages as usize,
             poisoned: false,
             _k: PhantomData,
         };
@@ -275,6 +334,12 @@ impl<K: IpKey> Writer<K> {
     /// tree. (The OS layer uses [`commit_meta`](Self::commit_meta) + [`take_dirty`] to
     /// stage the two-fsync on-disk commit instead.) Errors only if `txn_id` is exhausted.
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
+        if self.store.as_bytes().is_none() {
+            return Err(Error::InvalidInput(
+                "Writer::commit() is only valid for VecPageStore. \
+                 Use FileWriter::commit() for mmap-backed writers.",
+            ));
+        }
         self.commit_meta(updated_unixtime)?;
         self.dirty.clear();
         Ok(())
@@ -339,7 +404,7 @@ impl<K: IpKey> Writer<K> {
         self.free.append(&mut freed);
         // The file is now this long on disk after the OS layer's `set_len`; the next txn's
         // grown region starts here.
-        self.committed_pages = self.image.len() / PAGE_SIZE;
+        self.committed_pages = self.store.total_pages() as usize;
         inactive
     }
 
@@ -357,6 +422,7 @@ impl<K: IpKey> Writer<K> {
     /// between the metadata rebuild and the commit point): the in-memory state is partially
     /// advanced and must not be reused. The on-disk file remains the last committed valid
     /// state, recovered automatically on the next open.
+    #[cfg_attr(not(feature = "os"), allow(dead_code))]
     pub(crate) fn poison(&mut self) {
         self.poisoned = true;
     }
@@ -375,23 +441,38 @@ impl<K: IpKey> Writer<K> {
         if self.freed_this_txn.is_empty() {
             return dirty;
         }
+        // Clone — do NOT drain! finish_commit_meta reads freed_this_txn
+        // to move freed pages into the free list.
+        let freed: FxHashSet<u32> = self.freed_this_txn.iter().copied().collect();
         let boundary = self.committed_pages as u32;
         dirty
             .into_iter()
-            .filter(|&p| p >= boundary || !self.freed_this_txn.contains(&p))
+            .filter(|&p| p >= boundary || !freed.contains(&p))
             .collect()
     }
 
     /// Borrow the current image bytes (valid v4 file after a `commit`).
+    /// For VecPageStore: returns the Vec (zero-cost). For MmapPageStore:
+    /// returns committed_bytes() (the mmap, sized to total_pages * PAGE_SIZE).
     #[inline]
     pub fn image(&self) -> &[u8] {
-        &self.image
+        self.store
+            .as_bytes()
+            .unwrap_or_else(|| self.store.committed_bytes())
     }
 
     /// Consume the writer, returning the file image.
+    /// For VecPageStore: moves the Vec out (zero-cost). For MmapPageStore:
+    /// copies committed_bytes() into a new Vec (O(file_size) — acceptable
+    /// because into_image is only used in tests and the pure-API path).
     #[inline]
     pub fn into_image(self) -> Vec<u8> {
-        self.image
+        let is_vec = self.store.as_bytes().is_some();
+        if is_vec {
+            self.store.into_vec().unwrap()
+        } else {
+            self.store.committed_bytes().to_vec()
+        }
     }
 
     /// Number of records in the (pending) tree.
@@ -543,7 +624,11 @@ impl<K: IpKey> Writer<K> {
     /// (0 when empty → the file stays/returns to byte-compatible v4.0, §C.6).
     fn rebuild_scope_table(&mut self) -> Result<()> {
         let mut old = Vec::new();
-        scope::collect_pages(&self.image, self.scope_table_root, &mut old);
+        scope::collect_pages(
+            self.store.committed_bytes(),
+            self.scope_table_root,
+            &mut old,
+        );
         for p in old {
             self.free_page(p);
         }
@@ -561,13 +646,13 @@ impl<K: IpKey> Writer<K> {
         if scopes.is_empty() {
             return Ok(0);
         }
-        let mut buf = vec![0u8; PAGE_SIZE];
         let leaf_max = spec::scope_leaf_max();
         let mut level: Vec<(u32, u32)> = Vec::new();
         for chunk in scopes.chunks(leaf_max) {
             let pgno = self.alloc_page()?;
-            scope::write_scope_leaf(&mut buf, pgno, chunk);
-            self.write_page(pgno, &buf);
+            let page = self.store.write_page_mut(pgno);
+            scope::write_scope_leaf(page, pgno, chunk);
+            self.dirty.push(pgno);
             level.push((pgno, chunk[0].id));
         }
         let mut height = 1u32;
@@ -588,21 +673,15 @@ impl<K: IpKey> Writer<K> {
                 let pgno = self.alloc_page()?;
                 let children: Vec<u32> = chunk.iter().map(|&(p, _)| p).collect();
                 let seps: Vec<u32> = chunk.iter().skip(1).map(|&(_, id)| id).collect();
-                scope::write_scope_branch(&mut buf, pgno, &seps, &children);
-                self.write_page(pgno, &buf);
+                let page = self.store.write_page_mut(pgno);
+                scope::write_scope_branch(page, pgno, &seps, &children);
+                self.dirty.push(pgno);
                 next.push((pgno, chunk[0].1));
             }
             level = next;
             height += 1;
         }
         Ok(level[0].0)
-    }
-
-    /// Copy a fully-built page into the image and record it dirty (for the OS pwrite set).
-    fn write_page(&mut self, pgno: u32, page: &[u8]) {
-        let base = pgno as usize * PAGE_SIZE;
-        self.image[base..base + PAGE_SIZE].copy_from_slice(page);
-        self.dirty.push(pgno);
     }
 
     // --- v4.1 per-scope KV (§C.4) ---
@@ -649,7 +728,7 @@ impl<K: IpKey> Writer<K> {
             Some(r) => r,
             None => return Ok(None),
         };
-        kv::get(&self.image, root, key, self.total_pages())
+        kv::get(self.store.committed_bytes(), root, key, self.total_pages())
     }
 
     /// Delete `key` on `target`. Returns `Changed` if a key was removed, `Unchanged` if it
@@ -688,7 +767,12 @@ impl<K: IpKey> Writer<K> {
         let mut out = Vec::new();
         if let Some(root) = self.target_kv_root(target) {
             let mut entries = Vec::new();
-            kv::list(&self.image, root, self.total_pages(), &mut entries)?;
+            kv::list(
+                self.store.committed_bytes(),
+                root,
+                self.total_pages(),
+                &mut entries,
+            )?;
             out = entries
                 .into_iter()
                 .map(|e| (e.key, e.type_, e.value))
@@ -723,7 +807,12 @@ impl<K: IpKey> Writer<K> {
         if !self.kv_dirty.contains_key(&target) {
             let mut entries = Vec::new();
             if let Some(root) = self.target_kv_root(target) {
-                kv::list(&self.image, root, self.total_pages(), &mut entries)?;
+                kv::list(
+                    self.store.committed_bytes(),
+                    root,
+                    self.total_pages(),
+                    &mut entries,
+                )?;
             }
             self.kv_dirty.insert(target, entries);
         }
@@ -791,7 +880,12 @@ impl<K: IpKey> Writer<K> {
             return;
         }
         let mut pages = Vec::new();
-        kv::collect_pages(&self.image, root, self.total_pages(), &mut pages);
+        kv::collect_pages(
+            self.store.committed_bytes(),
+            root,
+            self.total_pages(),
+            &mut pages,
+        );
         for p in pages {
             self.free_page(p);
         }
@@ -826,7 +920,6 @@ impl<K: IpKey> Writer<K> {
         }
         // 2) Pack leaves greedily (each leaf keeps >= 1 slot; the spec geometry guarantees
         //    the largest single inline entry + its slot fits a fresh leaf body).
-        let mut buf = vec![0u8; PAGE_SIZE];
         let mut level: Vec<(u32, Vec<u8>)> = Vec::new(); // (pgno, first key of subtree)
         let mut i = 0usize;
         while i < slots.len() {
@@ -841,8 +934,9 @@ impl<K: IpKey> Writer<K> {
                 j += 1;
             }
             let pgno = self.alloc_page()?;
-            kv::write_kv_leaf(&mut buf, pgno, &slots[i..j]);
-            self.write_page(pgno, &buf);
+            let page = self.store.write_page_mut(pgno);
+            kv::write_kv_leaf(page, pgno, &slots[i..j]);
+            self.dirty.push(pgno);
             level.push((pgno, slots[i].key().to_vec()));
             i = j;
         }
@@ -852,7 +946,7 @@ impl<K: IpKey> Writer<K> {
             if height >= spec::TREE_HEIGHT_MAX {
                 return Err(Error::InvalidInput("kv tree would exceed TREE_HEIGHT_MAX"));
             }
-            let next = self.emit_kv_branch_level(&level, &mut buf)?;
+            let next = self.emit_kv_branch_level(&level)?;
             level = next;
             height += 1;
         }
@@ -866,11 +960,7 @@ impl<K: IpKey> Writer<K> {
     /// leave a lone last child, one child is moved from the previous (full) node into it — the
     /// previous keeps at least two (a full KV branch holds several children even with
     /// max-size keys).
-    fn emit_kv_branch_level(
-        &mut self,
-        level: &[(u32, Vec<u8>)],
-        buf: &mut [u8],
-    ) -> Result<Vec<(u32, Vec<u8>)>> {
+    fn emit_kv_branch_level(&mut self, level: &[(u32, Vec<u8>)]) -> Result<Vec<(u32, Vec<u8>)>> {
         // Phase 1: greedy group boundaries as `[start, end)` index ranges (each >= 1 child).
         let body = spec::KV_PAGE_BODY - 4; // the leftmost-child `u32` consumes 4 body bytes
         let mut groups: Vec<(usize, usize)> = Vec::new();
@@ -920,8 +1010,9 @@ impl<K: IpKey> Writer<K> {
                 })
                 .collect();
             let pgno = self.alloc_page()?;
-            kv::write_kv_branch(buf, pgno, leftmost, &seps);
-            self.write_page(pgno, buf);
+            let page = self.store.write_page_mut(pgno);
+            kv::write_kv_branch(page, pgno, leftmost, &seps);
+            self.dirty.push(pgno);
             next.push((pgno, level[start].1.clone()));
         }
         Ok(next)
@@ -930,7 +1021,12 @@ impl<K: IpKey> Writer<K> {
     /// Write `value` to a fresh overflow page chain; returns the first page's pgno. Splits
     /// into `ceil(len/overflow_payload)` pages, each pointing to the next (last → 0), §D.
     fn write_overflow_chain(&mut self, value: &[u8]) -> Result<u32> {
-        debug_assert!(!value.is_empty());
+        if value.is_empty() {
+            // Release-mode guard (not just debug_assert): the indexing below would
+            // panic on an empty chain. Callers guard on KV_INLINE_MAX, but a future
+            // caller must not trip a silent panic.
+            return Err(Error::InvalidInput("write_overflow_chain: empty value"));
+        }
         let payload = spec::OVERFLOW_PAYLOAD;
         let n = value.len().div_ceil(payload);
         // Allocate all pages up front so each can reference the next.
@@ -938,13 +1034,13 @@ impl<K: IpKey> Writer<K> {
         for _ in 0..n {
             pgnos.push(self.alloc_page()?);
         }
-        let mut buf = vec![0u8; PAGE_SIZE];
         for (k, &pgno) in pgnos.iter().enumerate() {
             let start = k * payload;
             let end = (start + payload).min(value.len());
             let next = if k + 1 < n { pgnos[k + 1] } else { 0 };
-            kv::write_overflow(&mut buf, pgno, next, &value[start..end]);
-            self.write_page(pgno, &buf);
+            let page = self.store.write_page_mut(pgno);
+            kv::write_overflow(page, pgno, next, &value[start..end]);
+            self.dirty.push(pgno);
         }
         Ok(pgnos[0])
     }
@@ -952,7 +1048,7 @@ impl<K: IpKey> Writer<K> {
     /// The current logical page count of the in-memory image (for KV bounds checks).
     #[inline]
     fn total_pages(&self) -> u64 {
-        (self.image.len() / PAGE_SIZE) as u64
+        self.store.total_pages()
     }
 
     // --- COW internals ---
@@ -1041,24 +1137,19 @@ impl<K: IpKey> Writer<K> {
     fn write_leaf(&mut self, records: &[OwnedRecord<K>]) -> Result<u32> {
         let pgno = self.alloc_page()?;
         self.dirty.push(pgno);
-        let base = pgno as usize * PAGE_SIZE;
-        self.image[base..base + PAGE_SIZE].fill(0);
-        PageHeader::write(
-            &mut self.image[base..base + PAGE_SIZE],
-            spec::PAGE_TYPE_LEAF,
-            records.len() as u16,
-            pgno,
-        );
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_LEAF, records.len() as u16, pgno);
         for (i, r) in records.iter().enumerate() {
-            let off = base + PAGE_HEADER_SIZE + i * self.record_size;
+            let off = PAGE_HEADER_SIZE + i * self.record_size;
             record::write::<K>(
-                &mut self.image[off..off + self.record_size],
+                &mut page[off..off + self.record_size],
                 r.from,
                 r.to,
                 &r.scope,
             );
         }
-        finalize_checksum(&mut self.image[base..base + PAGE_SIZE]);
+        finalize_checksum(page);
         Ok(pgno)
     }
 
@@ -1066,24 +1157,18 @@ impl<K: IpKey> Writer<K> {
         debug_assert_eq!(children.len(), seps.len() + 1);
         let pgno = self.alloc_page()?;
         self.dirty.push(pgno);
-        let base = pgno as usize * PAGE_SIZE;
-        self.image[base..base + PAGE_SIZE].fill(0);
-        PageHeader::write(
-            &mut self.image[base..base + PAGE_SIZE],
-            spec::PAGE_TYPE_BRANCH,
-            seps.len() as u16,
-            pgno,
-        );
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, seps.len() as u16, pgno);
         // child[0] at +16, then (sep[i], child[i+1]) pairs.
-        let c0 = base + PAGE_HEADER_SIZE;
-        self.image[c0..c0 + 4].copy_from_slice(&children[0].to_le_bytes());
+        page[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + 4].copy_from_slice(&children[0].to_le_bytes());
         for i in 0..seps.len() {
-            let sep_off = base + PAGE_HEADER_SIZE + 4 + i * (K::WIDTH + 4);
-            seps[i].write_le(&mut self.image[sep_off..sep_off + K::WIDTH]);
+            let sep_off = PAGE_HEADER_SIZE + 4 + i * (K::WIDTH + 4);
+            seps[i].write_le(&mut page[sep_off..sep_off + K::WIDTH]);
             let c_off = sep_off + K::WIDTH;
-            self.image[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
+            page[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
         }
-        finalize_checksum(&mut self.image[base..base + PAGE_SIZE]);
+        finalize_checksum(page);
         Ok(pgno)
     }
 
@@ -1109,23 +1194,22 @@ impl<K: IpKey> Writer<K> {
             created_unixtime: self.created_unixtime,
             root_pgno: self.root_pgno,
             tree_height: self.tree_height,
-            total_pages: (self.image.len() / PAGE_SIZE) as u64,
+            total_pages: self.store.total_pages(),
             record_count: self.record_count,
             txn_id,
             updated_unixtime,
             scope_table_root: self.scope_table_root,
         };
-        let base = pgno as usize * PAGE_SIZE;
-        meta.encode_into(&mut self.image[base..base + PAGE_SIZE]);
+        let page = self.store.write_page_mut(pgno);
+        meta.encode_into(page);
     }
 
     #[inline]
     fn page(&self, pgno: u32) -> &[u8] {
-        let base = pgno as usize * PAGE_SIZE;
-        &self.image[base..base + PAGE_SIZE]
+        self.store.page(pgno)
     }
 
-    /// Allocate a page: reuse a freed page (from a prior txn) or grow the image. Refuses
+    /// Allocate a page: reuse a freed page (from a prior txn) or grow the store. Refuses
     /// to grow past the `2^32`-page limit (§6.4) rather than wrap the `u32` pgno.
     fn alloc_page(&mut self) -> Result<u32> {
         if let Some(p) = self.free.pop() {
@@ -1133,12 +1217,10 @@ impl<K: IpKey> Writer<K> {
         } else {
             // u64 math so the `1 << 32` literal and the comparison are valid on 32-bit
             // targets (where `usize` is 32-bit and `1usize << 32` would overflow).
-            if (self.image.len() / PAGE_SIZE) as u64 >= (1u64 << 32) {
+            if self.store.total_pages() >= ((1u64 << 32) - 1) {
                 return Err(Error::InvalidInput("file would exceed the 2^32-page limit"));
             }
-            let p = (self.image.len() / PAGE_SIZE) as u32;
-            self.image.resize(self.image.len() + PAGE_SIZE, 0);
-            Ok(p)
+            Ok(self.store.alloc_page())
         }
     }
 
@@ -1151,7 +1233,8 @@ impl<K: IpKey> Writer<K> {
     /// Derive the free set (§7): pages in `[2, total_pages)` not reachable from the
     /// root. The image is already validated, so the walk is bounded and safe.
     fn derive_free_set(&self) -> Vec<u32> {
-        let total = self.image.len() / PAGE_SIZE;
+        let bytes = self.store.committed_bytes();
+        let total = bytes.len() / PAGE_SIZE;
         let mut used = vec![false; total];
         used[0] = true; // META-A
         used[1] = true; // META-B
@@ -1161,7 +1244,7 @@ impl<K: IpKey> Writer<K> {
         // The v4.1 scope table is also reachable (§C.5): its pages must not be reallocated.
         if self.scope_table_root != 0 {
             let mut sp = Vec::new();
-            scope::collect_pages(&self.image, self.scope_table_root, &mut sp);
+            scope::collect_pages(bytes, self.scope_table_root, &mut sp);
             for p in sp {
                 used[p as usize] = true;
             }
@@ -1170,7 +1253,7 @@ impl<K: IpKey> Writer<K> {
         // committed `kv_root` (incl. FILE's, if persisted) into the used set.
         let mut kp = Vec::new();
         for rec in &self.scopes {
-            kv::collect_pages(&self.image, rec.kv_root, total as u64, &mut kp);
+            kv::collect_pages(bytes, rec.kv_root, total as u64, &mut kp);
         }
         for p in kp {
             used[p as usize] = true;
@@ -1410,7 +1493,11 @@ impl<K: IpKey> Writer<K> {
         if self.root_pgno == 0 {
             return None;
         }
-        let mut stack: Vec<(u32, usize)> = Vec::new();
+        // Fixed stack (mirrors Cursor): avoids per-call heap allocation on the
+        // set/delete hot path. TREE_HEIGHT_MAX (32) is the format's hard cap.
+        let mut stack: [(u32, usize); spec::TREE_HEIGHT_MAX as usize] =
+            [(0, 0); spec::TREE_HEIGHT_MAX as usize];
+        let mut stack_len: usize = 0;
         let mut pgno = self.root_pgno;
         let mut depth = 1;
         while depth < self.tree_height {
@@ -1418,7 +1505,8 @@ impl<K: IpKey> Writer<K> {
             let count = PageHeader::decode(page).entry_count as usize;
             let b = BranchView::<K>::new(page, count);
             let i = partition_idx(count, |j| b.sep(j) <= key);
-            stack.push((pgno, i));
+            stack[stack_len] = (pgno, i);
+            stack_len += 1;
             pgno = b.child(i);
             depth += 1;
         }
@@ -1431,7 +1519,9 @@ impl<K: IpKey> Writer<K> {
             return Some((r.from(), r.to(), r.scope().to_vec()));
         }
         // No record >= key in this leaf; ascend to the nearest next child, descend left.
-        while let Some((bp, ci)) = stack.pop() {
+        while stack_len > 0 {
+            stack_len -= 1;
+            let (bp, ci) = stack[stack_len];
             let bpage = self.page(bp);
             let bcount = PageHeader::decode(bpage).entry_count as usize;
             let b = BranchView::<K>::new(bpage, bcount);
@@ -1505,7 +1595,7 @@ impl<K: IpKey> core::fmt::Debug for Writer<K> {
             .field("root_pgno", &self.root_pgno)
             .field("tree_height", &self.tree_height)
             .field("record_count", &self.record_count)
-            .field("total_pages", &(self.image.len() / PAGE_SIZE))
+            .field("total_pages", &self.store.total_pages())
             .field("txn_id", &self.txn_id)
             .finish_non_exhaustive()
     }
@@ -1519,6 +1609,61 @@ mod tests {
 
     fn k(n: u32) -> Ipv4Key {
         Ipv4Key(n)
+    }
+
+    struct FullPageStore;
+
+    impl PageStore for FullPageStore {
+        fn page(&self, _pgno: u32) -> &[u8] {
+            panic!("page() must not be called")
+        }
+
+        fn write_page_mut(&mut self, _pgno: u32) -> &mut [u8] {
+            panic!("write_page_mut() must not be called")
+        }
+
+        fn alloc_page(&mut self) -> u32 {
+            panic!("alloc_page() must not be called after the guard rejects growth")
+        }
+
+        fn total_pages(&self) -> u64 {
+            (1u64 << 32) - 1
+        }
+
+        fn committed_bytes(&self) -> &[u8] {
+            &[]
+        }
+
+        fn page_data(&self, _pgno: u32) -> &[u8] {
+            panic!("page_data() must not be called")
+        }
+
+        fn clear_dirty(&mut self) {}
+
+        fn into_vec(self: Box<Self>) -> Option<Vec<u8>> {
+            None
+        }
+
+        fn as_bytes(&self) -> Option<&[u8]> {
+            None
+        }
+
+        fn remap(&mut self, _fd: i32, _new_size: u64) -> Result<()> {
+            Ok(())
+        }
+
+        fn close(&mut self) {}
+    }
+
+    #[test]
+    fn alloc_page_rejects_before_u32_wrap() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.store = Box::new(FullPageStore);
+        let err = w.alloc_page().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidInput("file would exceed the 2^32-page limit")
+        ));
     }
 
     #[test]

@@ -11,6 +11,7 @@ package iprangedb
 // loop, or out-of-bounds read.
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -140,12 +141,14 @@ func (m *MmapReader) Close() error {
 }
 
 // FileWriter is a read/write handle holding LOCK_EX (§11): mutate via Set/Delete, then
-// Commit (the two-fsync double-meta protocol, §6.3). It loads the file image into memory
-// (fine for files that fit in RAM). It is generic over the key width; use
+// Commit (the two-fsync double-meta protocol, §6.3). Uses an mmap-backed page store to
+// avoid loading the whole file into heap memory. It is generic over the key width; use
 // CreateFileWriterV4/V6 or OpenFileWriterV4/V6.
 type FileWriter[K ipKey[K]] struct {
-	file *os.File
-	w    *Writer[K]
+	file    *os.File
+	w       *Writer[K]
+	mmapLen int64 // current mmap size (0 for vecPageStore, file size at open for mmapPageStore)
+	closed  bool  // set to true after Close(); all operations fail once closed
 }
 
 // CreateFileWriterV4 creates a new IPv4 file (see createFileWriter).
@@ -159,7 +162,8 @@ func CreateFileWriterV6(path string, scopeWidth uint8, createdUnixtime uint64, w
 }
 
 // createFileWriter creates a new file (must not exist — O_EXCL) and writes the initial
-// empty DB durably. Holds LOCK_EX.
+// empty DB durably. Holds LOCK_EX. Then reopens through the mmap-backed path so the
+// writer never holds the full DB image in heap memory.
 func createFileWriter[K ipKey[K]](path string, scopeWidth uint8, createdUnixtime uint64, wait time.Duration) (*FileWriter[K], error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
@@ -174,6 +178,8 @@ func createFileWriter[K ipKey[K]](path string, scopeWidth uint8, createdUnixtime
 	if err := flockExclusive(int(file.Fd()), wait); err != nil {
 		return nil, err
 	}
+	// Build the initial 2-page file (meta A + meta B) in a small heap buffer,
+	// write it to disk, fsync. Then reopen through the mmap-backed path.
 	w := createWriter[K](scopeWidth, createdUnixtime)
 	img := w.Image()
 	if err := file.Truncate(int64(len(img))); err != nil {
@@ -185,8 +191,10 @@ func createFileWriter[K ipKey[K]](path string, scopeWidth uint8, createdUnixtime
 	if err := file.Sync(); err != nil {
 		return nil, errf("Io", "sync: "+err.Error())
 	}
+	// Release the Vec-backed writer before reopening through the mmap path.
+	w = nil
 	ok = true
-	return &FileWriter[K]{file: file, w: w}, nil
+	return openFileWriterLocked[K](file)
 }
 
 // OpenFileWriterV4 opens an existing IPv4 file for mutation (see openFileWriter).
@@ -199,8 +207,9 @@ func OpenFileWriterV6(path string, wait time.Duration) (*FileWriter[Ipv6Key], er
 	return openFileWriter[Ipv6Key](path, wait)
 }
 
-// openFileWriter opens an existing file for mutation: LOCK_EX, read the image, validate +
-// derive the free set (§6.2 / §7). It rejects a non-regular file.
+// openFileWriter opens an existing file for mutation: LOCK_EX, mmap the committed range,
+// validate + derive the free set (§6.2 / §7). It rejects a non-regular file, sparse
+// committed range, or corrupt metadata.
 func openFileWriter[K ipKey[K]](path string, wait time.Duration) (*FileWriter[K], error) {
 	file, err := os.OpenFile(path, os.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -212,33 +221,138 @@ func openFileWriter[K ipKey[K]](path string, wait time.Duration) (*FileWriter[K]
 			_ = file.Close()
 		}
 	}()
-	if err := flockExclusive(int(file.Fd()), wait); err != nil {
+	fd := int(file.Fd())
+	if err := flockExclusive(fd, wait); err != nil {
 		return nil, err
 	}
+	ok = true
+	return openFileWriterLocked[K](file)
+}
+
+// openFileWriterLocked is the shared open logic for a file that is already opened and
+// locked. Used by both openFileWriter and createFileWriter (after writing the initial
+// 2-page file).
+func openFileWriterLocked[K ipKey[K]](file *os.File) (*FileWriter[K], error) {
+	ok := false
+	defer func() {
+		if !ok {
+			_ = file.Close()
+		}
+	}()
+	fd := int(file.Fd())
 	var st unix.Stat_t
-	if err := unix.Fstat(int(file.Fd()), &st); err != nil {
+	if err := unix.Fstat(fd, &st); err != nil {
 		return nil, errf("Io", "fstat: "+err.Error())
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, errStructural("not a regular file")
 	}
-	buf := make([]byte, st.Size)
-	if _, err := file.ReadAt(buf, 0); err != nil {
-		return nil, errf("Io", "read: "+err.Error())
+	fileLen := st.Size
+	if fileLen < int64(2*pageSize) {
+		return nil, errFileTooShort(uint64(2*pageSize), uint64(fileLen))
 	}
-	w, err := openImage[K](buf)
+
+	// Read the two meta pages first and validate them using selectActiveMeta
+	// (CRC32C, magic, page header, class 2 checks).
+	var metaBuf [2 * pageSize]byte
+	if _, err := file.ReadAt(metaBuf[:], 0); err != nil {
+		return nil, errf("Io", "read metas: "+err.Error())
+	}
+	activeMeta, err := selectActiveMeta(metaBuf[:])
 	if err != nil {
 		return nil, err
 	}
+	totalPages := activeMeta.totalPages
+	// The format requires at least 2 pages (the two metas) and enforces a
+	// 2^32-page limit. Reject out-of-range values before any mutation.
+	if totalPages < 2 {
+		return nil, errInvalidInput("total_pages < 2")
+	}
+	if totalPages >= 1<<32 {
+		return nil, errInvalidInput("total_pages >= 2^32 (would wrap u32)")
+	}
+	committedLen := int64(totalPages) * int64(pageSize)
+
+	// Verify that the committed range fits within the file.
+	if fileLen < committedLen {
+		return nil, errFileTooShort(uint64(committedLen), uint64(fileLen))
+	}
+
+	// Do NOT truncate trailing pages here — a hostile (but CRC-valid) meta with a
+	// small total_pages would destroy data. The committed range is mmap'd below;
+	// trailing pages are never accessed through it. At commit time the file is
+	// extended properly (no holes). The writer holds LOCK_EX, so no reader can see
+	// the trailing pages before the first commit cleans them up.
+
+	// Verify that the committed range is hole-free before mmaping.
+	hole, err := unix.Seek(fd, 0, unix.SEEK_HOLE)
+	if err != nil {
+		// ENXIO from offset 0 on a non-empty file indicates a genuinely broken
+		// file descriptor or filesystem state. Fail closed.
+		return nil, errStructural("hole detection unavailable — cannot verify committed range is hole-free")
+	}
+	if hole < committedLen {
+		// A hole exists within the committed range — the file is corrupt.
+		return nil, errStructural("sparse committed range — refusing to mmap")
+	}
+
+	// mmap only the committed range.
+	data, err := unix.Mmap(fd, 0, int(committedLen), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return nil, errf("Io", "mmap: "+err.Error())
+	}
+	defer func() {
+		if !ok {
+			_ = unix.Munmap(data)
+		}
+	}()
+
+	// Post-map hardening: re-fstat and last-byte probe (same as MmapReader).
+	var st2 unix.Stat_t
+	if err := unix.Fstat(fd, &st2); err != nil {
+		return nil, errf("Io", "re-fstat: "+err.Error())
+	}
+	if st2.Size != fileLen || st2.Ino != st.Ino || st2.Dev != st.Dev {
+		return nil, errStructural("file changed during mmap (TOCTOU)")
+	}
+	var probe [1]byte
+	if n, perr := file.ReadAt(probe[:], committedLen-1); perr != nil || n != 1 {
+		return nil, errStructural("file truncated after fstat (probe failed)")
+	}
+
+	// Create the mmapPageStore and open the writer through it.
+	store := newMmapPageStore(data, uint32(totalPages))
+	w, err := openWithStore[K](store)
+	if err != nil {
+		return nil, err
+	}
+
 	ok = true
-	return &FileWriter[K]{file: file, w: w}, nil
+	return &FileWriter[K]{file: file, w: w, mmapLen: committedLen, closed: false}, nil
+}
+
+func (fw *FileWriter[K]) checkOpen() error {
+	if fw.closed {
+		return errState("FileWriter is closed")
+	}
+	return nil
 }
 
 // Set applies set([from,to]) = scope (§8). Not durable until Commit.
-func (fw *FileWriter[K]) Set(from, to K, scope []byte) error { return fw.w.Set(from, to, scope) }
+func (fw *FileWriter[K]) Set(from, to K, scope []byte) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
+	return fw.w.Set(from, to, scope)
+}
 
 // Delete applies delete([from,to]) (§8). Not durable until Commit.
-func (fw *FileWriter[K]) Delete(from, to K) error { return fw.w.Delete(from, to) }
+func (fw *FileWriter[K]) Delete(from, to K) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
+	return fw.w.Delete(from, to)
+}
 
 // --- v4.1 scope registry + per-scope metadata (§C) ---
 //
@@ -248,69 +362,166 @@ func (fw *FileWriter[K]) Delete(from, to K) error { return fw.w.Delete(from, to)
 // Commit / rebuildCommitState).
 
 // ScopeDefine defines a new scope, returning its scope_id (§C.2). Not durable until Commit.
-func (fw *FileWriter[K]) ScopeDefine(name []byte) (uint32, error) { return fw.w.ScopeDefine(name) }
+func (fw *FileWriter[K]) ScopeDefine(name []byte) (uint32, error) {
+	if err := fw.checkOpen(); err != nil {
+		return 0, err
+	}
+	return fw.w.ScopeDefine(name)
+}
 
 // ScopeDrop drops a defined scope from the registry (§C.2). Not durable until Commit.
-func (fw *FileWriter[K]) ScopeDrop(scopeID uint32) (bool, error) { return fw.w.ScopeDrop(scopeID) }
+func (fw *FileWriter[K]) ScopeDrop(scopeID uint32) (bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return false, err
+	}
+	return fw.w.ScopeDrop(scopeID)
+}
 
 // ScopeName returns a defined scope's name (§C.2).
-func (fw *FileWriter[K]) ScopeName(scopeID uint32) ([]byte, bool) { return fw.w.ScopeName(scopeID) }
+func (fw *FileWriter[K]) ScopeName(scopeID uint32) ([]byte, bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, false, err
+	}
+	name, ok := fw.w.ScopeName(scopeID)
+	return name, ok, nil
+}
 
 // ScopeList returns all defined scopes ascending by id (§C.2).
-func (fw *FileWriter[K]) ScopeList() []ScopeEntry { return fw.w.ScopeList() }
+func (fw *FileWriter[K]) ScopeList() ([]ScopeEntry, error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	return fw.w.ScopeList(), nil
+}
 
 // ScopeVersion returns a scope's version counter (§C.2).
-func (fw *FileWriter[K]) ScopeVersion(scopeID uint32) (uint64, bool) {
-	return fw.w.ScopeVersion(scopeID)
+func (fw *FileWriter[K]) ScopeVersion(scopeID uint32) (uint64, bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return 0, false, err
+	}
+	ver, ok := fw.w.ScopeVersion(scopeID)
+	return ver, ok, nil
 }
 
 // ScopeSetVersion sets a scope's version counter (§C.2). Not durable until Commit.
 func (fw *FileWriter[K]) ScopeSetVersion(scopeID uint32, version uint64) (bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return false, err
+	}
 	return fw.w.ScopeSetVersion(scopeID, version)
 }
 
 // ScopeBumpVersion increments a scope's version counter (§C.2). Not durable until Commit.
 func (fw *FileWriter[K]) ScopeBumpVersion(scopeID uint32) (bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return false, err
+	}
 	return fw.w.ScopeBumpVersion(scopeID)
 }
 
 // ScopeType returns a scope's opaque type byte (§C.2).
-func (fw *FileWriter[K]) ScopeType(scopeID uint32) (uint8, bool) { return fw.w.ScopeType(scopeID) }
+func (fw *FileWriter[K]) ScopeType(scopeID uint32) (uint8, bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return 0, false, err
+	}
+	typ, ok := fw.w.ScopeType(scopeID)
+	return typ, ok, nil
+}
 
 // ScopeSetType sets a scope's opaque type byte (§C.2). Not durable until Commit.
 func (fw *FileWriter[K]) ScopeSetType(scopeID uint32, typ uint8) (bool, error) {
+	if err := fw.checkOpen(); err != nil {
+		return false, err
+	}
 	return fw.w.ScopeSetType(scopeID, typ)
 }
 
 // MetaSet sets key = (type, value) on target (0 = FILE, §C.4). Not durable until Commit.
 func (fw *FileWriter[K]) MetaSet(target uint32, key []byte, typ uint32, value []byte) error {
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
 	return fw.w.MetaSet(target, key, typ, value)
 }
 
 // MetaGet gets key on target as (type, value) (§C.4).
 func (fw *FileWriter[K]) MetaGet(target uint32, key []byte) (typ uint32, value []byte, found bool, err error) {
+	if err := fw.checkOpen(); err != nil {
+		return 0, nil, false, err
+	}
 	return fw.w.MetaGet(target, key)
 }
 
 // MetaDelete deletes key on target (§C.7). Not durable until Commit.
 func (fw *FileWriter[K]) MetaDelete(target uint32, key []byte) (Changed, error) {
+	if err := fw.checkOpen(); err != nil {
+		return Unchanged, err
+	}
 	return fw.w.MetaDelete(target, key)
 }
 
 // MetaList lists (key, type, value) on target, ordered by key (§C.4).
-func (fw *FileWriter[K]) MetaList(target uint32) ([]MetaEntry, error) { return fw.w.MetaList(target) }
+func (fw *FileWriter[K]) MetaList(target uint32) ([]MetaEntry, error) {
+	if err := fw.checkOpen(); err != nil {
+		return nil, err
+	}
+	return fw.w.MetaList(target)
+}
 
 // RecordCount returns the records in the (pending) tree.
-func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
+func (fw *FileWriter[K]) RecordCount() (uint64, error) {
+	if err := fw.checkOpen(); err != nil {
+		return 0, err
+	}
+	return fw.w.RecordCount(), nil
+}
+
+// growFilePwrite zero-fills the growth region using pwrite.
+// Shared fallback used by both Linux (after fallocate fails) and
+// non-Linux Unix (Darwin, FreeBSD, etc.) where fallocate is unavailable.
+func growFilePwrite(fd int, oldLen, newLen int64) error {
+	zeros := make([]byte, pageSize)
+	for off := oldLen; off < newLen; off += int64(pageSize) {
+		n, err := unix.Pwrite(fd, zeros, off)
+		if err != nil {
+			return errf("Io", "pwrite zero-fill: "+err.Error())
+		}
+		if n != pageSize {
+			return errf("Io", fmt.Sprintf("pwrite zero-fill: short write (%d/%d)", n, pageSize))
+		}
+	}
+	return nil
+}
+
+// growFile extends the file to newLen, ensuring no holes via a fallback chain.
+// Targets only the growth region (offset oldLen, length newLen - oldLen).
+func growFile(fd int, oldLen, newLen int64) error {
+	if newLen <= oldLen {
+		// Shrink is not expected (the writer only grows the file). If it happens,
+		// refuse: truncating below the committed tree before the meta flip would
+		// destroy data.
+		return errf("Io", "grow_file called with non-growth size")
+	}
+	// Grow: avoid sparse holes that would SIGBUS on mmap access.
+	// First extend the file to the new size.
+	if err := unix.Ftruncate(fd, newLen); err != nil {
+		return errf("Io", "ftruncate grow: "+err.Error())
+	}
+	// Then allocate space for the growth region only (offset oldLen,
+	// length newLen - oldLen). Using offset 0 would zero-fill the
+	// entire file including committed pages — data corruption.
+	return growFileAlloc(fd, oldLen, newLen)
+}
 
 // Commit commits durably (§6.3): pwrite the new data pages, fsync (Barrier 1), pwrite the
 // new meta, fsync (Barrier 2). On any error the txn is abandoned with no acknowledged
 // commit; recovery is automatic on the next open.
 func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
-	// Build the scope-table / KV metadata pages into the image BEFORE collecting the dirty set,
+	if err := fw.checkOpen(); err != nil {
+		return err
+	}
+	// Build the scope-table / KV metadata pages into the store BEFORE collecting the dirty set,
 	// so they are pwritten and made durable at Barrier 1 alongside every other data page (§6.3).
-	// Doing this after takeDirty (the previous order) stranded them: the flipped meta referenced
-	// pages that were never written → a corrupt file on reopen.
 	if err := fw.w.rebuildCommitState(); err != nil {
 		return err
 	}
@@ -328,31 +539,77 @@ func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
 // pages, fsync (Barrier 1), finalize + pwrite the meta page, fsync (Barrier 2).
 func (fw *FileWriter[K]) commitDurable(updatedUnixtime uint64) error {
 	dirty := fw.w.takeDirty()
-	// Grow / reclaim trailing to match the in-memory image length.
-	if err := fw.file.Truncate(int64(len(fw.w.Image()))); err != nil {
-		return errf("Io", "truncate: "+err.Error())
+	newLen := int64(fw.w.store.totalPages() * uint64(pageSize))
+
+	// growFile is only needed for mmap-backed stores (mmapLen > 0) when
+	// the file actually grew. vecPageStore uses pwrite which extends the
+	// file naturally.
+	if fw.mmapLen > 0 && newLen > fw.mmapLen {
+		if err := growFile(int(fw.file.Fd()), fw.mmapLen, newLen); err != nil {
+			return err
+		}
 	}
-	img := fw.w.Image()
+
 	for _, p := range dirty {
-		off := int(p) * pageSize
-		if _, err := fw.file.WriteAt(img[off:off+pageSize], int64(off)); err != nil {
+		off := int64(p) * int64(pageSize)
+		if _, err := fw.file.WriteAt(fw.w.store.pageData(p), off); err != nil {
 			return errf("Io", "pwrite data: "+err.Error())
 		}
 	}
 	if err := fw.file.Sync(); err != nil { // Barrier 1: data durable before the meta references it
 		return errf("Io", "fsync barrier 1: "+err.Error())
 	}
+
+	// Truncate trailing sparse pages (from a crashed growth) that are beyond
+	// the committed range before the meta flip. After Barrier 2, Commit must
+	// not report ordinary remap/truncate failures because the new transaction
+	// has already been acknowledged durably.
+	if fw.mmapLen > 0 {
+		var st unix.Stat_t
+		if err := unix.Fstat(int(fw.file.Fd()), &st); err != nil {
+			return errf("Io", "fstat: "+err.Error())
+		}
+		if st.Size > newLen {
+			if err := unix.Ftruncate(int(fw.file.Fd()), newLen); err != nil {
+				return errf("Io", "ftruncate trailing: "+err.Error())
+			}
+		}
+	}
+
+	// Remap if the file size changed (grew or shrunk). This is deliberately
+	// before the inactive meta write: a remap failure is still an uncommitted
+	// error and the old on-disk root remains authoritative.
+	if fw.mmapLen > 0 && newLen != fw.mmapLen {
+		if err := fw.w.store.remap(fw.file.Fd(), newLen); err != nil {
+			return err
+		}
+		fw.mmapLen = newLen
+	}
+
 	inactive := fw.w.finishCommitMeta(updatedUnixtime)
-	img = fw.w.Image()
-	off := int(inactive) * pageSize
-	if _, err := fw.file.WriteAt(img[off:off+pageSize], int64(off)); err != nil {
+	off := int64(inactive) * int64(pageSize)
+	if _, err := fw.file.WriteAt(fw.w.store.pageData(inactive), off); err != nil {
 		return errf("Io", "pwrite meta: "+err.Error())
 	}
 	if err := fw.file.Sync(); err != nil { // Barrier 2: the commit point
 		return errf("Io", "fsync barrier 2: "+err.Error())
 	}
+
+	fw.w.store.clearDirty()
 	return nil
 }
 
-// Close releases the exclusive lock (uncommitted mutations are discarded).
-func (fw *FileWriter[K]) Close() error { return fw.file.Close() }
+// Close releases the exclusive lock and cleans up the mmap (uncommitted mutations are
+// discarded). All further operations fail.
+func (fw *FileWriter[K]) Close() error {
+	if fw.closed {
+		return nil
+	}
+	fw.closed = true
+	fw.w.store.close()
+	// Release the exclusive lock before closing the file.
+	if err := unix.Flock(int(fw.file.Fd()), unix.LOCK_UN); err != nil {
+		return errf("Io", "flock(LOCK_UN): "+err.Error())
+	}
+	return fw.file.Close()
+}
