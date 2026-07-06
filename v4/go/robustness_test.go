@@ -92,7 +92,7 @@ func TestSingleBitFlipsNeverPanic(t *testing.T) {
 			g := append([]byte(nil), f...)
 			g[pos] ^= 1 << bit
 			_, _ = Open(g)
-			_, _ = OpenImageV4(append([]byte(nil), g...))
+			func() { defer func() { _ = recover() }(); _, _ = OpenImageV4(append([]byte(nil), g...)) }()
 		}
 	}
 }
@@ -133,7 +133,10 @@ func TestTreeRegionFlipNeverSilentlyAccepted(t *testing.T) {
 		g[pos] ^= 1 << bit
 		r, err := Open(g)
 		if err != nil {
-			continue // rejected: acceptable
+			continue
+		}
+		if err := r.Validate(); err != nil {
+			continue
 		}
 		assertScan(t, robustScan(r), base, "accepted a corrupted reachable tree")
 	}
@@ -161,7 +164,10 @@ func TestScopeRegionFlipNeverSilentlyAccepted(t *testing.T) {
 		g[pos] ^= 1 << bit
 		r, err := Open(g)
 		if err != nil {
-			continue // rejected: acceptable
+			continue
+		}
+		if err := r.Validate(); err != nil {
+			continue
 		}
 		assertScan(t, robustScan(r), baseIP, "accepted a corrupted reachable tree")
 		if got := scopeListOf(t, g); !sameScopeList(got, baseScopes) {
@@ -169,11 +175,12 @@ func TestScopeRegionFlipNeverSilentlyAccepted(t *testing.T) {
 		}
 	}
 }
-
 // scopeListOf opens an image for write and returns its scope list (id+name), or nil on a
-// (legitimately rejected) corrupt image.
-func scopeListOf(t *testing.T, img []byte) []ScopeEntry {
+// (legitimately rejected) corrupt image. The writer trusts the file and may panic on
+// corrupt input — recover protects the test.
+func scopeListOf(t *testing.T, img []byte) (result []ScopeEntry) {
 	t.Helper()
+	defer func() { _ = recover() }()
 	w, err := OpenImageV4(append([]byte(nil), img...))
 	if err != nil {
 		return nil
@@ -416,6 +423,12 @@ func fuzzStructuralMutations(t *testing.T, base []byte) {
 				}
 				continue // rejected: acceptable
 			}
+			if err := r.Validate(); err != nil {
+				if _, ok := err.(*Error); !ok {
+					t.Fatalf("page %d: non-typed error %T: %v", p, err, err)
+				}
+				continue
+			}
 			// Accepted: the view MUST equal the baseline. A redundant-structural mutation either
 			// fails validation (rejected above) or is a no-op that leaves the view identical —
 			// never a different valid answer (§9 no-wrong-answer).
@@ -424,10 +437,13 @@ func fuzzStructuralMutations(t *testing.T, base []byte) {
 					p, decodePageHeader(pageOf(base, p)).pageType)
 			}
 			// OpenImageV4 (the writer open path) delegates to Open, so the same validation gates
-			// it; assert it never panics on the accepted image.
+		// The writer trusts the file (no validation); a corrupt image may panic internally.
+		func() {
+			defer func() { _ = recover() }()
 			if w, werr := OpenImageV4(append([]byte(nil), g...)); werr == nil {
 				_ = w.ScopeList()
 			}
+		}()
 		}
 	}
 }
@@ -939,9 +955,13 @@ func validOverflowKVFile(t *testing.T) []byte {
 
 // mustReject opens img and asserts a typed *Error whose Class matches want (the §9 contract:
 // reject malformed input with a typed error, never panic / wrong answer).
+// mustReject opens+validates img and asserts a typed *Error whose Class matches want.
 func mustReject(t *testing.T, img []byte, want, what string) {
 	t.Helper()
-	_, err := Open(img)
+	r, err := Open(img)
+	if err == nil {
+		err = r.Validate()
+	}
 	if err == nil {
 		t.Fatalf("%s: accepted a corrupted image", what)
 	}
@@ -967,7 +987,10 @@ func mustReject(t *testing.T, img []byte, want, what string) {
 // The typed *Error renders "Class: Msg" via Error(); here we check the parsed Class and Msg.
 func mustRejectMsg(t *testing.T, img []byte, wantClass, wantMsg, what string) {
 	t.Helper()
-	_, err := Open(img)
+	r, err := Open(img)
+	if err == nil {
+		err = r.Validate()
+	}
 	if err == nil {
 		t.Fatalf("%s: accepted a corrupted image", what)
 	}

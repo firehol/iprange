@@ -2,17 +2,18 @@ package iprangedb
 
 import "bytes"
 
-// The v4 reader: open over an in-memory image, validate per §9, and query.
+// The v4 reader: open over an in-memory image and query.
 //
-// Open selects the active meta (§5.1 bootstrap), checks geometry (§9 step 2), and fully
-// validates the reachable tree before exposing any result (§9 step 4 — the default): a
-// hostile but checksum-valid structure cannot leak a wrong answer, and a
-// corrupt/truncated image is rejected, never panics, loops, or reads out of bounds.
-// LookupV4/V6 and ScanV4/V6 then navigate the validated structure, returning the borrowed
-// scope (zero-copy, D11).
+// Open selects the active meta (§5.1 bootstrap, with per-meta CRC to detect torn writes)
+// and checks geometry (§9 step 2), but does NOT walk the tree — files are trusted by
+// default (daemon files are written under LOCK_EX; the format is crash-safe). Call
+// Validate for the full §9 structural walk + per-page CRC when the input is untrusted.
+// LookupV4/V6 and ScanV4/V6 navigate the tree directly, returning the borrowed scope
+// (zero-copy, D11).
 
-// Reader is a read-only view over a validated v4 image. It holds no lock and no
-// allocation; lookups and scans return slices borrowed from the underlying bytes.
+// Reader is a read-only view over a v4 image (trusted by default; call Validate for the
+// full §9 walk). It holds no lock and no allocation; lookups and scans return slices
+// borrowed from the underlying bytes.
 type Reader struct {
 	bytes      []byte
 	meta       meta
@@ -21,8 +22,11 @@ type Reader struct {
 	leafMax    int
 	branchMax  int
 }
-
-// Open opens and fully validates a v4 image (the default, §9). It returns a typed error
+// Open opens a v4 image in trusted mode: select the active meta (per-meta CRC to detect
+// torn writes, §5.1 bootstrap) and check geometry (§9 step 2). The tree is NOT walked —
+// the file is trusted (daemon files are crash-safe under LOCK_EX). For the full §9
+// structural walk + per-page CRC, call Validate after opening. Returns a typed error on
+// a malformed meta or geometry violation.
 // (exposing nothing) on any malformed/hostile input.
 func Open(b []byte) (*Reader, error) {
 	m, err := selectActiveMeta(b)
@@ -67,13 +71,19 @@ func Open(b []byte) (*Reader, error) {
 		leafMax:    leafMax(m.recordSize),
 		branchMax:  branchMax(m.keyWidth),
 	}
-	if err := r.validateTree(); err != nil {
-		return nil, err
-	}
-	if err := r.validateScopeTableTree(); err != nil {
-		return nil, err
-	}
 	return r, nil
+}
+
+// Validate fully validates the image per §9 (the structural walk + per-page CRC + scope/KV
+// tree validation). Call this when the input is untrusted (externally provided files) or
+// for periodic integrity checks. Returns a typed error on any corruption. On a trusted
+// (daemon) file this is a no-op success; on a corrupt file it rejects rather than
+// panicking during lookup/scan.
+func (r *Reader) Validate() error {
+	if err := r.validateTree(); err != nil {
+		return err
+	}
+	return r.validateScopeTableTree()
 }
 
 // validateScopeTableTree validates the v4.1 metadata (§C.5) before exposing the reader: the

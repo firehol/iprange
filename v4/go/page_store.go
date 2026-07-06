@@ -104,6 +104,8 @@ func newMmapPageStore(data []byte, committedPages uint32) *mmapPageStore {
 	}
 }
 
+// zeroPage is a read-only shared buffer returned for pages beyond the committed range.
+// Callers must NOT write through the returned slice.
 var zeroPage [pageSize]byte
 
 func (s *mmapPageStore) page(pgno uint32) []byte {
@@ -141,7 +143,11 @@ func (s *mmapPageStore) writePageMut(pgno uint32) []byte {
 
 func (s *mmapPageStore) allocPage() uint32 {
 	p := s.logicalPages
-	s.logicalPages++
+	// Saturating add: prevent u32 wrap-around at the theoretical 2^32-page limit.
+	// The Writer checks total_pages >= 2^32 before calling, but guard defensively.
+	if s.logicalPages != maxUint32 {
+		s.logicalPages++
+	}
 	return p
 }
 

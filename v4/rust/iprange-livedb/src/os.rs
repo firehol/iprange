@@ -905,7 +905,7 @@ mod tests {
         let active = if meta1.txn_id > meta0.txn_id { 1 } else { 0 };
         let base = active as usize * PAGE_SIZE;
         // total_pages is at offset 48 in the meta (u64 little-endian).
-        data[base + 48..base + 56].copy_from_slice(&(1u64 << 33).to_le_bytes());
+        data[base + crate::spec::META_TOTAL_PAGES..base + crate::spec::META_TOTAL_PAGES + 8].copy_from_slice(&(1u64 << 33).to_le_bytes());
         // Re-checksum the page so select_active_meta accepts it.
         crate::wire::finalize_checksum(&mut data[base..base + PAGE_SIZE]);
         std::fs::write(&path, &data).unwrap();
@@ -1010,7 +1010,7 @@ mod tests {
         let meta1 = crate::wire::Meta::decode(&data[PAGE_SIZE..2 * PAGE_SIZE]);
         let active = if meta1.txn_id > meta0.txn_id { 1 } else { 0 };
         let base = active as usize * PAGE_SIZE;
-        data[base + 48..base + 56].copy_from_slice(&0u64.to_le_bytes());
+        data[base + crate::spec::META_TOTAL_PAGES..base + crate::spec::META_TOTAL_PAGES + 8].copy_from_slice(&0u64.to_le_bytes());
         crate::wire::finalize_checksum(&mut data[base..base + PAGE_SIZE]);
         std::fs::write(&path, &data).unwrap();
         let file_len = data.len() as u64;
@@ -1037,7 +1037,7 @@ mod tests {
         let meta1 = crate::wire::Meta::decode(&data[PAGE_SIZE..2 * PAGE_SIZE]);
         let active = if meta1.txn_id > meta0.txn_id { 1 } else { 0 };
         let base = active as usize * PAGE_SIZE;
-        data[base + 48..base + 56].copy_from_slice(&(1u64 << 32).to_le_bytes());
+        data[base + crate::spec::META_TOTAL_PAGES..base + crate::spec::META_TOTAL_PAGES + 8].copy_from_slice(&(1u64 << 32).to_le_bytes());
         crate::wire::finalize_checksum(&mut data[base..base + PAGE_SIZE]);
         std::fs::write(&path, &data).unwrap();
 

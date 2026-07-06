@@ -286,6 +286,25 @@ func (w *Writer[K]) Set(from, to K, scope []byte) error {
 	return w.insert(nf, nt, scope)
 }
 
+// Append adds a disjoint record [from,to] = scope whose from is greater than every
+// existing record's to. The caller MUST guarantee this ordering (e.g., appending sorted
+// ranges from update-ipsets). Skips the overlap-trim and coalesce descents that Set does —
+// ONE tree descent instead of 3-4. O(log n) per call. If the caller's guarantee is
+// violated (overlap or out-of-order), the tree invariant breaks silently — this is a
+// performance fast-path for trusted callers only.
+func (w *Writer[K]) Append(from, to K, scope []byte) error {
+	if err := w.ensureUsable(); err != nil {
+		return err
+	}
+	if to.cmp(from) < 0 {
+		return errInvalidInput("append from > to")
+	}
+	if len(scope) != w.scopeWidth {
+		return errInvalidInput("append scope width mismatch")
+	}
+	return w.insert(from, to, scope)
+}
+
 // Delete makes [from,to] absent (§8). It splits a straddling record, trims boundaries,
 // removes records fully inside; a wholly-absent range is a no-op. O(k log n).
 func (w *Writer[K]) Delete(from, to K) error {
@@ -319,6 +338,17 @@ func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
 	}
 	w.dirty = w.dirty[:0]
 	return nil
+}
+
+// Validate validates the committed state (full §9 structural walk + per-page CRC +
+// scope/KV trees). Call when the input is untrusted (externally provided images). On a
+// trusted (daemon) file this is a no-op success.
+func (w *Writer[K]) Validate() error {
+	r, err := Open(w.Image())
+	if err != nil {
+		return err
+	}
+	return r.Validate()
 }
 
 // Image returns the current image bytes (a valid v4 file after a Commit). For vecPageStore:

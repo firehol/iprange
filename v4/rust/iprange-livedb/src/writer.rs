@@ -278,6 +278,23 @@ impl<K: IpKey> Writer<K> {
         self.insert(nf, nt, scope)
     }
 
+    /// Append a disjoint record `[from,to] = scope` whose `from` is greater than every
+    /// existing record's `to`. The caller MUST guarantee this ordering (e.g., appending
+    /// sorted ranges from `update-ipsets`). Skips the overlap-trim and coalesce descents
+    /// that `set` does — **one** tree descent instead of 3-4. `O(log n)` per call.
+    /// If the caller's guarantee is violated (overlap or out-of-order), the tree
+    /// invariant breaks silently — this is a performance fast-path for trusted callers only.
+    pub fn append(&mut self, from: K, to: K, scope: &[u8]) -> Result<()> {
+        self.ensure_usable()?;
+        if to < from {
+            return Err(Error::InvalidInput("append from > to"));
+        }
+        if scope.len() != self.scope_width {
+            return Err(Error::InvalidInput("append scope width mismatch"));
+        }
+        self.insert(from, to, scope)
+    }
+
     /// `delete([from,to])`: make the range absent (§8). Splits a straddling record,
     /// trims boundaries, removes records fully inside; a wholly-absent range is a no-op.
     /// `O(k log n)`.
@@ -347,6 +364,13 @@ impl<K: IpKey> Writer<K> {
         self.commit_meta(updated_unixtime)?;
         self.dirty.clear();
         Ok(())
+    }
+
+    /// Validate the committed state (full §9 structural walk + per-page CRC + scope/KV
+    /// trees). Call when the input is untrusted (externally provided images). On a
+    /// trusted (daemon) file this is a no-op success. See [`crate::reader::Reader::validate`].
+    pub fn validate(&self) -> Result<()> {
+        Reader::open(self.image())?.validate()
     }
 
     /// Refuse to operate on a writer poisoned by a failed commit (see the `poisoned` field):
@@ -1807,6 +1831,11 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn mark_reachable(&self, pgno: u32, depth: u32, used: &mut [bool]) {
+        // Bounds-check: a corrupt (trusted) file may have an out-of-range child pgno.
+        // Skip it rather than panicking — the caller should validate untrusted input.
+        if pgno as usize >= used.len() {
+            return;
+        }
         used[pgno as usize] = true;
         if depth < self.tree_height {
             let page = self.page(pgno);
@@ -2484,11 +2513,12 @@ mod tests {
         w.set(k(1), k(2), &[1]).unwrap();
         w.commit(1).unwrap();
         let mut img = w.into_image();
-        // Corrupt the active meta's checksum-covered bytes ⇒ both metas can't both be
-        // valid / reachable tree mismatch ⇒ open_image must reject.
+        // Corrupt a leaf-page byte so its CRC breaks. With trusted open, the writer
+        // does not walk the tree; use Reader::open + validate to test that the §9 walk
+        // catches the corruption.
         let n = img.len();
         img[n - 100] ^= 0xFF; // a leaf-page byte
-        assert!(Writer::<Ipv4Key>::open_image(img).is_err());
+        assert!(Reader::open(&img).and_then(|r| r.validate()).is_err());
     }
 
     // --- crash recovery (§6.3): construct each post-crash on-disk state, verify the

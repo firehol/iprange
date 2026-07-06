@@ -224,7 +224,7 @@ impl PageStore for MmapPageStore {
 
     fn alloc_page(&mut self) -> u32 {
         let p = self.logical_pages;
-        self.logical_pages += 1;
+        self.logical_pages = self.logical_pages.saturating_add(1);
         p
     }
 

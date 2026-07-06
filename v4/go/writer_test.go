@@ -265,8 +265,12 @@ func TestOpenImageRejectsCorruption(t *testing.T) {
 	w.Commit(1)
 	img := append([]byte(nil), w.Image()...)
 	img[len(img)-100] ^= 0xFF // corrupt a leaf-page byte
-	if _, err := OpenImageV4(img); err == nil {
-		t.Fatal("open_image must reject corruption")
+	r, err := Open(img)
+	if err != nil {
+		t.Fatalf("open must succeed on CRC-valid meta: %v", err)
+	}
+	if err := r.Validate(); err == nil {
+		t.Fatal("validate must reject corruption")
 	}
 }
 

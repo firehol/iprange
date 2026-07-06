@@ -473,7 +473,7 @@ func TestMmapWriterRejectsTotalPagesOverflow(t *testing.T) {
 	}
 	base := active * pageSize
 	// total_pages is at offset 48 in the meta (u64 little-endian).
-	le.PutUint64(data[base+48:base+56], 1<<33)
+	le.PutUint64(data[base+metaTotalPages:base+metaTotalPages+8], 1<<33)
 	// Re-checksum the page so selectActiveMeta accepts it.
 	finalizeChecksum(data[base : base+pageSize])
 	if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -543,7 +543,7 @@ func TestMmapWriterRejectsTotalPagesZero(t *testing.T) {
 		active = 1
 	}
 	base := active * pageSize
-	le.PutUint64(data[base+48:base+56], 0)
+	le.PutUint64(data[base+metaTotalPages:base+metaTotalPages+8], 0)
 	finalizeChecksum(data[base : base+pageSize])
 	fileLen := len(data)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
@@ -585,7 +585,7 @@ func TestMmapWriterRejectsTotalPagesEq2Pow32(t *testing.T) {
 		active = 1
 	}
 	base := active * pageSize
-	le.PutUint64(data[base+48:base+56], 1<<32)
+	le.PutUint64(data[base+metaTotalPages:base+metaTotalPages+8], 1<<32)
 	finalizeChecksum(data[base : base+pageSize])
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)

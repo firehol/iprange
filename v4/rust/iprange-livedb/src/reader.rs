@@ -1,12 +1,13 @@
-//! The v4 reader: open over an in-memory image, validate per §9, and query.
+//! The v4 reader: open over an in-memory image and query.
 //!
 //! This is the byte-slice core (the OS layer — `mmap` + `SEEK_HOLE`/`fstat` hardening
 //! (§10) and `flock(LOCK_SH)` (§11) — wraps it). `open` selects the active meta
-//! (§5.1 bootstrap), checks geometry (§9 step 2), and **fully validates the reachable
-//! tree before exposing any result** (§9 step 4 — the default): a hostile but
-//! checksum-valid structure cannot leak a wrong answer, and a corrupt/truncated image
-//! is rejected, never `SIGBUS`/loops/reads OOB. `lookup` / `scan` then navigate the
-//! validated structure, returning the borrowed `scope` (zero-copy, D11).
+//! (§5.1 bootstrap, with per-meta CRC to detect torn writes) and checks geometry
+//! (§9 step 2), but **does not walk the tree** — files are **trusted** by default
+//! (daemon files are written under `LOCK_EX`; the format is crash-safe). Call
+//! [`validate`](Reader::validate) for the full §9 structural walk + per-page CRC when
+//! the input is untrusted. `lookup` / `scan` navigate the tree directly, returning the
+//! borrowed `scope` (zero-copy, D11).
 
 use crate::crc32c;
 use crate::cursor::Cursor;
@@ -16,7 +17,8 @@ use crate::node::{BranchView, LeafView};
 use crate::spec::{self, IpVersion};
 use crate::wire::{self, Meta, PageHeader};
 
-/// A read-only view over a **validated** v4 image. Holds no lock and no allocation;
+/// A read-only view over a v4 image (trusted by default; call [`validate`](Self::validate)
+/// for the full §9 walk). Holds no lock and no allocation;
 /// `lookup` / `scan` return slices borrowed from the underlying bytes.
 #[derive(Debug)]
 pub struct Reader<'a> {
@@ -29,7 +31,12 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// Open and **fully validate** a v4 image (the default, §9). Returns a typed error
+    /// Open a v4 image in **trusted** mode: select the active meta (per-meta CRC to
+    /// detect torn writes, §5.1 bootstrap) and check geometry (§9 step 2). The tree
+    /// is NOT walked — the file is trusted (daemon files are crash-safe under `LOCK_EX`).
+    /// For the full §9 structural walk + per-page CRC, call [`validate`](Self::validate)
+    /// after opening. Returns a typed error (exposing nothing) on a malformed meta or
+    /// geometry violation.
     /// (exposing nothing) on any malformed/hostile input.
     pub fn open(bytes: &'a [u8]) -> Result<Reader<'a>> {
         let meta = select_active_meta(bytes)?;
@@ -75,9 +82,18 @@ impl<'a> Reader<'a> {
             leaf_max: spec::leaf_max(meta.record_size),
             branch_max: spec::branch_max(meta.key_width),
         };
-        reader.validate_tree()?;
-        reader.validate_scope_table()?;
         Ok(reader)
+    }
+
+    /// Fully validate the image per §9 (the structural walk + per-page CRC + scope/KV
+    /// tree validation). Call this when the input is **untrusted** (externally provided
+    /// files) or for periodic integrity checks. Returns a typed error on any corruption.
+    /// On a trusted (daemon) file this is a no-op success; on a corrupt file it rejects
+    /// rather than panicking during `lookup`/`scan`.
+    pub fn validate(&self) -> Result<()> {
+        self.validate_tree()?;
+        self.validate_scope_table()?;
+        Ok(())
     }
 
     /// Validate the v4.1 metadata (§C.5) before exposing the reader: the scope table, then
@@ -114,11 +130,13 @@ impl<'a> Reader<'a> {
         }
     }
 
+
     /// The file's IP family.
     #[inline]
     pub fn version(&self) -> IpVersion {
         self.version
     }
+
 
     /// The fixed per-record scope width (bytes); 0 = presence map (§4).
     #[inline]
@@ -126,17 +144,20 @@ impl<'a> Reader<'a> {
         self.meta.scope_width as usize
     }
 
+
     /// The exact record count (verified against the tree during `open`).
     #[inline]
     pub fn record_count(&self) -> u64 {
         self.meta.record_count
     }
 
+
     /// Whether the tree is empty (`root_pgno == 0`).
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.meta.root_pgno == 0
     }
+
 
     /// Open an ordered [`Cursor`] over this validated image for `seek`/`next`/`prev`
     /// traversal and the standard helpers (§v4.1.A/B). Errors on a key-family mismatch.
@@ -147,6 +168,7 @@ impl<'a> Reader<'a> {
         Ok(Cursor::new(self))
     }
 
+
     // --- cursor support (validated tree; pgnos already checked by the open-time walk) ---
 
     /// The active root page number (0 = empty tree).
@@ -155,17 +177,20 @@ impl<'a> Reader<'a> {
         self.meta.root_pgno
     }
 
+
     /// The tree height (0 = empty; the leaf level equals the height).
     #[inline]
     pub(crate) fn tree_height(&self) -> u32 {
         self.meta.tree_height
     }
 
+
     /// The fixed per-record size in bytes (`2·key_width + scope_width`).
     #[inline]
     pub(crate) fn record_size_bytes(&self) -> usize {
         self.record_size
     }
+
 
     /// The validated active meta (for the writer's `open_image`, §6.2).
     #[inline]
@@ -174,17 +199,20 @@ impl<'a> Reader<'a> {
         self.meta
     }
 
+
     /// Point lookup (IPv4). Errors if the file is not IPv4.
     #[inline]
     pub fn lookup_v4(&self, ip: Ipv4Key) -> Result<Option<&'a [u8]>> {
         self.lookup(ip)
     }
 
+
     /// Point lookup (IPv6). Errors if the file is not IPv6.
     #[inline]
     pub fn lookup_v6(&self, ip: Ipv6Key) -> Result<Option<&'a [u8]>> {
         self.lookup(ip)
     }
+
 
     /// Point lookup: the `scope` of the range covering `ip`, or `None` if absent.
     /// `O(log n)`. Errors only on a family mismatch.
@@ -195,16 +223,19 @@ impl<'a> Reader<'a> {
         Ok(self.lookup_inner::<K>(ip))
     }
 
+
     /// In-order scan (IPv4): calls `f(from, to, scope)` for every record. Errors if the
     /// file is not IPv4.
     pub fn scan_v4<F: FnMut(Ipv4Key, Ipv4Key, &[u8])>(&self, f: F) -> Result<()> {
         self.scan(f)
     }
 
+
     /// In-order scan (IPv6).
     pub fn scan_v6<F: FnMut(Ipv6Key, Ipv6Key, &[u8])>(&self, f: F) -> Result<()> {
         self.scan(f)
     }
+
 
     /// In-order scan: calls `f(from, to, scope)` for every record in key order.
     /// Re-descends (no leaf sibling pointers, D3); zero-alloc. Errors on family
@@ -218,6 +249,7 @@ impl<'a> Reader<'a> {
         }
         Ok(())
     }
+
 
     // --- v4.1 metadata reads (§C, mirror the Writer's read API) ---
     //
@@ -247,6 +279,7 @@ impl<'a> Reader<'a> {
         }
     }
 
+
     /// The scope's `name` (UTF-8 bytes), or `None` if it does not exist. The FILE target
     /// (`scope_id 0`) is never a defined scope, so it returns `None`. Mirrors
     /// [`Writer::scope_name`].
@@ -255,11 +288,13 @@ impl<'a> Reader<'a> {
         self.scope_rec(scope_id).map(|r| r.name)
     }
 
+
     /// The scope's `version`, or `None` if it does not exist. Mirrors [`Writer::scope_version`].
     #[cfg(feature = "alloc")]
     pub fn scope_version(&self, scope_id: u32) -> Option<u64> {
         self.scope_rec(scope_id).map(|r| r.version)
     }
+
 
     /// The scope's opaque `type` byte, or `None` if it does not exist. Mirrors
     /// [`Writer::scope_type`].
@@ -267,6 +302,7 @@ impl<'a> Reader<'a> {
     pub fn scope_type(&self, scope_id: u32) -> Option<u8> {
         self.scope_rec(scope_id).map(|r| r.type_)
     }
+
 
     /// Get `key` on `target` as `(type, value)` (the whole reassembled value), or
     /// `Ok(None)` if absent (§C.7). Resolves the target's committed `kv_root` (`target == 0`
@@ -281,6 +317,7 @@ impl<'a> Reader<'a> {
         };
         crate::kv::get(self.bytes, root, key, self.meta.total_pages)
     }
+
 
     /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). A non-existent
     /// target or `kv_root == 0` ⇒ an empty list. Mirrors [`Writer::meta_list`].
@@ -297,6 +334,7 @@ impl<'a> Reader<'a> {
         }
         Ok(out)
     }
+
 
     /// The committed per-scope record for a **defined** scope (the FILE target `scope_id 0`
     /// is excluded, mirroring the Writer's `scope_pos`). `scope_table_root == 0` (a v4.0
@@ -317,6 +355,7 @@ impl<'a> Reader<'a> {
         .flatten()
     }
 
+
     /// The committed `kv_root` of `target` (`None` if the target has no record or no KV).
     /// FILE (`scope_id 0`) is looked up like any scope record. Mirrors the Writer's
     /// `target_kv_root` over the on-disk tree.
@@ -332,6 +371,7 @@ impl<'a> Reader<'a> {
         }
     }
 
+
     // --- internals ---
 
     /// The `pgno`-th page. `pgno < total_pages` is guaranteed by the caller (geometry +
@@ -343,6 +383,7 @@ impl<'a> Reader<'a> {
         let off = pgno as usize * spec::PAGE_SIZE;
         &bytes[off..off + spec::PAGE_SIZE]
     }
+
 
     fn lookup_inner<K: IpKey>(&self, ip: K) -> Option<&'a [u8]> {
         if self.meta.root_pgno == 0 {
@@ -364,6 +405,7 @@ impl<'a> Reader<'a> {
         }
     }
 
+
     fn scan_node<K: IpKey, F: FnMut(K, K, &[u8])>(&self, pgno: u32, depth: u32, f: &mut F) {
         let page = self.page_bytes(pgno);
         let count = PageHeader::decode(page).entry_count as usize;
@@ -380,6 +422,7 @@ impl<'a> Reader<'a> {
             }
         }
     }
+
 
     fn validate_tree(&self) -> Result<()> {
         if self.meta.root_pgno == 0 {
@@ -419,6 +462,7 @@ impl<'a> Reader<'a> {
         }
         Ok(())
     }
+
 
     /// Recursive structural walk (§9 step 4). `lo`/`hi` are the **inherited** inclusive
     /// key bound; `prev_to` threads the largest `to` seen so far across the whole
@@ -552,6 +596,7 @@ impl<'a> Reader<'a> {
         }
         self.validate_node::<K>(branch.child(s), depth + 1, lower, hi, prev_to, count)
     }
+
 }
 
 /// Active-meta selection (§5.1 bootstrap). Reads both 4096-byte candidates
@@ -565,6 +610,7 @@ pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
             have: bytes.len() as u64,
         });
     }
+
     let a = classify(&bytes[..spec::PAGE_SIZE], 0)?;
     let b = classify(&bytes[spec::PAGE_SIZE..2 * spec::PAGE_SIZE], 1)?;
     match (a, b) {
@@ -594,6 +640,7 @@ pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
             }
         }
     }
+
 }
 
 /// Classify one meta candidate (§5.1): `Ok(None)` = class 1 (torn/not-a-meta, discard),
@@ -603,9 +650,11 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
     if !crc32c::verify_page(page) {
         return Ok(None);
     }
+
     if wire::read_magic(page) != spec::MAGIC {
         return Ok(None);
     }
+
     let h = PageHeader::decode(page);
     if h.page_type != spec::PAGE_TYPE_META
         || h.reserved != 0
@@ -615,40 +664,50 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
         return Ok(None);
     }
 
+
     // A genuine, undamaged v4 meta. Class 2: incompatible / malformed ⇒ fail closed.
     let version_major = wire::read_version_major(page);
     if version_major != spec::VERSION_MAJOR {
         return Err(Error::UnsupportedMajor(version_major));
     }
+
     let m = Meta::decode(page);
     if m.page_size != spec::PAGE_SIZE as u32 {
         return Err(Error::Incompatible("page_size"));
     }
+
     if m.checksum_algo != spec::CHECKSUM_ALGO_CRC32C {
         return Err(Error::Incompatible("checksum_algo"));
     }
+
     if m.flags & !spec::FLAG_IP_VERSION != 0 {
         return Err(Error::Incompatible("unknown flags bit"));
     }
+
     if m.meta_size < spec::META_SIZE || m.meta_size as usize > spec::PAGE_SIZE {
         return Err(Error::BadMetaSize(m.meta_size));
     }
+
     // Pin the exact `meta_size` for each known minor (F7): v4.0 is 90, v4.1 is 94. A future
     // minor (>= 2) may declare a larger `meta_size` for genuine forward-compat (the reserved
     // tail beyond it is still zero-checked below), so it keeps the `>= 90` floor only.
     if m.version_minor == spec::VERSION_MINOR && m.meta_size != spec::META_SIZE {
         return Err(Error::BadMetaSize(m.meta_size));
     }
+
     if m.version_minor == spec::VERSION_MINOR_METADATA && m.meta_size != spec::META_SIZE_V41 {
         return Err(Error::BadMetaSize(m.meta_size));
     }
+
     let expect_kw = IpVersion::from_flag_bit(m.flags).key_width();
     if m.key_width != expect_kw {
         return Err(Error::Structural("key_width disagrees with flags"));
     }
+
     if m.record_size != spec::record_size(m.key_width, m.scope_width) {
         return Err(Error::Structural("record_size mismatch"));
     }
+
     // The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check
     // the FILE's `meta_size` (not the reader's constant): a future minor declares a
     // larger `meta_size`, so this skips that minor's appended fields and only enforces
@@ -656,6 +715,7 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
     if page[m.meta_size as usize..].iter().any(|&b| b != 0) {
         return Err(Error::NonZeroReserved("meta tail"));
     }
+
     Ok(Some(m))
 }
 
@@ -673,15 +733,18 @@ fn leaf_lookup<'a, K: IpKey>(leaf: &LeafView<'a, K>, ip: K) -> Option<&'a [u8]> 
             hi = mid;
         }
     }
+
     if lo == 0 {
         return None;
     }
+
     let rec = leaf.record(lo - 1);
     if ip <= rec.to() {
         Some(rec.scope())
     } else {
         None
     }
+
 }
 
 /// Branch descent (§5.2): the child index = number of separators `<= ip` (binary
@@ -697,6 +760,7 @@ fn branch_descend<K: IpKey>(branch: &BranchView<'_, K>, ip: K) -> usize {
             hi = mid;
         }
     }
+
     lo
 }
 
@@ -742,6 +806,7 @@ mod tests {
         }
     }
 
+
     fn put_leaf<K: IpKey>(file: &mut [u8], pgno: u32, scope_width: u8, records: &[(K, K, &[u8])]) {
         let rs = spec::record_size(K::WIDTH as u8, scope_width) as usize;
         let base = pgno as usize * PAGE_SIZE;
@@ -753,6 +818,7 @@ mod tests {
         }
         finalize_checksum(page);
     }
+
 
     /// 3 pages: meta-A (active, txn 2), meta-B (txn 1), one root leaf at pgno 2.
     fn build_single_leaf<K: IpKey>(
@@ -769,12 +835,14 @@ mod tests {
         file
     }
 
+
     fn build_empty(version: IpVersion, scope_width: u8) -> Vec<u8> {
         let mut file = vec![0u8; 2 * PAGE_SIZE];
         meta(0, version, scope_width, 0, 0, 2, 0, 2).encode_into(&mut file[..PAGE_SIZE]);
         meta(1, version, scope_width, 0, 0, 2, 0, 1).encode_into(&mut file[PAGE_SIZE..]);
         file
     }
+
 
     /// 5 pages: metas, a root branch at pgno 2 (one separator), leaves at pgno 3/4.
     fn build_two_level<K: IpKey>(
@@ -804,9 +872,11 @@ mod tests {
         file
     }
 
+
     fn v4(n: u32) -> Ipv4Key {
         Ipv4Key(n)
     }
+
 
     // --- tests ---
 
@@ -834,6 +904,7 @@ mod tests {
         assert_eq!(seen, vec![(10, 20, vec![1]), (30, 40, vec![2])]);
     }
 
+
     #[test]
     fn empty_tree() {
         let file = build_empty(IpVersion::V4, 1);
@@ -845,6 +916,7 @@ mod tests {
         r.scan_v4(|_, _, _| n += 1).unwrap();
         assert_eq!(n, 0);
     }
+
 
     #[test]
     fn two_level_lookup_crosses_leaves() {
@@ -865,6 +937,7 @@ mod tests {
         assert_eq!(seen, vec![10, 50, 100, 200]);
     }
 
+
     #[test]
     fn torn_inactive_meta_recovers() {
         let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1])];
@@ -874,6 +947,7 @@ mod tests {
         let r = Reader::open(&file).unwrap();
         assert_eq!(r.lookup_v4(v4(15)).unwrap(), Some(&[1u8][..]));
     }
+
 
     #[test]
     fn both_metas_corrupt_rejects() {
@@ -888,6 +962,7 @@ mod tests {
             Ok(_) => panic!("expected rejection, but opened OK"),
         }
     }
+
 
     #[test]
     fn incompatible_major_fails_closed() {
@@ -904,17 +979,19 @@ mod tests {
         ));
     }
 
+
     #[test]
     fn malformed_unsorted_leaf_rejects() {
         // Records written out of order ⇒ the validate walk rejects.
         let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(30), v4(40), &[2]), (v4(10), v4(20), &[1])];
         let file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
-        match Reader::open(&file) {
+        match Reader::open(&file).and_then(|r| r.validate()) {
             Err(Error::Invariant(m)) => assert_eq!(m, "leaf records not sorted/disjoint"),
             Err(e) => panic!("expected Invariant(\"leaf records not sorted/disjoint\"), got {e:?}"),
             Ok(_) => panic!("expected rejection, but opened OK"),
         }
     }
+
 
     #[test]
     fn record_count_mismatch_rejects() {
@@ -925,12 +1002,13 @@ mod tests {
         page[spec::META_RECORD_COUNT..spec::META_RECORD_COUNT + 8]
             .copy_from_slice(&5u64.to_le_bytes());
         finalize_checksum(page);
-        match Reader::open(&file) {
+        match Reader::open(&file).and_then(|r| r.validate()) {
             Err(Error::Invariant(m)) => assert_eq!(m, "record_count mismatch"),
             Err(e) => panic!("expected Invariant(\"record_count mismatch\"), got {e:?}"),
             Ok(_) => panic!("expected rejection, but opened OK"),
         }
     }
+
 
     #[test]
     fn lookup_family_mismatch_errors() {
@@ -942,6 +1020,7 @@ mod tests {
             Err(Error::InvalidInput(_))
         ));
     }
+
 
     #[test]
     fn truncated_file_rejects() {
@@ -959,6 +1038,7 @@ mod tests {
         ));
     }
 
+
     #[test]
     fn meta_tail_nonzero_rejected() {
         // A crafted non-zero byte in the active meta's reserved tail [meta_size,
@@ -974,6 +1054,7 @@ mod tests {
             Ok(_) => panic!("expected rejection, but opened OK"),
         }
     }
+
 
     // --- v4.1 metadata reads on the Reader (descend the on-disk committed tree) ---
 
@@ -1128,4 +1209,5 @@ mod tests {
             assert!(r.meta_list(a).unwrap().is_empty());
         }
     }
+
 }

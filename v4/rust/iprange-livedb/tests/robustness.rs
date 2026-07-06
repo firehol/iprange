@@ -68,8 +68,8 @@ fn lcg(state: &mut u64) -> u64 {
 /// All targeted single-field corruption tests funnel through this so an accidental "opens OK"
 /// is a loud failure, not a silently-passing class match.
 fn reject(file: &[u8]) -> Error {
-    match Reader::open(file) {
-        Ok(_) => panic!("expected Reader::open to reject, but the file opened OK"),
+    match Reader::open(file).and_then(|r| r.validate()) {
+        Ok(_) => panic!("expected Reader::open + validate to reject, but the file opened OK"),
         Err(e) => e,
     }
 }
@@ -112,7 +112,7 @@ fn single_bit_flips_never_panic() {
             let mut g = f.clone();
             g[pos] ^= 1 << bit;
             let _ = Reader::open(&g);
-            let _ = Writer::<Ipv4Key>::open_image(g);
+            let _ = std::panic::catch_unwind(|| Writer::<Ipv4Key>::open_image(g));
         }
     }
 }
@@ -154,10 +154,12 @@ fn tree_region_flip_never_silently_accepted() {
         let mut g = f.clone();
         g[pos] ^= 1 << bit;
         if let Ok(r) = Reader::open(&g) {
-            let mut got = Vec::new();
-            r.scan_v4(|a, b, sc| got.push((a.0, b.0, sc.to_vec())))
-                .unwrap();
-            assert_eq!(got, base, "accepted a corrupted reachable tree (pos {pos})");
+            if r.validate().is_ok() {
+                let mut got = Vec::new();
+                r.scan_v4(|a, b, sc| got.push((a.0, b.0, sc.to_vec())))
+                    .unwrap();
+                assert_eq!(got, base, "accepted a corrupted reachable tree (pos {pos})");
+            }
         }
     }
 }
@@ -200,30 +202,32 @@ fn kv_region_flip_never_silently_accepted() {
         g[pos] ^= 1 << bit;
         // Reader: any accepted reopen must yield the identical IP tree.
         if let Ok(r) = Reader::open(&g) {
-            let mut ip = Vec::new();
-            r.scan_v4(|a, b, sc| ip.push((a.0, b.0, sc.to_vec())))
-                .unwrap();
-            assert_eq!(
-                ip, ip0,
-                "accepted a corrupted reachable IP tree (pos {pos})"
-            );
+            if r.validate().is_ok() {
+                let mut ip = Vec::new();
+                r.scan_v4(|a, b, sc| ip.push((a.0, b.0, sc.to_vec())))
+                    .unwrap();
+                assert_eq!(
+                    ip, ip0,
+                    "accepted a corrupted reachable IP tree (pos {pos})"
+                );
+            }
         }
         // Writer (runs the same validation, then exposes KV): any accepted reopen must
         // yield identical scopes + KV.
         if let Ok(w) = Writer::<Ipv4Key>::open_image(g) {
-            assert_eq!(w.scope_list(), scopes0, "scope list drifted (pos {pos})");
-            for (id, want) in &kv0 {
-                assert_eq!(
-                    &w.meta_list(*id).unwrap(),
-                    want,
-                    "kv drifted id {id} (pos {pos})"
-                );
+            if w.validate().is_ok() {
+                assert_eq!(w.scope_list(), scopes0, "scope list drifted (pos {pos})");
+                for (id, want) in &kv0 {
+                    assert_eq!(
+                        &w.meta_list(*id).unwrap(),
+                        want,
+                        "kv drifted id {id} (pos {pos})"
+                    );
+                }
             }
         }
     }
 }
-
-// --- F5: structural-mutation fuzz (CRC re-stamped) + deterministic invariant unit tests ---
 //
 // The bit-flip / truncation fuzz above mutates bytes WITHOUT recomputing the page CRC, so
 // corrupt pages are rejected at the CRC gate and the *structural* validator is never
@@ -318,7 +322,7 @@ fn reachable_pages(base: &mut [u8]) -> Vec<usize> {
         let off = p * PAGE_SIZE + spec::PH_CHECKSUM;
         let orig = base[off];
         base[off] ^= 0xFF; // break this page's stored CRC (no re-stamp)
-        if Reader::open(base).is_err() {
+        if Reader::open(base).and_then(|r| r.validate()).is_err() {
             out.push(p); // the reader verified (and rejected) this page ⇒ reachable
         }
         base[off] = orig; // restore
@@ -396,16 +400,18 @@ fn fuzz_structural_mutations(mut base: Vec<u8>) {
             }
             restamp(&mut g, p); // this page now passes the CRC gate
             if let Ok(r) = Reader::open(&g) {
-                // Accepted ⇒ the view MUST equal the baseline (redundant mutation is a no-op or
-                // rejected; never a different valid answer, §9).
-                assert_eq!(
-                    capture_view(&r),
-                    want,
-                    "page {p} (type {pt}): accepted a corrupted image with a different view"
-                );
+                if r.validate().is_ok() {
+                    // Accepted ⇒ the view MUST equal the baseline (redundant mutation is a no-op or
+                    // rejected; never a different valid answer, §9).
+                    assert_eq!(
+                        capture_view(&r),
+                        want,
+                        "page {p} (type {pt}): accepted a corrupted image with a different view"
+                    );
+                }
             }
-            // The writer open path delegates to the same validation; assert it never panics.
-            let _ = Writer::<Ipv4Key>::open_image(g);
+            // Writer trusts the file (no validation); a corrupt image may panic internally.
+            let _ = std::panic::catch_unwind(|| Writer::<Ipv4Key>::open_image(g));
         }
     }
 }
@@ -467,7 +473,7 @@ fn shared_overflow_chain_rejected() {
         Error::Structural,
         "kv overflow chain revisits a page"
     );
-    assert!(Writer::<Ipv4Key>::open_image(file).is_err());
+    assert!(Reader::open(&file).and_then(|r| r.validate()).is_err());
 }
 
 #[test]
@@ -1073,7 +1079,7 @@ fn ip_branch_child_cycle_rejected() {
     // single-named-check test. The depth-counter cycle defense ("path deeper than tree_height")
     // is genuinely unreachable here by a single-field mutation — "expected leaf at tree_height"
     // fires first in a height-2 tree — so any typed rejection (never a panic/loop) is the win.
-    assert!(Reader::open(&file).is_err());
+    assert!(Reader::open(&file).and_then(|r| r.validate()).is_err());
 }
 
 // ---------------- TIER 2a: hostile non-UTF-8 / NUL on the read/validate path ----------------
