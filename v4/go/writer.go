@@ -951,8 +951,14 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 // pgno. It splits into ceil(len/overflow_payload) pages, each pointing to the next (last → 0),
 // §D.
 func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
+	if len(value) == 0 {
+		// Release-mode guard (mirrors Rust): the indexing below would panic on
+		// an empty chain. Callers guard on kvInlineMax, but a future caller must
+		// not trip a silent panic.
+		return 0, errInvalidInput("write_overflow_chain: empty value")
+	}
 	payload := overflowPayload
-	n := (len(value) + payload - 1) / payload // value is non-empty (caller checked vs kvInlineMax)
+	n := (len(value) + payload - 1) / payload
 	// Allocate all pages up front so each can reference the next.
 	pgnos := make([]uint32, n)
 	for k := 0; k < n; k++ {
@@ -1188,7 +1194,7 @@ func (w *Writer[K]) leafInsertAt(pgno uint32, pos int, rec ownedRecord[K]) (newP
 	newCount := count + 1
 	mid := newCount / 2
 	sep = w.leafInsertCombinedFrom(src[:], pos, rec, mid)
-	left, e := w.ensurePrivatePage(pgno)
+	left, e := w.allocPrivateReplacing(pgno)
 	if e != nil {
 		return 0, sep, 0, false, e
 	}
@@ -1300,7 +1306,7 @@ func (w *Writer[K]) rebalanceLeafChildren(leftPgno, rightPgno uint32) (uint32, K
 	leftCount := int(decodePageHeader(leftSrc[:]).entryCount)
 	rightCount := int(decodePageHeader(rightSrc[:]).entryCount)
 	combined := leftCount + rightCount
-	left, err := w.ensurePrivatePage(leftPgno)
+	left, err := w.allocPrivateReplacing(leftPgno)
 	if err != nil {
 		return 0, sep, 0, false, err
 	}
@@ -1341,6 +1347,24 @@ func (w *Writer[K]) ensurePrivatePage(pgno uint32) (uint32, error) {
 	}
 	dst := w.store.writePageMut(privatePgno)
 	copy(dst, w.page(pgno))
+	w.markDirty(privatePgno)
+	w.freePage(pgno)
+	return privatePgno, nil
+}
+
+// allocPrivateReplacing is like ensurePrivatePage but does NOT copy the old
+// page's contents. Used on split/rebalance paths where the caller overwrites
+// the entire page (via write*From*Combined, which starts with clear(page)).
+// Avoids a wasted 4 KB memcpy per split/rebalance. If pgno is already private
+// (touched earlier this txn), it is reused without copy.
+func (w *Writer[K]) allocPrivateReplacing(pgno uint32) (uint32, error) {
+	if _, ok := w.privatePages[pgno]; ok {
+		return pgno, nil
+	}
+	privatePgno, err := w.allocPage()
+	if err != nil {
+		return 0, err
+	}
 	w.markDirty(privatePgno)
 	w.freePage(pgno)
 	return privatePgno, nil
@@ -1465,7 +1489,7 @@ func (w *Writer[K]) branchAbsorbChildSplit(pgno uint32, childIdx int, newChild u
 	newCount := count + 1
 	mid := newCount / 2
 	promoted = w.branchInsertCombinedSep(src[:], childIdx, sep, mid)
-	left, e := w.ensurePrivatePage(pgno)
+	left, e := w.allocPrivateReplacing(pgno)
 	if e != nil {
 		return 0, promoted, 0, false, e
 	}
@@ -1566,7 +1590,7 @@ func (w *Writer[K]) rebalanceBranchChildren(leftPgno uint32, parentSep K, rightP
 	leftCount := int(decodePageHeader(leftSrc[:]).entryCount)
 	rightCount := int(decodePageHeader(rightSrc[:]).entryCount)
 	combined := leftCount + 1 + rightCount
-	left, err := w.ensurePrivatePage(leftPgno)
+	left, err := w.allocPrivateReplacing(leftPgno)
 	if err != nil {
 		return 0, promoted, 0, false, err
 	}

@@ -1121,7 +1121,7 @@ impl<K: IpKey> Writer<K> {
             let new_count = count + 1;
             let mid = new_count / 2;
             let sep = self.leaf_insert_combined_from(&src, pos, rec, mid);
-            let left = self.ensure_private_page(pgno)?;
+            let left = self.alloc_private_replacing(pgno)?;
             let right = self.alloc_page()?;
             self.write_leaf_from_insert_combined(left, &src, count, pos, rec, 0, mid);
             self.write_leaf_from_insert_combined(
@@ -1271,7 +1271,7 @@ impl<K: IpKey> Writer<K> {
         let left_count = PageHeader::decode(&left_src).entry_count as usize;
         let right_count = PageHeader::decode(&right_src).entry_count as usize;
         let combined = left_count + right_count;
-        let left = self.ensure_private_page(left_pgno)?;
+        let left = self.alloc_private_replacing(left_pgno)?;
         if combined <= self.leaf_max {
             self.write_leaf_from_pair_combined(
                 left,
@@ -1331,6 +1331,21 @@ impl<K: IpKey> Writer<K> {
         self.store
             .write_page_mut(private_pgno)
             .copy_from_slice(&copy);
+        self.free_page(pgno);
+        Ok(private_pgno)
+    }
+
+    /// Like `ensure_private_page` but does NOT copy the old page's contents.
+    /// Used on split/rebalance paths where the caller overwrites the entire page
+    /// (via `write_*_from_*_combined`, which starts with `fill(0)`). Avoids a
+    /// wasted 4 KB memcpy per split/rebalance. If `pgno` is already private
+    /// (touched earlier this txn), it is reused without copy.
+    fn alloc_private_replacing(&mut self, pgno: u32) -> Result<u32> {
+        if self.private_pages.contains(&pgno) {
+            return Ok(pgno);
+        }
+        let private_pgno = self.alloc_page()?;
+        self.mark_dirty(private_pgno);
         self.free_page(pgno);
         Ok(private_pgno)
     }
@@ -1449,7 +1464,7 @@ impl<K: IpKey> Writer<K> {
             let new_count = count + 1;
             let mid = new_count / 2;
             let promoted = Self::branch_insert_combined_sep(&src, child_idx, sep, mid);
-            let left = self.ensure_private_page(pgno)?;
+            let left = self.alloc_private_replacing(pgno)?;
             let new_right = self.alloc_page()?;
             self.write_branch_from_insert_combined(
                 left, &src, count, child_idx, new_child, sep, right, 0, mid,
@@ -1612,7 +1627,7 @@ impl<K: IpKey> Writer<K> {
         let left_count = PageHeader::decode(&left_src).entry_count as usize;
         let right_count = PageHeader::decode(&right_src).entry_count as usize;
         let combined = left_count + 1 + right_count;
-        let left = self.ensure_private_page(left_pgno)?;
+        let left = self.alloc_private_replacing(left_pgno)?;
         if combined <= self.branch_max {
             self.write_branch_from_pair_combined(
                 left,

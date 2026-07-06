@@ -447,8 +447,9 @@ impl<K: IpKey> FileWriter<K> {
             }
         }
         // Fallback: pwrite-zero-fill every page in the grown region.
+        // Hoisted out of the loop: the buffer is never mutated.
+        let zeros = [0u8; PAGE_SIZE];
         for off in (old_len..new_len).step_by(PAGE_SIZE) {
-            let zeros = [0u8; PAGE_SIZE];
             if unsafe {
                 libc::pwrite(
                     fd,
