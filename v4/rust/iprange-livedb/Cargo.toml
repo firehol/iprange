@@ -30,9 +30,11 @@ rustc-hash = { workspace = true }
 iprange-format = { path = "../../../v3/rust/iprange-format", optional = true }
 
 # Test-only: the conformance harness parses the shared language-neutral cases.json.
+# criterion powers the SOW-0013 benchmark harness (benches/core.rs, benches/os_bench.rs).
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 # Quick tests (default): conformance + metadata_conformance (~0.1s each).
 [[test]]
@@ -47,3 +49,16 @@ required-features = ["std"]
 [[test]]
 name = "robustness"
 required-features = ["slow-tests"]
+
+# --- Benchmarks (criterion, SOW-0013) ---
+# Run: cargo bench --manifest-path iprange-livedb/Cargo.toml
+# Or:  cargo bench --manifest-path iprange-livedb/Cargo.toml --bench core -- 100000
+[[bench]]
+name = "core"
+harness = false
+required-features = ["std"]
+
+[[bench]]
+name = "os_bench"
+harness = false
+required-features = ["os"]

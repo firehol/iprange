@@ -327,3 +327,62 @@ Pending.
 ## Regression Log
 
 None yet.
+
+## Execution Log (updated)
+
+### 2026-07-06 — Phase 1 initial benchmark results
+
+Hardware: Costa's workstation (RTX 5090, x86_64, SSE4.2 available). Criterion
+(Rust, default config adapted: sample-size=10-30, measurement-time=2-3s) and
+`testing.B` (Go, benchtime=1s). All numbers are wall-clock per iteration.
+
+#### Rust vs Go — 1M records, IPv4, scope_width=1
+
+| Scenario | Rust | Go | Go/Rust | Notes |
+|----------|------|-----|---------|-------|
+| 1_scan | 668 µs | 7.17 ms | 10.7× | Rust mmap traversal much faster |
+| 2_append (100k) | 169 ms | 41.6 ms | 0.24× | **Go 4× faster** — Rust Vec alloc bottleneck |
+| 3_set_random (100k) | 628 ms | 1.43 s | 2.3× | Rust faster on overlapping writes |
+| 5_lookup_hit (1M keys) | 54.0 ms | 118.4 ms | 2.2× | 54ns vs 118ns per lookup |
+| 7_open_read (trusted) | 3.42 µs | 2.08 µs | 0.61× | **Go faster** — stdlib CRC dispatch |
+| 7b_open_validate | 6.91 ms | 14.85 ms | 2.2× | Rust hardware CRC faster |
+| 7_open_read_file | — | 11.5 µs | — | Go MmapReader (flock + mmap + §10) |
+
+#### The validation optimization impact (Rust, 1M records)
+
+| Mode | Time | Ratio |
+|------|------|-------|
+| Trusted open | 3.42 µs | **baseline** |
+| Full validate | 6.91 ms | **2000× slower** |
+
+Trusted open is O(1) — 3.4µs at 10k, 100k, and 1M records. Validate scales
+linearly: ~7ns/page (dominated by CRC + tree walk).
+
+#### append() vs set() impact (Rust, 100k records)
+
+| Method | Time | Per-record |
+|--------|------|------------|
+| append (ordered) | 169 ms | 1.69 µs |
+| set (random) | 628 ms | 6.28 µs |
+| **Speedup** | | **3.7×** |
+
+#### Key findings for v5 reasoning
+
+1. **Open is solved**: trusted open is O(1) at 3µs. Not a v5 concern.
+2. **Scan is fast**: 0.67ns/record (Rust). Not a v5 concern.
+3. **Lookup is OK**: 54ns/lookup (Rust, 1M records). Tree descent + binary search. Could be improved with a first-level DIR-24-8 table for IPv4.
+4. **Write is the bottleneck**: 1.69µs/append, dominated by COW page allocation + per-record Vec clones. The deferred Fix 5-6 (scratch buffers) should help significantly.
+5. **Rust write is SLOWER than Go** (4× on append): likely allocator pressure from `Vec<OwnedRecord>` per COW op, each cloning 1-byte scope Vecs. Needs profiling.
+6. **Validate is expensive but optional**: 7ms for 1M records. The automated trigger (periodic validate on the daemon's own files) is affordable.
+
+#### What the data says about v5
+
+The hot paths that a v5 format change should target:
+- **Write amplification**: COW copies entire 4KB pages per mutation. A log-structured append or an in-place (non-COW) design would help.
+- **Per-write allocation**: Vec clones per record during COW. A format with fixed-size records (no per-record scope clone) would eliminate this.
+- **IPv4 lookup**: 54ns is OK but a DIR-24-8 first level would cut tree depth by 1-2 levels.
+
+What v5 should NOT change:
+- The double-meta atomic commit (crash safety is correct).
+- The page format (checksums work, hardware CRC is fast).
+- The B+tree structure for IPv6 (good enough).
