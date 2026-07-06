@@ -1105,7 +1105,6 @@ func writeKVLeaf(page []byte, pgno uint32, slots []leafSlot) {
 		le.PutUint16(page[so:], uint16(start))
 		heapEnd = start
 	}
-	finalizeChecksum(page)
 }
 
 // branchSep is a KV branch separator for bulk-load: (sep_key, child_pgno).
@@ -1135,7 +1134,6 @@ func writeKVBranch(page []byte, pgno, leftmost uint32, seps []branchSep) {
 		le.PutUint16(page[so:], uint16(start))
 		heapEnd = start
 	}
-	finalizeChecksum(page)
 }
 
 // writeOverflow writes one overflow page: header, next_pgno, and payload (zero-padded to the
@@ -1148,7 +1146,6 @@ func writeOverflow(page []byte, pgno, next uint32, payload []byte) {
 	le.PutUint32(page[overflowNextPgno:], next)
 	body := pageHeaderSize + 4
 	copy(page[body:body+len(payload)], payload)
-	finalizeChecksum(page)
 }
 
 // --- in-page write cursor helpers ---

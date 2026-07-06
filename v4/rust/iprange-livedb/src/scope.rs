@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 use crate::key::Ipv4Key;
 use crate::node::BranchView;
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
-use crate::wire::{finalize_checksum, PageHeader};
+use crate::wire::PageHeader;
 
 /// An owned per-scope header record (the scope-table leaf payload, §C.2). `name` holds
 /// `name_len` bytes (`<= SCOPE_NAME_MAX`); `type_`/`version`/`kv_root` are the seekable
@@ -458,7 +458,6 @@ pub(crate) fn write_scope_leaf(page: &mut [u8], pgno: u32, recs: &[ScopeRec]) {
         let off = PAGE_HEADER_SIZE + i * spec::SCOPE_RECORD_SIZE;
         rec.encode(&mut page[off..off + spec::SCOPE_RECORD_SIZE]);
     }
-    finalize_checksum(page);
 }
 
 /// Build a single scope-table branch page (IPv4-branch layout: `scope_id` separators).
@@ -474,7 +473,6 @@ pub(crate) fn write_scope_branch(page: &mut [u8], pgno: u32, seps: &[u32], child
         let c_off = sep_off + 4;
         page[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
     }
-    finalize_checksum(page);
 }
 
 /// Read the scope branch as an IPv4 branch view (scope_id == Ipv4Key key).

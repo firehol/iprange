@@ -12,7 +12,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use iprange_livedb::os::{FileWriter, MmapReader};
-use iprange_livedb::{Ipv4Key, Writer};
+use iprange_livedb::Ipv4Key;
 use std::path::PathBuf;
 
 /// Deterministic LCG (identical constants to the core bench and Go harness).
@@ -58,7 +58,7 @@ fn make_db_file(tag: &str, n: usize) -> PathBuf {
         fw.set(Ipv4Key(f), Ipv4Key(t), &[1]).expect("set");
     }
     fw.commit(0).expect("commit");
-    fw.close().expect("close");
+    let _ = fw.close();
     path
 }
 
@@ -103,7 +103,7 @@ fn bench_open_write_file(c: &mut Criterion) {
             b.iter(|| {
                 let fw =
                     FileWriter::<Ipv4Key>::open(path, std::time::Duration::from_secs(30)).unwrap();
-                black_box(fw.record_count());
+                let _ = black_box(fw.record_count());
                 // fw dropped here → munmap + release LOCK_EX
             });
         });

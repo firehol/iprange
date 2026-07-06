@@ -113,6 +113,11 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 	// META-A active (txn 1), META-B (txn 0); identical static identity.
 	w.writeMeta(0, 1, createdUnixtime)
 	w.writeMeta(1, 0, createdUnixtime)
+	// Finalize CRC for both metas (deferred from writeMeta).
+	p0 := w.store.writePageMut(0)
+	finalizeChecksum(p0)
+	p1 := w.store.writePageMut(1)
+	finalizeChecksum(p1)
 	return w
 }
 
@@ -333,11 +338,43 @@ func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
 	if _, ok := w.store.(*vecPageStore); !ok {
 		return errInvalidInput("Writer.Commit is only valid for vecPageStore; use FileWriter.Commit for mmap-backed writers")
 	}
-	if _, err := w.commitMeta(updatedUnixtime); err != nil {
+	// Rebuild metadata pages, then finalize CRC for surviving dirty pages BEFORE
+	// writing the meta. CRC is deferred from write_* to avoid computing it on
+	// intermediate COW copies freed within the same txn.
+	if err := w.rebuildCommitState(); err != nil {
 		return err
 	}
+	w.finalizeDirtyChecksums()
+	// Write the new meta and finalize its CRC.
+	inactive := w.finishCommitMeta(updatedUnixtime)
+	page := w.store.writePageMut(inactive)
+	finalizeChecksum(page)
 	w.dirty = w.dirty[:0]
 	return nil
+}
+
+// finalizeDirtyChecksums finalizes CRC for all dirty pages that survive the orphan
+// filter (pages freed within this txn are not reachable from the root — their CRC is
+// never validated). This is the deferred-CRC hot path: CRC is computed once per
+// surviving page at commit time, not on every write_leaf/write_branch call.
+func (w *Writer[K]) finalizeDirtyChecksums() {
+	if len(w.freedThisTxn) == 0 {
+		for _, pgno := range w.dirty {
+			page := w.store.writePageMut(pgno)
+			finalizeChecksum(page)
+		}
+		return
+	}
+	freed := make(map[uint32]struct{}, len(w.freedThisTxn))
+	for _, p := range w.freedThisTxn {
+		freed[p] = struct{}{}
+	}
+	for _, pgno := range w.dirty {
+		if _, ok := freed[pgno]; !ok {
+			page := w.store.writePageMut(pgno)
+			finalizeChecksum(page)
+		}
+	}
 }
 
 // Validate validates the committed state (full §9 structural walk + per-page CRC +
@@ -1215,7 +1252,6 @@ func (w *Writer[K]) leafInsertAt(pgno uint32, pos int, rec ownedRecord[K]) (newP
 		copy(page[start+w.recordSize:], page[start:end])
 		recordWrite[K](page[start:start+w.recordSize], rec.from, rec.to, rec.scope)
 		writePageHeader(page, pageTypeLeaf, uint16(count+1), p)
-		finalizeChecksum(page)
 		return p, sep, 0, false, nil
 	}
 
@@ -1252,7 +1288,6 @@ func (w *Writer[K]) leafDeleteAt(pgno uint32, pos int) (uint32, bool, error) {
 	tail := pageHeaderSize + newCount*w.recordSize
 	clear(page[tail:end])
 	writePageHeader(page, pageTypeLeaf, uint16(newCount), p)
-	finalizeChecksum(page)
 	return p, newCount == 0, nil
 }
 
@@ -1291,7 +1326,6 @@ func (w *Writer[K]) writeLeafFromInsertCombined(pgno uint32, src []byte, oldCoun
 		srcOff := pageHeaderSize + oldIdx*w.recordSize
 		copy(page[dst:dst+w.recordSize], src[srcOff:srcOff+w.recordSize])
 	}
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) leafPairCombinedFrom(left []byte, leftCount int, right []byte, idx int) K {
@@ -1325,7 +1359,6 @@ func (w *Writer[K]) writeLeafFromPairCombined(pgno uint32, left []byte, leftCoun
 			copy(page[dst:dst+w.recordSize], right[src:src+w.recordSize])
 		}
 	}
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) rebalanceLeafChildren(leftPgno, rightPgno uint32) (uint32, K, uint32, bool, error) {
@@ -1420,7 +1453,6 @@ func (w *Writer[K]) writeLeafInto(pgno uint32, records []ownedRecord[K]) {
 		off := pageHeaderSize + i*w.recordSize
 		recordWrite[K](page[off:off+w.recordSize], r.from, r.to, r.scope)
 	}
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
@@ -1448,7 +1480,6 @@ func (w *Writer[K]) writeBranchInto(pgno uint32, seps []K, children []uint32) {
 		seps[i].writeLE(page[sepOff : sepOff+width])
 		le.PutUint32(page[sepOff+width:], children[i+1])
 	}
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) branchPairOff(i int) int {
@@ -1488,7 +1519,6 @@ func (w *Writer[K]) branchUpdateChildAt(pgno uint32, childIdx int, child uint32)
 	page := w.store.writePageMut(p)
 	w.branchPutChild(page, childIdx, child)
 	writePageHeader(page, pageTypeBranch, uint16(count), p)
-	finalizeChecksum(page)
 	return p, nil
 }
 
@@ -1510,7 +1540,6 @@ func (w *Writer[K]) branchAbsorbChildSplit(pgno uint32, childIdx int, newChild u
 		sep.writeLE(page[start : start+width])
 		le.PutUint32(page[start+width:], right)
 		writePageHeader(page, pageTypeBranch, uint16(count+1), p)
-		finalizeChecksum(page)
 		return p, promoted, 0, false, nil
 	}
 
@@ -1572,7 +1601,6 @@ func (w *Writer[K]) writeBranchFromInsertCombined(pgno uint32, src []byte, oldCo
 		le.PutUint32(page[dst+width:], c)
 	}
 	_ = oldCount
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) branchPairCombinedSep(left []byte, leftCount int, parentSep K, right []byte, idx int) K {
@@ -1609,7 +1637,6 @@ func (w *Writer[K]) writeBranchFromPairCombined(pgno uint32, left []byte, leftCo
 		le.PutUint32(page[dst+width:], child)
 	}
 	_ = rightCount
-	finalizeChecksum(page)
 }
 
 func (w *Writer[K]) rebalanceBranchChildren(leftPgno uint32, parentSep K, rightPgno uint32) (uint32, K, uint32, bool, error) {
@@ -1659,7 +1686,6 @@ func (w *Writer[K]) branchRemoveSepChild(pgno uint32, sepIdx int, leftChild uint
 	tail := w.branchPairOff(newCount)
 	clear(page[tail:end])
 	writePageHeader(page, pageTypeBranch, uint16(newCount), p)
-	finalizeChecksum(page)
 	return p, newCount == 0, nil
 }
 
@@ -1677,7 +1703,6 @@ func (w *Writer[K]) branchUpdateSepChildren(pgno uint32, sepIdx int, leftChild u
 	sep.writeLE(page[sepOff : sepOff+width])
 	le.PutUint32(page[sepOff+width:], rightChild)
 	writePageHeader(page, pageTypeBranch, uint16(count), p)
-	finalizeChecksum(page)
 	return p, nil
 }
 

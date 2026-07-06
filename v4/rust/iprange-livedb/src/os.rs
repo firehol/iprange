@@ -469,7 +469,17 @@ impl<K: IpKey> FileWriter<K> {
     /// pwrite the data pages, fsync (Barrier 1), finalize + pwrite the meta page,
     /// fsync (Barrier 2).
     fn commit_durable(&mut self, updated_unixtime: u64) -> Result<()> {
+        // Finalize CRC for all dirty pages BEFORE take_dirty drains the set.
+        // Deferred from write_* to avoid CRC on intermediate COW copies freed
+        // within this txn. finalize_dirty_checksums skips orphan (freed) pages.
+        self.w.finalize_dirty_checksums();
         let dirty = self.w.take_dirty();
+        // take_dirty may keep some freed pages in the grown region (to avoid sparse
+        // holes on disk). Those need CRC too — finalize the full pwrite set.
+        for &p in &dirty {
+            let page = self.w.store.write_page_mut(p);
+            crate::wire::finalize_checksum(page);
+        }
         let new_len = self.w.store.total_pages() * PAGE_SIZE as u64;
         let file = self
             .file
@@ -509,6 +519,11 @@ impl<K: IpKey> FileWriter<K> {
         }
 
         let inactive = self.w.finish_commit_meta(updated_unixtime);
+        // Finalize the meta CRC before pwrite.
+        {
+            let meta_page = self.w.store.write_page_mut(inactive);
+            crate::wire::finalize_checksum(meta_page);
+        }
         let off = inactive as u64 * PAGE_SIZE as u64;
         file.write_all_at(self.w.store.page_data(inactive), off)?;
         file.sync_all()?; // Barrier 2: the commit point

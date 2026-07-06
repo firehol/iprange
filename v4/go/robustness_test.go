@@ -1914,6 +1914,15 @@ func putKVLeafBin(file []byte, pgno uint32, kvs []kvKV) {
 // hi=+inf). Keys a..f route: root sep "d"; inner-4 sep "b" (hi "d"); inner-5 sep "f" (lo "d").
 // Pages: 0/1 meta, 2 scope leaf (scope 1, kv_root 3), 3 root KV branch, 4/5 inner KV branches,
 // 6..9 KV leaves. Empty IP tree (root_pgno 0).
+// finalizeAllChecksums finalizes CRC for every page in a forged test file. The write_*
+// functions defer CRC to commit time, but forge helpers build files directly without
+// going through Commit — so they must finalize CRC explicitly.
+func finalizeAllChecksums(file []byte) {
+	pages := len(file) / pageSize
+	for p := 0; p < pages; p++ {
+		finalizeChecksum(file[p*pageSize : (p+1)*pageSize])
+	}
+}
 func forgeHeight3KVFile(t *testing.T) []byte {
 	t.Helper()
 	const total = 10
@@ -1930,6 +1939,7 @@ func forgeHeight3KVFile(t *testing.T) []byte {
 	mb := buildV41Meta(1, 1, 0, 0, total, 0, 1, 2)
 	ma.encodeInto(file[:pageSize])
 	mb.encodeInto(file[pageSize : 2*pageSize])
+	finalizeAllChecksums(file)
 	if _, err := Open(file); err != nil {
 		t.Fatalf("forgeHeight3KVFile base rejected: %v", err)
 	}
@@ -1961,6 +1971,7 @@ func forgeHeight3ScopeFile(t *testing.T) []byte {
 	ma := buildV41Meta(0, 1, 0, 0, total, 0, 2, 2)
 	mb := buildV41Meta(1, 1, 0, 0, total, 0, 1, 2)
 	ma.encodeInto(file[:pageSize])
+	finalizeAllChecksums(file)
 	mb.encodeInto(file[pageSize : 2*pageSize])
 	if _, err := Open(file); err != nil {
 		t.Fatalf("forgeHeight3ScopeFile base rejected: %v", err)

@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
-use crate::wire::{finalize_checksum, u16_le, u32_le, u64_le, PageHeader};
+use crate::wire::{u16_le, u32_le, u64_le, PageHeader};
 
 /// An owned KV entry, as buffered by the writer and returned by reads. `value` is the
 /// **whole** reassembled value (inline or overflow-spanning), opaque to the engine
@@ -1084,7 +1084,6 @@ pub(crate) fn write_kv_leaf(page: &mut [u8], pgno: u32, slots: &[LeafSlot]) {
         page[so..so + 2].copy_from_slice(&(start as u16).to_le_bytes());
         heap_end = start;
     }
-    finalize_checksum(page);
 }
 
 /// A KV branch separator for bulk-load: `(sep_key, child_pgno)`.
@@ -1112,7 +1111,6 @@ pub(crate) fn write_kv_branch(page: &mut [u8], pgno: u32, leftmost: u32, seps: &
         page[so..so + 2].copy_from_slice(&(start as u16).to_le_bytes());
         heap_end = start;
     }
-    finalize_checksum(page);
 }
 
 /// Write one overflow page: header, `next_pgno`, and `payload` (zero-padded to the page).
@@ -1124,7 +1122,6 @@ pub(crate) fn write_overflow(page: &mut [u8], pgno: u32, next: u32, payload: &[u
         .copy_from_slice(&next.to_le_bytes());
     let body = PAGE_HEADER_SIZE + 4;
     page[body..body + payload.len()].copy_from_slice(payload);
-    finalize_checksum(page);
 }
 
 // --- in-page write cursor helpers ---

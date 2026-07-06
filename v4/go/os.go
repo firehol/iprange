@@ -538,7 +538,16 @@ func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
 // commitDurable is the on-disk half of Commit, run after the metadata rebuild: pwrite the data
 // pages, fsync (Barrier 1), finalize + pwrite the meta page, fsync (Barrier 2).
 func (fw *FileWriter[K]) commitDurable(updatedUnixtime uint64) error {
+	// Finalize CRC for dirty pages BEFORE takeDirty drains the set. Deferred from
+	// write_* to avoid CRC on intermediate COW copies freed within this txn.
+	fw.w.finalizeDirtyChecksums()
 	dirty := fw.w.takeDirty()
+	// takeDirty may keep some freed pages in the grown region (sparse-hole avoidance).
+	// Those need CRC too — finalize the full pwrite set.
+	for _, p := range dirty {
+		page := fw.w.store.writePageMut(p)
+		finalizeChecksum(page)
+	}
 	newLen := int64(fw.w.store.totalPages() * uint64(pageSize))
 
 	// growFile is only needed for mmap-backed stores (mmapLen > 0) when
@@ -587,6 +596,9 @@ func (fw *FileWriter[K]) commitDurable(updatedUnixtime uint64) error {
 	}
 
 	inactive := fw.w.finishCommitMeta(updatedUnixtime)
+	// Finalize the meta CRC before pwrite.
+	metaPage := fw.w.store.writePageMut(inactive)
+	finalizeChecksum(metaPage)
 	off := int64(inactive) * int64(pageSize)
 	if _, err := fw.file.WriteAt(fw.w.store.pageData(inactive), off); err != nil {
 		return errf("Io", "pwrite meta: "+err.Error())

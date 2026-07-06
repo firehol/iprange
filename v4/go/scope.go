@@ -397,7 +397,6 @@ func writeScopeLeaf(page []byte, pgno uint32, recs []scopeRec) {
 		off := pageHeaderSize + i*scopeRecordSize
 		recs[i].encode(page[off : off+scopeRecordSize])
 	}
-	finalizeChecksum(page)
 }
 
 // writeScopeBranch builds a single scope-table branch page (IPv4-branch layout: scope_id
@@ -413,5 +412,4 @@ func writeScopeBranch(page []byte, pgno uint32, seps, children []uint32) {
 		le.PutUint32(page[sepOff:], seps[i])
 		le.PutUint32(page[sepOff+4:], children[i+1])
 	}
-	finalizeChecksum(page)
 }

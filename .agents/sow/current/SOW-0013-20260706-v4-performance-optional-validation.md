@@ -386,3 +386,52 @@ What v5 should NOT change:
 - The double-meta atomic commit (crash safety is correct).
 - The page format (checksums work, hardware CRC is fast).
 - The B+tree structure for IPv6 (good enough).
+
+### 2026-07-06 — Deferred CRC: the single biggest write-path win
+
+Profile finding (perf record on append/100k):
+- 95.36% of append time was `crc32c::update_sse42` — CRC32C computed on EVERY
+  write_leaf/write_branch call during mutation.
+- Root cause: finalize_checksum(page) was called inside every write_* function,
+  computing CRC over 4096 bytes per page write. For 100k COW appends, that's
+  ~100k CRC computations on intermediate pages — most of which are freed as
+  orphans within the same txn.
+
+Fix (Costa's insight: "crc should be computed on commit, not on every update"):
+- Removed finalize_checksum from ALL write_* functions (writer.rs, scope.rs,
+  kv.rs — 18 call sites in Rust; same in Go).
+- Added finalize_dirty_checksums(): at commit time, iterates self.dirty and
+  finalizes CRC ONLY for pages not in freed_this_txn (orphan COW copies are
+  skipped — their CRC is never validated by the reader).
+- The in-memory commit() calls it between rebuild_commit_state and
+  finish_commit_meta. The OS commit_durable() calls it before take_dirty,
+  then finalizes the full take_dirty set (including grown-region freed pages
+  needed for sparse-hole avoidance).
+- create() finalizes CRC for both initial metas.
+- Forge test helpers (forgeHeight3KVFile, forgeHeight3ScopeFile) call
+  finalizeAllChecksums() after writing pages directly.
+
+Before/after (100k records, Rust):
+| Scenario   | Before    | After     | Speedup |
+|------------|-----------|-----------|---------|
+| append     | 169 ms    | 5.15 ms   | 33×     |
+| set_random | 628 ms    | 244 ms    | 2.6×    |
+
+Before/after (100k records, Go):
+| Scenario   | Before    | After     | Speedup |
+|------------|-----------|-----------|---------|
+| append     | 41.6 ms   | 14.6 ms   | 2.8×    |
+| set_random | 1.43 s    | 1.34 s    | 1.1×    |
+
+Rust append at scale:
+| Records | Time     | Per-record |
+|---------|----------|------------|
+| 10k     | 486 µs   | 49 ns      |
+| 100k    | 5.15 ms  | 52 ns      |
+| 1M      | 68.0 ms  | 68 ns      |
+
+Rust is now FASTER than Go on append (5.15ms vs 14.6ms at 100k) — the
+allocator pressure hypothesis was wrong; CRC was the real bottleneck.
+
+Tests: 221 Rust (107 lib + 1 conformance + 2 metadata + 111 robustness) + all
+Go tests pass. Clippy + go vet clean.

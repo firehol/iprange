@@ -123,6 +123,10 @@ impl<K: IpKey> Writer<K> {
         // META-A active (txn 1), META-B (txn 0); identical static identity.
         w.write_meta(0, 1, created_unixtime);
         w.write_meta(1, 0, created_unixtime);
+        let p0 = w.store.write_page_mut(0);
+        finalize_checksum(p0);
+        let p1 = w.store.write_page_mut(1);
+        finalize_checksum(p1);
         w
     }
 
@@ -361,9 +365,40 @@ impl<K: IpKey> Writer<K> {
                  Use FileWriter::commit() for mmap-backed writers.",
             ));
         }
-        self.commit_meta(updated_unixtime)?;
+        // Rebuild metadata pages (KV + scope table), then finalize CRC for all
+        // surviving dirty pages BEFORE writing the meta. CRC is deferred from the
+        // write_* functions to avoid computing it on intermediate COW copies that
+        // are freed within the same txn (~100k pages → ~221 for a 100k-record txn).
+        self.rebuild_commit_state()?;
+        self.finalize_dirty_checksums();
+        // Write the new meta and finalize its CRC.
+        let inactive = self.finish_commit_meta(updated_unixtime);
+        let meta_page = self.store.write_page_mut(inactive);
+        finalize_checksum(meta_page);
         self.dirty.clear();
         Ok(())
+    }
+
+    /// Finalize CRC for all dirty pages that survive the orphan filter (pages freed
+    /// within this txn are not reachable from the root — their CRC is never validated).
+    /// This is the deferred-CRC hot path: instead of computing CRC on every write_leaf
+    /// /write_branch call during mutation, we compute it once per surviving page at
+    /// commit time.
+    pub(crate) fn finalize_dirty_checksums(&mut self) {
+        if self.freed_this_txn.is_empty() {
+            for &pgno in &self.dirty {
+                let page = self.store.write_page_mut(pgno);
+                finalize_checksum(page);
+            }
+            return;
+        }
+        let freed: FxHashSet<u32> = self.freed_this_txn.iter().copied().collect();
+        for &pgno in &self.dirty {
+            if !freed.contains(&pgno) {
+                let page = self.store.write_page_mut(pgno);
+                finalize_checksum(page);
+            }
+        }
     }
 
     /// Validate the committed state (full §9 structural walk + per-page CRC + scope/KV
@@ -442,6 +477,7 @@ impl<K: IpKey> Writer<K> {
     /// interleaves [`rebuild_commit_state`](Self::rebuild_commit_state) / [`take_dirty`]
     /// (`take_dirty`) / [`finish_commit_meta`](Self::finish_commit_meta) around its two fsync
     /// barriers.
+    #[allow(dead_code)]
     pub(crate) fn commit_meta(&mut self, updated_unixtime: u64) -> Result<u32> {
         self.rebuild_commit_state()?;
         Ok(self.finish_commit_meta(updated_unixtime))
@@ -1137,7 +1173,6 @@ impl<K: IpKey> Writer<K> {
                 &rec.scope,
             );
             PageHeader::write(page, spec::PAGE_TYPE_LEAF, (count + 1) as u16, pgno);
-            finalize_checksum(page);
             Ok((pgno, None))
         } else {
             let mut src = [0u8; PAGE_SIZE];
@@ -1175,7 +1210,6 @@ impl<K: IpKey> Writer<K> {
         let tail = PAGE_HEADER_SIZE + new_count * record_size;
         page[tail..end].fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_LEAF, new_count as u16, pgno);
-        finalize_checksum(page);
         Ok((pgno, new_count == 0))
     }
 
@@ -1232,7 +1266,6 @@ impl<K: IpKey> Writer<K> {
                 page[dst..dst + record_size].copy_from_slice(&src[src_off..src_off + record_size]);
             }
         }
-        finalize_checksum(page);
     }
 
     fn leaf_pair_combined_from(
@@ -1280,7 +1313,6 @@ impl<K: IpKey> Writer<K> {
                 page[dst..dst + record_size].copy_from_slice(&right[src..src + record_size]);
             }
         }
-        finalize_checksum(page);
     }
 
     fn rebalance_leaf_children(
@@ -1394,7 +1426,6 @@ impl<K: IpKey> Writer<K> {
                 &r.scope,
             );
         }
-        finalize_checksum(page);
     }
 
     fn write_branch(&mut self, seps: &[K], children: &[u32]) -> Result<u32> {
@@ -1418,7 +1449,6 @@ impl<K: IpKey> Writer<K> {
             let c_off = sep_off + K::WIDTH;
             page[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
         }
-        finalize_checksum(page);
     }
 
     fn branch_pair_off(i: usize) -> usize {
@@ -1455,7 +1485,6 @@ impl<K: IpKey> Writer<K> {
         let page = self.store.write_page_mut(pgno);
         Self::branch_put_child(page, child_idx, child);
         PageHeader::write(page, spec::PAGE_TYPE_BRANCH, count as u16, pgno);
-        finalize_checksum(page);
         Ok(pgno)
     }
 
@@ -1480,7 +1509,6 @@ impl<K: IpKey> Writer<K> {
             sep.write_le(&mut page[start..start + K::WIDTH]);
             page[start + K::WIDTH..start + K::WIDTH + 4].copy_from_slice(&right.to_le_bytes());
             PageHeader::write(page, spec::PAGE_TYPE_BRANCH, (count + 1) as u16, pgno);
-            finalize_checksum(page);
             Ok((pgno, None))
         } else {
             let mut src = [0u8; PAGE_SIZE];
@@ -1574,7 +1602,6 @@ impl<K: IpKey> Writer<K> {
             s.write_le(&mut page[dst..dst + K::WIDTH]);
             page[dst + K::WIDTH..dst + K::WIDTH + 4].copy_from_slice(&c.to_le_bytes());
         }
-        finalize_checksum(page);
     }
 
     fn branch_pair_combined_sep(
@@ -1635,7 +1662,6 @@ impl<K: IpKey> Writer<K> {
             sep.write_le(&mut page[dst..dst + K::WIDTH]);
             page[dst + K::WIDTH..dst + K::WIDTH + 4].copy_from_slice(&child.to_le_bytes());
         }
-        finalize_checksum(page);
     }
 
     fn rebalance_branch_children(
@@ -1715,7 +1741,6 @@ impl<K: IpKey> Writer<K> {
         let tail = Self::branch_pair_off(new_count);
         page[tail..end].fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_BRANCH, new_count as u16, pgno);
-        finalize_checksum(page);
         Ok((pgno, new_count == 0))
     }
 
@@ -1737,7 +1762,6 @@ impl<K: IpKey> Writer<K> {
         page[sep_off + K::WIDTH..sep_off + K::WIDTH + 4]
             .copy_from_slice(&right_child.to_le_bytes());
         PageHeader::write(page, spec::PAGE_TYPE_BRANCH, count as u16, pgno);
-        finalize_checksum(page);
         Ok(pgno)
     }
 
