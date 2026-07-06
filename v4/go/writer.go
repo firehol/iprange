@@ -24,11 +24,11 @@ type MetaEntry struct {
 // (§6, §7, §8).
 //
 // This is the in-memory writer core: it owns the whole file image as a growable buffer
-// and emulates the pread/pwrite model the OS layer (os.go) uses against a real file —
-// every mutated node is copied to a freshly allocated page (the old page is
-// freed-by-this-txn, D7) up to a new root, and Commit writes the new state into the
-// inactive meta and flips it (§6.3). A crash leaves the file as old-or-new, never torn
-// (the active meta only points at durable pages).
+// and emulates the pread/pwrite model the OS layer (os.go) uses against a real file. The
+// first write to a committed page in a transaction copies it to a transaction-private
+// page; later writes to that private page mutate it in place. Commit writes the new state
+// into the inactive meta and flips it (§6.3). A crash leaves the file as old-or-new,
+// never torn (the active meta only points at durable pages).
 //
 // Implements Create, range Set / Delete (§8) over a COW B+tree (leaf/branch split + root
 // growth on insert; sibling-merge + root-collapse on delete), Scan, and Commit. Set /
@@ -64,10 +64,11 @@ type Writer[K ipKey[K]] struct {
 	// its committed kv_root on first mutation and bulk-rebuilt at commit (§C.4). target =
 	// scope_id (0 = FILE). Absent = clean (read straight from disk).
 	kvDirty        map[uint32][]kvEntry
-	free           []uint32 // pages reusable by the current txn
-	freedThisTxn   []uint32 // pages freed since the last commit (reusable next txn, D7)
-	dirty          []uint32 // data pages written this txn (for the OS layer's pwrite set)
-	committedPages int      // on-disk page count as of the last commit (grown-region boundary)
+	free           []uint32            // pages reusable by the current txn
+	freedThisTxn   []uint32            // pages freed since the last commit (reusable next txn, D7)
+	dirty          []uint32            // data pages written this txn (for the OS layer's pwrite set)
+	privatePages   map[uint32]struct{} // txn-private data pages safe to mutate in place
+	committedPages int                 // on-disk page count as of the last commit (grown-region boundary)
 	// poisoned is set if the commit rebuild phase fails: page alloc/free is irreversible, so
 	// the in-memory allocator/registry is then indeterminate. The on-disk meta is unwritten
 	// (the file is the last committed valid state), so the writer must be discarded and
@@ -106,6 +107,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		scopeTableRoot:  0,
 		nextScopeID:     1, // 0 is reserved for the FILE target (§C.2)
 		kvDirty:         make(map[uint32][]kvEntry),
+		privatePages:    make(map[uint32]struct{}),
 		committedPages:  2, // the two metas, both written by create
 	}
 	// META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -182,6 +184,7 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
+		privatePages:    make(map[uint32]struct{}),
 		committedPages:  int(m.totalPages), // committed on-disk page count
 	}
 	w.free = w.deriveFreeSet()
@@ -234,6 +237,7 @@ func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
+		privatePages:    make(map[uint32]struct{}),
 		committedPages:  int(m.totalPages),
 	}
 	w.free = w.deriveFreeSet()
@@ -551,7 +555,7 @@ func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
 		}
 		page := w.store.writePageMut(pgno)
 		writeScopeLeaf(page, pgno, chunk)
-		w.dirty = append(w.dirty, pgno)
+		w.markDirty(pgno)
 		level = append(level, node{pgno: pgno, firstID: chunk[0].id})
 	}
 	height := uint32(1)
@@ -576,7 +580,7 @@ func (w *Writer[K]) buildScopeTree(scopes []scopeRec) (uint32, error) {
 			}
 			page := w.store.writePageMut(pgno)
 			writeScopeBranch(page, pgno, seps, children)
-			w.dirty = append(w.dirty, pgno)
+			w.markDirty(pgno)
 			next = append(next, node{pgno: pgno, firstID: chunk[0].firstID})
 		}
 		level = next
@@ -883,7 +887,7 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 		}
 		page := w.store.writePageMut(pgno)
 		writeKVLeaf(page, pgno, slots[i:j])
-		w.dirty = append(w.dirty, pgno)
+		w.markDirty(pgno)
 		level = append(level, node{pgno: pgno, firstKey: cloneBytes(slots[i].slotKey())})
 		i = j
 	}
@@ -934,7 +938,7 @@ func (w *Writer[K]) buildKVTree(entries []kvEntry) (uint32, error) {
 			}
 			page := w.store.writePageMut(pgno)
 			writeKVBranch(page, pgno, leftmost, seps)
-			w.dirty = append(w.dirty, pgno)
+			w.markDirty(pgno)
 			next = append(next, node{pgno: pgno, firstKey: level[lo].firstKey})
 		}
 		level = next
@@ -970,7 +974,7 @@ func (w *Writer[K]) writeOverflowChain(value []byte) (uint32, error) {
 		}
 		page := w.store.writePageMut(pgnos[k])
 		writeOverflow(page, pgnos[k], next, value[start:end])
-		w.dirty = append(w.dirty, pgnos[k])
+		w.markDirty(pgnos[k])
 	}
 	return pgnos[0], nil
 }
@@ -1039,6 +1043,7 @@ func (w *Writer[K]) finishCommitMeta(updatedUnixtime uint64) uint32 {
 	w.activeMeta = inactive
 	w.free = append(w.free, w.freedThisTxn...)
 	w.freedThisTxn = w.freedThisTxn[:0]
+	clear(w.privatePages)
 	// The file is now this long on disk after the OS layer's truncate; the next txn's
 	// grown region starts here.
 	w.committedPages = int(w.store.totalPages())
@@ -1139,91 +1144,206 @@ func (w *Writer[K]) insert(from, to K, scope []byte) error {
 // overflow, a (separator, right_pgno) split (split=true) for the parent to absorb.
 func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
 	if depth == w.treeHeight {
-		recs := w.readLeaf(pgno)
-		w.freePage(pgno)
-		pos := partitionIdx(len(recs), func(i int) bool { return recs[i].from.cmp(rec.from) < 0 })
-		recs = insertRecord(recs, pos, rec)
-		return w.emitLeaf(recs)
+		page := w.page(pgno)
+		count := int(decodePageHeader(page).entryCount)
+		leaf := newLeafView[K](page, count, w.recordSize)
+		pos := partitionIdx(count, func(i int) bool { return leaf.record(i).from().cmp(rec.from) < 0 })
+		return w.leafInsertAt(pgno, pos, rec)
 	}
-	seps, children := w.readBranch(pgno)
-	w.freePage(pgno)
-	i := partitionIdx(len(seps), func(j int) bool { return seps[j].cmp(rec.from) <= 0 })
-	nc, csep, cright, csplit, cerr := w.cowInsert(children[i], depth+1, rec)
+	page := w.page(pgno)
+	count := int(decodePageHeader(page).entryCount)
+	branch := newBranchView[K](page, count)
+	i := partitionIdx(count, func(j int) bool { return branch.sep(j).cmp(rec.from) <= 0 })
+	child := branch.child(i)
+	nc, csep, cright, csplit, cerr := w.cowInsert(child, depth+1, rec)
 	if cerr != nil {
 		return 0, sep, 0, false, cerr
 	}
-	children[i] = nc
 	if csplit {
-		seps = insertKey(seps, i, csep)
-		children = insertU32(children, i+1, cright)
+		return w.branchAbsorbChildSplit(pgno, i, nc, csep, cright)
 	}
-	return w.emitBranch(seps, children)
+	p, err := w.branchUpdateChildAt(pgno, i, nc)
+	return p, sep, 0, false, err
 }
 
-// emitLeaf writes records as one leaf, or splits into two if over leaf_max.
-func (w *Writer[K]) emitLeaf(records []ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
-	if len(records) <= w.leafMax {
-		p, e := w.writeLeaf(records)
-		return p, sep, 0, false, e
+func (w *Writer[K]) leafInsertAt(pgno uint32, pos int, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	if count < w.leafMax {
+		p, e := w.ensurePrivatePage(pgno)
+		if e != nil {
+			return 0, sep, 0, false, e
+		}
+		page := w.store.writePageMut(p)
+		start := pageHeaderSize + pos*w.recordSize
+		end := pageHeaderSize + count*w.recordSize
+		copy(page[start+w.recordSize:], page[start:end])
+		recordWrite[K](page[start:start+w.recordSize], rec.from, rec.to, rec.scope)
+		writePageHeader(page, pageTypeLeaf, uint16(count+1), p)
+		finalizeChecksum(page)
+		return p, sep, 0, false, nil
 	}
-	mid := len(records) / 2
-	lp, e := w.writeLeaf(records[:mid])
+
+	var src [pageSize]byte
+	copy(src[:], w.page(pgno))
+	newCount := count + 1
+	mid := newCount / 2
+	sep = w.leafInsertCombinedFrom(src[:], pos, rec, mid)
+	left, e := w.ensurePrivatePage(pgno)
 	if e != nil {
 		return 0, sep, 0, false, e
 	}
-	rp, e := w.writeLeaf(records[mid:])
+	rightPgno, e := w.allocPage()
 	if e != nil {
 		return 0, sep, 0, false, e
 	}
-	return lp, records[mid].from, rp, true, nil
+	w.writeLeafFromInsertCombined(left, src[:], count, pos, rec, 0, mid)
+	w.writeLeafFromInsertCombined(rightPgno, src[:], count, pos, rec, mid, newCount-mid)
+	return left, sep, rightPgno, true, nil
 }
 
-// emitBranch writes a branch, or splits into two (promoting the middle separator) if over
-// branch_max.
-func (w *Writer[K]) emitBranch(seps []K, children []uint32) (newPgno uint32, sep K, right uint32, split bool, err error) {
-	if len(seps) <= w.branchMax {
-		p, e := w.writeBranch(seps, children)
-		return p, sep, 0, false, e
+func (w *Writer[K]) leafDeleteAt(pgno uint32, pos int) (uint32, bool, error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	newCount := count - 1
+	p, err := w.ensurePrivatePage(pgno)
+	if err != nil {
+		return 0, false, err
 	}
-	mid := len(seps) / 2
-	lp, e := w.writeBranch(seps[:mid], children[:mid+1])
-	if e != nil {
-		return 0, sep, 0, false, e
+	page := w.store.writePageMut(p)
+	start := pageHeaderSize + pos*w.recordSize
+	next := start + w.recordSize
+	end := pageHeaderSize + count*w.recordSize
+	copy(page[start:], page[next:end])
+	tail := pageHeaderSize + newCount*w.recordSize
+	clear(page[tail:end])
+	writePageHeader(page, pageTypeLeaf, uint16(newCount), p)
+	finalizeChecksum(page)
+	return p, newCount == 0, nil
+}
+
+func (w *Writer[K]) leafInsertCombinedFrom(src []byte, insertPos int, rec ownedRecord[K], idx int) K {
+	if idx == insertPos {
+		return rec.from
 	}
-	rp, e := w.writeBranch(seps[mid+1:], children[mid+1:])
-	if e != nil {
-		return 0, sep, 0, false, e
+	oldIdx := idx
+	if idx > insertPos {
+		oldIdx--
 	}
-	return lp, seps[mid], rp, true, nil
+	off := pageHeaderSize + oldIdx*w.recordSize
+	var zero K
+	return zero.readLE(src[off : off+zero.width()])
+}
+
+func (w *Writer[K]) writeLeafFromInsertCombined(pgno uint32, src []byte, oldCount, insertPos int, rec ownedRecord[K], startIdx, n int) {
+	w.markDirty(pgno)
+	page := w.store.writePageMut(pgno)
+	clear(page)
+	writePageHeader(page, pageTypeLeaf, uint16(n), pgno)
+	for outIdx := 0; outIdx < n; outIdx++ {
+		combinedIdx := startIdx + outIdx
+		dst := pageHeaderSize + outIdx*w.recordSize
+		if combinedIdx == insertPos {
+			recordWrite[K](page[dst:dst+w.recordSize], rec.from, rec.to, rec.scope)
+			continue
+		}
+		oldIdx := combinedIdx
+		if combinedIdx > insertPos {
+			oldIdx--
+		}
+		if oldIdx >= oldCount {
+			panic("writeLeafFromInsertCombined: old index out of range")
+		}
+		srcOff := pageHeaderSize + oldIdx*w.recordSize
+		copy(page[dst:dst+w.recordSize], src[srcOff:srcOff+w.recordSize])
+	}
+	finalizeChecksum(page)
+}
+
+func (w *Writer[K]) leafPairCombinedFrom(left []byte, leftCount int, right []byte, idx int) K {
+	var zero K
+	width := zero.width()
+	if idx < leftCount {
+		off := pageHeaderSize + idx*w.recordSize
+		return zero.readLE(left[off : off+width])
+	}
+	off := pageHeaderSize + (idx-leftCount)*w.recordSize
+	return zero.readLE(right[off : off+width])
+}
+
+func (w *Writer[K]) writeLeafFromPairCombined(pgno uint32, left []byte, leftCount int, right []byte, rightCount int, startIdx, n int) {
+	w.markDirty(pgno)
+	page := w.store.writePageMut(pgno)
+	clear(page)
+	writePageHeader(page, pageTypeLeaf, uint16(n), pgno)
+	for outIdx := 0; outIdx < n; outIdx++ {
+		combinedIdx := startIdx + outIdx
+		dst := pageHeaderSize + outIdx*w.recordSize
+		if combinedIdx < leftCount {
+			src := pageHeaderSize + combinedIdx*w.recordSize
+			copy(page[dst:dst+w.recordSize], left[src:src+w.recordSize])
+		} else {
+			rightIdx := combinedIdx - leftCount
+			if rightIdx >= rightCount {
+				panic("writeLeafFromPairCombined: right index out of range")
+			}
+			src := pageHeaderSize + rightIdx*w.recordSize
+			copy(page[dst:dst+w.recordSize], right[src:src+w.recordSize])
+		}
+	}
+	finalizeChecksum(page)
+}
+
+func (w *Writer[K]) rebalanceLeafChildren(leftPgno, rightPgno uint32) (uint32, K, uint32, bool, error) {
+	var sep K
+	var leftSrc, rightSrc [pageSize]byte
+	copy(leftSrc[:], w.page(leftPgno))
+	copy(rightSrc[:], w.page(rightPgno))
+	leftCount := int(decodePageHeader(leftSrc[:]).entryCount)
+	rightCount := int(decodePageHeader(rightSrc[:]).entryCount)
+	combined := leftCount + rightCount
+	left, err := w.ensurePrivatePage(leftPgno)
+	if err != nil {
+		return 0, sep, 0, false, err
+	}
+	if combined <= w.leafMax {
+		w.writeLeafFromPairCombined(left, leftSrc[:], leftCount, rightSrc[:], rightCount, 0, combined)
+		w.freePage(rightPgno)
+		return left, sep, 0, false, nil
+	}
+	mid := combined / 2
+	sep = w.leafPairCombinedFrom(leftSrc[:], leftCount, rightSrc[:], mid)
+	right, err := w.allocPage()
+	if err != nil {
+		return 0, sep, 0, false, err
+	}
+	w.writeLeafFromPairCombined(left, leftSrc[:], leftCount, rightSrc[:], rightCount, 0, mid)
+	w.writeLeafFromPairCombined(right, leftSrc[:], leftCount, rightSrc[:], rightCount, mid, combined-mid)
+	w.freePage(rightPgno)
+	return left, sep, right, true, nil
 }
 
 // --- page I/O over the in-memory image ---
 
-func (w *Writer[K]) readLeaf(pgno uint32) []ownedRecord[K] {
-	page := w.page(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	leaf := newLeafView[K](page, count, w.recordSize)
-	out := make([]ownedRecord[K], count)
-	for i := 0; i < count; i++ {
-		rec := leaf.record(i)
-		out[i] = ownedRecord[K]{from: rec.from(), to: rec.to(), scope: cloneBytes(rec.scope())}
+func (w *Writer[K]) markDirty(pgno uint32) {
+	if _, ok := w.privatePages[pgno]; !ok {
+		w.privatePages[pgno] = struct{}{}
+		w.dirty = append(w.dirty, pgno)
 	}
-	return out
 }
 
-func (w *Writer[K]) readBranch(pgno uint32) ([]K, []uint32) {
-	page := w.page(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	b := newBranchView[K](page, count)
-	seps := make([]K, count)
-	for i := 0; i < count; i++ {
-		seps[i] = b.sep(i)
+func (w *Writer[K]) ensurePrivatePage(pgno uint32) (uint32, error) {
+	if _, ok := w.privatePages[pgno]; ok {
+		return pgno, nil
 	}
-	children := make([]uint32, count+1)
-	for j := 0; j <= count; j++ {
-		children[j] = b.child(j)
+
+	privatePgno, err := w.allocPage()
+	if err != nil {
+		return 0, err
 	}
-	return seps, children
+	dst := w.store.writePageMut(privatePgno)
+	copy(dst, w.page(pgno))
+	w.markDirty(privatePgno)
+	w.freePage(pgno)
+	return privatePgno, nil
 }
 
 func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) (uint32, error) {
@@ -1231,7 +1351,12 @@ func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	w.dirty = append(w.dirty, pgno)
+	w.writeLeafInto(pgno, records)
+	return pgno, nil
+}
+
+func (w *Writer[K]) writeLeafInto(pgno uint32, records []ownedRecord[K]) {
+	w.markDirty(pgno)
 	page := w.store.writePageMut(pgno)
 	for i := range page {
 		page[i] = 0
@@ -1242,7 +1367,6 @@ func (w *Writer[K]) writeLeaf(records []ownedRecord[K]) (uint32, error) {
 		recordWrite[K](page[off:off+w.recordSize], r.from, r.to, r.scope)
 	}
 	finalizeChecksum(page)
-	return pgno, nil
 }
 
 func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
@@ -1250,7 +1374,12 @@ func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	w.dirty = append(w.dirty, pgno)
+	w.writeBranchInto(pgno, seps, children)
+	return pgno, nil
+}
+
+func (w *Writer[K]) writeBranchInto(pgno uint32, seps []K, children []uint32) {
+	w.markDirty(pgno)
 	page := w.store.writePageMut(pgno)
 	for i := range page {
 		page[i] = 0
@@ -1266,7 +1395,236 @@ func (w *Writer[K]) writeBranch(seps []K, children []uint32) (uint32, error) {
 		le.PutUint32(page[sepOff+width:], children[i+1])
 	}
 	finalizeChecksum(page)
-	return pgno, nil
+}
+
+func (w *Writer[K]) branchPairOff(i int) int {
+	var zero K
+	return pageHeaderSize + 4 + i*(zero.width()+4)
+}
+
+func (w *Writer[K]) branchChildOff(j int) int {
+	if j == 0 {
+		return pageHeaderSize
+	}
+	var zero K
+	return w.branchPairOff(j-1) + zero.width()
+}
+
+func (w *Writer[K]) branchChildIn(page []byte, j int) uint32 {
+	return le.Uint32(page[w.branchChildOff(j):])
+}
+
+func (w *Writer[K]) branchSepIn(page []byte, i int) K {
+	var zero K
+	width := zero.width()
+	off := w.branchPairOff(i)
+	return zero.readLE(page[off : off+width])
+}
+
+func (w *Writer[K]) branchPutChild(page []byte, j int, child uint32) {
+	le.PutUint32(page[w.branchChildOff(j):], child)
+}
+
+func (w *Writer[K]) branchUpdateChildAt(pgno uint32, childIdx int, child uint32) (uint32, error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	p, err := w.ensurePrivatePage(pgno)
+	if err != nil {
+		return 0, err
+	}
+	page := w.store.writePageMut(p)
+	w.branchPutChild(page, childIdx, child)
+	writePageHeader(page, pageTypeBranch, uint16(count), p)
+	finalizeChecksum(page)
+	return p, nil
+}
+
+func (w *Writer[K]) branchAbsorbChildSplit(pgno uint32, childIdx int, newChild uint32, sep K, right uint32) (newPgno uint32, promoted K, promotedRight uint32, split bool, err error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	if count < w.branchMax {
+		p, e := w.ensurePrivatePage(pgno)
+		if e != nil {
+			return 0, promoted, 0, false, e
+		}
+		var zero K
+		width := zero.width()
+		slot := width + 4
+		page := w.store.writePageMut(p)
+		start := w.branchPairOff(childIdx)
+		end := w.branchPairOff(count)
+		copy(page[start+slot:], page[start:end])
+		w.branchPutChild(page, childIdx, newChild)
+		sep.writeLE(page[start : start+width])
+		le.PutUint32(page[start+width:], right)
+		writePageHeader(page, pageTypeBranch, uint16(count+1), p)
+		finalizeChecksum(page)
+		return p, promoted, 0, false, nil
+	}
+
+	var src [pageSize]byte
+	copy(src[:], w.page(pgno))
+	newCount := count + 1
+	mid := newCount / 2
+	promoted = w.branchInsertCombinedSep(src[:], childIdx, sep, mid)
+	left, e := w.ensurePrivatePage(pgno)
+	if e != nil {
+		return 0, promoted, 0, false, e
+	}
+	newRight, e := w.allocPage()
+	if e != nil {
+		return 0, promoted, 0, false, e
+	}
+	w.writeBranchFromInsertCombined(left, src[:], count, childIdx, newChild, sep, right, 0, mid)
+	w.writeBranchFromInsertCombined(newRight, src[:], count, childIdx, newChild, sep, right, mid+1, newCount-mid-1)
+	return left, promoted, newRight, true, nil
+}
+
+func (w *Writer[K]) branchInsertCombinedSep(src []byte, insertIdx int, sep K, idx int) K {
+	if idx < insertIdx {
+		return w.branchSepIn(src, idx)
+	}
+	if idx == insertIdx {
+		return sep
+	}
+	return w.branchSepIn(src, idx-1)
+}
+
+func (w *Writer[K]) branchInsertCombinedChild(src []byte, insertIdx int, newChild uint32, right uint32, idx int) uint32 {
+	if idx <= insertIdx {
+		if idx == insertIdx {
+			return newChild
+		}
+		return w.branchChildIn(src, idx)
+	}
+	if idx == insertIdx+1 {
+		return right
+	}
+	return w.branchChildIn(src, idx-1)
+}
+
+func (w *Writer[K]) writeBranchFromInsertCombined(pgno uint32, src []byte, oldCount int, insertIdx int, newChild uint32, sep K, right uint32, sepStart, sepLen int) {
+	w.markDirty(pgno)
+	page := w.store.writePageMut(pgno)
+	clear(page)
+	writePageHeader(page, pageTypeBranch, uint16(sepLen), pgno)
+	w.branchPutChild(page, 0, w.branchInsertCombinedChild(src, insertIdx, newChild, right, sepStart))
+	var zero K
+	width := zero.width()
+	for outIdx := 0; outIdx < sepLen; outIdx++ {
+		combinedSepIdx := sepStart + outIdx
+		dst := w.branchPairOff(outIdx)
+		s := w.branchInsertCombinedSep(src, insertIdx, sep, combinedSepIdx)
+		c := w.branchInsertCombinedChild(src, insertIdx, newChild, right, combinedSepIdx+1)
+		s.writeLE(page[dst : dst+width])
+		le.PutUint32(page[dst+width:], c)
+	}
+	_ = oldCount
+	finalizeChecksum(page)
+}
+
+func (w *Writer[K]) branchPairCombinedSep(left []byte, leftCount int, parentSep K, right []byte, idx int) K {
+	if idx < leftCount {
+		return w.branchSepIn(left, idx)
+	}
+	if idx == leftCount {
+		return parentSep
+	}
+	return w.branchSepIn(right, idx-leftCount-1)
+}
+
+func (w *Writer[K]) branchPairCombinedChild(left []byte, leftCount int, right []byte, idx int) uint32 {
+	if idx <= leftCount {
+		return w.branchChildIn(left, idx)
+	}
+	return w.branchChildIn(right, idx-leftCount-1)
+}
+
+func (w *Writer[K]) writeBranchFromPairCombined(pgno uint32, left []byte, leftCount int, parentSep K, right []byte, rightCount int, sepStart, sepLen int) {
+	w.markDirty(pgno)
+	page := w.store.writePageMut(pgno)
+	clear(page)
+	writePageHeader(page, pageTypeBranch, uint16(sepLen), pgno)
+	w.branchPutChild(page, 0, w.branchPairCombinedChild(left, leftCount, right, sepStart))
+	var zero K
+	width := zero.width()
+	for outIdx := 0; outIdx < sepLen; outIdx++ {
+		combinedSepIdx := sepStart + outIdx
+		dst := w.branchPairOff(outIdx)
+		sep := w.branchPairCombinedSep(left, leftCount, parentSep, right, combinedSepIdx)
+		child := w.branchPairCombinedChild(left, leftCount, right, combinedSepIdx+1)
+		sep.writeLE(page[dst : dst+width])
+		le.PutUint32(page[dst+width:], child)
+	}
+	_ = rightCount
+	finalizeChecksum(page)
+}
+
+func (w *Writer[K]) rebalanceBranchChildren(leftPgno uint32, parentSep K, rightPgno uint32) (uint32, K, uint32, bool, error) {
+	var promoted K
+	var leftSrc, rightSrc [pageSize]byte
+	copy(leftSrc[:], w.page(leftPgno))
+	copy(rightSrc[:], w.page(rightPgno))
+	leftCount := int(decodePageHeader(leftSrc[:]).entryCount)
+	rightCount := int(decodePageHeader(rightSrc[:]).entryCount)
+	combined := leftCount + 1 + rightCount
+	left, err := w.ensurePrivatePage(leftPgno)
+	if err != nil {
+		return 0, promoted, 0, false, err
+	}
+	if combined <= w.branchMax {
+		w.writeBranchFromPairCombined(left, leftSrc[:], leftCount, parentSep, rightSrc[:], rightCount, 0, combined)
+		w.freePage(rightPgno)
+		return left, promoted, 0, false, nil
+	}
+	mid := combined / 2
+	promoted = w.branchPairCombinedSep(leftSrc[:], leftCount, parentSep, rightSrc[:], mid)
+	right, err := w.allocPage()
+	if err != nil {
+		return 0, promoted, 0, false, err
+	}
+	w.writeBranchFromPairCombined(left, leftSrc[:], leftCount, parentSep, rightSrc[:], rightCount, 0, mid)
+	w.writeBranchFromPairCombined(right, leftSrc[:], leftCount, parentSep, rightSrc[:], rightCount, mid+1, combined-mid-1)
+	w.freePage(rightPgno)
+	return left, promoted, right, true, nil
+}
+
+func (w *Writer[K]) branchRemoveSepChild(pgno uint32, sepIdx int, leftChild uint32) (uint32, bool, error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	p, err := w.ensurePrivatePage(pgno)
+	if err != nil {
+		return 0, false, err
+	}
+	var zero K
+	slot := zero.width() + 4
+	page := w.store.writePageMut(p)
+	w.branchPutChild(page, sepIdx, leftChild)
+	start := w.branchPairOff(sepIdx)
+	next := start + slot
+	end := w.branchPairOff(count)
+	copy(page[start:], page[next:end])
+	newCount := count - 1
+	tail := w.branchPairOff(newCount)
+	clear(page[tail:end])
+	writePageHeader(page, pageTypeBranch, uint16(newCount), p)
+	finalizeChecksum(page)
+	return p, newCount == 0, nil
+}
+
+func (w *Writer[K]) branchUpdateSepChildren(pgno uint32, sepIdx int, leftChild uint32, sep K, rightChild uint32) (uint32, error) {
+	count := int(decodePageHeader(w.page(pgno)).entryCount)
+	p, err := w.ensurePrivatePage(pgno)
+	if err != nil {
+		return 0, err
+	}
+	var zero K
+	width := zero.width()
+	page := w.store.writePageMut(p)
+	w.branchPutChild(page, sepIdx, leftChild)
+	sepOff := w.branchPairOff(sepIdx)
+	sep.writeLE(page[sepOff : sepOff+width])
+	le.PutUint32(page[sepOff+width:], rightChild)
+	writePageHeader(page, pageTypeBranch, uint16(count), p)
+	finalizeChecksum(page)
+	return p, nil
 }
 
 func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
@@ -1426,15 +1784,16 @@ func (w *Writer[K]) treeDelete(key K) (bool, error) {
 		return false, nil
 	}
 	if w.treeHeight == 1 {
-		recs := w.readLeaf(w.rootPgno)
-		w.freePage(w.rootPgno)
-		pos := partitionIdx(len(recs), func(i int) bool { return recs[i].from.cmp(key) < 0 })
-		recs = removeRecord(recs, pos)
-		if len(recs) == 0 {
+		page := w.page(w.rootPgno)
+		count := int(decodePageHeader(page).entryCount)
+		leaf := newLeafView[K](page, count, w.recordSize)
+		pos := partitionIdx(count, func(i int) bool { return leaf.record(i).from().cmp(key) < 0 })
+		if count == 1 {
+			w.freePage(w.rootPgno)
 			w.rootPgno = 0
 			w.treeHeight = 0
 		} else {
-			p, err := w.writeLeaf(recs)
+			p, _, err := w.leafDeleteAt(w.rootPgno, pos)
 			if err != nil {
 				return false, err
 			}
@@ -1468,82 +1827,73 @@ func (w *Writer[K]) treeDelete(key K) (bool, error) {
 // repairs.
 func (w *Writer[K]) cowDelete(pgno, depth uint32, key K) (uint32, bool, error) {
 	if depth == w.treeHeight {
-		recs := w.readLeaf(pgno)
-		w.freePage(pgno)
-		pos := partitionIdx(len(recs), func(i int) bool { return recs[i].from.cmp(key) < 0 })
-		if pos < len(recs) && recs[pos].from.cmp(key) == 0 {
-			recs = removeRecord(recs, pos)
+		page := w.page(pgno)
+		count := int(decodePageHeader(page).entryCount)
+		leaf := newLeafView[K](page, count, w.recordSize)
+		pos := partitionIdx(count, func(i int) bool { return leaf.record(i).from().cmp(key) < 0 })
+		if pos < count && leaf.record(pos).from().cmp(key) == 0 {
+			return w.leafDeleteAt(pgno, pos)
 		}
-		p, err := w.writeLeaf(recs)
-		if err != nil {
-			return 0, false, err
-		}
-		return p, len(recs) == 0, nil
+		return pgno, count == 0, nil
 	}
-	seps, children := w.readBranch(pgno)
-	w.freePage(pgno)
-	i := partitionIdx(len(seps), func(j int) bool { return seps[j].cmp(key) <= 0 })
-	nc, childUF, err := w.cowDelete(children[i], depth+1, key)
+	page := w.page(pgno)
+	count := int(decodePageHeader(page).entryCount)
+	branch := newBranchView[K](page, count)
+	i := partitionIdx(count, func(j int) bool { return branch.sep(j).cmp(key) <= 0 })
+	child := branch.child(i)
+	nc, childUF, err := w.cowDelete(child, depth+1, key)
 	if err != nil {
 		return 0, false, err
 	}
-	children[i] = nc
 	if childUF {
-		seps, children, err = w.rebalance(seps, children, i, depth+1)
-		if err != nil {
-			return 0, false, err
-		}
+		return w.rebalanceAt(pgno, i, depth+1, nc)
 	}
-	p, err := w.writeBranch(seps, children)
+	p, err := w.branchUpdateChildAt(pgno, i, nc)
 	if err != nil {
 		return 0, false, err
 	}
-	return p, len(children) < 2, nil
+	return p, false, nil
 }
 
 // rebalance merges an underflowed children[i] with an adjacent sibling and re-emits (1 or
 // 2 nodes), patching seps/children. Balance-preserving.
-func (w *Writer[K]) rebalance(seps []K, children []uint32, i int, childDepth uint32) ([]K, []uint32, error) {
+func (w *Writer[K]) rebalanceAt(parentPgno uint32, i int, childDepth uint32, newChild uint32) (uint32, bool, error) {
+	var parentSrc [pageSize]byte
+	copy(parentSrc[:], w.page(parentPgno))
+	parentCount := int(decodePageHeader(parentSrc[:]).entryCount)
 	var l, r, sepIdx int
 	if i > 0 {
 		l, r, sepIdx = i-1, i, i-1
 	} else {
 		l, r, sepIdx = i, i+1, i
 	}
+	leftPgno := w.branchChildIn(parentSrc[:], l)
+	if l == i {
+		leftPgno = newChild
+	}
+	rightPgno := w.branchChildIn(parentSrc[:], r)
+	if r == i {
+		rightPgno = newChild
+	}
+	parentSep := w.branchSepIn(parentSrc[:], sepIdx)
 	var p, p2 uint32
-	var newsep K
+	var newSep K
 	var split bool
 	var err error
 	if childDepth == w.treeHeight {
-		recs := w.readLeaf(children[l])
-		rr := w.readLeaf(children[r])
-		recs = append(recs, rr...)
-		w.freePage(children[l])
-		w.freePage(children[r])
-		p, newsep, p2, split, err = w.emitLeaf(recs)
+		p, newSep, p2, split, err = w.rebalanceLeafChildren(leftPgno, rightPgno)
 	} else {
-		s1, c1 := w.readBranch(children[l])
-		s2, c2 := w.readBranch(children[r])
-		w.freePage(children[l])
-		w.freePage(children[r])
-		s1 = append(s1, seps[sepIdx])
-		s1 = append(s1, s2...)
-		c1 = append(c1, c2...)
-		p, newsep, p2, split, err = w.emitBranch(s1, c1)
+		p, newSep, p2, split, err = w.rebalanceBranchChildren(leftPgno, parentSep, rightPgno)
 	}
 	if err != nil {
-		return nil, nil, err
+		return 0, false, err
 	}
-	if !split {
-		children[l] = p
-		children = removeU32(children, r)
-		seps = removeKey(seps, sepIdx)
-	} else {
-		children[l] = p
-		children[r] = p2
-		seps[sepIdx] = newsep
+	if split {
+		parent, err := w.branchUpdateSepChildren(parentPgno, sepIdx, p, newSep, p2)
+		return parent, false, err
 	}
-	return seps, children, nil
+	_ = parentCount
+	return w.branchRemoveSepChild(parentPgno, sepIdx, p)
 }
 
 // --- read-path queries over the pending tree ---
@@ -1677,45 +2027,6 @@ func (w *Writer[K]) lookupGE(key K) (from, to K, scope []byte, found bool) {
 		}
 	}
 	return from, to, nil, false
-}
-
-// --- slice helpers (mirror the Rust Vec insert/remove) ---
-
-func insertRecord[K ipKey[K]](s []ownedRecord[K], i int, v ownedRecord[K]) []ownedRecord[K] {
-	s = append(s, ownedRecord[K]{})
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
-}
-
-func removeRecord[K ipKey[K]](s []ownedRecord[K], i int) []ownedRecord[K] {
-	copy(s[i:], s[i+1:])
-	return s[:len(s)-1]
-}
-
-func insertKey[K ipKey[K]](s []K, i int, v K) []K {
-	var zero K
-	s = append(s, zero)
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
-}
-
-func removeKey[K ipKey[K]](s []K, i int) []K {
-	copy(s[i:], s[i+1:])
-	return s[:len(s)-1]
-}
-
-func insertU32(s []uint32, i int, v uint32) []uint32 {
-	s = append(s, 0)
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
-}
-
-func removeU32(s []uint32, i int) []uint32 {
-	copy(s[i:], s[i+1:])
-	return s[:len(s)-1]
 }
 
 // partitionIdx returns the number of indices in [0, count) for which pred (monotone

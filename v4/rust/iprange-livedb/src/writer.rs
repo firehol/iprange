@@ -2,11 +2,11 @@
 //! (§6, §7, §8).
 //!
 //! This writer core is page-store backed: pure API use keeps a growable `Vec<u8>`, while
-//! the OS layer can wrap the same COW logic around an mmap-backed store. Every mutated node
-//! is **copied** to a freshly allocated page (the old page is freed-by-this-txn, D7) up to
-//! a new root, and `commit` writes the new state into the **inactive** meta and flips it
-//! (§6.3). A crash leaves the file as old-or-new, never torn (the active meta only points at
-//! durable pages).
+//! the OS layer can wrap the same COW logic around an mmap-backed store. The first write to
+//! a committed page in a transaction copies it to a transaction-private page; later writes
+//! to that private page mutate it in place. `commit` writes the new state into the
+//! **inactive** meta and flips it (§6.3). A crash leaves the file as old-or-new, never torn
+//! (the active meta only points at durable pages).
 //!
 //! Implements **create**, range `set` / `delete` (§8) over a COW B+tree (leaf/branch
 //! split + root growth on insert; sibling-merge + root-collapse on delete), `scan`,
@@ -75,10 +75,11 @@ pub struct Writer<K: IpKey> {
     // loaded lazily from its committed `kv_root` on first mutation and bulk-rebuilt at
     // commit. `target = scope_id` (`0` = FILE). Absent = clean (read straight from disk).
     kv_dirty: BTreeMap<u32, Vec<KvEntry>>,
-    free: Vec<u32>,           // pages reusable by the current txn
-    freed_this_txn: Vec<u32>, // pages freed since the last commit (reusable next txn, D7)
-    dirty: Vec<u32>,          // data pages written this txn (for the OS layer's pwrite set)
-    committed_pages: usize,   // on-disk page count as of the last commit (grown-region boundary)
+    free: Vec<u32>,                // pages reusable by the current txn
+    freed_this_txn: Vec<u32>,      // pages freed since the last commit (reusable next txn, D7)
+    dirty: Vec<u32>,               // data pages written this txn (for the OS layer's pwrite set)
+    private_pages: FxHashSet<u32>, // txn-private data pages safe to mutate in place
+    committed_pages: usize, // on-disk page count as of the last commit (grown-region boundary)
     // Set if the commit rebuild phase fails: page alloc/free is irreversible, so the
     // in-memory allocator/registry is then indeterminate. The on-disk meta is unwritten (the
     // file is the last committed valid state), so the writer must be discarded and reopened.
@@ -114,6 +115,7 @@ impl<K: IpKey> Writer<K> {
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
+            private_pages: FxHashSet::default(),
             committed_pages: 2, // the two metas, both written by create
             poisoned: false,
             _k: PhantomData,
@@ -179,6 +181,7 @@ impl<K: IpKey> Writer<K> {
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
+            private_pages: FxHashSet::default(),
             committed_pages: meta.total_pages as usize, // committed on-disk page count
             poisoned: false,
             _k: PhantomData,
@@ -232,6 +235,7 @@ impl<K: IpKey> Writer<K> {
             free: Vec::new(),
             freed_this_txn: Vec::new(),
             dirty: Vec::new(),
+            private_pages: FxHashSet::default(),
             committed_pages: meta.total_pages as usize,
             poisoned: false,
             _k: PhantomData,
@@ -312,7 +316,7 @@ impl<K: IpKey> Writer<K> {
             self.root_pgno = p;
             self.tree_height = 1;
         } else {
-            let (new_root, split) = self.cow_insert(self.root_pgno, 1, rec)?;
+            let (new_root, split) = self.cow_insert(self.root_pgno, 1, &rec)?;
             match split {
                 None => self.root_pgno = new_root,
                 Some((sep, right)) => {
@@ -402,6 +406,7 @@ impl<K: IpKey> Writer<K> {
         self.active_meta = inactive;
         let mut freed = core::mem::take(&mut self.freed_this_txn);
         self.free.append(&mut freed);
+        self.private_pages.clear();
         // The file is now this long on disk after the OS layer's `set_len`; the next txn's
         // grown region starts here.
         self.committed_pages = self.store.total_pages() as usize;
@@ -652,7 +657,7 @@ impl<K: IpKey> Writer<K> {
             let pgno = self.alloc_page()?;
             let page = self.store.write_page_mut(pgno);
             scope::write_scope_leaf(page, pgno, chunk);
-            self.dirty.push(pgno);
+            self.mark_dirty(pgno);
             level.push((pgno, chunk[0].id));
         }
         let mut height = 1u32;
@@ -675,7 +680,7 @@ impl<K: IpKey> Writer<K> {
                 let seps: Vec<u32> = chunk.iter().skip(1).map(|&(_, id)| id).collect();
                 let page = self.store.write_page_mut(pgno);
                 scope::write_scope_branch(page, pgno, &seps, &children);
-                self.dirty.push(pgno);
+                self.mark_dirty(pgno);
                 next.push((pgno, chunk[0].1));
             }
             level = next;
@@ -936,7 +941,7 @@ impl<K: IpKey> Writer<K> {
             let pgno = self.alloc_page()?;
             let page = self.store.write_page_mut(pgno);
             kv::write_kv_leaf(page, pgno, &slots[i..j]);
-            self.dirty.push(pgno);
+            self.mark_dirty(pgno);
             level.push((pgno, slots[i].key().to_vec()));
             i = j;
         }
@@ -1012,7 +1017,7 @@ impl<K: IpKey> Writer<K> {
             let pgno = self.alloc_page()?;
             let page = self.store.write_page_mut(pgno);
             kv::write_kv_branch(page, pgno, leftmost, &seps);
-            self.dirty.push(pgno);
+            self.mark_dirty(pgno);
             next.push((pgno, level[start].1.clone()));
         }
         Ok(next)
@@ -1040,7 +1045,7 @@ impl<K: IpKey> Writer<K> {
             let next = if k + 1 < n { pgnos[k + 1] } else { 0 };
             let page = self.store.write_page_mut(pgno);
             kv::write_overflow(page, pgno, next, &value[start..end]);
-            self.dirty.push(pgno);
+            self.mark_dirty(pgno);
         }
         Ok(pgnos[0])
     }
@@ -1059,84 +1064,285 @@ impl<K: IpKey> Writer<K> {
         &mut self,
         pgno: u32,
         depth: u32,
-        rec: OwnedRecord<K>,
+        rec: &OwnedRecord<K>,
     ) -> Result<(u32, Option<(K, u32)>)> {
         if depth == self.tree_height {
-            let mut recs = self.read_leaf(pgno);
-            self.free_page(pgno);
-            let pos = recs.partition_point(|r| r.from < rec.from);
-            recs.insert(pos, rec);
-            self.emit_leaf(&recs)
+            let pos = {
+                let page = self.page(pgno);
+                let count = PageHeader::decode(page).entry_count as usize;
+                let leaf = LeafView::<K>::new(page, count, self.record_size);
+                partition_idx(count, |i| leaf.record(i).from() < rec.from)
+            };
+            self.leaf_insert_at(pgno, pos, rec)
         } else {
-            let (mut seps, mut children) = self.read_branch(pgno);
-            self.free_page(pgno);
-            let i = seps.partition_point(|s| *s <= rec.from);
-            let (new_child, split) = self.cow_insert(children[i], depth + 1, rec)?;
-            children[i] = new_child;
+            let (i, child) = {
+                let page = self.page(pgno);
+                let count = PageHeader::decode(page).entry_count as usize;
+                let branch = BranchView::<K>::new(page, count);
+                let i = partition_idx(count, |j| branch.sep(j) <= rec.from);
+                (i, branch.child(i))
+            };
+            let (new_child, split) = self.cow_insert(child, depth + 1, rec)?;
             if let Some((sep, right)) = split {
-                seps.insert(i, sep);
-                children.insert(i + 1, right);
+                self.branch_absorb_child_split(pgno, i, new_child, sep, right)
+            } else {
+                Ok((self.branch_update_child_at(pgno, i, new_child)?, None))
             }
-            self.emit_branch(&seps, &children)
         }
     }
 
-    /// Write `records` as one leaf, or split into two if over `leaf_max`. Returns the
-    /// (primary pgno, optional split).
-    fn emit_leaf(&mut self, records: &[OwnedRecord<K>]) -> Result<(u32, Option<(K, u32)>)> {
-        if records.len() <= self.leaf_max {
-            Ok((self.write_leaf(records)?, None))
+    fn leaf_insert_at(
+        &mut self,
+        pgno: u32,
+        pos: usize,
+        rec: &OwnedRecord<K>,
+    ) -> Result<(u32, Option<(K, u32)>)> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(pos <= count);
+        if count < self.leaf_max {
+            let pgno = self.ensure_private_page(pgno)?;
+            let record_size = self.record_size;
+            let page = self.store.write_page_mut(pgno);
+            let start = PAGE_HEADER_SIZE + pos * record_size;
+            let end = PAGE_HEADER_SIZE + count * record_size;
+            page.copy_within(start..end, start + record_size);
+            record::write::<K>(
+                &mut page[start..start + record_size],
+                rec.from,
+                rec.to,
+                &rec.scope,
+            );
+            PageHeader::write(page, spec::PAGE_TYPE_LEAF, (count + 1) as u16, pgno);
+            finalize_checksum(page);
+            Ok((pgno, None))
         } else {
-            let mid = records.len() / 2;
-            let lp = self.write_leaf(&records[..mid])?;
-            let rp = self.write_leaf(&records[mid..])?;
-            Ok((lp, Some((records[mid].from, rp))))
+            let mut src = [0u8; PAGE_SIZE];
+            src.copy_from_slice(self.page(pgno));
+            let new_count = count + 1;
+            let mid = new_count / 2;
+            let sep = self.leaf_insert_combined_from(&src, pos, rec, mid);
+            let left = self.ensure_private_page(pgno)?;
+            let right = self.alloc_page()?;
+            self.write_leaf_from_insert_combined(left, &src, count, pos, rec, 0, mid);
+            self.write_leaf_from_insert_combined(
+                right,
+                &src,
+                count,
+                pos,
+                rec,
+                mid,
+                new_count - mid,
+            );
+            Ok((left, Some((sep, right))))
         }
     }
 
-    /// Write a branch, or split into two (promoting the middle separator) if over
-    /// `branch_max`.
-    fn emit_branch(&mut self, seps: &[K], children: &[u32]) -> Result<(u32, Option<(K, u32)>)> {
-        if seps.len() <= self.branch_max {
-            Ok((self.write_branch(seps, children)?, None))
+    fn leaf_delete_at(&mut self, pgno: u32, pos: usize) -> Result<(u32, bool)> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(pos < count);
+        let new_count = count - 1;
+        let pgno = self.ensure_private_page(pgno)?;
+        let record_size = self.record_size;
+        let page = self.store.write_page_mut(pgno);
+        let start = PAGE_HEADER_SIZE + pos * record_size;
+        let next = start + record_size;
+        let end = PAGE_HEADER_SIZE + count * record_size;
+        page.copy_within(next..end, start);
+        let tail = PAGE_HEADER_SIZE + new_count * record_size;
+        page[tail..end].fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_LEAF, new_count as u16, pgno);
+        finalize_checksum(page);
+        Ok((pgno, new_count == 0))
+    }
+
+    fn leaf_insert_combined_from(
+        &self,
+        src: &[u8],
+        insert_pos: usize,
+        rec: &OwnedRecord<K>,
+        idx: usize,
+    ) -> K {
+        if idx == insert_pos {
+            rec.from
         } else {
-            let mid = seps.len() / 2;
-            let lp = self.write_branch(&seps[..mid], &children[..mid + 1])?;
-            let rp = self.write_branch(&seps[mid + 1..], &children[mid + 1..])?;
-            Ok((lp, Some((seps[mid], rp))))
+            let old_idx = if idx < insert_pos { idx } else { idx - 1 };
+            let off = PAGE_HEADER_SIZE + old_idx * self.record_size;
+            K::read_le(&src[off..off + K::WIDTH])
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_leaf_from_insert_combined(
+        &mut self,
+        pgno: u32,
+        src: &[u8],
+        old_count: usize,
+        insert_pos: usize,
+        rec: &OwnedRecord<K>,
+        start_idx: usize,
+        len: usize,
+    ) {
+        debug_assert!(start_idx + len <= old_count + 1);
+        self.mark_dirty(pgno);
+        let record_size = self.record_size;
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_LEAF, len as u16, pgno);
+        for out_idx in 0..len {
+            let combined_idx = start_idx + out_idx;
+            let dst = PAGE_HEADER_SIZE + out_idx * record_size;
+            if combined_idx == insert_pos {
+                record::write::<K>(
+                    &mut page[dst..dst + record_size],
+                    rec.from,
+                    rec.to,
+                    &rec.scope,
+                );
+            } else {
+                let old_idx = if combined_idx < insert_pos {
+                    combined_idx
+                } else {
+                    combined_idx - 1
+                };
+                let src_off = PAGE_HEADER_SIZE + old_idx * record_size;
+                page[dst..dst + record_size].copy_from_slice(&src[src_off..src_off + record_size]);
+            }
+        }
+        finalize_checksum(page);
+    }
+
+    fn leaf_pair_combined_from(
+        &self,
+        left: &[u8],
+        left_count: usize,
+        right: &[u8],
+        idx: usize,
+    ) -> K {
+        if idx < left_count {
+            let off = PAGE_HEADER_SIZE + idx * self.record_size;
+            K::read_le(&left[off..off + K::WIDTH])
+        } else {
+            let off = PAGE_HEADER_SIZE + (idx - left_count) * self.record_size;
+            K::read_le(&right[off..off + K::WIDTH])
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_leaf_from_pair_combined(
+        &mut self,
+        pgno: u32,
+        left: &[u8],
+        left_count: usize,
+        right: &[u8],
+        right_count: usize,
+        start_idx: usize,
+        len: usize,
+    ) {
+        debug_assert!(start_idx + len <= left_count + right_count);
+        self.mark_dirty(pgno);
+        let record_size = self.record_size;
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_LEAF, len as u16, pgno);
+        for out_idx in 0..len {
+            let combined_idx = start_idx + out_idx;
+            let dst = PAGE_HEADER_SIZE + out_idx * record_size;
+            if combined_idx < left_count {
+                let src = PAGE_HEADER_SIZE + combined_idx * record_size;
+                page[dst..dst + record_size].copy_from_slice(&left[src..src + record_size]);
+            } else {
+                let right_idx = combined_idx - left_count;
+                let src = PAGE_HEADER_SIZE + right_idx * record_size;
+                page[dst..dst + record_size].copy_from_slice(&right[src..src + record_size]);
+            }
+        }
+        finalize_checksum(page);
+    }
+
+    fn rebalance_leaf_children(
+        &mut self,
+        left_pgno: u32,
+        right_pgno: u32,
+    ) -> Result<(u32, Option<(K, u32)>)> {
+        let mut left_src = [0u8; PAGE_SIZE];
+        let mut right_src = [0u8; PAGE_SIZE];
+        left_src.copy_from_slice(self.page(left_pgno));
+        right_src.copy_from_slice(self.page(right_pgno));
+        let left_count = PageHeader::decode(&left_src).entry_count as usize;
+        let right_count = PageHeader::decode(&right_src).entry_count as usize;
+        let combined = left_count + right_count;
+        let left = self.ensure_private_page(left_pgno)?;
+        if combined <= self.leaf_max {
+            self.write_leaf_from_pair_combined(
+                left,
+                &left_src,
+                left_count,
+                &right_src,
+                right_count,
+                0,
+                combined,
+            );
+            self.free_page(right_pgno);
+            Ok((left, None))
+        } else {
+            let mid = combined / 2;
+            let sep = self.leaf_pair_combined_from(&left_src, left_count, &right_src, mid);
+            let right = self.alloc_page()?;
+            self.write_leaf_from_pair_combined(
+                left,
+                &left_src,
+                left_count,
+                &right_src,
+                right_count,
+                0,
+                mid,
+            );
+            self.write_leaf_from_pair_combined(
+                right,
+                &left_src,
+                left_count,
+                &right_src,
+                right_count,
+                mid,
+                combined - mid,
+            );
+            self.free_page(right_pgno);
+            Ok((left, Some((sep, right))))
         }
     }
 
     // --- page I/O over the in-memory image ---
 
-    fn read_leaf(&self, pgno: u32) -> Vec<OwnedRecord<K>> {
-        let page = self.page(pgno);
-        let count = PageHeader::decode(page).entry_count as usize;
-        let leaf = LeafView::<K>::new(page, count, self.record_size);
-        (0..count)
-            .map(|i| {
-                let r = leaf.record(i);
-                OwnedRecord {
-                    from: r.from(),
-                    to: r.to(),
-                    scope: r.scope().to_vec(),
-                }
-            })
-            .collect()
+    fn mark_dirty(&mut self, pgno: u32) {
+        if self.private_pages.insert(pgno) {
+            self.dirty.push(pgno);
+        }
     }
 
-    fn read_branch(&self, pgno: u32) -> (Vec<K>, Vec<u32>) {
-        let page = self.page(pgno);
-        let count = PageHeader::decode(page).entry_count as usize;
-        let b = BranchView::<K>::new(page, count);
-        let seps = (0..count).map(|i| b.sep(i)).collect();
-        let children = (0..=count).map(|j| b.child(j)).collect();
-        (seps, children)
+    fn ensure_private_page(&mut self, pgno: u32) -> Result<u32> {
+        if self.private_pages.contains(&pgno) {
+            return Ok(pgno);
+        }
+
+        let mut copy = [0u8; PAGE_SIZE];
+        copy.copy_from_slice(self.page(pgno));
+        let private_pgno = self.alloc_page()?;
+        self.mark_dirty(private_pgno);
+        self.store
+            .write_page_mut(private_pgno)
+            .copy_from_slice(&copy);
+        self.free_page(pgno);
+        Ok(private_pgno)
     }
 
     fn write_leaf(&mut self, records: &[OwnedRecord<K>]) -> Result<u32> {
         let pgno = self.alloc_page()?;
-        self.dirty.push(pgno);
+        self.write_leaf_into(pgno, records);
+        Ok(pgno)
+    }
+
+    fn write_leaf_into(&mut self, pgno: u32, records: &[OwnedRecord<K>]) {
+        self.mark_dirty(pgno);
         let page = self.store.write_page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_LEAF, records.len() as u16, pgno);
@@ -1150,13 +1356,18 @@ impl<K: IpKey> Writer<K> {
             );
         }
         finalize_checksum(page);
-        Ok(pgno)
     }
 
     fn write_branch(&mut self, seps: &[K], children: &[u32]) -> Result<u32> {
         debug_assert_eq!(children.len(), seps.len() + 1);
         let pgno = self.alloc_page()?;
-        self.dirty.push(pgno);
+        self.write_branch_into(pgno, seps, children);
+        Ok(pgno)
+    }
+
+    fn write_branch_into(&mut self, pgno: u32, seps: &[K], children: &[u32]) {
+        debug_assert_eq!(children.len(), seps.len() + 1);
+        self.mark_dirty(pgno);
         let page = self.store.write_page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_BRANCH, seps.len() as u16, pgno);
@@ -1168,6 +1379,325 @@ impl<K: IpKey> Writer<K> {
             let c_off = sep_off + K::WIDTH;
             page[c_off..c_off + 4].copy_from_slice(&children[i + 1].to_le_bytes());
         }
+        finalize_checksum(page);
+    }
+
+    fn branch_pair_off(i: usize) -> usize {
+        PAGE_HEADER_SIZE + 4 + i * (K::WIDTH + 4)
+    }
+
+    fn branch_child_off(j: usize) -> usize {
+        if j == 0 {
+            PAGE_HEADER_SIZE
+        } else {
+            Self::branch_pair_off(j - 1) + K::WIDTH
+        }
+    }
+
+    fn branch_child_in(page: &[u8], j: usize) -> u32 {
+        let off = Self::branch_child_off(j);
+        u32::from_le_bytes([page[off], page[off + 1], page[off + 2], page[off + 3]])
+    }
+
+    fn branch_sep_in(page: &[u8], i: usize) -> K {
+        let off = Self::branch_pair_off(i);
+        K::read_le(&page[off..off + K::WIDTH])
+    }
+
+    fn branch_put_child(page: &mut [u8], j: usize, child: u32) {
+        let off = Self::branch_child_off(j);
+        page[off..off + 4].copy_from_slice(&child.to_le_bytes());
+    }
+
+    fn branch_update_child_at(&mut self, pgno: u32, child_idx: usize, child: u32) -> Result<u32> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(child_idx <= count);
+        let pgno = self.ensure_private_page(pgno)?;
+        let page = self.store.write_page_mut(pgno);
+        Self::branch_put_child(page, child_idx, child);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, count as u16, pgno);
+        finalize_checksum(page);
+        Ok(pgno)
+    }
+
+    fn branch_absorb_child_split(
+        &mut self,
+        pgno: u32,
+        child_idx: usize,
+        new_child: u32,
+        sep: K,
+        right: u32,
+    ) -> Result<(u32, Option<(K, u32)>)> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(child_idx <= count);
+        if count < self.branch_max {
+            let pgno = self.ensure_private_page(pgno)?;
+            let slot = K::WIDTH + 4;
+            let page = self.store.write_page_mut(pgno);
+            let start = Self::branch_pair_off(child_idx);
+            let end = Self::branch_pair_off(count);
+            page.copy_within(start..end, start + slot);
+            Self::branch_put_child(page, child_idx, new_child);
+            sep.write_le(&mut page[start..start + K::WIDTH]);
+            page[start + K::WIDTH..start + K::WIDTH + 4].copy_from_slice(&right.to_le_bytes());
+            PageHeader::write(page, spec::PAGE_TYPE_BRANCH, (count + 1) as u16, pgno);
+            finalize_checksum(page);
+            Ok((pgno, None))
+        } else {
+            let mut src = [0u8; PAGE_SIZE];
+            src.copy_from_slice(self.page(pgno));
+            let new_count = count + 1;
+            let mid = new_count / 2;
+            let promoted = Self::branch_insert_combined_sep(&src, child_idx, sep, mid);
+            let left = self.ensure_private_page(pgno)?;
+            let new_right = self.alloc_page()?;
+            self.write_branch_from_insert_combined(
+                left, &src, count, child_idx, new_child, sep, right, 0, mid,
+            );
+            self.write_branch_from_insert_combined(
+                new_right,
+                &src,
+                count,
+                child_idx,
+                new_child,
+                sep,
+                right,
+                mid + 1,
+                new_count - mid - 1,
+            );
+            Ok((left, Some((promoted, new_right))))
+        }
+    }
+
+    fn branch_insert_combined_sep(src: &[u8], insert_idx: usize, sep: K, idx: usize) -> K {
+        if idx < insert_idx {
+            Self::branch_sep_in(src, idx)
+        } else if idx == insert_idx {
+            sep
+        } else {
+            Self::branch_sep_in(src, idx - 1)
+        }
+    }
+
+    fn branch_insert_combined_child(
+        src: &[u8],
+        insert_idx: usize,
+        new_child: u32,
+        right: u32,
+        idx: usize,
+    ) -> u32 {
+        if idx <= insert_idx {
+            if idx == insert_idx {
+                new_child
+            } else {
+                Self::branch_child_in(src, idx)
+            }
+        } else if idx == insert_idx + 1 {
+            right
+        } else {
+            Self::branch_child_in(src, idx - 1)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_branch_from_insert_combined(
+        &mut self,
+        pgno: u32,
+        src: &[u8],
+        old_count: usize,
+        insert_idx: usize,
+        new_child: u32,
+        sep: K,
+        right: u32,
+        sep_start: usize,
+        sep_len: usize,
+    ) {
+        debug_assert!(sep_start + sep_len <= old_count + 1);
+        self.mark_dirty(pgno);
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, sep_len as u16, pgno);
+        let first_child =
+            Self::branch_insert_combined_child(src, insert_idx, new_child, right, sep_start);
+        Self::branch_put_child(page, 0, first_child);
+        for out_idx in 0..sep_len {
+            let combined_sep_idx = sep_start + out_idx;
+            let combined_child_idx = combined_sep_idx + 1;
+            let dst = Self::branch_pair_off(out_idx);
+            let s = Self::branch_insert_combined_sep(src, insert_idx, sep, combined_sep_idx);
+            let c = Self::branch_insert_combined_child(
+                src,
+                insert_idx,
+                new_child,
+                right,
+                combined_child_idx,
+            );
+            s.write_le(&mut page[dst..dst + K::WIDTH]);
+            page[dst + K::WIDTH..dst + K::WIDTH + 4].copy_from_slice(&c.to_le_bytes());
+        }
+        finalize_checksum(page);
+    }
+
+    fn branch_pair_combined_sep(
+        left: &[u8],
+        left_count: usize,
+        parent_sep: K,
+        right: &[u8],
+        idx: usize,
+    ) -> K {
+        if idx < left_count {
+            Self::branch_sep_in(left, idx)
+        } else if idx == left_count {
+            parent_sep
+        } else {
+            Self::branch_sep_in(right, idx - left_count - 1)
+        }
+    }
+
+    fn branch_pair_combined_child(left: &[u8], left_count: usize, right: &[u8], idx: usize) -> u32 {
+        if idx <= left_count {
+            Self::branch_child_in(left, idx)
+        } else {
+            Self::branch_child_in(right, idx - left_count - 1)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_branch_from_pair_combined(
+        &mut self,
+        pgno: u32,
+        left: &[u8],
+        left_count: usize,
+        parent_sep: K,
+        right: &[u8],
+        right_count: usize,
+        sep_start: usize,
+        sep_len: usize,
+    ) {
+        debug_assert!(sep_start + sep_len <= left_count + 1 + right_count);
+        self.mark_dirty(pgno);
+        let page = self.store.write_page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, sep_len as u16, pgno);
+        let first_child = Self::branch_pair_combined_child(left, left_count, right, sep_start);
+        Self::branch_put_child(page, 0, first_child);
+        for out_idx in 0..sep_len {
+            let combined_sep_idx = sep_start + out_idx;
+            let dst = Self::branch_pair_off(out_idx);
+            let sep = Self::branch_pair_combined_sep(
+                left,
+                left_count,
+                parent_sep,
+                right,
+                combined_sep_idx,
+            );
+            let child =
+                Self::branch_pair_combined_child(left, left_count, right, combined_sep_idx + 1);
+            sep.write_le(&mut page[dst..dst + K::WIDTH]);
+            page[dst + K::WIDTH..dst + K::WIDTH + 4].copy_from_slice(&child.to_le_bytes());
+        }
+        finalize_checksum(page);
+    }
+
+    fn rebalance_branch_children(
+        &mut self,
+        left_pgno: u32,
+        parent_sep: K,
+        right_pgno: u32,
+    ) -> Result<(u32, Option<(K, u32)>)> {
+        let mut left_src = [0u8; PAGE_SIZE];
+        let mut right_src = [0u8; PAGE_SIZE];
+        left_src.copy_from_slice(self.page(left_pgno));
+        right_src.copy_from_slice(self.page(right_pgno));
+        let left_count = PageHeader::decode(&left_src).entry_count as usize;
+        let right_count = PageHeader::decode(&right_src).entry_count as usize;
+        let combined = left_count + 1 + right_count;
+        let left = self.ensure_private_page(left_pgno)?;
+        if combined <= self.branch_max {
+            self.write_branch_from_pair_combined(
+                left,
+                &left_src,
+                left_count,
+                parent_sep,
+                &right_src,
+                right_count,
+                0,
+                combined,
+            );
+            self.free_page(right_pgno);
+            Ok((left, None))
+        } else {
+            let mid = combined / 2;
+            let promoted =
+                Self::branch_pair_combined_sep(&left_src, left_count, parent_sep, &right_src, mid);
+            let right = self.alloc_page()?;
+            self.write_branch_from_pair_combined(
+                left,
+                &left_src,
+                left_count,
+                parent_sep,
+                &right_src,
+                right_count,
+                0,
+                mid,
+            );
+            self.write_branch_from_pair_combined(
+                right,
+                &left_src,
+                left_count,
+                parent_sep,
+                &right_src,
+                right_count,
+                mid + 1,
+                combined - mid - 1,
+            );
+            self.free_page(right_pgno);
+            Ok((left, Some((promoted, right))))
+        }
+    }
+
+    fn branch_remove_sep_child(
+        &mut self,
+        pgno: u32,
+        sep_idx: usize,
+        left_child: u32,
+    ) -> Result<(u32, bool)> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(sep_idx < count);
+        let pgno = self.ensure_private_page(pgno)?;
+        let slot = K::WIDTH + 4;
+        let page = self.store.write_page_mut(pgno);
+        Self::branch_put_child(page, sep_idx, left_child);
+        let start = Self::branch_pair_off(sep_idx);
+        let next = start + slot;
+        let end = Self::branch_pair_off(count);
+        page.copy_within(next..end, start);
+        let new_count = count - 1;
+        let tail = Self::branch_pair_off(new_count);
+        page[tail..end].fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, new_count as u16, pgno);
+        finalize_checksum(page);
+        Ok((pgno, new_count == 0))
+    }
+
+    fn branch_update_sep_children(
+        &mut self,
+        pgno: u32,
+        sep_idx: usize,
+        left_child: u32,
+        sep: K,
+        right_child: u32,
+    ) -> Result<u32> {
+        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+        debug_assert!(sep_idx < count);
+        let pgno = self.ensure_private_page(pgno)?;
+        let page = self.store.write_page_mut(pgno);
+        Self::branch_put_child(page, sep_idx, left_child);
+        let sep_off = Self::branch_pair_off(sep_idx);
+        sep.write_le(&mut page[sep_off..sep_off + K::WIDTH]);
+        page[sep_off + K::WIDTH..sep_off + K::WIDTH + 4]
+            .copy_from_slice(&right_child.to_le_bytes());
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, count as u16, pgno);
         finalize_checksum(page);
         Ok(pgno)
     }
@@ -1313,15 +1843,19 @@ impl<K: IpKey> Writer<K> {
             return Ok(false);
         }
         if self.tree_height == 1 {
-            let mut recs = self.read_leaf(self.root_pgno);
-            self.free_page(self.root_pgno);
-            let pos = recs.partition_point(|r| r.from < key);
-            recs.remove(pos);
-            if recs.is_empty() {
+            let (count, pos) = {
+                let page = self.page(self.root_pgno);
+                let count = PageHeader::decode(page).entry_count as usize;
+                let leaf = LeafView::<K>::new(page, count, self.record_size);
+                let pos = partition_idx(count, |i| leaf.record(i).from() < key);
+                (count, pos)
+            };
+            if count == 1 {
+                self.free_page(self.root_pgno);
                 self.root_pgno = 0;
                 self.tree_height = 0;
             } else {
-                self.root_pgno = self.write_leaf(&recs)?;
+                self.root_pgno = self.leaf_delete_at(self.root_pgno, pos)?.0;
             }
         } else {
             let (new_root, _uf) = self.cow_delete(self.root_pgno, 1, key)?;
@@ -1348,72 +1882,76 @@ impl<K: IpKey> Writer<K> {
     /// repairs.
     fn cow_delete(&mut self, pgno: u32, depth: u32, key: K) -> Result<(u32, bool)> {
         if depth == self.tree_height {
-            let mut recs = self.read_leaf(pgno);
-            self.free_page(pgno);
-            let pos = recs.partition_point(|r| r.from < key);
-            if pos < recs.len() && recs[pos].from == key {
-                recs.remove(pos);
+            let (count, pos, found) = {
+                let page = self.page(pgno);
+                let count = PageHeader::decode(page).entry_count as usize;
+                let leaf = LeafView::<K>::new(page, count, self.record_size);
+                let pos = partition_idx(count, |i| leaf.record(i).from() < key);
+                let found = pos < count && leaf.record(pos).from() == key;
+                (count, pos, found)
+            };
+            if found {
+                self.leaf_delete_at(pgno, pos)
+            } else {
+                Ok((pgno, count == 0))
             }
-            let p = self.write_leaf(&recs)?;
-            Ok((p, recs.is_empty()))
         } else {
-            let (mut seps, mut children) = self.read_branch(pgno);
-            self.free_page(pgno);
-            let i = seps.partition_point(|s| *s <= key);
-            let (nc, child_uf) = self.cow_delete(children[i], depth + 1, key)?;
-            children[i] = nc;
+            let (i, child) = {
+                let page = self.page(pgno);
+                let count = PageHeader::decode(page).entry_count as usize;
+                let branch = BranchView::<K>::new(page, count);
+                let i = partition_idx(count, |j| branch.sep(j) <= key);
+                (i, branch.child(i))
+            };
+            let (nc, child_uf) = self.cow_delete(child, depth + 1, key)?;
             if child_uf {
-                self.rebalance(&mut seps, &mut children, i, depth + 1)?;
+                self.rebalance_at(pgno, i, depth + 1, nc)
+            } else {
+                Ok((self.branch_update_child_at(pgno, i, nc)?, false))
             }
-            let p = self.write_branch(&seps, &children)?;
-            Ok((p, children.len() < 2))
         }
     }
 
     /// Merge an underflowed `children[i]` with an adjacent sibling and re-emit (1 or 2
     /// nodes), patching `seps`/`children`. Balance-preserving.
-    fn rebalance(
+    fn rebalance_at(
         &mut self,
-        seps: &mut Vec<K>,
-        children: &mut Vec<u32>,
+        parent_pgno: u32,
         i: usize,
         child_depth: u32,
-    ) -> Result<()> {
+        new_child: u32,
+    ) -> Result<(u32, bool)> {
+        let mut parent_src = [0u8; PAGE_SIZE];
+        parent_src.copy_from_slice(self.page(parent_pgno));
+        let parent_count = PageHeader::decode(&parent_src).entry_count as usize;
         let (l, r, sep_idx) = if i > 0 {
             (i - 1, i, i - 1)
         } else {
             (i, i + 1, i)
         };
-        let (p, split) = if child_depth == self.tree_height {
-            let mut recs = self.read_leaf(children[l]);
-            let mut rr = self.read_leaf(children[r]);
-            recs.append(&mut rr);
-            self.free_page(children[l]);
-            self.free_page(children[r]);
-            self.emit_leaf(&recs)?
+        let left_pgno = if l == i {
+            new_child
         } else {
-            let (mut s1, mut c1) = self.read_branch(children[l]);
-            let (mut s2, mut c2) = self.read_branch(children[r]);
-            self.free_page(children[l]);
-            self.free_page(children[r]);
-            s1.push(seps[sep_idx]);
-            s1.append(&mut s2);
-            c1.append(&mut c2);
-            self.emit_branch(&s1, &c1)?
+            Self::branch_child_in(&parent_src, l)
         };
-        match split {
-            None => {
-                children[l] = p;
-                children.remove(r);
-                seps.remove(sep_idx);
-            }
-            Some((newsep, p2)) => {
-                children[l] = p;
-                children[r] = p2;
-                seps[sep_idx] = newsep;
-            }
+        let right_pgno = if r == i {
+            new_child
+        } else {
+            Self::branch_child_in(&parent_src, r)
+        };
+        let parent_sep = Self::branch_sep_in(&parent_src, sep_idx);
+        let (p, split) = if child_depth == self.tree_height {
+            self.rebalance_leaf_children(left_pgno, right_pgno)?
+        } else {
+            self.rebalance_branch_children(left_pgno, parent_sep, right_pgno)?
+        };
+        if let Some((new_sep, p2)) = split {
+            let parent = self.branch_update_sep_children(parent_pgno, sep_idx, p, new_sep, p2)?;
+            Ok((parent, false))
+        } else {
+            debug_assert!(parent_count > 0);
+            self.branch_remove_sep_child(parent_pgno, sep_idx, p)
         }
-        Ok(())
     }
 
     // --- read-path queries over the pending tree ---
@@ -1749,6 +2287,69 @@ mod tests {
         assert_eq!(r.record_count(), 260);
         assert_eq!(r.lookup_v4(k(2550)).unwrap(), Some(&[255u8][..]));
         assert!(pages_after_first >= 2); // sanity: the file grew at least past the metas
+    }
+
+    #[test]
+    fn repeated_writes_same_leaf_cow_once_per_txn() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        for i in 0..700u32 {
+            w.insert(k(i * 10), k(i * 10 + 1), &[(i % 251) as u8])
+                .unwrap();
+        }
+        w.commit(1).unwrap();
+        assert!(w.tree_height > 1, "test must exercise a branch + leaf path");
+
+        let pages_before = w.store.total_pages();
+        let expected_private_path = w.tree_height as u64;
+        for i in 0..8u32 {
+            w.set(k(i * 10), k(i * 10 + 1), &[250]).unwrap();
+            assert_eq!(
+                w.store.total_pages(),
+                pages_before + expected_private_path,
+                "write {i} COW'd a page already private in this transaction"
+            );
+            assert_eq!(
+                w.dirty.len() as u64,
+                expected_private_path,
+                "write {i} duplicated dirty pages for the same transaction-private path"
+            );
+        }
+
+        w.commit(2).unwrap();
+        assert!(w.private_pages.is_empty());
+        let img = w.into_image();
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), 700);
+        for i in 0..8u32 {
+            assert_eq!(r.lookup_v4(k(i * 10)).unwrap(), Some(&[250u8][..]));
+        }
+    }
+
+    #[test]
+    fn byte_level_single_leaf_insert_delete_boundaries() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0);
+        w.insert(k(20), k(21), &[2]).unwrap();
+        w.insert(k(0), k(1), &[0]).unwrap(); // insert at index 0
+        w.insert(k(40), k(41), &[4]).unwrap(); // append
+        w.insert(k(10), k(11), &[1]).unwrap(); // insert in the middle
+
+        let mut order = Vec::new();
+        w.scan(|from, _, scope| order.push((from.0, scope[0])));
+        assert_eq!(order, vec![(0, 0), (10, 1), (20, 2), (40, 4)]);
+
+        w.tree_delete(k(0)).unwrap(); // delete first
+        w.tree_delete(k(40)).unwrap(); // delete last
+        w.tree_delete(k(20)).unwrap(); // delete middle
+        let mut remaining = Vec::new();
+        w.scan(|from, _, scope| remaining.push((from.0, scope[0])));
+        assert_eq!(remaining, vec![(10, 1)]);
+
+        w.commit(1).unwrap();
+        let img = w.into_image();
+        let r = Reader::open(&img).unwrap();
+        assert_eq!(r.record_count(), 1);
+        assert_eq!(r.lookup_v4(k(10)).unwrap(), Some(&[1u8][..]));
+        assert_eq!(r.lookup_v4(k(20)).unwrap(), None);
     }
 
     // --- the oracle: random set/delete vs. an independent in-memory interval map ---

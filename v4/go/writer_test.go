@@ -116,6 +116,110 @@ func TestMultipleCommitsReuseFreedPages(t *testing.T) {
 	}
 }
 
+func TestRepeatedWritesSameLeafCOWOncePerTxn(t *testing.T) {
+	w := CreateV4(1, 0)
+	for i := uint32(0); i < 700; i++ {
+		must(t, w.insert(wk(i*10), wk(i*10+1), []byte{byte(i % 251)}))
+	}
+	must(t, w.Commit(1))
+	if w.treeHeight <= 1 {
+		t.Fatal("test must exercise a branch + leaf path")
+	}
+
+	pagesBefore := w.store.totalPages()
+	expectedPrivatePath := uint64(w.treeHeight)
+	for i := uint32(0); i < 8; i++ {
+		must(t, w.Set(wk(i*10), wk(i*10+1), []byte{250}))
+		if got, want := w.store.totalPages(), pagesBefore+expectedPrivatePath; got != want {
+			t.Fatalf("write %d COW'd a page already private in this transaction: pages=%d want %d", i, got, want)
+		}
+		if got, want := uint64(len(w.dirty)), expectedPrivatePath; got != want {
+			t.Fatalf("write %d duplicated dirty pages for the same transaction-private path: dirty=%d want %d", i, got, want)
+		}
+	}
+
+	must(t, w.Commit(2))
+	if len(w.privatePages) != 0 {
+		t.Fatalf("privatePages not cleared after commit: %d", len(w.privatePages))
+	}
+	r, err := Open(w.Image())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RecordCount() != 700 {
+		t.Fatalf("count = %d, want 700", r.RecordCount())
+	}
+	for i := uint32(0); i < 8; i++ {
+		s, ok, err := r.LookupV4(wk(i * 10))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || len(s) != 1 || s[0] != 250 {
+			t.Fatalf("lookup %d = %v ok=%v, want scope 250", i*10, s, ok)
+		}
+	}
+}
+
+func TestByteLevelSingleLeafInsertDeleteBoundaries(t *testing.T) {
+	w := CreateV4(1, 0)
+	must(t, w.insert(wk(20), wk(21), []byte{2}))
+	must(t, w.insert(wk(0), wk(1), []byte{0}))   // insert at index 0
+	must(t, w.insert(wk(40), wk(41), []byte{4})) // append
+	must(t, w.insert(wk(10), wk(11), []byte{1})) // insert in the middle
+
+	var order []uint32
+	w.Scan(func(from, _ Ipv4Key, scope []byte) {
+		order = append(order, uint32(from), uint32(scope[0]))
+	})
+	wantOrder := []uint32{0, 0, 10, 1, 20, 2, 40, 4}
+	if len(order) != len(wantOrder) {
+		t.Fatalf("order len = %d, want %d: %v", len(order), len(wantOrder), order)
+	}
+	for i := range order {
+		if order[i] != wantOrder[i] {
+			t.Fatalf("order = %v, want %v", order, wantOrder)
+		}
+	}
+
+	if _, err := w.treeDelete(wk(0)); err != nil { // delete first
+		t.Fatal(err)
+	}
+	if _, err := w.treeDelete(wk(40)); err != nil { // delete last
+		t.Fatal(err)
+	}
+	if _, err := w.treeDelete(wk(20)); err != nil { // delete middle
+		t.Fatal(err)
+	}
+	var remaining []uint32
+	w.Scan(func(from, _ Ipv4Key, scope []byte) {
+		remaining = append(remaining, uint32(from), uint32(scope[0]))
+	})
+	wantRemaining := []uint32{10, 1}
+	if len(remaining) != len(wantRemaining) {
+		t.Fatalf("remaining len = %d, want %d: %v", len(remaining), len(wantRemaining), remaining)
+	}
+	for i := range remaining {
+		if remaining[i] != wantRemaining[i] {
+			t.Fatalf("remaining = %v, want %v", remaining, wantRemaining)
+		}
+	}
+
+	must(t, w.Commit(1))
+	r, err := Open(w.Image())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RecordCount() != 1 {
+		t.Fatalf("count = %d, want 1", r.RecordCount())
+	}
+	if s, ok, _ := r.LookupV4(wk(10)); !ok || len(s) != 1 || s[0] != 1 {
+		t.Fatalf("lookup 10 = %v ok=%v, want scope 1", s, ok)
+	}
+	if _, ok, _ := r.LookupV4(wk(20)); ok {
+		t.Fatal("lookup 20 should miss")
+	}
+}
+
 func TestReopenValidatesAndMutates(t *testing.T) {
 	w := CreateV4(1, 0)
 	for i := uint32(0); i < 500; i++ {

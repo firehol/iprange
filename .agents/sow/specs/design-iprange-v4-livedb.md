@@ -333,8 +333,10 @@ MUST NOT hold the lock during downstream processing (§11).
 1. `flock(LOCK_EX)`. 2. Select active meta; **validate the reachable tree with the
    same §9 checks a reader uses** (the writer also reads untrusted on‑disk bytes —
    reject a corrupt file rather than allocate against it), then build the in‑memory
-   free set (§7). 3. Apply the op (§8) by COW into newly‑allocated pages; old
-   versions are **freed‑by‑this‑txn** (not reusable until commit, §6.4). 4. Commit
+   free set (§7). 3. Apply the op (§8) by transaction‑local COW: the first write to a
+   committed page copies it to a transaction‑private page and marks the old version
+   **freed‑by‑this‑txn** (not reusable until commit, §6.4); repeated writes to that
+   transaction‑private page in the same transaction mutate it in place. 4. Commit
    (§6.3). 5. release.
 
 ### 6.3 Commit protocol (the only durability mechanism)

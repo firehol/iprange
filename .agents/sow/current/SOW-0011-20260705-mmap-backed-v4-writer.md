@@ -2,12 +2,14 @@
 
 ## Status
 
-Status: in-progress
+Status: paused
 
 Sub-state: Implementation repaired after round-19 review fixes. Both `create` and
 `open` paths are now mmap-backed after the 8KB bootstrap image. The commit path no
 longer returns ordinary remap/truncate errors after the Barrier 2 commit point.
-Validation passes; SOW remains in progress until the normal close/review process.
+Validation passes; SOW is paused while SOW-0012 implements the user-directed
+transaction-local COW fix. Normal close/review for this SOW still requires the
+recorded external-review step before completion.
 
 ## Requirements
 
