@@ -52,6 +52,7 @@ type Writer[K ipKey[K]] struct {
 	recordCount     uint64
 	scopeWidth      int
 	recordSize      int
+	keyWidth       int
 	leafMax         int
 	branchMax       int
 	createdUnixtime uint64
@@ -67,7 +68,7 @@ type Writer[K ipKey[K]] struct {
 	free           []uint32            // pages reusable by the current txn
 	freedThisTxn   []uint32            // pages freed since the last commit (reusable next txn, D7)
 	dirty          []uint32            // data pages written this txn (for the OS layer's pwrite set)
-	privatePages   map[uint32]struct{} // txn-private data pages safe to mutate in place
+	privatePages   *pageSet            // txn-private data pages safe to mutate in place
 	committedPages int                 // on-disk page count as of the last commit (grown-region boundary)
 	// poisoned is set if the commit rebuild phase fails: page alloc/free is irreversible, so
 	// the in-memory allocator/registry is then indeterminate. The on-disk meta is unwritten
@@ -100,6 +101,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		recordCount:     0,
 		scopeWidth:      int(scopeWidth),
 		recordSize:      int(recSize),
+		keyWidth:       int(zero.width()),
 		leafMax:         leafMax(recSize),
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: createdUnixtime,
@@ -107,7 +109,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		scopeTableRoot:  0,
 		nextScopeID:     1, // 0 is reserved for the FILE target (§C.2)
 		kvDirty:         make(map[uint32][]kvEntry),
-		privatePages:    make(map[uint32]struct{}),
+		privatePages:    newPageSet(),
 		committedPages:  2, // the two metas, both written by create
 	}
 	// META-A active (txn 1), META-B (txn 0); identical static identity.
@@ -181,6 +183,7 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		recordCount:     m.recordCount,
 		scopeWidth:      int(m.scopeWidth),
 		recordSize:      int(recSize),
+		keyWidth:       int(zero.width()),
 		leafMax:         leafMax(recSize),
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: m.createdUnixtime,
@@ -189,7 +192,7 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
-		privatePages:    make(map[uint32]struct{}),
+		privatePages:    newPageSet(),
 		committedPages:  int(m.totalPages), // committed on-disk page count
 	}
 	w.free = w.deriveFreeSet()
@@ -234,6 +237,7 @@ func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		recordCount:     m.recordCount,
 		scopeWidth:      int(m.scopeWidth),
 		recordSize:      int(recSize),
+		keyWidth:       int(zero.width()),
 		leafMax:         leafMax(recSize),
 		branchMax:       branchMax(uint8(zero.width())),
 		createdUnixtime: m.createdUnixtime,
@@ -242,7 +246,7 @@ func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
-		privatePages:    make(map[uint32]struct{}),
+		privatePages:    newPageSet(),
 		committedPages:  int(m.totalPages),
 	}
 	w.free = w.deriveFreeSet()
@@ -1116,7 +1120,7 @@ func (w *Writer[K]) finishCommitMeta(updatedUnixtime uint64) uint32 {
 	w.activeMeta = inactive
 	w.free = append(w.free, w.freedThisTxn...)
 	w.freedThisTxn = w.freedThisTxn[:0]
-	clear(w.privatePages)
+	w.privatePages.clear()
 	// The file is now this long on disk after the OS layer's truncate; the next txn's
 	// grown region starts here.
 	w.committedPages = int(w.store.totalPages())
@@ -1216,18 +1220,19 @@ func (w *Writer[K]) insert(from, to K, scope []byte) error {
 // cowInsert is the recursive COW insert. It returns the new subtree pgno and, on
 // overflow, a (separator, right_pgno) split (split=true) for the parent to absorb.
 func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
-	if depth == w.treeHeight {
-		page := w.page(pgno)
-		count := int(decodePageHeader(page).entryCount)
-		leaf := newLeafView[K](page, count, w.recordSize)
-		pos := partitionIdx(count, func(i int) bool { return leaf.record(i).from().cmp(rec.from) < 0 })
-		return w.leafInsertAt(pgno, pos, rec)
-	}
 	page := w.page(pgno)
 	count := int(decodePageHeader(page).entryCount)
-	branch := newBranchView[K](page, count)
-	i := partitionIdx(count, func(j int) bool { return branch.sep(j).cmp(rec.from) <= 0 })
-	child := branch.child(i)
+	if depth == w.treeHeight {
+		// Inline binary search: find first record whose from >= rec.from.
+		// Reads raw bytes directly to bypass the generic ipKey dispatch (the closure
+		// in partitionIdx captures generic-typed values and can't be devirtualized).
+		pos := w.leafSearchPos(page, count, rec.from)
+		return w.leafInsertAtCount(pgno, pos, count, rec)
+	}
+	// Branch level: find the child whose range contains rec.from.
+	// partitionIdx finds the first sep > key; that child index = first-gt-sep.
+	i := w.branchSearchChild(page, count, rec.from)
+	child := readLE32(page, pageHeaderSize+i*(w.keyWidth+4))
 	nc, csep, cright, csplit, cerr := w.cowInsert(child, depth+1, rec)
 	if cerr != nil {
 		return 0, sep, 0, false, cerr
@@ -1239,8 +1244,95 @@ func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno u
 	return p, sep, 0, false, err
 }
 
-func (w *Writer[K]) leafInsertAt(pgno uint32, pos int, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
-	count := int(decodePageHeader(w.page(pgno)).entryCount)
+// leafSearchPos does an inline binary search over a leaf page's records to find the
+// first position whose from-key >= target. Converts target to Uint128 ONCE (one generic
+// dispatch), then the binary search loop compares raw LE bytes via concrete Uint128.cmp
+// (zero generic method calls in the hot loop — the dominant win over closure-based
+// partitionIdx).
+func (w *Writer[K]) leafSearchPos(page []byte, count int, target K) int {
+	if w.keyWidth <= 8 {
+		// IPv4 fast path: direct uint32 comparison (avoids Uint128 struct + cmp call).
+		tgt := uint32(target.toU128().Lo)
+		lo, hi := 0, count
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			off := pageHeaderSize + mid*w.recordSize
+			if readLE32(page, off) < tgt {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		return lo
+	}
+	// IPv6: Uint128 comparison (hi then lo).
+	tgt := target.toU128()
+	lo, hi := 0, count
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		off := pageHeaderSize + mid*w.recordSize
+		curHi := readLE64(page, off)
+		if curHi != tgt.Hi {
+			if curHi < tgt.Hi {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		} else if readLE64(page, off+8) < tgt.Lo {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// branchSearchChild does an inline binary search over a branch page's separators to
+// find the child index for target. Returns the index of the first separator > target
+// (which is the child that contains target). Raw-byte reads via concrete Uint128.cmp.
+func (w *Writer[K]) branchSearchChild(page []byte, count int, target K) int {
+	if w.keyWidth <= 8 {
+		tgt := uint32(target.toU128().Lo)
+		lo, hi := 0, count
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			off := pageHeaderSize + 4 + mid*(w.keyWidth+4)
+			if readLE32(page, off) <= tgt {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		return lo
+	}
+	tgt := target.toU128()
+	lo, hi := 0, count
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		off := pageHeaderSize + 4 + mid*(w.keyWidth+4)
+		curHi := readLE64(page, off)
+		if curHi != tgt.Hi {
+			if curHi < tgt.Hi {
+				lo = mid + 1
+				continue
+			}
+			hi = mid
+			continue
+		}
+		if readLE64(page, off+8) <= tgt.Lo {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// leafInsertAtCount is leafInsertAt but takes the pre-decoded count to avoid a
+// redundant decodePageHeader call (cowInsert already decoded it for the search).
+// leafInsertAtCount is leafInsertAt but takes the pre-decoded count (cowInsert already
+// decoded it for the binary search — avoids a redundant decodePageHeader).
+func (w *Writer[K]) leafInsertAtCount(pgno uint32, pos, count int, rec ownedRecord[K]) (newPgno uint32, sep K, right uint32, split bool, err error) {
 	if count < w.leafMax {
 		p, e := w.ensurePrivatePage(pgno)
 		if e != nil {
@@ -1393,14 +1485,14 @@ func (w *Writer[K]) rebalanceLeafChildren(leftPgno, rightPgno uint32) (uint32, K
 // --- page I/O over the in-memory image ---
 
 func (w *Writer[K]) markDirty(pgno uint32) {
-	if _, ok := w.privatePages[pgno]; !ok {
-		w.privatePages[pgno] = struct{}{}
+	if !w.privatePages.contains(pgno) {
+		w.privatePages.mark(pgno)
 		w.dirty = append(w.dirty, pgno)
 	}
 }
 
 func (w *Writer[K]) ensurePrivatePage(pgno uint32) (uint32, error) {
-	if _, ok := w.privatePages[pgno]; ok {
+	if w.privatePages.contains(pgno) {
 		return pgno, nil
 	}
 
@@ -1421,7 +1513,7 @@ func (w *Writer[K]) ensurePrivatePage(pgno uint32) (uint32, error) {
 // Avoids a wasted 4 KB memcpy per split/rebalance. If pgno is already private
 // (touched earlier this txn), it is reused without copy.
 func (w *Writer[K]) allocPrivateReplacing(pgno uint32) (uint32, error) {
-	if _, ok := w.privatePages[pgno]; ok {
+	if w.privatePages.contains(pgno) {
 		return pgno, nil
 	}
 	privatePgno, err := w.allocPage()

@@ -1127,26 +1127,26 @@ impl<K: IpKey> Writer<K> {
         rec: &OwnedRecord<K>,
     ) -> Result<(u32, Option<(K, u32)>)> {
         if depth == self.tree_height {
-            let pos = {
+            let (pos, count) = {
                 let page = self.page(pgno);
                 let count = PageHeader::decode(page).entry_count as usize;
                 let leaf = LeafView::<K>::new(page, count, self.record_size);
-                partition_idx(count, |i| leaf.record(i).from() < rec.from)
+                (partition_idx(count, |i| leaf.record(i).from() < rec.from), count)
             };
-            self.leaf_insert_at(pgno, pos, rec)
+            self.leaf_insert_at(pgno, pos, count, rec)
         } else {
-            let (i, child) = {
+            let (i, count, child) = {
                 let page = self.page(pgno);
                 let count = PageHeader::decode(page).entry_count as usize;
                 let branch = BranchView::<K>::new(page, count);
                 let i = partition_idx(count, |j| branch.sep(j) <= rec.from);
-                (i, branch.child(i))
+                (i, count, branch.child(i))
             };
             let (new_child, split) = self.cow_insert(child, depth + 1, rec)?;
             if let Some((sep, right)) = split {
                 self.branch_absorb_child_split(pgno, i, new_child, sep, right)
             } else {
-                Ok((self.branch_update_child_at(pgno, i, new_child)?, None))
+                Ok((self.branch_update_child_at(pgno, i, count, new_child)?, None))
             }
         }
     }
@@ -1155,9 +1155,9 @@ impl<K: IpKey> Writer<K> {
         &mut self,
         pgno: u32,
         pos: usize,
+        count: usize,
         rec: &OwnedRecord<K>,
     ) -> Result<(u32, Option<(K, u32)>)> {
-        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
         debug_assert!(pos <= count);
         if count < self.leaf_max {
             let pgno = self.ensure_private_page(pgno)?;
@@ -1478,8 +1478,7 @@ impl<K: IpKey> Writer<K> {
         page[off..off + 4].copy_from_slice(&child.to_le_bytes());
     }
 
-    fn branch_update_child_at(&mut self, pgno: u32, child_idx: usize, child: u32) -> Result<u32> {
-        let count = PageHeader::decode(self.page(pgno)).entry_count as usize;
+    fn branch_update_child_at(&mut self, pgno: u32, child_idx: usize, count: usize, child: u32) -> Result<u32> {
         debug_assert!(child_idx <= count);
         let pgno = self.ensure_private_page(pgno)?;
         let page = self.store.write_page_mut(pgno);
@@ -1964,18 +1963,18 @@ impl<K: IpKey> Writer<K> {
                 Ok((pgno, count == 0))
             }
         } else {
-            let (i, child) = {
+            let (i, count, child) = {
                 let page = self.page(pgno);
                 let count = PageHeader::decode(page).entry_count as usize;
                 let branch = BranchView::<K>::new(page, count);
                 let i = partition_idx(count, |j| branch.sep(j) <= key);
-                (i, branch.child(i))
+                (i, count, branch.child(i))
             };
             let (nc, child_uf) = self.cow_delete(child, depth + 1, key)?;
             if child_uf {
                 self.rebalance_at(pgno, i, depth + 1, nc)
             } else {
-                Ok((self.branch_update_child_at(pgno, i, nc)?, false))
+                Ok((self.branch_update_child_at(pgno, i, count, nc)?, false))
             }
         }
     }

@@ -139,8 +139,11 @@ func TestRepeatedWritesSameLeafCOWOncePerTxn(t *testing.T) {
 	}
 
 	must(t, w.Commit(2))
-	if len(w.privatePages) != 0 {
-		t.Fatalf("privatePages not cleared after commit: %d", len(w.privatePages))
+	// privatePages is cleared after commit (all bits zero)
+	for _, b := range w.privatePages.bits {
+		if b != 0 {
+			t.Fatal("privatePages not cleared after commit")
+		}
 	}
 	r, err := Open(w.Image())
 	if err != nil {
