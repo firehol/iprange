@@ -469,9 +469,8 @@ impl<K: IpKey> FileWriter<K> {
     /// pwrite the data pages, fsync (Barrier 1), finalize + pwrite the meta page,
     /// fsync (Barrier 2).
     fn commit_durable(&mut self, updated_unixtime: u64) -> Result<()> {
-        // Finalize CRC for all dirty pages BEFORE take_dirty drains the set.
-        // Deferred from write_* to avoid CRC on intermediate COW copies freed
-        // within this txn. finalize_dirty_checksums skips orphan (freed) pages.
+        // Build the free-list linked list BEFORE finalize so link pages get CRC.
+        self.w.build_free_list();
         self.w.finalize_dirty_checksums();
         let dirty = self.w.take_dirty();
         // take_dirty may keep some freed pages in the grown region (to avoid sparse

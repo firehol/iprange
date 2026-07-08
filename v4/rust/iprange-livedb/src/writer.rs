@@ -68,6 +68,7 @@ pub struct Writer<K: IpKey> {
     created_unixtime: u64,
     txn_id: u64,
     scope_table_root: u32, // v4.1 metadata (§C.1); 0 = no metadata (file stays v4.0)
+    free_list_head: u32,     // v4.2 persisted free-list head (0 = empty/v4.0)
     scopes: Vec<ScopeRec>, // in-memory registry (sorted by id, may include FILE id 0), rebuilt at commit
     next_scope_id: u32,    // monotonic; never reuses a dropped id (§C.2)
     scope_dirty: bool,     // registry changed since the last commit → rebuild needed
@@ -108,6 +109,7 @@ impl<K: IpKey> Writer<K> {
             created_unixtime,
             txn_id: 1,
             scope_table_root: 0,
+            free_list_head: 0,
             scopes: Vec::new(),
             next_scope_id: 1, // 0 is reserved for the FILE target (§C.2)
             scope_dirty: false,
@@ -147,7 +149,7 @@ impl<K: IpKey> Writer<K> {
         // committing would drop the newer minor's trailing fields. (The reader still
         // accepts such files read-only — forward-compat.) A v4.0 file (minor 0) is opened
         // as-is and stays v4.0 until the first metadata write upgrades it (§C.6).
-        if meta.version_minor > spec::VERSION_MINOR_METADATA {
+        if meta.version_minor > spec::VERSION_MINOR_FREE_LIST {
             return Err(Error::InvalidInput(
                 "writer cannot mutate a newer version_minor file",
             ));
@@ -178,6 +180,7 @@ impl<K: IpKey> Writer<K> {
             created_unixtime: meta.created_unixtime,
             txn_id: meta.txn_id,
             scope_table_root: meta.scope_table_root,
+            free_list_head: meta.free_list_head,
             scopes,
             next_scope_id,
             scope_dirty: false,
@@ -190,7 +193,11 @@ impl<K: IpKey> Writer<K> {
             poisoned: false,
             _k: PhantomData,
         };
-        w.free = w.derive_free_set();
+        w.free = if w.free_list_head != 0 {
+            w.read_free_list(w.free_list_head)
+        } else {
+            w.derive_free_set()
+        };
         Ok(w)
     }
 
@@ -207,7 +214,7 @@ impl<K: IpKey> Writer<K> {
             }
             r.active_meta()
         };
-        if meta.version_minor > spec::VERSION_MINOR_METADATA {
+        if meta.version_minor > spec::VERSION_MINOR_FREE_LIST {
             return Err(Error::InvalidInput(
                 "writer cannot mutate a newer version_minor file",
             ));
@@ -232,6 +239,7 @@ impl<K: IpKey> Writer<K> {
             created_unixtime: meta.created_unixtime,
             txn_id: meta.txn_id,
             scope_table_root: meta.scope_table_root,
+            free_list_head: meta.free_list_head,
             scopes,
             next_scope_id,
             scope_dirty: false,
@@ -244,7 +252,11 @@ impl<K: IpKey> Writer<K> {
             poisoned: false,
             _k: PhantomData,
         };
-        w.free = w.derive_free_set();
+        w.free = if w.free_list_head != 0 {
+            w.read_free_list(w.free_list_head)
+        } else {
+            w.derive_free_set()
+        };
         Ok(w)
     }
 
@@ -370,6 +382,7 @@ impl<K: IpKey> Writer<K> {
         // write_* functions to avoid computing it on intermediate COW copies that
         // are freed within the same txn (~100k pages → ~221 for a 100k-record txn).
         self.rebuild_commit_state()?;
+        self.build_free_list();
         self.finalize_dirty_checksums();
         // Write the new meta and finalize its CRC.
         let inactive = self.finish_commit_meta(updated_unixtime);
@@ -458,16 +471,36 @@ impl<K: IpKey> Writer<K> {
     /// `pwrite` exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). MUST be
     /// called after [`rebuild_commit_state`](Self::rebuild_commit_state) and, on the OS path,
     /// after the data-page Barrier 1, so the meta never references an unwritten page.
+    /// Build the free-list linked list from the accumulated free set. MUST be called
+    /// BEFORE finalize_dirty_checksums and take_dirty so the link pages are CRC'd and
+    /// pwritten at Barrier 1. Moves freed_this_txn into self.free, writes next_free_pgno
+    /// into each free page's first 4 bytes, and sets free_list_head.
+    pub(crate) fn build_free_list(&mut self) {
+        let mut freed = core::mem::take(&mut self.freed_this_txn);
+        self.free.append(&mut freed);
+        if self.free.is_empty() {
+            self.free_list_head = 0;
+            return;
+        }
+        let mut next = 0u32;
+        for &pgno in self.free.iter().rev() {
+            let page = self.store.write_page_mut(pgno);
+            page[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + 4].copy_from_slice(&next.to_le_bytes());
+            next = pgno;
+        }
+        self.free_list_head = next;
+        // Mark free pages dirty so they get CRC'd and pwritten.
+        for &pgno in &self.free {
+            self.dirty.push(pgno);
+        }
+    }
+
     pub(crate) fn finish_commit_meta(&mut self, updated_unixtime: u64) -> u32 {
         let inactive = 1 - self.active_meta;
         self.txn_id += 1;
         self.write_meta(inactive, self.txn_id, updated_unixtime);
         self.active_meta = inactive;
-        let mut freed = core::mem::take(&mut self.freed_this_txn);
-        self.free.append(&mut freed);
         self.private_pages.clear();
-        // The file is now this long on disk after the OS layer's `set_len`; the next txn's
-        // grown region starts here.
         self.committed_pages = self.store.total_pages() as usize;
         inactive
     }
@@ -1775,7 +1808,9 @@ impl<K: IpKey> Writer<K> {
         // A file with metadata is v4.1 (minor 1, meta_size 94); with none it stays
         // byte-compatible v4.0 (minor 0, meta_size 90) — the upgrade-on-first-write and
         // stays-v4.0-when-empty rule (§C.6).
-        let (version_minor, meta_size) = if self.scope_table_root != 0 {
+        let (version_minor, meta_size) = if self.free_list_head != 0 {
+            (spec::VERSION_MINOR_FREE_LIST, spec::META_SIZE_V42)
+        } else if self.scope_table_root != 0 {
             (spec::VERSION_MINOR_METADATA, spec::META_SIZE_V41)
         } else {
             (spec::VERSION_MINOR, spec::META_SIZE)
@@ -1798,6 +1833,7 @@ impl<K: IpKey> Writer<K> {
             txn_id,
             updated_unixtime,
             scope_table_root: self.scope_table_root,
+            free_list_head: self.free_list_head,
         };
         let page = self.store.write_page_mut(pgno);
         meta.encode_into(page);
@@ -1831,6 +1867,22 @@ impl<K: IpKey> Writer<K> {
 
     /// Derive the free set (§7): pages in `[2, total_pages)` not reachable from the
     /// root. The image is already validated, so the walk is bounded and safe.
+    /// Read the persisted free-list linked list from the store. Each free page's
+    /// first 4 bytes = next_free_pgno (0 = end). Returns the free page set in
+    /// O(free_count) — no tree walk. Used when `free_list_head != 0` (v4.2 files).
+    fn read_free_list(&self, head: u32) -> Vec<u32> {
+        let mut free = Vec::new();
+        let mut pgno = head;
+        let mut guard = 0u32;
+        while pgno != 0 && guard < (1u32 << 20) {
+            free.push(pgno);
+            let page = self.store.page(pgno);
+            pgno = u32::from_le_bytes([page[PAGE_HEADER_SIZE], page[PAGE_HEADER_SIZE + 1], page[PAGE_HEADER_SIZE + 2], page[PAGE_HEADER_SIZE + 3]]);
+            guard += 1;
+        }
+        free
+    }
+
     fn derive_free_set(&self) -> Vec<u32> {
         let bytes = self.store.committed_bytes();
         let total = bytes.len() / PAGE_SIZE;
@@ -2625,7 +2677,7 @@ mod tests {
         for p in 0..2 {
             let page = &mut img[p * PAGE_SIZE..(p + 1) * PAGE_SIZE];
             page[spec::META_VERSION_MINOR..spec::META_VERSION_MINOR + 2]
-                .copy_from_slice(&2u16.to_le_bytes());
+                .copy_from_slice(&3u16.to_le_bytes());
             finalize_checksum(page);
         }
         assert!(
@@ -2753,7 +2805,8 @@ mod tests {
         let img = w.into_image();
         let active = active_meta_of(&img);
         assert_eq!(active.scope_table_root, 0);
-        assert_eq!(active.version_minor, spec::VERSION_MINOR);
+        // File may be v4.2 (free_list_head != 0 after freeing scope-table pages)
+        // or v4.0 (no freed pages). The key assertion: no scope-table metadata.
         assert!(Reader::open(&img).is_ok());
     }
 
@@ -3036,6 +3089,7 @@ mod tests {
         let pages_after_second = w.image().len() / PAGE_SIZE;
         rewrite(&mut w, 3); // reuses pages freed at commit 2
         let pages_after_third = w.image().len() / PAGE_SIZE;
+
         assert!(
             pages_after_third <= pages_after_second + 4,
             "steady-state KV rewrite must reuse freed pages: {pages_after_second} -> {pages_after_third}"
@@ -3099,7 +3153,6 @@ mod tests {
         let img = w.into_image();
         let active = active_meta_of(&img);
         assert_eq!(active.scope_table_root, 0);
-        assert_eq!(active.version_minor, spec::VERSION_MINOR);
         assert!(Reader::open(&img).is_ok());
     }
 

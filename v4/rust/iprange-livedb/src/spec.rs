@@ -25,6 +25,16 @@ pub const VERSION_MINOR_METADATA: u16 = 1;
 /// `meta_size` for v4.1: v4.0's 90 plus the trailing `scope_table_root` (u32) at offset 90.
 pub const META_SIZE_V41: u16 = 94;
 
+/// Minor version for v4.2 (persisted free-list: the `free_list_head` field). Additive:
+/// a v4.0/v4.1 reader skips it; a v4.0/v4.1 writer refuses to mutate a v4.2 file.
+pub const VERSION_MINOR_FREE_LIST: u16 = 2;
+
+/// `meta_size` for v4.2: v4.1's 94 plus the trailing `free_list_head` (u32) at offset 94.
+pub const META_SIZE_V42: u16 = 98;
+
+/// Byte offset of the `free_list_head` field in the meta page (v4.2).
+pub const META_FREE_LIST_HEAD: usize = 94;
+
 /// The fixed page size for **all** v4.x (D10). A reader MUST reject any other value
 /// at `version_major == 4`. Pinning it to 4096 fixes meta-B at byte offset 4096 and
 /// completes bootstrap (§5.1). It is the page-aligned I/O / allocation unit (§2).

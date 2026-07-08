@@ -138,6 +138,10 @@ pub struct Meta {
     /// (`meta_size == 90`) `decode` reports 0 and `encode_into` writes 0 (keeping the
     /// reserved tail zero); at v4.1 (`meta_size == 94`) it holds the scope-table root pgno.
     pub scope_table_root: u32,
+    /// `free_list_head` (u32, v4.2 only). 0 = empty free list (or v4.0/v4.1). At
+    /// v4.2 (`meta_size == 98`) it holds the head page of the free-list linked list;
+    /// each free page's first 4 bytes = next_free_pgno (0 = end of list).
+    pub free_list_head: u32,
 }
 
 impl Meta {
@@ -168,6 +172,8 @@ impl Meta {
         put_u64(page, spec::META_UPDATED_UNIXTIME, self.updated_unixtime);
         // v4.1: `scope_table_root` at offset 90. 0 for v4.0 (keeps the reserved tail zero).
         put_u32(page, spec::META_SCOPE_TABLE_ROOT, self.scope_table_root);
+        // v4.2: `free_list_head` at offset 94. 0 for v4.0/v4.1.
+        put_u32(page, spec::META_FREE_LIST_HEAD, self.free_list_head);
         finalize_checksum(page);
     }
 
@@ -194,6 +200,11 @@ impl Meta {
             // v4.1 trailing field; absent (reported 0) at v4.0 (`meta_size == 90`).
             scope_table_root: if u16_le(page, spec::META_META_SIZE) >= spec::META_SIZE_V41 {
                 u32_le(page, spec::META_SCOPE_TABLE_ROOT)
+            } else {
+                0
+            },
+            free_list_head: if u16_le(page, spec::META_META_SIZE) >= spec::META_SIZE_V42 {
+                u32_le(page, spec::META_FREE_LIST_HEAD)
             } else {
                 0
             },
@@ -239,6 +250,7 @@ mod tests {
             txn_id: 0x4142_4344_4546_4748,
             updated_unixtime: 0x5152_5354_5556_5758,
             scope_table_root: 0,
+            free_list_head: 0,
         }
     }
 

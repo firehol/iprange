@@ -815,6 +815,7 @@ mod tests {
             txn_id: txn,
             updated_unixtime: 0,
             scope_table_root: 0,
+            free_list_head: 0,
         }
     }
 
