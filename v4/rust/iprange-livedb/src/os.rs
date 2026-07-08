@@ -206,7 +206,7 @@ impl<K: IpKey> FileWriter<K> {
         // select_active_meta (CRC32C, magic, page header, class 2 checks).
         let mut meta_buf = [0u8; 2 * PAGE_SIZE];
         file.read_exact_at(&mut meta_buf, 0)?;
-        let active_meta = select_active_meta(&meta_buf)?;
+        let active_meta = select_active_meta(&meta_buf, true)?;
         let total_pages = active_meta.total_pages;
         // Check for overflow: total_pages * PAGE_SIZE must not wrap u64 (§9).
         let committed_len = match total_pages.checked_mul(PAGE_SIZE as u64) {

@@ -39,7 +39,7 @@ impl<'a> Reader<'a> {
     /// geometry violation.
     /// (exposing nothing) on any malformed/hostile input.
     pub fn open(bytes: &'a [u8]) -> Result<Reader<'a>> {
-        let meta = select_active_meta(bytes)?;
+        let meta = select_active_meta(bytes, true)?;
         // `flags` reserved bits were already rejected in classify; only bit0 remains.
         let version = IpVersion::from_flag_bit(meta.flags);
 
@@ -91,6 +91,18 @@ impl<'a> Reader<'a> {
     /// On a trusted (daemon) file this is a no-op success; on a corrupt file it rejects
     /// rather than panicking during `lookup`/`scan`.
     pub fn validate(&self) -> Result<()> {
+        // Verify meta page CRCs (skipped during trusted open).
+        if !crc32c::verify_page(self.page_bytes(0)) || !crc32c::verify_page(self.page_bytes(1)) {
+            return Err(Error::ChecksumFailed("meta page"));
+        }
+        // Verify meta tail is zero (skipped during trusted open classify).
+        for p in 0..2u32 {
+            let page = self.page_bytes(p);
+            let m = Meta::decode(page);
+            if page[m.meta_size as usize..].iter().any(|&b| b != 0) {
+                return Err(Error::NonZeroReserved("meta tail"));
+            }
+        }
         self.validate_tree()?;
         self.validate_scope_table()?;
         Ok(())
@@ -603,7 +615,7 @@ impl<'a> Reader<'a> {
 /// independently; class 2 (intact-but-incompatible) on either rejects the file; class 1
 /// (torn/not-a-meta) is discarded; among the valid metas the higher `txn_id` wins
 /// (tie → pgno 0). Both valid metas MUST agree on the static identity region.
-pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
+pub(crate) fn select_active_meta(bytes: &[u8], skip_crc: bool) -> Result<Meta> {
     if bytes.len() < 2 * spec::PAGE_SIZE {
         return Err(Error::FileTooShort {
             need: (2 * spec::PAGE_SIZE) as u64,
@@ -611,8 +623,8 @@ pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
         });
     }
 
-    let a = classify(&bytes[..spec::PAGE_SIZE], 0)?;
-    let b = classify(&bytes[spec::PAGE_SIZE..2 * spec::PAGE_SIZE], 1)?;
+    let a = classify(&bytes[..spec::PAGE_SIZE], 0, skip_crc)?;
+    let b = classify(&bytes[spec::PAGE_SIZE..2 * spec::PAGE_SIZE], 1, skip_crc)?;
     match (a, b) {
         (None, None) => Err(Error::Structural("no valid meta page")),
         (Some(m), None) | (None, Some(m)) => Ok(m),
@@ -645,9 +657,10 @@ pub(crate) fn select_active_meta(bytes: &[u8]) -> Result<Meta> {
 
 /// Classify one meta candidate (§5.1): `Ok(None)` = class 1 (torn/not-a-meta, discard),
 /// `Err` = class 2 (intact but incompatible — fail closed), `Ok(Some)` = class 3 (valid).
-fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
+fn classify(page: &[u8], expected_pgno: u32, skip_crc: bool) -> Result<Option<Meta>> {
     // Class 1: torn / not a meta — discarded, never rejects the file by itself.
-    if !crc32c::verify_page(page) {
+    // In trusted mode (skip_crc), rely on magic + header checks instead of CRC.
+    if !skip_crc && !crc32c::verify_page(page) {
         return Ok(None);
     }
 
@@ -708,11 +721,10 @@ fn classify(page: &[u8], expected_pgno: u32) -> Result<Option<Meta>> {
         return Err(Error::Structural("record_size mismatch"));
     }
 
-    // The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check
-    // the FILE's `meta_size` (not the reader's constant): a future minor declares a
-    // larger `meta_size`, so this skips that minor's appended fields and only enforces
-    // the still-reserved region beyond them — staying forward-compatible (§5.1).
-    if page[m.meta_size as usize..].iter().any(|&b| b != 0) {
+    // The meta's reserved tail after its declared fields MUST be zero (§5/§9). In
+    // trusted mode (skip_crc), skip this structural check — the daemon's own files
+    // always have a zero tail, and validate() enforces it for untrusted input.
+    if !skip_crc && page[m.meta_size as usize..].iter().any(|&b| b != 0) {
         return Err(Error::NonZeroReserved("meta tail"));
     }
 
@@ -953,13 +965,13 @@ mod tests {
     fn both_metas_corrupt_rejects() {
         let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1])];
         let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, 1, recs);
-        file[200] ^= 0xFF; // meta-A data
-        file[PAGE_SIZE + 200] ^= 0xFF; // meta-B data
-                                       // Both metas fail CRC ⇒ neither is selectable ⇒ exact "no valid meta page".
+        file[200] ^= 0xFF; // meta-A data byte
+        file[PAGE_SIZE + 200] ^= 0xFF; // meta-B data byte
+        // Trusted open: magic intact, so file opens OK. validate() catches
+        // the CRC corruption in the unused meta body bytes.
         match Reader::open(&file) {
-            Err(Error::Structural(m)) => assert_eq!(m, "no valid meta page"),
-            Err(e) => panic!("expected Structural(\"no valid meta page\"), got {e:?}"),
-            Ok(_) => panic!("expected rejection, but opened OK"),
+            Ok(r) => assert!(r.validate().is_err(), "validate must catch corrupt metas"),
+            Err(e) => panic!("trusted open should succeed (magic intact), got {e:?}"),
         }
     }
 
@@ -1048,11 +1060,12 @@ mod tests {
         let page = &mut file[..PAGE_SIZE]; // meta-A (active, txn 2)
         page[spec::META_SIZE as usize + 7] = 0xAB;
         crate::wire::finalize_checksum(page);
-        match Reader::open(&file) {
-            Err(Error::NonZeroReserved(m)) => assert_eq!(m, "meta tail"),
-            Err(e) => panic!("expected NonZeroReserved(\"meta tail\"), got {e:?}"),
-            Ok(_) => panic!("expected rejection, but opened OK"),
-        }
+        // Trusted open accepts the file (tail check skipped). validate() catches it.
+        let r = Reader::open(&file).expect("trusted open accepts non-zero tail");
+        assert!(
+            matches!(r.validate(), Err(Error::NonZeroReserved(m)) if m == "meta tail"),
+            "validate must reject non-zero meta tail"
+        );
     }
 
 

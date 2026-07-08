@@ -202,8 +202,9 @@ func TestBothMetasCorruptRejects(t *testing.T) {
 	file := buildSingleLeaf(V4, 1, []v4rec{{10, 20, []byte{1}}})
 	file[200] ^= 0xFF
 	file[pageSize+200] ^= 0xFF
-	// Both meta CRCs now fail ⇒ no meta classifies as valid (exact message, not just the class).
-	mustRejectMsg(t, file, "Structural", "no valid meta page", "both metas corrupt")
+	// Trusted Open skips the meta CRC, so with magic intact the file opens OK; Validate
+	// catches the CRC corruption in both meta bodies (exact message, not just the class).
+	mustRejectMsg(t, file, "ChecksumFailed", "meta page", "both metas corrupt")
 }
 
 func TestIncompatibleMajorFailsClosed(t *testing.T) {

@@ -1241,6 +1241,11 @@ func (w *Writer[K]) cowInsert(pgno, depth uint32, rec ownedRecord[K]) (newPgno u
 	if csplit {
 		return w.branchAbsorbChildSplit(pgno, i, nc, csep, cright)
 	}
+	if nc == child {
+		// Child was already private and modified in-place — branch pointer
+		// unchanged, skip the unnecessary COW + page write.
+		return pgno, sep, 0, false, nil
+	}
 	p, err := w.branchUpdateChildAt(pgno, i, nc)
 	return p, sep, 0, false, err
 }
@@ -2033,6 +2038,10 @@ func (w *Writer[K]) cowDelete(pgno, depth uint32, key K) (uint32, bool, error) {
 	}
 	if childUF {
 		return w.rebalanceAt(pgno, i, depth+1, nc)
+	}
+	if nc == child {
+		// Child was already private and modified in-place — branch pointer unchanged.
+		return pgno, false, nil
 	}
 	p, err := w.branchUpdateChildAt(pgno, i, nc)
 	if err != nil {

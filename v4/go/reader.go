@@ -4,12 +4,13 @@ import "bytes"
 
 // The v4 reader: open over an in-memory image and query.
 //
-// Open selects the active meta (§5.1 bootstrap, with per-meta CRC to detect torn writes)
-// and checks geometry (§9 step 2), but does NOT walk the tree — files are trusted by
-// default (daemon files are written under LOCK_EX; the format is crash-safe). Call
-// Validate for the full §9 structural walk + per-page CRC when the input is untrusted.
-// LookupV4/V6 and ScanV4/V6 navigate the tree directly, returning the borrowed scope
-// (zero-copy, D11).
+// Open selects the active meta (§5.1 bootstrap) in trusted mode — magic + page-header +
+// class-2 structural checks, with the per-meta CRC and reserved-tail zero-check skipped
+// for speed (daemon files are written under LOCK_EX; the format is crash-safe) — and
+// checks geometry (§9 step 2), but does NOT walk the tree. Call Validate for the full §9
+// structural walk + per-page CRC (and the meta CRC/tail checks Open skips) when the input
+// is untrusted. LookupV4/V6 and ScanV4/V6 navigate the tree directly, returning the
+// borrowed scope (zero-copy, D11).
 
 // Reader is a read-only view over a v4 image (trusted by default; call Validate for the
 // full §9 walk). It holds no lock and no allocation; lookups and scans return slices
@@ -23,14 +24,14 @@ type Reader struct {
 	leafMax    int
 	branchMax  int
 }
-// Open opens a v4 image in trusted mode: select the active meta (per-meta CRC to detect
-// torn writes, §5.1 bootstrap) and check geometry (§9 step 2). The tree is NOT walked —
-// the file is trusted (daemon files are crash-safe under LOCK_EX). For the full §9
-// structural walk + per-page CRC, call Validate after opening. Returns a typed error on
-// a malformed meta or geometry violation.
-// (exposing nothing) on any malformed/hostile input.
+// Open opens a v4 image in trusted mode: select the active meta (§5.1 bootstrap) via
+// magic + page-header + class-2 structural checks — the per-meta CRC and reserved-tail
+// zero-check are SKIPPED for speed (daemon files are crash-safe under LOCK_EX) — and check
+// geometry (§9 step 2). The tree is NOT walked. For the full §9 structural walk + per-page
+// CRC + the meta CRC/tail checks skipped here, call Validate after opening. Returns a typed
+// error (exposing nothing) on any malformed/hostile meta or geometry violation.
 func Open(b []byte) (*Reader, error) {
-	m, err := selectActiveMeta(b)
+	m, err := selectActiveMeta(b, true)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +82,25 @@ func Open(b []byte) (*Reader, error) {
 // for periodic integrity checks. Returns a typed error on any corruption. On a trusted
 // (daemon) file this is a no-op success; on a corrupt file it rejects rather than
 // panicking during lookup/scan.
+//
+// This also re-runs the two checks that trusted Open skips: both meta page CRC32Cs and the
+// per-meta reserved-tail zero-check. Open accepts a meta with intact magic + header but a
+// CRC-mismatching body / non-zero tail; Validate catches both here, before the tree walks.
 func (r *Reader) Validate() error {
+	// Verify both meta page CRCs (skipped during trusted Open).
+	if !verifyPage(r.pageBytes(0)) || !verifyPage(r.pageBytes(1)) {
+		return errChecksumFailed("meta page")
+	}
+	// Verify each meta's reserved tail is zero (skipped during trusted Open classify).
+	for p := uint32(0); p < 2; p++ {
+		page := r.pageBytes(p)
+		m := decodeMeta(page)
+		for _, b := range page[m.metaSize:] {
+			if b != 0 {
+				return errNonZeroReserved("meta tail")
+			}
+		}
+	}
 	if err := r.validateTree(); err != nil {
 		return err
 	}
@@ -566,15 +585,17 @@ func validateNode[K ipKey[K]](r *Reader, pgno, depth uint32, lo, hi K, prevTo *K
 // candidates independently; class 2 (intact-but-incompatible) on either rejects the file;
 // class 1 (torn/not-a-meta) is discarded; among the valid metas the higher txn_id wins
 // (tie → pgno 0). Both valid metas MUST agree on the static identity region.
-func selectActiveMeta(b []byte) (meta, error) {
+// skipCRC selects trusted mode (see classify): the daemon path passes true to skip the
+// per-meta CRC + tail zero-check; untrusted callers pass false.
+func selectActiveMeta(b []byte, skipCRC bool) (meta, error) {
 	if len(b) < 2*pageSize {
 		return meta{}, errFileTooShort(2*pageSize, uint64(len(b)))
 	}
-	ma, aok, err := classify(b[:pageSize], 0)
+	ma, aok, err := classify(b[:pageSize], 0, skipCRC)
 	if err != nil {
 		return meta{}, err
 	}
-	mb, bok, err := classify(b[pageSize:2*pageSize], 1)
+	mb, bok, err := classify(b[pageSize:2*pageSize], 1, skipCRC)
 	if err != nil {
 		return meta{}, err
 	}
@@ -611,9 +632,15 @@ func selectActiveMeta(b []byte) (meta, error) {
 // classify classifies one meta candidate (§5.1): (_, false, nil) = class 1 (torn/not-a-
 // meta, discard), (_, _, err) = class 2 (intact but incompatible — fail closed),
 // (m, true, nil) = class 3 (valid).
-func classify(page []byte, expectedPgno uint32) (meta, bool, error) {
+//
+// In trusted mode (skipCRC) the per-page CRC and the meta reserved-tail zero-check are
+// skipped: the daemon's own files are crash-safe under LOCK_EX, so Open relies on magic +
+// page-header + class-2 structural checks alone for speed. Validate re-runs both checks for
+// untrusted input.
+func classify(page []byte, expectedPgno uint32, skipCRC bool) (meta, bool, error) {
 	// Class 1: torn / not a meta — discarded, never rejects the file by itself.
-	if !verifyPage(page) {
+	// In trusted mode (skipCRC), rely on magic + header checks instead of CRC.
+	if !skipCRC && !verifyPage(page) {
 		return meta{}, false, nil
 	}
 	if readMagic(page) != magic {
@@ -661,10 +688,14 @@ func classify(page []byte, expectedPgno uint32) (meta, bool, error) {
 	// The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check the
 	// FILE's metaSize (not the constant): a future minor declares a larger metaSize, so
 	// this skips that minor's appended fields and only enforces the still-reserved region
-	// beyond them — staying forward-compatible (§5.1).
-	for _, b := range page[m.metaSize:] {
-		if b != 0 {
-			return meta{}, false, errNonZeroReserved("meta tail")
+	// beyond them — staying forward-compatible (§5.1). In trusted mode (skipCRC) this
+	// structural check is skipped — the daemon's own files always have a zero tail, and
+	// Validate enforces it for untrusted input.
+	if !skipCRC {
+		for _, b := range page[m.metaSize:] {
+			if b != 0 {
+				return meta{}, false, errNonZeroReserved("meta tail")
+			}
 		}
 	}
 	return m, true, nil

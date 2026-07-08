@@ -253,12 +253,13 @@ func openFileWriterLocked[K ipKey[K]](file *os.File) (*FileWriter[K], error) {
 	}
 
 	// Read the two meta pages first and validate them using selectActiveMeta
-	// (CRC32C, magic, page header, class 2 checks).
+	// (trusted mode: magic, page header, class 2 checks — per-meta CRC is deferred,
+	// mirroring the reader's trusted Open; total_pages geometry is still enforced below).
 	var metaBuf [2 * pageSize]byte
 	if _, err := file.ReadAt(metaBuf[:], 0); err != nil {
 		return nil, errf("Io", "read metas: "+err.Error())
 	}
-	activeMeta, err := selectActiveMeta(metaBuf[:])
+	activeMeta, err := selectActiveMeta(metaBuf[:], true)
 	if err != nil {
 		return nil, err
 	}
