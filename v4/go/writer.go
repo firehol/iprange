@@ -59,6 +59,7 @@ type Writer[K ipKey[K]] struct {
 	createdUnixtime uint64
 	txnID           uint64
 	scopeTableRoot  uint32     // v4.1 metadata (§C.1); 0 = no metadata (file stays v4.0)
+	freeListHead    uint32     // v4.2 persisted free-list head (0 = empty/v4.0)
 	scopes          []scopeRec // in-memory registry (sorted by id), bulk-rebuilt at commit
 	nextScopeID     uint32     // monotonic; never reuses a dropped id (§C.2)
 	scopeDirty      bool       // registry changed since the last commit → rebuild needed
@@ -108,6 +109,7 @@ func createWriter[K ipKey[K]](scopeWidth uint8, createdUnixtime uint64) *Writer[
 		createdUnixtime: createdUnixtime,
 		txnID:           1,
 		scopeTableRoot:  0,
+		freeListHead:    0,
 		nextScopeID:     1, // 0 is reserved for the FILE target (§C.2)
 		kvDirty:         make(map[uint32][]kvEntry),
 		privatePages:    newPageSet(),
@@ -148,12 +150,12 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		return nil, errInvalidInput("writer family mismatch")
 	}
 	m := r.meta
-	// The writer implements up to versionMinor 1 (the v4.1 metadata system). It MUST refuse
-	// to mutate a file of a newer minor it does not fully implement (§5.1/§C.6): committing
-	// would drop the newer minor's trailing fields. (The reader still accepts such files
-	// read-only — forward-compat.) A v4.0 file (minor 0) is opened as-is and stays v4.0 until
-	// the first metadata write upgrades it (§C.6).
-	if m.versionMinor > versionMinorMetadata {
+	// The writer implements up to versionMinorFreeList (the v4.2 persisted free-list). It
+	// MUST refuse to mutate a file of a newer minor it does not fully implement (§5.1/§C.6):
+	// committing would drop the newer minor's trailing fields. (The reader still accepts such
+	// files read-only — forward-compat.) A v4.0 file (minor 0) is opened as-is and stays v4.0
+	// until the first metadata write upgrades it (§C.6).
+	if m.versionMinor > versionMinorFreeList {
 		return nil, errInvalidInput("writer cannot mutate a newer version_minor file")
 	}
 	// Reclaim trailing pages beyond total_pages (a crashed growth, §6.4): the committed
@@ -190,13 +192,20 @@ func openImage[K ipKey[K]](image []byte) (*Writer[K], error) {
 		createdUnixtime: m.createdUnixtime,
 		txnID:           m.txnID,
 		scopeTableRoot:  m.scopeTableRoot,
+		freeListHead:    m.freeListHead,
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
 		privatePages:    newPageSet(),
 		committedPages:  int(m.totalPages), // committed on-disk page count
 	}
-	w.free = w.deriveFreeSet()
+	// v4.2: read the persisted free-list linked list (O(free_count), no tree walk); fall
+	// back to the derived free set for v4.0/v4.1 files (free_list_head == 0).
+	if w.freeListHead != 0 {
+		w.free = w.readFreeList(w.freeListHead)
+	} else {
+		w.free = w.deriveFreeSet()
+	}
 	return w, nil
 }
 
@@ -213,7 +222,7 @@ func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		return nil, errInvalidInput("writer family mismatch")
 	}
 	m := r.meta
-	if m.versionMinor > versionMinorMetadata {
+	if m.versionMinor > versionMinorFreeList {
 		return nil, errInvalidInput("writer cannot mutate a newer version_minor file")
 	}
 	scopes, err := loadAllScopes(bytes, m.scopeTableRoot)
@@ -244,13 +253,19 @@ func openWithStore[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		createdUnixtime: m.createdUnixtime,
 		txnID:           m.txnID,
 		scopeTableRoot:  m.scopeTableRoot,
+		freeListHead:    m.freeListHead,
 		scopes:          scopes,
 		nextScopeID:     nextScopeID,
 		kvDirty:         make(map[uint32][]kvEntry),
 		privatePages:    newPageSet(),
 		committedPages:  int(m.totalPages),
 	}
-	w.free = w.deriveFreeSet()
+	// v4.2: read the persisted free-list linked list; fall back to deriving the free set.
+	if w.freeListHead != 0 {
+		w.free = w.readFreeList(w.freeListHead)
+	} else {
+		w.free = w.deriveFreeSet()
+	}
 	return w, nil
 }
 
@@ -343,12 +358,14 @@ func (w *Writer[K]) Commit(updatedUnixtime uint64) error {
 	if _, ok := w.store.(*vecPageStore); !ok {
 		return errInvalidInput("Writer.Commit is only valid for vecPageStore; use FileWriter.Commit for mmap-backed writers")
 	}
-	// Rebuild metadata pages, then finalize CRC for surviving dirty pages BEFORE
-	// writing the meta. CRC is deferred from write_* to avoid computing it on
-	// intermediate COW copies freed within the same txn.
+	// Rebuild metadata pages, then build the free-list linked list, then finalize CRC for
+	// surviving dirty pages BEFORE writing the meta. CRC is deferred from write_* to avoid
+	// computing it on intermediate COW copies freed within the same txn. The free-list build
+	// must precede finalize so the link pages are CRC'd too.
 	if err := w.rebuildCommitState(); err != nil {
 		return err
 	}
+	w.buildFreeList()
 	w.finalizeDirtyChecksums()
 	// Write the new meta and finalize its CRC.
 	inactive := w.finishCommitMeta(updatedUnixtime)
@@ -1111,16 +1128,14 @@ func (w *Writer[K]) rebuildCommitStateInner() error {
 
 // finishCommitMeta finalizes the commit: write the new meta into the inactive page and flip it
 // (the commit point, §6.3); it returns the page number (0 or 1) just written so the OS layer can
-// pwrite exactly that page as Barrier 2. Reclaims this txn's freed pages (D7). MUST be called
-// after rebuildCommitState and, on the OS path, after the data-page Barrier 1, so the meta never
-// references an unwritten page.
+// pwrite exactly that page as Barrier 2. MUST be called after rebuildCommitState AND
+// buildFreeList (which moves freedThisTxn into free and sets freeListHead), and, on the OS path,
+// after the data-page Barrier 1, so the meta never references an unwritten page.
 func (w *Writer[K]) finishCommitMeta(updatedUnixtime uint64) uint32 {
 	inactive := 1 - w.activeMeta
 	w.txnID++
 	w.writeMeta(inactive, w.txnID, updatedUnixtime)
 	w.activeMeta = inactive
-	w.free = append(w.free, w.freedThisTxn...)
-	w.freedThisTxn = w.freedThisTxn[:0]
 	w.privatePages.clear()
 	// The file is now this long on disk after the OS layer's truncate; the next txn's
 	// grown region starts here.
@@ -1820,11 +1835,15 @@ func (w *Writer[K]) branchUpdateSepChildren(pgno uint32, sepIdx int, leftChild u
 
 func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
 	var zero K
-	// A file with metadata is v4.1 (minor 1, meta_size 94); with none it stays
-	// byte-compatible v4.0 (minor 0, meta_size 90) — the upgrade-on-first-write and
-	// stays-v4.0-when-empty rule (§C.6).
+	// A file with a persisted free-list is v4.2 (minor 2, meta_size 98); one with metadata
+	// is v4.1 (minor 1, meta_size 94); with neither it stays byte-compatible v4.0 (minor 0,
+	// meta_size 90) — the upgrade-on-first-write and stays-v4.0-when-empty rule (§C.6). The
+	// free-list minor takes precedence: even an all-empty-metadata file with free pages is
+	// v4.2 (the free_list_head field must be carried).
 	verMinor, mSize := versionMinor, metaSize
-	if w.scopeTableRoot != 0 {
+	if w.freeListHead != 0 {
+		verMinor, mSize = versionMinorFreeList, metaSizeV42
+	} else if w.scopeTableRoot != 0 {
 		verMinor, mSize = versionMinorMetadata, metaSizeV41
 	}
 	m := meta{
@@ -1845,6 +1864,7 @@ func (w *Writer[K]) writeMeta(pgno uint32, txnID, updatedUnixtime uint64) {
 		txnID:           txnID,
 		updatedUnixtime: updatedUnixtime,
 		scopeTableRoot:  w.scopeTableRoot,
+		freeListHead:    w.freeListHead,
 	}
 	page := w.store.writePageMut(pgno)
 	m.encodeInto(page)
@@ -1875,6 +1895,50 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 // D7).
 func (w *Writer[K]) freePage(pgno uint32) {
 	w.freedThisTxn = append(w.freedThisTxn, pgno)
+}
+
+// buildFreeList builds the persisted free-list linked list from the accumulated free set,
+// moving freedThisTxn into free. It MUST be called BEFORE finalizeDirtyChecksums and
+// takeDirty so the link pages are CRC'd and pwritten at Barrier 1. Each free page's first 4
+// bytes (at pageHeaderSize) hold the next_free_pgno (0 = end of list); freeListHead points at
+// the first page. Free pages are marked dirty so they get CRC'd and pwritten.
+func (w *Writer[K]) buildFreeList() {
+	freed := w.freedThisTxn
+	w.freedThisTxn = nil
+	w.free = append(w.free, freed...)
+	if len(w.free) == 0 {
+		w.freeListHead = 0
+		return
+	}
+	// Walk the free pages in reverse, threading next_free_pgno through each page. The last
+	// iterated page (the first in free) becomes the head.
+	next := uint32(0)
+	for i := len(w.free) - 1; i >= 0; i-- {
+		pgno := w.free[i]
+		page := w.store.writePageMut(pgno)
+		le.PutUint32(page[pageHeaderSize:], next)
+		next = pgno
+	}
+	w.freeListHead = next
+	// Mark free pages dirty so they get CRC'd and pwritten.
+	for _, pgno := range w.free {
+		w.dirty = append(w.dirty, pgno)
+	}
+}
+
+// readFreeList reads the persisted free-list linked list from the store: each free page's
+// first 4 bytes (at pageHeaderSize) = next_free_pgno (0 = end). Returns the free page set in
+// O(free_count) — no tree walk. Used when freeListHead != 0 (v4.2 files). A guard caps the
+// chain length to defend against a corrupt loop.
+func (w *Writer[K]) readFreeList(head uint32) []uint32 {
+	var free []uint32
+	pgno := head
+	for guard := uint32(0); pgno != 0 && guard < (1<<20); guard++ {
+		free = append(free, pgno)
+		page := w.store.page(pgno)
+		pgno = le.Uint32(page[pageHeaderSize:])
+	}
+	return free
 }
 
 // deriveFreeSet derives the free set (§7): pages in [2, total_pages) not reachable from

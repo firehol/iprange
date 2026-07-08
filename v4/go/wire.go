@@ -75,6 +75,10 @@ type meta struct {
 	// (meta_size == 90) decodeMeta reports 0 and encodeInto writes 0 (keeping the reserved
 	// tail zero); at v4.1 (meta_size == 94) it holds the scope-table root pgno.
 	scopeTableRoot uint32
+	// freeListHead (u32, v4.2 only). 0 = empty free list (or v4.0/v4.1). At v4.2
+	// (meta_size == 98) it holds the head page of the free-list linked list; each free
+	// page's first 4 bytes (at pageHeaderSize) = next_free_pgno (0 = end of list).
+	freeListHead uint32
 }
 
 // encodeInto serializes into a full pageSize page buffer: zero-fill, write the page
@@ -102,6 +106,8 @@ func (m *meta) encodeInto(page []byte) {
 	le.PutUint64(page[metaUpdatedUnixtime:], m.updatedUnixtime)
 	// v4.1: scope_table_root at offset 90. 0 for v4.0 (keeps the reserved tail zero).
 	le.PutUint32(page[metaScopeTableRoot:], m.scopeTableRoot)
+	// v4.2: free_list_head at offset 94. 0 for v4.0/v4.1 (keeps the reserved tail zero).
+	le.PutUint32(page[metaFreeListHead:], m.freeListHead)
 	finalizeChecksum(page)
 }
 
@@ -128,6 +134,8 @@ func decodeMeta(page []byte) meta {
 		updatedUnixtime: le.Uint64(page[metaUpdatedUnixtime:]),
 		// v4.1 trailing field; absent (reported 0) at v4.0 (meta_size == 90).
 		scopeTableRoot: decodeScopeTableRoot(page),
+		// v4.2 trailing field; absent (reported 0) at v4.0/v4.1 (meta_size < 98).
+		freeListHead: decodeFreeListHead(page),
 	}
 }
 
@@ -136,6 +144,16 @@ func decodeMeta(page []byte) meta {
 func decodeScopeTableRoot(page []byte) uint32 {
 	if le.Uint16(page[metaMetaSize:]) >= metaSizeV41 {
 		return le.Uint32(page[metaScopeTableRoot:])
+	}
+	return 0
+}
+
+// decodeFreeListHead reads free_list_head only when the file declares a v4.2+ meta_size
+// (>= 98); a v4.0/v4.1 file (meta_size < 98) reports 0 (the field lies in its reserved
+// tail, §5.1).
+func decodeFreeListHead(page []byte) uint32 {
+	if le.Uint16(page[metaMetaSize:]) >= metaSizeV42 {
+		return le.Uint32(page[metaFreeListHead:])
 	}
 	return 0
 }

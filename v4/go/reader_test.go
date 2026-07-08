@@ -30,6 +30,7 @@ func buildMeta(pgno uint32, version IPVersion, scopeWidth uint8, root, height ui
 		recordCount:     recCount,
 		txnID:           txn,
 		updatedUnixtime: 0,
+		freeListHead:    0,
 	}
 }
 

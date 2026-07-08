@@ -38,6 +38,15 @@ const (
 	// at offset 90.
 	metaSizeV41 uint16 = 94
 
+	// versionMinorFreeList is the v4.2 contract (persisted free-list: the free_list_head
+	// field). Additive: a v4.0/v4.1 reader skips it; a v4.0/v4.1 writer refuses to mutate a
+	// v4.2 file.
+	versionMinorFreeList uint16 = 2
+
+	// metaSizeV42 is meta_size for v4.2: v4.1's 94 plus the trailing free_list_head (u32)
+	// at offset 94.
+	metaSizeV42 uint16 = 98
+
 	// checksumAlgoCRC32C selects CRC32C/Castagnoli (D9); a field, so future algorithms
 	// are possible. v4.0 readers require this value.
 	checksumAlgoCRC32C uint8 = 1
@@ -96,6 +105,13 @@ const (
 	// meta_size >= 94). 0 = no metadata; else the scope table's root pgno (§C.1). At v4.0
 	// (meta_size == 90) this offset lies in the reserved-zero tail.
 	metaScopeTableRoot = 90
+
+	// metaFreeListHead is free_list_head (u32), v4.2 only (version_minor >= 2,
+	// meta_size >= 98). 0 = empty free list (or v4.0/v4.1); else the head page of the
+	// free-list linked list — each free page's first 4 bytes (at pageHeaderSize) hold the
+	// next_free_pgno (0 = end of list). At v4.0/v4.1 this offset lies in the reserved-zero
+	// tail.
+	metaFreeListHead = 94
 
 	// metaStaticStart/metaStaticEnd bound the static identity region [16, 50) (§5.1):
 	// magic..=created_unixtime. Two valid metas MUST agree byte-for-byte here; the

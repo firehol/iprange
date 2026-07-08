@@ -539,6 +539,9 @@ func (fw *FileWriter[K]) Commit(updatedUnixtime uint64) error {
 // commitDurable is the on-disk half of Commit, run after the metadata rebuild: pwrite the data
 // pages, fsync (Barrier 1), finalize + pwrite the meta page, fsync (Barrier 2).
 func (fw *FileWriter[K]) commitDurable(updatedUnixtime uint64) error {
+	// Build the free-list linked list BEFORE finalize so the link pages get CRC'd and
+	// pwritten at Barrier 1 with the rest of the dirty set.
+	fw.w.buildFreeList()
 	// Finalize CRC for dirty pages BEFORE takeDirty drains the set. Deferred from
 	// write_* to avoid CRC on intermediate COW copies freed within this txn.
 	fw.w.finalizeDirtyChecksums()

@@ -23,6 +23,7 @@ func sampleMeta() meta {
 		recordCount:     0x3132333435363738,
 		txnID:           0x4142434445464748,
 		updatedUnixtime: 0x5152535455565758,
+		freeListHead:    0,
 	}
 }
 
