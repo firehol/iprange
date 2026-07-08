@@ -61,8 +61,6 @@ func (s *vecPageStore) writePageMut(pgno uint32) []byte {
 
 func (s *vecPageStore) allocPage() uint32 {
 	p := uint32(len(s.image) / pageSize)
-	// Use a stack-local zero page instead of make([]byte, pageSize) — avoids a
-	// temporary heap allocation per page (profiled as contributing to memmove overhead).
 	var zero [pageSize]byte
 	s.image = append(s.image, zero[:]...)
 	return p
