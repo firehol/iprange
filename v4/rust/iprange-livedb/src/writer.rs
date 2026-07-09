@@ -377,11 +377,13 @@ impl<K: IpKey> Writer<K> {
                     if rec_from < from {
                         if let Some(trim_end) = from.checked_dec() {
                             self.cow_insert(rec_from, trim_end, rec_scope)?;
+                            self.pending_record_count += 1;
                         }
                     }
                     if rec_to > to {
                         if let Some(trim_start) = to.checked_inc() {
                             self.cow_insert(trim_start, rec_to, rec_scope)?;
+                            self.pending_record_count += 1;
                         }
                     }
                 }

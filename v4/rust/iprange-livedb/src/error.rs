@@ -57,6 +57,8 @@ pub enum Error {
     /// (§5.1 bootstrap class 2: `page_size`, `checksum_algo`, an unknown `flags` bit,
     /// or another fail-closed condition).
     Incompatible(&'static str),
+    /// The file is locked by another writer.
+    Locked(&'static str),
     /// The caller gave the writer input it cannot apply (e.g. `from > to`, wrong scope
     /// width, wrong key family, or growth past the `2^32`-page / `TREE_HEIGHT_MAX`
     /// limit). §8.
@@ -103,6 +105,7 @@ impl fmt::Display for Error {
                 write!(f, "v4 state not representable as a v3 snapshot: {w}")
             }
             #[cfg(feature = "std")]
+            Error::Locked(w) => write!(f, "locked: {w}"),
             Error::Io(e) => write!(f, "io error: {e}"),
         }
     }
