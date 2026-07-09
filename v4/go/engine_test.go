@@ -217,3 +217,41 @@ func TestStress500k(t *testing.T) {
 		}
 	}
 }
+
+// --- Reader registration tests ---
+
+func TestReaderTableRegister(t *testing.T) {
+	tmpPath := "/tmp/iprange_test_reader.iprdb"
+	rt, err := OpenReaderTable(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+
+	guard, err := rt.Register(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Close()
+
+	if rt.OldestReaderTxnID() != 42 {
+		t.Fatalf("oldest=%d", rt.OldestReaderTxnID())
+	}
+}
+
+func TestReaderTableReapStale(t *testing.T) {
+	tmpPath := "/tmp/iprange_test_reader2.iprdb"
+	rt, err := OpenReaderTable(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+
+	// Write a slot with a dead PID
+	rt.writeSlot(5, 999999, 1)
+
+	cleared := rt.ReapStale()
+	if cleared < 1 {
+		t.Fatalf("expected at least 1 stale slot cleared, got %d", cleared)
+	}
+}
