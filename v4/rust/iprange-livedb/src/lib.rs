@@ -45,6 +45,8 @@ pub mod wire;
 pub mod writer;
 pub mod migrate;
 pub mod extsort;
+#[cfg(feature = "os")]
+pub mod readers;
 
 #[cfg(feature = "alloc")]
 pub(crate) mod page_store;
