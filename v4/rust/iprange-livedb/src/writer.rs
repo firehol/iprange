@@ -16,7 +16,7 @@ use crate::page_store::{PageStore, VecPageStore};
 use crate::reader::Reader;
 use crate::record::{self, record_size};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
-use crate::wire::{finalize_checksum, put_u32, u32_le, Meta, PageHeader};
+use crate::wire::{finalize_checksum, put_u32, put_u64, u32_le, u64_le, Meta, PageHeader};
 
 /// One KV entry as returned by `meta_list`.
 pub type MetaEntry = (alloc::vec::Vec<u8>, u32, alloc::vec::Vec<u8>);
@@ -54,6 +54,9 @@ pub struct Writer<K: IpKey> {
     // Same fixed-array approach.
     reuse_buf: [u32; 64],
     reuse_count: usize,
+    /// Pages freed in txn_id <= this are safe to reclaim (from reader registration).
+    /// 0 = no readers registered → only reclaim growth-region frees.
+    safe_reclaim_txn_id: u64,
     _k: PhantomData<K>,
 }
 
@@ -84,6 +87,7 @@ impl<K: IpKey> Writer<K> {
             txn_free_chain: 0,
             reuse_buf: [0u32; 64],
             reuse_count: 0,
+            safe_reclaim_txn_id: 0,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -128,6 +132,7 @@ impl<K: IpKey> Writer<K> {
             txn_free_chain: 0,
             reuse_buf: [0u32; 64],
             reuse_count: 0,
+            safe_reclaim_txn_id: 0,
             _k: PhantomData,
         };
         // Load the committed free-list for page reuse.
@@ -174,12 +179,10 @@ impl<K: IpKey> Writer<K> {
 
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         self.check()?;
-        // Flush any remaining freed pages in the buffer to a TXN_FREE page.
+        // Flush any remaining freed pages.
         if self.txn_free_count > 0 {
             self.build_free_list_linked()?;
         }
-        // The committed free-list head is the txn_free_chain (the pages
-        // freed this transaction become reusable next transaction).
         self.free_list_head = self.txn_free_chain;
 
         let total = self.store.total_pages();
@@ -212,25 +215,44 @@ impl<K: IpKey> Writer<K> {
     /// The free-list is a linked list in freed pages: @0 next_free_pgno (u32).
     /// These pages are safe to reuse (they were freed in a prior committed txn,
     /// and no active reader needs them — reader coordination is Phase 3).
+    /// Read the committed free-list (TXN_FREE page chain) and populate the
+    /// reuse buffer with freed DATA pages that are safe to reclaim.
     fn load_free_list(&mut self) {
         self.reuse_count = 0;
-        let mut pgno = self.free_list_head;
+        let mut meta_pgno = self.free_list_head;
         let mut guard = 0u32;
-        while pgno != 0 && guard < spec::TREE_HEIGHT_MAX {
+        while meta_pgno != 0 && guard < spec::TREE_HEIGHT_MAX {
             guard += 1;
-            if pgno as u64 >= self.store.total_pages() as u64 {
+            if meta_pgno as u64 >= self.store.total_pages() as u64 {
                 break;
             }
-            let page = self.store.page(pgno);
-            let next = u32_le(page, spec::FREE_NEXT);
-            if self.reuse_count < self.reuse_buf.len() {
-                self.reuse_buf[self.reuse_count] = pgno;
-                self.reuse_count += 1;
+            let page = self.store.page(meta_pgno);
+            let h = PageHeader::decode(page);
+            if h.page_type != spec::PAGE_TYPE_TXN_FREE {
+                break; // corrupt or old-format free-list
+            }
+            let next_meta = u32_le(page, spec::TXN_FREE_NEXT);
+            let count = u32_le(page, spec::TXN_FREE_COUNT) as usize;
+            let freed_in = u64_le(page, spec::TXN_FREE_FREED_IN);
+            let safe = self.safe_reclaim_txn_id == 0 || freed_in < self.safe_reclaim_txn_id;
+            if safe {
+                for i in 0..count {
+                    if self.reuse_count >= self.reuse_buf.len() {
+                        self.free_list_head = meta_pgno; // more to load next time
+                        return;
+                    }
+                    let freed_pgno = u32_le(page, spec::TXN_FREE_ARRAY + i * 4);
+                    self.reuse_buf[self.reuse_count] = freed_pgno;
+                    self.reuse_count += 1;
+                }
             } else {
-                break;
+                // Not safe to reclaim yet — keep the chain head.
+                self.free_list_head = meta_pgno;
+                return;
             }
-            pgno = next;
+            meta_pgno = next_meta;
         }
+        self.free_list_head = 0;
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
@@ -272,6 +294,13 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
+    /// Set the oldest reader's txn_id. Pages freed in txn_id <= this value
+    /// are safe to reclaim. Called by the OS layer from ReaderTable::oldest_reader_txn_id().
+    /// 0 means no active readers (reclaim everything from prior committed txns).
+    pub fn set_safe_reclaim_txn_id(&mut self, txn_id: u64) {
+        self.safe_reclaim_txn_id = txn_id;
+    }
+
     #[inline]
     fn cow_page(&mut self, pgno: u32) -> Result<u32> {
         if pgno >= self.committed_pages {
@@ -295,17 +324,11 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
-    /// Track a freed page. Only growth-region pages (pgno >= committed_pages
-    /// at the time of freeing) are safe to reuse — committed-prefix pages may
-    /// still be referenced by concurrent readers using an older snapshot.
+    /// Track a freed page (COW victim). Records ALL freed pages including
+    /// committed-prefix ones. Reclaim safety is checked at load time via
+    /// freed_in_txn vs safe_reclaim_txn_id.
     #[inline]
     fn track_freed(&mut self, pgno: u32) -> Result<()> {
-        // Only track pages that were allocated in THIS transaction (growth region).
-        // Pages from the committed prefix are old snapshots — they stay until
-        // reader coordination (Phase 3) confirms no reader needs them.
-        if pgno < self.committed_pages {
-            return Ok(()); // committed page — not safe to reclaim yet
-        }
         if self.txn_free_count < self.txn_free_buf.len() {
             self.txn_free_buf[self.txn_free_count] = pgno;
             self.txn_free_count += 1;
@@ -320,36 +343,30 @@ impl<K: IpKey> Writer<K> {
     /// Build the committed free-list as a linked list IN the freed pages.
     /// Each freed page stores next_free_pgno at offset PAGE_HEADER_SIZE.
     /// free_list_head points to the first freed page in this chain.
+    /// Write the txn-free buffer into a TXN_FREE metadata page. These pages
+    /// store arrays of freed pgnos and are never reused themselves — only
+    /// the DATA pages they list are reusable.
     fn build_free_list_linked(&mut self) -> Result<()> {
         if self.txn_free_count == 0 {
-            self.free_list_head = self.txn_free_chain;
             return Ok(());
         }
-        // Spill remaining buffer: link the freed pages together.
-        // The first freed page in this batch becomes the new chain head;
-        // it links to the previous chain head.
-        let first = self.txn_free_buf[0];
-        let page = self.store.page_mut(first);
-        put_u32(page, spec::FREE_NEXT, self.txn_free_chain);
-        
-        // Link remaining freed pages.
-        for i in 1..self.txn_free_count {
-            let prev = self.txn_free_buf[i - 1];
-            let curr = self.txn_free_buf[i];
-            let page = self.store.page_mut(prev);
-            put_u32(page, spec::FREE_NEXT, curr);
+        let freed_in = self.committed_txn_id + 1;
+        let meta_pgno = self.store.alloc_page()?;
+        let page = self.store.page_mut(meta_pgno);
+        page.fill(0);
+        // @16: next TXN_FREE page in the chain (0 = end)
+        put_u32(page, spec::TXN_FREE_NEXT, self.txn_free_chain);
+        // @20: count of freed pgnos in this page
+        put_u32(page, spec::TXN_FREE_COUNT, self.txn_free_count as u32);
+        // @24: array of freed pgnos
+        for i in 0..self.txn_free_count {
+            put_u32(page, spec::TXN_FREE_ARRAY + i * 4, self.txn_free_buf[i]);
         }
-        // The last freed page links to the old chain head (already set above
-        // for single-entry; for multi-entry, the last links to chain).
-        if self.txn_free_count > 1 {
-            let last = self.txn_free_buf[self.txn_free_count - 1];
-            let page = self.store.page_mut(last);
-            put_u32(page, spec::FREE_NEXT, self.txn_free_chain);
-        }
-        
-        self.txn_free_chain = first;
+        // Store freed_in_txn once per page (all entries share the same txn).
+        put_u64(page, spec::TXN_FREE_FREED_IN, freed_in);
+        PageHeader::write(page, spec::PAGE_TYPE_TXN_FREE, 0, meta_pgno);
+        self.txn_free_chain = meta_pgno;
         self.txn_free_count = 0;
-        self.free_list_head = self.txn_free_chain;
         Ok(())
     }
 

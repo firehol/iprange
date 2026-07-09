@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::spec::PAGE_SIZE;
 
 /// Page-level storage abstraction. All methods are zero-alloc in the hot path.
-pub(crate) trait PageStore: Send {
+pub trait PageStore: Send {
     /// Read a page (immutable). Returns a slice into the backing store.
     fn page(&self, pgno: u32) -> &[u8];
 
@@ -57,13 +57,13 @@ pub(crate) trait PageStore: Send {
 
 // ── VecPageStore (tests / pure-API) ──────────────────────────────────────────
 
-pub(crate) struct VecPageStore {
+pub struct VecPageStore {
     image: Vec<u8>,
     committed: u32,
 }
 
 impl VecPageStore {
-    pub(crate) fn new(image: Vec<u8>) -> Self {
+    pub fn new(image: Vec<u8>) -> Self {
         let committed = (image.len() / PAGE_SIZE) as u32;
         VecPageStore {
             image,
@@ -71,7 +71,7 @@ impl VecPageStore {
         }
     }
 
-    pub(crate) fn into_vec(self) -> Vec<u8> {
+    pub fn into_vec(self) -> Vec<u8> {
         self.image
     }
 }
