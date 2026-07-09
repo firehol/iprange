@@ -1,6 +1,9 @@
 package iprangedb
 
-import "hash/crc32"
+import (
+	"encoding/binary"
+	"hash/crc32"
+)
 
 // CRC32C (Castagnoli) — the per-page corruption checksum (D9).
 //
@@ -21,10 +24,10 @@ func crc32c(b []byte) uint32 {
 // bytes with the 8-byte checksum field ([8, 16)) taken as zero, in the low 4 bytes of a
 // u64 (the high 4 bytes are 0). page MUST be exactly pageSize bytes.
 func pageChecksum(page []byte) uint64 {
-	crc := crc32.Update(0, castagnoli, page[:phChecksum]) // [0, 8)
+	crc := crc32.Update(0, castagnoli, page[:PHChecksum]) // [0, 8)
 	var zero [8]byte
 	crc = crc32.Update(crc, castagnoli, zero[:])             // checksum field as zero
-	crc = crc32.Update(crc, castagnoli, page[phChecksum+8:]) // [16, pageSize)
+	crc = crc32.Update(crc, castagnoli, page[PHChecksum+8:]) // [16, pageSize)
 	return uint64(crc)                                       // high 32 bits zero by construction
 }
 
@@ -32,7 +35,7 @@ func pageChecksum(page []byte) uint64 {
 // high-32-bits-zero rule: a reader MUST reject a non-zero high half. page MUST be exactly
 // pageSize bytes.
 func verifyPage(page []byte) bool {
-	stored := le.Uint64(page[phChecksum:])
+	stored := binary.LittleEndian.Uint64(page[PHChecksum:])
 	if stored>>32 != 0 {
 		return false // high 4 bytes MUST be zero (D9)
 	}

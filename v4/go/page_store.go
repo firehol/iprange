@@ -1,191 +1,194 @@
 package iprangedb
 
-// pageStore is the page-level storage abstraction for the v4 writer.
-//
-// Two implementations:
-//   - vecPageStore: wraps a []byte (current in-memory behavior). Used by tests
-//     and the pure-API path (createWriter, openImage from a buffer).
-//   - mmapPageStore: wraps a read-only mmap + dirty-page map. Used by the
-//     file-backed writer to avoid loading the whole file into heap memory.
+import (
+	"fmt"
+	"os"
+	"syscall"
+	"unsafe"
+)
+
+// pageStore is the page-level storage abstraction. All methods are zero-alloc
+// in the hot path — page storage lives in the mmap, not in heap buffers.
 type pageStore interface {
-	// page reads a page. Checks the dirty map first (hit → return dirty data),
-	// then falls back to the committed source (mmap or Vec).
-	page(pgno uint32) []byte
-
-	// writePageMut returns a mutable reference to a page's storage.
-	writePageMut(pgno uint32) []byte
-
-	// allocPage extends the store by one page (called only when the Writer's free list
-	// is empty). Returns the new page number.
-	allocPage() uint32
-
-	// totalPages returns the total logical pages in the store.
-	totalPages() uint64
-
-	// committedBytes returns the committed bytes as a contiguous slice.
-	committedBytes() []byte
-
-	// pageData returns the bytes for a specific dirty page.
-	// Used by the OS layer at commit time to obtain page data for pwrite.
-	pageData(pgno uint32) []byte
-
-	// clearDirty clears all dirty pages. Called after a successful commit.
-	clearDirty()
-
-	// remap remaps the mmap to a new size (mmapPageStore only). vecPageStore no-ops.
-	remap(fd uintptr, newSize int64) error
-
-	// close releases resources (mmap munmap for mmapPageStore). vecPageStore no-ops.
-	// Must be idempotent.
-	close()
+	page(pgno uint32) []byte          // read a page
+	pageMut(pgno uint32) []byte       // mutable page (caller ensures COW discipline)
+	copyPage(src, dst uint32)         // copy PAGE_SIZE bytes from src to dst
+	allocPage() (uint32, error)       // allocate a new page in the growth region
+	totalPages() uint32               // committed + growth region
+	committedPages() uint32           // stable prefix
+	setCommittedPages(n uint32)       // advance the committed boundary (at commit)
+	committedBytes() []byte           // for Reader construction
+	ensureCapacity(minPages uint32) error
+	sync() error
 }
 
-// vecPageStore is an in-memory page store backed by a []byte.
+// --- vecPageStore (tests / pure-API) ---
+
 type vecPageStore struct {
-	image []byte
+	image     []byte
+	committed uint32
 }
 
 func newVecPageStore(image []byte) *vecPageStore {
-	return &vecPageStore{image: image}
+	cp := uint32(len(image) / PageSize)
+	return &vecPageStore{image: image, committed: cp}
 }
 
 func (s *vecPageStore) page(pgno uint32) []byte {
-	base := int(pgno) * pageSize
-	return s.image[base : base+pageSize]
+	base := int(pgno) * PageSize
+	return s.image[base : base+PageSize]
 }
 
-func (s *vecPageStore) writePageMut(pgno uint32) []byte {
-	base := int(pgno) * pageSize
-	return s.image[base : base+pageSize]
+func (s *vecPageStore) pageMut(pgno uint32) []byte {
+	base := int(pgno) * PageSize
+	return s.image[base : base+PageSize]
 }
 
-func (s *vecPageStore) allocPage() uint32 {
-	p := uint32(len(s.image) / pageSize)
-	var zero [pageSize]byte
-	s.image = append(s.image, zero[:]...)
-	return p
+func (s *vecPageStore) copyPage(src, dst uint32) {
+	sb := int(src) * PageSize
+	db := int(dst) * PageSize
+	copy(s.image[db:db+PageSize], s.image[sb:sb+PageSize])
 }
 
-func (s *vecPageStore) totalPages() uint64 {
-	return uint64(len(s.image) / pageSize)
+func (s *vecPageStore) allocPage() (uint32, error) {
+	p := uint32(len(s.image) / PageSize)
+	s.image = append(s.image, make([]byte, PageSize)...)
+	return p, nil
 }
 
-func (s *vecPageStore) committedBytes() []byte {
-	return s.image
-}
+func (s *vecPageStore) totalPages() uint32    { return uint32(len(s.image) / PageSize) }
+func (s *vecPageStore) committedPages() uint32 { return s.committed }
+func (s *vecPageStore) setCommittedPages(n uint32) { s.committed = n }
+func (s *vecPageStore) committedBytes() []byte { return s.image[:int(s.committed)*PageSize] }
 
-func (s *vecPageStore) pageData(pgno uint32) []byte {
-	base := int(pgno) * pageSize
-	return s.image[base : base+pageSize]
-}
-
-func (s *vecPageStore) clearDirty() {}
-
-func (s *vecPageStore) remap(_ uintptr, _ int64) error { return nil }
-
-func (s *vecPageStore) close() {}
-
-// mmapPageStore is an mmap-backed page store. Reads committed pages from a read-only mmap;
-// stores dirty/new pages in a private map[uint32][]byte.
-type mmapPageStore struct {
-	data           []byte
-	committedPages uint32
-	logicalPages   uint32
-	dirty          map[uint32][]byte
-	pool           [][]byte
-	closed         bool
-}
-
-func newMmapPageStore(data []byte, committedPages uint32) *mmapPageStore {
-	return &mmapPageStore{
-		data:           data,
-		committedPages: committedPages,
-		logicalPages:   committedPages,
-		dirty:          make(map[uint32][]byte),
+func (s *vecPageStore) ensureCapacity(minPages uint32) error {
+	needed := int(minPages) * PageSize
+	if len(s.image) < needed {
+		s.image = append(s.image, make([]byte, needed-len(s.image))...)
 	}
+	return nil
 }
 
-// zeroPage is a read-only shared buffer returned for pages beyond the committed range.
-// Callers must NOT write through the returned slice.
-var zeroPage [pageSize]byte
+func (s *vecPageStore) sync() error { return nil }
 
-func (s *mmapPageStore) page(pgno uint32) []byte {
-	// Fast path: no pages dirty this txn → skip the map lookup entirely
-	// (common in append-only txns that only read committed pages during descent).
-	if len(s.dirty) > 0 {
-		if buf, ok := s.dirty[pgno]; ok {
-			return buf
+// --- mmapStore (writable MAP_SHARED, zero-heap) ---
+
+type mmapStore struct {
+	data        []byte // writable mmap
+	file        *os.File
+	committed   uint32
+	logical     uint32
+	growthChunk uint32
+}
+
+func newMmapStore(file *os.File, committedPages uint32) (*mmapStore, error) {
+	growthChunk := uint32(64)
+	mapPages := committedPages + growthChunk
+	mapLen := int(mapPages) * PageSize
+
+	// Extend the file to the mapping size.
+	if err := file.Truncate(int64(mapLen)); err != nil {
+		return nil, fmt.Errorf("mmap truncate: %w", err)
+	}
+
+	data, err := syscall.Mmap(int(file.Fd()), 0, mapLen,
+		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	if err != nil {
+		return nil, fmt.Errorf("mmap: %w", err)
+	}
+
+	return &mmapStore{
+		data:        data,
+		file:        file,
+		committed:   committedPages,
+		logical:     committedPages,
+		growthChunk: growthChunk,
+	}, nil
+}
+
+func (s *mmapStore) page(pgno uint32) []byte {
+	base := int(pgno) * PageSize
+	return s.data[base : base+PageSize]
+}
+
+func (s *mmapStore) pageMut(pgno uint32) []byte {
+	base := int(pgno) * PageSize
+	return s.data[base : base+PageSize]
+}
+
+func (s *mmapStore) copyPage(src, dst uint32) {
+	sb := int(src) * PageSize
+	db := int(dst) * PageSize
+	copy(s.data[db:db+PageSize], s.data[sb:sb+PageSize])
+}
+
+func (s *mmapStore) allocPage() (uint32, error) {
+	p := s.logical
+	s.logical++
+	needed := s.logical
+	mapped := uint32(len(s.data) / PageSize)
+	if needed > mapped {
+		if err := s.remap(needed); err != nil {
+			return 0, err
 		}
 	}
-	// Fall back to mmap for committed pages (nil after close — return zero page).
-	if pgno < s.committedPages && s.data != nil {
-		base := int(pgno) * pageSize
-		return s.data[base : base+pageSize]
+	return p, nil
+}
+
+func (s *mmapStore) remap(minPages uint32) error {
+	// Unmap old.
+	if err := syscall.Munmap(s.data); err != nil {
+		return fmt.Errorf("munmap: %w", err)
 	}
-	// Pages allocated but not yet written this txn, pages beyond the
-	// committed file size, or after close — return a static zero page.
-	return zeroPage[:]
-}
-
-func (s *mmapPageStore) writePageMut(pgno uint32) []byte {
-	buf, ok := s.dirty[pgno]
-	if !ok {
-		// Try to pop a recycled buffer from the pool first.
-		if n := len(s.pool); n > 0 {
-			buf = s.pool[n-1]
-			s.pool = s.pool[:n-1]
-		} else {
-			buf = make([]byte, pageSize)
-		}
-		s.dirty[pgno] = buf
+	// Grow the file.
+	mapLen := int(minPages+s.growthChunk) * PageSize
+	if err := s.file.Truncate(int64(mapLen)); err != nil {
+		return fmt.Errorf("ftruncate: %w", err)
 	}
-	return buf
-}
-
-func (s *mmapPageStore) allocPage() uint32 {
-	p := s.logicalPages
-	// Saturating add: prevent u32 wrap-around at the theoretical 2^32-page limit.
-	// The Writer checks total_pages >= 2^32 before calling, but guard defensively.
-	if s.logicalPages != maxUint32 {
-		s.logicalPages++
+	// New writable mapping.
+	data, err := syscall.Mmap(int(s.file.Fd()), 0, mapLen,
+		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap remap: %w", err)
 	}
-	return p
-}
-
-func (s *mmapPageStore) totalPages() uint64 {
-	return uint64(s.logicalPages)
-}
-
-func (s *mmapPageStore) committedBytes() []byte {
-	return s.data[:int(s.committedPages)*pageSize]
-}
-
-func (s *mmapPageStore) pageData(pgno uint32) []byte {
-	buf, ok := s.dirty[pgno]
-	if !ok {
-		panic("mmapPageStore.pageData: pgnot found in dirty map — OS layer must only call this for dirty pages")
+	s.data = data
+	if s.growthChunk < 1024 {
+		s.growthChunk *= 2
 	}
-	return buf
+	return nil
 }
 
-func (s *mmapPageStore) clearDirty() {
-	txnDirtyCount := len(s.dirty)
-	// Move all dirty buffers into the recycled pool.
-	for _, buf := range s.dirty {
-		s.pool = append(s.pool, buf)
+func (s *mmapStore) totalPages() uint32    { return s.logical }
+func (s *mmapStore) committedPages() uint32 { return s.committed }
+func (s *mmapStore) setCommittedPages(n uint32) { s.committed = n }
+
+func (s *mmapStore) committedBytes() []byte {
+	return s.data[:int(s.committed)*PageSize]
+}
+
+func (s *mmapStore) ensureCapacity(minPages uint32) error {
+	mapped := uint32(len(s.data) / PageSize)
+	if minPages > mapped {
+		return s.remap(minPages)
 	}
-	// Clear the dirty map.
-	s.dirty = make(map[uint32][]byte)
-	// Trim the pool if it is more than 2x larger than the current txn's
-	// dirty page count. Nil the trimmed entries so their backing arrays
-	// can be GC'd.
-	if len(s.pool) > txnDirtyCount*2 {
-		for i := txnDirtyCount; i < len(s.pool); i++ {
-			s.pool[i] = nil
-		}
-		s.pool = s.pool[:txnDirtyCount]
+	return nil
+}
+
+func (s *mmapStore) sync() error {
+	// msync(MS_SYNC)
+	_, _, errno := syscall.Syscall(syscall.SYS_MSYNC,
+		uintptr(unsafe.Pointer(&s.data[0])),
+		uintptr(len(s.data)),
+		syscall.MS_SYNC)
+	if errno != 0 {
+		return fmt.Errorf("msync: %v", errno)
+	}
+	return nil
+}
+
+func (s *mmapStore) close() {
+	if s.data != nil {
+		syscall.Munmap(s.data)
+		s.data = nil
 	}
 }
-
-// remap and close are implemented in page_store_unix.go (unix build tag).
-// On non-unix platforms, mmapPageStore is not used (the os.go file has the unix build tag).

@@ -2,172 +2,141 @@ package iprangedb
 
 import "encoding/binary"
 
-// Unaligned little-endian field access and the fixed page structures.
-//
-// Per D8 every multi-byte field is little-endian, read/written by explicit byte access —
-// never a packed-struct pointer cast over the mmap'd bytes (fields are not guaranteed
-// naturally aligned: meta u64s sit at offsets 58/66/74, record_size at 38, branch keys
-// follow a u32 child pgno). encoding/binary.LittleEndian does exactly this. This module
-// is pure (de)serialization plus the page checksum finalize; the reader does validation.
+// --- little-endian primitives ---
 
-var le = binary.LittleEndian
-
-// pageHeader is the common 16-byte page header (§5), present on every page.
-type pageHeader struct {
-	pageType   uint8  // 1 = meta, 2 = branch, 3 = leaf
-	reserved   uint8  // MUST be 0 (reader rejects non-zero)
-	entryCount uint16 // records in a leaf / separators in a branch; 0 for a meta
-	pgno       uint32 // this page's own number (reader verifies it matches)
-	checksum   uint64 // D9 page checksum (whole page, this field zeroed)
+func u16le(b []byte, at int) uint16 {
+	return binary.LittleEndian.Uint16(b[at:])
 }
 
-// decodePageHeader parses the header from the first 16 bytes of a page. page MUST be
-// >= 16 bytes.
-func decodePageHeader(page []byte) pageHeader {
+func u32le(b []byte, at int) uint32 {
+	return binary.LittleEndian.Uint32(b[at:])
+}
+
+func u64le(b []byte, at int) uint64 {
+	return binary.LittleEndian.Uint64(b[at:])
+}
+
+func putU16(b []byte, at int, v uint16) {
+	binary.LittleEndian.PutUint16(b[at:], v)
+}
+
+func putU32(b []byte, at int, v uint32) {
+	binary.LittleEndian.PutUint32(b[at:], v)
+}
+
+func putU64(b []byte, at int, v uint64) {
+	binary.LittleEndian.PutUint64(b[at:], v)
+}
+
+// --- page header ---
+
+type pageHeader struct {
+	pageType   uint8
+	reserved   uint8
+	entryCount uint16
+	pgno       uint32
+	checksum   uint64
+}
+
+func decodeHeader(page []byte) pageHeader {
 	return pageHeader{
-		pageType:   page[phPageType],
-		reserved:   page[phReserved],
-		entryCount: le.Uint16(page[phEntryCount:]),
-		pgno:       le.Uint32(page[phPgno:]),
-		checksum:   le.Uint64(page[phChecksum:]),
+		pageType:   page[PHPageType],
+		reserved:   page[PHReserved],
+		entryCount: u16le(page, PHEntryCount),
+		pgno:       u32le(page, PHPgno),
+		checksum:   u64le(page, PHChecksum),
 	}
 }
 
-// writePageHeader writes page_type / reserved=0 / entry_count / pgno into the header. The
-// checksum is written separately by finalizeChecksum after the body is filled.
-func writePageHeader(page []byte, pageType uint8, entryCount uint16, pgno uint32) {
-	page[phPageType] = pageType
-	page[phReserved] = 0
-	le.PutUint16(page[phEntryCount:], entryCount)
-	le.PutUint32(page[phPgno:], pgno)
-	// checksum field [8,16) is left zero until finalizeChecksum.
+func writeHeader(page []byte, pageType uint8, entryCount uint16, pgno uint32) {
+	page[PHPageType] = pageType
+	page[PHReserved] = 0
+	putU16(page, PHEntryCount, entryCount)
+	putU32(page, PHPgno, pgno)
 }
 
-// finalizeChecksum computes the D9 checksum over the whole (already fully populated) page
-// and writes it into the header checksum field. Call last, after every other byte is set.
 func finalizeChecksum(page []byte) {
-	le.PutUint64(page[phChecksum:], pageChecksum(page))
+	sum := pageChecksum(page)
+	putU64(page, PHChecksum, sum)
 }
 
-// meta is the meta page (pgno 0 / 1) — static identity + committed dynamic state (§5.1).
-// magic and version_major are implied constants (encodeInto writes them; decodeMeta does
-// not check them — the reader's bootstrap reads magic/version first to classify, §5.1).
+// --- meta page ---
+
 type meta struct {
-	pgno uint32
-	// --- static identity (identical in both metas) ---
+	pgno            uint32
 	versionMinor    uint16
 	metaSize        uint16
 	pageSize        uint32
 	checksumAlgo    uint8
 	flags           uint8
 	keyWidth        uint8
-	scopeWidth      uint8
+	scopeMode       uint8 // was scopeWidth
 	recordSize      uint32
-	createdUnixtime uint64
-	// --- dynamic state (per commit) ---
+	createdUnix     uint64
 	rootPgno        uint32
 	treeHeight      uint32
 	totalPages      uint64
 	recordCount     uint64
 	txnID           uint64
-	updatedUnixtime uint64
-	// scopeTableRoot (u32, v4.1 only — §C.1). 0 = no metadata (or v4.0). At v4.0
-	// (meta_size == 90) decodeMeta reports 0 and encodeInto writes 0 (keeping the reserved
-	// tail zero); at v4.1 (meta_size == 94) it holds the scope-table root pgno.
-	scopeTableRoot uint32
-	// freeListHead (u32, v4.2 only). 0 = empty free list (or v4.0/v4.1). At v4.2
-	// (meta_size == 98) it holds the head page of the free-list linked list; each free
-	// page's first 4 bytes (at pageHeaderSize) = next_free_pgno (0 = end of list).
-	freeListHead uint32
+	updatedUnix     uint64
+	scopeTableRoot  uint32
+	freeListHead    uint32
 }
 
-// encodeInto serializes into a full pageSize page buffer: zero-fill, write the page
-// header (page_type=1, entry_count=0, pgno), magic, version_major, every field at its
-// §5.1 offset, then finalize the checksum. page MUST be exactly pageSize bytes.
 func (m *meta) encodeInto(page []byte) {
-	clear(page)
-	writePageHeader(page, pageTypeMeta, 0, m.pgno)
-	copy(page[metaMagic:metaMagic+8], magic[:])
-	le.PutUint16(page[metaVersionMajor:], versionMajor)
-	le.PutUint16(page[metaVersionMinor:], m.versionMinor)
-	le.PutUint16(page[metaMetaSize:], m.metaSize)
-	le.PutUint32(page[metaPageSize:], m.pageSize)
-	page[metaChecksumAlgo] = m.checksumAlgo
-	page[metaFlags] = m.flags
-	page[metaKeyWidth] = m.keyWidth
-	page[metaScopeWidth] = m.scopeWidth
-	le.PutUint32(page[metaRecordSize:], m.recordSize)
-	le.PutUint64(page[metaCreatedUnixtime:], m.createdUnixtime)
-	le.PutUint32(page[metaRootPgno:], m.rootPgno)
-	le.PutUint32(page[metaTreeHeight:], m.treeHeight)
-	le.PutUint64(page[metaTotalPages:], m.totalPages)
-	le.PutUint64(page[metaRecordCount:], m.recordCount)
-	le.PutUint64(page[metaTxnID:], m.txnID)
-	le.PutUint64(page[metaUpdatedUnixtime:], m.updatedUnixtime)
-	// v4.1: scope_table_root at offset 90. 0 for v4.0 (keeps the reserved tail zero).
-	le.PutUint32(page[metaScopeTableRoot:], m.scopeTableRoot)
-	// v4.2: free_list_head at offset 94. 0 for v4.0/v4.1 (keeps the reserved tail zero).
-	le.PutUint32(page[metaFreeListHead:], m.freeListHead)
+	for i := range page {
+		page[i] = 0
+	}
+	writeHeader(page, PageTypeMeta, 0, m.pgno)
+	copy(page[MetaMagic:MetaMagic+8], []byte(Magic))
+	putU16(page, MetaVersionMajor, VersionMajor)
+	putU16(page, MetaVersionMinor, m.versionMinor)
+	putU16(page, MetaMetaSize, m.metaSize)
+	putU32(page, MetaPageSize, m.pageSize)
+	page[MetaChecksumAlgo] = m.checksumAlgo
+	page[MetaFlags] = m.flags
+	page[MetaKeyWidth] = m.keyWidth
+	page[MetaScopeMode] = m.scopeMode
+	putU32(page, MetaRecordSize, m.recordSize)
+	putU64(page, MetaCreatedUnix, m.createdUnix)
+	putU32(page, MetaRootPgno, m.rootPgno)
+	putU32(page, MetaTreeHeight, m.treeHeight)
+	putU64(page, MetaTotalPages, m.totalPages)
+	putU64(page, MetaRecordCount, m.recordCount)
+	putU64(page, MetaTxnID, m.txnID)
+	putU64(page, MetaUpdatedUnix, m.updatedUnix)
+	putU32(page, MetaScopeTableRoot, m.scopeTableRoot)
+	putU32(page, MetaFreeListHead, m.freeListHead)
 	finalizeChecksum(page)
 }
 
-// decodeMeta parses the variable meta fields from a page (no validation of
-// magic/version/geometry — the reader's bootstrap does that, §5.1). page MUST be >= 90
-// bytes.
 func decodeMeta(page []byte) meta {
 	return meta{
-		pgno:            le.Uint32(page[phPgno:]),
-		versionMinor:    le.Uint16(page[metaVersionMinor:]),
-		metaSize:        le.Uint16(page[metaMetaSize:]),
-		pageSize:        le.Uint32(page[metaPageSize:]),
-		checksumAlgo:    page[metaChecksumAlgo],
-		flags:           page[metaFlags],
-		keyWidth:        page[metaKeyWidth],
-		scopeWidth:      page[metaScopeWidth],
-		recordSize:      le.Uint32(page[metaRecordSize:]),
-		createdUnixtime: le.Uint64(page[metaCreatedUnixtime:]),
-		rootPgno:        le.Uint32(page[metaRootPgno:]),
-		treeHeight:      le.Uint32(page[metaTreeHeight:]),
-		totalPages:      le.Uint64(page[metaTotalPages:]),
-		recordCount:     le.Uint64(page[metaRecordCount:]),
-		txnID:           le.Uint64(page[metaTxnID:]),
-		updatedUnixtime: le.Uint64(page[metaUpdatedUnixtime:]),
-		// v4.1 trailing field; absent (reported 0) at v4.0 (meta_size == 90).
-		scopeTableRoot: decodeScopeTableRoot(page),
-		// v4.2 trailing field; absent (reported 0) at v4.0/v4.1 (meta_size < 98).
-		freeListHead: decodeFreeListHead(page),
+		pgno:           u32le(page, PHPgno),
+		versionMinor:   u16le(page, MetaVersionMinor),
+		metaSize:       u16le(page, MetaMetaSize),
+		pageSize:       u32le(page, MetaPageSize),
+		checksumAlgo:   page[MetaChecksumAlgo],
+		flags:          page[MetaFlags],
+		keyWidth:       page[MetaKeyWidth],
+		scopeMode:      page[MetaScopeMode],
+		recordSize:     u32le(page, MetaRecordSize),
+		createdUnix:    u64le(page, MetaCreatedUnix),
+		rootPgno:       u32le(page, MetaRootPgno),
+		treeHeight:     u32le(page, MetaTreeHeight),
+		totalPages:     u64le(page, MetaTotalPages),
+		recordCount:    u64le(page, MetaRecordCount),
+		txnID:          u64le(page, MetaTxnID),
+		updatedUnix:    u64le(page, MetaUpdatedUnix),
+		scopeTableRoot: u32le(page, MetaScopeTableRoot),
+		freeListHead:   u32le(page, MetaFreeListHead),
 	}
 }
 
-// decodeScopeTableRoot reads scope_table_root only when the file declares a v4.1+ meta_size
-// (>= 94); a v4.0 file (meta_size 90) reports 0 (the field lies in its reserved tail, §C.1).
-func decodeScopeTableRoot(page []byte) uint32 {
-	if le.Uint16(page[metaMetaSize:]) >= metaSizeV41 {
-		return le.Uint32(page[metaScopeTableRoot:])
-	}
-	return 0
+func readMagic(page []byte) []byte {
+	return page[MetaMagic : MetaMagic+8]
 }
 
-// decodeFreeListHead reads free_list_head only when the file declares a v4.2+ meta_size
-// (>= 98); a v4.0/v4.1 file (meta_size < 98) reports 0 (the field lies in its reserved
-// tail, §5.1).
-func decodeFreeListHead(page []byte) uint32 {
-	if le.Uint16(page[metaMetaSize:]) >= metaSizeV42 {
-		return le.Uint32(page[metaFreeListHead:])
-	}
-	return 0
-}
-
-// readMagic reads the file magic from a page ([16, 24)). The bootstrap uses this before
-// trusting any other field (§5.1).
-func readMagic(page []byte) [8]byte {
-	var m [8]byte
-	copy(m[:], page[metaMagic:metaMagic+8])
-	return m
-}
-
-// readVersionMajor reads version_major from a page ([24, 26)), used by bootstrap
-// classification.
 func readVersionMajor(page []byte) uint16 {
-	return le.Uint16(page[metaVersionMajor:])
+	return u16le(page, MetaVersionMajor)
 }

@@ -1,740 +1,163 @@
 package iprangedb
 
-import "bytes"
+import "fmt"
 
-// The v4 reader: open over an in-memory image and query.
-//
-// Open selects the active meta (§5.1 bootstrap) in trusted mode — magic + page-header +
-// class-2 structural checks, with the per-meta CRC and reserved-tail zero-check skipped
-// for speed (daemon files are written under LOCK_EX; the format is crash-safe) — and
-// checks geometry (§9 step 2), but does NOT walk the tree. Call Validate for the full §9
-// structural walk + per-page CRC (and the meta CRC/tail checks Open skips) when the input
-// is untrusted. LookupV4/V6 and ScanV4/V6 navigate the tree directly, returning the
-// borrowed scope (zero-copy, D11).
-
-// Reader is a read-only view over a v4 image (trusted by default; call Validate for the
-// full §9 walk). It holds no lock and no allocation; lookups and scans return slices
-// borrowed from the underlying bytes.
+// Reader is a zero-copy view over a committed v4.3 image.
 type Reader struct {
-	bytes      []byte
-	meta       meta
-	version    IPVersion
-	recordSize int
-	keyWidth   int
-	leafMax    int
-	branchMax  int
-}
-// Open opens a v4 image in trusted mode: select the active meta (§5.1 bootstrap) via
-// magic + page-header + class-2 structural checks — the per-meta CRC and reserved-tail
-// zero-check are SKIPPED for speed (daemon files are crash-safe under LOCK_EX) — and check
-// geometry (§9 step 2). The tree is NOT walked. For the full §9 structural walk + per-page
-// CRC + the meta CRC/tail checks skipped here, call Validate after opening. Returns a typed
-// error (exposing nothing) on any malformed/hostile meta or geometry violation.
-func Open(b []byte) (*Reader, error) {
-	m, err := selectActiveMeta(b, true)
-	if err != nil {
-		return nil, err
-	}
-	// flags reserved bits were already rejected in classify; only bit0 remains.
-	version := ipVersionFromFlagBit(m.flags)
-
-	// Geometry (§9 step 2). page_size/key_width/record_size/meta_size were cross-checked
-	// in classify; here: page-count, file size, height/root.
-	if m.totalPages < 2 || m.totalPages >= (uint64(1)<<32) {
-		return nil, errStructural("total_pages out of range")
-	}
-	// Overflow-checked total_pages*page_size.
-	if m.totalPages > maxUint64/pageSize {
-		return nil, errOverflow("total_pages*page_size")
-	}
-	needed := m.totalPages * pageSize
-	have := uint64(len(b))
-	if have%pageSize != 0 {
-		return nil, errFileSizeMismatch(needed, have)
-	}
-	if have < needed {
-		return nil, errFileTooShort(needed, have)
-	}
-	if m.treeHeight > treeHeightMax {
-		return nil, errStructural("tree_height > 32")
-	}
-	if (m.treeHeight == 0) != (m.rootPgno == 0) {
-		return nil, errStructural("tree_height/root_pgno inconsistent")
-	}
-	if m.rootPgno != 0 && (uint64(m.rootPgno) < 2 || uint64(m.rootPgno) >= m.totalPages) {
-		return nil, errStructural("root_pgno out of range")
-	}
-
-	r := &Reader{
-		bytes:      b,
-		meta:       m,
-		version:    version,
-		recordSize: int(m.recordSize),
-		keyWidth:   int(m.keyWidth),
-		leafMax:    leafMax(m.recordSize),
-		branchMax:  branchMax(m.keyWidth),
-	}
-	return r, nil
+	bytes   []byte
+	meta    meta
 }
 
-// Validate fully validates the image per §9 (the structural walk + per-page CRC + scope/KV
-// tree validation). Call this when the input is untrusted (externally provided files) or
-// for periodic integrity checks. Returns a typed error on any corruption. On a trusted
-// (daemon) file this is a no-op success; on a corrupt file it rejects rather than
-// panicking during lookup/scan.
-//
-// This also re-runs the two checks that trusted Open skips: both meta page CRC32Cs and the
-// per-meta reserved-tail zero-check. Open accepts a meta with intact magic + header but a
-// CRC-mismatching body / non-zero tail; Validate catches both here, before the tree walks.
-func (r *Reader) Validate() error {
-	// Verify both meta page CRCs (skipped during trusted Open).
-	if !verifyPage(r.pageBytes(0)) || !verifyPage(r.pageBytes(1)) {
-		return errChecksumFailed("meta page")
+// Open constructs a Reader over a committed byte image.
+func Open(bytes []byte) (*Reader, error) {
+	if len(bytes) < 2*PageSize {
+		return nil, fmt.Errorf("image too small")
 	}
-	// Verify each meta's reserved tail is zero (skipped during trusted Open classify).
-	for p := uint32(0); p < 2; p++ {
-		page := r.pageBytes(p)
-		m := decodeMeta(page)
-		for _, b := range page[m.metaSize:] {
-			if b != 0 {
-				return errNonZeroReserved("meta tail")
-			}
-		}
+	metaA := decodeMeta(bytes[:PageSize])
+	metaB := decodeMeta(bytes[PageSize : 2*PageSize])
+	var active meta
+	if metaA.txnID >= metaB.txnID {
+		active = metaA
+	} else {
+		active = metaB
 	}
-	if err := r.validateTree(); err != nil {
-		return err
+	if string(bytes[MetaMagic:MetaMagic+8]) != Magic {
+		return nil, fmt.Errorf("bad magic")
 	}
-	return r.validateScopeTableTree()
+	return &Reader{bytes: bytes, meta: active}, nil
 }
 
-// validateScopeTableTree validates the v4.1 metadata (§C.5) before exposing the reader: the
-// scope table, then every scope's per-scope KV tree (incl. its overflow chains). It
-// range-checks every kv_root/child/overflow pgno, enforces TREE_HEIGHT_MAX, checks sorted +
-// disjoint keys, page-type + self-pgno + CRC32C, overflow read-by-count, and rejects type == 0
-// values that are not valid UTF-8 over the whole reassembled value. A v4.0 file has
-// scope_table_root == 0 (no metadata) and this is a no-op.
-func (r *Reader) validateScopeTableTree() error {
-	root := r.meta.scopeTableRoot
-	if root == 0 {
-		return nil
-	}
-	// F2: a single file-wide visitor threads through the scope table AND every per-scope KV
-	// tree AND every overflow chain. The first visit marks a page; any second visit (a shared
-	// overflow chain, a duplicate child pgno, or any other aliasing) is a structural error.
-	// This proves the metadata page-forest disjoint + acyclic and subsumes the per-node
-	// duplicate-child check. total_pages was bounded by Open (>= 2, < 2^32, file-backed).
-	vis := &pageVisitor{visited: make([]bool, r.meta.totalPages)}
-	if err := validateScopeTable(r.bytes, root, r.meta.totalPages, vis); err != nil {
-		return err
-	}
-	// Each scope record's kv_root is a separate B+tree (§C.4). The scope table is now
-	// validated, so loading the records is bounded and safe.
-	recs, err := loadAllScopes(r.bytes, root)
-	if err != nil {
-		return err
-	}
-	for i := range recs {
-		if err := validateKV(r.bytes, recs[i].kvRoot, r.meta.totalPages, vis); err != nil {
-			return err
-		}
-	}
-	return nil
+func (r *Reader) RecordCount() uint64 {
+	return r.meta.recordCount
 }
 
-// Version returns the file's IP family.
-func (r *Reader) Version() IPVersion { return r.version }
-
-// ScopeWidth returns the fixed per-record scope width in bytes; 0 = presence map (§4).
-func (r *Reader) ScopeWidth() int { return int(r.meta.scopeWidth) }
-
-// RecordCount returns the exact record count (verified against the tree during Open).
-func (r *Reader) RecordCount() uint64 { return r.meta.recordCount }
-
-// IsEmpty reports whether the tree is empty (root_pgno == 0).
-func (r *Reader) IsEmpty() bool { return r.meta.rootPgno == 0 }
-
-// LookupV4 returns the scope of the range covering ip, and whether it was found. Error if
-// the file is not IPv4.
-func (r *Reader) LookupV4(ip Ipv4Key) ([]byte, bool, error) {
-	if r.version != V4 {
-		return nil, false, errInvalidInput("lookup key family mismatch")
-	}
-	scope, ok := r.lookupV4Raw(ip)
-	return scope, ok, nil
+func (r *Reader) ScopeMode() uint8 {
+	return r.meta.scopeMode
 }
 
-// lookupV4Raw does a tree descent + leaf binary search reading raw page bytes directly.
-// No generic dispatch: from/to/separators are read via readLE32 (one instruction each),
-// eliminating the 3+ dictionary-dispatched method calls per binary search iteration that
-// the generic readerLookup/leafLookup/branchDescend chain incurred.
-func (r *Reader) lookupV4Raw(ip Ipv4Key) ([]byte, bool) {
+func (r *Reader) KeyWidth() uint8 {
+	return r.meta.keyWidth
+}
+
+func (r *Reader) page(pgno uint32) []byte {
+	off := int(pgno) * PageSize
+	return r.bytes[off : off+PageSize]
+}
+
+// LookupV4 finds the scope_id covering ip (IPv4). Returns (scope_id, true) or (0, false).
+func (r *Reader) LookupV4(ip Ipv4Key) (uint32, bool) {
+	return r.lookup(ip, 4)
+}
+
+// LookupV6 finds the scope_id covering ip (IPv6).
+func (r *Reader) LookupV6(ip Ipv6Key) (uint32, bool) {
+	return r.lookup(ip, 16)
+}
+
+func (r *Reader) lookup(key interface{}, kw int) (uint32, bool) {
 	if r.meta.rootPgno == 0 {
-		return nil, false
-	}
-	tgt := uint32(ip)
-	pgno := r.meta.rootPgno
-	depth := uint32(1)
-	for {
-		page := r.pageBytes(pgno)
-		count := int(decodePageHeader(page).entryCount)
-		if depth == r.meta.treeHeight {
-			// Leaf: binary search for first from > tgt, then check candidate (lo-1).
-			lo, hi := 0, count
-			for lo < hi {
-				mid := lo + (hi-lo)/2
-				off := pageHeaderSize + mid*r.recordSize
-				if readLE32(page, off) <= tgt {
-					lo = mid + 1
-				} else {
-					hi = mid
-				}
-			}
-			if lo == 0 {
-				return nil, false
-			}
-			off := pageHeaderSize + (lo-1)*r.recordSize
-			if tgt <= readLE32(page, off+4) {
-				return page[off+8 : off+r.recordSize], true
-			}
-			return nil, false
-		}
-		// Branch: binary search separators (keyWidth=4, slot=8).
-		lo, hi := 0, count
-		for lo < hi {
-			mid := lo + (hi-lo)/2
-			sepOff := pageHeaderSize + 4 + mid*8
-			if readLE32(page, sepOff) <= tgt {
-				lo = mid + 1
-			} else {
-				hi = mid
-			}
-		}
-		pgno = readLE32(page, pageHeaderSize+lo*8)
-		depth++
-	}
-}
-
-// LookupV6 returns the scope of the range covering ip, and whether it was found. Error if
-// the file is not IPv6.
-func (r *Reader) LookupV6(ip Ipv6Key) ([]byte, bool, error) {
-	if r.version != V6 {
-		return nil, false, errInvalidInput("lookup key family mismatch")
-	}
-	scope, ok := readerLookup[Ipv6Key](r, ip)
-	return scope, ok, nil
-}
-
-// ScanV4 calls f(from, to, scope) for every record in key order. Error if not IPv4.
-// Uses a type-specialized raw-byte scan that bypasses the generic LeafView/RecordRef
-// dispatch chain (6 generic method calls per record → 0). Profile showed 97% of scan
-// time was in generic dispatch overhead.
-func (r *Reader) ScanV4(f func(from, to Ipv4Key, scope []byte)) error {
-	if r.version != V4 {
-		return errInvalidInput("scan key family mismatch")
-	}
-	if r.meta.rootPgno != 0 {
-		r.scanV4Raw(r.meta.rootPgno, 1, f)
-	}
-	return nil
-}
-
-// scanV4Raw traverses the tree reading records directly from raw page bytes. No generic
-// dispatch: from/to are read via readLE32 (one instruction each), scope via a slice view.
-// Branch children are read at pageHeaderSize + j*8 (keyWidth=4, slot=keyWidth+4=8).
-func (r *Reader) scanV4Raw(pgno, depth uint32, f func(from, to Ipv4Key, scope []byte)) {
-	page := r.pageBytes(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	if depth == r.meta.treeHeight {
-		for i := 0; i < count; i++ {
-			off := pageHeaderSize + i*r.recordSize
-			f(Ipv4Key(readLE32(page, off)), Ipv4Key(readLE32(page, off+4)), page[off+8:off+r.recordSize])
-		}
-		return
-	}
-	for j := 0; j <= count; j++ {
-		child := readLE32(page, pageHeaderSize+j*8)
-		r.scanV4Raw(child, depth+1, f)
-	}
-}
-
-// ScanV6 calls f(from, to, scope) for every record in key order. Error if not IPv6.
-func (r *Reader) ScanV6(f func(from, to Ipv6Key, scope []byte)) error {
-	if r.version != V6 {
-		return errInvalidInput("scan key family mismatch")
-	}
-	if r.meta.rootPgno != 0 {
-		readerScanNode[Ipv6Key](r, r.meta.rootPgno, 1, f)
-	}
-	return nil
-}
-
-// --- v4.1 metadata reads (§C.2/§C.4) ---
-//
-// These mirror the Writer's metadata getters but descend the on-disk committed scope table
-// and per-scope KV trees (validated at Open), so a read-only shared-lock consumer reads a
-// self-describing file's metadata. A v4.0 image (scope_table_root == 0) returns the empty/
-// not-found result everywhere. All reads go through the bounds-safe byte views.
-
-// scopeByID resolves one scope record from the committed scope tree, ignoring an error (the
-// tree was validated at Open, so a descent error means not-found from a caller's view).
-func (r *Reader) scopeByID(id uint32) (scopeRec, bool) {
-	rec, found, err := findScopeByID(r.bytes, r.meta.scopeTableRoot, r.meta.totalPages, id)
-	if err != nil {
-		return scopeRec{}, false
-	}
-	return rec, found
-}
-
-// ScopeName returns the scope's name (UTF-8 bytes, a copy) and whether it exists. A missing
-// scope returns (nil, false). Mirrors Writer.ScopeName.
-func (r *Reader) ScopeName(scopeID uint32) ([]byte, bool) {
-	if scopeID == fileScopeID {
-		return nil, false
-	}
-	if rec, ok := r.scopeByID(scopeID); ok {
-		return cloneBytes(rec.name), true
-	}
-	return nil, false
-}
-
-// ScopeList returns all defined scopes as (id, name), ascending by scope_id. The FILE target
-// (scope_id 0) is a dataset-metadata target, not a defined scope, so it is excluded (§C.2).
-// Mirrors Writer.ScopeList.
-func (r *Reader) ScopeList() []ScopeEntry {
-	recs, err := loadAllScopes(r.bytes, r.meta.scopeTableRoot)
-	if err != nil {
-		return nil
-	}
-	out := make([]ScopeEntry, 0, len(recs))
-	for i := range recs {
-		if recs[i].id == fileScopeID {
-			continue
-		}
-		out = append(out, ScopeEntry{ID: recs[i].id, Name: cloneBytes(recs[i].name)})
-	}
-	return out
-}
-
-// ScopeVersion returns the scope's version and whether it exists. Mirrors Writer.ScopeVersion.
-func (r *Reader) ScopeVersion(scopeID uint32) (uint64, bool) {
-	if scopeID == fileScopeID {
 		return 0, false
 	}
-	if rec, ok := r.scopeByID(scopeID); ok {
-		return rec.version, true
+	pgno := r.meta.rootPgno
+	for depth := uint32(0); depth < r.meta.treeHeight-1; depth++ {
+		page := r.page(pgno)
+		h := decodeHeader(page)
+		bv := newBranchView(page, int(h.entryCount), kw)
+		idx := branchFindChildInterface(bv, key, kw)
+		pgno = bv.child(idx)
+	}
+	// Leaf level
+	page := r.page(pgno)
+	h := decodeHeader(page)
+	lv := newLeafView(page, int(h.entryCount), kw)
+	for i := 0; i < lv.len(); i++ {
+		from := readKeyInterface(lv.recordFrom(i), kw)
+		to := readKeyInterface(lv.recordTo(i), kw)
+		if cmpInterface(from, key) <= 0 && cmpInterface(key, to) <= 0 {
+			return lv.recordScopeID(i), true
+		}
+		if cmpInterface(from, key) > 0 {
+			break
+		}
 	}
 	return 0, false
 }
 
-// ScopeType returns the scope's opaque type byte and whether it exists. Mirrors Writer.ScopeType.
-func (r *Reader) ScopeType(scopeID uint32) (uint8, bool) {
-	if scopeID == fileScopeID {
-		return 0, false
-	}
-	if rec, ok := r.scopeByID(scopeID); ok {
-		return rec.typ, true
-	}
-	return 0, false
+// ScanV4 iterates all IPv4 records in order.
+func (r *Reader) ScanV4(f func(from, to Ipv4Key, scopeID uint32)) error {
+	return r.scan(4, func(fromLE, toLE []byte, scopeID uint32) {
+		f(Ipv4Key(0).readLE(fromLE), Ipv4Key(0).readLE(toLE), scopeID)
+	})
 }
 
-// targetKVRoot returns the committed kv_root of target and whether the target has a record.
-// FILE (scope_id 0) is looked up like any scope record. Mirrors Writer.targetKVRoot.
-func (r *Reader) targetKVRoot(target uint32) (uint32, bool) {
-	rec, ok := r.scopeByID(target)
-	if !ok {
-		return 0, false
-	}
-	return rec.kvRoot, true
+// ScanV6 iterates all IPv6 records in order.
+func (r *Reader) ScanV6(f func(from, to Ipv6Key, scopeID uint32)) error {
+	return r.scan(16, func(fromLE, toLE []byte, scopeID uint32) {
+		f(Ipv6Key{}.readLE(fromLE), Ipv6Key{}.readLE(toLE), scopeID)
+	})
 }
 
-// MetaGet gets key on target as (type, value) (the whole reassembled value) and found=true, or
-// found=false if absent (§C.7). target = scope_id, 0 = FILE. A non-existent target → found=false.
-// Mirrors Writer.MetaGet, descending the committed KV tree.
-func (r *Reader) MetaGet(target uint32, key []byte) (typ uint32, value []byte, found bool, err error) {
-	if err := checkKey(key); err != nil {
-		return 0, nil, false, err
-	}
-	root, ok := r.targetKVRoot(target)
-	if !ok {
-		return 0, nil, false, nil
-	}
-	return kvGet(r.bytes, root, key, r.meta.totalPages)
-}
-
-// MetaList lists every (key, type, value) on target, ordered by key (§C.4). A non-existent
-// target → an empty list. Mirrors Writer.MetaList, descending the committed KV tree.
-func (r *Reader) MetaList(target uint32) ([]MetaEntry, error) {
-	var out []MetaEntry
-	root, ok := r.targetKVRoot(target)
-	if !ok {
-		return out, nil
-	}
-	var entries []kvEntry
-	if err := kvList(r.bytes, root, r.meta.totalPages, &entries); err != nil {
-		return nil, err
-	}
-	out = make([]MetaEntry, 0, len(entries))
-	for i := range entries {
-		out = append(out, MetaEntry{Key: entries[i].key, Type: entries[i].typ, Value: entries[i].value})
-	}
-	return out, nil
-}
-
-// --- internals ---
-
-// pageBytes returns the pgno-th page. pgno < total_pages and total_pages*page_size <=
-// len(bytes) were checked in Open / the validate walk, so the slice is always in bounds.
-func (r *Reader) pageBytes(pgno uint32) []byte {
-	off := int(pgno) * pageSize
-	return r.bytes[off : off+pageSize]
-}
-
-func readerLookup[K ipKey[K]](r *Reader, ip K) ([]byte, bool) {
+func (r *Reader) scan(kw int, f func(fromLE, toLE []byte, scopeID uint32)) error {
 	if r.meta.rootPgno == 0 {
-		return nil, false
-	}
-	height := r.meta.treeHeight
-	pgno := r.meta.rootPgno
-	depth := uint32(1)
-	for {
-		page := r.pageBytes(pgno)
-		count := int(decodePageHeader(page).entryCount)
-		if depth == height {
-			leaf := newLeafView[K](page, count, r.recordSize)
-			return leafLookup(leaf, ip)
-		}
-		branch := newBranchView[K](page, count)
-		pgno = branch.child(branchDescend(branch, ip))
-		depth++
-	}
-}
-
-func readerScanNode[K ipKey[K]](r *Reader, pgno, depth uint32, f func(from, to K, scope []byte)) {
-	page := r.pageBytes(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	if depth == r.meta.treeHeight {
-		leaf := newLeafView[K](page, count, r.recordSize)
-		for i := 0; i < leaf.len(); i++ {
-			rec := leaf.record(i)
-			f(rec.from(), rec.to(), rec.scope())
-		}
-		return
-	}
-	branch := newBranchView[K](page, count)
-	for j := 0; j < branch.childCount(); j++ {
-		readerScanNode[K](r, branch.child(j), depth+1, f)
-	}
-}
-
-func (r *Reader) validateTree() error {
-	if r.meta.rootPgno == 0 {
-		// Empty tree: the full pass enforces the exact record_count (§9 step 5).
-		if r.meta.recordCount != 0 {
-			return errInvariant("record_count nonzero for empty tree")
-		}
 		return nil
 	}
-	var count uint64
-	switch r.version {
-	case V4:
-		var prevTo Ipv4Key
-		havePrev := false
-		if err := validateNode[Ipv4Key](r, r.meta.rootPgno, 1, Ipv4Key(0).minKey(), Ipv4Key(0).maxKey(), &prevTo, &havePrev, &count); err != nil {
-			return err
-		}
-	case V6:
-		var prevTo Ipv6Key
-		havePrev := false
-		if err := validateNode[Ipv6Key](r, r.meta.rootPgno, 1, Ipv6Key{}.minKey(), Ipv6Key{}.maxKey(), &prevTo, &havePrev, &count); err != nil {
-			return err
-		}
-	}
-	if count != r.meta.recordCount {
-		return errInvariant("record_count mismatch")
-	}
-	return nil
+	return r.scanNode(r.meta.rootPgno, kw, f)
 }
 
-// validateNode is the recursive structural walk (§9 step 4). lo/hi are the inherited
-// inclusive key bound; (prevTo, havePrev) thread the largest to seen so far across the
-// whole in-order walk (global cross-leaf disjointness); count accumulates leaf records.
-func validateNode[K ipKey[K]](r *Reader, pgno, depth uint32, lo, hi K, prevTo *K, havePrev *bool, count *uint64) error {
-	// Cycle/DoS defense: a too-deep path (incl. any pgno cycle) exceeds tree_height.
-	if depth > r.meta.treeHeight {
-		return errInvariant("path deeper than tree_height")
-	}
-	page := r.pageBytes(pgno)
-	if !verifyPage(page) {
-		return errChecksumFailed("reachable page")
-	}
-	h := decodePageHeader(page)
-	if h.reserved != 0 {
-		return errNonZeroReserved("page header reserved")
-	}
-	if h.pgno != pgno {
-		return errStructural("page self-pgno mismatch")
-	}
-
-	if depth == r.meta.treeHeight {
-		// MUST be a leaf.
-		if h.pageType != pageTypeLeaf {
-			return errStructural("expected leaf at tree_height")
+func (r *Reader) scanNode(pgno uint32, kw int, f func([]byte, []byte, uint32)) error {
+	page := r.page(pgno)
+	h := decodeHeader(page)
+	switch h.pageType {
+	case PageTypeLeaf:
+		lv := newLeafView(page, int(h.entryCount), kw)
+		for i := 0; i < lv.len(); i++ {
+			f(lv.recordFrom(i), lv.recordTo(i), lv.recordScopeID(i))
 		}
-		rc := int(h.entryCount)
-		if rc < 1 || rc > r.leafMax {
-			return errInvariant("leaf entry_count out of range")
-		}
-		leaf := newLeafView[K](page, rc, r.recordSize)
-		// Tail after the records MUST be zero (full pass).
-		for _, b := range page[pageHeaderSize+leaf.bodyLen():] {
-			if b != 0 {
-				return errNonZeroReserved("leaf tail")
-			}
-		}
-		// Cross-leaf disjointness: prev_to < this leaf's first from.
-		firstFrom := leaf.record(0).from()
-		if *havePrev && (*prevTo).cmp(firstFrom) >= 0 {
-			return errInvariant("cross-leaf overlap")
-		}
-		// Records sorted, disjoint, within [lo, hi].
-		var prevRecTo K
-		havePrevRec := false
-		for i := 0; i < rc; i++ {
-			rec := leaf.record(i)
-			from, to := rec.from(), rec.to()
-			if to.cmp(from) < 0 {
-				return errInvariant("record to < from")
-			}
-			if from.cmp(lo) < 0 || to.cmp(hi) > 0 {
-				return errInvariant("record outside node bound")
-			}
-			if havePrevRec && from.cmp(prevRecTo) <= 0 {
-				return errInvariant("leaf records not sorted/disjoint")
-			}
-			prevRecTo = to
-			havePrevRec = true
-		}
-		*prevTo = prevRecTo // last record's to
-		*havePrev = true
-		*count += uint64(rc)
 		return nil
-	}
-
-	// MUST be a branch.
-	if h.pageType != pageTypeBranch {
-		return errStructural("expected branch above tree_height")
-	}
-	s := int(h.entryCount)
-	if s < 1 || s > r.branchMax {
-		return errInvariant("branch separator count out of range")
-	}
-	branch := newBranchView[K](page, s)
-	for _, b := range page[pageHeaderSize+branch.bodyLen():] {
-		if b != 0 {
-			return errNonZeroReserved("branch tail")
-		}
-	}
-	// Separators: lo < sep[0] < … < sep[s-1] <= hi (strictly increasing, in bound).
-	var prevSep K
-	havePrevSep := false
-	for i := 0; i < s; i++ {
-		sep := branch.sep(i)
-		if sep.cmp(lo) <= 0 {
-			return errInvariant("separator <= lo")
-		}
-		if sep.cmp(hi) > 0 {
-			return errInvariant("separator > hi")
-		}
-		if havePrevSep && sep.cmp(prevSep) <= 0 {
-			return errInvariant("separators not strictly increasing")
-		}
-		prevSep = sep
-		havePrevSep = true
-	}
-	// Children in [2, total_pages) and pairwise distinct.
-	childCount := branch.childCount()
-	for j := 0; j < childCount; j++ {
-		cj := branch.child(j)
-		if uint64(cj) < 2 || uint64(cj) >= r.meta.totalPages {
-			return errStructural("child pgno out of range")
-		}
-		for k := j + 1; k < childCount; k++ {
-			if branch.child(k) == cj {
-				return errStructural("duplicate child pgno")
+	case PageTypeBranch:
+		bv := newBranchView(page, int(h.entryCount), kw)
+		for j := 0; j < bv.childCount(); j++ {
+			if err := r.scanNode(bv.child(j), kw, f); err != nil {
+				return err
 			}
 		}
-	}
-	// Recurse with inherited bounds: child[0]=[lo, sep[0]-1]; child[i]=[sep[i-1],
-	// sep[i]-1]; child[s]=[sep[s-1], hi]. sep > lo >= family_min ⇒ sep-1 exists.
-	lower := lo
-	for i := 0; i < s; i++ {
-		sep := branch.sep(i)
-		upper, ok := sep.checkedDec()
-		if !ok {
-			return errInvariant("separator has no predecessor")
-		}
-		if err := validateNode[K](r, branch.child(i), depth+1, lower, upper, prevTo, havePrev, count); err != nil {
-			return err
-		}
-		lower = sep
-	}
-	return validateNode[K](r, branch.child(s), depth+1, lower, hi, prevTo, havePrev, count)
-}
-
-// selectActiveMeta selects the active meta (§5.1 bootstrap). It reads both 4096-byte
-// candidates independently; class 2 (intact-but-incompatible) on either rejects the file;
-// class 1 (torn/not-a-meta) is discarded; among the valid metas the higher txn_id wins
-// (tie → pgno 0). Both valid metas MUST agree on the static identity region.
-// skipCRC selects trusted mode (see classify): the daemon path passes true to skip the
-// per-meta CRC + tail zero-check; untrusted callers pass false.
-func selectActiveMeta(b []byte, skipCRC bool) (meta, error) {
-	if len(b) < 2*pageSize {
-		return meta{}, errFileTooShort(2*pageSize, uint64(len(b)))
-	}
-	ma, aok, err := classify(b[:pageSize], 0, skipCRC)
-	if err != nil {
-		return meta{}, err
-	}
-	mb, bok, err := classify(b[pageSize:2*pageSize], 1, skipCRC)
-	if err != nil {
-		return meta{}, err
-	}
-	switch {
-	case !aok && !bok:
-		return meta{}, errStructural("no valid meta page")
-	case aok && !bok:
-		return ma, nil
-	case !aok && bok:
-		return mb, nil
+		return nil
 	default:
-		// Both valid metas MUST agree on the static identity region [16,50) — EXCEPT
-		// version_minor (26) and meta_size (28): a v4.0→v4.1 in-place upgrade (§C.6) writes
-		// the new minor/meta_size into one meta while the other still holds the old values,
-		// so they legitimately differ there during the transition (the active/higher-txn_id
-		// meta is authoritative, and each field is still CRC-protected). The rest of the
-		// static identity must match byte-for-byte. Ranges: [16,26) and [30,50)
-		// (metaPageSize == 30 is the field after meta_size).
-		loA := b[metaStaticStart:metaVersionMinor]
-		loB := b[pageSize+metaStaticStart : pageSize+metaVersionMinor]
-		hiA := b[metaPageSize:metaStaticEnd]
-		hiB := b[pageSize+metaPageSize : pageSize+metaStaticEnd]
-		if !bytes.Equal(loA, loB) || !bytes.Equal(hiA, hiB) {
-			return meta{}, errStructural("metas disagree on static identity")
-		}
-		// Higher txn_id active; on an (illegal) tie pick pgno 0 (== ma).
-		if mb.txnID > ma.txnID {
-			return mb, nil
-		}
-		return ma, nil
+		return fmt.Errorf("unexpected page type %d", h.pageType)
 	}
 }
 
-// classify classifies one meta candidate (§5.1): (_, false, nil) = class 1 (torn/not-a-
-// meta, discard), (_, _, err) = class 2 (intact but incompatible — fail closed),
-// (m, true, nil) = class 3 (valid).
-//
-// In trusted mode (skipCRC) the per-page CRC and the meta reserved-tail zero-check are
-// skipped: the daemon's own files are crash-safe under LOCK_EX, so Open relies on magic +
-// page-header + class-2 structural checks alone for speed. Validate re-runs both checks for
-// untrusted input.
-func classify(page []byte, expectedPgno uint32, skipCRC bool) (meta, bool, error) {
-	// Class 1: torn / not a meta — discarded, never rejects the file by itself.
-	// In trusted mode (skipCRC), rely on magic + header checks instead of CRC.
-	if !skipCRC && !verifyPage(page) {
-		return meta{}, false, nil
-	}
-	if readMagic(page) != magic {
-		return meta{}, false, nil
-	}
-	h := decodePageHeader(page)
-	if h.pageType != pageTypeMeta || h.reserved != 0 || h.entryCount != 0 || h.pgno != expectedPgno {
-		return meta{}, false, nil
-	}
+// --- helpers for interface{} key comparison ---
 
-	// A genuine, undamaged v4 meta. Class 2: incompatible / malformed ⇒ fail closed.
-	vMajor := readVersionMajor(page)
-	if vMajor != versionMajor {
-		return meta{}, false, errUnsupportedMajor(vMajor)
-	}
-	m := decodeMeta(page)
-	if m.pageSize != pageSize {
-		return meta{}, false, errIncompatible("page_size")
-	}
-	if m.checksumAlgo != checksumAlgoCRC32C {
-		return meta{}, false, errIncompatible("checksum_algo")
-	}
-	if m.flags&^flagIPVersion != 0 {
-		return meta{}, false, errIncompatible("unknown flags bit")
-	}
-	if m.metaSize < metaSize || int(m.metaSize) > pageSize {
-		return meta{}, false, errBadMetaSize(m.metaSize)
-	}
-	if m.versionMinor == 0 && m.metaSize != metaSize {
-		return meta{}, false, errBadMetaSize(m.metaSize)
-	}
-	// v4.1 declares exactly meta_size 94 (F7): pin it like the minor-0 rule. minor >= 2
-	// keeps the >= 90 + tail-skip path, so a future minor declaring a larger meta_size
-	// stays forward-compatible.
-	if m.versionMinor == versionMinorMetadata && m.metaSize != metaSizeV41 {
-		return meta{}, false, errBadMetaSize(m.metaSize)
-	}
-	expectKW := ipVersionFromFlagBit(m.flags).keyWidth()
-	if m.keyWidth != expectKW {
-		return meta{}, false, errStructural("key_width disagrees with flags")
-	}
-	if m.recordSize != recordSize(m.keyWidth, m.scopeWidth) {
-		return meta{}, false, errStructural("record_size mismatch")
-	}
-	// The meta's reserved tail after its declared fields MUST be zero (§5/§9). Check the
-	// FILE's metaSize (not the constant): a future minor declares a larger metaSize, so
-	// this skips that minor's appended fields and only enforces the still-reserved region
-	// beyond them — staying forward-compatible (§5.1). In trusted mode (skipCRC) this
-	// structural check is skipped — the daemon's own files always have a zero tail, and
-	// Validate enforces it for untrusted input.
-	if !skipCRC {
-		for _, b := range page[m.metaSize:] {
-			if b != 0 {
-				return meta{}, false, errNonZeroReserved("meta tail")
-			}
-		}
-	}
-	return m, true, nil
-}
-
-// leafLookup binary-searches a leaf for the record covering ip: the record with greatest
-// from <= ip, a hit iff ip <= to. Returns the borrowed scope.
-func leafLookup[K ipKey[K]](leaf leafView[K], ip K) ([]byte, bool) {
-	// First index whose from is > ip; the candidate is the one before it.
-	lo, hi := 0, leaf.len()
+func branchFindChildInterface(bv branchView, key interface{}, kw int) int {
+	lo, hi := 0, bv.sepCount
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if leaf.record(mid).from().cmp(ip) <= 0 {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	if lo == 0 {
-		return nil, false
-	}
-	rec := leaf.record(lo - 1)
-	if ip.cmp(rec.to()) <= 0 {
-		return rec.scope(), true
-	}
-	return nil, false
-}
-
-// branchDescend returns the child index for ip (§5.2): the number of separators <= ip
-// (binary search). child[i] covers [sep[i-1], sep[i]-1].
-func branchDescend[K ipKey[K]](branch branchView[K], ip K) int {
-	lo, hi := 0, branch.sepCountOf()
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		if branch.sep(mid).cmp(ip) <= 0 {
+		sep := readKeyInterface(bv.sep(mid), kw)
+		if cmpInterface(sep, key) <= 0 {
 			lo = mid + 1
 		} else {
 			hi = mid
 		}
 	}
 	return lo
+}
+
+func readKeyInterface(b []byte, kw int) interface{} {
+	if kw == 4 {
+		return Ipv4Key(u32le(b, 0))
+	}
+	return Ipv6Key{Hi: u64le(b, 0), Lo: u64le(b, 8)}
+}
+
+func cmpInterface(a, b interface{}) int {
+	switch av := a.(type) {
+	case Ipv4Key:
+		bv := b.(Ipv4Key)
+		return av.cmp(bv)
+	case Ipv6Key:
+		bv := b.(Ipv6Key)
+		return av.cmp(bv)
+	}
+	return 0
 }

@@ -1,76 +1,72 @@
 package iprangedb
 
-// Zero-copy views over branch (§5.2) and leaf (§5.3) page bodies.
-//
-// The reader and writer share these. They do offset arithmetic only — no bounds
-// validation (that is the reader's §9 walk) beyond what slice indexing guarantees.
-
-// leafView is a leaf page (§5.3): count records of record_size bytes after the 16-byte
-// header.
-type leafView[K ipKey[K]] struct {
-	page       []byte
-	count      int
-	recordSize int
+// leafView is a zero-copy view over a leaf page's records.
+type leafView struct {
+	page  []byte
+	count int
+	kw    int // key width (4 or 16)
 }
 
-func newLeafView[K ipKey[K]](page []byte, count, recordSize int) leafView[K] {
-	return leafView[K]{page: page, count: count, recordSize: recordSize}
+func newLeafView(page []byte, count int, keyWidth int) leafView {
+	return leafView{page: page, count: count, kw: keyWidth}
 }
 
-// len returns the number of records.
-func (l leafView[K]) len() int { return l.count }
+func (l *leafView) len() int { return l.count }
 
-// record returns the i-th record (i < len). Zero-copy; scope is borrowed (D11).
-func (l leafView[K]) record(i int) recordRef[K] {
-	off := pageHeaderSize + i*l.recordSize
-	return newRecordRef[K](l.page[off : off+l.recordSize])
+// recordFrom returns the `from` key (LE bytes) of record i.
+func (l *leafView) recordFrom(i int) []byte {
+	rs := recordSizeBytes(l.kw)
+	off := PageHeaderSize + i*rs
+	return l.page[off : off+l.kw]
 }
 
-// bodyLen returns the byte length of the populated body (for the §9 tail-zero check).
-func (l leafView[K]) bodyLen() int { return l.count * l.recordSize }
+// recordTo returns the `to` key (LE bytes) of record i.
+func (l *leafView) recordTo(i int) []byte {
+	rs := recordSizeBytes(l.kw)
+	off := PageHeaderSize + i*rs + l.kw
+	return l.page[off : off+l.kw]
+}
 
-// branchView is a branch page (§5.2): child_pgno[0], then sep_count × (sep_key,
-// child_pgno) — s separators and s+1 children. Keys are K.width() bytes.
-type branchView[K ipKey[K]] struct {
+// recordScopeID returns the scope_id of record i.
+func (l *leafView) recordScopeID(i int) uint32 {
+	rs := recordSizeBytes(l.kw)
+	off := PageHeaderSize + i*rs + 2*l.kw
+	return u32le(l.page, off)
+}
+
+func (l *leafView) bodyLen() int {
+	return l.count * recordSizeBytes(l.kw)
+}
+
+// branchView is a zero-copy view over a branch page.
+type branchView struct {
 	page     []byte
 	sepCount int
+	kw       int
 }
 
-func newBranchView[K ipKey[K]](page []byte, sepCount int) branchView[K] {
-	return branchView[K]{page: page, sepCount: sepCount}
+func newBranchView(page []byte, sepCount int, keyWidth int) branchView {
+	return branchView{page: page, sepCount: sepCount, kw: keyWidth}
 }
 
-// sepCountOf returns the number of separators s.
-func (b branchView[K]) sepCountOf() int { return b.sepCount }
+func (b *branchView) sepCount_() int  { return b.sepCount }
+func (b *branchView) childCount() int { return b.sepCount + 1 }
 
-// childCount returns the number of children s+1.
-func (b branchView[K]) childCount() int { return b.sepCount + 1 }
-
-// sep returns separator i (i < sep_count): a routing key (§5.2).
-func (b branchView[K]) sep(i int) K {
-	var zero K
-	w := zero.width()
-	off := pageHeaderSize + 4 + i*(w+4)
-	return zero.readLE(b.page[off : off+w])
+func (b *branchView) sep(i int) []byte {
+	off := PageHeaderSize + 4 + i*(b.kw+4)
+	return b.page[off : off+b.kw]
 }
 
-// child returns child pgno j (j <= sep_count). child[0] precedes all separators;
-// child[j] (j >= 1) follows sep[j-1].
-func (b branchView[K]) child(j int) uint32 {
-	var zero K
-	w := zero.width()
+func (b *branchView) child(j int) uint32 {
 	var off int
 	if j == 0 {
-		off = pageHeaderSize
+		off = PageHeaderSize
 	} else {
-		off = pageHeaderSize + 4 + (j-1)*(w+4) + w
+		off = PageHeaderSize + 4 + (j-1)*(b.kw+4) + b.kw
 	}
-	return le.Uint32(b.page[off:])
+	return u32le(b.page, off)
 }
 
-// bodyLen returns the byte length of the populated body (for the §9 tail-zero check):
-// 4 + s*(W+4).
-func (b branchView[K]) bodyLen() int {
-	var zero K
-	return 4 + b.sepCount*(zero.width()+4)
+func (b *branchView) bodyLen() int {
+	return 4 + b.sepCount*(b.kw+4)
 }
