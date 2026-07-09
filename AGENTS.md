@@ -354,17 +354,13 @@ formats live in language libraries):
 
 - `v3/` — the sealed v3 snapshot format. Rust: `cargo test --manifest-path v3/rust/Cargo.toml`;
   Go: `go -C v3/go test ./...`. Shared corpus in `v3/conformance/`.
-- `v4/` — the v4 **live mutable DB** (`iprange-livedb`). Rust:
-  `cargo test --manifest-path v4/rust/Cargo.toml` (add `--features export-v3` for the
-  v3 bridge; `--features os` is default for the mmap/flock file layer);
-  `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features -- -D warnings`.
-  Go: `go -C v4/go test ./...`. Shared corpus + cross-read goldens in `v4/conformance/`
-  (regenerate with `REGENERATE_GOLDENS=1 cargo test --manifest-path v4/rust/Cargo.toml
-  --test conformance` — and `--test metadata_conformance` for the v4.1 scope/KV goldens).
-  The **v4.1** additions — the read-only **cursor + standard SDK helpers** (SOW-0008) and the
-  **per-scope metadata system** (scope table + per-scope KV; SOW-0009) — live in the same crate
-  (Go: `v4/go`) and run under the commands above; both are additive (v4.0 readers skip the
-  metadata, v4.0 writers refuse a v4.1 file).
+- `v4/` — the v4.3 **streaming mmap COW engine** (`iprange-livedb`). The engine was
+  rebuilt under SOW-0014 (four rules: zero-heap writer, concurrent readers+writer,
+  migration APIs, fixed scope_id record). Rust: `cargo test --manifest-path
+  v4/rust/iprange-livedb/Cargo.toml`; Go: `go -C v4/go test ./...`. The v4.0–v4.2
+  scope_width/flock/heap-dirty-page model is superseded; conformance goldens are
+  being regenerated for v4.3. Pending: Phase 3 (reader registration companion file),
+  Phase 4c (scope/KV metadata re-implementation).
 
 ### Project-specific overrides
 
