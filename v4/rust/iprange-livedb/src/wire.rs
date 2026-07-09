@@ -115,9 +115,9 @@ pub struct Meta {
     pub flags: u8,
     /// `key_width` (4 or 16).
     pub key_width: u8,
-    /// `scope_width` (0..=255).
-    pub scope_width: u8,
-    /// `record_size` (== `2·key_width + scope_width`).
+    /// `scope_mode` (0=scalar, 1=bitmap, 2=indirect).
+    pub scope_mode: u8,
+    /// `record_size` (== `2·key_width + 4`).
     pub record_size: u32,
     /// `created_unixtime` (static).
     pub created_unixtime: u64,
@@ -161,7 +161,7 @@ impl Meta {
         page[spec::META_CHECKSUM_ALGO] = self.checksum_algo;
         page[spec::META_FLAGS] = self.flags;
         page[spec::META_KEY_WIDTH] = self.key_width;
-        page[spec::META_SCOPE_WIDTH] = self.scope_width;
+        page[spec::META_SCOPE_MODE] = self.scope_mode;
         put_u32(page, spec::META_RECORD_SIZE, self.record_size);
         put_u64(page, spec::META_CREATED_UNIXTIME, self.created_unixtime);
         put_u32(page, spec::META_ROOT_PGNO, self.root_pgno);
@@ -188,7 +188,7 @@ impl Meta {
             checksum_algo: page[spec::META_CHECKSUM_ALGO],
             flags: page[spec::META_FLAGS],
             key_width: page[spec::META_KEY_WIDTH],
-            scope_width: page[spec::META_SCOPE_WIDTH],
+            scope_mode: page[spec::META_SCOPE_MODE],
             record_size: u32_le(page, spec::META_RECORD_SIZE),
             created_unixtime: u64_le(page, spec::META_CREATED_UNIXTIME),
             root_pgno: u32_le(page, spec::META_ROOT_PGNO),
@@ -240,8 +240,8 @@ mod tests {
             checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
             flags: spec::FLAG_IP_VERSION, // IPv6
             key_width: 16,
-            scope_width: 4,
-            record_size: spec::record_size(16, 4),
+            scope_mode: spec::SCOPE_MODE_SCALAR,
+            record_size: spec::record_size(16),
             created_unixtime: 0x1122_3344_5566_7788,
             root_pgno: 0x0A0B_0C0D,
             tree_height: 0x1112_1314,
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(p[spec::META_CHECKSUM_ALGO], 1);
         assert_eq!(p[spec::META_FLAGS], spec::FLAG_IP_VERSION);
         assert_eq!(p[spec::META_KEY_WIDTH], 16);
-        assert_eq!(p[spec::META_SCOPE_WIDTH], 4);
+        assert_eq!(p[spec::META_SCOPE_MODE], spec::SCOPE_MODE_SCALAR);
         assert_eq!(u32_le(&p, spec::META_RECORD_SIZE), 36);
         assert_eq!(
             u64_le(&p, spec::META_CREATED_UNIXTIME),

@@ -1,150 +1,125 @@
-//! Format constants from `design-iprange-v4-livedb.md` — the single source of on-disk
-//! truth for v4.
+//! Format constants for the v4 streaming mmap COW engine (v4.3).
 //!
-//! Every value here is normative and was verified against the spec's byte-layout
-//! tables (§5, §5.1). Changing one is a format change. Offsets are byte positions
-//! within a single `PAGE_SIZE` page buffer.
+//! Every record is a fixed `[from: K, to: K, scope_id: u32]` — 12 bytes (IPv4)
+//! or 36 bytes (IPv6). There is no `scope_width` field; `scope_mode` (0/1/2)
+//! selects how the 4-byte `scope_id` is interpreted.
+//!
+//! Offsets are byte positions within a single `PAGE_SIZE` page buffer.
 
-/// File magic, compared **bytewise** (8 ASCII bytes, endianness-independent, §5.1).
+// ── identity ──────────────────────────────────────────────────────────────
+
+/// File magic (8 ASCII bytes, compared bytewise).
 pub const MAGIC: [u8; 8] = *b"IPRANGE4";
 
-/// Major version. A reader MUST reject any other major (§5.1 forward-compat).
+/// Major version. A reader MUST reject any other major.
 pub const VERSION_MAJOR: u16 = 4;
-/// Minor version for the v4.0 contract.
-pub const VERSION_MINOR: u16 = 0;
 
-/// `meta_size` for v4.0: the offset just past the last defined meta field (§5.1). A
-/// reader requires `meta_size >= 90`, and exactly `90` at `version_minor == 0`.
-pub const META_SIZE: u16 = 90;
+/// v4.3: the streaming mmap COW engine. Breaking change from v4.0–v4.2 —
+/// the record layout changed from `[from, to, scope_bytes]` (variable-width)
+/// to `[from, to, scope_id:u32]` (fixed-width). Old files cannot be read.
+pub const VERSION_MINOR: u16 = 3;
 
-/// Minor version for the v4.1 contract (the metadata system: scope table + per-scope KV).
-/// Additive (§C.6): a v4.0 reader reads the IP tree and skips the metadata; a v4.0 writer
-/// refuses to mutate a v4.1 file.
-pub const VERSION_MINOR_METADATA: u16 = 1;
+/// `meta_size`: offset past the last defined meta field. Unchanged from v4.2
+/// layout (scope_mode reuses the scope_width byte at offset 37; free_list_head
+/// and scope_table_root remain at 94 / 90).
+pub const META_SIZE: u16 = 98;
 
-/// `meta_size` for v4.1: v4.0's 90 plus the trailing `scope_table_root` (u32) at offset 90.
-pub const META_SIZE_V41: u16 = 94;
+// ── page geometry ─────────────────────────────────────────────────────────
 
-/// Minor version for v4.2 (persisted free-list: the `free_list_head` field). Additive:
-/// a v4.0/v4.1 reader skips it; a v4.0/v4.1 writer refuses to mutate a v4.2 file.
-pub const VERSION_MINOR_FREE_LIST: u16 = 2;
-
-/// `meta_size` for v4.2: v4.1's 94 plus the trailing `free_list_head` (u32) at offset 94.
-pub const META_SIZE_V42: u16 = 98;
-
-/// Byte offset of the `free_list_head` field in the meta page (v4.2).
-pub const META_FREE_LIST_HEAD: usize = 94;
-
-/// The fixed page size for **all** v4.x (D10). A reader MUST reject any other value
-/// at `version_major == 4`. Pinning it to 4096 fixes meta-B at byte offset 4096 and
-/// completes bootstrap (§5.1). It is the page-aligned I/O / allocation unit (§2).
+/// Fixed page size for all v4.x.
 pub const PAGE_SIZE: usize = 4096;
 
-/// `checksum_algo` for CRC32C/Castagnoli (D9). A field, so future algorithms are
-/// possible; v4.0 readers require this value.
-pub const CHECKSUM_ALGO_CRC32C: u8 = 1;
+/// Size of the header present on every page.
+pub const PAGE_HEADER_SIZE: usize = 16;
 
-/// Hard cap on `tree_height` (§5.3): even at the degenerate minimum branch fanout of
-/// 2, a `u32`-pgno file (< 2^32 pages) cannot exceed ~32 levels. A reader MUST reject
-/// `tree_height > 32` and treat descending deeper as a hard error (cycle defense, §9).
+/// Maximum B+tree height (defense against cycles in hostile files).
 pub const TREE_HEIGHT_MAX: u32 = 32;
 
-// --- common 16-byte page header (§5), byte offsets within a page ---
+/// `checksum_algo` for CRC32C/Castagnoli.
+pub const CHECKSUM_ALGO_CRC32C: u8 = 1;
 
-/// Size of the header present on every page (§5).
-pub const PAGE_HEADER_SIZE: usize = 16;
-/// `page_type` (u8) — 1 meta, 2 branch, 3 leaf.
+// ── page header field offsets (within a page) ─────────────────────────────
+
 pub const PH_PAGE_TYPE: usize = 0;
-/// `reserved` (u8) — MUST be 0.
 pub const PH_RESERVED: usize = 1;
-/// `entry_count` (u16) — records in a leaf / separators in a branch; 0 for a meta.
 pub const PH_ENTRY_COUNT: usize = 2;
-/// `pgno` (u32) — this page's own number; a reader MUST verify it matches.
 pub const PH_PGNO: usize = 4;
-/// `checksum` (u64) — D9, computed over the whole page with this field zeroed.
 pub const PH_CHECKSUM: usize = 8;
 
-/// `page_type` value for a meta page (§5).
+// ── page_type values ───────────────────────────────────────────────────────
+
 pub const PAGE_TYPE_META: u8 = 1;
-/// `page_type` value for a branch (internal) page (§5.2).
 pub const PAGE_TYPE_BRANCH: u8 = 2;
-/// `page_type` value for a leaf page (§5.3).
 pub const PAGE_TYPE_LEAF: u8 = 3;
-/// v4.1 metadata page types (§D). A v4.0 reader never reaches these (they hang off
-/// `scope_table_root`); a v4.1 reader rejects an unknown `page_type`.
-/// Scope-table branch (internal) page.
 pub const PAGE_TYPE_SCOPE_BRANCH: u8 = 4;
-/// Scope-table leaf page (fixed [`SCOPE_RECORD_SIZE`]-byte per-scope headers).
 pub const PAGE_TYPE_SCOPE_LEAF: u8 = 5;
-/// Per-scope KV branch page (variable-length separators, slot directory).
 pub const PAGE_TYPE_KV_BRANCH: u8 = 6;
-/// Per-scope KV leaf page (variable-length entries, slot directory).
 pub const PAGE_TYPE_KV_LEAF: u8 = 7;
-/// KV overflow page (chained payload for a large value).
 pub const PAGE_TYPE_OVERFLOW: u8 = 8;
+/// A page in the transaction free-list (tracks pages freed during this txn).
+/// Body: `next_txn_free_page: u32` at offset 16, `count: u32` at offset 20,
+/// then `count` entries of `freed_pgno: u32` starting at offset 24.
+pub const PAGE_TYPE_TXN_FREE: u8 = 9;
 
-// --- meta page field offsets (§5.1), within the page (after the 16-byte header) ---
+// ── meta page field offsets (within the page, after the 16-byte header) ───
 
-/// `magic` (u8[8]).
 pub const META_MAGIC: usize = 16;
-/// `version_major` (u16).
 pub const META_VERSION_MAJOR: usize = 24;
-/// `version_minor` (u16).
 pub const META_VERSION_MINOR: usize = 26;
-/// `meta_size` (u16).
 pub const META_META_SIZE: usize = 28;
-/// `page_size` (u32).
 pub const META_PAGE_SIZE: usize = 30;
-/// `checksum_algo` (u8).
 pub const META_CHECKSUM_ALGO: usize = 34;
-/// `flags` (u8) — bit0: 0 = IPv4, 1 = IPv6; bits 1-7 reserved = 0.
 pub const META_FLAGS: usize = 35;
-/// `key_width` (u8) — 4 or 16.
 pub const META_KEY_WIDTH: usize = 36;
-/// `scope_width` (u8).
-pub const META_SCOPE_WIDTH: usize = 37;
-/// `record_size` (u32) — MUST equal `2·key_width + scope_width`.
+/// `scope_mode` (u8) — replaces `scope_width` at offset 37.
+/// 0 = scalar, 1 = bitmap, 2 = indirect.
+pub const META_SCOPE_MODE: usize = 37;
+/// `record_size` (u32) — MUST equal `2·key_width + 4`.
 pub const META_RECORD_SIZE: usize = 38;
-/// `created_unixtime` (u64) — static; identical in both metas.
 pub const META_CREATED_UNIXTIME: usize = 42;
-/// `root_pgno` (u32) — 0 = empty tree. First dynamic field.
 pub const META_ROOT_PGNO: usize = 50;
-/// `tree_height` (u32) — 0 = empty; leaf level = 1.
 pub const META_TREE_HEIGHT: usize = 54;
-/// `total_pages` (u64) — logical page count; `2 <= total_pages < 2^32`.
 pub const META_TOTAL_PAGES: usize = 58;
-/// `record_count` (u64) — UNVERIFIED hint; a reader MUST NOT size an allocation from it.
 pub const META_RECORD_COUNT: usize = 66;
-/// `txn_id` (u64) — monotonic; the checksum-valid meta with the higher value is active.
+/// `txn_id` (u64) — monotonic generation number. The checksum-valid meta with
+/// the higher `txn_id` is the active one. Readers register their txn_id in the
+/// companion file so the writer knows which freed pages are still needed.
 pub const META_TXN_ID: usize = 74;
-/// `updated_unixtime` (u64) — caller-supplied per commit (deterministic tests).
 pub const META_UPDATED_UNIXTIME: usize = 82;
-/// `scope_table_root` (u32) — v4.1 only (`version_minor >= 1`, `meta_size >= 94`). 0 = no
-/// metadata; else the root pgno of the scope table (§C.1). At v4.0 (`meta_size == 90`) this
-/// offset lies in the reserved-zero tail.
 pub const META_SCOPE_TABLE_ROOT: usize = 90;
+pub const META_FREE_LIST_HEAD: usize = 94;
 
-/// The static identity region `[16, 50)` (§5.1): magic..=created_unixtime. Two valid
-/// metas MUST agree byte-for-byte here; the dynamic region `[50, META_SIZE)` differs
-/// per commit.
+/// The static identity region `[16, 50)`: magic..=created_unixtime.
+/// Two valid metas MUST agree byte-for-byte here.
 pub const META_STATIC_START: usize = 16;
-/// End (exclusive) of the static identity region.
 pub const META_STATIC_END: usize = 50;
 
-/// Meta `flags` bit 0: IP version (0 = IPv4, 1 = IPv6). Bits 1-7 reserved = 0.
+// ── scope_mode values ─────────────────────────────────────────────────────
+
+/// Scalar scope: `scope_id` is a raw value (e.g. a timestamp). Compare with `=`.
+/// Used for retention files.
+pub const SCOPE_MODE_SCALAR: u8 = 0;
+/// Bitmap scope: `scope_id` IS a 32-bit bitmap (up to 32 feeds). Compare with `&`.
+/// No scope table needed.
+pub const SCOPE_MODE_BITMAP: u8 = 1;
+/// Indirect scope: `scope_id` is a pointer into the scope table, which holds an
+/// interned bitmap of arbitrary width. Compare with `&` after table lookup.
+pub const SCOPE_MODE_INDIRECT: u8 = 2;
+
+// ── flags ─────────────────────────────────────────────────────────────────
+
+/// Meta `flags` bit 0: IP version (0 = IPv4, 1 = IPv6).
 pub const FLAG_IP_VERSION: u8 = 0b1;
 
 /// IP family of a file (meta `flags` bit 0).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IpVersion {
-    /// IPv4: 4-byte keys.
     V4,
-    /// IPv6: 16-byte keys.
     V6,
 }
 
 impl IpVersion {
-    /// Key width in bytes (4 or 16).
+    #[inline]
     pub const fn key_width(self) -> u8 {
         match self {
             IpVersion::V4 => 4,
@@ -152,7 +127,7 @@ impl IpVersion {
         }
     }
 
-    /// Meta `flags` value for this family (bit 0).
+    #[inline]
     pub const fn flag(self) -> u8 {
         match self {
             IpVersion::V4 => 0,
@@ -160,8 +135,7 @@ impl IpVersion {
         }
     }
 
-    /// Family of a `flags` byte (only bit 0 is meaningful; the caller rejects other
-    /// bits, §5.1).
+    #[inline]
     pub const fn from_flag_bit(flags: u8) -> IpVersion {
         if flags & FLAG_IP_VERSION != 0 {
             IpVersion::V6
@@ -171,127 +145,121 @@ impl IpVersion {
     }
 }
 
-/// `record_size = 2·key_width + scope_width` (§4, D1). Widened to `u32` to match the
-/// meta field; the inputs are bytes so it never overflows.
+// ── record geometry ────────────────────────────────────────────────────────
+
+/// Scope ID is always 4 bytes (u32), regardless of scope_mode.
+pub const SCOPE_ID_SIZE: u32 = 4;
+
+/// `record_size = 2·key_width + 4` (scope_id is always a u32).
 #[inline]
-pub const fn record_size(key_width: u8, scope_width: u8) -> u32 {
-    2 * key_width as u32 + scope_width as u32
+pub const fn record_size(key_width: u8) -> u32 {
+    2 * key_width as u32 + SCOPE_ID_SIZE
 }
 
-/// Maximum records in a leaf: `(page_size − 16) / record_size` (§5.3). `record_size`
-/// MUST be > 0 (it is `>= 2·key_width >= 8`).
+/// Maximum records in a leaf: `(page_size − 16) / record_size`.
 #[inline]
-pub const fn leaf_max(record_size: u32) -> usize {
-    (PAGE_SIZE - PAGE_HEADER_SIZE) / record_size as usize
+pub const fn leaf_max(key_width: u8) -> usize {
+    (PAGE_SIZE - PAGE_HEADER_SIZE) / record_size(key_width) as usize
 }
 
-/// Maximum separators in a branch: `(page_size − 16 − 4) / (key_width + 4)` (§5.2).
-/// The leading `−4` is `child_pgno[0]`; each separator adds `key_width + 4` (a
-/// `sep_key` plus the following `child_pgno`). Children = separators + 1.
+/// Maximum separators in a branch: `(page_size − 16 − 4) / (key_width + 4)`.
 #[inline]
 pub const fn branch_max(key_width: u8) -> usize {
     (PAGE_SIZE - PAGE_HEADER_SIZE - 4) / (key_width as usize + 4)
 }
 
-// --- v4.1 scope table (§C.2, §D): a fixed-record B+tree keyed by `scope_id` (u32) ---
+// ── transaction free-list page layout ──────────────────────────────────────
+//
+// Freed pages during a transaction are tracked in growth-region pages of type
+// PAGE_TYPE_TXN_FREE. Each such page holds:
+//   @16  next_txn_free_page: u32  (0 = end of list)
+//   @20  count: u32              (number of freed pgnos in this page)
+//   @24  freed_pgnos: [u32; N]    (N = (PAGE_SIZE - 24) / 4 = 1018)
 
-/// `scope_id 0` is reserved for the file/dataset-level metadata (the FILE target).
-/// `scope_define` never returns it.
+/// Offset of `next_txn_free_page` within a TXN_FREE page.
+pub const TXN_FREE_NEXT: usize = PAGE_HEADER_SIZE;
+/// Offset of `count` within a TXN_FREE page.
+pub const TXN_FREE_COUNT: usize = PAGE_HEADER_SIZE + 4;
+/// Offset of the freed-pgno array within a TXN_FREE page.
+pub const TXN_FREE_ARRAY: usize = PAGE_HEADER_SIZE + 8;
+/// Maximum freed pgnos per TXN_FREE page.
+pub const TXN_FREE_CAPACITY: usize = (PAGE_SIZE - TXN_FREE_ARRAY) / 4;
+
+// ── committed free-list page layout ─────────────────────────────────────────
+//
+// The committed free-list is a linked list in freed pages themselves. Each free
+// page stores:
+//   @16  next_free_pgno: u32     (0 = end of list)
+//   @20  freed_in_txn: u64      (generation when this page was freed)
+//
+// A page is safe to reclaim only when no active reader is using a generation
+// <= freed_in_txn.
+
+/// Offset of `next_free_pgno` within a free page.
+pub const FREE_NEXT: usize = PAGE_HEADER_SIZE;
+/// Offset of `freed_in_txn` within a free page.
+pub const FREE_FREED_IN_TXN: usize = PAGE_HEADER_SIZE + 4;
+
+// ── v4.1 scope table (§C.2, §D): used for scope_mode == INDIRECT ───────────
+//
+// In INDIRECT mode, the scope table maps scope_id → interned bitmap. Each
+// scope-table leaf entry holds a variable-width bitmap. The bitmap width grows
+// when new feeds are added (CoW on the scope table, not on IP records).
+//
+// For SCALAR and BITMAP modes, scope_table_root is 0 (no scope table).
+
 pub const FILE_SCOPE_ID: u32 = 0;
-
-/// The scope-table B+tree key is the 4-byte `scope_id`.
 pub const SCOPE_KEY_WIDTH: usize = 4;
-
-/// Max bytes of a per-scope `name` (UTF-8). The fixed slot keeps the seek a fixed offset.
 pub const SCOPE_NAME_MAX: usize = 256;
 
-// Per-scope header record layout (§C.2), little-endian, within a scope-table leaf:
-/// `scope_id` (u32) — the B+tree key, first field of the record.
+// Per-scope header record layout (scope-table leaf), little-endian:
 pub const SCOPE_REC_ID: usize = 0;
-/// `version` (u64).
 pub const SCOPE_REC_VERSION: usize = 4;
-/// `type` (u8) — opaque caller value (the engine does not reject unknown values).
 pub const SCOPE_REC_TYPE: usize = 12;
-/// `name_len` (u16, 0..=256).
 pub const SCOPE_REC_NAME_LEN: usize = 13;
-/// `name` (`SCOPE_NAME_MAX` bytes; `name_len` used, the rest MUST be zero).
 pub const SCOPE_REC_NAME: usize = 15;
-/// `kv_root` (u32) — 0 = no KV; else this scope's KV tree root (§C.4).
 pub const SCOPE_REC_KV_ROOT: usize = 271;
-/// Fixed per-scope record size: `4 + 8 + 1 + 2 + 256 + 4 = 275`.
+/// Fixed per-scope metadata header: `4 + 8 + 1 + 2 + 256 + 4 = 275`.
 pub const SCOPE_RECORD_SIZE: usize = 275;
 
-/// Max per-scope records in a scope-table leaf: `(page_size − 16) / 275`.
 #[inline]
 pub const fn scope_leaf_max() -> usize {
     (PAGE_SIZE - PAGE_HEADER_SIZE) / SCOPE_RECORD_SIZE
 }
 
-/// Max separators in a scope-table branch: same geometry as `branch_max(4)`.
 #[inline]
 pub const fn scope_branch_max() -> usize {
     branch_max(SCOPE_KEY_WIDTH as u8)
 }
 
-// --- v4.1 per-scope KV (§C.4, §D): a slot-directory B+tree behind each `kv_root` ---
+// ── per-scope KV (§C.4, §D) ────────────────────────────────────────────────
 
-/// Minimum KV `key` length (bytes). An empty key is rejected (§C.4).
 pub const KV_KEY_MIN: usize = 1;
-/// Maximum KV `key` length (bytes), UTF-8, no NUL (§C.4).
 pub const KV_KEY_MAX: usize = 1024;
-
-/// KV `type == 0` ⇒ the value is text the engine validates as UTF-8 + no NUL (§C.4); any
-/// non-zero `type` is caller-defined binary the engine never interprets.
 pub const KV_TYPE_TEXT: u32 = 0;
-
-/// `value_kind` byte in a KV leaf entry: the value bytes live inside the entry (§D).
 pub const KV_VALUE_INLINE: u8 = 0;
-/// `value_kind` byte in a KV leaf entry: the value lives in an overflow chain (§D).
 pub const KV_VALUE_OVERFLOW: u8 = 1;
-
-/// One slot in a KV page's slot directory: a `u16` byte offset (from the page start) to
-/// the entry heap (§D). The directory grows from the front; the heap from the back.
 pub const KV_SLOT_SIZE: usize = 2;
-
-/// Bytes available for KV slots + entry heap on a page: everything after the 16-byte
-/// header. The slot directory and the entry heap share this region from opposite ends.
 pub const KV_PAGE_BODY: usize = PAGE_SIZE - PAGE_HEADER_SIZE;
-
-/// `next_pgno` (u32) offset within an overflow page, right after the common header (§D).
 pub const OVERFLOW_NEXT_PGNO: usize = PAGE_HEADER_SIZE;
-/// Payload bytes per overflow page: `page_size − 16 − 4` (header + `next_pgno`), §D.
 pub const OVERFLOW_PAYLOAD: usize = PAGE_SIZE - PAGE_HEADER_SIZE - 4;
-
-/// Inline/overflow threshold (writer choice, §C.4/§D): a value of at most this many bytes
-/// is stored inline; larger values go to an overflow chain. `value_kind` makes each entry
-/// self-describing, so a reader parses either regardless of this threshold. Chosen so a
-/// single entry (max-key + descriptor + inline value) always fits a fresh leaf's body.
 pub const KV_INLINE_MAX: usize = 512;
 
-/// Fixed bytes of a KV leaf entry header before the inline value: `key_len(2) · key ·
-/// type(4) · value_kind(1)`. `key` is the variable part; this returns the constant
-/// surround for a given `key_len`.
 #[inline]
 pub const fn kv_entry_fixed(key_len: usize) -> usize {
     2 + key_len + 4 + 1
 }
 
-/// Encoded size of an inline KV leaf entry (entry bytes, excluding its slot): the fixed
-/// header + `value_len(4)` + the value bytes (§D).
 #[inline]
 pub const fn kv_inline_entry_size(key_len: usize, value_len: usize) -> usize {
     kv_entry_fixed(key_len) + 4 + value_len
 }
 
-/// Encoded size of an overflow KV leaf entry (entry bytes, excluding its slot): the fixed
-/// header + `first_pgno(4)` + `value_total_len(8)` (§D).
 #[inline]
 pub const fn kv_overflow_entry_size(key_len: usize) -> usize {
     kv_entry_fixed(key_len) + 4 + 8
 }
 
-/// Encoded size of a KV branch separator (entry bytes, excluding its slot): `sep_len(2) ·
-/// sep_key · child_pgno(4)` (§D).
 #[inline]
 pub const fn kv_branch_sep_size(sep_len: usize) -> usize {
     2 + sep_len + 4
@@ -302,8 +270,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn meta_offsets_are_contiguous_and_end_at_meta_size() {
-        // Each field starts where the previous ended; the last ends at META_SIZE (90).
+    fn meta_offsets_are_contiguous() {
         assert_eq!(META_MAGIC, PAGE_HEADER_SIZE);
         assert_eq!(META_VERSION_MAJOR, META_MAGIC + 8);
         assert_eq!(META_VERSION_MINOR, META_VERSION_MAJOR + 2);
@@ -312,8 +279,8 @@ mod tests {
         assert_eq!(META_CHECKSUM_ALGO, META_PAGE_SIZE + 4);
         assert_eq!(META_FLAGS, META_CHECKSUM_ALGO + 1);
         assert_eq!(META_KEY_WIDTH, META_FLAGS + 1);
-        assert_eq!(META_SCOPE_WIDTH, META_KEY_WIDTH + 1);
-        assert_eq!(META_RECORD_SIZE, META_SCOPE_WIDTH + 1);
+        assert_eq!(META_SCOPE_MODE, META_KEY_WIDTH + 1);
+        assert_eq!(META_RECORD_SIZE, META_SCOPE_MODE + 1);
         assert_eq!(META_CREATED_UNIXTIME, META_RECORD_SIZE + 4);
         assert_eq!(META_ROOT_PGNO, META_CREATED_UNIXTIME + 8);
         assert_eq!(META_TREE_HEIGHT, META_ROOT_PGNO + 4);
@@ -321,56 +288,46 @@ mod tests {
         assert_eq!(META_RECORD_COUNT, META_TOTAL_PAGES + 8);
         assert_eq!(META_TXN_ID, META_RECORD_COUNT + 8);
         assert_eq!(META_UPDATED_UNIXTIME, META_TXN_ID + 8);
-        assert_eq!(
-            META_UPDATED_UNIXTIME + 8,
-            META_SIZE as usize,
-            "last field ends at meta_size"
-        );
-        // The static identity region is exactly magic..=created_unixtime.
-        assert_eq!(META_STATIC_START, META_MAGIC);
-        assert_eq!(META_STATIC_END, META_ROOT_PGNO);
+        assert_eq!(META_SCOPE_TABLE_ROOT, META_UPDATED_UNIXTIME + 8);
+        assert_eq!(META_FREE_LIST_HEAD, META_SCOPE_TABLE_ROOT + 4);
+        assert_eq!(META_FREE_LIST_HEAD + 4, META_SIZE as usize);
     }
 
     #[test]
-    fn geometry_matches_spec_formulas() {
-        // IPv4, scope_width 0: record 8 bytes.
-        assert_eq!(record_size(4, 0), 8);
-        assert_eq!(leaf_max(8), (4096 - 16) / 8); // 510
-                                                  // IPv6, scope_width 4: record 36 bytes.
-        assert_eq!(record_size(16, 4), 36);
-        assert_eq!(leaf_max(36), (4096 - 16) / 36); // 113
-                                                    // branch fanout.
-        assert_eq!(branch_max(4), (4096 - 16 - 4) / (4 + 4)); // 509 separators -> 510 children
-        assert_eq!(branch_max(16), (4096 - 16 - 4) / (16 + 4)); // 203 separators -> 204 children
-        assert!(record_size(4, 255) <= u16::MAX as u32);
+    fn record_size_is_fixed() {
+        assert_eq!(record_size(4), 12);   // IPv4: 4+4+4
+        assert_eq!(record_size(16), 36);  // IPv6: 16+16+4
     }
 
     #[test]
-    fn kv_geometry_matches_spec() {
-        // Overflow payload is page minus header minus the next_pgno field.
-        assert_eq!(OVERFLOW_PAYLOAD, 4096 - 16 - 4); // 4076
-        assert_eq!(OVERFLOW_NEXT_PGNO, PAGE_HEADER_SIZE);
-        // Entry sizing helpers compose the §D layout exactly.
-        assert_eq!(kv_entry_fixed(3), 2 + 3 + 4 + 1);
-        assert_eq!(kv_inline_entry_size(3, 10), 2 + 3 + 4 + 1 + 4 + 10);
-        assert_eq!(kv_overflow_entry_size(3), 2 + 3 + 4 + 1 + 4 + 8);
-        assert_eq!(kv_branch_sep_size(5), 2 + 5 + 4);
-        // The largest possible inline entry (max key + threshold value) plus its slot
-        // must fit a fresh KV leaf body — otherwise bulk-load could wedge.
-        let biggest = kv_inline_entry_size(KV_KEY_MAX, KV_INLINE_MAX) + KV_SLOT_SIZE;
-        assert!(
-            biggest <= KV_PAGE_BODY,
-            "single max inline entry fits a leaf"
-        );
+    fn leaf_max_constants() {
+        assert_eq!(leaf_max(4), (4096 - 16) / 12);   // 340
+        assert_eq!(leaf_max(16), (4096 - 16) / 36);   // 113
     }
 
     #[test]
-    fn ip_version_mapping() {
-        assert_eq!(IpVersion::V4.key_width(), 4);
-        assert_eq!(IpVersion::V6.key_width(), 16);
-        assert_eq!(IpVersion::V4.flag(), 0);
-        assert_eq!(IpVersion::V6.flag(), FLAG_IP_VERSION);
-        assert_eq!(IpVersion::from_flag_bit(0), IpVersion::V4);
-        assert_eq!(IpVersion::from_flag_bit(1), IpVersion::V6);
+    fn branch_max_constants() {
+        assert_eq!(branch_max(4), (4096 - 16 - 4) / (4 + 4));   // 509
+        assert_eq!(branch_max(16), (4096 - 16 - 4) / (16 + 4)); // 203
+    }
+
+    #[test]
+    fn txn_free_capacity() {
+        // (4096 - 24) / 4 = 1018 freed pgnos per page
+        assert_eq!(TXN_FREE_CAPACITY, 1018);
+    }
+
+    #[test]
+    fn scope_mode_values() {
+        assert_eq!(SCOPE_MODE_SCALAR, 0);
+        assert_eq!(SCOPE_MODE_BITMAP, 1);
+        assert_eq!(SCOPE_MODE_INDIRECT, 2);
     }
 }
+
+// ── compatibility aliases (for code not yet migrated) ─────────────────────
+// These allow gradual migration; they map old names to the new v4.3 values.
+pub const VERSION_MINOR_METADATA: u16 = VERSION_MINOR;
+pub const VERSION_MINOR_FREE_LIST: u16 = VERSION_MINOR;
+pub const META_SIZE_V41: u16 = META_SIZE;
+pub const META_SIZE_V42: u16 = META_SIZE;

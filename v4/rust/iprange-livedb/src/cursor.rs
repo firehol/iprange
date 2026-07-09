@@ -80,7 +80,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     fn leaf(&self, pgno: u32) -> LeafView<'a, K> {
         let page = self.reader.page_bytes(pgno);
         let count = PageHeader::decode(page).entry_count as usize;
-        LeafView::new(page, count, self.reader.record_size_bytes())
+        LeafView::new(page, count)
     }
 
     #[inline]
@@ -269,15 +269,15 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
         }
     }
 
-    /// The positioned record `(from, to, scope)`, or `None` unless `At`.
-    pub fn current(&self) -> Option<(K, K, &'a [u8])> {
+    /// The positioned record `(from, to, scope_id)`, or `None` unless `At`.
+    pub fn current(&self) -> Option<(K, K, u32)> {
         if self.state != State::At {
             return None;
         }
         let leaf_level = self.leaf_level();
         let f = self.path[leaf_level];
         let r = self.leaf(f.pgno).record(f.idx as usize);
-        Some((r.from(), r.to(), r.scope()))
+        Some((r.from(), r.to(), r.scope_id()))
     }
 
     // --- helpers (§v4.1.B) ---
@@ -287,7 +287,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     /// The covering record (one whose `from < from <= to`) is included.
     fn for_each_overlap<F>(&mut self, from: K, to: K, mut f: F)
     where
-        F: FnMut(K, K, &'a [u8]) -> ControlFlow<()>,
+        F: FnMut(K, K, u32) -> ControlFlow<()>,
     {
         if from > to {
             return;
@@ -318,11 +318,11 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     }
 
     /// Emit each record overlapping `[from, to]` whose `scope` matches `select`, clamped
-    /// to the window, as `(from, to, scope)`. Per-record (not merged).
+    /// to the window, as `(from, to, scope_id)`. Per-record (not merged).
     pub fn query_ranges<S, V>(&mut self, from: K, to: K, mut select: S, mut visit: V) -> Result<()>
     where
-        S: FnMut(&[u8]) -> bool,
-        V: FnMut(K, K, &[u8]) -> ControlFlow<()>,
+        S: FnMut(u32) -> bool,
+        V: FnMut(K, K, u32) -> ControlFlow<()>,
     {
         self.for_each_overlap(from, to, |cf, ct, scope| {
             if select(scope) {
@@ -344,7 +344,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
         mut visit: V,
     ) -> Result<()>
     where
-        S: FnMut(&[u8]) -> bool,
+        S: FnMut(u32) -> bool,
         V: FnMut(K, K) -> ControlFlow<()>,
     {
         let mut open: Option<(K, K)> = None;
@@ -381,11 +381,11 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     }
 
     /// Emit, for each matched record overlapping `[from, to]`, the canonical CIDR cover
-    /// of its clamped range, as `(addr, prefix_len, scope)`.
+    /// of its clamped range, as `(addr, prefix_len, scope_id)`.
     pub fn query_cidrs<S, V>(&mut self, from: K, to: K, mut select: S, mut visit: V) -> Result<()>
     where
-        S: FnMut(&[u8]) -> bool,
-        V: FnMut(K, u8, &[u8]) -> ControlFlow<()>,
+        S: FnMut(u32) -> bool,
+        V: FnMut(K, u8, u32) -> ControlFlow<()>,
     {
         self.for_each_overlap(from, to, |cf, ct, scope| {
             if select(scope) {
@@ -407,7 +407,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
         mut visit: V,
     ) -> Result<()>
     where
-        S: FnMut(&[u8]) -> bool,
+        S: FnMut(u32) -> bool,
         V: FnMut(K, u8) -> ControlFlow<()>,
     {
         self.query_ranges_merged(from, to, select, |rf, rt| {
@@ -420,7 +420,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     /// fully-covered IPv6 space, `2^128`, would exceed it).
     pub fn count_ips<S>(&mut self, from: K, to: K, mut select: S) -> u128
     where
-        S: FnMut(&[u8]) -> bool,
+        S: FnMut(u32) -> bool,
     {
         let mut total: u128 = 0;
         self.for_each_overlap(from, to, |cf, ct, scope| {
@@ -437,7 +437,7 @@ impl<'r, 'a, K: IpKey> Cursor<'r, 'a, K> {
     /// the CIDR count of the **merged** runs.
     pub fn count_cidrs<S>(&mut self, from: K, to: K, select: S) -> u64
     where
-        S: FnMut(&[u8]) -> bool,
+        S: FnMut(u32) -> bool,
     {
         let mut total: u64 = 0;
         let _ = self.query_ranges_merged(from, to, select, |rf, rt| {
@@ -557,8 +557,8 @@ mod tests {
             checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
             flags: IpVersion::V4.flag(),
             key_width: 4,
-            scope_width: 1,
-            record_size: spec::record_size(4, 1),
+            scope_mode: spec::SCOPE_MODE_SCALAR,
+            record_size: spec::record_size(4),
             created_unixtime: 0,
             root_pgno: root,
             tree_height: height,
@@ -571,19 +571,19 @@ mod tests {
         }
     }
 
-    fn put_leaf(file: &mut [u8], pgno: u32, records: &[(Ipv4Key, Ipv4Key, &[u8])]) {
-        let rs = spec::record_size(4, 1) as usize;
+    fn put_leaf(file: &mut [u8], pgno: u32, records: &[(Ipv4Key, Ipv4Key, u32)]) {
+        let rs = spec::record_size(4) as usize;
         let base = pgno as usize * PAGE_SIZE;
         let page = &mut file[base..base + PAGE_SIZE];
         PageHeader::write(page, spec::PAGE_TYPE_LEAF, records.len() as u16, pgno);
         for (i, (f, t, s)) in records.iter().enumerate() {
             let off = PAGE_HEADER_SIZE + i * rs;
-            record::write::<Ipv4Key>(&mut page[off..off + rs], *f, *t, s);
+            record::write::<Ipv4Key>(&mut page[off..off + rs], *f, *t, *s);
         }
         finalize_checksum(page);
     }
 
-    fn build_single_leaf(records: &[(Ipv4Key, Ipv4Key, &[u8])]) -> Vec<u8> {
+    fn build_single_leaf(records: &[(Ipv4Key, Ipv4Key, u32)]) -> Vec<u8> {
         let mut file = vec![0u8; 3 * PAGE_SIZE];
         put_leaf(&mut file, 2, records);
         let rc = records.len() as u64;
@@ -602,8 +602,8 @@ mod tests {
     /// metas, root branch (pgno 2, one separator `sep`), leaves at pgno 3/4.
     fn build_two_level(
         sep: Ipv4Key,
-        left: &[(Ipv4Key, Ipv4Key, &[u8])],
-        right: &[(Ipv4Key, Ipv4Key, &[u8])],
+        left: &[(Ipv4Key, Ipv4Key, u32)],
+        right: &[(Ipv4Key, Ipv4Key, u32)],
     ) -> Vec<u8> {
         let mut file = vec![0u8; 5 * PAGE_SIZE];
         put_leaf(&mut file, 3, left);
@@ -623,12 +623,12 @@ mod tests {
         file
     }
 
-    fn collect_all(r: &Reader<'_>) -> Vec<(u32, u32, Vec<u8>)> {
+    fn collect_all(r: &Reader<'_>) -> Vec<(u32, u32, u32)> {
         let mut c = r.cursor::<Ipv4Key>().unwrap();
         let mut out = Vec::new();
         c.first();
         while let Some((f, t, s)) = c.current() {
-            out.push((f.0, t.0, s.to_vec()));
+            out.push((f.0, t.0, s));
             c.next();
         }
         out
@@ -636,16 +636,16 @@ mod tests {
 
     #[test]
     fn iterate_forward_and_backward() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[
-            (v4(10), v4(20), &[1]),
-            (v4(30), v4(40), &[2]),
-            (v4(50), v4(60), &[1]),
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[
+            (v4(10), v4(20), 1),
+            (v4(30), v4(40), 2),
+            (v4(50), v4(60), 1),
         ];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
         assert_eq!(
             collect_all(&r),
-            vec![(10, 20, vec![1]), (30, 40, vec![2]), (50, 60, vec![1])]
+            vec![(10, 20, 1), (30, 40, 2), (50, 60, 1)]
         );
 
         // backward from last
@@ -661,10 +661,10 @@ mod tests {
 
     #[test]
     fn seek_semantics() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[
-            (v4(10), v4(20), &[1]),
-            (v4(30), v4(40), &[2]),
-            (v4(50), v4(60), &[1]),
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[
+            (v4(10), v4(20), 1),
+            (v4(30), v4(40), 2),
+            (v4(50), v4(60), 1),
         ];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn before_first_after_last_transitions() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1])];
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1)];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
         let mut c = r.cursor::<Ipv4Key>().unwrap();
@@ -718,9 +718,9 @@ mod tests {
 
     #[test]
     fn two_level_iterate_and_seek_cross_leaves() {
-        let left: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1]), (v4(50), v4(60), &[2])];
-        let right: &[(Ipv4Key, Ipv4Key, &[u8])] =
-            &[(v4(100), v4(110), &[3]), (v4(200), v4(210), &[4])];
+        let left: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1), (v4(50), v4(60), 2)];
+        let right: &[(Ipv4Key, Ipv4Key, u32)] =
+            &[(v4(100), v4(110), 3), (v4(200), v4(210), 4)];
         let file = build_two_level(v4(100), left, right);
         let r = Reader::open(&file).unwrap();
         assert_eq!(
@@ -740,10 +740,10 @@ mod tests {
 
     #[test]
     fn query_ranges_merged_and_select() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[
-            (v4(10), v4(20), &[1]),
-            (v4(21), v4(30), &[1]), // contiguous with previous (20+1 == 21)
-            (v4(40), v4(50), &[2]),
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[
+            (v4(10), v4(20), 1),
+            (v4(21), v4(30), 1), // contiguous with previous (20+1 == 21)
+            (v4(40), v4(50), 2),
         ];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
@@ -763,12 +763,12 @@ mod tests {
         .unwrap();
         assert_eq!(runs, vec![(10, 30), (40, 50)]);
 
-        // select scope == [2] only.
+        // select scope_id == 2 only.
         let mut runs2 = Vec::new();
         c.query_ranges_merged(
             Ipv4Key::MIN,
             Ipv4Key::MAX,
-            |s| s == [2],
+            |s| s == 2,
             |f, t| {
                 runs2.push((f.0, t.0));
                 ControlFlow::Continue(())
@@ -780,12 +780,12 @@ mod tests {
 
     #[test]
     fn count_ips_window_and_select() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(19), &[1]), (v4(30), v4(39), &[2])]; // 10 + 10 IPs
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(19), 1), (v4(30), v4(39), 2)]; // 10 + 10 IPs
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
         let mut c = r.cursor::<Ipv4Key>().unwrap();
         assert_eq!(c.count_ips(Ipv4Key::MIN, Ipv4Key::MAX, |_| true), 20);
-        assert_eq!(c.count_ips(Ipv4Key::MIN, Ipv4Key::MAX, |s| s == [1]), 10);
+        assert_eq!(c.count_ips(Ipv4Key::MIN, Ipv4Key::MAX, |s| s == 1), 10);
         // window clamps: [15, 34] -> 5 (15..19) + 5 (30..34) = 10
         assert_eq!(c.count_ips(v4(15), v4(34), |_| true), 10);
     }
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn query_cidrs_and_count() {
         // 0.0.0.0 .. 0.0.0.255 is exactly one /24.
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(0), v4(255), &[1])];
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(0), v4(255), 1)];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
         let mut c = r.cursor::<Ipv4Key>().unwrap();
@@ -843,10 +843,10 @@ mod tests {
 
     #[test]
     fn visitor_stop_is_honored() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[
-            (v4(10), v4(20), &[1]),
-            (v4(40), v4(50), &[2]),
-            (v4(70), v4(80), &[3]),
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[
+            (v4(10), v4(20), 1),
+            (v4(40), v4(50), 2),
+            (v4(70), v4(80), 3),
         ];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn family_mismatch_errors() {
-        let recs: &[(Ipv4Key, Ipv4Key, &[u8])] = &[(v4(10), v4(20), &[1])];
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1)];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
         assert!(r.cursor::<crate::key::Ipv6Key>().is_err());
