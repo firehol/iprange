@@ -36,7 +36,13 @@ type Writer[K ipKey[K]] struct {
 	pendingHeight       uint32
 	pendingRecordCount  uint64
 
-	poisoned bool
+	poisoned      bool
+	// Page reclamation: txn-free tracking (fixed-size, Rule 1: zero heap).
+	txnFreeBuf    [64]uint32
+	txnFreeCount  int
+	txnFreeChain  uint32
+	reuseBuf      [64]uint32
+	reuseCount    int
 }
 
 // --- construction ---
@@ -54,6 +60,8 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		activeMeta:         0,
 		committedPages:     2,
 		committedTxnID:     0,
+		txnFreeBuf:         [64]uint32{},
+		reuseBuf:           [64]uint32{},
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -87,7 +95,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	if active.recordSize != rs {
 		return nil, fmt.Errorf("record_size mismatch")
 	}
-	return &Writer[K]{
+	w := &Writer[K]{
 		store:              store,
 		keyWidth:           active.keyWidth,
 		scopeMode:          active.scopeMode,
@@ -102,7 +110,11 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		pendingRoot:        active.rootPgno,
 		pendingHeight:      active.treeHeight,
 		pendingRecordCount: active.recordCount,
-	}, nil
+		txnFreeBuf:         [64]uint32{},
+		reuseBuf:           [64]uint32{},
+	}
+	w.loadFreeList()
+	return w, nil
 }
 
 // --- public hot-path API ---
@@ -159,6 +171,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
+	// Flush remaining freed pages.
+	if w.txnFreeCount > 0 {
+		w.buildFreeListLinked()
+	}
+	w.freeListHead = w.txnFreeChain
 	total := w.store.totalPages()
 	for pgno := w.committedPages; pgno < total; pgno++ {
 		finalizeChecksum(w.store.pageMut(pgno))
@@ -179,6 +196,9 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	w.committedRecordCount = w.pendingRecordCount
 	w.committedPages = total
 	w.store.setCommittedPages(total)
+	w.txnFreeCount = 0
+	w.txnFreeChain = 0
+	w.loadFreeList()
 	return nil
 }
 
@@ -208,12 +228,81 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 	if pgno >= w.committedPages {
 		return pgno, nil
 	}
-	newPgno, err := w.store.allocPage()
+	newPgno, err := w.allocOrReuse()
 	if err != nil {
 		return 0, err
 	}
 	w.store.copyPage(pgno, newPgno)
+	w.trackFreed(pgno)
 	return newPgno, nil
+}
+
+func (w *Writer[K]) allocOrReuse() (uint32, error) {
+	if w.reuseCount > 0 {
+		w.reuseCount--
+		return w.reuseBuf[w.reuseCount], nil
+	}
+	return w.store.allocPage()
+}
+
+func (w *Writer[K]) trackFreed(pgno uint32) {
+	// Only track growth-region pages (safe to reuse without reader coordination).
+	if pgno < w.committedPages {
+		return
+	}
+	if w.txnFreeCount < len(w.txnFreeBuf) {
+		w.txnFreeBuf[w.txnFreeCount] = pgno
+		w.txnFreeCount++
+	} else {
+		w.buildFreeListLinked()
+		w.txnFreeBuf[0] = pgno
+		w.txnFreeCount = 1
+	}
+}
+
+func (w *Writer[K]) buildFreeListLinked() {
+	if w.txnFreeCount == 0 {
+		w.freeListHead = w.txnFreeChain
+		return
+	}
+	first := w.txnFreeBuf[0]
+	page := w.store.pageMut(first)
+	putU32(page, FreeNext, w.txnFreeChain)
+	for i := 1; i < w.txnFreeCount; i++ {
+		prev := w.txnFreeBuf[i-1]
+		curr := w.txnFreeBuf[i]
+		p := w.store.pageMut(prev)
+		putU32(p, FreeNext, curr)
+	}
+	if w.txnFreeCount > 1 {
+		last := w.txnFreeBuf[w.txnFreeCount-1]
+		p := w.store.pageMut(last)
+		putU32(p, FreeNext, w.txnFreeChain)
+	}
+	w.txnFreeChain = first
+	w.txnFreeCount = 0
+	w.freeListHead = w.txnFreeChain
+}
+
+func (w *Writer[K]) loadFreeList() {
+	w.reuseCount = 0
+	pgno := w.freeListHead
+	guard := uint32(0)
+	for pgno != 0 && guard < TreeHeightMax {
+		guard++
+		if uint64(pgno) >= uint64(w.store.totalPages()) {
+			break
+		}
+		page := w.store.page(pgno)
+		next := u32le(page, FreeNext)
+		if w.reuseCount < len(w.reuseBuf) {
+			w.reuseBuf[w.reuseCount] = pgno
+			w.reuseCount++
+		} else {
+			break
+		}
+		pgno = next
+	}
 }
 
 func (w *Writer[K]) cowRoot() (uint32, error) {
@@ -235,7 +324,7 @@ func (w *Writer[K]) cowRoot() (uint32, error) {
 
 func (w *Writer[K]) cowInsert(from, to K, scopeID uint32) error {
 	if w.pendingRoot == 0 {
-		leaf, err := w.store.allocPage()
+		leaf, err := w.allocOrReuse()
 		if err != nil {
 			return err
 		}
@@ -255,7 +344,7 @@ func (w *Writer[K]) cowInsert(from, to K, scopeID uint32) error {
 		return err
 	}
 	if split != nil {
-		newRoot, err := w.store.allocPage()
+		newRoot, err := w.allocOrReuse()
 		if err != nil {
 			return err
 		}
@@ -336,7 +425,7 @@ func (w *Writer[K]) leafInsert(pgno uint32, from, to K, scopeID uint32) (*branch
 	if err := w.writeLeafSplit(pgno, src[:], count, pos, from, to, scopeID, 0, mid); err != nil {
 		return nil, err
 	}
-	right, err := w.store.allocPage()
+	right, err := w.allocOrReuse()
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +724,7 @@ func (w *Writer[K]) branchAbsorbSplit(pgno uint32, childIdx int, left uint32, se
 	if err := w.writeBranchSplit(pgno, src[:], count, childIdx, left, sep, right, 0, mid); err != nil {
 		return nil, err
 	}
-	rightPgno, err := w.store.allocPage()
+	rightPgno, err := w.allocOrReuse()
 	if err != nil {
 		return nil, err
 	}

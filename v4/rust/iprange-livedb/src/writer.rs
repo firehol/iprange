@@ -44,6 +44,16 @@ pub struct Writer<K: IpKey> {
     pending_height: u32,
     pending_record_count: u64,
     poisoned: bool,
+    // Txn-free tracking: pages freed (superseded by COW) during this transaction.
+    // Stored in a fixed-size array (Rule 1: no heap). When full, spills to a
+    // TXN_FREE page chain in the growth region.
+    txn_free_buf: [u32; 64], // 64 freed pgnos before spilling to a page
+    txn_free_count: usize,   // entries in txn_free_buf
+    txn_free_chain: u32,     // head of TXN_FREE page chain (0 = none)
+    // Reusable pages from the committed free-list (read at open time).
+    // Same fixed-array approach.
+    reuse_buf: [u32; 64],
+    reuse_count: usize,
     _k: PhantomData<K>,
 }
 
@@ -69,6 +79,11 @@ impl<K: IpKey> Writer<K> {
             pending_height: 0,
             pending_record_count: 0,
             poisoned: false,
+            txn_free_buf: [0u32; 64],
+            txn_free_count: 0,
+            txn_free_chain: 0,
+            reuse_buf: [0u32; 64],
+            reuse_count: 0,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -92,7 +107,7 @@ impl<K: IpKey> Writer<K> {
         if active.record_size != record_size::<K>() as u32 {
             return Err(Error::Structural("record_size mismatch"));
         }
-        Ok(Writer {
+        let mut w = Writer {
             store,
             key_width: active.key_width,
             scope_mode: active.scope_mode,
@@ -108,8 +123,16 @@ impl<K: IpKey> Writer<K> {
             pending_height: active.tree_height,
             pending_record_count: active.record_count,
             poisoned: false,
+            txn_free_buf: [0u32; 64],
+            txn_free_count: 0,
+            txn_free_chain: 0,
+            reuse_buf: [0u32; 64],
+            reuse_count: 0,
             _k: PhantomData,
-        })
+        };
+        // Load the committed free-list for page reuse.
+        w.load_free_list();
+        Ok(w)
     }
 
     // ── public hot-path API ───────────────────────────────────────────
@@ -151,6 +174,14 @@ impl<K: IpKey> Writer<K> {
 
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         self.check()?;
+        // Flush any remaining freed pages in the buffer to a TXN_FREE page.
+        if self.txn_free_count > 0 {
+            self.build_free_list_linked()?;
+        }
+        // The committed free-list head is the txn_free_chain (the pages
+        // freed this transaction become reusable next transaction).
+        self.free_list_head = self.txn_free_chain;
+
         let total = self.store.total_pages();
         for pgno in self.committed_pages..total {
             finalize_checksum(self.store.page_mut(pgno));
@@ -169,7 +200,37 @@ impl<K: IpKey> Writer<K> {
         self.committed_record_count = self.pending_record_count;
         self.committed_pages = total;
         self.store.set_committed_pages(total);
+        // Reset txn-free tracking for the next transaction.
+        self.txn_free_count = 0;
+        self.txn_free_chain = 0;
+        // Load the committed free-list for reuse in the next transaction.
+        self.load_free_list();
         Ok(())
+    }
+
+    /// Read the committed free-list and populate the reuse buffer.
+    /// The free-list is a linked list in freed pages: @0 next_free_pgno (u32).
+    /// These pages are safe to reuse (they were freed in a prior committed txn,
+    /// and no active reader needs them — reader coordination is Phase 3).
+    fn load_free_list(&mut self) {
+        self.reuse_count = 0;
+        let mut pgno = self.free_list_head;
+        let mut guard = 0u32;
+        while pgno != 0 && guard < spec::TREE_HEIGHT_MAX {
+            guard += 1;
+            if pgno as u64 >= self.store.total_pages() as u64 {
+                break;
+            }
+            let page = self.store.page(pgno);
+            let next = u32_le(page, spec::FREE_NEXT);
+            if self.reuse_count < self.reuse_buf.len() {
+                self.reuse_buf[self.reuse_count] = pgno;
+                self.reuse_count += 1;
+            } else {
+                break;
+            }
+            pgno = next;
+        }
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
@@ -216,9 +277,80 @@ impl<K: IpKey> Writer<K> {
         if pgno >= self.committed_pages {
             return Ok(pgno);
         }
-        let new = self.store.alloc_page()?;
+        let new = self.alloc_or_reuse()?;
         self.store.copy_page(pgno, new);
+        // The old committed page is now freed (superseded by COW).
+        self.track_freed(pgno)?;
         Ok(new)
+    }
+
+    /// Allocate a new page, preferring reused (freed) pages over growth.
+    #[inline]
+    fn alloc_or_reuse(&mut self) -> Result<u32> {
+        if self.reuse_count > 0 {
+            self.reuse_count -= 1;
+            Ok(self.reuse_buf[self.reuse_count])
+        } else {
+            self.store.alloc_page()
+        }
+    }
+
+    /// Track a freed page. Only growth-region pages (pgno >= committed_pages
+    /// at the time of freeing) are safe to reuse — committed-prefix pages may
+    /// still be referenced by concurrent readers using an older snapshot.
+    #[inline]
+    fn track_freed(&mut self, pgno: u32) -> Result<()> {
+        // Only track pages that were allocated in THIS transaction (growth region).
+        // Pages from the committed prefix are old snapshots — they stay until
+        // reader coordination (Phase 3) confirms no reader needs them.
+        if pgno < self.committed_pages {
+            return Ok(()); // committed page — not safe to reclaim yet
+        }
+        if self.txn_free_count < self.txn_free_buf.len() {
+            self.txn_free_buf[self.txn_free_count] = pgno;
+            self.txn_free_count += 1;
+        } else {
+            self.build_free_list_linked()?;
+            self.txn_free_buf[0] = pgno;
+            self.txn_free_count = 1;
+        }
+        Ok(())
+    }
+
+    /// Build the committed free-list as a linked list IN the freed pages.
+    /// Each freed page stores next_free_pgno at offset PAGE_HEADER_SIZE.
+    /// free_list_head points to the first freed page in this chain.
+    fn build_free_list_linked(&mut self) -> Result<()> {
+        if self.txn_free_count == 0 {
+            self.free_list_head = self.txn_free_chain;
+            return Ok(());
+        }
+        // Spill remaining buffer: link the freed pages together.
+        // The first freed page in this batch becomes the new chain head;
+        // it links to the previous chain head.
+        let first = self.txn_free_buf[0];
+        let page = self.store.page_mut(first);
+        put_u32(page, spec::FREE_NEXT, self.txn_free_chain);
+        
+        // Link remaining freed pages.
+        for i in 1..self.txn_free_count {
+            let prev = self.txn_free_buf[i - 1];
+            let curr = self.txn_free_buf[i];
+            let page = self.store.page_mut(prev);
+            put_u32(page, spec::FREE_NEXT, curr);
+        }
+        // The last freed page links to the old chain head (already set above
+        // for single-entry; for multi-entry, the last links to chain).
+        if self.txn_free_count > 1 {
+            let last = self.txn_free_buf[self.txn_free_count - 1];
+            let page = self.store.page_mut(last);
+            put_u32(page, spec::FREE_NEXT, self.txn_free_chain);
+        }
+        
+        self.txn_free_chain = first;
+        self.txn_free_count = 0;
+        self.free_list_head = self.txn_free_chain;
+        Ok(())
     }
 
     #[inline]
@@ -238,7 +370,7 @@ impl<K: IpKey> Writer<K> {
 
     fn cow_insert(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
         if self.pending_root == 0 {
-            let leaf = self.store.alloc_page()?;
+            let leaf = self.alloc_or_reuse()?;
             self.write_leaf_single(leaf, from, to, scope_id)?;
             self.pending_root = leaf;
             self.pending_height = 1;
@@ -247,7 +379,7 @@ impl<K: IpKey> Writer<K> {
         let root = self.cow_root()?;
         let split = self.cow_insert_descend(root, 1, from, to, scope_id)?;
         if let Some((sep, right)) = split {
-            let new_root = self.store.alloc_page()?;
+            let new_root = self.alloc_or_reuse()?;
             self.write_branch_new(new_root, root, sep, right)?;
             self.pending_root = new_root;
             self.pending_height += 1;
@@ -301,7 +433,7 @@ impl<K: IpKey> Writer<K> {
             let new_count = count + 1;
             let mid = new_count / 2;
             self.write_leaf_split(pgno, &src, count, pos, from, to, scope_id, 0, mid)?;
-            let right = self.store.alloc_page()?;
+            let right = self.alloc_or_reuse()?;
             self.write_leaf_split(right, &src, count, pos, from, to, scope_id, mid, new_count - mid)?;
             let sep = {
                 let page = self.store.page(right);
@@ -519,7 +651,7 @@ impl<K: IpKey> Writer<K> {
             let mid = total / 2;
 
             self.write_branch_split(pgno, &src, count, child_idx, left, sep, right, 0, mid)?;
-            let right_pgno = self.store.alloc_page()?;
+            let right_pgno = self.alloc_or_reuse()?;
             self.write_branch_split(right_pgno, &src, count, child_idx, left, sep, right, mid, total - mid)?;
 
             // Promoted separator = sep at index `mid` in the combined array.
