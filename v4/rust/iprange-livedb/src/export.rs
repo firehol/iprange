@@ -78,27 +78,23 @@ where
     K3: iprange_format::key::IpKey,
     F: Fn(K4) -> K3,
 {
-    let scope_width = reader.scope_width();
+    let _scope_mode = reader.scope_mode();
     let mut writer =
         V3Writer::<K3>::new(meta.feed_meta, meta.license_flags, meta.generation_unixtime);
 
     // A v3 `add_range` error inside the scan closure is captured here and short-circuits
     // the scan (the closure cannot return a `Result`). Mapped to ExportUnrepresentable.
     let mut add_err: Option<Error> = None;
-    reader.scan::<K4, _>(|from, to, scope| {
+    reader.scan::<K4, _>(|from, to, scope_id| {
         if add_err.is_some() {
             return; // already failed; ignore the rest of the records
         }
-        // §13 step 2: scope_width == 0 -> sentinel (None); otherwise the scope bytes
-        // verbatim under the caller's type_id.
-        let value = if scope_width == 0 {
-            None
-        } else {
-            Some(V3Value {
-                type_id,
-                bytes: scope.to_vec(),
-            })
-        };
+        // v4.3: scope_id is u32. Encode as 4 LE bytes.
+        let scope_bytes = scope_id.to_le_bytes();
+        let value = Some(V3Value {
+            type_id,
+            bytes: scope_bytes.to_vec(),
+        });
         if let Err(e) = writer.add_range(to_v3(from), to_v3(to), value) {
             add_err = Some(unrepresentable(e));
         }
@@ -136,8 +132,8 @@ mod tests {
     }
 
     // Build a committed v4 IPv4 image from `(from, to, scope)` ranges with `scope_width`.
-    fn v4_image_v4(scope_width: u8, ranges: &[(u32, u32, &[u8])]) -> Vec<u8> {
-        let mut w = V4Writer::<Ipv4Key>::create(scope_width, 0);
+    fn v4_image_v4(ranges: &[(u32, u32, u32)]) -> Vec<u8> {
+        let mut w = V4Writer::<Ipv4Key>::create(0, 0);
         for &(from, to, scope) in ranges {
             w.set(Ipv4Key(from), Ipv4Key(to), scope).unwrap();
         }
@@ -145,8 +141,8 @@ mod tests {
         w.into_image()
     }
 
-    fn v4_image_v6(scope_width: u8, ranges: &[(u64, u64, &[u8])]) -> Vec<u8> {
-        let mut w = V4Writer::<Ipv6Key>::create(scope_width, 0);
+    fn v4_image_v6(ranges: &[(u64, u64, u32)]) -> Vec<u8> {
+        let mut w = V4Writer::<Ipv6Key>::create(0, 0);
         for &(from, to, scope) in ranges {
             w.set(
                 Ipv6Key { hi: 0, lo: from },
@@ -199,7 +195,7 @@ mod tests {
     fn roundtrip_v4_scope_width_0_presence() {
         // scope_width == 0 => v3 "present, no value" sentinel; type_id ignored.
         let ranges: &[(u32, u32, &[u8])] = &[(10, 20, &[][..]), (100, 110, &[][..])];
-        let img = v4_image_v4(0, ranges);
+        let img = v4_image_v4( ranges);
         let v3 = export_v3(&img, /* ignored */ 1, meta()).unwrap();
 
         let r = V3Reader::open(&v3).unwrap();
@@ -241,7 +237,7 @@ mod tests {
     #[test]
     fn roundtrip_v6_scope_width_0_presence() {
         let ranges: &[(u64, u64, &[u8])] = &[(5, 9, &[][..]), (50, 60, &[][..])];
-        let img = v4_image_v6(0, ranges);
+        let img = v4_image_v6( ranges);
         let v3 = export_v3(&img, 1, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         assert_eq!(r.record_count(), 2);

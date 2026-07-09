@@ -43,6 +43,8 @@ pub mod wire;
 
 #[cfg(feature = "alloc")]
 pub mod writer;
+pub mod migrate;
+pub mod extsort;
 
 #[cfg(feature = "alloc")]
 pub(crate) mod page_store;
@@ -78,6 +80,8 @@ pub use wire::Meta;
 
 #[cfg(feature = "alloc")]
 pub use writer::{Changed, MetaEntry, Writer};
+pub use migrate::{migrate, Change, DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions};
+pub use extsort::{ext_sort, SortedStream, ExtSortConfig};
 
 #[cfg(feature = "export-v3")]
 pub use export::{export_v3, V3Meta};
