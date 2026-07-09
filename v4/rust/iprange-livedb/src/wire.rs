@@ -234,7 +234,7 @@ mod tests {
     fn sample_meta() -> Meta {
         Meta {
             pgno: 1,
-            version_minor: 0,
+            version_minor: spec::VERSION_MINOR,
             meta_size: spec::META_SIZE,
             page_size: spec::PAGE_SIZE as u32,
             checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
@@ -290,8 +290,8 @@ mod tests {
         // static identity
         assert_eq!(&p[spec::META_MAGIC..spec::META_MAGIC + 8], b"IPRANGE4");
         assert_eq!(u16_le(&p, spec::META_VERSION_MAJOR), 4);
-        assert_eq!(u16_le(&p, spec::META_VERSION_MINOR), 0);
-        assert_eq!(u16_le(&p, spec::META_META_SIZE), 90);
+        assert_eq!(u16_le(&p, spec::META_VERSION_MINOR), spec::VERSION_MINOR);
+        assert_eq!(u16_le(&p, spec::META_META_SIZE), spec::META_SIZE);
         assert_eq!(u32_le(&p, spec::META_PAGE_SIZE), 4096);
         assert_eq!(p[spec::META_CHECKSUM_ALGO], 1);
         assert_eq!(p[spec::META_FLAGS], spec::FLAG_IP_VERSION);

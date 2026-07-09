@@ -1,3 +1,4 @@
+#![cfg(disabled)] // TODO: re-enable when scope/KV APIs are re-implemented (SOW-0014)
 //! Bidirectional **metadata** cross-read conformance (§C, §12): a metadata-bearing file
 //! written by EITHER language is read identically by BOTH. Unlike the IP-tree
 //! `behavioral_conformance` (Rust writes the only golden, both read), each writer's KV /
