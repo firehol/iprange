@@ -4,7 +4,7 @@
 //! (§10) and `flock(LOCK_SH)` (§11) — wraps it). `open` selects the active meta
 //! (§5.1 bootstrap, with per-meta CRC to detect torn writes) and checks geometry
 //! (§9 step 2), but **does not walk the tree** — files are **trusted** by default
-//! (daemon files are written under `LOCK_EX`; the format is crash-safe). Call
+//! (the writer uses a brief open-time lock; readers take no lock). Call
 //! [`validate`](Reader::validate) for the full §9 structural walk + per-page CRC when
 //! the input is untrusted. `lookup` / `scan` navigate the tree directly, returning the
 //! borrowed `scope` (zero-copy, D11).
@@ -33,7 +33,7 @@ pub struct Reader<'a> {
 impl<'a> Reader<'a> {
     /// Open a v4 image in **trusted** mode: select the active meta (per-meta CRC to
     /// detect torn writes, §5.1 bootstrap) and check geometry (§9 step 2). The tree
-    /// is NOT walked — the file is trusted (daemon files are crash-safe under `LOCK_EX`).
+    /// is NOT walked — the file is trusted (committed pages are never modified in-place; COW isolation).
     /// For the full §9 structural walk + per-page CRC, call [`validate`](Self::validate)
     /// after opening. Returns a typed error (exposing nothing) on a malformed meta or
     /// geometry violation.

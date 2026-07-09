@@ -268,11 +268,37 @@ Scope: rewrite all contradicting docs. Dependencies: all phases complete.
 
 ## Execution Log
 
-### 2026-07-09
+### 2026-07-09 (completed phases)
 
 - SOW created from 3-subagent gap analysis (Rust storage, Go implementation, specs/docs)
 - ~150 violations documented across 25+ files
 - 7-phase plan defined
+- **Phase 1 (format foundation):** spec.rs/go, wire.rs/go, record.rs/go, node.rs/go —
+  scope_mode, fixed [from,to,scope_id:u32], VERSION_MINOR=3, META_SIZE=98
+- **Phase 2 (storage layer):** page_store.rs/go — writable MAP_SHARED mmap, copy_page,
+  zero-heap. VecPageStore (tests) + MmapStore (file-backed)
+- **Phase 4a (writer rebuild):** writer.rs/go — fixed-size struct, COW in growth region,
+  leaf split, delete with boundary trim, double-meta commit
+- **Phase 4b (file layer):** os.rs/go — MmapReader (no flock), FileWriter (writable mmap)
+- **Phase 5 (reader/cursor):** scope_id u32 everywhere, LeafView 2-arg
+- **Phase 6 (migration APIs):** migrate.rs/go (streaming merge + change events),
+  extsort.rs/go (bounded-memory sort + coalesce)
+- **Phase 7 (specs/docs):** design-iprange-v4-livedb.md, scope-api.md, v5-reasoning.md
+  all rewritten. AGENTS.md updated.
+- **Gap analysis redo:** no active code references old APIs (scope_width, 2-arg
+  record_size, heap dirty map, lifetime flock LOCK_EX). Remaining references are in
+  comments and disabled test files.
+- **Test results:** Rust 68 tests pass (53 lib + 10 engine + 5 migrate);
+  Go 12 tests pass (7 engine + 5 migrate)
+
+### Pending phases
+
+- Phase 3: reader-registration companion file (cross-process MVCC)
+- Phase 4c: scope/KV metadata APIs re-implementation (mode 2 = indirect)
+- External sort spill path (file-backed runs for huge inputs)
+- Branch split (trees > 2 levels with > branch_max separators)
+- Cursor-based streaming old-state scan in migrate (current: Vec-based)
+- Port conformance/metadata/robustness tests to new API
 
 ## Validation
 

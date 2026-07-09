@@ -1,7 +1,7 @@
 //! IP keys for the index: IPv4 = one `u32`, IPv6 = two `u64` (`hi` then `lo`),
 //! compared **numerically** (§4). The hot path uses only `u64` comparisons — no native
 //! 128-bit type — so the same algorithm compiles for Go. The `[from, to, scope]`
-//! record size is `scope_width`-dependent (§4), so — unlike the v3 key — the width is
+//! record size is fixed `2*width + 4` (scope_id is always u32), so the width is
 //! kept here but the record size is not (it lives in [`crate::spec::record_size`]).
 //!
 //! [`IpKey::checked_inc`] / [`IpKey::checked_dec`] implement the §4 `u128_inc` /
