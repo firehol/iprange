@@ -85,3 +85,98 @@ func TestWriterReaderCommitted(t *testing.T) {
 	// Reader sees committed only (this test uses IntoImage which gives pending;
 	// for a proper committed-reader test we'd use the file-backed path)
 }
+
+// --- Migration tests ---
+
+func TestMigrateEmptyToFull(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Commit(0)
+
+	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
+		{From: Ipv4Key(30), To: Ipv4Key(40), ScopeID: 2},
+	})
+	counters, err := Migrate(w, desired, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Added != 2 || counters.Removed != 0 {
+		t.Fatalf("counters=%+v", counters)
+	}
+}
+
+func TestMigrateFullToEmpty(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
+	w.Set(Ipv4Key(30), Ipv4Key(40), 2)
+	w.Commit(0)
+
+	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{})
+	counters, err := Migrate(w, desired, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Added != 0 || counters.Removed != 2 {
+		t.Fatalf("counters=%+v", counters)
+	}
+}
+
+func TestMigrateIdentical(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
+	w.Commit(0)
+
+	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
+	})
+	counters, _ := Migrate(w, desired, nil)
+	if counters.Unchanged != 1 || counters.Added != 0 || counters.Removed != 0 {
+		t.Fatalf("counters=%+v", counters)
+	}
+}
+
+func TestMigrateChangeScope(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
+	w.Commit(0)
+
+	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 2},
+	})
+	counters, _ := Migrate(w, desired, nil)
+	if counters.Changed != 1 {
+		t.Fatalf("counters=%+v", counters)
+	}
+}
+
+func TestExtSortAndMigrate(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Commit(0)
+
+	unsorted := []DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(30), To: Ipv4Key(40), ScopeID: 2},
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
+		{From: Ipv4Key(50), To: Ipv4Key(60), ScopeID: 3},
+	}
+	stream, err := ExtSort(unsorted, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counters, err := Migrate(w, stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Added != 3 {
+		t.Fatalf("counters=%+v", counters)
+	}
+	w.Commit(0)
+
+	img, _ := w.IntoImage()
+	r, _ := Open(img)
+	if r.RecordCount() != 3 {
+		t.Fatalf("count=%d", r.RecordCount())
+	}
+	if s, ok := r.LookupV4(Ipv4Key(15)); !ok || s != 1 {
+		t.Fatalf("lookup(15)=%d,%v", s, ok)
+	}
+}
