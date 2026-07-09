@@ -128,7 +128,8 @@ func branchMax(keyWidth uint8) int {
 const (
 	TxnFreeNext     = PageHeaderSize
 	TxnFreeCount    = PageHeaderSize + 4
-	TxnFreeArray    = PageHeaderSize + 8
+	TxnFreeFreedIn  = PageHeaderSize + 8
+	TxnFreeArray    = PageHeaderSize + 16
 	TxnFreeCapacity = (PageSize - TxnFreeArray) / 4
 )
 

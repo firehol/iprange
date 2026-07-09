@@ -41,8 +41,9 @@ type Writer[K ipKey[K]] struct {
 	txnFreeBuf    [64]uint32
 	txnFreeCount  int
 	txnFreeChain  uint32
-	reuseBuf      [64]uint32
-	reuseCount    int
+	reuseBuf         [64]uint32
+	reuseCount       int
+	safeReclaimTxnID uint64
 }
 
 // --- construction ---
@@ -62,6 +63,7 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		committedTxnID:     0,
 		txnFreeBuf:         [64]uint32{},
 		reuseBuf:           [64]uint32{},
+		safeReclaimTxnID:   0,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -112,6 +114,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		pendingRecordCount: active.recordCount,
 		txnFreeBuf:         [64]uint32{},
 		reuseBuf:           [64]uint32{},
+		safeReclaimTxnID:   0,
 	}
 	w.loadFreeList()
 	return w, nil
@@ -224,6 +227,12 @@ func (w *Writer[K]) check() error {
 	return nil
 }
 
+// SetSafeReclaimTxnID sets the oldest reader's txn_id for page reclamation.
+// 0 = no active readers.
+func (w *Writer[K]) SetSafeReclaimTxnID(txnID uint64) {
+	w.safeReclaimTxnID = txnID
+}
+
 func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 	if pgno >= w.committedPages {
 		return pgno, nil
@@ -246,10 +255,6 @@ func (w *Writer[K]) allocOrReuse() (uint32, error) {
 }
 
 func (w *Writer[K]) trackFreed(pgno uint32) {
-	// Only track growth-region pages (safe to reuse without reader coordination).
-	if pgno < w.committedPages {
-		return
-	}
 	if w.txnFreeCount < len(w.txnFreeBuf) {
 		w.txnFreeBuf[w.txnFreeCount] = pgno
 		w.txnFreeCount++
@@ -262,47 +267,63 @@ func (w *Writer[K]) trackFreed(pgno uint32) {
 
 func (w *Writer[K]) buildFreeListLinked() {
 	if w.txnFreeCount == 0 {
-		w.freeListHead = w.txnFreeChain
 		return
 	}
-	first := w.txnFreeBuf[0]
-	page := w.store.pageMut(first)
-	putU32(page, FreeNext, w.txnFreeChain)
-	for i := 1; i < w.txnFreeCount; i++ {
-		prev := w.txnFreeBuf[i-1]
-		curr := w.txnFreeBuf[i]
-		p := w.store.pageMut(prev)
-		putU32(p, FreeNext, curr)
+	freedIn := w.committedTxnID + 1
+	metaPgno, err := w.store.allocPage()
+	if err != nil {
+		return
 	}
-	if w.txnFreeCount > 1 {
-		last := w.txnFreeBuf[w.txnFreeCount-1]
-		p := w.store.pageMut(last)
-		putU32(p, FreeNext, w.txnFreeChain)
+	page := w.store.pageMut(metaPgno)
+	for i := range page {
+		page[i] = 0
 	}
-	w.txnFreeChain = first
+	putU32(page, TxnFreeNext, w.txnFreeChain)
+	putU32(page, TxnFreeCount, uint32(w.txnFreeCount))
+	for i := 0; i < w.txnFreeCount; i++ {
+		putU32(page, TxnFreeArray+i*4, w.txnFreeBuf[i])
+	}
+	putU64(page, TxnFreeFreedIn, freedIn)
+	writeHeader(page, PageTypeTxnFree, 0, metaPgno)
+	w.txnFreeChain = metaPgno
 	w.txnFreeCount = 0
-	w.freeListHead = w.txnFreeChain
 }
 
 func (w *Writer[K]) loadFreeList() {
 	w.reuseCount = 0
-	pgno := w.freeListHead
+	metaPgno := w.freeListHead
 	guard := uint32(0)
-	for pgno != 0 && guard < TreeHeightMax {
+	for metaPgno != 0 && guard < TreeHeightMax {
 		guard++
-		if uint64(pgno) >= uint64(w.store.totalPages()) {
+		if uint64(metaPgno) >= uint64(w.store.totalPages()) {
 			break
 		}
-		page := w.store.page(pgno)
-		next := u32le(page, FreeNext)
-		if w.reuseCount < len(w.reuseBuf) {
-			w.reuseBuf[w.reuseCount] = pgno
-			w.reuseCount++
+		page := w.store.page(metaPgno)
+		h := decodeHeader(page)
+		if h.pageType != PageTypeTxnFree {
+			break
+		}
+		nextMeta := u32le(page, TxnFreeNext)
+		count := int(u32le(page, TxnFreeCount))
+		freedIn := u64le(page, TxnFreeFreedIn)
+		safe := w.safeReclaimTxnID == 0 || freedIn < w.safeReclaimTxnID
+		if safe {
+			for i := 0; i < count; i++ {
+				if w.reuseCount >= len(w.reuseBuf) {
+					w.freeListHead = metaPgno
+					return
+				}
+				freedPgno := u32le(page, TxnFreeArray+i*4)
+				w.reuseBuf[w.reuseCount] = freedPgno
+				w.reuseCount++
+			}
 		} else {
-			break
+			w.freeListHead = metaPgno
+			return
 		}
-		pgno = next
+		metaPgno = nextMeta
 	}
+	w.freeListHead = 0
 }
 
 func (w *Writer[K]) cowRoot() (uint32, error) {
