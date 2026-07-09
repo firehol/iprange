@@ -626,7 +626,85 @@ func (w *Writer[K]) branchAbsorbSplit(pgno uint32, childIdx int, left uint32, se
 		writeHeader(pageMut, PageTypeBranch, uint16(count+1), pgno)
 		return nil, nil
 	}
-	return nil, fmt.Errorf("branch split not yet implemented (tree too deep)")
+	// Branch split: copy to stack buffer, redistribute into two pages.
+	var src [PageSize]byte
+	copy(src[:], w.store.page(pgno))
+	total := count + 1
+	mid := total / 2
+
+	if err := w.writeBranchSplit(pgno, src[:], count, childIdx, left, sep, right, 0, mid); err != nil {
+		return nil, err
+	}
+	rightPgno, err := w.store.allocPage()
+	if err != nil {
+		return nil, err
+	}
+	if err := w.writeBranchSplit(rightPgno, src[:], count, childIdx, left, sep, right, mid, total-mid); err != nil {
+		return nil, err
+	}
+
+	// Promoted separator = sep at index `mid` in the combined array.
+	var promoted K
+	if mid == childIdx {
+		promoted = sep
+	} else {
+		oldI := mid
+		if mid > childIdx {
+			oldI = mid - 1
+		}
+		off := PageHeaderSize + 4 + oldI*(kw+4)
+		promoted = zero.readLE(src[off : off+kw])
+	}
+	return &branchSplit[K]{sep: promoted, right: rightPgno}, nil
+}
+
+func (w *Writer[K]) writeBranchSplit(pgno uint32, src []byte, oldCount, insertIdx int,
+	insLeft uint32, insSep K, insRight uint32, startIdx, sepCount int) error {
+	var zero K
+	kw := zero.width()
+	page := w.store.pageMut(pgno)
+	for i := range page {
+		page[i] = 0
+	}
+	writeHeader(page, PageTypeBranch, uint16(sepCount), pgno)
+
+	// Write child[0].
+	var firstChild uint32
+	if startIdx == 0 {
+		if insertIdx == 0 {
+			firstChild = insLeft
+		} else {
+			firstChild = u32le(src, PageHeaderSize)
+		}
+	} else if insertIdx == startIdx {
+		firstChild = insRight
+	} else {
+		oldI := startIdx - 1
+		firstChild = u32le(src, PageHeaderSize+4+oldI*(kw+4)+kw)
+	}
+	putU32(page, PageHeaderSize, firstChild)
+
+	// Write each separator + following child.
+	for outI := 0; outI < sepCount; outI++ {
+		absI := startIdx + outI
+		var s K
+		var c uint32
+		if absI == insertIdx {
+			s, c = insSep, insRight
+		} else {
+			oldI := absI
+			if absI > insertIdx {
+				oldI = absI - 1
+			}
+			off := PageHeaderSize + 4 + oldI*(kw+4)
+			s = zero.readLE(src[off : off+kw])
+			c = u32le(src, off+kw)
+		}
+		outOff := PageHeaderSize + 4 + outI*(kw+4)
+		s.writeLE(page[outOff : outOff+kw])
+		putU32(page, outOff+kw, c)
+	}
+	return nil
 }
 
 func (w *Writer[K]) writeBranchNew(pgno uint32, left uint32, sep K, right uint32) error {

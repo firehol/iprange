@@ -16,7 +16,7 @@ use crate::page_store::{PageStore, VecPageStore};
 use crate::reader::Reader;
 use crate::record::{self, record_size};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
-use crate::wire::{finalize_checksum, put_u32, Meta, PageHeader};
+use crate::wire::{finalize_checksum, put_u32, u32_le, Meta, PageHeader};
 
 /// One KV entry as returned by `meta_list`.
 pub type MetaEntry = (alloc::vec::Vec<u8>, u32, alloc::vec::Vec<u8>);
@@ -512,17 +512,63 @@ impl<K: IpKey> Writer<K> {
             PageHeader::write(page, spec::PAGE_TYPE_BRANCH, (count + 1) as u16, pgno);
             Ok(None)
         } else {
-            // Branch split: redistribute into two pages via a stack buffer.
+            // Branch split: copy to stack buffer, redistribute into two pages.
             let mut src = [0u8; PAGE_SIZE];
             src.copy_from_slice(self.store.page(pgno));
-            // Build the combined separator+child array, insert the new entry,
-            // split at midpoint, write two pages.
-            // For simplicity, this handles the common case; full split logic
-            // mirrors leaf split.
-            // TODO: implement branch split properly for trees > 2 levels deep
-            // with more than branch_max separators.
-            Err(Error::State("branch split not yet implemented (tree too deep)"))
+            let total = count + 1;
+            let mid = total / 2;
+
+            self.write_branch_split(pgno, &src, count, child_idx, left, sep, right, 0, mid)?;
+            let right_pgno = self.store.alloc_page()?;
+            self.write_branch_split(right_pgno, &src, count, child_idx, left, sep, right, mid, total - mid)?;
+
+            // Promoted separator = sep at index `mid` in the combined array.
+            let promoted = if mid == child_idx {
+                sep
+            } else {
+                let old_i = if mid < child_idx { mid } else { mid - 1 };
+                let off = PAGE_HEADER_SIZE + 4 + old_i * (K::WIDTH + 4);
+                K::read_le(&src[off..off + K::WIDTH])
+            };
+            Ok(Some((promoted, right_pgno)))
         }
+    }
+
+    /// Write a branch page from a source buffer + an inserted split entry.
+    #[allow(clippy::too_many_arguments)]
+    fn write_branch_split(
+        &mut self, pgno: u32, src: &[u8], old_count: usize, insert_idx: usize,
+        ins_left: u32, ins_sep: K, ins_right: u32, start_idx: usize, sep_count: usize,
+    ) -> Result<()> {
+        let kw = K::WIDTH;
+        let page = self.store.page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_BRANCH, sep_count as u16, pgno);
+
+        let first_child = if start_idx == 0 {
+            if insert_idx == 0 { ins_left } else { u32_le(src, PAGE_HEADER_SIZE) }
+        } else if insert_idx == start_idx {
+            ins_right
+        } else {
+            let old_i = start_idx - 1;
+            u32_le(src, PAGE_HEADER_SIZE + 4 + old_i * (kw + 4) + kw)
+        };
+        put_u32(page, PAGE_HEADER_SIZE, first_child);
+
+        for out_i in 0..sep_count {
+            let abs_i = start_idx + out_i;
+            let (s, c) = if abs_i == insert_idx {
+                (ins_sep, ins_right)
+            } else {
+                let old_i = if abs_i < insert_idx { abs_i } else { abs_i - 1 };
+                let off = PAGE_HEADER_SIZE + 4 + old_i * (kw + 4);
+                (K::read_le(&src[off..off + kw]), u32_le(src, off + kw))
+            };
+            let out_off = PAGE_HEADER_SIZE + 4 + out_i * (kw + 4);
+            s.write_le(&mut page[out_off..out_off + kw]);
+            put_u32(page, out_off + kw, c);
+        }
+        Ok(())
     }
 
     fn write_branch_new(&mut self, pgno: u32, left: u32, sep: K, right: u32) -> Result<()> {

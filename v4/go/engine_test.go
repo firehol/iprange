@@ -180,3 +180,40 @@ func TestExtSortAndMigrate(t *testing.T) {
 		t.Fatalf("lookup(15)=%d,%v", s, ok)
 	}
 }
+
+func TestStress200k(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	for i := uint32(0); i < 200_000; i++ {
+		w.Set(Ipv4Key(i), Ipv4Key(i), i)
+	}
+	w.Commit(0)
+	img, _ := w.IntoImage()
+	r, _ := Open(img)
+	if r.RecordCount() != 200_000 {
+		t.Fatalf("count=%d", r.RecordCount())
+	}
+	if s, ok := r.LookupV4(Ipv4Key(0)); !ok || s != 0 {
+		t.Fatalf("lookup(0)=%d,%v", s, ok)
+	}
+	if s, ok := r.LookupV4(Ipv4Key(199999)); !ok || s != 199999 {
+		t.Fatalf("lookup(199999)=%d,%v", s, ok)
+	}
+}
+
+func TestStress500k(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	for i := uint32(0); i < 500_000; i++ {
+		w.Set(Ipv4Key(i), Ipv4Key(i), i)
+	}
+	w.Commit(0)
+	img, _ := w.IntoImage()
+	r, _ := Open(img)
+	if r.RecordCount() != 500_000 {
+		t.Fatalf("count=%d", r.RecordCount())
+	}
+	for i := uint32(0); i < 500_000; i += 1000 {
+		if s, ok := r.LookupV4(Ipv4Key(i)); !ok || s != i {
+			t.Fatalf("lookup(%d)=%d,%v", i, s, ok)
+		}
+	}
+}
