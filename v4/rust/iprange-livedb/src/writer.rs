@@ -29,13 +29,13 @@ pub enum Changed {
 }
 
 pub struct Writer<K: IpKey> {
-    store: Box<dyn PageStore>,
+    pub(crate) store: Box<dyn PageStore>,
     key_width: u8,
     scope_mode: u8,
     created_unixtime: u64,
     active_meta: u32,
-    committed_root: u32,
-    committed_height: u32,
+    pub(crate) committed_root: u32,
+    pub(crate) committed_height: u32,
     committed_pages: u32,
     committed_record_count: u64,
     committed_txn_id: u64,
@@ -277,6 +277,17 @@ impl<K: IpKey> Writer<K> {
 
     pub fn record_count(&self) -> u64 {
         self.pending_record_count
+    }
+
+    /// Accessors for the streaming migrate (zero-copy old-tree scan).
+    pub(crate) fn store_ref(&self) -> &dyn PageStore {
+        self.store.as_ref()
+    }
+    pub(crate) fn pending_root_ref(&self) -> u32 {
+        self.pending_root
+    }
+    pub(crate) fn pending_height_ref(&self) -> u32 {
+        self.pending_height
     }
 
     pub fn into_image(self) -> Option<alloc::vec::Vec<u8>> {
