@@ -1,6 +1,9 @@
 package iprangedb
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestCreateEmpty(t *testing.T) {
 	w, err := Create[Ipv4Key](0, 0)
@@ -292,5 +295,258 @@ func TestChurnStableSize(t *testing.T) {
 	r, _ := Open(img)
 	if r.RecordCount() != 1000 {
 		t.Fatalf("count=%d", r.RecordCount())
+	}
+}
+
+// --- External sort spill tests (ported from extsort.rs) ---
+
+func TestSpillSort(t *testing.T) {
+	cfg := &ExtSortConfig{ChunkSize: 10, TempDir: t.TempDir()}
+	input := make([]DesiredRecord[Ipv4Key], 0, 25)
+	for i := uint32(0); i < 25; i++ {
+		input = append(input, DesiredRecord[Ipv4Key]{From: Ipv4Key(1000 - i), To: Ipv4Key(1000 - i), ScopeID: i})
+	}
+	stream, err := ExtSort(input, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prev Ipv4Key
+	count := 0
+	for {
+		r := stream.Next()
+		if r == nil {
+			break
+		}
+		if count > 0 && r.From.cmp(prev) <= 0 {
+			t.Fatalf("not sorted: prev=%v cur=%v", uint32(prev), uint32(r.From))
+		}
+		prev = r.From
+		count++
+	}
+	if count != 25 {
+		t.Fatalf("count=%d want 25", count)
+	}
+}
+
+func TestSpillCoalesce(t *testing.T) {
+	cfg := &ExtSortConfig{ChunkSize: 5, TempDir: t.TempDir()}
+	input := make([]DesiredRecord[Ipv4Key], 0, 10)
+	for i := uint32(0); i < 10; i++ {
+		input = append(input, DesiredRecord[Ipv4Key]{From: Ipv4Key(i * 2), To: Ipv4Key(i*2 + 1), ScopeID: 1})
+	}
+	stream, err := ExtSort(input, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := stream.Next()
+	if r == nil {
+		t.Fatal("expected one coalesced record")
+	}
+	if r.From != 0 || r.To != Ipv4Key(19) {
+		t.Fatalf("got [%v,%v] want [0,19]", uint32(r.From), uint32(r.To))
+	}
+	if stream.Next() != nil {
+		t.Fatal("expected a single coalesced record")
+	}
+}
+
+func TestSpillCoalesceV6(t *testing.T) {
+	cfg := &ExtSortConfig{ChunkSize: 4, TempDir: t.TempDir()}
+	input := make([]DesiredRecord[Ipv6Key], 0, 10)
+	for i := uint32(0); i < 10; i++ {
+		k := Ipv6Key{Hi: 0, Lo: uint64(i * 2)}
+		input = append(input, DesiredRecord[Ipv6Key]{From: k, To: Ipv6Key{Hi: 0, Lo: uint64(i*2 + 1)}, ScopeID: 1})
+	}
+	stream, err := ExtSort(input, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := stream.Next()
+	if r == nil {
+		t.Fatal("expected one coalesced record")
+	}
+	if r.From.Lo != 0 || r.To.Lo != 19 {
+		t.Fatalf("got [%d,%d] want [0,19]", r.From.Lo, r.To.Lo)
+	}
+	if stream.Next() != nil {
+		t.Fatal("expected a single coalesced record")
+	}
+}
+
+func TestSpillTempFilesCleanedUp(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &ExtSortConfig{ChunkSize: 3, TempDir: dir}
+	input := make([]DesiredRecord[Ipv4Key], 10)
+	for i := range input {
+		input[i] = DesiredRecord[Ipv4Key]{From: Ipv4Key(uint32(i)), To: Ipv4Key(uint32(i)), ScopeID: uint32(i)}
+	}
+	stream, err := ExtSort(input, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if stream.Next() == nil {
+			break
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected clean temp dir, found %d files", len(entries))
+	}
+}
+
+func TestSpillAndMigrate(t *testing.T) {
+	w, _ := Create[Ipv4Key](0, 0)
+	w.Commit(0)
+
+	const n = 50
+	cfg := &ExtSortConfig{ChunkSize: 7, TempDir: t.TempDir()}
+	input := make([]DesiredRecord[Ipv4Key], n)
+	for i := 0; i < n; i++ {
+		v := uint32(i*3 + 1)
+		input[i] = DesiredRecord[Ipv4Key]{From: Ipv4Key(v), To: Ipv4Key(v), ScopeID: uint32(i)}
+	}
+	stream, err := ExtSort(input, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counters, err := Migrate(w, stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Added != n {
+		t.Fatalf("added=%d want %d", counters.Added, n)
+	}
+	w.Commit(0)
+
+	img, _ := w.IntoImage()
+	r, _ := Open(img)
+	if r.RecordCount() != uint64(n) {
+		t.Fatalf("count=%d want %d", r.RecordCount(), n)
+	}
+	for i := 0; i < n; i++ {
+		v := uint32(i*3 + 1)
+		if s, ok := r.LookupV4(Ipv4Key(v)); !ok || s != uint32(i) {
+			t.Fatalf("lookup(%d)=%d,%v want %d", v, s, ok, i)
+		}
+	}
+}
+
+// --- Streaming TreeWalker tests (deep tree, branch traversal) ---
+
+func TestMigrateStreamingDeepTreeUnchanged(t *testing.T) {
+	const n = 2000
+	w, _ := Create[Ipv4Key](0, 0)
+	for i := uint32(0); i < n; i++ {
+		if err := w.Set(Ipv4Key(i*10), Ipv4Key(i*10+5), i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	// Force a tree with at least one branch level so the walker exercises
+	// descend/walk-up across branch pages, not just a flat leaf scan.
+	if w.committedHeight < 2 {
+		t.Fatalf("expected height>=2, got %d", w.committedHeight)
+	}
+
+	desired := make([]DesiredRecord[Ipv4Key], n)
+	for i := uint32(0); i < n; i++ {
+		desired[i] = DesiredRecord[Ipv4Key]{From: Ipv4Key(i * 10), To: Ipv4Key(i*10 + 5), ScopeID: i}
+	}
+	stream := FromUnsorted(desired)
+	counters, err := Migrate(w, stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Unchanged != n || counters.Added != 0 || counters.Removed != 0 || counters.Changed != 0 {
+		t.Fatalf("counters=%+v", counters)
+	}
+}
+
+func TestMigrateStreamingDeepTreeChurn(t *testing.T) {
+	const n = 1500
+	w, _ := Create[Ipv4Key](0, 0)
+	for i := uint32(0); i < n; i++ {
+		if err := w.Set(Ipv4Key(i*10), Ipv4Key(i*10+5), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	if w.committedHeight < 2 {
+		t.Fatalf("expected height>=2, got %d", w.committedHeight)
+	}
+
+	// Keep even keys (change scope of the first half), drop odd keys.
+	desired := make([]DesiredRecord[Ipv4Key], 0, n/2)
+	for i := uint32(0); i < n; i += 2 {
+		sc := uint32(1)
+		if i < n/2 {
+			sc = 2
+		}
+		desired = append(desired, DesiredRecord[Ipv4Key]{From: Ipv4Key(i * 10), To: Ipv4Key(i*10 + 5), ScopeID: sc})
+	}
+	stream := FromUnsorted(desired)
+	if _, err := Migrate(w, stream, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+
+	img, _ := w.IntoImage()
+	r, _ := Open(img)
+	for i := uint32(0); i < n; i += 2 {
+		want := uint32(1)
+		if i < n/2 {
+			want = 2
+		}
+		if s, ok := r.LookupV4(Ipv4Key(i * 10)); !ok || s != want {
+			t.Fatalf("lookup(%d)=%d,%v want %d", i*10, s, ok, want)
+		}
+	}
+	for i := uint32(1); i < n; i += 2 {
+		if _, ok := r.LookupV4(Ipv4Key(i * 10)); ok {
+			t.Fatalf("lookup(%d) should be removed", i*10)
+		}
+	}
+}
+
+// TestMigrateStreamingHeight3 forces a three-level tree (root branch whose
+// children are branches) so the walker exercises nested walkUp across two
+// branch levels, then verifies an identical-desired migrate marks everything
+// unchanged.
+func TestMigrateStreamingHeight3(t *testing.T) {
+	const n = 200_000
+	w, _ := Create[Ipv4Key](0, 0)
+	for i := uint32(0); i < n; i++ {
+		if err := w.Set(Ipv4Key(i), Ipv4Key(i), i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(0); err != nil {
+		t.Fatal(err)
+	}
+	if w.committedHeight < 3 {
+		t.Fatalf("expected height>=3, got %d", w.committedHeight)
+	}
+
+	desired := make([]DesiredRecord[Ipv4Key], n)
+	for i := uint32(0); i < n; i++ {
+		desired[i] = DesiredRecord[Ipv4Key]{From: Ipv4Key(i), To: Ipv4Key(i), ScopeID: i}
+	}
+	stream := FromUnsorted(desired)
+	counters, err := Migrate(w, stream, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters.Unchanged != n {
+		t.Fatalf("unchanged=%d want %d", counters.Unchanged, n)
 	}
 }

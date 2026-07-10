@@ -73,13 +73,18 @@ impl<K: IpKey> RunReader<K> {
 
 // --- k-way merge ---
 
-struct KWayMerge<K: IpKey> { runs: Vec<RunReader<K>> }
+struct KWayMerge<K: IpKey> {
+    runs: Vec<RunReader<K>>,
+    cached: Option<DesiredRecord<K>>, // coalesced peek result
+}
 
 impl<K: IpKey> KWayMerge<K> {
     fn new(run_paths: &[PathBuf]) -> Result<Self> {
         let mut runs = Vec::with_capacity(run_paths.len());
         for p in run_paths { runs.push(RunReader::<K>::open(p)?); }
-        Ok(KWayMerge { runs })
+        let mut m = KWayMerge { runs, cached: None };
+        m.cached = m.compute_coalesced();
+        Ok(m)
     }
 
     fn find_min(&self) -> Option<usize> {
@@ -104,23 +109,29 @@ impl<K: IpKey> KWayMerge<K> {
         self.runs[idx].advance();
         result
     }
-}
 
-impl<K: IpKey> DesiredStream<K> for KWayMerge<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> {
-        let idx = self.find_min()?;
-        self.runs[idx].current.as_ref()
-    }
-    fn next(&mut self) -> Option<DesiredRecord<K>> {
+    fn compute_coalesced(&mut self) -> Option<DesiredRecord<K>> {
         let mut result = self.pop_min()?;
         loop {
-            let merge = if let Some(n) = self.peek() {
+            let merge = if let Some(idx) = self.find_min() {
+                let n = self.runs[idx].current.as_ref().unwrap();
                 n.scope_id == result.scope_id &&
                     result.to.checked_inc().map_or(false, |a| a == n.from)
             } else { false };
             if !merge { break; }
             result.to = self.pop_min().unwrap().to;
         }
+        Some(result)
+    }
+}
+
+impl<K: IpKey> DesiredStream<K> for KWayMerge<K> {
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        self.cached.as_ref()
+    }
+    fn next(&mut self) -> Option<DesiredRecord<K>> {
+        let result = self.cached.take()?;
+        self.cached = self.compute_coalesced();
         Some(result)
     }
 }
