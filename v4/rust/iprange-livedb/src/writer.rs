@@ -217,6 +217,7 @@ impl<K: IpKey> Writer<K> {
     /// and no active reader needs them — reader coordination is Phase 3).
     /// Read the committed free-list (TXN_FREE page chain) and populate the
     /// reuse buffer with freed DATA pages that are safe to reclaim.
+    /// Consumed TXN_FREE metadata pages are themselves recycled into reuse_buf.
     fn load_free_list(&mut self) {
         self.reuse_count = 0;
         let mut meta_pgno = self.free_list_head;
@@ -229,24 +230,32 @@ impl<K: IpKey> Writer<K> {
             let page = self.store.page(meta_pgno);
             let h = PageHeader::decode(page);
             if h.page_type != spec::PAGE_TYPE_TXN_FREE {
-                break; // corrupt or old-format free-list
+                break;
             }
             let next_meta = u32_le(page, spec::TXN_FREE_NEXT);
             let count = u32_le(page, spec::TXN_FREE_COUNT) as usize;
             let freed_in = u64_le(page, spec::TXN_FREE_FREED_IN);
             let safe = self.safe_reclaim_txn_id == 0 || freed_in < self.safe_reclaim_txn_id;
             if safe {
+                // Load freed DATA pages into reuse_buf.
                 for i in 0..count {
                     if self.reuse_count >= self.reuse_buf.len() {
-                        self.free_list_head = meta_pgno; // more to load next time
+                        self.free_list_head = meta_pgno;
                         return;
                     }
                     let freed_pgno = u32_le(page, spec::TXN_FREE_ARRAY + i * 4);
                     self.reuse_buf[self.reuse_count] = freed_pgno;
                     self.reuse_count += 1;
                 }
+                // The TXN_FREE metadata page itself is now consumed → recycle it.
+                if self.reuse_count < self.reuse_buf.len() {
+                    self.reuse_buf[self.reuse_count] = meta_pgno;
+                    self.reuse_count += 1;
+                } else {
+                    self.free_list_head = meta_pgno;
+                    return;
+                }
             } else {
-                // Not safe to reclaim yet — keep the chain head.
                 self.free_list_head = meta_pgno;
                 return;
             }
@@ -314,14 +323,24 @@ impl<K: IpKey> Writer<K> {
     }
 
     /// Allocate a new page, preferring reused (freed) pages over growth.
+    /// Checks three sources in order:
+    /// 1. txn_free_buf (pages freed THIS transaction — safe, not reachable from pending root)
+    /// 2. reuse_buf (pages freed in prior committed transactions — loaded at open/commit)
+    /// 3. growth region (allocate a new page at the end of the file)
     #[inline]
     fn alloc_or_reuse(&mut self) -> Result<u32> {
+        // 1. Intra-transaction reuse: pages freed earlier in this same txn.
+        if self.txn_free_count > 0 {
+            self.txn_free_count -= 1;
+            return Ok(self.txn_free_buf[self.txn_free_count]);
+        }
+        // 2. Cross-transaction reuse: pages freed in prior committed txns.
         if self.reuse_count > 0 {
             self.reuse_count -= 1;
-            Ok(self.reuse_buf[self.reuse_count])
-        } else {
-            self.store.alloc_page()
+            return Ok(self.reuse_buf[self.reuse_count]);
         }
+        // 3. Growth: allocate at the end of the file.
+        self.store.alloc_page()
     }
 
     /// Track a freed page (COW victim). Records ALL freed pages including
@@ -351,7 +370,7 @@ impl<K: IpKey> Writer<K> {
             return Ok(());
         }
         let freed_in = self.committed_txn_id + 1;
-        let meta_pgno = self.store.alloc_page()?;
+        let meta_pgno = self.alloc_or_reuse()?;
         let page = self.store.page_mut(meta_pgno);
         page.fill(0);
         // @16: next TXN_FREE page in the chain (0 = end)

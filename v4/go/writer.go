@@ -247,10 +247,17 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 }
 
 func (w *Writer[K]) allocOrReuse() (uint32, error) {
+	// 1. Intra-transaction reuse.
+	if w.txnFreeCount > 0 {
+		w.txnFreeCount--
+		return w.txnFreeBuf[w.txnFreeCount], nil
+	}
+	// 2. Cross-transaction reuse.
 	if w.reuseCount > 0 {
 		w.reuseCount--
 		return w.reuseBuf[w.reuseCount], nil
 	}
+	// 3. Growth.
 	return w.store.allocPage()
 }
 
@@ -270,7 +277,7 @@ func (w *Writer[K]) buildFreeListLinked() {
 		return
 	}
 	freedIn := w.committedTxnID + 1
-	metaPgno, err := w.store.allocPage()
+	metaPgno, err := w.allocOrReuse()
 	if err != nil {
 		return
 	}
@@ -316,6 +323,14 @@ func (w *Writer[K]) loadFreeList() {
 				freedPgno := u32le(page, TxnFreeArray+i*4)
 				w.reuseBuf[w.reuseCount] = freedPgno
 				w.reuseCount++
+			}
+			// Recycle the TXN_FREE metadata page itself.
+			if w.reuseCount < len(w.reuseBuf) {
+				w.reuseBuf[w.reuseCount] = metaPgno
+				w.reuseCount++
+			} else {
+				w.freeListHead = metaPgno
+				return
 			}
 		} else {
 			w.freeListHead = metaPgno

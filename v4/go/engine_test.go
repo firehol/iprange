@@ -255,3 +255,42 @@ func TestReaderTableReapStale(t *testing.T) {
 		t.Fatalf("expected at least 1 stale slot cleared, got %d", cleared)
 	}
 }
+
+// --- Churn tests ---
+
+func TestChurnStableSize(t *testing.T) {
+	img := func() []byte {
+		w, _ := Create[Ipv4Key](0, 0)
+		for i := uint32(0); i < 1000; i++ {
+			w.Set(Ipv4Key(i), Ipv4Key(i), i)
+		}
+		w.Commit(0)
+		img, _ := w.IntoImage()
+		return img
+	}()
+
+	initialPages := len(img) / PageSize
+
+	for cycle := uint32(0); cycle < 20; cycle++ {
+		w, _ := openWriter[Ipv4Key](newVecPageStore(append([]byte(nil), img...)))
+		w.SetSafeReclaimTxnID(0)
+		for i := uint32(0); i < 1000; i++ {
+			w.Delete(Ipv4Key(i), Ipv4Key(i))
+		}
+		for i := uint32(0); i < 1000; i++ {
+			w.Set(Ipv4Key(i), Ipv4Key(i), i)
+		}
+		w.Commit(uint64(cycle + 1))
+		img, _ = w.IntoImage()
+	}
+
+	finalPages := len(img) / PageSize
+	if finalPages > initialPages*2 {
+		t.Fatalf("file grew from %d to %d pages — reclamation broken", initialPages, finalPages)
+	}
+
+	r, _ := Open(img)
+	if r.RecordCount() != 1000 {
+		t.Fatalf("count=%d", r.RecordCount())
+	}
+}
