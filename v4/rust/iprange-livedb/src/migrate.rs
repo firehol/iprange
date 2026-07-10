@@ -62,10 +62,14 @@ pub struct DesiredRecord<K: IpKey> {
 /// Trait for a sorted stream of desired records. The caller implements this
 /// (e.g., from an external sort, or directly from a sorted source).
 pub trait DesiredStream<K: IpKey> {
-    /// Peek at the next record without consuming it.
     fn peek(&self) -> Option<&DesiredRecord<K>>;
-    /// Consume and return the next record.
     fn next(&mut self) -> Option<DesiredRecord<K>>;
+}
+
+/// Blanket impl: a Box<dyn DesiredStream> is itself a DesiredStream.
+impl<K: IpKey> DesiredStream<K> for Box<dyn DesiredStream<K>> {
+    fn peek(&self) -> Option<&DesiredRecord<K>> { (**self).peek() }
+    fn next(&mut self) -> Option<DesiredRecord<K>> { (**self).next() }
 }
 
 /// Migrate the writer's pending tree to match the desired stream.
