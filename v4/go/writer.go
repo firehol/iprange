@@ -36,6 +36,12 @@ type Writer[K ipKey[K]] struct {
 	committedRecordCount uint64
 	committedTxnID       uint64
 
+	// Previous committed root/height (for reader-safe reclamation).
+	// A reader opened before the last commit reads from prevCommittedRoot;
+	// those pages must not be freed until the next generation.
+	prevCommittedRoot   uint32
+	prevCommittedHeight uint32
+
 	// Pending state (this txn's working copy)
 	pendingRoot        uint32
 	pendingHeight      uint32
@@ -74,6 +80,8 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		activeMeta:          0,
 		committedPages:      2,
 		committedTxnID:      0,
+		prevCommittedRoot:   0,
+		prevCommittedHeight: 0,
 		privatePages:        newPageSet(2),
 		scopeRegistry:       scopeRegForMode(scopeMode),
 		scopeTableRootCache: 0,
@@ -110,6 +118,17 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	if active.recordSize != rs {
 		return nil, fmt.Errorf("record_size mismatch")
 	}
+	// Previous committed root/height come from the inactive meta (the one
+	// with the lower txn_id). A reader opened before the last commit reads
+	// from that generation; its pages must stay reachable until next commit.
+	var prevRoot, prevHeight uint32
+	if activeNo == 0 {
+		prevRoot = metaB.rootPgno
+		prevHeight = metaB.treeHeight
+	} else {
+		prevRoot = metaA.rootPgno
+		prevHeight = metaA.treeHeight
+	}
 	w := &Writer[K]{
 		store:               store,
 		keyWidth:            active.keyWidth,
@@ -121,6 +140,8 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		committedPages:      uint32(active.totalPages),
 		committedRecordCount: active.recordCount,
 		committedTxnID:      active.txnID,
+		prevCommittedRoot:   prevRoot,
+		prevCommittedHeight: prevHeight,
 		pendingRoot:         active.rootPgno,
 		pendingHeight:       active.treeHeight,
 		pendingRecordCount:  active.recordCount,
@@ -223,6 +244,10 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	}
 	w.activeMeta = inactive
 	w.committedTxnID = newTxnID
+	// Save previous committed root/height BEFORE flipping, so the old
+	// generation stays protected from reclamation while readers may use it.
+	w.prevCommittedRoot = w.committedRoot
+	w.prevCommittedHeight = w.committedHeight
 	w.committedRoot = w.pendingRoot
 	w.committedHeight = w.pendingHeight
 	w.committedRecordCount = w.pendingRecordCount
@@ -304,9 +329,17 @@ func (w *Writer[K]) deriveFreePages() {
 	reachable := newPageSet(total)
 	reachable.insert(0)
 	reachable.insert(1)
+	// Walk the new committed tree.
 	w.markReachable(w.committedRoot, reachable)
 	if w.scopeTableRootCache != 0 {
 		w.markScopeReachable(w.scopeTableRootCache, reachable)
+	}
+	// MVCC safety: also walk the OLD committed tree if it's different.
+	// This protects readers using the previous generation. A reader opened
+	// before the last commit is reading from prevCommittedRoot; pages
+	// reachable from the old root must NOT be freed.
+	if w.prevCommittedRoot != 0 && w.prevCommittedRoot != w.committedRoot {
+		w.markReachable(w.prevCommittedRoot, reachable)
 	}
 	for pgno := 2; pgno < total; pgno++ {
 		if !reachable.contains(uint32(pgno)) {

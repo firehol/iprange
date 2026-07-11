@@ -65,8 +65,11 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
 		events = append(events, sweepEvent{pos: r.From.toU128(), isStart: true, idx: i})
 		if after, ok := r.To.checkedInc(); ok {
 			events = append(events, sweepEvent{pos: after.toU128(), isStart: false, idx: i})
+		} else {
+			// To is family_max: synthetic end at u128 max so the final
+			// segment is processed (fixes tail loss at max address).
+			events = append(events, sweepEvent{pos: Uint128{Hi: maxUint64, Lo: maxUint64}, isStart: false, idx: i})
 		}
-		// If checkedInc fails (To is family_max), no end event — record covers to end.
 	}
 	// Sort by position, then ends before starts at the same position.
 	sort.Slice(events, func(i, j int) bool {
@@ -108,7 +111,14 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
 		}
 
 		segFrom := zero.fromU128(pos)
-		segTo := zero.fromU128(decU128(nextPos))
+		// When nextPos is the synthetic u128 max (max-address end event),
+		// the segment extends to the family maximum, not fromU128(max-1).
+		var segTo K
+		if nextPos.Hi == maxUint64 && nextPos.Lo == maxUint64 {
+			segTo = zero.maxKey()
+		} else {
+			segTo = zero.fromU128(decU128(nextPos))
+		}
 
 		// Last-wins: highest index in active.
 		maxIdx := active[0]
@@ -297,9 +307,19 @@ func (r *runReader[K]) advance() {
 
 // --- K-way merge with cross-run overlap normalization ---
 
+// kMinSource identifies whether the minimum record came from a spill run or
+// the pending tail list.
+type kMinSource int
+
+const (
+	kMinRun     kMinSource = iota // minimum is in a runReader
+	kMinPending                   // minimum is in the pending tail list
+)
+
 type kWayMerge[K ipKey[K]] struct {
-	runs   []*runReader[K]
-	cached *DesiredRecord[K]
+	runs    []*runReader[K]
+	cached  *DesiredRecord[K]
+	pending []DesiredRecord[K] // tail fragments deferred from truncated results
 }
 
 func newKWayMerge[K ipKey[K]](paths []string) (*kWayMerge[K], error) {
@@ -321,77 +341,138 @@ func newKWayMerge[K ipKey[K]](paths []string) (*kWayMerge[K], error) {
 	return m, nil
 }
 
-func (m *kWayMerge[K]) findMin() (int, bool) {
-	minIdx := -1
+// findMin returns the source (run or pending) and index of the record with the
+// smallest From across all runs AND the pending tail list.
+func (m *kWayMerge[K]) findMin() (kMinSource, int, bool) {
+	var best K
+	hasBest := false
+	var bestSrc kMinSource
+	bestIdx := 0
+
 	for i := range m.runs {
 		if !m.runs[i].ok {
 			continue
 		}
-		if minIdx < 0 || m.runs[i].current.From.cmp(m.runs[minIdx].current.From) < 0 {
-			minIdx = i
+		if !hasBest || m.runs[i].current.From.cmp(best) < 0 {
+			best = m.runs[i].current.From
+			bestSrc = kMinRun
+			bestIdx = i
+			hasBest = true
 		}
 	}
-	if minIdx < 0 {
-		return 0, false
+	for i := range m.pending {
+		if !hasBest || m.pending[i].From.cmp(best) < 0 {
+			best = m.pending[i].From
+			bestSrc = kMinPending
+			bestIdx = i
+			hasBest = true
+		}
 	}
-	return minIdx, true
+	if !hasBest {
+		return 0, 0, false
+	}
+	return bestSrc, bestIdx, true
+}
+
+// peekMin returns the fields of the minimum record without consuming it.
+func (m *kWayMerge[K]) peekMin() (from, to K, scope uint32, ok bool) {
+	src, idx, hasMin := m.findMin()
+	if !hasMin {
+		var zero K
+		return zero, zero, 0, false
+	}
+	if src == kMinRun {
+		r := m.runs[idx].current
+		return r.From, r.To, r.ScopeID, true
+	}
+	r := m.pending[idx]
+	return r.From, r.To, r.ScopeID, true
 }
 
 func (m *kWayMerge[K]) popMin() (DesiredRecord[K], bool) {
-	idx, ok := m.findMin()
+	src, idx, ok := m.findMin()
 	if !ok {
 		var zero DesiredRecord[K]
 		return zero, false
 	}
-	r := m.runs[idx].current
-	m.runs[idx].advance()
+	if src == kMinRun {
+		r := m.runs[idx].current
+		m.runs[idx].advance()
+		return r, true
+	}
+	// Pending: swap_remove for O(1) (order is irrelevant; findMin scans all).
+	r := m.pending[idx]
+	last := len(m.pending) - 1
+	m.pending[idx] = m.pending[last]
+	m.pending = m.pending[:last]
 	return r, true
 }
 
 // computeNext produces the next coalesced/normalized record, handling
 // cross-run overlaps: same-scope overlaps are extended; different-scope
-// overlaps split the result (last-wins).
+// overlaps split the result (last-wins) and defer the surviving tail to
+// `pending` so it is not lost.
 func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 	result, ok := m.popMin()
 	if !ok {
 		return nil
 	}
 	for {
-		nextIdx, hasMin := m.findMin()
+		nextFrom, nextTo, nextScope, hasMin := m.peekMin()
 		if !hasMin {
 			break
 		}
-		next := m.runs[nextIdx].current
-		if next.From.cmp(result.To) > 0 {
+		if nextFrom.cmp(result.To) > 0 {
 			// No overlap — check adjacency for same-scope coalescing.
-			if next.ScopeID == result.ScopeID {
-				if after, canInc := result.To.checkedInc(); canInc && after.cmp(next.From) == 0 {
+			if nextScope == result.ScopeID {
+				if after, canInc := result.To.checkedInc(); canInc && after.cmp(nextFrom) == 0 {
 					popped, _ := m.popMin()
-					result.To = popped.To
+					if popped.To.cmp(result.To) > 0 {
+						result.To = popped.To
+					}
 					continue
 				}
 			}
 			break
 		}
 		// Overlap!
-		if next.ScopeID == result.ScopeID {
+		if nextScope == result.ScopeID {
 			// Same scope → extend.
 			popped, _ := m.popMin()
 			if popped.To.cmp(result.To) > 0 {
 				result.To = popped.To
 			}
-		} else if next.From.cmp(result.From) > 0 {
-			// Different scope, partial overlap → truncate result.
-			dec, ok := next.From.checkedDec()
-			if ok {
-				result.To = dec
-			} else {
-				result.To = next.From
-			}
-			break
 		} else {
-			// next.From <= result.From → next fully covers result → take next.
-			result, _ = m.popMin()
+			// Different scope: save the result's surviving tail before
+			// it gets overwritten, so it can reappear later.
+			originalTo := result.To
+			originalScope := result.ScopeID
+			if nextFrom.cmp(result.From) > 0 {
+				// Partial overlap → truncate result at nextFrom-1, defer
+				// any tail beyond nextTo back into pending.
+				dec, dok := nextFrom.checkedDec()
+				if dok {
+					result.To = dec
+				} else {
+					result.To = nextFrom
+				}
+				if originalTo.cmp(nextTo) > 0 {
+					if ts, ok := nextTo.checkedInc(); ok {
+						m.pending = append(m.pending, DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope})
+					}
+				}
+				break
+			} else {
+				// nextFrom <= result.From → next fully covers result's start.
+				// Defer result's tail beyond nextTo, then take next as the
+				// new result (last-wins).
+				if originalTo.cmp(nextTo) > 0 {
+					if ts, ok := nextTo.checkedInc(); ok {
+						m.pending = append(m.pending, DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope})
+					}
+				}
+				result, _ = m.popMin()
+			}
 		}
 	}
 	r := result

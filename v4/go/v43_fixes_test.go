@@ -899,3 +899,54 @@ func sortByFrom(records []DesiredRecord[Ipv4Key]) {
 		}
 	}
 }
+
+// ─── worker-bug fixes (ported from extsort.rs `worker_bugs`) ───
+
+func TestNormalizeChunkMaxAddressOverlap(t *testing.T) {
+	// [MAX-10, MAX] scope=1 overlaps [MAX-5, MAX] scope=2.
+	// Expected: [MAX-10, MAX-6] scope=1, [MAX-5, MAX] scope=2.
+	// Without the synthetic u128-max end event, the second segment is lost.
+	s := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(maxUint32 - 10), To: Ipv4Key(maxUint32), ScopeID: 1},
+		{From: Ipv4Key(maxUint32 - 5), To: Ipv4Key(maxUint32), ScopeID: 2},
+	})
+	if len(s.records) != 2 {
+		t.Fatalf("got %d segments want 2: %+v", len(s.records), s.records)
+	}
+	if s.records[0].From != Ipv4Key(maxUint32-10) || s.records[0].To != Ipv4Key(maxUint32-6) || s.records[0].ScopeID != 1 {
+		t.Fatalf("seg0: [%v,%v] s=%d want [MAX-10,MAX-6] s=1",
+			uint32(s.records[0].From), uint32(s.records[0].To), s.records[0].ScopeID)
+	}
+	if s.records[1].From != Ipv4Key(maxUint32-5) || s.records[1].To != Ipv4Key(maxUint32) || s.records[1].ScopeID != 2 {
+		t.Fatalf("seg1: [%v,%v] s=%d want [MAX-5,MAX] s=2",
+			uint32(s.records[1].From), uint32(s.records[1].To), s.records[1].ScopeID)
+	}
+}
+
+func TestCrossRunContainedTail(t *testing.T) {
+	// Run A: [10-30] scope=1 (wide), Run B: [15-25] scope=2 (contained in A).
+	// chunk_size=1 → each record is its own run.
+	// Expected after merge: [10-14]s1, [15-25]s2, [26-30]s1 (tail preserved).
+	sorter := NewExtSorter[Ipv4Key](&ExtSortConfig{ChunkSize: 1, TempDir: t.TempDir()})
+	sorter.Add(Ipv4Key(10), Ipv4Key(30), 1)
+	sorter.Add(Ipv4Key(15), Ipv4Key(25), 2)
+	stream, err := sorter.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1 := stream.Next()
+	if r1 == nil || r1.From != 10 || r1.To != 14 || r1.ScopeID != 1 {
+		t.Fatalf("r1=%v want [10,14]s1", r1)
+	}
+	r2 := stream.Next()
+	if r2 == nil || r2.From != 15 || r2.To != 25 || r2.ScopeID != 2 {
+		t.Fatalf("r2=%v want [15,25]s2", r2)
+	}
+	r3 := stream.Next()
+	if r3 == nil || r3.From != 26 || r3.To != 30 || r3.ScopeID != 1 {
+		t.Fatalf("r3=%v want [26,30]s1", r3)
+	}
+	if stream.Next() != nil {
+		t.Fatal("expected EOF after 3 segments")
+	}
+}

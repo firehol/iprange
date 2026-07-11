@@ -111,9 +111,28 @@ func OpenReaderTable(dbPath string) (*ReaderTable, error) {
 }
 
 // Register claims a free/stale slot for this reader at txnID.
+//
+// The find+claim is wrapped in a brief exclusive flock on the companion file
+// to prevent a cross-process TOCTOU race: without it, two processes could
+// both observe the same free slot and clobber each other. flock is acquired
+// on a fresh open() of the file (flock locks are per-open-file-description,
+// so it is independent of the mmap-backed t.file). This serializes only
+// registration, not normal reads.
 func (t *ReaderTable) Register(txnID uint64) (*ReaderGuard, error) {
 	pid := uint32(os.Getpid())
 	readerID := nextReaderID()
+
+	flockFile, err := os.OpenFile(t.path, os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open readers for lock: %w", err)
+	}
+	defer flockFile.Close()
+	if err := syscall.Flock(int(flockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("flock readers: %w", err)
+	}
+	defer syscall.Flock(int(flockFile.Fd()), syscall.LOCK_UN)
+
+	// Find a free slot under the lock.
 	slot, err := t.findFreeSlot()
 	if err != nil {
 		return nil, err
