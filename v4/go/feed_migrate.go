@@ -25,9 +25,10 @@ func MigrateFeed[K ipKey[K]](w *Writer[K], feedBit uint32, desired DesiredStream
 	_ = opts
 	counters := &MigrateCounters{}
 
-	// Snapshot the committed bytes — the walker needs a stable view.
-	committed := append([]byte(nil), w.store.committedBytes()...)
-	walker := newTreeWalker[K](committed, w.committedRoot, w.committedHeight)
+	// Read committed pages directly from the store (bitset COW is safe).
+	var zero K
+	kw := zero.width()
+	walker := newTreeWalker[K](w.store, kw, w.committedRoot, w.committedHeight)
 
 	oldFrom, oldTo, oldScope, hasOld := walker.peek()
 	desRec := desired.Peek()

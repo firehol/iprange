@@ -69,9 +69,10 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 	}
 	counters := &MigrateCounters{}
 
-	// Snapshot the committed bytes — the walker needs a stable view.
-	committed := append([]byte(nil), w.store.committedBytes()...)
-	walker := newTreeWalker[K](committed, w.committedRoot, w.committedHeight)
+	// Read committed pages directly from the store (bitset COW is safe).
+	var zero K
+	kw := zero.width()
+	walker := newTreeWalker[K](w.store, kw, w.committedRoot, w.committedHeight)
 
 	// The merge uses a "trim" approach: when old and desired partially overlap,
 	// we track trimmed starts for the current record on each side.
@@ -381,9 +382,9 @@ func emitChangeGo[K ipKey[K]](opts *MigrateOptions[K], ev *ChangeEvent[K]) {
 // --- streaming in-order B+tree walker ---
 //
 // Walks the committed tree in key order using a fixed-size path stack — zero
-// heap allocation per record. Reads from a private byte snapshot (the committed
-// prefix copied at migrate start) so COW page reuse during the merge cannot
-// corrupt the walker's view. Mirrors the Rust TreeWalker in migrate.rs.
+// heap allocation per record. Reads committed pages directly from the store
+// (safe because the bitset-based COW model never modifies committed pages
+// in-place). No full-DB heap copy (fixes #9).
 
 type pathEntry struct {
 	pgno uint32
@@ -391,25 +392,24 @@ type pathEntry struct {
 }
 
 type treeWalker[K ipKey[K]] struct {
-	bytes    []byte
-	root     uint32
-	height   uint32
-	kw       int
-	path     [TreeHeightMax]pathEntry
-	pathLen  int
+	store   pageStore
+	root    uint32
+	height  uint32
+	kw      int
+	path    [TreeHeightMax]pathEntry
+	pathLen int
 	curFrom  K
 	curTo    K
 	curScope uint32
 	curOk    bool
 }
 
-func newTreeWalker[K ipKey[K]](bytes []byte, root uint32, height uint32) *treeWalker[K] {
-	var zero K
+func newTreeWalker[K ipKey[K]](store pageStore, kw int, root uint32, height uint32) *treeWalker[K] {
 	w := &treeWalker[K]{
-		bytes:  bytes,
+		store:  store,
 		root:   root,
 		height: height,
-		kw:     zero.width(),
+		kw:     kw,
 	}
 	if root != 0 {
 		w.descendFirst(root, 1)
@@ -418,8 +418,7 @@ func newTreeWalker[K ipKey[K]](bytes []byte, root uint32, height uint32) *treeWa
 }
 
 func (w *treeWalker[K]) page(pgno uint32) []byte {
-	off := int(pgno) * PageSize
-	return w.bytes[off : off+PageSize]
+	return w.store.page(pgno)
 }
 
 func (w *treeWalker[K]) peek() (K, K, uint32, bool) {
