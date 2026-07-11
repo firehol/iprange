@@ -44,6 +44,7 @@ pub mod wire;
 #[cfg(feature = "alloc")]
 pub mod writer;
 pub mod migrate;
+pub mod feed_migrate;
 pub mod extsort;
 pub mod scope_table;
 pub mod interval;

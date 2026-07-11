@@ -952,7 +952,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     /// Create a scope_id with only the given feed bit set (no prior feeds).
-    fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
+    pub(crate) fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 {
@@ -1059,7 +1059,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     /// Apply a feed bit to a scope_id, returning the new scope_id.
-    fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+    pub(crate) fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 {
@@ -1078,7 +1078,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     /// Clear a feed bit from a scope_id, returning the new scope_id (0 if empty).
-    fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+    pub(crate) fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 {
