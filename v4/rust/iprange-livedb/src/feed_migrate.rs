@@ -28,12 +28,11 @@ pub fn migrate_feed<K: IpKey>(
     writer: &mut Writer<K>,
     feed_bit: u32,
     desired: &mut dyn DesiredStream<K>,
-    opts: &MigrateOptions<K>,
+    _opts: &MigrateOptions<K>,
 ) -> Result<MigrateCounters> {
     let mut counters = MigrateCounters::default();
 
     // Enable migration mode to prevent COW-reuse hazard.
-    writer.set_migration_mode(true);
 
     // Walk the old tree one record at a time.
     let mut walker = FeedWalker::<K>::new(writer.committed_root, writer.committed_height);
@@ -198,7 +197,6 @@ pub fn migrate_feed<K: IpKey>(
         }
     }
 
-    writer.set_migration_mode(false);
     Ok(counters)
 }
 

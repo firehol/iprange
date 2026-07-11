@@ -162,7 +162,6 @@ use std::os::unix::fs::MetadataExt;
         let oldest = reader_table.oldest_reader_txn_id();
 
         let mut writer = Writer::<K>::open(Box::new(store))?;
-        writer.set_safe_reclaim_txn_id(oldest);
 
         Ok(FileWriter {
             writer,
@@ -196,7 +195,6 @@ use std::os::unix::fs::MetadataExt;
         self.writer.commit(updated_unixtime)?;
         // After commit, update safe reclaim from the reader table.
         let oldest = self.reader_table.oldest_reader_txn_id();
-        self.writer.set_safe_reclaim_txn_id(oldest);
         Ok(())
     }
 
