@@ -7,14 +7,24 @@ import (
 )
 
 // Reader registration companion file (LMDB model).
-// Each slot: 32 bytes (pid:u32, txn_id:u64, padding:24 bytes).
-// 128 slots in the default 4096-byte file.
+//
+// Each reader registers (PID, thread_id, txn_id). Multiple readers in the same
+// process get separate slots via thread_id differentiation. Registration
+// failure is propagated as an error (not silently ignored).
+//
+// Each slot: 32 bytes.
+//
+//	@0  pid: u32        (0 = free slot)
+//	@4  thread_id: u32  (differentiates same-process readers)
+//	@8  txn_id: u64     (the committed generation this reader is using)
+//	@16 padding: [u8;16]
 
 const (
-	slotSize     = 32
-	maxSlots     = 4096 / slotSize
-	slotPidOff   = 0
-	slotTxnIDOff = 4
+	slotSize        = 32
+	maxSlots        = 4096 / slotSize
+	slotPidOff      = 0
+	slotThreadIDOff = 4
+	slotTxnIDOff    = 8
 )
 
 // ReaderTable holds a writable mmap of the companion file.
@@ -25,10 +35,14 @@ type ReaderTable struct {
 	path   string
 }
 
-// ReaderGuard deregisters the slot on Close().
+// ReaderGuard deregisters the slot on Close(). It stores the pid+thread_id so
+// it only clears the slot if they still match (avoids clobbering a different
+// reader that reused the slot).
 type ReaderGuard struct {
-	slot int
-	path string
+	slot     int
+	pid      uint32
+	threadID uint32
+	path     string
 }
 
 func (g *ReaderGuard) Close() error {
@@ -42,11 +56,16 @@ func (g *ReaderGuard) Close() error {
 	if err != nil {
 		return nil
 	}
+	defer syscall.Munmap(data)
 	off := g.slot * slotSize
-	if off+4 <= len(data) {
-		copy(data[off:off+4], []byte{0, 0, 0, 0})
+	if off+slotThreadIDOff+4 <= len(data) {
+		// Only clear if our pid+thread_id still match.
+		storedPid := u32le(data, off+slotPidOff)
+		storedTid := u32le(data, off+slotThreadIDOff)
+		if storedPid == g.pid && storedTid == g.threadID {
+			putU32(data, off+slotPidOff, 0)
+		}
 	}
-	syscall.Munmap(data)
 	return nil
 }
 
@@ -82,16 +101,18 @@ func OpenReaderTable(dbPath string) (*ReaderTable, error) {
 	}, nil
 }
 
-// Register claims a slot for this process at txnID.
+// Register claims a slot for this process+thread at txnID. Errors are
+// propagated (a full reader table is a hard failure).
 func (t *ReaderTable) Register(txnID uint64) (*ReaderGuard, error) {
 	pid := uint32(os.Getpid())
-	slot, err := t.findOrClaimSlot(pid)
+	threadID := getThreadID()
+	slot, err := t.findOrClaimSlot(pid, threadID)
 	if err != nil {
 		return nil, err
 	}
-	t.writeSlot(slot, pid, txnID)
+	t.writeSlot(slot, pid, threadID, txnID)
 	t.mySlot = slot
-	return &ReaderGuard{slot: slot, path: t.path}, nil
+	return &ReaderGuard{slot: slot, pid: pid, threadID: threadID, path: t.path}, nil
 }
 
 // OldestReaderTxnID returns the oldest active reader generation.
@@ -133,12 +154,19 @@ func (t *ReaderTable) Close() error {
 	return t.file.Close()
 }
 
-func (t *ReaderTable) findOrClaimSlot(pid uint32) (int, error) {
-	var freeSlot = -1
+// findOrClaimSlot returns the slot matching pid+threadID, or the first free/
+// stale slot. Same-process different-thread readers do NOT reuse each other's
+// slots.
+func (t *ReaderTable) findOrClaimSlot(pid, threadID uint32) (int, error) {
+	freeSlot := -1
 	for i := 0; i < maxSlots; i++ {
 		sp := t.slotPid(i)
-		if sp == pid {
-			return i, nil
+		st := t.slotThreadID(i)
+		if sp == pid && st == threadID {
+			return i, nil // reuse our exact slot
+		}
+		if sp == pid && st != threadID {
+			continue // same process, different thread — find a free slot
 		}
 		if sp == 0 || !isProcessAlive(int(sp)) {
 			if freeSlot == -1 {
@@ -152,9 +180,10 @@ func (t *ReaderTable) findOrClaimSlot(pid uint32) (int, error) {
 	return freeSlot, nil
 }
 
-func (t *ReaderTable) writeSlot(slot int, pid uint32, txnID uint64) {
+func (t *ReaderTable) writeSlot(slot int, pid, threadID uint32, txnID uint64) {
 	off := slot * slotSize
 	putU32(t.data, off+slotPidOff, pid)
+	putU32(t.data, off+slotThreadIDOff, threadID)
 	putU64(t.data, off+slotTxnIDOff, txnID)
 }
 
@@ -167,6 +196,10 @@ func (t *ReaderTable) slotPid(slot int) uint32 {
 	return u32le(t.data, slot*slotSize+slotPidOff)
 }
 
+func (t *ReaderTable) slotThreadID(slot int) uint32 {
+	return u32le(t.data, slot*slotSize+slotThreadIDOff)
+}
+
 func (t *ReaderTable) slotTxnID(slot int) uint64 {
 	return u64le(t.data, slot*slotSize+slotTxnIDOff)
 }
@@ -176,4 +209,3 @@ func isProcessAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil
 }
-

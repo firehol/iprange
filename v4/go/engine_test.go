@@ -251,7 +251,7 @@ func TestReaderTableReapStale(t *testing.T) {
 	defer rt.Close()
 
 	// Write a slot with a dead PID
-	rt.writeSlot(5, 999999, 1)
+	rt.writeSlot(5, 999999, 0, 1)
 
 	cleared := rt.ReapStale()
 	if cleared < 1 {

@@ -71,6 +71,10 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 	}
 	counters := &MigrateCounters{}
 
+	// Enable migration mode to prevent the COW-reuse hazard during the merge.
+	w.SetMigrationMode(true)
+	defer w.SetMigrationMode(false)
+
 	// Snapshot the committed bytes — the walker needs a stable view because
 	// COW + page reuse can overwrite committed pages mid-scan.
 	committed := append([]byte(nil), w.store.committedBytes()...)

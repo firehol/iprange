@@ -807,7 +807,11 @@ func (w *Writer[K]) branchAbsorbSplit(pgno uint32, childIdx int, left uint32, se
 	if err != nil {
 		return nil, err
 	}
-	if err := w.writeBranchSplit(rightPgno, src[:], count, childIdx, left, sep, right, mid, total-mid); err != nil {
+	// Right page starts at mid+1: the separator at combined index `mid`
+	// is promoted up and must NOT remain in either child page (otherwise
+	// the child at the split boundary is reachable from both pages,
+	// producing phantom duplicate subtrees).
+	if err := w.writeBranchSplit(rightPgno, src[:], count, childIdx, left, sep, right, mid+1, total-mid-1); err != nil {
 		return nil, err
 	}
 
@@ -826,6 +830,14 @@ func (w *Writer[K]) branchAbsorbSplit(pgno uint32, childIdx int, left uint32, se
 	return &branchSplit[K]{sep: promoted, right: rightPgno}, nil
 }
 
+// readOldChildSrc reads old_child[i] from a source branch page.
+func readOldChildSrc(src []byte, i, kw int) uint32 {
+	if i == 0 {
+		return u32le(src, PageHeaderSize)
+	}
+	return u32le(src, PageHeaderSize+4+(i-1)*(kw+4)+kw)
+}
+
 func (w *Writer[K]) writeBranchSplit(pgno uint32, src []byte, oldCount, insertIdx int,
 	insLeft uint32, insSep K, insRight uint32, startIdx, sepCount int) error {
 	var zero K
@@ -836,19 +848,27 @@ func (w *Writer[K]) writeBranchSplit(pgno uint32, src []byte, oldCount, insertId
 	}
 	writeHeader(page, PageTypeBranch, uint16(sepCount), pgno)
 
-	// Write child[0].
+	// Write child[0] = combined_child[startIdx].
+	//
+	// The combined children array inserts (insLeft, insRight) at insertIdx:
+	//   combined_child[i] = old_child[i]          (i < insertIdx)
+	//   combined_child[i] = insLeft               (i == insertIdx)
+	//   combined_child[i] = insRight              (i == insertIdx+1)
+	//   combined_child[i] = old_child[i-1]        (i > insertIdx+1)
 	var firstChild uint32
-	if startIdx == 0 {
-		if insertIdx == 0 {
-			firstChild = insLeft
-		} else {
-			firstChild = u32le(src, PageHeaderSize)
-		}
-	} else if insertIdx == startIdx {
+	switch {
+	case startIdx == 0 && insertIdx == 0:
+		firstChild = insLeft
+	case startIdx == 0:
+		firstChild = u32le(src, PageHeaderSize)
+	case startIdx == insertIdx:
+		firstChild = insLeft
+	case startIdx == insertIdx+1:
 		firstChild = insRight
-	} else {
-		oldI := startIdx - 1
-		firstChild = u32le(src, PageHeaderSize+4+oldI*(kw+4)+kw)
+	case startIdx < insertIdx:
+		firstChild = readOldChildSrc(src, startIdx, kw)
+	default: // startIdx > insertIdx+1: shifted by the insertion
+		firstChild = readOldChildSrc(src, startIdx-1, kw)
 	}
 	putU32(page, PageHeaderSize, firstChild)
 

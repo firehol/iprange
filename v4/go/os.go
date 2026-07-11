@@ -48,18 +48,23 @@ func OpenMmap(path string) (*MmapReader, error) {
 		activeTxnID = metaB.txnID
 	}
 
-	// Register in the reader table (best-effort; if the table can't be opened,
-	// we proceed without registration — correctness is the writer's flock).
-	mr := &MmapReader{file: file, data: data, path: path}
-	if table, err := OpenReaderTable(path); err == nil {
-		if guard, err := table.Register(activeTxnID); err == nil {
-			mr.guard = guard
-			mr.table = table
-		} else {
-			table.Close()
-		}
+	// Register in the reader table — mandatory (not best-effort). A failure
+	// means the writer cannot know about this reader, risking premature page
+	// reclamation.
+	table, err := OpenReaderTable(path)
+	if err != nil {
+		syscall.Munmap(data)
+		file.Close()
+		return nil, fmt.Errorf("reader table: %w", err)
 	}
-	return mr, nil
+	guard, err := table.Register(activeTxnID)
+	if err != nil {
+		table.Close()
+		syscall.Munmap(data)
+		file.Close()
+		return nil, fmt.Errorf("reader register: %w", err)
+	}
+	return &MmapReader{file: file, data: data, guard: guard, table: table, path: path}, nil
 }
 
 func (m *MmapReader) Bytes() []byte { return m.data }
@@ -172,19 +177,28 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		file.Close()
 		return nil, err
 	}
-	w, err := openWriter[K](store)
+
+	// Open the reader table and query oldest_reader BEFORE openWriter —
+	// openWriter calls loadFreeList which populates reuse pages, and we need
+	// the oldest reader generation available right after open.
+	readerTable, err := OpenReaderTable(path)
 	if err != nil {
 		store.close()
+		file.Close()
+		return nil, fmt.Errorf("reader table: %w", err)
+	}
+	oldest := readerTable.OldestReaderTxnID()
+
+	w, err := openWriter[K](store)
+	if err != nil {
+		readerTable.Close()
+		store.close()
+		file.Close()
 		return nil, err
 	}
+	w.SetSafeReclaimTxnID(oldest)
 
-	fw := &FileWriter[K]{w: w, store: store, path: path}
-
-	// Open the reader table and set safe reclaim (fixes #8).
-	if rt, err := OpenReaderTable(path); err == nil {
-		fw.readerTable = rt
-		fw.w.SetSafeReclaimTxnID(rt.OldestReaderTxnID())
-	}
+	fw := &FileWriter[K]{w: w, store: store, readerTable: readerTable, path: path}
 
 	return fw, nil
 }
@@ -203,19 +217,15 @@ func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
 		return err
 	}
 	// After commit, refresh safe reclaim from the reader table.
-	if fw.readerTable != nil {
-		fw.w.SetSafeReclaimTxnID(fw.readerTable.OldestReaderTxnID())
-	}
+	fw.w.SetSafeReclaimTxnID(fw.readerTable.OldestReaderTxnID())
 	return nil
 }
 func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
 func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error { return fw.w.Scan(f) }
 
 func (fw *FileWriter[K]) Close() error {
-	if fw.readerTable != nil {
-		fw.readerTable.Close()
-		fw.readerTable = nil
-	}
+	fw.readerTable.Close()
+	fw.readerTable = nil
 	fw.store.close()
 	return nil
 }
