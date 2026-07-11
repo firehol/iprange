@@ -550,3 +550,85 @@ func TestMigrateStreamingHeight3(t *testing.T) {
 		t.Fatalf("unchanged=%d want %d", counters.Unchanged, n)
 	}
 }
+
+// --- Scope mode 2 tests ---
+
+func TestMode2InternResolve(t *testing.T) {
+	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
+	id1, _ := w.ScopeIntern([]byte{0x01})
+	id2, _ := w.ScopeIntern([]byte{0x03})
+	id1b, _ := w.ScopeIntern([]byte{0x01})
+	if id1 != 1 || id2 != 2 || id1b != 1 {
+		t.Fatalf("intern: %d %d %d", id1, id2, id1b)
+	}
+	w.Set(Ipv4Key(10), Ipv4Key(20), id1)
+	w.Set(Ipv4Key(30), Ipv4Key(40), id2)
+	w.Commit(0)
+	if !bytesEqual(w.ScopeResolve(id1), []byte{0x01}) {
+		t.Fatal("resolve id1 failed")
+	}
+}
+
+func TestMode2Persist(t *testing.T) {
+	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
+	id, _ := w.ScopeIntern([]byte{0x05})
+	w.Set(Ipv4Key(10), Ipv4Key(20), id)
+	w.Commit(0)
+	img, _ := w.IntoImage()
+
+	store := newVecPageStore(img)
+	w2, _ := openWriter[Ipv4Key](store)
+	if !bytesEqual(w2.ScopeResolve(1), []byte{0x05}) {
+		t.Fatal("scope not persisted")
+	}
+}
+
+func TestMode2BitmapOps(t *testing.T) {
+	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
+	empty, _ := w.ScopeIntern([]byte{})
+	with0, _ := w.ScopeBitmapSetFeed(empty, 0)
+	if with0 == empty {
+		t.Fatal("set feed should change id")
+	}
+	bm := w.ScopeResolve(with0)
+	if bm[0]&1 == 0 {
+		t.Fatal("bit 0 not set")
+	}
+	with05, _ := w.ScopeBitmapSetFeed(with0, 5)
+	bm = w.ScopeResolve(with05)
+	if bm[0]&1 == 0 || bm[0]&32 == 0 {
+		t.Fatal("bits 0,5 not set")
+	}
+	result, _ := w.ScopeBitmapClearFeed(with05, 0)
+	bm = w.ScopeResolve(result)
+	if bm[0]&1 != 0 || bm[0]&32 == 0 {
+		t.Fatal("bit 0 should be clear, bit 5 set")
+	}
+	result2, _ := w.ScopeBitmapClearFeed(result, 5)
+	if result2 != 0 {
+		t.Fatal("should be empty")
+	}
+}
+
+func TestMode2ManyScopes(t *testing.T) {
+	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
+	for i := uint32(0); i < 50; i++ {
+		bm := make([]byte, i/8+1)
+		bm[i/8] = 1 << (i % 8)
+		id, _ := w.ScopeIntern(bm)
+		w.Set(Ipv4Key(i*10), Ipv4Key(i*10+9), id)
+	}
+	w.Commit(0)
+	img, _ := w.IntoImage()
+	store := newVecPageStore(img)
+	w2, _ := openWriter[Ipv4Key](store)
+	for i := uint32(0); i < 50; i++ {
+		bm := w2.ScopeResolve(i + 1)
+		if bm == nil {
+			t.Fatalf("scope %d not found", i+1)
+		}
+		if bm[i/8]&(1<<(i%8)) == 0 {
+			t.Fatalf("scope %d bitmap wrong", i+1)
+		}
+	}
+}

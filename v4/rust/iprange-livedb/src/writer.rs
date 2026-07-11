@@ -57,6 +57,9 @@ pub struct Writer<K: IpKey> {
     /// Pages freed in txn_id <= this are safe to reclaim (from reader registration).
     /// 0 = no readers registered → only reclaim growth-region frees.
     safe_reclaim_txn_id: u64,
+    /// Scope registry for mode 2 (indirect). None for modes 0/1.
+    scope_registry: Option<crate::scope_table::ScopeRegistry>,
+    scope_table_root_cache: u32,
     _k: PhantomData<K>,
 }
 
@@ -88,6 +91,10 @@ impl<K: IpKey> Writer<K> {
             reuse_buf: [0u32; 64],
             reuse_count: 0,
             safe_reclaim_txn_id: 0,
+            scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
+                Some(crate::scope_table::ScopeRegistry::new())
+            } else { None },
+            scope_table_root_cache: 0,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -111,6 +118,16 @@ impl<K: IpKey> Writer<K> {
         if active.record_size != record_size::<K>() as u32 {
             return Err(Error::Structural("record_size mismatch"));
         }
+        // Read scope table entries BEFORE moving store into Writer.
+        let scope_reg = if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
+            let entries = crate::scope_table::read_all(
+                store.committed_bytes(), active.scope_table_root,
+            ).unwrap_or_default();
+            Some(crate::scope_table::ScopeRegistry::from_entries(entries))
+        } else if active.scope_mode == spec::SCOPE_MODE_INDIRECT {
+            Some(crate::scope_table::ScopeRegistry::new())
+        } else { None };
+
         let mut w = Writer {
             store,
             key_width: active.key_width,
@@ -133,6 +150,8 @@ impl<K: IpKey> Writer<K> {
             reuse_buf: [0u32; 64],
             reuse_count: 0,
             safe_reclaim_txn_id: 0,
+            scope_registry: scope_reg,
+            scope_table_root_cache: active.scope_table_root,
             _k: PhantomData,
         };
         // Load the committed free-list for page reuse.
@@ -184,6 +203,13 @@ impl<K: IpKey> Writer<K> {
             self.build_free_list_linked()?;
         }
         self.free_list_head = self.txn_free_chain;
+
+        // Rebuild scope table (mode 2 only).
+        self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
+            if reg.is_empty() { 0 } else {
+                crate::scope_table::build_scope_tree(self.store.as_mut(), reg.entries())?
+            }
+        } else { 0 };
 
         let total = self.store.total_pages();
         for pgno in self.committed_pages..total {
@@ -784,7 +810,7 @@ impl<K: IpKey> Writer<K> {
             record_count,
             txn_id,
             updated_unixtime: updated,
-            scope_table_root: 0,
+            scope_table_root: self.scope_table_root_cache,
             free_list_head: self.free_list_head,
         };
         meta.encode_into(self.store.page_mut(pgno));
@@ -792,6 +818,38 @@ impl<K: IpKey> Writer<K> {
     }
 
     // ── scan ──────────────────────────────────────────────────────────
+
+    // ── scope table operations (mode 2 only) ──────────────────────────────
+
+    /// Find or create a scope_id for the given bitmap. Returns the scope_id.
+    /// Only valid when scope_mode == 2 (indirect).
+    pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
+        match &mut self.scope_registry {
+            Some(reg) => Ok(reg.intern(bitmap)),
+            None => Err(Error::State("scope_intern requires scope_mode == 2")),
+        }
+    }
+
+    /// Resolve a scope_id to its bitmap. Returns None if not found.
+    pub fn scope_resolve(&self, scope_id: u32) -> Option<&[u8]> {
+        self.scope_registry.as_ref()?.resolve(scope_id)
+    }
+
+    /// Set a feed bit in a bitmap. Returns the new scope_id.
+    pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        match &mut self.scope_registry {
+            Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
+            None => Err(Error::State("requires scope_mode == 2")),
+        }
+    }
+
+    /// Clear a feed bit from a bitmap. Returns the new scope_id (0 if empty).
+    pub fn scope_bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        match &mut self.scope_registry {
+            Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit)),
+            None => Err(Error::State("requires scope_mode == 2")),
+        }
+    }
 
     fn scan_node(&self, pgno: u32, f: &mut impl FnMut(K, K, u32)) -> Result<()> {
         let page = self.store.page(pgno);

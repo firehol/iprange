@@ -45,6 +45,7 @@ pub mod wire;
 pub mod writer;
 pub mod migrate;
 pub mod extsort;
+pub mod scope_table;
 #[cfg(feature = "os")]
 pub mod readers;
 

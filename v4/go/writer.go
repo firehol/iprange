@@ -43,7 +43,16 @@ type Writer[K ipKey[K]] struct {
 	txnFreeChain  uint32
 	reuseBuf         [64]uint32
 	reuseCount       int
-	safeReclaimTxnID uint64
+	safeReclaimTxnID   uint64
+	scopeRegistry      *ScopeRegistry
+	scopeTableRootCache uint32
+}
+
+func scopeRegForMode(scopeMode uint8) *ScopeRegistry {
+	if scopeMode == ScopeModeIndirect {
+		return NewScopeRegistry()
+	}
+	return nil
 }
 
 // --- construction ---
@@ -64,6 +73,8 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		txnFreeBuf:         [64]uint32{},
 		reuseBuf:           [64]uint32{},
 		safeReclaimTxnID:   0,
+		scopeRegistry:      scopeRegForMode(scopeMode),
+		scopeTableRootCache: 0,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -115,6 +126,17 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		txnFreeBuf:         [64]uint32{},
 		reuseBuf:           [64]uint32{},
 		safeReclaimTxnID:   0,
+		scopeRegistry:      nil,
+		scopeTableRootCache: active.scopeTableRoot,
+	}
+	// Load scope table for mode 2.
+	if active.scopeMode == ScopeModeIndirect {
+		entries, _ := readAllScopes(w.store.committedBytes(), active.scopeTableRoot)
+		if entries != nil {
+			w.scopeRegistry = ScopeRegistryFromEntries(entries)
+		} else {
+			w.scopeRegistry = NewScopeRegistry()
+		}
 	}
 	w.loadFreeList()
 	return w, nil
@@ -179,6 +201,16 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 		w.buildFreeListLinked()
 	}
 	w.freeListHead = w.txnFreeChain
+	// Rebuild scope table (mode 2 only).
+	if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
+		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries())
+		if err != nil {
+			return err
+		}
+		w.scopeTableRootCache = root
+	} else {
+		w.scopeTableRootCache = 0
+	}
 	total := w.store.totalPages()
 	for pgno := w.committedPages; pgno < total; pgno++ {
 		finalizeChecksum(w.store.pageMut(pgno))
@@ -868,7 +900,7 @@ func (w *Writer[K]) writeMetaPage(pgno uint32, txnID uint64, root uint32, height
 		recordCount:    recordCount,
 		txnID:          txnID,
 		updatedUnix:    updatedUnix,
-		scopeTableRoot: 0,
+		scopeTableRoot: w.scopeTableRootCache,
 		freeListHead:   w.freeListHead,
 	}
 	m.encodeInto(w.store.pageMut(pgno))
@@ -882,6 +914,36 @@ func (w *Writer[K]) Scan(f func(from, to K, scopeID uint32)) error {
 		return nil
 	}
 	return w.scanNode(w.pendingRoot, f)
+}
+
+// --- scope table operations (mode 2 only) ---
+
+func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
+	if w.scopeRegistry == nil {
+		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
+	}
+	return w.scopeRegistry.Intern(bitmap), nil
+}
+
+func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
+	if w.scopeRegistry == nil {
+		return nil
+	}
+	return w.scopeRegistry.Resolve(scopeID)
+}
+
+func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {
+	if w.scopeRegistry == nil {
+		return 0, fmt.Errorf("requires scope_mode == 2")
+	}
+	return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit), nil
+}
+
+func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32, error) {
+	if w.scopeRegistry == nil {
+		return 0, fmt.Errorf("requires scope_mode == 2")
+	}
+	return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit), nil
 }
 
 func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
