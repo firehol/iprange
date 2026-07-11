@@ -204,8 +204,11 @@ pub fn migrate<K: IpKey>(
 ) -> Result<MigrateCounters> {
     let mut counters = MigrateCounters::default();
 
+    // Enable migration mode: prevents alloc_or_reuse from reusing pages
+    // freed during this migration that the TreeWalker might still read.
+    writer.set_migration_mode(true);
+
     // Initialize the TreeWalker over the COMMITTED tree.
-    // The committed tree doesn't change during this transaction (COW guarantee).
     let mut walker = TreeWalker::<K>::new(writer.committed_root, writer.committed_height);
     walker.init(writer.store.as_ref());
 
@@ -382,6 +385,7 @@ pub fn migrate<K: IpKey>(
         }
     }
 
+    writer.set_migration_mode(false);
     Ok(counters)
 }
 

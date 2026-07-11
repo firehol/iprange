@@ -332,3 +332,60 @@ func readScopeNode(bytes []byte, pgno uint32, depth uint32, out *[]ScopeEntry) e
 		return fmt.Errorf("unexpected page type %d in scope table", h.pageType)
 	}
 }
+
+// FindScope finds a single scope entry by scope_id via B+tree descent.
+// O(log S) — reads ~3-4 pages for thousands of entries.
+func findScope(bytes []byte, rootPgno uint32, targetID uint32) []byte {
+	if rootPgno == 0 {
+		return nil
+	}
+	pgno := rootPgno
+	for guard := 0; guard < TreeHeightMax; guard++ {
+		off := int(pgno) * PageSize
+		if off+PageSize > len(bytes) {
+			return nil
+		}
+		page := bytes[off : off+PageSize]
+		h := decodeHeader(page)
+		switch h.pageType {
+		case PageTypeScopeLeaf:
+			count := int(h.entryCount)
+			lo, hi := 0, count
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				recOff := PageHeaderSize + mid*ScopeEntrySize
+				id := u32le(page, recOff)
+				if id < targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			if lo < count {
+				recOff := PageHeaderSize + lo*ScopeEntrySize
+				id := u32le(page, recOff)
+				if id == targetID {
+					entry := decodeScopeEntry(page[recOff : recOff+ScopeEntrySize])
+					return entry.Bitmap
+				}
+			}
+			return nil
+		case PageTypeScopeBranch:
+			bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+			lo, hi := 0, bv.sepCount
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				sep := Ipv4Key(u32le(bv.sep(mid), 0))
+				if uint32(sep) <= targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			pgno = bv.child(lo)
+		default:
+			return nil
+		}
+	}
+	return nil
+}

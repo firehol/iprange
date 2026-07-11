@@ -60,6 +60,8 @@ pub struct Writer<K: IpKey> {
     /// Scope registry for mode 2 (indirect). None for modes 0/1.
     scope_registry: Option<crate::scope_table::ScopeRegistry>,
     scope_table_root_cache: u32,
+    /// When true, alloc_or_reuse skips txn_free_buf (migration safety).
+    migration_mode: bool,
     _k: PhantomData<K>,
 }
 
@@ -95,6 +97,7 @@ impl<K: IpKey> Writer<K> {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
             scope_table_root_cache: 0,
+            migration_mode: false,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -152,6 +155,7 @@ impl<K: IpKey> Writer<K> {
             safe_reclaim_txn_id: 0,
             scope_registry: scope_reg,
             scope_table_root_cache: active.scope_table_root,
+            migration_mode: false,
             _k: PhantomData,
         };
         // Load the committed free-list for page reuse.
@@ -344,6 +348,14 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
+    /// Enable/disable migration mode. When enabled, alloc_or_reuse skips
+    /// intra-transaction reuse to prevent the COW-reuse hazard during
+    /// streaming migration (TreeWalker reads committed pages that could
+    /// be overwritten if reused).
+    pub(crate) fn set_migration_mode(&mut self, enabled: bool) {
+        self.migration_mode = enabled;
+    }
+
     /// Set the oldest reader's txn_id. Pages freed in txn_id <= this value
     /// are safe to reclaim. Called by the OS layer from ReaderTable::oldest_reader_txn_id().
     /// 0 means no active readers (reclaim everything from prior committed txns).
@@ -371,7 +383,10 @@ impl<K: IpKey> Writer<K> {
     #[inline]
     fn alloc_or_reuse(&mut self) -> Result<u32> {
         // 1. Intra-transaction reuse: pages freed earlier in this same txn.
-        if self.txn_free_count > 0 {
+        //    SKIPPED during migration (migration_mode) to prevent COW-reuse
+        //    hazard: the TreeWalker reads committed pages that could be
+        //    reused and overwritten, corrupting the scan.
+        if !self.migration_mode && self.txn_free_count > 0 {
             self.txn_free_count -= 1;
             return Ok(self.txn_free_buf[self.txn_free_count]);
         }
@@ -939,13 +954,19 @@ impl<K: IpKey> Writer<K> {
     /// Create a scope_id with only the given feed bit set (no prior feeds).
     fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
-            spec::SCOPE_MODE_BITMAP => Ok(1u32 << feed_bit),
+            spec::SCOPE_MODE_BITMAP => {
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode (use indirect mode)"));
+                }
+                Ok(1u32 << feed_bit)
+            }
             spec::SCOPE_MODE_INDIRECT => {
-                let mut bm = [0u8; 4];
-                bm[(feed_bit / 8) as usize] |= 1 << (feed_bit % 8);
-                let bm_vec = bm[0..=(feed_bit / 8) as usize].to_vec();
+                // Dynamically size the bitmap to fit the feed bit.
+                let byte_idx = (feed_bit / 8) as usize;
+                let mut bm = alloc::vec![0u8; byte_idx + 1];
+                bm[byte_idx] |= 1 << (feed_bit % 8);
                 match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.intern(&bm_vec)),
+                    Some(reg) => Ok(reg.intern(&bm)),
                     None => Err(Error::State("requires scope_mode == 2")),
                 }
             }
@@ -1017,7 +1038,18 @@ impl<K: IpKey> Writer<K> {
             }
             spec::PAGE_TYPE_BRANCH => {
                 let branch = BranchView::<K>::new(page, h.entry_count as usize);
-                for j in 0..branch.child_count() {
+                // Binary search for the first child that could contain `from`.
+                // child[j] covers [sep[j-1], sep[j]-1]. We want the first child
+                // whose range might overlap [from, to].
+                let start = Self::branch_find_child(&branch, from);
+                for j in start..branch.child_count() {
+                    // If the separator before this child is > to, no more overlaps.
+                    if j > 0 {
+                        let sep = branch.sep(j - 1);
+                        // sep[j-1] is the lower bound of child[j].
+                        // If sep > to, child[j] and all subsequent are past our range.
+                        if sep > to { break; }
+                    }
                     self.collect_overlapping_node(branch.child(j), from, to, out)?;
                 }
                 Ok(())
@@ -1029,7 +1061,12 @@ impl<K: IpKey> Writer<K> {
     /// Apply a feed bit to a scope_id, returning the new scope_id.
     fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
-            spec::SCOPE_MODE_BITMAP => Ok(scope_id | (1 << feed_bit)),
+            spec::SCOPE_MODE_BITMAP => {
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode"));
+                }
+                Ok(scope_id | (1u32 << feed_bit))
+            }
             spec::SCOPE_MODE_INDIRECT => {
                 match &mut self.scope_registry {
                     Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
@@ -1044,8 +1081,10 @@ impl<K: IpKey> Writer<K> {
     fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
-                let cleared = scope_id & !(1 << feed_bit);
-                Ok(cleared)
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode"));
+                }
+                Ok(scope_id & !(1u32 << feed_bit))
             }
             spec::SCOPE_MODE_INDIRECT => {
                 match &mut self.scope_registry {

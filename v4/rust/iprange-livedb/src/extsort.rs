@@ -283,13 +283,49 @@ impl<K: IpKey> KWayMerge<K> {
     fn compute_coalesced(&mut self) -> Option<DesiredRecord<K>> {
         let mut result = self.pop_min()?;
         loop {
-            let merge = if let Some(idx) = self.find_min() {
+            let next = if let Some(idx) = self.find_min() {
                 let n = self.runs[idx].current.as_ref().unwrap();
-                n.scope_id == result.scope_id &&
-                    result.to.checked_inc().map_or(false, |a| a == n.from)
-            } else { false };
-            if !merge { break; }
-            result.to = self.pop_min().unwrap().to;
+                Some((*n, idx))
+            } else { None };
+            match next {
+                None => break,
+                Some((n, _)) => {
+                    if n.from > result.to {
+                        // No overlap and not adjacent → done.
+                        // Check adjacency for coalescing.
+                        if n.scope_id == result.scope_id {
+                            if let Some(after) = result.to.checked_inc() {
+                                if after == n.from {
+                                    result.to = self.pop_min().unwrap().to;
+                                    continue;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    // Overlap! Split.
+                    if n.scope_id == result.scope_id {
+                        // Same scope → just extend result.to.
+                        let popped = self.pop_min().unwrap();
+                        if popped.to > result.to {
+                            result.to = popped.to;
+                        }
+                    } else {
+                        // Different scope → last-wins: the next record wins
+                        // for the overlapping part. Truncate result.to to
+                        // n.from - 1, then the next record takes over.
+                        if n.from > result.from {
+                            // result covers [result.from, n.from-1]
+                            result.to = n.from.checked_dec().unwrap_or(n.from);
+                            break;
+                        } else {
+                            // next.from <= result.from → next fully covers result
+                            // → skip result entirely, take next.
+                            result = self.pop_min().unwrap();
+                        }
+                    }
+                }
+            }
         }
         Some(result)
     }
@@ -472,6 +508,46 @@ mod tests {
     fn streaming_sorter_empty() {
         let sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig::default());
         let mut stream = sorter.finish().unwrap();
+        assert!(stream.next().is_none());
+    }
+}
+
+#[cfg(test)]
+mod cross_run_tests {
+    use super::*;
+    use crate::key::Ipv4Key;
+
+    #[test]
+    fn cross_run_overlap_different_scope() {
+        // Two runs: run0 has [10-20] scope=1, run1 has [15-25] scope=2.
+        // After merge: [10-14] scope=1, [15-25] scope=2 (last-wins).
+        let config = ExtSortConfig { chunk_size: 1, temp_dir: None };
+        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
+        sorter.add(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+        sorter.add(Ipv4Key(15), Ipv4Key(25), 2).unwrap();
+        let mut stream = sorter.finish().unwrap();
+        let r1 = stream.next().unwrap();
+        assert_eq!(r1.from, Ipv4Key(10));
+        assert_eq!(r1.to, Ipv4Key(14));
+        assert_eq!(r1.scope_id, 1);
+        let r2 = stream.next().unwrap();
+        assert_eq!(r2.from, Ipv4Key(15));
+        assert_eq!(r2.to, Ipv4Key(25));
+        assert_eq!(r2.scope_id, 2);
+        assert!(stream.next().is_none());
+    }
+
+    #[test]
+    fn cross_run_overlap_same_scope() {
+        let config = ExtSortConfig { chunk_size: 1, temp_dir: None };
+        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
+        sorter.add(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+        sorter.add(Ipv4Key(15), Ipv4Key(25), 1).unwrap();
+        let mut stream = sorter.finish().unwrap();
+        let r1 = stream.next().unwrap();
+        assert_eq!(r1.from, Ipv4Key(10));
+        assert_eq!(r1.to, Ipv4Key(25)); // merged
+        assert_eq!(r1.scope_id, 1);
         assert!(stream.next().is_none());
     }
 }

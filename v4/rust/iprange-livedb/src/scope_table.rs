@@ -386,3 +386,65 @@ mod tests {
         }
     }
 }
+
+/// Find a single scope entry by scope_id via B+tree descent.
+/// O(log S) — reads ~3-4 pages for thousands of entries.
+pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option<Vec<u8>>> {
+    if root_pgno == 0 {
+        return Ok(None);
+    }
+    let mut pgno = root_pgno;
+    for _ in 0..spec::TREE_HEIGHT_MAX {
+        if pgno as usize * spec::PAGE_SIZE + spec::PAGE_SIZE > bytes.len() {
+            return Err(Error::Structural("scope table page out of bounds"));
+        }
+        let off = pgno as usize * spec::PAGE_SIZE;
+        let page = &bytes[off..off + spec::PAGE_SIZE];
+        let h = PageHeader::decode(page);
+        match h.page_type {
+            spec::PAGE_TYPE_SCOPE_LEAF => {
+                let count = h.entry_count as usize;
+                // Binary search the sorted entries by scope_id.
+                let (mut lo, mut hi) = (0usize, count);
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    let rec_off = spec::PAGE_HEADER_SIZE + mid * SCOPE_ENTRY_SIZE;
+                    let id = wire::u32_le(page, rec_off);
+                    if id < target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if lo < count {
+                    let rec_off = spec::PAGE_HEADER_SIZE + lo * SCOPE_ENTRY_SIZE;
+                    let id = wire::u32_le(page, rec_off);
+                    if id == target_id {
+                        let entry = decode_entry(&page[rec_off..rec_off + SCOPE_ENTRY_SIZE]);
+                        return Ok(Some(entry.bitmap));
+                    }
+                }
+                return Ok(None);
+            }
+            spec::PAGE_TYPE_SCOPE_BRANCH => {
+                let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                    page, h.entry_count as usize,
+                );
+                // Binary search for the child index.
+                let (mut lo, mut hi) = (0usize, branch.sep_count());
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    let sep = branch.sep(mid).0;
+                    if sep <= target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                pgno = branch.child(lo);
+            }
+            _ => return Err(Error::Structural("unexpected page type in scope table")),
+        }
+    }
+    Err(Error::Invariant("scope table descent exceeded TREE_HEIGHT_MAX"))
+}

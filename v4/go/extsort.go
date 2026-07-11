@@ -43,66 +43,63 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
 		return coalesceAdjacent(sorted)
 	}
 
-	// Sweep-line: build events, sort, process.
-	type event struct {
-		pos   uint64
-		isEnd bool
-		idx   int
-	}
-	events := make([]event, 0, len(sorted)*2)
-	for i, r := range sorted {
-		events = append(events, event{pos: uint64(r.From.toU128().Lo), isEnd: false, idx: i})
+	// Boundary-based normalization: collect all boundary points, create
+	// segments between consecutive boundaries, assign last-wins scope.
+	// This handles ALL overlap cases correctly, including tails.
+	var boundaries []K
+	for _, r := range sorted {
+		boundaries = append(boundaries, r.From)
 		if after, ok := r.To.checkedInc(); ok {
-			events = append(events, event{pos: uint64(after.toU128().Lo), isEnd: true, idx: i})
+			boundaries = append(boundaries, after)
 		}
 	}
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].pos != events[j].pos {
-			return events[i].pos < events[j].pos
-		}
-		return events[i].isEnd && !events[j].isEnd
+	sort.Slice(boundaries, func(i, j int) bool {
+		return boundaries[i].cmp(boundaries[j]) < 0
 	})
+	// Dedup
+	db := boundaries[:1]
+	for i := 1; i < len(boundaries); i++ {
+		if boundaries[i].cmp(db[len(db)-1]) != 0 {
+			db = append(db, boundaries[i])
+		}
+	}
+	boundaries = db
 
-	active := make(map[int]bool, 64)
 	var out []DesiredRecord[K]
-	var zero K
+	for i := 0; i+1 < len(boundaries); i++ {
+		segFrom := boundaries[i]
+		segTo, ok := boundaries[i+1].checkedDec()
+		if !ok {
+			segTo = boundaries[i+1]
+		}
+		if segFrom.cmp(segTo) > 0 {
+			continue
+		}
 
-	for i := 0; i+1 < len(events); i++ {
-		pos := events[i].pos
-		for j := i; j < len(events) && events[j].pos == pos; j++ {
-			if events[j].isEnd {
-				delete(active, events[j].idx)
-			} else {
-				active[events[j].idx] = true
-			}
-			i = j
-		}
-		if len(active) == 0 || i+1 >= len(events) {
-			continue
-		}
-		segFrom := zero.fromU128(Uint128{Lo: pos})
-		segTo := zero.fromU128(Uint128{Lo: events[i+1].pos - 1})
-		maxIdx := -1
-		for idx := range active {
-			if idx > maxIdx {
-				maxIdx = idx
+		// Find the LAST record covering this segment (last-wins).
+		var scope uint32
+		found := false
+		for j := range sorted {
+			if sorted[j].From.cmp(segFrom) <= 0 && sorted[j].To.cmp(segTo) >= 0 {
+				scope = sorted[j].ScopeID
+				found = true
 			}
 		}
-		if maxIdx < 0 {
-			continue
-		}
-		scope := sorted[maxIdx].ScopeID
-		if len(out) > 0 {
-			last := &out[len(out)-1]
-			if last.ScopeID == scope {
-				if inc, ok := last.To.checkedInc(); ok && inc.cmp(segFrom) == 0 {
-					last.To = segTo
-					continue
+
+		if found {
+			if len(out) > 0 {
+				last := &out[len(out)-1]
+				if last.ScopeID == scope {
+					if inc, ok := last.To.checkedInc(); ok && inc.cmp(segFrom) == 0 {
+						last.To = segTo
+						continue
+					}
 				}
 			}
+			out = append(out, DesiredRecord[K]{From: segFrom, To: segTo, ScopeID: scope})
 		}
-		out = append(out, DesiredRecord[K]{From: segFrom, To: segTo, ScopeID: scope})
 	}
+
 	return out
 }
 

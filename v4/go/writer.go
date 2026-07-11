@@ -46,6 +46,7 @@ type Writer[K ipKey[K]] struct {
 	safeReclaimTxnID   uint64
 	scopeRegistry      *ScopeRegistry
 	scopeTableRootCache uint32
+	migrationMode      bool
 }
 
 func scopeRegForMode(scopeMode uint8) *ScopeRegistry {
@@ -269,6 +270,12 @@ func (w *Writer[K]) SetSafeReclaimTxnID(txnID uint64) {
 	w.safeReclaimTxnID = txnID
 }
 
+// SetMigrationMode enables/disables migration mode. When enabled, allocOrReuse
+// skips intra-transaction reuse to prevent the COW-reuse hazard.
+func (w *Writer[K]) SetMigrationMode(enabled bool) {
+	w.migrationMode = enabled
+}
+
 func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 	if pgno >= w.committedPages {
 		return pgno, nil
@@ -283,8 +290,8 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 }
 
 func (w *Writer[K]) allocOrReuse() (uint32, error) {
-	// 1. Intra-transaction reuse.
-	if w.txnFreeCount > 0 {
+	// 1. Intra-transaction reuse (skipped during migration — COW-reuse hazard).
+	if !w.migrationMode && w.txnFreeCount > 0 {
 		w.txnFreeCount--
 		return w.txnFreeBuf[w.txnFreeCount], nil
 	}
@@ -1284,6 +1291,9 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
+		if feedBit >= 32 {
+			return 0, fmt.Errorf("feed_bit >= 32 in bitmap mode")
+		}
 		return scopeID | (1 << feedBit), nil
 	case ScopeModeIndirect:
 		if w.scopeRegistry == nil {
@@ -1300,6 +1310,9 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
+		if feedBit >= 32 {
+			return 0, fmt.Errorf("feed_bit >= 32 in bitmap mode")
+		}
 		return scopeID & ^(1 << feedBit), nil
 	case ScopeModeIndirect:
 		if w.scopeRegistry == nil {
