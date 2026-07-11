@@ -851,6 +851,208 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
+    // ── feed-bit range API (fixes #5) ─────────────────────────────────────
+    //
+    // FeedAddRange: apply a feed bit across [from, to], preserving all other
+    // feed bits. Handles interval splitting: existing records that partially
+    // overlap are split at the boundaries, the bit is OR'd into scope_ids
+    // within [from, to], then adjacent same-scope records are merged.
+    //
+    // For mode 1 (bitmap): scope_id IS the bitmap; OR the bit directly.
+    // For mode 2 (indirect): resolve scope_id → bitmap, OR the bit, re-intern.
+
+    /// Add feed `feed_bit` to all IP ranges overlapping [from, to].
+    /// Existing feed bits are preserved. Adjacent same-scope ranges are merged.
+    pub fn feed_add_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
+        self.check()?;
+        if from > to { return Err(Error::InvalidInput("from > to")); }
+
+        // Collect all existing records that overlap [from, to].
+        let overlaps = self.collect_overlapping(from, to)?;
+
+        // Delete all overlapping records from the pending tree.
+        for (of, ot, _) in &overlaps {
+            self.delete(*of, *ot)?;
+        }
+
+        // Build segments: for each part of [from, to], determine the new scope.
+        // Parts outside [from, to] keep their original scope.
+        // Parts inside [from, to] get the feed bit OR'd in.
+        // Gaps in [from, to] not covered by any overlap get a fresh scope
+        // with just the feed bit.
+
+        // Track which parts of [from, to] have been covered.
+        let mut cursor = from;
+
+        for (of, ot, os) in &overlaps {
+            // Gap before this overlap: [cursor, of-1] if of > cursor and of >= from
+            if *of > cursor && cursor <= to {
+                let gap_to = if *of <= to { of.checked_dec().unwrap_or(*of) } else { to };
+                if gap_to >= cursor {
+                    let new_scope = self.fresh_feed_scope(feed_bit)?;
+                    self.cow_insert(cursor, gap_to, new_scope)?;
+                    self.pending_record_count += 1;
+                }
+            }
+
+            // Left outside part: [max(of, from_prev), min(of, from)-1]
+            // Actually: if the overlap starts before `from`, the part [of, from-1]
+            // keeps the original scope.
+            if *of < from {
+                let trim_end = from.checked_dec().unwrap_or(from);
+                self.cow_insert(*of, trim_end, *os)?;
+                self.pending_record_count += 1;
+            }
+
+            // Inside part: [max(of, from), min(ot, to)] → apply feed bit
+            let inner_from = if *of > from { *of } else { from };
+            let inner_to = if *ot < to { *ot } else { to };
+            let new_scope = self.apply_feed_bit(*os, feed_bit)?;
+            self.cow_insert(inner_from, inner_to, new_scope)?;
+            self.pending_record_count += 1;
+
+            // Right outside part: if ot > to, [to+1, ot] keeps original scope.
+            if *ot > to {
+                let trim_start = to.checked_inc().unwrap_or(to);
+                self.cow_insert(trim_start, *ot, *os)?;
+                self.pending_record_count += 1;
+            }
+
+            // Advance cursor past this overlap.
+            cursor = ot.checked_inc().unwrap_or(*ot);
+        }
+
+        // Gap after the last overlap (or the entire [from, to] if no overlaps).
+        if cursor <= to {
+            let new_scope = self.fresh_feed_scope(feed_bit)?;
+            self.cow_insert(cursor, to, new_scope)?;
+            self.pending_record_count += 1;
+        }
+
+        Ok(())
+    }
+
+    /// Create a scope_id with only the given feed bit set (no prior feeds).
+    fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
+        match self.scope_mode {
+            spec::SCOPE_MODE_BITMAP => Ok(1u32 << feed_bit),
+            spec::SCOPE_MODE_INDIRECT => {
+                let mut bm = [0u8; 4];
+                bm[(feed_bit / 8) as usize] |= 1 << (feed_bit % 8);
+                let bm_vec = bm[0..=(feed_bit / 8) as usize].to_vec();
+                match &mut self.scope_registry {
+                    Some(reg) => Ok(reg.intern(&bm_vec)),
+                    None => Err(Error::State("requires scope_mode == 2")),
+                }
+            }
+            _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
+        }
+    }
+
+    /// Remove feed `feed_bit` from all IP ranges overlapping [from, to].
+    pub fn feed_remove_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
+        self.check()?;
+        if from > to { return Err(Error::InvalidInput("from > to")); }
+
+        let overlaps = self.collect_overlapping(from, to)?;
+
+        for (of, ot, os) in &overlaps {
+            self.delete(*of, *ot)?;
+        }
+
+        for (of, ot, os) in &overlaps {
+            // Outside [from, to]: keep original.
+            if *of < from {
+                let trim_end = from.checked_dec().unwrap_or(from);
+                self.cow_insert(*of, trim_end, *os)?;
+                self.pending_record_count += 1;
+            }
+            if *ot > to {
+                let trim_start = to.checked_inc().unwrap_or(to);
+                self.cow_insert(trim_start, *ot, *os)?;
+                self.pending_record_count += 1;
+            }
+
+            // Inside [from, to]: clear the feed bit.
+            let inner_from = if *of > from { *of } else { from };
+            let inner_to = if *ot < to { *ot } else { to };
+            let new_scope = self.clear_feed_bit(*os, feed_bit)?;
+            if new_scope != 0 {
+                // Still has other feeds → keep.
+                self.cow_insert(inner_from, inner_to, new_scope)?;
+                self.pending_record_count += 1;
+            }
+            // If new_scope == 0, the record is fully removed (no feeds left).
+        }
+
+        Ok(())
+    }
+
+    /// Collect all pending records overlapping [from, to].
+    fn collect_overlapping(&self, from: K, to: K) -> Result<Vec<(K, K, u32)>> {
+        if self.pending_root == 0 { return Ok(Vec::new()); }
+        let mut result = Vec::new();
+        self.collect_overlapping_node(self.pending_root, from, to, &mut result)?;
+        Ok(result)
+    }
+
+    fn collect_overlapping_node(&self, pgno: u32, from: K, to: K, out: &mut Vec<(K, K, u32)>) -> Result<()> {
+        let page = self.store.page(pgno);
+        let h = PageHeader::decode(page);
+        match h.page_type {
+            spec::PAGE_TYPE_LEAF => {
+                let leaf = LeafView::<K>::new(page, h.entry_count as usize);
+                for i in 0..leaf.len() {
+                    let r = leaf.record(i);
+                    if r.from() > to { break; }
+                    if r.to() >= from {
+                        out.push((r.from(), r.to(), r.scope_id()));
+                    }
+                }
+                Ok(())
+            }
+            spec::PAGE_TYPE_BRANCH => {
+                let branch = BranchView::<K>::new(page, h.entry_count as usize);
+                for j in 0..branch.child_count() {
+                    self.collect_overlapping_node(branch.child(j), from, to, out)?;
+                }
+                Ok(())
+            }
+            _ => Err(Error::Structural("unexpected page type")),
+        }
+    }
+
+    /// Apply a feed bit to a scope_id, returning the new scope_id.
+    fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        match self.scope_mode {
+            spec::SCOPE_MODE_BITMAP => Ok(scope_id | (1 << feed_bit)),
+            spec::SCOPE_MODE_INDIRECT => {
+                match &mut self.scope_registry {
+                    Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
+                    None => Err(Error::State("requires scope_mode == 2")),
+                }
+            }
+            _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
+        }
+    }
+
+    /// Clear a feed bit from a scope_id, returning the new scope_id (0 if empty).
+    fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        match self.scope_mode {
+            spec::SCOPE_MODE_BITMAP => {
+                let cleared = scope_id & !(1 << feed_bit);
+                Ok(cleared)
+            }
+            spec::SCOPE_MODE_INDIRECT => {
+                match &mut self.scope_registry {
+                    Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit)),
+                    None => Err(Error::State("requires scope_mode == 2")),
+                }
+            }
+            _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
+        }
+    }
+
     fn scan_node(&self, pgno: u32, f: &mut impl FnMut(K, K, u32)) -> Result<()> {
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
