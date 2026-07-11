@@ -23,8 +23,8 @@ use crate::writer::{Changed, Writer};
 pub struct MmapReader {
     _file: std::fs::File,
     mmap: memmap2::Mmap,
-    _guard: Option<ReaderGuard>,
-    _table: Option<ReaderTable>,
+    _guard: ReaderGuard,
+    _table: ReaderTable,
 }
 
 impl MmapReader {
@@ -65,9 +65,9 @@ use std::os::unix::fs::MetadataExt;
             meta_b.txn_id
         };
 
-        // Register in the reader table.
-        let mut table = ReaderTable::open(path).ok();
-        let guard = table.as_mut().and_then(|t| t.register(active_txn_id).ok());
+        // Register in the reader table. Propagate errors (was silently .ok()).
+        let mut table = ReaderTable::open(path)?;
+        let guard = table.register(active_txn_id)?;
 
         Ok(MmapReader {
             _file: file,
@@ -90,7 +90,7 @@ use std::os::unix::fs::MetadataExt;
 /// table to determine safe page reclamation.
 pub struct FileWriter<K: IpKey> {
     writer: Writer<K>,
-    reader_table: Option<ReaderTable>,
+    reader_table: ReaderTable,
 }
 
 impl<K: IpKey> FileWriter<K> {
@@ -155,14 +155,14 @@ use std::os::unix::fs::MetadataExt;
         let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
 
         let store = MmapStore::open(file, committed_pages)?;
-        let mut writer = Writer::<K>::open(Box::new(store))?;
 
-        // Open the reader table and set safe reclaim.
-        let mut reader_table = ReaderTable::open(path).ok();
-        if let Some(ref rt) = reader_table {
-            let oldest = rt.oldest_reader_txn_id();
-            writer.set_safe_reclaim_txn_id(oldest);
-        }
+        // Open the reader table and query oldest_reader BEFORE Writer::open
+        // (Writer::open calls load_free_list which populates reuse pages).
+        let reader_table = ReaderTable::open(path)?;
+        let oldest = reader_table.oldest_reader_txn_id();
+
+        let mut writer = Writer::<K>::open(Box::new(store))?;
+        writer.set_safe_reclaim_txn_id(oldest);
 
         Ok(FileWriter {
             writer,
@@ -195,10 +195,8 @@ use std::os::unix::fs::MetadataExt;
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         self.writer.commit(updated_unixtime)?;
         // After commit, update safe reclaim from the reader table.
-        if let Some(ref rt) = self.reader_table {
-            let oldest = rt.oldest_reader_txn_id();
-            self.writer.set_safe_reclaim_txn_id(oldest);
-        }
+        let oldest = self.reader_table.oldest_reader_txn_id();
+        self.writer.set_safe_reclaim_txn_id(oldest);
         Ok(())
     }
 
