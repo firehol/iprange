@@ -205,6 +205,10 @@ impl<K: IpKey> Writer<K> {
         self.free_list_head = self.txn_free_chain;
 
         // Rebuild scope table (mode 2 only).
+        // Free old scope table pages so they're reclaimed.
+        if self.scope_table_root_cache != 0 {
+            self.free_scope_table_pages(self.scope_table_root_cache);
+        }
         self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
             if reg.is_empty() { 0 } else {
                 crate::scope_table::build_scope_tree(self.store.as_mut(), reg.entries())?
@@ -1050,6 +1054,30 @@ impl<K: IpKey> Writer<K> {
                 }
             }
             _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
+        }
+    }
+
+    /// Walk the old scope table tree and free each page.
+    fn free_scope_table_pages(&mut self, root: u32) {
+        let mut to_free: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+        self.collect_scope_pages(root, 0, &mut to_free);
+        for pgno in to_free {
+            let _ = self.track_freed(pgno);
+        }
+    }
+
+    fn collect_scope_pages(&self, pgno: u32, depth: u32, out: &mut alloc::vec::Vec<u32>) {
+        if depth > spec::TREE_HEIGHT_MAX || pgno as u64 >= self.store.total_pages() as u64 {
+            return;
+        }
+        out.push(pgno);
+        let page = self.store.page(pgno);
+        let h = PageHeader::decode(page);
+        if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
+            let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            for j in 0..branch.child_count() {
+                self.collect_scope_pages(branch.child(j), depth + 1, out);
+            }
         }
     }
 

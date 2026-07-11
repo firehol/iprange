@@ -10,6 +10,7 @@
 //! These are metadata operations (feed updates), NOT the per-IP hot path.
 
 use alloc::vec::Vec;
+use rustc_hash::FxHashMap;
 
 use crate::error::{Error, Result};
 use crate::spec;
@@ -31,6 +32,8 @@ pub struct ScopeEntry {
 /// into the scope table B+tree at commit time.
 pub struct ScopeRegistry {
     entries: Vec<ScopeEntry>,
+    /// O(1) bitmap → scope_id lookup (fixes #6: was linear search).
+    bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32>,
     next_id: u32,
 }
 
@@ -38,32 +41,33 @@ impl ScopeRegistry {
     pub fn new() -> Self {
         ScopeRegistry {
             entries: Vec::new(),
-            next_id: 1, // 0 is reserved for FILE
+            bitmap_index: FxHashMap::default(),
+            next_id: 1,
         }
     }
 
     /// Load from a committed scope table (at open time).
     pub fn from_entries(entries: Vec<ScopeEntry>) -> Self {
         let next_id = entries.iter().map(|e| e.scope_id).max().unwrap_or(0) + 1;
-        ScopeRegistry { entries, next_id }
+        let mut bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
+        for e in &entries {
+            bitmap_index.insert(e.bitmap.clone(), e.scope_id);
+        }
+        ScopeRegistry { entries, bitmap_index, next_id }
     }
 
     /// Find or create a scope_id for the given bitmap.
     /// Returns the scope_id. If the bitmap already exists, reuses its id.
     pub fn intern(&mut self, bitmap: &[u8]) -> u32 {
-        // Search for an existing entry with the same bitmap.
-        for e in &self.entries {
-            if e.bitmap == bitmap {
-                return e.scope_id;
-            }
+        // O(1) lookup via bitmap_index.
+        if let Some(&id) = self.bitmap_index.get(bitmap) {
+            return id;
         }
-        // Create a new entry.
         let id = self.next_id;
         self.next_id += 1;
-        self.entries.push(ScopeEntry {
-            scope_id: id,
-            bitmap: bitmap.to_vec(),
-        });
+        let bm = bitmap.to_vec();
+        self.bitmap_index.insert(bm.clone(), id);
+        self.entries.push(ScopeEntry { scope_id: id, bitmap: bm });
         id
     }
 
@@ -216,12 +220,65 @@ pub fn build_scope_tree(
         child_idx += count;
     }
 
+    build_branch_levels(store, &branch_pgnos, &seps, sep_width, branch_max)
+}
+
+/// Recursively build branch levels until a single root remains.
+fn build_branch_levels(
+    store: &mut dyn crate::page_store::PageStore,
+    children: &[u32],
+    all_seps: &[u32],
+    sep_width: usize,
+    branch_max: usize,
+) -> Result<u32> {
+    if children.len() == 1 {
+        return Ok(children[0]);
+    }
+
+    // Build one level of branches.
+    let mut branch_pgnos: Vec<u32> = Vec::new();
+    let mut new_seps: Vec<u32> = Vec::new();
+    let mut child_idx = 0;
+    let mut sep_idx = 0;
+
+    while child_idx < children.len() {
+        let remaining = children.len() - child_idx;
+        let count = remaining.min(branch_max);
+        let pgno = store.alloc_page()?;
+        let page = store.page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count - 1) as u16, pgno);
+        wire::put_u32(page, spec::PAGE_HEADER_SIZE, children[child_idx]);
+        for i in 0..count - 1 {
+            let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
+            if sep_idx < all_seps.len() {
+                wire::put_u32(page, off, all_seps[sep_idx]);
+            }
+            wire::put_u32(page, off + sep_width, children[child_idx + i + 1]);
+            sep_idx += 1;
+        }
+        branch_pgnos.push(pgno);
+        child_idx += count;
+    }
+
+    // Separators for the next level: first scope_id of each branch after the first.
+    for i in 1..branch_pgnos.len() {
+        // Read the first child's first separator (which is the first scope_id in that subtree).
+        // Actually, the separator is already in all_seps — but we need to track which seps
+        // belong to which branch level. For simplicity, read the first entry from each branch's
+        // leftmost leaf. But that requires descending. Instead, use the separator that was
+        // stored at the branch level.
+        // For the multi-level case, the separator between branch[i-1] and branch[i] is
+        // the first separator stored in branch[i].
+        let page = store.page(branch_pgnos[i]);
+        let off = spec::PAGE_HEADER_SIZE + 4; // first sep in this branch
+        new_seps.push(wire::u32_le(page, off));
+    }
+
     if branch_pgnos.len() == 1 {
         Ok(branch_pgnos[0])
     } else {
-        // Multi-level branch — rare (>7500 distinct bitmaps = very large file).
-        // For now, handle single-level. TODO: multi-level if needed.
-        Err(Error::State("scope table exceeds single-level branch capacity"))
+        build_branch_levels(store, &branch_pgnos, &new_seps, sep_width, branch_max)
     }
 }
 
