@@ -37,6 +37,9 @@ pub struct Writer<K: IpKey> {
     committed_pages: u32,
     committed_record_count: u64,
     committed_txn_id: u64,
+    /// Previous committed root (for reader-safe reclamation).
+    prev_committed_root: u32,
+    prev_committed_height: u32,
     pub(crate) pending_root: u32,
     pending_height: u32,
     pending_record_count: u64,
@@ -56,6 +59,7 @@ impl<K: IpKey> Writer<K> {
             store, key_width: K::WIDTH as u8, scope_mode, created_unixtime,
             active_meta: 0, committed_root: 0, committed_height: 0,
             committed_pages: 2, committed_record_count: 0, committed_txn_id: 0,
+            prev_committed_root: 0, prev_committed_height: 0,
             pending_root: 0, pending_height: 0, pending_record_count: 0,
             poisoned: false,
             private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0,
@@ -92,6 +96,8 @@ impl<K: IpKey> Writer<K> {
             committed_root: active.root_pgno, committed_height: active.tree_height,
             committed_pages: active.total_pages as u32, committed_record_count: active.record_count,
             committed_txn_id: active.txn_id,
+            prev_committed_root: if active_no == 0 { meta_b.root_pgno } else { meta_a.root_pgno },
+            prev_committed_height: if active_no == 0 { meta_b.tree_height } else { meta_a.tree_height },
             pending_root: active.root_pgno, pending_height: active.tree_height,
             pending_record_count: active.record_count, poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
@@ -150,6 +156,8 @@ impl<K: IpKey> Writer<K> {
         self.store.sync()?;
         self.active_meta = inactive;
         self.committed_txn_id = new_txn_id;
+        self.prev_committed_root = self.committed_root;
+        self.prev_committed_height = self.committed_height;
         self.committed_root = self.pending_root;
         self.committed_height = self.pending_height;
         self.committed_record_count = self.pending_record_count;
@@ -229,9 +237,17 @@ impl<K: IpKey> Writer<K> {
         let mut reachable = PageSet::new(total);
         reachable.insert(0);
         reachable.insert(1);
+        // Walk the new committed tree.
         self.mark_reachable(self.committed_root, &mut reachable);
         if self.scope_table_root_cache != 0 {
             self.mark_scope_reachable(self.scope_table_root_cache, &mut reachable);
+        }
+        // MVCC safety: also walk the OLD committed tree if it's different.
+        // This protects readers using the previous generation. A reader opened
+        // before the last commit is reading from prev_committed_root.
+        // Pages reachable from the old root must NOT be freed.
+        if self.prev_committed_root != 0 && self.prev_committed_root != self.committed_root {
+            self.mark_reachable(self.prev_committed_root, &mut reachable);
         }
         for pgno in 2..total {
             if !reachable.contains(pgno as u32) {

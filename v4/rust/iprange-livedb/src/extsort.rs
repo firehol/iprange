@@ -90,7 +90,9 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
         // For end: use to+1 (exclusive). Handle max address correctly.
         match r.to.checked_inc() {
             Some(after) => events.push(Event { pos: after.to_u128(), is_start: false, idx: i }),
-            None => { /* to is family_max — no end event, record covers to end */ }
+            // to is family_max — add synthetic end at u128::MAX so the
+            // final segment is processed (fixes tail loss at max address).
+            None => events.push(Event { pos: u128::MAX, is_start: false, idx: i }),
         }
     }
     events.sort_by(|a, b| {
@@ -125,7 +127,9 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
         if active.is_empty() { continue; }
 
         let seg_from = K::from_u128(pos);
-        let seg_to = K::from_u128(next_pos - 1);
+        // When next_pos is u128::MAX (synthetic end event), the segment
+        // extends to K::MAX (the family maximum), not K::from_u128(u128::MAX - 1).
+        let seg_to = if next_pos == u128::MAX { K::MAX } else { K::from_u128(next_pos - 1) };
 
         // Last-wins: highest index in active.
         let max_idx = *active.iter().max().unwrap();
@@ -204,68 +208,117 @@ impl<K: IpKey> RunReader<K> {
     fn advance(&mut self) { self.current = read_record::<K>(&mut self.file).ok().flatten(); }
 }
 
-struct KWayMerge<K: IpKey> { runs: Vec<RunReader<K>>, cached: Option<DesiredRecord<K>> }
+enum KMin { Run(usize), Pending(usize) }
+
+struct KWayMerge<K: IpKey> {
+    runs: Vec<RunReader<K>>,
+    cached: Option<DesiredRecord<K>>,
+    pending: Vec<DesiredRecord<K>>,
+}
 impl<K: IpKey> KWayMerge<K> {
     fn new(paths: &[PathBuf]) -> Result<Self> {
         let mut runs = Vec::with_capacity(paths.len());
         for p in paths { runs.push(RunReader::<K>::open(p)?); }
-        let mut m = KWayMerge { runs, cached: None };
+        let mut m = KWayMerge { runs, cached: None, pending: Vec::new() };
         m.cached = m.compute_next();
         Ok(m)
     }
 
-    fn find_min(&self) -> Option<usize> {
-        let mut mi: Option<usize> = None;
-        for i in 0..self.runs.len() {
-            if self.runs[i].current.is_none() { continue; }
-            match mi {
-                None => mi = Some(i),
-                Some(m) => if self.runs[i].current.unwrap().from < self.runs[m].current.unwrap().from { mi = Some(i); }
+    fn find_min(&self) -> Option<KMin> {
+        // Find the minimum across runs AND pending.
+        let mut best: Option<K> = None;
+        let mut best_kind: Option<KMin> = None;
+
+        for (i, run) in self.runs.iter().enumerate() {
+            if let Some(ref cur) = run.current {
+                if best.is_none() || cur.from < best.unwrap() {
+                    best = Some(cur.from);
+                    best_kind = Some(KMin::Run(i));
+                }
             }
         }
-        mi
+        for (i, p) in self.pending.iter().enumerate() {
+            if best.is_none() || p.from < best.unwrap() {
+                best = Some(p.from);
+                best_kind = Some(KMin::Pending(i));
+            }
+        }
+        best_kind
     }
 
     fn pop_min(&mut self) -> Option<DesiredRecord<K>> {
-        let idx = self.find_min()?;
-        let r = self.runs[idx].current.take();
-        self.runs[idx].advance();
-        r
+        match self.find_min()? {
+            KMin::Run(idx) => {
+                let r = self.runs[idx].current.take();
+                self.runs[idx].advance();
+                r
+            }
+            KMin::Pending(idx) => {
+                // Pop from pending (swap_remove for O(1)).
+                Some(self.pending.swap_remove(idx))
+            }
+        }
     }
 
     /// Compute the next coalesced/normalized record. Handles cross-run overlaps.
     fn compute_next(&mut self) -> Option<DesiredRecord<K>> {
         let mut result = self.pop_min()?;
         loop {
-            let next_idx = match self.find_min() { Some(i) => i, None => break };
-            let next = &self.runs[next_idx].current.as_ref().unwrap();
-            if next.from > result.to {
-                // No overlap — check adjacency for same-scope coalescing.
-                if next.scope_id == result.scope_id {
+            let (next_from, next_to, next_scope, _) = match self.peek_min() {
+                None => break,
+                Some(v) => v,
+            };
+            if next_from > result.to {
+                if next_scope == result.scope_id {
                     if let Some(after) = result.to.checked_inc() {
-                        if after.cmp(&next.from) == core::cmp::Ordering::Equal {
-                            result.to = self.pop_min().unwrap().to;
+                        if after == next_from {
+                            let popped = self.pop_min().unwrap();
+                            if popped.to > result.to { result.to = popped.to; }
                             continue;
                         }
                     }
                 }
                 break;
             }
-            // Overlap!
-            if next.scope_id == result.scope_id {
-                // Same scope → extend.
+            if next_scope == result.scope_id {
                 let popped = self.pop_min().unwrap();
                 if popped.to > result.to { result.to = popped.to; }
-            } else if next.from > result.from {
-                // Different scope, partial overlap → truncate result, next wins for its part.
-                result.to = next.from.checked_dec().unwrap_or(next.from);
-                break;
             } else {
-                // next.from <= result.from → next fully covers result → take next.
-                result = self.pop_min().unwrap();
+                let original_to = result.to;
+                let original_scope = result.scope_id;
+                if next_from > result.from {
+                    result.to = next_from.checked_dec().unwrap_or(next_from);
+                    if original_to > next_to {
+                        if let Some(ts) = next_to.checked_inc() {
+                            self.pending.push(DesiredRecord { from: ts, to: original_to, scope_id: original_scope });
+                        }
+                    }
+                    break;
+                } else {
+                    if original_to > next_to {
+                        if let Some(ts) = next_to.checked_inc() {
+                            self.pending.push(DesiredRecord { from: ts, to: original_to, scope_id: original_scope });
+                        }
+                    }
+                    result = self.pop_min().unwrap();
+                }
             }
         }
         Some(result)
+    }
+
+    fn peek_min(&self) -> Option<(K, K, u32, KMin)> {
+        let kmin = self.find_min()?;
+        match kmin {
+            KMin::Run(idx) => {
+                let r = self.runs[idx].current.as_ref()?;
+                Some((r.from, r.to, r.scope_id, KMin::Run(idx)))
+            }
+            KMin::Pending(idx) => {
+                let r = self.pending.get(idx)?;
+                Some((r.from, r.to, r.scope_id, KMin::Pending(idx)))
+            }
+        }
     }
 }
 
@@ -395,5 +448,56 @@ mod tests {
         let r2 = stream.next().unwrap();
         assert_eq!(r2.from, Ipv4Key(15));
         assert_eq!(r2.to, Ipv4Key(25));
+    }
+}
+
+#[cfg(test)]
+mod worker_bugs {
+    use super::*;
+    use crate::key::Ipv4Key;
+
+    fn r(f: u32, t: u32, s: u32) -> DesiredRecord<Ipv4Key> {
+        DesiredRecord { from: Ipv4Key(f), to: Ipv4Key(t), scope_id: s }
+    }
+
+    #[test]
+    fn max_address_overlap() {
+        // [u32::MAX-10, u32::MAX] scope=1 overlaps [u32::MAX-5, u32::MAX] scope=2
+        // Expected: [MAX-10, MAX-6] scope=1, [MAX-5, MAX] scope=2
+        let s = SortedStream::from_unsorted(vec![
+            r(u32::MAX - 10, u32::MAX, 1),
+            r(u32::MAX - 5, u32::MAX, 2),
+        ]);
+        assert_eq!(s.records.len(), 2, "should have 2 segments");
+        assert_eq!(s.records[0].from, Ipv4Key(u32::MAX - 10));
+        assert_eq!(s.records[0].to, Ipv4Key(u32::MAX - 6));
+        assert_eq!(s.records[0].scope_id, 1);
+        assert_eq!(s.records[1].from, Ipv4Key(u32::MAX - 5));
+        assert_eq!(s.records[1].to, Ipv4Key(u32::MAX));
+        assert_eq!(s.records[1].scope_id, 2);
+    }
+
+    #[test]
+    fn cross_run_contained_tail() {
+        // Run A has [10-30] scope=1 (wide range)
+        // Run B has [15-25] scope=2 (contained within A)
+        // Expected after merge: [10-14] scope=1, [15-25] scope=2, [26-30] scope=1
+        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig { chunk_size: 1, temp_dir: None });
+        sorter.add(Ipv4Key(10), Ipv4Key(30), 1).unwrap();
+        sorter.add(Ipv4Key(15), Ipv4Key(25), 2).unwrap();
+        let mut stream = sorter.finish().unwrap();
+        let r1 = stream.next().unwrap();
+        assert_eq!(r1.from, Ipv4Key(10));
+        assert_eq!(r1.to, Ipv4Key(14));
+        assert_eq!(r1.scope_id, 1);
+        let r2 = stream.next().unwrap();
+        assert_eq!(r2.from, Ipv4Key(15));
+        assert_eq!(r2.to, Ipv4Key(25));
+        assert_eq!(r2.scope_id, 2);
+        let r3 = stream.next().unwrap();
+        assert_eq!(r3.from, Ipv4Key(26));
+        assert_eq!(r3.to, Ipv4Key(30));
+        assert_eq!(r3.scope_id, 1);
+        assert!(stream.next().is_none());
     }
 }

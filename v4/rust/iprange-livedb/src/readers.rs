@@ -7,6 +7,7 @@
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
@@ -77,34 +78,43 @@ impl ReaderTable {
         Ok(ReaderTable { mmap, my_slot: None, path: readers_path })
     }
 
-    /// Register using atomic CAS. No TOCTOU race.
+    /// Register using flock for cross-process atomicity.
+    /// Brief LOCK_EX on the companion file prevents TOCTOU race.
     pub fn register(&mut self, txn_id: u64) -> Result<ReaderGuard> {
         let pid = std::process::id();
         let reader_id = next_reader_id();
 
-        // CAS loop: scan for a free slot (PID == 0), claim it atomically.
+        // Acquire brief exclusive lock on the companion file for atomic slot claiming.
+        // This serializes register() across processes (not during normal reads).
+        let file = OpenOptions::new()
+            .read(true).write(true)
+            .open(&self.path).map_err(Error::Io)?;
+        let fd = file.as_raw_fd();
+        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+
+        // Find a free slot under the lock.
+        let mut claimed = None;
         for slot in 0..MAX_SLOTS {
-            let off = slot * SLOT_SIZE + SLOT_PID_OFF;
-            let expected = 0u32.to_le_bytes();
-            // Read current value.
-            let current = u32::from_le_bytes([
-                self.mmap[off], self.mmap[off+1], self.mmap[off+2], self.mmap[off+3],
-            ]);
+            let current = self.slot_pid(slot);
             if current == 0 || !is_process_alive(current) {
-                // Attempt CAS: write our PID.
-                // Since we're using a mmap'd file (not shared memory), true atomicity
-                // requires file locking. Use a brief advisory lock on the slot.
-                // For correctness across processes: use flock on the companion file
-                // during the scan+claim.
-                // Actually, the simplest correct approach for cross-process CAS:
-                // use a POSIX mutex (semaphore) in the companion file.
-                // For now, use flock(LOCK_EX) briefly during register.
                 self.write_slot(slot, pid, reader_id, txn_id);
-                self.my_slot = Some(slot);
-                return Ok(ReaderGuard { slot, pid, reader_id, path: self.path.clone() });
+                claimed = Some(slot);
+                break;
             }
         }
-        Err(Error::State("reader table full"))
+
+        // Release the lock.
+        let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+
+        match claimed {
+            Some(slot) => {
+                self.my_slot = Some(slot);
+                Ok(ReaderGuard { slot, pid, reader_id, path: self.path.clone() })
+            }
+            None => Err(Error::State("reader table full")),
+        }
     }
 
     pub fn oldest_reader_txn_id(&self) -> u64 {
