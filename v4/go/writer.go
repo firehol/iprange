@@ -344,12 +344,12 @@ func (w *Writer[K]) deriveFreePagesWithReaders(readerRoots [][2]uint32) {
 	if w.scopeTableRootCache != 0 {
 		w.markScopeReachable(w.scopeTableRootCache, reachable)
 	}
-	// MVCC safety: also walk the OLD committed tree if it's different.
-	// This protects readers using the previous generation. A reader opened
-	// before the last commit is reading from prevCommittedRoot; pages
-	// reachable from the old root must NOT be freed.
-	if w.prevCommittedRoot != 0 && w.prevCommittedRoot != w.committedRoot {
-		w.markReachable(w.prevCommittedRoot, reachable)
+	// MVCC safety: walk ALL reader-referenced trees.
+	// Pages reachable from any active reader's root are protected.
+	for _, rh := range readerRoots {
+		if rh[0] != 0 && !reachable.contains(rh[0]) {
+			w.markReachable(rh[0], reachable)
+		}
 	}
 	for pgno := 2; pgno < total; pgno++ {
 		if !reachable.contains(uint32(pgno)) {
