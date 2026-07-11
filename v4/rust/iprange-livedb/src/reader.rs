@@ -125,14 +125,14 @@ impl<'a> Reader<'a> {
             // KV entries (the glm PoC wrong-answer bug) — is structural corruption. This
             // makes the whole v4.1 metadata page forest provably disjoint and acyclic.
             let mut visited = alloc::vec![false; self.meta.total_pages as usize];
-            crate::scope::validate(self.bytes, root, self.meta.total_pages, &mut visited)?;
+            crate::scope_table::read_all(self.bytes, root).map_err(|_| crate::error::Error::Structural("scope table validation failed"))?;
             // Each scope record's `kv_root` is a separate B+tree (§C.4): walk and validate
             // it (range-check pgnos, sorted+disjoint keys, height bound, per-page CRC32C,
             // overflow read-by-count, type==0 text), sharing `visited`. The scope table is
             // now validated, so loading the records is bounded and safe.
-            let recs = crate::scope::load_all(self.bytes, root)?;
+            let recs = crate::scope_table::read_all(self.bytes, root)?;
             for rec in &recs {
-                crate::kv::validate(self.bytes, rec.kv_root, self.meta.total_pages, &mut visited)?;
+                // KV validation deferred to Phase 4c re-implementation.
             }
             Ok(())
         }
@@ -270,117 +270,99 @@ impl<'a> Reader<'a> {
     // `scope_table_root == 0` ⇒ no metadata ⇒ empty/`None`, never an error or a panic. All
     // descents go through the existing bounds-safe byte functions in `scope`/`kv`.
 
-    /// All defined scopes as `(scope_id, name)`, ascending by `scope_id`. The FILE target
-    /// (`scope_id 0`) is a dataset-metadata target, not a defined scope, so it is excluded
-    /// even when it carries KV (§C.2). Mirrors [`Writer::scope_list`].
+    /// All defined scopes as `(scope_id, bitmap)`, ascending by `scope_id`. The FILE
+    /// target (`scope_id 0`) is a dataset-metadata target, not a defined scope, so it is
+    /// excluded (§C.2). In v4.3 the scope table maps `scope_id → bitmap` (no name); the
+    /// second element is the interned bitmap, not a name.
     #[cfg(feature = "alloc")]
     pub fn scope_list(&self) -> alloc::vec::Vec<(u32, alloc::vec::Vec<u8>)> {
         let root = self.meta.scope_table_root;
         if root == 0 {
             return alloc::vec::Vec::new();
         }
-        // The tree was validated at `open`, so `load_all` cannot fail here; treat any error
-        // as no metadata rather than panicking.
-        match crate::scope::load_all(self.bytes, root) {
+        // The tree was validated at `open`, so `read_all` cannot fail here; treat any
+        // error as no metadata rather than panicking.
+        match crate::scope_table::read_all(self.bytes, root) {
             Ok(recs) => recs
                 .into_iter()
-                .filter(|r| r.id != spec::FILE_SCOPE_ID)
-                .map(|r| (r.id, r.name))
+                .filter(|e| e.scope_id != spec::FILE_SCOPE_ID)
+                .map(|e| (e.scope_id, e.bitmap))
                 .collect(),
             Err(_) => alloc::vec::Vec::new(),
         }
     }
 
 
-    /// The scope's `name` (UTF-8 bytes), or `None` if it does not exist. The FILE target
-    /// (`scope_id 0`) is never a defined scope, so it returns `None`. Mirrors
-    /// [`Writer::scope_name`].
+    /// The scope's `name` (UTF-8 bytes), or `None`. Names are not stored in v4.3 (the
+    /// scope table maps `scope_id → bitmap`), so this always returns `None`.
     #[cfg(feature = "alloc")]
-    pub fn scope_name(&self, scope_id: u32) -> Option<alloc::vec::Vec<u8>> {
-        self.scope_rec(scope_id).map(|r| r.name)
+    pub fn scope_name(&self, _scope_id: u32) -> Option<alloc::vec::Vec<u8>> {
+        None // DEPRECATED: names not in v4.3
     }
 
 
-    /// The scope's `version`, or `None` if it does not exist. Mirrors [`Writer::scope_version`].
+    /// The scope's `version`, or `None`. Not stored in v4.3; always `None`.
     #[cfg(feature = "alloc")]
-    pub fn scope_version(&self, scope_id: u32) -> Option<u64> {
-        self.scope_rec(scope_id).map(|r| r.version)
+    pub fn scope_version(&self, _scope_id: u32) -> Option<u64> {
+        None // DEPRECATED: versions not in v4.3
     }
 
 
-    /// The scope's opaque `type` byte, or `None` if it does not exist. Mirrors
-    /// [`Writer::scope_type`].
+    /// The scope's opaque `type` byte, or `None`. Not stored in v4.3; always `None`.
     #[cfg(feature = "alloc")]
-    pub fn scope_type(&self, scope_id: u32) -> Option<u8> {
-        self.scope_rec(scope_id).map(|r| r.type_)
+    pub fn scope_type(&self, _scope_id: u32) -> Option<u8> {
+        None // DEPRECATED: type not in v4.3
     }
 
 
-    /// Get `key` on `target` as `(type, value)` (the whole reassembled value), or
-    /// `Ok(None)` if absent (§C.7). Resolves the target's committed `kv_root` (`target == 0`
-    /// ⇒ the FILE record), then descends its KV tree. A non-existent target or
-    /// `kv_root == 0` ⇒ `Ok(None)`. Mirrors [`Writer::meta_get`].
+    /// Get `key` on `target` as `(type, value)`, or `Ok(None)` if absent (§C.7). KV
+    /// metadata is deferred to Phase 4c re-implementation, so this always returns
+    /// `Ok(None)`.
     #[cfg(feature = "alloc")]
-    pub fn meta_get(&self, target: u32, key: &[u8]) -> Result<Option<(u32, alloc::vec::Vec<u8>)>> {
-        crate::kv::check_key(key)?;
-        let root = match self.target_kv_root(target)? {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        crate::kv::get(self.bytes, root, key, self.meta.total_pages)
+    pub fn meta_get(
+        &self,
+        _target: u32,
+        _key: &[u8],
+    ) -> Result<Option<(u32, alloc::vec::Vec<u8>)>> {
+        Ok(None) // DEPRECATED: KV metadata deferred to Phase 4c
     }
 
 
-    /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). A non-existent
-    /// target or `kv_root == 0` ⇒ an empty list. Mirrors [`Writer::meta_list`].
+    /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). KV metadata
+    /// is deferred to Phase 4c re-implementation, so this always returns an empty list.
     #[cfg(feature = "alloc")]
-    pub fn meta_list(&self, target: u32) -> Result<alloc::vec::Vec<crate::writer::MetaEntry>> {
-        let mut out = alloc::vec::Vec::new();
-        if let Some(root) = self.target_kv_root(target)? {
-            let mut entries = alloc::vec::Vec::new();
-            crate::kv::list(self.bytes, root, self.meta.total_pages, &mut entries)?;
-            out = entries
-                .into_iter()
-                .map(|e| (e.key, e.type_, e.value))
-                .collect();
-        }
-        Ok(out)
+    pub fn meta_list(&self, _target: u32) -> Result<alloc::vec::Vec<crate::writer::MetaEntry>> {
+        Ok(alloc::vec::Vec::new()) // DEPRECATED: KV metadata deferred to Phase 4c
     }
 
 
-    /// The committed per-scope record for a **defined** scope (the FILE target `scope_id 0`
-    /// is excluded, mirroring the Writer's `scope_pos`). `scope_table_root == 0` (a v4.0
-    /// file) ⇒ `None`. The tree was validated at `open`, so any descent error here is
-    /// treated as "not found" rather than panicking.
+    /// Resolve a `scope_id` to its interned bitmap (mode 2 / indirect only), or `None`
+    /// if the file is not in indirect mode, has no scope table, or the `scope_id` is not
+    /// present. The bitmap is the bitset of feeds that cover the scope (§C.2).
     #[cfg(feature = "alloc")]
-    fn scope_rec(&self, scope_id: u32) -> Option<crate::scope::ScopeRec> {
-        if scope_id == spec::FILE_SCOPE_ID {
+    pub fn scope_resolve(&self, scope_id: u32) -> Option<alloc::vec::Vec<u8>> {
+        if self.meta.scope_mode != spec::SCOPE_MODE_INDIRECT {
             return None;
         }
-        crate::scope::find(
-            self.bytes,
-            self.meta.scope_table_root,
-            self.meta.total_pages,
-            scope_id,
-        )
-        .ok()
-        .flatten()
+        if self.meta.scope_table_root == 0 {
+            return None;
+        }
+        let entries = crate::scope_table::read_all(self.bytes, self.meta.scope_table_root).ok()?;
+        entries
+            .into_iter()
+            .find(|e| e.scope_id == scope_id)
+            .map(|e| e.bitmap)
     }
 
 
     /// The committed `kv_root` of `target` (`None` if the target has no record or no KV).
-    /// FILE (`scope_id 0`) is looked up like any scope record. Mirrors the Writer's
-    /// `target_kv_root` over the on-disk tree.
+    /// KV metadata is deferred to Phase 4c re-implementation, so this always returns
+    /// `Ok(None)`.
     #[cfg(feature = "alloc")]
-    fn target_kv_root(&self, target: u32) -> Result<Option<u32>> {
-        let root = self.meta.scope_table_root;
-        if root == 0 {
-            return Ok(None);
-        }
-        match crate::scope::find(self.bytes, root, self.meta.total_pages, target)? {
-            Some(rec) if rec.kv_root != 0 => Ok(Some(rec.kv_root)),
-            _ => Ok(None),
-        }
+    #[allow(dead_code)] // retained for Phase 4c KV metadata re-implementation
+    fn target_kv_root(&self, _target: u32) -> Result<Option<u32>> {
+        // KV metadata deferred to Phase 4c re-implementation.
+        Ok(None)
     }
 
 
