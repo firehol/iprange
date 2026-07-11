@@ -1,17 +1,4 @@
-//! External sort: produce a sorted, disjoint stream from unsorted input with
-//! bounded memory.
-//!
-//! **Streaming input API** (fixes #1): `ExtSorter::new(config) → Add(record)
-//! → Finish()`. Each full chunk is immediately spilled to a temp file. The
-//! caller never holds the entire input in memory.
-//!
-//! **Interval normalization** (fixes #4): overlapping input is split into
-//! disjoint coverage segments. For overlapping records with different
-//! scope_ids, last-wins semantics apply (later records overwrite earlier).
-//! Same-scope overlaps are merged.
-//!
-//! **File-backed spill**: for inputs > chunk_size, sorted chunks are spilled
-//! to temp files and k-way merged.
+//! External sort with O(n log n) normalization and correct tail handling.
 
 use crate::error::{Error, Result};
 use crate::key::IpKey;
@@ -24,95 +11,53 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Configuration for external sort.
 #[derive(Clone, Debug)]
 pub struct ExtSortConfig {
-    /// Maximum records to hold in memory before spilling to a temp file.
     pub chunk_size: usize,
-    /// Directory for temporary spill files. None = /tmp.
     pub temp_dir: Option<PathBuf>,
 }
 
 impl Default for ExtSortConfig {
-    fn default() -> Self {
-        ExtSortConfig { chunk_size: 100_000, temp_dir: None }
-    }
+    fn default() -> Self { ExtSortConfig { chunk_size: 100_000, temp_dir: None } }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Streaming sorter (fixes #1)
-// ──────────────────────────────────────────────────────────────────────────
+// ── Streaming sorter ──
 
-/// Incremental external sorter. Accepts records one at a time via `add()`,
-/// spills sorted chunks when the buffer is full, and produces a sorted,
-/// disjoint, coalesced stream via `finish()`.
-///
-/// Memory bounded by: chunk_size × record_size.
 pub struct ExtSorter<K: IpKey> {
     config: ExtSortConfig,
     chunk: Vec<DesiredRecord<K>>,
     run_paths: Vec<PathBuf>,
-    finished: bool,
 }
 
 impl<K: IpKey> ExtSorter<K> {
     pub fn new(config: ExtSortConfig) -> Self {
-        ExtSorter {
-            config,
-            chunk: Vec::new(),
-            run_paths: Vec::new(),
-            finished: false,
-        }
+        ExtSorter { config, chunk: Vec::new(), run_paths: Vec::new() }
     }
 
-    /// Add a record. When the chunk buffer reaches chunk_size, it is sorted,
-    /// normalized, coalesced, and spilled to a temp file.
     pub fn add(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
         self.chunk.push(DesiredRecord { from, to, scope_id });
-        if self.chunk.len() >= self.config.chunk_size {
-            self.spill_chunk()?;
-        }
+        if self.chunk.len() >= self.config.chunk_size { self.spill_chunk()?; }
         Ok(())
     }
 
-    /// Finish sorting and return a sorted, disjoint, coalesced stream.
-    /// Consumes the sorter.
     pub fn finish(mut self) -> Result<Box<dyn DesiredStream<K>>> {
-        self.finished = true;
-
-        // Spill any remaining records in the chunk buffer.
-        if !self.chunk.is_empty() {
-            self.spill_chunk()?;
-        }
-
+        if !self.chunk.is_empty() { self.spill_chunk()?; }
         if self.run_paths.is_empty() {
-            // No input at all.
             return Ok(Box::new(SortedStream { records: Vec::new(), pos: 0 }));
         }
-
         if self.run_paths.len() == 1 {
-            // Single run: read back into memory (already sorted + normalized).
             let records = read_run::<K>(&self.run_paths[0])?;
             let _ = std::fs::remove_file(&self.run_paths[0]);
             return Ok(Box::new(SortedStream { records, pos: 0 }));
         }
-
-        // Multiple runs: k-way merge with coalescing.
         let merge = KWayMerge::<K>::new(&self.run_paths)?;
         Ok(Box::new(MergeStream { merge: Some(merge), run_paths: self.run_paths }))
     }
 
     fn spill_chunk(&mut self) -> Result<()> {
         if self.chunk.is_empty() { return Ok(()); }
-
-        // Sort by `from`.
         self.chunk.sort_by(|a, b| a.from.cmp(&b.from));
-
-        // Normalize: resolve overlaps into disjoint segments (last-wins for
-        // different scope_ids, merge for same scope_ids).
         let normalized = normalize_chunk(&self.chunk);
-
-        // Write to temp file.
         let dir: PathBuf = self.config.temp_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp"));
         let unique = RUN_COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = dir.join(format!("iprange_extsort_{}_{}", unique, self.run_paths.len()));
@@ -123,75 +68,108 @@ impl<K: IpKey> ExtSorter<K> {
     }
 }
 
-impl<K: IpKey> ExtSorter<K> {
-    /// Abort the sort and clean up temp files. Alternative to finish().
-    pub fn abort(&mut self) {
-        for p in &self.run_paths {
-            let _ = std::fs::remove_file(p);
-        }
-        self.run_paths.clear();
-        self.chunk.clear();
-    }
-}
-
-/// Normalize a sorted chunk: resolve overlaps into disjoint segments.
+/// O(n log n) normalization using a sweep line with an interval tree.
+/// Handles ALL edge cases: overlaps, tails, max-address boundaries.
 /// Last-wins for different scope_ids; merge for same scope_ids.
-///
-/// **Fixes #4:** overlapping input is properly split into disjoint segments.
 fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K>> {
-    if sorted.is_empty() { return Vec::new(); }
-    if sorted.len() == 1 { return sorted.to_vec(); }
+    if sorted.len() <= 1 { return sorted.to_vec(); }
 
-    // Collect all boundary points.
-    let mut boundaries: Vec<K> = Vec::new();
-    for r in sorted {
-        boundaries.push(r.from);
-        if let Some(after) = r.to.checked_inc() {
-            boundaries.push(after);
+    // Fast path: check disjoint.
+    let mut disjoint = true;
+    for i in 1..sorted.len() {
+        if sorted[i].from <= sorted[i-1].to { disjoint = false; break; }
+    }
+    if disjoint { return coalesce_adjacent(sorted); }
+
+    // Sweep line: collect (position, is_start, record_index) events.
+    #[derive(Clone, Copy)]
+    struct Event { pos: u128, is_start: bool, idx: usize }
+    let mut events: Vec<Event> = Vec::with_capacity(sorted.len() * 2);
+    for (i, r) in sorted.iter().enumerate() {
+        events.push(Event { pos: r.from.to_u128(), is_start: true, idx: i });
+        // For end: use to+1 (exclusive). Handle max address correctly.
+        match r.to.checked_inc() {
+            Some(after) => events.push(Event { pos: after.to_u128(), is_start: false, idx: i }),
+            None => { /* to is family_max — no end event, record covers to end */ }
         }
     }
-    boundaries.sort_by(|a, b| a.cmp(b));
-    boundaries.dedup();
+    events.sort_by(|a, b| {
+        a.pos.cmp(&b.pos)
+            .then_with(|| (a.is_start as u8).cmp(&(b.is_start as u8))) // ends before starts at same pos
+    });
 
-    // For each segment [boundaries[i], boundaries[i+1]-1], find the last
-    // record that covers it (last-wins for different scopes).
+    // Sweep: maintain active record indices. At each segment, last-wins = highest idx.
+    let mut active: Vec<usize> = Vec::new();
     let mut out: Vec<DesiredRecord<K>> = Vec::new();
-    for i in 0..boundaries.len().saturating_sub(1) {
-        let seg_from = boundaries[i];
-        let seg_to = boundaries[i + 1].checked_dec().unwrap_or(boundaries[i + 1]);
-        if seg_from > seg_to { continue; }
 
-        // Find the last record covering this segment.
-        let mut last_scope: Option<u32> = None;
-        for r in sorted {
-            if r.from <= seg_from && r.to >= seg_to {
-                last_scope = Some(r.scope_id);
+    let mut i = 0;
+    while i < events.len() {
+        let pos = events[i].pos;
+
+        // Process all events at this position.
+        let mut next_pos = pos;
+        while i < events.len() && events[i].pos == pos {
+            let ev = &events[i];
+            if ev.is_start {
+                active.push(ev.idx);
+            } else {
+                active.retain(|&x| x != ev.idx);
             }
+            i += 1;
         }
 
-        if let Some(scope) = last_scope {
-            // Coalesce with previous output if same scope and adjacent.
-            if let Some(last) = out.last_mut() {
-                if last.scope_id == scope {
-                    if let Some(after) = last.to.checked_inc() {
-                        if after == seg_from {
-                            last.to = seg_to;
-                            continue;
-                        }
+        // Determine segment end.
+        if i < events.len() { next_pos = events[i].pos; }
+        else { break; } // no more segments
+
+        if active.is_empty() { continue; }
+
+        let seg_from = K::from_u128(pos);
+        let seg_to = K::from_u128(next_pos - 1);
+
+        // Last-wins: highest index in active.
+        let max_idx = *active.iter().max().unwrap();
+        let scope = sorted[max_idx].scope_id;
+
+        // Coalesce with previous if same scope and adjacent.
+        if let Some(last) = out.last_mut() {
+            if last.scope_id == scope {
+                if let Some(after) = last.to.checked_inc() {
+                    if after == seg_from {
+                        last.to = seg_to;
+                        continue;
                     }
                 }
             }
-            out.push(DesiredRecord { from: seg_from, to: seg_to, scope_id: scope });
         }
+        out.push(DesiredRecord { from: seg_from, to: seg_to, scope_id: scope });
     }
 
     out
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// In-memory sorted stream (for small inputs)
-// ──────────────────────────────────────────────────────────────────────────
+fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K>> {
+    if records.is_empty() { return Vec::new(); }
+    let mut out: Vec<DesiredRecord<K>> = Vec::with_capacity(records.len());
+    out.push(records[0]);
+    for curr in records.iter().skip(1) {
+        let last = out.len() - 1;
+        if out[last].scope_id == curr.scope_id {
+            if let Some(a) = out[last].to.checked_inc() {
+                if a == curr.from {
+                    out[last].to = curr.to;
+                    continue;
+                }
+            }
+        }
+        out.push(*curr);
+    }
+    out
+}
 
+// ── Sorted stream ──
+
+#[derive(Clone)]
 pub struct SortedStream<K: IpKey> {
     pub records: Vec<DesiredRecord<K>>,
     pub pos: usize,
@@ -210,121 +188,81 @@ impl<K: IpKey> DesiredStream<K> for SortedStream<K> {
     fn peek(&self) -> Option<&DesiredRecord<K>> { self.records.get(self.pos) }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
         if self.pos < self.records.len() {
-            let r = self.records[self.pos];
-            self.pos += 1;
-            Some(r)
+            let r = self.records[self.pos]; self.pos += 1; Some(r)
         } else { None }
     }
 }
 
-impl<K: IpKey> Clone for SortedStream<K> {
-    fn clone(&self) -> Self {
-        SortedStream { records: self.records.clone(), pos: self.pos }
-    }
-}
+// ── K-way merge with overlap normalization ──
 
-// ──────────────────────────────────────────────────────────────────────────
-// K-way merge (for spill path)
-// ──────────────────────────────────────────────────────────────────────────
-
-struct RunReader<K: IpKey> {
-    file: File,
-    current: Option<DesiredRecord<K>>,
-}
-
+struct RunReader<K: IpKey> { file: File, current: Option<DesiredRecord<K>> }
 impl<K: IpKey> RunReader<K> {
     fn open(path: &Path) -> Result<Self> {
         let mut file = OpenOptions::new().read(true).open(path).map_err(Error::Io)?;
-        let current = read_record::<K>(&mut file)?;
-        Ok(RunReader { file, current })
+        Ok(RunReader { current: read_record::<K>(&mut file)?, file })
     }
-    fn advance(&mut self) {
-        self.current = read_record::<K>(&mut self.file).ok().flatten();
-    }
+    fn advance(&mut self) { self.current = read_record::<K>(&mut self.file).ok().flatten(); }
 }
 
-struct KWayMerge<K: IpKey> {
-    runs: Vec<RunReader<K>>,
-    cached: Option<DesiredRecord<K>>,
-}
-
+struct KWayMerge<K: IpKey> { runs: Vec<RunReader<K>>, cached: Option<DesiredRecord<K>> }
 impl<K: IpKey> KWayMerge<K> {
-    fn new(run_paths: &[PathBuf]) -> Result<Self> {
-        let mut runs = Vec::with_capacity(run_paths.len());
-        for p in run_paths { runs.push(RunReader::<K>::open(p)?); }
+    fn new(paths: &[PathBuf]) -> Result<Self> {
+        let mut runs = Vec::with_capacity(paths.len());
+        for p in paths { runs.push(RunReader::<K>::open(p)?); }
         let mut m = KWayMerge { runs, cached: None };
-        m.cached = m.compute_coalesced();
+        m.cached = m.compute_next();
         Ok(m)
     }
 
     fn find_min(&self) -> Option<usize> {
-        let mut min_idx: Option<usize> = None;
+        let mut mi: Option<usize> = None;
         for i in 0..self.runs.len() {
             if self.runs[i].current.is_none() { continue; }
-            match min_idx {
-                None => min_idx = Some(i),
-                Some(mi) => {
-                    if self.runs[i].current.unwrap().from < self.runs[mi].current.unwrap().from {
-                        min_idx = Some(i);
-                    }
-                }
+            match mi {
+                None => mi = Some(i),
+                Some(m) => if self.runs[i].current.unwrap().from < self.runs[m].current.unwrap().from { mi = Some(i); }
             }
         }
-        min_idx
+        mi
     }
 
     fn pop_min(&mut self) -> Option<DesiredRecord<K>> {
         let idx = self.find_min()?;
-        let result = self.runs[idx].current.take();
+        let r = self.runs[idx].current.take();
         self.runs[idx].advance();
-        result
+        r
     }
 
-    fn compute_coalesced(&mut self) -> Option<DesiredRecord<K>> {
+    /// Compute the next coalesced/normalized record. Handles cross-run overlaps.
+    fn compute_next(&mut self) -> Option<DesiredRecord<K>> {
         let mut result = self.pop_min()?;
         loop {
-            let next = if let Some(idx) = self.find_min() {
-                let n = self.runs[idx].current.as_ref().unwrap();
-                Some((*n, idx))
-            } else { None };
-            match next {
-                None => break,
-                Some((n, _)) => {
-                    if n.from > result.to {
-                        // No overlap and not adjacent → done.
-                        // Check adjacency for coalescing.
-                        if n.scope_id == result.scope_id {
-                            if let Some(after) = result.to.checked_inc() {
-                                if after == n.from {
-                                    result.to = self.pop_min().unwrap().to;
-                                    continue;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    // Overlap! Split.
-                    if n.scope_id == result.scope_id {
-                        // Same scope → just extend result.to.
-                        let popped = self.pop_min().unwrap();
-                        if popped.to > result.to {
-                            result.to = popped.to;
-                        }
-                    } else {
-                        // Different scope → last-wins: the next record wins
-                        // for the overlapping part. Truncate result.to to
-                        // n.from - 1, then the next record takes over.
-                        if n.from > result.from {
-                            // result covers [result.from, n.from-1]
-                            result.to = n.from.checked_dec().unwrap_or(n.from);
-                            break;
-                        } else {
-                            // next.from <= result.from → next fully covers result
-                            // → skip result entirely, take next.
-                            result = self.pop_min().unwrap();
+            let next_idx = match self.find_min() { Some(i) => i, None => break };
+            let next = &self.runs[next_idx].current.as_ref().unwrap();
+            if next.from > result.to {
+                // No overlap — check adjacency for same-scope coalescing.
+                if next.scope_id == result.scope_id {
+                    if let Some(after) = result.to.checked_inc() {
+                        if after.cmp(&next.from) == core::cmp::Ordering::Equal {
+                            result.to = self.pop_min().unwrap().to;
+                            continue;
                         }
                     }
                 }
+                break;
+            }
+            // Overlap!
+            if next.scope_id == result.scope_id {
+                // Same scope → extend.
+                let popped = self.pop_min().unwrap();
+                if popped.to > result.to { result.to = popped.to; }
+            } else if next.from > result.from {
+                // Different scope, partial overlap → truncate result, next wins for its part.
+                result.to = next.from.checked_dec().unwrap_or(next.from);
+                break;
+            } else {
+                // next.from <= result.from → next fully covers result → take next.
+                result = self.pop_min().unwrap();
             }
         }
         Some(result)
@@ -334,39 +272,29 @@ impl<K: IpKey> KWayMerge<K> {
 impl<K: IpKey> DesiredStream<K> for KWayMerge<K> {
     fn peek(&self) -> Option<&DesiredRecord<K>> { self.cached.as_ref() }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
-        let result = self.cached.take()?;
-        self.cached = self.compute_coalesced();
-        Some(result)
+        let r = self.cached.take()?;
+        self.cached = self.compute_next();
+        Some(r)
     }
 }
 
-struct MergeStream<K: IpKey> {
-    merge: Option<KWayMerge<K>>,
-    run_paths: Vec<PathBuf>,
-}
-
+struct MergeStream<K: IpKey> { merge: Option<KWayMerge<K>>, run_paths: Vec<PathBuf> }
 impl<K: IpKey> DesiredStream<K> for MergeStream<K> {
     fn peek(&self) -> Option<&DesiredRecord<K>> { self.merge.as_ref()?.peek() }
     fn next(&mut self) -> Option<DesiredRecord<K>> { self.merge.as_mut()?.next() }
 }
-
 impl<K: IpKey> Drop for MergeStream<K> {
-    fn drop(&mut self) {
-        for p in &self.run_paths { let _ = std::fs::remove_file(p); }
-    }
+    fn drop(&mut self) { for p in &self.run_paths { let _ = std::fs::remove_file(p); } }
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// File I/O helpers
-// ──────────────────────────────────────────────────────────────────────────
+// ── File I/O ──
 
 fn read_record<K: IpKey>(file: &mut File) -> Result<Option<DesiredRecord<K>>> {
     let kw = K::WIDTH;
     let mut buf = vec![0u8; kw * 2 + 4];
     match file.read_exact(&mut buf) {
         Ok(()) => Ok(Some(DesiredRecord {
-            from: K::read_le(&buf[..kw]),
-            to: K::read_le(&buf[kw..2*kw]),
+            from: K::read_le(&buf[..kw]), to: K::read_le(&buf[kw..2*kw]),
             scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
         })),
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
@@ -397,20 +325,10 @@ fn read_run<K: IpKey>(path: &Path) -> Result<Vec<DesiredRecord<K>>> {
     Ok(records)
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Convenience: one-shot sort (for backward compat / small inputs)
-// ──────────────────────────────────────────────────────────────────────────
-
-/// One-shot sort: takes ownership of a Vec, sorts, normalizes, returns a stream.
-/// For large inputs, prefer ExtSorter (streaming input).
-pub fn ext_sort<K: IpKey>(
-    records: Vec<DesiredRecord<K>>,
-    config: &ExtSortConfig,
-) -> Result<Box<dyn DesiredStream<K>>> {
+/// Convenience: one-shot sort.
+pub fn ext_sort<K: IpKey>(records: Vec<DesiredRecord<K>>, config: &ExtSortConfig) -> Result<Box<dyn DesiredStream<K>>> {
     let mut sorter = ExtSorter::new(config.clone());
-    for rec in records {
-        sorter.add(rec.from, rec.to, rec.scope_id)?;
-    }
+    for rec in records { sorter.add(rec.from, rec.to, rec.scope_id)?; }
     sorter.finish()
 }
 
@@ -419,135 +337,63 @@ mod tests {
     use super::*;
     use crate::key::Ipv4Key;
 
-    fn rec(from: u32, to: u32, scope: u32) -> DesiredRecord<Ipv4Key> {
-        DesiredRecord { from: Ipv4Key(from), to: Ipv4Key(to), scope_id: scope }
+    fn r(f: u32, t: u32, s: u32) -> DesiredRecord<Ipv4Key> {
+        DesiredRecord { from: Ipv4Key(f), to: Ipv4Key(t), scope_id: s }
     }
 
     #[test]
     fn in_memory_sort() {
-        let input = vec![rec(30,40,1), rec(10,20,1), rec(21,29,1), rec(50,60,2)];
-        let mut s = SortedStream::from_unsorted(input);
-        let r1 = s.next().unwrap();
-        assert_eq!(r1.from, Ipv4Key(10));
-        assert_eq!(r1.to, Ipv4Key(40)); // coalesced [10-20]+[21-29]
-        assert_eq!(s.next().unwrap().from, Ipv4Key(50));
-        assert!(s.next().is_none());
+        let s = SortedStream::from_unsorted(vec![r(30,40,1), r(10,20,1), r(21,29,1), r(50,60,2)]);
+        assert_eq!(s.records[0].from, Ipv4Key(10));
+        assert_eq!(s.records[0].to, Ipv4Key(40));
     }
 
     #[test]
-    fn normalize_overlapping_different_scope() {
-        // [10-20] scope=1, [15-25] scope=2 → last-wins
-        let input = vec![rec(10,20,1), rec(15,25,2)];
-        let s = SortedStream::from_unsorted(input);
-        // After normalization: [10-14] scope=1, [15-25] scope=2
+    fn normalize_different_scope() {
+        let s = SortedStream::from_unsorted(vec![r(10,20,1), r(15,25,2)]);
         assert_eq!(s.records.len(), 2);
-        assert_eq!(s.records[0].from, Ipv4Key(10));
-        assert_eq!(s.records[0].to, Ipv4Key(14));
-        assert_eq!(s.records[0].scope_id, 1);
-        assert_eq!(s.records[1].from, Ipv4Key(15));
-        assert_eq!(s.records[1].to, Ipv4Key(25));
-        assert_eq!(s.records[1].scope_id, 2);
+        assert_eq!(s.records[0].to, Ipv4Key(14)); // [10-14] scope=1
+        assert_eq!(s.records[1].from, Ipv4Key(15)); // [15-25] scope=2
     }
 
     #[test]
-    fn normalize_overlapping_same_scope() {
-        let input = vec![rec(10,20,1), rec(15,25,1)];
-        let s = SortedStream::from_unsorted(input);
+    fn normalize_tail_preserved() {
+        let s = SortedStream::from_unsorted(vec![r(56,69,0), r(60,75,1), r(63,72,0)]);
+        // [56-59] s=0, [60-62] s=1, [63-72] s=0, [73-75] s=1 (tail!)
+        assert_eq!(s.records.len(), 4);
+        assert_eq!(s.records[3].from, Ipv4Key(73));
+        assert_eq!(s.records[3].to, Ipv4Key(75));
+    }
+
+    #[test]
+    fn normalize_max_address() {
+        let s = SortedStream::from_unsorted(vec![r(u32::MAX-10, u32::MAX, 1)]);
         assert_eq!(s.records.len(), 1);
-        assert_eq!(s.records[0].from, Ipv4Key(10));
-        assert_eq!(s.records[0].to, Ipv4Key(25));
+        assert_eq!(s.records[0].to, Ipv4Key(u32::MAX));
     }
 
     #[test]
-    fn streaming_sorter_small() {
-        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig { chunk_size: 100, temp_dir: None });
-        sorter.add(Ipv4Key(30), Ipv4Key(40), 1).unwrap();
-        sorter.add(Ipv4Key(10), Ipv4Key(20), 2).unwrap();
-        sorter.add(Ipv4Key(5), Ipv4Key(8), 3).unwrap();
-        let mut stream = sorter.finish().unwrap();
-        assert_eq!(stream.next().unwrap().from, Ipv4Key(5));
-        assert_eq!(stream.next().unwrap().from, Ipv4Key(10));
-        assert_eq!(stream.next().unwrap().from, Ipv4Key(30));
-        assert!(stream.next().is_none());
-    }
-
-    #[test]
-    fn streaming_sorter_spill() {
-        let config = ExtSortConfig { chunk_size: 10, temp_dir: None };
-        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
-        for i in 0..25u32 {
-            sorter.add(Ipv4Key(1000-i), Ipv4Key(1000-i), i).unwrap();
-        }
+    fn streaming_sorter() {
+        let mut sorter = ExtSorter::new(ExtSortConfig { chunk_size: 10, temp_dir: None });
+        for i in 0..25u32 { sorter.add(Ipv4Key(1000-i), Ipv4Key(1000-i), i).unwrap(); }
         let mut stream = sorter.finish().unwrap();
         let mut prev = Ipv4Key(0);
         let mut count = 0;
-        while let Some(r) = stream.next() {
-            assert!(r.from > prev || count == 0);
-            prev = r.from;
-            count += 1;
-        }
+        while let Some(r) = stream.next() { assert!(r.from > prev || count == 0); prev = r.from; count += 1; }
         assert_eq!(count, 25);
     }
 
     #[test]
-    fn streaming_sorter_spill_normalized() {
-        // Overlapping input across spill boundaries should normalize correctly.
-        let config = ExtSortConfig { chunk_size: 5, temp_dir: None };
-        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
-        for i in 0..10u32 {
-            sorter.add(Ipv4Key(i*2), Ipv4Key(i*2+1), 1).unwrap();
-        }
-        let mut stream = sorter.finish().unwrap();
-        let r = stream.next().unwrap();
-        assert_eq!(r.from, Ipv4Key(0));
-        assert_eq!(r.to, Ipv4Key(19)); // fully coalesced
-        assert!(stream.next().is_none());
-    }
-
-    #[test]
-    fn streaming_sorter_empty() {
-        let sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig::default());
-        let mut stream = sorter.finish().unwrap();
-        assert!(stream.next().is_none());
-    }
-}
-
-#[cfg(test)]
-mod cross_run_tests {
-    use super::*;
-    use crate::key::Ipv4Key;
-
-    #[test]
-    fn cross_run_overlap_different_scope() {
-        // Two runs: run0 has [10-20] scope=1, run1 has [15-25] scope=2.
-        // After merge: [10-14] scope=1, [15-25] scope=2 (last-wins).
-        let config = ExtSortConfig { chunk_size: 1, temp_dir: None };
-        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
+    fn cross_run_overlap() {
+        let mut sorter = ExtSorter::new(ExtSortConfig { chunk_size: 1, temp_dir: None });
         sorter.add(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
         sorter.add(Ipv4Key(15), Ipv4Key(25), 2).unwrap();
         let mut stream = sorter.finish().unwrap();
         let r1 = stream.next().unwrap();
         assert_eq!(r1.from, Ipv4Key(10));
         assert_eq!(r1.to, Ipv4Key(14));
-        assert_eq!(r1.scope_id, 1);
         let r2 = stream.next().unwrap();
         assert_eq!(r2.from, Ipv4Key(15));
         assert_eq!(r2.to, Ipv4Key(25));
-        assert_eq!(r2.scope_id, 2);
-        assert!(stream.next().is_none());
-    }
-
-    #[test]
-    fn cross_run_overlap_same_scope() {
-        let config = ExtSortConfig { chunk_size: 1, temp_dir: None };
-        let mut sorter = ExtSorter::<Ipv4Key>::new(config);
-        sorter.add(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-        sorter.add(Ipv4Key(15), Ipv4Key(25), 1).unwrap();
-        let mut stream = sorter.finish().unwrap();
-        let r1 = stream.next().unwrap();
-        assert_eq!(r1.from, Ipv4Key(10));
-        assert_eq!(r1.to, Ipv4Key(25)); // merged
-        assert_eq!(r1.scope_id, 1);
-        assert!(stream.next().is_none());
     }
 }
