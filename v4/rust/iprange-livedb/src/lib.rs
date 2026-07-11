@@ -46,6 +46,7 @@ pub mod writer;
 pub mod migrate;
 pub mod extsort;
 pub mod scope_table;
+pub mod interval;
 #[cfg(feature = "os")]
 pub mod readers;
 
