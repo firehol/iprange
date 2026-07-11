@@ -86,6 +86,7 @@ func OpenReaderTable(dbPath string) (*ReaderTable, error) {
 	// Atomic creation: O_CREATE|O_EXCL prevents the stat-then-create race.
 	f, err := os.OpenFile(readersPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	if err == nil {
+		// Initialize size BEFORE closing so concurrent openers see a complete file.
 		f.Truncate(4096)
 		f.Close()
 	} else if !os.IsExist(err) {
@@ -212,16 +213,24 @@ func (t *ReaderTable) findFreeSlot() (int, error) {
 
 func (t *ReaderTable) writeSlot(slot int, pid, readerID uint32, txnID uint64, root uint32, height uint32) {
 	off := slot * slotSize
-	putU32(t.data, off+slotPidOff, pid)
-	putU32(t.data, off+slotReaderIDOff, readerID)
-	putU64(t.data, off+slotTxnIDOff, txnID)
-	putU32(t.data, off+slotRootOff, root)
+	// Write fields in reverse publication order: height, root, txnID, readerID, PID last.
+	// PID is the "publish" marker — a scanning writer only considers a slot valid
+	// when PID != 0, by which point all other fields are already written.
 	putU32(t.data, off+slotHeightOff, height)
+	putU32(t.data, off+slotRootOff, root)
+	putU64(t.data, off+slotTxnIDOff, txnID)
+	putU32(t.data, off+slotReaderIDOff, readerID)
+	putU32(t.data, off+slotPidOff, pid) // publish marker — write last
 }
 
 func (t *ReaderTable) clearSlot(slot int) {
 	off := slot * slotSize
+	// Clear PID first (unpublish), then clear other fields.
 	putU32(t.data, off+slotPidOff, 0)
+	putU32(t.data, off+slotReaderIDOff, 0)
+	putU64(t.data, off+slotTxnIDOff, 0)
+	putU32(t.data, off+slotRootOff, 0)
+	putU32(t.data, off+slotHeightOff, 0)
 }
 
 func (t *ReaderTable) slotPid(slot int) uint32 {

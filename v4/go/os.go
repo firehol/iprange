@@ -191,10 +191,14 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		return nil, err
 	}
 
+	// Query reader roots for MVCC-safe free page derivation.
+	readerRoots := readerTable.ReaderRoots()
+	w.DeriveFreePagesFromReaders(readerRoots)
+
 	return &FileWriter[K]{
 		w:           w,
 		store:       store,
-		file:        file, // keeps LOCK_EX alive
+		file:        file,
 		readerTable: readerTable,
 		path:        path,
 	}, nil
@@ -206,7 +210,15 @@ func (fw *FileWriter[K]) Delete(from, to K) (Changed, error)   { return fw.w.Del
 func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error {
 	return fw.w.Append(from, to, scopeID)
 }
-func (fw *FileWriter[K]) Commit(updatedUnix uint64) error { return fw.w.Commit(updatedUnix) }
+func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
+	if err := fw.w.Commit(updatedUnix); err != nil {
+		return err
+	}
+	// Re-derive free pages with reader roots for MVCC safety.
+	readerRoots := fw.readerTable.ReaderRoots()
+	fw.w.DeriveFreePagesFromReaders(readerRoots)
+	return nil
+}
 func (fw *FileWriter[K]) RecordCount() uint64              { return fw.w.RecordCount() }
 func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error  { return fw.w.Scan(f) }
 

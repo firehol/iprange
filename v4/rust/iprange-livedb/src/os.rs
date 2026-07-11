@@ -121,10 +121,12 @@ impl<K: IpKey> FileWriter<K> {
         } else { meta_b.total_pages } as u32;
 
         let store = MmapStore::open(file.try_clone().map_err(Error::Io)?, committed_pages)?;
-        let writer = Writer::<K>::open(Box::new(store))?;
+        let mut writer = Writer::<K>::open(Box::new(store))?;
 
-        // Open reader table (for future oldest_reader queries).
-        let reader_table = ReaderTable::open(path)?;
+        // Open reader table and query reader roots for MVCC-safe free derivation.
+        let mut reader_table = ReaderTable::open(path)?;
+        let reader_roots = reader_table.reader_roots();
+        writer.derive_free_pages_from_readers(&reader_roots);
 
         Ok(FileWriter {
             writer,
@@ -137,7 +139,13 @@ impl<K: IpKey> FileWriter<K> {
     pub fn set(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.set(from, to, scope_id) }
     pub fn delete(&mut self, from: K, to: K) -> Result<Changed> { self.writer.delete(from, to) }
     pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.append(from, to, scope_id) }
-    pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> { self.writer.commit(updated_unixtime) }
+    pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
+        self.writer.commit(updated_unixtime)?;
+        // Re-derive free pages with reader roots for MVCC safety.
+        let reader_roots = self.reader_table.reader_roots();
+        self.writer.derive_free_pages_from_readers(&reader_roots);
+        Ok(())
+    }
     pub fn reader(&self) -> Result<Reader<'_>> { self.writer.reader() }
     pub fn scan(&self, f: impl FnMut(K, K, u32)) -> Result<()> { self.writer.scan(f) }
     pub fn record_count(&self) -> u64 { self.writer.record_count() }

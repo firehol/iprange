@@ -32,9 +32,10 @@ func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
 
 // sweepEvent is a sweep-line event for normalizeChunk.
 type sweepEvent struct {
-	pos     Uint128
+	pos      Uint128
 	isStart bool
-	idx     int
+	isMaxEnd bool
+	idx      int
 }
 
 // normalizeChunk resolves overlaps in a sorted chunk into disjoint segments
@@ -62,22 +63,23 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
 	// Sweep line: collect (position, is_start, record_index) events.
 	events := make([]sweepEvent, 0, len(sorted)*2)
 	for i, r := range sorted {
-		events = append(events, sweepEvent{pos: r.From.toU128(), isStart: true, idx: i})
+		events = append(events, sweepEvent{pos: r.From.toU128(), isStart: true, isMaxEnd: false, idx: i})
 		if after, ok := r.To.checkedInc(); ok {
-			events = append(events, sweepEvent{pos: after.toU128(), isStart: false, idx: i})
+			events = append(events, sweepEvent{pos: after.toU128(), isStart: false, isMaxEnd: false, idx: i})
 		} else {
-			// To is family_max: synthetic end at u128 max so the final
-			// segment is processed (fixes tail loss at max address).
-			events = append(events, sweepEvent{pos: Uint128{Hi: maxUint64, Lo: maxUint64}, isStart: false, idx: i})
+			// To is family_max: use a flag instead of a sentinel value.
+			// u128::MAX is a valid IPv6 address and would collide.
+			events = append(events, sweepEvent{pos: Uint128{}, isStart: false, isMaxEnd: true, idx: i})
 		}
 	}
 	// Sort by position, then ends before starts at the same position.
-	sort.Slice(events, func(i, j int) bool {
+		sort.Slice(events, func(i, j int) bool {
+		// maxEnd events sort after everything.
+		if events[i].isMaxEnd { return false }
+		if events[j].isMaxEnd { return true }
 		c := cmpU128(events[i].pos, events[j].pos)
-		if c != 0 {
-			return c < 0
-		}
-		return !events[i].isStart && events[j].isStart
+		if c != 0 { return c < 0 }
+		return events[i].isStart && !events[j].isStart
 	})
 
 	// Sweep: maintain active record indices. At each segment, last-wins = highest idx.

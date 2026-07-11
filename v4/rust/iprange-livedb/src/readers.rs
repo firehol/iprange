@@ -166,11 +166,14 @@ impl ReaderTable {
     fn write_slot(&mut self, slot: usize, pid: u32, reader_id: u32, txn_id: u64, root: u32, height: u32) {
         let off = slot * SLOT_SIZE;
         let b = &mut self.mmap[off..off + SLOT_SIZE];
-        b[SLOT_PID_OFF..SLOT_PID_OFF+4].copy_from_slice(&pid.to_le_bytes());
-        b[SLOT_RID_OFF..SLOT_RID_OFF+4].copy_from_slice(&reader_id.to_le_bytes());
-        b[SLOT_TXN_OFF..SLOT_TXN_OFF+8].copy_from_slice(&txn_id.to_le_bytes());
-        b[SLOT_ROOT_OFF..SLOT_ROOT_OFF+4].copy_from_slice(&root.to_le_bytes());
+        // Write fields in reverse publication order. PID is the "publish" marker —
+        // a scanning writer only considers a slot valid when PID != 0, by which
+        // point all other fields are already written.
         b[SLOT_HEIGHT_OFF..SLOT_HEIGHT_OFF+4].copy_from_slice(&height.to_le_bytes());
+        b[SLOT_ROOT_OFF..SLOT_ROOT_OFF+4].copy_from_slice(&root.to_le_bytes());
+        b[SLOT_TXN_OFF..SLOT_TXN_OFF+8].copy_from_slice(&txn_id.to_le_bytes());
+        b[SLOT_RID_OFF..SLOT_RID_OFF+4].copy_from_slice(&reader_id.to_le_bytes());
+        b[SLOT_PID_OFF..SLOT_PID_OFF+4].copy_from_slice(&pid.to_le_bytes()); // publish last
     }
 
     fn clear_slot(&mut self, slot: usize) {
