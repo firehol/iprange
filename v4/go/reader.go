@@ -115,16 +115,7 @@ func (r *Reader) ScopeResolve(scopeID uint32) []byte {
 	if r.meta.scopeTableRoot == 0 {
 		return nil
 	}
-	entries, err := readAllScopes(r.bytes, r.meta.scopeTableRoot)
-	if err != nil {
-		return nil
-	}
-	for _, e := range entries {
-		if e.ScopeID == scopeID {
-			return e.Bitmap
-		}
-	}
-	return nil
+	return findScope(r.bytes, r.meta.scopeTableRoot, scopeID)
 }
 
 func (r *Reader) scanNode(pgno uint32, kw int, f func([]byte, []byte, uint32)) error {
