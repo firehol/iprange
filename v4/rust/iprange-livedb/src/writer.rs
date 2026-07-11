@@ -54,6 +54,9 @@ pub struct Writer<K: IpKey> {
     // Same fixed-array approach.
     reuse_buf: [u32; 64],
     reuse_count: usize,
+    /// Committed-prefix pages freed this txn (cross-txn reuse only).
+    committed_free_buf: [u32; 64],
+    committed_free_count: usize,
     /// Pages freed in txn_id <= this are safe to reclaim (from reader registration).
     /// 0 = no readers registered → only reclaim growth-region frees.
     safe_reclaim_txn_id: u64,
@@ -62,6 +65,7 @@ pub struct Writer<K: IpKey> {
     scope_table_root_cache: u32,
     /// When true, alloc_or_reuse skips txn_free_buf (migration safety).
     migration_mode: bool,
+    pub(crate) alloc_count: u64,
     _k: PhantomData<K>,
 }
 
@@ -92,12 +96,15 @@ impl<K: IpKey> Writer<K> {
             txn_free_chain: 0,
             reuse_buf: [0u32; 64],
             reuse_count: 0,
+            committed_free_buf: [0u32; 64],
+            committed_free_count: 0,
             safe_reclaim_txn_id: 0,
             scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
             scope_table_root_cache: 0,
             migration_mode: false,
+            alloc_count: 0,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -152,10 +159,13 @@ impl<K: IpKey> Writer<K> {
             txn_free_chain: 0,
             reuse_buf: [0u32; 64],
             reuse_count: 0,
+            committed_free_buf: [0u32; 64],
+            committed_free_count: 0,
             safe_reclaim_txn_id: 0,
             scope_registry: scope_reg,
             scope_table_root_cache: active.scope_table_root,
             migration_mode: false,
+            alloc_count: 0,
             _k: PhantomData,
         };
         // Load the committed free-list for page reuse.
@@ -202,14 +212,12 @@ impl<K: IpKey> Writer<K> {
 
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         self.check()?;
-        // Flush any remaining freed pages.
+        // Flush remaining growth-region frees (intra-txn reuse).
         if self.txn_free_count > 0 {
             self.build_free_list_linked()?;
         }
-        self.free_list_head = self.txn_free_chain;
 
         // Rebuild scope table (mode 2 only).
-        // Free old scope table pages so they're reclaimed.
         if self.scope_table_root_cache != 0 {
             self.free_scope_table_pages(self.scope_table_root_cache);
         }
@@ -252,50 +260,12 @@ impl<K: IpKey> Writer<K> {
     /// Read the committed free-list (TXN_FREE page chain) and populate the
     /// reuse buffer with freed DATA pages that are safe to reclaim.
     /// Consumed TXN_FREE metadata pages are themselves recycled into reuse_buf.
+/// Cross-transaction free-list loading is DISABLED.
+    /// Reusing committed-prefix pages causes infinite re-COW (the reused page
+    /// is still in [0, committed_pages), so cow_page treats it as committed
+    /// and COWs it again on every access). Space is reclaimed via compact().
     fn load_free_list(&mut self) {
         self.reuse_count = 0;
-        let mut meta_pgno = self.free_list_head;
-        let mut guard = 0u32;
-        while meta_pgno != 0 && guard < spec::TREE_HEIGHT_MAX {
-            guard += 1;
-            if meta_pgno as u64 >= self.store.total_pages() as u64 {
-                break;
-            }
-            let page = self.store.page(meta_pgno);
-            let h = PageHeader::decode(page);
-            if h.page_type != spec::PAGE_TYPE_TXN_FREE {
-                break;
-            }
-            let next_meta = u32_le(page, spec::TXN_FREE_NEXT);
-            let count = u32_le(page, spec::TXN_FREE_COUNT) as usize;
-            let freed_in = u64_le(page, spec::TXN_FREE_FREED_IN);
-            let safe = self.safe_reclaim_txn_id == 0 || freed_in < self.safe_reclaim_txn_id;
-            if safe {
-                // Load freed DATA pages into reuse_buf.
-                for i in 0..count {
-                    if self.reuse_count >= self.reuse_buf.len() {
-                        self.free_list_head = meta_pgno;
-                        return;
-                    }
-                    let freed_pgno = u32_le(page, spec::TXN_FREE_ARRAY + i * 4);
-                    self.reuse_buf[self.reuse_count] = freed_pgno;
-                    self.reuse_count += 1;
-                }
-                // The TXN_FREE metadata page itself is now consumed → recycle it.
-                if self.reuse_count < self.reuse_buf.len() {
-                    self.reuse_buf[self.reuse_count] = meta_pgno;
-                    self.reuse_count += 1;
-                } else {
-                    self.free_list_head = meta_pgno;
-                    return;
-                }
-            } else {
-                self.free_list_head = meta_pgno;
-                return;
-            }
-            meta_pgno = next_meta;
-        }
-        self.free_list_head = 0;
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
@@ -392,26 +362,78 @@ impl<K: IpKey> Writer<K> {
         }
         // 2. Cross-transaction reuse: pages freed in prior committed txns.
         if self.reuse_count > 0 {
+            eprintln!("[alloc] reuse_buf pop: {} (remaining: {})", self.reuse_buf[self.reuse_count - 1], self.reuse_count - 1);
             self.reuse_count -= 1;
             return Ok(self.reuse_buf[self.reuse_count]);
         }
         // 3. Growth: allocate at the end of the file.
-        self.store.alloc_page()
+        self.alloc_count += 1;
+        let p = self.store.alloc_page()?;
+        eprintln!("[alloc] GROWTH: page {}", p);
+        return Ok(p);
     }
 
     /// Track a freed page (COW victim). Records ALL freed pages including
     /// committed-prefix ones. Reclaim safety is checked at load time via
     /// freed_in_txn vs safe_reclaim_txn_id.
     #[inline]
+    /// Track a freed page. Only growth-region pages (pgno >= committed_pages)
+    /// are safe for intra-transaction reuse — committed-prefix pages may still
+    /// be read by concurrent readers using the old generation. Committed-prefix
+    /// pages are recorded for cross-transaction reuse only (subject to reader
+    /// coordination via safe_reclaim_txn_id).
     fn track_freed(&mut self, pgno: u32) -> Result<()> {
-        if self.txn_free_count < self.txn_free_buf.len() {
-            self.txn_free_buf[self.txn_free_count] = pgno;
-            self.txn_free_count += 1;
+        if pgno < self.committed_pages {
+            // Committed-prefix page: NOT safe for intra-txn reuse.
+            // Record for cross-txn reuse only (goes to TXN_FREE chain at commit).
+            // Store in a separate section of the buffer (after growth-region entries).
+            // We use a simple approach: put these directly into the TXN_FREE chain.
+            self.track_committed_free(pgno)?;
         } else {
-            self.build_free_list_linked()?;
-            self.txn_free_buf[0] = pgno;
-            self.txn_free_count = 1;
+            // Growth-region page: safe for intra-txn reuse.
+            if self.txn_free_count < self.txn_free_buf.len() {
+                self.txn_free_buf[self.txn_free_count] = pgno;
+                self.txn_free_count += 1;
+            } else {
+                self.build_free_list_linked()?;
+                self.txn_free_buf[0] = pgno;
+                self.txn_free_count = 1;
+            }
         }
+        Ok(())
+    }
+
+    /// Track a committed-prefix page for cross-transaction reuse only.
+    /// These go directly to the TXN_FREE metadata chain, not to txn_free_buf.
+    fn track_committed_free(&mut self, pgno: u32) -> Result<()> {
+        // Buffer committed-prefix frees in a separate fixed array.
+        if self.committed_free_count < self.committed_free_buf.len() {
+            self.committed_free_buf[self.committed_free_count] = pgno;
+            self.committed_free_count += 1;
+        } else {
+            self.flush_committed_frees()?;
+            self.committed_free_buf[0] = pgno;
+            self.committed_free_count = 1;
+        }
+        Ok(())
+    }
+
+    /// Flush committed-prefix frees to the TXN_FREE metadata chain.
+    fn flush_committed_frees(&mut self) -> Result<()> {
+        if self.committed_free_count == 0 { return Ok(()); }
+        let freed_in = self.committed_txn_id + 1;
+        let meta_pgno = self.store.alloc_page()?;
+        let page = self.store.page_mut(meta_pgno);
+        page.fill(0);
+        put_u32(page, spec::TXN_FREE_NEXT, self.txn_free_chain);
+        put_u32(page, spec::TXN_FREE_COUNT, self.committed_free_count as u32);
+        for i in 0..self.committed_free_count {
+            put_u32(page, spec::TXN_FREE_ARRAY + i * 4, self.committed_free_buf[i]);
+        }
+        put_u64(page, spec::TXN_FREE_FREED_IN, freed_in);
+        PageHeader::write(page, spec::PAGE_TYPE_TXN_FREE, 0, meta_pgno);
+        self.txn_free_chain = meta_pgno;
+        self.committed_free_count = 0;
         Ok(())
     }
 

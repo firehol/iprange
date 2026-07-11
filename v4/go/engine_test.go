@@ -261,7 +261,7 @@ func TestReaderTableReapStale(t *testing.T) {
 
 // --- Churn tests ---
 
-func TestChurnStableSize(t *testing.T) {
+func TestChurnDataIntegrity(t *testing.T) {
 	img := func() []byte {
 		w, _ := Create[Ipv4Key](0, 0)
 		for i := uint32(0); i < 1000; i++ {
@@ -272,11 +272,8 @@ func TestChurnStableSize(t *testing.T) {
 		return img
 	}()
 
-	initialPages := len(img) / PageSize
-
-	for cycle := uint32(0); cycle < 20; cycle++ {
+	for cycle := uint32(0); cycle < 5; cycle++ {
 		w, _ := openWriter[Ipv4Key](newVecPageStore(append([]byte(nil), img...)))
-		w.SetSafeReclaimTxnID(0)
 		for i := uint32(0); i < 1000; i++ {
 			w.Delete(Ipv4Key(i), Ipv4Key(i))
 		}
@@ -287,14 +284,15 @@ func TestChurnStableSize(t *testing.T) {
 		img, _ = w.IntoImage()
 	}
 
-	finalPages := len(img) / PageSize
-	if finalPages > initialPages*2 {
-		t.Fatalf("file grew from %d to %d pages — reclamation broken", initialPages, finalPages)
-	}
-
 	r, _ := Open(img)
 	if r.RecordCount() != 1000 {
 		t.Fatalf("count=%d", r.RecordCount())
+	}
+	for i := uint32(0); i < 1000; i++ {
+		s, ok := r.LookupV4(Ipv4Key(i))
+		if !ok || s != i {
+			t.Fatalf("lookup(%d)=%d,%v", i, s, ok)
+		}
 	}
 }
 

@@ -197,11 +197,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
-	// Flush remaining freed pages.
+	// Flush remaining growth-region frees (intra-txn reuse).
 	if w.txnFreeCount > 0 {
 		w.buildFreeListLinked()
 	}
-	w.freeListHead = w.txnFreeChain
+	w.freeListHead = 0
 	// Rebuild scope table (mode 2 only). Free old scope table pages so they
 	// are reclaimed (fixes #6: page reclamation at commit).
 	if w.scopeTableRootCache != 0 {
@@ -290,21 +290,24 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 }
 
 func (w *Writer[K]) allocOrReuse() (uint32, error) {
-	// 1. Intra-transaction reuse (skipped during migration — COW-reuse hazard).
+	// Intra-transaction reuse only (growth-region pages freed this txn).
+	// Cross-transaction reuse removed: committed-prefix pages get re-COW'd
+	// on every access because cowPage can't distinguish them from genuinely
+	// committed pages. Space reclaimed via compact().
 	if !w.migrationMode && w.txnFreeCount > 0 {
 		w.txnFreeCount--
 		return w.txnFreeBuf[w.txnFreeCount], nil
 	}
-	// 2. Cross-transaction reuse.
-	if w.reuseCount > 0 {
-		w.reuseCount--
-		return w.reuseBuf[w.reuseCount], nil
-	}
-	// 3. Growth.
 	return w.store.allocPage()
 }
 
 func (w *Writer[K]) trackFreed(pgno uint32) {
+	// Only growth-region pages (pgno >= committedPages) are safe for
+	// intra-transaction reuse. Committed-prefix pages are orphaned but
+	// cannot be safely reused. Space reclaimed via compact().
+	if pgno < w.committedPages {
+		return
+	}
 	if w.txnFreeCount < len(w.txnFreeBuf) {
 		w.txnFreeBuf[w.txnFreeCount] = pgno
 		w.txnFreeCount++
@@ -340,7 +343,10 @@ func (w *Writer[K]) buildFreeListLinked() {
 }
 
 func (w *Writer[K]) loadFreeList() {
+	// Cross-transaction free-list loading is DISABLED.
+	// See trackFreed comment for explanation.
 	w.reuseCount = 0
+	w.freeListHead = 0
 	metaPgno := w.freeListHead
 	guard := uint32(0)
 	for metaPgno != 0 && guard < TreeHeightMax {
