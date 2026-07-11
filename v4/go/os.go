@@ -42,20 +42,25 @@ func OpenMmap(path string) (*MmapReader, error) {
 	metaA := decodeMeta(data[:PageSize])
 	metaB := decodeMeta(data[PageSize : 2*PageSize])
 	var activeTxnID uint64
+	var activeRoot uint32
+	var activeHeight uint32
 	if metaA.txnID >= metaB.txnID {
 		activeTxnID = metaA.txnID
+		activeRoot = metaA.rootPgno
+		activeHeight = metaA.treeHeight
 	} else {
 		activeTxnID = metaB.txnID
+		activeRoot = metaB.rootPgno
+		activeHeight = metaB.treeHeight
 	}
 
-	// Register in the reader table — mandatory (not best-effort).
 	table, err := OpenReaderTable(path)
 	if err != nil {
 		syscall.Munmap(data)
 		file.Close()
 		return nil, fmt.Errorf("reader table: %w", err)
 	}
-	guard, err := table.Register(activeTxnID)
+	guard, err := table.Register(activeTxnID, activeRoot, activeHeight)
 	if err != nil {
 		table.Close()
 		syscall.Munmap(data)

@@ -231,7 +231,7 @@ func TestReaderTableRegister(t *testing.T) {
 	}
 	defer rt.Close()
 
-	guard, err := rt.Register(42)
+	guard, err := rt.Register(42, 5, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestReaderTableReapStale(t *testing.T) {
 	defer rt.Close()
 
 	// Write a slot with a dead PID
-	rt.writeSlot(5, 999999, 0, 1)
+	rt.writeSlot(5, 999999, 0, 1, 0, 0)
 
 	cleared := rt.ReapStale()
 	if cleared < 1 {

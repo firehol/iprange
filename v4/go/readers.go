@@ -27,6 +27,8 @@ const (
 	slotPidOff     = 0
 	slotReaderIDOff = 4
 	slotTxnIDOff   = 8
+	slotRootOff    = 16
+	slotHeightOff  = 20
 )
 
 // readerIDCounter is a process-local counter for unique reader IDs.
@@ -81,13 +83,13 @@ func (g *ReaderGuard) Close() error {
 // OpenReaderTable opens (or creates) the reader table for dbPath.
 func OpenReaderTable(dbPath string) (*ReaderTable, error) {
 	readersPath := dbPath + ".readers"
-	if _, err := os.Stat(readersPath); os.IsNotExist(err) {
-		f, err := os.OpenFile(readersPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-		if err != nil {
-			return nil, fmt.Errorf("create readers: %w", err)
-		}
+	// Atomic creation: O_CREATE|O_EXCL prevents the stat-then-create race.
+	f, err := os.OpenFile(readersPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	if err == nil {
 		f.Truncate(4096)
 		f.Close()
+	} else if !os.IsExist(err) {
+		return nil, fmt.Errorf("create readers: %w", err)
 	}
 
 	file, err := os.OpenFile(readersPath, os.O_RDWR, 0644)
@@ -118,7 +120,7 @@ func OpenReaderTable(dbPath string) (*ReaderTable, error) {
 // on a fresh open() of the file (flock locks are per-open-file-description,
 // so it is independent of the mmap-backed t.file). This serializes only
 // registration, not normal reads.
-func (t *ReaderTable) Register(txnID uint64) (*ReaderGuard, error) {
+func (t *ReaderTable) Register(txnID uint64, root uint32, height uint32) (*ReaderGuard, error) {
 	pid := uint32(os.Getpid())
 	readerID := nextReaderID()
 
@@ -137,12 +139,28 @@ func (t *ReaderTable) Register(txnID uint64) (*ReaderGuard, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.writeSlot(slot, pid, readerID, txnID)
+	t.writeSlot(slot, pid, readerID, txnID, root, height)
 	t.mySlot = slot
 	return &ReaderGuard{slot: slot, pid: pid, readerID: readerID, path: t.path}, nil
 }
 
 // OldestReaderTxnID returns the oldest active reader generation.
+// ReaderRoots returns all active reader (root, height) pairs.
+func (t *ReaderTable) ReaderRoots() [][2]uint32 {
+	var roots [][2]uint32
+	for i := 0; i < maxSlots; i++ {
+		pid := t.slotPid(i)
+		if pid != 0 && isProcessAlive(int(pid)) {
+			root := u32le(t.data, i*slotSize+slotRootOff)
+			height := u32le(t.data, i*slotSize+slotHeightOff)
+			if root != 0 {
+				roots = append(roots, [2]uint32{root, height})
+			}
+		}
+	}
+	return roots
+}
+
 func (t *ReaderTable) OldestReaderTxnID() uint64 {
 	oldest := uint64(^uint64(0))
 	for i := 0; i < maxSlots; i++ {
@@ -192,11 +210,13 @@ func (t *ReaderTable) findFreeSlot() (int, error) {
 	return 0, fmt.Errorf("reader table full")
 }
 
-func (t *ReaderTable) writeSlot(slot int, pid, readerID uint32, txnID uint64) {
+func (t *ReaderTable) writeSlot(slot int, pid, readerID uint32, txnID uint64, root uint32, height uint32) {
 	off := slot * slotSize
 	putU32(t.data, off+slotPidOff, pid)
 	putU32(t.data, off+slotReaderIDOff, readerID)
 	putU64(t.data, off+slotTxnIDOff, txnID)
+	putU32(t.data, off+slotRootOff, root)
+	putU32(t.data, off+slotHeightOff, height)
 }
 
 func (t *ReaderTable) clearSlot(slot int) {

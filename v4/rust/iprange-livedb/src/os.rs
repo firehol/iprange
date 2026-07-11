@@ -49,10 +49,14 @@ impl MmapReader {
 
         let meta_a = Meta::decode(&mmap[..PAGE_SIZE]);
         let meta_b = Meta::decode(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
-        let active_txn_id = if meta_a.txn_id >= meta_b.txn_id { meta_a.txn_id } else { meta_b.txn_id };
+        let (active_txn_id, active_root, active_height) = if meta_a.txn_id >= meta_b.txn_id {
+            (meta_a.txn_id, meta_a.root_pgno, meta_a.tree_height)
+        } else {
+            (meta_b.txn_id, meta_b.root_pgno, meta_b.tree_height)
+        };
 
         let mut table = ReaderTable::open(path)?;
-        let guard = table.register(active_txn_id)?;
+        let guard = table.register(active_txn_id, active_root, active_height)?;
 
         Ok(MmapReader { _file: file, mmap, _guard: guard, _table: table })
     }
@@ -65,7 +69,7 @@ impl MmapReader {
 pub struct FileWriter<K: IpKey> {
     writer: Writer<K>,
     _file: File,
-    _reader_table: ReaderTable,
+    reader_table: ReaderTable,
 }
 
 impl<K: IpKey> FileWriter<K> {
@@ -125,7 +129,7 @@ impl<K: IpKey> FileWriter<K> {
         Ok(FileWriter {
             writer,
             _file: file, // keeps LOCK_EX alive
-            _reader_table: reader_table,
+            reader_table,
         })
     }
 

@@ -316,6 +316,16 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 // deriveFreePages walks the committed tree to identify all unreachable pages.
 // Those become the free pool available for reuse in the next transaction.
 func (w *Writer[K]) deriveFreePages() {
+	w.deriveFreePagesWithReaders(nil)
+}
+
+// DeriveFreePagesFromReaders re-derives the free page set, also protecting
+// trees referenced by active readers.
+func (w *Writer[K]) DeriveFreePagesFromReaders(readerRoots [][2]uint32) {
+	w.deriveFreePagesWithReaders(readerRoots)
+}
+
+func (w *Writer[K]) deriveFreePagesWithReaders(readerRoots [][2]uint32) {
 	w.freePages = w.freePages[:0]
 	w.freePos = 0
 	total := int(w.store.totalPages())

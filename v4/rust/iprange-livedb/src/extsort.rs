@@ -83,21 +83,25 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
 
     // Sweep line: collect (position, is_start, record_index) events.
     #[derive(Clone, Copy)]
-    struct Event { pos: u128, is_start: bool, idx: usize }
+    struct Event { pos: u128, is_start: bool, is_max_end: bool, idx: usize }
     let mut events: Vec<Event> = Vec::with_capacity(sorted.len() * 2);
     for (i, r) in sorted.iter().enumerate() {
-        events.push(Event { pos: r.from.to_u128(), is_start: true, idx: i });
-        // For end: use to+1 (exclusive). Handle max address correctly.
+        events.push(Event { pos: r.from.to_u128(), is_start: true, is_max_end: false, idx: i });
         match r.to.checked_inc() {
-            Some(after) => events.push(Event { pos: after.to_u128(), is_start: false, idx: i }),
-            // to is family_max — add synthetic end at u128::MAX so the
-            // final segment is processed (fixes tail loss at max address).
-            None => events.push(Event { pos: u128::MAX, is_start: false, idx: i }),
+            Some(after) => events.push(Event { pos: after.to_u128(), is_start: false, is_max_end: false, idx: i }),
+            // to is family_max — use a flag instead of a sentinel value.
+            None => events.push(Event { pos: 0, is_start: false, is_max_end: true, idx: i }),
         }
     }
     events.sort_by(|a, b| {
-        a.pos.cmp(&b.pos)
-            .then_with(|| (a.is_start as u8).cmp(&(b.is_start as u8))) // ends before starts at same pos
+        // max_end events sort after everything (they represent "to the end").
+        match (a.is_max_end, b.is_max_end) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => a.pos.cmp(&b.pos)
+                .then_with(|| (a.is_start as u8).cmp(&(b.is_start as u8))),
+        }
     });
 
     // Sweep: maintain active record indices. At each segment, last-wins = highest idx.
@@ -127,9 +131,15 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
         if active.is_empty() { continue; }
 
         let seg_from = K::from_u128(pos);
-        // When next_pos is u128::MAX (synthetic end event), the segment
-        // extends to K::MAX (the family maximum), not K::from_u128(u128::MAX - 1).
-        let seg_to = if next_pos == u128::MAX { K::MAX } else { K::from_u128(next_pos - 1) };
+        // The segment ends at either the next event's position - 1, or K::MAX
+        // if the next event is a max_end flag.
+        let seg_to = if i < events.len() && events[i].is_max_end {
+            K::MAX
+        } else if i < events.len() {
+            K::from_u128(events[i].pos - 1)
+        } else {
+            break;
+        };
 
         // Last-wins: highest index in active.
         let max_idx = *active.iter().max().unwrap();
@@ -499,5 +509,31 @@ mod worker_bugs {
         assert_eq!(r3.to, Ipv4Key(30));
         assert_eq!(r3.scope_id, 1);
         assert!(stream.next().is_none());
+    }
+}
+
+#[cfg(test)]
+mod ipv6_max_tests {
+    use super::*;
+    use crate::key::Ipv6Key;
+
+    #[test]
+    fn ipv6_max_address_overlap() {
+        // Two records ending at the IPv6 maximum address.
+        let max = Ipv6Key::MAX;
+        let max_minus_1 = max.checked_dec().unwrap();
+
+        let s = SortedStream::from_unsorted(vec![
+            DesiredRecord { from: max_minus_1, to: max, scope_id: 1 },
+            DesiredRecord { from: max, to: max, scope_id: 2 },
+        ]);
+        // Expected: [max-1, max-1] scope=1, [max, max] scope=2
+        assert_eq!(s.records.len(), 2);
+        assert_eq!(s.records[0].from, max_minus_1);
+        assert_eq!(s.records[0].to, max_minus_1);
+        assert_eq!(s.records[0].scope_id, 1);
+        assert_eq!(s.records[1].from, max);
+        assert_eq!(s.records[1].to, max);
+        assert_eq!(s.records[1].scope_id, 2);
     }
 }

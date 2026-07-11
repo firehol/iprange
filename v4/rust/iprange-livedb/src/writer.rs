@@ -227,27 +227,38 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn derive_free_pages(&mut self) {
+        self.derive_free_pages_with_readers(&[]);
+    }
+
+    /// Derive free pages, also protecting trees referenced by active readers.
+    /// reader_roots: (root_pgno, height) pairs from the ReaderTable.
+    fn derive_free_pages_with_readers(&mut self, reader_roots: &[(u32, u32)]) {
         self.free_pages.clear();
         self.free_pos = 0;
         let total = self.store.total_pages() as usize;
-        if self.committed_root == 0 {
+        if self.committed_root == 0 && reader_roots.is_empty() {
             for pgno in 2..total { self.free_pages.push(pgno as u32); }
             return;
         }
         let mut reachable = PageSet::new(total);
-        reachable.insert(0);
-        reachable.insert(1);
-        // Walk the new committed tree.
-        self.mark_reachable(self.committed_root, &mut reachable);
+        reachable.insert(0); // meta 0
+        reachable.insert(1); // meta 1
+        // Walk the current committed tree.
+        if self.committed_root != 0 {
+            self.mark_reachable(self.committed_root, &mut reachable);
+        }
         if self.scope_table_root_cache != 0 {
             self.mark_scope_reachable(self.scope_table_root_cache, &mut reachable);
         }
-        // MVCC safety: also walk the OLD committed tree if it's different.
-        // This protects readers using the previous generation. A reader opened
-        // before the last commit is reading from prev_committed_root.
-        // Pages reachable from the old root must NOT be freed.
+        // MVCC safety: walk the previous committed tree.
         if self.prev_committed_root != 0 && self.prev_committed_root != self.committed_root {
             self.mark_reachable(self.prev_committed_root, &mut reachable);
+        }
+        // MVCC safety: walk ALL reader-referenced trees.
+        for &(root, _height) in reader_roots {
+            if root != 0 && !reachable.contains(root) {
+                self.mark_reachable(root, &mut reachable);
+            }
         }
         for pgno in 2..total {
             if !reachable.contains(pgno as u32) {
@@ -255,6 +266,12 @@ impl<K: IpKey> Writer<K> {
             }
         }
         self.private_pages.ensure_capacity(total);
+    }
+
+    /// Update the free page set using reader roots from the companion file.
+    /// Called by FileWriter after open and commit.
+    pub fn derive_free_pages_from_readers(&mut self, reader_roots: &[(u32, u32)]) {
+        self.derive_free_pages_with_readers(reader_roots);
     }
 
     fn mark_reachable(&self, pgno: u32, reachable: &mut PageSet) {
