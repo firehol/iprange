@@ -1,4 +1,4 @@
-//! v4 in-memory core benchmarks (scenarios 1-6 from SOW-0013).
+//! v4 in-memory core benchmarks (scenarios 1-6 from SOW-0013, v4.3 API).
 //!
 //! Run: cargo bench --manifest-path v4/rust/iprange-livedb/Cargo.toml --bench core
 //!
@@ -9,14 +9,22 @@
 //!   4. set_same   — write collision (re-set existing ranges)
 //!   5. hit        — lookup existing keys
 //!   6. miss       — lookup non-existing keys (gaps)
+//!   7. open_read  — Reader::open (trusted, no validate)
+//!   7b. open_validate — Reader::open + full §9 walk
+//!   8. migrate    — streaming migrate (100k → 100k, 20% changed)
+//!   9. feed_add_range — bitmap feed-bit OR over 1000 ranges (mode 1, 100k DB)
+//!   10. extsort   — external sort of 100k unsorted records
 //!
-//! All scenarios are parameterized by record count (10k, 100k, 1M) and use IPv4 with
-//! scope_width=1 (the simplest and most common production shape).
+//! All base scenarios are parameterized by record count (10k, 100k, 1M) and use IPv4
+//! with scope_mode=0 (scalar, the simplest and most common production shape).
 
 use criterion::{
     black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
 };
-use iprange_livedb::{Ipv4Key, Reader, Writer};
+use iprange_livedb::{
+    ext_sort, migrate::migrate, page_store::VecPageStore, DesiredRecord, ExtSortConfig,
+    Ipv4Key, MigrateOptions, Reader, SortedStream, Writer,
+};
 
 /// Deterministic LCG (identical constants to the v3 speed test and the Go harness).
 struct Lcg(u64);
@@ -63,14 +71,49 @@ fn gen_random(n: usize) -> Vec<(u32, u32)> {
     out
 }
 
-/// Build a committed writer from `ranges` using `append` (trusted ordered fast-path).
+/// Build a committed writer from `ranges` using `append` (trusted ordered fast-path),
+/// scalar scope_mode (0).
 fn build_db_append(ranges: &[(u32, u32)]) -> Writer<Ipv4Key> {
-    let mut w = Writer::<Ipv4Key>::create(1, 0);
+    build_db_append_mode(ranges, 0)
+}
+
+/// Build a committed writer in `scope_mode` using `append` (trusted ordered fast-path).
+fn build_db_append_mode(ranges: &[(u32, u32)], scope_mode: u8) -> Writer<Ipv4Key> {
+    let mut w = Writer::<Ipv4Key>::create(scope_mode, 0).unwrap();
     for &(f, t) in ranges {
-        w.append(Ipv4Key(f), Ipv4Key(t), &[1]).unwrap();
+        w.append(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
     }
     w.commit(0).unwrap();
     w
+}
+
+/// Build a desired stream from `ranges`, changing the scope on ~`change_pct`% of records
+/// (used by the migrate benchmark to exercise the merge changed-path).
+fn gen_desired_with_changes(ranges: &[(u32, u32)], change_pct: usize) -> Vec<DesiredRecord<Ipv4Key>> {
+    let denom = 100 / change_pct.max(1);
+    ranges
+        .iter()
+        .enumerate()
+        .map(|(i, &(f, t))| DesiredRecord {
+            from: Ipv4Key(f),
+            to: Ipv4Key(t),
+            scope_id: if i % denom == 0 { 2 } else { 1 },
+        })
+        .collect()
+}
+
+/// Generate `n` unsorted, possibly-overlapping desired records (extsort input).
+fn gen_unsorted_desired(n: usize) -> Vec<DesiredRecord<Ipv4Key>> {
+    let mut rng = Lcg::new(3);
+    let span = (n as u32 * 10).max(1000);
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let a = rng.next() % span;
+        let b = rng.next() % span;
+        let (from, to) = if a <= b { (a, b) } else { (b, a) };
+        out.push(DesiredRecord { from: Ipv4Key(from), to: Ipv4Key(to), scope_id: 1 });
+    }
+    out
 }
 
 const SIZES: &[usize] = &[10_000, 100_000, 1_000_000];
@@ -82,7 +125,7 @@ fn bench_scan(c: &mut Criterion) {
     for &n in SIZES {
         let ranges = gen_ordered(n);
         let w = build_db_append(&ranges);
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
         let r = Reader::open(&img).unwrap();
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &r, |b, r| {
@@ -105,9 +148,9 @@ fn bench_append(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &ranges, |b, ranges| {
             b.iter(|| {
-                let mut w = Writer::<Ipv4Key>::create(1, 0);
+                let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
                 for &(f, t) in ranges {
-                    w.append(Ipv4Key(f), Ipv4Key(t), &[1]).unwrap();
+                    w.append(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                 }
                 w.commit(0).unwrap();
                 black_box(w);
@@ -126,9 +169,9 @@ fn bench_set_random(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &ranges, |b, ranges| {
             b.iter(|| {
-                let mut w = Writer::<Ipv4Key>::create(1, 0);
+                let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
                 for &(f, t) in ranges {
-                    w.set(Ipv4Key(f), Ipv4Key(t), &[1]).unwrap();
+                    w.set(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                 }
                 w.commit(0).unwrap();
                 black_box(w);
@@ -152,7 +195,7 @@ fn bench_set_collision(c: &mut Criterion) {
                 |w| {
                     let mut w = w;
                     for &(f, t) in ranges {
-                        w.set(Ipv4Key(f), Ipv4Key(t), &[1]).unwrap();
+                        w.set(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                     }
                     black_box(w);
                 },
@@ -170,7 +213,7 @@ fn bench_lookup_hit(c: &mut Criterion) {
     for &n in SIZES {
         let ranges = gen_ordered(n);
         let w = build_db_append(&ranges);
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
         let r = Reader::open(&img).unwrap();
         // Keys that hit: the midpoint of each range.
         let keys: Vec<u32> = ranges.iter().map(|&(f, t)| f + (t - f) / 2).collect();
@@ -197,7 +240,7 @@ fn bench_lookup_miss(c: &mut Criterion) {
     for &n in SIZES {
         let ranges = gen_ordered(n);
         let w = build_db_append(&ranges);
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
         let r = Reader::open(&img).unwrap();
         // Keys that miss: the gaps between ranges (each gap is 1-16 wide; use gap midpoint).
         let mut keys = Vec::with_capacity(ranges.len());
@@ -231,7 +274,7 @@ fn bench_open_read(c: &mut Criterion) {
     for &n in SIZES {
         let ranges = gen_ordered(n);
         let w = build_db_append(&ranges);
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &img, |b, img| {
             b.iter(|| {
@@ -250,7 +293,7 @@ fn bench_open_validate(c: &mut Criterion) {
     for &n in SIZES {
         let ranges = gen_ordered(n);
         let w = build_db_append(&ranges);
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &img, |b, img| {
             b.iter(|| {
@@ -260,6 +303,93 @@ fn bench_open_validate(c: &mut Criterion) {
             });
         });
     }
+    group.finish();
+}
+
+// --- Scenario 8: streaming migrate (100k old → 100k desired, 20% changed) ---
+
+fn bench_migrate(c: &mut Criterion) {
+    let mut group = c.benchmark_group("8_migrate");
+    let n = 100_000;
+    let old_ranges = gen_ordered(n);
+    let w = build_db_append(&old_ranges);
+    let img = w.into_image().unwrap();
+    // Desired stream: same ranges, ~20% with a different scope_id (merge changed-path).
+    let desired = gen_desired_with_changes(&old_ranges, 20);
+    group.throughput(Throughput::Elements(n as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(n), &(&img, &desired), |b, (img, desired)| {
+        b.iter_batched(
+            || {
+                // Reopen a fresh writer over the committed image each iteration.
+                let store = VecPageStore::new(img.to_vec());
+                Writer::<Ipv4Key>::open(Box::new(store)).unwrap()
+            },
+            |mut w| {
+                let mut stream = SortedStream::from_unsorted(desired.to_vec());
+                let opts = MigrateOptions::<Ipv4Key>::default();
+                let counters = migrate(&mut w, &mut stream, &opts).unwrap();
+                w.commit(0).unwrap();
+                black_box(counters);
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+}
+
+// --- Scenario 9: feed_add_range (bitmap mode 1, 100k DB, feed bit over 1000 ranges) ---
+
+fn bench_feed_add_range(c: &mut Criterion) {
+    let mut group = c.benchmark_group("9_feed_add_range");
+    let n = 100_000;
+    let ranges = gen_ordered(n);
+    // Build the DB in bitmap scope_mode (1) so feed ops are valid.
+    let w = build_db_append_mode(&ranges, 1);
+    let img = w.into_image().unwrap();
+    // 1000 target ranges spread across a bounded key space (overlap the early DB region).
+    let feed_targets = gen_random(1000);
+    group.throughput(Throughput::Elements(1000));
+    group.bench_with_input(
+        BenchmarkId::from_parameter(n),
+        &(&img, &feed_targets),
+        |b, (img, feed_targets)| {
+            b.iter_batched(
+                || {
+                    let store = VecPageStore::new(img.to_vec());
+                    Writer::<Ipv4Key>::open(Box::new(store)).unwrap()
+                },
+                |mut w| {
+                    for &(f, t) in feed_targets.iter() {
+                        w.feed_add_range(Ipv4Key(f), Ipv4Key(t), 2).unwrap();
+                    }
+                    w.commit(0).unwrap();
+                    black_box(w);
+                },
+                criterion::BatchSize::LargeInput,
+            );
+        },
+    );
+    group.finish();
+}
+
+// --- Scenario 10: external sort (100k unsorted records) ---
+
+fn bench_extsort(c: &mut Criterion) {
+    let mut group = c.benchmark_group("10_extsort");
+    let n = 100_000;
+    let records = gen_unsorted_desired(n);
+    group.throughput(Throughput::Elements(n as u64));
+    group.bench_with_input(BenchmarkId::from_parameter(n), &records, |b, records| {
+        b.iter_batched(
+            || records.clone(),
+            |recs| {
+                let config = ExtSortConfig::default();
+                let stream = ext_sort::<Ipv4Key>(recs, &config).unwrap();
+                black_box(stream);
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
     group.finish();
 }
 
@@ -273,5 +403,8 @@ criterion_group!(
     bench_lookup_miss,
     bench_open_read,
     bench_open_validate,
+    bench_migrate,
+    bench_feed_add_range,
+    bench_extsort,
 );
 criterion_main!(benches);

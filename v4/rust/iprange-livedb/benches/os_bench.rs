@@ -1,9 +1,9 @@
-//! v4 OS-layer benchmarks (scenarios 7-9 from SOW-0013).
+//! v4 OS-layer benchmarks (scenarios 7-9 from SOW-0013, v4.3 API).
 //!
 //! Run: cargo bench --manifest-path v4/rust/iprange-livedb/Cargo.toml --bench os_bench
 //!
 //! Scenarios:
-//!   7. open_read    — MmapReader::open (file open + mmap + flock + §10 hardening)
+//!   7. open_read    — MmapReader::open (file open + mmap + reader registration + §10 hardening)
 //!   8. open_write   — FileWriter::open (file open + flock + mmap page store + free-set)
 //!   9. create_file  — FileWriter::create (O_EXCL + initial write + fsync)
 //!
@@ -52,10 +52,9 @@ fn make_db_file(tag: &str, n: usize) -> PathBuf {
         pid = std::process::id()
     ));
     let ranges = gen_ordered(n);
-    let mut fw = FileWriter::<Ipv4Key>::create(&path, 1, 0, std::time::Duration::from_secs(30))
-        .expect("create");
+    let mut fw = FileWriter::<Ipv4Key>::create(&path, 0, 0).expect("create");
     for &(f, t) in &ranges {
-        fw.set(Ipv4Key(f), Ipv4Key(t), &[1]).expect("set");
+        fw.set(Ipv4Key(f), Ipv4Key(t), 1).expect("set");
     }
     fw.commit(0).expect("commit");
     let _ = fw.close();
@@ -78,7 +77,7 @@ fn bench_open_read_file(c: &mut Criterion) {
                 let mr = MmapReader::open(path).unwrap();
                 let r = mr.reader().unwrap();
                 black_box(r);
-                // mr dropped here → munmap + release LOCK_SH
+                // mr dropped here → munmap + deregister from reader table
                 drop(mr);
             });
         });
@@ -101,8 +100,7 @@ fn bench_open_write_file(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &path, |b, path| {
             b.iter(|| {
-                let fw =
-                    FileWriter::<Ipv4Key>::open(path, std::time::Duration::from_secs(30)).unwrap();
+                let fw = FileWriter::<Ipv4Key>::open(path).unwrap();
                 let _ = black_box(fw.record_count());
                 // fw dropped here → munmap + release LOCK_EX
             });
@@ -132,15 +130,9 @@ fn bench_create_file(c: &mut Criterion) {
                     ))
                 },
                 |path| {
-                    let mut fw = FileWriter::<Ipv4Key>::create(
-                        &path,
-                        1,
-                        0,
-                        std::time::Duration::from_secs(30),
-                    )
-                    .unwrap();
+                    let mut fw = FileWriter::<Ipv4Key>::create(&path, 0, 0).unwrap();
                     for &(f, t) in ranges {
-                        fw.set(Ipv4Key(f), Ipv4Key(t), &[1]).unwrap();
+                        fw.set(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                     }
                     fw.commit(0).unwrap();
                     fw.close().unwrap();

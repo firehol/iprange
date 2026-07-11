@@ -112,10 +112,10 @@ impl<K: IpKey> TreeWalker<K> {
         self.try_leaf_next(store, pgno, idx + 1);
     }
 
-    fn descend_first(&mut self, store: &dyn crate::page_store::PageStore, pgno: u32, depth: u32) {
+    fn descend_first(&mut self, store: &dyn crate::page_store::PageStore, pgno: u32, _depth: u32) {
         let page = store.page(pgno);
         let h = PageHeader::decode(page);
-        if depth >= self.height {
+        if h.page_type == spec::PAGE_TYPE_LEAF {
             // Leaf level.
             let count = h.entry_count as usize;
             if count > 0 {
@@ -132,7 +132,7 @@ impl<K: IpKey> TreeWalker<K> {
         let child = branch.child(0);
         self.path[self.path_len as usize] = (pgno, 0);
         self.path_len += 1;
-        self.descend_first(store, child, depth + 1);
+        self.descend_first(store, child, _depth + 1);
     }
 
     fn try_leaf_next(&mut self, store: &dyn crate::page_store::PageStore, pgno: u32, idx: usize) {

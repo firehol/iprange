@@ -437,7 +437,7 @@ func (w *treeWalker[K]) descendFirst(pgno uint32, depth uint32) {
 	var zero K
 	page := w.page(pgno)
 	h := decodeHeader(page)
-	if depth >= w.height {
+	if h.pageType == PageTypeLeaf {
 		count := int(h.entryCount)
 		if count > 0 {
 			lv := newLeafView(page, count, w.kw)
