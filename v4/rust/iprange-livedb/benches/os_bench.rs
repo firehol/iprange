@@ -135,7 +135,7 @@ fn bench_create_file(c: &mut Criterion) {
                         fw.set(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                     }
                     fw.commit(0).unwrap();
-                    fw.close().unwrap();
+                    fw.close();
                     black_box(&path);
                 },
                 criterion::BatchSize::LargeInput,
