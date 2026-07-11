@@ -376,7 +376,91 @@ func TestNormalizeChunkSameScope(t *testing.T) {
 	}
 }
 
-// ─── ScopeRegistry HashMap interning tests (fixes #6) ───
+// ─── sweep-line normalizeChunk edge cases (ported from extsort.rs) ───
+
+func TestNormalizeChunkTailPreserved(t *testing.T) {
+	// [56-69]s0, [60-75]s1, [63-72]s0 → [56-59]s0, [60-62]s1, [63-72]s0, [73-75]s1 (tail!)
+	sorted := []DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(56), To: Ipv4Key(69), ScopeID: 0},
+		{From: Ipv4Key(60), To: Ipv4Key(75), ScopeID: 1},
+		{From: Ipv4Key(63), To: Ipv4Key(72), ScopeID: 0},
+	}
+	out := normalizeChunk(sorted)
+	if len(out) != 4 {
+		t.Fatalf("got %d segments want 4: %+v", len(out), out)
+	}
+	if out[3].From != 73 || out[3].To != 75 {
+		t.Fatalf("tail seg: [%v,%v] want [73,75]", uint32(out[3].From), uint32(out[3].To))
+	}
+}
+
+func TestNormalizeChunkMaxAddress(t *testing.T) {
+	// [MAX-10, MAX]s1 → single record, no end event (checkedInc fails at max)
+	sorted := []DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(maxUint32 - 10), To: Ipv4Key(maxUint32), ScopeID: 1},
+	}
+	out := normalizeChunk(sorted)
+	if len(out) != 1 {
+		t.Fatalf("got %d segments want 1", len(out))
+	}
+	if out[0].To != Ipv4Key(maxUint32) {
+		t.Fatalf("seg0 to=%v want MAX", uint32(out[0].To))
+	}
+}
+
+func TestFromUnsortedInMemoryCoalesce(t *testing.T) {
+	// [30-40]s1, [10-20]s1, [21-29]s1, [50-60]s2 → [10-40]s1, [50-60]s2
+	s := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(30), To: Ipv4Key(40), ScopeID: 1},
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
+		{From: Ipv4Key(21), To: Ipv4Key(29), ScopeID: 1},
+		{From: Ipv4Key(50), To: Ipv4Key(60), ScopeID: 2},
+	})
+	if len(s.records) != 2 {
+		t.Fatalf("got %d records want 2", len(s.records))
+	}
+	if s.records[0].From != 10 || s.records[0].To != 40 {
+		t.Fatalf("seg0: [%v,%v] want [10,40]", uint32(s.records[0].From), uint32(s.records[0].To))
+	}
+}
+
+func TestCrossRunOverlapSplit(t *testing.T) {
+	// chunk_size=1 → each record is its own run. Cross-run overlap with
+	// different scopes must be split: [10-14]s1, [15-25]s2.
+	sorter := NewExtSorter[Ipv4Key](&ExtSortConfig{ChunkSize: 1, TempDir: t.TempDir()})
+	sorter.Add(Ipv4Key(10), Ipv4Key(20), 1)
+	sorter.Add(Ipv4Key(15), Ipv4Key(25), 2)
+	stream, err := sorter.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1 := stream.Next()
+	if r1 == nil || r1.From != 10 || r1.To != 14 {
+		t.Fatalf("r1=%v want [10,14]", r1)
+	}
+	r2 := stream.Next()
+	if r2 == nil || r2.From != 15 || r2.To != 25 {
+		t.Fatalf("r2=%v want [15,25]", r2)
+	}
+	if stream.Next() != nil {
+		t.Fatal("expected EOF")
+	}
+}
+
+func TestSortedStreamClone(t *testing.T) {
+	original := FromUnsorted([]DesiredRecord[Ipv4Key]{
+		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
+	})
+	original.Next() // advance pos to 1
+	clone := original.Clone()
+	if clone.pos != 1 {
+		t.Fatalf("clone pos=%d want 1", clone.pos)
+	}
+	r := clone.Next()
+	if r != nil {
+		t.Fatal("clone should be exhausted")
+	}
+}
 
 func TestScopeRegistryHashMapIntern(t *testing.T) {
 	reg := NewScopeRegistry()

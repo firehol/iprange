@@ -7,13 +7,13 @@ import (
 )
 
 // MmapReader is a read-only mmap of a v4 file. Registers in the reader table
-// on open, deregisters on close (fixes #8: cross-process MVCC).
+// on open, deregisters on close.
 type MmapReader struct {
-	file    *os.File
-	data    []byte
-	guard   *ReaderGuard
-	table   *ReaderTable
-	path    string
+	file  *os.File
+	data  []byte
+	guard *ReaderGuard
+	table *ReaderTable
+	path  string
 }
 
 func OpenMmap(path string) (*MmapReader, error) {
@@ -48,9 +48,7 @@ func OpenMmap(path string) (*MmapReader, error) {
 		activeTxnID = metaB.txnID
 	}
 
-	// Register in the reader table — mandatory (not best-effort). A failure
-	// means the writer cannot know about this reader, risking premature page
-	// reclamation.
+	// Register in the reader table — mandatory (not best-effort).
 	table, err := OpenReaderTable(path)
 	if err != nil {
 		syscall.Munmap(data)
@@ -89,11 +87,12 @@ func (m *MmapReader) Close() error {
 	return m.file.Close()
 }
 
-// FileWriter is a file-backed writer using a writable MAP_SHARED mmap. Queries
-// the reader table to determine safe page reclamation (fixes #8).
+// FileWriter is a file-backed writer. Holds LOCK_EX for its entire lifetime
+// (serializes against other writers). Readers are never blocked.
 type FileWriter[K ipKey[K]] struct {
 	w           *Writer[K]
 	store       *mmapStore
+	file        *os.File // keeps LOCK_EX alive
 	readerTable *ReaderTable
 	path        string
 }
@@ -103,7 +102,6 @@ func CreateFile[K ipKey[K]](path string, scopeMode uint8, createdUnix uint64) (*
 	if err != nil {
 		return nil, fmt.Errorf("create: %w", err)
 	}
-	// Create initial image in memory.
 	w, err := Create[K](scopeMode, createdUnix)
 	if err != nil {
 		file.Close()
@@ -131,33 +129,30 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
-	// Brief LOCK_EX|LOCK_NB to serialize writer-open.
+	// LOCK_EX held for the entire lifetime — serializes writers.
 	fd := int(file.Fd())
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("locked: %w", err)
 	}
+
 	info, err := file.Stat()
 	if err != nil {
-		syscall.Flock(fd, syscall.LOCK_UN)
 		file.Close()
 		return nil, err
 	}
 	length := int(info.Size())
 	if length < 2*PageSize {
-		syscall.Flock(fd, syscall.LOCK_UN)
 		file.Close()
 		return nil, fmt.Errorf("file too small")
 	}
 	// Read meta to determine committed_pages.
 	buf := make([]byte, 2*PageSize)
 	if _, err := file.ReadAt(buf, 0); err != nil {
-		syscall.Flock(fd, syscall.LOCK_UN)
 		file.Close()
 		return nil, err
 	}
 	if string(buf[MetaMagic:MetaMagic+8]) != Magic {
-		syscall.Flock(fd, syscall.LOCK_UN)
 		file.Close()
 		return nil, fmt.Errorf("bad magic")
 	}
@@ -169,8 +164,6 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	} else {
 		committedPages = uint32(metaB.totalPages)
 	}
-	// Release open-time lock.
-	syscall.Flock(fd, syscall.LOCK_UN)
 
 	store, err := newMmapStore(file, committedPages)
 	if err != nil {
@@ -178,16 +171,12 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		return nil, err
 	}
 
-	// Open the reader table and query oldest_reader BEFORE openWriter —
-	// openWriter calls loadFreeList which populates reuse pages, and we need
-	// the oldest reader generation available right after open.
 	readerTable, err := OpenReaderTable(path)
 	if err != nil {
 		store.close()
 		file.Close()
 		return nil, fmt.Errorf("reader table: %w", err)
 	}
-	oldest := readerTable.OldestReaderTxnID()
 
 	w, err := openWriter[K](store)
 	if err != nil {
@@ -196,36 +185,68 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		file.Close()
 		return nil, err
 	}
-	w.SetSafeReclaimTxnID(oldest)
 
-	fw := &FileWriter[K]{w: w, store: store, readerTable: readerTable, path: path}
-
-	return fw, nil
+	return &FileWriter[K]{
+		w:           w,
+		store:       store,
+		file:        file, // keeps LOCK_EX alive
+		readerTable: readerTable,
+		path:        path,
+	}, nil
 }
 
+// Delegated API (core operations)
 func (fw *FileWriter[K]) Set(from, to K, scopeID uint32) error { return fw.w.Set(from, to, scopeID) }
-func (fw *FileWriter[K]) Delete(from, to K) (Changed, error) { return fw.w.Delete(from, to) }
-func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error { return fw.w.Append(from, to, scopeID) }
+func (fw *FileWriter[K]) Delete(from, to K) (Changed, error)   { return fw.w.Delete(from, to) }
+func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error {
+	return fw.w.Append(from, to, scopeID)
+}
+func (fw *FileWriter[K]) Commit(updatedUnix uint64) error { return fw.w.Commit(updatedUnix) }
+func (fw *FileWriter[K]) RecordCount() uint64              { return fw.w.RecordCount() }
+func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error  { return fw.w.Scan(f) }
+
+// Delegated API (feed operations)
 func (fw *FileWriter[K]) FeedAddRange(from, to K, feedBit uint32) error {
 	return fw.w.FeedAddRange(from, to, feedBit)
 }
 func (fw *FileWriter[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
 	return fw.w.FeedRemoveRange(from, to, feedBit)
 }
-func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
-	if err := fw.w.Commit(updatedUnix); err != nil {
-		return err
-	}
-	// After commit, refresh safe reclaim from the reader table.
-	fw.w.SetSafeReclaimTxnID(fw.readerTable.OldestReaderTxnID())
-	return nil
+
+// Delegated API (scope operations — mode 2)
+func (fw *FileWriter[K]) ScopeIntern(bitmap []byte) (uint32, error) {
+	return fw.w.ScopeIntern(bitmap)
 }
-func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
-func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error { return fw.w.Scan(f) }
+func (fw *FileWriter[K]) ScopeResolve(scopeID uint32) []byte {
+	return fw.w.ScopeResolve(scopeID)
+}
+
+// Delegated API (migration)
+func (fw *FileWriter[K]) Migrate(desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
+	return Migrate(fw.w, desired, opts)
+}
+
+func (fw *FileWriter[K]) MigrateFeed(feedBit uint32, desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
+	return MigrateFeed(fw.w, feedBit, desired, opts)
+}
+
+// Delegated API (overlap)
+func (fw *FileWriter[K]) AllToAllOverlap(onOverlap func(FeedOverlap)) error {
+	return AllToAllOverlap(fw.w, onOverlap)
+}
 
 func (fw *FileWriter[K]) Close() error {
-	fw.readerTable.Close()
-	fw.readerTable = nil
-	fw.store.close()
+	if fw.readerTable != nil {
+		fw.readerTable.Close()
+		fw.readerTable = nil
+	}
+	if fw.store != nil {
+		fw.store.close()
+		fw.store = nil
+	}
+	if fw.file != nil {
+		fw.file.Close() // releases LOCK_EX
+		fw.file = nil
+	}
 	return nil
 }

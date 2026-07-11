@@ -59,24 +59,17 @@ type DesiredStream[K ipKey[K]] interface {
 // Fixes blocker #3 (correct partial-overlap merge with boundary splitting).
 //
 // NOTE on the committed snapshot: the walker reads from a private copy of the
-// committed bytes. This is necessary because COW page reuse during the merge
-// can overwrite committed pages that the walker still needs — the intra-
-// transaction free pool (txnFreeBuf) allows allocOrReuse to immediately reuse
-// a page freed by cowPage, corrupting the walker's view. Eliminating this copy
-// requires preventing committed-page reuse during migration (tracked as a
-// future optimization).
+// committed bytes. With the v4.3 bitset COW model, committed tree pages are
+// never modified in-place during a transaction (cowPage always allocates a new
+// private page), so reading from the live store would also be safe. The
+// snapshot is retained as a defensive measure.
 func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
 	if opts == nil {
 		opts = &MigrateOptions[K]{}
 	}
 	counters := &MigrateCounters{}
 
-	// Enable migration mode to prevent the COW-reuse hazard during the merge.
-	w.SetMigrationMode(true)
-	defer w.SetMigrationMode(false)
-
-	// Snapshot the committed bytes — the walker needs a stable view because
-	// COW + page reuse can overwrite committed pages mid-scan.
+	// Snapshot the committed bytes — the walker needs a stable view.
 	committed := append([]byte(nil), w.store.committedBytes()...)
 	walker := newTreeWalker[K](committed, w.committedRoot, w.committedHeight)
 

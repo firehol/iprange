@@ -25,13 +25,7 @@ func MigrateFeed[K ipKey[K]](w *Writer[K], feedBit uint32, desired DesiredStream
 	_ = opts
 	counters := &MigrateCounters{}
 
-	// Enable migration mode to prevent the COW-reuse hazard during the merge.
-	w.SetMigrationMode(true)
-	defer w.SetMigrationMode(false)
-
-	// Snapshot the committed bytes — the walker needs a stable view because
-	// COW + page reuse can overwrite committed pages mid-scan (same rationale
-	// as Migrate in migrate.go).
+	// Snapshot the committed bytes — the walker needs a stable view.
 	committed := append([]byte(nil), w.store.committedBytes()...)
 	walker := newTreeWalker[K](committed, w.committedRoot, w.committedHeight)
 

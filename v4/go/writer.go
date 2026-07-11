@@ -10,43 +10,46 @@ const (
 	Changed_  Changed = 1
 )
 
-// Writer is a single-writer COW B+tree over a page store. All fields are
-// fixed-size — zero heap allocation in the hot path (Rule 1).
+// Writer is a single-writer COW B+tree over a page store.
+//
+// Design (LMDB-inspired):
+//   - privatePages: bitset tracking pages COW'd this transaction
+//   - cowPage: if pgno is in privatePages → in-place; else COW
+//   - freePages: derived at open/commit time by walking the committed tree
+//   - allocPage: pop from freePages, or extend the file
+//   - Commit: finalize CRCs on private pages, write meta, clear bitset
 type Writer[K ipKey[K]] struct {
 	store pageStore
 
 	// Format identity
-	keyWidth     uint8
-	scopeMode    uint8
-	createdUnix  uint64
+	keyWidth    uint8
+	scopeMode   uint8
+	createdUnix uint64
 
 	// Active meta page (0 or 1)
 	activeMeta uint32
 
 	// Committed state (from active meta at open / last commit)
-	committedRoot       uint32
-	committedHeight     uint32
-	committedPages      uint32
+	committedRoot        uint32
+	committedHeight      uint32
+	committedPages       uint32
 	committedRecordCount uint64
-	committedTxnID      uint64
-	freeListHead        uint32
+	committedTxnID       uint64
 
 	// Pending state (this txn's working copy)
-	pendingRoot         uint32
-	pendingHeight       uint32
-	pendingRecordCount  uint64
+	pendingRoot        uint32
+	pendingHeight      uint32
+	pendingRecordCount uint64
 
-	poisoned      bool
-	// Page reclamation: txn-free tracking (fixed-size, Rule 1: zero heap).
-	txnFreeBuf    [64]uint32
-	txnFreeCount  int
-	txnFreeChain  uint32
-	reuseBuf         [64]uint32
-	reuseCount       int
-	safeReclaimTxnID   uint64
+	poisoned bool
+
+	// Page reclamation: bitset + derived free pool.
+	privatePages *pageSet
+	freePages    []uint32
+	freePos      int
+
 	scopeRegistry      *ScopeRegistry
 	scopeTableRootCache uint32
-	migrationMode      bool
 }
 
 func scopeRegForMode(scopeMode uint8) *ScopeRegistry {
@@ -64,17 +67,15 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 	kw := uint8(zero.width())
 	store := newVecPageStore(make([]byte, 2*PageSize))
 	w := &Writer[K]{
-		store:              store,
-		keyWidth:           kw,
-		scopeMode:          scopeMode,
-		createdUnix:        createdUnix,
-		activeMeta:         0,
-		committedPages:     2,
-		committedTxnID:     0,
-		txnFreeBuf:         [64]uint32{},
-		reuseBuf:           [64]uint32{},
-		safeReclaimTxnID:   0,
-		scopeRegistry:      scopeRegForMode(scopeMode),
+		store:               store,
+		keyWidth:            kw,
+		scopeMode:           scopeMode,
+		createdUnix:         createdUnix,
+		activeMeta:          0,
+		committedPages:      2,
+		committedTxnID:      0,
+		privatePages:        newPageSet(2),
+		scopeRegistry:       scopeRegForMode(scopeMode),
 		scopeTableRootCache: 0,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
@@ -88,7 +89,7 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 	return w, nil
 }
 
-// Open opens from an existing committed page store.
+// openWriter opens from an existing committed page store.
 func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	metaA := decodeMeta(store.page(0))
 	metaB := decodeMeta(store.page(1))
@@ -110,24 +111,21 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		return nil, fmt.Errorf("record_size mismatch")
 	}
 	w := &Writer[K]{
-		store:              store,
-		keyWidth:           active.keyWidth,
-		scopeMode:          active.scopeMode,
-		createdUnix:        active.createdUnix,
-		activeMeta:         activeNo,
-		committedRoot:      active.rootPgno,
-		committedHeight:    active.treeHeight,
-		committedPages:     uint32(active.totalPages),
+		store:               store,
+		keyWidth:            active.keyWidth,
+		scopeMode:           active.scopeMode,
+		createdUnix:         active.createdUnix,
+		activeMeta:          activeNo,
+		committedRoot:       active.rootPgno,
+		committedHeight:     active.treeHeight,
+		committedPages:      uint32(active.totalPages),
 		committedRecordCount: active.recordCount,
-		committedTxnID:     active.txnID,
-		freeListHead:       active.freeListHead,
-		pendingRoot:        active.rootPgno,
-		pendingHeight:      active.treeHeight,
-		pendingRecordCount: active.recordCount,
-		txnFreeBuf:         [64]uint32{},
-		reuseBuf:           [64]uint32{},
-		safeReclaimTxnID:   0,
-		scopeRegistry:      nil,
+		committedTxnID:      active.txnID,
+		pendingRoot:         active.rootPgno,
+		pendingHeight:       active.treeHeight,
+		pendingRecordCount:  active.recordCount,
+		privatePages:        newPageSet(int(active.totalPages)),
+		scopeRegistry:       nil,
 		scopeTableRootCache: active.scopeTableRoot,
 	}
 	// Load scope table for mode 2.
@@ -139,7 +137,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 			w.scopeRegistry = NewScopeRegistry()
 		}
 	}
-	w.loadFreeList()
+	w.deriveFreePages()
 	return w, nil
 }
 
@@ -197,16 +195,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
-	// Flush remaining growth-region frees (intra-txn reuse).
-	if w.txnFreeCount > 0 {
-		w.buildFreeListLinked()
-	}
-	w.freeListHead = 0
-	// Rebuild scope table (mode 2 only). Free old scope table pages so they
-	// are reclaimed (fixes #6: page reclamation at commit).
-	if w.scopeTableRootCache != 0 {
-		w.freeScopeTablePages(w.scopeTableRootCache)
-	}
+	// Rebuild scope table (mode 2).
 	if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
 		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries())
 		if err != nil {
@@ -216,10 +205,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	} else {
 		w.scopeTableRootCache = 0
 	}
-	total := w.store.totalPages()
-	for pgno := w.committedPages; pgno < total; pgno++ {
-		finalizeChecksum(w.store.pageMut(pgno))
+	// Finalize CRCs on all private pages.
+	for _, pgno := range w.privatePages.iter() {
+		if pgno >= 2 {
+			finalizeChecksum(w.store.pageMut(pgno))
+		}
 	}
+	total := w.store.totalPages()
 	inactive := 1 - w.activeMeta
 	newTxnID := w.committedTxnID + 1
 	if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
@@ -236,9 +228,8 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	w.committedRecordCount = w.pendingRecordCount
 	w.committedPages = total
 	w.store.setCommittedPages(total)
-	w.txnFreeCount = 0
-	w.txnFreeChain = 0
-	w.loadFreeList()
+	w.resetTxn()
+	w.deriveFreePages()
 	return nil
 }
 
@@ -264,130 +255,101 @@ func (w *Writer[K]) check() error {
 	return nil
 }
 
-// SetSafeReclaimTxnID sets the oldest reader's txn_id for page reclamation.
-// 0 = no active readers.
-func (w *Writer[K]) SetSafeReclaimTxnID(txnID uint64) {
-	w.safeReclaimTxnID = txnID
-}
-
-// SetMigrationMode enables/disables migration mode. When enabled, allocOrReuse
-// skips intra-transaction reuse to prevent the COW-reuse hazard.
-func (w *Writer[K]) SetMigrationMode(enabled bool) {
-	w.migrationMode = enabled
-}
-
+// cowPage returns a private (writable) copy of pgno. If pgno is already private
+// (COW'd this transaction), it is returned as-is for in-place modification.
 func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
-	if pgno >= w.committedPages {
+	if w.privatePages.contains(pgno) {
 		return pgno, nil
 	}
-	newPgno, err := w.allocOrReuse()
+	newPgno, err := w.allocPage()
 	if err != nil {
 		return 0, err
 	}
 	w.store.copyPage(pgno, newPgno)
-	w.trackFreed(pgno)
+	w.privatePages.insert(newPgno)
 	return newPgno, nil
 }
 
-func (w *Writer[K]) allocOrReuse() (uint32, error) {
-	// Intra-transaction reuse only (growth-region pages freed this txn).
-	// Cross-transaction reuse removed: committed-prefix pages get re-COW'd
-	// on every access because cowPage can't distinguish them from genuinely
-	// committed pages. Space reclaimed via compact().
-	if !w.migrationMode && w.txnFreeCount > 0 {
-		w.txnFreeCount--
-		return w.txnFreeBuf[w.txnFreeCount], nil
+// allocPage pops a page from the derived free pool, or extends the file.
+// Every allocated page is marked private.
+func (w *Writer[K]) allocPage() (uint32, error) {
+	if w.freePos < len(w.freePages) {
+		pgno := w.freePages[w.freePos]
+		w.freePos++
+		w.privatePages.insert(pgno)
+		return pgno, nil
 	}
-	return w.store.allocPage()
-}
-
-func (w *Writer[K]) trackFreed(pgno uint32) {
-	// Only growth-region pages (pgno >= committedPages) are safe for
-	// intra-transaction reuse. Committed-prefix pages are orphaned but
-	// cannot be safely reused. Space reclaimed via compact().
-	if pgno < w.committedPages {
-		return
-	}
-	if w.txnFreeCount < len(w.txnFreeBuf) {
-		w.txnFreeBuf[w.txnFreeCount] = pgno
-		w.txnFreeCount++
-	} else {
-		w.buildFreeListLinked()
-		w.txnFreeBuf[0] = pgno
-		w.txnFreeCount = 1
-	}
-}
-
-func (w *Writer[K]) buildFreeListLinked() {
-	if w.txnFreeCount == 0 {
-		return
-	}
-	freedIn := w.committedTxnID + 1
-	metaPgno, err := w.allocOrReuse()
+	pgno, err := w.store.allocPage()
 	if err != nil {
-		return
+		return 0, err
 	}
-	page := w.store.pageMut(metaPgno)
-	for i := range page {
-		page[i] = 0
-	}
-	putU32(page, TxnFreeNext, w.txnFreeChain)
-	putU32(page, TxnFreeCount, uint32(w.txnFreeCount))
-	for i := 0; i < w.txnFreeCount; i++ {
-		putU32(page, TxnFreeArray+i*4, w.txnFreeBuf[i])
-	}
-	putU64(page, TxnFreeFreedIn, freedIn)
-	writeHeader(page, PageTypeTxnFree, 0, metaPgno)
-	w.txnFreeChain = metaPgno
-	w.txnFreeCount = 0
+	w.privatePages.ensureCapacity(int(pgno) + 1)
+	w.privatePages.insert(pgno)
+	return pgno, nil
 }
 
-func (w *Writer[K]) loadFreeList() {
-	// Cross-transaction free-list loading is DISABLED.
-	// See trackFreed comment for explanation.
-	w.reuseCount = 0
-	w.freeListHead = 0
-	metaPgno := w.freeListHead
-	guard := uint32(0)
-	for metaPgno != 0 && guard < TreeHeightMax {
-		guard++
-		if uint64(metaPgno) >= uint64(w.store.totalPages()) {
-			break
+// deriveFreePages walks the committed tree to identify all unreachable pages.
+// Those become the free pool available for reuse in the next transaction.
+func (w *Writer[K]) deriveFreePages() {
+	w.freePages = w.freePages[:0]
+	w.freePos = 0
+	total := int(w.store.totalPages())
+	if w.committedRoot == 0 {
+		for pgno := 2; pgno < total; pgno++ {
+			w.freePages = append(w.freePages, uint32(pgno))
 		}
-		page := w.store.page(metaPgno)
-		h := decodeHeader(page)
-		if h.pageType != PageTypeTxnFree {
-			break
-		}
-		nextMeta := u32le(page, TxnFreeNext)
-		count := int(u32le(page, TxnFreeCount))
-		freedIn := u64le(page, TxnFreeFreedIn)
-		safe := w.safeReclaimTxnID == 0 || freedIn < w.safeReclaimTxnID
-		if safe {
-			for i := 0; i < count; i++ {
-				if w.reuseCount >= len(w.reuseBuf) {
-					w.freeListHead = metaPgno
-					return
-				}
-				freedPgno := u32le(page, TxnFreeArray+i*4)
-				w.reuseBuf[w.reuseCount] = freedPgno
-				w.reuseCount++
-			}
-			// Recycle the TXN_FREE metadata page itself.
-			if w.reuseCount < len(w.reuseBuf) {
-				w.reuseBuf[w.reuseCount] = metaPgno
-				w.reuseCount++
-			} else {
-				w.freeListHead = metaPgno
-				return
-			}
-		} else {
-			w.freeListHead = metaPgno
-			return
-		}
-		metaPgno = nextMeta
+		w.privatePages.ensureCapacity(total)
+		return
 	}
-	w.freeListHead = 0
+	reachable := newPageSet(total)
+	reachable.insert(0)
+	reachable.insert(1)
+	w.markReachable(w.committedRoot, reachable)
+	if w.scopeTableRootCache != 0 {
+		w.markScopeReachable(w.scopeTableRootCache, reachable)
+	}
+	for pgno := 2; pgno < total; pgno++ {
+		if !reachable.contains(uint32(pgno)) {
+			w.freePages = append(w.freePages, uint32(pgno))
+		}
+	}
+	w.privatePages.ensureCapacity(total)
+}
+
+func (w *Writer[K]) markReachable(pgno uint32, reachable *pageSet) {
+	if reachable.contains(pgno) || uint64(pgno) >= uint64(w.store.totalPages()) {
+		return
+	}
+	reachable.insert(pgno)
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	if h.pageType == PageTypeBranch {
+		bv := newBranchView(page, int(h.entryCount), int(w.keyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			w.markReachable(bv.child(j), reachable)
+		}
+	}
+}
+
+func (w *Writer[K]) markScopeReachable(pgno uint32, reachable *pageSet) {
+	if reachable.contains(pgno) || uint64(pgno) >= uint64(w.store.totalPages()) {
+		return
+	}
+	reachable.insert(pgno)
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	if h.pageType == PageTypeScopeBranch {
+		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			w.markScopeReachable(bv.child(j), reachable)
+		}
+	}
+}
+
+// resetTxn clears the private-pages bitset for the next transaction.
+func (w *Writer[K]) resetTxn() {
+	w.privatePages.clear()
+	w.privatePages.ensureCapacity(int(w.store.totalPages()))
 }
 
 func (w *Writer[K]) cowRoot() (uint32, error) {
@@ -409,7 +371,7 @@ func (w *Writer[K]) cowRoot() (uint32, error) {
 
 func (w *Writer[K]) cowInsert(from, to K, scopeID uint32) error {
 	if w.pendingRoot == 0 {
-		leaf, err := w.allocOrReuse()
+		leaf, err := w.allocPage()
 		if err != nil {
 			return err
 		}
@@ -429,7 +391,7 @@ func (w *Writer[K]) cowInsert(from, to K, scopeID uint32) error {
 		return err
 	}
 	if split != nil {
-		newRoot, err := w.allocOrReuse()
+		newRoot, err := w.allocPage()
 		if err != nil {
 			return err
 		}
@@ -510,7 +472,7 @@ func (w *Writer[K]) leafInsert(pgno uint32, from, to K, scopeID uint32) (*branch
 	if err := w.writeLeafSplit(pgno, src[:], count, pos, from, to, scopeID, 0, mid); err != nil {
 		return nil, err
 	}
-	right, err := w.allocOrReuse()
+	right, err := w.allocPage()
 	if err != nil {
 		return nil, err
 	}
@@ -577,7 +539,6 @@ func (w *Writer[K]) writeLeafSplit(pgno uint32, src []byte, oldCount, insertPos 
 func (w *Writer[K]) writeLeafSingle(pgno uint32, from, to K, scopeID uint32) error {
 	var zero K
 	kw := zero.width()
-	rs := recordSizeBytes(kw)
 	page := w.store.pageMut(pgno)
 	for i := range page {
 		page[i] = 0
@@ -586,7 +547,6 @@ func (w *Writer[K]) writeLeafSingle(pgno uint32, from, to K, scopeID uint32) err
 	from.writeLE(page[PageHeaderSize : PageHeaderSize+kw])
 	to.writeLE(page[PageHeaderSize+kw : PageHeaderSize+2*kw])
 	putU32(page, PageHeaderSize+2*kw, scopeID)
-	_ = rs
 	return nil
 }
 
@@ -633,11 +593,11 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 }
 
 type overlapInfo[K ipKey[K]] struct {
-	recFrom   K
-	recTo     K
-	recScope  uint32
-	leafPgno  uint32
-	recIdx    int
+	recFrom  K
+	recTo    K
+	recScope uint32
+	leafPgno uint32
+	recIdx   int
 }
 
 func (w *Writer[K]) scanFirstOverlap(from, to K) (*overlapInfo[K], error) {
@@ -809,14 +769,12 @@ func (w *Writer[K]) branchAbsorbSplit(pgno uint32, childIdx int, left uint32, se
 	if err := w.writeBranchSplit(pgno, src[:], count, childIdx, left, sep, right, 0, mid); err != nil {
 		return nil, err
 	}
-	rightPgno, err := w.allocOrReuse()
+	rightPgno, err := w.allocPage()
 	if err != nil {
 		return nil, err
 	}
 	// Right page starts at mid+1: the separator at combined index `mid`
-	// is promoted up and must NOT remain in either child page (otherwise
-	// the child at the split boundary is reachable from both pages,
-	// producing phantom duplicate subtrees).
+	// is promoted up and must NOT remain in either child page.
 	if err := w.writeBranchSplit(rightPgno, src[:], count, childIdx, left, sep, right, mid+1, total-mid-1); err != nil {
 		return nil, err
 	}
@@ -854,13 +812,6 @@ func (w *Writer[K]) writeBranchSplit(pgno uint32, src []byte, oldCount, insertId
 	}
 	writeHeader(page, PageTypeBranch, uint16(sepCount), pgno)
 
-	// Write child[0] = combined_child[startIdx].
-	//
-	// The combined children array inserts (insLeft, insRight) at insertIdx:
-	//   combined_child[i] = old_child[i]          (i < insertIdx)
-	//   combined_child[i] = insLeft               (i == insertIdx)
-	//   combined_child[i] = insRight              (i == insertIdx+1)
-	//   combined_child[i] = old_child[i-1]        (i > insertIdx+1)
 	var firstChild uint32
 	switch {
 	case startIdx == 0 && insertIdx == 0:
@@ -878,7 +829,6 @@ func (w *Writer[K]) writeBranchSplit(pgno uint32, src []byte, oldCount, insertId
 	}
 	putU32(page, PageHeaderSize, firstChild)
 
-	// Write each separator + following child.
 	for outI := 0; outI < sepCount; outI++ {
 		absI := startIdx + outI
 		var s K
@@ -938,7 +888,7 @@ func (w *Writer[K]) writeMetaPage(pgno uint32, txnID uint64, root uint32, height
 		txnID:          txnID,
 		updatedUnix:    updatedUnix,
 		scopeTableRoot: w.scopeTableRootCache,
-		freeListHead:   w.freeListHead,
+		freeListHead:   0,
 	}
 	m.encodeInto(w.store.pageMut(pgno))
 	return nil
@@ -1008,42 +958,7 @@ func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
 	}
 }
 
-// --- scope table page reclamation ---
-
-// freeScopeTablePages walks the old scope table tree and marks each page as
-// freed so it can be reclaimed in the next transaction.
-func (w *Writer[K]) freeScopeTablePages(root uint32) {
-	var toFree []uint32
-	w.collectScopePages(root, 0, &toFree)
-	for _, pgno := range toFree {
-		w.trackFreed(pgno)
-	}
-}
-
-func (w *Writer[K]) collectScopePages(pgno uint32, depth uint32, out *[]uint32) {
-	if depth > TreeHeightMax || uint64(pgno) >= uint64(w.store.totalPages()) {
-		return
-	}
-	*out = append(*out, pgno)
-	page := w.store.page(pgno)
-	h := decodeHeader(page)
-	if h.pageType == PageTypeScopeBranch {
-		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
-		for j := 0; j < bv.childCount(); j++ {
-			w.collectScopePages(bv.child(j), depth+1, out)
-		}
-	}
-}
-
-// --- feed-bit range API (fixes #5) ---
-//
-// FeedAddRange: apply a feed bit across [from, to], preserving all other feed
-// bits. Handles interval splitting: existing records that partially overlap
-// are split at the boundaries, the bit is OR'd into scope_ids within
-// [from, to], then adjacent same-scope records are merged.
-//
-// For mode 1 (bitmap): scope_id IS the bitmap; OR the bit directly.
-// For mode 2 (indirect): resolve scope_id → bitmap, OR the bit, re-intern.
+// --- feed-bit range API ---
 
 // FeedAddRange adds feed `feedBit` to all IP ranges overlapping [from, to].
 // Existing feed bits are preserved. Adjacent same-scope ranges are merged.
@@ -1055,27 +970,20 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 		return fmt.Errorf("from > to")
 	}
 
-	// Collect all existing records that overlap [from, to].
 	overlaps, err := w.collectOverlapping(from, to)
 	if err != nil {
 		return err
 	}
-
-	// Delete all overlapping records from the pending tree.
 	for _, o := range overlaps {
 		if _, err := w.Delete(o.from, o.to); err != nil {
 			return err
 		}
 	}
 
-	// Build segments: parts outside [from, to] keep their original scope;
-	// parts inside [from, to] get the feed bit OR'd in. Gaps in [from, to]
-	// not covered by any overlap get a fresh scope with just the feed bit.
 	var cursor K
 	cursor = from
 
 	for _, o := range overlaps {
-		// Gap before this overlap: [cursor, min(of-1, to)].
 		if o.from.cmp(cursor) > 0 && cursor.cmp(to) <= 0 {
 			var gapTo K
 			if o.from.cmp(to) <= 0 {
@@ -1099,7 +1007,6 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 			}
 		}
 
-		// Left outside part: [of, from-1] keeps the original scope.
 		if o.from.cmp(from) < 0 {
 			trimEnd, ok := from.checkedDec()
 			if !ok {
@@ -1111,7 +1018,6 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 			w.pendingRecordCount++
 		}
 
-		// Inside part: [max(of, from), min(ot, to)] → apply feed bit.
 		var innerFrom K
 		if o.from.cmp(from) > 0 {
 			innerFrom = o.from
@@ -1133,7 +1039,6 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 		}
 		w.pendingRecordCount++
 
-		// Right outside part: [to+1, ot] keeps original scope.
 		if o.to.cmp(to) > 0 {
 			trimStart, ok := to.checkedInc()
 			if !ok {
@@ -1145,7 +1050,6 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 			w.pendingRecordCount++
 		}
 
-		// Advance cursor past this overlap.
 		next, ok := o.to.checkedInc()
 		if !ok {
 			next = o.to
@@ -1153,7 +1057,6 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 		cursor = next
 	}
 
-	// Gap after the last overlap (or the entire [from, to] if no overlaps).
 	if cursor.cmp(to) <= 0 {
 		newScope, err := w.freshFeedScope(feedBit)
 		if err != nil {
@@ -1169,7 +1072,7 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 }
 
 // FeedRemoveRange removes feed `feedBit` from all IP ranges overlapping
-// [from, to]. Records whose scope becomes empty (no feeds left) are removed.
+// [from, to]. Records whose scope becomes empty are removed.
 func (w *Writer[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
 	if err := w.check(); err != nil {
 		return err
@@ -1190,7 +1093,6 @@ func (w *Writer[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
 	}
 
 	for _, o := range overlaps {
-		// Outside [from, to]: keep original.
 		if o.from.cmp(from) < 0 {
 			trimEnd, ok := from.checkedDec()
 			if !ok {
@@ -1212,7 +1114,6 @@ func (w *Writer[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
 			w.pendingRecordCount++
 		}
 
-		// Inside [from, to]: clear the feed bit.
 		var innerFrom K
 		if o.from.cmp(from) > 0 {
 			innerFrom = o.from
@@ -1230,13 +1131,11 @@ func (w *Writer[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
 			return err
 		}
 		if newScope != 0 {
-			// Still has other feeds → keep.
 			if err := w.cowInsert(innerFrom, innerTo, newScope); err != nil {
 				return err
 			}
 			w.pendingRecordCount++
 		}
-		// If newScope == 0, the record is fully removed (no feeds left).
 	}
 
 	return nil
