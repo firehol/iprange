@@ -45,6 +45,7 @@ pub mod wire;
 pub mod writer;
 pub mod migrate;
 pub mod feed_migrate;
+pub mod overlap;
 pub mod extsort;
 pub mod scope_table;
 pub mod interval;

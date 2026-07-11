@@ -31,7 +31,7 @@ pub enum Changed {
 pub struct Writer<K: IpKey> {
     pub(crate) store: Box<dyn PageStore>,
     key_width: u8,
-    scope_mode: u8,
+    pub(crate) scope_mode: u8,
     created_unixtime: u64,
     active_meta: u32,
     pub(crate) committed_root: u32,
@@ -40,7 +40,7 @@ pub struct Writer<K: IpKey> {
     committed_record_count: u64,
     committed_txn_id: u64,
     free_list_head: u32,
-    pending_root: u32,
+    pub(crate) pending_root: u32,
     pending_height: u32,
     pending_record_count: u64,
     poisoned: bool,
