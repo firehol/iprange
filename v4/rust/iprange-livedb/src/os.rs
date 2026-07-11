@@ -1,32 +1,37 @@
-//! The v4.3 Unix file layer: writable mmap reader + writer.
+//! The v4.3 Unix file layer: writable mmap reader + writer with integrated
+//! reader registration for cross-process MVCC.
 //!
-//! Concurrency model (Rule 2): readers take no blocking lock. The writer uses a
-//! writable MAP_SHARED mmap. Cross-process coordination via a reader-registration
-//! companion file is Phase 3 of SOW-0014 (not yet implemented); until then, the
-//! writer takes a brief advisory flock only at open to serialize writer-open.
+//! Readers register their txn_id in the companion file on open and deregister
+//! on close. The writer queries the oldest active reader before reclaiming
+//! freed pages.
 
 use alloc::boxed::Box;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::page_store::{MmapStore};
 use crate::reader::Reader;
+use crate::readers::{ReaderTable, ReaderGuard};
 use crate::spec::{self, PAGE_SIZE};
 use crate::wire::{read_magic, read_version_major, Meta};
 use crate::writer::{Changed, Writer};
 
-/// A read-only mmap of a v4 file. Does NOT hold a blocking lock.
+/// A read-only mmap of a v4 file. Registers in the reader table on open,
+/// deregisters on close (Drop).
 pub struct MmapReader {
-    _file: File,
+    _file: std::fs::File,
     mmap: memmap2::Mmap,
+    _guard: Option<ReaderGuard>,
+    _table: Option<ReaderTable>,
 }
 
 impl MmapReader {
     pub fn open(path: &Path) -> Result<MmapReader> {
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-        let file = std::fs::OpenOptions::new()
+        use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::MetadataExt;
+        let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path)
@@ -51,7 +56,25 @@ impl MmapReader {
             return Err(Error::Structural("unsupported version_major"));
         }
 
-        Ok(MmapReader { _file: file, mmap })
+        // Select the active meta.
+        let meta_a = Meta::decode(&mmap[..PAGE_SIZE]);
+        let meta_b = Meta::decode(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
+        let active_txn_id = if meta_a.txn_id >= meta_b.txn_id {
+            meta_a.txn_id
+        } else {
+            meta_b.txn_id
+        };
+
+        // Register in the reader table.
+        let mut table = ReaderTable::open(path).ok();
+        let guard = table.as_mut().and_then(|t| t.register(active_txn_id).ok());
+
+        Ok(MmapReader {
+            _file: file,
+            mmap,
+            _guard: guard,
+            _table: table,
+        })
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
@@ -63,17 +86,20 @@ impl MmapReader {
     }
 }
 
-/// A file-backed writer using a writable MAP_SHARED mmap.
+/// A file-backed writer using a writable MAP_SHARED mmap. Queries the reader
+/// table to determine safe page reclamation.
 pub struct FileWriter<K: IpKey> {
     writer: Writer<K>,
+    reader_table: Option<ReaderTable>,
 }
 
 impl<K: IpKey> FileWriter<K> {
     pub fn create(path: &Path, scope_mode: u8, created_unixtime: u64) -> Result<FileWriter<K>> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::MetadataExt;
 
-        let file = std::fs::OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true).write(true).create(true).truncate(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path).map_err(Error::Io)?;
@@ -82,16 +108,18 @@ impl<K: IpKey> FileWriter<K> {
         let image = w.into_image().ok_or(Error::State("expected VecPageStore"))?;
         file.set_len(image.len() as u64).map_err(Error::Io)?;
         (&file).write_all(&image).map_err(Error::Io)?;
+        drop(file);
 
-        Self::open_with_file(file)
+        Self::open(path)
     }
 
     pub fn open(path: &Path) -> Result<FileWriter<K>> {
         use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::MetadataExt;
         use std::os::unix::io::AsRawFd;
         use std::os::unix::fs::FileExt;
 
-        let file = std::fs::OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true).write(true)
             .custom_flags(libc::O_NOFOLLOW)
             .open(path).map_err(Error::Io)?;
@@ -127,17 +155,19 @@ impl<K: IpKey> FileWriter<K> {
         let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
 
         let store = MmapStore::open(file, committed_pages)?;
-        let writer = Writer::<K>::open(Box::new(store))?;
-        Ok(FileWriter { writer })
-    }
+        let mut writer = Writer::<K>::open(Box::new(store))?;
 
-    fn open_with_file(file: File) -> Result<FileWriter<K>> {
-        use std::os::unix::fs::MetadataExt;
-        let len = file.metadata().map_err(Error::Io)?.len() as usize;
-        let committed_pages = (len / PAGE_SIZE) as u32;
-        let store = MmapStore::open(file, committed_pages)?;
-        let writer = Writer::<K>::open(Box::new(store))?;
-        Ok(FileWriter { writer })
+        // Open the reader table and set safe reclaim.
+        let mut reader_table = ReaderTable::open(path).ok();
+        if let Some(ref rt) = reader_table {
+            let oldest = rt.oldest_reader_txn_id();
+            writer.set_safe_reclaim_txn_id(oldest);
+        }
+
+        Ok(FileWriter {
+            writer,
+            reader_table,
+        })
     }
 
     // ── delegated hot-path API ────────────────────────────────────────────
@@ -154,8 +184,22 @@ impl<K: IpKey> FileWriter<K> {
         self.writer.append(from, to, scope_id)
     }
 
+    pub fn feed_add_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
+        self.writer.feed_add_range(from, to, feed_bit)
+    }
+
+    pub fn feed_remove_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
+        self.writer.feed_remove_range(from, to, feed_bit)
+    }
+
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
-        self.writer.commit(updated_unixtime)
+        self.writer.commit(updated_unixtime)?;
+        // After commit, update safe reclaim from the reader table.
+        if let Some(ref rt) = self.reader_table {
+            let oldest = rt.oldest_reader_txn_id();
+            self.writer.set_safe_reclaim_txn_id(oldest);
+        }
+        Ok(())
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
@@ -171,6 +215,6 @@ impl<K: IpKey> FileWriter<K> {
     }
 
     pub fn close(&mut self) -> Result<()> {
-        Ok(()) // drop handles cleanup
+        Ok(())
     }
 }
