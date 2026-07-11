@@ -6,10 +6,14 @@ import (
 	"syscall"
 )
 
-// MmapReader is a read-only mmap of a v4 file. Does NOT hold a blocking lock.
+// MmapReader is a read-only mmap of a v4 file. Registers in the reader table
+// on open, deregisters on close (fixes #8: cross-process MVCC).
 type MmapReader struct {
-	file *os.File
-	data []byte
+	file    *os.File
+	data    []byte
+	guard   *ReaderGuard
+	table   *ReaderTable
+	path    string
 }
 
 func OpenMmap(path string) (*MmapReader, error) {
@@ -33,7 +37,29 @@ func OpenMmap(path string) (*MmapReader, error) {
 		file.Close()
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
-	return &MmapReader{file: file, data: data}, nil
+
+	// Determine the active txn_id for reader registration.
+	metaA := decodeMeta(data[:PageSize])
+	metaB := decodeMeta(data[PageSize : 2*PageSize])
+	var activeTxnID uint64
+	if metaA.txnID >= metaB.txnID {
+		activeTxnID = metaA.txnID
+	} else {
+		activeTxnID = metaB.txnID
+	}
+
+	// Register in the reader table (best-effort; if the table can't be opened,
+	// we proceed without registration — correctness is the writer's flock).
+	mr := &MmapReader{file: file, data: data, path: path}
+	if table, err := OpenReaderTable(path); err == nil {
+		if guard, err := table.Register(activeTxnID); err == nil {
+			mr.guard = guard
+			mr.table = table
+		} else {
+			table.Close()
+		}
+	}
+	return mr, nil
 }
 
 func (m *MmapReader) Bytes() []byte { return m.data }
@@ -43,6 +69,14 @@ func (m *MmapReader) Reader() (*Reader, error) {
 }
 
 func (m *MmapReader) Close() error {
+	if m.guard != nil {
+		m.guard.Close()
+		m.guard = nil
+	}
+	if m.table != nil {
+		m.table.Close()
+		m.table = nil
+	}
 	if m.data != nil {
 		syscall.Munmap(m.data)
 		m.data = nil
@@ -50,10 +84,13 @@ func (m *MmapReader) Close() error {
 	return m.file.Close()
 }
 
-// FileWriter is a file-backed writer using a writable MAP_SHARED mmap.
+// FileWriter is a file-backed writer using a writable MAP_SHARED mmap. Queries
+// the reader table to determine safe page reclamation (fixes #8).
 type FileWriter[K ipKey[K]] struct {
-	w     *Writer[K]
-	store *mmapStore
+	w           *Writer[K]
+	store       *mmapStore
+	readerTable *ReaderTable
+	path        string
 }
 
 func CreateFile[K ipKey[K]](path string, scopeMode uint8, createdUnix uint64) (*FileWriter[K], error) {
@@ -140,17 +177,45 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		store.close()
 		return nil, err
 	}
-	return &FileWriter[K]{w: w, store: store}, nil
+
+	fw := &FileWriter[K]{w: w, store: store, path: path}
+
+	// Open the reader table and set safe reclaim (fixes #8).
+	if rt, err := OpenReaderTable(path); err == nil {
+		fw.readerTable = rt
+		fw.w.SetSafeReclaimTxnID(rt.OldestReaderTxnID())
+	}
+
+	return fw, nil
 }
 
 func (fw *FileWriter[K]) Set(from, to K, scopeID uint32) error { return fw.w.Set(from, to, scopeID) }
 func (fw *FileWriter[K]) Delete(from, to K) (Changed, error) { return fw.w.Delete(from, to) }
 func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error { return fw.w.Append(from, to, scopeID) }
-func (fw *FileWriter[K]) Commit(updatedUnix uint64) error { return fw.w.Commit(updatedUnix) }
+func (fw *FileWriter[K]) FeedAddRange(from, to K, feedBit uint32) error {
+	return fw.w.FeedAddRange(from, to, feedBit)
+}
+func (fw *FileWriter[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
+	return fw.w.FeedRemoveRange(from, to, feedBit)
+}
+func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
+	if err := fw.w.Commit(updatedUnix); err != nil {
+		return err
+	}
+	// After commit, refresh safe reclaim from the reader table.
+	if fw.readerTable != nil {
+		fw.w.SetSafeReclaimTxnID(fw.readerTable.OldestReaderTxnID())
+	}
+	return nil
+}
 func (fw *FileWriter[K]) RecordCount() uint64 { return fw.w.RecordCount() }
 func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error { return fw.w.Scan(f) }
 
 func (fw *FileWriter[K]) Close() error {
+	if fw.readerTable != nil {
+		fw.readerTable.Close()
+		fw.readerTable = nil
+	}
 	fw.store.close()
 	return nil
 }

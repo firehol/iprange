@@ -50,87 +50,325 @@ type DesiredStream[K ipKey[K]] interface {
 
 // Migrate updates the writer's pending tree to match the desired stream.
 //
-// The old committed tree is snapshotted once (O(DB_size), bounded — this is a
-// batch operation, not the per-record hot path). The snapshot is a private copy
-// because COW allocation during the merge may move the store backing array
-// (vec store) or remap the mmap, invalidating live references. The merge then
-// streams the old snapshot and the desired input simultaneously — O(1)
-// additional memory during the merge loop (fixed-size path stack, no per-record
-// heap allocation).
+// Uses a proper sweep-line merge that splits at every interval boundary,
+// handling ALL overlap cases: identical, partial, one-to-many, many-to-one,
+// complete separation. The old committed tree is traversed one record at a
+// time via treeWalker (fixed-size path stack, no per-record heap allocation).
+// The merge applies set/delete only for changed segments.
+//
+// Fixes blocker #3 (correct partial-overlap merge with boundary splitting).
+//
+// NOTE on the committed snapshot: the walker reads from a private copy of the
+// committed bytes. This is necessary because COW page reuse during the merge
+// can overwrite committed pages that the walker still needs — the intra-
+// transaction free pool (txnFreeBuf) allows allocOrReuse to immediately reuse
+// a page freed by cowPage, corrupting the walker's view. Eliminating this copy
+// requires preventing committed-page reuse during migration (tracked as a
+// future optimization).
 func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
 	if opts == nil {
 		opts = &MigrateOptions[K]{}
 	}
 	counters := &MigrateCounters{}
 
+	// Snapshot the committed bytes — the walker needs a stable view because
+	// COW + page reuse can overwrite committed pages mid-scan.
 	committed := append([]byte(nil), w.store.committedBytes()...)
 	walker := newTreeWalker[K](committed, w.committedRoot, w.committedHeight)
+
+	// The merge uses a "trim" approach: when old and desired partially overlap,
+	// we track trimmed starts for the current record on each side.
 	oldFrom, oldTo, oldScope, hasOld := walker.peek()
+	desRec := desired.Peek()
+	hasDes := desRec != nil
+
+	// Trimmed starts (for partial overlap handling).
+	var oldTrim K
+	oldTrimOk := false
+	if hasOld {
+		oldTrim = oldFrom
+		oldTrimOk = true
+	}
+	var desTrim K
+	desTrimOk := false
+	if hasDes {
+		desTrim = desRec.From
+		desTrimOk = true
+	}
 
 	for {
-		des := desired.Peek()
-		hasDes := des != nil
+		// Compute effective current records (with trimmed starts).
+		var oEffFrom, oEffTo K
+		var oEffScope uint32
+		oEff := false
+		if hasOld && oldTrimOk {
+			oEffFrom = oldTrim
+			oEffTo = oldTo
+			oEffScope = oldScope
+			oEff = true
+		}
 
-		if !hasOld && !hasDes {
+		var dEffFrom, dEffTo K
+		var dEffScope uint32
+		dEff := false
+		if hasDes && desTrimOk {
+			dEffFrom = desTrim
+			dEffTo = desRec.To
+			dEffScope = desRec.ScopeID
+			dEff = true
+		}
+
+		if !oEff && !dEff {
 			break
 		}
 
-		if hasOld && !hasDes {
-			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeRemoved, From: oldFrom, To: oldTo, OldScopeID: oldScope, HasOld: true})
-			if _, err := w.Delete(oldFrom, oldTo); err != nil {
+		if oEff && !dEff {
+			// Only old remains → remove.
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeRemoved, From: oEffFrom, To: oEffTo, OldScopeID: oEffScope, HasOld: true})
+			if _, err := w.Delete(oEffFrom, oEffTo); err != nil {
 				return nil, err
 			}
 			counters.Removed++
 			counters.OldScanned++
 			oldFrom, oldTo, oldScope, hasOld = walker.advance()
+			if hasOld {
+				oldTrim = oldFrom
+				oldTrimOk = true
+			} else {
+				oldTrimOk = false
+			}
 			continue
 		}
 
-		if !hasOld && hasDes {
-			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeAdded, From: des.From, To: des.To, ScopeID: des.ScopeID})
-			if err := w.Set(des.From, des.To, des.ScopeID); err != nil {
+		if !oEff && dEff {
+			// Only desired remains → add.
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeAdded, From: dEffFrom, To: dEffTo, ScopeID: dEffScope})
+			if err := w.Set(dEffFrom, dEffTo, dEffScope); err != nil {
 				return nil, err
 			}
-			desired.Next()
-			counters.DesiredScanned++
 			counters.Added++
+			counters.DesiredScanned++
+			desired.Next()
+			desRec = desired.Peek()
+			hasDes = desRec != nil
+			if hasDes {
+				desTrim = desRec.From
+				desTrimOk = true
+			} else {
+				desTrimOk = false
+			}
 			continue
 		}
 
 		// Both present.
-		if oldTo.cmp(des.From) < 0 {
-			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeRemoved, From: oldFrom, To: oldTo, OldScopeID: oldScope, HasOld: true})
-			if _, err := w.Delete(oldFrom, oldTo); err != nil {
+		if oEffTo.cmp(dEffFrom) < 0 {
+			// Old entirely before desired → remove old.
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeRemoved, From: oEffFrom, To: oEffTo, OldScopeID: oEffScope, HasOld: true})
+			if _, err := w.Delete(oEffFrom, oEffTo); err != nil {
 				return nil, err
 			}
-			oldFrom, oldTo, oldScope, hasOld = walker.advance()
 			counters.Removed++
 			counters.OldScanned++
-		} else if des.To.cmp(oldFrom) < 0 {
-			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeAdded, From: des.From, To: des.To, ScopeID: des.ScopeID})
-			if err := w.Set(des.From, des.To, des.ScopeID); err != nil {
+			oldFrom, oldTo, oldScope, hasOld = walker.advance()
+			if hasOld {
+				oldTrim = oldFrom
+				oldTrimOk = true
+			} else {
+				oldTrimOk = false
+			}
+			continue
+		}
+
+		if dEffTo.cmp(oEffFrom) < 0 {
+			// Desired entirely before old → add desired.
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeAdded, From: dEffFrom, To: dEffTo, ScopeID: dEffScope})
+			if err := w.Set(dEffFrom, dEffTo, dEffScope); err != nil {
 				return nil, err
 			}
-			desired.Next()
-			counters.DesiredScanned++
 			counters.Added++
+			counters.DesiredScanned++
+			desired.Next()
+			desRec = desired.Peek()
+			hasDes = desRec != nil
+			if hasDes {
+				desTrim = desRec.From
+				desTrimOk = true
+			} else {
+				desTrimOk = false
+			}
+			continue
+		}
+
+		// Overlap! Split at boundaries.
+		// Step 1: Emit any old-only prefix [oEffFrom, dEffFrom-1].
+		if oEffFrom.cmp(dEffFrom) < 0 {
+			prefixEnd, ok := dEffFrom.checkedDec()
+			if !ok {
+				prefixEnd = dEffFrom
+			}
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeRemoved, From: oEffFrom, To: prefixEnd, OldScopeID: oEffScope, HasOld: true})
+			if _, err := w.Delete(oEffFrom, prefixEnd); err != nil {
+				return nil, err
+			}
+			counters.Removed++
+		}
+
+		// Step 2: Emit any desired-only prefix [dEffFrom, oEffFrom-1].
+		if dEffFrom.cmp(oEffFrom) < 0 {
+			prefixEnd, ok := oEffFrom.checkedDec()
+			if !ok {
+				prefixEnd = oEffFrom
+			}
+			emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeAdded, From: dEffFrom, To: prefixEnd, ScopeID: dEffScope})
+			if err := w.Set(dEffFrom, prefixEnd, dEffScope); err != nil {
+				return nil, err
+			}
+			counters.Added++
+		}
+
+		// Step 3: Now both start at overlap_start.
+		var overlapStart K
+		if oEffFrom.cmp(dEffFrom) < 0 {
+			overlapStart = dEffFrom
 		} else {
-			if oldFrom.cmp(des.From) == 0 && oldTo.cmp(des.To) == 0 && oldScope == des.ScopeID {
+			overlapStart = oEffFrom
+		}
+
+		cmpEnd := oEffTo.cmp(dEffTo)
+		if cmpEnd == 0 {
+			// Same end → compare scopes, advance both.
+			if oEffScope == dEffScope {
 				if opts.EmitUnchanged {
-					emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeUnchanged, From: oldFrom, To: oldTo, ScopeID: oldScope})
+					emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeUnchanged, From: overlapStart, To: oEffTo, ScopeID: oEffScope})
 				}
 				counters.Unchanged++
 			} else {
-				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: des.From, To: des.To, ScopeID: des.ScopeID, OldScopeID: oldScope, HasOld: true})
-				if err := w.Set(des.From, des.To, des.ScopeID); err != nil {
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
+				if err := w.Set(overlapStart, oEffTo, dEffScope); err != nil {
 					return nil, err
 				}
 				counters.Changed++
 			}
-			oldFrom, oldTo, oldScope, hasOld = walker.advance()
-			desired.Next()
 			counters.OldScanned++
 			counters.DesiredScanned++
+			oldFrom, oldTo, oldScope, hasOld = walker.advance()
+			if hasOld {
+				oldTrim = oldFrom
+				oldTrimOk = true
+			} else {
+				oldTrimOk = false
+			}
+			desired.Next()
+			desRec = desired.Peek()
+			hasDes = desRec != nil
+			if hasDes {
+				desTrim = desRec.From
+				desTrimOk = true
+			} else {
+				desTrimOk = false
+			}
+		} else if cmpEnd < 0 {
+			// Old ends first → overlap [overlap_start, oEffTo], then desired continues.
+			if oEffScope == dEffScope {
+				if opts.EmitUnchanged {
+					emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeUnchanged, From: overlapStart, To: oEffTo, ScopeID: oEffScope})
+				}
+				counters.Unchanged++
+			} else {
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
+				if err := w.Set(overlapStart, oEffTo, dEffScope); err != nil {
+					return nil, err
+				}
+				counters.Changed++
+			}
+			counters.OldScanned++
+			// Advance old, trim desired's start.
+			oldFrom, oldTo, oldScope, hasOld = walker.advance()
+			if hasOld {
+				oldTrim = oldFrom
+				oldTrimOk = true
+			} else {
+				oldTrimOk = false
+			}
+			// Trim desired start to oEffTo+1.
+			trimNext, ok := oEffTo.checkedInc()
+			if !ok {
+				// Desired fully consumed.
+				desired.Next()
+				desRec = desired.Peek()
+				hasDes = desRec != nil
+				if hasDes {
+					desTrim = desRec.From
+					desTrimOk = true
+				} else {
+					desTrimOk = false
+				}
+			} else {
+				desTrim = trimNext
+				desTrimOk = true
+				if desTrim.cmp(dEffTo) > 0 {
+					// Trimmed past desired end → advance.
+					desired.Next()
+					desRec = desired.Peek()
+					hasDes = desRec != nil
+					if hasDes {
+						desTrim = desRec.From
+						desTrimOk = true
+					} else {
+						desTrimOk = false
+					}
+				}
+			}
+		} else {
+			// Desired ends first → overlap [overlap_start, dEffTo], then old continues.
+			if oEffScope == dEffScope {
+				if opts.EmitUnchanged {
+					emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeUnchanged, From: overlapStart, To: dEffTo, ScopeID: oEffScope})
+				}
+				counters.Unchanged++
+			} else {
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: dEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
+				if err := w.Set(overlapStart, dEffTo, dEffScope); err != nil {
+					return nil, err
+				}
+				counters.Changed++
+			}
+			counters.DesiredScanned++
+			// Advance desired, trim old's start.
+			desired.Next()
+			desRec = desired.Peek()
+			hasDes = desRec != nil
+			if hasDes {
+				desTrim = desRec.From
+				desTrimOk = true
+			} else {
+				desTrimOk = false
+			}
+			// Trim old start to dEffTo+1.
+			trimNext, ok := dEffTo.checkedInc()
+			if !ok {
+				// Old fully consumed.
+				oldFrom, oldTo, oldScope, hasOld = walker.advance()
+				if hasOld {
+					oldTrim = oldFrom
+					oldTrimOk = true
+				} else {
+					oldTrimOk = false
+				}
+			} else {
+				oldTrim = trimNext
+				oldTrimOk = true
+				if oldTrim.cmp(oEffTo) > 0 {
+					// Trimmed past old end → advance.
+					oldFrom, oldTo, oldScope, hasOld = walker.advance()
+					if hasOld {
+						oldTrim = oldFrom
+						oldTrimOk = true
+					} else {
+						oldTrimOk = false
+					}
+				}
+			}
 		}
 	}
 
@@ -146,8 +384,9 @@ func emitChangeGo[K ipKey[K]](opts *MigrateOptions[K], ev *ChangeEvent[K]) {
 // --- streaming in-order B+tree walker ---
 //
 // Walks the committed tree in key order using a fixed-size path stack — zero
-// heap allocation per record. Mirrors the Rust TreeWalker in migrate.rs. Depth
-// convention: root is at depth 1, leaves at depth == height.
+// heap allocation per record. Reads from a private byte snapshot (the committed
+// prefix copied at migrate start) so COW page reuse during the merge cannot
+// corrupt the walker's view. Mirrors the Rust TreeWalker in migrate.rs.
 
 type pathEntry struct {
 	pgno uint32

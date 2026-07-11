@@ -201,7 +201,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 		w.buildFreeListLinked()
 	}
 	w.freeListHead = w.txnFreeChain
-	// Rebuild scope table (mode 2 only).
+	// Rebuild scope table (mode 2 only). Free old scope table pages so they
+	// are reclaimed (fixes #6: page reclamation at commit).
+	if w.scopeTableRootCache != 0 {
+		w.freeScopeTablePages(w.scopeTableRootCache)
+	}
 	if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
 		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries())
 		if err != nil {
@@ -968,5 +972,341 @@ func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
 		return nil
 	default:
 		return fmt.Errorf("unexpected page type %d", h.pageType)
+	}
+}
+
+// --- scope table page reclamation ---
+
+// freeScopeTablePages walks the old scope table tree and marks each page as
+// freed so it can be reclaimed in the next transaction.
+func (w *Writer[K]) freeScopeTablePages(root uint32) {
+	var toFree []uint32
+	w.collectScopePages(root, 0, &toFree)
+	for _, pgno := range toFree {
+		w.trackFreed(pgno)
+	}
+}
+
+func (w *Writer[K]) collectScopePages(pgno uint32, depth uint32, out *[]uint32) {
+	if depth > TreeHeightMax || uint64(pgno) >= uint64(w.store.totalPages()) {
+		return
+	}
+	*out = append(*out, pgno)
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	if h.pageType == PageTypeScopeBranch {
+		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			w.collectScopePages(bv.child(j), depth+1, out)
+		}
+	}
+}
+
+// --- feed-bit range API (fixes #5) ---
+//
+// FeedAddRange: apply a feed bit across [from, to], preserving all other feed
+// bits. Handles interval splitting: existing records that partially overlap
+// are split at the boundaries, the bit is OR'd into scope_ids within
+// [from, to], then adjacent same-scope records are merged.
+//
+// For mode 1 (bitmap): scope_id IS the bitmap; OR the bit directly.
+// For mode 2 (indirect): resolve scope_id → bitmap, OR the bit, re-intern.
+
+// FeedAddRange adds feed `feedBit` to all IP ranges overlapping [from, to].
+// Existing feed bits are preserved. Adjacent same-scope ranges are merged.
+func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
+	if err := w.check(); err != nil {
+		return err
+	}
+	if from.cmp(to) > 0 {
+		return fmt.Errorf("from > to")
+	}
+
+	// Collect all existing records that overlap [from, to].
+	overlaps, err := w.collectOverlapping(from, to)
+	if err != nil {
+		return err
+	}
+
+	// Delete all overlapping records from the pending tree.
+	for _, o := range overlaps {
+		if _, err := w.Delete(o.from, o.to); err != nil {
+			return err
+		}
+	}
+
+	// Build segments: parts outside [from, to] keep their original scope;
+	// parts inside [from, to] get the feed bit OR'd in. Gaps in [from, to]
+	// not covered by any overlap get a fresh scope with just the feed bit.
+	var cursor K
+	cursor = from
+
+	for _, o := range overlaps {
+		// Gap before this overlap: [cursor, min(of-1, to)].
+		if o.from.cmp(cursor) > 0 && cursor.cmp(to) <= 0 {
+			var gapTo K
+			if o.from.cmp(to) <= 0 {
+				gt, ok := o.from.checkedDec()
+				if !ok {
+					gt = o.from
+				}
+				gapTo = gt
+			} else {
+				gapTo = to
+			}
+			if gapTo.cmp(cursor) >= 0 {
+				newScope, err := w.freshFeedScope(feedBit)
+				if err != nil {
+					return err
+				}
+				if err := w.cowInsert(cursor, gapTo, newScope); err != nil {
+					return err
+				}
+				w.pendingRecordCount++
+			}
+		}
+
+		// Left outside part: [of, from-1] keeps the original scope.
+		if o.from.cmp(from) < 0 {
+			trimEnd, ok := from.checkedDec()
+			if !ok {
+				trimEnd = from
+			}
+			if err := w.cowInsert(o.from, trimEnd, o.scope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+
+		// Inside part: [max(of, from), min(ot, to)] → apply feed bit.
+		var innerFrom K
+		if o.from.cmp(from) > 0 {
+			innerFrom = o.from
+		} else {
+			innerFrom = from
+		}
+		var innerTo K
+		if o.to.cmp(to) < 0 {
+			innerTo = o.to
+		} else {
+			innerTo = to
+		}
+		newScope, err := w.applyFeedBit(o.scope, feedBit)
+		if err != nil {
+			return err
+		}
+		if err := w.cowInsert(innerFrom, innerTo, newScope); err != nil {
+			return err
+		}
+		w.pendingRecordCount++
+
+		// Right outside part: [to+1, ot] keeps original scope.
+		if o.to.cmp(to) > 0 {
+			trimStart, ok := to.checkedInc()
+			if !ok {
+				trimStart = to
+			}
+			if err := w.cowInsert(trimStart, o.to, o.scope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+
+		// Advance cursor past this overlap.
+		next, ok := o.to.checkedInc()
+		if !ok {
+			next = o.to
+		}
+		cursor = next
+	}
+
+	// Gap after the last overlap (or the entire [from, to] if no overlaps).
+	if cursor.cmp(to) <= 0 {
+		newScope, err := w.freshFeedScope(feedBit)
+		if err != nil {
+			return err
+		}
+		if err := w.cowInsert(cursor, to, newScope); err != nil {
+			return err
+		}
+		w.pendingRecordCount++
+	}
+
+	return nil
+}
+
+// FeedRemoveRange removes feed `feedBit` from all IP ranges overlapping
+// [from, to]. Records whose scope becomes empty (no feeds left) are removed.
+func (w *Writer[K]) FeedRemoveRange(from, to K, feedBit uint32) error {
+	if err := w.check(); err != nil {
+		return err
+	}
+	if from.cmp(to) > 0 {
+		return fmt.Errorf("from > to")
+	}
+
+	overlaps, err := w.collectOverlapping(from, to)
+	if err != nil {
+		return err
+	}
+
+	for _, o := range overlaps {
+		if _, err := w.Delete(o.from, o.to); err != nil {
+			return err
+		}
+	}
+
+	for _, o := range overlaps {
+		// Outside [from, to]: keep original.
+		if o.from.cmp(from) < 0 {
+			trimEnd, ok := from.checkedDec()
+			if !ok {
+				trimEnd = from
+			}
+			if err := w.cowInsert(o.from, trimEnd, o.scope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+		if o.to.cmp(to) > 0 {
+			trimStart, ok := to.checkedInc()
+			if !ok {
+				trimStart = to
+			}
+			if err := w.cowInsert(trimStart, o.to, o.scope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+
+		// Inside [from, to]: clear the feed bit.
+		var innerFrom K
+		if o.from.cmp(from) > 0 {
+			innerFrom = o.from
+		} else {
+			innerFrom = from
+		}
+		var innerTo K
+		if o.to.cmp(to) < 0 {
+			innerTo = o.to
+		} else {
+			innerTo = to
+		}
+		newScope, err := w.clearFeedBit(o.scope, feedBit)
+		if err != nil {
+			return err
+		}
+		if newScope != 0 {
+			// Still has other feeds → keep.
+			if err := w.cowInsert(innerFrom, innerTo, newScope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+		// If newScope == 0, the record is fully removed (no feeds left).
+	}
+
+	return nil
+}
+
+type overlapRecord[K ipKey[K]] struct {
+	from  K
+	to    K
+	scope uint32
+}
+
+// collectOverlapping gathers all pending records overlapping [from, to].
+func (w *Writer[K]) collectOverlapping(from, to K) ([]overlapRecord[K], error) {
+	if w.pendingRoot == 0 {
+		return nil, nil
+	}
+	var result []overlapRecord[K]
+	if err := w.collectOverlappingNode(w.pendingRoot, from, to, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (w *Writer[K]) collectOverlappingNode(pgno uint32, from, to K, out *[]overlapRecord[K]) error {
+	var zero K
+	kw := zero.width()
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	switch h.pageType {
+	case PageTypeLeaf:
+		lv := newLeafView(page, int(h.entryCount), kw)
+		for i := 0; i < lv.len(); i++ {
+			rf := zero.readLE(lv.recordFrom(i))
+			if rf.cmp(to) > 0 {
+				return nil
+			}
+			rt := zero.readLE(lv.recordTo(i))
+			if rt.cmp(from) >= 0 {
+				*out = append(*out, overlapRecord[K]{
+					from:  rf,
+					to:    rt,
+					scope: lv.recordScopeID(i),
+				})
+			}
+		}
+		return nil
+	case PageTypeBranch:
+		bv := newBranchView(page, int(h.entryCount), kw)
+		for j := 0; j < bv.childCount(); j++ {
+			if err := w.collectOverlappingNode(bv.child(j), from, to, out); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected page type %d", h.pageType)
+	}
+}
+
+// freshFeedScope creates a scope_id with only the given feed bit set.
+func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
+	switch w.scopeMode {
+	case ScopeModeBitmap:
+		return 1 << feedBit, nil
+	case ScopeModeIndirect:
+		if w.scopeRegistry == nil {
+			return 0, fmt.Errorf("requires scope_mode == 2")
+		}
+		bm := make([]byte, feedBit/8+1)
+		bm[feedBit/8] |= 1 << (feedBit % 8)
+		return w.scopeRegistry.Intern(bm), nil
+	default:
+		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
+	}
+}
+
+// applyFeedBit OR's a feed bit into a scope_id, returning the new scope_id.
+func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
+	switch w.scopeMode {
+	case ScopeModeBitmap:
+		return scopeID | (1 << feedBit), nil
+	case ScopeModeIndirect:
+		if w.scopeRegistry == nil {
+			return 0, fmt.Errorf("requires scope_mode == 2")
+		}
+		return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit), nil
+	default:
+		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
+	}
+}
+
+// clearFeedBit clears a feed bit from a scope_id, returning the new scope_id
+// (0 if the bitmap becomes empty).
+func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
+	switch w.scopeMode {
+	case ScopeModeBitmap:
+		return scopeID & ^(1 << feedBit), nil
+	case ScopeModeIndirect:
+		if w.scopeRegistry == nil {
+			return 0, fmt.Errorf("requires scope_mode == 2")
+		}
+		return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit), nil
+	default:
+		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}
 }

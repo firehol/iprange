@@ -104,6 +104,29 @@ func (r *Reader) scan(kw int, f func(fromLE, toLE []byte, scopeID uint32)) error
 	return r.scanNode(r.meta.rootPgno, kw, f)
 }
 
+// ScopeResolve resolves a scope_id to its interned bitmap (mode 2 / indirect
+// only). Returns nil if the file is not in indirect mode, has no scope table,
+// or the scope_id is not present. The bitmap is the bitset of feeds that cover
+// the scope (fixes #7).
+func (r *Reader) ScopeResolve(scopeID uint32) []byte {
+	if r.meta.scopeMode != ScopeModeIndirect {
+		return nil
+	}
+	if r.meta.scopeTableRoot == 0 {
+		return nil
+	}
+	entries, err := readAllScopes(r.bytes, r.meta.scopeTableRoot)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		if e.ScopeID == scopeID {
+			return e.Bitmap
+		}
+	}
+	return nil
+}
+
 func (r *Reader) scanNode(pgno uint32, kw int, f func([]byte, []byte, uint32)) error {
 	page := r.page(pgno)
 	h := decodeHeader(page)

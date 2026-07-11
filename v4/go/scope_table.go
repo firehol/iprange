@@ -18,37 +18,44 @@ type ScopeEntry struct {
 }
 
 // ScopeRegistry maintains scope_id → bitmap mappings during a transaction.
+// Uses a HashMap for O(1) bitmap → scope_id lookup (fixes #6: was linear search).
 type ScopeRegistry struct {
-	entries []ScopeEntry
-	nextID  uint32
+	entries     []ScopeEntry
+	bitmapIndex map[string]uint32 // O(1) lookup by bitmap bytes
+	nextID      uint32
 }
 
 func NewScopeRegistry() *ScopeRegistry {
-	return &ScopeRegistry{nextID: 1}
+	return &ScopeRegistry{
+		bitmapIndex: make(map[string]uint32),
+		nextID:      1,
+	}
 }
 
 func ScopeRegistryFromEntries(entries []ScopeEntry) *ScopeRegistry {
 	maxID := uint32(0)
+	bitmapIndex := make(map[string]uint32, len(entries))
 	for _, e := range entries {
 		if e.ScopeID > maxID {
 			maxID = e.ScopeID
 		}
+		bitmapIndex[string(e.Bitmap)] = e.ScopeID
 	}
-	return &ScopeRegistry{entries: entries, nextID: maxID + 1}
+	return &ScopeRegistry{entries: entries, bitmapIndex: bitmapIndex, nextID: maxID + 1}
 }
 
 // Intern finds or creates a scope_id for the given bitmap.
+// O(1) lookup via bitmapIndex.
 func (r *ScopeRegistry) Intern(bitmap []byte) uint32 {
-	for _, e := range r.entries {
-		if bytesEqual(e.Bitmap, bitmap) {
-			return e.ScopeID
-		}
+	if id, ok := r.bitmapIndex[string(bitmap)]; ok {
+		return id
 	}
 	id := r.nextID
 	r.nextID++
 	stored := make([]byte, len(bitmap))
-		copy(stored, bitmap)
-		r.entries = append(r.entries, ScopeEntry{ScopeID: id, Bitmap: stored})
+	copy(stored, bitmap)
+	r.bitmapIndex[string(stored)] = id
+	r.entries = append(r.entries, ScopeEntry{ScopeID: id, Bitmap: stored})
 	return id
 }
 
@@ -227,10 +234,61 @@ func buildScopeTree(store pageStore, entries []ScopeEntry) (uint32, error) {
 		childIdx += count
 	}
 
+	return buildBranchLevels(store, branchPgnos, seps, sepWidth, branchMax)
+}
+
+// buildBranchLevels recursively builds branch levels until a single root remains.
+// This removes the old single-level 7635-leaf limit (fixes #6).
+func buildBranchLevels(store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
+	if len(children) == 1 {
+		return children[0], nil
+	}
+
+	// Build one level of branches.
+	var branchPgnos []uint32
+	var newSeps []uint32
+	childIdx := 0
+	sepIdx := 0
+
+	for childIdx < len(children) {
+		remaining := len(children) - childIdx
+		count := remaining
+		if count > branchMax {
+			count = branchMax
+		}
+		pgno, err := store.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		page := store.pageMut(pgno)
+		for j := range page {
+			page[j] = 0
+		}
+		writeHeader(page, PageTypeScopeBranch, uint16(count-1), pgno)
+		putU32(page, PageHeaderSize, children[childIdx])
+		for i := 0; i < count-1; i++ {
+			off := PageHeaderSize + 4 + i*(sepWidth+4)
+			if sepIdx < len(allSeps) {
+				putU32(page, off, allSeps[sepIdx])
+			}
+			putU32(page, off+sepWidth, children[childIdx+i+1])
+			sepIdx++
+		}
+		branchPgnos = append(branchPgnos, pgno)
+		childIdx += count
+	}
+
+	// Separators for the next level: first separator stored in each branch
+	// after the first is the boundary between subtrees.
+	for i := 1; i < len(branchPgnos); i++ {
+		page := store.page(branchPgnos[i])
+		newSeps = append(newSeps, u32le(page, PageHeaderSize+4))
+	}
+
 	if len(branchPgnos) == 1 {
 		return branchPgnos[0], nil
 	}
-	return 0, fmt.Errorf("scope table exceeds single-level branch capacity")
+	return buildBranchLevels(store, branchPgnos, newSeps, sepWidth, branchMax)
 }
 
 // ReadAllScopes reads all scope entries from a committed scope table.

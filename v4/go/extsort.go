@@ -12,15 +12,103 @@ type SortedStream[K ipKey[K]] struct {
 	pos     int
 }
 
-// FromUnsorted builds a sorted, coalesced stream from unsorted records.
+// FromUnsorted builds a sorted, normalized, coalesced stream from unsorted records.
+// Overlapping input is split into disjoint segments with last-wins semantics for
+// different scope_ids; same-scope overlaps are merged.
 func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].From.cmp(records[j].From) < 0
 	})
-	coalesced := coalesceAdjacent(records)
-	return &SortedStream[K]{records: coalesced}
+	normalized := normalizeChunk(records)
+	return &SortedStream[K]{records: normalized}
 }
 
+// normalizeChunk resolves overlaps in a sorted chunk into disjoint segments.
+// Last-wins for different scope_ids (later records overwrite earlier);
+// merge for same scope_ids. Fixes #4: overlapping input is properly split.
+func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
+	if len(sorted) <= 1 {
+		return sorted
+	}
+
+	// Fast path: check if already disjoint.
+	disjoint := true
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i].From.cmp(sorted[i-1].To) <= 0 {
+			disjoint = false
+			break
+		}
+	}
+	if disjoint {
+		return coalesceAdjacent(sorted)
+	}
+
+	// Sweep-line: build events, sort, process.
+	type event struct {
+		pos   uint64
+		isEnd bool
+		idx   int
+	}
+	events := make([]event, 0, len(sorted)*2)
+	for i, r := range sorted {
+		events = append(events, event{pos: uint64(r.From.toU128().Lo), isEnd: false, idx: i})
+		if after, ok := r.To.checkedInc(); ok {
+			events = append(events, event{pos: uint64(after.toU128().Lo), isEnd: true, idx: i})
+		}
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].pos != events[j].pos {
+			return events[i].pos < events[j].pos
+		}
+		return events[i].isEnd && !events[j].isEnd
+	})
+
+	active := make(map[int]bool, 64)
+	var out []DesiredRecord[K]
+	var zero K
+
+	for i := 0; i+1 < len(events); i++ {
+		pos := events[i].pos
+		for j := i; j < len(events) && events[j].pos == pos; j++ {
+			if events[j].isEnd {
+				delete(active, events[j].idx)
+			} else {
+				active[events[j].idx] = true
+			}
+			i = j
+		}
+		if len(active) == 0 || i+1 >= len(events) {
+			continue
+		}
+		segFrom := zero.fromU128(Uint128{Lo: pos})
+		segTo := zero.fromU128(Uint128{Lo: events[i+1].pos - 1})
+		maxIdx := -1
+		for idx := range active {
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+		if maxIdx < 0 {
+			continue
+		}
+		scope := sorted[maxIdx].ScopeID
+		if len(out) > 0 {
+			last := &out[len(out)-1]
+			if last.ScopeID == scope {
+				if inc, ok := last.To.checkedInc(); ok && inc.cmp(segFrom) == 0 {
+					last.To = segTo
+					continue
+				}
+			}
+		}
+		out = append(out, DesiredRecord[K]{From: segFrom, To: segTo, ScopeID: scope})
+	}
+	return out
+}
+
+// coalesceAdjacent merges records that are already adjacent (to+1 == next.from)
+// AND same scope. Does NOT split overlaps — retained for backward compatibility
+// with the k-way merge path.
 func coalesceAdjacent[K ipKey[K]](records []DesiredRecord[K]) []DesiredRecord[K] {
 	if len(records) <= 1 {
 		return records
@@ -77,7 +165,7 @@ func readSpillRecord[K ipKey[K]](buf []byte, kw int) DesiredRecord[K] {
 	}
 }
 
-// spillRun sorts + coalesces a chunk and writes it to a temp file. Returns the
+// spillRun sorts + normalizes a chunk and writes it to a temp file. Returns the
 // path. On error any partially-written file is removed.
 func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error) {
 	var zero K
@@ -85,7 +173,7 @@ func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].From.cmp(records[j].From) < 0
 	})
-	coalesced := coalesceAdjacent[K](records)
+	normalized := normalizeChunk[K](records)
 
 	f, err := os.CreateTemp(dir, "iprange_extsort_*")
 	if err != nil {
@@ -93,8 +181,8 @@ func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error
 	}
 	path := f.Name()
 	buf := make([]byte, spillRecordSize(kw))
-	for i := range coalesced {
-		writeSpillRecord(buf, &coalesced[i], kw)
+	for i := range normalized {
+		writeSpillRecord(buf, &normalized[i], kw)
 		if _, err := f.Write(buf); err != nil {
 			f.Close()
 			os.Remove(path)
@@ -340,4 +428,128 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		merge.runs = append(merge.runs, rr)
 	}
 	return &MergeStream[K]{merge: merge, runPaths: runPaths}, nil
+}
+
+// --- streaming sorter (fixes #1) ---
+
+// ExtSorter accepts records one at a time via Add, spills sorted chunks when
+// the buffer is full, and produces a sorted, disjoint, coalesced stream via
+// Finish. Memory bounded by ChunkSize × record_size.
+type ExtSorter[K ipKey[K]] struct {
+	config   *ExtSortConfig
+	chunk    []DesiredRecord[K]
+	runPaths []string
+	finished bool
+}
+
+// NewExtSorter creates an incremental external sorter.
+func NewExtSorter[K ipKey[K]](config *ExtSortConfig) *ExtSorter[K] {
+	if config == nil {
+		config = DefaultExtSortConfig()
+	}
+	if config.ChunkSize <= 0 {
+		config = DefaultExtSortConfig()
+	}
+	return &ExtSorter[K]{config: config}
+}
+
+// Add appends a record. When the chunk buffer reaches ChunkSize, it is sorted,
+// normalized, coalesced, and spilled to a temp file.
+func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
+	s.chunk = append(s.chunk, DesiredRecord[K]{From: from, To: to, ScopeID: scopeID})
+	if len(s.chunk) >= s.config.ChunkSize {
+		return s.spillChunk()
+	}
+	return nil
+}
+
+// Finish completes the sort and returns a sorted, disjoint, coalesced stream.
+func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
+	s.finished = true
+
+	// Spill any remaining records in the chunk buffer.
+	if len(s.chunk) > 0 {
+		if err := s.spillChunk(); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(s.runPaths) == 0 {
+		// No input at all.
+		return &SortedStream[K]{}, nil
+	}
+
+	if len(s.runPaths) == 1 {
+		// Single run: read back into memory (already sorted + normalized).
+		var zero K
+		kw := zero.width()
+		f, err := os.Open(s.runPaths[0])
+		if err != nil {
+			s.abort()
+			return nil, err
+		}
+		buf := make([]byte, spillRecordSize(kw))
+		recs := make([]DesiredRecord[K], 0)
+		for {
+			if _, err := io.ReadFull(f, buf); err != nil {
+				break
+			}
+			recs = append(recs, readSpillRecord[K](buf, kw))
+		}
+		f.Close()
+		os.Remove(s.runPaths[0])
+		return &SortedStream[K]{records: recs}, nil
+	}
+
+	// Multiple runs: k-way merge with coalescing.
+	dir := s.config.TempDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	_ = dir
+	merge := &kWayMerge[K]{runs: make([]*runReader[K], 0, len(s.runPaths))}
+	for _, p := range s.runPaths {
+		rr, err := openRunReader[K](p)
+		if err != nil {
+			for _, r := range merge.runs {
+				if r.file != nil {
+					r.file.Close()
+				}
+			}
+			s.abort()
+			return nil, err
+		}
+		merge.runs = append(merge.runs, rr)
+	}
+	return &MergeStream[K]{merge: merge, runPaths: s.runPaths}, nil
+}
+
+// Abort cleans up temp files. Alternative to Finish.
+func (s *ExtSorter[K]) Abort() {
+	s.abort()
+}
+
+func (s *ExtSorter[K]) abort() {
+	for _, p := range s.runPaths {
+		os.Remove(p)
+	}
+	s.runPaths = nil
+	s.chunk = nil
+}
+
+func (s *ExtSorter[K]) spillChunk() error {
+	if len(s.chunk) == 0 {
+		return nil
+	}
+	dir := s.config.TempDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	path, err := spillRun[K](s.chunk, dir)
+	if err != nil {
+		return err
+	}
+	s.runPaths = append(s.runPaths, path)
+	s.chunk = s.chunk[:0]
+	return nil
 }
