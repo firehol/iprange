@@ -141,7 +141,13 @@ impl<K: IpKey> Writer<K> {
         // Rebuild scope table (mode 2).
         self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
             if reg.is_empty() { 0 } else {
-                crate::scope_table::build_scope_tree(self.store.as_mut(), reg.entries())?
+                let scope_root = crate::scope_table::build_scope_tree(self.store.as_mut(), reg.entries())?;
+                // Register ALL scope tree pages in private_pages so they get
+                // CRC-finalized at commit (fixes invalid page checksums).
+                if scope_root != 0 {
+                    self.register_scope_pages(scope_root);
+                }
+                scope_root
             }
         } else { 0 };
         // Finalize CRCs on all private pages.
@@ -296,6 +302,30 @@ impl<K: IpKey> Writer<K> {
             let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
                 self.mark_scope_reachable(branch.child(j), reachable);
+            }
+        }
+    }
+
+    /// Walk the scope tree and register all pages in private_pages.
+    fn register_scope_pages(&mut self, root: u32) {
+        let mut pages = alloc::vec::Vec::new();
+        self.collect_scope_page_numbers(root, 0, &mut pages);
+        for pgno in pages {
+            self.private_pages.insert(pgno);
+        }
+    }
+
+    fn collect_scope_page_numbers(&self, pgno: u32, depth: u32, out: &mut alloc::vec::Vec<u32>) {
+        if depth > spec::TREE_HEIGHT_MAX || pgno as u64 >= self.store.total_pages() as u64 {
+            return;
+        }
+        out.push(pgno);
+        let page = self.store.page(pgno);
+        let h = PageHeader::decode(page);
+        if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
+            let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            for j in 0..branch.child_count() {
+                self.collect_scope_page_numbers(branch.child(j), depth + 1, out);
             }
         }
     }

@@ -222,6 +222,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 		if err != nil {
 			return err
 		}
+		// Register ALL scope tree pages in privatePages so they get
+		// CRC-finalized at commit (fixes invalid page checksums).
+		if root != 0 {
+			w.registerScopePages(root)
+		}
 		w.scopeTableRootCache = root
 	} else {
 		w.scopeTableRootCache = 0
@@ -390,6 +395,30 @@ func (w *Writer[K]) markScopeReachable(pgno uint32, reachable *pageSet) {
 }
 
 // resetTxn clears the private-pages bitset for the next transaction.
+// registerScopePages walks the scope tree and adds all pages to privatePages.
+func (w *Writer[K]) registerScopePages(root uint32) {
+	var pages []uint32
+	w.collectScopePageNumbers(root, 0, &pages)
+	for _, pgno := range pages {
+		w.privatePages.insert(pgno)
+	}
+}
+
+func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]uint32) {
+	if depth > TreeHeightMax || uint64(pgno) >= uint64(w.store.totalPages()) {
+		return
+	}
+	*out = append(*out, pgno)
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	if h.pageType == PageTypeScopeBranch {
+		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			w.collectScopePageNumbers(bv.child(j), depth+1, out)
+		}
+	}
+}
+
 func (w *Writer[K]) resetTxn() {
 	w.privatePages.clear()
 	w.privatePages.ensureCapacity(int(w.store.totalPages()))
