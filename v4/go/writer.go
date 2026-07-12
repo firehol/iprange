@@ -810,10 +810,18 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 			}
 		}
 	}
-	// Note: we do NOT collapse pendingRoot to 0 here when the tree
-	// becomes empty. The COW copies from the delete are in privatePages
-	// and must be tracked for proper CRC finalization and commit handling.
-	// The committed tree will correctly show record_count=0.
+	// F7 fix: collapse tree when all records are deleted. Move COW copies
+	// to freedThisTxn so they go to the free-list chain at commit.
+	if w.pendingRecordCount == 0 && w.pendingRoot != 0 {
+		for _, pgno := range w.privatePages.iter() {
+			if pgno >= 2 {
+				w.freedThisTxn = append(w.freedThisTxn, pgno)
+			}
+		}
+		w.privatePages.clear()
+		w.pendingRoot = 0
+		w.pendingHeight = 0
+	}
 	return nil
 }
 

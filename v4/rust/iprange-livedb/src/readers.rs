@@ -39,9 +39,9 @@ pub struct ReaderTable {
 
 #[allow(missing_debug_implementations)]
 pub struct ReaderGuard {
-    slot: usize,
-    pid: u32,
-    reader_id: u32,
+    pub slot: usize,
+    pub pid: u32,
+    pub reader_id: u32,
     path: PathBuf,
 }
 
@@ -126,6 +126,28 @@ impl ReaderTable {
         }
     }
 
+    /// Update the txn_id in a reader's slot. Used after the reader has
+    /// determined its pinned transaction: register with u64::MAX first
+    /// (preventing any reclamation), then update to the real txn_id.
+    pub fn update_txn_id(&mut self, slot: usize, pid: u32, reader_id: u32, txn_id: u64) {
+        let file = OpenOptions::new()
+            .read(true).write(true)
+            .open(&self.path).map_err(Error::Io);
+        let file = match file {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let fd = file.as_raw_fd();
+        if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 { return; }
+        // Only update if our pid+reader_id still match.
+        let stored_pid = self.slot_pid(slot);
+        let stored_rid = self.slot_reader_id(slot);
+        if stored_pid == pid && stored_rid == reader_id {
+            self.write_slot(slot, pid, reader_id, txn_id);
+        }
+        let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+    }
+
     pub fn oldest_reader_txn_id(&self) -> u64 {
         let mut oldest = u64::MAX;
         for i in 0..MAX_SLOTS {
@@ -176,6 +198,12 @@ impl ReaderTable {
     }
 
     #[inline]
+    fn slot_reader_id(&self, slot: usize) -> u32 {
+        let off = slot * SLOT_SIZE + SLOT_RID_OFF;
+        u32::from_le_bytes([self.mmap[off], self.mmap[off+1], self.mmap[off+2], self.mmap[off+3]])
+    }
+
+    #[inline]
     fn slot_txn_id(&self, slot: usize) -> u64 {
         let off = slot * SLOT_SIZE + SLOT_TXN_OFF;
         u64::from_le_bytes([
@@ -187,7 +215,9 @@ impl ReaderTable {
 
 impl Drop for ReaderTable {
     fn drop(&mut self) {
-        if let Some(slot) = self.my_slot { self.clear_slot(slot); }
+        // F5 fix: do NOT clear the slot here. ReaderGuard::drop already
+        // clears it. If both clear, a reader that reused the slot between
+        // the two drops would be incorrectly deregistered.
     }
 }
 

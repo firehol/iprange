@@ -2,6 +2,7 @@ package iprangedb
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"syscall"
 )
@@ -9,11 +10,12 @@ import (
 // MmapReader is a read-only mmap of a v4 file. Registers in the reader table
 // on open, deregisters on close.
 type MmapReader struct {
-	file  *os.File
-	data  []byte
-	guard *ReaderGuard
-	table *ReaderTable
-	path  string
+	file     *os.File
+	data     []byte
+	meta     meta
+	guard    *ReaderGuard
+	table    *ReaderTable
+	path     string
 }
 
 func OpenMmap(path string) (*MmapReader, error) {
@@ -38,51 +40,57 @@ func OpenMmap(path string) (*MmapReader, error) {
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
 
-	// CRC validation: only trust a meta whose checksum verifies.
-	metaA := decodeMeta(data[:PageSize])
-	metaB := decodeMeta(data[PageSize : 2*PageSize])
-	crcA := verifyPage(data[:PageSize])
-	crcB := verifyPage(data[PageSize : 2*PageSize])
-	var activeTxnID uint64
-	var activeRoot uint32
-	var activeHeight uint32
-	switch {
-	case crcA && crcB:
-		if metaA.txnID >= metaB.txnID {
-			activeTxnID, activeRoot, activeHeight = metaA.txnID, metaA.rootPgno, metaA.treeHeight
-		} else {
-			activeTxnID, activeRoot, activeHeight = metaB.txnID, metaB.rootPgno, metaB.treeHeight
-		}
-	case crcA:
-		activeTxnID, activeRoot, activeHeight = metaA.txnID, metaA.rootPgno, metaA.treeHeight
-	case crcB:
-		activeTxnID, activeRoot, activeHeight = metaB.txnID, metaB.rootPgno, metaB.treeHeight
-	default:
-		syscall.Munmap(data)
-		file.Close()
-		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
-	}
-
+	// F4 fix: register in reader table BEFORE reading meta pages.
+	// Register with MaxUint64 so no writer can reclaim pages while we
+	// determine and pin the transaction.
 	table, err := OpenReaderTable(path)
 	if err != nil {
 		syscall.Munmap(data)
 		file.Close()
 		return nil, fmt.Errorf("reader table: %w", err)
 	}
-	guard, err := table.Register(activeTxnID, activeRoot, activeHeight)
+	guard, err := table.Register(math.MaxUint64, 0, 0)
 	if err != nil {
 		table.Close()
 		syscall.Munmap(data)
 		file.Close()
 		return nil, fmt.Errorf("reader register: %w", err)
 	}
-	return &MmapReader{file: file, data: data, guard: guard, table: table, path: path}, nil
+
+	// CRC validation: only trust a meta whose checksum verifies.
+	metaA := decodeMeta(data[:PageSize])
+	metaB := decodeMeta(data[PageSize : 2*PageSize])
+	crcA := verifyPage(data[:PageSize])
+	crcB := verifyPage(data[PageSize : 2*PageSize])
+	var pinnedMeta meta
+	switch {
+	case crcA && crcB:
+		if metaA.txnID >= metaB.txnID { pinnedMeta = metaA } else { pinnedMeta = metaB }
+	case crcA:
+		pinnedMeta = metaA
+	case crcB:
+		pinnedMeta = metaB
+	default:
+		guard.Close()
+		table.Close()
+		syscall.Munmap(data)
+		file.Close()
+		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
+	}
+
+	// Update the reader slot with the real txn_id.
+	table.UpdateTxnID(guard.Slot, guard.Pid, guard.ReaderID,
+		pinnedMeta.txnID, pinnedMeta.rootPgno, pinnedMeta.treeHeight)
+
+	return &MmapReader{file: file, data: data, meta: pinnedMeta, guard: guard, table: table, path: path}, nil
 }
 
 func (m *MmapReader) Bytes() []byte { return m.data }
 
 func (m *MmapReader) Reader() (*Reader, error) {
-	return Open(m.data)
+	// F6 fix: use the pinned meta, not a fresh Open() which could pick
+	// up a newer transaction committed after we pinned.
+	return &Reader{bytes: m.data, meta: m.meta}, nil
 }
 
 func (m *MmapReader) Close() error {

@@ -41,6 +41,12 @@ impl MmapReader {
         let len = fmeta.len() as usize;
         if len < 2 * PAGE_SIZE { return Err(Error::Structural("file too small")); }
 
+        // F4 fix: register in the reader table BEFORE reading meta pages.
+        // Register with u64::MAX so no writer can reclaim pages while we
+        // read and pin the transaction. Update to the real txn_id after.
+        let mut table = ReaderTable::open(path)?;
+        let guard = table.register(u64::MAX)?;
+
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(Error::Io)? };
         let page0 = &mmap[..PAGE_SIZE];
         if read_magic(page0) != spec::MAGIC { return Err(Error::Structural("bad magic")); }
@@ -52,7 +58,6 @@ impl MmapReader {
         let meta_b = Meta::decode(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
 
         // CRC validation: only trust a meta whose checksum verifies.
-        // If both verify, pick the higher txn_id. If neither, the file is corrupt.
         let crc_a_ok = crate::crc32c::verify_page(&mmap[..PAGE_SIZE]);
         let crc_b_ok = crate::crc32c::verify_page(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
         let pinned_meta = match (crc_a_ok, crc_b_ok) {
@@ -62,16 +67,14 @@ impl MmapReader {
             (false, false) => return Err(Error::Structural("both meta pages fail CRC — corrupt file")),
         };
 
-        // Sparse-file hardening: verify the committed region has physical blocks.
-        // The growth region beyond committed_pages may be sparse (ftruncate'd);
-        // that's fine — readers never touch it.
+        // Sparse-file hardening.
         let committed_bytes = pinned_meta.total_pages as u64 * PAGE_SIZE as u64;
         if (fmeta.blocks() * 512) < committed_bytes {
             return Err(Error::Structural("committed region is sparse (hole)"));
         }
 
-        let mut table = ReaderTable::open(path)?;
-        let guard = table.register(pinned_meta.txn_id)?;
+        // Update the reader slot with the real txn_id now that we've pinned.
+        table.update_txn_id(guard.slot, guard.pid, guard.reader_id, pinned_meta.txn_id);
 
         Ok(MmapReader { _file: file, mmap, pinned_meta, _guard: guard, _table: table })
     }

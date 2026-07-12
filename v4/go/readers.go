@@ -50,9 +50,9 @@ type ReaderTable struct {
 // only clears the slot if they still match (avoids clobbering a different
 // reader that reused the slot).
 type ReaderGuard struct {
-	slot     int
-	pid      uint32
-	readerID uint32
+	Slot     int
+	Pid      uint32
+	ReaderID uint32
 	path     string
 }
 
@@ -68,12 +68,12 @@ func (g *ReaderGuard) Close() error {
 		return nil
 	}
 	defer syscall.Munmap(data)
-	off := g.slot * slotSize
+	off := g.Slot * slotSize
 	if off+slotReaderIDOff+4 <= len(data) {
 		// Only clear if our pid+reader_id still match.
 		storedPid := u32le(data, off+slotPidOff)
 		storedRid := u32le(data, off+slotReaderIDOff)
-		if storedPid == g.pid && storedRid == g.readerID {
+		if storedPid == g.Pid && storedRid == g.ReaderID {
 			putU32(data, off+slotPidOff, 0)
 		}
 	}
@@ -142,7 +142,28 @@ func (t *ReaderTable) Register(txnID uint64, root uint32, height uint32) (*Reade
 	}
 	t.writeSlot(slot, pid, readerID, txnID, root, height)
 	t.mySlot = slot
-	return &ReaderGuard{slot: slot, pid: pid, readerID: readerID, path: t.path}, nil
+	return &ReaderGuard{Slot: slot, Pid: pid, ReaderID: readerID, path: t.path}, nil
+}
+
+// UpdateTxnID updates the txn_id in a reader's slot after the reader has
+// determined its pinned transaction. Used with the F4 fix: register with
+// MaxUint64 first (preventing reclamation), then update to the real txn_id.
+func (t *ReaderTable) UpdateTxnID(slot int, pid, readerID uint32, txnID uint64, root uint32, height uint32) {
+	flockFile, err := os.OpenFile(t.path, os.O_RDWR, 0644)
+	if err != nil {
+		return
+	}
+	defer flockFile.Close()
+	if err := syscall.Flock(int(flockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return
+	}
+	defer syscall.Flock(int(flockFile.Fd()), syscall.LOCK_UN)
+
+	storedPid := t.slotPid(slot)
+	storedRid := t.slotReaderID(slot)
+	if storedPid == pid && storedRid == readerID {
+		t.writeSlot(slot, pid, readerID, txnID, root, height)
+	}
 }
 
 // OldestReaderTxnID returns the oldest active reader generation.
@@ -190,9 +211,9 @@ func (t *ReaderTable) ReapStale() int {
 }
 
 func (t *ReaderTable) Close() error {
-	if t.mySlot >= 0 {
-		t.clearSlot(t.mySlot)
-	}
+	// F5 fix: do NOT clear the slot here. ReaderGuard.Close already
+	// clears it. If both clear, a reader that reused the slot between
+	// the two closes would be incorrectly deregistered.
 	if t.data != nil {
 		syscall.Munmap(t.data)
 		t.data = nil

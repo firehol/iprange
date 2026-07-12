@@ -555,10 +555,26 @@ impl<K: IpKey> Writer<K> {
                 }
             }
         }
-        // Note: we do NOT collapse pending_root to 0 here when the tree
-        // becomes empty. The COW copies from the delete are in private_pages
-        // and must be tracked for proper CRC finalization and commit handling.
-        // The committed tree will correctly show record_count=0.
+        // F7 fix: collapse tree when all records are deleted. The COW
+        // copies (private_pages) are now unreachable from pending_root.
+        // Move them to freed_this_txn so they go to the free-list chain
+        // at commit and can be reused in future transactions.
+        if self.pending_record_count == 0 && self.pending_root != 0 {
+            for pgno in self.private_pages.iter() {
+                if pgno >= 2 {
+                    self.freed_this_txn.push(pgno);
+                }
+            }
+            // Clear private_pages for the remaining CRC loop — these pages
+            // are now free, not live. But we must still CRC-finalize the
+            // chain pages that will be allocated in commit. Keep the
+            // private_pages bitset for the CRC pass (it only finalizes
+            // pages >= 2 that are in the set, and we just pushed them all
+            // to freed_this_txn). Clear the set so the CRC pass skips them.
+            self.private_pages.clear();
+            self.pending_root = 0;
+            self.pending_height = 0;
+        }
         Ok(())
     }
 

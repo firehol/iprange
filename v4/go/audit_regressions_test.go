@@ -118,8 +118,7 @@ func TestAuditF3Mode2FeedUpdatePersists(t *testing.T) {
 	}
 }
 
-// F7: Delete-all must zero record_count but must NOT collapse pendingRoot
-// (the Rust reference reverted that collapse — it breaks COW/CRC tracking).
+// F7: Delete-all must collapse the tree (root=0, height=0, record_count=0).
 func TestAuditF7DeleteAllShrinksTree(t *testing.T) {
 	w, err := Create[Ipv4Key](ScopeModeScalar, 0)
 	if err != nil {
@@ -139,8 +138,9 @@ func TestAuditF7DeleteAllShrinksTree(t *testing.T) {
 	if err := w.Commit(2, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
-	if w.pendingRecordCount != 0 {
-		t.Fatalf("pendingRecordCount=%d want 0", w.pendingRecordCount)
+	if w.pendingRoot != 0 || w.pendingHeight != 0 || w.pendingRecordCount != 0 {
+		t.Fatalf("tree not collapsed: root=%d height=%d records=%d",
+			w.pendingRoot, w.pendingHeight, w.pendingRecordCount)
 	}
 	img, _ := w.IntoImage()
 	r, err := Open(img)
