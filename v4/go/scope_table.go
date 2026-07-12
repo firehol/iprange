@@ -46,9 +46,9 @@ func ScopeRegistryFromEntries(entries []ScopeEntry) *ScopeRegistry {
 
 // Intern finds or creates a scope_id for the given bitmap.
 // O(1) lookup via bitmapIndex.
-func (r *ScopeRegistry) Intern(bitmap []byte) uint32 {
+func (r *ScopeRegistry) Intern(bitmap []byte) (uint32, bool) {
 	if id, ok := r.bitmapIndex[string(bitmap)]; ok {
-		return id
+		return id, false
 	}
 	id := r.nextID
 	r.nextID++
@@ -56,7 +56,7 @@ func (r *ScopeRegistry) Intern(bitmap []byte) uint32 {
 	copy(stored, bitmap)
 	r.bitmapIndex[string(stored)] = id
 	r.entries = append(r.entries, ScopeEntry{ScopeID: id, Bitmap: stored})
-	return id
+	return id, true
 }
 
 // Resolve returns the bitmap for a scope_id, or nil if not found.
@@ -84,7 +84,8 @@ func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32) uint32 {
 		newBm = padded
 	}
 	newBm[byteIdx] |= 1 << bitIdx
-	return r.Intern(newBm)
+	id, _ := r.Intern(newBm)
+	return id
 }
 
 // BitmapClearFeed clears a feed bit. Returns the new scope_id (0 if empty).
@@ -109,7 +110,8 @@ func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32) uint32 {
 	if allZero {
 		return 0
 	}
-	return r.Intern(newBm)
+	id, _ := r.Intern(newBm)
+	return id
 }
 
 func (r *ScopeRegistry) Entries() []ScopeEntry { return r.entries }
@@ -155,7 +157,7 @@ func decodeScopeEntry(rec []byte) ScopeEntry {
 }
 
 // BuildScopeTree creates the scope table B+tree in the page store.
-func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32) (uint32, error) {
+func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32, freePool *[]uint32) (uint32, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -178,9 +180,16 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32) 
 			end = len(sorted)
 		}
 		chunk := sorted[i:end]
-		pgno, err := store.allocPage()
-		if err != nil {
-			return 0, err
+		var pgno uint32
+		if len(*freePool) > 0 {
+			pgno = (*freePool)[len(*freePool)-1]
+			*freePool = (*freePool)[:len(*freePool)-1]
+		} else {
+			var err error
+			pgno, err = store.allocPage()
+			if err != nil {
+				return 0, err
+			}
 		}
 		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
@@ -214,9 +223,16 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32) 
 		if count > branchMax {
 			count = branchMax
 		}
-		pgno, err := store.allocPage()
-		if err != nil {
-			return 0, err
+		var pgno uint32
+		if len(*freePool) > 0 {
+			pgno = (*freePool)[len(*freePool)-1]
+			*freePool = (*freePool)[:len(*freePool)-1]
+		} else {
+			var err error
+			pgno, err = store.allocPage()
+			if err != nil {
+				return 0, err
+			}
 		}
 		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
@@ -236,12 +252,12 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32) 
 		childIdx += count
 	}
 
-	return buildBranchLevels(allocated, store, branchPgnos, seps, sepWidth, branchMax)
+	return buildBranchLevels(allocated, freePool, store, branchPgnos, seps, sepWidth, branchMax)
 }
 
 // buildBranchLevels recursively builds branch levels until a single root remains.
 // This removes the old single-level 7635-leaf limit (fixes #6).
-func buildBranchLevels(allocated *[]uint32, store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
+func buildBranchLevels(allocated *[]uint32, freePool *[]uint32, store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
 	if len(children) == 1 {
 		return children[0], nil
 	}
@@ -258,9 +274,16 @@ func buildBranchLevels(allocated *[]uint32, store pageStore, children []uint32, 
 		if count > branchMax {
 			count = branchMax
 		}
-		pgno, err := store.allocPage()
-		if err != nil {
-			return 0, err
+		var pgno uint32
+		if len(*freePool) > 0 {
+			pgno = (*freePool)[len(*freePool)-1]
+			*freePool = (*freePool)[:len(*freePool)-1]
+		} else {
+			var err error
+			pgno, err = store.allocPage()
+			if err != nil {
+				return 0, err
+			}
 		}
 		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
@@ -291,7 +314,7 @@ func buildBranchLevels(allocated *[]uint32, store pageStore, children []uint32, 
 	if len(branchPgnos) == 1 {
 		return branchPgnos[0], nil
 	}
-	return buildBranchLevels(allocated, store, branchPgnos, newSeps, sepWidth, branchMax)
+	return buildBranchLevels(allocated, freePool, store, branchPgnos, newSeps, sepWidth, branchMax)
 }
 
 // ReadAllScopes reads all scope entries from a committed scope table.

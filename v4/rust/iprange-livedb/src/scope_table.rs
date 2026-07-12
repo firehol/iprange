@@ -58,17 +58,18 @@ impl ScopeRegistry {
 
     /// Find or create a scope_id for the given bitmap.
     /// Returns the scope_id. If the bitmap already exists, reuses its id.
-    pub fn intern(&mut self, bitmap: &[u8]) -> u32 {
-        // O(1) lookup via bitmap_index.
+    /// Intern a bitmap. Returns (scope_id, was_new).
+    /// was_new = true only when a new entry was actually created.
+    pub fn intern(&mut self, bitmap: &[u8]) -> (u32, bool) {
         if let Some(&id) = self.bitmap_index.get(bitmap) {
-            return id;
+            return (id, false);
         }
         let id = self.next_id;
         self.next_id += 1;
         let bm = bitmap.to_vec();
         self.bitmap_index.insert(bm.clone(), id);
         self.entries.push(ScopeEntry { scope_id: id, bitmap: bm });
-        id
+        (id, true)
     }
 
     /// Resolve a scope_id to its bitmap. Returns None if not found.
@@ -92,7 +93,7 @@ impl ScopeRegistry {
             new_bitmap.resize(byte_idx + 1, 0);
         }
         new_bitmap[byte_idx] |= 1 << bit_idx;
-        self.intern(&new_bitmap)
+        self.intern(&new_bitmap).0
     }
 
     /// Clear a feed bit from a bitmap. Returns the new scope_id, or 0 if the
@@ -112,7 +113,7 @@ impl ScopeRegistry {
         if new_bitmap.iter().all(|&b| b == 0) {
             return 0; // empty
         }
-        self.intern(&new_bitmap)
+        self.intern(&new_bitmap).0
     }
 
     /// All entries (for commit-time bulk rebuild).
@@ -156,6 +157,7 @@ pub fn build_scope_tree(
     store: &mut dyn crate::page_store::PageStore,
     entries: &[ScopeEntry],
     allocated: &mut Vec<u32>,
+    free_pool: &mut Vec<u32>,
 ) -> Result<u32> {
     if entries.is_empty() {
         return Ok(0);
@@ -172,7 +174,7 @@ pub fn build_scope_tree(
     let mut seps: Vec<u32> = Vec::new(); // first scope_id of each leaf after the first
 
     for chunk in sorted.chunks(leaf_max) {
-        let pgno = store.alloc_page()?;
+        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -204,7 +206,7 @@ pub fn build_scope_tree(
     while child_idx < leaf_pgnos.len() {
         let remaining = leaf_pgnos.len() - child_idx;
         let count = remaining.min(branch_max);
-        let pgno = store.alloc_page()?;
+        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -223,12 +225,13 @@ pub fn build_scope_tree(
         child_idx += count;
     }
 
-    build_branch_levels(allocated, store, &branch_pgnos, &seps, sep_width, branch_max)
+    build_branch_levels(allocated, free_pool, store, &branch_pgnos, &seps, sep_width, branch_max)
 }
 
 /// Recursively build branch levels until a single root remains.
 fn build_branch_levels(
     allocated: &mut Vec<u32>,
+    free_pool: &mut Vec<u32>,
     store: &mut dyn crate::page_store::PageStore,
     children: &[u32],
     all_seps: &[u32],
@@ -248,7 +251,7 @@ fn build_branch_levels(
     while child_idx < children.len() {
         let remaining = children.len() - child_idx;
         let count = remaining.min(branch_max);
-        let pgno = store.alloc_page()?;
+        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -283,7 +286,7 @@ fn build_branch_levels(
     if branch_pgnos.len() == 1 {
         Ok(branch_pgnos[0])
     } else {
-        build_branch_levels(allocated, store, &branch_pgnos, &new_seps, sep_width, branch_max)
+        build_branch_levels(allocated, free_pool, store, &branch_pgnos, &new_seps, sep_width, branch_max)
     }
 }
 
@@ -337,9 +340,9 @@ mod tests {
     #[test]
     fn intern_and_resolve() {
         let mut reg = ScopeRegistry::new();
-        let id1 = reg.intern(&[0b00000001]); // feed 0
-        let id2 = reg.intern(&[0b00000010]); // feed 1
-        let id1b = reg.intern(&[0b00000001]); // same as id1
+        let (id1, _) = reg.intern(&[0b00000001]); // feed 0
+        let (id2, _) = reg.intern(&[0b00000010]); // feed 1
+        let (id1b, _) = reg.intern(&[0b00000001]); // same as id1
 
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
@@ -351,7 +354,7 @@ mod tests {
     #[test]
     fn bitmap_set_clear_feed() {
         let mut reg = ScopeRegistry::new();
-        let empty = reg.intern(&[]); // empty bitmap (presence only)
+        let (empty, _) = reg.intern(&[]); // empty bitmap (presence only)
         let with_feed0 = reg.bitmap_set_feed(empty, 0);
         assert_ne!(with_feed0, empty);
         let resolved = reg.resolve(with_feed0).unwrap();
@@ -380,7 +383,7 @@ mod tests {
         for i in 0..100u32 {
             let mut bitmap = vec![0u8; (i / 8 + 1) as usize];
             bitmap[i as usize / 8] = 1 << (i % 8);
-            reg.intern(&bitmap);
+            let _ = reg.intern(&bitmap);
         }
         assert_eq!(reg.len(), 100);
         // Each unique bitmap gets its own scope_id

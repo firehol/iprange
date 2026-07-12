@@ -143,15 +143,16 @@ impl<K: IpKey> Writer<K> {
         self.check()?;
         // Rebuild scope table (mode 2).
         if self.scope_dirty {
-            // Free old scope table pages so they can be reused.
+            // Collect old scope tree pages for reuse.
+            let mut free_pool = Vec::new();
             if self.scope_table_root_cache != 0 {
-                self.register_scope_pages(self.scope_table_root_cache);
+                self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut free_pool);
             }
             self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
                 if reg.is_empty() { 0 } else {
                     let mut allocated = Vec::new();
                     let root = crate::scope_table::build_scope_tree(
-                        self.store.as_mut(), reg.entries(), &mut allocated,
+                        self.store.as_mut(), reg.entries(), &mut allocated, &mut free_pool,
                     )?;
                     // Register scope pages in private_pages for CRC finalization.
                     for pgno in &allocated {
@@ -698,9 +699,12 @@ impl<K: IpKey> Writer<K> {
     // ── scope table operations (mode 2 only) ──
 
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
-        self.scope_dirty = true;
         match &mut self.scope_registry {
-            Some(reg) => Ok(reg.intern(bitmap)),
+            Some(reg) => {
+                let (id, was_new) = reg.intern(bitmap);
+                if was_new { self.scope_dirty = true; }
+                Ok(id)
+            }
             None => Err(Error::State("scope_intern requires scope_mode == 2")),
         }
     }
@@ -771,7 +775,11 @@ impl<K: IpKey> Writer<K> {
                 let mut bm = vec![0u8; byte_idx + 1];
                 bm[byte_idx] |= 1 << (feed_bit % 8);
                 match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.intern(&bm)),
+                    Some(reg) => {
+                        let (id, was_new) = reg.intern(&bm);
+                        if was_new { self.scope_dirty = true; }
+                        Ok(id)
+                    }
                     None => Err(Error::State("requires scope_mode == 2")),
                 }
             }

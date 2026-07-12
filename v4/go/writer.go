@@ -219,8 +219,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	}
 	// Rebuild scope table (mode 2) only if the registry changed.
 	if w.scopeDirty {
+		// Collect old scope tree pages for reuse.
+		var freePool []uint32
+		if w.scopeTableRootCache != 0 {
+			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &freePool)
+		}
 		var allocated []uint32
-		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated)
+		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated, &freePool)
 		if err != nil {
 			return err
 		}
@@ -978,11 +983,14 @@ func (w *Writer[K]) Scan(f func(from, to K, scopeID uint32)) error {
 // --- scope table operations (mode 2 only) ---
 
 func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
-	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
 	}
-	return w.scopeRegistry.Intern(bitmap), nil
+	id, wasNew := w.scopeRegistry.Intern(bitmap)
+	if wasNew {
+		w.scopeDirty = true
+	}
+	return id, nil
 }
 
 func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
@@ -1279,7 +1287,11 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 		}
 		bm := make([]byte, feedBit/8+1)
 		bm[feedBit/8] |= 1 << (feedBit % 8)
-		return w.scopeRegistry.Intern(bm), nil
+		id, wasNew := w.scopeRegistry.Intern(bm)
+		if wasNew {
+			w.scopeDirty = true
+		}
+		return id, nil
 	default:
 		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}
