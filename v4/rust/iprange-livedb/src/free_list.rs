@@ -73,11 +73,13 @@ pub fn read_chain_page_numbers(store: &dyn PageStore, head: u32) -> Vec<u32> {
 }
 
 /// Filter free-list entries by MVCC safety.
-/// Only pages freed in txn_id <= oldest_reader_txn_id are reclaimable.
+/// Only pages freed in txn_id < oldest_reader_txn_id are reclaimable.
+/// A page tagged with txn T was last live in txn T — a reader pinned at
+/// txn T still needs it. So reclamation requires strict < .
 /// If oldest_reader_txn_id == u64::MAX, all entries are reclaimable.
 pub fn reclaimable(entries: &[FreeEntry], oldest_reader_txn_id: u64) -> Vec<u32> {
     entries.iter()
-        .filter(|e| oldest_reader_txn_id == u64::MAX || e.freed_txn_id <= oldest_reader_txn_id)
+        .filter(|e| oldest_reader_txn_id == u64::MAX || e.freed_txn_id < oldest_reader_txn_id)
         .map(|e| e.pgno)
         .collect()
 }
@@ -233,9 +235,13 @@ mod tests {
             FreeEntry { pgno: 2, freed_txn_id: 7 },
             FreeEntry { pgno: 3, freed_txn_id: 3 },
         ];
-        // Reader at txn 5: reclaim entries with freed_txn <= 5.
+        // Reader at txn 5: a page tagged with txn 5 was last live in txn 5 —
+        // the reader still needs it. Only txn < 5 is reclaimable.
         let free = reclaimable(&entries, 5);
-        assert_eq!(free, vec![1, 3]); // pgno 1 (txn 5) and pgno 3 (txn 3)
+        assert_eq!(free, vec![3]); // only pgno 3 (txn 3 < 5)
+        // Reader at txn 6: pages tagged 5 and 3 are reclaimable (both < 6).
+        let free6 = reclaimable(&entries, 6);
+        assert_eq!(free6, vec![1, 3]);
         // No readers: reclaim all.
         let all = reclaimable(&entries, u64::MAX);
         assert_eq!(all.len(), 3);

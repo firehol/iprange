@@ -124,9 +124,24 @@ impl<K: IpKey> FileWriter<K> {
 
         let meta_a = Meta::decode(&buf[..PAGE_SIZE]);
         let meta_b = Meta::decode(&buf[PAGE_SIZE..2 * PAGE_SIZE]);
-        let committed_pages = if meta_a.txn_id >= meta_b.txn_id {
-            meta_a.total_pages
-        } else { meta_b.total_pages } as u32;
+
+        // CRC validation: detect torn meta writes. Only trust a meta whose
+        // checksum verifies. If both verify, pick the higher txn_id.
+        // If neither verifies, the file is corrupt.
+        let crc_a_ok = crate::crc32c::verify_page(&buf[..PAGE_SIZE]);
+        let crc_b_ok = crate::crc32c::verify_page(&buf[PAGE_SIZE..2 * PAGE_SIZE]);
+        let committed_pages = match (crc_a_ok, crc_b_ok) {
+            (true, true) => {
+                if meta_a.txn_id >= meta_b.txn_id { meta_a.total_pages as u32 }
+                else { meta_b.total_pages as u32 }
+            }
+            (true, false) => meta_a.total_pages as u32,
+            (false, true) => meta_b.total_pages as u32,
+            (false, false) => {
+                let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+                return Err(Error::Structural("both meta pages fail CRC — corrupt file"));
+            }
+        };
 
         let store = MmapStore::open(file.try_clone().map_err(Error::Io)?, committed_pages)?;
         let mut writer = Writer::<K>::open(Box::new(store))?;

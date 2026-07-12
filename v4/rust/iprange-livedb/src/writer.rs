@@ -235,6 +235,25 @@ impl<K: IpKey> Writer<K> {
             });
         }
 
+        // Rule 5: compute trailing free pages that can be truncated.
+        // This must happen BEFORE writing the chain so truncated pages
+        // don't appear as stale entries in the chain.
+        let pre_truncate_total = self.store.total_pages();
+        let trailing: u32 = if oldest_reader_txn_id == u64::MAX {
+            let free_pgnos: alloc::vec::Vec<u32> = entries_to_write.iter()
+                .map(|e| e.pgno)
+                .collect();
+            crate::free_list::trailing_free_count(&free_pgnos, pre_truncate_total)
+        } else { 0 };
+
+        let new_total = pre_truncate_total - trailing;
+
+        // Remove trailing pages from entries_to_write so the chain doesn't
+        // reference pages that will be truncated.
+        if trailing > 0 {
+            entries_to_write.retain(|e| e.pgno < new_total);
+        }
+
         // Allocate chain pages: prefer reusing a freed page as the first chain
         // page (Rule 5: no unbounded file growth). Only safe when no readers
         // are active — otherwise freed pages may still be referenced by a
@@ -266,7 +285,14 @@ impl<K: IpKey> Writer<K> {
             self.store.as_mut(), &entries_to_write, &chain_pages,
         )?;
 
-        let total = self.store.total_pages();
+        // Truncate trailing free pages now that the chain no longer references them.
+        let total = if trailing > 0 {
+            self.store.truncate(new_total)?;
+            new_total
+        } else {
+            self.store.total_pages()
+        };
+
         let inactive = 1 - self.active_meta;
         let new_txn_id = self.committed_txn_id + 1;
         self.write_meta_page(inactive, new_txn_id, self.pending_root, self.pending_height,
@@ -283,21 +309,6 @@ impl<K: IpKey> Writer<K> {
         self.store.set_committed_pages(total);
         self.reset_txn();
         self.load_free_list(oldest_reader_txn_id);
-
-        // Rule 5: shrink the file by truncating trailing free pages.
-        // Only truncate when no readers are active (they may reference
-        // trailing pages via mmap). When readers exist, keep the growth
-        // region intact to avoid SIGBUS on the reader's mmap.
-        if oldest_reader_txn_id == u64::MAX {
-            let trailing = crate::free_list::trailing_free_count(
-                &self.free_pages, self.store.total_pages(),
-            );
-            if trailing > 0 {
-                self.store.truncate(self.store.total_pages() - trailing)?;
-                // Reload free list after truncation (trailing pages removed).
-                self.load_free_list(oldest_reader_txn_id);
-            }
-        }
 
         Ok(())
     }

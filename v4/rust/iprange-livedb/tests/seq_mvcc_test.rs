@@ -1,5 +1,6 @@
 //! Sequential MVCC test — no fork. Verifies reader snapshot isolation
-//! when writer commits subsequent transactions.
+//! when writer commits 2+ subsequent transactions (the off-by-one in
+//! reclaimable only manifests on the second commit).
 use iprange_livedb::{Ipv4Key};
 use iprange_livedb::os::{FileWriter, MmapReader};
 
@@ -12,7 +13,7 @@ fn temp_db(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn sequential_mvcc() {
+fn sequential_mvcc_two_commits() {
     let path = temp_db("smvcc");
 
     // 1. Create + populate txn 1.
@@ -44,21 +45,40 @@ fn sequential_mvcc() {
         w.close();
     }
 
-    // 5. Reader should STILL see txn 1 data (pinned meta).
+    // 5. Reader should STILL see txn 1 data after first commit.
     {
         let r = rdr.reader().unwrap();
         for i in 0..10u32 {
             assert_eq!(r.lookup(Ipv4Key(i * 50)).unwrap(), Some(i * 50),
-                "MVCC violation at {}", i * 50);
+                "MVCC violation after commit 2 at {}", i * 50);
         }
     }
 
-    // 6. A NEW reader sees txn 2 data.
+    // 6. Writer commits txn 3 (second churn — this is where the off-by-one
+    //    would reclaim pages still needed by the reader).
+    {
+        let mut w = FileWriter::<Ipv4Key>::open(&path).unwrap();
+        for i in 0..500u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+        for i in 0..500u32 { w.set(Ipv4Key(i), Ipv4Key(i), i + 200).unwrap(); }
+        w.commit(3).unwrap();
+        w.close();
+    }
+
+    // 7. Reader should STILL see txn 1 data after second commit.
+    {
+        let r = rdr.reader().unwrap();
+        for i in 0..10u32 {
+            assert_eq!(r.lookup(Ipv4Key(i * 50)).unwrap(), Some(i * 50),
+                "MVCC violation after commit 3 at {}", i * 50);
+        }
+    }
+
+    // 8. A NEW reader sees txn 3 data.
     let rdr2 = MmapReader::open(&path).unwrap();
     {
         let r = rdr2.reader().unwrap();
         for i in 0..10u32 {
-            assert_eq!(r.lookup(Ipv4Key(i * 50)).unwrap(), Some(i * 50 + 100),
+            assert_eq!(r.lookup(Ipv4Key(i * 50)).unwrap(), Some(i * 50 + 200),
                 "new reader should see latest at {}", i * 50);
         }
     }
