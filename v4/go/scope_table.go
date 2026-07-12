@@ -155,7 +155,7 @@ func decodeScopeEntry(rec []byte) ScopeEntry {
 }
 
 // BuildScopeTree creates the scope table B+tree in the page store.
-func buildScopeTree(store pageStore, entries []ScopeEntry) (uint32, error) {
+func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32) (uint32, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
@@ -182,6 +182,7 @@ func buildScopeTree(store pageStore, entries []ScopeEntry) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
+		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
 		for j := range page {
 			page[j] = 0
@@ -217,6 +218,7 @@ func buildScopeTree(store pageStore, entries []ScopeEntry) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
+		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
 		for j := range page {
 			page[j] = 0
@@ -234,12 +236,12 @@ func buildScopeTree(store pageStore, entries []ScopeEntry) (uint32, error) {
 		childIdx += count
 	}
 
-	return buildBranchLevels(store, branchPgnos, seps, sepWidth, branchMax)
+	return buildBranchLevels(allocated, store, branchPgnos, seps, sepWidth, branchMax)
 }
 
 // buildBranchLevels recursively builds branch levels until a single root remains.
 // This removes the old single-level 7635-leaf limit (fixes #6).
-func buildBranchLevels(store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
+func buildBranchLevels(allocated *[]uint32, store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
 	if len(children) == 1 {
 		return children[0], nil
 	}
@@ -260,6 +262,7 @@ func buildBranchLevels(store pageStore, children []uint32, allSeps []uint32, sep
 		if err != nil {
 			return 0, err
 		}
+		*allocated = append(*allocated, pgno)
 		page := store.pageMut(pgno)
 		for j := range page {
 			page[j] = 0
@@ -288,7 +291,7 @@ func buildBranchLevels(store pageStore, children []uint32, allSeps []uint32, sep
 	if len(branchPgnos) == 1 {
 		return branchPgnos[0], nil
 	}
-	return buildBranchLevels(store, branchPgnos, newSeps, sepWidth, branchMax)
+	return buildBranchLevels(allocated, store, branchPgnos, newSeps, sepWidth, branchMax)
 }
 
 // ReadAllScopes reads all scope entries from a committed scope table.

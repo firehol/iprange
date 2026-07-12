@@ -155,6 +155,7 @@ pub fn decode_entry(rec: &[u8]) -> ScopeEntry {
 pub fn build_scope_tree(
     store: &mut dyn crate::page_store::PageStore,
     entries: &[ScopeEntry],
+    allocated: &mut Vec<u32>,
 ) -> Result<u32> {
     if entries.is_empty() {
         return Ok(0);
@@ -172,6 +173,7 @@ pub fn build_scope_tree(
 
     for chunk in sorted.chunks(leaf_max) {
         let pgno = store.alloc_page()?;
+        allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_SCOPE_LEAF, chunk.len() as u16, pgno);
@@ -203,6 +205,7 @@ pub fn build_scope_tree(
         let remaining = leaf_pgnos.len() - child_idx;
         let count = remaining.min(branch_max);
         let pgno = store.alloc_page()?;
+        allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
         // child[0]
@@ -220,11 +223,12 @@ pub fn build_scope_tree(
         child_idx += count;
     }
 
-    build_branch_levels(store, &branch_pgnos, &seps, sep_width, branch_max)
+    build_branch_levels(allocated, store, &branch_pgnos, &seps, sep_width, branch_max)
 }
 
 /// Recursively build branch levels until a single root remains.
 fn build_branch_levels(
+    allocated: &mut Vec<u32>,
     store: &mut dyn crate::page_store::PageStore,
     children: &[u32],
     all_seps: &[u32],
@@ -245,6 +249,7 @@ fn build_branch_levels(
         let remaining = children.len() - child_idx;
         let count = remaining.min(branch_max);
         let pgno = store.alloc_page()?;
+        allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count - 1) as u16, pgno);
@@ -278,7 +283,7 @@ fn build_branch_levels(
     if branch_pgnos.len() == 1 {
         Ok(branch_pgnos[0])
     } else {
-        build_branch_levels(store, &branch_pgnos, &new_seps, sep_width, branch_max)
+        build_branch_levels(allocated, store, &branch_pgnos, &new_seps, sep_width, branch_max)
     }
 }
 

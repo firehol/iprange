@@ -56,6 +56,7 @@ type Writer[K ipKey[K]] struct {
 
 	scopeRegistry      *ScopeRegistry
 	scopeTableRootCache uint32
+	scopeDirty         bool
 }
 
 func scopeRegForMode(scopeMode uint8) *ScopeRegistry {
@@ -84,7 +85,7 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		prevCommittedHeight: 0,
 		privatePages:        newPageSet(2),
 		scopeRegistry:       scopeRegForMode(scopeMode),
-		scopeTableRootCache: 0,
+		scopeTableRootCache: 0, scopeDirty: false,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -147,7 +148,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		pendingRecordCount:  active.recordCount,
 		privatePages:        newPageSet(int(active.totalPages)),
 		scopeRegistry:       nil,
-		scopeTableRootCache: active.scopeTableRoot,
+		scopeTableRootCache: active.scopeTableRoot, scopeDirty: false,
 	}
 	// Load scope table for mode 2.
 	if active.scopeMode == ScopeModeIndirect {
@@ -216,20 +217,19 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
-	// Rebuild scope table (mode 2).
-	if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
-		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries())
+	// Rebuild scope table (mode 2) only if the registry changed.
+	if w.scopeDirty {
+		var allocated []uint32
+		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated)
 		if err != nil {
 			return err
 		}
-		// Register ALL scope tree pages in privatePages so they get
-		// CRC-finalized at commit (fixes invalid page checksums).
-		if root != 0 {
-			w.registerScopePages(root)
+		// Register scope pages in privatePages for CRC finalization.
+		for _, pgno := range allocated {
+			w.privatePages.insert(pgno)
 		}
 		w.scopeTableRootCache = root
-	} else {
-		w.scopeTableRootCache = 0
+		w.scopeDirty = false
 	}
 	// Finalize CRCs on all private pages.
 	for _, pgno := range w.privatePages.iter() {
@@ -978,6 +978,7 @@ func (w *Writer[K]) Scan(f func(from, to K, scopeID uint32)) error {
 // --- scope table operations (mode 2 only) ---
 
 func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
+	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
 	}

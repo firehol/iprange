@@ -49,6 +49,7 @@ pub struct Writer<K: IpKey> {
     free_pos: usize,
     scope_registry: Option<crate::scope_table::ScopeRegistry>,
     scope_table_root_cache: u32,
+    scope_dirty: bool,
     _k: PhantomData<K>,
 }
 
@@ -67,6 +68,7 @@ impl<K: IpKey> Writer<K> {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
             scope_table_root_cache: 0,
+            scope_dirty: false,
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -103,6 +105,7 @@ impl<K: IpKey> Writer<K> {
             private_pages: PageSet::new(active.total_pages as usize),
             free_pages: vec![], free_pos: 0,
             scope_registry: scope_reg, scope_table_root_cache: active.scope_table_root,
+            scope_dirty: false,
             _k: PhantomData,
         };
         w.derive_free_pages();
@@ -139,17 +142,26 @@ impl<K: IpKey> Writer<K> {
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         self.check()?;
         // Rebuild scope table (mode 2).
-        self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
-            if reg.is_empty() { 0 } else {
-                let scope_root = crate::scope_table::build_scope_tree(self.store.as_mut(), reg.entries())?;
-                // Register ALL scope tree pages in private_pages so they get
-                // CRC-finalized at commit (fixes invalid page checksums).
-                if scope_root != 0 {
-                    self.register_scope_pages(scope_root);
-                }
-                scope_root
+        if self.scope_dirty {
+            // Free old scope table pages so they can be reused.
+            if self.scope_table_root_cache != 0 {
+                self.register_scope_pages(self.scope_table_root_cache);
             }
-        } else { 0 };
+            self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
+                if reg.is_empty() { 0 } else {
+                    let mut allocated = Vec::new();
+                    let root = crate::scope_table::build_scope_tree(
+                        self.store.as_mut(), reg.entries(), &mut allocated,
+                    )?;
+                    // Register scope pages in private_pages for CRC finalization.
+                    for pgno in &allocated {
+                        self.private_pages.insert(*pgno);
+                    }
+                    root
+                }
+            } else { 0 };
+            self.scope_dirty = false;
+        }
         // Finalize CRCs on all private pages.
         for pgno in self.private_pages.iter() {
             if pgno >= 2 { finalize_checksum(self.store.page_mut(pgno)); }
@@ -686,6 +698,7 @@ impl<K: IpKey> Writer<K> {
     // ── scope table operations (mode 2 only) ──
 
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
+        self.scope_dirty = true;
         match &mut self.scope_registry {
             Some(reg) => Ok(reg.intern(bitmap)),
             None => Err(Error::State("scope_intern requires scope_mode == 2")),
@@ -697,6 +710,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        self.scope_dirty = true;
         match &mut self.scope_registry {
             Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
             None => Err(Error::State("requires scope_mode == 2")),
@@ -704,6 +718,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn scope_bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        self.scope_dirty = true;
         match &mut self.scope_registry {
             Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit)),
             None => Err(Error::State("requires scope_mode == 2")),
@@ -711,6 +726,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
@@ -727,6 +743,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
@@ -743,6 +760,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
