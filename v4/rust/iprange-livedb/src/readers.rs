@@ -18,7 +18,9 @@ pub const MAX_SLOTS: usize = 4096 / SLOT_SIZE;
 const SLOT_PID_OFF: usize = 0;
 const SLOT_RID_OFF: usize = 4;
 const SLOT_TXN_OFF: usize = 8;
+#[allow(dead_code)]
 const SLOT_ROOT_OFF: usize = 16;
+#[allow(dead_code)]
 const SLOT_HEIGHT_OFF: usize = 20;
 
 /// Process-local counter for unique reader IDs.
@@ -28,12 +30,14 @@ pub fn next_reader_id() -> u32 {
     READER_ID_COUNTER.fetch_add(1, Ordering::SeqCst) as u32
 }
 
+#[allow(missing_debug_implementations)]
 pub struct ReaderTable {
     mmap: memmap2::MmapMut,
     my_slot: Option<usize>,
     path: PathBuf,
 }
 
+#[allow(missing_debug_implementations)]
 pub struct ReaderGuard {
     slot: usize,
     pid: u32,
@@ -85,7 +89,7 @@ impl ReaderTable {
 
     /// Register using flock for cross-process atomicity.
     /// Brief LOCK_EX on the companion file prevents TOCTOU race.
-    pub fn register(&mut self, txn_id: u64, root_pgno: u32, height: u32) -> Result<ReaderGuard> {
+    pub fn register(&mut self, txn_id: u64) -> Result<ReaderGuard> {
         let pid = std::process::id();
         let reader_id = next_reader_id();
 
@@ -104,7 +108,7 @@ impl ReaderTable {
         for slot in 0..MAX_SLOTS {
             let current = self.slot_pid(slot);
             if current == 0 || !is_process_alive(current) {
-                self.write_slot(slot, pid, reader_id, txn_id, root_pgno, height);
+                self.write_slot(slot, pid, reader_id, txn_id);
                 claimed = Some(slot);
                 break;
             }
@@ -134,22 +138,6 @@ impl ReaderTable {
         oldest
     }
 
-    /// Collect all active reader roots: (root_pgno, height) pairs.
-    /// Used by derive_free_pages to protect reader-referenced trees.
-    pub fn reader_roots(&self) -> Vec<(u32, u32)> {
-        let mut roots = Vec::new();
-        for i in 0..MAX_SLOTS {
-            let pid = self.slot_pid(i);
-            if pid != 0 && is_process_alive(pid) {
-                let root = self.slot_root(i);
-                let height = self.slot_height(i);
-                if root != 0 {
-                    roots.push((root, height));
-                }
-            }
-        }
-        roots
-    }
 
     pub fn reap_stale(&mut self) -> usize {
         let mut cleared = 0;
@@ -163,14 +151,12 @@ impl ReaderTable {
         cleared
     }
 
-    fn write_slot(&mut self, slot: usize, pid: u32, reader_id: u32, txn_id: u64, root: u32, height: u32) {
+    fn write_slot(&mut self, slot: usize, pid: u32, reader_id: u32, txn_id: u64) {
         let off = slot * SLOT_SIZE;
         let b = &mut self.mmap[off..off + SLOT_SIZE];
         // Write fields in reverse publication order. PID is the "publish" marker —
         // a scanning writer only considers a slot valid when PID != 0, by which
         // point all other fields are already written.
-        b[SLOT_HEIGHT_OFF..SLOT_HEIGHT_OFF+4].copy_from_slice(&height.to_le_bytes());
-        b[SLOT_ROOT_OFF..SLOT_ROOT_OFF+4].copy_from_slice(&root.to_le_bytes());
         b[SLOT_TXN_OFF..SLOT_TXN_OFF+8].copy_from_slice(&txn_id.to_le_bytes());
         b[SLOT_RID_OFF..SLOT_RID_OFF+4].copy_from_slice(&reader_id.to_le_bytes());
         b[SLOT_PID_OFF..SLOT_PID_OFF+4].copy_from_slice(&pid.to_le_bytes()); // publish last
@@ -181,17 +167,7 @@ impl ReaderTable {
         self.mmap[off..off+4].copy_from_slice(&0u32.to_le_bytes());
     }
 
-    #[inline]
-    fn slot_root(&self, slot: usize) -> u32 {
-        let off = slot * SLOT_SIZE + SLOT_ROOT_OFF;
-        u32::from_le_bytes([self.mmap[off], self.mmap[off+1], self.mmap[off+2], self.mmap[off+3]])
-    }
 
-    #[inline]
-    fn slot_height(&self, slot: usize) -> u32 {
-        let off = slot * SLOT_SIZE + SLOT_HEIGHT_OFF;
-        u32::from_le_bytes([self.mmap[off], self.mmap[off+1], self.mmap[off+2], self.mmap[off+3]])
-    }
 
     #[inline]
     fn slot_pid(&self, slot: usize) -> u32 {
@@ -234,7 +210,7 @@ mod tests {
     fn register_and_query() {
         let path = test_path("rdr1");
         let mut table = ReaderTable::open(&path).unwrap();
-        let reg = table.register(42, 5, 1).unwrap();
+        let reg = table.register(42).unwrap();
         assert_eq!(table.oldest_reader_txn_id(), 42);
         drop(reg);
         assert_eq!(table.oldest_reader_txn_id(), u64::MAX);
@@ -251,7 +227,7 @@ mod tests {
     fn reap_stale() {
         let path = test_path("rdr3");
         let mut table = ReaderTable::open(&path).unwrap();
-        table.write_slot(5, 999999, 1, 1, 0, 0);
+        table.write_slot(5, 999999, 1, 1);
         assert!(table.reap_stale() >= 1);
     }
 }

@@ -5,7 +5,7 @@ fn feed_bit_436_no_panic() {
     let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap(); // mode 2 = indirect
     // Feed bit 436 should NOT panic
     w.feed_add_range(Ipv4Key(10), Ipv4Key(20), 436).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     // Verify the record exists
@@ -32,7 +32,7 @@ fn feed_bit_high_indirect_mode() {
     let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap();
     w.feed_add_range(Ipv4Key(0), Ipv4Key(100), 100).unwrap();
     w.feed_add_range(Ipv4Key(0), Ipv4Key(100), 200).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     let scope_id = r.lookup(Ipv4Key(50)).unwrap().unwrap();

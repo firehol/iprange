@@ -83,7 +83,7 @@ fn build_db_append_mode(ranges: &[(u32, u32)], scope_mode: u8) -> Writer<Ipv4Key
     for &(f, t) in ranges {
         w.append(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w
 }
 
@@ -152,7 +152,7 @@ fn bench_append(c: &mut Criterion) {
                 for &(f, t) in ranges {
                     w.append(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                 }
-                w.commit(0).unwrap();
+                w.commit(0, u64::MAX).unwrap();
                 black_box(w);
             });
         });
@@ -173,7 +173,7 @@ fn bench_set_random(c: &mut Criterion) {
                 for &(f, t) in ranges {
                     w.set(Ipv4Key(f), Ipv4Key(t), 1).unwrap();
                 }
-                w.commit(0).unwrap();
+                w.commit(0, u64::MAX).unwrap();
                 black_box(w);
             });
         });
@@ -328,7 +328,7 @@ fn bench_migrate(c: &mut Criterion) {
                 let mut stream = SortedStream::from_unsorted(desired.to_vec());
                 let opts = MigrateOptions::<Ipv4Key>::default();
                 let counters = migrate(&mut w, &mut stream, &opts).unwrap();
-                w.commit(0).unwrap();
+                w.commit(0, u64::MAX).unwrap();
                 black_box(counters);
             },
             criterion::BatchSize::LargeInput,
@@ -362,7 +362,7 @@ fn bench_feed_add_range(c: &mut Criterion) {
                     for &(f, t) in feed_targets.iter() {
                         w.feed_add_range(Ipv4Key(f), Ipv4Key(t), 2).unwrap();
                     }
-                    w.commit(0).unwrap();
+                    w.commit(0, u64::MAX).unwrap();
                     black_box(w);
                 },
                 criterion::BatchSize::LargeInput,

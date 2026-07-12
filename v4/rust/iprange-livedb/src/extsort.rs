@@ -23,6 +23,7 @@ impl Default for ExtSortConfig {
 
 // ── Streaming sorter ──
 
+#[allow(missing_debug_implementations)]
 pub struct ExtSorter<K: IpKey> {
     config: ExtSortConfig,
     chunk: Vec<DesiredRecord<K>>,
@@ -113,7 +114,7 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
         let pos = events[i].pos;
 
         // Process all events at this position.
-        let mut next_pos = pos;
+        let mut _next_pos = pos;
         while i < events.len() && events[i].pos == pos {
             let ev = &events[i];
             if ev.is_start {
@@ -125,7 +126,7 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
         }
 
         // Determine segment end.
-        if i < events.len() { next_pos = events[i].pos; }
+        if i < events.len() { _next_pos = events[i].pos; }
         else { break; } // no more segments
 
         if active.is_empty() { continue; }
@@ -184,6 +185,7 @@ fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>]) -> Vec<DesiredRecor
 // ── Sorted stream ──
 
 #[derive(Clone)]
+#[allow(missing_debug_implementations)]
 pub struct SortedStream<K: IpKey> {
     pub records: Vec<DesiredRecord<K>>,
     pub pos: usize,

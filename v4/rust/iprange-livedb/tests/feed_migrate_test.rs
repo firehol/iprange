@@ -21,7 +21,7 @@ fn has_feed_bit(scope_id: u32, bit: u32) -> bool {
 fn make_and_open(records: &[(u32, u32, u32)]) -> Writer<Ipv4Key> {
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
     for &(f, t, s) in records { w.set(Ipv4Key(f), Ipv4Key(t), s).unwrap(); }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img));
     Writer::<Ipv4Key>::open(store).unwrap()
@@ -32,7 +32,7 @@ fn feed_migrate_add_feed() {
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
     let desired = SortedStream::from_unsorted(vec![dr(10, 20)]);
     let counters = migrate_feed(&mut w, 0, &mut desired.clone(), &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let map = per_ip_map(&img);
     for ip in 10..=20 { assert!(has_feed_bit(map[&ip], 0)); }
@@ -46,7 +46,7 @@ fn feed_migrate_preserve_other_feeds() {
         let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
         let d0 = SortedStream::from_unsorted(vec![dr(10, 30)]);
         migrate_feed(&mut w, 0, &mut d0.clone(), &MigrateOptions::default()).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
 
@@ -55,7 +55,7 @@ fn feed_migrate_preserve_other_feeds() {
     let mut w2 = Writer::<Ipv4Key>::open(store).unwrap();
     let d1 = SortedStream::from_unsorted(vec![dr(15, 25)]);
     migrate_feed(&mut w2, 1, &mut d1.clone(), &MigrateOptions::default()).unwrap();
-    w2.commit(1).unwrap();
+    w2.commit(1, u64::MAX).unwrap();
     let img2 = w2.into_image().unwrap();
     let map = per_ip_map(&img2);
 
@@ -71,13 +71,13 @@ fn feed_migrate_remove_feed() {
         let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
         let d0 = SortedStream::from_unsorted(vec![dr(10, 30)]);
         migrate_feed(&mut w, 0, &mut d0.clone(), &MigrateOptions::default()).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         let img1 = w.into_image().unwrap();
         let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img1));
         let mut w2 = Writer::<Ipv4Key>::open(store).unwrap();
         let d1 = SortedStream::from_unsorted(vec![dr(15, 25)]);
         migrate_feed(&mut w2, 1, &mut d1.clone(), &MigrateOptions::default()).unwrap();
-        w2.commit(1).unwrap();
+        w2.commit(1, u64::MAX).unwrap();
         w2.into_image().unwrap()
     };
 
@@ -86,7 +86,7 @@ fn feed_migrate_remove_feed() {
     let mut w3 = Writer::<Ipv4Key>::open(store).unwrap();
     let d1_new = SortedStream::from_unsorted(vec![dr(20, 22)]);
     migrate_feed(&mut w3, 1, &mut d1_new.clone(), &MigrateOptions::default()).unwrap();
-    w3.commit(2).unwrap();
+    w3.commit(2, u64::MAX).unwrap();
     let img3 = w3.into_image().unwrap();
     let map = per_ip_map(&img3);
 

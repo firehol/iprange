@@ -20,9 +20,13 @@ use crate::wire::{read_magic, read_version_major, Meta};
 use crate::writer::{Changed, Writer};
 
 /// A read-only mmap of a v4 file. Registers in the reader table on open.
+/// Pins the meta at open time for MVCC — subsequent reader() calls always
+/// see the transaction snapshot from open time, not the writer's latest commit.
+#[allow(missing_debug_implementations)]
 pub struct MmapReader {
     _file: File,
     mmap: memmap2::Mmap,
+    pinned_meta: Meta,
     _guard: ReaderGuard,
     _table: ReaderTable,
 }
@@ -33,12 +37,9 @@ impl MmapReader {
             .read(true).custom_flags(libc::O_NOFOLLOW)
             .open(path).map_err(Error::Io)?;
 
-        let meta = file.metadata().map_err(Error::Io)?;
-        let len = meta.len() as usize;
+        let fmeta = file.metadata().map_err(Error::Io)?;
+        let len = fmeta.len() as usize;
         if len < 2 * PAGE_SIZE { return Err(Error::Structural("file too small")); }
-        if (meta.blocks() * 512) < len as u64 {
-            return Err(Error::Structural("sparse file (hole)"));
-        }
 
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(Error::Io)? };
         let page0 = &mmap[..PAGE_SIZE];
@@ -49,23 +50,30 @@ impl MmapReader {
 
         let meta_a = Meta::decode(&mmap[..PAGE_SIZE]);
         let meta_b = Meta::decode(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
-        let (active_txn_id, active_root, active_height) = if meta_a.txn_id >= meta_b.txn_id {
-            (meta_a.txn_id, meta_a.root_pgno, meta_a.tree_height)
-        } else {
-            (meta_b.txn_id, meta_b.root_pgno, meta_b.tree_height)
-        };
+        let pinned_meta = if meta_a.txn_id >= meta_b.txn_id { meta_a } else { meta_b };
+
+        // Sparse-file hardening: verify the committed region has physical blocks.
+        // The growth region beyond committed_pages may be sparse (ftruncate'd);
+        // that's fine — readers never touch it.
+        let committed_bytes = pinned_meta.total_pages as u64 * PAGE_SIZE as u64;
+        if (fmeta.blocks() * 512) < committed_bytes {
+            return Err(Error::Structural("committed region is sparse (hole)"));
+        }
 
         let mut table = ReaderTable::open(path)?;
-        let guard = table.register(active_txn_id, active_root, active_height)?;
+        let guard = table.register(pinned_meta.txn_id)?;
 
-        Ok(MmapReader { _file: file, mmap, _guard: guard, _table: table })
+        Ok(MmapReader { _file: file, mmap, pinned_meta, _guard: guard, _table: table })
     }
 
-    pub fn reader(&self) -> Result<Reader<'_>> { Reader::open(&self.mmap[..]) }
+    pub fn reader(&self) -> Result<Reader<'_>> {
+        Reader::from_meta(&self.mmap[..], self.pinned_meta)
+    }
     pub fn bytes(&self) -> &[u8] { &self.mmap[..] }
 }
 
 /// A file-backed writer. Holds LOCK_EX for its entire lifetime.
+#[allow(missing_debug_implementations)]
 pub struct FileWriter<K: IpKey> {
     writer: Writer<K>,
     _file: File,
@@ -124,9 +132,8 @@ impl<K: IpKey> FileWriter<K> {
         let mut writer = Writer::<K>::open(Box::new(store))?;
 
         // Open reader table and query reader roots for MVCC-safe free derivation.
-        let mut reader_table = ReaderTable::open(path)?;
-        let reader_roots = reader_table.reader_roots();
-        writer.derive_free_pages_from_readers(&reader_roots);
+        let reader_table = ReaderTable::open(path)?;
+        writer.load_free_list(reader_table.oldest_reader_txn_id());
 
         Ok(FileWriter {
             writer,
@@ -140,10 +147,8 @@ impl<K: IpKey> FileWriter<K> {
     pub fn delete(&mut self, from: K, to: K) -> Result<Changed> { self.writer.delete(from, to) }
     pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.append(from, to, scope_id) }
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
-        self.writer.commit(updated_unixtime)?;
-        // Re-derive free pages with reader roots for MVCC safety.
-        let reader_roots = self.reader_table.reader_roots();
-        self.writer.derive_free_pages_from_readers(&reader_roots);
+        let oldest = self.reader_table.oldest_reader_txn_id();
+        self.writer.commit(updated_unixtime, oldest)?;
         Ok(())
     }
     pub fn reader(&self) -> Result<Reader<'_>> { self.writer.reader() }
@@ -178,7 +183,12 @@ impl<K: IpKey> FileWriter<K> {
         crate::overlap::all_to_all_overlap(&self.writer, on_overlap)
     }
 
-    pub fn close(self) {}
+    pub fn close(self) {
+        let FileWriter { writer, _file: file, reader_table } = self;
+        drop(writer);
+        drop(reader_table);
+        let _ = file.sync_all();
+    }
 }
 
 use std::os::unix::io::AsRawFd;

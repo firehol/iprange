@@ -12,11 +12,11 @@ fn rec(from: u32, to: u32, scope: u32) -> DesiredRecord<Ipv4Key> {
 #[test]
 fn migrate_empty_to_full() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 1), rec(30, 40, 2)]);
     let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.added, 2);
     assert_eq!(counters.removed, 0);
@@ -29,11 +29,11 @@ fn migrate_full_to_empty() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
     w.set(Ipv4Key(30), Ipv4Key(40), 2).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![]);
     let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.added, 0);
     assert_eq!(counters.removed, 2);
@@ -43,11 +43,11 @@ fn migrate_full_to_empty() {
 fn migrate_identical() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 1)]);
     let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.unchanged, 1);
     assert_eq!(counters.added, 0);
@@ -58,11 +58,11 @@ fn migrate_identical() {
 fn migrate_change_scope() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 2)]);
     let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.changed, 1);
 }
@@ -71,7 +71,7 @@ fn migrate_change_scope() {
 fn extsort_and_migrate() {
     // Unsorted input → extsort → migrate to empty DB
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     let unsorted = vec![
         rec(30, 40, 2),
@@ -80,7 +80,7 @@ fn extsort_and_migrate() {
     ];
     let mut stream = ext_sort(unsorted, &ExtSortConfig::default()).unwrap();
     let counters = migrate(&mut w, &mut stream, &MigrateOptions::default()).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.added, 3);
 

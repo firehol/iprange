@@ -55,6 +55,7 @@ pub mod readers;
 #[cfg(feature = "alloc")]
 pub mod page_store;
 pub mod page_set;
+pub mod free_list;
 
 /// The v4.1 scope table (§C.2, §D): the per-scope metadata registry. Requires `alloc`.
 #[cfg(feature = "alloc")]

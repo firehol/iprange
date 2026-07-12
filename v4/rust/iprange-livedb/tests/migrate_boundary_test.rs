@@ -7,7 +7,7 @@ fn make_db(records: &[(u32, u32, u32)]) -> Vec<u8> {
     for &(f, t, s) in records {
         w.set(Ipv4Key(f), Ipv4Key(t), s).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 
@@ -16,7 +16,7 @@ fn migrate_and_get_map(img: Vec<u8>, desired: Vec<DesiredRecord<Ipv4Key>>) -> BT
     let mut w = Writer::<Ipv4Key>::open(store).unwrap();
     let mut stream = SortedStream::from_unsorted(desired);
     iprange_livedb::migrate(&mut w, &mut stream, &MigrateOptions::default()).unwrap();
-    w.commit(1).unwrap();
+    w.commit(1, u64::MAX).unwrap();
     let img2 = w.into_image().unwrap();
     let r = Reader::open(&img2).unwrap();
     let mut map = BTreeMap::new();

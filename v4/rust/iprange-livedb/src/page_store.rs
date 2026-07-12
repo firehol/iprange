@@ -48,15 +48,26 @@ pub trait PageStore: Send {
     /// Flush dirty pages to disk (msync or fsync).
     fn sync(&self) -> Result<()>;
 
+    /// Truncate the store to exactly `new_total_pages` pages.
+    /// Called after commit to shrink the file (Rule 5).
+    fn truncate(&mut self, new_total_pages: u32) -> Result<()>;
+
     /// Grow the file to match logical_pages (for mmap stores, before remap).
     #[cfg(feature = "os")]
     fn file_size(&self) -> Option<u64> {
+        None
+    }
+
+    /// Consume the boxed store and return its image as a Vec, if backed by
+    /// VecPageStore. Returns None for mmap-backed stores.
+    fn into_vec(self: Box<Self>) -> Option<alloc::vec::Vec<u8>> {
         None
     }
 }
 
 // ── VecPageStore (tests / pure-API) ──────────────────────────────────────────
 
+#[allow(missing_debug_implementations)]
 pub struct VecPageStore {
     image: Vec<u8>,
     committed: u32,
@@ -126,6 +137,20 @@ impl PageStore for VecPageStore {
     fn sync(&self) -> Result<()> {
         Ok(())
     }
+
+    fn truncate(&mut self, new_total_pages: u32) -> Result<()> {
+        let new_len = new_total_pages as usize * PAGE_SIZE;
+        if new_len < self.image.len() {
+            self.image.truncate(new_len);
+        }
+        Ok(())
+    }
+
+    fn into_vec(self: Box<Self>) -> Option<alloc::vec::Vec<u8>> {
+        // Safe downcast: consume the Box, extract the VecPageStore's inner Vec.
+        // We know the concrete type because only VecPageStore overrides this.
+        Some(self.image)
+    }
 }
 
 // ── MmapStore (writable MAP_SHARED, zero-heap) ──────────────────────────────
@@ -149,14 +174,13 @@ impl MmapStore {
     /// Open a writable mmap of `file`. The file must be at least `committed_pages`
     /// pages long. The mapping is PROT_READ|PROT_WRITE, MAP_SHARED.
     pub(crate) fn open(file: std::fs::File, committed_pages: u32) -> Result<Self> {
-                let len = committed_pages as usize * PAGE_SIZE;
+                let _len = committed_pages as usize * PAGE_SIZE;
         // Grow the mapping ahead to reduce remap frequency.
         let growth_chunk = 64u32;
         let map_len = (committed_pages + growth_chunk) as usize * PAGE_SIZE;
 
         // Extend the file to the mapping size (fallocate for physical allocation).
         let current_size = {
-            use std::os::unix::fs::MetadataExt;
             file.metadata()
                 .map_err(Error::Io)?
                 .len() as usize
@@ -267,14 +291,42 @@ impl PageStore for MmapStore {
     }
 
     fn sync(&self) -> Result<()> {
-        self.mmap
-            .flush()
-            .map_err(Error::Io)
+        // msync flushes dirty pages to the page cache.
+        self.mmap.flush().map_err(Error::Io)?;
+        // fdatasync ensures the page cache is written to stable storage.
+        // Without this, a system crash (not just process crash) can lose data.
+        if let Some(file) = &self.file {
+            use std::os::unix::io::AsRawFd;
+            let fd = file.as_raw_fd();
+            let rc = unsafe { libc::fdatasync(fd) };
+            if rc != 0 {
+                return Err(Error::Io(std::io::Error::last_os_error()));
+            }
+        }
+        Ok(())
+    }
+
+    fn truncate(&mut self, new_total_pages: u32) -> Result<()> {
+        let new_len = new_total_pages as usize * PAGE_SIZE;
+        // Truncate the backing file, then remap to the smaller size.
+        if new_len < self.mmap.len() {
+            let file = self.file.as_ref().ok_or(Error::State("store closed"))?;
+            file.set_len(new_len as u64).map_err(Error::Io)?;
+            self.logical = new_total_pages;
+            self.committed = self.committed.min(new_total_pages);
+            let new_mmap = unsafe {
+                memmap2::MmapOptions::new()
+                    .map_mut(file)
+                    .map_err(Error::Io)?
+            };
+            self.mmap = new_mmap;
+            self.growth_chunk = 64; // reset growth chunk
+        }
+        Ok(())
     }
 
     fn file_size(&self) -> Option<u64> {
         self.file.as_ref().map(|f| {
-            use std::os::unix::fs::MetadataExt;
             f.metadata().map(|m| m.len()).unwrap_or(0)
         })
     }

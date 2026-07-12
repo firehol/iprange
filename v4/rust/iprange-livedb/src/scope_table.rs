@@ -30,6 +30,7 @@ pub struct ScopeEntry {
 
 /// In-memory scope registry. Maintained during a transaction, bulk-rebuilt
 /// into the scope table B+tree at commit time.
+#[allow(missing_debug_implementations)]
 pub struct ScopeRegistry {
     entries: Vec<ScopeEntry>,
     /// O(1) bitmap → scope_id lookup (fixes #6: was linear search).

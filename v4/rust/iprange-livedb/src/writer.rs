@@ -26,6 +26,7 @@ pub type MetaEntry = (alloc::vec::Vec<u8>, u32, alloc::vec::Vec<u8>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Changed { Changed, Unchanged }
 
+#[allow(missing_debug_implementations)]
 pub struct Writer<K: IpKey> {
     pub(crate) store: Box<dyn PageStore>,
     key_width: u8,
@@ -47,9 +48,17 @@ pub struct Writer<K: IpKey> {
     private_pages: PageSet,
     free_pages: alloc::vec::Vec<u32>,
     free_pos: usize,
+    /// Cursor into freed_this_txn for same-transaction recycling.
+    /// When free_pages is exhausted, alloc_page reuses COW victims.
+    recycle_pos: usize,
+    /// When false, COW victims are NOT recycled (readers may reference them).
+    /// Set by FileWriter based on oldest_reader_txn_id.
+    can_recycle: bool,
     scope_registry: Option<crate::scope_table::ScopeRegistry>,
     scope_table_root_cache: u32,
     scope_dirty: bool,
+    free_list_head: u32,
+    freed_this_txn: alloc::vec::Vec<u32>,
     _k: PhantomData<K>,
 }
 
@@ -64,11 +73,14 @@ impl<K: IpKey> Writer<K> {
             pending_root: 0, pending_height: 0, pending_record_count: 0,
             poisoned: false,
             private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0,
+            recycle_pos: 0, can_recycle: true,
             scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
             scope_table_root_cache: 0,
             scope_dirty: false,
+            free_list_head: 0,
+            freed_this_txn: alloc::vec::Vec::with_capacity(4096),
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -104,11 +116,14 @@ impl<K: IpKey> Writer<K> {
             pending_record_count: active.record_count, poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
             free_pages: vec![], free_pos: 0,
+            recycle_pos: 0, can_recycle: true,
             scope_registry: scope_reg, scope_table_root_cache: active.scope_table_root,
             scope_dirty: false,
+            free_list_head: active.free_list_head,
+            freed_this_txn: alloc::vec::Vec::with_capacity((active.total_pages as usize).max(4096)),
             _k: PhantomData,
         };
-        w.derive_free_pages();
+        w.load_free_list(u64::MAX);
         Ok(w)
     }
 
@@ -139,14 +154,32 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
+    /// Commit the pending transaction.
+    /// `oldest_reader_txn_id` must be the minimum txn_id among all active
+    /// readers, or `u64::MAX` if no readers are active. This is queried fresh
+    /// at call time (not cached) to prevent MVCC violations from stale state.
+    pub fn commit(&mut self, updated_unixtime: u64, oldest_reader_txn_id: u64) -> Result<()> {
         self.check()?;
+        // Refresh MVCC state BEFORE any commit logic uses can_recycle.
+        self.can_recycle = oldest_reader_txn_id == u64::MAX;
         // Rebuild scope table (mode 2).
         if self.scope_dirty {
-            // Collect old scope tree pages for reuse.
-            let mut free_pool = Vec::new();
+            // Collect old scope tree pages.
+            let mut old_scope_pages = Vec::new();
             if self.scope_table_root_cache != 0 {
-                self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut free_pool);
+                self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut old_scope_pages);
+            }
+            // When readers are active, old scope pages are committed-region
+            // pages that readers may reference via MAP_SHARED. We must NOT
+            // overwrite them in-place. Instead, push them to freed_this_txn
+            // (for free-list chain) and let build_scope_tree allocate fresh.
+            let mut free_pool = Vec::new();
+            if self.can_recycle {
+                free_pool = old_scope_pages;
+            } else {
+                for &pgno in &old_scope_pages {
+                    self.freed_this_txn.push(pgno);
+                }
             }
             self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
                 if reg.is_empty() { 0 } else {
@@ -167,6 +200,72 @@ impl<K: IpKey> Writer<K> {
         for pgno in self.private_pages.iter() {
             if pgno >= 2 { finalize_checksum(self.store.page_mut(pgno)); }
         }
+        // Build and write the persistent free-list.
+        let new_txn_id_val = self.committed_txn_id;
+        // Collect entries to persist:
+        // - Old entries not consumed this transaction
+        // - Pages freed this transaction (COW victims + old chain pages + old scope pages)
+        let old_entries = if self.free_list_head != 0 {
+            crate::free_list::read_chain(self.store.as_ref(), self.free_list_head).unwrap_or_default()
+        } else { Vec::new() };
+        let old_chain_pages = crate::free_list::read_chain_page_numbers(
+            self.store.as_ref(), self.free_list_head,
+        );
+        
+        // Determine consumed pages (popped from free_pages during the transaction).
+        let consumed: std::collections::HashSet<u32> = 
+            self.free_pages[..self.free_pos.min(self.free_pages.len())].iter().copied().collect();
+        
+        let mut entries_to_write: Vec<crate::free_list::FreeEntry> = Vec::new();
+        // Keep unconsumed old entries.
+        for e in &old_entries {
+            if !consumed.contains(&e.pgno) {
+                entries_to_write.push(*e);
+            }
+        }
+        // Add old chain page numbers (they're being replaced).
+        for p in &old_chain_pages {
+            self.freed_this_txn.push(*p);
+        }
+        // Add pages freed this transaction (excluding recycled pages, which
+        // are now live tree pages and must NOT appear in the free-list).
+        for &pgno in &self.freed_this_txn[self.recycle_pos..] {
+            entries_to_write.push(crate::free_list::FreeEntry { 
+                pgno, freed_txn_id: new_txn_id_val, 
+            });
+        }
+
+        // Allocate chain pages: prefer reusing a freed page as the first chain
+        // page (Rule 5: no unbounded file growth). Only safe when no readers
+        // are active — otherwise freed pages may still be referenced by a
+        // reader at an older transaction (MVCC safety).
+        let self_supply_page: Option<u32> = if self.can_recycle && entries_to_write.len() >= 2 {
+            let max_idx = entries_to_write.iter()
+                .enumerate()
+                .max_by_key(|(_, e)| e.pgno)
+                .map(|(i, _)| i);
+            if let Some(idx) = max_idx {
+                let pgno = entries_to_write[idx].pgno;
+                entries_to_write.swap_remove(idx);
+                Some(pgno)
+            } else { None }
+        } else { None };
+
+        entries_to_write.sort_by_key(|e| e.freed_txn_id);
+        let needed = crate::free_list::chain_page_count(&entries_to_write);
+
+        let mut chain_pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(needed);
+        if let Some(cp) = self_supply_page {
+            chain_pages.push(cp);
+        }
+        while chain_pages.len() < needed {
+            chain_pages.push(self.store.alloc_page()?);
+        }
+
+        self.free_list_head = crate::free_list::write_chain(
+            self.store.as_mut(), &entries_to_write, &chain_pages,
+        )?;
+
         let total = self.store.total_pages();
         let inactive = 1 - self.active_meta;
         let new_txn_id = self.committed_txn_id + 1;
@@ -183,7 +282,23 @@ impl<K: IpKey> Writer<K> {
         self.committed_pages = total;
         self.store.set_committed_pages(total);
         self.reset_txn();
-        self.derive_free_pages();
+        self.load_free_list(oldest_reader_txn_id);
+
+        // Rule 5: shrink the file by truncating trailing free pages.
+        // Only truncate when no readers are active (they may reference
+        // trailing pages via mmap). When readers exist, keep the growth
+        // region intact to avoid SIGBUS on the reader's mmap.
+        if oldest_reader_txn_id == u64::MAX {
+            let trailing = crate::free_list::trailing_free_count(
+                &self.free_pages, self.store.total_pages(),
+            );
+            if trailing > 0 {
+                self.store.truncate(self.store.total_pages() - trailing)?;
+                // Reload free list after truncation (trailing pages removed).
+                self.load_free_list(oldest_reader_txn_id);
+            }
+        }
+
         Ok(())
     }
 
@@ -195,19 +310,10 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn record_count(&self) -> u64 { self.pending_record_count }
-
-    pub(crate) fn store_ref(&self) -> &dyn PageStore { self.store.as_ref() }
-    pub(crate) fn pending_root_ref(&self) -> u32 { self.pending_root }
-    pub(crate) fn pending_height_ref(&self) -> u32 { self.pending_height }
+    pub fn committed_pages(&self) -> u32 { self.committed_pages }
 
     pub fn into_image(self) -> Option<alloc::vec::Vec<u8>> {
-        unsafe {
-            let raw: *mut dyn PageStore = Box::into_raw(self.store);
-            match raw.cast::<VecPageStore>().as_mut() {
-                Some(s) => Some(core::ptr::read(s).into_vec()),
-                None => { drop(Box::from_raw(raw)); None }
-            }
-        }
+        self.store.into_vec()
     }
 
     // ── COW mechanics ──
@@ -221,6 +327,7 @@ impl<K: IpKey> Writer<K> {
         let new = self.alloc_page()?;
         self.store.copy_page(pgno, new);
         self.private_pages.insert(new);
+        self.freed_this_txn.push(pgno);
         Ok(new)
     }
 
@@ -237,94 +344,19 @@ impl<K: IpKey> Writer<K> {
             self.free_pos += 1;
             self.private_pages.insert(pgno);
             Ok(pgno)
+        } else if self.can_recycle && self.recycle_pos < self.freed_this_txn.len() {
+            let pgno = self.freed_this_txn[self.recycle_pos];
+            self.recycle_pos += 1;
+            self.private_pages.insert(pgno);
+            // Clear stale data: recycled pages may contain old branch headers
+            // with child pointers that create cycles during tree traversal.
+            self.store.page_mut(pgno).fill(0);
+            Ok(pgno)
         } else {
             let pgno = self.store.alloc_page()?;
             self.private_pages.ensure_capacity(pgno as usize + 1);
             self.private_pages.insert(pgno);
             Ok(pgno)
-        }
-    }
-
-    fn derive_free_pages(&mut self) {
-        self.derive_free_pages_with_readers(&[]);
-    }
-
-    /// Derive free pages, also protecting trees referenced by active readers.
-    /// reader_roots: (root_pgno, height) pairs from the ReaderTable.
-    fn derive_free_pages_with_readers(&mut self, reader_roots: &[(u32, u32)]) {
-        self.free_pages.clear();
-        self.free_pos = 0;
-        let total = self.store.total_pages() as usize;
-        if self.committed_root == 0 && reader_roots.is_empty() {
-            for pgno in 2..total { self.free_pages.push(pgno as u32); }
-            return;
-        }
-        let mut reachable = PageSet::new(total);
-        reachable.insert(0); // meta 0
-        reachable.insert(1); // meta 1
-        // Walk the current committed tree.
-        if self.committed_root != 0 {
-            self.mark_reachable(self.committed_root, &mut reachable);
-        }
-        if self.scope_table_root_cache != 0 {
-            self.mark_scope_reachable(self.scope_table_root_cache, &mut reachable);
-        }
-        // MVCC safety: walk the previous committed tree.
-        if self.prev_committed_root != 0 && self.prev_committed_root != self.committed_root {
-            self.mark_reachable(self.prev_committed_root, &mut reachable);
-        }
-        // MVCC safety: walk ALL reader-referenced trees.
-        for &(root, _height) in reader_roots {
-            if root != 0 && !reachable.contains(root) {
-                self.mark_reachable(root, &mut reachable);
-            }
-        }
-        for pgno in 2..total {
-            if !reachable.contains(pgno as u32) {
-                self.free_pages.push(pgno as u32);
-            }
-        }
-        self.private_pages.ensure_capacity(total);
-    }
-
-    /// Update the free page set using reader roots from the companion file.
-    /// Called by FileWriter after open and commit.
-    pub fn derive_free_pages_from_readers(&mut self, reader_roots: &[(u32, u32)]) {
-        self.derive_free_pages_with_readers(reader_roots);
-    }
-
-    fn mark_reachable(&self, pgno: u32, reachable: &mut PageSet) {
-        if reachable.contains(pgno) || pgno as u64 >= self.store.total_pages() as u64 { return; }
-        reachable.insert(pgno);
-        let page = self.store.page(pgno);
-        let h = PageHeader::decode(page);
-        if h.page_type == spec::PAGE_TYPE_BRANCH {
-            let branch = BranchView::<K>::new(page, h.entry_count as usize);
-            for j in 0..branch.child_count() {
-                self.mark_reachable(branch.child(j), reachable);
-            }
-        }
-    }
-
-    fn mark_scope_reachable(&self, pgno: u32, reachable: &mut PageSet) {
-        if reachable.contains(pgno) || pgno as u64 >= self.store.total_pages() as u64 { return; }
-        reachable.insert(pgno);
-        let page = self.store.page(pgno);
-        let h = PageHeader::decode(page);
-        if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
-            let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
-            for j in 0..branch.child_count() {
-                self.mark_scope_reachable(branch.child(j), reachable);
-            }
-        }
-    }
-
-    /// Walk the scope tree and register all pages in private_pages.
-    fn register_scope_pages(&mut self, root: u32) {
-        let mut pages = alloc::vec::Vec::new();
-        self.collect_scope_page_numbers(root, 0, &mut pages);
-        for pgno in pages {
-            self.private_pages.insert(pgno);
         }
     }
 
@@ -343,8 +375,28 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
+    /// Load the free-list from the persistent chain.
+    /// `oldest_reader_txn_id`: pages freed in txn <= this are reclaimable.
+    /// u64::MAX means no readers (all pages reclaimable).
+    pub fn load_free_list(&mut self, oldest_reader_txn_id: u64) {
+        // Control same-txn recycling: safe only when no readers are active.
+        self.can_recycle = oldest_reader_txn_id == u64::MAX;
+        if self.free_list_head == 0 {
+            self.free_pages.clear();
+            self.free_pos = 0;
+            return;
+        }
+        let entries = crate::free_list::read_chain(self.store.as_ref(), self.free_list_head)
+            .unwrap_or_default();
+        self.free_pages = crate::free_list::reclaimable(&entries, oldest_reader_txn_id);
+        self.free_pages.sort(); // Rule 5: prefer low-numbered pages
+        self.free_pos = 0;
+    }
+
     fn reset_txn(&mut self) {
         self.private_pages.clear();
+        self.freed_this_txn.clear();
+        self.recycle_pos = 0;
         self.private_pages.ensure_capacity(self.store.total_pages() as usize);
     }
 
@@ -433,7 +485,7 @@ impl<K: IpKey> Writer<K> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write_leaf_split(&mut self, pgno: u32, src: &[u8], old_count: usize, insert_pos: usize,
+    fn write_leaf_split(&mut self, pgno: u32, src: &[u8], _old_count: usize, insert_pos: usize,
         ins_from: K, ins_to: K, ins_scope: u32, start_idx: usize, count: usize) -> Result<()> {
         let rs = record_size::<K>();
         let page = self.store.page_mut(pgno);
@@ -604,7 +656,7 @@ impl<K: IpKey> Writer<K> {
             let mid = total / 2;
             self.write_branch_split(pgno, &src, count, child_idx, left, sep, right, 0, mid)?;
             let right_pgno = self.alloc_page()?;
-            self.write_branch_split(right_pgno, &src, count, child_idx, left, sep, right, mid, total - mid)?;
+            self.write_branch_split(right_pgno, &src, count, child_idx, left, sep, right, mid + 1, total - mid - 1)?;
             let promoted = if mid == child_idx { sep } else {
                 let old_i = if mid < child_idx { mid } else { mid - 1 };
                 K::read_le(&src[PAGE_HEADER_SIZE + 4 + old_i * (K::WIDTH + 4)..][..K::WIDTH])
@@ -665,7 +717,7 @@ impl<K: IpKey> Writer<K> {
             root_pgno: root, tree_height: height, total_pages: total_pages as u64,
             record_count, txn_id, updated_unixtime: updated,
             scope_table_root: self.scope_table_root_cache,
-            free_list_head: 0,
+            free_list_head: self.free_list_head,
         };
         meta.encode_into(self.store.page_mut(pgno));
         Ok(())

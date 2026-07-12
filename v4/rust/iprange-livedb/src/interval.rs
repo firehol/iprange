@@ -7,7 +7,6 @@
 
 use crate::key::IpKey;
 use alloc::vec::Vec;
-use core::cmp::Ordering;
 
 /// A segment produced by the sweep-line diff between two interval sequences.
 /// Each segment represents a maximal range where old and desired agree or differ.
@@ -112,7 +111,7 @@ pub fn interval_diff<K: IpKey>(
                     if di < desired.len() { des_from = Some(desired[di].0); }
                 } else {
                     // Overlap! Split at boundaries.
-                    let seg_start = if of < df { of } else { df };
+                    let _seg_start = if of < df { of } else { df };
 
                     // Emit any old-only prefix [of, df-1]
                     if of < df {

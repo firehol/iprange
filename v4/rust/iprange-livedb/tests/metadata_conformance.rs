@@ -280,7 +280,7 @@ fn build<K: IpKey>(c: &Case, parse: impl Fn(&str) -> K) -> Vec<u8> {
             o => panic!("case {}: bad ip op {o}", c.name),
         }
     }
-    w.commit(1).unwrap();
+    w.commit(1, u64::MAX).unwrap();
     w.into_image()
 }
 

@@ -137,7 +137,7 @@ mod tests {
         for &(from, to, scope) in ranges {
             w.set(Ipv4Key(from), Ipv4Key(to), scope).unwrap();
         }
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image()
     }
 
@@ -151,7 +151,7 @@ mod tests {
             )
             .unwrap();
         }
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image()
     }
 
@@ -272,7 +272,7 @@ mod tests {
         w.set(Ipv4Key(41), Ipv4Key(60), &[5, 0, 0, 0]).unwrap();
         // A different scope after a gap: stays separate.
         w.set(Ipv4Key(100), Ipv4Key(110), &[6, 0, 0, 0]).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         let img = w.into_image();
 
         let v3 = export_v3(&img, 1, meta()).unwrap();
@@ -405,7 +405,7 @@ mod tests {
         w.set(Ipv4Key(10), Ipv4Key(20), &[1, 0, 0, 0]).unwrap();
         w.set(Ipv4Key(30), Ipv4Key(40), &[2, 0, 0, 0]).unwrap();
         w.set(Ipv4Key(100), Ipv4Key(200), &[3, 0, 0, 0]).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         let out = export_v3(&w.into_image(), 7, m).unwrap();
         assert_eq!(
             out,

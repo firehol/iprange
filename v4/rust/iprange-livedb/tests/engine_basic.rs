@@ -5,7 +5,7 @@ use iprange_livedb::{Ipv4Key, Writer, Reader};
 #[test]
 fn create_empty_commit() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 0);
@@ -15,7 +15,7 @@ fn create_empty_commit() {
 fn set_single_record() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 1);
@@ -28,7 +28,7 @@ fn set_multiple_sorted() {
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
     w.set(Ipv4Key(30), Ipv4Key(40), 2).unwrap();
     w.set(Ipv4Key(50), Ipv4Key(60), 3).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 3);
@@ -43,7 +43,7 @@ fn append_sorted_disjoint() {
     for i in 0..1000u32 {
         w.append(Ipv4Key(i * 10), Ipv4Key(i * 10 + 5), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 1000);
@@ -55,7 +55,7 @@ fn delete_overlap() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(100), 1).unwrap();
     w.delete(Ipv4Key(30), Ipv4Key(50)).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 2);
@@ -69,7 +69,7 @@ fn set_overwrites() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(100), 1).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(100), 2).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 1);
@@ -98,7 +98,7 @@ fn leaf_split_many_inserts() {
     for i in 0..1000u32 {
         w.set(Ipv4Key(i * 2), Ipv4Key(i * 2 + 1), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 1000);
@@ -112,7 +112,7 @@ fn leaf_split_many_inserts() {
 fn writer_reader_committed_state() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.set(Ipv4Key(30), Ipv4Key(40), 2).unwrap(); // pending
 
     let r = w.reader().unwrap();
@@ -127,7 +127,7 @@ fn large_append_10k() {
     for i in 0..10_000u32 {
         w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
     let r = Reader::open(&image).unwrap();
     assert_eq!(r.record_count(), 10_000);

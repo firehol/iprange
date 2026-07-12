@@ -69,7 +69,7 @@ fn behavioral_conformance() {
                 }
             }
         }
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         let img = w.into_image().unwrap();
         let r = Reader::open(&img).unwrap();
 

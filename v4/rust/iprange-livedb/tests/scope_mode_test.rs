@@ -18,7 +18,7 @@ fn mode2_intern_resolve() {
     w.set(Ipv4Key(10), Ipv4Key(20), id1).unwrap();
     w.set(Ipv4Key(30), Ipv4Key(40), id2).unwrap();
     
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     
     // Resolve and verify
     assert_eq!(w.scope_resolve(id1), Some(&[0b00000001][..]));
@@ -31,7 +31,7 @@ fn mode2_persist_across_commit() {
         let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap();
         let id1 = w.scope_intern(&[0b00000101]).unwrap();
         w.set(Ipv4Key(10), Ipv4Key(20), id1).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
     
@@ -86,7 +86,7 @@ fn mode2_many_scopes() {
         w.set(Ipv4Key(i * 10), Ipv4Key(i * 10 + 9), id).unwrap();
     }
     
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();

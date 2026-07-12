@@ -6,6 +6,7 @@
 
 use alloc::vec::Vec;
 
+#[allow(missing_debug_implementations)]
 pub struct PageSet {
     bits: Vec<u64>,
     capacity: usize, // max pages addressable

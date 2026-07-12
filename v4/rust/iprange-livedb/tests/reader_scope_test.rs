@@ -7,7 +7,7 @@ fn reader_scope_resolve() {
     let id2 = w.scope_intern(&[0b00000011]).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), id1).unwrap();
     w.set(Ipv4Key(30), Ipv4Key(40), id2).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
 
     // Use Reader (not Writer) to resolve bitmaps
@@ -23,7 +23,7 @@ fn reader_scope_list() {
     w.scope_intern(&[0xAB]).unwrap();
     w.scope_intern(&[0xCD, 0xEF]).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
 
     let r = Reader::open(&img).unwrap();
@@ -38,7 +38,7 @@ fn reader_scope_list() {
 fn reader_scope_resolve_mode0_returns_none() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap(); // mode 0 = scalar
     w.set(Ipv4Key(10), Ipv4Key(20), 42).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
 
     let r = Reader::open(&img).unwrap();

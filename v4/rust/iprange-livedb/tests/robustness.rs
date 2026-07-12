@@ -18,7 +18,7 @@ fn valid_file() -> Vec<u8> {
     for i in (0..2000u32).step_by(5) {
         w.delete(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2)).unwrap(); // frees pages
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 
@@ -46,7 +46,7 @@ fn valid_file_with_kv() -> Vec<u8> {
     w.meta_set(1, b"blob", 9, &big).unwrap();
     // FILE (scope 0) dataset metadata.
     w.meta_set(0, b"dataset", 0, b"firehol").unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -449,7 +449,7 @@ fn file_two_overflow_entries() -> Vec<u8> {
     let b: Vec<u8> = (0..6000u32).map(|i| (i * 5 + 1) as u8).collect();
     w.meta_set(id, b"a", 9, &a).unwrap();
     w.meta_set(id, b"b", 9, &b).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -514,7 +514,7 @@ fn duplicate_child_in_scope_branch_rejected() {
     for s in 0..40u32 {
         w.scope_define(format!("scope-{s}").as_bytes()).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let mut file = w.into_image().unwrap();
     let total = file.len() / PAGE_SIZE;
 
@@ -558,7 +558,7 @@ fn duplicate_child_in_kv_branch_rejected() {
         let key = format!("key-{i:08}-{}", "x".repeat(200));
         w.meta_set(id, key.as_bytes(), 0, b"v").unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let mut file = w.into_image().unwrap();
     let total = file.len() / PAGE_SIZE;
 
@@ -603,7 +603,7 @@ fn scope_branch_separator_misroute_rejected() {
     for s in 0..40u32 {
         w.scope_define(format!("scope-{s}").as_bytes()).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let mut file = w.into_image().unwrap();
     let total = file.len() / PAGE_SIZE;
 
@@ -637,7 +637,7 @@ fn kv_branch_separator_misroute_rejected() {
         let key = format!("key-{i:08}-{}", "x".repeat(200));
         w.meta_set(id, key.as_bytes(), 0, b"v").unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let mut file = w.into_image().unwrap();
     let total = file.len() / PAGE_SIZE;
 
@@ -670,7 +670,7 @@ fn overflow_total_len_u64_max_rejected() {
         let id = w.scope_define(b"s").unwrap();
         let big: Vec<u8> = (0..6000u32).map(|i| (i * 3) as u8).collect();
         w.meta_set(id, b"k", 9, &big).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
     assert!(Reader::open(&file).is_ok(), "valid overflow file rejected");
@@ -711,7 +711,7 @@ fn shared_kv_root_across_scopes_rejected() {
         let b = w.scope_define(b"b").unwrap();
         w.meta_set(a, b"ka", 0, b"va").unwrap();
         w.meta_set(b, b"kb", 0, b"vb").unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
     assert!(
@@ -768,7 +768,7 @@ fn f1_lone_last_child_kv_round_trips() {
         expect.push((kb, 0u32, b"x".to_vec()));
     }
     expect.sort_by(|a, b| a.0.cmp(&b.0));
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
 
     // Opens (full structural validation, incl. F2 disjointness + branch count >= 1) and the
@@ -799,7 +799,7 @@ fn f1_lone_last_child_scopes_round_trips() {
         for s in 0..n as u32 {
             ids.push(w.scope_define(format!("scope-{s}").as_bytes()).unwrap());
         }
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         let img = w.into_image().unwrap();
 
         let r = Reader::open(&img).unwrap_or_else(|e| panic!("F1 scopes n={n} must open: {e}"));
@@ -932,7 +932,7 @@ fn valid_ip_tree() -> Vec<u8> {
         w.set(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2), i & 0xff)
             .unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 
@@ -1140,7 +1140,7 @@ fn ip_branch_child_cycle_rejected() {
 fn file_named_scope() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.scope_define(b"scope-x").unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1151,7 +1151,7 @@ fn file_inline_text_kv() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     let id = w.scope_define(b"s").unwrap();
     w.meta_set(id, b"k", spec::KV_TYPE_TEXT, b"hello").unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1164,7 +1164,7 @@ fn file_overflow_text_kv() -> Vec<u8> {
     // ASCII text larger than the inline cap ⇒ a real (multi-page) overflow chain.
     let big = vec![b'a'; spec::KV_INLINE_MAX + spec::OVERFLOW_PAYLOAD + 50];
     w.meta_set(id, b"k", spec::KV_TYPE_TEXT, &big).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1437,7 +1437,7 @@ fn file_kv_branch() -> Vec<u8> {
         let key = format!("key-{i:08}-{}", "x".repeat(200));
         w.meta_set(id, key.as_bytes(), 0, b"v").unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1452,7 +1452,7 @@ fn file_binary_overflow() -> Vec<u8> {
     let id = w.scope_define(b"s").unwrap();
     let big: Vec<u8> = (0..6000u32).map(|i| (i * 3) as u8).collect();
     w.meta_set(id, b"k", 9, &big).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1467,7 +1467,7 @@ fn valid_ip_tree_h3() -> Vec<u8> {
     for i in 0..200_000u32 {
         w.set(Ipv4Key(i * 4), Ipv4Key(i * 4 + 1), 0x5a5a5a5au32).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     assert_eq!(
         ip_geom(&img).1,
@@ -1769,7 +1769,7 @@ fn file_two_inline_kv() -> Vec<u8> {
     let id = w.scope_define(b"s").unwrap();
     w.meta_set(id, b"a", spec::KV_TYPE_TEXT, b"va").unwrap();
     w.meta_set(id, b"b", spec::KV_TYPE_TEXT, b"vb").unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1829,7 +1829,7 @@ fn kv_separators_not_increasing() {
         let key = format!("key-{i:08}-{}", "x".repeat(200)); // fixed-length keys ⇒ equal seps
         w.meta_set(id, key.as_bytes(), 0, b"v").unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let mut file = w.into_image().unwrap();
     let total = file.len() / PAGE_SIZE;
     let branch = (2..total)
@@ -1888,7 +1888,7 @@ fn file_empty_value_kv() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     let id = w.scope_define(b"s").unwrap();
     w.meta_set(id, b"aaaa", spec::KV_TYPE_TEXT, b"").unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */
@@ -1961,7 +1961,7 @@ fn scope_name_padding_nonzero() {
 fn empty_tree_record_count_nonzero() {
     let mut file = {
         let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-        w.commit(0).unwrap();
+        w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
     assert!(Reader::open(&file).is_ok(), "empty file must open");
@@ -2116,7 +2116,7 @@ fn file_scopes(n: u32) -> Vec<u8> {
     for s in 0..n {
         w.scope_define(format!("scope-{s}").as_bytes()).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
 }
 */

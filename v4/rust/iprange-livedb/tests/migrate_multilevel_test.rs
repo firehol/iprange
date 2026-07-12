@@ -7,7 +7,7 @@ fn migrate_multilevel_tree() {
     for i in 0..1000u32 {
         w.set(Ipv4Key(i * 10), Ipv4Key(i * 10 + 5), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     
     let img = w.into_image().unwrap();
     let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img));
@@ -21,5 +21,5 @@ fn migrate_multilevel_tree() {
     let result = iprange_livedb::migrate(&mut w2, &mut stream, &MigrateOptions::default());
     eprintln!("migrate result: {:?}", result.as_ref().map(|c| (c.added, c.removed, c.changed, c.unchanged)));
     result.unwrap();
-    w2.commit(1).unwrap();
+    w2.commit(1, u64::MAX).unwrap();
 }

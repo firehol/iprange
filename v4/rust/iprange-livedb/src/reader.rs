@@ -25,6 +25,7 @@ pub struct Reader<'a> {
     bytes: &'a [u8],
     meta: Meta,
     version: IpVersion,
+    #[allow(dead_code)]
     record_size: usize,
     leaf_max: usize,
     branch_max: usize,
@@ -85,6 +86,28 @@ impl<'a> Reader<'a> {
         Ok(reader)
     }
 
+    /// Create a Reader with a pinned meta (MVCC snapshot).
+    /// Used by MmapReader to read a specific transaction's view, not the latest.
+    pub(crate) fn from_meta(bytes: &[u8], meta: crate::wire::Meta) -> Result<Reader<'_>> {
+        let needed = meta.total_pages
+            .checked_mul(spec::PAGE_SIZE as u64)
+            .ok_or(Error::Overflow("total_pages*page_size"))?;
+        if (bytes.len() as u64) < needed {
+            return Err(Error::FileTooShort { need: needed, have: bytes.len() as u64 });
+        }
+        if meta.tree_height > spec::TREE_HEIGHT_MAX {
+            return Err(Error::Structural("tree_height > 32"));
+        }
+        Ok(Reader {
+            bytes,
+            meta,
+            version: IpVersion::from_flag_bit(meta.flags),
+            record_size: meta.record_size as usize,
+            leaf_max: spec::leaf_max(meta.key_width),
+            branch_max: spec::branch_max(meta.key_width),
+        })
+    }
+
     /// Fully validate the image per §9 (the structural walk + per-page CRC + scope/KV
     /// tree validation). Call this when the input is **untrusted** (externally provided
     /// files) or for periodic integrity checks. Returns a typed error on any corruption.
@@ -124,14 +147,14 @@ impl<'a> Reader<'a> {
             // duplicate child pgno, an aliased subtree, or a shared overflow chain across two
             // KV entries (the glm PoC wrong-answer bug) — is structural corruption. This
             // makes the whole v4.1 metadata page forest provably disjoint and acyclic.
-            let mut visited = alloc::vec![false; self.meta.total_pages as usize];
+            let _visited = alloc::vec![false; self.meta.total_pages as usize];
             crate::scope_table::read_all(self.bytes, root).map_err(|_| crate::error::Error::Structural("scope table validation failed"))?;
             // Each scope record's `kv_root` is a separate B+tree (§C.4): walk and validate
             // it (range-check pgnos, sorted+disjoint keys, height bound, per-page CRC32C,
             // overflow read-by-count, type==0 text), sharing `visited`. The scope table is
             // now validated, so loading the records is bounded and safe.
             let recs = crate::scope_table::read_all(self.bytes, root)?;
-            for rec in &recs {
+            for _rec in &recs {
                 // KV validation deferred to Phase 4c re-implementation.
             }
             Ok(())
@@ -198,6 +221,7 @@ impl<'a> Reader<'a> {
 
 
     /// The fixed per-record size in bytes (`2·key_width + 4`).
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn record_size_bytes(&self) -> usize {
         self.record_size
@@ -205,6 +229,7 @@ impl<'a> Reader<'a> {
 
 
     /// The validated active meta (for the writer's `open_image`, §6.2).
+    #[allow(dead_code)]
     #[inline]
     #[cfg_attr(not(feature = "os"), allow(dead_code))]
     pub(crate) fn active_meta(&self) -> Meta {
@@ -1088,7 +1113,7 @@ mod tests {
             )
             .unwrap();
             w.set(v4(10), v4(20), &[7]).unwrap(); // IP tree coexists
-            w.commit(1).unwrap();
+            w.commit(1, u64::MAX).unwrap();
             (w.into_image(), a, b)
         }
         */
@@ -1187,7 +1212,7 @@ mod tests {
         fn v40_image_has_no_metadata() {
             let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
             w.set(v4(1), v4(2), 1).unwrap();
-            w.commit(1).unwrap();
+            w.commit(1, u64::MAX).unwrap();
             let img = w.into_image().unwrap();
             let r = Reader::open(&img).unwrap();
             assert!(r.scope_list().is_empty());
@@ -1208,7 +1233,7 @@ mod tests {
         fn scope_without_kv() {
             let mut w = Writer::<Ipv4Key>::create(1, 0);
             let a = w.scope_define(b"noKV").unwrap();
-            w.commit(1).unwrap();
+            w.commit(1, u64::MAX).unwrap();
             let img = w.into_image();
             let r = Reader::open(&img).unwrap();
             assert_eq!(r.scope_name(a), Some(b"noKV".to_vec()));

@@ -73,6 +73,7 @@ impl<K: IpKey> DesiredStream<K> for Box<dyn DesiredStream<K>> {
 /// one at a time through the store's `page()` method.
 struct TreeWalker<K: IpKey> {
     root: u32,
+    #[allow(dead_code)]
     height: u32,
     path: [(u32, usize); 32],
     path_len: u32,
@@ -222,7 +223,7 @@ pub fn migrate<K: IpKey>(
 
     loop {
         // Get the effective current records (with trimmed starts).
-        let old_eff = if let (Some((of, ot, os)), Some(ts)) = (old_cur, old_trim_start) {
+        let old_eff = if let (Some((_of, ot, os)), Some(ts)) = (old_cur, old_trim_start) {
             Some((ts, ot, os))
         } else { None };
 

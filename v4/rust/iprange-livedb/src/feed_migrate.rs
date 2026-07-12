@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use crate::key::IpKey;
-use crate::migrate::{DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions, Change};
+use crate::migrate::{DesiredStream, MigrateCounters, MigrateOptions};
 use crate::writer::Writer;
 use crate::node::{BranchView, LeafView};
 use crate::spec;
@@ -46,7 +46,7 @@ pub fn migrate_feed<K: IpKey>(
     let mut des_trim: Option<K> = des_cur.map(|r| r.from);
 
     loop {
-        let old_eff = if let (Some((of, ot, os)), Some(ts)) = (old_cur, old_trim) {
+        let old_eff = if let (Some((_of, ot, os)), Some(ts)) = (old_cur, old_trim) {
             Some((ts, ot, os))
         } else { None };
 
@@ -203,6 +203,7 @@ pub fn migrate_feed<K: IpKey>(
 /// Re-use the TreeWalker from migrate.rs (same fixed-size path stack).
 struct FeedWalker<K: IpKey> {
     root: u32,
+    #[allow(dead_code)]
     height: u32,
     path: [(u32, usize); 32],
     path_len: u32,

@@ -6,7 +6,7 @@ fn stress_10k() {
     for i in 0..10_000u32 {
         w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     assert_eq!(r.record_count(), 10_000);
@@ -18,7 +18,7 @@ fn stress_200k_branch_split() {
     for i in 0..200_000u32 {
         w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     assert_eq!(r.record_count(), 200_000);
@@ -36,7 +36,7 @@ fn stress_500k_deep_tree() {
     for i in 0..500_000u32 {
         w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
     }
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     assert_eq!(r.record_count(), 500_000);

@@ -12,7 +12,7 @@ fn dump(img: &[u8]) -> Vec<(u32, u32, u32)> {
 fn partial_overlap_bug() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-    w.commit(0).unwrap();
+    w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     
     let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img));
@@ -21,7 +21,7 @@ fn partial_overlap_bug() {
     // Use Writer directly: set [10-15] which should delete [10-20] and insert [10-15]
     // This tests the underlying set operation
     w2.set(Ipv4Key(10), Ipv4Key(15), 1).unwrap();
-    w2.commit(1).unwrap();
+    w2.commit(1, u64::MAX).unwrap();
     
     let img2 = w2.into_image().unwrap();
     let records = dump(&img2);
