@@ -23,10 +23,22 @@ func (s *SortedStream[K]) Clone() *SortedStream[K] {
 // Overlapping input is split into disjoint segments with last-wins semantics for
 // different scope_ids; same-scope overlaps are merged.
 func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].From.cmp(records[j].From) < 0
+	// F8 fix: tag with input order before sorting so normalizeChunk resolves
+	// last-wins by input sequence, not sorted-array position.
+	idx := make([]int, len(records))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return records[idx[a]].From.cmp(records[idx[b]].From) < 0
 	})
-	normalized := normalizeChunk(records)
+	sorted := make([]DesiredRecord[K], len(records))
+	seqs := make([]int, len(records))
+	for i, orig := range idx {
+		sorted[i] = records[orig]
+		seqs[i] = orig
+	}
+	normalized := normalizeChunk(sorted, seqs)
 	return &SortedStream[K]{records: normalized}
 }
 
@@ -43,7 +55,10 @@ type sweepEvent struct {
 // scope_ids (later records overwrite earlier); merge for same scope_ids.
 // Correctly handles tails and max-address boundaries (checkedInc returns
 // false at family_max → no end event, record covers to end).
-func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
+//
+// seqs[i] is the original input order of sorted[i]; last-wins is resolved by
+// highest input seq, not sorted-array index (F8 fix: sorting loses input order).
+func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []DesiredRecord[K] {
 	if len(sorted) <= 1 {
 		return sorted
 	}
@@ -122,10 +137,10 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K]) []DesiredRecord[K] {
 			segTo = zero.fromU128(decU128(nextPos))
 		}
 
-		// Last-wins: highest index in active.
+		// Last-wins: highest input seq in active.
 		maxIdx := active[0]
 		for _, idx := range active[1:] {
-			if idx > maxIdx {
+			if seqs[idx] > seqs[maxIdx] {
 				maxIdx = idx
 			}
 		}
@@ -242,10 +257,22 @@ func readSpillRecord[K ipKey[K]](buf []byte, kw int) DesiredRecord[K] {
 func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error) {
 	var zero K
 	kw := zero.width()
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].From.cmp(records[j].From) < 0
+	// F8 fix: tag with input order before sorting so normalizeChunk resolves
+	// last-wins by input sequence, not sorted-array position.
+	idx := make([]int, len(records))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool {
+		return records[idx[a]].From.cmp(records[idx[b]].From) < 0
 	})
-	normalized := normalizeChunk[K](records)
+	sorted := make([]DesiredRecord[K], len(records))
+	seqs := make([]int, len(records))
+	for i, orig := range idx {
+		sorted[i] = records[orig]
+		seqs[i] = orig
+	}
+	normalized := normalizeChunk[K](sorted, seqs)
 
 	f, err := os.CreateTemp(dir, "iprange_extsort_*")
 	if err != nil {

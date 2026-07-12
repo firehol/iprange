@@ -165,13 +165,31 @@ impl<K: IpKey> Writer<K> {
             // old meta's scope_table_root. They MUST NOT be overwritten
             // in-place — a reader pinned at the old txn would see corrupted
             // scope data. Free them for reclamation at the next commit.
+            let mut old_scope_page_count = 0;
             if self.scope_table_root_cache != 0 {
                 let root = self.scope_table_root_cache;
                 let mut pages = alloc::vec::Vec::new();
                 self.collect_scope_page_numbers(root, 0, &mut pages);
+                old_scope_page_count = pages.len();
                 self.freed_this_txn.extend(pages);
             }
+            // F2 fix: pre-populate free_pool from the Writer's free-list so
+            // that scope page allocation reuses freed pages instead of
+            // extending the file. The old scope pages freed above are not
+            // available yet (they're in the current txn's free chain), but
+            // pages freed in PREVIOUS transactions are in free_pages.
             let mut free_pool = Vec::new();
+            let estimate = old_scope_page_count + 2;
+            for _ in 0..estimate {
+                if self.free_pos < self.free_pages.len() {
+                    let pgno = self.free_pages[self.free_pos];
+                    self.free_pos += 1;
+                    self.private_pages.insert(pgno);
+                    free_pool.push(pgno);
+                } else {
+                    break;
+                }
+            }
             self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
                 if reg.is_empty() { 0 } else {
                     let mut allocated = Vec::new();
@@ -185,6 +203,12 @@ impl<K: IpKey> Writer<K> {
                     root
                 }
             } else { 0 };
+            // Return unused free_pool pages to the Writer's free-list.
+            for pgno in free_pool.drain(..) {
+                if self.free_pos > 0 { self.free_pos -= 1; }
+                self.free_pages[self.free_pos] = pgno;
+                self.private_pages.remove(pgno);
+            }
             self.scope_dirty = false;
         }
         // Finalize CRCs on all private pages.
@@ -226,9 +250,9 @@ impl<K: IpKey> Writer<K> {
             });
         }
 
-        // Rule 5: compute trailing free pages that can be truncated.
-        // This must happen BEFORE writing the chain so truncated pages
-        // don't appear as stale entries in the chain.
+        // Rule 5: compute trailing free pages for truncation.
+        // This must happen BEFORE writing the chain so the chain never
+        // references pages that will be truncated.
         let pre_truncate_total = self.store.total_pages();
         let trailing: u32 = if oldest_reader_txn_id == u64::MAX {
             let free_pgnos: alloc::vec::Vec<u32> = entries_to_write.iter()
@@ -236,36 +260,44 @@ impl<K: IpKey> Writer<K> {
                 .collect();
             crate::free_list::trailing_free_count(&free_pgnos, pre_truncate_total)
         } else { 0 };
-
         let new_total = pre_truncate_total - trailing;
 
-        // Remove trailing pages from entries_to_write so the chain doesn't
-        // reference pages that will be truncated.
+        // Remove trailing pages from entries so the chain doesn't reference them.
         if trailing > 0 {
             entries_to_write.retain(|e| e.pgno < new_total);
         }
 
         // Allocate chain pages from the free-list or growth region.
-        // COW victims (freed_this_txn) are still reachable from committed_root
-        // until the meta flip — they MUST NOT be reused in-place.
         entries_to_write.sort_by_key(|e| e.freed_txn_id);
         let needed = crate::free_list::chain_page_count(&entries_to_write);
-
         let mut chain_pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(needed);
         while chain_pages.len() < needed {
             chain_pages.push(self.alloc_page()?);
         }
+        // F1 fix: chain pages allocated from the free-list are no longer free.
+        let chain_set: std::collections::HashSet<u32> = chain_pages.iter().copied().collect();
+        entries_to_write.retain(|e| !chain_set.contains(&e.pgno));
 
         self.free_list_head = crate::free_list::write_chain(
             self.store.as_mut(), &entries_to_write, &chain_pages,
         )?;
 
-        // Truncate trailing free pages now that the chain no longer references them.
+        // F9 fix: finalize CRCs on chain pages.
+        for &pgno in &chain_pages {
+            finalize_checksum(self.store.page_mut(pgno));
+        }
+
+        // Truncate. Chain pages might be at positions >= new_total if they
+        // were allocated from the growth region. Adjust to preserve them.
+        let max_chain_page = chain_pages.iter().copied().max().unwrap_or(0);
         let total = if trailing > 0 {
-            self.store.truncate(new_total)?;
-            new_total
+            let effective_total = new_total.max(max_chain_page + 1);
+            if effective_total < pre_truncate_total {
+                self.store.truncate(effective_total)?;
+            }
+            effective_total
         } else {
-            self.store.total_pages()
+            pre_truncate_total
         };
 
         let inactive = 1 - self.active_meta;
@@ -367,6 +399,9 @@ impl<K: IpKey> Writer<K> {
         let entries = crate::free_list::read_chain(self.store.as_ref(), self.free_list_head)
             .unwrap_or_default();
         self.free_pages = crate::free_list::reclaimable(&entries, oldest_reader_txn_id);
+        // Filter out entries beyond the current store (truncated pages).
+        let total = self.store.total_pages();
+        self.free_pages.retain(|&p| p < total);
         self.free_pages.sort(); // Rule 5: prefer low-numbered pages
         self.free_pos = 0;
     }
@@ -500,7 +535,7 @@ impl<K: IpKey> Writer<K> {
             if self.pending_root == 0 { return Ok(()); }
             let overlap = self.scan_first_overlap(from, to)?;
             match overlap {
-                None => return Ok(()),
+                None => break,
                 Some((rec_from, rec_to, rec_scope, leaf_pgno, rec_idx)) => {
                     let cow_leaf = self.cow_to_leaf(leaf_pgno)?;
                     self.leaf_delete_at(cow_leaf, rec_idx)?;
@@ -520,6 +555,11 @@ impl<K: IpKey> Writer<K> {
                 }
             }
         }
+        // Note: we do NOT collapse pending_root to 0 here when the tree
+        // becomes empty. The COW copies from the delete are in private_pages
+        // and must be tracked for proper CRC finalization and commit handling.
+        // The committed tree will correctly show record_count=0.
+        Ok(())
     }
 
     fn scan_first_overlap(&self, from: K, to: K) -> Result<Option<(K, K, u32, u32, usize)>> {

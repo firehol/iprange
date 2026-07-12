@@ -27,10 +27,10 @@ fn migrate_and_get_map(img: Vec<u8>, desired: Vec<DesiredRecord<Ipv4Key>>) -> BT
 }
 
 fn oracle_map(desired: &[DesiredRecord<Ipv4Key>]) -> BTreeMap<u32, u32> {
-    let mut sorted = desired.to_vec();
-    sorted.sort_by_key(|d| d.from);
+    // Input-order last-wins: later records in the input override earlier
+    // ones for overlapping ranges. This matches the F8 fix in normalize_chunk.
     let mut map = BTreeMap::new();
-    for d in &sorted {
+    for d in desired {
         for ip in d.from.0..=d.to.0 { map.insert(ip, d.scope_id); }
     }
     map

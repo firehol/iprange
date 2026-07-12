@@ -57,8 +57,19 @@ impl<K: IpKey> ExtSorter<K> {
 
     fn spill_chunk(&mut self) -> Result<()> {
         if self.chunk.is_empty() { return Ok(()); }
-        self.chunk.sort_by(|a, b| a.from.cmp(&b.from));
-        let normalized = normalize_chunk(&self.chunk);
+        // F8 fix: tag with original input order before sorting so that
+        // normalize_chunk can resolve last-wins by input sequence, not by
+        // sorted-array position (which loses input precedence).
+        let mut indexed: Vec<(DesiredRecord<K>, usize)> = self.chunk
+            .drain(..)
+            .enumerate()
+            .map(|(i, r)| (r, i))
+            .collect();
+        // Sort by from key (stable — preserves input order for equal keys).
+        indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
+        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<usize>) =
+            indexed.into_iter().unzip();
+        let normalized = normalize_chunk(&sorted, &seqs);
         let dir: PathBuf = self.config.temp_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp"));
         let unique = RUN_COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = dir.join(format!("iprange_extsort_{}_{}", unique, self.run_paths.len()));
@@ -71,8 +82,8 @@ impl<K: IpKey> ExtSorter<K> {
 
 /// O(n log n) normalization using a sweep line with an interval tree.
 /// Handles ALL edge cases: overlaps, tails, max-address boundaries.
-/// Last-wins for different scope_ids; merge for same scope_ids.
-fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K>> {
+/// Last-wins = highest input seq (not sorted-array index).
+fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[usize]) -> Vec<DesiredRecord<K>> {
     if sorted.len() <= 1 { return sorted.to_vec(); }
 
     // Fast path: check disjoint.
@@ -142,8 +153,8 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K
             break;
         };
 
-        // Last-wins: highest index in active.
-        let max_idx = *active.iter().max().unwrap();
+        // Last-wins: highest input seq in active.
+        let max_idx = *active.iter().max_by_key(|&&i| seqs[i]).unwrap();
         let scope = sorted[max_idx].scope_id;
 
         // Coalesce with previous if same scope and adjacent.
@@ -193,9 +204,16 @@ pub struct SortedStream<K: IpKey> {
 
 impl<K: IpKey> SortedStream<K> {
     pub fn from_unsorted(records: Vec<DesiredRecord<K>>) -> Self {
-        let mut sorted = records;
-        sorted.sort_by(|a, b| a.from.cmp(&b.from));
-        let normalized = normalize_chunk(&sorted);
+        // F8 fix: tag with input order before sorting.
+        let mut indexed: Vec<(DesiredRecord<K>, usize)> = records
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| (r, i))
+            .collect();
+        indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
+        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<usize>) =
+            indexed.into_iter().unzip();
+        let normalized = normalize_chunk(&sorted, &seqs);
         SortedStream { records: normalized, pos: 0 }
     }
 }

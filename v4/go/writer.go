@@ -261,10 +261,28 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		// Old scope pages are committed-region pages reachable from the old
 		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
 		// a reader pinned at the old txn would see corrupted scope data.
+		oldScopePageCount := 0
 		if w.scopeTableRootCache != 0 {
+			before := len(w.freedThisTxn)
 			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &w.freedThisTxn)
+			oldScopePageCount = len(w.freedThisTxn) - before
 		}
+		// F2 fix: pre-populate freePool from the Writer's free-list so scope
+		// page allocation reuses freed pages instead of always extending the
+		// file. Pages freed in PREVIOUS transactions live in freePages; the
+		// old scope pages freed above are not reclaimable yet.
 		var freePool []uint32
+		estimate := oldScopePageCount + 2
+		for i := 0; i < estimate; i++ {
+			if w.freePos < len(w.freePages) {
+				pgno := w.freePages[w.freePos]
+				w.freePos++
+				w.privatePages.insert(pgno)
+				freePool = append(freePool, pgno)
+			} else {
+				break
+			}
+		}
 		w.scopeTableRootCache = 0
 		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
 			var allocated []uint32
@@ -277,6 +295,12 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 				w.privatePages.insert(pgno)
 			}
 			w.scopeTableRootCache = root
+		}
+		// Return unused freePool pages to the Writer's free-list.
+		for _, pgno := range freePool {
+			w.freePos--
+			w.freePages[w.freePos] = pgno
+			w.privatePages.remove(pgno)
 		}
 		w.scopeDirty = false
 	}
@@ -365,6 +389,19 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		}
 		chainPages = append(chainPages, pgno)
 	}
+	// F1 fix: chain pages allocated from the free-list are no longer free.
+	// Remove them from entriesToWrite so the chain never lists itself.
+	chainSet := make(map[uint32]bool, len(chainPages))
+	for _, p := range chainPages {
+		chainSet[p] = true
+	}
+	filtered := entriesToWrite[:0]
+	for _, e := range entriesToWrite {
+		if !chainSet[e.Pgno] {
+			filtered = append(filtered, e)
+		}
+	}
+	entriesToWrite = filtered
 
 	head, err := WriteChain(w.store, entriesToWrite, chainPages)
 	if err != nil {
@@ -372,15 +409,35 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	}
 	w.freeListHead = head
 
+	// F9 fix: finalize CRCs on chain pages (they were allocated AFTER the
+	// earlier CRC pass). Chain pages are in privatePages.
+	for _, pgno := range chainPages {
+		finalizeChecksum(w.store.pageMut(pgno))
+	}
+
 	// Truncate trailing free pages now that the chain no longer references them.
+	// Chain pages allocated from the growth region may sit at positions >= newTotal;
+	// the effective total must preserve them so they are not truncated away.
+	var maxChainPage uint32
+	for _, p := range chainPages {
+		if p > maxChainPage {
+			maxChainPage = p
+		}
+	}
 	var total uint32
 	if trailing > 0 {
-		if err := w.store.truncate(newTotal); err != nil {
-			return err
+		effectiveTotal := newTotal
+		if maxChainPage+1 > effectiveTotal {
+			effectiveTotal = maxChainPage + 1
 		}
-		total = newTotal
+		if effectiveTotal < preTruncateTotal {
+			if err := w.store.truncate(effectiveTotal); err != nil {
+				return err
+			}
+		}
+		total = effectiveTotal
 	} else {
-		total = w.store.totalPages()
+		total = preTruncateTotal
 	}
 
 	inactive := 1 - w.activeMeta
@@ -479,6 +536,15 @@ func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
 	}
 	entries, _ := ReadChain(w.store, w.freeListHead)
 	w.freePages = Reclaimable(entries, oldestReaderTxnID)
+	// Filter out entries beyond the current store (truncated pages).
+	total := w.store.totalPages()
+	bounded := w.freePages[:0]
+	for _, p := range w.freePages {
+		if p < total {
+			bounded = append(bounded, p)
+		}
+	}
+	w.freePages = bounded
 	sort.Slice(w.freePages, func(i, j int) bool { return w.freePages[i] < w.freePages[j] })
 	w.freePos = 0
 }
@@ -716,7 +782,7 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 			return err
 		}
 		if overlap == nil {
-			return nil
+			break
 		}
 		o := *overlap
 		cowLeaf, err := w.cowToLeaf(o.leafPgno)
@@ -744,6 +810,11 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 			}
 		}
 	}
+	// Note: we do NOT collapse pendingRoot to 0 here when the tree
+	// becomes empty. The COW copies from the delete are in privatePages
+	// and must be tracked for proper CRC finalization and commit handling.
+	// The committed tree will correctly show record_count=0.
+	return nil
 }
 
 type overlapInfo[K ipKey[K]] struct {
@@ -1383,6 +1454,11 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 
 // applyFeedBit OR's a feed bit into a scope_id, returning the new scope_id.
 func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
+	// F3 fix: indirect mode interns a new bitmap here — mark the registry
+	// dirty so the scope table is rebuilt at commit.
+	if w.scopeMode == ScopeModeIndirect {
+		w.scopeDirty = true
+	}
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		if feedBit >= 32 {
@@ -1402,6 +1478,11 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 // clearFeedBit clears a feed bit from a scope_id, returning the new scope_id
 // (0 if the bitmap becomes empty).
 func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
+	// F3 fix: indirect mode interns a new bitmap here — mark the registry
+	// dirty so the scope table is rebuilt at commit.
+	if w.scopeMode == ScopeModeIndirect {
+		w.scopeDirty = true
+	}
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		if feedBit >= 32 {
