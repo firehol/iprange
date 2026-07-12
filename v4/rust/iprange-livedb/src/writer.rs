@@ -164,23 +164,17 @@ impl<K: IpKey> Writer<K> {
         self.can_recycle = oldest_reader_txn_id == u64::MAX;
         // Rebuild scope table (mode 2).
         if self.scope_dirty {
-            // Collect old scope tree pages.
-            let mut old_scope_pages = Vec::new();
+            // Old scope pages are committed-region pages reachable from the
+            // old meta's scope_table_root. They MUST NOT be overwritten
+            // in-place — a reader pinned at the old txn would see corrupted
+            // scope data. Free them for reclamation at the next commit.
             if self.scope_table_root_cache != 0 {
-                self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut old_scope_pages);
+                let root = self.scope_table_root_cache;
+                let mut pages = alloc::vec::Vec::new();
+                self.collect_scope_page_numbers(root, 0, &mut pages);
+                self.freed_this_txn.extend(pages);
             }
-            // When readers are active, old scope pages are committed-region
-            // pages that readers may reference via MAP_SHARED. We must NOT
-            // overwrite them in-place. Instead, push them to freed_this_txn
-            // (for free-list chain) and let build_scope_tree allocate fresh.
             let mut free_pool = Vec::new();
-            if self.can_recycle {
-                free_pool = old_scope_pages;
-            } else {
-                for &pgno in &old_scope_pages {
-                    self.freed_this_txn.push(pgno);
-                }
-            }
             self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
                 if reg.is_empty() { 0 } else {
                     let mut allocated = Vec::new();
@@ -254,31 +248,15 @@ impl<K: IpKey> Writer<K> {
             entries_to_write.retain(|e| e.pgno < new_total);
         }
 
-        // Allocate chain pages: prefer reusing a freed page as the first chain
-        // page (Rule 5: no unbounded file growth). Only safe when no readers
-        // are active — otherwise freed pages may still be referenced by a
-        // reader at an older transaction (MVCC safety).
-        let self_supply_page: Option<u32> = if self.can_recycle && entries_to_write.len() >= 2 {
-            let max_idx = entries_to_write.iter()
-                .enumerate()
-                .max_by_key(|(_, e)| e.pgno)
-                .map(|(i, _)| i);
-            if let Some(idx) = max_idx {
-                let pgno = entries_to_write[idx].pgno;
-                entries_to_write.swap_remove(idx);
-                Some(pgno)
-            } else { None }
-        } else { None };
-
+        // Allocate chain pages from the free-list or growth region.
+        // COW victims (freed_this_txn) are still reachable from committed_root
+        // until the meta flip — they MUST NOT be reused in-place.
         entries_to_write.sort_by_key(|e| e.freed_txn_id);
         let needed = crate::free_list::chain_page_count(&entries_to_write);
 
         let mut chain_pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(needed);
-        if let Some(cp) = self_supply_page {
-            chain_pages.push(cp);
-        }
         while chain_pages.len() < needed {
-            chain_pages.push(self.store.alloc_page()?);
+            chain_pages.push(self.alloc_page()?);
         }
 
         self.free_list_head = crate::free_list::write_chain(
@@ -354,14 +332,6 @@ impl<K: IpKey> Writer<K> {
             let pgno = self.free_pages[self.free_pos];
             self.free_pos += 1;
             self.private_pages.insert(pgno);
-            Ok(pgno)
-        } else if self.can_recycle && self.recycle_pos < self.freed_this_txn.len() {
-            let pgno = self.freed_this_txn[self.recycle_pos];
-            self.recycle_pos += 1;
-            self.private_pages.insert(pgno);
-            // Clear stale data: recycled pages may contain old branch headers
-            // with child pointers that create cycles during tree traversal.
-            self.store.page_mut(pgno).fill(0);
             Ok(pgno)
         } else {
             let pgno = self.store.alloc_page()?;
@@ -683,10 +653,23 @@ impl<K: IpKey> Writer<K> {
         let page = self.store.page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_BRANCH, sep_count as u16, pgno);
-        let first_child = if start_idx == 0 {
-            if insert_idx == 0 { ins_left } else { u32_le(src, PAGE_HEADER_SIZE) }
-        } else if insert_idx == start_idx { ins_right }
-        else { u32_le(src, PAGE_HEADER_SIZE + 4 + (start_idx - 1) * (kw + 4) + kw) };
+
+        // 6-case first_child logic (mirrors Go writer.go:1016-1030).
+        let first_child = if start_idx == 0 && insert_idx == 0 {
+            ins_left
+        } else if start_idx == 0 {
+            u32_le(src, PAGE_HEADER_SIZE)
+        } else if start_idx == insert_idx {
+            ins_left
+        } else if start_idx == insert_idx + 1 {
+            ins_right
+        } else if start_idx < insert_idx {
+            // Old child at position start_idx (no shift needed, insertion is after).
+            u32_le(src, PAGE_HEADER_SIZE + 4 + (start_idx - 1) * (kw + 4) + kw)
+        } else {
+            // start_idx > insert_idx + 1: the insertion shifted this child left by 1.
+            u32_le(src, PAGE_HEADER_SIZE + 4 + (start_idx - 2) * (kw + 4) + kw)
+        };
         put_u32(page, PAGE_HEADER_SIZE, first_child);
         for out_i in 0..sep_count {
             let abs_i = start_idx + out_i;

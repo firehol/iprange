@@ -50,7 +50,17 @@ impl MmapReader {
 
         let meta_a = Meta::decode(&mmap[..PAGE_SIZE]);
         let meta_b = Meta::decode(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
-        let pinned_meta = if meta_a.txn_id >= meta_b.txn_id { meta_a } else { meta_b };
+
+        // CRC validation: only trust a meta whose checksum verifies.
+        // If both verify, pick the higher txn_id. If neither, the file is corrupt.
+        let crc_a_ok = crate::crc32c::verify_page(&mmap[..PAGE_SIZE]);
+        let crc_b_ok = crate::crc32c::verify_page(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
+        let pinned_meta = match (crc_a_ok, crc_b_ok) {
+            (true, true) => if meta_a.txn_id >= meta_b.txn_id { meta_a } else { meta_b },
+            (true, false) => meta_a,
+            (false, true) => meta_b,
+            (false, false) => return Err(Error::Structural("both meta pages fail CRC — corrupt file")),
+        };
 
         // Sparse-file hardening: verify the committed region has physical blocks.
         // The growth region beyond committed_pages may be sparse (ftruncate'd);

@@ -260,20 +260,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 
 	// Rebuild scope table (mode 2) only if the registry changed.
 	if w.scopeDirty {
-		// Collect old scope tree pages.
-		var oldScopePages []uint32
+		// Old scope pages are committed-region pages reachable from the old
+		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
+		// a reader pinned at the old txn would see corrupted scope data.
 		if w.scopeTableRootCache != 0 {
-			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &oldScopePages)
+			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &w.freedThisTxn)
 		}
-		// When readers are active, old scope pages are committed-region pages
-		// that readers may reference via MAP_SHARED. Push them to freedThisTxn
-		// for the free-list chain and let buildScopeTree allocate fresh.
 		var freePool []uint32
-		if w.canRecycle {
-			freePool = oldScopePages
-		} else {
-			w.freedThisTxn = append(w.freedThisTxn, oldScopePages...)
-		}
 		w.scopeTableRootCache = 0
 		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
 			var allocated []uint32
@@ -359,34 +352,17 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		entriesToWrite = kept
 	}
 
-	// Allocate chain pages: prefer reusing a freed page as the first chain page
-	// (Rule 5: no unbounded file growth). Only safe when no readers are active.
-	var selfSupplyPage uint32
-	hasSelfSupply := false
-	if w.canRecycle && len(entriesToWrite) >= 2 {
-		maxIdx := 0
-		for i, e := range entriesToWrite {
-			if e.Pgno > entriesToWrite[maxIdx].Pgno {
-				maxIdx = i
-			}
-		}
-		selfSupplyPage = entriesToWrite[maxIdx].Pgno
-		entriesToWrite[maxIdx] = entriesToWrite[len(entriesToWrite)-1]
-		entriesToWrite = entriesToWrite[:len(entriesToWrite)-1]
-		hasSelfSupply = true
-	}
-
+	// Allocate chain pages from the free-list or growth region.
+	// COW victims (freedThisTxn) are still reachable from committedRoot
+	// until the meta flip — they MUST NOT be reused in-place.
 	sort.Slice(entriesToWrite, func(i, j int) bool {
 		return entriesToWrite[i].FreedTxnID < entriesToWrite[j].FreedTxnID
 	})
 	needed := ChainPageCount(entriesToWrite)
 
 	chainPages := make([]uint32, 0, needed)
-	if hasSelfSupply {
-		chainPages = append(chainPages, selfSupplyPage)
-	}
 	for len(chainPages) < needed {
-		pgno, err := w.store.allocPage()
+		pgno, err := w.allocPage()
 		if err != nil {
 			return err
 		}
@@ -475,25 +451,14 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 	return newPgno, nil
 }
 
-// allocPage pops a page from the free pool, recycles a same-txn COW victim, or
-// extends the file. Every allocated page is marked private.
+// allocPage pops a page from the free pool or extends the file.
+// COW victims (freedThisTxn) are NOT reused mid-transaction — they are still
+// reachable from committedRoot until the meta flip.
 func (w *Writer[K]) allocPage() (uint32, error) {
 	if w.freePos < len(w.freePages) {
 		pgno := w.freePages[w.freePos]
 		w.freePos++
 		w.privatePages.insert(pgno)
-		return pgno, nil
-	}
-	if w.canRecycle && w.recyclePos < len(w.freedThisTxn) {
-		pgno := w.freedThisTxn[w.recyclePos]
-		w.recyclePos++
-		w.privatePages.insert(pgno)
-		// Clear stale data: recycled pages may contain old branch headers with
-		// child pointers that create cycles during tree traversal.
-		page := w.store.pageMut(pgno)
-		for i := range page {
-			page[i] = 0
-		}
 		return pgno, nil
 	}
 	pgno, err := w.store.allocPage()
@@ -1389,7 +1354,14 @@ func (w *Writer[K]) collectOverlappingNode(pgno uint32, from, to K, out *[]overl
 		return nil
 	case PageTypeBranch:
 		bv := newBranchView(page, int(h.entryCount), kw)
-		for j := 0; j < bv.childCount(); j++ {
+		start := branchFindChild(&bv, from)
+		for j := start; j < bv.childCount(); j++ {
+			if j > 0 {
+				sepVal := zero.readLE(bv.sep(j - 1))
+				if sepVal.cmp(to) > 0 {
+					break
+				}
+			}
 			if err := w.collectOverlappingNode(bv.child(j), from, to, out); err != nil {
 				return err
 			}
