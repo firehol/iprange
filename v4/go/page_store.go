@@ -20,6 +20,7 @@ type pageStore interface {
 	committedBytes() []byte           // for Reader construction
 	ensureCapacity(minPages uint32) error
 	sync() error
+	truncate(newTotalPages uint32) error // shrink the store (Rule 5)
 }
 
 // --- vecPageStore (tests / pure-API) ---
@@ -70,6 +71,14 @@ func (s *vecPageStore) ensureCapacity(minPages uint32) error {
 }
 
 func (s *vecPageStore) sync() error { return nil }
+
+func (s *vecPageStore) truncate(newTotalPages uint32) error {
+	newLen := int(newTotalPages) * PageSize
+	if newLen < len(s.image) {
+		s.image = s.image[:newLen]
+	}
+	return nil
+}
 
 // --- mmapStore (writable MAP_SHARED, zero-heap) ---
 
@@ -183,6 +192,34 @@ func (s *mmapStore) sync() error {
 	if errno != 0 {
 		return fmt.Errorf("msync: %v", errno)
 	}
+	return nil
+}
+
+// truncate mirrors the Rust MmapStore::truncate: shrink the backing file to
+// exactly newTotalPages pages, remap to that size (no growth over-allocation),
+// and reset the growth chunk. Called only when no readers are active.
+func (s *mmapStore) truncate(newTotalPages uint32) error {
+	newLen := int(newTotalPages) * PageSize
+	if newLen >= len(s.data) {
+		return nil
+	}
+	if err := syscall.Munmap(s.data); err != nil {
+		return fmt.Errorf("munmap: %w", err)
+	}
+	if err := s.file.Truncate(int64(newLen)); err != nil {
+		return fmt.Errorf("ftruncate: %w", err)
+	}
+	data, err := syscall.Mmap(int(s.file.Fd()), 0, newLen,
+		syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	if err != nil {
+		return fmt.Errorf("mmap truncate: %w", err)
+	}
+	s.data = data
+	s.logical = newTotalPages
+	if s.committed > newTotalPages {
+		s.committed = newTotalPages
+	}
+	s.growthChunk = 64
 	return nil
 }
 

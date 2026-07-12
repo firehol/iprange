@@ -207,6 +207,8 @@ pub fn migrate<K: IpKey>(
 
     // Enable migration mode: prevents alloc_or_reuse from reusing pages
     // freed during this migration that the TreeWalker might still read.
+    let prev_can_recycle = writer.can_recycle;
+    writer.can_recycle = false;
 
     // Initialize the TreeWalker over the COMMITTED tree.
     let mut walker = TreeWalker::<K>::new(writer.committed_root, writer.committed_height);
@@ -385,6 +387,7 @@ pub fn migrate<K: IpKey>(
         }
     }
 
+    writer.can_recycle = prev_can_recycle;
     Ok(counters)
 }
 

@@ -33,6 +33,8 @@ pub fn migrate_feed<K: IpKey>(
     let mut counters = MigrateCounters::default();
 
     // Enable migration mode to prevent COW-reuse hazard.
+    let prev_can_recycle = writer.can_recycle;
+    writer.can_recycle = false;
 
     // Walk the old tree one record at a time.
     let mut walker = FeedWalker::<K>::new(writer.committed_root, writer.committed_height);
@@ -197,6 +199,7 @@ pub fn migrate_feed<K: IpKey>(
         }
     }
 
+    writer.can_recycle = prev_can_recycle;
     Ok(counters)
 }
 

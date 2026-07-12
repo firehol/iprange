@@ -1,6 +1,9 @@
 package iprangedb
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Changed indicates whether a delete actually removed something.
 type Changed int
@@ -49,10 +52,24 @@ type Writer[K ipKey[K]] struct {
 
 	poisoned bool
 
-	// Page reclamation: bitset + derived free pool.
+	// Page reclamation: bitset + persistent free-list chain.
 	privatePages *pageSet
 	freePages    []uint32
 	freePos      int
+
+	// freeListHead is the head page of the persistent PAGE_TYPE_TXN_FREE chain
+	// stored in the file (0 if no chain). Freed pages are tagged with the txn
+	// that freed them and reclaimed subject to MVCC safety (Rules 5-8).
+	freeListHead uint32
+	// freedThisTxn collects COW victims and old chain/scope pages freed this
+	// transaction. Used for same-transaction recycling and appended to the
+	// persistent chain at commit.
+	freedThisTxn []uint32
+	// recyclePos is the cursor into freedThisTxn for same-transaction recycling.
+	recyclePos int
+	// canRecycle controls whether COW victims may be recycled in-place. Safe
+	// only when no readers are active (oldestReaderTxnID == MaxUint64).
+	canRecycle bool
 
 	scopeRegistry      *ScopeRegistry
 	scopeTableRootCache uint32
@@ -84,6 +101,8 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		prevCommittedRoot:   0,
 		prevCommittedHeight: 0,
 		privatePages:        newPageSet(2),
+		freedThisTxn:        make([]uint32, 0, 4096),
+		canRecycle:          true,
 		scopeRegistry:       scopeRegForMode(scopeMode),
 		scopeTableRootCache: 0, scopeDirty: false,
 	}
@@ -102,14 +121,22 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	metaA := decodeMeta(store.page(0))
 	metaB := decodeMeta(store.page(1))
+	// CRC validation: prefer a meta whose page checksum verifies. If both
+	// verify, pick the higher txn_id; if only one verifies, use it; if neither
+	// verifies, fall back to the txn_id comparison (best-effort).
+	validA := verifyPage(store.page(0))
+	validB := verifyPage(store.page(1))
 	var active meta
 	var activeNo uint32
-	if metaA.txnID >= metaB.txnID {
-		active = metaA
-		activeNo = 0
-	} else {
-		active = metaB
-		activeNo = 1
+	switch {
+	case validA && !validB:
+		active, activeNo = metaA, 0
+	case !validA && validB:
+		active, activeNo = metaB, 1
+	case metaA.txnID >= metaB.txnID:
+		active, activeNo = metaA, 0
+	default:
+		active, activeNo = metaB, 1
 	}
 	var zero K
 	if active.keyWidth != uint8(zero.width()) {
@@ -130,6 +157,10 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		prevRoot = metaA.rootPgno
 		prevHeight = metaA.treeHeight
 	}
+	capacity := int(active.totalPages)
+	if capacity < 4096 {
+		capacity = 4096
+	}
 	w := &Writer[K]{
 		store:               store,
 		keyWidth:            active.keyWidth,
@@ -147,6 +178,9 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		pendingHeight:       active.treeHeight,
 		pendingRecordCount:  active.recordCount,
 		privatePages:        newPageSet(int(active.totalPages)),
+		freeListHead:        active.freeListHead,
+		freedThisTxn:        make([]uint32, 0, capacity),
+		canRecycle:          true,
 		scopeRegistry:       nil,
 		scopeTableRootCache: active.scopeTableRoot, scopeDirty: false,
 	}
@@ -159,7 +193,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 			w.scopeRegistry = NewScopeRegistry()
 		}
 	}
-	w.deriveFreePages()
+	w.LoadFreeList(^uint64(0))
 	return w, nil
 }
 
@@ -213,36 +247,169 @@ func (w *Writer[K]) Append(from, to K, scopeID uint32) error {
 	return nil
 }
 
-func (w *Writer[K]) Commit(updatedUnix uint64) error {
+// Commit commits the pending transaction.
+// oldestReaderTxnID must be the minimum txn_id among all active readers, or
+// math.MaxUint64 if no readers are active. It is queried fresh at call time
+// (not cached) to prevent MVCC violations from stale state.
+func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
+	// Refresh MVCC state BEFORE any commit logic uses canRecycle.
+	w.canRecycle = oldestReaderTxnID == ^uint64(0)
+
 	// Rebuild scope table (mode 2) only if the registry changed.
 	if w.scopeDirty {
-		// Collect old scope tree pages for reuse.
-		var freePool []uint32
+		// Collect old scope tree pages.
+		var oldScopePages []uint32
 		if w.scopeTableRootCache != 0 {
-			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &freePool)
+			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &oldScopePages)
 		}
-		var allocated []uint32
-		root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated, &freePool)
-		if err != nil {
-			return err
+		// When readers are active, old scope pages are committed-region pages
+		// that readers may reference via MAP_SHARED. Push them to freedThisTxn
+		// for the free-list chain and let buildScopeTree allocate fresh.
+		var freePool []uint32
+		if w.canRecycle {
+			freePool = oldScopePages
+		} else {
+			w.freedThisTxn = append(w.freedThisTxn, oldScopePages...)
 		}
-		// Register scope pages in privatePages for CRC finalization.
-		for _, pgno := range allocated {
-			w.privatePages.insert(pgno)
+		w.scopeTableRootCache = 0
+		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
+			var allocated []uint32
+			root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated, &freePool)
+			if err != nil {
+				return err
+			}
+			// Register scope pages in privatePages for CRC finalization.
+			for _, pgno := range allocated {
+				w.privatePages.insert(pgno)
+			}
+			w.scopeTableRootCache = root
 		}
-		w.scopeTableRootCache = root
 		w.scopeDirty = false
 	}
+
 	// Finalize CRCs on all private pages.
 	for _, pgno := range w.privatePages.iter() {
 		if pgno >= 2 {
 			finalizeChecksum(w.store.pageMut(pgno))
 		}
 	}
-	total := w.store.totalPages()
+
+	// Build and write the persistent free-list.
+	newTxnIDVal := w.committedTxnID
+
+	// Collect entries to persist:
+	// - Old entries not consumed this transaction
+	// - Pages freed this transaction (COW victims + old chain pages + old scope pages)
+	var oldEntries []FreeEntry
+	if w.freeListHead != 0 {
+		oldEntries, _ = ReadChain(w.store, w.freeListHead)
+	}
+	oldChainPages := ReadChainPageNumbers(w.store, w.freeListHead)
+
+	// Determine consumed pages (popped from freePages during the transaction).
+	consumed := make(map[uint32]bool)
+	upper := w.freePos
+	if upper > len(w.freePages) {
+		upper = len(w.freePages)
+	}
+	for i := 0; i < upper; i++ {
+		consumed[w.freePages[i]] = true
+	}
+
+	var entriesToWrite []FreeEntry
+	for _, e := range oldEntries {
+		if !consumed[e.Pgno] {
+			entriesToWrite = append(entriesToWrite, e)
+		}
+	}
+	// Old chain pages are being replaced.
+	w.freedThisTxn = append(w.freedThisTxn, oldChainPages...)
+	// Add pages freed this transaction (excluding recycled pages, which are
+	// now live tree pages and must NOT appear in the free-list).
+	for _, pgno := range w.freedThisTxn[w.recyclePos:] {
+		entriesToWrite = append(entriesToWrite, FreeEntry{Pgno: pgno, FreedTxnID: newTxnIDVal})
+	}
+
+	// Rule 5: compute trailing free pages that can be truncated. This must
+	// happen BEFORE writing the chain so truncated pages don't appear as stale
+	// entries in the chain.
+	preTruncateTotal := w.store.totalPages()
+	var trailing uint32
+	if oldestReaderTxnID == ^uint64(0) {
+		freePgnos := make([]uint32, len(entriesToWrite))
+		for i, e := range entriesToWrite {
+			freePgnos[i] = e.Pgno
+		}
+		trailing = TrailingFreeCount(freePgnos, preTruncateTotal)
+	}
+	newTotal := preTruncateTotal - trailing
+
+	// Remove trailing pages from entriesToWrite so the chain doesn't reference
+	// pages that will be truncated.
+	if trailing > 0 {
+		kept := entriesToWrite[:0]
+		for _, e := range entriesToWrite {
+			if e.Pgno < newTotal {
+				kept = append(kept, e)
+			}
+		}
+		entriesToWrite = kept
+	}
+
+	// Allocate chain pages: prefer reusing a freed page as the first chain page
+	// (Rule 5: no unbounded file growth). Only safe when no readers are active.
+	var selfSupplyPage uint32
+	hasSelfSupply := false
+	if w.canRecycle && len(entriesToWrite) >= 2 {
+		maxIdx := 0
+		for i, e := range entriesToWrite {
+			if e.Pgno > entriesToWrite[maxIdx].Pgno {
+				maxIdx = i
+			}
+		}
+		selfSupplyPage = entriesToWrite[maxIdx].Pgno
+		entriesToWrite[maxIdx] = entriesToWrite[len(entriesToWrite)-1]
+		entriesToWrite = entriesToWrite[:len(entriesToWrite)-1]
+		hasSelfSupply = true
+	}
+
+	sort.Slice(entriesToWrite, func(i, j int) bool {
+		return entriesToWrite[i].FreedTxnID < entriesToWrite[j].FreedTxnID
+	})
+	needed := ChainPageCount(entriesToWrite)
+
+	chainPages := make([]uint32, 0, needed)
+	if hasSelfSupply {
+		chainPages = append(chainPages, selfSupplyPage)
+	}
+	for len(chainPages) < needed {
+		pgno, err := w.store.allocPage()
+		if err != nil {
+			return err
+		}
+		chainPages = append(chainPages, pgno)
+	}
+
+	head, err := WriteChain(w.store, entriesToWrite, chainPages)
+	if err != nil {
+		return err
+	}
+	w.freeListHead = head
+
+	// Truncate trailing free pages now that the chain no longer references them.
+	var total uint32
+	if trailing > 0 {
+		if err := w.store.truncate(newTotal); err != nil {
+			return err
+		}
+		total = newTotal
+	} else {
+		total = w.store.totalPages()
+	}
+
 	inactive := 1 - w.activeMeta
 	newTxnID := w.committedTxnID + 1
 	if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
@@ -264,7 +431,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64) error {
 	w.committedPages = total
 	w.store.setCommittedPages(total)
 	w.resetTxn()
-	w.deriveFreePages()
+	w.LoadFreeList(oldestReaderTxnID)
 	return nil
 }
 
@@ -302,16 +469,31 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 	}
 	w.store.copyPage(pgno, newPgno)
 	w.privatePages.insert(newPgno)
+	// The old page is a COW victim — record it for the free-list chain and
+	// same-transaction recycling.
+	w.freedThisTxn = append(w.freedThisTxn, pgno)
 	return newPgno, nil
 }
 
-// allocPage pops a page from the derived free pool, or extends the file.
-// Every allocated page is marked private.
+// allocPage pops a page from the free pool, recycles a same-txn COW victim, or
+// extends the file. Every allocated page is marked private.
 func (w *Writer[K]) allocPage() (uint32, error) {
 	if w.freePos < len(w.freePages) {
 		pgno := w.freePages[w.freePos]
 		w.freePos++
 		w.privatePages.insert(pgno)
+		return pgno, nil
+	}
+	if w.canRecycle && w.recyclePos < len(w.freedThisTxn) {
+		pgno := w.freedThisTxn[w.recyclePos]
+		w.recyclePos++
+		w.privatePages.insert(pgno)
+		// Clear stale data: recycled pages may contain old branch headers with
+		// child pointers that create cycles during tree traversal.
+		page := w.store.pageMut(pgno)
+		for i := range page {
+			page[i] = 0
+		}
 		return pgno, nil
 	}
 	pgno, err := w.store.allocPage()
@@ -323,80 +505,20 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 	return pgno, nil
 }
 
-// deriveFreePages walks the committed tree to identify all unreachable pages.
-// Those become the free pool available for reuse in the next transaction.
-func (w *Writer[K]) deriveFreePages() {
-	w.deriveFreePagesWithReaders(nil)
-}
-
-// DeriveFreePagesFromReaders re-derives the free page set, also protecting
-// trees referenced by active readers.
-func (w *Writer[K]) DeriveFreePagesFromReaders(readerRoots [][2]uint32) {
-	w.deriveFreePagesWithReaders(readerRoots)
-}
-
-func (w *Writer[K]) deriveFreePagesWithReaders(readerRoots [][2]uint32) {
-	w.freePages = w.freePages[:0]
+// LoadFreeList loads the free pool from the persistent PAGE_TYPE_TXN_FREE chain.
+// oldestReaderTxnID: pages freed in txn < this are reclaimable.
+// ^uint64(0) means no readers (all pages reclaimable).
+func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
+	w.canRecycle = oldestReaderTxnID == ^uint64(0)
+	if w.freeListHead == 0 {
+		w.freePages = w.freePages[:0]
+		w.freePos = 0
+		return
+	}
+	entries, _ := ReadChain(w.store, w.freeListHead)
+	w.freePages = Reclaimable(entries, oldestReaderTxnID)
+	sort.Slice(w.freePages, func(i, j int) bool { return w.freePages[i] < w.freePages[j] })
 	w.freePos = 0
-	total := int(w.store.totalPages())
-	if w.committedRoot == 0 {
-		for pgno := 2; pgno < total; pgno++ {
-			w.freePages = append(w.freePages, uint32(pgno))
-		}
-		w.privatePages.ensureCapacity(total)
-		return
-	}
-	reachable := newPageSet(total)
-	reachable.insert(0)
-	reachable.insert(1)
-	// Walk the new committed tree.
-	w.markReachable(w.committedRoot, reachable)
-	if w.scopeTableRootCache != 0 {
-		w.markScopeReachable(w.scopeTableRootCache, reachable)
-	}
-	// MVCC safety: walk ALL reader-referenced trees.
-	// Pages reachable from any active reader's root are protected.
-	for _, rh := range readerRoots {
-		if rh[0] != 0 && !reachable.contains(rh[0]) {
-			w.markReachable(rh[0], reachable)
-		}
-	}
-	for pgno := 2; pgno < total; pgno++ {
-		if !reachable.contains(uint32(pgno)) {
-			w.freePages = append(w.freePages, uint32(pgno))
-		}
-	}
-	w.privatePages.ensureCapacity(total)
-}
-
-func (w *Writer[K]) markReachable(pgno uint32, reachable *pageSet) {
-	if reachable.contains(pgno) || uint64(pgno) >= uint64(w.store.totalPages()) {
-		return
-	}
-	reachable.insert(pgno)
-	page := w.store.page(pgno)
-	h := decodeHeader(page)
-	if h.pageType == PageTypeBranch {
-		bv := newBranchView(page, int(h.entryCount), int(w.keyWidth))
-		for j := 0; j < bv.childCount(); j++ {
-			w.markReachable(bv.child(j), reachable)
-		}
-	}
-}
-
-func (w *Writer[K]) markScopeReachable(pgno uint32, reachable *pageSet) {
-	if reachable.contains(pgno) || uint64(pgno) >= uint64(w.store.totalPages()) {
-		return
-	}
-	reachable.insert(pgno)
-	page := w.store.page(pgno)
-	h := decodeHeader(page)
-	if h.pageType == PageTypeScopeBranch {
-		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
-		for j := 0; j < bv.childCount(); j++ {
-			w.markScopeReachable(bv.child(j), reachable)
-		}
-	}
 }
 
 // resetTxn clears the private-pages bitset for the next transaction.
@@ -426,6 +548,8 @@ func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]ui
 
 func (w *Writer[K]) resetTxn() {
 	w.privatePages.clear()
+	w.freedThisTxn = w.freedThisTxn[:0]
+	w.recyclePos = 0
 	w.privatePages.ensureCapacity(int(w.store.totalPages()))
 }
 
@@ -965,7 +1089,7 @@ func (w *Writer[K]) writeMetaPage(pgno uint32, txnID uint64, root uint32, height
 		txnID:          txnID,
 		updatedUnix:    updatedUnix,
 		scopeTableRoot: w.scopeTableRootCache,
-		freeListHead:   0,
+		freeListHead:   w.freeListHead,
 	}
 	m.encodeInto(w.store.pageMut(pgno))
 	return nil

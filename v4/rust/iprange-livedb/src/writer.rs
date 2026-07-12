@@ -53,7 +53,7 @@ pub struct Writer<K: IpKey> {
     recycle_pos: usize,
     /// When false, COW victims are NOT recycled (readers may reference them).
     /// Set by FileWriter based on oldest_reader_txn_id.
-    can_recycle: bool,
+    pub(crate) can_recycle: bool,
     scope_registry: Option<crate::scope_table::ScopeRegistry>,
     scope_table_root_cache: u32,
     scope_dirty: bool,

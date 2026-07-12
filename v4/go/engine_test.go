@@ -1,6 +1,7 @@
 package iprangedb
 
 import (
+	"math"
 	"os"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 func TestCreateEmpty(t *testing.T) {
 	w, err := Create[Ipv4Key](0, 0)
 	if err != nil { t.Fatal(err) }
-	if err := w.Commit(0); err != nil { t.Fatal(err) }
+	if err := w.Commit(0, math.MaxUint64); err != nil { t.Fatal(err) }
 	img, ok := w.IntoImage()
 	if !ok { t.Fatal("expected image") }
 	r, err := Open(img)
@@ -19,7 +20,7 @@ func TestCreateEmpty(t *testing.T) {
 func TestSetSingle(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 1 { t.Fatalf("count=%d", r.RecordCount()) }
@@ -32,7 +33,7 @@ func TestAppend1k(t *testing.T) {
 	for i := uint32(0); i < 1000; i++ {
 		w.Append(Ipv4Key(i*10), Ipv4Key(i*10+5), i)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 1000 { t.Fatalf("count=%d", r.RecordCount()) }
@@ -44,7 +45,7 @@ func TestDeleteOverlap(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(100), 1)
 	w.Delete(Ipv4Key(30), Ipv4Key(50))
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 2 { t.Fatalf("count=%d", r.RecordCount()) }
@@ -57,7 +58,7 @@ func TestSetOverwrite(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(100), 1)
 	w.Set(Ipv4Key(10), Ipv4Key(100), 2)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 1 { t.Fatalf("count=%d", r.RecordCount()) }
@@ -70,7 +71,7 @@ func TestLeafSplit(t *testing.T) {
 	for i := uint32(0); i < 1000; i++ {
 		w.Set(Ipv4Key(i*2), Ipv4Key(i*2+1), i)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 1000 { t.Fatalf("count=%d", r.RecordCount()) }
@@ -83,7 +84,7 @@ func TestLeafSplit(t *testing.T) {
 func TestWriterReaderCommitted(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	w.Set(Ipv4Key(30), Ipv4Key(40), 2) // pending
 	// Reader sees committed only (this test uses IntoImage which gives pending;
 	// for a proper committed-reader test we'd use the file-backed path)
@@ -93,7 +94,7 @@ func TestWriterReaderCommitted(t *testing.T) {
 
 func TestMigrateEmptyToFull(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
@@ -112,7 +113,7 @@ func TestMigrateFullToEmpty(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
 	w.Set(Ipv4Key(30), Ipv4Key(40), 2)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{})
 	counters, err := Migrate(w, desired, nil)
@@ -127,7 +128,7 @@ func TestMigrateFullToEmpty(t *testing.T) {
 func TestMigrateIdentical(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
@@ -141,7 +142,7 @@ func TestMigrateIdentical(t *testing.T) {
 func TestMigrateChangeScope(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 2},
@@ -154,7 +155,7 @@ func TestMigrateChangeScope(t *testing.T) {
 
 func TestExtSortAndMigrate(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	unsorted := []DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(30), To: Ipv4Key(40), ScopeID: 2},
@@ -172,7 +173,7 @@ func TestExtSortAndMigrate(t *testing.T) {
 	if counters.Added != 3 {
 		t.Fatalf("counters=%+v", counters)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
@@ -189,7 +190,7 @@ func TestStress200k(t *testing.T) {
 	for i := uint32(0); i < 200_000; i++ {
 		w.Set(Ipv4Key(i), Ipv4Key(i), i)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 200_000 {
@@ -208,7 +209,7 @@ func TestStress500k(t *testing.T) {
 	for i := uint32(0); i < 500_000; i++ {
 		w.Set(Ipv4Key(i), Ipv4Key(i), i)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.RecordCount() != 500_000 {
@@ -267,7 +268,7 @@ func TestChurnDataIntegrity(t *testing.T) {
 		for i := uint32(0); i < 1000; i++ {
 			w.Set(Ipv4Key(i), Ipv4Key(i), i)
 		}
-		w.Commit(0)
+		w.Commit(0, math.MaxUint64)
 		img, _ := w.IntoImage()
 		return img
 	}()
@@ -280,7 +281,7 @@ func TestChurnDataIntegrity(t *testing.T) {
 		for i := uint32(0); i < 1000; i++ {
 			w.Set(Ipv4Key(i), Ipv4Key(i), i)
 		}
-		w.Commit(uint64(cycle + 1))
+		w.Commit(uint64(cycle+1), math.MaxUint64)
 		img, _ = w.IntoImage()
 	}
 
@@ -398,7 +399,7 @@ func TestSpillTempFilesCleanedUp(t *testing.T) {
 
 func TestSpillAndMigrate(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	const n = 50
 	cfg := &ExtSortConfig{ChunkSize: 7, TempDir: t.TempDir()}
@@ -418,7 +419,7 @@ func TestSpillAndMigrate(t *testing.T) {
 	if counters.Added != n {
 		t.Fatalf("added=%d want %d", counters.Added, n)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
@@ -443,7 +444,7 @@ func TestMigrateStreamingDeepTreeUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
 	// Force a tree with at least one branch level so the walker exercises
@@ -474,7 +475,7 @@ func TestMigrateStreamingDeepTreeChurn(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
 	if w.committedHeight < 2 {
@@ -494,7 +495,7 @@ func TestMigrateStreamingDeepTreeChurn(t *testing.T) {
 	if _, err := Migrate(w, stream, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -528,7 +529,7 @@ func TestMigrateStreamingHeight3(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatal(err)
 	}
 	if w.committedHeight < 3 {
@@ -561,7 +562,7 @@ func TestMode2InternResolve(t *testing.T) {
 	}
 	w.Set(Ipv4Key(10), Ipv4Key(20), id1)
 	w.Set(Ipv4Key(30), Ipv4Key(40), id2)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	if !bytesEqual(w.ScopeResolve(id1), []byte{0x01}) {
 		t.Fatal("resolve id1 failed")
 	}
@@ -571,7 +572,7 @@ func TestMode2Persist(t *testing.T) {
 	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
 	id, _ := w.ScopeIntern([]byte{0x05})
 	w.Set(Ipv4Key(10), Ipv4Key(20), id)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 
 	store := newVecPageStore(img)
@@ -616,7 +617,7 @@ func TestMode2ManyScopes(t *testing.T) {
 		id, _ := w.ScopeIntern(bm)
 		w.Set(Ipv4Key(i*10), Ipv4Key(i*10+9), id)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	store := newVecPageStore(img)
 	w2, _ := openWriter[Ipv4Key](store)

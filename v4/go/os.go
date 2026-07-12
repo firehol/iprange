@@ -163,10 +163,18 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	}
 	metaA := decodeMeta(buf[:PageSize])
 	metaB := decodeMeta(buf[PageSize : 2*PageSize])
+	// Pick the authoritative meta, preferring one whose page checksum verifies.
+	validA := verifyPage(buf[:PageSize])
+	validB := verifyPage(buf[PageSize : 2*PageSize])
 	var committedPages uint32
-	if metaA.txnID >= metaB.txnID {
+	switch {
+	case validA && !validB:
 		committedPages = uint32(metaA.totalPages)
-	} else {
+	case !validA && validB:
+		committedPages = uint32(metaB.totalPages)
+	case metaA.txnID >= metaB.txnID:
+		committedPages = uint32(metaA.totalPages)
+	default:
 		committedPages = uint32(metaB.totalPages)
 	}
 
@@ -191,9 +199,8 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		return nil, err
 	}
 
-	// Query reader roots for MVCC-safe free page derivation.
-	readerRoots := readerTable.ReaderRoots()
-	w.DeriveFreePagesFromReaders(readerRoots)
+	// Load the persistent free-list with current reader MVCC state.
+	w.LoadFreeList(readerTable.OldestReaderTxnID())
 
 	return &FileWriter[K]{
 		w:           w,
@@ -211,13 +218,9 @@ func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error {
 	return fw.w.Append(from, to, scopeID)
 }
 func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
-	if err := fw.w.Commit(updatedUnix); err != nil {
-		return err
-	}
-	// Re-derive free pages with reader roots for MVCC safety.
-	readerRoots := fw.readerTable.ReaderRoots()
-	fw.w.DeriveFreePagesFromReaders(readerRoots)
-	return nil
+	// Query the oldest live reader fresh at commit time for MVCC safety.
+	oldest := fw.readerTable.OldestReaderTxnID()
+	return fw.w.Commit(updatedUnix, oldest)
 }
 func (fw *FileWriter[K]) RecordCount() uint64              { return fw.w.RecordCount() }
 func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error  { return fw.w.Scan(f) }

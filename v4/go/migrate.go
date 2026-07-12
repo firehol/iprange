@@ -69,7 +69,14 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 	}
 	counters := &MigrateCounters{}
 
-	// Read committed pages directly from the store (bitset COW is safe).
+	// Migration mode: the treeWalker reads committed pages directly from the
+	// store. Same-txn recycling would zero COW victims the walker still needs
+	// to traverse, so disable it for the duration of the migration (mirrors the
+	// Rust migrate.rs "migration mode" guard against the COW-reuse hazard).
+	prevRecycle := w.canRecycle
+	w.canRecycle = false
+	defer func() { w.canRecycle = prevRecycle }()
+
 	var zero K
 	kw := zero.width()
 	walker := newTreeWalker[K](w.store, kw, w.committedRoot, w.committedHeight)

@@ -1,6 +1,7 @@
 package iprangedb
 
 import (
+	"math"
 	"testing"
 )
 
@@ -507,7 +508,7 @@ func TestBuildScopeTreeMultiLevel(t *testing.T) {
 		w.ScopeIntern(bm)
 	}
 	// This commit builds the scope tree — previously it would fail for > 7635.
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatalf("commit with %d scopes failed: %v", n, err)
 	}
 
@@ -543,7 +544,7 @@ func TestFeedAddRangeBitmapMode(t *testing.T) {
 	if err := w.FeedAddRange(Ipv4Key(15), Ipv4Key(25), 1); err != nil {
 		t.Fatal(err)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 
@@ -570,7 +571,7 @@ func TestFeedAddRangeGapFill(t *testing.T) {
 
 	// Add feed bit 2 to [5-30] — covers existing [10-20] plus gaps.
 	w.FeedAddRange(Ipv4Key(5), Ipv4Key(30), 2)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 
@@ -597,7 +598,7 @@ func TestFeedRemoveRangeBitmapMode(t *testing.T) {
 
 	// Remove feed bit 0 from [15-25].
 	w.FeedRemoveRange(Ipv4Key(15), Ipv4Key(25), 0)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 
@@ -624,7 +625,7 @@ func TestFeedRemoveRangeClearsRecord(t *testing.T) {
 
 	// Remove feed 0 from the entire range → record disappears.
 	w.FeedRemoveRange(Ipv4Key(10), Ipv4Key(20), 0)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if _, ok := r.LookupV4(Ipv4Key(15)); ok {
@@ -640,7 +641,7 @@ func TestFeedAddRangeIndirectMode(t *testing.T) {
 
 	// Add feed bit 3 to [15-25].
 	w.FeedAddRange(Ipv4Key(15), Ipv4Key(25), 3)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Verify: [15-20] should have both feed 0 and feed 3.
 	img, _ := w.IntoImage()
@@ -666,7 +667,7 @@ func TestReaderScopeResolve(t *testing.T) {
 	id2, _ := w.ScopeIntern([]byte{0x02, 0x03})
 	w.Set(Ipv4Key(10), Ipv4Key(20), id1)
 	w.Set(Ipv4Key(30), Ipv4Key(40), id2)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
@@ -689,7 +690,7 @@ func TestReaderScopeResolveWrongMode(t *testing.T) {
 	// Mode 0 (scalar): scope_resolve returns nil.
 	w, _ := Create[Ipv4Key](ScopeModeScalar, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if r.ScopeResolve(1) != nil {
@@ -703,7 +704,7 @@ func TestReaderScopeResolveWrongMode(t *testing.T) {
 func TestMigratePartialOverlapOldExtends(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [10-15] → [10-15] unchanged, [16-20] removed.
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
@@ -716,7 +717,7 @@ func TestMigratePartialOverlapOldExtends(t *testing.T) {
 	if counters.Unchanged != 1 || counters.Removed != 1 {
 		t.Fatalf("counters=%+v", counters)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if s, ok := r.LookupV4(Ipv4Key(12)); !ok || s != 1 {
@@ -730,7 +731,7 @@ func TestMigratePartialOverlapOldExtends(t *testing.T) {
 func TestMigratePartialOverlapDesiredExtends(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(15), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [10-20] → [10-15] unchanged, [16-20] added.
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
@@ -745,7 +746,7 @@ func TestMigratePartialOverlapDesiredExtends(t *testing.T) {
 func TestMigrateOverlappingDifferentScope(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(20), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [15-25] scope=2
 	// → [10-14] removed(1), [15-20] changed(1→2), [21-25] added(2)
@@ -756,7 +757,7 @@ func TestMigrateOverlappingDifferentScope(t *testing.T) {
 	if counters.Removed != 1 || counters.Changed != 1 || counters.Added != 1 {
 		t.Fatalf("counters=%+v", counters)
 	}
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 	img, _ := w.IntoImage()
 	r, _ := Open(img)
 	if _, ok := r.LookupV4(Ipv4Key(12)); ok {
@@ -773,7 +774,7 @@ func TestMigrateOverlappingDifferentScope(t *testing.T) {
 func TestMigrateOneToMany(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(30), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [10-15],[20-30] → [10-15] unchanged, [16-19] removed, [20-30] unchanged
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
@@ -790,7 +791,7 @@ func TestMigrateManyToOne(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(10), Ipv4Key(15), 1)
 	w.Set(Ipv4Key(20), Ipv4Key(30), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [10-30] → [10-15] unchanged, [16-19] added, [20-30] unchanged
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
@@ -805,7 +806,7 @@ func TestMigrateManyToOne(t *testing.T) {
 func TestMigrateBoundaryIPs(t *testing.T) {
 	w, _ := Create[Ipv4Key](0, 0)
 	w.Set(Ipv4Key(0), Ipv4Key(100), 1)
-	w.Commit(0)
+	w.Commit(0, math.MaxUint64)
 
 	// Desired: [0-50] scope=2 → [0-50] changed, [51-100] removed
 	desired := FromUnsorted([]DesiredRecord[Ipv4Key]{
@@ -839,7 +840,7 @@ func TestMigrateRandomOracle(t *testing.T) {
 		for _, r := range oldRecords {
 			w.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), r[2])
 		}
-		w.Commit(0)
+		w.Commit(0, math.MaxUint64)
 
 		// Build desired.
 		var desired []DesiredRecord[Ipv4Key]
@@ -855,7 +856,7 @@ func TestMigrateRandomOracle(t *testing.T) {
 		if _, err := Migrate(w, stream, nil); err != nil {
 			t.Fatalf("trial %d: migrate error: %v", trial, err)
 		}
-		w.Commit(0)
+		w.Commit(0, math.MaxUint64)
 
 		// Build result map.
 		img, _ := w.IntoImage()
