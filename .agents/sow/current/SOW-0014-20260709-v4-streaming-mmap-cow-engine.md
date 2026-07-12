@@ -42,6 +42,25 @@ Multi-feed scope = membership bitmap. Splits and merges for optimal footprint.
   - 1 = bitmap (32-scopes: u32 IS the bitmap; compare with `&`)
   - 2 = indirect (unlimited: u32 → scope table interned bitmap; compare with `&`)
 
+**Rule 5 — Optimal file size.** CoW must optimally reuse available pages,
+preferring pages at the beginning (low page numbers). The file must shrink
+(truncate trailing free pages) when free pages are at the end. No unbounded
+file growth under any workload.
+
+**Rule 6 — Optimal performance.** No unnecessary operations. Don't reuse fat
+code when a leaner path exists. Performance dictates code organization — not the
+other way around. Any choice that doesn't boost performance is not a choice.
+Code simplicity/organization follows performance, never leads it.
+
+**Rule 7 — No full scans.** Full page-by-page scans must never be part of
+normal file lifecycle management. Only when explicitly required by end-user
+operations (migration, validate, compact).
+
+**Rule 8 — Performance must be proved.** Profile everything. Eliminate all
+heavy operations. The file format itself is subject to change for performance —
+no backwards compatibility constraints, no prior design decisions are sacred.
+"Performance is god." Must be proved with benchmarks and profiling.
+
 **Decisions:**
 - D1: Writable shared mmap (`PROT_READ|PROT_WRITE`, `MAP_SHARED`) with app-level COW
 - D2: Free-list in CoW pages with freed-in-txn tags
@@ -78,6 +97,15 @@ Unknowns:
 - Exact companion-file format for reader registration (needs design)
 - Whether KV metadata rebuild can be made fully zero-heap (may need streaming merge
   into growth-region pages)
+
+### Working Process
+
+The assistant must NEVER report "finished" before verifying rule compliance.
+Before reporting completion:
+
+1. Spawn 2–3 internal review agents to audit the implementation against ALL rules.
+2. Iterate to fix findings from the agents.
+3. Only report "finished" when all agents pass and all rules are verified.
 
 ### Acceptance Criteria
 
