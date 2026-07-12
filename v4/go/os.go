@@ -38,20 +38,29 @@ func OpenMmap(path string) (*MmapReader, error) {
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
 
-	// Determine the active txn_id for reader registration.
+	// CRC validation: only trust a meta whose checksum verifies.
 	metaA := decodeMeta(data[:PageSize])
 	metaB := decodeMeta(data[PageSize : 2*PageSize])
+	crcA := verifyPage(data[:PageSize])
+	crcB := verifyPage(data[PageSize : 2*PageSize])
 	var activeTxnID uint64
 	var activeRoot uint32
 	var activeHeight uint32
-	if metaA.txnID >= metaB.txnID {
-		activeTxnID = metaA.txnID
-		activeRoot = metaA.rootPgno
-		activeHeight = metaA.treeHeight
-	} else {
-		activeTxnID = metaB.txnID
-		activeRoot = metaB.rootPgno
-		activeHeight = metaB.treeHeight
+	switch {
+	case crcA && crcB:
+		if metaA.txnID >= metaB.txnID {
+			activeTxnID, activeRoot, activeHeight = metaA.txnID, metaA.rootPgno, metaA.treeHeight
+		} else {
+			activeTxnID, activeRoot, activeHeight = metaB.txnID, metaB.rootPgno, metaB.treeHeight
+		}
+	case crcA:
+		activeTxnID, activeRoot, activeHeight = metaA.txnID, metaA.rootPgno, metaA.treeHeight
+	case crcB:
+		activeTxnID, activeRoot, activeHeight = metaB.txnID, metaB.rootPgno, metaB.treeHeight
+	default:
+		syscall.Munmap(data)
+		file.Close()
+		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
 	}
 
 	table, err := OpenReaderTable(path)

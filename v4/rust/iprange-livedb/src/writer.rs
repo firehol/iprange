@@ -50,7 +50,6 @@ pub struct Writer<K: IpKey> {
     free_pos: usize,
     /// Cursor into freed_this_txn for same-transaction recycling.
     /// When free_pages is exhausted, alloc_page reuses COW victims.
-    recycle_pos: usize,
     /// When false, COW victims are NOT recycled (readers may reference them).
     /// Set by FileWriter based on oldest_reader_txn_id.
     pub(crate) can_recycle: bool,
@@ -72,8 +71,7 @@ impl<K: IpKey> Writer<K> {
             prev_committed_root: 0, prev_committed_height: 0,
             pending_root: 0, pending_height: 0, pending_record_count: 0,
             poisoned: false,
-            private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0,
-            recycle_pos: 0, can_recycle: true,
+            private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0, can_recycle: true,
             scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
@@ -115,8 +113,7 @@ impl<K: IpKey> Writer<K> {
             pending_root: active.root_pgno, pending_height: active.tree_height,
             pending_record_count: active.record_count, poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
-            free_pages: vec![], free_pos: 0,
-            recycle_pos: 0, can_recycle: true,
+            free_pages: vec![], free_pos: 0, can_recycle: true,
             scope_registry: scope_reg, scope_table_root_cache: active.scope_table_root,
             scope_dirty: false,
             free_list_head: active.free_list_head,
@@ -221,9 +218,9 @@ impl<K: IpKey> Writer<K> {
         for p in &old_chain_pages {
             self.freed_this_txn.push(*p);
         }
-        // Add pages freed this transaction (excluding recycled pages, which
-        // are now live tree pages and must NOT appear in the free-list).
-        for &pgno in &self.freed_this_txn[self.recycle_pos..] {
+        // Add pages freed this transaction (excluding pages truncated above, which
+        // are freed this transaction and go to the chain)
+        for &pgno in &self.freed_this_txn[..] {
             entries_to_write.push(crate::free_list::FreeEntry { 
                 pgno, freed_txn_id: new_txn_id_val, 
             });
@@ -377,7 +374,6 @@ impl<K: IpKey> Writer<K> {
     fn reset_txn(&mut self) {
         self.private_pages.clear();
         self.freed_this_txn.clear();
-        self.recycle_pos = 0;
         self.private_pages.ensure_capacity(self.store.total_pages() as usize);
     }
 

@@ -174,7 +174,8 @@ pub const fn branch_max(key_width: u8) -> usize {
 // PAGE_TYPE_TXN_FREE. Each such page holds:
 //   @16  next_txn_free_page: u32  (0 = end of list)
 //   @20  count: u32              (number of freed pgnos in this page)
-//   @24  freed_pgnos: [u32; N]    (N = (PAGE_SIZE - 24) / 4 = 1018)
+//   @24  freed_in_txn: u64       (txn_id that freed these pages)
+//   @32  freed_pgnos: [u32; N]    (N = (PAGE_SIZE - 32) / 4 = 1016)
 
 /// Offset of `next_txn_free_page` within a TXN_FREE page.
 pub const TXN_FREE_NEXT: usize = PAGE_HEADER_SIZE;
@@ -315,7 +316,7 @@ mod tests {
 
     #[test]
     fn txn_free_capacity() {
-        // (4096 - 24) / 4 = 1018 freed pgnos per page
+        // (4096 - 32) / 4 = 1016 freed pgnos per page
         assert_eq!(TXN_FREE_CAPACITY, 1016);
     }
 

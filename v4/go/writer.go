@@ -65,8 +65,6 @@ type Writer[K ipKey[K]] struct {
 	// transaction. Used for same-transaction recycling and appended to the
 	// persistent chain at commit.
 	freedThisTxn []uint32
-	// recyclePos is the cursor into freedThisTxn for same-transaction recycling.
-	recyclePos int
 	// canRecycle controls whether COW victims may be recycled in-place. Safe
 	// only when no readers are active (oldestReaderTxnID == MaxUint64).
 	canRecycle bool
@@ -320,9 +318,8 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	}
 	// Old chain pages are being replaced.
 	w.freedThisTxn = append(w.freedThisTxn, oldChainPages...)
-	// Add pages freed this transaction (excluding recycled pages, which are
-	// now live tree pages and must NOT appear in the free-list).
-	for _, pgno := range w.freedThisTxn[w.recyclePos:] {
+	// Add pages freed this transaction.
+	for _, pgno := range w.freedThisTxn {
 		entriesToWrite = append(entriesToWrite, FreeEntry{Pgno: pgno, FreedTxnID: newTxnIDVal})
 	}
 
@@ -487,14 +484,6 @@ func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
 }
 
 // resetTxn clears the private-pages bitset for the next transaction.
-// registerScopePages walks the scope tree and adds all pages to privatePages.
-func (w *Writer[K]) registerScopePages(root uint32) {
-	var pages []uint32
-	w.collectScopePageNumbers(root, 0, &pages)
-	for _, pgno := range pages {
-		w.privatePages.insert(pgno)
-	}
-}
 
 func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]uint32) {
 	if depth > TreeHeightMax || uint64(pgno) >= uint64(w.store.totalPages()) {
@@ -514,7 +503,6 @@ func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]ui
 func (w *Writer[K]) resetTxn() {
 	w.privatePages.clear()
 	w.freedThisTxn = w.freedThisTxn[:0]
-	w.recyclePos = 0
 	w.privatePages.ensureCapacity(int(w.store.totalPages()))
 }
 

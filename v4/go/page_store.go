@@ -184,13 +184,20 @@ func (s *mmapStore) ensureCapacity(minPages uint32) error {
 }
 
 func (s *mmapStore) sync() error {
-	// msync(MS_SYNC)
+	// msync(MS_SYNC) flushes dirty pages to the page cache.
 	_, _, errno := syscall.Syscall(syscall.SYS_MSYNC,
 		uintptr(unsafe.Pointer(&s.data[0])),
 		uintptr(len(s.data)),
 		syscall.MS_SYNC)
 	if errno != 0 {
 		return fmt.Errorf("msync: %v", errno)
+	}
+	// fdatasync ensures the page cache reaches stable storage.
+	// Without this, a system crash (not just process crash) can lose data.
+	if s.file != nil {
+		if err := s.file.Sync(); err != nil {
+			return fmt.Errorf("fdatasync: %w", err)
+		}
 	}
 	return nil
 }
