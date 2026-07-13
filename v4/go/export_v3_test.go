@@ -2,12 +2,18 @@ package iprangedb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math"
 	"testing"
 
 	v3 "github.com/firehol/iprange/v3/go"
 )
+
+// Export-v3 tests for the v4.3 → v3 bridge (export_v3.go). scope_id is a fixed u32;
+// ExportV3 maps it to 4 little-endian bytes under the caller's type_id, then the v3
+// writer owns coalescing, interning, and canonicalization.
 
 func exportMeta() V3Meta {
 	return V3Meta{
@@ -22,52 +28,71 @@ func exportMeta() V3Meta {
 
 type rangeV4 struct {
 	from, to uint32
-	scope    []byte
+	scopeID  uint32
 }
 
 type rangeV6 struct {
 	from, to uint64
-	scope    []byte
+	scopeID  uint32
 }
 
-// v4ImageV4 builds a committed v4 IPv4 image from the given ranges.
-func v4ImageV4(t *testing.T, scopeWidth uint8, ranges []rangeV4) []byte {
+// v4ImageV4 builds a committed v4 IPv4 image from the given (range, scope_id) tuples.
+func v4ImageV4(t *testing.T, ranges []rangeV4) []byte {
 	t.Helper()
-	w := CreateV4(scopeWidth, 0)
+	w, err := Create[Ipv4Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatalf("Create v4: %v", err)
+	}
 	for _, r := range ranges {
-		if err := w.Set(Ipv4Key(r.from), Ipv4Key(r.to), r.scope); err != nil {
-			t.Fatalf("v4 Set: %v", err)
+		if err := w.Set(Ipv4Key(r.from), Ipv4Key(r.to), r.scopeID); err != nil {
+			t.Fatalf("v4 Set [%d,%d]: %v", r.from, r.to, err)
 		}
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatalf("v4 Commit: %v", err)
 	}
-	return w.Image()
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("expected image")
+	}
+	return img
 }
 
-func v4ImageV6(t *testing.T, scopeWidth uint8, ranges []rangeV6) []byte {
+// v4ImageV6 builds a committed v4 IPv6 image from the given (range, scope_id) tuples
+// (Lo half only; Hi is zero, enough for these fixtures).
+func v4ImageV6(t *testing.T, ranges []rangeV6) []byte {
 	t.Helper()
-	w := CreateV6(scopeWidth, 0)
+	w, err := Create[Ipv6Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatalf("Create v6: %v", err)
+	}
 	for _, r := range ranges {
-		if err := w.Set(Ipv6Key{Lo: r.from}, Ipv6Key{Lo: r.to}, r.scope); err != nil {
-			t.Fatalf("v6 Set: %v", err)
+		if err := w.Set(Ipv6Key{Lo: r.from}, Ipv6Key{Lo: r.to}, r.scopeID); err != nil {
+			t.Fatalf("v6 Set [%d,%d]: %v", r.from, r.to, err)
 		}
 	}
-	if err := w.Commit(0); err != nil {
+	if err := w.Commit(0, math.MaxUint64); err != nil {
 		t.Fatalf("v6 Commit: %v", err)
 	}
-	return w.Image()
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("expected image")
+	}
+	return img
+}
+
+// scopeLE is the 4 little-endian bytes ExportV3 encodes a scope_id as.
+func scopeLE(id uint32) []byte {
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, id)
+	return b
 }
 
 // --- ROUND-TRIP: v4 -> ExportV3 -> v3 Reader, asserting parity ---
 
-func TestExportRoundtripV4ScopeWidth4(t *testing.T) {
-	ranges := []rangeV4{
-		{10, 20, []byte{1, 0, 0, 0}},
-		{30, 40, []byte{2, 0, 0, 0}},
-		{100, 200, []byte{3, 0, 0, 0}},
-	}
-	img := v4ImageV4(t, 4, ranges)
+func TestExportRoundtripV4(t *testing.T) {
+	ranges := []rangeV4{{10, 20, 1}, {30, 40, 2}, {100, 200, 3}}
+	img := v4ImageV4(t, ranges)
 	const typeID = uint32(7)
 	out, err := ExportV3(img, typeID, exportMeta())
 	if err != nil {
@@ -102,8 +127,8 @@ func TestExportRoundtripV4ScopeWidth4(t *testing.T) {
 			if val.TypeID != typeID {
 				t.Fatalf("type_id = %d, want %d", val.TypeID, typeID)
 			}
-			if !bytes.Equal(val.Bytes, rg.scope) {
-				t.Fatalf("value bytes %v != v4 scope %v", val.Bytes, rg.scope)
+			if !bytes.Equal(val.Bytes, scopeLE(rg.scopeID)) {
+				t.Fatalf("value bytes %v != scopeLE(%d) %v", val.Bytes, rg.scopeID, scopeLE(rg.scopeID))
 			}
 		}
 	}
@@ -114,10 +139,11 @@ func TestExportRoundtripV4ScopeWidth4(t *testing.T) {
 	}
 }
 
-func TestExportRoundtripV4ScopeWidth0Presence(t *testing.T) {
-	ranges := []rangeV4{{10, 20, nil}, {100, 110, nil}}
-	img := v4ImageV4(t, 0, ranges)
-	out, err := ExportV3(img, 1 /* ignored */, exportMeta())
+// scope_id == 0 is a real value ([0,0,0,0]), not a presence-without-value sentinel.
+func TestExportRoundtripV4ScopeIDZero(t *testing.T) {
+	ranges := []rangeV4{{10, 20, 0}, {100, 110, 0}}
+	img := v4ImageV4(t, ranges)
+	out, err := ExportV3(img, 1, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
 	}
@@ -134,25 +160,20 @@ func TestExportRoundtripV4ScopeWidth0Presence(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("lookup %d: found=%v err=%v", ip, found, err)
 			}
-			if hit.ValueID != 0xFFFF_FFFF {
-				t.Fatalf("ip %d: value_id = %#x, want sentinel", ip, hit.ValueID)
+			val, ok := r.Value(hit.ValueID)
+			if !ok {
+				t.Fatalf("ip %d: scope 0 must still resolve to a value", ip)
 			}
-			if _, ok := r.Value(hit.ValueID); ok {
-				t.Fatalf("sentinel resolved to a value")
+			if val.TypeID != 1 || !bytes.Equal(val.Bytes, []byte{0, 0, 0, 0}) {
+				t.Fatalf("ip %d: val=%+v", ip, val)
 			}
 		}
 	}
-	if _, found, _ := r.LookupV4(v3.Ipv4Key(50)); found {
-		t.Fatalf("gap present")
-	}
 }
 
-func TestExportRoundtripV6ScopeWidth4(t *testing.T) {
-	ranges := []rangeV6{
-		{10, 20, []byte{9, 9, 9, 9}},
-		{1000, 2000, []byte{8, 8, 8, 8}},
-	}
-	img := v4ImageV6(t, 4, ranges)
+func TestExportRoundtripV6(t *testing.T) {
+	ranges := []rangeV6{{10, 20, 9}, {1000, 2000, 8}}
+	img := v4ImageV6(t, ranges)
 	const typeID = uint32(2)
 	out, err := ExportV3(img, typeID, exportMeta())
 	if err != nil {
@@ -172,7 +193,7 @@ func TestExportRoundtripV6ScopeWidth4(t *testing.T) {
 				t.Fatalf("lookup %d: found=%v err=%v", lo, found, err)
 			}
 			val, ok := r.Value(hit.ValueID)
-			if !ok || val.TypeID != typeID || !bytes.Equal(val.Bytes, rg.scope) {
+			if !ok || val.TypeID != typeID || !bytes.Equal(val.Bytes, scopeLE(rg.scopeID)) {
 				t.Fatalf("lookup %d: val=%+v ok=%v", lo, val, ok)
 			}
 		}
@@ -182,30 +203,8 @@ func TestExportRoundtripV6ScopeWidth4(t *testing.T) {
 	}
 }
 
-func TestExportRoundtripV6ScopeWidth0Presence(t *testing.T) {
-	img := v4ImageV6(t, 0, []rangeV6{{5, 9, nil}, {50, 60, nil}})
-	out, err := ExportV3(img, 1, exportMeta())
-	if err != nil {
-		t.Fatalf("ExportV3: %v", err)
-	}
-	r, err := v3.Open(out)
-	if err != nil {
-		t.Fatalf("v3 Open: %v", err)
-	}
-	if r.RecordCount() != 2 {
-		t.Fatalf("record_count = %d, want 2", r.RecordCount())
-	}
-	hit, found, err := r.LookupV6(v3.Ipv6Key{Lo: 7})
-	if err != nil || !found || hit.ValueID != 0xFFFF_FFFF {
-		t.Fatalf("lookup 7: found=%v vid=%#x err=%v", found, hit.ValueID, err)
-	}
-	if _, found, _ := r.LookupV6(v3.Ipv6Key{Lo: 100}); found {
-		t.Fatalf("gap present")
-	}
-}
-
 func TestExportEmptyV4(t *testing.T) {
-	img := v4ImageV4(t, 4, nil)
+	img := v4ImageV4(t, nil)
 	out, err := ExportV3(img, 1, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
@@ -222,17 +221,22 @@ func TestExportEmptyV4(t *testing.T) {
 	}
 }
 
-// --- COALESCING: adjacent byte-equal scopes merge in the v3 file ---
+// --- COALESCING: adjacent equal-value scopes merge in the v3 file ---
 
 func TestExportCoalescesAdjacentEqualScopes(t *testing.T) {
-	w := CreateV4(4, 0)
-	mustSet(t, w, 10, 40, []byte{5, 0, 0, 0})
-	mustSet(t, w, 41, 60, []byte{5, 0, 0, 0}) // contiguous, same scope
-	mustSet(t, w, 100, 110, []byte{6, 0, 0, 0})
-	if err := w.Commit(0); err != nil {
-		t.Fatalf("commit: %v", err)
+	w, err := Create[Ipv4Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	out, err := ExportV3(w.Image(), 1, exportMeta())
+	must(t, w.Set(Ipv4Key(10), Ipv4Key(40), 5))
+	must(t, w.Set(Ipv4Key(41), Ipv4Key(60), 5)) // contiguous, same scope; v4 keeps them apart
+	must(t, w.Set(Ipv4Key(100), Ipv4Key(110), 6))
+	must(t, w.Commit(0, math.MaxUint64))
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("expected image")
+	}
+	out, err := ExportV3(img, 1, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
 	}
@@ -249,7 +253,7 @@ func TestExportCoalescesAdjacentEqualScopes(t *testing.T) {
 			t.Fatalf("ip %d absent", ip)
 		}
 		val, _ := r.Value(hit.ValueID)
-		if !bytes.Equal(val.Bytes, []byte{5, 0, 0, 0}) {
+		if !bytes.Equal(val.Bytes, scopeLE(5)) {
 			t.Fatalf("ip %d: wrong scope %v", ip, val.Bytes)
 		}
 	}
@@ -258,16 +262,13 @@ func TestExportCoalescesAdjacentEqualScopes(t *testing.T) {
 	}
 	hit, _, _ := r.LookupV4(v3.Ipv4Key(105))
 	val, _ := r.Value(hit.ValueID)
-	if !bytes.Equal(val.Bytes, []byte{6, 0, 0, 0}) {
+	if !bytes.Equal(val.Bytes, scopeLE(6)) {
 		t.Fatalf("105: wrong scope %v", val.Bytes)
 	}
 }
 
-func TestExportDistinctScopesShareInternedValue(t *testing.T) {
-	img := v4ImageV4(t, 4, []rangeV4{
-		{10, 20, []byte{1, 1, 1, 1}},
-		{100, 200, []byte{1, 1, 1, 1}},
-	})
+func TestExportDistinctRangesShareInternedValue(t *testing.T) {
+	img := v4ImageV4(t, []rangeV4{{10, 20, 42}, {100, 200, 42}})
 	out, err := ExportV3(img, 3, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
@@ -279,39 +280,15 @@ func TestExportDistinctScopesShareInternedValue(t *testing.T) {
 	a, _, _ := r.LookupV4(v3.Ipv4Key(15))
 	b, _, _ := r.LookupV4(v3.Ipv4Key(150))
 	if a.ValueID != b.ValueID {
-		t.Fatalf("byte-equal scopes not interned: %d vs %d", a.ValueID, b.ValueID)
+		t.Fatalf("equal scope_ids not interned: %d vs %d", a.ValueID, b.ValueID)
 	}
 }
 
-// --- ExportUnrepresentable: the v3 writer rejects the stream ---
-
-func TestExportUnrepresentableBadMembershipValue(t *testing.T) {
-	// type_id == 1 membership set: bytes must be a non-empty %4==0 ascending LE uint32
-	// list. A 3-byte scope under type_id 1 is not %4 == 0 => v3 rejects.
-	img := v4ImageV4(t, 3, []rangeV4{{10, 20, []byte{1, 2, 3}}})
-	_, err := ExportV3(img, 1, exportMeta())
-	if err == nil {
-		t.Fatalf("expected ExportUnrepresentable, got nil")
-	}
-	if !errors.Is(err, ErrExportUnrepresentable) {
-		t.Fatalf("error not ExportUnrepresentable: %v", err)
-	}
-}
-
-func TestExportUnrepresentableMembershipNotAscending(t *testing.T) {
-	// Two LE uint32 feed-ids that are not strictly ascending (5, 5) => v3 rejects.
-	scope := []byte{5, 0, 0, 0, 5, 0, 0, 0}
-	img := v4ImageV4(t, 8, []rangeV4{{10, 20, scope}})
-	_, err := ExportV3(img, 1, exportMeta())
-	if !errors.Is(err, ErrExportUnrepresentable) {
-		t.Fatalf("error not ExportUnrepresentable: %v", err)
-	}
-}
+// --- type_id == 1 membership: a conforming single-feed-id scope round-trips ---
 
 func TestExportMembershipValueWellFormed(t *testing.T) {
-	// A conforming type_id 1 scope (ascending LE uint32 ids) exports fine.
-	scope := []byte{1, 0, 0, 0, 2, 0, 0, 0}
-	img := v4ImageV4(t, 8, []rangeV4{{10, 20, scope}})
+	// scope_id 5 -> LE [5,0,0,0] -> one feed-id {5}: a valid type_id 1 membership set.
+	img := v4ImageV4(t, []rangeV4{{10, 20, 5}})
 	out, err := ExportV3(img, 1, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
@@ -322,23 +299,56 @@ func TestExportMembershipValueWellFormed(t *testing.T) {
 	}
 	hit, _, _ := r.LookupV4(v3.Ipv4Key(15))
 	val, ok := r.Value(hit.ValueID)
-	if !ok || val.TypeID != 1 || !bytes.Equal(val.Bytes, scope) {
+	if !ok || val.TypeID != 1 || !bytes.Equal(val.Bytes, scopeLE(5)) {
 		t.Fatalf("membership value not round-tripped: val=%+v ok=%v", val, ok)
+	}
+}
+
+// --- ExportUnrepresentable: the v3 writer rejects the stream ---
+
+// The only v4.3 input the v3 writer rejects is the full IPv6 space (size 2^128, which
+// does not fit unique_ip_count). A v4.3 scope_id is always 4 bytes, so the malformed /
+// non-ascending membership rejections are unreachable from the export bridge.
+func TestExportUnrepresentableFullV6Space(t *testing.T) {
+	w, err := Create[Ipv6Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.Set(Ipv6Key{}, Ipv6Key{Hi: math.MaxUint64, Lo: math.MaxUint64}, 1))
+	must(t, w.Commit(0, math.MaxUint64))
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("expected image")
+	}
+	_, err = ExportV3(img, 7, exportMeta())
+	if err == nil {
+		t.Fatalf("expected ExportUnrepresentable, got nil")
+	}
+	if !errors.Is(err, ErrExportUnrepresentable) {
+		t.Fatalf("error not ExportUnrepresentable: %v", err)
+	}
+}
+
+// A corrupt v4 image is surfaced as-is (not wrapped in ExportUnrepresentable).
+func TestExportRejectsCorruptV4(t *testing.T) {
+	_, err := ExportV3([]byte("not a v4 file"), 1, exportMeta())
+	if err == nil {
+		t.Fatal("expected error on corrupt input")
+	}
+	if errors.Is(err, ErrExportUnrepresentable) {
+		t.Fatalf("corrupt input must not be ExportUnrepresentable: %v", err)
 	}
 }
 
 // --- determinism ---
 
 func TestExportDeterministic(t *testing.T) {
-	ranges := []rangeV4{
-		{10, 20, []byte{1, 0, 0, 0}},
-		{100, 200, []byte{2, 0, 0, 0}},
-	}
-	a, err := ExportV3(v4ImageV4(t, 4, ranges), 9, exportMeta())
+	ranges := []rangeV4{{10, 20, 1}, {100, 200, 2}}
+	a, err := ExportV3(v4ImageV4(t, ranges), 9, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3 a: %v", err)
 	}
-	b, err := ExportV3(v4ImageV4(t, 4, ranges), 9, exportMeta())
+	b, err := ExportV3(v4ImageV4(t, ranges), 9, exportMeta())
 	if err != nil {
 		t.Fatalf("ExportV3 b: %v", err)
 	}
@@ -347,18 +357,11 @@ func TestExportDeterministic(t *testing.T) {
 	}
 }
 
-func mustSet(t *testing.T, w *Writer[Ipv4Key], from, to uint32, scope []byte) {
-	t.Helper()
-	if err := w.Set(Ipv4Key(from), Ipv4Key(to), scope); err != nil {
-		t.Fatalf("Set [%d,%d]: %v", from, to, err)
-	}
-}
-
-// crossGoldenHex is the exact v3 export of the fixed v4 input in
-// TestExportCrossLanguageGolden. The identical vector is asserted by the Rust suite
-// (export::tests::export_cross_language_golden), so a drift in either the v4 writer, the
-// v3 writer, or this bridge — in either language — breaks one of the two tests. This is
-// the in-repo proof that Go and Rust ExportV3 produce byte-identical v3 files.
+// crossGoldenHex is the exact v3 export of the fixed v4 input below. The identical
+// vector is asserted by the Rust suite (export::tests::export_cross_language_golden),
+// so a drift in either the v4 scan, the v3 writer, or this bridge — in either
+// language — breaks one of the two tests. v4.3 emits the same (range, scope_id) stream
+// for this input, so the bytes are unchanged from the v4.0–v4.2 era golden.
 const crossGoldenHex = "495052414e474533030000004800000000020000000000004800000000000000" +
 	"0400000000000000030000000000000000f15365000000007b00000000000000" +
 	"0000000000000000010000000100000068010000000000002800000000000000" +
@@ -377,18 +380,23 @@ const crossGoldenHex = "495052414e4745330300000048000000000200000000000048000000
 	"0400000001000000070000000400000002000000070000000400000003000000"
 
 func TestExportCrossLanguageGolden(t *testing.T) {
-	w := CreateV4(4, 0)
-	mustSet(t, w, 10, 20, []byte{1, 0, 0, 0})
-	mustSet(t, w, 30, 40, []byte{2, 0, 0, 0})
-	mustSet(t, w, 100, 200, []byte{3, 0, 0, 0})
-	if err := w.Commit(0); err != nil {
-		t.Fatalf("commit: %v", err)
+	w, err := Create[Ipv4Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.Set(Ipv4Key(10), Ipv4Key(20), 1))
+	must(t, w.Set(Ipv4Key(30), Ipv4Key(40), 2))
+	must(t, w.Set(Ipv4Key(100), Ipv4Key(200), 3))
+	must(t, w.Commit(0, math.MaxUint64))
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("expected image")
 	}
 	meta := V3Meta{
 		FeedMeta:           v3.FeedMeta{Name: "cross", Category: "attacks"},
 		GenerationUnixtime: 1_700_000_000,
 	}
-	out, err := ExportV3(w.Image(), 7, meta)
+	out, err := ExportV3(img, 7, meta)
 	if err != nil {
 		t.Fatalf("ExportV3: %v", err)
 	}

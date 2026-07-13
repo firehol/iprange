@@ -1,16 +1,16 @@
 // v4 benchmark harness (SOW-0013). Mirrors the Rust criterion benches.
 // Run: go test -bench=. -benchmem -benchtime=2s
 //
-// Scenarios match the Rust benches (1-9). All use IPv4, scope_width=1.
+// Scenarios match the Rust benches (1-9). All use IPv4, scope_mode=scalar.
 
 package iprangedb
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // benchLcg is the shared deterministic generator (identical constants to Rust).
@@ -32,7 +32,7 @@ func genOrderedBench(n int) [][2]uint32 {
 		width := rng.next() % 8
 		start := cursor + gap
 		end := start + width
-		if start < cursor || end < start { // overflow
+		if start < cursor || end < start {
 			break
 		}
 		out = append(out, [2]uint32{start, end})
@@ -61,12 +61,13 @@ func genRandomBench(n int) [][2]uint32 {
 }
 
 func buildDBAppendBench(ranges [][2]uint32) []byte {
-	w := CreateV4(1, 0)
+	w, _ := Create[Ipv4Key](ScopeModeScalar, 0)
 	for _, r := range ranges {
-		_ = w.Append(Ipv4Key(r[0]), Ipv4Key(r[1]), []byte{1})
+		_ = w.Append(Ipv4Key(r[0]), Ipv4Key(r[1]), 1)
 	}
-	_ = w.Commit(0)
-	return w.Image()
+	_ = w.Commit(0, math.MaxUint64)
+	img, _ := w.IntoImage()
+	return img
 }
 
 var benchSizes = []int{10_000, 100_000, 1_000_000}
@@ -86,7 +87,7 @@ func BenchmarkScan(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				count := 0
-				_ = r.ScanV4(func(_, _ Ipv4Key, _ []byte) { count++ })
+				_ = r.ScanV4(func(_, _ Ipv4Key, _ uint32) { count++ })
 			}
 		})
 	}
@@ -101,11 +102,11 @@ func BenchmarkAppend(b *testing.B) {
 			b.SetBytes(int64(n))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				w := CreateV4(1, 0)
+				w, _ := Create[Ipv4Key](ScopeModeScalar, 0)
 				for _, r := range ranges {
-					_ = w.Append(Ipv4Key(r[0]), Ipv4Key(r[1]), []byte{1})
+					_ = w.Append(Ipv4Key(r[0]), Ipv4Key(r[1]), 1)
 				}
-				_ = w.Commit(0)
+				_ = w.Commit(0, math.MaxUint64)
 			}
 		})
 	}
@@ -120,11 +121,11 @@ func BenchmarkSetRandom(b *testing.B) {
 			b.SetBytes(int64(n))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				w := CreateV4(1, 0)
+				w, _ := Create[Ipv4Key](ScopeModeScalar, 0)
 				for _, r := range ranges {
-					_ = w.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), []byte{1})
+					_ = w.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), 1)
 				}
-				_ = w.Commit(0)
+				_ = w.Commit(0, math.MaxUint64)
 			}
 		})
 	}
@@ -150,7 +151,7 @@ func BenchmarkLookupHit(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				found := 0
 				for _, k := range keys {
-					if _, ok, _ := r.LookupV4(k); ok {
+					if _, ok := r.LookupV4(k); ok {
 						found++
 					}
 				}
@@ -184,7 +185,7 @@ func BenchmarkLookupMiss(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				found := 0
 				for _, k := range keys {
-					if _, ok, _ := r.LookupV4(k); ok {
+					if _, ok := r.LookupV4(k); ok {
 						found++
 					}
 				}
@@ -214,41 +215,18 @@ func BenchmarkOpenRead(b *testing.B) {
 	}
 }
 
-// --- Scenario 7b: open + validate (full §9 walk) ---
-
-func BenchmarkOpenValidate(b *testing.B) {
-	for _, n := range benchSizes {
-		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
-			ranges := genOrderedBench(n)
-			img := buildDBAppendBench(ranges)
-			b.SetBytes(int64(n))
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				r, err := Open(img)
-				if err != nil {
-					b.Fatal(err)
-				}
-				if err := r.Validate(); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
 // --- Scenario 7f: open read (file-backed MmapReader) ---
 
 func BenchmarkOpenReadFile(b *testing.B) {
 	for _, n := range benchSizes {
 		path := filepath.Join(os.TempDir(), fmt.Sprintf("iprange-v4-bench-rd-%d-%d.iprdb", n, os.Getpid()))
-		// Build the file once.
 		ranges := genOrderedBench(n)
-		fw, err := CreateFileWriterV4(path, 1, 0, 30*time.Second)
+		fw, err := CreateFile[Ipv4Key](path, ScopeModeScalar, 0)
 		if err != nil {
 			b.Fatal(err)
 		}
 		for _, r := range ranges {
-			_ = fw.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), []byte{1})
+			_ = fw.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), 1)
 		}
 		_ = fw.Commit(0)
 		_ = fw.Close()
@@ -282,12 +260,12 @@ func BenchmarkCreateFile(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				path := filepath.Join(os.TempDir(), fmt.Sprintf("iprange-v4-bench-cr-%d-%d-%d.iprdb", n, os.Getpid(), i))
-				fw, err := CreateFileWriterV4(path, 1, 0, 30*time.Second)
+				fw, err := CreateFile[Ipv4Key](path, ScopeModeScalar, 0)
 				if err != nil {
 					b.Fatal(err)
 				}
 				for _, r := range ranges {
-					_ = fw.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), []byte{1})
+					_ = fw.Set(Ipv4Key(r[0]), Ipv4Key(r[1]), 1)
 				}
 				_ = fw.Commit(0)
 				_ = fw.Close()

@@ -1,22 +1,21 @@
 package iprangedb
 
-// Ordered cursor over a validated v4 image (§v4.1.A) and the standard SDK helpers built
-// on it (§v4.1.B), mirroring the Rust reference (iprange-livedb/src/cursor.rs).
+// Ordered cursor over a validated v4.3 image (§v4.1.A) and the standard SDK helpers
+// built on it (§v4.1.B), mirroring the Rust reference (iprange-livedb/src/cursor.rs).
 //
 // The cursor is read-only: it navigates the structure that Open already validated, so it
 // never reads out of bounds, never loops, never panics — it only walks a known-good tree.
 // There are no leaf sibling pointers (D3), so the cursor keeps a root→leaf path stack (a
-// fixed [treeHeightMax]frame, no per-step heap) and re-descends at leaf boundaries.
+// fixed [TreeHeightMax]frame, no per-step heap) and re-descends at leaf boundaries.
 //
-// Seek(key) positions at the successor — the first record with from >= key. Next/Prev step
-// in key order; Current reads the positioned record. The struct is small and cheaply
-// copyable, so the helpers here snapshot a position by copying it internally; CursorV4 /
-// CursorV6 hand the caller a *Cursor.
+// Seek positions at the successor — the first record with from >= key. Next/Prev step in
+// key order; Current reads the positioned record. The struct is small and cheaply
+// copyable, so the helpers here snapshot a position by copying the value internally.
 //
-// Helpers take a selector predicate func(scope) bool over the opaque scope bytes — the
-// engine never interprets scope (D11) — and stream results to a visitor that returns an
-// error: nil continues, Stop halts cleanly (the helper returns nil), any other error halts
-// and is returned. query* emit; count* tally. CIDR output is the canonical minimal cover.
+// Helpers take a selector predicate func(scopeID uint32) bool and stream results to a
+// visitor returning an error: nil continues, Stop halts cleanly (the helper returns nil),
+// any other error halts and is returned. Query* emit; Count* tally. CIDR output is the
+// canonical minimal cover.
 
 import (
 	"errors"
@@ -44,27 +43,27 @@ const (
 	stAfterLast                      // past the last record (Prev → last; Next → stays)
 )
 
-// Cursor is an ordered cursor over a validated Reader (§v4.1.A). Construct with
-// Reader.CursorV4 / Reader.CursorV6. The zero-value is invalid; the constructor sets it up.
+// Cursor is an ordered, bidirectional, seekable cursor over a validated Reader (§v4.1.A).
+// Construct with Reader.CursorV4 / Reader.CursorV6. The zero-value is invalid.
 type Cursor[K ipKey[K]] struct {
 	r     *Reader
-	path  [treeHeightMax]frame
+	path  [TreeHeightMax]frame
 	state cursorState
 }
 
 // CursorV4 returns a cursor over an IPv4 image (starts unpositioned: BeforeFirst, or Empty
 // if the tree has no records). Error if the file is not IPv4.
 func (r *Reader) CursorV4() (*Cursor[Ipv4Key], error) {
-	if r.version != V4 {
-		return nil, errInvalidInput("cursor key family mismatch")
+	if r.meta.keyWidth != 4 {
+		return nil, errf("cursor", "key family mismatch: file is not IPv4")
 	}
 	return newCursor[Ipv4Key](r), nil
 }
 
 // CursorV6 returns a cursor over an IPv6 image. Error if the file is not IPv6.
 func (r *Reader) CursorV6() (*Cursor[Ipv6Key], error) {
-	if r.version != V6 {
-		return nil, errInvalidInput("cursor key family mismatch")
+	if r.meta.keyWidth != 16 {
+		return nil, errf("cursor", "key family mismatch: file is not IPv6")
 	}
 	return newCursor[Ipv6Key](r), nil
 }
@@ -77,22 +76,51 @@ func newCursor[K ipKey[K]](r *Reader) *Cursor[K] {
 	return &Cursor[K]{r: r, state: st}
 }
 
-// --- node access (over already-validated pages) ---
+// --- node access ---
+//
+// Although the cursor is intended for a Validate'd tree, leaf/branch are
+// panic-safe against a corrupt tree too: an out-of-bounds pgno yields the
+// shared zero page (so reads return zeros and the cursor behaves as empty), and
+// entry counts are clamped to the page capacity so a record/child access never
+// reads past the page. The cursor never loops indefinitely: every descent is
+// bounded by tree_height (≤ TreeHeightMax, enforced by Open).
 
-func (c *Cursor[K]) leaf(pgno uint32) leafView[K] {
-	page := c.r.pageBytes(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	return newLeafView[K](page, count, c.r.recordSize)
+var cursorZeroPage [PageSize]byte
+
+func (c *Cursor[K]) leaf(pgno uint32) leafView {
+	page := c.r.page(pgno)
+	if page == nil {
+		page = cursorZeroPage[:]
+	}
+	h := decodeHeader(page)
+	count := min(int(h.entryCount), leafMax(c.r.meta.keyWidth))
+	if h.pageType != PageTypeLeaf {
+		count = 0
+	}
+	return newLeafView(page, count, int(c.r.meta.keyWidth))
 }
 
-func (c *Cursor[K]) branch(pgno uint32) branchView[K] {
-	page := c.r.pageBytes(pgno)
-	count := int(decodePageHeader(page).entryCount)
-	return newBranchView[K](page, count)
+func (c *Cursor[K]) branch(pgno uint32) branchView {
+	page := c.r.page(pgno)
+	if page == nil {
+		page = cursorZeroPage[:]
+	}
+	h := decodeHeader(page)
+	count := min(int(h.entryCount), branchMax(c.r.meta.keyWidth))
+	if h.pageType != PageTypeBranch {
+		count = 0
+	}
+	return newBranchView(page, count, int(c.r.meta.keyWidth))
 }
 
-// leafLevel is the path index of the leaf (tree_height >= 1 when non-empty).
+// leafLevel is the path index of the leaf level (tree_height >= 1 whenever non-empty).
 func (c *Cursor[K]) leafLevel() int { return int(c.r.meta.treeHeight) - 1 }
+
+// readKey decodes a little-endian key buffer into K.
+func readKey[K ipKey[K]](buf []byte) K {
+	var zero K
+	return zero.readLE(buf)
+}
 
 // --- positioning ---
 
@@ -106,7 +134,8 @@ func (c *Cursor[K]) descendLeftmost(level int, pgno uint32) {
 			return
 		}
 		c.path[level] = frame{pgno: pgno, idx: 0}
-		pgno = c.branch(pgno).child(0)
+		bv := c.branch(pgno)
+		pgno = bv.child(0)
 		level++
 	}
 }
@@ -117,23 +146,23 @@ func (c *Cursor[K]) descendRightmost(level int, pgno uint32) {
 	leafLevel := c.leafLevel()
 	for {
 		if level == leafLevel {
-			n := c.leaf(pgno).len()
+			lv := c.leaf(pgno)
 			last := 0
-			if n > 0 {
+			if n := lv.len(); n > 0 {
 				last = n - 1
 			}
 			c.path[level] = frame{pgno: pgno, idx: uint32(last)}
 			return
 		}
-		b := c.branch(pgno)
-		last := b.childCount() - 1
+		bv := c.branch(pgno)
+		last := bv.childCount() - 1
 		c.path[level] = frame{pgno: pgno, idx: uint32(last)}
-		pgno = b.child(last)
+		pgno = bv.child(last)
 		level++
 	}
 }
 
-// First positions at the first record (key order). false if the tree is empty.
+// First positions at the first record (key order). Returns false if the tree is empty.
 func (c *Cursor[K]) First() bool {
 	if c.state == stEmpty {
 		return false
@@ -143,7 +172,7 @@ func (c *Cursor[K]) First() bool {
 	return true
 }
 
-// Last positions at the last record (key order). false if the tree is empty.
+// Last positions at the last record (key order). Returns false if the tree is empty.
 func (c *Cursor[K]) Last() bool {
 	if c.state == stEmpty {
 		return false
@@ -168,9 +197,9 @@ func (c *Cursor[K]) Seek(key K) bool {
 	pgno := c.r.meta.rootPgno
 	for {
 		if level == leafLevel {
-			lf := c.leaf(pgno)
-			idx := leafLowerBound[K](lf, key)
-			if idx < lf.len() {
+			lv := c.leaf(pgno)
+			idx := leafLowerBound[K](lv, key)
+			if idx < lv.len() {
 				c.path[level] = frame{pgno: pgno, idx: uint32(idx)}
 				c.state = stAt
 				return true
@@ -178,17 +207,17 @@ func (c *Cursor[K]) Seek(key K) bool {
 			// No record >= key in this leaf; the successor (if any) is the first record of
 			// the next leaf. Park at the last record and step forward.
 			last := 0
-			if lf.len() > 0 {
-				last = lf.len() - 1
+			if n := lv.len(); n > 0 {
+				last = n - 1
 			}
 			c.path[level] = frame{pgno: pgno, idx: uint32(last)}
 			c.state = stAt
 			return c.Next()
 		}
-		b := c.branch(pgno)
-		ci := branchDescend[K](b, key)
+		bv := c.branch(pgno)
+		ci := branchDescend[K](bv, key)
 		c.path[level] = frame{pgno: pgno, idx: uint32(ci)}
-		pgno = b.child(ci)
+		pgno = bv.child(ci)
 		level++
 	}
 }
@@ -203,7 +232,8 @@ func (c *Cursor[K]) Next() bool {
 		return c.First()
 	default: // stAt
 		leafLevel := c.leafLevel()
-		if int(c.path[leafLevel].idx)+1 < c.leaf(c.path[leafLevel].pgno).len() {
+		lf := c.leaf(c.path[leafLevel].pgno)
+		if int(c.path[leafLevel].idx)+1 < lf.len() {
 			c.path[leafLevel].idx++
 			return true
 		}
@@ -214,10 +244,10 @@ func (c *Cursor[K]) Next() bool {
 				return false
 			}
 			level--
-			b := c.branch(c.path[level].pgno)
-			if int(c.path[level].idx)+1 < b.childCount() {
+			bv := c.branch(c.path[level].pgno)
+			if int(c.path[level].idx)+1 < bv.childCount() {
 				c.path[level].idx++
-				child := b.child(int(c.path[level].idx))
+				child := bv.child(int(c.path[level].idx))
 				c.descendLeftmost(level+1, child)
 				return true
 			}
@@ -248,7 +278,8 @@ func (c *Cursor[K]) Prev() bool {
 			level--
 			if c.path[level].idx > 0 {
 				c.path[level].idx--
-				child := c.branch(c.path[level].pgno).child(int(c.path[level].idx))
+				bv := c.branch(c.path[level].pgno)
+				child := bv.child(int(c.path[level].idx))
 				c.descendRightmost(level+1, child)
 				return true
 			}
@@ -256,24 +287,27 @@ func (c *Cursor[K]) Prev() bool {
 	}
 }
 
-// Current returns the positioned record (from, to, scope) and ok=true, or ok=false unless
-// the cursor is positioned at a record. scope is borrowed from the image (D11).
-func (c *Cursor[K]) Current() (from, to K, scope []byte, ok bool) {
+// Current returns the positioned record (from, to, scopeID) and ok=true, or ok=false unless
+// the cursor is positioned at a record (BeforeFirst/AfterLast/Empty).
+func (c *Cursor[K]) Current() (K, K, uint32, bool) {
 	if c.state != stAt {
-		return from, to, nil, false
+		var zero K
+		return zero, zero, 0, false
 	}
 	leafLevel := c.leafLevel()
 	f := c.path[leafLevel]
-	rec := c.leaf(f.pgno).record(int(f.idx))
-	return rec.from(), rec.to(), rec.scope(), true
+	lv := c.leaf(f.pgno)
+	from := readKey[K](lv.recordFrom(int(f.idx)))
+	to := readKey[K](lv.recordTo(int(f.idx)))
+	return from, to, lv.recordScopeID(int(f.idx)), true
 }
 
 // --- helpers (§v4.1.B) ---
 
 // forEachOverlap walks records overlapping [from, to] in key order, calling f(cf, ct,
-// scope) with each record clamped to the window (cf <= ct). Stops if f returns false. The
-// covering record (one whose from < from <= to) is included.
-func (c *Cursor[K]) forEachOverlap(from, to K, f func(cf, ct K, scope []byte) bool) {
+// scopeID) with each record clamped to the window (cf <= ct). f returns true to continue,
+// false to stop. The covering record (one whose from < from <= to) is included.
+func (c *Cursor[K]) forEachOverlap(from, to K, f func(cf, ct K, scopeID uint32) bool) {
 	if from.cmp(to) > 0 {
 		return
 	}
@@ -307,16 +341,16 @@ func (c *Cursor[K]) forEachOverlap(from, to K, f func(cf, ct K, scope []byte) bo
 	}
 }
 
-// QueryRanges emits each record overlapping [from, to] whose scope matches select, clamped
-// to the window, as (from, to, scope). Per-record (not merged).
-func (c *Cursor[K]) QueryRanges(from, to K, sel func([]byte) bool, visit func(from, to K, scope []byte) error) error {
+// QueryRanges emits each record overlapping [from, to] whose scopeID matches sel, clamped
+// to the window, as (from, to, scopeID). Per-record (not merged).
+func (c *Cursor[K]) QueryRanges(from, to K, sel func(scopeID uint32) bool, visit func(from, to K, scopeID uint32) error) error {
 	var verr error
-	c.forEachOverlap(from, to, func(cf, ct K, scope []byte) bool {
-		if !sel(scope) {
+	c.forEachOverlap(from, to, func(cf, ct K, scopeID uint32) bool {
+		if !sel(scopeID) {
 			return true
 		}
-		if err := visit(cf, ct, scope); err != nil {
-			if err != Stop {
+		if err := visit(cf, ct, scopeID); err != nil {
+			if !errors.Is(err, Stop) {
 				verr = err
 			}
 			return false
@@ -328,24 +362,24 @@ func (c *Cursor[K]) QueryRanges(from, to K, sel func([]byte) bool, visit func(fr
 
 // QueryRangesMerged emits the maximal contiguous runs of matched key-space in [from, to] as
 // (from, to) (coalesced across scopes; a non-matching or absent span breaks a run).
-func (c *Cursor[K]) QueryRangesMerged(from, to K, sel func([]byte) bool, visit func(from, to K) error) error {
+func (c *Cursor[K]) QueryRangesMerged(from, to K, sel func(scopeID uint32) bool, visit func(from, to K) error) error {
 	var (
 		open    bool
 		of, ot  K
 		verr    error
 		stopped bool
 	)
-	emit := func(f, t K) bool { // returns continue
+	emit := func(f, t K) bool {
 		if err := visit(f, t); err != nil {
-			if err != Stop {
+			if !errors.Is(err, Stop) {
 				verr = err
 			}
 			return false
 		}
 		return true
 	}
-	c.forEachOverlap(from, to, func(cf, ct K, scope []byte) bool {
-		if !sel(scope) {
+	c.forEachOverlap(from, to, func(cf, ct K, scopeID uint32) bool {
+		if !sel(scopeID) {
 			if open {
 				open = false
 				if !emit(of, ot) {
@@ -377,15 +411,15 @@ func (c *Cursor[K]) QueryRangesMerged(from, to K, sel func([]byte) bool, visit f
 }
 
 // QueryCIDRs emits, for each matched record overlapping [from, to], the canonical CIDR
-// cover of its clamped range, as (network, prefixLen, scope).
-func (c *Cursor[K]) QueryCIDRs(from, to K, sel func([]byte) bool, visit func(network K, prefixLen uint8, scope []byte) error) error {
+// cover of its clamped range, as (network, prefixLen, scopeID).
+func (c *Cursor[K]) QueryCIDRs(from, to K, sel func(scopeID uint32) bool, visit func(network K, prefixLen uint8, scopeID uint32) error) error {
 	var verr error
-	c.forEachOverlap(from, to, func(cf, ct K, scope []byte) bool {
-		if !sel(scope) {
+	c.forEachOverlap(from, to, func(cf, ct K, scopeID uint32) bool {
+		if !sel(scopeID) {
 			return true
 		}
-		if err := emitCIDRs[K](cf, ct, func(net K, pl uint8) error { return visit(net, pl, scope) }); err != nil {
-			if err != Stop {
+		if err := emitCIDRs[K](cf, ct, func(net K, pl uint8) error { return visit(net, pl, scopeID) }); err != nil {
+			if !errors.Is(err, Stop) {
 				verr = err
 			}
 			return false
@@ -397,19 +431,19 @@ func (c *Cursor[K]) QueryCIDRs(from, to K, sel func([]byte) bool, visit func(net
 
 // QueryCIDRsMerged emits the canonical CIDR cover of each merged matched run in [from, to],
 // as (network, prefixLen) — the netset view.
-func (c *Cursor[K]) QueryCIDRsMerged(from, to K, sel func([]byte) bool, visit func(network K, prefixLen uint8) error) error {
+func (c *Cursor[K]) QueryCIDRsMerged(from, to K, sel func(scopeID uint32) bool, visit func(network K, prefixLen uint8) error) error {
 	return c.QueryRangesMerged(from, to, sel, func(rf, rt K) error {
 		return emitCIDRs[K](rf, rt, visit)
 	})
 }
 
-// CountIPs returns the total distinct IPs in [from, to] whose scope matches select. Records
-// are disjoint, so this is the sum of clamped sizes. Saturates at the 128-bit max (only a
-// fully-covered IPv6 space, 2^128, would exceed it).
-func (c *Cursor[K]) CountIPs(from, to K, sel func([]byte) bool) Uint128 {
+// CountIPs returns the total distinct IPs in [from, to] whose scopeID matches sel. Records
+// are disjoint, so this is the sum of clamped sizes. Saturates at the 128-bit maximum (only
+// a fully-covered IPv6 space, 2^128, would exceed it).
+func (c *Cursor[K]) CountIPs(from, to K, sel func(scopeID uint32) bool) Uint128 {
 	var total Uint128
-	c.forEachOverlap(from, to, func(cf, ct K, scope []byte) bool {
-		if sel(scope) {
+	c.forEachOverlap(from, to, func(cf, ct K, scopeID uint32) bool {
+		if sel(scopeID) {
 			span := ct.toU128().sub(cf.toU128()) // ct - cf (cf <= ct)
 			total = total.saturatingAdd(span).saturatingAdd(Uint128{Lo: 1})
 		}
@@ -420,7 +454,7 @@ func (c *Cursor[K]) CountIPs(from, to K, sel func([]byte) bool) Uint128 {
 
 // CountCIDRs returns the number of CIDRs the matched set in [from, to] decomposes to
 // (netset entry count): the CIDR count of the merged runs.
-func (c *Cursor[K]) CountCIDRs(from, to K, sel func([]byte) bool) uint64 {
+func (c *Cursor[K]) CountCIDRs(from, to K, sel func(scopeID uint32) bool) uint64 {
 	var total uint64
 	_ = c.QueryRangesMerged(from, to, sel, func(rf, rt K) error {
 		total += cidrCount[K](rf, rt)
@@ -431,11 +465,25 @@ func (c *Cursor[K]) CountCIDRs(from, to K, sel func([]byte) bool) uint64 {
 
 // leafLowerBound returns the first index in leaf whose record from >= key (lower bound);
 // len if all are < key.
-func leafLowerBound[K ipKey[K]](leaf leafView[K], key K) int {
-	lo, hi := 0, leaf.len()
+func leafLowerBound[K ipKey[K]](lv leafView, key K) int {
+	lo, hi := 0, lv.len()
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if leaf.record(mid).from().cmp(key) < 0 {
+		if readKey[K](lv.recordFrom(mid)).cmp(key) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// branchDescend returns the child index for key: the number of separators <= key (§5.2).
+func branchDescend[K ipKey[K]](bv branchView, key K) int {
+	lo, hi := 0, bv.sepCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if readKey[K](bv.sep(mid)).cmp(key) <= 0 {
 			lo = mid + 1
 		} else {
 			hi = mid
@@ -494,21 +542,16 @@ func sizeBits(gap Uint128, bw int) int {
 	if bw == 128 && gap.isMax() {
 		return 128 // gap + 1 == 2^128
 	}
-	cap := gap.add(Uint128{Lo: 1}) // safe: gap < 2^bw, full-128 handled above
-	n := 127 - cap.leadingZeros()  // floor(log2(cap))
+	gapPlus1 := gap.add(Uint128{Lo: 1}) // safe: gap < 2^bw, full-128 handled above
+	n := 127 - gapPlus1.leadingZeros()  // floor(log2(gapPlus1))
 	if n > bw {
 		n = bw
 	}
 	return n
 }
 
-// --- Uint128: a 128-bit unsigned integer (Hi:Lo) for IP counts and CIDR math ---
-
-// Uint128 is a 128-bit unsigned integer, Hi the most-significant 64 bits. It is the return
-// type of CountIPs (a fully-covered IPv6 space holds 2^128 addresses).
-type Uint128 struct {
-	Hi, Lo uint64
-}
+// --- Uint128 arithmetic (supports CIDR math and IP counts) ---
+// The Uint128 type is defined in key.go; these are its operations.
 
 func (a Uint128) isZero() bool { return a.Hi == 0 && a.Lo == 0 }
 func (a Uint128) isMax() bool  { return a.Hi == maxUint64 && a.Lo == maxUint64 }
