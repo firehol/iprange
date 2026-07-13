@@ -8,10 +8,10 @@
 use crate::error::Result;
 use crate::key::IpKey;
 use crate::migrate::{DesiredStream, MigrateCounters, MigrateOptions};
-use crate::writer::Writer;
 use crate::node::{BranchView, LeafView};
 use crate::spec;
 use crate::wire::PageHeader;
+use crate::writer::Writer;
 
 /// Migrate a single feed's membership to match the desired stream.
 ///
@@ -50,11 +50,15 @@ pub fn migrate_feed<K: IpKey>(
     loop {
         let old_eff = if let (Some((_of, ot, os)), Some(ts)) = (old_cur, old_trim) {
             Some((ts, ot, os))
-        } else { None };
+        } else {
+            None
+        };
 
         let des_eff = if let (Some(dr), Some(ts)) = (des_cur, des_trim) {
             Some((ts, dr.to, dr.scope_id))
-        } else { None };
+        } else {
+            None
+        };
 
         match (old_eff, des_eff) {
             (None, None) => break,
@@ -200,6 +204,16 @@ pub fn migrate_feed<K: IpKey>(
     }
 
     writer.can_recycle = prev_can_recycle;
+
+    // Same truncated-spill guard as migrate(): a partial record in a spill file
+    // ends the desired stream early. Without this check the feed would be
+    // updated against an incomplete desired set. See migrate.rs for details.
+    if desired.err().is_some() {
+        return Err(crate::error::Error::Structural(
+            "desired stream ended with a read error (truncated spill)",
+        ));
+    }
+
     Ok(counters)
 }
 
@@ -216,20 +230,32 @@ struct FeedWalker<K: IpKey> {
 impl<K: IpKey> FeedWalker<K> {
     fn new(root: u32, height: u32) -> Self {
         FeedWalker {
-            root, height,
-            path: [(0, 0); 32], path_len: 0, current: None,
+            root,
+            height,
+            path: [(0, 0); 32],
+            path_len: 0,
+            current: None,
         }
     }
 
     fn init(&mut self, store: &dyn crate::page_store::PageStore) {
-        if self.root != 0 { self.descend_first(store, self.root, 1); }
+        if self.root != 0 {
+            self.descend_first(store, self.root, 1);
+        }
     }
 
-    fn peek(&self) -> Option<(K, K, u32)> { self.current }
+    fn peek(&self) -> Option<(K, K, u32)> {
+        self.current
+    }
 
     fn advance(&mut self, store: &dyn crate::page_store::PageStore) {
-        if self.current.is_none() { return; }
-        if self.path_len == 0 { self.current = None; return; }
+        if self.current.is_none() {
+            return;
+        }
+        if self.path_len == 0 {
+            self.current = None;
+            return;
+        }
         self.path_len -= 1;
         let (pgno, idx) = self.path[self.path_len as usize];
         self.try_leaf_next(store, pgno, idx + 1);
@@ -275,7 +301,10 @@ impl<K: IpKey> FeedWalker<K> {
 
     fn walk_up(&mut self, store: &dyn crate::page_store::PageStore) {
         loop {
-            if self.path_len == 0 { self.current = None; return; }
+            if self.path_len == 0 {
+                self.current = None;
+                return;
+            }
             self.path_len -= 1;
             let (pgno, idx) = self.path[self.path_len as usize];
             let next_child = {
@@ -284,8 +313,14 @@ impl<K: IpKey> FeedWalker<K> {
                 if h.page_type == spec::PAGE_TYPE_BRANCH {
                     let branch = BranchView::<K>::new(page, h.entry_count as usize);
                     let ni = idx + 1;
-                    if ni < branch.child_count() { Some((ni, branch.child(ni))) } else { None }
-                } else { None }
+                    if ni < branch.child_count() {
+                        Some((ni, branch.child(ni)))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             };
             if let Some((next_idx, child_pgno)) = next_child {
                 self.path[self.path_len as usize] = (pgno, next_idx);

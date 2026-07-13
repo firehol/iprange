@@ -305,19 +305,19 @@ mod tests {
 
     #[test]
     fn record_size_is_fixed() {
-        assert_eq!(record_size(4), 12);   // IPv4: 4+4+4
-        assert_eq!(record_size(16), 36);  // IPv6: 16+16+4
+        assert_eq!(record_size(4), 12); // IPv4: 4+4+4
+        assert_eq!(record_size(16), 36); // IPv6: 16+16+4
     }
 
     #[test]
     fn leaf_max_constants() {
-        assert_eq!(leaf_max(4), (4096 - 16) / 12);   // 340
-        assert_eq!(leaf_max(16), (4096 - 16) / 36);   // 113
+        assert_eq!(leaf_max(4), (4096 - 16) / 12); // 340
+        assert_eq!(leaf_max(16), (4096 - 16) / 36); // 113
     }
 
     #[test]
     fn branch_max_constants() {
-        assert_eq!(branch_max(4), (4096 - 16 - 4) / (4 + 4));   // 509
+        assert_eq!(branch_max(4), (4096 - 16 - 4) / (4 + 4)); // 509
         assert_eq!(branch_max(16), (4096 - 16 - 4) / (16 + 4)); // 203
     }
 

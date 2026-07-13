@@ -62,7 +62,7 @@ func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
 // sweepEvent is a sweep-line event for normalizeChunk.
 type sweepEvent struct {
 	pos      Uint128
-	isStart bool
+	isStart  bool
 	isMaxEnd bool
 	idx      int
 }
@@ -244,6 +244,10 @@ func (s *SortedStream[K]) Next() *DesiredRecord[K] {
 	s.pos++
 	return r
 }
+
+// Err is always nil for SortedStream: the records are already materialized in
+// memory, so there is no deferred read error to report.
+func (s *SortedStream[K]) Err() error { return nil }
 
 // --- u128 helpers for the sweep line ---
 
@@ -696,6 +700,10 @@ func (c *coalesceStream[K]) Next() *DesiredRecord[K] {
 	c.fill()
 	return r
 }
+
+// Err propagates the inner stream's deferred read error so Migrate/MigrateFeed
+// can reject a truncated spill instead of committing partial data.
+func (c *coalesceStream[K]) Err() error { return c.inner.Err() }
 
 // --- entry point ---
 

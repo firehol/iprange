@@ -18,12 +18,10 @@
 //! All base scenarios are parameterized by record count (10k, 100k, 1M) and use IPv4
 //! with scope_mode=0 (scalar, the simplest and most common production shape).
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use iprange_livedb::{
-    ext_sort, migrate::migrate, page_store::VecPageStore, DesiredRecord, ExtSortConfig,
-    Ipv4Key, MigrateOptions, Reader, SortedStream, Writer,
+    ext_sort, migrate::migrate, page_store::VecPageStore, DesiredRecord, ExtSortConfig, Ipv4Key,
+    MigrateOptions, Reader, SortedStream, Writer,
 };
 
 /// Deterministic LCG (identical constants to the v3 speed test and the Go harness).
@@ -33,7 +31,10 @@ impl Lcg {
         Lcg(seed ^ 0x9e37_79b9_7f4a_7c15)
     }
     fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
 }
@@ -89,7 +90,10 @@ fn build_db_append_mode(ranges: &[(u32, u32)], scope_mode: u8) -> Writer<Ipv4Key
 
 /// Build a desired stream from `ranges`, changing the scope on ~`change_pct`% of records
 /// (used by the migrate benchmark to exercise the merge changed-path).
-fn gen_desired_with_changes(ranges: &[(u32, u32)], change_pct: usize) -> Vec<DesiredRecord<Ipv4Key>> {
+fn gen_desired_with_changes(
+    ranges: &[(u32, u32)],
+    change_pct: usize,
+) -> Vec<DesiredRecord<Ipv4Key>> {
     let denom = 100 / change_pct.max(1);
     ranges
         .iter()
@@ -111,7 +115,11 @@ fn gen_unsorted_desired(n: usize) -> Vec<DesiredRecord<Ipv4Key>> {
         let a = rng.next() % span;
         let b = rng.next() % span;
         let (from, to) = if a <= b { (a, b) } else { (b, a) };
-        out.push(DesiredRecord { from: Ipv4Key(from), to: Ipv4Key(to), scope_id: 1 });
+        out.push(DesiredRecord {
+            from: Ipv4Key(from),
+            to: Ipv4Key(to),
+            scope_id: 1,
+        });
     }
     out
 }
@@ -218,17 +226,21 @@ fn bench_lookup_hit(c: &mut Criterion) {
         // Keys that hit: the midpoint of each range.
         let keys: Vec<u32> = ranges.iter().map(|&(f, t)| f + (t - f) / 2).collect();
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(n), &(&r, &keys), |b, (r, keys)| {
-            b.iter(|| {
-                let mut found = 0u32;
-                for &k in keys.iter() {
-                    if r.lookup_v4(Ipv4Key(k)).unwrap().is_some() {
-                        found += 1;
+        group.bench_with_input(
+            BenchmarkId::from_parameter(n),
+            &(&r, &keys),
+            |b, (r, keys)| {
+                b.iter(|| {
+                    let mut found = 0u32;
+                    for &k in keys.iter() {
+                        if r.lookup_v4(Ipv4Key(k)).unwrap().is_some() {
+                            found += 1;
+                        }
                     }
-                }
-                black_box(found);
-            });
-        });
+                    black_box(found);
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -252,17 +264,21 @@ fn bench_lookup_miss(c: &mut Criterion) {
             }
         }
         group.throughput(Throughput::Elements(keys.len() as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(n), &(&r, &keys), |b, (r, keys)| {
-            b.iter(|| {
-                let mut found = 0u32;
-                for &k in keys.iter() {
-                    if r.lookup_v4(Ipv4Key(k)).unwrap().is_some() {
-                        found += 1;
+        group.bench_with_input(
+            BenchmarkId::from_parameter(n),
+            &(&r, &keys),
+            |b, (r, keys)| {
+                b.iter(|| {
+                    let mut found = 0u32;
+                    for &k in keys.iter() {
+                        if r.lookup_v4(Ipv4Key(k)).unwrap().is_some() {
+                            found += 1;
+                        }
                     }
-                }
-                black_box(found);
-            });
-        });
+                    black_box(found);
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -317,23 +333,27 @@ fn bench_migrate(c: &mut Criterion) {
     // Desired stream: same ranges, ~20% with a different scope_id (merge changed-path).
     let desired = gen_desired_with_changes(&old_ranges, 20);
     group.throughput(Throughput::Elements(n as u64));
-    group.bench_with_input(BenchmarkId::from_parameter(n), &(&img, &desired), |b, (img, desired)| {
-        b.iter_batched(
-            || {
-                // Reopen a fresh writer over the committed image each iteration.
-                let store = VecPageStore::new(img.to_vec());
-                Writer::<Ipv4Key>::open(Box::new(store)).unwrap()
-            },
-            |mut w| {
-                let mut stream = SortedStream::from_unsorted(desired.to_vec());
-                let opts = MigrateOptions::<Ipv4Key>::default();
-                let counters = migrate(&mut w, &mut stream, &opts).unwrap();
-                w.commit(0, u64::MAX).unwrap();
-                black_box(counters);
-            },
-            criterion::BatchSize::LargeInput,
-        );
-    });
+    group.bench_with_input(
+        BenchmarkId::from_parameter(n),
+        &(&img, &desired),
+        |b, (img, desired)| {
+            b.iter_batched(
+                || {
+                    // Reopen a fresh writer over the committed image each iteration.
+                    let store = VecPageStore::new(img.to_vec());
+                    Writer::<Ipv4Key>::open(Box::new(store)).unwrap()
+                },
+                |mut w| {
+                    let mut stream = SortedStream::from_unsorted(desired.to_vec());
+                    let opts = MigrateOptions::<Ipv4Key>::default();
+                    let counters = migrate(&mut w, &mut stream, &opts).unwrap();
+                    w.commit(0, u64::MAX).unwrap();
+                    black_box(counters);
+                },
+                criterion::BatchSize::LargeInput,
+            );
+        },
+    );
     group.finish();
 }
 

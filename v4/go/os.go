@@ -9,12 +9,12 @@ import (
 // MmapReader is a read-only mmap of a v4 file. Registers in the reader table
 // on open, deregisters on close.
 type MmapReader struct {
-	file     *os.File
-	data     []byte
-	meta     meta
-	guard    *ReaderGuard
-	table    *ReaderTable
-	path     string
+	file  *os.File
+	data  []byte
+	meta  meta
+	guard *ReaderGuard
+	table *ReaderTable
+	path  string
 }
 
 func OpenMmap(path string) (*MmapReader, error) {
@@ -65,7 +65,11 @@ func OpenMmap(path string) (*MmapReader, error) {
 	var pinnedMeta meta
 	switch {
 	case crcA && crcB:
-		if metaA.txnID >= metaB.txnID { pinnedMeta = metaA } else { pinnedMeta = metaB }
+		if metaA.txnID >= metaB.txnID {
+			pinnedMeta = metaA
+		} else {
+			pinnedMeta = metaB
+		}
 	case crcA:
 		pinnedMeta = metaA
 	case crcB:
@@ -272,8 +276,8 @@ func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
 	oldest := fw.readerTable.OldestReaderTxnID()
 	return fw.w.Commit(updatedUnix, oldest)
 }
-func (fw *FileWriter[K]) RecordCount() uint64              { return fw.w.RecordCount() }
-func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error  { return fw.w.Scan(f) }
+func (fw *FileWriter[K]) RecordCount() uint64             { return fw.w.RecordCount() }
+func (fw *FileWriter[K]) Scan(f func(K, K, uint32)) error { return fw.w.Scan(f) }
 
 // Delegated API (feed operations)
 func (fw *FileWriter[K]) FeedAddRange(from, to K, feedBit uint32) error {
@@ -321,6 +325,17 @@ func (fw *FileWriter[K]) ForeignVsAllFromSlice(foreign []ForeignRange[K], onOver
 }
 
 func (fw *FileWriter[K]) Close() error {
+	// Issue 2 fix: truncate the file to exactly committed_pages * PageSize.
+	// The mmap store over-allocates a growth region (committed + growthChunk);
+	// without truncating on close, chain pages allocated in that region linger
+	// on disk past the committed boundary. On reopen, committed_pages (from the
+	// meta) is smaller than the lingering chain page, so the free-list head
+	// looks out-of-bounds and LoadFreeList silently drops it. Truncating to the
+	// committed boundary on close guarantees the on-disk file matches the meta.
+	committedPages := uint32(0)
+	if fw.w != nil {
+		committedPages = fw.w.committedPages
+	}
 	if fw.readerTable != nil {
 		fw.readerTable.Close()
 		fw.readerTable = nil
@@ -330,6 +345,17 @@ func (fw *FileWriter[K]) Close() error {
 		fw.store = nil
 	}
 	if fw.file != nil {
+		// ftruncate the backing file to the committed region. Done after the
+		// mmap is munmapped (store.close) and before the file handle is released.
+		// Best-effort: a truncate failure does not undo the committed data, so
+		// only the growth region is at stake — log by returning the error.
+		if committedPages > 0 {
+			if err := fw.file.Truncate(int64(committedPages) * PageSize); err != nil {
+				fw.file.Close()
+				fw.file = nil
+				return fmt.Errorf("close truncate: %w", err)
+			}
+		}
 		fw.file.Close() // releases LOCK_EX
 		fw.file = nil
 	}

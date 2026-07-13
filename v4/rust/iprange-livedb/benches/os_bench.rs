@@ -22,7 +22,10 @@ impl Lcg {
         Lcg(seed ^ 0x9e37_79b9_7f4a_7c15)
     }
     fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
 }

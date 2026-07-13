@@ -18,7 +18,12 @@ pub struct ExtSortConfig {
 }
 
 impl Default for ExtSortConfig {
-    fn default() -> Self { ExtSortConfig { chunk_size: 100_000, temp_dir: None } }
+    fn default() -> Self {
+        ExtSortConfig {
+            chunk_size: 100_000,
+            temp_dir: None,
+        }
+    }
 }
 
 // ── Streaming sorter ──
@@ -33,21 +38,33 @@ pub struct ExtSorter<K: IpKey> {
 
 impl<K: IpKey> ExtSorter<K> {
     pub fn new(config: ExtSortConfig) -> Self {
-        ExtSorter { config, chunk: Vec::new(), run_paths: Vec::new(), global_seq: 0 }
+        ExtSorter {
+            config,
+            chunk: Vec::new(),
+            run_paths: Vec::new(),
+            global_seq: 0,
+        }
     }
 
     pub fn add(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
         let seq = self.global_seq;
         self.global_seq += 1;
         self.chunk.push((DesiredRecord { from, to, scope_id }, seq));
-        if self.chunk.len() >= self.config.chunk_size { self.spill_chunk()?; }
+        if self.chunk.len() >= self.config.chunk_size {
+            self.spill_chunk()?;
+        }
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<Box<dyn DesiredStream<K>>> {
-        if !self.chunk.is_empty() { self.spill_chunk()?; }
+        if !self.chunk.is_empty() {
+            self.spill_chunk()?;
+        }
         let inner: Box<dyn DesiredStream<K>> = if self.run_paths.is_empty() {
-            Box::new(SortedStream { records: Vec::new(), pos: 0 })
+            Box::new(SortedStream {
+                records: Vec::new(),
+                pos: 0,
+            })
         } else if self.run_paths.len() == 1 {
             let tagged = read_run::<K>(&self.run_paths[0])?;
             let _ = std::fs::remove_file(&self.run_paths[0]);
@@ -55,25 +72,43 @@ impl<K: IpKey> ExtSorter<K> {
             Box::new(SortedStream { records, pos: 0 })
         } else {
             let merge = KWayMerge::<K>::new(&self.run_paths)?;
-            Box::new(MergeStream { merge: Some(merge), run_paths: self.run_paths })
+            Box::new(MergeStream {
+                merge: Some(merge),
+                run_paths: self.run_paths,
+            })
         };
         Ok(Box::new(CoalesceStream::new(inner)))
     }
 
     fn spill_chunk(&mut self) -> Result<()> {
-        if self.chunk.is_empty() { return Ok(()); }
+        if self.chunk.is_empty() {
+            return Ok(());
+        }
         // Tag each record with its global input seq BEFORE sorting, so that
         // normalize_chunk can resolve last-wins by input sequence and the
         // surviving seq is persisted to the spill file for cross-run merge.
         let mut indexed: Vec<(DesiredRecord<K>, u64)> = self.chunk.drain(..).collect();
         // Sort by from key (stable — preserves input order for equal keys).
         indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
-        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<u64>) =
-            indexed.into_iter().unzip();
+        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<u64>) = indexed.into_iter().unzip();
         let normalized = normalize_chunk(&sorted, &seqs);
-        let dir: PathBuf = self.config.temp_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp"));
+        let dir: PathBuf = self
+            .config
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        // Issue 4: include the PID so two concurrent processes cannot collide on
+        // the same spill filename. RUN_COUNTER is process-local, so without the
+        // PID two processes would both write `iprange_extsort_0_0` and silently
+        // corrupt each other's spill (create+truncate overwrote the file).
+        let pid = std::process::id();
         let unique = RUN_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = dir.join(format!("iprange_extsort_{}_{}", unique, self.run_paths.len()));
+        let path = dir.join(format!(
+            "iprange_extsort_{}_{}_{}",
+            pid,
+            unique,
+            self.run_paths.len()
+        ));
         write_run::<K>(&path, &normalized)?;
         self.run_paths.push(path);
         self.chunk.clear();
@@ -88,28 +123,60 @@ impl<K: IpKey> ExtSorter<K> {
 /// Returns each output segment paired with the global seq of the input record
 /// that won the segment (i.e. set its scope). Coalesced same-scope adjacent
 /// segments carry the max seq of their constituents.
-fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(DesiredRecord<K>, u64)> {
+fn normalize_chunk<K: IpKey>(
+    sorted: &[DesiredRecord<K>],
+    seqs: &[u64],
+) -> Vec<(DesiredRecord<K>, u64)> {
     if sorted.len() <= 1 {
-        return sorted.iter().zip(seqs.iter()).map(|(r, &s)| (*r, s)).collect();
+        return sorted
+            .iter()
+            .zip(seqs.iter())
+            .map(|(r, &s)| (*r, s))
+            .collect();
     }
 
     // Fast path: check disjoint.
     let mut disjoint = true;
     for i in 1..sorted.len() {
-        if sorted[i].from <= sorted[i-1].to { disjoint = false; break; }
+        if sorted[i].from <= sorted[i - 1].to {
+            disjoint = false;
+            break;
+        }
     }
-    if disjoint { return coalesce_adjacent(sorted, seqs); }
+    if disjoint {
+        return coalesce_adjacent(sorted, seqs);
+    }
 
     // Sweep line: collect (position, is_start, record_index) events.
     #[derive(Clone, Copy)]
-    struct Event { pos: u128, is_start: bool, is_max_end: bool, idx: usize }
+    struct Event {
+        pos: u128,
+        is_start: bool,
+        is_max_end: bool,
+        idx: usize,
+    }
     let mut events: Vec<Event> = Vec::with_capacity(sorted.len() * 2);
     for (i, r) in sorted.iter().enumerate() {
-        events.push(Event { pos: r.from.to_u128(), is_start: true, is_max_end: false, idx: i });
+        events.push(Event {
+            pos: r.from.to_u128(),
+            is_start: true,
+            is_max_end: false,
+            idx: i,
+        });
         match r.to.checked_inc() {
-            Some(after) => events.push(Event { pos: after.to_u128(), is_start: false, is_max_end: false, idx: i }),
+            Some(after) => events.push(Event {
+                pos: after.to_u128(),
+                is_start: false,
+                is_max_end: false,
+                idx: i,
+            }),
             // to is family_max — use a flag instead of a sentinel value.
-            None => events.push(Event { pos: 0, is_start: false, is_max_end: true, idx: i }),
+            None => events.push(Event {
+                pos: 0,
+                is_start: false,
+                is_max_end: true,
+                idx: i,
+            }),
         }
     }
     events.sort_by(|a, b| {
@@ -118,7 +185,9 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
             (false, true) => std::cmp::Ordering::Less,
-            (false, false) => a.pos.cmp(&b.pos)
+            (false, false) => a
+                .pos
+                .cmp(&b.pos)
                 .then_with(|| (a.is_start as u8).cmp(&(b.is_start as u8))),
         }
     });
@@ -143,9 +212,13 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(
         }
 
         // Determine segment end.
-        if i >= events.len() { break; } // no more segments
+        if i >= events.len() {
+            break;
+        } // no more segments
 
-        if active.is_empty() { continue; }
+        if active.is_empty() {
+            continue;
+        }
 
         let seg_from = K::from_u128(pos);
         // The segment ends at either the next event's position - 1, or K::MAX
@@ -178,14 +251,26 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(
                 }
             }
         }
-        out.push((DesiredRecord { from: seg_from, to: seg_to, scope_id: scope }, win_seq));
+        out.push((
+            DesiredRecord {
+                from: seg_from,
+                to: seg_to,
+                scope_id: scope,
+            },
+            win_seq,
+        ));
     }
 
     out
 }
 
-fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(DesiredRecord<K>, u64)> {
-    if records.is_empty() { return Vec::new(); }
+fn coalesce_adjacent<K: IpKey>(
+    records: &[DesiredRecord<K>],
+    seqs: &[u64],
+) -> Vec<(DesiredRecord<K>, u64)> {
+    if records.is_empty() {
+        return Vec::new();
+    }
     let mut out: Vec<(DesiredRecord<K>, u64)> = Vec::with_capacity(records.len());
     out.push((records[0], seqs[0]));
     for i in 1..records.len() {
@@ -223,8 +308,7 @@ impl<K: IpKey> SortedStream<K> {
             .map(|(i, r)| (r, i))
             .collect();
         indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
-        let (sorted, seqs_local): (Vec<DesiredRecord<K>>, Vec<usize>) =
-            indexed.into_iter().unzip();
+        let (sorted, seqs_local): (Vec<DesiredRecord<K>>, Vec<usize>) = indexed.into_iter().unzip();
         let seqs: Vec<u64> = seqs_local.into_iter().map(|s| s as u64).collect();
         let normalized = normalize_chunk(&sorted, &seqs);
         // Presentation coalesce: this is a final output stream (seqs are
@@ -244,42 +328,90 @@ impl<K: IpKey> SortedStream<K> {
             }
             recs.push(r);
         }
-        SortedStream { records: recs, pos: 0 }
+        SortedStream {
+            records: recs,
+            pos: 0,
+        }
     }
 }
 
 impl<K: IpKey> DesiredStream<K> for SortedStream<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { self.records.get(self.pos) }
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        self.records.get(self.pos)
+    }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
         if self.pos < self.records.len() {
-            let r = self.records[self.pos]; self.pos += 1; Some(r)
-        } else { None }
+            let r = self.records[self.pos];
+            self.pos += 1;
+            Some(r)
+        } else {
+            None
+        }
     }
 }
 
 // ── K-way merge with overlap normalization ──
 
-struct RunReader<K: IpKey> { file: File, current: Option<(DesiredRecord<K>, u64)> }
+struct RunReader<K: IpKey> {
+    file: File,
+    current: Option<(DesiredRecord<K>, u64)>,
+    // Set when read_record detects a truncated/partial final record. The error
+    // is sticky: once set, `current` is None and the reader reports it via err().
+    err: Option<&'static str>,
+}
 impl<K: IpKey> RunReader<K> {
     fn open(path: &Path) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).open(path).map_err(Error::Io)?;
-        Ok(RunReader { current: read_record::<K>(&mut file)?, file })
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(Error::Io)?;
+        // Read the first record eagerly; a truncated first record is a hard open error.
+        let current = read_record::<K>(&mut file)?;
+        Ok(RunReader {
+            current,
+            file,
+            err: None,
+        })
     }
-    fn advance(&mut self) { self.current = read_record::<K>(&mut self.file).ok().flatten(); }
+    fn advance(&mut self) {
+        // read_record distinguishes a clean EOF (Ok(None)) from a truncated
+        // partial record (Err). Swallowing the Err would silently drop the IPs
+        // in the partial record and make the merge look done — store it instead.
+        match read_record::<K>(&mut self.file) {
+            Ok(r) => self.current = r,
+            Err(_) => {
+                self.err = Some("truncated spill file: partial record");
+                self.current = None;
+            }
+        }
+    }
 }
 
-enum KMin { Run(usize), Pending(usize) }
+enum KMin {
+    Run(usize),
+    Pending(usize),
+}
 
 struct KWayMerge<K: IpKey> {
     runs: Vec<RunReader<K>>,
     cached: Option<(DesiredRecord<K>, u64)>,
     pending: Vec<(DesiredRecord<K>, u64)>,
+    // First truncation/IO error observed from any run. Sticky: once the merge
+    // has read partial data, callers must NOT trust the (short) result stream.
+    err: Option<&'static str>,
 }
 impl<K: IpKey> KWayMerge<K> {
     fn new(paths: &[PathBuf]) -> Result<Self> {
         let mut runs = Vec::with_capacity(paths.len());
-        for p in paths { runs.push(RunReader::<K>::open(p)?); }
-        let mut m = KWayMerge { runs, cached: None, pending: Vec::new() };
+        for p in paths {
+            runs.push(RunReader::<K>::open(p)?);
+        }
+        let mut m = KWayMerge {
+            runs,
+            cached: None,
+            pending: Vec::new(),
+            err: None,
+        };
         m.cached = m.compute_next();
         Ok(m)
     }
@@ -311,6 +443,12 @@ impl<K: IpKey> KWayMerge<K> {
             KMin::Run(idx) => {
                 let r = self.runs[idx].current.take();
                 self.runs[idx].advance();
+                // Capture the first truncation error from any run we advanced.
+                // The merge keeps going (other runs may still have valid data),
+                // but the caller MUST check err() after exhaustion.
+                if self.err.is_none() && self.runs[idx].err.is_some() {
+                    self.err = self.runs[idx].err;
+                }
                 r
             }
             KMin::Pending(idx) => {
@@ -347,7 +485,9 @@ impl<K: IpKey> KWayMerge<K> {
                     if let Some(after) = result.0.to.checked_inc() {
                         if after == next_from {
                             let (popped, _popped_seq) = self.pop_min().unwrap();
-                            if popped.to > result.0.to { result.0.to = popped.to; }
+                            if popped.to > result.0.to {
+                                result.0.to = popped.to;
+                            }
                             continue;
                         }
                     }
@@ -366,7 +506,14 @@ impl<K: IpKey> KWayMerge<K> {
                     result.0.to = next_from.checked_dec().unwrap_or(next_from);
                     if original_to > next_to {
                         if let Some(ts) = next_to.checked_inc() {
-                            self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
+                            self.pending.push((
+                                DesiredRecord {
+                                    from: ts,
+                                    to: original_to,
+                                    scope_id: original_scope,
+                                },
+                                result_seq,
+                            ));
                         }
                     }
                     break;
@@ -375,7 +522,14 @@ impl<K: IpKey> KWayMerge<K> {
                     // Defer result's surviving tail, then take next as result.
                     if original_to > next_to {
                         if let Some(ts) = next_to.checked_inc() {
-                            self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
+                            self.pending.push((
+                                DesiredRecord {
+                                    from: ts,
+                                    to: original_to,
+                                    scope_id: original_scope,
+                                },
+                                result_seq,
+                            ));
                         }
                     }
                     result = self.pop_min().unwrap();
@@ -386,7 +540,14 @@ impl<K: IpKey> KWayMerge<K> {
                 let (popped, popped_seq) = self.pop_min().unwrap();
                 if popped.to > result.0.to {
                     if let Some(ts) = result.0.to.checked_inc() {
-                        self.pending.push((DesiredRecord { from: ts, to: popped.to, scope_id: next_scope }, popped_seq));
+                        self.pending.push((
+                            DesiredRecord {
+                                from: ts,
+                                to: popped.to,
+                                scope_id: next_scope,
+                            },
+                            popped_seq,
+                        ));
                     }
                 }
                 // result unchanged, continue scanning.
@@ -411,21 +572,40 @@ impl<K: IpKey> KWayMerge<K> {
 }
 
 impl<K: IpKey> DesiredStream<K> for KWayMerge<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { self.cached.as_ref().map(|(r, _)| r) }
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        self.cached.as_ref().map(|(r, _)| r)
+    }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
         let r = self.cached.take()?;
         self.cached = self.compute_next();
         Some(r.0)
     }
+    fn err(&self) -> Option<&str> {
+        self.err
+    }
 }
 
-struct MergeStream<K: IpKey> { merge: Option<KWayMerge<K>>, run_paths: Vec<PathBuf> }
+struct MergeStream<K: IpKey> {
+    merge: Option<KWayMerge<K>>,
+    run_paths: Vec<PathBuf>,
+}
 impl<K: IpKey> DesiredStream<K> for MergeStream<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { self.merge.as_ref()?.peek() }
-    fn next(&mut self) -> Option<DesiredRecord<K>> { self.merge.as_mut()?.next() }
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        self.merge.as_ref()?.peek()
+    }
+    fn next(&mut self) -> Option<DesiredRecord<K>> {
+        self.merge.as_mut()?.next()
+    }
+    fn err(&self) -> Option<&str> {
+        self.merge.as_ref()?.err()
+    }
 }
 impl<K: IpKey> Drop for MergeStream<K> {
-    fn drop(&mut self) { for p in &self.run_paths { let _ = std::fs::remove_file(p); } }
+    fn drop(&mut self) {
+        for p in &self.run_paths {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 /// Presentation wrapper that merges adjacent same-scope records emitted by an
@@ -443,7 +623,10 @@ struct CoalesceStream<K: IpKey> {
 
 impl<K: IpKey> CoalesceStream<K> {
     fn new(inner: Box<dyn DesiredStream<K>>) -> Self {
-        let mut s = CoalesceStream { inner, pending: None };
+        let mut s = CoalesceStream {
+            inner,
+            pending: None,
+        };
         s.fill();
         s
     }
@@ -454,11 +637,17 @@ impl<K: IpKey> CoalesceStream<K> {
                 Some(n) => *n,
                 None => return,
             };
-            if n.scope_id != p.scope_id { return; }
+            if n.scope_id != p.scope_id {
+                return;
+            }
             match p.to.checked_inc() {
                 Some(after) if after == n.from => {
                     let new_to = if n.to > p.to { n.to } else { p.to };
-                    self.pending = Some(DesiredRecord { from: p.from, to: new_to, scope_id: p.scope_id });
+                    self.pending = Some(DesiredRecord {
+                        from: p.from,
+                        to: new_to,
+                        scope_id: p.scope_id,
+                    });
                     self.inner.next(); // consume the merged-in record
                 }
                 _ => return,
@@ -468,11 +657,18 @@ impl<K: IpKey> CoalesceStream<K> {
 }
 
 impl<K: IpKey> DesiredStream<K> for CoalesceStream<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { self.pending.as_ref() }
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        self.pending.as_ref()
+    }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
         let r = self.pending.take();
         self.fill();
         r
+    }
+    // Propagate the inner stream's deferred read error so callers (migrate) can
+    // reject a truncated spill instead of committing partial data.
+    fn err(&self) -> Option<&str> {
+        self.inner.err()
     }
 }
 
@@ -507,12 +703,23 @@ fn read_record<K: IpKey>(file: &mut File) -> Result<Option<(DesiredRecord<K>, u6
     Ok(Some((
         DesiredRecord {
             from: K::read_le(&buf[..kw]),
-            to: K::read_le(&buf[kw..2*kw]),
-            scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
+            to: K::read_le(&buf[kw..2 * kw]),
+            scope_id: u32::from_le_bytes([
+                buf[2 * kw],
+                buf[2 * kw + 1],
+                buf[2 * kw + 2],
+                buf[2 * kw + 3],
+            ]),
         },
         u64::from_le_bytes([
-            buf[2*kw+4], buf[2*kw+5], buf[2*kw+6], buf[2*kw+7],
-            buf[2*kw+8], buf[2*kw+9], buf[2*kw+10], buf[2*kw+11],
+            buf[2 * kw + 4],
+            buf[2 * kw + 5],
+            buf[2 * kw + 6],
+            buf[2 * kw + 7],
+            buf[2 * kw + 8],
+            buf[2 * kw + 9],
+            buf[2 * kw + 10],
+            buf[2 * kw + 11],
         ]),
     )))
 }
@@ -521,30 +728,50 @@ fn write_record<K: IpKey>(file: &mut File, rec: &DesiredRecord<K>, seq: u64) -> 
     let kw = K::WIDTH;
     let mut buf = vec![0u8; kw * 2 + 12];
     rec.from.write_le(&mut buf[..kw]);
-    rec.to.write_le(&mut buf[kw..2*kw]);
-    buf[2*kw..2*kw+4].copy_from_slice(&rec.scope_id.to_le_bytes());
-    buf[2*kw+4..2*kw+12].copy_from_slice(&seq.to_le_bytes());
+    rec.to.write_le(&mut buf[kw..2 * kw]);
+    buf[2 * kw..2 * kw + 4].copy_from_slice(&rec.scope_id.to_le_bytes());
+    buf[2 * kw + 4..2 * kw + 12].copy_from_slice(&seq.to_le_bytes());
     file.write_all(&buf).map_err(Error::Io)
 }
 
 fn write_run<K: IpKey>(path: &Path, records: &[(DesiredRecord<K>, u64)]) -> Result<()> {
-    let mut file = OpenOptions::new().write(true).create(true).truncate(true)
-        .open(path).map_err(Error::Io)?;
-    for (rec, seq) in records { write_record::<K>(&mut file, rec, *seq)?; }
+    // Issue 4: create_new (O_CREAT|O_EXCL) instead of create+truncate. If two
+    // processes somehow produce the same filename, the second open fails loudly
+    // instead of silently truncating the first process's spill. The PID in the
+    // name (see spill_chunk) makes this a near-impossible case, but create_new
+    // turns it from silent data loss into a hard, debuggable error.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(Error::Io)?;
+    for (rec, seq) in records {
+        write_record::<K>(&mut file, rec, *seq)?;
+    }
     file.flush().map_err(Error::Io)
 }
 
 fn read_run<K: IpKey>(path: &Path) -> Result<Vec<(DesiredRecord<K>, u64)>> {
-    let mut file = OpenOptions::new().read(true).open(path).map_err(Error::Io)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .map_err(Error::Io)?;
     let mut records = Vec::new();
-    while let Some(r) = read_record::<K>(&mut file)? { records.push(r); }
+    while let Some(r) = read_record::<K>(&mut file)? {
+        records.push(r);
+    }
     Ok(records)
 }
 
 /// Convenience: one-shot sort.
-pub fn ext_sort<K: IpKey>(records: Vec<DesiredRecord<K>>, config: &ExtSortConfig) -> Result<Box<dyn DesiredStream<K>>> {
+pub fn ext_sort<K: IpKey>(
+    records: Vec<DesiredRecord<K>>,
+    config: &ExtSortConfig,
+) -> Result<Box<dyn DesiredStream<K>>> {
     let mut sorter = ExtSorter::new(config.clone());
-    for rec in records { sorter.add(rec.from, rec.to, rec.scope_id)?; }
+    for rec in records {
+        sorter.add(rec.from, rec.to, rec.scope_id)?;
+    }
     sorter.finish()
 }
 
@@ -554,19 +781,28 @@ mod tests {
     use crate::key::Ipv4Key;
 
     fn r(f: u32, t: u32, s: u32) -> DesiredRecord<Ipv4Key> {
-        DesiredRecord { from: Ipv4Key(f), to: Ipv4Key(t), scope_id: s }
+        DesiredRecord {
+            from: Ipv4Key(f),
+            to: Ipv4Key(t),
+            scope_id: s,
+        }
     }
 
     #[test]
     fn in_memory_sort() {
-        let s = SortedStream::from_unsorted(vec![r(30,40,1), r(10,20,1), r(21,29,1), r(50,60,2)]);
+        let s = SortedStream::from_unsorted(vec![
+            r(30, 40, 1),
+            r(10, 20, 1),
+            r(21, 29, 1),
+            r(50, 60, 2),
+        ]);
         assert_eq!(s.records[0].from, Ipv4Key(10));
         assert_eq!(s.records[0].to, Ipv4Key(40));
     }
 
     #[test]
     fn normalize_different_scope() {
-        let s = SortedStream::from_unsorted(vec![r(10,20,1), r(15,25,2)]);
+        let s = SortedStream::from_unsorted(vec![r(10, 20, 1), r(15, 25, 2)]);
         assert_eq!(s.records.len(), 2);
         assert_eq!(s.records[0].to, Ipv4Key(14)); // [10-14] scope=1
         assert_eq!(s.records[1].from, Ipv4Key(15)); // [15-25] scope=2
@@ -574,7 +810,7 @@ mod tests {
 
     #[test]
     fn normalize_tail_preserved() {
-        let s = SortedStream::from_unsorted(vec![r(56,69,0), r(60,75,1), r(63,72,0)]);
+        let s = SortedStream::from_unsorted(vec![r(56, 69, 0), r(60, 75, 1), r(63, 72, 0)]);
         // [56-59] s=0, [60-62] s=1, [63-72] s=0, [73-75] s=1 (tail!)
         assert_eq!(s.records.len(), 4);
         assert_eq!(s.records[3].from, Ipv4Key(73));
@@ -583,25 +819,37 @@ mod tests {
 
     #[test]
     fn normalize_max_address() {
-        let s = SortedStream::from_unsorted(vec![r(u32::MAX-10, u32::MAX, 1)]);
+        let s = SortedStream::from_unsorted(vec![r(u32::MAX - 10, u32::MAX, 1)]);
         assert_eq!(s.records.len(), 1);
         assert_eq!(s.records[0].to, Ipv4Key(u32::MAX));
     }
 
     #[test]
     fn streaming_sorter() {
-        let mut sorter = ExtSorter::new(ExtSortConfig { chunk_size: 10, temp_dir: None });
-        for i in 0..25u32 { sorter.add(Ipv4Key(1000-i), Ipv4Key(1000-i), i).unwrap(); }
+        let mut sorter = ExtSorter::new(ExtSortConfig {
+            chunk_size: 10,
+            temp_dir: None,
+        });
+        for i in 0..25u32 {
+            sorter.add(Ipv4Key(1000 - i), Ipv4Key(1000 - i), i).unwrap();
+        }
         let mut stream = sorter.finish().unwrap();
         let mut prev = Ipv4Key(0);
         let mut count = 0;
-        while let Some(r) = stream.next() { assert!(r.from > prev || count == 0); prev = r.from; count += 1; }
+        while let Some(r) = stream.next() {
+            assert!(r.from > prev || count == 0);
+            prev = r.from;
+            count += 1;
+        }
         assert_eq!(count, 25);
     }
 
     #[test]
     fn cross_run_overlap() {
-        let mut sorter = ExtSorter::new(ExtSortConfig { chunk_size: 1, temp_dir: None });
+        let mut sorter = ExtSorter::new(ExtSortConfig {
+            chunk_size: 1,
+            temp_dir: None,
+        });
         sorter.add(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
         sorter.add(Ipv4Key(15), Ipv4Key(25), 2).unwrap();
         let mut stream = sorter.finish().unwrap();
@@ -618,16 +866,30 @@ mod tests {
     #[test]
     fn read_record_rejects_truncated_spill() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("iprange_trunc_{}.spill", RUN_COUNTER.fetch_add(1, Ordering::SeqCst)));
+        let path = dir.join(format!(
+            "iprange_trunc_{}.spill",
+            RUN_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
 
         // Write 3 complete records.
         {
-            let mut f = OpenOptions::new().write(true).create(true).truncate(true)
-                .open(&path).unwrap();
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)
+                .unwrap();
             for i in 0u32..3 {
-                write_record::<Ipv4Key>(&mut f,
-                    &DesiredRecord { from: Ipv4Key(i*10), to: Ipv4Key(i*10+9), scope_id: i+1 },
-                    u64::from(i)).unwrap();
+                write_record::<Ipv4Key>(
+                    &mut f,
+                    &DesiredRecord {
+                        from: Ipv4Key(i * 10),
+                        to: Ipv4Key(i * 10 + 9),
+                        scope_id: i + 1,
+                    },
+                    u64::from(i),
+                )
+                .unwrap();
             }
             // Append a partial 4th record (half the record size).
             let kw = Ipv4Key::WIDTH;
@@ -643,8 +905,139 @@ mod tests {
             Err(crate::error::Error::Structural(msg)) => {
                 assert!(msg.contains("truncated"), "wrong error: {}", msg);
             }
-            other => panic!("expected truncation error, got {:?}", other.map(|v| v.len())),
+            other => panic!(
+                "expected truncation error, got {:?}",
+                other.map(|v| v.len())
+            ),
         }
+    }
+
+    // ── Issue 1: a truncated spill file must surface via err(), not look like EOF ──
+
+    #[test]
+    fn truncated_spill_stream_reports_err() {
+        // chunk_size=2 over 4 records forces two spill runs, so finish() returns
+        // a MergeStream-backed stream (the path that reads spill files lazily).
+        let dir = std::env::temp_dir().join(format!(
+            "iprange_trunc_stream_{}_{}",
+            std::process::id(),
+            RUN_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig {
+            chunk_size: 2,
+            temp_dir: Some(dir.clone()),
+        });
+        // Records [0,0],[10,10],[20,20],[30,30] → two spill files of 2 records each.
+        sorter.add(Ipv4Key(0), Ipv4Key(0), 1).unwrap();
+        sorter.add(Ipv4Key(10), Ipv4Key(10), 1).unwrap();
+        sorter.add(Ipv4Key(20), Ipv4Key(20), 1).unwrap();
+        sorter.add(Ipv4Key(30), Ipv4Key(30), 1).unwrap();
+
+        // Truncate the first spill file mid-record (cut the 2nd record in half).
+        // Each Ipv4Key spill record is kw*2+12 = 20 bytes; 2 records = 40 bytes.
+        let mut spill_files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        spill_files.sort();
+        assert!(spill_files.len() >= 2, "expected >=2 spill files");
+        let target = &spill_files[0];
+        let half_record = Ipv4Key::WIDTH * 2 + 12; // 20 bytes (one full record)
+                                                   // Keep the 1st record intact + half of the 2nd → truncated mid-record.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(target)
+            .unwrap()
+            .set_len((half_record + half_record / 2) as u64)
+            .unwrap();
+
+        let mut stream = sorter.finish().unwrap();
+        // Drain whatever records are still readable. The stream will end (None)
+        // when it hits the truncated run; that None MUST NOT be mistaken for a
+        // clean EOF.
+        while stream.next().is_some() {}
+        assert!(
+            stream.err().is_some(),
+            "truncated spill must surface a deferred error via err(), not look like clean EOF"
+        );
+
+        // Cleanup.
+        for p in spill_files {
+            let _ = std::fs::remove_file(p);
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    // ── Issue 4: spill files must be unique across processes ────────────────
+
+    #[test]
+    fn spill_filename_contains_pid() {
+        // A spill file's name MUST embed the process id; without it two
+        // processes share the process-local RUN_COUNTER and collide on the same
+        // filename, silently corrupting each other's spill.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange_pid_test_{}_{}",
+            std::process::id(),
+            RUN_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig {
+            chunk_size: 1,
+            temp_dir: Some(dir.clone()),
+        });
+        // One add with chunk_size=1 forces a spill immediately.
+        sorter.add(Ipv4Key(0), Ipv4Key(0), 1).unwrap();
+
+        let pid_str = std::process::id().to_string();
+        let mut found_with_pid = false;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if name.contains(&pid_str) {
+                found_with_pid = true;
+                break;
+            }
+        }
+        assert!(
+            found_with_pid,
+            "spill filename must contain the PID {} for cross-process safety",
+            pid_str
+        );
+
+        // Cleanup.
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn write_run_create_new_detects_collision() {
+        // write_run must use create_new (O_CREAT|O_EXCL): a second write to the
+        // same path MUST fail loudly, not silently truncate the first.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "iprange_collision_{}_{}.spill",
+            std::process::id(),
+            RUN_COUNTER.fetch_add(1, Ordering::SeqCst),
+        ));
+        let rec = vec![(
+            DesiredRecord {
+                from: Ipv4Key(0),
+                to: Ipv4Key(9),
+                scope_id: 1,
+            },
+            0u64,
+        )];
+        write_run::<Ipv4Key>(&path, &rec).unwrap();
+        let second = write_run::<Ipv4Key>(&path, &rec);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            second.is_err(),
+            "write_run must fail on an existing path (create_new), not silently truncate it"
+        );
     }
 }
 
@@ -654,7 +1047,11 @@ mod worker_bugs {
     use crate::key::Ipv4Key;
 
     fn r(f: u32, t: u32, s: u32) -> DesiredRecord<Ipv4Key> {
-        DesiredRecord { from: Ipv4Key(f), to: Ipv4Key(t), scope_id: s }
+        DesiredRecord {
+            from: Ipv4Key(f),
+            to: Ipv4Key(t),
+            scope_id: s,
+        }
     }
 
     #[test]
@@ -679,7 +1076,10 @@ mod worker_bugs {
         // Run A has [10-30] scope=1 (wide range)
         // Run B has [15-25] scope=2 (contained within A)
         // Expected after merge: [10-14] scope=1, [15-25] scope=2, [26-30] scope=1
-        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig { chunk_size: 1, temp_dir: None });
+        let mut sorter = ExtSorter::<Ipv4Key>::new(ExtSortConfig {
+            chunk_size: 1,
+            temp_dir: None,
+        });
         sorter.add(Ipv4Key(10), Ipv4Key(30), 1).unwrap();
         sorter.add(Ipv4Key(15), Ipv4Key(25), 2).unwrap();
         let mut stream = sorter.finish().unwrap();
@@ -711,8 +1111,16 @@ mod ipv6_max_tests {
         let max_minus_1 = max.checked_dec().unwrap();
 
         let s = SortedStream::from_unsorted(vec![
-            DesiredRecord { from: max_minus_1, to: max, scope_id: 1 },
-            DesiredRecord { from: max, to: max, scope_id: 2 },
+            DesiredRecord {
+                from: max_minus_1,
+                to: max,
+                scope_id: 1,
+            },
+            DesiredRecord {
+                from: max,
+                to: max,
+                scope_id: 2,
+            },
         ]);
         // Expected: [max-1, max-1] scope=1, [max, max] scope=2
         assert_eq!(s.records.len(), 2);

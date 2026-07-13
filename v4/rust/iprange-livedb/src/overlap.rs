@@ -14,10 +14,10 @@
 
 use crate::error::Result;
 use crate::key::IpKey;
-use crate::writer::Writer;
 use crate::node::{BranchView, LeafView};
 use crate::spec;
 use crate::wire::PageHeader;
+use crate::writer::Writer;
 
 /// A pairwise overlap result: feeds A and B share `ip_count` addresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,7 +91,8 @@ fn scan_overlap_node<K: IpKey>(
 /// calling `on_pair(a, b)` for each. Avoids materializing a feed `Vec`.
 ///
 /// - bitmap mode: `scope_id` IS the bitmap; walk set bits with `x & (x - 1)`.
-/// - indirect mode: resolve to the bitmap byte slice and scan it directly.
+/// - indirect mode: resolve to the bitmap byte slice (zero-copy ref, issue-6)
+///   and scan it directly — no per-record Vec allocation.
 fn for_each_feed_pair<K: IpKey>(
     writer: &Writer<K>,
     scope_id: u32,
@@ -115,8 +116,8 @@ fn for_each_feed_pair<K: IpKey>(
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            if let Some(bitmap) = writer.scope_resolve(scope_id) {
-                for_each_set_bit_pair(&bitmap, on_pair);
+            if let Some(bitmap) = writer.scope_resolve_ref(scope_id) {
+                for_each_set_bit_pair(bitmap, on_pair);
             }
         }
         _ => {}
@@ -124,11 +125,7 @@ fn for_each_feed_pair<K: IpKey>(
 }
 
 /// Iterate every set feed bit in `scope_id`, calling `on_feed(bit)` for each.
-fn for_each_feed<K: IpKey>(
-    writer: &Writer<K>,
-    scope_id: u32,
-    on_feed: &mut dyn FnMut(u32),
-) {
+fn for_each_feed<K: IpKey>(writer: &Writer<K>, scope_id: u32, on_feed: &mut dyn FnMut(u32)) {
     match writer.scope_mode {
         spec::SCOPE_MODE_BITMAP => {
             let mut bits = scope_id;
@@ -139,8 +136,9 @@ fn for_each_feed<K: IpKey>(
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            if let Some(bitmap) = writer.scope_resolve(scope_id) {
-                for_each_set_bit(&bitmap, on_feed);
+            // Zero-copy ref (issue-6): borrows the committed page image.
+            if let Some(bitmap) = writer.scope_resolve_ref(scope_id) {
+                for_each_set_bit(bitmap, on_feed);
             }
         }
         _ => {}
@@ -212,11 +210,17 @@ fn ip_range_count<K: IpKey>(from: K, to: K) -> u64 {
 /// Foreign-vs-all comparison: scan a foreign feed against the multi-feed file.
 ///
 /// The foreign ranges are streamed via `next_foreign`: each call returns the
-/// next `(from, to)` and `true`, or a zero pair and `false` when exhausted.
-/// This lets a caller feed ranges from a file/iterator without materializing
-/// a `Vec` (issue-4 fix). For each IP range in the foreign feed, descend the
-/// tree and report every feed covering each overlap region. Descent is
-/// callback-driven — no intermediate `Vec` of overlapping records is built.
+/// next `(from, to)` and `Some`, or `None` when exhausted. This lets a caller
+/// feed ranges from a file/iterator without materializing a `Vec` (issue-4
+/// fix). For each foreign range, every stored feed covering each overlap region
+/// is reported via `on_overlap(feed, 0, ip_count)`.
+///
+/// **Precondition:** the foreign ranges MUST be yielded sorted ascending by
+/// `from`. Both inputs (foreign feed + stored tree records) are then sorted, so
+/// a single-pass linear merge replaces the per-range B+tree descent (issue-5).
+/// The old implementation walked the tree once per foreign range — O(foreign ×
+/// tree_height); this is O(tree_pages + foreign) + overlap output. Unsorted
+/// foreign input would silently under-count overlaps.
 ///
 /// This is the ASN/Geo/critical-infra use case: compare one external feed
 /// against all stored feeds in a single pass.
@@ -231,17 +235,85 @@ pub fn foreign_vs_all<K: IpKey>(
         while next_foreign().is_some() {}
         return Ok(());
     }
-    while let Some((from, to)) = next_foreign() {
-        descend_overlapping(writer, writer.pending_root, from, to, &mut |rec_from, rec_to, scope_id| {
-            let overlap_from = if from >= rec_from { from } else { rec_from };
-            let overlap_to = if to <= rec_to { to } else { rec_to };
+    // Collect leaf page numbers in tree (key) order once — page numbers only,
+    // no record materialization. The records inside are globally sorted.
+    let leaf_pages = writer.pending_leaf_pages()?;
+
+    // Permanent cursor over tree records (leaf idx, record idx). Only advances
+    // forward across foreign ranges — records that end before the current
+    // foreign range's `from` can never overlap it or any later (sorted) range.
+    let mut r_li = 0usize;
+    let mut r_ri = 0usize;
+
+    while let Some((f_from, f_to)) = next_foreign() {
+        // Phase 1 — permanently skip records ending strictly before f_from.
+        while let Some((_, rec_to, _)) = read_leaf_rec::<K>(writer, &leaf_pages, r_li, r_ri) {
+            if rec_to >= f_from {
+                break;
+            }
+            step_leaf_rec::<K>(writer, &leaf_pages, &mut r_li, &mut r_ri);
+        }
+        // Phase 2 — scan forward from the permanent cursor, emitting overlaps,
+        // until a record starts after f_to. The scan cursor is a COPY of the
+        // permanent one: records that overlap this foreign range may also
+        // overlap the next, so the permanent cursor is not advanced past them.
+        let mut s_li = r_li;
+        let mut s_ri = r_ri;
+        while let Some((rec_from, rec_to, scope_id)) =
+            read_leaf_rec::<K>(writer, &leaf_pages, s_li, s_ri)
+        {
+            if rec_from > f_to {
+                break;
+            }
+            // Overlap is guaranteed: rec_to >= f_from (phase 1) and rec_from <= f_to.
+            let overlap_from = if f_from >= rec_from { f_from } else { rec_from };
+            let overlap_to = if f_to <= rec_to { f_to } else { rec_to };
             let ip_count = ip_range_count::<K>(overlap_from, overlap_to);
             for_each_feed(writer, scope_id, &mut |feed| {
                 on_overlap(feed, 0, ip_count); // feed_bit=0 means "foreign feed"
             });
-        })?;
+            step_leaf_rec::<K>(writer, &leaf_pages, &mut s_li, &mut s_ri);
+        }
     }
     Ok(())
+}
+
+/// Read the record at leaf-pages cursor `(li, ri)`, or `None` past the end.
+#[inline]
+fn read_leaf_rec<K: IpKey>(
+    writer: &Writer<K>,
+    leaf_pages: &[u32],
+    li: usize,
+    ri: usize,
+) -> Option<(K, K, u32)> {
+    if li >= leaf_pages.len() {
+        return None;
+    }
+    let page = writer.store.as_ref().page(leaf_pages[li]);
+    let h = PageHeader::decode(page);
+    let count = h.entry_count as usize;
+    if ri >= count {
+        return None;
+    }
+    let leaf = LeafView::<K>::new(page, count);
+    let r = leaf.record(ri);
+    Some((r.from(), r.to(), r.scope_id()))
+}
+
+/// Advance the leaf-pages cursor by one record, crossing leaf boundaries.
+#[inline]
+fn step_leaf_rec<K: IpKey>(writer: &Writer<K>, leaf_pages: &[u32], li: &mut usize, ri: &mut usize) {
+    *ri += 1;
+    while *li < leaf_pages.len() {
+        let page = writer.store.as_ref().page(leaf_pages[*li]);
+        let h = PageHeader::decode(page);
+        let count = h.entry_count as usize;
+        if *ri < count {
+            return;
+        }
+        *li += 1;
+        *ri = 0;
+    }
 }
 
 /// Slice-based convenience wrapper around `foreign_vs_all`.
@@ -251,64 +323,19 @@ pub fn foreign_vs_all_slice<K: IpKey>(
     on_overlap: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
     let mut i = 0;
-    foreign_vs_all(writer, || {
-        if i < foreign.len() {
-            let r = foreign[i];
-            i += 1;
-            Some(r)
-        } else {
-            None
-        }
-    }, on_overlap)
-}
-
-/// Descend the pending tree, invoking `on_rec` for every leaf record that
-/// overlaps [from, to]. Binary-search pruned branch descent.
-fn descend_overlapping<K: IpKey>(
-    writer: &Writer<K>,
-    pgno: u32,
-    from: K,
-    to: K,
-    on_rec: &mut dyn FnMut(K, K, u32),
-) -> Result<()> {
-    let page = writer.store.as_ref().page(pgno);
-    let h = PageHeader::decode(page);
-    match h.page_type {
-        spec::PAGE_TYPE_LEAF => {
-            let leaf = LeafView::<K>::new(page, h.entry_count as usize);
-            for i in 0..leaf.len() {
-                let r = leaf.record(i);
-                if r.from() > to { break; }
-                if r.to() >= from {
-                    on_rec(r.from(), r.to(), r.scope_id());
-                }
+    foreign_vs_all(
+        writer,
+        || {
+            if i < foreign.len() {
+                let r = foreign[i];
+                i += 1;
+                Some(r)
+            } else {
+                None
             }
-            Ok(())
-        }
-        spec::PAGE_TYPE_BRANCH => {
-            let branch = BranchView::<K>::new(page, h.entry_count as usize);
-            let start = branch_find_child(&branch, from);
-            for j in start..branch.child_count() {
-                if j > 0 && branch.sep(j - 1) > to { break; }
-                descend_overlapping(writer, branch.child(j), from, to, on_rec)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-fn branch_find_child<K: IpKey>(branch: &BranchView<'_, K>, key: K) -> usize {
-    let (mut lo, mut hi) = (0usize, branch.sep_count());
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if branch.sep(mid) <= key {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    lo
+        },
+        on_overlap,
+    )
 }
 
 #[cfg(test)]
@@ -328,9 +355,15 @@ mod tests {
 
         // Should find: (0,1, 11 IPs) from [10-20], (1,2, 11 IPs) from [30-40]
         assert_eq!(overlaps.len(), 2);
-        let r0 = overlaps.iter().find(|o| o.feed_a == 0 && o.feed_b == 1).unwrap();
+        let r0 = overlaps
+            .iter()
+            .find(|o| o.feed_a == 0 && o.feed_b == 1)
+            .unwrap();
         assert_eq!(r0.ip_count, 11); // 10..=20 = 11 IPs
-        let r1 = overlaps.iter().find(|o| o.feed_a == 1 && o.feed_b == 2).unwrap();
+        let r1 = overlaps
+            .iter()
+            .find(|o| o.feed_a == 1 && o.feed_b == 2)
+            .unwrap();
         assert_eq!(r1.ip_count, 11);
     }
 
@@ -347,5 +380,95 @@ mod tests {
         for o in &overlaps {
             assert_eq!(o.ip_count, 100);
         }
+    }
+
+    // Issue 5: foreign_vs_all must produce identical overlap counts to the
+    // per-range descent, across multiple foreign ranges that each overlap
+    // multiple records, including ranges that fall in gaps (no overlap) and
+    // ranges that span the whole tree. Exercises the linear-merge cursor.
+    #[test]
+    fn foreign_vs_all_merge_correctness() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
+        // feeds 0+1 over [10-20], feeds 1+2 over [30-40], feed 0 over [50-60]
+        w.set(Ipv4Key(10), Ipv4Key(20), 0b011).unwrap();
+        w.set(Ipv4Key(30), Ipv4Key(40), 0b110).unwrap();
+        w.set(Ipv4Key(50), Ipv4Key(60), 0b001).unwrap();
+
+        // Foreign ranges sorted by `from` (merge precondition):
+        //   [5-8]   → gap before first record (no overlap)
+        //   [15-35] → overlaps [10-20] (feed 0,1) and [30-40] (feed 1,2)
+        //   [45-45] → gap between records (no overlap)
+        //   [55-70] → overlaps [50-60] (feed 0)
+        let foreign: Vec<(Ipv4Key, Ipv4Key)> = vec![
+            (Ipv4Key(5), Ipv4Key(8)),
+            (Ipv4Key(15), Ipv4Key(35)),
+            (Ipv4Key(45), Ipv4Key(45)),
+            (Ipv4Key(55), Ipv4Key(70)),
+        ];
+
+        let mut got: Vec<(u32, u64)> = Vec::new();
+        foreign_vs_all_slice(&w, &foreign, &mut |feed, _fid, cnt| {
+            got.push((feed, cnt));
+        })
+        .unwrap();
+
+        // Expected (feed, ip_count), unsorted then sorted for compare:
+        //   [15-20] → feed 0 (6), feed 1 (6)
+        //   [30-35] → feed 1 (6), feed 2 (6)
+        //   [55-60] → feed 0 (6)
+        let mut want: Vec<(u32, u64)> = vec![(0, 6), (1, 6), (1, 6), (2, 6), (0, 6)];
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want, "merge produced wrong overlaps");
+    }
+
+    // Issue 5: a foreign range fully spanning one record, plus a foreign range
+    // equal to a record, plus adjacent foreign ranges sharing a record. Guards
+    // the cursor-advance logic (records overlapped by one range must remain
+    // visible to the next).
+    #[test]
+    fn foreign_vs_all_merge_adjacent_ranges() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
+        w.set(Ipv4Key(100), Ipv4Key(200), 0b001).unwrap(); // feed 0 over 101 IPs
+
+        // Two adjacent foreign ranges that BOTH overlap the same record.
+        let foreign: Vec<(Ipv4Key, Ipv4Key)> = vec![
+            (Ipv4Key(110), Ipv4Key(120)), // 11 IPs of feed 0
+            (Ipv4Key(150), Ipv4Key(160)), // 11 IPs of feed 0
+        ];
+        let mut total = 0u64;
+        foreign_vs_all_slice(&w, &foreign, &mut |_feed, _fid, cnt| {
+            total += cnt;
+        })
+        .unwrap();
+        assert_eq!(total, 22, "adjacent ranges should each report their slice");
+    }
+
+    // Issue 5: scale — many records × many foreign ranges. Asserts the merge
+    // visits every overlap exactly once (no double-count, no skip) for a
+    // non-trivial interleaving. Also acts as a smoke test that the linear merge
+    // handles O(N) inputs (the old per-range descent was O(N log N) here).
+    #[test]
+    fn foreign_vs_all_merge_scaled() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
+        // 1000 disjoint single-IP records, each feed 0.
+        for i in 0u32..1000 {
+            w.set(Ipv4Key(10_000 + i), Ipv4Key(10_000 + i), 0b001)
+                .unwrap();
+        }
+        // Foreign ranges each covering exactly one record, plus gaps.
+        let mut foreign: Vec<(Ipv4Key, Ipv4Key)> = Vec::new();
+        for i in 0u32..1000 {
+            foreign.push((Ipv4Key(10_000 + i), Ipv4Key(10_000 + i)));
+        }
+        let mut hits = 0u64;
+        foreign_vs_all_slice(&w, &foreign, &mut |_f, _fid, _c| {
+            hits += 1;
+        })
+        .unwrap();
+        assert_eq!(
+            hits, 1000,
+            "every foreign range must hit its record exactly once"
+        );
     }
 }

@@ -8,8 +8,8 @@
 use core::marker::PhantomData;
 
 use crate::key::IpKey;
-use crate::wire;
 use crate::spec;
+use crate::wire;
 
 /// A zero-copy view over one `(2·K::WIDTH + 4)`-byte record.
 #[derive(Clone, Copy, Debug)]
@@ -82,8 +82,14 @@ mod tests {
     #[test]
     fn v6_round_trip() {
         let mut buf = [0u8; 36]; // 2*16 + 4
-        let from = Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0 };
-        let to = Ipv6Key { hi: 0x2001_0db8_0000_0000, lo: 0xffff };
+        let from = Ipv6Key {
+            hi: 0x2001_0db8_0000_0000,
+            lo: 0,
+        };
+        let to = Ipv6Key {
+            hi: 0x2001_0db8_0000_0000,
+            lo: 0xffff,
+        };
         write::<Ipv6Key>(&mut buf, from, to, 0xDEAD_BEEF);
         let r = RecordRef::<Ipv6Key>::new(&buf);
         assert_eq!(r.from(), from);

@@ -60,13 +60,13 @@ const (
 	MetaKeyWidth       = 36
 	MetaScopeMode      = 37 // was MetaScopeWidth
 	MetaRecordSize     = 38
-	MetaCreatedUnix   = 42
+	MetaCreatedUnix    = 42
 	MetaRootPgno       = 50
 	MetaTreeHeight     = 54
 	MetaTotalPages     = 58
 	MetaRecordCount    = 66
 	MetaTxnID          = 74
-	MetaUpdatedUnix   = 82
+	MetaUpdatedUnix    = 82
 	MetaScopeTableRoot = 90
 	MetaFreeListHead   = 94
 
@@ -141,15 +141,15 @@ const (
 
 // Scope table constants (for mode 2 = indirect).
 const (
-	FileScopeID    = 0
-	ScopeKeyWidth  = 4
-	ScopeNameMax   = 256
-	ScopeRecID     = 0
+	FileScopeID     = 0
+	ScopeKeyWidth   = 4
+	ScopeNameMax    = 256
+	ScopeRecID      = 0
 	ScopeRecVersion = 4
-	ScopeRecType   = 12
+	ScopeRecType    = 12
 	ScopeRecNameLen = 13
-	ScopeRecName   = 15
-	ScopeRecKVRoot = 271
+	ScopeRecName    = 15
+	ScopeRecKVRoot  = 271
 	ScopeRecordSize = 275
 )
 
@@ -163,14 +163,14 @@ func scopeBranchMax() int {
 
 // KV constants.
 const (
-	KVKeyMin       = 1
-	KVKeyMax       = 1024
-	KVTypeText     = 0
-	KVValueInline  = 0
-	KVValueOverflow = 1
-	KVSlotSize     = 2
-	KVPageBody     = PageSize - PageHeaderSize
+	KVKeyMin         = 1
+	KVKeyMax         = 1024
+	KVTypeText       = 0
+	KVValueInline    = 0
+	KVValueOverflow  = 1
+	KVSlotSize       = 2
+	KVPageBody       = PageSize - PageHeaderSize
 	OverflowNextPgno = PageHeaderSize
 	OverflowPayload  = PageSize - PageHeaderSize - 4
-	KVInlineMax    = 512
+	KVInlineMax      = 512
 )

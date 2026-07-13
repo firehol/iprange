@@ -643,10 +643,7 @@ mod tests {
         ];
         let file = build_single_leaf(recs);
         let r = Reader::open(&file).unwrap();
-        assert_eq!(
-            collect_all(&r),
-            vec![(10, 20, 1), (30, 40, 2), (50, 60, 1)]
-        );
+        assert_eq!(collect_all(&r), vec![(10, 20, 1), (30, 40, 2), (50, 60, 1)]);
 
         // backward from last
         let mut c = r.cursor::<Ipv4Key>().unwrap();
@@ -719,8 +716,7 @@ mod tests {
     #[test]
     fn two_level_iterate_and_seek_cross_leaves() {
         let left: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1), (v4(50), v4(60), 2)];
-        let right: &[(Ipv4Key, Ipv4Key, u32)] =
-            &[(v4(100), v4(110), 3), (v4(200), v4(210), 4)];
+        let right: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(100), v4(110), 3), (v4(200), v4(210), 4)];
         let file = build_two_level(v4(100), left, right);
         let r = Reader::open(&file).unwrap();
         assert_eq!(

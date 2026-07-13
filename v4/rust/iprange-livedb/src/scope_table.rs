@@ -29,17 +29,21 @@ pub struct ScopeEntry {
 }
 
 /// In-memory scope registry. Does NOT materialize the committed scope table
-/// into a heap HashMap (issue-1/issue-2 fix).
+/// into a heap HashMap (issue-1/issue-2/issue-7 fix).
 ///
 /// Design:
 ///   - The committed scope table stays on disk (a B+tree keyed by scope_id).
 ///     `resolve()` descends it via `find_scope` → O(log S), zero heap.
 ///   - Only THIS transaction's newly-interned entries live in RAM.
 ///   - `intern()` dedups against the new set (O(1)); against the committed set
-///     it lazily builds a bitmap→scope_id index once, then O(1). The index
-///     materializes only when an intern actually misses the new set AND there
-///     is committed data — read/record-write workloads never pay the heap cost
-///     that used to be paid eagerly at open.
+///     it streams the on-disk scope tree via `find_scope_by_bitmap`
+///     (O(scope_pages) time, O(1) heap). It NEVER materializes the whole
+///     committed table into a HashMap — the old eager load allocated O(S) on
+///     the first intern after reopen (issue-7).
+///   - `committed_index` is retained ONLY as an in-memory facility for the
+///     `from_entries` test helper and the incremental fold performed by
+///     `promote` (this-txn new entries, O(new)). It is never populated from
+///     disk.
 ///
 /// `committed_bytes` is passed into resolve/intern by the caller (the Writer,
 /// which owns the page store). The registry does not hold a reference to it.
@@ -48,7 +52,10 @@ pub struct ScopeRegistry {
     new_entries: Vec<ScopeEntry>,
     new_bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32>,
     committed_root: u32,
-    /// Lazily-built bitmap → scope_id index over the committed table.
+    /// In-memory bitmap → scope_id index. NEVER loaded from disk (issue-7).
+    /// Populated only by `from_entries` (tests) and incrementally by `promote`
+    /// (this-session new entries). Production dedup of committed bitmaps goes
+    /// through `find_scope_by_bitmap` instead.
     committed_index: Option<FxHashMap<alloc::vec::Vec<u8>, u32>>,
     next_id: u32,
 }
@@ -100,29 +107,29 @@ impl ScopeRegistry {
         }
     }
 
-    fn ensure_committed_index(&mut self, committed_bytes: &[u8]) {
-        if self.committed_index.is_some() || self.committed_root == 0 {
-            return;
-        }
-        if let Ok(entries) = read_all(committed_bytes, self.committed_root) {
-            let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
-            for e in &entries {
-                idx.insert(e.bitmap.clone(), e.scope_id);
-            }
-            self.committed_index = Some(idx);
-        }
-    }
-
     /// Find or create a scope_id for `bitmap`. Returns (scope_id, was_new).
+    ///
+    /// Dedup order:
+    ///   1. this-txn new entries (O(1) via `new_bitmap_index`)
+    ///   2. in-memory `committed_index` if present (O(1); from_entries/promote)
+    ///   3. committed on-disk scope tree via `find_scope_by_bitmap`
+    ///      (O(scope_pages) time, O(1) heap — issue-7: no eager O(S) load)
+    ///   4. miss → mint a new id.
     pub fn intern(&mut self, bitmap: &[u8], committed_bytes: &[u8]) -> (u32, bool) {
         if let Some(&id) = self.new_bitmap_index.get(bitmap) {
             return (id, false);
         }
-        if self.committed_root != 0 && self.committed_index.is_none() {
-            self.ensure_committed_index(committed_bytes);
-        }
         if let Some(ref idx) = self.committed_index {
             if let Some(&id) = idx.get(bitmap) {
+                return (id, false);
+            }
+        }
+        if self.committed_root != 0 {
+            if let Some(id) = crate::scope_table::find_scope_by_bitmap(
+                committed_bytes,
+                self.committed_root,
+                bitmap,
+            ) {
                 return (id, false);
             }
         }
@@ -132,7 +139,10 @@ impl ScopeRegistry {
         // bitmap distinguishable from None on resolve.
         let bm = bitmap.to_vec();
         self.new_bitmap_index.insert(bm.clone(), id);
-        self.new_entries.push(ScopeEntry { scope_id: id, bitmap: bm });
+        self.new_entries.push(ScopeEntry {
+            scope_id: id,
+            bitmap: bm,
+        });
         (id, true)
     }
 
@@ -146,7 +156,27 @@ impl ScopeRegistry {
             }
         }
         if self.committed_root != 0 {
-            return find_scope(committed_bytes, self.committed_root, scope_id).ok().flatten();
+            return find_scope(committed_bytes, self.committed_root, scope_id)
+                .ok()
+                .flatten();
+        }
+        None
+    }
+
+    /// Zero-copy resolve: returns a slice borrowing the committed page image
+    /// (issue-6). For new (this-txn) entries, returns a slice into the entry's
+    /// owned bitmap. Avoids the per-call Vec allocation that `resolve` pays —
+    /// used by the all-to-all overlap scan which resolves one bitmap per record.
+    pub fn resolve_ref<'a>(&'a self, scope_id: u32, committed_bytes: &'a [u8]) -> Option<&'a [u8]> {
+        for e in &self.new_entries {
+            if e.scope_id == scope_id {
+                return Some(&e.bitmap);
+            }
+        }
+        if self.committed_root != 0 {
+            return find_scope_ref(committed_bytes, self.committed_root, scope_id)
+                .ok()
+                .flatten();
         }
         None
     }
@@ -169,7 +199,12 @@ impl ScopeRegistry {
 
     /// Clear a feed bit from a bitmap. Returns the new scope_id, or 0 if the
     /// bitmap becomes empty.
-    pub fn bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32, committed_bytes: &[u8]) -> u32 {
+    pub fn bitmap_clear_feed(
+        &mut self,
+        scope_id: u32,
+        feed_bit: u32,
+        committed_bytes: &[u8],
+    ) -> u32 {
         let bitmap = match self.resolve(scope_id, committed_bytes) {
             Some(b) => b,
             None => return 0,
@@ -186,19 +221,13 @@ impl ScopeRegistry {
         self.intern(&new_bitmap, committed_bytes).0
     }
 
-    /// Full entry list (committed ∪ new) for the bulk rebuild at commit, and
-    /// warms the committed index from the read.
+    /// Full entry list (committed ∪ new) for the bulk rebuild at commit.
+    /// Reads the committed table from disk (no index warming — issue-7) and
+    /// appends this-txn new entries.
     pub fn entries_for_commit(&mut self, committed_bytes: &[u8]) -> Vec<ScopeEntry> {
         let mut all: Vec<ScopeEntry> = Vec::new();
         if self.committed_root != 0 {
             if let Ok(committed) = read_all(committed_bytes, self.committed_root) {
-                if self.committed_index.is_none() {
-                    let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
-                    for e in &committed {
-                        idx.insert(e.bitmap.clone(), e.scope_id);
-                    }
-                    self.committed_index = Some(idx);
-                }
                 all = committed;
             }
         }
@@ -287,7 +316,11 @@ pub fn build_scope_tree(
     let mut seps: Vec<u32> = Vec::new(); // first scope_id of each leaf after the first
 
     for chunk in sorted.chunks(leaf_max) {
-        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
+        let pgno = if let Some(p) = free_pool.pop() {
+            p
+        } else {
+            store.alloc_page()?
+        };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -319,7 +352,11 @@ pub fn build_scope_tree(
     while child_idx < leaf_pgnos.len() {
         let remaining = leaf_pgnos.len() - child_idx;
         let count = remaining.min(branch_max);
-        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
+        let pgno = if let Some(p) = free_pool.pop() {
+            p
+        } else {
+            store.alloc_page()?
+        };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -338,7 +375,15 @@ pub fn build_scope_tree(
         child_idx += count;
     }
 
-    build_branch_levels(allocated, free_pool, store, &branch_pgnos, &seps, sep_width, branch_max)
+    build_branch_levels(
+        allocated,
+        free_pool,
+        store,
+        &branch_pgnos,
+        &seps,
+        sep_width,
+        branch_max,
+    )
 }
 
 /// Recursively build branch levels until a single root remains.
@@ -364,7 +409,11 @@ fn build_branch_levels(
     while child_idx < children.len() {
         let remaining = children.len() - child_idx;
         let count = remaining.min(branch_max);
-        let pgno = if let Some(p) = free_pool.pop() { p } else { store.alloc_page()? };
+        let pgno = if let Some(p) = free_pool.pop() {
+            p
+        } else {
+            store.alloc_page()?
+        };
         allocated.push(pgno);
         let page = store.page_mut(pgno);
         page.fill(0);
@@ -392,7 +441,15 @@ fn build_branch_levels(
     if branch_pgnos.len() == 1 {
         Ok(branch_pgnos[0])
     } else {
-        build_branch_levels(allocated, free_pool, store, &branch_pgnos, &new_seps, sep_width, branch_max)
+        build_branch_levels(
+            allocated,
+            free_pool,
+            store,
+            &branch_pgnos,
+            &new_seps,
+            sep_width,
+            branch_max,
+        )
     }
 }
 
@@ -419,7 +476,11 @@ pub fn read_all_checked(bytes: &[u8], root_pgno: u32, total: u32) -> Result<Vec<
 }
 
 fn read_node_checked(
-    bytes: &[u8], pgno: u32, depth: u32, total: u32, out: &mut Vec<ScopeEntry>,
+    bytes: &[u8],
+    pgno: u32,
+    depth: u32,
+    total: u32,
+    out: &mut Vec<ScopeEntry>,
 ) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("scope table too deep"));
@@ -447,9 +508,8 @@ fn read_node_checked(
             Ok(())
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
-            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
-                page, h.entry_count as usize,
-            );
+            let branch =
+                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
                 read_node_checked(bytes, branch.child(j), depth + 1, total, out)?;
             }
@@ -480,9 +540,8 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
             Ok(())
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
-            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
-                page, h.entry_count as usize,
-            );
+            let branch =
+                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
                 read_node(bytes, branch.child(j), depth + 1, out)?;
             }
@@ -533,7 +592,8 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
             }
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
-                    page, h.entry_count as usize,
+                    page,
+                    h.entry_count as usize,
                 );
                 // Binary search for the child index.
                 let (mut lo, mut hi) = (0usize, branch.sep_count());
@@ -551,7 +611,130 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
             _ => return Err(Error::Structural("unexpected page type in scope table")),
         }
     }
-    Err(Error::Invariant("scope table descent exceeded TREE_HEIGHT_MAX"))
+    Err(Error::Invariant(
+        "scope table descent exceeded TREE_HEIGHT_MAX",
+    ))
+}
+
+/// Zero-copy variant of [`find_scope`]: returns a slice borrowing `bytes`
+/// (the page image) instead of an owned `Vec<u8>` (issue-6). Used by the
+/// all-to-all overlap scan which only needs to iterate set bits, not own the
+/// bitmap — avoids one allocation per resolved record.
+pub fn find_scope_ref(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option<&[u8]>> {
+    if root_pgno == 0 {
+        return Ok(None);
+    }
+    let mut pgno = root_pgno;
+    for _ in 0..spec::TREE_HEIGHT_MAX {
+        if pgno as usize * spec::PAGE_SIZE + spec::PAGE_SIZE > bytes.len() {
+            return Err(Error::Structural("scope table page out of bounds"));
+        }
+        let off = pgno as usize * spec::PAGE_SIZE;
+        let page = &bytes[off..off + spec::PAGE_SIZE];
+        let h = PageHeader::decode(page);
+        match h.page_type {
+            spec::PAGE_TYPE_SCOPE_LEAF => {
+                let count = h.entry_count as usize;
+                let (mut lo, mut hi) = (0usize, count);
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    let rec_off = spec::PAGE_HEADER_SIZE + mid * SCOPE_ENTRY_SIZE;
+                    let id = wire::u32_le(page, rec_off);
+                    if id < target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if lo < count {
+                    let rec_off = spec::PAGE_HEADER_SIZE + lo * SCOPE_ENTRY_SIZE;
+                    let id = wire::u32_le(page, rec_off);
+                    if id == target_id {
+                        let bm_len = wire::u16_le(page, rec_off + 4) as usize;
+                        let bm_len = bm_len.min(MAX_BITMAP_WIDTH);
+                        return Ok(Some(&page[rec_off + 6..rec_off + 6 + bm_len]));
+                    }
+                }
+                return Ok(None);
+            }
+            spec::PAGE_TYPE_SCOPE_BRANCH => {
+                let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                    page,
+                    h.entry_count as usize,
+                );
+                let (mut lo, mut hi) = (0usize, branch.sep_count());
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    let sep = branch.sep(mid).0;
+                    if sep <= target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                pgno = branch.child(lo);
+            }
+            _ => return Err(Error::Structural("unexpected page type in scope table")),
+        }
+    }
+    Err(Error::Invariant(
+        "scope table descent exceeded TREE_HEIGHT_MAX",
+    ))
+}
+
+/// Find the scope_id of an existing entry whose bitmap equals `target` by
+/// streaming the committed scope tree (issue-7). O(scope_pages) time, O(1)
+/// heap — replaces the old eager O(S) HashMap materialization. The scope tree
+/// is keyed by scope_id (not bitmap), so this is a linear leaf scan; it is
+/// only reached on a `new_bitmap_index` miss, which is rare (new feed
+/// combinations). Returns `None` if no committed entry matches.
+pub fn find_scope_by_bitmap(bytes: &[u8], root_pgno: u32, target: &[u8]) -> Option<u32> {
+    if root_pgno == 0 {
+        return None;
+    }
+    find_scope_by_bitmap_node(bytes, root_pgno, 0, target)
+}
+
+fn find_scope_by_bitmap_node(bytes: &[u8], pgno: u32, depth: u32, target: &[u8]) -> Option<u32> {
+    if depth > spec::TREE_HEIGHT_MAX {
+        return None;
+    }
+    let off = pgno as usize * spec::PAGE_SIZE;
+    if off + spec::PAGE_SIZE > bytes.len() {
+        return None;
+    }
+    let page = &bytes[off..off + spec::PAGE_SIZE];
+    let h = PageHeader::decode(page);
+    match h.page_type {
+        spec::PAGE_TYPE_SCOPE_LEAF => {
+            let count = h.entry_count as usize;
+            for i in 0..count {
+                let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
+                let bm_len = wire::u16_le(page, rec_off + 4) as usize;
+                let bm_len = bm_len.min(MAX_BITMAP_WIDTH);
+                if bm_len == target.len() {
+                    let bm = &page[rec_off + 6..rec_off + 6 + bm_len];
+                    if bm == target {
+                        return Some(wire::u32_le(page, rec_off));
+                    }
+                }
+            }
+            None
+        }
+        spec::PAGE_TYPE_SCOPE_BRANCH => {
+            let branch =
+                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            for j in 0..branch.child_count() {
+                if let Some(id) =
+                    find_scope_by_bitmap_node(bytes, branch.child(j), depth + 1, target)
+                {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Return the highest scope_id in the committed scope table by descending to
@@ -580,7 +763,8 @@ pub fn read_max_scope_id(bytes: &[u8], root_pgno: u32) -> Option<u32> {
             }
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
-                    page, h.entry_count as usize,
+                    page,
+                    h.entry_count as usize,
                 );
                 let cc = branch.child_count();
                 if cc == 0 {
@@ -595,19 +779,29 @@ pub fn read_max_scope_id(bytes: &[u8], root_pgno: u32) -> Option<u32> {
 }
 
 /// Walk every page of the committed scope tree and verify its per-page CRC32C
-/// WITHOUT materializing entries. O(S pages) time, O(log S) heap (descent
-/// stack). Preserves the open-time corruption guard the old eager
-/// `read_all_checked` provided, while fixing the heap load.
+/// AND structural integrity WITHOUT materializing entries. O(S pages) time,
+/// O(log S) heap (descent stack). Preserves the open-time corruption guard the
+/// old eager `read_all_checked` provided, while fixing the heap load.
+///
+/// Structural checks (entry_count within page capacity, page type matches a
+/// scope node, child page numbers in range) are essential because a corrupt
+/// entry_count that still verifies against a recomputed CRC would otherwise
+/// pass the CRC guard and later cause a slice-bounds panic when the leaf is
+/// read. Mirrors `Reader::validate_scope_node`.
 pub fn validate_scope_crc(bytes: &[u8], root_pgno: u32) -> Result<()> {
     if root_pgno == 0 {
         return Ok(());
     }
-    validate_scope_crc_node(bytes, root_pgno, 0)
+    let total_pages = (bytes.len() / spec::PAGE_SIZE) as u32;
+    validate_scope_crc_node(bytes, root_pgno, 0, total_pages)
 }
 
-fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32) -> Result<()> {
+fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32, total_pages: u32) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("scope table too deep"));
+    }
+    if pgno as u64 >= total_pages as u64 {
+        return Err(Error::Structural("scope page out of bounds"));
     }
     let off = pgno as usize * spec::PAGE_SIZE;
     if off + spec::PAGE_SIZE > bytes.len() {
@@ -618,15 +812,39 @@ fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32) -> Result<()> {
         return Err(Error::ChecksumFailed("scope table page fails CRC"));
     }
     let h = PageHeader::decode(page);
-    if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
-        let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
-            page, h.entry_count as usize,
-        );
-        for j in 0..branch.child_count() {
-            validate_scope_crc_node(bytes, branch.child(j), depth + 1)?;
+    let entry_count = h.entry_count as usize;
+    match h.page_type {
+        spec::PAGE_TYPE_SCOPE_LEAF => {
+            // entry_count MUST be within the page capacity, or a later read
+            // computes an offset past the page and panics.
+            let max_entries = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / SCOPE_ENTRY_SIZE;
+            if entry_count < 1 || entry_count > max_entries {
+                return Err(Error::Invariant("scope leaf entry_count out of range"));
+            }
+            Ok(())
         }
+        spec::PAGE_TYPE_SCOPE_BRANCH => {
+            let sep_width = spec::SCOPE_KEY_WIDTH;
+            let max_seps = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (sep_width + 4);
+            if entry_count < 1 || entry_count > max_seps {
+                return Err(Error::Invariant(
+                    "scope branch separator count out of range",
+                ));
+            }
+            // child_count = sep_count + 1. Each child MUST be a valid page
+            // number in [2, total_pages); otherwise descent reads garbage.
+            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(page, entry_count);
+            for j in 0..branch.child_count() {
+                let child = branch.child(j);
+                if child < 2 || child as u64 >= total_pages as u64 {
+                    return Err(Error::Structural("scope child pgno out of range"));
+                }
+                validate_scope_crc_node(bytes, child, depth + 1, total_pages)?;
+            }
+            Ok(())
+        }
+        _ => Err(Error::Structural("unexpected page type in scope table")),
     }
-    Ok(())
 }
 
 #[cfg(test)]

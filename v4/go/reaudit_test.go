@@ -244,11 +244,13 @@ func TestReaudit8_TombstoneFreedThenConsumedStaysLive(t *testing.T) {
 	}()
 
 	// Free pages by deleting a contiguous range, then commit.
- reopen := func(b []byte) *Writer[Ipv4Key] {
- 	w, err := openWriter[Ipv4Key](newVecPageStore(b))
- 	if err != nil { t.Fatal(err) }
- 	return w
- }
+	reopen := func(b []byte) *Writer[Ipv4Key] {
+		w, err := openWriter[Ipv4Key](newVecPageStore(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
 	img = func() []byte {
 		w := reopen(img)
 		for i := uint32(0); i < 400; i++ {

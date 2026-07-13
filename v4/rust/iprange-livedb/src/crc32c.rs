@@ -16,7 +16,6 @@
 
 use crate::spec::{PAGE_SIZE, PH_CHECKSUM};
 
-
 const POLY: u32 = 0x82F6_3B78;
 const INIT: u32 = 0xFFFF_FFFF;
 const XOROUT: u32 = 0xFFFF_FFFF;
@@ -30,7 +29,11 @@ const fn build_table() -> [u32; 256] {
         let mut crc = i as u32;
         let mut bit = 0;
         while bit < 8 {
-            crc = if crc & 1 != 0 { (crc >> 1) ^ POLY } else { crc >> 1 };
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ POLY
+            } else {
+                crc >> 1
+            };
             bit += 1;
         }
         table[i] = crc;
@@ -91,9 +94,12 @@ mod x86 {
     /// dependency chains), achieving 1 instruction/cycle instead of 1/3.
     #[target_feature(enable = "sse4.2")]
     pub unsafe fn crc_triple(
-        mut ca: u32, a: *const u8,
-        mut cb: u32, b: *const u8,
-        mut cc: u32, c: *const u8,
+        mut ca: u32,
+        a: *const u8,
+        mut cb: u32,
+        b: *const u8,
+        mut cc: u32,
+        c: *const u8,
     ) -> (u32, u32, u32) {
         let mut ca64 = ca as u64;
         let mut cb64 = cb as u64;
@@ -172,8 +178,14 @@ unsafe fn crc_aarch64(mut crc: u32, bytes: &[u8]) -> u32 {
     let mut i = 0;
     while i < n8 {
         let v = u64::from_le_bytes([
-            bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3],
-            bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7],
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+            bytes[i + 4],
+            bytes[i + 5],
+            bytes[i + 6],
+            bytes[i + 7],
         ]);
         crc = __crc32cd(crc, v);
         i += 8;
@@ -327,9 +339,16 @@ mod tests {
     #[test]
     fn hw_matches_soft() {
         let patterns: &[&[u8]] = &[
-            b"", b"\x00", b"123456789",
-            &[0xFFu8; 1], &[0xFFu8; 7], &[0xFFu8; 8], &[0xFFu8; 9],
-            &[0xFFu8; 15], &[0xFFu8; 16], &[0xFFu8; 17],
+            b"",
+            b"\x00",
+            b"123456789",
+            &[0xFFu8; 1],
+            &[0xFFu8; 7],
+            &[0xFFu8; 8],
+            &[0xFFu8; 9],
+            &[0xFFu8; 15],
+            &[0xFFu8; 16],
+            &[0xFFu8; 17],
         ];
         for pat in patterns {
             for init in [INIT, 0u32, 0x1234_5678u32] {

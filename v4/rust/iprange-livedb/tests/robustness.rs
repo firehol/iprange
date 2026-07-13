@@ -12,8 +12,7 @@ use iprange_livedb::{Error, Ipv4Key, Reader, Writer};
 fn valid_file() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     for i in 0..2000u32 {
-        w.set(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2), i & 0xff)
-            .unwrap();
+        w.set(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2), i & 0xff).unwrap();
     }
     for i in (0..2000u32).step_by(5) {
         w.delete(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2)).unwrap(); // frees pages
@@ -87,8 +86,7 @@ fn tree_region_flip_never_silently_accepted() {
     let f = valid_file();
     let r0 = Reader::open(&f).unwrap();
     let mut base = Vec::new();
-    r0.scan_v4(|a, b, sc| base.push((a.0, b.0, sc)))
-        .unwrap();
+    r0.scan_v4(|a, b, sc| base.push((a.0, b.0, sc))).unwrap();
 
     let two = 2 * PAGE_SIZE;
     let mut s = 0xdead_beef_cafe_babeu64;
@@ -100,8 +98,7 @@ fn tree_region_flip_never_silently_accepted() {
         if let Ok(r) = Reader::open(&g) {
             if r.validate().is_ok() {
                 let mut got = Vec::new();
-                r.scan_v4(|a, b, sc| got.push((a.0, b.0, sc)))
-                    .unwrap();
+                r.scan_v4(|a, b, sc| got.push((a.0, b.0, sc))).unwrap();
                 assert_eq!(got, base, "accepted a corrupted reachable tree (pos {pos})");
             }
         }
@@ -225,8 +222,7 @@ fn ip_sep_off(p: usize, i: usize) -> usize {
 fn valid_ip_tree() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     for i in 0..2000u32 {
-        w.set(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2), i & 0xff)
-            .unwrap();
+        w.set(Ipv4Key(i * 7), Ipv4Key(i * 7 + 2), i & 0xff).unwrap();
     }
     w.commit(0, u64::MAX).unwrap();
     w.into_image().unwrap()
@@ -562,7 +558,8 @@ fn file_size_not_page_multiple_rejected() {
 fn valid_ip_tree_h3() -> Vec<u8> {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     for i in 0..200_000u32 {
-        w.set(Ipv4Key(i * 4), Ipv4Key(i * 4 + 1), 0x5a5a5a5au32).unwrap();
+        w.set(Ipv4Key(i * 4), Ipv4Key(i * 4 + 1), 0x5a5a5a5au32)
+            .unwrap();
     }
     w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();

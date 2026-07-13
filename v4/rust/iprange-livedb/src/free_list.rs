@@ -38,7 +38,9 @@ pub fn read_chain(store: &dyn PageStore, head: u32) -> Result<Vec<FreeEntry>> {
     while pgno != 0 {
         seen_pages += 1;
         if seen_pages > 10_000_000 {
-            return Err(Error::Structural("free-list chain exceeds 10M pages — corrupt"));
+            return Err(Error::Structural(
+                "free-list chain exceeds 10M pages — corrupt",
+            ));
         }
         if pgno as u64 >= store.total_pages() as u64 {
             break; // chain page beyond file — corrupt or truncated
@@ -54,7 +56,10 @@ pub fn read_chain(store: &dyn PageStore, head: u32) -> Result<Vec<FreeEntry>> {
         let max = count.min(spec::TXN_FREE_CAPACITY);
         for i in 0..max {
             let p = wire::u32_le(page, spec::TXN_FREE_ARRAY + i * 4);
-            entries.push(FreeEntry { pgno: p, freed_txn_id: freed_txn });
+            entries.push(FreeEntry {
+                pgno: p,
+                freed_txn_id: freed_txn,
+            });
         }
         pgno = next;
     }
@@ -75,7 +80,9 @@ pub fn validate_chain_crc(store: &dyn PageStore, head: u32) -> Result<()> {
     while pgno != 0 {
         seen += 1;
         if seen > 10_000_000 {
-            return Err(Error::Structural("free-list chain exceeds 10M pages — corrupt"));
+            return Err(Error::Structural(
+                "free-list chain exceeds 10M pages — corrupt",
+            ));
         }
         if pgno as u64 >= store.total_pages() as u64 {
             return Ok(()); // chain page beyond file — stop
@@ -99,9 +106,13 @@ pub fn read_chain_page_numbers(store: &dyn PageStore, head: u32) -> Vec<u32> {
     let mut guard = 0u32;
     while pgno != 0 && guard < 10_000_000 {
         guard += 1;
-        if pgno as u64 >= store.total_pages() as u64 { break; }
+        if pgno as u64 >= store.total_pages() as u64 {
+            break;
+        }
         let page = store.page(pgno);
-        if PageHeader::decode(page).page_type != spec::PAGE_TYPE_TXN_FREE { break; }
+        if PageHeader::decode(page).page_type != spec::PAGE_TYPE_TXN_FREE {
+            break;
+        }
         pages.push(pgno);
         pgno = wire::u32_le(page, spec::TXN_FREE_NEXT);
     }
@@ -114,7 +125,8 @@ pub fn read_chain_page_numbers(store: &dyn PageStore, head: u32) -> Vec<u32> {
 /// txn T still needs it. So reclamation requires strict < .
 /// If oldest_reader_txn_id == u64::MAX, all entries are reclaimable.
 pub fn reclaimable(entries: &[FreeEntry], oldest_reader_txn_id: u64) -> Vec<u32> {
-    entries.iter()
+    entries
+        .iter()
         .filter(|e| oldest_reader_txn_id == u64::MAX || e.freed_txn_id < oldest_reader_txn_id)
         .map(|e| e.pgno)
         .collect()
@@ -235,7 +247,9 @@ pub fn trailing_free_count(free_pages: &[u32], total_pages: u32) -> u32 {
     let mut pgno = total_pages - 1;
     while pgno >= 2 && free_set.contains(&pgno) {
         shrink += 1;
-        if pgno == 2 { break; }
+        if pgno == 2 {
+            break;
+        }
         pgno -= 1;
     }
     shrink
@@ -261,9 +275,18 @@ mod tests {
     fn write_and_read_chain() {
         let mut store = make_store(100);
         let entries = vec![
-            FreeEntry { pgno: 5, freed_txn_id: 1 },
-            FreeEntry { pgno: 3, freed_txn_id: 1 },
-            FreeEntry { pgno: 8, freed_txn_id: 2 },
+            FreeEntry {
+                pgno: 5,
+                freed_txn_id: 1,
+            },
+            FreeEntry {
+                pgno: 3,
+                freed_txn_id: 1,
+            },
+            FreeEntry {
+                pgno: 8,
+                freed_txn_id: 2,
+            },
         ];
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
@@ -281,15 +304,24 @@ mod tests {
     #[test]
     fn reclaimable_filter() {
         let entries = vec![
-            FreeEntry { pgno: 1, freed_txn_id: 5 },
-            FreeEntry { pgno: 2, freed_txn_id: 7 },
-            FreeEntry { pgno: 3, freed_txn_id: 3 },
+            FreeEntry {
+                pgno: 1,
+                freed_txn_id: 5,
+            },
+            FreeEntry {
+                pgno: 2,
+                freed_txn_id: 7,
+            },
+            FreeEntry {
+                pgno: 3,
+                freed_txn_id: 3,
+            },
         ];
         // Reader at txn 5: a page tagged with txn 5 was last live in txn 5 —
         // the reader still needs it. Only txn < 5 is reclaimable.
         let free = reclaimable(&entries, 5);
         assert_eq!(free, vec![3]); // only pgno 3 (txn 3 < 5)
-        // Reader at txn 6: pages tagged 5 and 3 are reclaimable (both < 6).
+                                   // Reader at txn 6: pages tagged 5 and 3 are reclaimable (both < 6).
         let free6 = reclaimable(&entries, 6);
         assert_eq!(free6, vec![1, 3]);
         // No readers: reclaim all.
@@ -301,9 +333,18 @@ mod tests {
     fn chain_page_numbers() {
         let mut store = make_store(100);
         let entries = vec![
-            FreeEntry { pgno: 5, freed_txn_id: 1 },
-            FreeEntry { pgno: 10, freed_txn_id: 1 },
-            FreeEntry { pgno: 20, freed_txn_id: 2 },
+            FreeEntry {
+                pgno: 5,
+                freed_txn_id: 1,
+            },
+            FreeEntry {
+                pgno: 10,
+                freed_txn_id: 1,
+            },
+            FreeEntry {
+                pgno: 20,
+                freed_txn_id: 2,
+            },
         ];
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
@@ -316,7 +357,10 @@ mod tests {
     fn large_chain() {
         let mut store = make_store(2000);
         let entries: Vec<FreeEntry> = (0..3000u32)
-            .map(|i| FreeEntry { pgno: i + 10, freed_txn_id: 1 })
+            .map(|i| FreeEntry {
+                pgno: i + 10,
+                freed_txn_id: 1,
+            })
             .collect();
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
@@ -351,15 +395,33 @@ mod tests {
     fn round_trip_preserves_txn_ids() {
         let mut store = make_store(100);
         let entries = vec![
-            FreeEntry { pgno: 5, freed_txn_id: 3 },
-            FreeEntry { pgno: 10, freed_txn_id: 7 },
+            FreeEntry {
+                pgno: 5,
+                freed_txn_id: 3,
+            },
+            FreeEntry {
+                pgno: 10,
+                freed_txn_id: 7,
+            },
         ];
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
         let mut read = read_chain(&store as &dyn PageStore, head).unwrap();
         read.sort_by_key(|e| e.pgno);
-        assert_eq!(read[0], FreeEntry { pgno: 5, freed_txn_id: 3 });
-        assert_eq!(read[1], FreeEntry { pgno: 10, freed_txn_id: 7 });
+        assert_eq!(
+            read[0],
+            FreeEntry {
+                pgno: 5,
+                freed_txn_id: 3
+            }
+        );
+        assert_eq!(
+            read[1],
+            FreeEntry {
+                pgno: 10,
+                freed_txn_id: 7
+            }
+        );
     }
 
     /// append_segment prepends a new segment to an existing chain: the new
@@ -368,26 +430,32 @@ mod tests {
     fn append_segment_prepends() {
         let mut store = make_store(200);
         // Build an initial chain with one entry.
-        let old = vec![FreeEntry { pgno: 5, freed_txn_id: 1 }];
+        let old = vec![FreeEntry {
+            pgno: 5,
+            freed_txn_id: 1,
+        }];
         let old_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &old);
         let old_head = write_chain(&mut store as &mut dyn PageStore, &old, &old_pages).unwrap();
 
         // Append a new segment with a different txn id.
-        let new = vec![FreeEntry { pgno: 9, freed_txn_id: 2 }];
+        let new = vec![FreeEntry {
+            pgno: 9,
+            freed_txn_id: 2,
+        }];
         let new_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &new);
-        let new_head = append_segment(
-            &mut store as &mut dyn PageStore,
-            &new,
-            &new_pages,
-            old_head,
-        ).unwrap();
+        let new_head =
+            append_segment(&mut store as &mut dyn PageStore, &new, &new_pages, old_head).unwrap();
 
         // New head is the freshly written page, distinct from the old head.
         assert!(new_head != 0);
         assert!(new_head != old_head);
         // Reading the whole chain yields BOTH entries (old + new).
         let read = read_chain(&store as &dyn PageStore, new_head).unwrap();
-        assert_eq!(read.len(), 2, "appended segment must keep old entries reachable");
+        assert_eq!(
+            read.len(),
+            2,
+            "appended segment must keep old entries reachable"
+        );
     }
 
     /// Tombstone invariant: a page that is freed then tombstoned must resolve
@@ -397,14 +465,23 @@ mod tests {
     fn tombstone_newest_wins() {
         let mut store = make_store(200);
         // Segment 1: page 7 freed in txn 1.
-        let s1 = vec![FreeEntry { pgno: 7, freed_txn_id: 1 }];
+        let s1 = vec![FreeEntry {
+            pgno: 7,
+            freed_txn_id: 1,
+        }];
         let s1_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &s1);
         let head1 = write_chain(&mut store as &mut dyn PageStore, &s1, &s1_pages).unwrap();
 
         // Segment 2 (newer): tombstone page 7 (freed_txn_id = MAX), and free page 8.
         let s2 = vec![
-            FreeEntry { pgno: 8, freed_txn_id: 1 },
-            FreeEntry { pgno: 7, freed_txn_id: u64::MAX }, // tombstone
+            FreeEntry {
+                pgno: 8,
+                freed_txn_id: 1,
+            },
+            FreeEntry {
+                pgno: 7,
+                freed_txn_id: u64::MAX,
+            }, // tombstone
         ];
         // Sort by freed_txn_id so the tombstone group (MAX) is written last → newest.
         let mut s2_sorted = s2.clone();
@@ -415,11 +492,13 @@ mod tests {
             &s2_sorted,
             &s2_pages,
             head1,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Newest-wins dedup (first occurrence in newest-first chain order).
         let entries = read_chain(&store as &dyn PageStore, head2).unwrap();
-        let mut latest: alloc::collections::BTreeMap<u32, u64> = alloc::collections::BTreeMap::new();
+        let mut latest: alloc::collections::BTreeMap<u32, u64> =
+            alloc::collections::BTreeMap::new();
         for e in &entries {
             latest.entry(e.pgno).or_insert(e.freed_txn_id);
         }

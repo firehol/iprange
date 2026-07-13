@@ -41,21 +41,21 @@ pub mod record;
 pub mod spec;
 pub mod wire;
 
-#[cfg(feature = "alloc")]
-pub mod writer;
-pub mod migrate;
-pub mod feed_migrate;
-pub mod overlap;
 pub mod extsort;
-pub mod scope_table;
+pub mod feed_migrate;
 pub mod interval;
+pub mod migrate;
+pub mod overlap;
 #[cfg(feature = "os")]
 pub mod readers;
+pub mod scope_table;
+#[cfg(feature = "alloc")]
+pub mod writer;
 
+pub mod free_list;
+pub mod page_set;
 #[cfg(feature = "alloc")]
 pub mod page_store;
-pub mod page_set;
-pub mod free_list;
 
 /// The v4 -> v3 snapshot bridge (§13): export a sealed, canonical v3 file from a
 /// validated v4 image. Opt-in (`export-v3` feature) so the core stays free of the v3
@@ -77,10 +77,13 @@ pub use record::RecordRef;
 pub use spec::IpVersion;
 pub use wire::Meta;
 
+pub use extsort::{ext_sort, ExtSortConfig, SortedStream};
+pub use migrate::{
+    migrate, migrate_retention, Change, DesiredRecord, DesiredStream, MigrateCounters,
+    MigrateOptions,
+};
 #[cfg(feature = "alloc")]
 pub use writer::{Changed, Writer};
-pub use migrate::{migrate, migrate_retention, Change, DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions};
-pub use extsort::{ext_sort, SortedStream, ExtSortConfig};
 
 #[cfg(feature = "export-v3")]
 pub use export::{export_v3, V3Meta};

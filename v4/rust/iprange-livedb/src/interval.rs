@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 pub struct DiffSegment<K: IpKey> {
     pub from: K,
     pub to: K,
-    pub old_scope: Option<u32>,  // None = not in old
+    pub old_scope: Option<u32>,     // None = not in old
     pub desired_scope: Option<u32>, // None = not in desired
 }
 
@@ -86,29 +86,57 @@ pub fn interval_diff<K: IpKey>(
 
             (Some((of, ot, os)), None) => {
                 // Only old remains → removed
-                segments.push(DiffSegment { from: of, to: ot, old_scope: Some(os), desired_scope: None });
+                segments.push(DiffSegment {
+                    from: of,
+                    to: ot,
+                    old_scope: Some(os),
+                    desired_scope: None,
+                });
                 oi += 1;
-                if oi < old.len() { old_from = Some(old[oi].0); }
+                if oi < old.len() {
+                    old_from = Some(old[oi].0);
+                }
             }
 
             (None, Some((df, dt, ds))) => {
                 // Only desired remains → added
-                segments.push(DiffSegment { from: df, to: dt, old_scope: None, desired_scope: Some(ds) });
+                segments.push(DiffSegment {
+                    from: df,
+                    to: dt,
+                    old_scope: None,
+                    desired_scope: Some(ds),
+                });
                 di += 1;
-                if di < desired.len() { des_from = Some(desired[di].0); }
+                if di < desired.len() {
+                    des_from = Some(desired[di].0);
+                }
             }
 
             (Some((of, ot, os)), Some((df, dt, ds))) => {
                 if ot < df {
                     // Old entirely before desired → removed
-                    segments.push(DiffSegment { from: of, to: ot, old_scope: Some(os), desired_scope: None });
+                    segments.push(DiffSegment {
+                        from: of,
+                        to: ot,
+                        old_scope: Some(os),
+                        desired_scope: None,
+                    });
                     oi += 1;
-                    if oi < old.len() { old_from = Some(old[oi].0); }
+                    if oi < old.len() {
+                        old_from = Some(old[oi].0);
+                    }
                 } else if dt < of {
                     // Desired entirely before old → added
-                    segments.push(DiffSegment { from: df, to: dt, old_scope: None, desired_scope: Some(ds) });
+                    segments.push(DiffSegment {
+                        from: df,
+                        to: dt,
+                        old_scope: None,
+                        desired_scope: Some(ds),
+                    });
                     di += 1;
-                    if di < desired.len() { des_from = Some(desired[di].0); }
+                    if di < desired.len() {
+                        des_from = Some(desired[di].0);
+                    }
                 } else {
                     // Overlap! Split at boundaries.
                     let _seg_start = if of < df { of } else { df };
@@ -117,8 +145,10 @@ pub fn interval_diff<K: IpKey>(
                     if of < df {
                         let prefix_end = df.checked_dec().unwrap_or(df);
                         segments.push(DiffSegment {
-                            from: of, to: prefix_end,
-                            old_scope: Some(os), desired_scope: None,
+                            from: of,
+                            to: prefix_end,
+                            old_scope: Some(os),
+                            desired_scope: None,
                         });
                     }
 
@@ -126,8 +156,10 @@ pub fn interval_diff<K: IpKey>(
                     if df < of {
                         let prefix_end = of.checked_dec().unwrap_or(of);
                         segments.push(DiffSegment {
-                            from: df, to: prefix_end,
-                            old_scope: None, desired_scope: Some(ds),
+                            from: df,
+                            to: prefix_end,
+                            old_scope: None,
+                            desired_scope: Some(ds),
                         });
                     }
 
@@ -137,22 +169,32 @@ pub fn interval_diff<K: IpKey>(
                     if ot == dt {
                         // Same end → emit the overlap segment, advance both
                         segments.push(DiffSegment {
-                            from: overlap_start, to: ot,
-                            old_scope: Some(os), desired_scope: Some(ds),
+                            from: overlap_start,
+                            to: ot,
+                            old_scope: Some(os),
+                            desired_scope: Some(ds),
                         });
                         oi += 1;
                         di += 1;
-                        if oi < old.len() { old_from = Some(old[oi].0); }
-                        if di < desired.len() { des_from = Some(desired[di].0); }
+                        if oi < old.len() {
+                            old_from = Some(old[oi].0);
+                        }
+                        if di < desired.len() {
+                            des_from = Some(desired[di].0);
+                        }
                     } else if ot < dt {
                         // Old ends first → overlap is [overlap_start, ot]
                         segments.push(DiffSegment {
-                            from: overlap_start, to: ot,
-                            old_scope: Some(os), desired_scope: Some(ds),
+                            from: overlap_start,
+                            to: ot,
+                            old_scope: Some(os),
+                            desired_scope: Some(ds),
                         });
                         // Advance old, trim desired's start to ot+1
                         oi += 1;
-                        if oi < old.len() { old_from = Some(old[oi].0); }
+                        if oi < old.len() {
+                            old_from = Some(old[oi].0);
+                        }
                         des_from = ot.checked_inc();
                         if des_from.is_none() {
                             // Desired's start overflows → desired is fully consumed
@@ -161,12 +203,16 @@ pub fn interval_diff<K: IpKey>(
                     } else {
                         // Desired ends first → overlap is [overlap_start, dt]
                         segments.push(DiffSegment {
-                            from: overlap_start, to: dt,
-                            old_scope: Some(os), desired_scope: Some(ds),
+                            from: overlap_start,
+                            to: dt,
+                            old_scope: Some(os),
+                            desired_scope: Some(ds),
                         });
                         // Advance desired, trim old's start to dt+1
                         di += 1;
-                        if di < desired.len() { des_from = Some(desired[di].0); }
+                        if di < desired.len() {
+                            des_from = Some(desired[di].0);
+                        }
                         old_from = dt.checked_inc();
                         if old_from.is_none() {
                             oi += 1;
@@ -184,14 +230,17 @@ pub fn interval_diff<K: IpKey>(
 
 /// Merge adjacent segments where old_scope and desired_scope both match.
 fn merge_adjacent_segments<K: IpKey>(segs: &mut Vec<DiffSegment<K>>) {
-    if segs.len() <= 1 { return; }
+    if segs.len() <= 1 {
+        return;
+    }
     let mut out: Vec<DiffSegment<K>> = Vec::with_capacity(segs.len());
     out.push(segs[0]);
     for &curr in segs.iter().skip(1) {
         let last = out.len() - 1;
         let prev = out[last];
         let adjacent = prev.to.checked_inc() == Some(curr.from);
-        if adjacent && prev.old_scope == curr.old_scope && prev.desired_scope == curr.desired_scope {
+        if adjacent && prev.old_scope == curr.old_scope && prev.desired_scope == curr.desired_scope
+        {
             out[last].to = curr.to;
         } else {
             out.push(curr);
@@ -221,10 +270,10 @@ pub struct CoverageSegment<K: IpKey> {
 /// Example:
 ///   Input:  [(10, 20, A), (15, 25, B)]
 ///   Output: [(10, 14, [A]), (15, 20, [A, B]), (21, 25, [B])]
-pub fn normalize_overlapping<K: IpKey>(
-    input: &[(K, K, u32)],
-) -> Vec<CoverageSegment<K>> {
-    if input.is_empty() { return Vec::new(); }
+pub fn normalize_overlapping<K: IpKey>(input: &[(K, K, u32)]) -> Vec<CoverageSegment<K>> {
+    if input.is_empty() {
+        return Vec::new();
+    }
 
     // Collect all boundary points.
     let mut boundaries: Vec<K> = Vec::new();
@@ -245,7 +294,9 @@ pub fn normalize_overlapping<K: IpKey>(
         // But we need to be careful with the boundary semantics.
         // boundaries[i] is a start point; the segment goes until boundaries[i+1]-1.
         let seg_to = boundaries[i + 1].checked_dec().unwrap_or(boundaries[i + 1]);
-        if seg_from > seg_to { continue; }
+        if seg_from > seg_to {
+            continue;
+        }
 
         let mut scopes: Vec<u32> = Vec::new();
         for &(f, t, s) in input {
@@ -262,7 +313,11 @@ pub fn normalize_overlapping<K: IpKey>(
                     continue;
                 }
             }
-            segments.push(CoverageSegment { from: seg_from, to: seg_to, scopes });
+            segments.push(CoverageSegment {
+                from: seg_from,
+                to: seg_to,
+                scopes,
+            });
         }
     }
 
@@ -359,7 +414,7 @@ mod tests {
         eprintln!("segs: {:?}", segs);
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].kind(), SegmentKind::Unchanged); // [10-15]
-        assert_eq!(segs[1].kind(), SegmentKind::Removed);   // [16-19]
+        assert_eq!(segs[1].kind(), SegmentKind::Removed); // [16-19]
         assert_eq!(segs[1].from, Ipv4Key(16));
         assert_eq!(segs[1].to, Ipv4Key(19));
         assert_eq!(segs[2].kind(), SegmentKind::Unchanged); // [20-30]
@@ -448,9 +503,9 @@ mod tests {
         let segs = normalize_overlapping(&input);
         eprintln!("normalize: {:?}", segs);
         assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0].scopes, vec![1]);          // [10-14]
-        assert_eq!(segs[1].scopes, vec![1, 2]);       // [15-25]
-        assert_eq!(segs[2].scopes, vec![1]);          // [26-30]
+        assert_eq!(segs[0].scopes, vec![1]); // [10-14]
+        assert_eq!(segs[1].scopes, vec![1, 2]); // [15-25]
+        assert_eq!(segs[2].scopes, vec![1]); // [26-30]
     }
 
     #[test]

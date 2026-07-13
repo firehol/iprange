@@ -18,9 +18,22 @@ use crate::writer::Writer;
 /// A change event emitted during migration.
 #[derive(Clone, Copy, Debug)]
 pub enum Change<K: IpKey> {
-    Added { from: K, to: K, scope_id: u32, old_scope_id: Option<u32> },
-    Removed { from: K, to: K, old_scope_id: u32 },
-    Unchanged { from: K, to: K, scope_id: u32 },
+    Added {
+        from: K,
+        to: K,
+        scope_id: u32,
+        old_scope_id: Option<u32>,
+    },
+    Removed {
+        from: K,
+        to: K,
+        old_scope_id: u32,
+    },
+    Unchanged {
+        from: K,
+        to: K,
+        scope_id: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -47,7 +60,11 @@ pub struct MigrateOptions<K: IpKey> {
 
 impl<K: IpKey> Default for MigrateOptions<K> {
     fn default() -> Self {
-        MigrateOptions { emit_unchanged: false, on_change: None, combine: None }
+        MigrateOptions {
+            emit_unchanged: false,
+            on_change: None,
+            combine: None,
+        }
     }
 }
 
@@ -61,11 +78,26 @@ pub struct DesiredRecord<K: IpKey> {
 pub trait DesiredStream<K: IpKey> {
     fn peek(&self) -> Option<&DesiredRecord<K>>;
     fn next(&mut self) -> Option<DesiredRecord<K>>;
+    /// A deferred read error (e.g. a truncated spill file detected mid-stream).
+    /// `None` on a clean EOF; `Some(msg)` means the stream ended early because a
+    /// record could not be read. Callers that stop when `next()` returns `None`
+    /// MUST check `err()` afterwards — otherwise a truncated spill silently looks
+    /// like a clean EOF and partial data gets committed.
+    fn err(&self) -> Option<&str> {
+        None
+    }
 }
 
 impl<K: IpKey> DesiredStream<K> for Box<dyn DesiredStream<K>> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { (**self).peek() }
-    fn next(&mut self) -> Option<DesiredRecord<K>> { (**self).next() }
+    fn peek(&self) -> Option<&DesiredRecord<K>> {
+        (**self).peek()
+    }
+    fn next(&mut self) -> Option<DesiredRecord<K>> {
+        (**self).next()
+    }
+    fn err(&self) -> Option<&str> {
+        (**self).err()
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -90,7 +122,8 @@ struct TreeWalker<K: IpKey> {
 impl<K: IpKey> TreeWalker<K> {
     fn new(root: u32, height: u32) -> Self {
         TreeWalker {
-            root, height,
+            root,
+            height,
             path: [(0, 0); 32],
             path_len: 0,
             current: None,
@@ -106,12 +139,19 @@ impl<K: IpKey> TreeWalker<K> {
         }
     }
 
-    fn peek(&self) -> Option<(K, K, u32)> { self.current }
+    fn peek(&self) -> Option<(K, K, u32)> {
+        self.current
+    }
 
     /// Advance to the next record. Reads pages from `store` on demand.
     fn advance(&mut self, store: &dyn crate::page_store::PageStore) {
-        if self.current.is_none() { return; }
-        if self.path_len == 0 { self.current = None; return; }
+        if self.current.is_none() {
+            return;
+        }
+        if self.path_len == 0 {
+            self.current = None;
+            return;
+        }
 
         // Pop the leaf frame and try the next record in the same leaf.
         self.path_len -= 1;
@@ -162,7 +202,10 @@ impl<K: IpKey> TreeWalker<K> {
 
     fn walk_up(&mut self, store: &dyn crate::page_store::PageStore) {
         loop {
-            if self.path_len == 0 { self.current = None; return; }
+            if self.path_len == 0 {
+                self.current = None;
+                return;
+            }
             self.path_len -= 1;
             let (pgno, idx) = self.path[self.path_len as usize];
             // Read the branch page to check for a next child.
@@ -233,18 +276,29 @@ pub fn migrate<K: IpKey>(
         // Get the effective current records (with trimmed starts).
         let old_eff = if let (Some((_of, ot, os)), Some(ts)) = (old_cur, old_trim_start) {
             Some((ts, ot, os))
-        } else { None };
+        } else {
+            None
+        };
 
         let des_eff = if let (Some(dr), Some(ts)) = (des_cur, des_trim_start) {
             Some((ts, dr.to, dr.scope_id))
-        } else { None };
+        } else {
+            None
+        };
 
         match (old_eff, des_eff) {
             (None, None) => break,
 
             (Some((of, ot, os)), None) => {
                 // Only old remains → remove.
-                emit(opts, &Change::Removed { from: of, to: ot, old_scope_id: os });
+                emit(
+                    opts,
+                    &Change::Removed {
+                        from: of,
+                        to: ot,
+                        old_scope_id: os,
+                    },
+                );
                 writer.delete(of, ot)?;
                 counters.removed += 1;
                 counters.old_scanned += 1;
@@ -256,7 +310,15 @@ pub fn migrate<K: IpKey>(
 
             (None, Some((df, dt, ds))) => {
                 // Only desired remains → add.
-                emit(opts, &Change::Added { from: df, to: dt, scope_id: ds, old_scope_id: None });
+                emit(
+                    opts,
+                    &Change::Added {
+                        from: df,
+                        to: dt,
+                        scope_id: ds,
+                        old_scope_id: None,
+                    },
+                );
                 writer.set(df, dt, ds)?;
                 counters.added += 1;
                 counters.desired_scanned += 1;
@@ -269,7 +331,14 @@ pub fn migrate<K: IpKey>(
             (Some((of, ot, os)), Some((df, dt, ds))) => {
                 if ot < df {
                     // Old entirely before desired → remove old.
-                    emit(opts, &Change::Removed { from: of, to: ot, old_scope_id: os });
+                    emit(
+                        opts,
+                        &Change::Removed {
+                            from: of,
+                            to: ot,
+                            old_scope_id: os,
+                        },
+                    );
                     writer.delete(of, ot)?;
                     counters.removed += 1;
                     counters.old_scanned += 1;
@@ -278,7 +347,15 @@ pub fn migrate<K: IpKey>(
                     old_trim_start = old_cur.map(|r| r.0);
                 } else if dt < of {
                     // Desired entirely before old → add desired.
-                    emit(opts, &Change::Added { from: df, to: dt, scope_id: ds, old_scope_id: None });
+                    emit(
+                        opts,
+                        &Change::Added {
+                            from: df,
+                            to: dt,
+                            scope_id: ds,
+                            old_scope_id: None,
+                        },
+                    );
                     writer.set(df, dt, ds)?;
                     counters.added += 1;
                     counters.desired_scanned += 1;
@@ -290,7 +367,14 @@ pub fn migrate<K: IpKey>(
                     // Step 1: Emit any old-only prefix [of, df-1]
                     if of < df {
                         let prefix_end = df.checked_dec().unwrap_or(df);
-                        emit(opts, &Change::Removed { from: of, to: prefix_end, old_scope_id: os });
+                        emit(
+                            opts,
+                            &Change::Removed {
+                                from: of,
+                                to: prefix_end,
+                                old_scope_id: os,
+                            },
+                        );
                         writer.delete(of, prefix_end)?;
                         counters.removed += 1;
                     }
@@ -298,7 +382,15 @@ pub fn migrate<K: IpKey>(
                     // Step 2: Emit any desired-only prefix [df, of-1]
                     if df < of {
                         let prefix_end = of.checked_dec().unwrap_or(of);
-                        emit(opts, &Change::Added { from: df, to: prefix_end, scope_id: ds, old_scope_id: None });
+                        emit(
+                            opts,
+                            &Change::Added {
+                                from: df,
+                                to: prefix_end,
+                                scope_id: ds,
+                                old_scope_id: None,
+                            },
+                        );
                         writer.set(df, prefix_end, ds)?;
                         counters.added += 1;
                     }
@@ -310,7 +402,14 @@ pub fn migrate<K: IpKey>(
                         // Same end → compare scopes, advance both.
                         if os == ds {
                             if opts.emit_unchanged {
-                                emit(opts, &Change::Unchanged { from: overlap_start, to: ot, scope_id: os });
+                                emit(
+                                    opts,
+                                    &Change::Unchanged {
+                                        from: overlap_start,
+                                        to: ot,
+                                        scope_id: os,
+                                    },
+                                );
                             }
                             counters.unchanged += 1;
                         } else {
@@ -318,7 +417,15 @@ pub fn migrate<K: IpKey>(
                                 Some(f) => f(os, ds),
                                 None => ds,
                             };
-                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: keep_scope, old_scope_id: Some(os) });
+                            emit(
+                                opts,
+                                &Change::Added {
+                                    from: overlap_start,
+                                    to: ot,
+                                    scope_id: keep_scope,
+                                    old_scope_id: Some(os),
+                                },
+                            );
                             if keep_scope != os {
                                 writer.set(overlap_start, ot, keep_scope)?;
                             }
@@ -336,7 +443,14 @@ pub fn migrate<K: IpKey>(
                         // Old ends first → overlap [overlap_start, ot], then desired continues.
                         if os == ds {
                             if opts.emit_unchanged {
-                                emit(opts, &Change::Unchanged { from: overlap_start, to: ot, scope_id: os });
+                                emit(
+                                    opts,
+                                    &Change::Unchanged {
+                                        from: overlap_start,
+                                        to: ot,
+                                        scope_id: os,
+                                    },
+                                );
                             }
                             counters.unchanged += 1;
                         } else {
@@ -344,7 +458,15 @@ pub fn migrate<K: IpKey>(
                                 Some(f) => f(os, ds),
                                 None => ds,
                             };
-                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: keep_scope, old_scope_id: Some(os) });
+                            emit(
+                                opts,
+                                &Change::Added {
+                                    from: overlap_start,
+                                    to: ot,
+                                    scope_id: keep_scope,
+                                    old_scope_id: Some(os),
+                                },
+                            );
                             if keep_scope != os {
                                 writer.set(overlap_start, ot, keep_scope)?;
                             }
@@ -373,7 +495,14 @@ pub fn migrate<K: IpKey>(
                         // dt < ot: Desired ends first → overlap [overlap_start, dt], then old continues.
                         if os == ds {
                             if opts.emit_unchanged {
-                                emit(opts, &Change::Unchanged { from: overlap_start, to: dt, scope_id: os });
+                                emit(
+                                    opts,
+                                    &Change::Unchanged {
+                                        from: overlap_start,
+                                        to: dt,
+                                        scope_id: os,
+                                    },
+                                );
                             }
                             counters.unchanged += 1;
                         } else {
@@ -381,7 +510,15 @@ pub fn migrate<K: IpKey>(
                                 Some(f) => f(os, ds),
                                 None => ds,
                             };
-                            emit(opts, &Change::Added { from: overlap_start, to: dt, scope_id: keep_scope, old_scope_id: Some(os) });
+                            emit(
+                                opts,
+                                &Change::Added {
+                                    from: overlap_start,
+                                    to: dt,
+                                    scope_id: keep_scope,
+                                    old_scope_id: Some(os),
+                                },
+                            );
                             if keep_scope != os {
                                 writer.set(overlap_start, dt, keep_scope)?;
                             }
@@ -412,12 +549,26 @@ pub fn migrate<K: IpKey>(
     }
 
     writer.can_recycle = prev_can_recycle;
+
+    // A truncated spill file makes the desired stream end early: next() returns
+    // None on the partial record, so the merge loop above treats it as a clean
+    // EOF. Without this check we would silently commit the records read so far
+    // and lose the IPs in the truncated tail. err() is None only on a true clean
+    // EOF; a Some value means "done" was actually a deferred read failure.
+    if desired.err().is_some() {
+        return Err(crate::error::Error::Structural(
+            "desired stream ended with a read error (truncated spill)",
+        ));
+    }
+
     Ok(counters)
 }
 
 #[inline]
 fn emit<K: IpKey>(opts: &MigrateOptions<K>, change: &Change<K>) {
-    if let Some(f) = opts.on_change { f(change); }
+    if let Some(f) = opts.on_change {
+        f(change);
+    }
 }
 
 /// Retention migration: like [`migrate`] but preserves the older scope_id on a

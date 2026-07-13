@@ -22,13 +22,13 @@ import (
 //	@16 padding: [u8;16]
 
 const (
-	slotSize       = 32
-	maxSlots       = 4096 / slotSize
-	slotPidOff     = 0
+	slotSize        = 32
+	maxSlots        = 4096 / slotSize
+	slotPidOff      = 0
 	slotReaderIDOff = 4
-	slotTxnIDOff   = 8
-	slotRootOff    = 16
-	slotHeightOff  = 20
+	slotTxnIDOff    = 8
+	slotRootOff     = 16
+	slotHeightOff   = 20
 )
 
 // readerIDCounter is a process-local counter for unique reader IDs.

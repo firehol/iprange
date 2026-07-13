@@ -1,4 +1,4 @@
-use iprange_livedb::{Ipv4Key, Writer, Reader};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 fn dump(img: &[u8]) -> Vec<(u32, u32, u32)> {
     let r = Reader::open(img).unwrap();

@@ -106,11 +106,8 @@ fn i4_open_writer_rejects_corrupt_free_list_chain() {
     let img = build_scalar_with_freelist_image();
     let mut bad = img.clone();
     // Corrupt a byte in the TXN_FREE freed-page array region.
-    let corrupted = corrupt_first_page_of_type(
-        &mut bad,
-        spec::PAGE_TYPE_TXN_FREE,
-        spec::TXN_FREE_ARRAY + 4,
-    );
+    let corrupted =
+        corrupt_first_page_of_type(&mut bad, spec::PAGE_TYPE_TXN_FREE, spec::TXN_FREE_ARRAY + 4);
     assert!(corrupted, "no free-list chain page to corrupt");
 
     let store = VecPageStore::new(bad);
@@ -154,9 +151,7 @@ fn i1_commit_acquires_reader_table_lock() {
     use iprange_livedb::os::FileWriter;
     use std::os::unix::io::AsRawFd;
 
-    let path = std::env::temp_dir().join(format!(
-        "iprange_i1_lock_{}.iprdb", std::process::id(),
-    ));
+    let path = std::env::temp_dir().join(format!("iprange_i1_lock_{}.iprdb", std::process::id(),));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(path.with_extension("iprdb.readers"));
 
@@ -173,10 +168,16 @@ fn i1_commit_acquires_reader_table_lock() {
     // Take LOCK_EX on the companion file.
     let readers_path = path.with_extension("iprdb.readers");
     let lock_file = std::fs::OpenOptions::new()
-        .read(true).write(true).open(&readers_path).unwrap();
+        .read(true)
+        .write(true)
+        .open(&readers_path)
+        .unwrap();
     unsafe {
-        assert_eq!(libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX), 0,
-            "test setup: failed to take LOCK_EX");
+        assert_eq!(
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX),
+            0,
+            "test setup: failed to take LOCK_EX"
+        );
     }
 
     // Commit must BLOCK while the lock is held. Move the writer into a thread.
@@ -191,10 +192,15 @@ fn i1_commit_acquires_reader_table_lock() {
     // Wait 500ms — the commit should still be blocked.
     std::thread::sleep(std::time::Duration::from_millis(500));
     let blocked = !*done.lock().unwrap();
-    assert!(blocked, "commit did not block while reader table was locked — lock not acquired");
+    assert!(
+        blocked,
+        "commit did not block while reader table was locked — lock not acquired"
+    );
 
     // Release the LOCK_EX; commit should now complete.
-    unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN); }
+    unsafe {
+        libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+    }
     drop(lock_file);
 
     let result = handle.join().expect("commit thread panicked");

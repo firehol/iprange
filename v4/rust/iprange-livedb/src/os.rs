@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::page_store::MmapStore;
 use crate::reader::Reader;
-use crate::readers::{ReaderTable, ReaderGuard};
+use crate::readers::{ReaderGuard, ReaderTable};
 use crate::spec::{self, PAGE_SIZE};
 use crate::wire::{read_magic, read_version_major, Meta};
 use crate::writer::{Changed, Writer};
@@ -34,12 +34,16 @@ pub struct MmapReader {
 impl MmapReader {
     pub fn open(path: &Path) -> Result<MmapReader> {
         let file = OpenOptions::new()
-            .read(true).custom_flags(libc::O_NOFOLLOW)
-            .open(path).map_err(Error::Io)?;
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(Error::Io)?;
 
         let fmeta = file.metadata().map_err(Error::Io)?;
         let len = fmeta.len() as usize;
-        if len < 2 * PAGE_SIZE { return Err(Error::Structural("file too small")); }
+        if len < 2 * PAGE_SIZE {
+            return Err(Error::Structural("file too small"));
+        }
 
         // F4 fix: register in the reader table BEFORE reading meta pages.
         // Use txn_id=0 as the provisional sentinel: it blocks ALL reclamation
@@ -51,7 +55,9 @@ impl MmapReader {
 
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(Error::Io)? };
         let page0 = &mmap[..PAGE_SIZE];
-        if read_magic(page0) != spec::MAGIC { return Err(Error::Structural("bad magic")); }
+        if read_magic(page0) != spec::MAGIC {
+            return Err(Error::Structural("bad magic"));
+        }
         if read_version_major(page0) != spec::VERSION_MAJOR {
             return Err(Error::Structural("unsupported version_major"));
         }
@@ -63,10 +69,18 @@ impl MmapReader {
         let crc_a_ok = crate::crc32c::verify_page(&mmap[..PAGE_SIZE]);
         let crc_b_ok = crate::crc32c::verify_page(&mmap[PAGE_SIZE..2 * PAGE_SIZE]);
         let pinned_meta = match (crc_a_ok, crc_b_ok) {
-            (true, true) => if meta_a.txn_id >= meta_b.txn_id { meta_a } else { meta_b },
+            (true, true) => {
+                if meta_a.txn_id >= meta_b.txn_id {
+                    meta_a
+                } else {
+                    meta_b
+                }
+            }
             (true, false) => meta_a,
             (false, true) => meta_b,
-            (false, false) => return Err(Error::Structural("both meta pages fail CRC — corrupt file")),
+            (false, false) => {
+                return Err(Error::Structural("both meta pages fail CRC — corrupt file"))
+            }
         };
 
         // Sparse-file hardening.
@@ -78,13 +92,21 @@ impl MmapReader {
         // Update the reader slot with the real txn_id now that we've pinned.
         table.update_txn_id(guard.slot, guard.pid, guard.reader_id, pinned_meta.txn_id);
 
-        Ok(MmapReader { _file: file, mmap, pinned_meta, _guard: guard, _table: table })
+        Ok(MmapReader {
+            _file: file,
+            mmap,
+            pinned_meta,
+            _guard: guard,
+            _table: table,
+        })
     }
 
     pub fn reader(&self) -> Result<Reader<'_>> {
         Reader::from_meta(&self.mmap[..], self.pinned_meta)
     }
-    pub fn bytes(&self) -> &[u8] { &self.mmap[..] }
+    pub fn bytes(&self) -> &[u8] {
+        &self.mmap[..]
+    }
 }
 
 /// A file-backed writer. Holds LOCK_EX for its entire lifetime.
@@ -99,11 +121,17 @@ impl<K: IpKey> FileWriter<K> {
     pub fn create(path: &Path, scope_mode: u8, created_unixtime: u64) -> Result<FileWriter<K>> {
         use std::io::Write;
         let file = OpenOptions::new()
-            .read(true).write(true).create(true).truncate(true)
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(path).map_err(Error::Io)?;
+            .open(path)
+            .map_err(Error::Io)?;
         let w = Writer::<K>::create(scope_mode, created_unixtime)?;
-        let image = w.into_image().ok_or(Error::State("expected VecPageStore"))?;
+        let image = w
+            .into_image()
+            .ok_or(Error::State("expected VecPageStore"))?;
         file.set_len(image.len() as u64).map_err(Error::Io)?;
         (&file).write_all(&image).map_err(Error::Io)?;
         drop(file);
@@ -113,9 +141,11 @@ impl<K: IpKey> FileWriter<K> {
     pub fn open(path: &Path) -> Result<FileWriter<K>> {
         // Open with LOCK_EX (held for entire lifetime — serializes writers).
         let file = OpenOptions::new()
-            .read(true).write(true)
+            .read(true)
+            .write(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .open(path).map_err(Error::Io)?;
+            .open(path)
+            .map_err(Error::Io)?;
 
         let fd = file.as_raw_fd();
         if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
@@ -147,8 +177,11 @@ impl<K: IpKey> FileWriter<K> {
         let crc_b_ok = crate::crc32c::verify_page(&buf[PAGE_SIZE..2 * PAGE_SIZE]);
         let committed_pages = match (crc_a_ok, crc_b_ok) {
             (true, true) => {
-                if meta_a.txn_id >= meta_b.txn_id { meta_a.total_pages as u32 }
-                else { meta_b.total_pages as u32 }
+                if meta_a.txn_id >= meta_b.txn_id {
+                    meta_a.total_pages as u32
+                } else {
+                    meta_b.total_pages as u32
+                }
             }
             (true, false) => meta_a.total_pages as u32,
             (false, true) => meta_b.total_pages as u32,
@@ -173,9 +206,15 @@ impl<K: IpKey> FileWriter<K> {
     }
 
     // Delegated API (core operations)
-    pub fn set(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.set(from, to, scope_id) }
-    pub fn delete(&mut self, from: K, to: K) -> Result<Changed> { self.writer.delete(from, to) }
-    pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.append(from, to, scope_id) }
+    pub fn set(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
+        self.writer.set(from, to, scope_id)
+    }
+    pub fn delete(&mut self, from: K, to: K) -> Result<Changed> {
+        self.writer.delete(from, to)
+    }
+    pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
+        self.writer.append(from, to, scope_id)
+    }
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
         // I1 fix: hold LOCK_SH on the reader companion file for the entire
         // commit. This blocks reader register (LOCK_EX) during the
@@ -187,9 +226,15 @@ impl<K: IpKey> FileWriter<K> {
         self.writer.commit(updated_unixtime, oldest)?;
         Ok(())
     }
-    pub fn reader(&self) -> Result<Reader<'_>> { self.writer.reader() }
-    pub fn scan(&self, f: impl FnMut(K, K, u32)) -> Result<()> { self.writer.scan(f) }
-    pub fn record_count(&self) -> u64 { self.writer.record_count() }
+    pub fn reader(&self) -> Result<Reader<'_>> {
+        self.writer.reader()
+    }
+    pub fn scan(&self, f: impl FnMut(K, K, u32)) -> Result<()> {
+        self.writer.scan(f)
+    }
+    pub fn record_count(&self) -> u64 {
+        self.writer.record_count()
+    }
 
     // Delegated API (feed operations)
     pub fn feed_add_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
@@ -200,40 +245,74 @@ impl<K: IpKey> FileWriter<K> {
     }
 
     // Delegated API (scope operations — mode 2)
-    pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> { self.writer.scope_intern(bitmap) }
-    pub fn scope_resolve(&self, scope_id: u32) -> Option<Vec<u8>> { self.writer.scope_resolve(scope_id) }
+    pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
+        self.writer.scope_intern(bitmap)
+    }
+    pub fn scope_resolve(&self, scope_id: u32) -> Option<Vec<u8>> {
+        self.writer.scope_resolve(scope_id)
+    }
 
     // Delegated API (migration)
-    pub fn migrate(&mut self, desired: &mut dyn crate::migrate::DesiredStream<K>,
-        opts: &crate::migrate::MigrateOptions<K>) -> Result<crate::migrate::MigrateCounters> {
+    pub fn migrate(
+        &mut self,
+        desired: &mut dyn crate::migrate::DesiredStream<K>,
+        opts: &crate::migrate::MigrateOptions<K>,
+    ) -> Result<crate::migrate::MigrateCounters> {
         crate::migrate::migrate(&mut self.writer, desired, opts)
     }
 
-    pub fn migrate_feed(&mut self, feed_bit: u32,
+    pub fn migrate_feed(
+        &mut self,
+        feed_bit: u32,
         desired: &mut dyn crate::migrate::DesiredStream<K>,
-        opts: &crate::migrate::MigrateOptions<K>) -> Result<crate::migrate::MigrateCounters> {
+        opts: &crate::migrate::MigrateOptions<K>,
+    ) -> Result<crate::migrate::MigrateCounters> {
         crate::feed_migrate::migrate_feed(&mut self.writer, feed_bit, desired, opts)
     }
 
-    pub fn all_to_all_overlap(&self, on_overlap: &mut dyn FnMut(crate::overlap::FeedOverlap)) -> Result<()> {
+    pub fn all_to_all_overlap(
+        &self,
+        on_overlap: &mut dyn FnMut(crate::overlap::FeedOverlap),
+    ) -> Result<()> {
         crate::overlap::all_to_all_overlap(&self.writer, on_overlap)
     }
 
     pub fn foreign_vs_all(
-        &self, next_foreign: &mut dyn FnMut() -> Option<(K, K)>,
+        &self,
+        next_foreign: &mut dyn FnMut() -> Option<(K, K)>,
         on_overlap: &mut dyn FnMut(u32, u32, u64),
     ) -> Result<()> {
         crate::overlap::foreign_vs_all(&self.writer, next_foreign, on_overlap)
     }
 
-    pub fn foreign_vs_all_slice(&self, foreign: &[(K, K)], on_overlap: &mut dyn FnMut(u32, u32, u64)) -> Result<()> {
+    pub fn foreign_vs_all_slice(
+        &self,
+        foreign: &[(K, K)],
+        on_overlap: &mut dyn FnMut(u32, u32, u64),
+    ) -> Result<()> {
         crate::overlap::foreign_vs_all_slice(&self.writer, foreign, on_overlap)
     }
 
     pub fn close(self) {
-        let FileWriter { writer, _file: file, reader_table } = self;
+        // Capture committed_pages BEFORE dropping the writer (it owns the value).
+        let committed_pages = self.writer.committed_pages();
+        let FileWriter {
+            writer,
+            _file: file,
+            reader_table,
+        } = self;
         drop(writer);
         drop(reader_table);
+        // Issue 2 fix: truncate the file to exactly committed_pages * PAGE_SIZE.
+        // The mmap store over-allocates a growth region (committed + growth_chunk);
+        // without truncating on close, chain pages allocated in that region linger
+        // on disk past the committed boundary. On reopen, committed_pages (from the
+        // meta) is smaller than the lingering chain page, so the free-list head
+        // looks out-of-bounds and load_free_list silently drops it. Truncating to
+        // the committed boundary guarantees the on-disk file matches the meta.
+        if committed_pages > 0 {
+            let _ = file.set_len(committed_pages as u64 * PAGE_SIZE as u64);
+        }
         let _ = file.sync_all();
     }
 }

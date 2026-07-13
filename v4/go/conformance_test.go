@@ -73,8 +73,8 @@ func TestConformance(t *testing.T) {
 			To    string `json:"to"`
 			Scope []byte `json:"scope"`
 		} `json:"ops"`
-		ExpectScan [][]json.RawMessage `json:"expect_scan"`
-		ExpectLookup []json.RawMessage `json:"expect_lookup"`
+		ExpectScan   [][]json.RawMessage `json:"expect_scan"`
+		ExpectLookup []json.RawMessage   `json:"expect_lookup"`
 	}
 	if err := json.Unmarshal(casesJSON, &raw); err != nil {
 		t.Fatalf("parse cases.json: %v", err)

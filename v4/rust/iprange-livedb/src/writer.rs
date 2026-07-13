@@ -23,7 +23,10 @@ use crate::wire::{finalize_checksum, put_u32, u32_le, Meta, PageHeader};
 use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Changed { Changed, Unchanged }
+pub enum Changed {
+    Changed,
+    Unchanged,
+}
 
 /// An overlap scan hit: `(from, to, scope_id, pgno, index_in_leaf)`.
 type OverlapHit<K> = (K, K, u32, u32, usize);
@@ -40,6 +43,11 @@ pub struct Writer<K: IpKey> {
     committed_pages: u32,
     committed_record_count: u64,
     committed_txn_id: u64,
+    /// Page count of the committed IP tree (issue-8). Refreshed once at open
+    /// and after each compaction; treated as approximate between compactions
+    /// (COW preserves structure). Lets `compact_if_needed` compare counts
+    /// instead of walking the whole tree every commit.
+    committed_tree_pages: u32,
     pub(crate) pending_root: u32,
     pending_height: u32,
     pending_record_count: u64,
@@ -67,15 +75,30 @@ impl<K: IpKey> Writer<K> {
     pub fn create(scope_mode: u8, created_unixtime: u64) -> Result<Writer<K>> {
         let store: Box<dyn PageStore> = Box::new(VecPageStore::new(vec![0u8; 2 * PAGE_SIZE]));
         let mut w = Writer {
-            store, key_width: K::WIDTH as u8, scope_mode, created_unixtime,
-            active_meta: 0, committed_root: 0, committed_height: 0,
-            committed_pages: 2, committed_record_count: 0, committed_txn_id: 0,
-            pending_root: 0, pending_height: 0, pending_record_count: 0,
+            store,
+            key_width: K::WIDTH as u8,
+            scope_mode,
+            created_unixtime,
+            active_meta: 0,
+            committed_root: 0,
+            committed_height: 0,
+            committed_pages: 2,
+            committed_record_count: 0,
+            committed_txn_id: 0,
+            committed_tree_pages: 0,
+            pending_root: 0,
+            pending_height: 0,
+            pending_record_count: 0,
             poisoned: false,
-            private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0, can_recycle: true,
+            private_pages: PageSet::new(2),
+            free_pages: vec![],
+            free_pos: 0,
+            can_recycle: true,
             scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
                 Some(crate::scope_table::ScopeRegistry::new())
-            } else { None },
+            } else {
+                None
+            },
             scope_dirty: false,
             free_list_head: 0,
             freed_this_txn: alloc::vec::Vec::with_capacity(4096),
@@ -104,11 +127,23 @@ impl<K: IpKey> Writer<K> {
         let meta_b = Meta::decode(store.page(1));
         let (active, active_no) = if valid_a {
             if valid_b {
-                if meta_a.txn_id >= meta_b.txn_id { (meta_a, 0u32) } else { (meta_b, 1u32) }
-            } else { (meta_a, 0u32) }
-        } else { (meta_b, 1u32) };
-        if active.key_width != K::WIDTH as u8 { return Err(Error::Structural("key_width mismatch")); }
-        if active.record_size != record_size::<K>() as u32 { return Err(Error::Structural("record_size mismatch")); }
+                if meta_a.txn_id >= meta_b.txn_id {
+                    (meta_a, 0u32)
+                } else {
+                    (meta_b, 1u32)
+                }
+            } else {
+                (meta_a, 0u32)
+            }
+        } else {
+            (meta_b, 1u32)
+        };
+        if active.key_width != K::WIDTH as u8 {
+            return Err(Error::Structural("key_width mismatch"));
+        }
+        if active.record_size != record_size::<K>() as u32 {
+            return Err(Error::Structural("record_size mismatch"));
+        }
 
         // Open the scope registry WITHOUT materializing the table (issue-1 fix):
         // CRC-validate every scope page (O(S) time, O(log S) heap) to preserve
@@ -117,24 +152,44 @@ impl<K: IpKey> Writer<K> {
         // demand.
         let scope_reg = if active.scope_mode == spec::SCOPE_MODE_INDIRECT {
             crate::scope_table::validate_scope_crc(
-                store.committed_bytes(), active.scope_table_root,
-            ).map_err(|_| Error::Structural("corrupt scope table on open"))?;
+                store.committed_bytes(),
+                active.scope_table_root,
+            )
+            .map_err(|_| Error::Structural("corrupt scope table on open"))?;
             let next_id = crate::scope_table::read_max_scope_id(
-                store.committed_bytes(), active.scope_table_root,
-            ).map(|m| m + 1).unwrap_or(1);
-            Some(crate::scope_table::ScopeRegistry::open(active.scope_table_root, next_id))
-        } else { None };
+                store.committed_bytes(),
+                active.scope_table_root,
+            )
+            .map(|m| m + 1)
+            .unwrap_or(1);
+            Some(crate::scope_table::ScopeRegistry::open(
+                active.scope_table_root,
+                next_id,
+            ))
+        } else {
+            None
+        };
 
         let mut w = Writer {
-            store, key_width: active.key_width, scope_mode: active.scope_mode,
-            created_unixtime: active.created_unixtime, active_meta: active_no,
-            committed_root: active.root_pgno, committed_height: active.tree_height,
-            committed_pages: active.total_pages as u32, committed_record_count: active.record_count,
+            store,
+            key_width: active.key_width,
+            scope_mode: active.scope_mode,
+            created_unixtime: active.created_unixtime,
+            active_meta: active_no,
+            committed_root: active.root_pgno,
+            committed_height: active.tree_height,
+            committed_pages: active.total_pages as u32,
+            committed_record_count: active.record_count,
             committed_txn_id: active.txn_id,
-            pending_root: active.root_pgno, pending_height: active.tree_height,
-            pending_record_count: active.record_count, poisoned: false,
+            committed_tree_pages: 0,
+            pending_root: active.root_pgno,
+            pending_height: active.tree_height,
+            pending_record_count: active.record_count,
+            poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
-            free_pages: vec![], free_pos: 0, can_recycle: true,
+            free_pages: vec![],
+            free_pos: 0,
+            can_recycle: true,
             scope_registry: scope_reg,
             scope_dirty: false,
             free_list_head: active.free_list_head,
@@ -145,6 +200,13 @@ impl<K: IpKey> Writer<K> {
         // Strict CRC validation of the persistent free-list chain at open time.
         crate::free_list::validate_chain_crc(w.store.as_ref(), w.free_list_head)?;
         w.load_free_list(u64::MAX);
+        // Issue-8: seed committed_tree_pages once (one-time walk, not per
+        // commit) so compact_if_needed can compare counts without walking.
+        if w.committed_root != 0 {
+            let mut pages = 0u64;
+            let _ = w.count_tree_pages(w.committed_root, w.committed_height, &mut pages);
+            w.committed_tree_pages = pages as u32;
+        }
         Ok(w)
     }
 
@@ -152,7 +214,9 @@ impl<K: IpKey> Writer<K> {
 
     pub fn set(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
         self.check()?;
-        if from > to { return Err(Error::InvalidInput("from > to")); }
+        if from > to {
+            return Err(Error::InvalidInput("from > to"));
+        }
         self.delete_range(from, to)?;
         self.cow_insert(from, to, scope_id)?;
         self.pending_record_count += 1;
@@ -161,15 +225,23 @@ impl<K: IpKey> Writer<K> {
 
     pub fn delete(&mut self, from: K, to: K) -> Result<Changed> {
         self.check()?;
-        if from > to { return Err(Error::InvalidInput("from > to")); }
+        if from > to {
+            return Err(Error::InvalidInput("from > to"));
+        }
         let before = self.pending_record_count;
         self.delete_range(from, to)?;
-        Ok(if self.pending_record_count < before { Changed::Changed } else { Changed::Unchanged })
+        Ok(if self.pending_record_count < before {
+            Changed::Changed
+        } else {
+            Changed::Unchanged
+        })
     }
 
     pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
         self.check()?;
-        if from > to { return Err(Error::InvalidInput("from > to")); }
+        if from > to {
+            return Err(Error::InvalidInput("from > to"));
+        }
         self.cow_insert(from, to, scope_id)?;
         self.pending_record_count += 1;
         Ok(())
@@ -240,7 +312,10 @@ impl<K: IpKey> Writer<K> {
                     };
                     let mut allocated = Vec::new();
                     let root = crate::scope_table::build_scope_tree(
-                        self.store.as_mut(), &all, &mut allocated, &mut free_pool,
+                        self.store.as_mut(),
+                        &all,
+                        &mut allocated,
+                        &mut free_pool,
                     )?;
                     for pgno in &allocated {
                         self.private_pages.insert(*pgno);
@@ -257,7 +332,9 @@ impl<K: IpKey> Writer<K> {
             // tombstone the ones build_scope_tree actually consumed.
             let mut returned: std::collections::HashSet<u32> = std::collections::HashSet::new();
             for pgno in free_pool.drain(..) {
-                if self.free_pos > 0 { self.free_pos -= 1; }
+                if self.free_pos > 0 {
+                    self.free_pos -= 1;
+                }
                 self.free_pages[self.free_pos] = pgno;
                 self.private_pages.remove(pgno);
                 returned.insert(pgno);
@@ -271,7 +348,9 @@ impl<K: IpKey> Writer<K> {
         }
         // Finalize CRCs on all private pages.
         for pgno in self.private_pages.iter() {
-            if pgno >= 2 { finalize_checksum(self.store.page_mut(pgno)); }
+            if pgno >= 2 {
+                finalize_checksum(self.store.page_mut(pgno));
+            }
         }
         // Tag for freed entries written this commit: the generation being
         // superseded (MVCC reclamation uses strict <).
@@ -286,9 +365,15 @@ impl<K: IpKey> Writer<K> {
             let total = self.store.total_pages();
             let inactive = 1 - self.active_meta;
             let new_txn_id = self.committed_txn_id + 1;
-            self.write_meta_page(inactive, new_txn_id, self.pending_root,
-                self.pending_height, self.pending_record_count, total,
-                updated_unixtime)?;
+            self.write_meta_page(
+                inactive,
+                new_txn_id,
+                self.pending_root,
+                self.pending_height,
+                self.pending_record_count,
+                total,
+                updated_unixtime,
+            )?;
             self.store.sync()?;
             self.active_meta = inactive;
             self.committed_txn_id = new_txn_id;
@@ -319,7 +404,9 @@ impl<K: IpKey> Writer<K> {
         // consumed and then freed again in the SAME transaction (e.g. a COW
         // copy from the delete-all collapse path) is no longer live, so it is
         // NOT tombstoned — its freed entry makes it correctly free.
-        let live_consumed: alloc::vec::Vec<u32> = self.consumed_this_txn.iter()
+        let live_consumed: alloc::vec::Vec<u32> = self
+            .consumed_this_txn
+            .iter()
             .filter(|&&p| self.private_pages.contains(p))
             .copied()
             .collect();
@@ -330,13 +417,21 @@ impl<K: IpKey> Writer<K> {
         let pre_truncate_total = self.store.total_pages();
         let trailing: u32 = if oldest_reader_txn_id == u64::MAX {
             let mut eff: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            for &p in &self.free_pages { eff.insert(p); }
-            for &p in &self.freed_this_txn { eff.insert(p); }
-            for &p in &live_consumed { eff.remove(&p); }
+            for &p in &self.free_pages {
+                eff.insert(p);
+            }
+            for &p in &self.freed_this_txn {
+                eff.insert(p);
+            }
+            for &p in &live_consumed {
+                eff.remove(&p);
+            }
             let mut v: alloc::vec::Vec<u32> = eff.into_iter().collect();
             v.sort();
             crate::free_list::trailing_free_count(&v, pre_truncate_total)
-        } else { 0 };
+        } else {
+            0
+        };
         let new_total = pre_truncate_total - trailing;
 
         // Build entries: freed (drop trailing pages that will be truncated) and
@@ -346,7 +441,8 @@ impl<K: IpKey> Writer<K> {
         for &pgno in &self.freed_this_txn {
             if pgno < new_total {
                 entries_to_write.push(crate::free_list::FreeEntry {
-                    pgno, freed_txn_id: new_txn_id_val,
+                    pgno,
+                    freed_txn_id: new_txn_id_val,
                 });
             }
         }
@@ -355,7 +451,8 @@ impl<K: IpKey> Writer<K> {
             // Guard defensively anyway.
             if pgno < new_total {
                 entries_to_write.push(crate::free_list::FreeEntry {
-                    pgno, freed_txn_id: u64::MAX,
+                    pgno,
+                    freed_txn_id: u64::MAX,
                 });
             }
         }
@@ -370,20 +467,21 @@ impl<K: IpKey> Writer<K> {
         // entries (newest-wins dedup), filters tombstones, and rewrites as a
         // single clean chain. Old chain pages are freed.
         let old_chain_pages = if self.free_list_head != 0 {
-            crate::free_list::read_chain_page_numbers(
-                self.store.as_ref(), self.free_list_head,
-            )
-        } else { Vec::new() };
+            crate::free_list::read_chain_page_numbers(self.store.as_ref(), self.free_list_head)
+        } else {
+            Vec::new()
+        };
 
         let mut chain_pages: alloc::vec::Vec<u32>;
 
         if old_chain_pages.len() >= 20 {
             // Compaction path: read old entries, deduplicate, rewrite.
             let old_entries = if self.free_list_head != 0 {
-                crate::free_list::read_chain(
-                    self.store.as_ref(), self.free_list_head,
-                ).unwrap_or_default()
-            } else { Vec::new() };
+                crate::free_list::read_chain(self.store.as_ref(), self.free_list_head)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
 
             // Merge: new entries take priority (they are this txn's state).
             let mut merged: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
@@ -394,10 +492,12 @@ impl<K: IpKey> Writer<K> {
                 merged.insert(e.pgno, e.freed_txn_id);
             }
 
-            let mut compact_entries: Vec<crate::free_list::FreeEntry> = merged.iter()
+            let mut compact_entries: Vec<crate::free_list::FreeEntry> = merged
+                .iter()
                 .filter(|(_, &ftxn)| ftxn != u64::MAX)
                 .map(|(&pgno, &ftxn)| crate::free_list::FreeEntry {
-                    pgno, freed_txn_id: ftxn,
+                    pgno,
+                    freed_txn_id: ftxn,
                 })
                 .filter(|e| e.pgno < new_total)
                 .collect();
@@ -408,7 +508,8 @@ impl<K: IpKey> Writer<K> {
             for &pgno in &old_chain_pages {
                 if pgno < new_total {
                     compact_entries.push(crate::free_list::FreeEntry {
-                        pgno, freed_txn_id: new_txn_id_val,
+                        pgno,
+                        freed_txn_id: new_txn_id_val,
                     });
                 }
             }
@@ -422,10 +523,10 @@ impl<K: IpKey> Writer<K> {
             let chain_set: std::collections::HashSet<u32> = chain_pages.iter().copied().collect();
             compact_entries.retain(|e| !chain_set.contains(&e.pgno));
 
-            self.free_list_head = if compact_entries.is_empty() { 0 } else {
-                crate::free_list::write_chain(
-                    self.store.as_mut(), &compact_entries, &chain_pages,
-                )?
+            self.free_list_head = if compact_entries.is_empty() {
+                0
+            } else {
+                crate::free_list::write_chain(self.store.as_mut(), &compact_entries, &chain_pages)?
             };
         } else {
             // Append-only path: prepend new segment to existing chain.
@@ -437,7 +538,10 @@ impl<K: IpKey> Writer<K> {
 
             let old_head = self.free_list_head;
             self.free_list_head = crate::free_list::append_segment(
-                self.store.as_mut(), &entries_to_write, &chain_pages, old_head,
+                self.store.as_mut(),
+                &entries_to_write,
+                &chain_pages,
+                old_head,
             )?;
         }
 
@@ -456,13 +560,27 @@ impl<K: IpKey> Writer<K> {
             }
             effective_total
         } else {
-            pre_truncate_total
+            // No trailing free pages to reclaim, BUT chain pages may still have
+            // been allocated beyond pre_truncate_total (in the growth region,
+            // because alloc_chain_page extends the store). committed_pages MUST
+            // cover the highest chain page: otherwise, after close+reopen, the
+            // free-list head points past committed_pages and load_free_list
+            // silently drops it (the chain page looks out-of-bounds), so freed
+            // pages are never reclaimed and the file grows ~1 page per reopen.
+            pre_truncate_total.max(max_chain_page + 1)
         };
 
         let inactive = 1 - self.active_meta;
         let new_txn_id = self.committed_txn_id + 1;
-        self.write_meta_page(inactive, new_txn_id, self.pending_root, self.pending_height,
-            self.pending_record_count, total, updated_unixtime)?;
+        self.write_meta_page(
+            inactive,
+            new_txn_id,
+            self.pending_root,
+            self.pending_height,
+            self.pending_record_count,
+            total,
+            updated_unixtime,
+        )?;
         self.store.sync()?;
         self.active_meta = inactive;
         self.committed_txn_id = new_txn_id;
@@ -477,22 +595,32 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    pub fn reader(&self) -> Result<Reader<'_>> { Reader::open(self.store.committed_bytes()) }
+    pub fn reader(&self) -> Result<Reader<'_>> {
+        Reader::open(self.store.committed_bytes())
+    }
 
     pub fn scan(&self, mut f: impl FnMut(K, K, u32)) -> Result<()> {
-        if self.pending_root == 0 { return Ok(()); }
+        if self.pending_root == 0 {
+            return Ok(());
+        }
         self.scan_node(self.pending_root, &mut f)
     }
 
-    pub fn record_count(&self) -> u64 { self.pending_record_count }
-    pub fn committed_pages(&self) -> u32 { self.committed_pages }
+    pub fn record_count(&self) -> u64 {
+        self.pending_record_count
+    }
+    pub fn committed_pages(&self) -> u32 {
+        self.committed_pages
+    }
 
     /// Number of pages currently in the in-memory free-list (reclaimable pool).
     /// Reflects the result of the last `load_free_list`: newest-entry-wins over
     /// the append-only chain, with tombstones and chain pages excluded. Used by
     /// tests/audits to verify the tombstone invariant (a consumed page must not
     /// reappear here after close/reopen).
-    pub fn free_page_count(&self) -> usize { self.free_pages.len() }
+    pub fn free_page_count(&self) -> usize {
+        self.free_pages.len()
+    }
 
     pub fn into_image(self) -> Option<alloc::vec::Vec<u8>> {
         self.store.into_vec()
@@ -501,11 +629,17 @@ impl<K: IpKey> Writer<K> {
     // ── COW mechanics ──
 
     fn check(&self) -> Result<()> {
-        if self.poisoned { Err(Error::State("writer poisoned")) } else { Ok(()) }
+        if self.poisoned {
+            Err(Error::State("writer poisoned"))
+        } else {
+            Ok(())
+        }
     }
 
     fn cow_page(&mut self, pgno: u32) -> Result<u32> {
-        if self.private_pages.contains(pgno) { return Ok(pgno); }
+        if self.private_pages.contains(pgno) {
+            return Ok(pgno);
+        }
         let new = self.alloc_page()?;
         self.store.copy_page(pgno, new);
         self.private_pages.insert(new);
@@ -514,7 +648,9 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn cow_root(&mut self) -> Result<u32> {
-        if self.pending_root == 0 { return Ok(0); }
+        if self.pending_root == 0 {
+            return Ok(0);
+        }
         let new = self.cow_page(self.pending_root)?;
         self.pending_root = new;
         Ok(new)
@@ -591,20 +727,24 @@ impl<K: IpKey> Writer<K> {
             .unwrap_or_default();
         // Chain pages are live metadata and must never be handed out as free,
         // even if an older segment still lists them as freed. Exclude them.
-        let chain_page_set: alloc::vec::Vec<u32> = crate::free_list::read_chain_page_numbers(
-            self.store.as_ref(), self.free_list_head,
-        );
+        let chain_page_set: alloc::vec::Vec<u32> =
+            crate::free_list::read_chain_page_numbers(self.store.as_ref(), self.free_list_head);
         let mut chain_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for p in &chain_page_set { chain_set.insert(*p); }
+        for p in &chain_page_set {
+            chain_set.insert(*p);
+        }
         // Newest-entry-wins: entries are newest-first, so the first occurrence
         // of each pgno is its most recent state.
         let mut latest: FxHashMap<u32, u64> = FxHashMap::default();
         for e in &entries {
             latest.entry(e.pgno).or_insert(e.freed_txn_id);
         }
-        self.free_pages = latest.iter()
+        self.free_pages = latest
+            .iter()
             .filter(|(&pgno, &ftxn)| {
-                if chain_set.contains(&pgno) { return false; }
+                if chain_set.contains(&pgno) {
+                    return false;
+                }
                 ftxn != u64::MAX
                     && (oldest_reader_txn_id == u64::MAX || ftxn < oldest_reader_txn_id)
             })
@@ -621,7 +761,8 @@ impl<K: IpKey> Writer<K> {
         self.private_pages.clear();
         self.freed_this_txn.clear();
         self.consumed_this_txn.clear();
-        self.private_pages.ensure_capacity(self.store.total_pages() as usize);
+        self.private_pages
+            .ensure_capacity(self.store.total_pages() as usize);
     }
 
     // ── B+tree insert ──
@@ -645,7 +786,13 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    fn cow_insert_descend(&mut self, pgno: u32, from: K, to: K, scope_id: u32) -> Result<Option<(K, u32)>> {
+    fn cow_insert_descend(
+        &mut self,
+        pgno: u32,
+        from: K,
+        to: K,
+        scope_id: u32,
+    ) -> Result<Option<(K, u32)>> {
         let page_type = PageHeader::decode(self.store.page(pgno)).page_type;
         if page_type == spec::PAGE_TYPE_LEAF {
             self.leaf_insert(pgno, from, to, scope_id)
@@ -664,11 +811,19 @@ impl<K: IpKey> Writer<K> {
             let split = self.cow_insert_descend(cow_child, from, to, scope_id)?;
             if let Some((sep, right)) = split {
                 self.branch_absorb_split(pgno, child_idx, cow_child, sep, right)
-            } else { Ok(None) }
+            } else {
+                Ok(None)
+            }
         }
     }
 
-    fn leaf_insert(&mut self, pgno: u32, from: K, to: K, scope_id: u32) -> Result<Option<(K, u32)>> {
+    fn leaf_insert(
+        &mut self,
+        pgno: u32,
+        from: K,
+        to: K,
+        scope_id: u32,
+    ) -> Result<Option<(K, u32)>> {
         let count = PageHeader::decode(self.store.page(pgno)).entry_count as usize;
         let leaf_max = spec::leaf_max(self.key_width);
         let pos = self.leaf_find_pos(pgno, count, from);
@@ -688,7 +843,17 @@ impl<K: IpKey> Writer<K> {
             let mid = new_count / 2;
             self.write_leaf_split(pgno, &src, count, pos, from, to, scope_id, 0, mid)?;
             let right = self.alloc_page()?;
-            self.write_leaf_split(right, &src, count, pos, from, to, scope_id, mid, new_count - mid)?;
+            self.write_leaf_split(
+                right,
+                &src,
+                count,
+                pos,
+                from,
+                to,
+                scope_id,
+                mid,
+                new_count - mid,
+            )?;
             let sep = {
                 let page = self.store.page(right);
                 LeafView::<K>::new(page, mid).record(0).from()
@@ -703,14 +868,28 @@ impl<K: IpKey> Writer<K> {
         let (mut lo, mut hi) = (0usize, count);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if leaf.record(mid).from() < from { lo = mid + 1; } else { hi = mid; }
+            if leaf.record(mid).from() < from {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
         lo
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write_leaf_split(&mut self, pgno: u32, src: &[u8], _old_count: usize, insert_pos: usize,
-        ins_from: K, ins_to: K, ins_scope: u32, start_idx: usize, count: usize) -> Result<()> {
+    fn write_leaf_split(
+        &mut self,
+        pgno: u32,
+        src: &[u8],
+        _old_count: usize,
+        insert_pos: usize,
+        ins_from: K,
+        ins_to: K,
+        ins_scope: u32,
+        start_idx: usize,
+        count: usize,
+    ) -> Result<()> {
         let rs = record_size::<K>();
         let page = self.store.page_mut(pgno);
         page.fill(0);
@@ -736,7 +915,12 @@ impl<K: IpKey> Writer<K> {
         let page = self.store.page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_LEAF, 1, pgno);
-        record::write::<K>(&mut page[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + rs], from, to, scope_id);
+        record::write::<K>(
+            &mut page[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + rs],
+            from,
+            to,
+            scope_id,
+        );
         Ok(())
     }
 
@@ -744,7 +928,9 @@ impl<K: IpKey> Writer<K> {
 
     fn delete_range(&mut self, from: K, to: K) -> Result<()> {
         loop {
-            if self.pending_root == 0 { return Ok(()); }
+            if self.pending_root == 0 {
+                return Ok(());
+            }
             let overlap = self.scan_first_overlap(from, to)?;
             match overlap {
                 None => break,
@@ -797,26 +983,46 @@ impl<K: IpKey> Writer<K> {
 
     /// Check if the pending tree is sparse (many pages, few records) and
     /// rebuild it compactly. Only triggers when the tree is <25% full.
+    ///
+    /// Issue-8: no per-commit tree walk. `committed_tree_pages` (refreshed once
+    /// at open and after each compaction) is compared against the page count a
+    /// dense tree would need for `pending_record_count` records. Between
+    /// compactions the value is approximate (COW preserves structure); since it
+    /// only ever under-counts (appends grow the actual tree, deletes don't
+    /// shrink it), a false trigger is avoided and a genuinely sparse tree still
+    /// trips the threshold once the stale count exceeds 4× the dense estimate.
     fn compact_if_needed(&mut self) -> Result<()> {
         if self.pending_root == 0 || self.pending_record_count == 0 {
             return Ok(());
         }
-        // Walk the pending tree to count actual pages.
-        let mut tree_pages = 0u64;
-        self.count_tree_pages(self.pending_root, self.pending_height, &mut tree_pages)?;
-        // Estimate the number of pages needed for the current records.
-        let leaf_max = spec::leaf_max(self.key_width) as u64;
-        let needed_pages = self.pending_record_count.div_ceil(leaf_max);
+        // Lazy seed (issue-8): a freshly created Writer has no cached count.
+        // Open seeds it for reopened files; for created files we count once on
+        // the first commit, then rely on the approximation + compaction
+        // refresh. This walk happens at most once per Writer session — not
+        // every commit.
+        if self.committed_tree_pages == 0 {
+            let mut pages = 0u64;
+            let _ = self.count_tree_pages(self.pending_root, self.pending_height, &mut pages);
+            self.committed_tree_pages = pages as u32;
+        }
+        let tree_pages = self.committed_tree_pages as u64;
+        let needed_pages = expected_tree_pages(self.key_width, self.pending_record_count);
         // Only compact if the tree is at least 4x larger than needed.
         if tree_pages > needed_pages * 4 + 4 {
             self.rebuild_compact()?;
+            // Refresh the count from the freshly-rebuilt (small) tree.
+            let mut pages = 0u64;
+            let _ = self.count_tree_pages(self.pending_root, self.pending_height, &mut pages);
+            self.committed_tree_pages = pages as u32;
         }
         Ok(())
     }
 
     fn count_tree_pages(&self, pgno: u32, height: u32, count: &mut u64) -> Result<()> {
         *count += 1;
-        if height <= 1 { return Ok(()); }
+        if height <= 1 {
+            return Ok(());
+        }
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         if h.page_type == spec::PAGE_TYPE_BRANCH {
@@ -826,6 +1032,15 @@ impl<K: IpKey> Writer<K> {
             }
         }
         Ok(())
+    }
+
+    /// Collect leaf page numbers of the pending tree in tree (left-to-right)
+    /// order. Used by `rebuild_compact` to stream leaves one at a time, and by
+    /// the foreign_vs_all linear merge (issue-5).
+    pub(crate) fn pending_leaf_pages(&self) -> Result<Vec<u32>> {
+        let mut out = Vec::new();
+        self.collect_leaf_pages(self.pending_root, self.pending_height, &mut out)?;
+        Ok(out)
     }
 
     fn rebuild_compact(&mut self) -> Result<()> {
@@ -871,7 +1086,9 @@ impl<K: IpKey> Writer<K> {
         // sorted). Old leaf pages are returned to the pool one-at-a-time after
         // buffering (private) or not at all (shared).
         let mut new_free: Vec<u32> = self.free_pages[self.free_pos..].to_vec();
-        let mut non_leaf: Vec<u32> = self.private_pages.iter()
+        let mut non_leaf: Vec<u32> = self
+            .private_pages
+            .iter()
             .filter(|&p| p >= 2 && !leaf_set.contains(&p))
             .collect();
         non_leaf.sort_unstable();
@@ -883,7 +1100,9 @@ impl<K: IpKey> Writer<K> {
         self.free_pages = new_free;
         self.free_pos = 0;
         // Capture private-leaf set before clearing private_pages.
-        let private_leaf: std::collections::HashSet<u32> = leaf_pages.iter().copied()
+        let private_leaf: std::collections::HashSet<u32> = leaf_pages
+            .iter()
+            .copied()
             .filter(|&p| self.private_pages.contains(p))
             .collect();
         self.private_pages.clear();
@@ -924,9 +1143,7 @@ impl<K: IpKey> Writer<K> {
 
     /// Collect leaf page numbers of the pending tree in tree (left-to-right)
     /// order. Used by `rebuild_compact` to stream leaves one at a time.
-    fn collect_leaf_pages(
-        &self, pgno: u32, height: u32, out: &mut Vec<u32>,
-    ) -> Result<()> {
+    fn collect_leaf_pages(&self, pgno: u32, height: u32, out: &mut Vec<u32>) -> Result<()> {
         if height <= 1 {
             out.push(pgno);
             return Ok(());
@@ -941,7 +1158,9 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn scan_first_overlap(&self, from: K, to: K) -> Result<Option<OverlapHit<K>>> {
-        if self.pending_root == 0 { return Ok(None); }
+        if self.pending_root == 0 {
+            return Ok(None);
+        }
         self.scan_overlap_node(self.pending_root, from, to)
     }
 
@@ -953,7 +1172,9 @@ impl<K: IpKey> Writer<K> {
                 let leaf = LeafView::<K>::new(page, h.entry_count as usize);
                 for i in 0..leaf.len() {
                     let r = leaf.record(i);
-                    if r.from() > to { return Ok(None); }
+                    if r.from() > to {
+                        return Ok(None);
+                    }
                     if r.to() >= from {
                         return Ok(Some((r.from(), r.to(), r.scope_id(), pgno, i)));
                     }
@@ -971,7 +1192,9 @@ impl<K: IpKey> Writer<K> {
                     // re-scans ALL remaining leaves on the second scan.
                     if j > 0 {
                         let sep = branch.sep(j - 1);
-                        if sep > to { return Ok(None); }
+                        if sep > to {
+                            return Ok(None);
+                        }
                     }
                     if let Some(r) = self.scan_overlap_node(branch.child(j), from, to)? {
                         return Ok(Some(r));
@@ -987,7 +1210,11 @@ impl<K: IpKey> Writer<K> {
         let guide_key = {
             let page = self.store.page(target_leaf);
             let count = PageHeader::decode(page).entry_count as usize;
-            if count == 0 { K::MIN } else { LeafView::<K>::new(page, count).record(0).from() }
+            if count == 0 {
+                K::MIN
+            } else {
+                LeafView::<K>::new(page, count).record(0).from()
+            }
         };
         let mut pgno = self.cow_root()?;
         for _ in 1..self.pending_height {
@@ -1026,19 +1253,33 @@ impl<K: IpKey> Writer<K> {
         let (mut lo, mut hi) = (0usize, branch.sep_count());
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            if branch.sep(mid) <= key { lo = mid + 1; } else { hi = mid; }
+            if branch.sep(mid) <= key {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
         lo
     }
 
     fn branch_update_child(&mut self, pgno: u32, child_idx: usize, new_child: u32) -> Result<()> {
-        let off = if child_idx == 0 { PAGE_HEADER_SIZE }
-            else { PAGE_HEADER_SIZE + 4 + (child_idx - 1) * (K::WIDTH + 4) + K::WIDTH };
+        let off = if child_idx == 0 {
+            PAGE_HEADER_SIZE
+        } else {
+            PAGE_HEADER_SIZE + 4 + (child_idx - 1) * (K::WIDTH + 4) + K::WIDTH
+        };
         put_u32(self.store.page_mut(pgno), off, new_child);
         Ok(())
     }
 
-    fn branch_absorb_split(&mut self, pgno: u32, child_idx: usize, left: u32, sep: K, right: u32) -> Result<Option<(K, u32)>> {
+    fn branch_absorb_split(
+        &mut self,
+        pgno: u32,
+        child_idx: usize,
+        left: u32,
+        sep: K,
+        right: u32,
+    ) -> Result<Option<(K, u32)>> {
         let count = PageHeader::decode(self.store.page(pgno)).entry_count as usize;
         let branch_max = spec::branch_max(self.key_width);
         if count < branch_max {
@@ -1048,8 +1289,11 @@ impl<K: IpKey> Writer<K> {
             page.copy_within(ins_off..end_off, ins_off + K::WIDTH + 4);
             sep.write_le(&mut page[ins_off..ins_off + K::WIDTH]);
             put_u32(page, ins_off + K::WIDTH, right);
-            let left_off = if child_idx == 0 { PAGE_HEADER_SIZE }
-                else { PAGE_HEADER_SIZE + 4 + (child_idx - 1) * (K::WIDTH + 4) + K::WIDTH };
+            let left_off = if child_idx == 0 {
+                PAGE_HEADER_SIZE
+            } else {
+                PAGE_HEADER_SIZE + 4 + (child_idx - 1) * (K::WIDTH + 4) + K::WIDTH
+            };
             put_u32(page, left_off, left);
             PageHeader::write(page, spec::PAGE_TYPE_BRANCH, (count + 1) as u16, pgno);
             Ok(None)
@@ -1060,8 +1304,20 @@ impl<K: IpKey> Writer<K> {
             let mid = total / 2;
             self.write_branch_split(pgno, &src, count, child_idx, left, sep, right, 0, mid)?;
             let right_pgno = self.alloc_page()?;
-            self.write_branch_split(right_pgno, &src, count, child_idx, left, sep, right, mid + 1, total - mid - 1)?;
-            let promoted = if mid == child_idx { sep } else {
+            self.write_branch_split(
+                right_pgno,
+                &src,
+                count,
+                child_idx,
+                left,
+                sep,
+                right,
+                mid + 1,
+                total - mid - 1,
+            )?;
+            let promoted = if mid == child_idx {
+                sep
+            } else {
                 let old_i = if mid < child_idx { mid } else { mid - 1 };
                 K::read_le(&src[PAGE_HEADER_SIZE + 4 + old_i * (K::WIDTH + 4)..][..K::WIDTH])
             };
@@ -1070,8 +1326,18 @@ impl<K: IpKey> Writer<K> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write_branch_split(&mut self, pgno: u32, src: &[u8], _old_count: usize, insert_idx: usize,
-        ins_left: u32, ins_sep: K, ins_right: u32, start_idx: usize, sep_count: usize) -> Result<()> {
+    fn write_branch_split(
+        &mut self,
+        pgno: u32,
+        src: &[u8],
+        _old_count: usize,
+        insert_idx: usize,
+        ins_left: u32,
+        ins_sep: K,
+        ins_right: u32,
+        start_idx: usize,
+        sep_count: usize,
+    ) -> Result<()> {
         let kw = K::WIDTH;
         let page = self.store.page_mut(pgno);
         page.fill(0);
@@ -1096,8 +1362,9 @@ impl<K: IpKey> Writer<K> {
         put_u32(page, PAGE_HEADER_SIZE, first_child);
         for out_i in 0..sep_count {
             let abs_i = start_idx + out_i;
-            let (s, c) = if abs_i == insert_idx { (ins_sep, ins_right) }
-            else {
+            let (s, c) = if abs_i == insert_idx {
+                (ins_sep, ins_right)
+            } else {
                 let old_i = if abs_i < insert_idx { abs_i } else { abs_i - 1 };
                 let off = PAGE_HEADER_SIZE + 4 + old_i * (kw + 4);
                 (K::read_le(&src[off..off + kw]), u32_le(src, off + kw))
@@ -1123,16 +1390,37 @@ impl<K: IpKey> Writer<K> {
     // ── meta ──
 
     #[allow(clippy::too_many_arguments)]
-    fn write_meta_page(&mut self, pgno: u32, txn_id: u64, root: u32, height: u32,
-        record_count: u64, total_pages: u32, updated: u64) -> Result<()> {
+    fn write_meta_page(
+        &mut self,
+        pgno: u32,
+        txn_id: u64,
+        root: u32,
+        height: u32,
+        record_count: u64,
+        total_pages: u32,
+        updated: u64,
+    ) -> Result<()> {
         let meta = Meta {
-            pgno, version_minor: spec::VERSION_MINOR, meta_size: spec::META_SIZE,
-            page_size: PAGE_SIZE as u32, checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
-            flags: if K::WIDTH == 16 { spec::FLAG_IP_VERSION } else { 0 },
-            key_width: K::WIDTH as u8, scope_mode: self.scope_mode,
-            record_size: record_size::<K>() as u32, created_unixtime: self.created_unixtime,
-            root_pgno: root, tree_height: height, total_pages: total_pages as u64,
-            record_count, txn_id, updated_unixtime: updated,
+            pgno,
+            version_minor: spec::VERSION_MINOR,
+            meta_size: spec::META_SIZE,
+            page_size: PAGE_SIZE as u32,
+            checksum_algo: spec::CHECKSUM_ALGO_CRC32C,
+            flags: if K::WIDTH == 16 {
+                spec::FLAG_IP_VERSION
+            } else {
+                0
+            },
+            key_width: K::WIDTH as u8,
+            scope_mode: self.scope_mode,
+            record_size: record_size::<K>() as u32,
+            created_unixtime: self.created_unixtime,
+            root_pgno: root,
+            tree_height: height,
+            total_pages: total_pages as u64,
+            record_count,
+            txn_id,
+            updated_unixtime: updated,
             scope_table_root: self.scope_root(),
             free_list_head: self.free_list_head,
         };
@@ -1170,7 +1458,10 @@ impl<K: IpKey> Writer<K> {
     /// The committed scope-table root (registry is the single source of
     /// truth), or 0 when there is no scope table.
     pub(crate) fn scope_root(&self) -> u32 {
-        self.scope_registry.as_ref().map(|r| r.committed_root()).unwrap_or(0)
+        self.scope_registry
+            .as_ref()
+            .map(|r| r.committed_root())
+            .unwrap_or(0)
     }
 
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
@@ -1181,7 +1472,9 @@ impl<K: IpKey> Writer<K> {
         match &mut self.scope_registry {
             Some(reg) => {
                 let (id, was_new) = reg.intern(bitmap, bytes);
-                if was_new { self.scope_dirty = true; }
+                if was_new {
+                    self.scope_dirty = true;
+                }
                 Ok(id)
             }
             None => Err(Error::State("scope_intern requires scope_mode == 2")),
@@ -1195,15 +1488,37 @@ impl<K: IpKey> Writer<K> {
         self.scope_registry.as_ref()?.resolve(scope_id, bytes)
     }
 
+    /// Zero-copy scope resolve returning a slice borrowing the committed page
+    /// image (issue-6). Used by the all-to-all / foreign-vs-all overlap scans,
+    /// which resolve one bitmap per record and only need to iterate set bits.
+    pub fn scope_resolve_ref(&self, scope_id: u32) -> Option<&[u8]> {
+        let bytes = self.store.committed_bytes();
+        self.scope_registry.as_ref()?.resolve_ref(scope_id, bytes)
+    }
+
     /// Number of pages in the current scope-table tree (mode 2 only).
     /// Returns 0 when there is no scope table. Used by tests/audits to verify
     /// that scope pages are reused across commits rather than accumulated.
     pub fn scope_page_count(&self) -> usize {
         let root = self.scope_root();
-        if root == 0 { return 0; }
+        if root == 0 {
+            return 0;
+        }
         let mut pages = alloc::vec::Vec::new();
         self.collect_scope_page_numbers(root, 0, &mut pages);
         pages.len()
+    }
+
+    /// Number of pages in the committed IP tree (tests/audits). Walks the tree,
+    /// so it is NOT on the hot path — `compact_if_needed` uses the cached
+    /// `committed_tree_pages` estimate instead.
+    pub fn tree_page_count(&self) -> u64 {
+        if self.committed_root == 0 {
+            return 0;
+        }
+        let mut pages = 0u64;
+        let _ = self.count_tree_pages(self.committed_root, self.committed_height, &mut pages);
+        pages
     }
 
     pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
@@ -1225,46 +1540,54 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
+            self.scope_dirty = true;
+        }
         let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
-                if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode"));
+                }
                 Ok(scope_id | (1u32 << feed_bit))
             }
-            spec::SCOPE_MODE_INDIRECT => {
-                match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
-                    None => Err(Error::State("requires scope_mode == 2")),
-                }
-            }
+            spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
+                Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
+                None => Err(Error::State("requires scope_mode == 2")),
+            },
             _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
         }
     }
 
     pub(crate) fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
+            self.scope_dirty = true;
+        }
         let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
-                if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode"));
+                }
                 Ok(scope_id & !(1u32 << feed_bit))
             }
-            spec::SCOPE_MODE_INDIRECT => {
-                match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
-                    None => Err(Error::State("requires scope_mode == 2")),
-                }
-            }
+            spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
+                Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
+                None => Err(Error::State("requires scope_mode == 2")),
+            },
             _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
         }
     }
 
     pub(crate) fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
+            self.scope_dirty = true;
+        }
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
-                if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
+                if feed_bit >= 32 {
+                    return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode"));
+                }
                 Ok(1u32 << feed_bit)
             }
             spec::SCOPE_MODE_INDIRECT => {
@@ -1275,7 +1598,9 @@ impl<K: IpKey> Writer<K> {
                     Some(reg) => {
                         let bytes = self.store.committed_bytes();
                         let (id, was_new) = reg.intern(&bm, bytes);
-                        if was_new { self.scope_dirty = true; }
+                        if was_new {
+                            self.scope_dirty = true;
+                        }
                         Ok(id)
                     }
                     None => Err(Error::State("requires scope_mode == 2")),
@@ -1289,13 +1614,21 @@ impl<K: IpKey> Writer<K> {
 
     pub fn feed_add_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
         self.check()?;
-        if from > to { return Err(Error::InvalidInput("from > to")); }
+        if from > to {
+            return Err(Error::InvalidInput("from > to"));
+        }
         let overlaps = self.collect_overlapping(from, to)?;
-        for (of, ot, _) in &overlaps { self.delete(*of, *ot)?; }
+        for (of, ot, _) in &overlaps {
+            self.delete(*of, *ot)?;
+        }
         let mut cursor = from;
         for (of, ot, os) in &overlaps {
             if *of > cursor && cursor <= to {
-                let gap_to = if *of <= to { of.checked_dec().unwrap_or(*of) } else { to };
+                let gap_to = if *of <= to {
+                    of.checked_dec().unwrap_or(*of)
+                } else {
+                    to
+                };
                 if gap_to >= cursor {
                     let ns = self.fresh_feed_scope(feed_bit)?;
                     self.cow_insert(cursor, gap_to, ns)?;
@@ -1329,9 +1662,13 @@ impl<K: IpKey> Writer<K> {
 
     pub fn feed_remove_range(&mut self, from: K, to: K, feed_bit: u32) -> Result<()> {
         self.check()?;
-        if from > to { return Err(Error::InvalidInput("from > to")); }
+        if from > to {
+            return Err(Error::InvalidInput("from > to"));
+        }
         let overlaps = self.collect_overlapping(from, to)?;
-        for (of, ot, _) in &overlaps { self.delete(*of, *ot)?; }
+        for (of, ot, _) in &overlaps {
+            self.delete(*of, *ot)?;
+        }
         for (of, ot, os) in &overlaps {
             if *of < from {
                 let trim_end = from.checked_dec().unwrap_or(from);
@@ -1355,13 +1692,21 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn collect_overlapping(&self, from: K, to: K) -> Result<vec::Vec<(K, K, u32)>> {
-        if self.pending_root == 0 { return Ok(vec::Vec::new()); }
+        if self.pending_root == 0 {
+            return Ok(vec::Vec::new());
+        }
         let mut result = vec::Vec::new();
         self.collect_overlapping_node(self.pending_root, from, to, &mut result)?;
         Ok(result)
     }
 
-    fn collect_overlapping_node(&self, pgno: u32, from: K, to: K, out: &mut vec::Vec<(K, K, u32)>) -> Result<()> {
+    fn collect_overlapping_node(
+        &self,
+        pgno: u32,
+        from: K,
+        to: K,
+        out: &mut vec::Vec<(K, K, u32)>,
+    ) -> Result<()> {
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         match h.page_type {
@@ -1369,8 +1714,12 @@ impl<K: IpKey> Writer<K> {
                 let leaf = LeafView::<K>::new(page, h.entry_count as usize);
                 for i in 0..leaf.len() {
                     let r = leaf.record(i);
-                    if r.from() > to { break; }
-                    if r.to() >= from { out.push((r.from(), r.to(), r.scope_id())); }
+                    if r.from() > to {
+                        break;
+                    }
+                    if r.to() >= from {
+                        out.push((r.from(), r.to(), r.scope_id()));
+                    }
                 }
                 Ok(())
             }
@@ -1378,7 +1727,9 @@ impl<K: IpKey> Writer<K> {
                 let branch = BranchView::<K>::new(page, h.entry_count as usize);
                 let start = Self::branch_find_child(&branch, from);
                 for j in start..branch.child_count() {
-                    if j > 0 && branch.sep(j - 1) > to { break; }
+                    if j > 0 && branch.sep(j - 1) > to {
+                        break;
+                    }
                     self.collect_overlapping_node(branch.child(j), from, to, out)?;
                 }
                 Ok(())
@@ -1386,4 +1737,25 @@ impl<K: IpKey> Writer<K> {
             _ => Err(Error::Structural("unexpected page type")),
         }
     }
+}
+
+/// Estimated page count of a dense B+tree holding `record_count` records
+/// (issue-8). Sums leaf pages plus each branch level until a single root
+/// remains. Used by `compact_if_needed` to avoid walking the tree every commit.
+fn expected_tree_pages(key_width: u8, record_count: u64) -> u64 {
+    if record_count == 0 {
+        return 0;
+    }
+    let leaf_max = spec::leaf_max(key_width) as u64;
+    let branch_max = spec::branch_max(key_width) as u64;
+    let mut total = 0u64;
+    let mut level = record_count.div_ceil(leaf_max.max(1));
+    loop {
+        total += level;
+        if level <= 1 {
+            break;
+        }
+        level = level.div_ceil(branch_max.max(1));
+    }
+    total
 }

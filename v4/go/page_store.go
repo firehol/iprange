@@ -10,14 +10,14 @@ import (
 // pageStore is the page-level storage abstraction. All methods are zero-alloc
 // in the hot path — page storage lives in the mmap, not in heap buffers.
 type pageStore interface {
-	page(pgno uint32) []byte          // read a page
-	pageMut(pgno uint32) []byte       // mutable page (caller ensures COW discipline)
-	copyPage(src, dst uint32)         // copy PAGE_SIZE bytes from src to dst
-	allocPage() (uint32, error)       // allocate a new page in the growth region
-	totalPages() uint32               // committed + growth region
-	committedPages() uint32           // stable prefix
-	setCommittedPages(n uint32)       // advance the committed boundary (at commit)
-	committedBytes() []byte           // for Reader construction
+	page(pgno uint32) []byte    // read a page
+	pageMut(pgno uint32) []byte // mutable page (caller ensures COW discipline)
+	copyPage(src, dst uint32)   // copy PAGE_SIZE bytes from src to dst
+	allocPage() (uint32, error) // allocate a new page in the growth region
+	totalPages() uint32         // committed + growth region
+	committedPages() uint32     // stable prefix
+	setCommittedPages(n uint32) // advance the committed boundary (at commit)
+	committedBytes() []byte     // for Reader construction
 	ensureCapacity(minPages uint32) error
 	sync() error
 	truncate(newTotalPages uint32) error // shrink the store (Rule 5)
@@ -57,10 +57,10 @@ func (s *vecPageStore) allocPage() (uint32, error) {
 	return p, nil
 }
 
-func (s *vecPageStore) totalPages() uint32    { return uint32(len(s.image) / PageSize) }
-func (s *vecPageStore) committedPages() uint32 { return s.committed }
+func (s *vecPageStore) totalPages() uint32         { return uint32(len(s.image) / PageSize) }
+func (s *vecPageStore) committedPages() uint32     { return s.committed }
 func (s *vecPageStore) setCommittedPages(n uint32) { s.committed = n }
-func (s *vecPageStore) committedBytes() []byte { return s.image[:int(s.committed)*PageSize] }
+func (s *vecPageStore) committedBytes() []byte     { return s.image[:int(s.committed)*PageSize] }
 
 func (s *vecPageStore) ensureCapacity(minPages uint32) error {
 	needed := int(minPages) * PageSize
@@ -167,8 +167,8 @@ func (s *mmapStore) remap(minPages uint32) error {
 	return nil
 }
 
-func (s *mmapStore) totalPages() uint32    { return s.logical }
-func (s *mmapStore) committedPages() uint32 { return s.committed }
+func (s *mmapStore) totalPages() uint32         { return s.logical }
+func (s *mmapStore) committedPages() uint32     { return s.committed }
 func (s *mmapStore) setCommittedPages(n uint32) { s.committed = n }
 
 func (s *mmapStore) committedBytes() []byte {

@@ -852,7 +852,7 @@ func TestMigrateRandomOracle(t *testing.T) {
 		nOld := int(nextRand()%6) + 1
 		for i := 0; i < nOld; i++ {
 			f := nextRand() % 200
-			t := f + nextRand() % 30
+			t := f + nextRand()%30
 			oldRecords = append(oldRecords, [3]uint32{f, t, nextRand() % 3})
 		}
 		w, _ := Create[Ipv4Key](0, 0)
@@ -866,7 +866,7 @@ func TestMigrateRandomOracle(t *testing.T) {
 		nDes := int(nextRand()%6) + 1
 		for i := 0; i < nDes; i++ {
 			f := nextRand() % 200
-			t := f + nextRand() % 30
+			t := f + nextRand()%30
 			desired = append(desired, DesiredRecord[Ipv4Key]{
 				From: Ipv4Key(f), To: Ipv4Key(t), ScopeID: nextRand() % 3,
 			})

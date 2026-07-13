@@ -1,5 +1,5 @@
-use iprange_livedb::{Ipv4Key, Writer, Reader};
 use iprange_livedb::page_store::{PageStore, VecPageStore};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 #[test]
 fn churn_stable_size() {
@@ -11,7 +11,9 @@ fn churn_stable_size() {
     // not reused, the file would grow noticeably faster than 2 pages/cycle.
     let mut img = {
         let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+        }
         w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
@@ -22,8 +24,12 @@ fn churn_stable_size() {
     for cycle in 0..20 {
         let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img.clone()));
         let mut w = Writer::<Ipv4Key>::open(store).unwrap();
-        for i in 0..1000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+        for i in 0..1000u32 {
+            w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+        }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+        }
         w.commit(cycle as u64 + 1, u64::MAX).unwrap();
         img = w.into_image().unwrap();
         let pages = img.len() / 4096;
@@ -35,15 +41,19 @@ fn churn_stable_size() {
     }
 
     let final_pages = img.len() / 4096;
-    eprintln!("Churn: {} → {} pages over 20 cycles (max per-cycle {})",
-        initial_pages, final_pages, max_per_cycle);
+    eprintln!(
+        "Churn: {} → {} pages over 20 cycles (max per-cycle {})",
+        initial_pages, final_pages, max_per_cycle
+    );
 
     // The chain grows ~2 pages/cycle (one freed-entry group + one tombstone
     // group). Allow a small margin; a data-page reuse leak would push this
     // well above 3.
-    assert!(max_per_cycle <= 3,
+    assert!(
+        max_per_cycle <= 3,
         "per-cycle growth {} exceeds chain rate — data-page reuse broken",
-        max_per_cycle);
+        max_per_cycle
+    );
 
     let r = Reader::open(&img).unwrap();
     assert_eq!(r.record_count(), 1000);
@@ -55,7 +65,9 @@ fn churn_stable_size() {
 #[test]
 fn append_only_compact() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..10_000u32 { w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..10_000u32 {
+        w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let pages = img.len() / 4096;

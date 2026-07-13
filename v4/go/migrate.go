@@ -1,5 +1,7 @@
 package iprangedb
 
+import "fmt"
+
 // ChangeEvent represents a change detected during migration.
 type ChangeEvent[K ipKey[K]] struct {
 	Kind       ChangeKind
@@ -52,6 +54,11 @@ type DesiredRecord[K ipKey[K]] struct {
 type DesiredStream[K ipKey[K]] interface {
 	Peek() *DesiredRecord[K]
 	Next() *DesiredRecord[K]
+	// Err returns a deferred read error (e.g. a truncated spill file detected
+	// mid-stream). Returns nil on a clean EOF. Callers that stop when Next
+	// returns nil MUST check Err afterwards — otherwise a truncated spill looks
+	// like a clean EOF and partial data gets committed.
+	Err() error
 }
 
 // Migrate updates the writer's pending tree to match the desired stream.
@@ -401,6 +408,14 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 		}
 	}
 
+	// A truncated spill file ends the desired stream early: Next returns nil on
+	// the partial record, so the merge loop above treats it as a clean EOF.
+	// Without this check we would silently commit the records read so far and
+	// lose the IPs in the truncated tail. Err is nil only on a true clean EOF.
+	if err := desired.Err(); err != nil {
+		return nil, fmt.Errorf("desired stream ended with a read error (truncated spill): %w", err)
+	}
+
 	return counters, nil
 }
 
@@ -442,12 +457,12 @@ type pathEntry struct {
 }
 
 type treeWalker[K ipKey[K]] struct {
-	store   pageStore
-	root    uint32
-	height  uint32
-	kw      int
-	path    [TreeHeightMax]pathEntry
-	pathLen int
+	store    pageStore
+	root     uint32
+	height   uint32
+	kw       int
+	path     [TreeHeightMax]pathEntry
+	pathLen  int
 	curFrom  K
 	curTo    K
 	curScope uint32

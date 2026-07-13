@@ -1,4 +1,4 @@
-use iprange_livedb::{Ipv4Key, Writer, Reader};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 #[test]
 fn stress_10k() {

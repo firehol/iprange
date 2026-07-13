@@ -76,10 +76,7 @@ pub struct VecPageStore {
 impl VecPageStore {
     pub fn new(image: Vec<u8>) -> Self {
         let committed = (image.len() / PAGE_SIZE) as u32;
-        VecPageStore {
-            image,
-            committed,
-        }
+        VecPageStore { image, committed }
     }
 
     pub fn into_vec(self) -> Vec<u8> {
@@ -174,22 +171,17 @@ impl MmapStore {
     /// Open a writable mmap of `file`. The file must be at least `committed_pages`
     /// pages long. The mapping is PROT_READ|PROT_WRITE, MAP_SHARED.
     pub(crate) fn open(file: std::fs::File, committed_pages: u32) -> Result<Self> {
-                let _len = committed_pages as usize * PAGE_SIZE;
+        let _len = committed_pages as usize * PAGE_SIZE;
         // Grow the mapping ahead to reduce remap frequency.
         let growth_chunk = 64u32;
         let map_len = (committed_pages + growth_chunk) as usize * PAGE_SIZE;
 
         // Extend the file to the mapping size (fallocate for physical allocation).
-        let current_size = {
-            file.metadata()
-                .map_err(Error::Io)?
-                .len() as usize
-        };
+        let current_size = { file.metadata().map_err(Error::Io)?.len() as usize };
         if current_size < map_len {
             // ftruncate is sufficient for a writable MAP_SHARED mapping — the
             // kernel allocates physical pages lazily on first write.
-            file.set_len(map_len as u64)
-                .map_err(Error::Io)?;
+            file.set_len(map_len as u64).map_err(Error::Io)?;
         }
 
         let mmap = unsafe {
@@ -212,17 +204,15 @@ impl MmapStore {
     /// Remap to cover at least `min_pages` pages. Grows the file first (ftruncate),
     /// then creates a new writable mapping.
     fn remap(&mut self, min_pages: u32) -> Result<()> {
-                let file = self.file.as_ref().ok_or(Error::State("store closed"))?;
+        let file = self.file.as_ref().ok_or(Error::State("store closed"))?;
         let new_len = min_pages as usize * PAGE_SIZE;
 
         // Extend the file.
-        file.set_len(new_len as u64)
-            .map_err(Error::Io)?;
+        file.set_len(new_len as u64).map_err(Error::Io)?;
 
         // Over-allocate for growth.
         let map_len = (min_pages + self.growth_chunk) as usize * PAGE_SIZE;
-        file.set_len(map_len as u64)
-            .map_err(Error::Io)?;
+        file.set_len(map_len as u64).map_err(Error::Io)?;
 
         // Create a new writable mapping. `file` is already &File here.
         let new_mmap = unsafe {
@@ -326,9 +316,9 @@ impl PageStore for MmapStore {
     }
 
     fn file_size(&self) -> Option<u64> {
-        self.file.as_ref().map(|f| {
-            f.metadata().map(|m| m.len()).unwrap_or(0)
-        })
+        self.file
+            .as_ref()
+            .map(|f| f.metadata().map(|m| m.len()).unwrap_or(0))
     }
 }
 

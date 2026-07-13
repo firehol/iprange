@@ -39,6 +39,12 @@ type Writer[K ipKey[K]] struct {
 	committedRecordCount uint64
 	committedTxnID       uint64
 
+	// committedTreePages is the page count of the committed IP tree (issue-8).
+	// Refreshed once at open and after each compaction; approximate between
+	// compactions (COW preserves structure). Lets compactIfNeeded compare
+	// counts instead of walking the whole tree every commit.
+	committedTreePages uint64
+
 	// Previous committed root/height (for reader-safe reclamation).
 	// A reader opened before the last commit reads from prevCommittedRoot;
 	// those pages must not be freed until the next generation.
@@ -109,14 +115,15 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		activeMeta:          0,
 		committedPages:      2,
 		committedTxnID:      0,
+		committedTreePages:  0,
 		prevCommittedRoot:   0,
 		prevCommittedHeight: 0,
 		privatePages:        newPageSet(2),
 		freedThisTxn:        make([]uint32, 0, 4096),
 		consumedThisTxn:     make([]uint32, 0, 4096),
 		canRecycle:          true,
-		scopeRegistry: scopeRegForMode(scopeMode),
-		scopeDirty:    false,
+		scopeRegistry:       scopeRegForMode(scopeMode),
+		scopeDirty:          false,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -177,28 +184,29 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		capacity = 4096
 	}
 	w := &Writer[K]{
-		store:               store,
-		keyWidth:            active.keyWidth,
-		scopeMode:           active.scopeMode,
-		createdUnix:         active.createdUnix,
-		activeMeta:          activeNo,
-		committedRoot:       active.rootPgno,
-		committedHeight:     active.treeHeight,
-		committedPages:      uint32(active.totalPages),
+		store:                store,
+		keyWidth:             active.keyWidth,
+		scopeMode:            active.scopeMode,
+		createdUnix:          active.createdUnix,
+		activeMeta:           activeNo,
+		committedRoot:        active.rootPgno,
+		committedHeight:      active.treeHeight,
+		committedPages:       uint32(active.totalPages),
 		committedRecordCount: active.recordCount,
-		committedTxnID:      active.txnID,
-		prevCommittedRoot:   prevRoot,
-		prevCommittedHeight: prevHeight,
-		pendingRoot:         active.rootPgno,
-		pendingHeight:       active.treeHeight,
-		pendingRecordCount:  active.recordCount,
-		privatePages:        newPageSet(int(active.totalPages)),
-		freeListHead:        active.freeListHead,
-		freedThisTxn:        make([]uint32, 0, capacity),
-		consumedThisTxn:     make([]uint32, 0, 4096),
-		canRecycle:          true,
-		scopeRegistry:       nil,
-		scopeDirty:          false,
+		committedTxnID:       active.txnID,
+		committedTreePages:   0,
+		prevCommittedRoot:    prevRoot,
+		prevCommittedHeight:  prevHeight,
+		pendingRoot:          active.rootPgno,
+		pendingHeight:        active.treeHeight,
+		pendingRecordCount:   active.recordCount,
+		privatePages:         newPageSet(int(active.totalPages)),
+		freeListHead:         active.freeListHead,
+		freedThisTxn:         make([]uint32, 0, capacity),
+		consumedThisTxn:      make([]uint32, 0, 4096),
+		canRecycle:           true,
+		scopeRegistry:        nil,
+		scopeDirty:           false,
 	}
 	// Open the scope registry WITHOUT materializing the table (issue-1 fix):
 	// CRC-validate every scope page (O(S) time, O(log S) heap) to preserve the
@@ -221,6 +229,13 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	}
 	if err := w.LoadFreeList(^uint64(0)); err != nil {
 		return nil, err
+	}
+	// Issue-8: seed committedTreePages once (one-time walk, not per commit) so
+	// compactIfNeeded can compare counts without walking.
+	if w.committedRoot != 0 {
+		var pages uint64
+		w.countTreePages(w.committedRoot, w.committedHeight, &pages)
+		w.committedTreePages = pages
 	}
 	return w, nil
 }
@@ -619,7 +634,17 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		}
 		total = effectiveTotal
 	} else {
+		// No trailing free pages to reclaim, BUT chain pages may still have been
+		// allocated beyond preTruncateTotal (in the growth region, because
+		// allocChainPage extends the store). committed_pages MUST cover the
+		// highest chain page: otherwise, after close+reopen, the free-list head
+		// points past committed_pages and LoadFreeList silently drops it (the
+		// chain page looks out-of-bounds), so freed pages are never reclaimed
+		// and the file grows ~1 page per reopen cycle.
 		total = preTruncateTotal
+		if maxChainPage+1 > total {
+			total = maxChainPage + 1
+		}
 	}
 
 	inactive := 1 - w.activeMeta
@@ -1097,21 +1122,69 @@ func (w *Writer[K]) countTreePages(pgno uint32, height uint32, count *uint64) {
 	}
 }
 
-// compactIfNeeded rebuilds the pending tree compactly when it is less than
-// 25% full (actual tree pages exceed 4x the pages needed for the current
-// records). Triggered after a large delete that leaves the tree sparse.
+// compactIfNeeded rebuilds the pending tree compactly when it is less than 25%
+// full (actual tree pages exceed 4x the pages needed for the current records).
+// Triggered after a large delete that leaves the tree sparse.
+//
+// Issue-8: no per-commit tree walk. committedTreePages (refreshed once at open
+// and after each compaction) is compared against the page count a dense tree
+// would need for pendingRecordCount records. Between compactions the value is
+// approximate (COW preserves structure); since it only ever under-counts
+// (appends grow the actual tree, deletes don't shrink it), a false trigger is
+// avoided and a genuinely sparse tree still trips the threshold once the stale
+// count exceeds 4x the dense estimate.
 func (w *Writer[K]) compactIfNeeded() error {
 	if w.pendingRoot == 0 || w.pendingRecordCount == 0 {
 		return nil
 	}
-	var treePages uint64
-	w.countTreePages(w.pendingRoot, w.pendingHeight, &treePages)
-	lmax := uint64(leafMax(w.keyWidth))
-	neededPages := (w.pendingRecordCount + lmax - 1) / lmax
+	// Lazy seed (issue-8): a freshly created Writer has no cached count. Open
+	// seeds it for reopened files; for created files we count once on the first
+	// commit, then rely on the approximation + compaction refresh. This walk
+	// happens at most once per Writer session — not every commit.
+	if w.committedTreePages == 0 {
+		var pages uint64
+		w.countTreePages(w.pendingRoot, w.pendingHeight, &pages)
+		w.committedTreePages = pages
+	}
+	treePages := w.committedTreePages
+	neededPages := expectedTreePages(w.keyWidth, w.pendingRecordCount)
 	if treePages > neededPages*4+4 {
-		return w.rebuildCompact()
+		if err := w.rebuildCompact(); err != nil {
+			return err
+		}
+		// Refresh the count from the freshly-rebuilt (small) tree.
+		var pages uint64
+		w.countTreePages(w.pendingRoot, w.pendingHeight, &pages)
+		w.committedTreePages = pages
 	}
 	return nil
+}
+
+// expectedTreePages estimates the page count of a dense B+tree holding
+// recordCount records (issue-8). Sums leaf pages plus each branch level until
+// a single root remains. Used by compactIfNeeded to avoid walking every commit.
+func expectedTreePages(keyWidth uint8, recordCount uint64) uint64 {
+	if recordCount == 0 {
+		return 0
+	}
+	lmax := uint64(leafMax(keyWidth))
+	bmax := uint64(branchMax(keyWidth))
+	if lmax == 0 {
+		lmax = 1
+	}
+	if bmax == 0 {
+		bmax = 1
+	}
+	var total uint64
+	level := (recordCount + lmax - 1) / lmax
+	for {
+		total += level
+		if level <= 1 {
+			break
+		}
+		level = (level + bmax - 1) / bmax
+	}
+	return total
 }
 
 // rebuildCompact rebuilds the pending tree compactly, streaming one leaf at a
@@ -1245,6 +1318,17 @@ func (w *Writer[K]) collectLeafPages(pgno uint32, height uint32, out *[]uint32) 
 	return nil
 }
 
+// pendingLeafPages returns the pending tree's leaf page numbers in tree
+// (left-to-right = key) order. Used by the foreign-vs-all linear merge
+// (issue-5).
+func (w *Writer[K]) pendingLeafPages() ([]uint32, error) {
+	var out []uint32
+	if err := w.collectLeafPages(w.pendingRoot, w.pendingHeight, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 type overlapInfo[K ipKey[K]] struct {
 	recFrom  K
 	recTo    K
@@ -1252,6 +1336,7 @@ type overlapInfo[K ipKey[K]] struct {
 	leafPgno uint32
 	recIdx   int
 }
+
 func (w *Writer[K]) scanFirstOverlap(from, to K) (overlapInfo[K], bool, error) {
 	if w.pendingRoot == 0 {
 		var zero overlapInfo[K]
@@ -1589,6 +1674,17 @@ func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
 	return w.scopeRegistry.Resolve(scopeID, w.store.committedBytes())
 }
 
+// ScopeResolveRef is the zero-copy variant of ScopeResolve (issue-6): for
+// committed scopes it returns a sub-slice of the committed page image (no
+// per-call allocation). Used by the overlap scans which resolve one bitmap per
+// record.
+func (w *Writer[K]) ScopeResolveRef(scopeID uint32) []byte {
+	if w.scopeRegistry == nil {
+		return nil
+	}
+	return w.scopeRegistry.ResolveRef(scopeID, w.store.committedBytes())
+}
+
 // ScopePageCount returns the number of pages in the current scope-table tree
 // (mode 2 only). Returns 0 when there is no scope table. Used by tests/audits
 // to verify that scope pages are reused across commits rather than accumulated.
@@ -1600,6 +1696,18 @@ func (w *Writer[K]) ScopePageCount() int {
 	var pages []uint32
 	w.collectScopePageNumbers(root, 0, &pages)
 	return len(pages)
+}
+
+// TreePageCount returns the number of pages in the committed IP tree
+// (tests/audits). Walks the tree, so it is NOT on the hot path —
+// compactIfNeeded uses the cached committedTreePages estimate instead.
+func (w *Writer[K]) TreePageCount() uint64 {
+	if w.committedRoot == 0 {
+		return 0
+	}
+	var pages uint64
+	w.countTreePages(w.committedRoot, w.committedHeight, &pages)
+	return pages
 }
 
 func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {

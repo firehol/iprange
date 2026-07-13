@@ -408,17 +408,17 @@ type countingStore struct {
 	readCount int
 }
 
-func (c *countingStore) page(pgno uint32) []byte { c.readCount++; return c.inner.page(pgno) }
-func (c *countingStore) pageMut(pgno uint32) []byte      { return c.inner.pageMut(pgno) }
-func (c *countingStore) copyPage(src, dst uint32)         { c.inner.copyPage(src, dst) }
-func (c *countingStore) allocPage() (uint32, error)      { return c.inner.allocPage() }
-func (c *countingStore) totalPages() uint32               { return c.inner.totalPages() }
-func (c *countingStore) committedPages() uint32           { return c.inner.committedPages() }
-func (c *countingStore) setCommittedPages(n uint32)       { c.inner.setCommittedPages(n) }
-func (c *countingStore) committedBytes() []byte           { return c.inner.committedBytes() }
-func (c *countingStore) ensureCapacity(m uint32) error    { return c.inner.ensureCapacity(m) }
-func (c *countingStore) sync() error                      { return c.inner.sync() }
-func (c *countingStore) truncate(n uint32) error          { return c.inner.truncate(n) }
+func (c *countingStore) page(pgno uint32) []byte       { c.readCount++; return c.inner.page(pgno) }
+func (c *countingStore) pageMut(pgno uint32) []byte    { return c.inner.pageMut(pgno) }
+func (c *countingStore) copyPage(src, dst uint32)      { c.inner.copyPage(src, dst) }
+func (c *countingStore) allocPage() (uint32, error)    { return c.inner.allocPage() }
+func (c *countingStore) totalPages() uint32            { return c.inner.totalPages() }
+func (c *countingStore) committedPages() uint32        { return c.inner.committedPages() }
+func (c *countingStore) setCommittedPages(n uint32)    { c.inner.setCommittedPages(n) }
+func (c *countingStore) committedBytes() []byte        { return c.inner.committedBytes() }
+func (c *countingStore) ensureCapacity(m uint32) error { return c.inner.ensureCapacity(m) }
+func (c *countingStore) sync() error                   { return c.inner.sync() }
+func (c *countingStore) truncate(n uint32) error       { return c.inner.truncate(n) }
 
 // TestI7_DeleteDoesNotWalkEntireTree: a single delete must read O(height)
 // pages, NOT O(tree pages). The old code called compactIfNeeded (full tree

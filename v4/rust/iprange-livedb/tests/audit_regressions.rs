@@ -1,9 +1,9 @@
 //! Regression tests for audit findings.
 //! Each test proves a specific bug exists (FAILS) until the bug is fixed.
 
-use iprange_livedb::{Ipv4Key, Writer, Reader};
 use iprange_livedb::page_store::{PageStore, VecPageStore};
 use iprange_livedb::spec::PAGE_SIZE;
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 // ── F1: Free-list self-referential corruption ──────────────────────────────
 
@@ -12,24 +12,27 @@ fn self_referential_chain_pages(data: &[u8]) -> Vec<u32> {
     let mut bad = Vec::new();
     for p in 0..data.len() / PAGE_SIZE {
         let base = p * PAGE_SIZE;
-        if data.len() < base + 36 { break; }
+        if data.len() < base + 36 {
+            break;
+        }
         // PH_PAGE_TYPE is at offset 0 (1 byte)
         let page_type = data[base];
         const PAGE_TYPE_TXN_FREE: u8 = 9;
-        if page_type != PAGE_TYPE_TXN_FREE { continue; }
+        if page_type != PAGE_TYPE_TXN_FREE {
+            continue;
+        }
         // PH_PGNO at offset 4 (4 bytes LE)
-        let self_pgno = u32::from_le_bytes(
-            data[base + 4..base + 8].try_into().unwrap()
-        );
+        let self_pgno = u32::from_le_bytes(data[base + 4..base + 8].try_into().unwrap());
         // TXN_FREE_COUNT at offset 20 (4 bytes LE)
-        let count = u32::from_le_bytes(
-            data[base + 20..base + 24].try_into().unwrap()
-        ).min(1016) as usize;
+        let count =
+            u32::from_le_bytes(data[base + 20..base + 24].try_into().unwrap()).min(1016) as usize;
         // TXN_FREE_ARRAY at offset 32
         let array_off = base + 32;
         for i in 0..count {
             let off = array_off + i * 4;
-            if off + 4 > data.len() { break; }
+            if off + 4 > data.len() {
+                break;
+            }
             let entry = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
             if entry == self_pgno {
                 bad.push(self_pgno);
@@ -43,16 +46,24 @@ fn self_referential_chain_pages(data: &[u8]) -> Vec<u32> {
 #[test]
 fn f1_no_self_referential_free_list() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..5000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..5000u32 {
+        w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
-    for i in 0..3000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+    for i in 0..3000u32 {
+        w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+    }
     w.commit(2, u64::MAX).unwrap();
     // No-op commit: must not produce a self-referential free-list entry.
     w.commit(3, u64::MAX).unwrap();
 
     let img = w.into_image().unwrap();
     let bad = self_referential_chain_pages(&img);
-    assert!(bad.is_empty(), "self-referential free-list pages: {:?}", bad);
+    assert!(
+        bad.is_empty(),
+        "self-referential free-list pages: {:?}",
+        bad
+    );
 }
 
 // ── F2: Mode-2 scope catastrophic growth ───────────────────────────────────
@@ -76,7 +87,11 @@ fn f2_mode2_scope_stabilizes() {
     let max_scope = *scope_pages.iter().max().unwrap();
     // 10 interned bitmaps fit in a single scope leaf (scope_leaf_max ≈ 14),
     // so a healthy reuse path keeps the live scope tree at 1-2 pages.
-    assert!(max_scope <= 2, "mode-2 scope table grew without reuse: {:?}", scope_pages);
+    assert!(
+        max_scope <= 2,
+        "mode-2 scope table grew without reuse: {:?}",
+        scope_pages
+    );
 }
 
 // ── F3: Mode-2 feed update persists scope (Rust only — Go has the bug) ─────
@@ -93,7 +108,9 @@ fn f3_mode2_feed_update_persists() {
     let img = w.into_image().unwrap();
     let store = VecPageStore::new(img);
     let r = Reader::open(store.committed_bytes()).unwrap();
-    let scope_id = r.lookup(Ipv4Key(15)).expect("lookup error")
+    let scope_id = r
+        .lookup(Ipv4Key(15))
+        .expect("lookup error")
         .expect("record disappeared after feed update");
     assert!(scope_id > 0, "scope_id should be non-zero");
 }
@@ -103,7 +120,9 @@ fn f3_mode2_feed_update_persists() {
 #[test]
 fn f7_delete_all_shrinks_tree() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..10_000u32 { w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..10_000u32 {
+        w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
 
     w.delete(Ipv4Key(0), Ipv4Key(9_999)).unwrap();
@@ -131,9 +150,12 @@ fn f7_delete_all_shrinks_tree() {
 
 #[test]
 fn f8_extsort_last_wins() {
-    use iprange_livedb::extsort::{ExtSorter, ExtSortConfig};
+    use iprange_livedb::extsort::{ExtSortConfig, ExtSorter};
 
-    let config = ExtSortConfig { chunk_size: 1000, temp_dir: None };
+    let config = ExtSortConfig {
+        chunk_size: 1000,
+        temp_dir: None,
+    };
     let mut sorter = ExtSorter::<Ipv4Key>::new(config);
     // Input order: [10,20] scope 1, then [0,30] scope 2.
     // The later [0,30] should win over [10,20] for the overlapping range.
@@ -143,10 +165,15 @@ fn f8_extsort_last_wins() {
 
     // After normalization, every record in [0,30] should have scope 2.
     while let Some(rec) = stream.next() {
-        eprintln!("record: from={:?} to={:?} scope={}",
-            rec.from, rec.to, rec.scope_id);
-        assert_eq!(rec.scope_id, 2,
-            "extsort lost input last-wins: got scope {} expected 2", rec.scope_id);
+        eprintln!(
+            "record: from={:?} to={:?} scope={}",
+            rec.from, rec.to, rec.scope_id
+        );
+        assert_eq!(
+            rec.scope_id, 2,
+            "extsort lost input last-wins: got scope {} expected 2",
+            rec.scope_id
+        );
     }
 }
 
@@ -155,9 +182,13 @@ fn f8_extsort_last_wins() {
 #[test]
 fn f9_free_list_pages_have_crc() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..1000u32 {
+        w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
-    for i in 0..1000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+    for i in 0..1000u32 {
+        w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+    }
     w.commit(2, u64::MAX).unwrap();
 
     let img = w.into_image().unwrap();
@@ -165,9 +196,14 @@ fn f9_free_list_pages_have_crc() {
     for p in 2..n_pages {
         let base = p * PAGE_SIZE;
         let page_type = img[base]; // PH_PAGE_TYPE at offset 0
-        if page_type != 9 { continue; } // PAGE_TYPE_TXN_FREE
+        if page_type != 9 {
+            continue;
+        } // PAGE_TYPE_TXN_FREE
         let page = &img[base..base + PAGE_SIZE];
-        assert!(iprange_livedb::crc32c::verify_page(page),
-            "free-list page {} has invalid CRC", p);
+        assert!(
+            iprange_livedb::crc32c::verify_page(page),
+            "free-list page {} has invalid CRC",
+            p
+        );
     }
 }

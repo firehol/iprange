@@ -1,5 +1,7 @@
 package iprangedb
 
+import "fmt"
+
 // Streaming feed migration: update a single feed's membership in a multi-feed
 // file to match a desired stream.
 //
@@ -277,6 +279,13 @@ func MigrateFeed[K ipKey[K]](w *Writer[K], feedBit uint32, desired DesiredStream
 				oldTrimOk = true
 			}
 		}
+	}
+
+	// Same truncated-spill guard as Migrate: a partial record in a spill file
+	// ends the desired stream early. Without this check the feed would be
+	// updated against an incomplete desired set. See migrate.go for details.
+	if err := desired.Err(); err != nil {
+		return nil, fmt.Errorf("desired stream ended with a read error (truncated spill): %w", err)
 	}
 
 	return counters, nil

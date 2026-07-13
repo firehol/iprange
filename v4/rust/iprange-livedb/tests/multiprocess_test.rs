@@ -11,8 +11,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use iprange_livedb::{Ipv4Key};
 use iprange_livedb::os::{FileWriter, MmapReader};
+use iprange_livedb::Ipv4Key;
 
 fn temp_db(name: &str) -> PathBuf {
     let pid = std::process::id();
@@ -28,17 +28,25 @@ fn temp_db(name: &str) -> PathBuf {
 unsafe fn run_child(path: &str, samples: &[(u32, u32)]) -> ! {
     let reader = match MmapReader::open(std::path::Path::new(path)) {
         Ok(r) => r,
-        Err(e) => { eprintln!("[child] open failed: {:?}", e); libc::_exit(1); }
+        Err(e) => {
+            eprintln!("[child] open failed: {:?}", e);
+            libc::_exit(1);
+        }
     };
 
     // Initial verification.
     let initial_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = reader.reader().unwrap();
         for &(k, v) in samples {
-            assert_eq!(r.lookup(Ipv4Key(k)).unwrap_or(None), Some(v),
-                "initial lookup({}) failed", k);
+            assert_eq!(
+                r.lookup(Ipv4Key(k)).unwrap_or(None),
+                Some(v),
+                "initial lookup({}) failed",
+                k
+            );
         }
-    })).is_ok();
+    }))
+    .is_ok();
     if !initial_ok {
         eprintln!("[child] initial verification panicked");
         libc::_exit(2);
@@ -46,7 +54,9 @@ unsafe fn run_child(path: &str, samples: &[(u32, u32)]) -> ! {
 
     // Signal parent: reader is registered at txn T.
     let buf = [1u8; 1];
-    unsafe { libc::write(1, buf.as_ptr() as *const _, 1); }
+    unsafe {
+        libc::write(1, buf.as_ptr() as *const _, 1);
+    }
 
     // Sleep while writer commits T+1 and T+2.
     std::thread::sleep(Duration::from_secs(3));
@@ -55,11 +65,17 @@ unsafe fn run_child(path: &str, samples: &[(u32, u32)]) -> ! {
     let reverify_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let r = reader.reader().unwrap();
         for &(k, v) in samples {
-            assert_eq!(r.lookup(Ipv4Key(k)).unwrap_or(None), Some(v),
-                "MVCC violation: lookup({}) expected {} got {:?}", k, v,
-                r.lookup(Ipv4Key(k)).unwrap_or(None));
+            assert_eq!(
+                r.lookup(Ipv4Key(k)).unwrap_or(None),
+                Some(v),
+                "MVCC violation: lookup({}) expected {} got {:?}",
+                k,
+                v,
+                r.lookup(Ipv4Key(k)).unwrap_or(None)
+            );
         }
-    })).is_ok();
+    }))
+    .is_ok();
     if !reverify_ok {
         eprintln!("[child] MVCC violation after 2 commits");
         libc::_exit(3);
@@ -75,14 +91,18 @@ fn reader_survives_two_commits() {
     // 1. Create DB with 1000 records at txn 1.
     {
         let mut w = FileWriter::<Ipv4Key>::create(&path, 0, 0).unwrap();
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+        }
         w.commit(1).unwrap();
         w.close();
     }
 
     // 2. Fork child with pipe sync via stdout (fd 1 is inherited).
     let mut pipe_fds = [0i32; 2];
-    unsafe { assert!(libc::pipe(pipe_fds.as_mut_ptr()) == 0); }
+    unsafe {
+        assert!(libc::pipe(pipe_fds.as_mut_ptr()) == 0);
+    }
     let read_fd = pipe_fds[0];
     let write_fd = pipe_fds[1];
 
@@ -91,16 +111,26 @@ fn reader_survives_two_commits() {
 
     if pid == 0 {
         // Child: close read end, redirect write to pipe.
-        unsafe { libc::close(read_fd); }
+        unsafe {
+            libc::close(read_fd);
+        }
         // Use dup2 to redirect stdout to the pipe write fd.
-        unsafe { libc::dup2(write_fd, 1); }
-        unsafe { libc::close(write_fd); }
+        unsafe {
+            libc::dup2(write_fd, 1);
+        }
+        unsafe {
+            libc::close(write_fd);
+        }
         let samples: Vec<(u32, u32)> = (0..10).map(|i| (i * 100, i * 100)).collect();
-        unsafe { run_child(&path_str, &samples); }
+        unsafe {
+            run_child(&path_str, &samples);
+        }
     }
 
     // Parent: close write end.
-    unsafe { libc::close(write_fd); }
+    unsafe {
+        libc::close(write_fd);
+    }
 
     // 3. Wait for child to signal ready.
     let mut buf = [0u8; 1];
@@ -115,24 +145,38 @@ fn reader_survives_two_commits() {
     {
         let mut w = FileWriter::<Ipv4Key>::open(&path).unwrap();
         // Commit 2: churn all records.
-        for i in 0..1000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i + 50).unwrap(); }
+        for i in 0..1000u32 {
+            w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+        }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i + 50).unwrap();
+        }
         w.commit(2).unwrap();
         // Commit 3: churn again (this is where stale pages get reclaimed).
-        for i in 0..1000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i + 100).unwrap(); }
+        for i in 0..1000u32 {
+            w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+        }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i + 100).unwrap();
+        }
         w.commit(3).unwrap();
         w.close();
     }
 
     // 5. Wait for child.
     let mut status = 0;
-    unsafe { libc::waitpid(pid, &mut status, 0); }
+    unsafe {
+        libc::waitpid(pid, &mut status, 0);
+    }
 
     assert!(libc::WIFEXITED(status), "child did not exit normally");
     let exit_code = libc::WEXITSTATUS(status);
-    assert_eq!(exit_code, 0, "child reader failed with exit code {} \
-        (1=open fail, 2=initial fail, 3=MVCC violation after 2 commits)", exit_code);
+    assert_eq!(
+        exit_code, 0,
+        "child reader failed with exit code {} \
+        (1=open fail, 2=initial fail, 3=MVCC violation after 2 commits)",
+        exit_code
+    );
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(path.with_extension("iprdb.readers"));

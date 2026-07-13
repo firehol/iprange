@@ -1,12 +1,16 @@
 //! Integration tests for the streaming migrate API.
 
 use iprange_livedb::{
-    ext_sort, migrate, migrate_retention, DesiredRecord, ExtSortConfig, Ipv4Key,
+    ext_sort, migrate, migrate_retention, DesiredRecord, DesiredStream, ExtSortConfig, Ipv4Key,
     MigrateOptions, SortedStream, Writer,
 };
 
 fn rec(from: u32, to: u32, scope: u32) -> DesiredRecord<Ipv4Key> {
-    DesiredRecord { from: Ipv4Key(from), to: Ipv4Key(to), scope_id: scope }
+    DesiredRecord {
+        from: Ipv4Key(from),
+        to: Ipv4Key(to),
+        scope_id: scope,
+    }
 }
 
 #[test]
@@ -15,7 +19,12 @@ fn migrate_empty_to_full() {
     w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 1), rec(30, 40, 2)]);
-    let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    let counters = migrate(
+        &mut w,
+        &mut desired.clone_stream(),
+        &MigrateOptions::default(),
+    )
+    .unwrap();
     w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.added, 2);
@@ -32,7 +41,12 @@ fn migrate_full_to_empty() {
     w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![]);
-    let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    let counters = migrate(
+        &mut w,
+        &mut desired.clone_stream(),
+        &MigrateOptions::default(),
+    )
+    .unwrap();
     w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.added, 0);
@@ -46,7 +60,12 @@ fn migrate_identical() {
     w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 1)]);
-    let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    let counters = migrate(
+        &mut w,
+        &mut desired.clone_stream(),
+        &MigrateOptions::default(),
+    )
+    .unwrap();
     w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.unchanged, 1);
@@ -61,7 +80,12 @@ fn migrate_change_scope() {
     w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 2)]);
-    let counters = migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    let counters = migrate(
+        &mut w,
+        &mut desired.clone_stream(),
+        &MigrateOptions::default(),
+    )
+    .unwrap();
     w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.changed, 1);
@@ -87,7 +111,10 @@ fn retention_keeps_older_when_desired_is_newer() {
     w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
 
-    assert_eq!(counters.changed, 1, "scope decision still counted as changed");
+    assert_eq!(
+        counters.changed, 1,
+        "scope decision still counted as changed"
+    );
     assert_eq!(scope_of(&image, 15), 100, "older timestamp must survive");
 }
 
@@ -105,7 +132,11 @@ fn retention_overwrites_when_desired_is_older() {
     let image = w.into_image().unwrap();
 
     assert_eq!(counters.changed, 1);
-    assert_eq!(scope_of(&image, 15), 100, "older desired timestamp must win");
+    assert_eq!(
+        scope_of(&image, 15),
+        100,
+        "older desired timestamp must win"
+    );
 }
 
 #[test]
@@ -138,7 +169,12 @@ fn combine_none_is_legacy_overwrite() {
     w.commit(0, u64::MAX).unwrap();
 
     let desired = SortedStream::from_unsorted(vec![rec(10, 20, 200)]);
-    migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    migrate(
+        &mut w,
+        &mut desired.clone_stream(),
+        &MigrateOptions::default(),
+    )
+    .unwrap();
     w.commit(0, u64::MAX).unwrap();
     let image = w.into_image().unwrap();
 
@@ -151,11 +187,7 @@ fn extsort_and_migrate() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
     w.commit(0, u64::MAX).unwrap();
 
-    let unsorted = vec![
-        rec(30, 40, 2),
-        rec(10, 20, 1),
-        rec(50, 60, 3),
-    ];
+    let unsorted = vec![rec(30, 40, 2), rec(10, 20, 1), rec(50, 60, 3)];
     let mut stream = ext_sort(unsorted, &ExtSortConfig::default()).unwrap();
     let counters = migrate(&mut w, &mut stream, &MigrateOptions::default()).unwrap();
     w.commit(0, u64::MAX).unwrap();
@@ -182,5 +214,97 @@ impl CloneStream<Ipv4Key> for SortedStream<Ipv4Key> {
             records: self.records.clone(),
             pos: 0,
         }
+    }
+}
+
+// ── Issue 1: a desired stream that ends on a truncated spill must make migrate
+//    return an error, NOT silently commit the partial data read so far. ────────
+
+// A desired stream backed by an in-memory buffer that reports a deferred read
+// error once the buffered records are drained — simulating a truncated spill
+// file that was detected lazily during iteration.
+struct TruncatedStream {
+    records: Vec<DesiredRecord<Ipv4Key>>,
+    pos: usize,
+}
+
+impl DesiredStream<Ipv4Key> for TruncatedStream {
+    fn peek(&self) -> Option<&DesiredRecord<Ipv4Key>> {
+        self.records.get(self.pos)
+    }
+    fn next(&mut self) -> Option<DesiredRecord<Ipv4Key>> {
+        if self.pos < self.records.len() {
+            let r = self.records[self.pos];
+            self.pos += 1;
+            Some(r)
+        } else {
+            None
+        }
+    }
+    fn err(&self) -> Option<&str> {
+        // Once the buffer is drained, simulate that the underlying spill had a
+        // truncated tail — there should be more data, but a read failed.
+        if self.pos >= self.records.len() {
+            Some("truncated spill file")
+        } else {
+            None
+        }
+    }
+}
+
+#[test]
+fn migrate_rejects_truncated_desired_stream() {
+    // Old tree holds one record; the desired stream yields two then signals a
+    // read error. migrate MUST return Err rather than committing the two records
+    // it managed to read.
+    let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+    w.set(Ipv4Key(5), Ipv4Key(5), 1).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let mut desired = TruncatedStream {
+        records: vec![rec(0, 0, 2), rec(10, 10, 2)],
+        pos: 0,
+    };
+    let result = migrate(&mut w, &mut desired, &MigrateOptions::default());
+    match result {
+        Err(iprange_livedb::Error::Structural(msg)) => {
+            assert!(
+                msg.contains("truncated") || msg.contains("read error"),
+                "wrong error: {}",
+                msg
+            );
+        }
+        other => panic!(
+            "migrate with a truncated stream must error, got {:?}",
+            other.is_ok()
+        ),
+    }
+    // The caller must NOT commit; the pending tree holds partial data.
+}
+
+#[test]
+fn migrate_feed_rejects_truncated_desired_stream() {
+    use iprange_livedb::feed_migrate::migrate_feed;
+    let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap(); // bitmap mode
+    w.set(Ipv4Key(5), Ipv4Key(5), 1).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let mut desired = TruncatedStream {
+        records: vec![rec(0, 0, 2), rec(10, 10, 2)],
+        pos: 0,
+    };
+    let result = migrate_feed(&mut w, 0, &mut desired, &MigrateOptions::default());
+    match result {
+        Err(iprange_livedb::Error::Structural(msg)) => {
+            assert!(
+                msg.contains("truncated") || msg.contains("read error"),
+                "wrong error: {}",
+                msg
+            );
+        }
+        other => panic!(
+            "migrate_feed with a truncated stream must error, got {:?}",
+            other.is_ok()
+        ),
     }
 }

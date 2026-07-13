@@ -3,7 +3,7 @@
 
 #![cfg(test)]
 
-use iprange_livedb::{Ipv4Key, Writer, Reader};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -21,7 +21,11 @@ struct Case {
 #[serde(tag = "op")]
 enum Op {
     #[serde(rename = "set")]
-    Set { from: String, to: String, scope: Vec<u8> },
+    Set {
+        from: String,
+        to: String,
+        scope: Vec<u8>,
+    },
     #[serde(rename = "delete")]
     Delete { from: String, to: String },
 }
@@ -31,21 +35,29 @@ struct ScanEntry(String, String, Vec<u8>);
 #[derive(Deserialize)]
 struct LookupEntry(String, Option<Vec<u8>>);
 
-fn s2u(s: &str) -> u32 { s.parse().unwrap_or(0) }
+fn s2u(s: &str) -> u32 {
+    s.parse().unwrap_or(0)
+}
 fn scope_b2u(b: &[u8]) -> u32 {
     let mut buf = [0u8; 4];
-    for (i, &v) in b.iter().take(4).enumerate() { buf[i] = v; }
+    for (i, &v) in b.iter().take(4).enumerate() {
+        buf[i] = v;
+    }
     u32::from_le_bytes(buf)
 }
 
 fn merge_adjacent(recs: &[(u32, u32, u32)]) -> Vec<(u32, u32, u32)> {
-    if recs.is_empty() { return vec![]; }
+    if recs.is_empty() {
+        return vec![];
+    }
     let mut out = vec![recs[0]];
     for &(f, t, s) in recs.iter().skip(1) {
         let last = out.len() - 1;
         if out[last].2 == s && out[last].1.checked_add(1) == Some(f) {
             out[last].1 = t;
-        } else { out.push((f, t, s)); }
+        } else {
+            out.push((f, t, s));
+        }
     }
     out
 }
@@ -56,13 +68,16 @@ fn behavioral_conformance() {
     let cases: Vec<Case> = serde_json::from_str(cases_json).unwrap();
 
     for case in &cases {
-        if case.family != "v4" { continue; }
+        if case.family != "v4" {
+            continue;
+        }
 
         let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
         for op in &case.ops {
             match op {
                 Op::Set { from, to, scope } => {
-                    w.set(Ipv4Key(s2u(from)), Ipv4Key(s2u(to)), scope_b2u(scope)).unwrap();
+                    w.set(Ipv4Key(s2u(from)), Ipv4Key(s2u(to)), scope_b2u(scope))
+                        .unwrap();
                 }
                 Op::Delete { from, to } => {
                     w.delete(Ipv4Key(s2u(from)), Ipv4Key(s2u(to))).unwrap();
@@ -78,21 +93,37 @@ fn behavioral_conformance() {
         r.scan_v4(|f, t, s| actual.push((f.0, t.0, s))).unwrap();
         actual.sort_by_key(|r| r.0);
 
-        let mut expected: Vec<(u32, u32, u32)> = case.expect_scan.iter()
+        let mut expected: Vec<(u32, u32, u32)> = case
+            .expect_scan
+            .iter()
             .map(|e| (s2u(&e.0), s2u(&e.1), scope_b2u(&e.2)))
             .collect();
         expected.sort_by_key(|r| r.0);
 
-        assert_eq!(merge_adjacent(&actual), merge_adjacent(&expected),
-            "{}: scan mismatch", case.name);
+        assert_eq!(
+            merge_adjacent(&actual),
+            merge_adjacent(&expected),
+            "{}: scan mismatch",
+            case.name
+        );
 
         // Lookup verification.
         for entry in &case.expect_lookup {
             let result = r.lookup(Ipv4Key(s2u(&entry.0))).unwrap();
             match &entry.1 {
-                None => assert!(result.is_none(), "{}: lookup({}) should be None", case.name, entry.0),
-                Some(sb) => assert_eq!(result, Some(scope_b2u(sb)),
-                    "{}: lookup({}) scope mismatch", case.name, entry.0),
+                None => assert!(
+                    result.is_none(),
+                    "{}: lookup({}) should be None",
+                    case.name,
+                    entry.0
+                ),
+                Some(sb) => assert_eq!(
+                    result,
+                    Some(scope_b2u(sb)),
+                    "{}: lookup({}) scope mismatch",
+                    case.name,
+                    entry.0
+                ),
             }
         }
     }

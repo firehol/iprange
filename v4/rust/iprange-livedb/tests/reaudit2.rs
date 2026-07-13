@@ -37,10 +37,8 @@ impl Rng {
 #[test]
 fn reaudit2_c1_mvcc_reader_pins_snapshot_across_commits() {
     use iprange_livedb::os::{FileWriter, MmapReader};
-    let path = std::env::temp_dir().join(format!(
-        "iprange_reaudit2_c1_{}.iprdb",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("iprange_reaudit2_c1_{}.iprdb", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(path.with_extension("iprdb.readers"));
 
@@ -58,7 +56,11 @@ fn reaudit2_c1_mvcc_reader_pins_snapshot_across_commits() {
     let rdr = MmapReader::open(&path).unwrap();
     {
         let r = rdr.reader().unwrap();
-        assert_eq!(r.lookup(Ipv4Key(500)).unwrap(), Some(11), "txn1 initial scope");
+        assert_eq!(
+            r.lookup(Ipv4Key(500)).unwrap(),
+            Some(11),
+            "txn1 initial scope"
+        );
     }
 
     // txn 2: overwrite key 500 -> scope 22.
@@ -155,7 +157,10 @@ fn reaudit2_c2_extsort_randomized_last_wins() {
             }
         }
     }
-    assert_eq!(mismatches, 0, "ext_sort last-wins violated at {mismatches} IPs");
+    assert_eq!(
+        mismatches, 0,
+        "ext_sort last-wins violated at {mismatches} IPs"
+    );
 
     // (b) coverage correctness: ext_sort's coverage must equal the reference.
     let mut stream2 = ext_sort(input, &config).unwrap();
@@ -194,10 +199,7 @@ fn reaudit2_c3_writer_open_rejects_corrupt_meta() {
         w.commit(0, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
-    assert!(
-        img.len() >= 2 * 4096,
-        "image must hold two meta pages"
-    );
+    assert!(img.len() >= 2 * 4096, "image must hold two meta pages");
 
     // Sanity: the clean image verifies.
     assert!(
@@ -249,7 +251,11 @@ fn reaudit2_c4_scope_intern_rejects_oversized_bitmap() {
     // A 256-byte bitmap is the maximum legal width and must be accepted.
     let legal = vec![0u8; 256];
     let id = w.scope_intern(&legal);
-    assert!(id.is_ok(), "256-byte bitmap (the cap) should be accepted: {:?}", id);
+    assert!(
+        id.is_ok(),
+        "256-byte bitmap (the cap) should be accepted: {:?}",
+        id
+    );
 }
 
 // ── A1: 100 churn cycles must not grow the file unboundedly ──────────────────
@@ -294,6 +300,10 @@ fn reaudit2_a1_churn_cycles_do_not_grow_unbounded() {
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
     for i in 0..50u32 {
-        assert_eq!(r.lookup(Ipv4Key(i)).unwrap(), Some(101), "data corrupted at key {i}");
+        assert_eq!(
+            r.lookup(Ipv4Key(i)).unwrap(),
+            Some(101),
+            "data corrupted at key {i}"
+        );
     }
 }

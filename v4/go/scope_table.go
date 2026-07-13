@@ -20,15 +20,18 @@ type ScopeEntry struct {
 // ScopeRegistry maintains scope_id → bitmap mappings WITHOUT materializing the
 // committed scope table into a heap HashMap at open time.
 //
-// Design (issue-1/issue-2 fix):
+// Design (issue-1/issue-2/issue-7 fix):
 //   - The committed scope table stays on disk (a B+tree keyed by scope_id).
-//     resolve() descends that tree via findScope → O(log S), zero heap.
+//     Resolve() descends that tree via findScope → O(log S), zero heap.
 //   - Only THIS transaction's newly-interned entries live in RAM (newEntries).
-//   - intern() dedups against the new set (O(1)); against the committed set it
-//     lazily builds a bitmap→scope_id index once (committedIndex), then O(1).
-//     The index materializes only when an intern actually misses the new set
-//     AND there is committed data — so read/record-write workloads never pay
-//     the heap cost that used to be paid eagerly at open.
+//   - Intern() dedups against the new set (O(1)); against the committed set it
+//     streams the on-disk scope tree via findScopeByBitmap (O(scope_pages)
+//     time, O(1) heap). It NEVER materializes the whole committed table into a
+//     HashMap — the old eager load allocated O(S) on the first intern after
+//     reopen (issue-7).
+//   - committedIndex is retained ONLY as an in-memory facility for
+//     ScopeRegistryFromEntries (tests) and the incremental fold performed by
+//     Promote (this-txn new entries, O(new)). It is never populated from disk.
 //
 // The registry is the single source of truth for the committed scope-tree root.
 type ScopeRegistry struct {
@@ -39,8 +42,10 @@ type ScopeRegistry struct {
 	// committedRoot is the on-disk scope-table B+tree root (0 = none).
 	committedRoot uint32
 
-	// committedIndex is the lazily-built bitmap → scope_id map over the
-	// committed table. nil means "not needed yet".
+	// committedIndex is the in-memory bitmap → scope_id map. NEVER loaded from
+	// disk (issue-7). Populated only by ScopeRegistryFromEntries (tests) and
+	// incrementally by Promote (this-session new entries). Production dedup of
+	// committed bitmaps goes through findScopeByBitmap instead.
 	committedIndex map[string]uint32
 
 	nextID uint32
@@ -84,35 +89,27 @@ func ScopeRegistryFromEntries(entries []ScopeEntry) *ScopeRegistry {
 	}
 }
 
-// ensureCommittedIndex lazily builds the committed bitmap→scope_id index by
-// reading the committed scope tree once. O(S) one-time; idempotent.
-func (r *ScopeRegistry) ensureCommittedIndex(committedBytes []byte) {
-	if r.committedIndex != nil || r.committedRoot == 0 {
-		return
-	}
-	entries, err := readAllScopes(committedBytes, r.committedRoot)
-	if err != nil {
-		return
-	}
-	idx := make(map[string]uint32, len(entries))
-	for _, e := range entries {
-		idx[string(e.Bitmap)] = e.ScopeID
-	}
-	r.committedIndex = idx
-}
-
 // Intern finds or creates a scope_id for the given bitmap.
-// committedBytes is the committed page image (for lazy dedup against the
-// on-disk table). Returns (scope_id, was_new).
+// committedBytes is the committed page image (for dedup against the on-disk
+// table). Returns (scope_id, was_new).
+//
+// Dedup order (issue-7):
+//  1. this-txn new entries (O(1) via newBitmapIndex)
+//  2. in-memory committedIndex if present (O(1); FromEntries/Promote)
+//  3. committed on-disk scope tree via findScopeByBitmap
+//     (O(scope_pages) time, O(1) heap — no eager O(S) load)
+//  4. miss → mint a new id.
 func (r *ScopeRegistry) Intern(bitmap []byte, committedBytes []byte) (uint32, bool) {
 	if id, ok := r.newBitmapIndex[string(bitmap)]; ok {
 		return id, false
 	}
-	if r.committedRoot != 0 && r.committedIndex == nil {
-		r.ensureCommittedIndex(committedBytes)
-	}
 	if r.committedIndex != nil {
 		if id, ok := r.committedIndex[string(bitmap)]; ok {
+			return id, false
+		}
+	}
+	if r.committedRoot != 0 {
+		if id, ok := findScopeByBitmap(committedBytes, r.committedRoot, bitmap); ok {
 			return id, false
 		}
 	}
@@ -138,6 +135,22 @@ func (r *ScopeRegistry) Resolve(scopeID uint32, committedBytes []byte) []byte {
 	}
 	if r.committedRoot != 0 {
 		return findScope(committedBytes, r.committedRoot, scopeID)
+	}
+	return nil
+}
+
+// ResolveRef is the zero-copy variant of Resolve (issue-6): for committed
+// scopes it returns a sub-slice of committedBytes (no per-call allocation).
+// Used by the all-to-all / foreign-vs-all overlap scans, which resolve one
+// bitmap per record and only need to iterate set bits.
+func (r *ScopeRegistry) ResolveRef(scopeID uint32, committedBytes []byte) []byte {
+	for i := range r.newEntries {
+		if r.newEntries[i].ScopeID == scopeID {
+			return r.newEntries[i].Bitmap
+		}
+	}
+	if r.committedRoot != 0 {
+		return findScopeRef(committedBytes, r.committedRoot, scopeID)
 	}
 	return nil
 }
@@ -188,20 +201,14 @@ func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committe
 }
 
 // EntriesForCommit returns the full entry list (committed ∪ new) for the
-// bulk rebuild at commit, and warms the committed index from the read.
+// bulk rebuild at commit. Reads the committed table from disk (no index
+// warming — issue-7) and appends this-txn new entries.
 func (r *ScopeRegistry) EntriesForCommit(committedBytes []byte) []ScopeEntry {
 	var all []ScopeEntry
 	if r.committedRoot != 0 {
 		committed, err := readAllScopes(committedBytes, r.committedRoot)
 		if err == nil {
 			all = committed
-			if r.committedIndex == nil {
-				idx := make(map[string]uint32, len(committed))
-				for _, e := range committed {
-					idx[string(e.Bitmap)] = e.ScopeID
-				}
-				r.committedIndex = idx
-			}
 		}
 	}
 	all = append(all, r.newEntries...)
@@ -589,6 +596,119 @@ func findScope(bytes []byte, rootPgno uint32, targetID uint32) []byte {
 	return nil
 }
 
+// findScopeRef is the zero-copy variant of findScope (issue-6): it returns a
+// sub-slice of bytes (the committed page image) instead of an allocated copy.
+// Used by the all-to-all overlap scan which only needs to iterate set bits.
+func findScopeRef(bytes []byte, rootPgno uint32, targetID uint32) []byte {
+	if rootPgno == 0 {
+		return nil
+	}
+	pgno := rootPgno
+	for guard := 0; guard < TreeHeightMax; guard++ {
+		off := int(pgno) * PageSize
+		if off+PageSize > len(bytes) {
+			return nil
+		}
+		page := bytes[off : off+PageSize]
+		h := decodeHeader(page)
+		switch h.pageType {
+		case PageTypeScopeLeaf:
+			count := int(h.entryCount)
+			lo, hi := 0, count
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				recOff := PageHeaderSize + mid*ScopeEntrySize
+				id := u32le(page, recOff)
+				if id < targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			if lo < count {
+				recOff := PageHeaderSize + lo*ScopeEntrySize
+				id := u32le(page, recOff)
+				if id == targetID {
+					bmLen := int(u16le(page, recOff+4))
+					if bmLen > MaxBitmapWidth {
+						bmLen = MaxBitmapWidth
+					}
+					return page[recOff+6 : recOff+6+bmLen]
+				}
+			}
+			return nil
+		case PageTypeScopeBranch:
+			bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+			lo, hi := 0, bv.sepCount
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				sep := Ipv4Key(u32le(bv.sep(mid), 0))
+				if uint32(sep) <= targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			pgno = bv.child(lo)
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// findScopeByBitmap returns the scope_id of an existing entry whose bitmap
+// equals target by streaming the committed scope tree (issue-7). O(scope_pages)
+// time, O(1) heap — replaces the old eager O(S) HashMap materialization. The
+// scope tree is keyed by scope_id (not bitmap), so this is a linear leaf scan;
+// it is only reached on a newBitmapIndex miss, which is rare (new feed
+// combinations). Returns (0, false) if no committed entry matches.
+func findScopeByBitmap(bytes []byte, rootPgno uint32, target []byte) (uint32, bool) {
+	if rootPgno == 0 {
+		return 0, false
+	}
+	return findScopeByBitmapNode(bytes, rootPgno, 0, target)
+}
+
+func findScopeByBitmapNode(bytes []byte, pgno uint32, depth uint32, target []byte) (uint32, bool) {
+	if depth > TreeHeightMax {
+		return 0, false
+	}
+	off := int(pgno) * PageSize
+	if off+PageSize > len(bytes) {
+		return 0, false
+	}
+	page := bytes[off : off+PageSize]
+	h := decodeHeader(page)
+	switch h.pageType {
+	case PageTypeScopeLeaf:
+		count := int(h.entryCount)
+		for i := 0; i < count; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			bmLen := int(u16le(page, recOff+4))
+			if bmLen > MaxBitmapWidth {
+				bmLen = MaxBitmapWidth
+			}
+			if bmLen == len(target) {
+				if bytesEqual(page[recOff+6:recOff+6+bmLen], target) {
+					return u32le(page, recOff), true
+				}
+			}
+		}
+		return 0, false
+	case PageTypeScopeBranch:
+		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			if id, ok := findScopeByBitmapNode(bytes, bv.child(j), depth+1, target); ok {
+				return id, true
+			}
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
 // ReadMaxScopeID returns the highest scope_id in the committed scope table by
 // descending to the rightmost leaf (O(log S)). Used at open to compute
 // nextID = max + 1 without loading the table.
@@ -627,19 +747,30 @@ func ReadMaxScopeID(bytes []byte, rootPgno uint32) (uint32, bool) {
 }
 
 // ValidateScopeCRC walks every page of the committed scope tree and verifies
-// its per-page CRC32C WITHOUT materializing entries. O(S pages) time, O(log S)
-// heap (descent stack only). Preserves the open-time corruption guard that the
-// old eager readAllScopesChecked provided, while fixing the 256MB heap load.
+// its per-page CRC32C AND structural integrity WITHOUT materializing entries.
+// O(S pages) time, O(log S) heap (descent stack only). Preserves the open-time
+// corruption guard that the old eager readAllScopesChecked provided, while
+// fixing the 256MB heap load.
+//
+// Structural checks (entry_count within page capacity, page type matches a
+// scope node, child page numbers in range) are essential: a corrupt entry_count
+// that still verifies against a recomputed CRC would otherwise pass the CRC
+// guard and later cause an out-of-bounds slice access (panic) when the leaf is
+// read by findScope/readScopeNode.
 func ValidateScopeCRC(bytes []byte, rootPgno uint32) error {
 	if rootPgno == 0 {
 		return nil
 	}
-	return validateScopeCRCNode(bytes, rootPgno, 0)
+	totalPages := uint32(len(bytes) / PageSize)
+	return validateScopeCRCNode(bytes, rootPgno, 0, totalPages)
 }
 
-func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32) error {
+func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages uint32) error {
 	if depth > TreeHeightMax {
 		return fmt.Errorf("scope table too deep")
+	}
+	if uint64(pgno) >= uint64(totalPages) {
+		return fmt.Errorf("scope page out of bounds")
 	}
 	off := int(pgno) * PageSize
 	if off+PageSize > len(bytes) {
@@ -650,13 +781,37 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32) error {
 		return fmt.Errorf("scope table page %d fails CRC", pgno)
 	}
 	h := decodeHeader(page)
-	if h.pageType == PageTypeScopeBranch {
-		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+	switch h.pageType {
+	case PageTypeScopeLeaf:
+		// entry_count MUST be within the page capacity, or a later read
+		// computes an offset past the page and panics.
+		count := int(h.entryCount)
+		maxEntries := (PageSize - PageHeaderSize) / ScopeEntrySize
+		if count < 1 || count > maxEntries {
+			return fmt.Errorf("scope leaf entry_count out of range: %d (max %d)", count, maxEntries)
+		}
+		return nil
+	case PageTypeScopeBranch:
+		sepCount := int(h.entryCount)
+		sepWidth := ScopeKeyWidth // 4
+		maxSeps := (PageSize - PageHeaderSize - 4) / (sepWidth + 4)
+		if sepCount < 1 || sepCount > maxSeps {
+			return fmt.Errorf("scope branch separator count out of range: %d (max %d)", sepCount, maxSeps)
+		}
+		bv := newBranchView(page, sepCount, sepWidth)
+		// child_count = sep_count + 1. Each child MUST be a valid page number in
+		// [2, totalPages); otherwise descent reads garbage.
 		for j := 0; j < bv.childCount(); j++ {
-			if err := validateScopeCRCNode(bytes, bv.child(j), depth+1); err != nil {
+			child := bv.child(j)
+			if child < 2 || uint64(child) >= uint64(totalPages) {
+				return fmt.Errorf("scope child pgno out of range: %d", child)
+			}
+			if err := validateScopeCRCNode(bytes, child, depth+1, totalPages); err != nil {
 				return err
 			}
 		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected page type %d in scope table", h.pageType)
 	}
-	return nil
 }

@@ -69,9 +69,13 @@ func activeMetaPage(file []byte) int {
 	return 0
 }
 
-func metaRoot(file []byte) uint32      { return u32le(file[activeMetaPage(file)*PageSize:], MetaRootPgno) }
-func metaHeight(file []byte) uint32    { return u32le(file[activeMetaPage(file)*PageSize:], MetaTreeHeight) }
-func metaTotal(file []byte) uint64     { return u64le(file[activeMetaPage(file)*PageSize:], MetaTotalPages) }
+func metaRoot(file []byte) uint32 { return u32le(file[activeMetaPage(file)*PageSize:], MetaRootPgno) }
+func metaHeight(file []byte) uint32 {
+	return u32le(file[activeMetaPage(file)*PageSize:], MetaTreeHeight)
+}
+func metaTotal(file []byte) uint64 {
+	return u64le(file[activeMetaPage(file)*PageSize:], MetaTotalPages)
+}
 func metaRecordCount(file []byte) uint64 {
 	return u64le(file[activeMetaPage(file)*PageSize:], MetaRecordCount)
 }
@@ -265,9 +269,9 @@ func structuralOffsets(pt uint8) []int {
 		// IPv4-layout branch: count (tail-checked) + child[0]/sep[0]/child[1].
 		h = append(h,
 			PHEntryCount,
-			PageHeaderSize,     // child[0]
-			PageHeaderSize+4,   // sep[0]
-			PageHeaderSize+8,   // child[1]
+			PageHeaderSize,   // child[0]
+			PageHeaderSize+4, // sep[0]
+			PageHeaderSize+8, // child[1]
 		)
 	}
 	return h

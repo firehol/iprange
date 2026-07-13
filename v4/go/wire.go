@@ -63,24 +63,24 @@ func finalizeChecksum(page []byte) {
 // --- meta page ---
 
 type meta struct {
-	pgno            uint32
-	versionMinor    uint16
-	metaSize        uint16
-	pageSize        uint32
-	checksumAlgo    uint8
-	flags           uint8
-	keyWidth        uint8
-	scopeMode       uint8 // was scopeWidth
-	recordSize      uint32
-	createdUnix     uint64
-	rootPgno        uint32
-	treeHeight      uint32
-	totalPages      uint64
-	recordCount     uint64
-	txnID           uint64
-	updatedUnix     uint64
-	scopeTableRoot  uint32
-	freeListHead    uint32
+	pgno           uint32
+	versionMinor   uint16
+	metaSize       uint16
+	pageSize       uint32
+	checksumAlgo   uint8
+	flags          uint8
+	keyWidth       uint8
+	scopeMode      uint8 // was scopeWidth
+	recordSize     uint32
+	createdUnix    uint64
+	rootPgno       uint32
+	treeHeight     uint32
+	totalPages     uint64
+	recordCount    uint64
+	txnID          uint64
+	updatedUnix    uint64
+	scopeTableRoot uint32
+	freeListHead   uint32
 }
 
 func (m *meta) encodeInto(page []byte) {

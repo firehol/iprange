@@ -29,12 +29,12 @@ const (
 // DiffSegment is a maximal range where old and desired agree or differ,
 // produced by the sweep-line diff between two interval sequences.
 type DiffSegment[K ipKey[K]] struct {
-	From          K
-	To            K
-	OldScope      uint32 // valid when HasOld
-	HasOld        bool
-	DesiredScope  uint32 // valid when HasDesired
-	HasDesired    bool
+	From         K
+	To           K
+	OldScope     uint32 // valid when HasOld
+	HasOld       bool
+	DesiredScope uint32 // valid when HasDesired
+	HasDesired   bool
 }
 
 // Kind returns what changed in this segment.

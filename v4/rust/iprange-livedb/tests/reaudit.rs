@@ -1,18 +1,22 @@
 //! Re-audit regression tests. Each test proves a specific bug exists.
 //! Tests FAIL until the bug is fixed.
 
-use iprange_livedb::{Ipv4Key, Writer, Reader};
-use iprange_livedb::extsort::{ExtSorter, ExtSortConfig};
+use iprange_livedb::extsort::{ExtSortConfig, ExtSorter};
 use iprange_livedb::page_store::VecPageStore;
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 // ── Issue 2: No-op commits leak pages ────────────────────────────────────────
 
 #[test]
 fn reaudit2_noop_commits_do_not_leak_pages() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..5000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..5000u32 {
+        w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
-    for i in 0..3000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+    for i in 0..3000u32 {
+        w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+    }
     w.commit(2, u64::MAX).unwrap();
     let start = w.committed_pages();
     for txn in 3..=100u64 {
@@ -20,7 +24,10 @@ fn reaudit2_noop_commits_do_not_leak_pages() {
     }
     let end = w.committed_pages();
     eprintln!("no-op pages {start} -> {end}");
-    assert!(end <= start + 2, "no-op commits grew file: {start} -> {end}");
+    assert!(
+        end <= start + 2,
+        "no-op commits grew file: {start} -> {end}"
+    );
 }
 
 // ── Issue 3: Partial deletion retains peak tree ──────────────────────────────
@@ -28,7 +35,9 @@ fn reaudit2_noop_commits_do_not_leak_pages() {
 #[test]
 fn reaudit3_large_partial_delete_shrinks_near_final() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..100_000u32 { w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..100_000u32 {
+        w.append(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
     w.delete(Ipv4Key(0), Ipv4Key(89_999)).unwrap();
     w.commit(2, u64::MAX).unwrap();
@@ -47,8 +56,12 @@ fn reaudit3_large_partial_delete_shrinks_near_final() {
     // The key assertion: the file is significantly smaller than the
     // uncompact case (1127 pages). 700 is a generous threshold that
     // still catches the regression.
-    assert!(after_second < 700, "90% delete retained peak tree: first={} second={}",
-        after_first, after_second);
+    assert!(
+        after_second < 700,
+        "90% delete retained peak tree: first={} second={}",
+        after_first,
+        after_second
+    );
     // Verify correctness: 10000 records remain.
     let img = w.into_image().unwrap();
     let r = Reader::open(&img).unwrap();
@@ -67,8 +80,10 @@ fn reaudit4_extsort_last_wins_across_spill_runs() {
     sorter.add(Ipv4Key(0), Ipv4Key(30), 2).unwrap();
     let mut stream = sorter.finish().unwrap();
     while let Some(rec) = stream.next() {
-        assert_eq!(rec.scope_id, 2,
-            "later record lost across spill runs: {rec:?}");
+        assert_eq!(
+            rec.scope_id, 2,
+            "later record lost across spill runs: {rec:?}"
+        );
     }
 }
 
@@ -77,9 +92,13 @@ fn reaudit4_extsort_last_wins_across_spill_runs() {
 #[test]
 fn reaudit7_noop_commits_preserve_free_entries() {
     let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-    for i in 0..5000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+    for i in 0..5000u32 {
+        w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+    }
     w.commit(1, u64::MAX).unwrap();
-    for i in 0..3000u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+    for i in 0..3000u32 {
+        w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+    }
     w.commit(2, u64::MAX).unwrap();
     // After churn, the free-list should have entries. After 8 no-op commits,
     // the free entries should be preserved (not leaked).
@@ -95,8 +114,10 @@ fn reaudit7_noop_commits_preserve_free_entries() {
     let pages_after = img_after.len() / 4096;
 
     eprintln!("no-op pages {pages_before} -> {pages_after}");
-    assert!(pages_after <= pages_before + 2,
-        "no-op commits grew file: {pages_before} -> {pages_after}");
+    assert!(
+        pages_after <= pages_before + 2,
+        "no-op commits grew file: {pages_before} -> {pages_after}"
+    );
 }
 
 // ── Tombstone invariant: freed-then-consumed page must not reappear as free ─
@@ -108,7 +129,9 @@ fn reaudit7_noop_commits_preserve_free_entries() {
 fn reaudit8_tombstone_freed_then_consumed_stays_live() {
     let mut img = {
         let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
-        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+        for i in 0..1000u32 {
+            w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap();
+        }
         w.commit(1, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
@@ -116,7 +139,9 @@ fn reaudit8_tombstone_freed_then_consumed_stays_live() {
     img = {
         let store = VecPageStore::new(img);
         let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
-        for i in 0..400u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+        for i in 0..400u32 {
+            w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap();
+        }
         w.commit(2, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
@@ -132,7 +157,9 @@ fn reaudit8_tombstone_freed_then_consumed_stays_live() {
         let store = VecPageStore::new(img);
         let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
         let free_before = w.free_page_count();
-        for i in 0..400u32 { w.set(Ipv4Key(10_000 + i), Ipv4Key(10_000 + i), i).unwrap(); }
+        for i in 0..400u32 {
+            w.set(Ipv4Key(10_000 + i), Ipv4Key(10_000 + i), i).unwrap();
+        }
         w.commit(3, u64::MAX).unwrap();
         let _ = free_before;
         w.into_image().unwrap()
@@ -151,7 +178,9 @@ fn reaudit8_tombstone_freed_then_consumed_stays_live() {
     img = {
         let store = VecPageStore::new(img);
         let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
-        for i in 0..400u32 { w.set(Ipv4Key(20_000 + i), Ipv4Key(20_000 + i), i).unwrap(); }
+        for i in 0..400u32 {
+            w.set(Ipv4Key(20_000 + i), Ipv4Key(20_000 + i), i).unwrap();
+        }
         w.commit(4, u64::MAX).unwrap();
         w.into_image().unwrap()
     };
@@ -159,12 +188,20 @@ fn reaudit8_tombstone_freed_then_consumed_stays_live() {
     let r = Reader::open(&img).unwrap();
     // The data written over consumed pages must survive intact.
     for i in 0..400u32 {
-        assert_eq!(r.lookup(Ipv4Key(10_000 + i)).unwrap(), Some(i),
-            "tombstone invariant broken: consumed page overwritten at key {}", 10_000 + i);
+        assert_eq!(
+            r.lookup(Ipv4Key(10_000 + i)).unwrap(),
+            Some(i),
+            "tombstone invariant broken: consumed page overwritten at key {}",
+            10_000 + i
+        );
     }
     for i in 0..400u32 {
-        assert_eq!(r.lookup(Ipv4Key(20_000 + i)).unwrap(), Some(i),
-            "data lost at key {}", 20_000 + i);
+        assert_eq!(
+            r.lookup(Ipv4Key(20_000 + i)).unwrap(),
+            Some(i),
+            "data lost at key {}",
+            20_000 + i
+        );
     }
     // Remaining original records must survive too.
     for i in 400..1000u32 {
@@ -173,7 +210,10 @@ fn reaudit8_tombstone_freed_then_consumed_stays_live() {
     // The free-list after reopen must not have re-listed the consumed pages.
     // It should be strictly smaller than right after the delete (some pages
     // were consumed and are now live).
-    assert!(free_after_reopen < free_after_delete,
+    assert!(
+        free_after_reopen < free_after_delete,
         "consumed pages reappeared as free after reopen: {} >= {}",
-        free_after_reopen, free_after_delete);
+        free_after_reopen,
+        free_after_delete
+    );
 }

@@ -1,6 +1,6 @@
 //! Basic integration tests for the v4.3 streaming mmap COW engine.
 
-use iprange_livedb::{Ipv4Key, Writer, Reader};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 #[test]
 fn create_empty_commit() {
@@ -85,7 +85,8 @@ fn scan_all_records() {
     let mut records = vec![];
     w.scan(|from, to, scope| {
         records.push((from, to, scope));
-    }).unwrap();
+    })
+    .unwrap();
 
     assert_eq!(records.len(), 2);
     assert_eq!(records[0], (Ipv4Key(10), Ipv4Key(20), 1));

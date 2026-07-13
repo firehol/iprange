@@ -1,9 +1,9 @@
-use iprange_livedb::{Ipv4Key, Writer, Reader};
+use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 #[test]
 fn feed_bit_436_no_panic() {
     let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap(); // mode 2 = indirect
-    // Feed bit 436 should NOT panic
+                                                          // Feed bit 436 should NOT panic
     w.feed_add_range(Ipv4Key(10), Ipv4Key(20), 436).unwrap();
     w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
@@ -14,15 +14,22 @@ fn feed_bit_436_no_panic() {
     // Resolve the bitmap and check feed bit 436 is set
     let bitmap = r.scope_resolve(scope_id).expect("should resolve");
     let byte_idx = 436 / 8; // 54
-    let bit_idx = 436 % 8;  // 4
-    assert!(bitmap.len() > byte_idx, "bitmap too short: {} bytes", bitmap.len());
-    assert!(bitmap[byte_idx] & (1 << bit_idx) != 0, "feed bit 436 not set");
+    let bit_idx = 436 % 8; // 4
+    assert!(
+        bitmap.len() > byte_idx,
+        "bitmap too short: {} bytes",
+        bitmap.len()
+    );
+    assert!(
+        bitmap[byte_idx] & (1 << bit_idx) != 0,
+        "feed bit 436 not set"
+    );
 }
 
 #[test]
 fn feed_bit_32_bitmap_mode_errors() {
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap(); // mode 1 = bitmap (32 bits max)
-    // Feed bit 32 in bitmap mode should return an error, not panic
+                                                          // Feed bit 32 in bitmap mode should return an error, not panic
     let result = w.feed_add_range(Ipv4Key(10), Ipv4Key(20), 32);
     assert!(result.is_err());
 }

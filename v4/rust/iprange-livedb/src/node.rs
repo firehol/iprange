@@ -7,7 +7,7 @@
 use core::marker::PhantomData;
 
 use crate::key::IpKey;
-use crate::record::{RecordRef, record_size};
+use crate::record::{record_size, RecordRef};
 use crate::spec::PAGE_HEADER_SIZE;
 use crate::wire::u32_le;
 
@@ -22,14 +22,22 @@ pub struct LeafView<'a, K: IpKey> {
 impl<'a, K: IpKey> LeafView<'a, K> {
     #[inline]
     pub fn new(page: &'a [u8], count: usize) -> Self {
-        LeafView { page, count, _k: PhantomData }
+        LeafView {
+            page,
+            count,
+            _k: PhantomData,
+        }
     }
 
     #[inline]
-    pub fn len(&self) -> usize { self.count }
+    pub fn len(&self) -> usize {
+        self.count
+    }
 
     #[inline]
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     /// The `i`-th record (`i < len`). Zero-copy.
     #[inline]
@@ -57,14 +65,22 @@ pub struct BranchView<'a, K: IpKey> {
 impl<'a, K: IpKey> BranchView<'a, K> {
     #[inline]
     pub fn new(page: &'a [u8], sep_count: usize) -> Self {
-        BranchView { page, sep_count, _k: PhantomData }
+        BranchView {
+            page,
+            sep_count,
+            _k: PhantomData,
+        }
     }
 
     #[inline]
-    pub fn sep_count(&self) -> usize { self.sep_count }
+    pub fn sep_count(&self) -> usize {
+        self.sep_count
+    }
 
     #[inline]
-    pub fn child_count(&self) -> usize { self.sep_count + 1 }
+    pub fn child_count(&self) -> usize {
+        self.sep_count + 1
+    }
 
     #[inline]
     pub fn sep(&self, i: usize) -> K {

@@ -85,6 +85,13 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 //
 // onOverlap receives (feed, foreignID, ipCount) for every overlapping feed.
 // foreignID is always 0 (the foreign feed marker).
+//
+// Precondition: the foreign ranges MUST be yielded sorted ascending by `from`.
+// Both inputs (foreign feed + stored tree records) are then sorted, so a
+// single-pass linear merge replaces the per-range B+tree descent (issue-5).
+// The old implementation walked the tree once per foreign range —
+// O(foreign × tree_height); this is O(tree_pages + foreign) + overlap output.
+// Unsorted foreign input would silently under-count overlaps.
 func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
 	if w.pendingRoot == 0 {
 		// Drain the stream so the caller's iterator state is fully consumed
@@ -97,13 +104,48 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 		}
 		return nil
 	}
+	// Collect leaf page numbers in tree (key) order once — page numbers only,
+	// no record materialization. The records inside are globally sorted.
+	leafPages, err := w.pendingLeafPages()
+	if err != nil {
+		return err
+	}
+
+	// Permanent cursor over tree records (leaf idx, record idx). Only advances
+	// forward across foreign ranges — records that end before the current
+	// foreign range's `from` can never overlap it or any later (sorted) range.
+	rLi, rRi := 0, 0
+
 	for {
 		from, to, ok := nextForeign()
 		if !ok {
 			return nil
 		}
-		// Callback-driven descent: no intermediate slice of overlapping records.
-		if err := descendOverlapping[K](w, w.pendingRoot, from, to, func(recFrom, recTo K, scopeID uint32) {
+		// Phase 1 — permanently skip records ending strictly before `from`.
+		for {
+			_, recTo, _, rok := readLeafRec[K](w, leafPages, rLi, rRi)
+			if !rok {
+				break
+			}
+			if recTo.cmp(from) >= 0 {
+				break
+			}
+			stepLeafRec[K](w, leafPages, &rLi, &rRi)
+		}
+		// Phase 2 — scan forward from the permanent cursor, emitting overlaps,
+		// until a record starts after `to`. The scan cursor is a COPY of the
+		// permanent one: records that overlap this foreign range may also
+		// overlap the next, so the permanent cursor is not advanced past them.
+		sLi, sRi := rLi, rRi
+		for {
+			recFrom, recTo, scopeID, rok := readLeafRec[K](w, leafPages, sLi, sRi)
+			if !rok {
+				break
+			}
+			if recFrom.cmp(to) > 0 {
+				break
+			}
+			// Overlap is guaranteed: recTo >= from (phase 1) and recFrom <= to.
 			overlapFrom := from
 			if recFrom.cmp(from) > 0 {
 				overlapFrom = recFrom
@@ -116,9 +158,44 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 			forEachFeed[K](w, scopeID, func(feed uint32) {
 				onOverlap(feed, 0, ipCount)
 			})
-		}); err != nil {
-			return err
+			stepLeafRec[K](w, leafPages, &sLi, &sRi)
 		}
+	}
+}
+
+// readLeafRec returns the record at the leaf-pages cursor (li, ri), or the
+// zero value and false past the end.
+func readLeafRec[K ipKey[K]](w *Writer[K], leafPages []uint32, li, ri int) (K, K, uint32, bool) {
+	var zero K
+	if li >= len(leafPages) {
+		return zero, zero, 0, false
+	}
+	kw := zero.width()
+	page := w.store.page(leafPages[li])
+	h := decodeHeader(page)
+	count := int(h.entryCount)
+	if ri >= count {
+		return zero, zero, 0, false
+	}
+	lv := newLeafView(page, count, kw)
+	rf := zero.readLE(lv.recordFrom(ri))
+	rt := zero.readLE(lv.recordTo(ri))
+	return rf, rt, lv.recordScopeID(ri), true
+}
+
+// stepLeafRec advances the leaf-pages cursor by one record, crossing leaf
+// boundaries.
+func stepLeafRec[K ipKey[K]](w *Writer[K], leafPages []uint32, li, ri *int) {
+	*ri++
+	for *li < len(leafPages) {
+		page := w.store.page(leafPages[*li])
+		h := decodeHeader(page)
+		count := int(h.entryCount)
+		if *ri < count {
+			return
+		}
+		*li++
+		*ri = 0
 	}
 }
 
@@ -137,52 +214,12 @@ func ForeignVsAllFromSlice[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], 
 	}, onOverlap)
 }
 
-// descendOverlapping descends the pending tree, invoking onRec for every leaf
-// record that overlaps [from, to]. Binary-search pruned branch descent.
-func descendOverlapping[K ipKey[K]](w *Writer[K], pgno uint32, from, to K, onRec func(recFrom, recTo K, scopeID uint32)) error {
-	var zero K
-	kw := zero.width()
-	page := w.store.page(pgno)
-	h := decodeHeader(page)
-	switch h.pageType {
-	case PageTypeLeaf:
-		lv := newLeafView(page, int(h.entryCount), kw)
-		for i := 0; i < lv.len(); i++ {
-			rf := zero.readLE(lv.recordFrom(i))
-			if rf.cmp(to) > 0 {
-				return nil
-			}
-			rt := zero.readLE(lv.recordTo(i))
-			if rt.cmp(from) >= 0 {
-				onRec(rf, rt, lv.recordScopeID(i))
-			}
-		}
-		return nil
-	case PageTypeBranch:
-		bv := newBranchView(page, int(h.entryCount), kw)
-		start := branchFindChild[K](&bv, from)
-		for j := start; j < bv.childCount(); j++ {
-			if j > 0 {
-				sep := zero.readLE(bv.sep(j - 1))
-				if sep.cmp(to) > 0 {
-					return nil
-				}
-			}
-			if err := descendOverlapping[K](w, bv.child(j), from, to, onRec); err != nil {
-				return err
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("unexpected page type %d", h.pageType)
-	}
-}
-
 // forEachFeedPair iterates every ordered feed pair (a, b) with a < b covered by
 // scopeID, invoking onPair(a, b) for each. Avoids materializing a feed slice.
 //
 // Bitmap mode: scopeID IS the bitmap; walk set bits with x & (x-1).
-// Indirect mode: resolve to the bitmap byte slice and scan it directly.
+// Indirect mode: resolve to the bitmap byte slice (zero-copy ref, issue-6) and
+// scan it directly — no per-record slice allocation.
 func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b uint32)) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
@@ -201,7 +238,7 @@ func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b 
 			}
 		}
 	case ScopeModeIndirect:
-		bitmap := w.ScopeResolve(scopeID)
+		bitmap := w.ScopeResolveRef(scopeID)
 		if bitmap != nil {
 			forEachSetBitPair(bitmap, onPair)
 		}
@@ -219,7 +256,8 @@ func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, onFeed func(bit uint3
 			onFeed(bit)
 		}
 	case ScopeModeIndirect:
-		bitmap := w.ScopeResolve(scopeID)
+		// Zero-copy ref (issue-6): sub-slice of the committed page image.
+		bitmap := w.ScopeResolveRef(scopeID)
 		if bitmap != nil {
 			forEachSetBit(bitmap, onFeed)
 		}
