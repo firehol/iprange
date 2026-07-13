@@ -113,7 +113,9 @@ impl<K: IpKey> Writer<K> {
         if active.record_size != record_size::<K>() as u32 { return Err(Error::Structural("record_size mismatch")); }
 
         let scope_reg = if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
-            let entries = crate::scope_table::read_all(store.committed_bytes(), active.scope_table_root).unwrap_or_default();
+            let entries = crate::scope_table::read_all_checked(
+                store.committed_bytes(), active.scope_table_root, active.total_pages as u32,
+            ).map_err(|_| Error::Structural("corrupt scope table on open"))?;
             Some(crate::scope_table::ScopeRegistry::from_entries(entries))
         } else if active.scope_mode == spec::SCOPE_MODE_INDIRECT {
             Some(crate::scope_table::ScopeRegistry::new())
@@ -136,6 +138,8 @@ impl<K: IpKey> Writer<K> {
             consumed_this_txn: alloc::vec::Vec::with_capacity(4096),
             _k: PhantomData,
         };
+        // Strict CRC validation of the persistent free-list chain at open time.
+        crate::free_list::validate_chain_crc(w.store.as_ref(), w.free_list_head)?;
         w.load_free_list(u64::MAX);
         Ok(w)
     }
@@ -175,6 +179,12 @@ impl<K: IpKey> Writer<K> {
         self.check()?;
         // Refresh MVCC state BEFORE any commit logic uses can_recycle.
         self.can_recycle = oldest_reader_txn_id == u64::MAX;
+
+        // I7 fix: run the sparseness check ONCE per commit (not on every
+        // delete). compact_if_needed walks the tree (O(tree pages)); doing it
+        // per-delete was O(n²) for bulk delete. At commit it is one walk.
+        self.compact_if_needed()?;
+
         // Rebuild scope table (mode 2) only if the registry changed.
         let scope_rebuilt = self.scope_dirty;
         if self.scope_dirty {
@@ -761,10 +771,9 @@ impl<K: IpKey> Writer<K> {
             self.pending_height = 0;
         }
 
-        // Issue 3 fix: compact the tree if it's significantly sparse after
-        // a large delete. This prevents the tree from retaining peak-sized
-        // structure when most records have been removed.
-        self.compact_if_needed()?;
+        // I7 fix: compaction is deferred to Commit (one walk per commit, not
+        // per delete). Calling compact_if_needed here made every delete
+        // O(tree pages).
 
         Ok(())
     }
@@ -938,6 +947,15 @@ impl<K: IpKey> Writer<K> {
                 let branch = BranchView::<K>::new(page, h.entry_count as usize);
                 let start = Self::branch_find_child(&branch, from);
                 for j in start..branch.child_count() {
+                    // I7: separator-based early exit. The separator at j-1 is
+                    // the lower bound of child j's key range. If it exceeds
+                    // `to`, child j and all later children can't overlap
+                    // [from, to] — stop scanning. Without this, a point delete
+                    // re-scans ALL remaining leaves on the second scan.
+                    if j > 0 {
+                        let sep = branch.sep(j - 1);
+                        if sep > to { return Ok(None); }
+                    }
                     if let Some(r) = self.scan_overlap_node(branch.child(j), from, to)? {
                         return Ok(Some(r));
                     }

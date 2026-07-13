@@ -390,18 +390,91 @@ func (r *Reader) validateTree() error {
 	return nil
 }
 
-// validateScopeTable walks the scope table (mode 2) if present. The scope-table
-// readers (findScope/readScopeNode) are already bounds-safe and depth-bounded;
-// here we ensure the committed table is walkable. KV-tree validation is deferred
-// to Phase 4c.
+// validateScopeTable walks the scope table (mode 2) if present, verifying
+// per-page CRC32C, page type at each level, monotonically increasing
+// scope_ids within each leaf, and child page numbers in range. KV-tree
+// validation is deferred to Phase 4c.
 func (r *Reader) validateScopeTable() error {
 	if r.meta.scopeTableRoot == 0 {
 		return nil
 	}
-	if _, err := readAllScopes(r.bytes, r.meta.scopeTableRoot); err != nil {
-		return errf("structural", "scope table validation failed")
+	return r.validateScopeNode(r.meta.scopeTableRoot, 0)
+}
+
+// validateScopeNode is the recursive structural walk over scope-table pages.
+// It is panic-safe: r.page bounds-checks every access.
+func (r *Reader) validateScopeNode(pgno uint32, depth uint32) error {
+	if depth > TreeHeightMax {
+		return errf("structural", "scope table too deep")
 	}
-	return nil
+	page := r.page(pgno)
+	if page == nil {
+		return errf("structural", "scope page out of bounds")
+	}
+	// Per-page CRC: a corrupt scope page must be rejected, not silently read.
+	if !verifyPage(page) {
+		return errf("checksum", "scope table page")
+	}
+	h := decodeHeader(page)
+	if h.reserved != 0 {
+		return errf("reserved", "scope page header reserved")
+	}
+	if h.pgno != pgno {
+		return errf("structural", "scope page self-pgno mismatch")
+	}
+	switch h.pageType {
+	case PageTypeScopeLeaf:
+		count := int(h.entryCount)
+		maxEntries := (PageSize - PageHeaderSize) / ScopeEntrySize
+		if count < 1 || count > maxEntries {
+			return errf("invariant", "scope leaf entry_count out of range")
+		}
+		var prevID uint32
+		havePrev := false
+		for i := 0; i < count; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			id := u32le(page, recOff)
+			if havePrev && id <= prevID {
+				return errf("invariant", "scope_ids not strictly increasing in leaf")
+			}
+			prevID = id
+			havePrev = true
+		}
+		return nil
+	case PageTypeScopeBranch:
+		s := int(h.entryCount)
+		sepWidth := int(ScopeKeyWidth)
+		maxSeps := (PageSize - PageHeaderSize - 4) / (sepWidth + 4)
+		if s < 1 || s > maxSeps {
+			return errf("invariant", "scope branch separator count out of range")
+		}
+		bv := newBranchView(page, s, sepWidth)
+		var prevSep uint32
+		havePrev := false
+		for i := 0; i < s; i++ {
+			sep := u32le(bv.sep(i), 0)
+			if havePrev && sep <= prevSep {
+				return errf("invariant", "scope branch separators not strictly increasing")
+			}
+			prevSep = sep
+			havePrev = true
+		}
+		cc := bv.childCount()
+		for j := 0; j < cc; j++ {
+			cj := bv.child(j)
+			if uint64(cj) < 2 || uint64(cj) >= r.meta.totalPages {
+				return errf("structural", "scope child pgno out of range")
+			}
+		}
+		for j := 0; j < cc; j++ {
+			if err := r.validateScopeNode(bv.child(j), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("structural: unexpected page type %d in scope table", h.pageType)
+	}
 }
 
 // validateNode is the recursive structural walk (§9 step 4). lo/hi are the

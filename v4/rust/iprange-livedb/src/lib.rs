@@ -57,13 +57,6 @@ pub mod page_store;
 pub mod page_set;
 pub mod free_list;
 
-/// The v4.1 scope table (§C.2, §D): the per-scope metadata registry. Requires `alloc`.
-#[cfg(feature = "alloc")]
-
-/// The v4.1 per-scope KV store (§C.4, §D): a slot-directory B+tree behind each scope's
-/// `kv_root`. Requires `alloc`.
-#[cfg(feature = "alloc")]
-
 /// The v4 -> v3 snapshot bridge (§13): export a sealed, canonical v3 file from a
 /// validated v4 image. Opt-in (`export-v3` feature) so the core stays free of the v3
 /// crate dependency.

@@ -131,29 +131,104 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// Validate the v4.1 metadata (§C.5) before exposing the reader: the scope table, then
-    /// every scope's per-scope KV tree (incl. its overflow chains). A v4.0 file has
-    /// `scope_table_root == 0` (no metadata) and this is a no-op. Without `alloc` the reader
-    /// fails closed on a metadata-bearing file (it cannot walk the scope structures).
+    /// Validate the v4.1 scope table: walk every scope page verifying per-page
+    /// CRC32C, page type at each level, monotonically increasing scope_ids and
+    /// separator keys, and child page numbers in range. A v4.0 file has
+    /// `scope_table_root == 0` (no metadata) and this is a no-op.
     fn validate_scope_table(&self) -> Result<()> {
         let root = self.meta.scope_table_root;
         if root == 0 {
             return Ok(());
         }
-        #[cfg(feature = "alloc")]
-        {
-            // One file-wide page-disjointness bitset (F2) shared by the scope-table walk,
-            // every per-scope KV tree, and every overflow chain: a page reached twice — a
-            // duplicate child pgno, an aliased subtree, or a shared overflow chain across two
-            // KV entries (the glm PoC wrong-answer bug) — is structural corruption. This
-            // makes the whole v4.1 metadata page forest provably disjoint and acyclic.
-            let _visited = alloc::vec![false; self.meta.total_pages as usize];
-            crate::scope_table::read_all(self.bytes, root).map_err(|_| crate::error::Error::Structural("scope table validation failed"))?;
-            Ok(())
+        self.validate_scope_node(root, 0)
+    }
+
+    fn validate_scope_node(&self, pgno: u32, depth: u32) -> Result<()> {
+        if depth > spec::TREE_HEIGHT_MAX {
+            return Err(Error::Structural("scope table too deep"));
         }
-        #[cfg(not(feature = "alloc"))]
-        {
-            Err(Error::Incompatible("v4.1 metadata requires alloc"))
+        if pgno as u64 >= self.meta.total_pages {
+            return Err(Error::Structural("scope page out of bounds"));
+        }
+        let page = self.page_bytes(pgno);
+        // Per-page CRC: a corrupt scope page must be rejected.
+        if !crc32c::verify_page(page) {
+            return Err(Error::ChecksumFailed("scope table page"));
+        }
+        let h = crate::wire::PageHeader::decode(page);
+        if h.reserved != 0 {
+            return Err(Error::NonZeroReserved("scope page header"));
+        }
+        if h.pgno != pgno {
+            return Err(Error::Structural("scope page self-pgno mismatch"));
+        }
+        match h.page_type {
+            spec::PAGE_TYPE_SCOPE_LEAF => {
+                let count = h.entry_count as usize;
+                let max_entries = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) /
+                    crate::scope_table::SCOPE_ENTRY_SIZE;
+                if count < 1 || count > max_entries {
+                    return Err(Error::Invariant("scope leaf entry_count out of range"));
+                }
+                let mut have_prev = false;
+                let mut prev_id = 0u32;
+                for i in 0..count {
+                    let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
+                    let id = crate::wire::u32_le(page, rec_off);
+                    if have_prev && id <= prev_id {
+                        return Err(Error::Invariant("scope_ids not strictly increasing in leaf"));
+                    }
+                    prev_id = id;
+                    have_prev = true;
+                }
+                Ok(())
+            }
+            spec::PAGE_TYPE_SCOPE_BRANCH => {
+                let s = h.entry_count as usize; // separator count
+                let sep_width = spec::SCOPE_KEY_WIDTH;
+                let max_seps = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (sep_width + 4);
+                if s < 1 || s > max_seps {
+                    return Err(Error::Invariant("scope branch separator count out of range"));
+                }
+                // Separators and children are laid out directly in the page:
+                // [first_child(4)] [sep(4) child(4)]*s
+                let mut have_prev = false;
+                let mut prev_sep = 0u32;
+                for i in 0..s {
+                    let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
+                    let sep = crate::wire::u32_le(page, off);
+                    if have_prev && sep <= prev_sep {
+                        return Err(Error::Invariant("scope branch separators not strictly increasing"));
+                    }
+                    prev_sep = sep;
+                    have_prev = true;
+                }
+                // child_count = s + 1. Verify each child is in range.
+                let cc = s + 1;
+                for j in 0..cc {
+                    let child_off = if j == 0 {
+                        spec::PAGE_HEADER_SIZE
+                    } else {
+                        spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (sep_width + 4) + sep_width
+                    };
+                    let cj = crate::wire::u32_le(page, child_off);
+                    if cj < 2 || cj as u64 >= self.meta.total_pages {
+                        return Err(Error::Structural("scope child pgno out of range"));
+                    }
+                }
+                // Recurse into each child.
+                for j in 0..cc {
+                    let child_off = if j == 0 {
+                        spec::PAGE_HEADER_SIZE
+                    } else {
+                        spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (sep_width + 4) + sep_width
+                    };
+                    let cj = crate::wire::u32_le(page, child_off);
+                    self.validate_scope_node(cj, depth + 1)?;
+                }
+                Ok(())
+            }
+            _ => Err(Error::Structural("unexpected page type in scope table")),
         }
     }
 

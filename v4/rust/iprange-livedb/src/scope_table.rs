@@ -300,6 +300,59 @@ pub fn read_all(bytes: &[u8], root_pgno: u32) -> Result<Vec<ScopeEntry>> {
     Ok(entries)
 }
 
+/// Read all scope entries, verifying the per-page CRC32C of every scope page.
+/// Used at open time to reject a corrupt scope table instead of silently
+/// loading garbage data. `total` bounds the page-number space.
+pub fn read_all_checked(bytes: &[u8], root_pgno: u32, total: u32) -> Result<Vec<ScopeEntry>> {
+    let mut entries = Vec::new();
+    if root_pgno == 0 {
+        return Ok(entries);
+    }
+    read_node_checked(bytes, root_pgno, 0, total, &mut entries)?;
+    Ok(entries)
+}
+
+fn read_node_checked(
+    bytes: &[u8], pgno: u32, depth: u32, total: u32, out: &mut Vec<ScopeEntry>,
+) -> Result<()> {
+    if depth > spec::TREE_HEIGHT_MAX {
+        return Err(Error::Invariant("scope table too deep"));
+    }
+    if pgno as u64 >= total as u64 {
+        return Err(Error::Structural("scope table page out of bounds"));
+    }
+    let off = pgno as usize * spec::PAGE_SIZE;
+    if off + spec::PAGE_SIZE > bytes.len() {
+        return Err(Error::Structural("scope table page out of bounds"));
+    }
+    let page = &bytes[off..off + spec::PAGE_SIZE];
+    if !crate::crc32c::verify_page(page) {
+        return Err(Error::ChecksumFailed("scope table page fails CRC"));
+    }
+    let h = PageHeader::decode(page);
+    match h.page_type {
+        spec::PAGE_TYPE_SCOPE_LEAF => {
+            let count = h.entry_count as usize;
+            for i in 0..count {
+                let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
+                let entry = decode_entry(&page[rec_off..rec_off + SCOPE_ENTRY_SIZE]);
+                out.push(entry);
+            }
+            Ok(())
+        }
+        spec::PAGE_TYPE_SCOPE_BRANCH => {
+            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                page, h.entry_count as usize,
+            );
+            for j in 0..branch.child_count() {
+                read_node_checked(bytes, branch.child(j), depth + 1, total, out)?;
+            }
+            Ok(())
+        }
+        _ => Err(Error::Structural("unexpected page type in scope table")),
+    }
+}
+
 fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("scope table too deep"));

@@ -485,21 +485,36 @@ impl<K: IpKey> DesiredStream<K> for CoalesceStream<K> {
 fn read_record<K: IpKey>(file: &mut File) -> Result<Option<(DesiredRecord<K>, u64)>> {
     let kw = K::WIDTH;
     let mut buf = vec![0u8; kw * 2 + 12];
-    match file.read_exact(&mut buf) {
-        Ok(()) => Ok(Some((
-            DesiredRecord {
-                from: K::read_le(&buf[..kw]),
-                to: K::read_le(&buf[kw..2*kw]),
-                scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
-            },
-            u64::from_le_bytes([
-                buf[2*kw+4], buf[2*kw+5], buf[2*kw+6], buf[2*kw+7],
-                buf[2*kw+8], buf[2*kw+9], buf[2*kw+10], buf[2*kw+11],
-            ]),
-        ))),
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
-        Err(e) => Err(Error::Io(e)),
+    // Fill the buffer ourselves so we can distinguish a clean end-of-file
+    // (0 bytes available → Ok(None)) from a truncated final record (1..len
+    // bytes available → Err). read_exact returns UnexpectedEof for both,
+    // which would silently drop the IPs in the partial record.
+    let mut filled = 0;
+    while filled < buf.len() {
+        match file.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(Error::Io(e)),
+        }
     }
+    if filled == 0 {
+        return Ok(None);
+    }
+    if filled < buf.len() {
+        return Err(Error::Structural("truncated spill file: partial record"));
+    }
+    Ok(Some((
+        DesiredRecord {
+            from: K::read_le(&buf[..kw]),
+            to: K::read_le(&buf[kw..2*kw]),
+            scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
+        },
+        u64::from_le_bytes([
+            buf[2*kw+4], buf[2*kw+5], buf[2*kw+6], buf[2*kw+7],
+            buf[2*kw+8], buf[2*kw+9], buf[2*kw+10], buf[2*kw+11],
+        ]),
+    )))
 }
 
 fn write_record<K: IpKey>(file: &mut File, rec: &DesiredRecord<K>, seq: u64) -> Result<()> {
@@ -596,6 +611,40 @@ mod tests {
         let r2 = stream.next().unwrap();
         assert_eq!(r2.from, Ipv4Key(15));
         assert_eq!(r2.to, Ipv4Key(25));
+    }
+
+    // ── I5: truncated spill file must error, not silently lose records ──────
+
+    #[test]
+    fn read_record_rejects_truncated_spill() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("iprange_trunc_{}.spill", RUN_COUNTER.fetch_add(1, Ordering::SeqCst)));
+
+        // Write 3 complete records.
+        {
+            let mut f = OpenOptions::new().write(true).create(true).truncate(true)
+                .open(&path).unwrap();
+            for i in 0u32..3 {
+                write_record::<Ipv4Key>(&mut f,
+                    &DesiredRecord { from: Ipv4Key(i*10), to: Ipv4Key(i*10+9), scope_id: i+1 },
+                    u64::from(i)).unwrap();
+            }
+            // Append a partial 4th record (half the record size).
+            let kw = Ipv4Key::WIDTH;
+            let half = kw * 2 + 12; // full size
+            let half_bytes = vec![0xABu8; half / 2];
+            f.write_all(&half_bytes).unwrap();
+        }
+
+        // read_run must error (truncation), not silently return 3 records.
+        let result = read_run::<Ipv4Key>(&path);
+        let _ = std::fs::remove_file(&path);
+        match result {
+            Err(crate::error::Error::Structural(msg)) => {
+                assert!(msg.contains("truncated"), "wrong error: {}", msg);
+            }
+            other => panic!("expected truncation error, got {:?}", other.map(|v| v.len())),
+        }
     }
 }
 

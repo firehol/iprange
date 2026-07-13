@@ -192,16 +192,27 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		scopeRegistry:       nil,
 		scopeTableRootCache: active.scopeTableRoot, scopeDirty: false,
 	}
-	// Load scope table for mode 2.
+	// Load scope table for mode 2 (CRC-validating).
 	if active.scopeMode == ScopeModeIndirect {
-		entries, _ := readAllScopes(w.store.committedBytes(), active.scopeTableRoot)
+		entries, err := readAllScopesChecked(w.store.committedBytes(), active.scopeTableRoot, uint32(active.totalPages))
+		if err != nil {
+			return nil, fmt.Errorf("corrupt scope table on open: %w", err)
+		}
 		if entries != nil {
 			w.scopeRegistry = ScopeRegistryFromEntries(entries)
 		} else {
 			w.scopeRegistry = NewScopeRegistry()
 		}
 	}
-	w.LoadFreeList(^uint64(0))
+	// Strict CRC validation of the persistent free-list chain. At open time
+	// chain pages are intact from the previous commit; a CRC failure here means
+	// genuine corruption (not the commit-time dangling-head case).
+	if err := ValidateChainCRC(w.store, w.freeListHead); err != nil {
+		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
+	}
+	if err := w.LoadFreeList(^uint64(0)); err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 
@@ -265,6 +276,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	}
 	// Refresh MVCC state BEFORE any commit logic uses canRecycle.
 	w.canRecycle = oldestReaderTxnID == ^uint64(0)
+
+	// I7 fix: run the sparseness check ONCE per commit (not on every delete).
+	// compactIfNeeded walks the tree (O(tree pages)); doing it per-delete was
+	// O(n²) for bulk delete. At commit it is one walk — acceptable.
+	if err := w.compactIfNeeded(); err != nil {
+		return err
+	}
 
 	// Rebuild scope table (mode 2) only if the registry changed.
 	scopeRebuilt := w.scopeDirty
@@ -366,7 +384,9 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		w.committedPages = total
 		w.store.setCommittedPages(total)
 		w.resetTxn()
-		w.LoadFreeList(oldestReaderTxnID)
+		if err := w.LoadFreeList(oldestReaderTxnID); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -457,7 +477,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		// Compaction path: read old entries, deduplicate, rewrite.
 		var oldEntries []FreeEntry
 		if w.freeListHead != 0 {
-			oldEntries, _ = ReadChain(w.store, w.freeListHead)
+			var err error
+			oldEntries, err = ReadChain(w.store, w.freeListHead)
+			if err != nil {
+				return err
+			}
 		}
 
 		// Merge: new entries take priority (they are this txn's state).
@@ -601,7 +625,9 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	w.committedPages = total
 	w.store.setCommittedPages(total)
 	w.resetTxn()
-	w.LoadFreeList(oldestReaderTxnID)
+	if err := w.LoadFreeList(oldestReaderTxnID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -705,14 +731,17 @@ func (w *Writer[K]) allocChainPage() (uint32, error) {
 // means the page was reused and is NOT free. A normal entry means free, subject
 // to MVCC filtering (FreedTxnID < oldestReaderTxnID, or all reclaimable when
 // MaxUint64). Chain pages themselves are excluded — they are live metadata.
-func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
+func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) error {
 	w.canRecycle = oldestReaderTxnID == ^uint64(0)
 	if w.freeListHead == 0 {
 		w.freePages = w.freePages[:0]
 		w.freePos = 0
-		return
+		return nil
 	}
-	entries, _ := ReadChain(w.store, w.freeListHead)
+	entries, err := ReadChain(w.store, w.freeListHead)
+	if err != nil {
+		return err
+	}
 	// Chain pages are live metadata and must never be handed out as free,
 	// even if an older segment still lists them as freed. Exclude them.
 	chainPages := ReadChainPageNumbers(w.store, w.freeListHead)
@@ -752,6 +781,7 @@ func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
 	w.freePages = bounded
 	sort.Slice(w.freePages, func(i, j int) bool { return w.freePages[i] < w.freePages[j] })
 	w.freePos = 0
+	return nil
 }
 
 // resetTxn clears the private-pages bitset for the next transaction.
@@ -983,14 +1013,13 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 		if w.pendingRoot == 0 {
 			return nil
 		}
-		overlap, err := w.scanFirstOverlap(from, to)
+		o, found, err := w.scanFirstOverlap(from, to)
 		if err != nil {
 			return err
 		}
-		if overlap == nil {
+		if !found {
 			break
 		}
-		o := *overlap
 		cowLeaf, err := w.cowToLeaf(o.leafPgno)
 		if err != nil {
 			return err
@@ -1028,11 +1057,8 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 		w.pendingRoot = 0
 		w.pendingHeight = 0
 	}
-	// Issue 3 fix: compact the tree if it is significantly sparse after a
-	// large delete, preventing peak-sized structure from lingering.
-	if err := w.compactIfNeeded(); err != nil {
-		return err
-	}
+	// I7 fix: compaction is deferred to Commit (one walk per commit, not per
+	// delete). Calling compactIfNeeded here made every delete O(tree pages).
 	return nil
 }
 
@@ -1208,51 +1234,61 @@ type overlapInfo[K ipKey[K]] struct {
 	leafPgno uint32
 	recIdx   int
 }
-
-func (w *Writer[K]) scanFirstOverlap(from, to K) (*overlapInfo[K], error) {
+func (w *Writer[K]) scanFirstOverlap(from, to K) (overlapInfo[K], bool, error) {
 	if w.pendingRoot == 0 {
-		return nil, nil
+		var zero overlapInfo[K]
+		return zero, false, nil
 	}
 	return w.scanOverlapNode(w.pendingRoot, from, to)
 }
 
-func (w *Writer[K]) scanOverlapNode(pgno uint32, from, to K) (*overlapInfo[K], error) {
-	var zero K
-	kw := zero.width()
+func (w *Writer[K]) scanOverlapNode(pgno uint32, from, to K) (overlapInfo[K], bool, error) {
+	var zero overlapInfo[K]
+	var z K
+	kw := z.width()
 	page := w.store.page(pgno)
 	h := decodeHeader(page)
 	switch h.pageType {
 	case PageTypeLeaf:
 		lv := newLeafView(page, int(h.entryCount), kw)
 		for i := 0; i < lv.len(); i++ {
-			rf := zero.readLE(lv.recordFrom(i))
+			rf := z.readLE(lv.recordFrom(i))
 			if rf.cmp(to) > 0 {
-				return nil, nil
+				return zero, false, nil
 			}
-			rt := zero.readLE(lv.recordTo(i))
+			rt := z.readLE(lv.recordTo(i))
 			if rt.cmp(from) >= 0 {
-				return &overlapInfo[K]{
+				return overlapInfo[K]{
 					recFrom: rf, recTo: rt, recScope: lv.recordScopeID(i),
 					leafPgno: pgno, recIdx: i,
-				}, nil
+				}, true, nil
 			}
 		}
-		return nil, nil
+		return zero, false, nil
 	case PageTypeBranch:
 		bv := newBranchView(page, int(h.entryCount), kw)
 		start := branchFindChild[K](&bv, from)
 		for j := start; j < bv.childCount(); j++ {
-			r, err := w.scanOverlapNode(bv.child(j), from, to)
-			if err != nil {
-				return nil, err
+			// I7: separator-based early exit. The separator at j-1 is the
+			// lower bound of child j's key range. If it exceeds `to`, child j
+			// and all later children can't overlap [from, to] — stop scanning.
+			if j > 0 {
+				sep := readKey[K](bv.sep(j - 1))
+				if sep.cmp(to) > 0 {
+					return zero, false, nil
+				}
 			}
-			if r != nil {
-				return r, nil
+			r, found, err := w.scanOverlapNode(bv.child(j), from, to)
+			if err != nil {
+				return zero, false, err
+			}
+			if found {
+				return r, true, nil
 			}
 		}
-		return nil, nil
+		return zero, false, nil
 	default:
-		return nil, fmt.Errorf("unexpected page type %d", h.pageType)
+		return zero, false, fmt.Errorf("unexpected page type %d", h.pageType)
 	}
 }
 

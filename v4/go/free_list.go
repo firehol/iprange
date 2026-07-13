@@ -41,6 +41,13 @@ type FreeEntry struct {
 // semantics. Callers that want a pgno-sorted view must sort the result.
 //
 // Cost: O(chain_page_count) = O(free_count / TxnFreeCapacity).
+//
+// CRC note: ReadChain is used both at open-time (chain pages intact) and at
+// commit-time (where a previous chain head may have been legitimately
+// overwritten by COW growth — the dangling-head case). To avoid crashing
+// the commit on that known case, ReadChain stops at the first non-TXN_FREE
+// page WITHOUT a hard CRC failure. Use ValidateChainCRC for a strict CRC
+// check at open time.
 func ReadChain(store PageReader, head uint32) ([]FreeEntry, error) {
 	var entries []FreeEntry
 	pgno := head
@@ -56,7 +63,7 @@ func ReadChain(store PageReader, head uint32) ([]FreeEntry, error) {
 		page := store.page(pgno)
 		h := decodeHeader(page)
 		if h.pageType != PageTypeTxnFree {
-			break // not a free-list page — stop
+			break // not a free-list page — stop (handles dangling-head case)
 		}
 		next := u32le(page, TxnFreeNext)
 		freedTxn := u64le(page, TxnFreeFreedIn)
@@ -74,6 +81,39 @@ func ReadChain(store PageReader, head uint32) ([]FreeEntry, error) {
 	// NOTE: intentionally NOT sorted — chain order (newest-first) is preserved
 	// so that newest-entry-wins dedup in LoadFreeList is correct.
 	return entries, nil
+}
+
+// ValidateChainCRC walks the free-list chain starting at head and verifies the
+// per-page CRC32C of every TXN_FREE chain page. Use this at open time (when
+// chain pages are intact from the previous commit) to reject a corrupt chain
+// page instead of silently loading its garbage freed-page numbers.
+//
+// Returns nil if the chain is intact or head == 0; an error on the first chain
+// page whose CRC fails.
+func ValidateChainCRC(store PageReader, head uint32) error {
+	if head == 0 {
+		return nil
+	}
+	pgno := head
+	seenPages := uint32(0)
+	for pgno != 0 {
+		seenPages++
+		if seenPages > 10_000_000 {
+			return fmt.Errorf("free-list chain exceeds 10M pages — corrupt")
+		}
+		if uint64(pgno) >= uint64(store.totalPages()) {
+			return nil // chain page beyond file — stop (not a CRC failure)
+		}
+		page := store.page(pgno)
+		if decodeHeader(page).pageType != PageTypeTxnFree {
+			return nil // not a chain page — stop
+		}
+		if !verifyPage(page) {
+			return fmt.Errorf("free-list chain page %d fails CRC", pgno)
+		}
+		pgno = u32le(page, TxnFreeNext)
+	}
+	return nil
 }
 
 // ReadChainPageNumbers returns the page numbers of the chain pages themselves

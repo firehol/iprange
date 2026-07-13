@@ -160,6 +160,22 @@ impl ReaderTable {
         oldest
     }
 
+    /// Acquire LOCK_SH on the reader companion file for the duration of a
+    /// writer commit. Returns an open File whose Drop releases the lock. This
+    /// blocks reader register/update_txn_id (LOCK_EX) during the commit,
+    /// closing the MVCC race where a reader registers after the writer's
+    /// oldest-txn query but before the meta flip.
+    pub fn lock_for_commit(&self) -> Result<std::fs::File> {
+        let file = OpenOptions::new()
+            .read(true).write(true)
+            .open(&self.path).map_err(Error::Io)?;
+        let fd = file.as_raw_fd();
+        if unsafe { libc::flock(fd, libc::LOCK_SH) } != 0 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        Ok(file)
+    }
+
 
     pub fn reap_stale(&mut self) -> usize {
         let mut cleared = 0;

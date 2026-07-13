@@ -183,6 +183,14 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	// Pick the authoritative meta, preferring one whose page checksum verifies.
 	validA := verifyPage(buf[:PageSize])
 	validB := verifyPage(buf[PageSize : 2*PageSize])
+	// If BOTH meta pages fail CRC, the file is corrupt. Reject BEFORE calling
+	// newMmapStore — newMmapStore truncates the file to (committedPages+chunk)
+	// pages, and a garbage total_pages from the corrupt meta would damage the
+	// file before openWriter ever gets to reject it.
+	if !validA && !validB {
+		file.Close()
+		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
+	}
 	var committedPages uint32
 	switch {
 	case validA && !validB:
@@ -193,6 +201,11 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		committedPages = uint32(metaA.totalPages)
 	default:
 		committedPages = uint32(metaB.totalPages)
+	}
+	// Defensive cap: never let a (possibly corrupt) total_pages exceed the real
+	// file size, so newMmapStore never extends/truncates the file erroneously.
+	if pageLimit := uint32(length / PageSize); committedPages > pageLimit {
+		committedPages = pageLimit
 	}
 
 	store, err := newMmapStore(file, committedPages)
@@ -217,7 +230,12 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	}
 
 	// Load the persistent free-list with current reader MVCC state.
-	w.LoadFreeList(readerTable.OldestReaderTxnID())
+	if err := w.LoadFreeList(readerTable.OldestReaderTxnID()); err != nil {
+		readerTable.Close()
+		store.close()
+		file.Close()
+		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
+	}
 
 	return &FileWriter[K]{
 		w:           w,
@@ -235,7 +253,22 @@ func (fw *FileWriter[K]) Append(from, to K, scopeID uint32) error {
 	return fw.w.Append(from, to, scopeID)
 }
 func (fw *FileWriter[K]) Commit(updatedUnix uint64) error {
-	// Query the oldest live reader fresh at commit time for MVCC safety.
+	// I1 fix: hold LOCK_SH on the reader companion file for the entire commit.
+	// This blocks reader Register (LOCK_EX) during the query→meta-flip window,
+	// so a reader cannot register after the oldest-txn snapshot. Any reader
+	// that arrives during the commit is forced to wait until the meta flip +
+	// LoadFreeList complete — after which it pins the new txn and is unaffected
+	// by page reuse. Without this, the writer could reuse pages the reader's
+	// pinned transaction still references.
+	lockFile, err := fw.readerTable.LockForCommit()
+	if err != nil {
+		return fmt.Errorf("commit lock: %w", err)
+	}
+	defer func() {
+		syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		lockFile.Close()
+	}()
+	// Query the oldest live reader fresh at commit time (under the lock).
 	oldest := fw.readerTable.OldestReaderTxnID()
 	return fw.w.Commit(updatedUnix, oldest)
 }

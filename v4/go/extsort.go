@@ -1,6 +1,7 @@
 package iprangedb
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -346,6 +347,7 @@ type runReader[K ipKey[K]] struct {
 	ok      bool
 	kw      int
 	buf     []byte
+	err     error // set when a truncated (partial) record is detected
 }
 
 func openRunReader[K ipKey[K]](path string) (*runReader[K], error) {
@@ -361,13 +363,24 @@ func openRunReader[K ipKey[K]](path string) (*runReader[K], error) {
 		buf:  make([]byte, spillRecordSize(kw)),
 	}
 	r.advance()
+	if r.err != nil {
+		f.Close()
+		return nil, r.err
+	}
 	return r, nil
 }
 
 func (r *runReader[K]) advance() {
-	_, err := io.ReadFull(r.file, r.buf)
+	n, err := io.ReadFull(r.file, r.buf)
 	if err != nil {
 		r.ok = false
+		// Distinguish a clean end-of-file (0 bytes, io.EOF) from a truncated
+		// spill file (some bytes read, io.ErrUnexpectedEOF). A truncated record
+		// means IPs were lost — surface it as an error instead of silently
+		// stopping.
+		if err == io.ErrUnexpectedEOF || (err != io.EOF && n > 0) {
+			r.err = fmt.Errorf("truncated spill file: short read (%d bytes)", n)
+		}
 		if r.file != nil {
 			r.file.Close()
 			r.file = nil
@@ -399,6 +412,7 @@ type kWayMerge[K ipKey[K]] struct {
 	runs    []*runReader[K]
 	cached  *DesiredRecord[K]
 	pending []taggedRec[K] // tail fragments deferred from truncated results
+	err     error          // first truncation/IO error from any run
 }
 
 func newKWayMerge[K ipKey[K]](paths []string) (*kWayMerge[K], error) {
@@ -478,6 +492,10 @@ func (m *kWayMerge[K]) popMin() (DesiredRecord[K], uint64, bool) {
 		rec := m.runs[idx].current
 		seq := m.runs[idx].seq
 		m.runs[idx].advance()
+		// Capture truncation errors from the run we just advanced.
+		if m.err == nil && m.runs[idx].err != nil {
+			m.err = m.runs[idx].err
+		}
 		return rec, seq, true
 	}
 	// Pending: swap_remove for O(1) (order is irrelevant; findMin scans all).
@@ -606,6 +624,12 @@ func (m *MergeStream[K]) Next() *DesiredRecord[K] {
 	}
 	return r
 }
+
+// Err returns any truncation/IO error encountered while streaming records.
+// Returns nil when the stream ended cleanly at EOF. Callers that need to
+// distinguish "exhausted" from "truncated" should check Err() after Next()
+// returns nil.
+func (m *MergeStream[K]) Err() error { return m.merge.err }
 
 func (m *MergeStream[K]) cleanup() {
 	if m.cleaned {
@@ -744,8 +768,15 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		}
 		buf := make([]byte, spillRecordSize(kw))
 		recs := make([]DesiredRecord[K], 0)
+		var truncErr error
 		for {
-			if _, err := io.ReadFull(f, buf); err != nil {
+			n, err := io.ReadFull(f, buf)
+			if err != nil {
+				// A partial final record (io.ErrUnexpectedEOF with bytes read)
+				// means the spill file is truncated — IPs were lost.
+				if err != io.EOF && (err == io.ErrUnexpectedEOF || n > 0) {
+					truncErr = fmt.Errorf("truncated spill file: short read (%d bytes)", n)
+				}
 				break
 			}
 			rec, _ := readSpillRecord[K](buf, kw)
@@ -753,6 +784,9 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		}
 		f.Close()
 		os.Remove(runPaths[0])
+		if truncErr != nil {
+			return nil, truncErr
+		}
 		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
 	}
 
@@ -817,8 +851,13 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		}
 		buf := make([]byte, spillRecordSize(kw))
 		recs := make([]DesiredRecord[K], 0)
+		var truncErr error
 		for {
-			if _, err := io.ReadFull(f, buf); err != nil {
+			n, err := io.ReadFull(f, buf)
+			if err != nil {
+				if err != io.EOF && (err == io.ErrUnexpectedEOF || n > 0) {
+					truncErr = fmt.Errorf("truncated spill file: short read (%d bytes)", n)
+				}
 				break
 			}
 			rec, _ := readSpillRecord[K](buf, kw)
@@ -826,6 +865,10 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		}
 		f.Close()
 		os.Remove(s.runPaths[0])
+		if truncErr != nil {
+			s.abort()
+			return nil, truncErr
+		}
 		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
 	}
 

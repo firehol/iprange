@@ -63,6 +63,35 @@ pub fn read_chain(store: &dyn PageStore, head: u32) -> Result<Vec<FreeEntry>> {
     Ok(entries)
 }
 
+/// Walk the free-list chain and verify the per-page CRC32C of every TXN_FREE
+/// chain page. Use at open time (when chain pages are intact) to reject a
+/// corrupt chain page. Returns Ok(()) if intact or head == 0.
+pub fn validate_chain_crc(store: &dyn PageStore, head: u32) -> Result<()> {
+    if head == 0 {
+        return Ok(());
+    }
+    let mut pgno = head;
+    let mut seen = 0u32;
+    while pgno != 0 {
+        seen += 1;
+        if seen > 10_000_000 {
+            return Err(Error::Structural("free-list chain exceeds 10M pages — corrupt"));
+        }
+        if pgno as u64 >= store.total_pages() as u64 {
+            return Ok(()); // chain page beyond file — stop
+        }
+        let page = store.page(pgno);
+        if PageHeader::decode(page).page_type != spec::PAGE_TYPE_TXN_FREE {
+            return Ok(()); // not a chain page — stop
+        }
+        if !crate::crc32c::verify_page(page) {
+            return Err(Error::ChecksumFailed("free-list chain page fails CRC"));
+        }
+        pgno = wire::u32_le(page, spec::TXN_FREE_NEXT);
+    }
+    Ok(())
+}
+
 /// Read the page numbers of the chain pages themselves (for freeing at commit).
 pub fn read_chain_page_numbers(store: &dyn PageStore, head: u32) -> Vec<u32> {
     let mut pages = Vec::new();

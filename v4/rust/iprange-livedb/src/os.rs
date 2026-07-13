@@ -177,6 +177,12 @@ impl<K: IpKey> FileWriter<K> {
     pub fn delete(&mut self, from: K, to: K) -> Result<Changed> { self.writer.delete(from, to) }
     pub fn append(&mut self, from: K, to: K, scope_id: u32) -> Result<()> { self.writer.append(from, to, scope_id) }
     pub fn commit(&mut self, updated_unixtime: u64) -> Result<()> {
+        // I1 fix: hold LOCK_SH on the reader companion file for the entire
+        // commit. This blocks reader register (LOCK_EX) during the
+        // query→meta-flip window, so a reader cannot register after the
+        // oldest-txn snapshot. The guard is dropped (releasing the lock) when
+        // commit returns.
+        let _commit_lock = self.reader_table.lock_for_commit()?;
         let oldest = self.reader_table.oldest_reader_txn_id();
         self.writer.commit(updated_unixtime, oldest)?;
         Ok(())

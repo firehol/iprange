@@ -197,6 +197,24 @@ func (t *ReaderTable) OldestReaderTxnID() uint64 {
 	return oldest
 }
 
+// LockForCommit acquires LOCK_SH on the reader companion file and returns an
+// os.File that MUST be closed (which releases the lock) when the commit
+// completes. This blocks reader Register/UpdateTxnID (which need LOCK_EX) for
+// the entire commit, closing the MVCC race where a reader registers after the
+// writer's oldest-txn query but before the meta flip — which would let the
+// writer reuse pages the reader's pinned transaction still references.
+func (t *ReaderTable) LockForCommit() (*os.File, error) {
+	f, err := os.OpenFile(t.path, os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("commit lock open: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("commit lock flock: %w", err)
+	}
+	return f, nil
+}
+
 // ReapStale clears slots from crashed processes.
 func (t *ReaderTable) ReapStale() int {
 	cleared := 0

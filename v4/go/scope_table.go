@@ -359,6 +359,59 @@ func readScopeNode(bytes []byte, pgno uint32, depth uint32, out *[]ScopeEntry) e
 	}
 }
 
+// readAllScopesChecked reads all scope entries from a committed scope table,
+// verifying the per-page CRC32C of every scope page walked. A corrupt scope
+// page (CRC failure) is an error so that openWriter rejects the file instead
+// of silently loading garbage scope data.
+func readAllScopesChecked(bytes []byte, rootPgno uint32, total uint32) ([]ScopeEntry, error) {
+	if rootPgno == 0 {
+		return nil, nil
+	}
+	var entries []ScopeEntry
+	if err := readScopeNodeChecked(bytes, rootPgno, 0, total, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func readScopeNodeChecked(bytes []byte, pgno uint32, depth uint32, total uint32, out *[]ScopeEntry) error {
+	if depth > TreeHeightMax {
+		return fmt.Errorf("scope table too deep")
+	}
+	if uint64(pgno) >= uint64(total) {
+		return fmt.Errorf("scope page out of bounds")
+	}
+	off := int(pgno) * PageSize
+	if off+PageSize > len(bytes) {
+		return fmt.Errorf("scope page out of bounds")
+	}
+	page := bytes[off : off+PageSize]
+	if !verifyPage(page) {
+		return fmt.Errorf("scope table page %d fails CRC", pgno)
+	}
+	h := decodeHeader(page)
+	switch h.pageType {
+	case PageTypeScopeLeaf:
+		count := int(h.entryCount)
+		for i := 0; i < count; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			entry := decodeScopeEntry(page[recOff : recOff+ScopeEntrySize])
+			*out = append(*out, entry)
+		}
+		return nil
+	case PageTypeScopeBranch:
+		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			if err := readScopeNodeChecked(bytes, bv.child(j), depth+1, total, out); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected page type %d in scope table", h.pageType)
+	}
+}
+
 // FindScope finds a single scope entry by scope_id via B+tree descent.
 // O(log S) — reads ~3-4 pages for thousands of entries.
 func findScope(bytes []byte, rootPgno uint32, targetID uint32) []byte {
