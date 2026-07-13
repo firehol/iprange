@@ -20,6 +20,7 @@ use crate::reader::Reader;
 use crate::record::{self, record_size};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::wire::{finalize_checksum, put_u32, u32_le, Meta, PageHeader};
+use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Changed { Changed, Unchanged }
@@ -56,6 +57,10 @@ pub struct Writer<K: IpKey> {
     scope_dirty: bool,
     free_list_head: u32,
     freed_this_txn: alloc::vec::Vec<u32>,
+    /// Pages popped from `free_pages` and reused (made live) this transaction.
+    /// At commit, each gets a tombstone entry `(pgno, u64::MAX)` appended to the
+    /// chain so that newest-entry-wins in `load_free_list` marks them NOT free.
+    consumed_this_txn: alloc::vec::Vec<u32>,
     _k: PhantomData<K>,
 }
 
@@ -76,6 +81,7 @@ impl<K: IpKey> Writer<K> {
             scope_dirty: false,
             free_list_head: 0,
             freed_this_txn: alloc::vec::Vec::with_capacity(4096),
+            consumed_this_txn: alloc::vec::Vec::with_capacity(4096),
             _k: PhantomData,
         };
         w.write_meta_page(0, 1, 0, 0, 0, 2, 0)?;
@@ -113,6 +119,7 @@ impl<K: IpKey> Writer<K> {
             scope_dirty: false,
             free_list_head: active.free_list_head,
             freed_this_txn: alloc::vec::Vec::with_capacity((active.total_pages as usize).max(4096)),
+            consumed_this_txn: alloc::vec::Vec::with_capacity(4096),
             _k: PhantomData,
         };
         w.load_free_list(u64::MAX);
@@ -154,7 +161,8 @@ impl<K: IpKey> Writer<K> {
         self.check()?;
         // Refresh MVCC state BEFORE any commit logic uses can_recycle.
         self.can_recycle = oldest_reader_txn_id == u64::MAX;
-        // Rebuild scope table (mode 2).
+        // Rebuild scope table (mode 2) only if the registry changed.
+        let scope_rebuilt = self.scope_dirty;
         if self.scope_dirty {
             // Old scope pages are committed-region pages reachable from the
             // old meta's scope_table_root. They MUST NOT be overwritten
@@ -185,6 +193,12 @@ impl<K: IpKey> Writer<K> {
                     break;
                 }
             }
+            // Remember the speculative pre-pop so we can tombstone the pages
+            // actually consumed by the scope rebuild. build_scope_tree pops the
+            // pages it needs from free_pool; the rest are returned below. Those
+            // consumed pages are now live scope data and must NOT reappear as
+            // free, so they are recorded for tombstoning at commit.
+            let scope_pool_snapshot: alloc::vec::Vec<u32> = free_pool.clone();
             self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
                 if reg.is_empty() { 0 } else {
                     let mut allocated = Vec::new();
@@ -198,11 +212,19 @@ impl<K: IpKey> Writer<K> {
                     root
                 }
             } else { 0 };
-            // Return unused free_pool pages to the Writer's free-list.
+            // Return unused free_pool pages to the Writer's free-list and
+            // tombstone the ones build_scope_tree actually consumed.
+            let mut returned: std::collections::HashSet<u32> = std::collections::HashSet::new();
             for pgno in free_pool.drain(..) {
                 if self.free_pos > 0 { self.free_pos -= 1; }
                 self.free_pages[self.free_pos] = pgno;
                 self.private_pages.remove(pgno);
+                returned.insert(pgno);
+            }
+            for pgno in scope_pool_snapshot {
+                if !returned.contains(&pgno) {
+                    self.consumed_this_txn.push(pgno);
+                }
             }
             self.scope_dirty = false;
         }
@@ -210,15 +232,15 @@ impl<K: IpKey> Writer<K> {
         for pgno in self.private_pages.iter() {
             if pgno >= 2 { finalize_checksum(self.store.page_mut(pgno)); }
         }
-        // Build and write the persistent free-list.
+        // Tag for freed entries written this commit: the generation being
+        // superseded (MVCC reclamation uses strict <).
         let new_txn_id_val = self.committed_txn_id;
 
-        // Fast path: if nothing was freed and nothing was consumed, the
-        // existing chain is still valid. Skip the rewrite to avoid leaking
-        // pages (allocating chain pages from the free-list consumes them).
+        // Fast path: nothing was freed, nothing consumed, and no scope rebuild.
+        // The existing append-only chain is still valid, so skip the append.
         let nothing_freed = self.freed_this_txn.is_empty();
-        let nothing_consumed = self.free_pos == 0;
-        if nothing_freed && nothing_consumed && self.scope_table_root_cache == 0 {
+        let nothing_consumed = self.consumed_this_txn.is_empty();
+        if nothing_freed && nothing_consumed && !scope_rebuilt {
             // The existing chain is valid — just write the meta and flip.
             let total = self.store.total_pages();
             let inactive = 1 - self.active_meta;
@@ -239,78 +261,90 @@ impl<K: IpKey> Writer<K> {
             return Ok(());
         }
 
-        // Collect entries to persist:
-        // - Old entries not consumed this transaction
-        // - Pages freed this transaction (COW victims + old chain pages + old scope pages)
-        let old_entries = if self.free_list_head != 0 {
-            crate::free_list::read_chain(self.store.as_ref(), self.free_list_head).unwrap_or_default()
-        } else { Vec::new() };
-        let old_chain_pages = crate::free_list::read_chain_page_numbers(
-            self.store.as_ref(), self.free_list_head,
-        );
-        
-        // Determine consumed pages (popped from free_pages during the transaction).
-        let consumed: std::collections::HashSet<u32> = 
-            self.free_pages[..self.free_pos.min(self.free_pages.len())].iter().copied().collect();
-        
-        let mut entries_to_write: Vec<crate::free_list::FreeEntry> = Vec::new();
-        // Keep unconsumed old entries.
-        for e in &old_entries {
-            if !consumed.contains(&e.pgno) {
-                entries_to_write.push(*e);
-            }
-        }
-        // Add old chain page numbers (they're being replaced).
-        for p in &old_chain_pages {
-            self.freed_this_txn.push(*p);
-        }
-        // Add pages freed this transaction (excluding pages truncated above, which
-        // are freed this transaction and go to the chain)
-        for &pgno in &self.freed_this_txn[..] {
-            entries_to_write.push(crate::free_list::FreeEntry { 
-                pgno, freed_txn_id: new_txn_id_val, 
-            });
-        }
+        // ── Tombstone append-only free-list commit ───────────────────────────
+        //
+        // The chain grows monotonically: we append ONE new segment holding this
+        // transaction's freed entries (COW victims + old scope pages) tagged
+        // with `new_txn_id_val`, plus tombstone entries (`u64::MAX`) for every
+        // page that is LIVE this commit but was consumed (reused) from the
+        // free-list. `load_free_list` resolves the final free set with
+        // newest-entry-wins, so a page that is freed and later reused never
+        // reappears as free after close/reopen. Chain pages themselves are
+        // excluded from the free set by `load_free_list` (they appear in
+        // `read_chain_page_numbers`), so they need no tombstone.
+        //
+        // Tombstone rule: a page popped from the free-list is tombstoned ONLY
+        // if it is still live at commit (in private_pages). A page that was
+        // consumed and then freed again in the SAME transaction (e.g. a COW
+        // copy from the delete-all collapse path) is no longer live, so it is
+        // NOT tombstoned — its freed entry makes it correctly free.
+        let live_consumed: alloc::vec::Vec<u32> = self.consumed_this_txn.iter()
+            .filter(|&&p| self.private_pages.contains(p))
+            .copied()
+            .collect();
 
-        // Rule 5: compute trailing free pages for truncation.
-        // This must happen BEFORE writing the chain so the chain never
-        // references pages that will be truncated.
+        // Effective free set for truncation = (previously free ∪ freed this txn)
+        // − live-consumed. Live-consumed pages are LIVE and must never be
+        // truncated, so they are excluded from the trailing scan.
         let pre_truncate_total = self.store.total_pages();
         let trailing: u32 = if oldest_reader_txn_id == u64::MAX {
-            let free_pgnos: alloc::vec::Vec<u32> = entries_to_write.iter()
-                .map(|e| e.pgno)
-                .collect();
-            crate::free_list::trailing_free_count(&free_pgnos, pre_truncate_total)
+            let mut eff: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            for &p in &self.free_pages { eff.insert(p); }
+            for &p in &self.freed_this_txn { eff.insert(p); }
+            for &p in &live_consumed { eff.remove(&p); }
+            let mut v: alloc::vec::Vec<u32> = eff.into_iter().collect();
+            v.sort();
+            crate::free_list::trailing_free_count(&v, pre_truncate_total)
         } else { 0 };
         let new_total = pre_truncate_total - trailing;
 
-        // Remove trailing pages from entries so the chain doesn't reference them.
-        if trailing > 0 {
-            entries_to_write.retain(|e| e.pgno < new_total);
+        // Build entries: freed (drop trailing pages that will be truncated) and
+        // tombstones for live-consumed pages (which are live, so never trailing).
+        let mut entries_to_write: alloc::vec::Vec<crate::free_list::FreeEntry> =
+            alloc::vec::Vec::with_capacity(self.freed_this_txn.len() + live_consumed.len());
+        for &pgno in &self.freed_this_txn {
+            if pgno < new_total {
+                entries_to_write.push(crate::free_list::FreeEntry {
+                    pgno, freed_txn_id: new_txn_id_val,
+                });
+            }
+        }
+        for &pgno in &live_consumed {
+            // Live-consumed pages are live (tree/scope data) ⇒ all < new_total.
+            // Guard defensively anyway.
+            if pgno < new_total {
+                entries_to_write.push(crate::free_list::FreeEntry {
+                    pgno, freed_txn_id: u64::MAX,
+                });
+            }
         }
 
-        // Allocate chain pages from the free-list or growth region.
+        // Sort by freed_txn_id: tombstones (MAX) sort after freed entries, so
+        // they are written last and become the newest pages in the chain —
+        // newest-entry-wins then gives tombstones priority for reused pages.
         entries_to_write.sort_by_key(|e| e.freed_txn_id);
+
+        // Allocate chain pages (NOT tracked as consumed — see alloc_chain_page).
         let needed = crate::free_list::chain_page_count(&entries_to_write);
         let mut chain_pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(needed);
         while chain_pages.len() < needed {
-            chain_pages.push(self.alloc_page()?);
+            chain_pages.push(self.alloc_chain_page()?);
         }
-        // F1 fix: chain pages allocated from the free-list are no longer free.
-        let chain_set: std::collections::HashSet<u32> = chain_pages.iter().copied().collect();
-        entries_to_write.retain(|e| !chain_set.contains(&e.pgno));
 
-        self.free_list_head = crate::free_list::write_chain(
-            self.store.as_mut(), &entries_to_write, &chain_pages,
+        // Append the new segment to the front of the existing chain. Old chain
+        // pages stay reachable (append-only) — they are never freed here.
+        let old_head = self.free_list_head;
+        self.free_list_head = crate::free_list::append_segment(
+            self.store.as_mut(), &entries_to_write, &chain_pages, old_head,
         )?;
 
-        // F9 fix: finalize CRCs on chain pages.
+        // F9 fix: finalize CRCs on the newly written chain pages.
         for &pgno in &chain_pages {
             finalize_checksum(self.store.page_mut(pgno));
         }
 
-        // Truncate. Chain pages might be at positions >= new_total if they
-        // were allocated from the growth region. Adjust to preserve them.
+        // Truncate. Chain pages allocated from the growth region may sit at
+        // positions >= new_total; preserve them so they are not truncated away.
         let max_chain_page = chain_pages.iter().copied().max().unwrap_or(0);
         let total = if trailing > 0 {
             let effective_total = new_total.max(max_chain_page + 1);
@@ -350,6 +384,13 @@ impl<K: IpKey> Writer<K> {
     pub fn record_count(&self) -> u64 { self.pending_record_count }
     pub fn committed_pages(&self) -> u32 { self.committed_pages }
 
+    /// Number of pages currently in the in-memory free-list (reclaimable pool).
+    /// Reflects the result of the last `load_free_list`: newest-entry-wins over
+    /// the append-only chain, with tombstones and chain pages excluded. Used by
+    /// tests/audits to verify the tombstone invariant (a consumed page must not
+    /// reappear here after close/reopen).
+    pub fn free_page_count(&self) -> usize { self.free_pages.len() }
+
     pub fn into_image(self) -> Option<alloc::vec::Vec<u8>> {
         self.store.into_vec()
     }
@@ -381,6 +422,28 @@ impl<K: IpKey> Writer<K> {
             let pgno = self.free_pages[self.free_pos];
             self.free_pos += 1;
             self.private_pages.insert(pgno);
+            // Track for tombstone at commit: this page was free and is now live.
+            self.consumed_this_txn.push(pgno);
+            Ok(pgno)
+        } else {
+            let pgno = self.store.alloc_page()?;
+            self.private_pages.ensure_capacity(pgno as usize + 1);
+            self.private_pages.insert(pgno);
+            Ok(pgno)
+        }
+    }
+
+    /// Allocate a page for free-list chain metadata. Like [`alloc_page`] but
+    /// does NOT record the page in `consumed_this_txn`: chain pages are
+    /// excluded from the free-list by [`load_free_list`] (they appear in
+    /// `read_chain_page_numbers`), so they need no tombstone entry. This breaks
+    /// what would otherwise be a circular dependency (chain page count depends
+    /// on entries, which would depend on tombstones for the chain pages).
+    fn alloc_chain_page(&mut self) -> Result<u32> {
+        if self.free_pos < self.free_pages.len() {
+            let pgno = self.free_pages[self.free_pos];
+            self.free_pos += 1;
+            self.private_pages.insert(pgno);
             Ok(pgno)
         } else {
             let pgno = self.store.alloc_page()?;
@@ -406,8 +469,13 @@ impl<K: IpKey> Writer<K> {
     }
 
     /// Load the free-list from the persistent chain.
-    /// `oldest_reader_txn_id`: pages freed in txn <= this are reclaimable.
-    /// u64::MAX means no readers (all pages reclaimable).
+    ///
+    /// Applies **newest-entry-wins** semantics over the append-only chain: for
+    /// each pgno, the most recent entry (first in chain order, since
+    /// [`crate::free_list::read_chain`] returns newest-first) determines state.
+    /// A tombstone entry (`freed_txn_id == u64::MAX`) means the page was reused
+    /// and is NOT free. A normal entry means free, subject to MVCC filtering
+    /// (`freed_txn_id < oldest_reader_txn_id`, or all reclaimable when MAX).
     pub fn load_free_list(&mut self, oldest_reader_txn_id: u64) {
         // Control same-txn recycling: safe only when no readers are active.
         self.can_recycle = oldest_reader_txn_id == u64::MAX;
@@ -418,7 +486,27 @@ impl<K: IpKey> Writer<K> {
         }
         let entries = crate::free_list::read_chain(self.store.as_ref(), self.free_list_head)
             .unwrap_or_default();
-        self.free_pages = crate::free_list::reclaimable(&entries, oldest_reader_txn_id);
+        // Chain pages are live metadata and must never be handed out as free,
+        // even if an older segment still lists them as freed. Exclude them.
+        let chain_page_set: alloc::vec::Vec<u32> = crate::free_list::read_chain_page_numbers(
+            self.store.as_ref(), self.free_list_head,
+        );
+        let mut chain_set: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for p in &chain_page_set { chain_set.insert(*p); }
+        // Newest-entry-wins: entries are newest-first, so the first occurrence
+        // of each pgno is its most recent state.
+        let mut latest: FxHashMap<u32, u64> = FxHashMap::default();
+        for e in &entries {
+            latest.entry(e.pgno).or_insert(e.freed_txn_id);
+        }
+        self.free_pages = latest.iter()
+            .filter(|(&pgno, &ftxn)| {
+                if chain_set.contains(&pgno) { return false; }
+                ftxn != u64::MAX
+                    && (oldest_reader_txn_id == u64::MAX || ftxn < oldest_reader_txn_id)
+            })
+            .map(|(&pgno, _)| pgno)
+            .collect();
         // Filter out entries beyond the current store (truncated pages).
         let total = self.store.total_pages();
         self.free_pages.retain(|&p| p < total);
@@ -429,6 +517,7 @@ impl<K: IpKey> Writer<K> {
     fn reset_txn(&mut self) {
         self.private_pages.clear();
         self.freed_this_txn.clear();
+        self.consumed_this_txn.clear();
         self.private_pages.ensure_capacity(self.store.total_pages() as usize);
     }
 
@@ -901,6 +990,16 @@ impl<K: IpKey> Writer<K> {
 
     pub fn scope_resolve(&self, scope_id: u32) -> Option<&[u8]> {
         self.scope_registry.as_ref()?.resolve(scope_id)
+    }
+
+    /// Number of pages in the current scope-table tree (mode 2 only).
+    /// Returns 0 when there is no scope table. Used by tests/audits to verify
+    /// that scope pages are reused across commits rather than accumulated.
+    pub fn scope_page_count(&self) -> usize {
+        if self.scope_table_root_cache == 0 { return 0; }
+        let mut pages = alloc::vec::Vec::new();
+        self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut pages);
+        pages.len()
     }
 
     pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {

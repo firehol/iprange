@@ -3,6 +3,7 @@
 
 use iprange_livedb::{Ipv4Key, Writer, Reader};
 use iprange_livedb::extsort::{ExtSorter, ExtSortConfig};
+use iprange_livedb::page_store::VecPageStore;
 
 // ── Issue 2: No-op commits leak pages ────────────────────────────────────────
 
@@ -96,4 +97,83 @@ fn reaudit7_noop_commits_preserve_free_entries() {
     eprintln!("no-op pages {pages_before} -> {pages_after}");
     assert!(pages_after <= pages_before + 2,
         "no-op commits grew file: {pages_before} -> {pages_after}");
+}
+
+// ── Tombstone invariant: freed-then-consumed page must not reappear as free ─
+//
+// The key correctness guarantee of the append-only tombstone free-list: a page
+// that is freed, then consumed (reused for new live data), must NOT be handed
+// out again after close/reopen — or live data would be overwritten.
+#[test]
+fn reaudit8_tombstone_freed_then_consumed_stays_live() {
+    let mut img = {
+        let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+        for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
+        w.commit(1, u64::MAX).unwrap();
+        w.into_image().unwrap()
+    };
+    // Free pages by deleting a contiguous range, then commit.
+    img = {
+        let store = VecPageStore::new(img);
+        let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
+        for i in 0..400u32 { w.delete(Ipv4Key(i), Ipv4Key(i)).unwrap(); }
+        w.commit(2, u64::MAX).unwrap();
+        w.into_image().unwrap()
+    };
+    let free_after_delete = {
+        let store = VecPageStore::new(img.clone());
+        let w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
+        w.free_page_count()
+    };
+    assert!(free_after_delete > 0, "expected freed pages after delete");
+
+    // Consume free pages by inserting new data (allocates from the free-list).
+    img = {
+        let store = VecPageStore::new(img);
+        let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
+        let free_before = w.free_page_count();
+        for i in 0..400u32 { w.set(Ipv4Key(10_000 + i), Ipv4Key(10_000 + i), i).unwrap(); }
+        w.commit(3, u64::MAX).unwrap();
+        let _ = free_before;
+        w.into_image().unwrap()
+    };
+
+    // Reopen: the consumed pages must NOT reappear as free. If the tombstone
+    // were missing, the free-list would have grown back (consumed pages
+    // re-listed), and a subsequent insert would overwrite live data.
+    let free_after_reopen = {
+        let store = VecPageStore::new(img.clone());
+        let w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
+        w.free_page_count()
+    };
+
+    // Insert more data that would land on any wrongly-reclaimed page.
+    img = {
+        let store = VecPageStore::new(img);
+        let mut w = Writer::<Ipv4Key>::open(Box::new(store)).unwrap();
+        for i in 0..400u32 { w.set(Ipv4Key(20_000 + i), Ipv4Key(20_000 + i), i).unwrap(); }
+        w.commit(4, u64::MAX).unwrap();
+        w.into_image().unwrap()
+    };
+
+    let r = Reader::open(&img).unwrap();
+    // The data written over consumed pages must survive intact.
+    for i in 0..400u32 {
+        assert_eq!(r.lookup(Ipv4Key(10_000 + i)).unwrap(), Some(i),
+            "tombstone invariant broken: consumed page overwritten at key {}", 10_000 + i);
+    }
+    for i in 0..400u32 {
+        assert_eq!(r.lookup(Ipv4Key(20_000 + i)).unwrap(), Some(i),
+            "data lost at key {}", 20_000 + i);
+    }
+    // Remaining original records must survive too.
+    for i in 400..1000u32 {
+        assert_eq!(r.lookup(Ipv4Key(i)).unwrap(), Some(i));
+    }
+    // The free-list after reopen must not have re-listed the consumed pages.
+    // It should be strictly smaller than right after the delete (some pages
+    // were consumed and are now live).
+    assert!(free_after_reopen < free_after_delete,
+        "consumed pages reappeared as free after reopen: {} >= {}",
+        free_after_reopen, free_after_delete);
 }

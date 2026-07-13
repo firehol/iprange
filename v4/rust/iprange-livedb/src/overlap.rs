@@ -64,19 +64,15 @@ fn scan_overlap_node<K: IpKey>(
                 let r = leaf.record(i);
                 let ip_count = ip_range_count(r.from(), r.to());
 
-                // Get the feeds covering this record.
-                let feeds = get_feeds_for_scope(writer, r.scope_id());
-
-                // For every pair of feeds, accumulate the overlap.
-                for a in 0..feeds.len() {
-                    for b in (a + 1)..feeds.len() {
-                        on_overlap(FeedOverlap {
-                            feed_a: feeds[a],
-                            feed_b: feeds[b],
-                            ip_count,
-                        });
-                    }
-                }
+                // Iterate feed pairs directly from the scope bitmap — no
+                // per-record Vec allocation. Emits every (a, b) with a < b.
+                for_each_feed_pair(writer, r.scope_id(), &mut |a, b| {
+                    on_overlap(FeedOverlap {
+                        feed_a: a,
+                        feed_b: b,
+                        ip_count,
+                    });
+                });
             }
             Ok(())
         }
@@ -91,45 +87,115 @@ fn scan_overlap_node<K: IpKey>(
     }
 }
 
-/// Resolve a scope_id to the list of feed bits it represents.
-fn get_feeds_for_scope<K: IpKey>(writer: &Writer<K>, scope_id: u32) -> Vec<u32> {
+/// Iterate every ordered feed pair (a, b) with a < b covered by `scope_id`,
+/// calling `on_pair(a, b)` for each. Avoids materializing a feed `Vec`.
+///
+/// - bitmap mode: `scope_id` IS the bitmap; walk set bits with `x & (x - 1)`.
+/// - indirect mode: resolve to the bitmap byte slice and scan it directly.
+fn for_each_feed_pair<K: IpKey>(
+    writer: &Writer<K>,
+    scope_id: u32,
+    on_pair: &mut dyn FnMut(u32, u32),
+) {
     match writer.scope_mode {
         spec::SCOPE_MODE_BITMAP => {
-            // scope_id IS the bitmap. Extract set bits.
-            let mut feeds = Vec::new();
-            let mut bits = scope_id;
-            let mut bit = 0u32;
-            while bits != 0 {
-                if bits & 1 != 0 {
-                    feeds.push(bit);
+            // `outer` always holds the bits strictly greater than the current `a`;
+            // after clearing `a`, the remaining bits form the inner iteration set,
+            // so every emitted pair satisfies a < b.
+            let mut outer = scope_id;
+            while outer != 0 {
+                let a = outer.trailing_zeros();
+                outer &= outer - 1;
+                let mut inner = outer;
+                while inner != 0 {
+                    let b = inner.trailing_zeros();
+                    inner &= inner - 1;
+                    on_pair(a, b);
                 }
-                bits >>= 1;
-                bit += 1;
             }
-            feeds
         }
         spec::SCOPE_MODE_INDIRECT => {
-            // Resolve via the scope registry (writer-side).
             if let Some(bitmap) = writer.scope_resolve(scope_id) {
-                let mut feeds = Vec::new();
-                for (byte_idx, &byte) in bitmap.iter().enumerate() {
-                    let mut bits = byte;
-                    let mut bit_in_byte = 0u32;
-                    while bits != 0 {
-                        if bits & 1 != 0 {
-                            feeds.push((byte_idx as u32) * 8 + bit_in_byte);
-                        }
-                        bits >>= 1;
-                        bit_in_byte += 1;
-                    }
-                }
-                feeds
-            } else {
-                Vec::new()
+                for_each_set_bit_pair(bitmap, on_pair);
             }
         }
-        _ => Vec::new(),
+        _ => {}
     }
+}
+
+/// Iterate every set feed bit in `scope_id`, calling `on_feed(bit)` for each.
+fn for_each_feed<K: IpKey>(
+    writer: &Writer<K>,
+    scope_id: u32,
+    on_feed: &mut dyn FnMut(u32),
+) {
+    match writer.scope_mode {
+        spec::SCOPE_MODE_BITMAP => {
+            let mut bits = scope_id;
+            while bits != 0 {
+                let bit = bits.trailing_zeros();
+                bits &= bits - 1;
+                on_feed(bit);
+            }
+        }
+        spec::SCOPE_MODE_INDIRECT => {
+            if let Some(bitmap) = writer.scope_resolve(scope_id) {
+                for_each_set_bit(bitmap, on_feed);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk set bits of a byte slice, calling `on_feed(absolute_bit)` for each.
+fn for_each_set_bit(bitmap: &[u8], on_feed: &mut dyn FnMut(u32)) {
+    for (byte_idx, &byte) in bitmap.iter().enumerate() {
+        let mut bits = byte;
+        while bits != 0 {
+            let bit_in_byte = bits.trailing_zeros();
+            bits &= bits - 1;
+            on_feed((byte_idx as u32) * 8 + bit_in_byte);
+        }
+    }
+}
+
+/// Walk every ordered pair (a, b) with a < b over the set bits of `bitmap`.
+/// Two-cursor scan over the byte slice — zero allocation, works for any bitmap
+/// width (indirect mode supports unlimited feeds).
+fn for_each_set_bit_pair(bitmap: &[u8], on_pair: &mut dyn FnMut(u32, u32)) {
+    let mut a_pos: usize = 0;
+    while let Some(a) = next_set_bit_from(bitmap, a_pos) {
+        let mut b_pos = a as usize + 1;
+        while let Some(b) = next_set_bit_from(bitmap, b_pos) {
+            on_pair(a, b);
+            b_pos = b as usize + 1;
+        }
+        a_pos = a as usize + 1;
+    }
+}
+
+/// Return the absolute position of the first set bit at or after `start`,
+/// or `None` if no such bit exists.
+fn next_set_bit_from(bitmap: &[u8], start: usize) -> Option<u32> {
+    let mut byte_idx = start >> 3;
+    if byte_idx >= bitmap.len() {
+        return None;
+    }
+    let bit_in_byte = (start & 7) as u32;
+    // First byte: ignore bits below the requested offset.
+    let first = bitmap[byte_idx] & (0xFFu8).wrapping_shl(bit_in_byte);
+    if first != 0 {
+        return Some((byte_idx as u32) * 8 + first.trailing_zeros());
+    }
+    byte_idx += 1;
+    while byte_idx < bitmap.len() {
+        let b = bitmap[byte_idx];
+        if b != 0 {
+            return Some((byte_idx as u32) * 8 + b.trailing_zeros());
+        }
+        byte_idx += 1;
+    }
+    None
 }
 
 /// Count the number of IP addresses in [from, to] (inclusive).
@@ -145,41 +211,41 @@ fn ip_range_count<K: IpKey>(from: K, to: K) -> u64 {
 
 /// Foreign-vs-all comparison: scan a foreign feed against the multi-feed file.
 ///
-/// For each IP range in the foreign feed, find all records in the multi-feed
-/// file that overlap, and report which feeds cover the overlap region.
+/// For each IP range in the foreign feed, descend the tree and report every
+/// feed covering each overlap region. Descent is callback-driven — no
+/// intermediate `Vec` of overlapping records is materialized.
 ///
 /// This is the ASN/Geo/critical-infra use case: compare one external feed
 /// against all stored feeds in a single pass.
-pub fn foreign_vs_all<K: IpKey, F: FnMut(u32, u32, u64)>(
+pub fn foreign_vs_all<K: IpKey>(
     writer: &Writer<K>,
     foreign: &[(K, K)], // sorted, disjoint ranges from the foreign feed
-    on_overlap: &mut F,
+    on_overlap: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
-    // For each foreign range, find overlapping records via tree descent.
+    if writer.pending_root == 0 {
+        return Ok(());
+    }
     for &(from, to) in foreign {
-        let mut overlaps: Vec<(K, K, u32)> = Vec::new();
-        collect_overlapping_writer(writer, writer.pending_root, from, to, &mut overlaps)?;
-
-        for (rec_from, rec_to, scope_id) in &overlaps {
-            let overlap_from = if from >= *rec_from { from } else { *rec_from };
-            let overlap_to = if to <= *rec_to { to } else { *rec_to };
-            let ip_count = ip_range_count(overlap_from, overlap_to);
-
-            let feeds = get_feeds_for_scope(writer, *scope_id);
-            for feed in feeds {
+        descend_overlapping(writer, writer.pending_root, from, to, &mut |rec_from, rec_to, scope_id| {
+            let overlap_from = if from >= rec_from { from } else { rec_from };
+            let overlap_to = if to <= rec_to { to } else { rec_to };
+            let ip_count = ip_range_count::<K>(overlap_from, overlap_to);
+            for_each_feed(writer, scope_id, &mut |feed| {
                 on_overlap(feed, 0, ip_count); // feed_bit=0 means "foreign feed"
-            }
-        }
+            });
+        })?;
     }
     Ok(())
 }
 
-fn collect_overlapping_writer<K: IpKey>(
+/// Descend the pending tree, invoking `on_rec` for every leaf record that
+/// overlaps [from, to]. Binary-search pruned branch descent.
+fn descend_overlapping<K: IpKey>(
     writer: &Writer<K>,
     pgno: u32,
     from: K,
     to: K,
-    out: &mut Vec<(K, K, u32)>,
+    on_rec: &mut dyn FnMut(K, K, u32),
 ) -> Result<()> {
     let page = writer.store.as_ref().page(pgno);
     let h = PageHeader::decode(page);
@@ -190,7 +256,7 @@ fn collect_overlapping_writer<K: IpKey>(
                 let r = leaf.record(i);
                 if r.from() > to { break; }
                 if r.to() >= from {
-                    out.push((r.from(), r.to(), r.scope_id()));
+                    on_rec(r.from(), r.to(), r.scope_id());
                 }
             }
             Ok(())
@@ -200,7 +266,7 @@ fn collect_overlapping_writer<K: IpKey>(
             let start = branch_find_child(&branch, from);
             for j in start..branch.child_count() {
                 if j > 0 && branch.sep(j - 1) > to { break; }
-                collect_overlapping_writer(writer, branch.child(j), from, to, out)?;
+                descend_overlapping(writer, branch.child(j), from, to, on_rec)?;
             }
             Ok(())
         }

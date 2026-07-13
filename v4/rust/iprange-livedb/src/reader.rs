@@ -343,11 +343,8 @@ impl<'a> Reader<'a> {
         if self.meta.scope_table_root == 0 {
             return None;
         }
-        let entries = crate::scope_table::read_all(self.bytes, self.meta.scope_table_root).ok()?;
-        entries
-            .into_iter()
-            .find(|e| e.scope_id == scope_id)
-            .map(|e| e.bitmap)
+        // P2 fix: O(log S) B+tree descent instead of O(S) read_all + linear scan.
+        crate::scope_table::find_scope(self.bytes, self.meta.scope_table_root, scope_id).ok()?
     }
 
 
@@ -936,10 +933,8 @@ mod tests {
         file[200] ^= 0xFF; // meta-A data byte
         file[PAGE_SIZE + 200] ^= 0xFF; // meta-B data byte
         // CRC-validating open: both metas fail CRC → file is corrupt.
-        match Reader::open(&file) {
-            Ok(_) => panic!("CRC-validating open must reject corrupt metas"),
-            Err(_) => {}, // expected
-        }
+        let result = Reader::open(&file);
+        assert!(result.is_err(), "CRC-validating open must reject corrupt metas");
     }
 
 
@@ -1028,12 +1023,11 @@ mod tests {
         page[spec::META_SIZE as usize + 7] = 0xAB;
         crate::wire::finalize_checksum(page);
         // CRC-validating open + classify catches the non-zero tail.
-        match Reader::open(&file) {
-            Ok(r) => assert!(
+        if let Ok(r) = Reader::open(&file) {
+            assert!(
                 matches!(r.validate(), Err(Error::NonZeroReserved(m)) if m == "meta tail"),
                 "validate must reject non-zero meta tail"
-            ),
-            Err(_) => {}, // CRC-validating open may also catch it
+            );
         }
     }
 

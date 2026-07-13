@@ -33,6 +33,12 @@ type MigrateCounters struct {
 type MigrateOptions[K ipKey[K]] struct {
 	EmitUnchanged bool
 	OnChange      func(*ChangeEvent[K])
+	// Combine is an optional scope combiner for overlapping records with
+	// differing scopes. Called with (oldScopeID, desiredScopeID) → the scopeID
+	// to keep. If nil, the desired scopeID wins (overwrite — legacy behavior).
+	// For Mode 0 retention, set this to keep the older timestamp
+	// (e.g. func(old, new uint32) uint32 { if old < new { return old }; return new }).
+	Combine func(oldScopeID, desiredScopeID uint32) uint32
 }
 
 // DesiredRecord is one record from the desired stream.
@@ -248,9 +254,15 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 				}
 				counters.Unchanged++
 			} else {
-				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
-				if err := w.Set(overlapStart, oEffTo, dEffScope); err != nil {
-					return nil, err
+				keepScope := dEffScope
+				if opts.Combine != nil {
+					keepScope = opts.Combine(oEffScope, dEffScope)
+				}
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: keepScope, OldScopeID: oEffScope, HasOld: true})
+				if keepScope != oEffScope {
+					if err := w.Set(overlapStart, oEffTo, keepScope); err != nil {
+						return nil, err
+					}
 				}
 				counters.Changed++
 			}
@@ -280,9 +292,15 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 				}
 				counters.Unchanged++
 			} else {
-				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
-				if err := w.Set(overlapStart, oEffTo, dEffScope); err != nil {
-					return nil, err
+				keepScope := dEffScope
+				if opts.Combine != nil {
+					keepScope = opts.Combine(oEffScope, dEffScope)
+				}
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: oEffTo, ScopeID: keepScope, OldScopeID: oEffScope, HasOld: true})
+				if keepScope != oEffScope {
+					if err := w.Set(overlapStart, oEffTo, keepScope); err != nil {
+						return nil, err
+					}
 				}
 				counters.Changed++
 			}
@@ -332,9 +350,15 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 				}
 				counters.Unchanged++
 			} else {
-				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: dEffTo, ScopeID: dEffScope, OldScopeID: oEffScope, HasOld: true})
-				if err := w.Set(overlapStart, dEffTo, dEffScope); err != nil {
-					return nil, err
+				keepScope := dEffScope
+				if opts.Combine != nil {
+					keepScope = opts.Combine(oEffScope, dEffScope)
+				}
+				emitChangeGo(opts, &ChangeEvent[K]{Kind: ChangeChanged, From: overlapStart, To: dEffTo, ScopeID: keepScope, OldScopeID: oEffScope, HasOld: true})
+				if keepScope != oEffScope {
+					if err := w.Set(overlapStart, dEffTo, keepScope); err != nil {
+						return nil, err
+					}
 				}
 				counters.Changed++
 			}
@@ -384,6 +408,25 @@ func emitChangeGo[K ipKey[K]](opts *MigrateOptions[K], ev *ChangeEvent[K]) {
 	if opts.OnChange != nil {
 		opts.OnChange(ev)
 	}
+}
+
+// MigrateRetention is like Migrate but preserves the older scopeID on a scope
+// mismatch instead of overwriting it.
+//
+// For Mode 0 (retention/timestamp) databases, scopeID is a unix timestamp. The
+// correct merge semantics is "keep min(old, new)" — the older timestamp wins,
+// so a record is only rewritten when the desired stream carries an older
+// timestamp than what is already stored.
+func MigrateRetention[K ipKey[K]](w *Writer[K], desired DesiredStream[K]) (*MigrateCounters, error) {
+	opts := &MigrateOptions[K]{
+		Combine: func(oldScopeID, desiredScopeID uint32) uint32 {
+			if oldScopeID < desiredScopeID {
+				return oldScopeID
+			}
+			return desiredScopeID
+		},
+	}
+	return Migrate[K](w, desired, opts)
 }
 
 // --- streaming in-order B+tree walker ---

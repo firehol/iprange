@@ -21,7 +21,14 @@ pub struct FreeEntry {
 }
 
 /// Read the entire free-list chain from the file.
-/// Returns a Vec of (pgno, freed_txn_id) sorted by pgno ascending.
+///
+/// Returns entries in **chain order** (the segment at `head` first, then its
+/// `next`, and so on). Because new segments are always prepended at the head
+/// (see [`append_segment`]), chain order is newest-first. This preserves the
+/// chronology that [`crate::writer::Writer::load_free_list`] needs to apply
+/// newest-entry-wins semantics. Callers that want a pgno-sorted view must sort
+/// the result themselves.
+///
 /// Cost: O(chain_page_count) = O(free_count / 1016).
 pub fn read_chain(store: &dyn PageStore, head: u32) -> Result<Vec<FreeEntry>> {
     let mut entries = Vec::new();
@@ -51,8 +58,8 @@ pub fn read_chain(store: &dyn PageStore, head: u32) -> Result<Vec<FreeEntry>> {
         }
         pgno = next;
     }
-    // Sort ascending by pgno (Rule 5: prefer low-numbered pages).
-    entries.sort_by_key(|e| e.pgno);
+    // NOTE: intentionally NOT sorted — chain order (newest-first) is preserved
+    // so that newest-entry-wins dedup in load_free_list is correct.
     Ok(entries)
 }
 
@@ -110,49 +117,62 @@ pub fn chain_page_count(entries: &[FreeEntry]) -> usize {
     count
 }
 
-/// Build the new free-list chain using pre-allocated chain pages.
+/// Append a new segment of entries to the front of the free-list chain.
 ///
-/// entries: ALL entries to persist (unconsumed old + new freed + old chain pages).
-/// chain_pages: pre-allocated page numbers (from Writer.alloc_page — reuses freed pages).
-/// Entries are grouped by freed_txn_id and sorted by pgno within each group.
-/// Returns the head page number of the chain (0 if entries is empty).
+/// This is the tombstone-based append-only writer. `entries` MUST be sorted by
+/// `freed_txn_id` (consecutive equal values form one group); within each group
+/// the pgnos are sorted ascending (Rule 5). Each group is packed into
+/// `TXN_FREE_CAPACITY`-sized pages. Pages are linked so that the **last** page
+/// written becomes the new head, and the first page of the new segment points
+/// its `next` at `old_head`. Thus the new segment is the newest in the chain.
+///
+/// With `old_head == 0` this builds a standalone chain (equivalent to the legacy
+/// full rewrite). Returns the new head page number (== `old_head` if empty).
+pub fn append_segment(
+    store: &mut dyn PageStore,
+    entries: &[FreeEntry],
+    chain_pages: &[u32],
+    old_head: u32,
+) -> Result<u32> {
+    if entries.is_empty() {
+        return Ok(old_head);
+    }
+
+    // Group consecutive same-freed_txn_id entries (caller pre-sorts by txn).
+    // Sort each group's pgnos ascending (Rule 5: prefer low-numbered pages).
+    let mut page_iter = chain_pages.iter();
+    let mut head: u32 = old_head;
+    let mut i = 0;
+    while i < entries.len() {
+        let ftxn = entries[i].freed_txn_id;
+        let mut group: Vec<u32> = Vec::new();
+        while i < entries.len() && entries[i].freed_txn_id == ftxn {
+            group.push(entries[i].pgno);
+            i += 1;
+        }
+        group.sort();
+        for chunk in group.chunks(spec::TXN_FREE_CAPACITY) {
+            let pgno = *page_iter.next().ok_or(Error::Structural(
+                "not enough pre-allocated chain pages for free-list",
+            ))?;
+            write_free_page(store, pgno, head, ftxn, chunk)?;
+            head = pgno;
+        }
+    }
+    Ok(head)
+}
+
+/// Build a standalone free-list chain using pre-allocated chain pages.
+///
+/// This is [`append_segment`] with `old_head == 0` (a fresh chain, not appended
+/// to an existing one). Kept for standalone/test use; the commit path uses
+/// [`append_segment`] to prepend to the existing chain.
 pub fn write_chain(
     store: &mut dyn PageStore,
     entries: &[FreeEntry],
     chain_pages: &[u32],
 ) -> Result<u32> {
-    if entries.is_empty() {
-        return Ok(0);
-    }
-
-    // Group by freed_txn_id, sort each group by pgno ascending (Rule 5).
-    let mut grouped: Vec<(u64, Vec<u32>)> = Vec::new();
-    for e in entries {
-        if let Some(last) = grouped.last_mut() {
-            if last.0 == e.freed_txn_id {
-                last.1.push(e.pgno);
-                continue;
-            }
-        }
-        grouped.push((e.freed_txn_id, vec![e.pgno]));
-    }
-    for (_, pgnos) in grouped.iter_mut() {
-        pgnos.sort();
-    }
-
-    // Write chain pages using the pre-allocated pages.
-    let mut page_iter = chain_pages.iter();
-    let mut head: u32 = 0;
-    for (ftxn, pgnos) in &grouped {
-        for chunk in pgnos.chunks(spec::TXN_FREE_CAPACITY) {
-            let pgno = *page_iter.next().ok_or(Error::Structural(
-                "not enough pre-allocated chain pages for free-list",
-            ))?;
-            write_free_page(store, pgno, head, *ftxn, chunk)?;
-            head = pgno;
-        }
-    }
-    Ok(head)
+    append_segment(store, entries, chain_pages, 0)
 }
 
 fn write_free_page(
@@ -220,9 +240,10 @@ mod tests {
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
         assert!(head != 0);
 
-        let read = read_chain(&store as &dyn PageStore, head).unwrap();
+        let mut read = read_chain(&store as &dyn PageStore, head).unwrap();
         assert_eq!(read.len(), 3);
-        // Sorted by pgno
+        // read_chain returns chain order; sort for comparison.
+        read.sort_by_key(|e| e.pgno);
         assert_eq!(read[0].pgno, 3);
         assert_eq!(read[1].pgno, 5);
         assert_eq!(read[2].pgno, 8);
@@ -270,8 +291,9 @@ mod tests {
             .collect();
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
-        let read = read_chain(&store as &dyn PageStore, head).unwrap();
+        let mut read = read_chain(&store as &dyn PageStore, head).unwrap();
         assert_eq!(read.len(), 3000);
+        read.sort_by_key(|e| e.pgno);
         assert_eq!(read[0].pgno, 10);
         assert_eq!(read[2999].pgno, 3009);
     }
@@ -305,8 +327,76 @@ mod tests {
         ];
         let chain_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &entries);
         let head = write_chain(&mut store as &mut dyn PageStore, &entries, &chain_pages).unwrap();
-        let read = read_chain(&store as &dyn PageStore, head).unwrap();
+        let mut read = read_chain(&store as &dyn PageStore, head).unwrap();
+        read.sort_by_key(|e| e.pgno);
         assert_eq!(read[0], FreeEntry { pgno: 5, freed_txn_id: 3 });
         assert_eq!(read[1], FreeEntry { pgno: 10, freed_txn_id: 7 });
+    }
+
+    /// append_segment prepends a new segment to an existing chain: the new
+    /// segment becomes the head, the old chain stays reachable via `next`.
+    #[test]
+    fn append_segment_prepends() {
+        let mut store = make_store(200);
+        // Build an initial chain with one entry.
+        let old = vec![FreeEntry { pgno: 5, freed_txn_id: 1 }];
+        let old_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &old);
+        let old_head = write_chain(&mut store as &mut dyn PageStore, &old, &old_pages).unwrap();
+
+        // Append a new segment with a different txn id.
+        let new = vec![FreeEntry { pgno: 9, freed_txn_id: 2 }];
+        let new_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &new);
+        let new_head = append_segment(
+            &mut store as &mut dyn PageStore,
+            &new,
+            &new_pages,
+            old_head,
+        ).unwrap();
+
+        // New head is the freshly written page, distinct from the old head.
+        assert!(new_head != 0);
+        assert!(new_head != old_head);
+        // Reading the whole chain yields BOTH entries (old + new).
+        let read = read_chain(&store as &dyn PageStore, new_head).unwrap();
+        assert_eq!(read.len(), 2, "appended segment must keep old entries reachable");
+    }
+
+    /// Tombstone invariant: a page that is freed then tombstoned must resolve
+    /// as NOT free under newest-entry-wins. This mirrors the dedup logic in
+    /// Writer::load_free_list at the chain level.
+    #[test]
+    fn tombstone_newest_wins() {
+        let mut store = make_store(200);
+        // Segment 1: page 7 freed in txn 1.
+        let s1 = vec![FreeEntry { pgno: 7, freed_txn_id: 1 }];
+        let s1_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &s1);
+        let head1 = write_chain(&mut store as &mut dyn PageStore, &s1, &s1_pages).unwrap();
+
+        // Segment 2 (newer): tombstone page 7 (freed_txn_id = MAX), and free page 8.
+        let s2 = vec![
+            FreeEntry { pgno: 8, freed_txn_id: 1 },
+            FreeEntry { pgno: 7, freed_txn_id: u64::MAX }, // tombstone
+        ];
+        // Sort by freed_txn_id so the tombstone group (MAX) is written last → newest.
+        let mut s2_sorted = s2.clone();
+        s2_sorted.sort_by_key(|e| e.freed_txn_id);
+        let s2_pages = alloc_chain_pages(&mut store as &mut dyn PageStore, &s2_sorted);
+        let head2 = append_segment(
+            &mut store as &mut dyn PageStore,
+            &s2_sorted,
+            &s2_pages,
+            head1,
+        ).unwrap();
+
+        // Newest-wins dedup (first occurrence in newest-first chain order).
+        let entries = read_chain(&store as &dyn PageStore, head2).unwrap();
+        let mut latest: alloc::collections::BTreeMap<u32, u64> = alloc::collections::BTreeMap::new();
+        for e in &entries {
+            latest.entry(e.pgno).or_insert(e.freed_txn_id);
+        }
+        // Page 7: newest entry is the tombstone (MAX) → NOT free.
+        assert_eq!(latest[&7], u64::MAX, "tombstone must win for page 7");
+        // Page 8: newest (only) entry is a normal free → free.
+        assert_eq!(latest[&8], 1, "page 8 must be free");
     }
 }

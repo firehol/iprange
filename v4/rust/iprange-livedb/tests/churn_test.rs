@@ -3,8 +3,12 @@ use iprange_livedb::page_store::{PageStore, VecPageStore};
 
 #[test]
 fn churn_stable_size() {
-    // With the bitset-based COW approach, the file should stabilize:
-    // pages freed by COW are derived as free at open time, then reused.
+    // With the bitset-based COW approach, freed pages are reused: the live data
+    // tree must not grow across churn cycles. The append-only tombstone
+    // free-list chain grows monotonically by design (~2 chain pages per
+    // mutating commit), so total page count no longer "stabilizes" — but the
+    // per-cycle growth must stay at the chain rate. If freed data pages were
+    // not reused, the file would grow noticeably faster than 2 pages/cycle.
     let mut img = {
         let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
         for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
@@ -13,6 +17,8 @@ fn churn_stable_size() {
     };
     let initial_pages = img.len() / 4096;
 
+    let mut max_per_cycle: u32 = 0;
+    let mut prev_pages = initial_pages;
     for cycle in 0..20 {
         let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img.clone()));
         let mut w = Writer::<Ipv4Key>::open(store).unwrap();
@@ -20,15 +26,24 @@ fn churn_stable_size() {
         for i in 0..1000u32 { w.set(Ipv4Key(i), Ipv4Key(i), i).unwrap(); }
         w.commit(cycle as u64 + 1, u64::MAX).unwrap();
         img = w.into_image().unwrap();
+        let pages = img.len() / 4096;
+        // Measure steady-state per-cycle growth (skip warmup cycles).
+        if cycle >= 2 && pages > prev_pages {
+            max_per_cycle = max_per_cycle.max((pages - prev_pages) as u32);
+        }
+        prev_pages = pages;
     }
 
     let final_pages = img.len() / 4096;
-    eprintln!("Churn: {} → {} pages over 20 cycles", initial_pages, final_pages);
+    eprintln!("Churn: {} → {} pages over 20 cycles (max per-cycle {})",
+        initial_pages, final_pages, max_per_cycle);
 
-    // File must stabilize within 2x the initial size.
-    assert!(final_pages <= initial_pages * 3,
-        "file grew to {} pages ({}x initial) — reclamation broken",
-        final_pages, final_pages / initial_pages);
+    // The chain grows ~2 pages/cycle (one freed-entry group + one tombstone
+    // group). Allow a small margin; a data-page reuse leak would push this
+    // well above 3.
+    assert!(max_per_cycle <= 3,
+        "per-cycle growth {} exceeds chain rate — data-page reuse broken",
+        max_per_cycle);
 
     let r = Reader::open(&img).unwrap();
     assert_eq!(r.record_count(), 1000);

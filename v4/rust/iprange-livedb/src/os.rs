@@ -213,6 +213,10 @@ impl<K: IpKey> FileWriter<K> {
         crate::overlap::all_to_all_overlap(&self.writer, on_overlap)
     }
 
+    pub fn foreign_vs_all<F: FnMut(u32, u32, u64)>(&self, foreign: &[(K, K)], on_overlap: &mut F) -> Result<()> {
+        crate::overlap::foreign_vs_all(&self.writer, foreign, on_overlap)
+    }
+
     pub fn close(self) {
         let FileWriter { writer, _file: file, reader_table } = self;
         drop(writer);

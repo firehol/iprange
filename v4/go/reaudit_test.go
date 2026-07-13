@@ -41,18 +41,34 @@ func assertNoReachablePageIsFree[K ipKey[K]](t *testing.T, w *Writer[K]) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seenFree := make(map[uint32]bool)
+	// With the append-only tombstone chain, raw entries may contain stale
+	// duplicates (a page freed then later reused has both an old freed entry
+	// and a newer tombstone). Mirror LoadFreeList: newest-entry-wins, drop
+	// tombstones, and exclude chain pages. Only the resulting effective free
+	// set must not overlap reachable pages.
+	chainSet := make(map[uint32]bool, len(chainPages))
+	for _, p := range chainPages {
+		chainSet[p] = true
+	}
+	latest := make(map[uint32]uint64, len(entries))
 	for _, e := range entries {
-		if e.Pgno >= w.store.totalPages() {
-			t.Fatalf("free page %d outside total %d", e.Pgno, w.store.totalPages())
+		if _, ok := latest[e.Pgno]; !ok {
+			latest[e.Pgno] = e.FreedTxnID
 		}
-		if reachable[e.Pgno] {
-			t.Fatalf("reachable page %d is also marked free", e.Pgno)
+	}
+	for pgno, ftxn := range latest {
+		if pgno >= w.store.totalPages() {
+			t.Fatalf("free page %d outside total %d", pgno, w.store.totalPages())
 		}
-		if seenFree[e.Pgno] {
-			t.Fatalf("duplicate free page %d", e.Pgno)
+		if chainSet[pgno] {
+			continue // chain page — live metadata, correctly excluded from free
 		}
-		seenFree[e.Pgno] = true
+		if ftxn == ^uint64(0) {
+			continue // tombstone — reused, not free
+		}
+		if reachable[pgno] {
+			t.Fatalf("reachable page %d is also marked free", pgno)
+		}
 	}
 }
 
@@ -208,5 +224,95 @@ func TestReaudit7_NoopCommitsPreserveFreeEntries(t *testing.T) {
 	endFree, _ := ReadChain(w.store, w.freeListHead)
 	if len(endFree)+2 < len(startFree) {
 		t.Fatalf("no-op commits leaked free pages: %d -> %d", len(startFree), len(endFree))
+	}
+}
+
+// ── Tombstone invariant: freed-then-consumed page must not reappear as free ─
+//
+// The key correctness guarantee of the append-only tombstone free-list: a page
+// that is freed, then consumed (reused for new live data), must NOT be handed
+// out again after close/reopen — or live data would be overwritten.
+func TestReaudit8_TombstoneFreedThenConsumedStaysLive(t *testing.T) {
+	img := func() []byte {
+		w, _ := Create[Ipv4Key](ScopeModeScalar, 0)
+		for i := uint32(0); i < 1000; i++ {
+			w.Set(Ipv4Key(i), Ipv4Key(i), i)
+		}
+		w.Commit(1, math.MaxUint64)
+		b, _ := w.IntoImage()
+		return b
+	}()
+
+	// Free pages by deleting a contiguous range, then commit.
+ reopen := func(b []byte) *Writer[Ipv4Key] {
+ 	w, err := openWriter[Ipv4Key](newVecPageStore(b))
+ 	if err != nil { t.Fatal(err) }
+ 	return w
+ }
+	img = func() []byte {
+		w := reopen(img)
+		for i := uint32(0); i < 400; i++ {
+			w.Delete(Ipv4Key(i), Ipv4Key(i))
+		}
+		w.Commit(2, math.MaxUint64)
+		b, _ := w.IntoImage()
+		return b
+	}()
+	freeAfterDelete := reopen(img).FreePageCount()
+	if freeAfterDelete == 0 {
+		t.Fatal("expected freed pages after delete")
+	}
+
+	// Consume free pages by inserting new data.
+	img = func() []byte {
+		w := reopen(img)
+		for i := uint32(0); i < 400; i++ {
+			w.Set(Ipv4Key(10000+i), Ipv4Key(10000+i), i)
+		}
+		w.Commit(3, math.MaxUint64)
+		b, _ := w.IntoImage()
+		return b
+	}()
+
+	// Reopen: consumed pages must NOT reappear as free.
+	freeAfterReopen := reopen(img).FreePageCount()
+
+	// Insert more data that would land on any wrongly-reclaimed page.
+	img = func() []byte {
+		w := reopen(img)
+		for i := uint32(0); i < 400; i++ {
+			w.Set(Ipv4Key(20000+i), Ipv4Key(20000+i), i)
+		}
+		w.Commit(4, math.MaxUint64)
+		b, _ := w.IntoImage()
+		return b
+	}()
+
+	r, err := Open(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The data written over consumed pages must survive intact.
+	for i := uint32(0); i < 400; i++ {
+		v, ok := r.LookupV4(Ipv4Key(10000 + i))
+		if !ok || v != i {
+			t.Fatalf("tombstone invariant broken: consumed page overwritten at key %d", 10000+i)
+		}
+	}
+	for i := uint32(0); i < 400; i++ {
+		v, ok := r.LookupV4(Ipv4Key(20000 + i))
+		if !ok || v != i {
+			t.Fatalf("data lost at key %d", 20000+i)
+		}
+	}
+	for i := uint32(400); i < 1000; i++ {
+		v, ok := r.LookupV4(Ipv4Key(i))
+		if !ok || v != i {
+			t.Fatalf("original record %d lost", i)
+		}
+	}
+	if freeAfterReopen >= freeAfterDelete {
+		t.Fatalf("consumed pages reappeared as free after reopen: %d >= %d",
+			freeAfterReopen, freeAfterDelete)
 	}
 }

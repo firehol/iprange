@@ -37,11 +37,17 @@ pub struct MigrateCounters {
 pub struct MigrateOptions<K: IpKey> {
     pub emit_unchanged: bool,
     pub on_change: Option<fn(&Change<K>)>,
+    /// Optional scope combiner for overlapping records with differing scopes.
+    /// Called with (old_scope_id, desired_scope_id) → the scope_id to keep.
+    /// If `None`, the desired scope_id wins (overwrite — current/legacy behavior).
+    /// For Mode 0 retention, set this to `Some(|old, new| old.min(new))` to
+    /// preserve the older timestamp instead of overwriting it.
+    pub combine: Option<fn(u32, u32) -> u32>,
 }
 
 impl<K: IpKey> Default for MigrateOptions<K> {
     fn default() -> Self {
-        MigrateOptions { emit_unchanged: false, on_change: None }
+        MigrateOptions { emit_unchanged: false, on_change: None, combine: None }
     }
 }
 
@@ -308,8 +314,14 @@ pub fn migrate<K: IpKey>(
                             }
                             counters.unchanged += 1;
                         } else {
-                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: ds, old_scope_id: Some(os) });
-                            writer.set(overlap_start, ot, ds)?;
+                            let keep_scope = match opts.combine {
+                                Some(f) => f(os, ds),
+                                None => ds,
+                            };
+                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: keep_scope, old_scope_id: Some(os) });
+                            if keep_scope != os {
+                                writer.set(overlap_start, ot, keep_scope)?;
+                            }
                             counters.changed += 1;
                         }
                         counters.old_scanned += 1;
@@ -328,8 +340,14 @@ pub fn migrate<K: IpKey>(
                             }
                             counters.unchanged += 1;
                         } else {
-                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: ds, old_scope_id: Some(os) });
-                            writer.set(overlap_start, ot, ds)?;
+                            let keep_scope = match opts.combine {
+                                Some(f) => f(os, ds),
+                                None => ds,
+                            };
+                            emit(opts, &Change::Added { from: overlap_start, to: ot, scope_id: keep_scope, old_scope_id: Some(os) });
+                            if keep_scope != os {
+                                writer.set(overlap_start, ot, keep_scope)?;
+                            }
                             counters.changed += 1;
                         }
                         counters.old_scanned += 1;
@@ -359,8 +377,14 @@ pub fn migrate<K: IpKey>(
                             }
                             counters.unchanged += 1;
                         } else {
-                            emit(opts, &Change::Added { from: overlap_start, to: dt, scope_id: ds, old_scope_id: Some(os) });
-                            writer.set(overlap_start, dt, ds)?;
+                            let keep_scope = match opts.combine {
+                                Some(f) => f(os, ds),
+                                None => ds,
+                            };
+                            emit(opts, &Change::Added { from: overlap_start, to: dt, scope_id: keep_scope, old_scope_id: Some(os) });
+                            if keep_scope != os {
+                                writer.set(overlap_start, dt, keep_scope)?;
+                            }
                             counters.changed += 1;
                         }
                         counters.desired_scanned += 1;
@@ -394,4 +418,23 @@ pub fn migrate<K: IpKey>(
 #[inline]
 fn emit<K: IpKey>(opts: &MigrateOptions<K>, change: &Change<K>) {
     if let Some(f) = opts.on_change { f(change); }
+}
+
+/// Retention migration: like [`migrate`] but preserves the older scope_id on a
+/// scope mismatch instead of overwriting it.
+///
+/// For Mode 0 (retention/timestamp) databases, `scope_id` is a unix timestamp.
+/// The correct merge semantics is "keep `min(old, new)`" — the older timestamp
+/// wins, so a record is only rewritten when the desired stream carries an older
+/// timestamp than what is already stored. Records where the old timestamp is
+/// already older (or equal) are left untouched.
+pub fn migrate_retention<K: IpKey>(
+    writer: &mut Writer<K>,
+    desired: &mut dyn DesiredStream<K>,
+) -> Result<MigrateCounters> {
+    let opts = MigrateOptions::<K> {
+        combine: Some(|old: u32, new: u32| old.min(new)),
+        ..MigrateOptions::<K>::default()
+    };
+    migrate(writer, desired, &opts)
 }

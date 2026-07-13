@@ -1,7 +1,7 @@
 //! Integration tests for the streaming migrate API.
 
 use iprange_livedb::{
-    ext_sort, migrate, DesiredRecord, ExtSortConfig, Ipv4Key,
+    ext_sort, migrate, migrate_retention, DesiredRecord, ExtSortConfig, Ipv4Key,
     MigrateOptions, SortedStream, Writer,
 };
 
@@ -65,6 +65,84 @@ fn migrate_change_scope() {
     w.commit(0, u64::MAX).unwrap();
 
     assert_eq!(counters.changed, 1);
+}
+
+// ── migrate_retention: Mode 0 timestamp preservation ──────────────────────
+
+fn scope_of(image: &[u8], ip: u32) -> u32 {
+    let r = iprange_livedb::Reader::open(image).unwrap();
+    r.lookup(Ipv4Key(ip)).unwrap().unwrap()
+}
+
+#[test]
+fn retention_keeps_older_when_desired_is_newer() {
+    // Stored timestamp (100) is OLDER than desired (200). Retention must keep
+    // min(100, 200) = 100 → no rewrite.
+    let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+    w.set(Ipv4Key(10), Ipv4Key(20), 100).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let desired = SortedStream::from_unsorted(vec![rec(10, 20, 200)]);
+    let counters = migrate_retention(&mut w, &mut desired.clone_stream()).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+    let image = w.into_image().unwrap();
+
+    assert_eq!(counters.changed, 1, "scope decision still counted as changed");
+    assert_eq!(scope_of(&image, 15), 100, "older timestamp must survive");
+}
+
+#[test]
+fn retention_overwrites_when_desired_is_older() {
+    // Stored timestamp (200) is NEWER than desired (100). Retention must keep
+    // min(200, 100) = 100 → rewrite to the older timestamp.
+    let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+    w.set(Ipv4Key(10), Ipv4Key(20), 200).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let desired = SortedStream::from_unsorted(vec![rec(10, 20, 100)]);
+    let counters = migrate_retention(&mut w, &mut desired.clone_stream()).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+    let image = w.into_image().unwrap();
+
+    assert_eq!(counters.changed, 1);
+    assert_eq!(scope_of(&image, 15), 100, "older desired timestamp must win");
+}
+
+#[test]
+fn retention_partial_overlap_preserves_old_on_overlap() {
+    // Old [10-30] ts=100, desired [15-25] ts=300.
+    // - old-only [10-14] and [26-30] removed (not in desired — desired is target)
+    // - overlap [15-25] keeps min(100,300)=100
+    let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+    w.set(Ipv4Key(10), Ipv4Key(30), 100).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let desired = SortedStream::from_unsorted(vec![rec(15, 25, 300)]);
+    migrate_retention(&mut w, &mut desired.clone_stream()).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+    let image = w.into_image().unwrap();
+    let r = iprange_livedb::Reader::open(&image).unwrap();
+
+    // Overlap region keeps the older stored timestamp.
+    assert_eq!(r.lookup(Ipv4Key(20)).unwrap(), Some(100));
+    // Old-only regions are removed (desired is the target state).
+    assert_eq!(r.lookup(Ipv4Key(12)).unwrap(), None);
+    assert_eq!(r.lookup(Ipv4Key(28)).unwrap(), None);
+}
+
+#[test]
+fn combine_none_is_legacy_overwrite() {
+    // Sanity: with combine unset, desired wins (legacy behavior).
+    let mut w = Writer::<Ipv4Key>::create(0, 0).unwrap();
+    w.set(Ipv4Key(10), Ipv4Key(20), 100).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+
+    let desired = SortedStream::from_unsorted(vec![rec(10, 20, 200)]);
+    migrate(&mut w, &mut desired.clone_stream(), &MigrateOptions::default()).unwrap();
+    w.commit(0, u64::MAX).unwrap();
+    let image = w.into_image().unwrap();
+
+    assert_eq!(scope_of(&image, 15), 200, "default migrate overwrites");
 }
 
 #[test]

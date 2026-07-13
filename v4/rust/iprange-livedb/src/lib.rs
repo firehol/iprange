@@ -86,7 +86,7 @@ pub use wire::Meta;
 
 #[cfg(feature = "alloc")]
 pub use writer::{Changed, Writer};
-pub use migrate::{migrate, Change, DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions};
+pub use migrate::{migrate, migrate_retention, Change, DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions};
 pub use extsort::{ext_sort, SortedStream, ExtSortConfig};
 
 #[cfg(feature = "export-v3")]

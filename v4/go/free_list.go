@@ -33,7 +33,13 @@ type FreeEntry struct {
 }
 
 // ReadChain reads the entire free-list chain starting at head.
-// Returns entries sorted by pgno ascending.
+//
+// Returns entries in **chain order** (the segment at `head` first, then its
+// `next`, and so on). Because new segments are always prepended at the head
+// (see AppendSegment), chain order is newest-first. This preserves the
+// chronology that Writer.LoadFreeList needs to apply newest-entry-wins
+// semantics. Callers that want a pgno-sorted view must sort the result.
+//
 // Cost: O(chain_page_count) = O(free_count / TxnFreeCapacity).
 func ReadChain(store PageReader, head uint32) ([]FreeEntry, error) {
 	var entries []FreeEntry
@@ -65,8 +71,8 @@ func ReadChain(store PageReader, head uint32) ([]FreeEntry, error) {
 		}
 		pgno = next
 	}
-	// Sort ascending by pgno (Rule 5: prefer low-numbered pages).
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Pgno < entries[j].Pgno })
+	// NOTE: intentionally NOT sorted — chain order (newest-first) is preserved
+	// so that newest-entry-wins dedup in LoadFreeList is correct.
 	return entries, nil
 }
 
@@ -132,55 +138,57 @@ func ChainPageCount(entries []FreeEntry) int {
 	return count
 }
 
-// WriteChain builds the new free-list chain using pre-allocated chain pages.
+// AppendSegment appends a new segment of entries to the front of the free-list
+// chain. This is the tombstone-based append-only writer. `entries` MUST be
+// sorted by freed_txn_id (consecutive equal values form one group); within each
+// group the pgnos are sorted ascending (Rule 5). Each group is packed into
+// TxnFreeCapacity-sized pages. Pages are linked so that the LAST page written
+// becomes the new head, and the first page of the new segment points its next
+// at oldHead. Thus the new segment is the newest in the chain.
 //
-// entries: ALL entries to persist (unconsumed old + new freed + old chain pages).
-// chainPages: pre-allocated page numbers (reuses freed pages).
-// Entries are grouped by freed_txn_id and sorted by pgno within each group.
-// Returns the head page number of the chain (0 if entries is empty).
-func WriteChain(store PageWriter, entries []FreeEntry, chainPages []uint32) (uint32, error) {
+// With oldHead == 0 this builds a standalone chain (equivalent to the legacy
+// full rewrite). Returns the new head page number (== oldHead if empty).
+func AppendSegment(store PageWriter, entries []FreeEntry, chainPages []uint32, oldHead uint32) (uint32, error) {
 	if len(entries) == 0 {
-		return 0, nil
+		return oldHead, nil
 	}
 
-	// Group consecutive entries by freed_txn_id, sort each group by pgno ascending.
-	type txnGroup struct {
-		freedTxn uint64
-		pgnos    []uint32
-	}
-	var grouped []txnGroup
-	for _, e := range entries {
-		if n := len(grouped); n > 0 && grouped[n-1].freedTxn == e.FreedTxnID {
-			grouped[n-1].pgnos = append(grouped[n-1].pgnos, e.Pgno)
-			continue
-		}
-		grouped = append(grouped, txnGroup{freedTxn: e.FreedTxnID, pgnos: []uint32{e.Pgno}})
-	}
-	for i := range grouped {
-		sort.Slice(grouped[i].pgnos, func(a, b int) bool {
-			return grouped[i].pgnos[a] < grouped[i].pgnos[b]
-		})
-	}
-
-	// Write chain pages using the pre-allocated pages.
+	// Group consecutive same-freed-txn entries (caller pre-sorts by txn).
+	// Sort each group's pgnos ascending (Rule 5: prefer low-numbered pages).
 	pageIdx := 0
-	var head uint32
-	for _, g := range grouped {
-		for start := 0; start < len(g.pgnos); start += TxnFreeCapacity {
+	head := oldHead
+	i := 0
+	for i < len(entries) {
+		ftxn := entries[i].FreedTxnID
+		var group []uint32
+		for i < len(entries) && entries[i].FreedTxnID == ftxn {
+			group = append(group, entries[i].Pgno)
+			i++
+		}
+		sort.Slice(group, func(a, b int) bool { return group[a] < group[b] })
+		for start := 0; start < len(group); start += TxnFreeCapacity {
 			end := start + TxnFreeCapacity
-			if end > len(g.pgnos) {
-				end = len(g.pgnos)
+			if end > len(group) {
+				end = len(group)
 			}
 			if pageIdx >= len(chainPages) {
 				return 0, fmt.Errorf("not enough pre-allocated chain pages for free-list")
 			}
 			pgno := chainPages[pageIdx]
 			pageIdx++
-			writeFreePage(store, pgno, head, g.freedTxn, g.pgnos[start:end])
+			writeFreePage(store, pgno, head, ftxn, group[start:end])
 			head = pgno
 		}
 	}
 	return head, nil
+}
+
+// WriteChain builds a standalone free-list chain using pre-allocated chain
+// pages. This is AppendSegment with oldHead == 0 (a fresh chain, not appended
+// to an existing one). Kept for standalone/test use; the commit path uses
+// AppendSegment to prepend to the existing chain.
+func WriteChain(store PageWriter, entries []FreeEntry, chainPages []uint32) (uint32, error) {
+	return AppendSegment(store, entries, chainPages, 0)
 }
 
 // writeFreePage writes one PAGE_TYPE_TXN_FREE chain page.

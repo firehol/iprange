@@ -263,6 +263,10 @@ func (fw *FileWriter[K]) Migrate(desired DesiredStream[K], opts *MigrateOptions[
 	return Migrate(fw.w, desired, opts)
 }
 
+func (fw *FileWriter[K]) MigrateRetention(desired DesiredStream[K]) (*MigrateCounters, error) {
+	return MigrateRetention(fw.w, desired)
+}
+
 func (fw *FileWriter[K]) MigrateFeed(feedBit uint32, desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
 	return MigrateFeed(fw.w, feedBit, desired, opts)
 }
@@ -270,6 +274,10 @@ func (fw *FileWriter[K]) MigrateFeed(feedBit uint32, desired DesiredStream[K], o
 // Delegated API (overlap)
 func (fw *FileWriter[K]) AllToAllOverlap(onOverlap func(FeedOverlap)) error {
 	return AllToAllOverlap(fw.w, onOverlap)
+}
+
+func (fw *FileWriter[K]) ForeignVsAll(foreign []ForeignRange[K], onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+	return ForeignVsAll(fw.w, foreign, onOverlap)
 }
 
 func (fw *FileWriter[K]) Close() error {

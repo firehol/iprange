@@ -54,16 +54,15 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 			rf := zero.readLE(lv.recordFrom(i))
 			rt := zero.readLE(lv.recordTo(i))
 			ipCount := ipRangeCount[K](rf, rt)
-			feeds := getFeedsForScope[K](w, lv.recordScopeID(i))
-			for a := 0; a < len(feeds); a++ {
-				for b := a + 1; b < len(feeds); b++ {
-					onOverlap(FeedOverlap{
-						FeedA:   feeds[a],
-						FeedB:   feeds[b],
-						IPCount: ipCount,
-					})
-				}
-			}
+			// Iterate feed pairs directly from the scope bitmap — no per-record
+			// slice allocation. Emits every (a, b) pair with a < b.
+			forEachFeedPair[K](w, lv.recordScopeID(i), func(a, b uint32) {
+				onOverlap(FeedOverlap{
+					FeedA:   a,
+					FeedB:   b,
+					IPCount: ipCount,
+				})
+			})
 		}
 		return nil
 	case PageTypeBranch:
@@ -90,33 +89,32 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], onOverlap
 		return nil
 	}
 	for _, fr := range foreign {
-		var overlaps []overlapRecord[K]
-		if err := collectOverlappingWriter[K](w, w.pendingRoot, fr.From, fr.To, &overlaps); err != nil {
-			return err
-		}
-		for _, o := range overlaps {
-			overlapFrom := fr.From
-			if o.from.cmp(fr.From) > 0 {
-				overlapFrom = o.from
+		from := fr.From
+		to := fr.To
+		// Callback-driven descent: no intermediate slice of overlapping records.
+		if err := descendOverlapping[K](w, w.pendingRoot, from, to, func(recFrom, recTo K, scopeID uint32) {
+			overlapFrom := from
+			if recFrom.cmp(from) > 0 {
+				overlapFrom = recFrom
 			}
-			overlapTo := fr.To
-			if o.to.cmp(fr.To) < 0 {
-				overlapTo = o.to
+			overlapTo := to
+			if recTo.cmp(to) < 0 {
+				overlapTo = recTo
 			}
 			ipCount := ipRangeCount[K](overlapFrom, overlapTo)
-			feeds := getFeedsForScope[K](w, o.scope)
-			for _, feed := range feeds {
+			forEachFeed[K](w, scopeID, func(feed uint32) {
 				onOverlap(feed, 0, ipCount)
-			}
+			})
+		}); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// collectOverlappingWriter gathers all pending records overlapping [from, to],
-// using binary-search pruned branch descent (like the Rust
-// collect_overlapping_writer).
-func collectOverlappingWriter[K ipKey[K]](w *Writer[K], pgno uint32, from, to K, out *[]overlapRecord[K]) error {
+// descendOverlapping descends the pending tree, invoking onRec for every leaf
+// record that overlaps [from, to]. Binary-search pruned branch descent.
+func descendOverlapping[K ipKey[K]](w *Writer[K], pgno uint32, from, to K, onRec func(recFrom, recTo K, scopeID uint32)) error {
 	var zero K
 	kw := zero.width()
 	page := w.store.page(pgno)
@@ -131,11 +129,7 @@ func collectOverlappingWriter[K ipKey[K]](w *Writer[K], pgno uint32, from, to K,
 			}
 			rt := zero.readLE(lv.recordTo(i))
 			if rt.cmp(from) >= 0 {
-				*out = append(*out, overlapRecord[K]{
-					from:  rf,
-					to:    rt,
-					scope: lv.recordScopeID(i),
-				})
+				onRec(rf, rt, lv.recordScopeID(i))
 			}
 		}
 		return nil
@@ -149,7 +143,7 @@ func collectOverlappingWriter[K ipKey[K]](w *Writer[K], pgno uint32, from, to K,
 					return nil
 				}
 			}
-			if err := collectOverlappingWriter[K](w, bv.child(j), from, to, out); err != nil {
+			if err := descendOverlapping[K](w, bv.child(j), from, to, onRec); err != nil {
 				return err
 			}
 		}
@@ -159,40 +153,111 @@ func collectOverlappingWriter[K ipKey[K]](w *Writer[K], pgno uint32, from, to K,
 	}
 }
 
-// getFeedsForScope resolves a scope_id to the list of feed bits it represents.
-func getFeedsForScope[K ipKey[K]](w *Writer[K], scopeID uint32) []uint32 {
+// forEachFeedPair iterates every ordered feed pair (a, b) with a < b covered by
+// scopeID, invoking onPair(a, b) for each. Avoids materializing a feed slice.
+//
+// Bitmap mode: scopeID IS the bitmap; walk set bits with x & (x-1).
+// Indirect mode: resolve to the bitmap byte slice and scan it directly.
+func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b uint32)) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
-		// scope_id IS the bitmap — extract set bits.
-		var feeds []uint32
-		remaining := scopeID
-		for bit := uint32(0); remaining != 0; bit++ {
-			if remaining&1 != 0 {
-				feeds = append(feeds, bit)
+		// outer always holds the bits strictly greater than the current a;
+		// after clearing a, the remaining bits form the inner iteration set,
+		// so every emitted pair satisfies a < b.
+		outer := scopeID
+		for outer != 0 {
+			a := uint32(bits.TrailingZeros32(outer))
+			outer &= outer - 1
+			inner := outer
+			for inner != 0 {
+				b := uint32(bits.TrailingZeros32(inner))
+				inner &= inner - 1
+				onPair(a, b)
 			}
-			remaining >>= 1
 		}
-		return feeds
 	case ScopeModeIndirect:
-		// Resolve via the scope registry (writer-side).
 		bitmap := w.ScopeResolve(scopeID)
-		if bitmap == nil {
-			return nil
+		if bitmap != nil {
+			forEachSetBitPair(bitmap, onPair)
 		}
-		var feeds []uint32
-		for byteIdx, by := range bitmap {
-			rb := by
-			for bitInByte := uint32(0); rb != 0; bitInByte++ {
-				if rb&1 != 0 {
-					feeds = append(feeds, uint32(byteIdx)*8+bitInByte)
-				}
-				rb >>= 1
-			}
-		}
-		return feeds
-	default:
-		return nil
 	}
+}
+
+// forEachFeed iterates every set feed bit in scopeID, invoking onFeed(bit).
+func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, onFeed func(bit uint32)) {
+	switch w.scopeMode {
+	case ScopeModeBitmap:
+		remaining := scopeID
+		for remaining != 0 {
+			bit := uint32(bits.TrailingZeros32(remaining))
+			remaining &= remaining - 1
+			onFeed(bit)
+		}
+	case ScopeModeIndirect:
+		bitmap := w.ScopeResolve(scopeID)
+		if bitmap != nil {
+			forEachSetBit(bitmap, onFeed)
+		}
+	}
+}
+
+// forEachSetBit walks set bits of a byte slice, invoking onFeed(absouluteBit).
+func forEachSetBit(bitmap []byte, onFeed func(bit uint32)) {
+	for byteIdx, by := range bitmap {
+		b := by
+		for b != 0 {
+			bitInByte := uint32(bits.TrailingZeros8(b))
+			b &= b - 1
+			onFeed(uint32(byteIdx)*8 + bitInByte)
+		}
+	}
+}
+
+// forEachSetBitPair walks every ordered pair (a, b) with a < b over the set bits
+// of bitmap. Two-cursor scan over the byte slice — zero allocation, works for
+// any bitmap width (indirect mode supports unlimited feeds).
+func forEachSetBitPair(bitmap []byte, onPair func(a, b uint32)) {
+	aPos := 0
+	for {
+		a, ok := nextSetBitFrom(bitmap, aPos)
+		if !ok {
+			return
+		}
+		bPos := int(a) + 1
+		for {
+			b, ok := nextSetBitFrom(bitmap, bPos)
+			if !ok {
+				break
+			}
+			onPair(a, b)
+			bPos = int(b) + 1
+		}
+		aPos = int(a) + 1
+	}
+}
+
+// nextSetBitFrom returns the absolute position of the first set bit at or after
+// start, or (0, false) if no such bit exists.
+func nextSetBitFrom(bitmap []byte, start int) (uint32, bool) {
+	byteIdx := start >> 3
+	if byteIdx >= len(bitmap) {
+		return 0, false
+	}
+	bitInByte := uint(start & 7)
+	// First byte: ignore bits below the requested offset.
+	first := bitmap[byteIdx] & byte(0xFF<<bitInByte)
+	if first != 0 {
+		return uint32(byteIdx)*8 + uint32(bits.TrailingZeros8(first)), true
+	}
+	byteIdx++
+	for byteIdx < len(bitmap) {
+		b := bitmap[byteIdx]
+		if b != 0 {
+			return uint32(byteIdx)*8 + uint32(bits.TrailingZeros8(b)), true
+		}
+		byteIdx++
+	}
+	return 0, false
 }
 
 // ipRangeCount returns the number of IP addresses in [from, to] (inclusive).

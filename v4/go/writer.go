@@ -65,6 +65,11 @@ type Writer[K ipKey[K]] struct {
 	// transaction. Used for same-transaction recycling and appended to the
 	// persistent chain at commit.
 	freedThisTxn []uint32
+	// consumedThisTxn collects pages popped from freePages and reused (made
+	// live) this transaction. At commit, each gets a tombstone entry
+	// (pgno, MaxUint64) appended to the chain so that newest-entry-wins in
+	// LoadFreeList marks them NOT free after close/reopen.
+	consumedThisTxn []uint32
 	// canRecycle controls whether COW victims may be recycled in-place. Safe
 	// only when no readers are active (oldestReaderTxnID == MaxUint64).
 	canRecycle bool
@@ -100,6 +105,7 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		prevCommittedHeight: 0,
 		privatePages:        newPageSet(2),
 		freedThisTxn:        make([]uint32, 0, 4096),
+		consumedThisTxn:     make([]uint32, 0, 4096),
 		canRecycle:          true,
 		scopeRegistry:       scopeRegForMode(scopeMode),
 		scopeTableRootCache: 0, scopeDirty: false,
@@ -178,6 +184,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		privatePages:        newPageSet(int(active.totalPages)),
 		freeListHead:        active.freeListHead,
 		freedThisTxn:        make([]uint32, 0, capacity),
+		consumedThisTxn:     make([]uint32, 0, 4096),
 		canRecycle:          true,
 		scopeRegistry:       nil,
 		scopeTableRootCache: active.scopeTableRoot, scopeDirty: false,
@@ -257,6 +264,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	w.canRecycle = oldestReaderTxnID == ^uint64(0)
 
 	// Rebuild scope table (mode 2) only if the registry changed.
+	scopeRebuilt := w.scopeDirty
 	if w.scopeDirty {
 		// Old scope pages are committed-region pages reachable from the old
 		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
@@ -283,6 +291,12 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 				break
 			}
 		}
+		// Remember the speculative pre-pop so we can tombstone the pages
+		// actually consumed by the scope rebuild. buildScopeTree pops the
+		// pages it needs from freePool; the rest are returned below. Those
+		// consumed pages are now live scope data and must NOT reappear as
+		// free, so they are recorded for tombstoning at commit.
+		scopePoolSnapshot := append([]uint32(nil), freePool...)
 		w.scopeTableRootCache = 0
 		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
 			var allocated []uint32
@@ -296,11 +310,19 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 			}
 			w.scopeTableRootCache = root
 		}
-		// Return unused freePool pages to the Writer's free-list.
+		// Return unused freePool pages to the Writer's free-list and tombstone
+		// the ones buildScopeTree actually consumed.
+		returned := make(map[uint32]struct{}, len(freePool))
 		for _, pgno := range freePool {
 			w.freePos--
 			w.freePages[w.freePos] = pgno
 			w.privatePages.remove(pgno)
+			returned[pgno] = struct{}{}
+		}
+		for _, pgno := range scopePoolSnapshot {
+			if _, ok := returned[pgno]; !ok {
+				w.consumedThisTxn = append(w.consumedThisTxn, pgno)
+			}
 		}
 		w.scopeDirty = false
 	}
@@ -312,13 +334,15 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		}
 	}
 
-	// Build and write the persistent free-list.
+	// Tag for freed entries written this commit: the generation being
+	// superseded (MVCC reclamation uses strict <).
 	newTxnIDVal := w.committedTxnID
 
-	// Fast path: if nothing was freed and nothing was consumed, the
-	// existing chain is still valid. Skip the rewrite to avoid leaking
-	// pages (allocating chain pages from the free-list consumes them).
-	if len(w.freedThisTxn) == 0 && w.freePos == 0 && w.scopeTableRootCache == 0 {
+	// Fast path: nothing was freed, nothing consumed, and no scope rebuild.
+	// The existing append-only chain is still valid, so skip the append.
+	nothingFreed := len(w.freedThisTxn) == 0
+	nothingConsumed := len(w.consumedThisTxn) == 0
+	if nothingFreed && nothingConsumed && !scopeRebuilt {
 		total := w.store.totalPages()
 		inactive := 1 - w.activeMeta
 		newTxnID := w.committedTxnID + 1
@@ -343,109 +367,105 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		return nil
 	}
 
-	// Collect entries to persist:
-	// - Old entries not consumed this transaction
-	// - Pages freed this transaction (COW victims + old chain pages + old scope pages)
-	var oldEntries []FreeEntry
-	if w.freeListHead != 0 {
-		oldEntries, _ = ReadChain(w.store, w.freeListHead)
-	}
-	oldChainPages := ReadChainPageNumbers(w.store, w.freeListHead)
-
-	// Determine consumed pages (popped from freePages during the transaction).
-	consumed := make(map[uint32]bool)
-	upper := w.freePos
-	if upper > len(w.freePages) {
-		upper = len(w.freePages)
-	}
-	for i := 0; i < upper; i++ {
-		consumed[w.freePages[i]] = true
-	}
-
-	var entriesToWrite []FreeEntry
-	for _, e := range oldEntries {
-		if !consumed[e.Pgno] {
-			entriesToWrite = append(entriesToWrite, e)
+	// ── Tombstone append-only free-list commit ───────────────────────────
+	//
+	// The chain grows monotonically: we append ONE new segment holding this
+	// transaction's freed entries (COW victims + old scope pages) tagged with
+	// newTxnIDVal, plus tombstone entries (MaxUint64) for every page that is
+	// LIVE this commit but was consumed (reused) from the free-list. LoadFreeList
+	// resolves the final free set with newest-entry-wins, so a page that is
+	// freed and later reused never reappears as free after close/reopen. Chain
+	// pages themselves are excluded from the free set by LoadFreeList (they
+	// appear in ReadChainPageNumbers), so they need no tombstone.
+	//
+	// Tombstone rule: a page popped from the free-list is tombstoned ONLY if it
+	// is still live at commit (in privatePages). A page that was consumed and
+	// then freed again in the SAME transaction (e.g. a COW copy from the
+	// delete-all collapse path) is no longer live, so it is NOT tombstoned —
+	// its freed entry makes it correctly free.
+	var liveConsumed []uint32
+	for _, pgno := range w.consumedThisTxn {
+		if w.privatePages.contains(pgno) {
+			liveConsumed = append(liveConsumed, pgno)
 		}
 	}
-	// Old chain pages are being replaced.
-	w.freedThisTxn = append(w.freedThisTxn, oldChainPages...)
-	// Add pages freed this transaction.
-	for _, pgno := range w.freedThisTxn {
-		entriesToWrite = append(entriesToWrite, FreeEntry{Pgno: pgno, FreedTxnID: newTxnIDVal})
-	}
 
-	// Rule 5: compute trailing free pages that can be truncated. This must
-	// happen BEFORE writing the chain so truncated pages don't appear as stale
-	// entries in the chain.
+	// Effective free set for truncation = (previously free ∪ freed this txn)
+	// − live-consumed. Live-consumed pages are LIVE and must never be truncated,
+	// so they are excluded from the trailing scan.
 	preTruncateTotal := w.store.totalPages()
 	var trailing uint32
 	if oldestReaderTxnID == ^uint64(0) {
-		freePgnos := make([]uint32, len(entriesToWrite))
-		for i, e := range entriesToWrite {
-			freePgnos[i] = e.Pgno
+		eff := make(map[uint32]struct{}, len(w.freePages)+len(w.freedThisTxn))
+		for _, p := range w.freePages {
+			eff[p] = struct{}{}
 		}
+		for _, p := range w.freedThisTxn {
+			eff[p] = struct{}{}
+		}
+		for _, p := range liveConsumed {
+			delete(eff, p)
+		}
+		freePgnos := make([]uint32, 0, len(eff))
+		for p := range eff {
+			freePgnos = append(freePgnos, p)
+		}
+		sort.Slice(freePgnos, func(i, j int) bool { return freePgnos[i] < freePgnos[j] })
 		trailing = TrailingFreeCount(freePgnos, preTruncateTotal)
 	}
 	newTotal := preTruncateTotal - trailing
 
-	// Remove trailing pages from entriesToWrite so the chain doesn't reference
-	// pages that will be truncated.
-	if trailing > 0 {
-		kept := entriesToWrite[:0]
-		for _, e := range entriesToWrite {
-			if e.Pgno < newTotal {
-				kept = append(kept, e)
-			}
+	// Build entries: freed (drop trailing pages that will be truncated) and
+	// tombstones for live-consumed pages (which are live, so never trailing).
+	entriesToWrite := make([]FreeEntry, 0, len(w.freedThisTxn)+len(liveConsumed))
+	for _, pgno := range w.freedThisTxn {
+		if pgno < newTotal {
+			entriesToWrite = append(entriesToWrite, FreeEntry{Pgno: pgno, FreedTxnID: newTxnIDVal})
 		}
-		entriesToWrite = kept
+	}
+	for _, pgno := range liveConsumed {
+		// Live-consumed pages are live (tree/scope data) ⇒ all < newTotal.
+		// Guard defensively anyway.
+		if pgno < newTotal {
+			entriesToWrite = append(entriesToWrite, FreeEntry{Pgno: pgno, FreedTxnID: ^uint64(0)})
+		}
 	}
 
-	// Allocate chain pages from the free-list or growth region.
-	// COW victims (freedThisTxn) are still reachable from committedRoot
-	// until the meta flip — they MUST NOT be reused in-place.
+	// Sort by freed_txn_id: tombstones (MaxUint64) sort after freed entries, so
+	// they are written last and become the newest pages in the chain —
+	// newest-entry-wins then gives tombstones priority for reused pages.
 	sort.Slice(entriesToWrite, func(i, j int) bool {
 		return entriesToWrite[i].FreedTxnID < entriesToWrite[j].FreedTxnID
 	})
-	needed := ChainPageCount(entriesToWrite)
 
+	// Allocate chain pages (NOT tracked as consumed — see allocChainPage).
+	needed := ChainPageCount(entriesToWrite)
 	chainPages := make([]uint32, 0, needed)
 	for len(chainPages) < needed {
-		pgno, err := w.allocPage()
+		pgno, err := w.allocChainPage()
 		if err != nil {
 			return err
 		}
 		chainPages = append(chainPages, pgno)
 	}
-	// F1 fix: chain pages allocated from the free-list are no longer free.
-	// Remove them from entriesToWrite so the chain never lists itself.
-	chainSet := make(map[uint32]bool, len(chainPages))
-	for _, p := range chainPages {
-		chainSet[p] = true
-	}
-	filtered := entriesToWrite[:0]
-	for _, e := range entriesToWrite {
-		if !chainSet[e.Pgno] {
-			filtered = append(filtered, e)
-		}
-	}
-	entriesToWrite = filtered
 
-	head, err := WriteChain(w.store, entriesToWrite, chainPages)
+	// Append the new segment to the front of the existing chain. Old chain
+	// pages stay reachable (append-only) — they are never freed here.
+	oldHead := w.freeListHead
+	head, err := AppendSegment(w.store, entriesToWrite, chainPages, oldHead)
 	if err != nil {
 		return err
 	}
 	w.freeListHead = head
 
-	// F9 fix: finalize CRCs on chain pages (they were allocated AFTER the
-	// earlier CRC pass). Chain pages are in privatePages.
+	// F9 fix: finalize CRCs on the newly written chain pages.
 	for _, pgno := range chainPages {
 		finalizeChecksum(w.store.pageMut(pgno))
 	}
 
-	// Truncate trailing free pages now that the chain no longer references them.
-	// Chain pages allocated from the growth region may sit at positions >= newTotal;
-	// the effective total must preserve them so they are not truncated away.
+	// Truncate. Chain pages allocated from the growth region may sit at
+	// positions >= newTotal; the effective total must preserve them so they are
+	// not truncated away.
 	var maxChainPage uint32
 	for _, p := range chainPages {
 		if p > maxChainPage {
@@ -497,6 +517,15 @@ func (w *Writer[K]) RecordCount() uint64 {
 	return w.pendingRecordCount
 }
 
+// FreePageCount returns the number of pages currently in the in-memory
+// free-list (reclaimable pool). Reflects the result of the last LoadFreeList:
+// newest-entry-wins over the append-only chain, with tombstones and chain
+// pages excluded. Used by tests/audits to verify the tombstone invariant (a
+// consumed page must not reappear here after close/reopen).
+func (w *Writer[K]) FreePageCount() int {
+	return len(w.freePages)
+}
+
 // IntoImage consumes the writer and returns the image (vecPageStore only).
 func (w *Writer[K]) IntoImage() ([]byte, bool) {
 	vps, ok := w.store.(*vecPageStore)
@@ -541,6 +570,30 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 		pgno := w.freePages[w.freePos]
 		w.freePos++
 		w.privatePages.insert(pgno)
+		// Track for tombstone at commit: this page was free and is now live.
+		w.consumedThisTxn = append(w.consumedThisTxn, pgno)
+		return pgno, nil
+	}
+	pgno, err := w.store.allocPage()
+	if err != nil {
+		return 0, err
+	}
+	w.privatePages.ensureCapacity(int(pgno) + 1)
+	w.privatePages.insert(pgno)
+	return pgno, nil
+}
+
+// allocChainPage allocates a page for free-list chain metadata. Like allocPage
+// but does NOT record the page in consumedThisTxn: chain pages are excluded
+// from the free-list by LoadFreeList (they appear in ReadChainPageNumbers), so
+// they need no tombstone entry. This breaks what would otherwise be a circular
+// dependency (chain page count depends on entries, which would depend on
+// tombstones for the chain pages).
+func (w *Writer[K]) allocChainPage() (uint32, error) {
+	if w.freePos < len(w.freePages) {
+		pgno := w.freePages[w.freePos]
+		w.freePos++
+		w.privatePages.insert(pgno)
 		return pgno, nil
 	}
 	pgno, err := w.store.allocPage()
@@ -553,8 +606,13 @@ func (w *Writer[K]) allocPage() (uint32, error) {
 }
 
 // LoadFreeList loads the free pool from the persistent PAGE_TYPE_TXN_FREE chain.
-// oldestReaderTxnID: pages freed in txn < this are reclaimable.
-// ^uint64(0) means no readers (all pages reclaimable).
+//
+// Applies newest-entry-wins semantics over the append-only chain: for each
+// pgno, the most recent entry (first in chain order, since ReadChain returns
+// newest-first) determines state. A tombstone entry (FreedTxnID == MaxUint64)
+// means the page was reused and is NOT free. A normal entry means free, subject
+// to MVCC filtering (FreedTxnID < oldestReaderTxnID, or all reclaimable when
+// MaxUint64). Chain pages themselves are excluded — they are live metadata.
 func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
 	w.canRecycle = oldestReaderTxnID == ^uint64(0)
 	if w.freeListHead == 0 {
@@ -563,11 +621,38 @@ func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) {
 		return
 	}
 	entries, _ := ReadChain(w.store, w.freeListHead)
-	w.freePages = Reclaimable(entries, oldestReaderTxnID)
+	// Chain pages are live metadata and must never be handed out as free,
+	// even if an older segment still lists them as freed. Exclude them.
+	chainPages := ReadChainPageNumbers(w.store, w.freeListHead)
+	chainSet := make(map[uint32]struct{}, len(chainPages))
+	for _, p := range chainPages {
+		chainSet[p] = struct{}{}
+	}
+	// Newest-entry-wins: entries are newest-first, so the first occurrence of
+	// each pgno is its most recent state.
+	latest := make(map[uint32]uint64, len(entries))
+	for _, e := range entries {
+		if _, ok := latest[e.Pgno]; !ok {
+			latest[e.Pgno] = e.FreedTxnID
+		}
+	}
+	var free []uint32
+	for pgno, ftxn := range latest {
+		if _, isChain := chainSet[pgno]; isChain {
+			continue
+		}
+		if ftxn == ^uint64(0) {
+			continue // tombstone → reused, not free
+		}
+		if oldestReaderTxnID != ^uint64(0) && ftxn >= oldestReaderTxnID {
+			continue // MVCC: reader still needs this page
+		}
+		free = append(free, pgno)
+	}
 	// Filter out entries beyond the current store (truncated pages).
 	total := w.store.totalPages()
-	bounded := w.freePages[:0]
-	for _, p := range w.freePages {
+	bounded := free[:0]
+	for _, p := range free {
 		if p < total {
 			bounded = append(bounded, p)
 		}
@@ -597,6 +682,7 @@ func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]ui
 func (w *Writer[K]) resetTxn() {
 	w.privatePages.clear()
 	w.freedThisTxn = w.freedThisTxn[:0]
+	w.consumedThisTxn = w.consumedThisTxn[:0]
 	w.privatePages.ensureCapacity(int(w.store.totalPages()))
 }
 
@@ -1257,6 +1343,18 @@ func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
 		return nil
 	}
 	return w.scopeRegistry.Resolve(scopeID)
+}
+
+// ScopePageCount returns the number of pages in the current scope-table tree
+// (mode 2 only). Returns 0 when there is no scope table. Used by tests/audits
+// to verify that scope pages are reused across commits rather than accumulated.
+func (w *Writer[K]) ScopePageCount() int {
+	if w.scopeTableRootCache == 0 {
+		return 0
+	}
+	var pages []uint32
+	w.collectScopePageNumbers(w.scopeTableRootCache, 0, &pages)
+	return len(pages)
 }
 
 func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {
