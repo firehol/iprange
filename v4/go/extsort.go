@@ -23,7 +23,7 @@ func (s *SortedStream[K]) Clone() *SortedStream[K] {
 // Overlapping input is split into disjoint segments with last-wins semantics for
 // different scope_ids; same-scope overlaps are merged.
 func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
-	// F8 fix: tag with input order before sorting so normalizeChunk resolves
+	// Tag with input order before sorting so normalizeChunk resolves
 	// last-wins by input sequence, not sorted-array position.
 	idx := make([]int, len(records))
 	for i := range idx {
@@ -33,12 +33,12 @@ func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
 		return records[idx[a]].From.cmp(records[idx[b]].From) < 0
 	})
 	sorted := make([]DesiredRecord[K], len(records))
-	seqs := make([]int, len(records))
+	seqs := make([]uint64, len(records))
 	for i, orig := range idx {
 		sorted[i] = records[orig]
-		seqs[i] = orig
+		seqs[i] = uint64(orig)
 	}
-	normalized := normalizeChunk(sorted, seqs)
+	normalized, _ := normalizeChunk(sorted, seqs)
 	return &SortedStream[K]{records: normalized}
 }
 
@@ -56,11 +56,13 @@ type sweepEvent struct {
 // Correctly handles tails and max-address boundaries (checkedInc returns
 // false at family_max → no end event, record covers to end).
 //
-// seqs[i] is the original input order of sorted[i]; last-wins is resolved by
-// highest input seq, not sorted-array index (F8 fix: sorting loses input order).
-func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []DesiredRecord[K] {
+// seqs[i] is the global input order of sorted[i]; last-wins is resolved by
+// highest seq. Returns the normalized records and the winning global seq for
+// each output segment (max seq of coalesced constituents when same-scope
+// adjacent segments are merged).
+func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []uint64) ([]DesiredRecord[K], []uint64) {
 	if len(sorted) <= 1 {
-		return sorted
+		return sorted, seqs
 	}
 
 	// Fast path: check if already disjoint.
@@ -72,7 +74,7 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []Desired
 		}
 	}
 	if disjoint {
-		return coalesceAdjacent(sorted)
+		return coalesceAdjacent(sorted, seqs)
 	}
 
 	// Sweep line: collect (position, is_start, record_index) events.
@@ -88,19 +90,26 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []Desired
 		}
 	}
 	// Sort by position, then ends before starts at the same position.
-		sort.Slice(events, func(i, j int) bool {
+	sort.Slice(events, func(i, j int) bool {
 		// maxEnd events sort after everything.
-		if events[i].isMaxEnd { return false }
-		if events[j].isMaxEnd { return true }
+		if events[i].isMaxEnd {
+			return false
+		}
+		if events[j].isMaxEnd {
+			return true
+		}
 		c := cmpU128(events[i].pos, events[j].pos)
-		if c != 0 { return c < 0 }
+		if c != 0 {
+			return c < 0
+		}
 		return events[i].isStart && !events[j].isStart
 	})
 
-	// Sweep: maintain active record indices. At each segment, last-wins = highest idx.
+	// Sweep: maintain active record indices. At each segment, last-wins = highest seq.
 	var active []int
 	var zero K
 	var out []DesiredRecord[K]
+	var outSeqs []uint64
 
 	i := 0
 	for i < len(events) {
@@ -145,6 +154,7 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []Desired
 			}
 		}
 		scope := sorted[maxIdx].ScopeID
+		winSeq := seqs[maxIdx]
 
 		// Coalesce with previous if same scope and adjacent.
 		if len(out) > 0 {
@@ -152,14 +162,18 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []int) []Desired
 			if last.ScopeID == scope {
 				if after, ok := last.To.checkedInc(); ok && after.cmp(segFrom) == 0 {
 					last.To = segTo
+					if winSeq > outSeqs[len(outSeqs)-1] {
+						outSeqs[len(outSeqs)-1] = winSeq
+					}
 					continue
 				}
 			}
 		}
 		out = append(out, DesiredRecord[K]{From: segFrom, To: segTo, ScopeID: scope})
+		outSeqs = append(outSeqs, winSeq)
 	}
 
-	return out
+	return out, outSeqs
 }
 
 func removeActive(active []int, idx int) []int {
@@ -172,25 +186,31 @@ func removeActive(active []int, idx int) []int {
 }
 
 // coalesceAdjacent merges records that are already adjacent (to+1 == next.from)
-// AND same scope.
-func coalesceAdjacent[K ipKey[K]](records []DesiredRecord[K]) []DesiredRecord[K] {
+// AND same scope. Returns merged records and their (max) seqs.
+func coalesceAdjacent[K ipKey[K]](records []DesiredRecord[K], seqs []uint64) ([]DesiredRecord[K], []uint64) {
 	if len(records) <= 1 {
-		return records
+		return records, seqs
 	}
 	out := make([]DesiredRecord[K], 0, len(records))
+	outSeqs := make([]uint64, 0, len(records))
 	out = append(out, records[0])
+	outSeqs = append(outSeqs, seqs[0])
 	for i := 1; i < len(records); i++ {
 		prev := &out[len(out)-1]
 		curr := records[i]
 		if prev.ScopeID == curr.ScopeID {
 			if next, ok := prev.To.checkedInc(); ok && next.cmp(curr.From) == 0 {
 				prev.To = curr.To
+				if seqs[i] > outSeqs[len(outSeqs)-1] {
+					outSeqs[len(outSeqs)-1] = seqs[i]
+				}
 				continue
 			}
 		}
 		out = append(out, curr)
+		outSeqs = append(outSeqs, seqs[i])
 	}
-	return out
+	return out, outSeqs
 }
 
 func (s *SortedStream[K]) Peek() *DesiredRecord[K] {
@@ -235,29 +255,37 @@ func decU128(v Uint128) Uint128 {
 }
 
 // --- file-backed spill runs (feeds can be bigger than RAM) ---
+//
+// Spill record layout: from (kw) | to (kw) | scope_id (4) | seq (8).
+// The seq is the global input order counter, used by the k-way merge to
+// resolve last-wins across separate spill runs.
 
-func spillRecordSize(kw int) int { return 2*kw + ScopeIDSize }
+const seqSize = 8
 
-func writeSpillRecord[K ipKey[K]](buf []byte, rec *DesiredRecord[K], kw int) {
+func spillRecordSize(kw int) int { return 2*kw + ScopeIDSize + seqSize }
+
+func writeSpillRecord[K ipKey[K]](buf []byte, rec *DesiredRecord[K], seq uint64, kw int) {
 	rec.From.writeLE(buf[0:kw])
 	rec.To.writeLE(buf[kw : 2*kw])
 	putU32(buf, 2*kw, rec.ScopeID)
+	putU64(buf, 2*kw+ScopeIDSize, seq)
 }
 
-func readSpillRecord[K ipKey[K]](buf []byte, kw int) DesiredRecord[K] {
+func readSpillRecord[K ipKey[K]](buf []byte, kw int) (DesiredRecord[K], uint64) {
 	var zero K
 	return DesiredRecord[K]{
 		From:    zero.readLE(buf[0:kw]),
 		To:      zero.readLE(buf[kw : 2*kw]),
 		ScopeID: u32le(buf, 2*kw),
-	}
+	}, u64le(buf, 2*kw+ScopeIDSize)
 }
 
-// spillRun sorts + normalizes a chunk and writes it to a temp file.
-func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error) {
+// spillRun sorts + normalizes a chunk and writes it to a temp file. baseSeq is
+// the global input seq of records[0]; subsequent records get baseSeq+1, etc.
+func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string, baseSeq uint64) (string, error) {
 	var zero K
 	kw := zero.width()
-	// F8 fix: tag with input order before sorting so normalizeChunk resolves
+	// Tag with global input order before sorting so normalizeChunk resolves
 	// last-wins by input sequence, not sorted-array position.
 	idx := make([]int, len(records))
 	for i := range idx {
@@ -267,12 +295,12 @@ func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error
 		return records[idx[a]].From.cmp(records[idx[b]].From) < 0
 	})
 	sorted := make([]DesiredRecord[K], len(records))
-	seqs := make([]int, len(records))
+	seqs := make([]uint64, len(records))
 	for i, orig := range idx {
 		sorted[i] = records[orig]
-		seqs[i] = orig
+		seqs[i] = baseSeq + uint64(orig)
 	}
-	normalized := normalizeChunk[K](sorted, seqs)
+	normalized, normSeqs := normalizeChunk[K](sorted, seqs)
 
 	f, err := os.CreateTemp(dir, "iprange_extsort_*")
 	if err != nil {
@@ -281,7 +309,7 @@ func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error
 	path := f.Name()
 	buf := make([]byte, spillRecordSize(kw))
 	for i := range normalized {
-		writeSpillRecord(buf, &normalized[i], kw)
+		writeSpillRecord(buf, &normalized[i], normSeqs[i], kw)
 		if _, err := f.Write(buf); err != nil {
 			f.Close()
 			os.Remove(path)
@@ -299,6 +327,7 @@ func spillRun[K ipKey[K]](records []DesiredRecord[K], dir string) (string, error
 type runReader[K ipKey[K]] struct {
 	file    *os.File
 	current DesiredRecord[K]
+	seq     uint64
 	ok      bool
 	kw      int
 	buf     []byte
@@ -330,11 +359,17 @@ func (r *runReader[K]) advance() {
 		}
 		return
 	}
-	r.current = readSpillRecord[K](r.buf, r.kw)
+	r.current, r.seq = readSpillRecord[K](r.buf, r.kw)
 	r.ok = true
 }
 
 // --- K-way merge with cross-run overlap normalization ---
+
+// taggedRec pairs a record with its global input seq for the pending tail list.
+type taggedRec[K ipKey[K]] struct {
+	rec DesiredRecord[K]
+	seq uint64
+}
 
 // kMinSource identifies whether the minimum record came from a spill run or
 // the pending tail list.
@@ -348,7 +383,7 @@ const (
 type kWayMerge[K ipKey[K]] struct {
 	runs    []*runReader[K]
 	cached  *DesiredRecord[K]
-	pending []DesiredRecord[K] // tail fragments deferred from truncated results
+	pending []taggedRec[K] // tail fragments deferred from truncated results
 }
 
 func newKWayMerge[K ipKey[K]](paths []string) (*kWayMerge[K], error) {
@@ -390,8 +425,8 @@ func (m *kWayMerge[K]) findMin() (kMinSource, int, bool) {
 		}
 	}
 	for i := range m.pending {
-		if !hasBest || m.pending[i].From.cmp(best) < 0 {
-			best = m.pending[i].From
+		if !hasBest || m.pending[i].rec.From.cmp(best) < 0 {
+			best = m.pending[i].rec.From
 			bestSrc = kMinPending
 			bestIdx = i
 			hasBest = true
@@ -404,50 +439,51 @@ func (m *kWayMerge[K]) findMin() (kMinSource, int, bool) {
 }
 
 // peekMin returns the fields of the minimum record without consuming it.
-func (m *kWayMerge[K]) peekMin() (from, to K, scope uint32, ok bool) {
+func (m *kWayMerge[K]) peekMin() (from, to K, scope uint32, seq uint64, ok bool) {
 	src, idx, hasMin := m.findMin()
 	if !hasMin {
 		var zero K
-		return zero, zero, 0, false
+		return zero, zero, 0, 0, false
 	}
 	if src == kMinRun {
 		r := m.runs[idx].current
-		return r.From, r.To, r.ScopeID, true
+		return r.From, r.To, r.ScopeID, m.runs[idx].seq, true
 	}
-	r := m.pending[idx]
-	return r.From, r.To, r.ScopeID, true
+	r := m.pending[idx].rec
+	return r.From, r.To, r.ScopeID, m.pending[idx].seq, true
 }
 
-func (m *kWayMerge[K]) popMin() (DesiredRecord[K], bool) {
+func (m *kWayMerge[K]) popMin() (DesiredRecord[K], uint64, bool) {
 	src, idx, ok := m.findMin()
 	if !ok {
 		var zero DesiredRecord[K]
-		return zero, false
+		return zero, 0, false
 	}
 	if src == kMinRun {
-		r := m.runs[idx].current
+		rec := m.runs[idx].current
+		seq := m.runs[idx].seq
 		m.runs[idx].advance()
-		return r, true
+		return rec, seq, true
 	}
 	// Pending: swap_remove for O(1) (order is irrelevant; findMin scans all).
-	r := m.pending[idx]
+	tr := m.pending[idx]
 	last := len(m.pending) - 1
 	m.pending[idx] = m.pending[last]
 	m.pending = m.pending[:last]
-	return r, true
+	return tr.rec, tr.seq, true
 }
 
 // computeNext produces the next coalesced/normalized record, handling
-// cross-run overlaps: same-scope overlaps are extended; different-scope
-// overlaps split the result (last-wins) and defer the surviving tail to
-// `pending` so it is not lost.
+// cross-run overlaps. Each record carries a global input seq; when two records
+// from different runs overlap with different scopes, the higher seq wins
+// (last-wins by global input order). Same-scope overlaps are always merged.
 func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
-	result, ok := m.popMin()
+	result, resultSeq, ok := m.popMin()
 	if !ok {
 		return nil
 	}
 	for {
-		nextFrom, nextTo, nextScope, hasMin := m.peekMin()
+		nextFrom, nextTo, nextScope, nextSeq, hasMin := m.peekMin()
 		if !hasMin {
 			break
 		}
@@ -455,9 +491,12 @@ func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 			// No overlap — check adjacency for same-scope coalescing.
 			if nextScope == result.ScopeID {
 				if after, canInc := result.To.checkedInc(); canInc && after.cmp(nextFrom) == 0 {
-					popped, _ := m.popMin()
+					popped, poppedSeq, _ := m.popMin()
 					if popped.To.cmp(result.To) > 0 {
 						result.To = popped.To
+					}
+					if poppedSeq > resultSeq {
+						resultSeq = poppedSeq
 					}
 					continue
 				}
@@ -466,41 +505,65 @@ func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 		}
 		// Overlap!
 		if nextScope == result.ScopeID {
-			// Same scope → extend.
-			popped, _ := m.popMin()
+			// Same scope → extend, keep max seq.
+			popped, poppedSeq, _ := m.popMin()
 			if popped.To.cmp(result.To) > 0 {
 				result.To = popped.To
 			}
+			if poppedSeq > resultSeq {
+				resultSeq = poppedSeq
+			}
 		} else {
-			// Different scope: save the result's surviving tail before
-			// it gets overwritten, so it can reappear later.
-			originalTo := result.To
-			originalScope := result.ScopeID
-			if nextFrom.cmp(result.From) > 0 {
-				// Partial overlap → truncate result at nextFrom-1, defer
-				// any tail beyond nextTo back into pending.
-				dec, dok := nextFrom.checkedDec()
-				if dok {
-					result.To = dec
+			// Different scope, overlapping ranges — resolve by global seq.
+			if nextSeq > resultSeq {
+				// Next is newer → next wins (last-wins). Trim/split result.
+				originalTo := result.To
+				originalScope := result.ScopeID
+				if nextFrom.cmp(result.From) > 0 {
+					// Partial overlap → truncate result at nextFrom-1, defer
+					// any tail beyond nextTo back into pending.
+					dec, dok := nextFrom.checkedDec()
+					if dok {
+						result.To = dec
+					} else {
+						result.To = nextFrom
+					}
+					if originalTo.cmp(nextTo) > 0 {
+						if ts, ok := nextTo.checkedInc(); ok {
+							m.pending = append(m.pending, taggedRec[K]{
+								rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
+								seq: resultSeq,
+							})
+						}
+					}
+					break
 				} else {
-					result.To = nextFrom
-				}
-				if originalTo.cmp(nextTo) > 0 {
-					if ts, ok := nextTo.checkedInc(); ok {
-						m.pending = append(m.pending, DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope})
+					// nextFrom <= result.From → next fully covers result's start.
+					// Defer result's tail beyond nextTo, then take next as the
+					// new result (last-wins).
+					if originalTo.cmp(nextTo) > 0 {
+						if ts, ok := nextTo.checkedInc(); ok {
+							m.pending = append(m.pending, taggedRec[K]{
+								rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
+								seq: resultSeq,
+							})
+						}
 					}
+					result, resultSeq, _ = m.popMin()
 				}
-				break
 			} else {
-				// nextFrom <= result.From → next fully covers result's start.
-				// Defer result's tail beyond nextTo, then take next as the
-				// new result (last-wins).
-				if originalTo.cmp(nextTo) > 0 {
-					if ts, ok := nextTo.checkedInc(); ok {
-						m.pending = append(m.pending, DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope})
+				// Result is newer (or equal seq) → result wins. Consume next;
+				// if next extends beyond result, defer its surviving tail.
+				popped, poppedSeq, _ := m.popMin()
+				if popped.To.cmp(result.To) > 0 {
+					if ts, ok := result.To.checkedInc(); ok {
+						m.pending = append(m.pending, taggedRec[K]{
+							rec: DesiredRecord[K]{From: ts, To: popped.To, ScopeID: nextScope},
+							seq: poppedSeq,
+						})
 					}
 				}
-				result, _ = m.popMin()
+				// result unchanged, continue scanning.
 			}
 		}
 	}
@@ -588,21 +651,23 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		}
 	}
 
+	seqOffset := uint64(0)
 	chunk := make([]DesiredRecord[K], 0, config.ChunkSize)
 	for i := range records {
 		chunk = append(chunk, records[i])
 		if len(chunk) >= config.ChunkSize {
-			path, err := spillRun[K](chunk, dir)
+			path, err := spillRun[K](chunk, dir, seqOffset)
 			if err != nil {
 				dropAll()
 				return nil, err
 			}
 			runPaths = append(runPaths, path)
+			seqOffset += uint64(len(chunk))
 			chunk = make([]DesiredRecord[K], 0, config.ChunkSize)
 		}
 	}
 	if len(chunk) > 0 {
-		path, err := spillRun[K](chunk, dir)
+		path, err := spillRun[K](chunk, dir, seqOffset)
 		if err != nil {
 			dropAll()
 			return nil, err
@@ -625,7 +690,8 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 			if _, err := io.ReadFull(f, buf); err != nil {
 				break
 			}
-			recs = append(recs, readSpillRecord[K](buf, kw))
+			rec, _ := readSpillRecord[K](buf, kw)
+			recs = append(recs, rec)
 		}
 		f.Close()
 		os.Remove(runPaths[0])
@@ -644,10 +710,11 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 // --- streaming sorter ---
 
 type ExtSorter[K ipKey[K]] struct {
-	config   *ExtSortConfig
-	chunk    []DesiredRecord[K]
-	runPaths []string
-	finished bool
+	config    *ExtSortConfig
+	chunk     []DesiredRecord[K]
+	runPaths  []string
+	finished  bool
+	globalSeq uint64
 }
 
 func NewExtSorter[K ipKey[K]](config *ExtSortConfig) *ExtSorter[K] {
@@ -662,6 +729,7 @@ func NewExtSorter[K ipKey[K]](config *ExtSortConfig) *ExtSorter[K] {
 
 func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
 	s.chunk = append(s.chunk, DesiredRecord[K]{From: from, To: to, ScopeID: scopeID})
+	s.globalSeq++
 	if len(s.chunk) >= s.config.ChunkSize {
 		return s.spillChunk()
 	}
@@ -695,7 +763,8 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 			if _, err := io.ReadFull(f, buf); err != nil {
 				break
 			}
-			recs = append(recs, readSpillRecord[K](buf, kw))
+			rec, _ := readSpillRecord[K](buf, kw)
+			recs = append(recs, rec)
 		}
 		f.Close()
 		os.Remove(s.runPaths[0])
@@ -730,7 +799,9 @@ func (s *ExtSorter[K]) spillChunk() error {
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	path, err := spillRun[K](s.chunk, dir)
+	// Records in chunk have contiguous global seqs; baseSeq is the first.
+	baseSeq := s.globalSeq - uint64(len(s.chunk))
+	path, err := spillRun[K](s.chunk, dir, baseSeq)
 	if err != nil {
 		return err
 	}

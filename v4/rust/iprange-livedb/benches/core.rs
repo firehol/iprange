@@ -10,7 +10,7 @@
 //!   5. hit        — lookup existing keys
 //!   6. miss       — lookup non-existing keys (gaps)
 //!   7. open_read  — Reader::open (trusted, no validate)
-//!   7b. open_validate — Reader::open + full §9 walk
+//!      7b. open_validate — Reader::open + full §9 walk
 //!   8. migrate    — streaming migrate (100k → 100k, 20% changed)
 //!   9. feed_add_range — bitmap feed-bit OR over 1000 ranges (mode 1, 100k DB)
 //!   10. extsort   — external sort of 100k unsorted records

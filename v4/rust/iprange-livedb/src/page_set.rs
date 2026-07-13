@@ -15,7 +15,7 @@ pub struct PageSet {
 impl PageSet {
     /// Allocate a bitset covering `capacity` pages.
     pub fn new(capacity: usize) -> Self {
-        let words = (capacity + 63) / 64;
+        let words = capacity.div_ceil(64);
         PageSet {
             bits: vec![0u64; words],
             capacity,
@@ -28,7 +28,7 @@ impl PageSet {
             return;
         }
         let new_cap = min_capacity.max(self.capacity * 2);
-        let new_words = (new_cap + 63) / 64;
+        let new_words = new_cap.div_ceil(64);
         self.bits.resize(new_words, 0u64);
         self.capacity = new_cap;
     }

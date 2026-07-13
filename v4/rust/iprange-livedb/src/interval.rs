@@ -187,11 +187,10 @@ fn merge_adjacent_segments<K: IpKey>(segs: &mut Vec<DiffSegment<K>>) {
     if segs.len() <= 1 { return; }
     let mut out: Vec<DiffSegment<K>> = Vec::with_capacity(segs.len());
     out.push(segs[0]);
-    for i in 1..segs.len() {
+    for &curr in segs.iter().skip(1) {
         let last = out.len() - 1;
         let prev = out[last];
-        let curr = segs[i];
-        let adjacent = prev.to.checked_inc().map_or(false, |a| a == curr.from);
+        let adjacent = prev.to.checked_inc() == Some(curr.from);
         if adjacent && prev.old_scope == curr.old_scope && prev.desired_scope == curr.desired_scope {
             out[last].to = curr.to;
         } else {
@@ -235,7 +234,7 @@ pub fn normalize_overlapping<K: IpKey>(
             boundaries.push(after);
         }
     }
-    boundaries.sort_by(|a, b| a.cmp(b));
+    boundaries.sort();
     boundaries.dedup();
 
     // For each consecutive pair of boundaries, find all covering scopes.
@@ -257,7 +256,7 @@ pub fn normalize_overlapping<K: IpKey>(
         if !scopes.is_empty() {
             // Merge with previous segment if same scope set and adjacent.
             if let Some(last) = segments.last_mut() {
-                let adjacent = last.to.checked_inc().map_or(false, |a| a == seg_from);
+                let adjacent = last.to.checked_inc() == Some(seg_from);
                 if adjacent && last.scopes == scopes {
                     last.to = seg_to;
                     continue;

@@ -85,7 +85,7 @@ pub use spec::IpVersion;
 pub use wire::Meta;
 
 #[cfg(feature = "alloc")]
-pub use writer::{Changed, MetaEntry, Writer};
+pub use writer::{Changed, Writer};
 pub use migrate::{migrate, Change, DesiredRecord, DesiredStream, MigrateCounters, MigrateOptions};
 pub use extsort::{ext_sort, SortedStream, ExtSortConfig};
 

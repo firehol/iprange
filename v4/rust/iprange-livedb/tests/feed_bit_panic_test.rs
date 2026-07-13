@@ -16,7 +16,7 @@ fn feed_bit_436_no_panic() {
     let byte_idx = 436 / 8; // 54
     let bit_idx = 436 % 8;  // 4
     assert!(bitmap.len() > byte_idx, "bitmap too short: {} bytes", bitmap.len());
-    assert!(bitmap[byte_idx as usize] & (1 << bit_idx) != 0, "feed bit 436 not set");
+    assert!(bitmap[byte_idx] & (1 << bit_idx) != 0, "feed bit 436 not set");
 }
 
 #[test]

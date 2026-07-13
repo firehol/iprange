@@ -97,7 +97,7 @@ pub fn chain_page_count(entries: &[FreeEntry]) -> usize {
     for e in entries {
         if e.freed_txn_id != last_txn {
             if group_size > 0 {
-                count += (group_size + spec::TXN_FREE_CAPACITY - 1) / spec::TXN_FREE_CAPACITY;
+                count += group_size.div_ceil(spec::TXN_FREE_CAPACITY);
             }
             last_txn = e.freed_txn_id;
             group_size = 0;
@@ -105,7 +105,7 @@ pub fn chain_page_count(entries: &[FreeEntry]) -> usize {
         group_size += 1;
     }
     if group_size > 0 {
-        count += (group_size + spec::TXN_FREE_CAPACITY - 1) / spec::TXN_FREE_CAPACITY;
+        count += group_size.div_ceil(spec::TXN_FREE_CAPACITY);
     }
     count
 }

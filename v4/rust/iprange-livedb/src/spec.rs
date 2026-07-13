@@ -268,6 +268,13 @@ pub const fn kv_branch_sep_size(sep_len: usize) -> usize {
     2 + sep_len + 4
 }
 
+// ── compatibility aliases (for code not yet migrated) ─────────────────────
+// These allow gradual migration; they map old names to the new v4.3 values.
+pub const VERSION_MINOR_METADATA: u16 = VERSION_MINOR;
+pub const VERSION_MINOR_FREE_LIST: u16 = VERSION_MINOR;
+pub const META_SIZE_V41: u16 = META_SIZE;
+pub const META_SIZE_V42: u16 = META_SIZE;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,10 +334,3 @@ mod tests {
         assert_eq!(SCOPE_MODE_INDIRECT, 2);
     }
 }
-
-// ── compatibility aliases (for code not yet migrated) ─────────────────────
-// These allow gradual migration; they map old names to the new v4.3 values.
-pub const VERSION_MINOR_METADATA: u16 = VERSION_MINOR;
-pub const VERSION_MINOR_FREE_LIST: u16 = VERSION_MINOR;
-pub const META_SIZE_V41: u16 = META_SIZE;
-pub const META_SIZE_V42: u16 = META_SIZE;

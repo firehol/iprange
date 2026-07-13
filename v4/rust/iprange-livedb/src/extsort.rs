@@ -26,17 +26,20 @@ impl Default for ExtSortConfig {
 #[allow(missing_debug_implementations)]
 pub struct ExtSorter<K: IpKey> {
     config: ExtSortConfig,
-    chunk: Vec<DesiredRecord<K>>,
+    chunk: Vec<(DesiredRecord<K>, u64)>,
     run_paths: Vec<PathBuf>,
+    global_seq: u64,
 }
 
 impl<K: IpKey> ExtSorter<K> {
     pub fn new(config: ExtSortConfig) -> Self {
-        ExtSorter { config, chunk: Vec::new(), run_paths: Vec::new() }
+        ExtSorter { config, chunk: Vec::new(), run_paths: Vec::new(), global_seq: 0 }
     }
 
     pub fn add(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
-        self.chunk.push(DesiredRecord { from, to, scope_id });
+        let seq = self.global_seq;
+        self.global_seq += 1;
+        self.chunk.push((DesiredRecord { from, to, scope_id }, seq));
         if self.chunk.len() >= self.config.chunk_size { self.spill_chunk()?; }
         Ok(())
     }
@@ -47,8 +50,9 @@ impl<K: IpKey> ExtSorter<K> {
             return Ok(Box::new(SortedStream { records: Vec::new(), pos: 0 }));
         }
         if self.run_paths.len() == 1 {
-            let records = read_run::<K>(&self.run_paths[0])?;
+            let tagged = read_run::<K>(&self.run_paths[0])?;
             let _ = std::fs::remove_file(&self.run_paths[0]);
+            let records: Vec<DesiredRecord<K>> = tagged.into_iter().map(|(r, _)| r).collect();
             return Ok(Box::new(SortedStream { records, pos: 0 }));
         }
         let merge = KWayMerge::<K>::new(&self.run_paths)?;
@@ -57,17 +61,13 @@ impl<K: IpKey> ExtSorter<K> {
 
     fn spill_chunk(&mut self) -> Result<()> {
         if self.chunk.is_empty() { return Ok(()); }
-        // F8 fix: tag with original input order before sorting so that
-        // normalize_chunk can resolve last-wins by input sequence, not by
-        // sorted-array position (which loses input precedence).
-        let mut indexed: Vec<(DesiredRecord<K>, usize)> = self.chunk
-            .drain(..)
-            .enumerate()
-            .map(|(i, r)| (r, i))
-            .collect();
+        // Tag each record with its global input seq BEFORE sorting, so that
+        // normalize_chunk can resolve last-wins by input sequence and the
+        // surviving seq is persisted to the spill file for cross-run merge.
+        let mut indexed: Vec<(DesiredRecord<K>, u64)> = self.chunk.drain(..).collect();
         // Sort by from key (stable — preserves input order for equal keys).
         indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
-        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<usize>) =
+        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<u64>) =
             indexed.into_iter().unzip();
         let normalized = normalize_chunk(&sorted, &seqs);
         let dir: PathBuf = self.config.temp_dir.clone().unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -83,15 +83,21 @@ impl<K: IpKey> ExtSorter<K> {
 /// O(n log n) normalization using a sweep line with an interval tree.
 /// Handles ALL edge cases: overlaps, tails, max-address boundaries.
 /// Last-wins = highest input seq (not sorted-array index).
-fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[usize]) -> Vec<DesiredRecord<K>> {
-    if sorted.len() <= 1 { return sorted.to_vec(); }
+///
+/// Returns each output segment paired with the global seq of the input record
+/// that won the segment (i.e. set its scope). Coalesced same-scope adjacent
+/// segments carry the max seq of their constituents.
+fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(DesiredRecord<K>, u64)> {
+    if sorted.len() <= 1 {
+        return sorted.iter().zip(seqs.iter()).map(|(r, &s)| (*r, s)).collect();
+    }
 
     // Fast path: check disjoint.
     let mut disjoint = true;
     for i in 1..sorted.len() {
         if sorted[i].from <= sorted[i-1].to { disjoint = false; break; }
     }
-    if disjoint { return coalesce_adjacent(sorted); }
+    if disjoint { return coalesce_adjacent(sorted, seqs); }
 
     // Sweep line: collect (position, is_start, record_index) events.
     #[derive(Clone, Copy)]
@@ -116,16 +122,15 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[usize]) -> Vec
         }
     });
 
-    // Sweep: maintain active record indices. At each segment, last-wins = highest idx.
+    // Sweep: maintain active record indices. At each segment, last-wins = highest seq.
     let mut active: Vec<usize> = Vec::new();
-    let mut out: Vec<DesiredRecord<K>> = Vec::new();
+    let mut out: Vec<(DesiredRecord<K>, u64)> = Vec::new();
 
     let mut i = 0;
     while i < events.len() {
         let pos = events[i].pos;
 
         // Process all events at this position.
-        let mut _next_pos = pos;
         while i < events.len() && events[i].pos == pos {
             let ev = &events[i];
             if ev.is_start {
@@ -137,58 +142,59 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[usize]) -> Vec
         }
 
         // Determine segment end.
-        if i < events.len() { _next_pos = events[i].pos; }
-        else { break; } // no more segments
+        if i >= events.len() { break; } // no more segments
 
         if active.is_empty() { continue; }
 
         let seg_from = K::from_u128(pos);
         // The segment ends at either the next event's position - 1, or K::MAX
         // if the next event is a max_end flag.
-        let seg_to = if i < events.len() && events[i].is_max_end {
+        let seg_to = if events[i].is_max_end {
             K::MAX
-        } else if i < events.len() {
-            K::from_u128(events[i].pos - 1)
         } else {
-            break;
+            K::from_u128(events[i].pos - 1)
         };
 
         // Last-wins: highest input seq in active.
         let max_idx = *active.iter().max_by_key(|&&i| seqs[i]).unwrap();
         let scope = sorted[max_idx].scope_id;
+        let win_seq = seqs[max_idx];
 
         // Coalesce with previous if same scope and adjacent.
         if let Some(last) = out.last_mut() {
-            if last.scope_id == scope {
-                if let Some(after) = last.to.checked_inc() {
+            if last.0.scope_id == scope {
+                if let Some(after) = last.0.to.checked_inc() {
                     if after == seg_from {
-                        last.to = seg_to;
+                        last.0.to = seg_to;
+                        if win_seq > last.1 { last.1 = win_seq; }
                         continue;
                     }
                 }
             }
         }
-        out.push(DesiredRecord { from: seg_from, to: seg_to, scope_id: scope });
+        out.push((DesiredRecord { from: seg_from, to: seg_to, scope_id: scope }, win_seq));
     }
 
     out
 }
 
-fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>]) -> Vec<DesiredRecord<K>> {
+fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(DesiredRecord<K>, u64)> {
     if records.is_empty() { return Vec::new(); }
-    let mut out: Vec<DesiredRecord<K>> = Vec::with_capacity(records.len());
-    out.push(records[0]);
-    for curr in records.iter().skip(1) {
+    let mut out: Vec<(DesiredRecord<K>, u64)> = Vec::with_capacity(records.len());
+    out.push((records[0], seqs[0]));
+    for i in 1..records.len() {
+        let curr = &records[i];
         let last = out.len() - 1;
-        if out[last].scope_id == curr.scope_id {
-            if let Some(a) = out[last].to.checked_inc() {
+        if out[last].0.scope_id == curr.scope_id {
+            if let Some(a) = out[last].0.to.checked_inc() {
                 if a == curr.from {
-                    out[last].to = curr.to;
+                    out[last].0.to = curr.to;
+                    if seqs[i] > out[last].1 { out[last].1 = seqs[i]; }
                     continue;
                 }
             }
         }
-        out.push(*curr);
+        out.push((*curr, seqs[i]));
     }
     out
 }
@@ -204,17 +210,20 @@ pub struct SortedStream<K: IpKey> {
 
 impl<K: IpKey> SortedStream<K> {
     pub fn from_unsorted(records: Vec<DesiredRecord<K>>) -> Self {
-        // F8 fix: tag with input order before sorting.
+        // Tag with input order before sorting so normalize_chunk resolves
+        // last-wins by input sequence.
         let mut indexed: Vec<(DesiredRecord<K>, usize)> = records
             .into_iter()
             .enumerate()
             .map(|(i, r)| (r, i))
             .collect();
         indexed.sort_by(|a, b| a.0.from.cmp(&b.0.from));
-        let (sorted, seqs): (Vec<DesiredRecord<K>>, Vec<usize>) =
+        let (sorted, seqs_local): (Vec<DesiredRecord<K>>, Vec<usize>) =
             indexed.into_iter().unzip();
+        let seqs: Vec<u64> = seqs_local.into_iter().map(|s| s as u64).collect();
         let normalized = normalize_chunk(&sorted, &seqs);
-        SortedStream { records: normalized, pos: 0 }
+        let recs: Vec<DesiredRecord<K>> = normalized.into_iter().map(|(r, _)| r).collect();
+        SortedStream { records: recs, pos: 0 }
     }
 }
 
@@ -229,7 +238,7 @@ impl<K: IpKey> DesiredStream<K> for SortedStream<K> {
 
 // ── K-way merge with overlap normalization ──
 
-struct RunReader<K: IpKey> { file: File, current: Option<DesiredRecord<K>> }
+struct RunReader<K: IpKey> { file: File, current: Option<(DesiredRecord<K>, u64)> }
 impl<K: IpKey> RunReader<K> {
     fn open(path: &Path) -> Result<Self> {
         let mut file = OpenOptions::new().read(true).open(path).map_err(Error::Io)?;
@@ -242,8 +251,8 @@ enum KMin { Run(usize), Pending(usize) }
 
 struct KWayMerge<K: IpKey> {
     runs: Vec<RunReader<K>>,
-    cached: Option<DesiredRecord<K>>,
-    pending: Vec<DesiredRecord<K>>,
+    cached: Option<(DesiredRecord<K>, u64)>,
+    pending: Vec<(DesiredRecord<K>, u64)>,
 }
 impl<K: IpKey> KWayMerge<K> {
     fn new(paths: &[PathBuf]) -> Result<Self> {
@@ -261,22 +270,22 @@ impl<K: IpKey> KWayMerge<K> {
 
         for (i, run) in self.runs.iter().enumerate() {
             if let Some(ref cur) = run.current {
-                if best.is_none() || cur.from < best.unwrap() {
-                    best = Some(cur.from);
+                if best.is_none() || cur.0.from < best.unwrap() {
+                    best = Some(cur.0.from);
                     best_kind = Some(KMin::Run(i));
                 }
             }
         }
         for (i, p) in self.pending.iter().enumerate() {
-            if best.is_none() || p.from < best.unwrap() {
-                best = Some(p.from);
+            if best.is_none() || p.0.from < best.unwrap() {
+                best = Some(p.0.from);
                 best_kind = Some(KMin::Pending(i));
             }
         }
         best_kind
     }
 
-    fn pop_min(&mut self) -> Option<DesiredRecord<K>> {
+    fn pop_min(&mut self) -> Option<(DesiredRecord<K>, u64)> {
         match self.find_min()? {
             KMin::Run(idx) => {
                 let r = self.runs[idx].current.take();
@@ -291,73 +300,99 @@ impl<K: IpKey> KWayMerge<K> {
     }
 
     /// Compute the next coalesced/normalized record. Handles cross-run overlaps.
-    fn compute_next(&mut self) -> Option<DesiredRecord<K>> {
+    ///
+    /// Each record carries a global input seq. When two records from different
+    /// runs overlap with different scopes, the one with the higher seq wins
+    /// (last-wins by global input order). Same-scope overlaps are always merged.
+    fn compute_next(&mut self) -> Option<(DesiredRecord<K>, u64)> {
         let mut result = self.pop_min()?;
         loop {
-            let (next_from, next_to, next_scope, _) = match self.peek_min() {
+            let (next_from, next_to, next_scope, next_seq) = match self.peek_min() {
                 None => break,
                 Some(v) => v,
             };
-            if next_from > result.to {
-                if next_scope == result.scope_id {
-                    if let Some(after) = result.to.checked_inc() {
+            if next_from > result.0.to {
+                // No overlap — check adjacency for same-scope coalescing.
+                if next_scope == result.0.scope_id {
+                    if let Some(after) = result.0.to.checked_inc() {
                         if after == next_from {
-                            let popped = self.pop_min().unwrap();
-                            if popped.to > result.to { result.to = popped.to; }
+                            let (popped, popped_seq) = self.pop_min().unwrap();
+                            if popped.to > result.0.to { result.0.to = popped.to; }
+                            if popped_seq > result.1 { result.1 = popped_seq; }
                             continue;
                         }
                     }
                 }
                 break;
             }
-            if next_scope == result.scope_id {
-                let popped = self.pop_min().unwrap();
-                if popped.to > result.to { result.to = popped.to; }
+            if next_scope == result.0.scope_id {
+                // Same scope → extend result, keep max seq.
+                let (popped, popped_seq) = self.pop_min().unwrap();
+                if popped.to > result.0.to { result.0.to = popped.to; }
+                if popped_seq > result.1 { result.1 = popped_seq; }
             } else {
-                let original_to = result.to;
-                let original_scope = result.scope_id;
-                if next_from > result.from {
-                    result.to = next_from.checked_dec().unwrap_or(next_from);
-                    if original_to > next_to {
-                        if let Some(ts) = next_to.checked_inc() {
-                            self.pending.push(DesiredRecord { from: ts, to: original_to, scope_id: original_scope });
+                // Different scope, overlapping ranges — resolve by global seq.
+                let result_seq = result.1;
+                if next_seq > result_seq {
+                    // Next is newer → next wins (last-wins). Trim/split result.
+                    let original_to = result.0.to;
+                    let original_scope = result.0.scope_id;
+                    if next_from > result.0.from {
+                        // Partial overlap → truncate result at next_from-1.
+                        result.0.to = next_from.checked_dec().unwrap_or(next_from);
+                        if original_to > next_to {
+                            if let Some(ts) = next_to.checked_inc() {
+                                self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
+                            }
                         }
+                        break;
+                    } else {
+                        // next_from == result.from → next fully covers result start.
+                        // Defer result's surviving tail, then take next as result.
+                        if original_to > next_to {
+                            if let Some(ts) = next_to.checked_inc() {
+                                self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
+                            }
+                        }
+                        result = self.pop_min().unwrap();
                     }
-                    break;
                 } else {
-                    if original_to > next_to {
-                        if let Some(ts) = next_to.checked_inc() {
-                            self.pending.push(DesiredRecord { from: ts, to: original_to, scope_id: original_scope });
+                    // Result is newer (or equal) → result wins. Consume next;
+                    // if next extends beyond result, defer its tail.
+                    let (popped, popped_seq) = self.pop_min().unwrap();
+                    if popped.to > result.0.to {
+                        if let Some(ts) = result.0.to.checked_inc() {
+                            self.pending.push((DesiredRecord { from: ts, to: popped.to, scope_id: next_scope }, popped_seq));
                         }
                     }
-                    result = self.pop_min().unwrap();
+                    // result unchanged, continue scanning.
                 }
             }
         }
         Some(result)
     }
 
-    fn peek_min(&self) -> Option<(K, K, u32, KMin)> {
+    fn peek_min(&self) -> Option<(K, K, u32, u64)> {
         let kmin = self.find_min()?;
         match kmin {
             KMin::Run(idx) => {
-                let r = self.runs[idx].current.as_ref()?;
-                Some((r.from, r.to, r.scope_id, KMin::Run(idx)))
+                let (r, seq) = self.runs[idx].current.as_ref()?;
+                Some((r.from, r.to, r.scope_id, *seq))
             }
             KMin::Pending(idx) => {
-                let r = self.pending.get(idx)?;
-                Some((r.from, r.to, r.scope_id, KMin::Pending(idx)))
+                let (r, seq) = self.pending.get(idx)?;
+                Some((r.from, r.to, r.scope_id, *seq))
             }
         }
     }
 }
 
 impl<K: IpKey> DesiredStream<K> for KWayMerge<K> {
-    fn peek(&self) -> Option<&DesiredRecord<K>> { self.cached.as_ref() }
+    fn peek(&self) -> Option<&DesiredRecord<K>> { self.cached.as_ref().map(|(r, _)| r) }
     fn next(&mut self) -> Option<DesiredRecord<K>> {
         let r = self.cached.take()?;
         self.cached = self.compute_next();
-        Some(r)
+        Some(r.0)
     }
 }
 
@@ -371,37 +406,49 @@ impl<K: IpKey> Drop for MergeStream<K> {
 }
 
 // ── File I/O ──
+//
+// Spill record layout: from (K::WIDTH) | to (K::WIDTH) | scope_id (4) | seq (8).
+// The seq is the global input order counter, used by the k-way merge to resolve
+// last-wins across separate spill runs.
 
-fn read_record<K: IpKey>(file: &mut File) -> Result<Option<DesiredRecord<K>>> {
+fn read_record<K: IpKey>(file: &mut File) -> Result<Option<(DesiredRecord<K>, u64)>> {
     let kw = K::WIDTH;
-    let mut buf = vec![0u8; kw * 2 + 4];
+    let mut buf = vec![0u8; kw * 2 + 12];
     match file.read_exact(&mut buf) {
-        Ok(()) => Ok(Some(DesiredRecord {
-            from: K::read_le(&buf[..kw]), to: K::read_le(&buf[kw..2*kw]),
-            scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
-        })),
+        Ok(()) => Ok(Some((
+            DesiredRecord {
+                from: K::read_le(&buf[..kw]),
+                to: K::read_le(&buf[kw..2*kw]),
+                scope_id: u32::from_le_bytes([buf[2*kw], buf[2*kw+1], buf[2*kw+2], buf[2*kw+3]]),
+            },
+            u64::from_le_bytes([
+                buf[2*kw+4], buf[2*kw+5], buf[2*kw+6], buf[2*kw+7],
+                buf[2*kw+8], buf[2*kw+9], buf[2*kw+10], buf[2*kw+11],
+            ]),
+        ))),
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
         Err(e) => Err(Error::Io(e)),
     }
 }
 
-fn write_record<K: IpKey>(file: &mut File, rec: &DesiredRecord<K>) -> Result<()> {
+fn write_record<K: IpKey>(file: &mut File, rec: &DesiredRecord<K>, seq: u64) -> Result<()> {
     let kw = K::WIDTH;
-    let mut buf = vec![0u8; kw * 2 + 4];
+    let mut buf = vec![0u8; kw * 2 + 12];
     rec.from.write_le(&mut buf[..kw]);
     rec.to.write_le(&mut buf[kw..2*kw]);
-    buf[2*kw..].copy_from_slice(&rec.scope_id.to_le_bytes());
+    buf[2*kw..2*kw+4].copy_from_slice(&rec.scope_id.to_le_bytes());
+    buf[2*kw+4..2*kw+12].copy_from_slice(&seq.to_le_bytes());
     file.write_all(&buf).map_err(Error::Io)
 }
 
-fn write_run<K: IpKey>(path: &Path, records: &[DesiredRecord<K>]) -> Result<()> {
+fn write_run<K: IpKey>(path: &Path, records: &[(DesiredRecord<K>, u64)]) -> Result<()> {
     let mut file = OpenOptions::new().write(true).create(true).truncate(true)
         .open(path).map_err(Error::Io)?;
-    for rec in records { write_record::<K>(&mut file, rec)?; }
+    for (rec, seq) in records { write_record::<K>(&mut file, rec, *seq)?; }
     file.flush().map_err(Error::Io)
 }
 
-fn read_run<K: IpKey>(path: &Path) -> Result<Vec<DesiredRecord<K>>> {
+fn read_run<K: IpKey>(path: &Path) -> Result<Vec<(DesiredRecord<K>, u64)>> {
     let mut file = OpenOptions::new().read(true).open(path).map_err(Error::Io)?;
     let mut records = Vec::new();
     while let Some(r) = read_record::<K>(&mut file)? { records.push(r); }

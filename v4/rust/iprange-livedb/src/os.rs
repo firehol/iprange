@@ -42,10 +42,12 @@ impl MmapReader {
         if len < 2 * PAGE_SIZE { return Err(Error::Structural("file too small")); }
 
         // F4 fix: register in the reader table BEFORE reading meta pages.
-        // Register with u64::MAX so no writer can reclaim pages while we
-        // read and pin the transaction. Update to the real txn_id after.
+        // Use txn_id=0 as the provisional sentinel: it blocks ALL reclamation
+        // (freed_txn_id < 0 is never true for unsigned). After reading meta,
+        // update to the real txn_id. This is distinct from u64::MAX which
+        // means "no readers."
         let mut table = ReaderTable::open(path)?;
-        let guard = table.register(u64::MAX)?;
+        let guard = table.register(0)?;
 
         let mmap = unsafe { memmap2::Mmap::map(&file).map_err(Error::Io)? };
         let page0 = &mmap[..PAGE_SIZE];

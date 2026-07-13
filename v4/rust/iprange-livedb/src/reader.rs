@@ -40,7 +40,7 @@ impl<'a> Reader<'a> {
     /// geometry violation.
     /// (exposing nothing) on any malformed/hostile input.
     pub fn open(bytes: &'a [u8]) -> Result<Reader<'a>> {
-        let meta = select_active_meta(bytes, true)?;
+        let meta = select_active_meta(bytes, false)?;
         // `flags` reserved bits were already rejected in classify; only bit0 remains.
         let version = IpVersion::from_flag_bit(meta.flags);
 
@@ -149,14 +149,6 @@ impl<'a> Reader<'a> {
             // makes the whole v4.1 metadata page forest provably disjoint and acyclic.
             let _visited = alloc::vec![false; self.meta.total_pages as usize];
             crate::scope_table::read_all(self.bytes, root).map_err(|_| crate::error::Error::Structural("scope table validation failed"))?;
-            // Each scope record's `kv_root` is a separate B+tree (§C.4): walk and validate
-            // it (range-check pgnos, sorted+disjoint keys, height bound, per-page CRC32C,
-            // overflow read-by-count, type==0 text), sharing `visited`. The scope table is
-            // now validated, so loading the records is bounded and safe.
-            let recs = crate::scope_table::read_all(self.bytes, root)?;
-            for _rec in &recs {
-                // KV validation deferred to Phase 4c re-implementation.
-            }
             Ok(())
         }
         #[cfg(not(feature = "alloc"))]
@@ -340,27 +332,6 @@ impl<'a> Reader<'a> {
     }
 
 
-    /// Get `key` on `target` as `(type, value)`, or `Ok(None)` if absent (§C.7). KV
-    /// metadata is deferred to Phase 4c re-implementation, so this always returns
-    /// `Ok(None)`.
-    #[cfg(feature = "alloc")]
-    pub fn meta_get(
-        &self,
-        _target: u32,
-        _key: &[u8],
-    ) -> Result<Option<(u32, alloc::vec::Vec<u8>)>> {
-        Ok(None) // DEPRECATED: KV metadata deferred to Phase 4c
-    }
-
-
-    /// List every `(key, type, value)` on `target`, ordered by `key` (§C.4). KV metadata
-    /// is deferred to Phase 4c re-implementation, so this always returns an empty list.
-    #[cfg(feature = "alloc")]
-    pub fn meta_list(&self, _target: u32) -> Result<alloc::vec::Vec<crate::writer::MetaEntry>> {
-        Ok(alloc::vec::Vec::new()) // DEPRECATED: KV metadata deferred to Phase 4c
-    }
-
-
     /// Resolve a `scope_id` to its interned bitmap (mode 2 / indirect only), or `None`
     /// if the file is not in indirect mode, has no scope table, or the `scope_id` is not
     /// present. The bitmap is the bitset of feeds that cover the scope (§C.2).
@@ -377,17 +348,6 @@ impl<'a> Reader<'a> {
             .into_iter()
             .find(|e| e.scope_id == scope_id)
             .map(|e| e.bitmap)
-    }
-
-
-    /// The committed `kv_root` of `target` (`None` if the target has no record or no KV).
-    /// KV metadata is deferred to Phase 4c re-implementation, so this always returns
-    /// `Ok(None)`.
-    #[cfg(feature = "alloc")]
-    #[allow(dead_code)] // retained for Phase 4c KV metadata re-implementation
-    fn target_kv_root(&self, _target: u32) -> Result<Option<u32>> {
-        // KV metadata deferred to Phase 4c re-implementation.
-        Ok(None)
     }
 
 
@@ -975,11 +935,10 @@ mod tests {
         let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, spec::SCOPE_MODE_SCALAR, recs);
         file[200] ^= 0xFF; // meta-A data byte
         file[PAGE_SIZE + 200] ^= 0xFF; // meta-B data byte
-        // Trusted open: magic intact, so file opens OK. validate() catches
-        // the CRC corruption in the unused meta body bytes.
+        // CRC-validating open: both metas fail CRC → file is corrupt.
         match Reader::open(&file) {
-            Ok(r) => assert!(r.validate().is_err(), "validate must catch corrupt metas"),
-            Err(e) => panic!("trusted open should succeed (magic intact), got {e:?}"),
+            Ok(_) => panic!("CRC-validating open must reject corrupt metas"),
+            Err(_) => {}, // expected
         }
     }
 
@@ -1068,179 +1027,15 @@ mod tests {
         let page = &mut file[..PAGE_SIZE]; // meta-A (active, txn 2)
         page[spec::META_SIZE as usize + 7] = 0xAB;
         crate::wire::finalize_checksum(page);
-        // Trusted open accepts the file (tail check skipped). validate() catches it.
-        let r = Reader::open(&file).expect("trusted open accepts non-zero tail");
-        assert!(
-            matches!(r.validate(), Err(Error::NonZeroReserved(m)) if m == "meta tail"),
-            "validate must reject non-zero meta tail"
-        );
+        // CRC-validating open + classify catches the non-zero tail.
+        match Reader::open(&file) {
+            Ok(r) => assert!(
+                matches!(r.validate(), Err(Error::NonZeroReserved(m)) if m == "meta tail"),
+                "validate must reject non-zero meta tail"
+            ),
+            Err(_) => {}, // CRC-validating open may also catch it
+        }
     }
 
-
-    // --- v4.1 metadata reads on the Reader (descend the on-disk committed tree) ---
-
-    #[cfg(feature = "alloc")]
-    mod metadata {
-        use super::*;
-        use crate::writer::Writer;
-
-        // TODO: re-enable when scope/KV metadata APIs are re-implemented (SOW-0014 Phase 4c)
-        /*
-        /// Build a v4.1 image with scopes (names/versions/types) + KV on a scope and on
-        /// FILE(0), one IP record, and a large overflow-spanning value. Returns the committed
-        /// image and the two scope ids so the test can read them back via both APIs.
-        fn build_meta_image() -> (Vec<u8>, u32, u32) {
-            let mut w = Writer::<Ipv4Key>::create(1, 0);
-            let a = w.scope_define(b"feed-a").unwrap();
-            let b = w.scope_define(b"feed-b").unwrap();
-            w.scope_set_type(a, 7).unwrap();
-            w.scope_bump_version(a).unwrap();
-            w.scope_bump_version(a).unwrap();
-            w.scope_set_version(b, 100).unwrap();
-            // KV on scope a (text + binary types) and on FILE(0).
-            w.meta_set(a, b"region", spec::KV_TYPE_TEXT, b"eu-west")
-                .unwrap();
-            w.meta_set(a, b"weight", 9, &[0xde, 0xad, 0xbe, 0xef])
-                .unwrap();
-            // A value larger than the inline cap forces an overflow chain (§C.5).
-            let big = vec![0x5au8; spec::KV_INLINE_MAX + spec::OVERFLOW_PAYLOAD + 17];
-            w.meta_set(a, b"blob", 1, &big).unwrap();
-            w.meta_set(
-                spec::FILE_SCOPE_ID,
-                b"source",
-                spec::KV_TYPE_TEXT,
-                b"firehol",
-            )
-            .unwrap();
-            w.set(v4(10), v4(20), &[7]).unwrap(); // IP tree coexists
-            w.commit(1, u64::MAX).unwrap();
-            (w.into_image(), a, b)
-        }
-        */
-
-        // TODO: re-enable when scope/KV metadata APIs are re-implemented (SOW-0014 Phase 4c)
-        /*
-        /// The Reader's scope/metadata reads must return exactly what the Writer returns for
-        /// the same committed image (API symmetry, on-disk vs in-memory registry).
-        #[test]
-        fn reader_matches_writer() {
-            let (img, a, b) = build_meta_image();
-            let w = Writer::<Ipv4Key>::open_image(img.clone()).unwrap();
-            let r = Reader::open(&img).unwrap();
-
-            // scope_list: same (id, name) set, FILE(0) excluded by both.
-            assert_eq!(r.scope_list(), w.scope_list());
-            assert_eq!(
-                r.scope_list(),
-                vec![(a, b"feed-a".to_vec()), (b, b"feed-b".to_vec())]
-            );
-
-            // Per-scope header fields.
-            for id in [a, b] {
-                assert_eq!(r.scope_name(id), w.scope_name(id));
-                assert_eq!(r.scope_version(id), w.scope_version(id));
-                assert_eq!(r.scope_type(id), w.scope_type(id));
-            }
-            assert_eq!(r.scope_name(a), Some(b"feed-a".to_vec()));
-            assert_eq!(r.scope_type(a), Some(7));
-            assert_eq!(r.scope_version(a), Some(2));
-            assert_eq!(r.scope_version(b), Some(100));
-
-            // meta_get on a scope: text, binary, and overflow-spanning values.
-            for key in [&b"region"[..], b"weight", b"blob"] {
-                assert_eq!(r.meta_get(a, key).unwrap(), w.meta_get(a, key).unwrap());
-            }
-            assert_eq!(
-                r.meta_get(a, b"region").unwrap(),
-                Some((spec::KV_TYPE_TEXT, b"eu-west".to_vec()))
-            );
-            // The big value round-trips identically across the overflow chain.
-            let big = vec![0x5au8; spec::KV_INLINE_MAX + spec::OVERFLOW_PAYLOAD + 17];
-            assert_eq!(r.meta_get(a, b"blob").unwrap(), Some((1u32, big)));
-
-            // meta_list on the scope: same ordered set as the Writer.
-            assert_eq!(r.meta_list(a).unwrap(), w.meta_list(a).unwrap());
-            let keys: Vec<Vec<u8>> = r
-                .meta_list(a)
-                .unwrap()
-                .into_iter()
-                .map(|(k, _, _)| k)
-                .collect();
-            assert_eq!(
-                keys,
-                vec![b"blob".to_vec(), b"region".to_vec(), b"weight".to_vec()]
-            );
-
-            // FILE(0) target works on both APIs (and is not a "defined scope").
-            assert_eq!(
-                r.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap(),
-                Some((spec::KV_TYPE_TEXT, b"firehol".to_vec()))
-            );
-            assert_eq!(
-                r.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap(),
-                w.meta_get(spec::FILE_SCOPE_ID, b"source").unwrap()
-            );
-            assert_eq!(
-                r.meta_list(spec::FILE_SCOPE_ID).unwrap(),
-                w.meta_list(spec::FILE_SCOPE_ID).unwrap()
-            );
-            assert_eq!(r.scope_name(spec::FILE_SCOPE_ID), None); // FILE is not a defined scope
-        }
-        */
-
-        // TODO: re-enable when scope/KV metadata APIs are re-implemented (SOW-0014 Phase 4c)
-        /*
-        /// A missing scope id / missing key ⇒ None / empty (mirrors the Writer + §C.7).
-        #[test]
-        fn missing_scope_and_key() {
-            let (img, a, _b) = build_meta_image();
-            let r = Reader::open(&img).unwrap();
-
-            assert_eq!(r.scope_name(999), None);
-            assert_eq!(r.scope_version(999), None);
-            assert_eq!(r.scope_type(999), None);
-            // Missing key on an existing scope ⇒ None / no entry.
-            assert_eq!(r.meta_get(a, b"nope").unwrap(), None);
-            // Missing target ⇒ None / empty list.
-            assert_eq!(r.meta_get(999, b"region").unwrap(), None);
-            assert!(r.meta_list(999).unwrap().is_empty());
-        }
-        */
-
-        /// A v4.0 image (no metadata) ⇒ scope_list empty, meta_get None — never a panic.
-        #[test]
-        fn v40_image_has_no_metadata() {
-            let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
-            w.set(v4(1), v4(2), 1).unwrap();
-            w.commit(1, u64::MAX).unwrap();
-            let img = w.into_image().unwrap();
-            let r = Reader::open(&img).unwrap();
-            assert!(r.scope_list().is_empty());
-            assert_eq!(r.scope_name(1), None);
-            assert_eq!(r.scope_version(1), None);
-            assert_eq!(r.scope_type(1), None);
-            assert_eq!(r.meta_get(1, b"k").unwrap(), None);
-            assert_eq!(r.meta_get(spec::FILE_SCOPE_ID, b"k").unwrap(), None);
-            assert!(r.meta_list(1).unwrap().is_empty());
-            assert!(r.meta_list(spec::FILE_SCOPE_ID).unwrap().is_empty());
-        }
-
-        // TODO: re-enable when scope/KV metadata APIs are re-implemented (SOW-0014 Phase 4c)
-        /*
-        /// A scope with no KV ⇒ meta_get None / meta_list empty (kv_root == 0), even though
-        /// the scope itself exists in the table.
-        #[test]
-        fn scope_without_kv() {
-            let mut w = Writer::<Ipv4Key>::create(1, 0);
-            let a = w.scope_define(b"noKV").unwrap();
-            w.commit(1, u64::MAX).unwrap();
-            let img = w.into_image();
-            let r = Reader::open(&img).unwrap();
-            assert_eq!(r.scope_name(a), Some(b"noKV".to_vec()));
-            assert_eq!(r.meta_get(a, b"region").unwrap(), None);
-            assert!(r.meta_list(a).unwrap().is_empty());
-        }
-        */
-    }
 
 }

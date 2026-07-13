@@ -2,7 +2,6 @@ package iprangedb
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"syscall"
 )
@@ -41,15 +40,16 @@ func OpenMmap(path string) (*MmapReader, error) {
 	}
 
 	// F4 fix: register in reader table BEFORE reading meta pages.
-	// Register with MaxUint64 so no writer can reclaim pages while we
-	// determine and pin the transaction.
+	// Use txn_id=0 as the provisional sentinel: it blocks ALL reclamation
+	// (freed_txn_id < 0 is never true for unsigned). After reading meta,
+	// update to the real txn_id. Distinct from MaxUint64 ("no readers").
 	table, err := OpenReaderTable(path)
 	if err != nil {
 		syscall.Munmap(data)
 		file.Close()
 		return nil, fmt.Errorf("reader table: %w", err)
 	}
-	guard, err := table.Register(math.MaxUint64, 0, 0)
+	guard, err := table.Register(0, 0, 0)
 	if err != nil {
 		table.Close()
 		syscall.Munmap(data)

@@ -350,8 +350,8 @@ func TestNormalizeChunkDifferentScope(t *testing.T) {
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
 		{From: Ipv4Key(15), To: Ipv4Key(25), ScopeID: 2},
 	}
-	seqs := []int{0, 1}
-	out := normalizeChunk(sorted, seqs)
+	seqs := []uint64{0, 1}
+	out, _ := normalizeChunk(sorted, seqs)
 	if len(out) != 2 {
 		t.Fatalf("got %d segments", len(out))
 	}
@@ -369,8 +369,8 @@ func TestNormalizeChunkSameScope(t *testing.T) {
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
 		{From: Ipv4Key(15), To: Ipv4Key(25), ScopeID: 1},
 	}
-	seqs := []int{0, 1}
-	out := normalizeChunk(sorted, seqs)
+	seqs := []uint64{0, 1}
+	out, _ := normalizeChunk(sorted, seqs)
 	if len(out) != 1 {
 		t.Fatalf("got %d segments", len(out))
 	}
@@ -388,8 +388,8 @@ func TestNormalizeChunkTailPreserved(t *testing.T) {
 		{From: Ipv4Key(60), To: Ipv4Key(75), ScopeID: 1},
 		{From: Ipv4Key(63), To: Ipv4Key(72), ScopeID: 0},
 	}
-	seqs := []int{0, 1, 2}
-	out := normalizeChunk(sorted, seqs)
+	seqs := []uint64{0, 1, 2}
+	out, _ := normalizeChunk(sorted, seqs)
 	if len(out) != 4 {
 		t.Fatalf("got %d segments want 4: %+v", len(out), out)
 	}
@@ -403,8 +403,8 @@ func TestNormalizeChunkMaxAddress(t *testing.T) {
 	sorted := []DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(maxUint32 - 10), To: Ipv4Key(maxUint32), ScopeID: 1},
 	}
-	seqs := []int{0}
-	out := normalizeChunk(sorted, seqs)
+	seqs := []uint64{0}
+	out, _ := normalizeChunk(sorted, seqs)
 	if len(out) != 1 {
 		t.Fatalf("got %d segments want 1", len(out))
 	}

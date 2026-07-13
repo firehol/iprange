@@ -37,7 +37,7 @@ fn mode2_persist_across_commit() {
     
     // Reopen and verify scope table is loaded
     let store: Box<dyn PageStore> = Box::new(VecPageStore::new(img));
-    let mut w2 = Writer::<Ipv4Key>::open(store).unwrap();
+    let w2 = Writer::<Ipv4Key>::open(store).unwrap();
     
     // scope_resolve should work from the loaded registry
     let bitmap = w2.scope_resolve(1);

@@ -57,7 +57,7 @@ fn make_db_file(tag: &str, n: usize) -> PathBuf {
         fw.set(Ipv4Key(f), Ipv4Key(t), 1).expect("set");
     }
     fw.commit(0).expect("commit");
-    let _ = fw.close();
+    fw.close();
     path
 }
 

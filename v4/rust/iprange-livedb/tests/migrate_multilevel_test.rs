@@ -1,4 +1,4 @@
-use iprange_livedb::{Ipv4Key, Writer, Reader, DesiredRecord, SortedStream, MigrateOptions};
+use iprange_livedb::{Ipv4Key, Writer, DesiredRecord, SortedStream, MigrateOptions};
 use iprange_livedb::page_store::{PageStore, VecPageStore};
 
 #[test]

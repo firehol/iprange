@@ -21,10 +21,11 @@ use crate::record::{self, record_size};
 use crate::spec::{self, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::wire::{finalize_checksum, put_u32, u32_le, Meta, PageHeader};
 
-pub type MetaEntry = (alloc::vec::Vec<u8>, u32, alloc::vec::Vec<u8>);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Changed { Changed, Unchanged }
+
+/// An overlap scan hit: `(from, to, scope_id, pgno, index_in_leaf)`.
+type OverlapHit<K> = (K, K, u32, u32, usize);
 
 #[allow(missing_debug_implementations)]
 pub struct Writer<K: IpKey> {
@@ -38,9 +39,6 @@ pub struct Writer<K: IpKey> {
     committed_pages: u32,
     committed_record_count: u64,
     committed_txn_id: u64,
-    /// Previous committed root (for reader-safe reclamation).
-    prev_committed_root: u32,
-    prev_committed_height: u32,
     pub(crate) pending_root: u32,
     pending_height: u32,
     pending_record_count: u64,
@@ -68,7 +66,6 @@ impl<K: IpKey> Writer<K> {
             store, key_width: K::WIDTH as u8, scope_mode, created_unixtime,
             active_meta: 0, committed_root: 0, committed_height: 0,
             committed_pages: 2, committed_record_count: 0, committed_txn_id: 0,
-            prev_committed_root: 0, prev_committed_height: 0,
             pending_root: 0, pending_height: 0, pending_record_count: 0,
             poisoned: false,
             private_pages: PageSet::new(2), free_pages: vec![], free_pos: 0, can_recycle: true,
@@ -108,8 +105,6 @@ impl<K: IpKey> Writer<K> {
             committed_root: active.root_pgno, committed_height: active.tree_height,
             committed_pages: active.total_pages as u32, committed_record_count: active.record_count,
             committed_txn_id: active.txn_id,
-            prev_committed_root: if active_no == 0 { meta_b.root_pgno } else { meta_a.root_pgno },
-            prev_committed_height: if active_no == 0 { meta_b.tree_height } else { meta_a.tree_height },
             pending_root: active.root_pgno, pending_height: active.tree_height,
             pending_record_count: active.record_count, poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
@@ -217,6 +212,33 @@ impl<K: IpKey> Writer<K> {
         }
         // Build and write the persistent free-list.
         let new_txn_id_val = self.committed_txn_id;
+
+        // Fast path: if nothing was freed and nothing was consumed, the
+        // existing chain is still valid. Skip the rewrite to avoid leaking
+        // pages (allocating chain pages from the free-list consumes them).
+        let nothing_freed = self.freed_this_txn.is_empty();
+        let nothing_consumed = self.free_pos == 0;
+        if nothing_freed && nothing_consumed && self.scope_table_root_cache == 0 {
+            // The existing chain is valid — just write the meta and flip.
+            let total = self.store.total_pages();
+            let inactive = 1 - self.active_meta;
+            let new_txn_id = self.committed_txn_id + 1;
+            self.write_meta_page(inactive, new_txn_id, self.pending_root,
+                self.pending_height, self.pending_record_count, total,
+                updated_unixtime)?;
+            self.store.sync()?;
+            self.active_meta = inactive;
+            self.committed_txn_id = new_txn_id;
+            self.committed_root = self.pending_root;
+            self.committed_height = self.pending_height;
+            self.committed_record_count = self.pending_record_count;
+            self.committed_pages = total;
+            self.store.set_committed_pages(total);
+            self.reset_txn();
+            self.load_free_list(oldest_reader_txn_id);
+            return Ok(());
+        }
+
         // Collect entries to persist:
         // - Old entries not consumed this transaction
         // - Pages freed this transaction (COW victims + old chain pages + old scope pages)
@@ -307,8 +329,6 @@ impl<K: IpKey> Writer<K> {
         self.store.sync()?;
         self.active_meta = inactive;
         self.committed_txn_id = new_txn_id;
-        self.prev_committed_root = self.committed_root;
-        self.prev_committed_height = self.committed_height;
         self.committed_root = self.pending_root;
         self.committed_height = self.pending_height;
         self.committed_record_count = self.pending_record_count;
@@ -575,15 +595,87 @@ impl<K: IpKey> Writer<K> {
             self.pending_root = 0;
             self.pending_height = 0;
         }
+
+        // Issue 3 fix: compact the tree if it's significantly sparse after
+        // a large delete. This prevents the tree from retaining peak-sized
+        // structure when most records have been removed.
+        self.compact_if_needed()?;
+
         Ok(())
     }
 
-    fn scan_first_overlap(&self, from: K, to: K) -> Result<Option<(K, K, u32, u32, usize)>> {
+    /// Check if the pending tree is sparse (many pages, few records) and
+    /// rebuild it compactly. Only triggers when the tree is <25% full.
+    fn compact_if_needed(&mut self) -> Result<()> {
+        if self.pending_root == 0 || self.pending_record_count == 0 {
+            return Ok(());
+        }
+        // Walk the pending tree to count actual pages.
+        let mut tree_pages = 0u64;
+        self.count_tree_pages(self.pending_root, self.pending_height, &mut tree_pages)?;
+        // Estimate the number of pages needed for the current records.
+        let leaf_max = spec::leaf_max(self.key_width) as u64;
+        let needed_pages = self.pending_record_count.div_ceil(leaf_max);
+        // Only compact if the tree is at least 4x larger than needed.
+        if tree_pages > needed_pages * 4 + 4 {
+            self.rebuild_compact()?;
+        }
+        Ok(())
+    }
+
+    fn count_tree_pages(&self, pgno: u32, height: u32, count: &mut u64) -> Result<()> {
+        *count += 1;
+        if height <= 1 { return Ok(()); }
+        let page = self.store.page(pgno);
+        let h = PageHeader::decode(page);
+        if h.page_type == spec::PAGE_TYPE_BRANCH {
+            let branch = BranchView::<K>::new(page, h.entry_count as usize);
+            for j in 0..branch.child_count() {
+                self.count_tree_pages(branch.child(j), height - 1, count)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_compact(&mut self) -> Result<()> {
+        // Extract all records from the pending tree.
+        let mut records: Vec<(K, K, u32)> = Vec::with_capacity(self.pending_record_count as usize);
+        self.scan_node(self.pending_root, &mut |from, to, scope_id| {
+            records.push((from, to, scope_id));
+        })?;
+
+        // Free the old pending pages. These are uncommitted COW copies
+        // (never committed, never visible to readers). Return them to
+        // free_pages so the rebuild can reuse the same pages — no file growth.
+        let mut reusable: Vec<u32> = self.private_pages.iter()
+            .filter(|&p| p >= 2)
+            .collect();
+        reusable.sort();
+        for &pgno in &reusable {
+            self.freed_this_txn.push(pgno);
+        }
+        // Make reusable pages available for immediate reuse.
+        self.free_pages.extend(&reusable);
+        self.free_pages.sort();
+        self.private_pages.clear();
+        self.pending_root = 0;
+        self.pending_height = 0;
+        self.pending_record_count = 0;
+
+        // Re-insert all records into a fresh compact tree.
+        for (from, to, scope_id) in records {
+            self.cow_insert(from, to, scope_id)?;
+            self.pending_record_count += 1;
+        }
+        Ok(())
+    }
+
+    fn scan_first_overlap(&self, from: K, to: K) -> Result<Option<OverlapHit<K>>> {
         if self.pending_root == 0 { return Ok(None); }
         self.scan_overlap_node(self.pending_root, from, to)
     }
 
-    fn scan_overlap_node(&self, pgno: u32, from: K, to: K) -> Result<Option<(K, K, u32, u32, usize)>> {
+    fn scan_overlap_node(&self, pgno: u32, from: K, to: K) -> Result<Option<OverlapHit<K>>> {
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         match h.page_type {

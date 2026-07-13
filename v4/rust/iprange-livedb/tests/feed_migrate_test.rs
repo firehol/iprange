@@ -18,6 +18,7 @@ fn has_feed_bit(scope_id: u32, bit: u32) -> bool {
     (scope_id & (1 << bit)) != 0
 }
 
+#[allow(dead_code)]
 fn make_and_open(records: &[(u32, u32, u32)]) -> Writer<Ipv4Key> {
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
     for &(f, t, s) in records { w.set(Ipv4Key(f), Ipv4Key(t), s).unwrap(); }
@@ -31,7 +32,7 @@ fn make_and_open(records: &[(u32, u32, u32)]) -> Writer<Ipv4Key> {
 fn feed_migrate_add_feed() {
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
     let desired = SortedStream::from_unsorted(vec![dr(10, 20)]);
-    let counters = migrate_feed(&mut w, 0, &mut desired.clone(), &MigrateOptions::default()).unwrap();
+    let _counters = migrate_feed(&mut w, 0, &mut desired.clone(), &MigrateOptions::default()).unwrap();
     w.commit(0, u64::MAX).unwrap();
     let img = w.into_image().unwrap();
     let map = per_ip_map(&img);

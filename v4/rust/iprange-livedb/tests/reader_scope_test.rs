@@ -30,8 +30,8 @@ fn reader_scope_list() {
     let list = r.scope_list();
     assert_eq!(list.len(), 2);
     // Entries are (scope_id, bitmap)
-    assert!(list.iter().any(|(id, bm)| *id == 1 && bm.as_slice() == &[0xAB]));
-    assert!(list.iter().any(|(id, bm)| *id == 2 && bm.as_slice() == &[0xCD, 0xEF]));
+    assert!(list.iter().any(|(id, bm)| *id == 1 && bm.as_slice() == [0xAB]));
+    assert!(list.iter().any(|(id, bm)| *id == 2 && bm.as_slice() == [0xCD, 0xEF]));
 }
 
 #[test]

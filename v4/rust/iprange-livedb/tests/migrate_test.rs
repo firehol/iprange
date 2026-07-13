@@ -1,7 +1,7 @@
 //! Integration tests for the streaming migrate API.
 
 use iprange_livedb::{
-    ext_sort, migrate, Change, DesiredRecord, ExtSortConfig, Ipv4Key,
+    ext_sort, migrate, DesiredRecord, ExtSortConfig, Ipv4Key,
     MigrateOptions, SortedStream, Writer,
 };
 

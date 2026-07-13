@@ -315,6 +315,34 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	// Build and write the persistent free-list.
 	newTxnIDVal := w.committedTxnID
 
+	// Fast path: if nothing was freed and nothing was consumed, the
+	// existing chain is still valid. Skip the rewrite to avoid leaking
+	// pages (allocating chain pages from the free-list consumes them).
+	if len(w.freedThisTxn) == 0 && w.freePos == 0 && w.scopeTableRootCache == 0 {
+		total := w.store.totalPages()
+		inactive := 1 - w.activeMeta
+		newTxnID := w.committedTxnID + 1
+		if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
+			w.pendingHeight, w.pendingRecordCount, total, updatedUnix); err != nil {
+			return err
+		}
+		if err := w.store.sync(); err != nil {
+			return err
+		}
+		w.activeMeta = inactive
+		w.committedTxnID = newTxnID
+		w.prevCommittedRoot = w.committedRoot
+		w.prevCommittedHeight = w.committedHeight
+		w.committedRoot = w.pendingRoot
+		w.committedHeight = w.pendingHeight
+		w.committedRecordCount = w.pendingRecordCount
+		w.committedPages = total
+		w.store.setCommittedPages(total)
+		w.resetTxn()
+		w.LoadFreeList(oldestReaderTxnID)
+		return nil
+	}
+
 	// Collect entries to persist:
 	// - Old entries not consumed this transaction
 	// - Pages freed this transaction (COW victims + old chain pages + old scope pages)
@@ -822,6 +850,81 @@ func (w *Writer[K]) deleteRange(from, to K) error {
 		w.pendingRoot = 0
 		w.pendingHeight = 0
 	}
+	// Issue 3 fix: compact the tree if it is significantly sparse after a
+	// large delete, preventing peak-sized structure from lingering.
+	if err := w.compactIfNeeded(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// countTreePages walks the pending B+tree rooted at pgno and counts every
+// page reachable from it (branches and leaves).
+func (w *Writer[K]) countTreePages(pgno uint32, height uint32, count *uint64) {
+	*count++
+	if height <= 1 {
+		return
+	}
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	if h.pageType == PageTypeBranch {
+		bv := newBranchView(page, int(h.entryCount), int(w.keyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			w.countTreePages(bv.child(j), height-1, count)
+		}
+	}
+}
+
+// compactIfNeeded rebuilds the pending tree compactly when it is less than
+// 25% full (actual tree pages exceed 4x the pages needed for the current
+// records). Triggered after a large delete that leaves the tree sparse.
+func (w *Writer[K]) compactIfNeeded() error {
+	if w.pendingRoot == 0 || w.pendingRecordCount == 0 {
+		return nil
+	}
+	var treePages uint64
+	w.countTreePages(w.pendingRoot, w.pendingHeight, &treePages)
+	lmax := uint64(leafMax(w.keyWidth))
+	neededPages := (w.pendingRecordCount + lmax - 1) / lmax
+	if treePages > neededPages*4+4 {
+		return w.rebuildCompact()
+	}
+	return nil
+}
+
+// rebuildCompact extracts all records from the pending tree, returns the old
+// COW pages to the free pool for immediate reuse, and re-inserts the records
+// into a fresh compact tree. The COW copies were never committed, so no reader
+// can reference them — they are safe to recycle within the same transaction.
+func (w *Writer[K]) rebuildCompact() error {
+	records := make([]overlapRecord[K], 0, w.pendingRecordCount)
+	if err := w.scanNode(w.pendingRoot, func(from, to K, scopeID uint32) {
+		records = append(records, overlapRecord[K]{from: from, to: to, scope: scopeID})
+	}); err != nil {
+		return err
+	}
+	var reusable []uint32
+	for _, pgno := range w.privatePages.iter() {
+		if pgno >= 2 {
+			reusable = append(reusable, pgno)
+		}
+	}
+	sort.Slice(reusable, func(i, j int) bool { return reusable[i] < reusable[j] })
+	// Record freed pages for the persistent free-list chain and make them
+	// immediately available to allocPage so the rebuild does not grow the file.
+	w.freedThisTxn = append(w.freedThisTxn, reusable...)
+	w.freePages = append(w.freePages, reusable...)
+	sort.Slice(w.freePages, func(i, j int) bool { return w.freePages[i] < w.freePages[j] })
+	w.privatePages.clear()
+	w.pendingRoot = 0
+	w.pendingHeight = 0
+	w.pendingRecordCount = 0
+	for _, r := range records {
+		if err := w.cowInsert(r.from, r.to, r.scope); err != nil {
+			return err
+		}
+		w.pendingRecordCount++
+	}
 	return nil
 }
 
@@ -1157,6 +1260,7 @@ func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
 }
 
 func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {
+	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
@@ -1164,6 +1268,7 @@ func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, 
 }
 
 func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32, error) {
+	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
@@ -1443,6 +1548,9 @@ func (w *Writer[K]) collectOverlappingNode(pgno uint32, from, to K, out *[]overl
 func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
+		if feedBit >= 32 {
+			return 0, fmt.Errorf("feed bit %d exceeds 32-bit bitmap mode", feedBit)
+		}
 		return 1 << feedBit, nil
 	case ScopeModeIndirect:
 		if w.scopeRegistry == nil {

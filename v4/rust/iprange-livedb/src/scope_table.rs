@@ -38,6 +38,12 @@ pub struct ScopeRegistry {
     next_id: u32,
 }
 
+impl Default for ScopeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScopeRegistry {
     pub fn new() -> Self {
         ScopeRegistry {
@@ -188,8 +194,8 @@ pub fn build_scope_tree(
         // The separator is the first scope_id of the NEXT leaf (not this one).
     }
     // Separators: for leaf[i] (i >= 1), the separator is leaf[i]'s first scope_id.
-    for i in 1..leaf_pgnos.len() {
-        let page = store.page(leaf_pgnos[i]);
+    for &pgno in leaf_pgnos.iter().skip(1) {
+        let page = store.page(pgno);
         let first_id = wire::u32_le(page, spec::PAGE_HEADER_SIZE);
         seps.push(first_id);
     }
@@ -271,15 +277,8 @@ fn build_branch_levels(
     }
 
     // Separators for the next level: first scope_id of each branch after the first.
-    for i in 1..branch_pgnos.len() {
-        // Read the first child's first separator (which is the first scope_id in that subtree).
-        // Actually, the separator is already in all_seps — but we need to track which seps
-        // belong to which branch level. For simplicity, read the first entry from each branch's
-        // leftmost leaf. But that requires descending. Instead, use the separator that was
-        // stored at the branch level.
-        // For the multi-level case, the separator between branch[i-1] and branch[i] is
-        // the first separator stored in branch[i].
-        let page = store.page(branch_pgnos[i]);
+    for &pgno in branch_pgnos.iter().skip(1) {
+        let page = store.page(pgno);
         let off = spec::PAGE_HEADER_SIZE + 4; // first sep in this branch
         new_seps.push(wire::u32_le(page, off));
     }
@@ -331,68 +330,6 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
             Ok(())
         }
         _ => Err(Error::Structural("unexpected page type in scope table")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn intern_and_resolve() {
-        let mut reg = ScopeRegistry::new();
-        let (id1, _) = reg.intern(&[0b00000001]); // feed 0
-        let (id2, _) = reg.intern(&[0b00000010]); // feed 1
-        let (id1b, _) = reg.intern(&[0b00000001]); // same as id1
-
-        assert_eq!(id1, 1);
-        assert_eq!(id2, 2);
-        assert_eq!(id1b, 1); // reuse
-        assert_eq!(reg.resolve(id1), Some(&[0b00000001][..]));
-        assert_eq!(reg.resolve(id2), Some(&[0b00000010][..]));
-    }
-
-    #[test]
-    fn bitmap_set_clear_feed() {
-        let mut reg = ScopeRegistry::new();
-        let (empty, _) = reg.intern(&[]); // empty bitmap (presence only)
-        let with_feed0 = reg.bitmap_set_feed(empty, 0);
-        assert_ne!(with_feed0, empty);
-        let resolved = reg.resolve(with_feed0).unwrap();
-        assert_eq!(resolved[0] & 1, 1); // bit 0 set
-
-        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0);
-        assert_eq!(without_feed0, 0); // empty again
-    }
-
-    #[test]
-    fn encode_decode_roundtrip() {
-        let entry = ScopeEntry {
-            scope_id: 42,
-            bitmap: vec![0xAB, 0xCD, 0xEF],
-        };
-        let mut buf = vec![0u8; SCOPE_ENTRY_SIZE];
-        encode_entry(&mut buf, &entry);
-        let decoded = decode_entry(&buf);
-        assert_eq!(decoded.scope_id, 42);
-        assert_eq!(decoded.bitmap, vec![0xAB, 0xCD, 0xEF]);
-    }
-
-    #[test]
-    fn many_entries() {
-        let mut reg = ScopeRegistry::new();
-        for i in 0..100u32 {
-            let mut bitmap = vec![0u8; (i / 8 + 1) as usize];
-            bitmap[i as usize / 8] = 1 << (i % 8);
-            let _ = reg.intern(&bitmap);
-        }
-        assert_eq!(reg.len(), 100);
-        // Each unique bitmap gets its own scope_id
-        for i in 0..100u32 {
-            let id = i + 1;
-            let bitmap = reg.resolve(id).unwrap();
-            assert!(bitmap[i as usize / 8] & (1 << (i % 8)) != 0);
-        }
     }
 }
 
@@ -456,4 +393,66 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
         }
     }
     Err(Error::Invariant("scope table descent exceeded TREE_HEIGHT_MAX"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intern_and_resolve() {
+        let mut reg = ScopeRegistry::new();
+        let (id1, _) = reg.intern(&[0b00000001]); // feed 0
+        let (id2, _) = reg.intern(&[0b00000010]); // feed 1
+        let (id1b, _) = reg.intern(&[0b00000001]); // same as id1
+
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id1b, 1); // reuse
+        assert_eq!(reg.resolve(id1), Some(&[0b00000001][..]));
+        assert_eq!(reg.resolve(id2), Some(&[0b00000010][..]));
+    }
+
+    #[test]
+    fn bitmap_set_clear_feed() {
+        let mut reg = ScopeRegistry::new();
+        let (empty, _) = reg.intern(&[]); // empty bitmap (presence only)
+        let with_feed0 = reg.bitmap_set_feed(empty, 0);
+        assert_ne!(with_feed0, empty);
+        let resolved = reg.resolve(with_feed0).unwrap();
+        assert_eq!(resolved[0] & 1, 1); // bit 0 set
+
+        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0);
+        assert_eq!(without_feed0, 0); // empty again
+    }
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        let entry = ScopeEntry {
+            scope_id: 42,
+            bitmap: vec![0xAB, 0xCD, 0xEF],
+        };
+        let mut buf = vec![0u8; SCOPE_ENTRY_SIZE];
+        encode_entry(&mut buf, &entry);
+        let decoded = decode_entry(&buf);
+        assert_eq!(decoded.scope_id, 42);
+        assert_eq!(decoded.bitmap, vec![0xAB, 0xCD, 0xEF]);
+    }
+
+    #[test]
+    fn many_entries() {
+        let mut reg = ScopeRegistry::new();
+        for i in 0..100u32 {
+            let mut bitmap = vec![0u8; (i / 8 + 1) as usize];
+            bitmap[i as usize / 8] = 1 << (i % 8);
+            let _ = reg.intern(&bitmap);
+        }
+        assert_eq!(reg.len(), 100);
+        // Each unique bitmap gets its own scope_id
+        for i in 0..100u32 {
+            let id = i + 1;
+            let bitmap = reg.resolve(id).unwrap();
+            assert!(bitmap[i as usize / 8] & (1 << (i % 8)) != 0);
+        }
+    }
 }
