@@ -92,9 +92,23 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn open(store: Box<dyn PageStore>) -> Result<Writer<K>> {
+        // Validate per-page CRC32C on both meta pages. A torn write or byte
+        // corruption that leaves the bytes decodable (but CRC-invalid) must be
+        // rejected here, not silently accepted by trusting txn_id alone. Pick
+        // the active meta as the CRC-valid page with the higher txn_id; if
+        // both are valid, the higher txn_id wins; if neither is valid, reject.
+        let valid_a = crate::crc32c::verify_page(store.page(0));
+        let valid_b = crate::crc32c::verify_page(store.page(1));
+        if !valid_a && !valid_b {
+            return Err(Error::Structural("both meta pages fail CRC"));
+        }
         let meta_a = Meta::decode(store.page(0));
         let meta_b = Meta::decode(store.page(1));
-        let (active, active_no) = if meta_a.txn_id >= meta_b.txn_id { (meta_a, 0u32) } else { (meta_b, 1u32) };
+        let (active, active_no) = if valid_a {
+            if valid_b {
+                if meta_a.txn_id >= meta_b.txn_id { (meta_a, 0u32) } else { (meta_b, 1u32) }
+            } else { (meta_a, 0u32) }
+        } else { (meta_b, 1u32) };
         if active.key_width != K::WIDTH as u8 { return Err(Error::Structural("key_width mismatch")); }
         if active.record_size != record_size::<K>() as u32 { return Err(Error::Structural("record_size mismatch")); }
 
@@ -324,19 +338,81 @@ impl<K: IpKey> Writer<K> {
         // newest-entry-wins then gives tombstones priority for reused pages.
         entries_to_write.sort_by_key(|e| e.freed_txn_id);
 
-        // Allocate chain pages (NOT tracked as consumed — see alloc_chain_page).
-        let needed = crate::free_list::chain_page_count(&entries_to_write);
-        let mut chain_pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(needed);
-        while chain_pages.len() < needed {
-            chain_pages.push(self.alloc_chain_page()?);
-        }
+        // A1 fix: when the existing chain is large (≥20 pages), compact it
+        // instead of appending. This reads all old entries, merges with new
+        // entries (newest-wins dedup), filters tombstones, and rewrites as a
+        // single clean chain. Old chain pages are freed.
+        let old_chain_pages = if self.free_list_head != 0 {
+            crate::free_list::read_chain_page_numbers(
+                self.store.as_ref(), self.free_list_head,
+            )
+        } else { Vec::new() };
 
-        // Append the new segment to the front of the existing chain. Old chain
-        // pages stay reachable (append-only) — they are never freed here.
-        let old_head = self.free_list_head;
-        self.free_list_head = crate::free_list::append_segment(
-            self.store.as_mut(), &entries_to_write, &chain_pages, old_head,
-        )?;
+        let mut chain_pages: alloc::vec::Vec<u32>;
+
+        if old_chain_pages.len() >= 20 {
+            // Compaction path: read old entries, deduplicate, rewrite.
+            let old_entries = if self.free_list_head != 0 {
+                crate::free_list::read_chain(
+                    self.store.as_ref(), self.free_list_head,
+                ).unwrap_or_default()
+            } else { Vec::new() };
+
+            // Merge: new entries take priority (they are this txn's state).
+            let mut merged: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+            for e in &old_entries {
+                merged.entry(e.pgno).or_insert(e.freed_txn_id);
+            }
+            for e in &entries_to_write {
+                merged.insert(e.pgno, e.freed_txn_id);
+            }
+
+            let mut compact_entries: Vec<crate::free_list::FreeEntry> = merged.iter()
+                .filter(|(_, &ftxn)| ftxn != u64::MAX)
+                .map(|(&pgno, &ftxn)| crate::free_list::FreeEntry {
+                    pgno, freed_txn_id: ftxn,
+                })
+                .filter(|e| e.pgno < new_total)
+                .collect();
+
+            // Old chain pages are being replaced by the compact chain.
+            // Add them as freed entries so they appear in the compact chain
+            // and can be reused by future transactions.
+            for &pgno in &old_chain_pages {
+                if pgno < new_total {
+                    compact_entries.push(crate::free_list::FreeEntry {
+                        pgno, freed_txn_id: new_txn_id_val,
+                    });
+                }
+            }
+            compact_entries.sort_by_key(|e| e.freed_txn_id);
+
+            let needed = crate::free_list::chain_page_count(&compact_entries);
+            chain_pages = alloc::vec::Vec::with_capacity(needed);
+            while chain_pages.len() < needed {
+                chain_pages.push(self.alloc_chain_page()?);
+            }
+            let chain_set: std::collections::HashSet<u32> = chain_pages.iter().copied().collect();
+            compact_entries.retain(|e| !chain_set.contains(&e.pgno));
+
+            self.free_list_head = if compact_entries.is_empty() { 0 } else {
+                crate::free_list::write_chain(
+                    self.store.as_mut(), &compact_entries, &chain_pages,
+                )?
+            };
+        } else {
+            // Append-only path: prepend new segment to existing chain.
+            let needed = crate::free_list::chain_page_count(&entries_to_write);
+            chain_pages = alloc::vec::Vec::with_capacity(needed);
+            while chain_pages.len() < needed {
+                chain_pages.push(self.alloc_chain_page()?);
+            }
+
+            let old_head = self.free_list_head;
+            self.free_list_head = crate::free_list::append_segment(
+                self.store.as_mut(), &entries_to_write, &chain_pages, old_head,
+            )?;
+        }
 
         // F9 fix: finalize CRCs on the newly written chain pages.
         for &pgno in &chain_pages {
@@ -727,34 +803,113 @@ impl<K: IpKey> Writer<K> {
     }
 
     fn rebuild_compact(&mut self) -> Result<()> {
-        // Extract all records from the pending tree.
-        let mut records: Vec<(K, K, u32)> = Vec::with_capacity(self.pending_record_count as usize);
-        self.scan_node(self.pending_root, &mut |from, to, scope_id| {
-            records.push((from, to, scope_id));
-        })?;
+        // Streaming rebuild: bound memory to one leaf's worth of records.
+        //
+        // Leaves are processed in tree (key) order, which yields globally
+        // sorted records → a densely packed tree. Only one leaf's records are
+        // buffered at a time.
+        //
+        // Only PRIVATE pages (uncommitted COW copies) may be recycled. Pages
+        // still shared with the committed tree may be referenced by pinned
+        // readers, so they are read for their records but never freed here —
+        // they are reclaimed later via MVCC reclamation of the superseded
+        // generation.
+        //
+        // Safety (cross-leaf overwrite): each private leaf is returned to the
+        // free pool only AFTER its records have been buffered. When leaf L_k is
+        // being read, the pool holds only non-leaf pages and the private leaves
+        // processed before L_k — never L_k itself or any later leaf — so the
+        // allocator cannot clobber an unread leaf. This holds for any
+        // processing order; tree order is chosen for dense packing.
+        //
+        // Placement: each freed leaf is inserted at its sorted position within
+        // the unconsumed tail of the free pool, so the allocator keeps
+        // consuming the lowest page numbers first. The new compact tree then
+        // lands in the lowest available pages and the trailing gap above it is
+        // truncated away at commit. (Sorted-insert is O(n) per leaf; rebuild is
+        // a rare operation triggered only when the tree is ≥4× sparse, and the
+        // O(n²) total is dominated by the record re-insertion work.)
+        //
+        // The free pool is rebuilt clean (deduped, sorted, cursor reset) from
+        // the unconsumed tail plus the non-leaf private pages, so pages already
+        // consumed earlier in the transaction are not re-offered.
+        let old_root = self.pending_root;
+        let old_height = self.pending_height;
 
-        // Free the old pending pages. These are uncommitted COW copies
-        // (never committed, never visible to readers). Return them to
-        // free_pages so the rebuild can reuse the same pages — no file growth.
-        let mut reusable: Vec<u32> = self.private_pages.iter()
-            .filter(|&p| p >= 2)
+        // Collect old leaf page numbers in tree (left-to-right = key) order.
+        let mut leaf_pages: Vec<u32> = Vec::new();
+        self.collect_leaf_pages(old_root, old_height, &mut leaf_pages)?;
+        let leaf_set: std::collections::HashSet<u32> = leaf_pages.iter().copied().collect();
+
+        // New pool = unconsumed tail ∪ old non-leaf private pages (disjoint,
+        // sorted). Old leaf pages are returned to the pool one-at-a-time after
+        // buffering (private) or not at all (shared).
+        let mut new_free: Vec<u32> = self.free_pages[self.free_pos..].to_vec();
+        let mut non_leaf: Vec<u32> = self.private_pages.iter()
+            .filter(|&p| p >= 2 && !leaf_set.contains(&p))
             .collect();
-        reusable.sort();
-        for &pgno in &reusable {
+        non_leaf.sort_unstable();
+        for &pgno in &non_leaf {
             self.freed_this_txn.push(pgno);
+            new_free.push(pgno);
         }
-        // Make reusable pages available for immediate reuse.
-        self.free_pages.extend(&reusable);
-        self.free_pages.sort();
+        new_free.sort_unstable();
+        self.free_pages = new_free;
+        self.free_pos = 0;
+        // Capture private-leaf set before clearing private_pages.
+        let private_leaf: std::collections::HashSet<u32> = leaf_pages.iter().copied()
+            .filter(|&p| self.private_pages.contains(p))
+            .collect();
         self.private_pages.clear();
         self.pending_root = 0;
         self.pending_height = 0;
         self.pending_record_count = 0;
 
-        // Re-insert all records into a fresh compact tree.
-        for (from, to, scope_id) in records {
-            self.cow_insert(from, to, scope_id)?;
-            self.pending_record_count += 1;
+        // Single pass in tree (key) order: dense insertion. Private leaves are
+        // recycled after buffering; shared leaves are read but kept in place.
+        let mut buf: Vec<(K, K, u32)> = Vec::new();
+        for &leaf_pgno in &leaf_pages {
+            buf.clear();
+            {
+                let page = self.store.page(leaf_pgno);
+                let h = PageHeader::decode(page);
+                let leaf = LeafView::<K>::new(page, h.entry_count as usize);
+                for i in 0..leaf.len() {
+                    let r = leaf.record(i);
+                    buf.push((r.from(), r.to(), r.scope_id()));
+                }
+            }
+            if private_leaf.contains(&leaf_pgno) {
+                // Records are owned in `buf`; safe to recycle this leaf now.
+                self.freed_this_txn.push(leaf_pgno);
+                // Insert into the unconsumed tail at its sorted position so the
+                // allocator keeps reusing the lowest page numbers first.
+                let lo = self.free_pos;
+                let pos = self.free_pages[lo..].partition_point(|&x| x < leaf_pgno) + lo;
+                self.free_pages.insert(pos, leaf_pgno);
+            }
+            for (from, to, scope_id) in buf.drain(..) {
+                self.cow_insert(from, to, scope_id)?;
+                self.pending_record_count += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect leaf page numbers of the pending tree in tree (left-to-right)
+    /// order. Used by `rebuild_compact` to stream leaves one at a time.
+    fn collect_leaf_pages(
+        &self, pgno: u32, height: u32, out: &mut Vec<u32>,
+    ) -> Result<()> {
+        if height <= 1 {
+            out.push(pgno);
+            return Ok(());
+        }
+        let page = self.store.page(pgno);
+        let h = PageHeader::decode(page);
+        let branch = BranchView::<K>::new(page, h.entry_count as usize);
+        for j in 0..branch.child_count() {
+            self.collect_leaf_pages(branch.child(j), height - 1, out)?;
         }
         Ok(())
     }
@@ -978,6 +1133,9 @@ impl<K: IpKey> Writer<K> {
     // ── scope table operations (mode 2 only) ──
 
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
+        if bitmap.len() > crate::scope_table::MAX_BITMAP_WIDTH {
+            return Err(Error::InvalidInput("bitmap exceeds 256 bytes (2048 feeds)"));
+        }
         match &mut self.scope_registry {
             Some(reg) => {
                 let (id, was_new) = reg.intern(bitmap);

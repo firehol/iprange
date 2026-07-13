@@ -364,18 +364,26 @@ func TestNormalizeChunkDifferentScope(t *testing.T) {
 }
 
 func TestNormalizeChunkSameScope(t *testing.T) {
-	// [10-20] scope=1, [15-25] scope=1 → merge: [10-25]s1
+	// [10-20] scope=1 seq=0, [15-25] scope=1 seq=1 → same scope, but the two
+	// halves have DIFFERENT winning seqs ([10-14] won by seq 0, [15-25] won by
+	// seq 1). normalizeChunk keeps them as separate segments so each carries
+	// its truthful winning seq; stamping one max seq onto the merged range
+	// would make a later cross-run overlap resolve the wrong winner. Both
+	// segments are scope 1, so per-IP coverage is unchanged.
 	sorted := []DesiredRecord[Ipv4Key]{
 		{From: Ipv4Key(10), To: Ipv4Key(20), ScopeID: 1},
 		{From: Ipv4Key(15), To: Ipv4Key(25), ScopeID: 1},
 	}
 	seqs := []uint64{0, 1}
 	out, _ := normalizeChunk(sorted, seqs)
-	if len(out) != 1 {
-		t.Fatalf("got %d segments", len(out))
+	if len(out) != 2 {
+		t.Fatalf("got %d segments, want 2", len(out))
 	}
-	if out[0].From != 10 || out[0].To != 25 || out[0].ScopeID != 1 {
+	if out[0].From != 10 || out[0].To != 14 || out[0].ScopeID != 1 {
 		t.Fatalf("seg0: [%v,%v] s=%d", uint32(out[0].From), uint32(out[0].To), out[0].ScopeID)
+	}
+	if out[1].From != 15 || out[1].To != 25 || out[1].ScopeID != 1 {
+		t.Fatalf("seg1: [%v,%v] s=%d", uint32(out[1].From), uint32(out[1].To), out[1].ScopeID)
 	}
 }
 
@@ -507,9 +515,14 @@ func TestBuildScopeTreeMultiLevel(t *testing.T) {
 	w, _ := Create[Ipv4Key](ScopeModeIndirect, 0)
 	const n = 8000
 	for i := uint32(0); i < n; i++ {
-		bm := make([]byte, i/8+1)
-		bm[i/8] = 1 << (i % 8)
-		w.ScopeIntern(bm)
+		// Unique 4-byte bitmap encoding i (well within MaxBitmapWidth=256).
+		// The tree structure depends on entry COUNT, not bitmap content.
+		bm := make([]byte, 4)
+		bm[0] = byte(i)
+		bm[1] = byte(i >> 8)
+		if _, err := w.ScopeIntern(bm); err != nil {
+			t.Fatalf("ScopeIntern(%d): %v", i, err)
+		}
 	}
 	// This commit builds the scope tree — previously it would fail for > 7635.
 	if err := w.Commit(0, math.MaxUint64); err != nil {

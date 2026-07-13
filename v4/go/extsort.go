@@ -39,7 +39,23 @@ func FromUnsorted[K ipKey[K]](records []DesiredRecord[K]) *SortedStream[K] {
 		seqs[i] = uint64(orig)
 	}
 	normalized, _ := normalizeChunk(sorted, seqs)
-	return &SortedStream[K]{records: normalized}
+	// Presentation coalesce: this is a final output stream (seqs discarded),
+	// so adjacent same-scope segments are always safe to merge regardless of
+	// their (now-irrelevant) winning seqs.
+	recs := make([]DesiredRecord[K], 0, len(normalized))
+	for _, r := range normalized {
+		if len(recs) > 0 {
+			last := &recs[len(recs)-1]
+			if last.ScopeID == r.ScopeID {
+				if after, ok := last.To.checkedInc(); ok && after.cmp(r.From) == 0 {
+					last.To = r.To
+					continue
+				}
+			}
+		}
+		recs = append(recs, r)
+	}
+	return &SortedStream[K]{records: recs}
 }
 
 // sweepEvent is a sweep-line event for normalizeChunk.
@@ -156,15 +172,17 @@ func normalizeChunk[K ipKey[K]](sorted []DesiredRecord[K], seqs []uint64) ([]Des
 		scope := sorted[maxIdx].ScopeID
 		winSeq := seqs[maxIdx]
 
-		// Coalesce with previous if same scope and adjacent.
+		// Coalesce with previous only when same scope, adjacent, AND the same
+		// winning seq. Merging same-scope segments with different seqs would
+		// stamp one (max) seq onto the whole range — wrong for the part covered
+		// only by the lower-seq constituent, which would then resolve wrongly
+		// against a different-scope record in the cross-run merge. Equal seqs
+		// come from the same input record, so merging them is always safe.
 		if len(out) > 0 {
 			last := &out[len(out)-1]
-			if last.ScopeID == scope {
+			if last.ScopeID == scope && outSeqs[len(outSeqs)-1] == winSeq {
 				if after, ok := last.To.checkedInc(); ok && after.cmp(segFrom) == 0 {
 					last.To = segTo
-					if winSeq > outSeqs[len(outSeqs)-1] {
-						outSeqs[len(outSeqs)-1] = winSeq
-					}
 					continue
 				}
 			}
@@ -198,12 +216,9 @@ func coalesceAdjacent[K ipKey[K]](records []DesiredRecord[K], seqs []uint64) ([]
 	for i := 1; i < len(records); i++ {
 		prev := &out[len(out)-1]
 		curr := records[i]
-		if prev.ScopeID == curr.ScopeID {
+		if prev.ScopeID == curr.ScopeID && outSeqs[len(outSeqs)-1] == seqs[i] {
 			if next, ok := prev.To.checkedInc(); ok && next.cmp(curr.From) == 0 {
 				prev.To = curr.To
-				if seqs[i] > outSeqs[len(outSeqs)-1] {
-					outSeqs[len(outSeqs)-1] = seqs[i]
-				}
 				continue
 			}
 		}
@@ -475,8 +490,13 @@ func (m *kWayMerge[K]) popMin() (DesiredRecord[K], uint64, bool) {
 
 // computeNext produces the next coalesced/normalized record, handling
 // cross-run overlaps. Each record carries a global input seq; when two records
-// from different runs overlap with different scopes, the higher seq wins
-// (last-wins by global input order). Same-scope overlaps are always merged.
+// overlap, the higher seq wins the overlapping region (last-wins by global
+// input order) — regardless of whether their scopes match. Same-scope records
+// from different runs must NOT be merged by blindly extending the range and
+// bumping the seq: the inflated seq would then beat a different-scope record
+// that should win in a part of the range the high-seq constituent does not
+// cover. Resolving every overlap by seq keeps each emitted segment's seq
+// truthful for its whole span.
 func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 	result, resultSeq, ok := m.popMin()
 	if !ok {
@@ -488,83 +508,71 @@ func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 			break
 		}
 		if nextFrom.cmp(result.To) > 0 {
-			// No overlap — check adjacency for same-scope coalescing.
-			if nextScope == result.ScopeID {
+			// No overlap. Adjacent same-scope segments may be coalesced only
+			// when they carry the same seq — then the merged segment's seq is
+			// valid for the whole range. When seqs differ, keep them separate.
+			if nextScope == result.ScopeID && nextSeq == resultSeq {
 				if after, canInc := result.To.checkedInc(); canInc && after.cmp(nextFrom) == 0 {
-					popped, poppedSeq, _ := m.popMin()
+					popped, _, _ := m.popMin()
 					if popped.To.cmp(result.To) > 0 {
 						result.To = popped.To
-					}
-					if poppedSeq > resultSeq {
-						resultSeq = poppedSeq
 					}
 					continue
 				}
 			}
 			break
 		}
-		// Overlap!
-		if nextScope == result.ScopeID {
-			// Same scope → extend, keep max seq.
-			popped, poppedSeq, _ := m.popMin()
-			if popped.To.cmp(result.To) > 0 {
-				result.To = popped.To
-			}
-			if poppedSeq > resultSeq {
-				resultSeq = poppedSeq
-			}
-		} else {
-			// Different scope, overlapping ranges — resolve by global seq.
-			if nextSeq > resultSeq {
-				// Next is newer → next wins (last-wins). Trim/split result.
-				originalTo := result.To
-				originalScope := result.ScopeID
-				if nextFrom.cmp(result.From) > 0 {
-					// Partial overlap → truncate result at nextFrom-1, defer
-					// any tail beyond nextTo back into pending.
-					dec, dok := nextFrom.checkedDec()
-					if dok {
-						result.To = dec
-					} else {
-						result.To = nextFrom
-					}
-					if originalTo.cmp(nextTo) > 0 {
-						if ts, ok := nextTo.checkedInc(); ok {
-							m.pending = append(m.pending, taggedRec[K]{
-								rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
-								seq: resultSeq,
-							})
-						}
-					}
-					break
+		// Overlap (same or different scope) — resolve by global seq. The record
+		// with the higher seq wins the overlapping region.
+		if nextSeq > resultSeq {
+			// Next is newer → next wins (last-wins). Trim/split result.
+			originalTo := result.To
+			originalScope := result.ScopeID
+			if nextFrom.cmp(result.From) > 0 {
+				// Partial overlap → truncate result at nextFrom-1, defer any
+				// tail beyond nextTo back into pending.
+				dec, dok := nextFrom.checkedDec()
+				if dok {
+					result.To = dec
 				} else {
-					// nextFrom <= result.From → next fully covers result's start.
-					// Defer result's tail beyond nextTo, then take next as the
-					// new result (last-wins).
-					if originalTo.cmp(nextTo) > 0 {
-						if ts, ok := nextTo.checkedInc(); ok {
-							m.pending = append(m.pending, taggedRec[K]{
-								rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
-								seq: resultSeq,
-							})
-						}
-					}
-					result, resultSeq, _ = m.popMin()
+					result.To = nextFrom
 				}
-			} else {
-				// Result is newer (or equal seq) → result wins. Consume next;
-				// if next extends beyond result, defer its surviving tail.
-				popped, poppedSeq, _ := m.popMin()
-				if popped.To.cmp(result.To) > 0 {
-					if ts, ok := result.To.checkedInc(); ok {
+				if originalTo.cmp(nextTo) > 0 {
+					if ts, ok := nextTo.checkedInc(); ok {
 						m.pending = append(m.pending, taggedRec[K]{
-							rec: DesiredRecord[K]{From: ts, To: popped.To, ScopeID: nextScope},
-							seq: poppedSeq,
+							rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
+							seq: resultSeq,
 						})
 					}
 				}
-				// result unchanged, continue scanning.
+				break
+			} else {
+				// nextFrom <= result.From → next fully covers result's start.
+				// Defer result's tail beyond nextTo, then take next as the new
+				// result (last-wins).
+				if originalTo.cmp(nextTo) > 0 {
+					if ts, ok := nextTo.checkedInc(); ok {
+						m.pending = append(m.pending, taggedRec[K]{
+							rec: DesiredRecord[K]{From: ts, To: originalTo, ScopeID: originalScope},
+							seq: resultSeq,
+						})
+					}
+				}
+				result, resultSeq, _ = m.popMin()
 			}
+		} else {
+			// Result is newer (or equal seq) → result wins. Consume next; if
+			// next extends beyond result, defer its surviving tail.
+			popped, poppedSeq, _ := m.popMin()
+			if popped.To.cmp(result.To) > 0 {
+				if ts, ok := result.To.checkedInc(); ok {
+					m.pending = append(m.pending, taggedRec[K]{
+						rec: DesiredRecord[K]{From: ts, To: popped.To, ScopeID: nextScope},
+						seq: poppedSeq,
+					})
+				}
+			}
+			// result unchanged, continue scanning.
 		}
 	}
 	r := result
@@ -613,6 +621,56 @@ func (m *MergeStream[K]) cleanup() {
 	for _, p := range m.runPaths {
 		os.Remove(p)
 	}
+}
+
+// coalesceStream is a presentation wrapper that merges adjacent same-scope
+// records emitted by an inner stream into maximal segments. The cross-run
+// merge deliberately keeps same-scope records that have different winning seqs
+// as separate segments so each one's seq stays truthful for its whole span
+// (required for correct last-wins resolution). Once the merge is done, no
+// seq-based comparison ever happens again, so collapsing adjacent same-scope
+// segments is purely a segment-count reduction that never changes any IP's
+// assigned scope.
+type coalesceStream[K ipKey[K]] struct {
+	inner   DesiredStream[K]
+	pending *DesiredRecord[K]
+}
+
+func newCoalesceStream[K ipKey[K]](inner DesiredStream[K]) *coalesceStream[K] {
+	c := &coalesceStream[K]{inner: inner}
+	c.fill()
+	return c
+}
+
+func (c *coalesceStream[K]) fill() {
+	rec := c.inner.Next()
+	if rec == nil {
+		c.pending = nil
+		return
+	}
+	owned := *rec // own a copy so mutating To never corrupts the inner stream
+	c.pending = &owned
+	for {
+		peeked := c.inner.Peek()
+		if peeked == nil || peeked.ScopeID != c.pending.ScopeID {
+			return
+		}
+		after, ok := c.pending.To.checkedInc()
+		if !ok || after.cmp(peeked.From) != 0 {
+			return
+		}
+		if peeked.To.cmp(c.pending.To) > 0 {
+			c.pending.To = peeked.To
+		}
+		c.inner.Next() // consume the merged-in record
+	}
+}
+
+func (c *coalesceStream[K]) Peek() *DesiredRecord[K] { return c.pending }
+func (c *coalesceStream[K]) Next() *DesiredRecord[K] {
+	r := c.pending
+	c.fill()
+	return r
 }
 
 // --- entry point ---
@@ -695,7 +753,7 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		}
 		f.Close()
 		os.Remove(runPaths[0])
-		return &SortedStream[K]{records: recs}, nil
+		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
 	}
 
 	// K-way merge across run files.
@@ -704,7 +762,7 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		dropAll()
 		return nil, err
 	}
-	return &MergeStream[K]{merge: merge, runPaths: runPaths}, nil
+	return newCoalesceStream[K](&MergeStream[K]{merge: merge, runPaths: runPaths}), nil
 }
 
 // --- streaming sorter ---
@@ -746,7 +804,7 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 	}
 
 	if len(s.runPaths) == 0 {
-		return &SortedStream[K]{}, nil
+		return newCoalesceStream[K](&SortedStream[K]{}), nil
 	}
 
 	if len(s.runPaths) == 1 {
@@ -768,7 +826,7 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		}
 		f.Close()
 		os.Remove(s.runPaths[0])
-		return &SortedStream[K]{records: recs}, nil
+		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
 	}
 
 	merge, err := newKWayMerge[K](s.runPaths)
@@ -776,7 +834,7 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		s.abort()
 		return nil, err
 	}
-	return &MergeStream[K]{merge: merge, runPaths: s.runPaths}, nil
+	return newCoalesceStream[K](&MergeStream[K]{merge: merge, runPaths: s.runPaths}), nil
 }
 
 func (s *ExtSorter[K]) Abort() {

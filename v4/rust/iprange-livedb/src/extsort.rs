@@ -46,17 +46,18 @@ impl<K: IpKey> ExtSorter<K> {
 
     pub fn finish(mut self) -> Result<Box<dyn DesiredStream<K>>> {
         if !self.chunk.is_empty() { self.spill_chunk()?; }
-        if self.run_paths.is_empty() {
-            return Ok(Box::new(SortedStream { records: Vec::new(), pos: 0 }));
-        }
-        if self.run_paths.len() == 1 {
+        let inner: Box<dyn DesiredStream<K>> = if self.run_paths.is_empty() {
+            Box::new(SortedStream { records: Vec::new(), pos: 0 })
+        } else if self.run_paths.len() == 1 {
             let tagged = read_run::<K>(&self.run_paths[0])?;
             let _ = std::fs::remove_file(&self.run_paths[0]);
             let records: Vec<DesiredRecord<K>> = tagged.into_iter().map(|(r, _)| r).collect();
-            return Ok(Box::new(SortedStream { records, pos: 0 }));
-        }
-        let merge = KWayMerge::<K>::new(&self.run_paths)?;
-        Ok(Box::new(MergeStream { merge: Some(merge), run_paths: self.run_paths }))
+            Box::new(SortedStream { records, pos: 0 })
+        } else {
+            let merge = KWayMerge::<K>::new(&self.run_paths)?;
+            Box::new(MergeStream { merge: Some(merge), run_paths: self.run_paths })
+        };
+        Ok(Box::new(CoalesceStream::new(inner)))
     }
 
     fn spill_chunk(&mut self) -> Result<()> {
@@ -160,13 +161,18 @@ fn normalize_chunk<K: IpKey>(sorted: &[DesiredRecord<K>], seqs: &[u64]) -> Vec<(
         let scope = sorted[max_idx].scope_id;
         let win_seq = seqs[max_idx];
 
-        // Coalesce with previous if same scope and adjacent.
+        // Coalesce with previous only when same scope, adjacent, AND the same
+        // winning seq. Merging same-scope segments that have different seqs
+        // would stamp one (max) seq onto the whole range — wrong for the part
+        // covered only by the lower-seq constituent, which would then lose
+        // (or win) incorrectly against a different-scope record in the later
+        // cross-run merge. Segments with equal seq come from the same input
+        // record, so merging them is always safe.
         if let Some(last) = out.last_mut() {
-            if last.0.scope_id == scope {
+            if last.0.scope_id == scope && last.1 == win_seq {
                 if let Some(after) = last.0.to.checked_inc() {
                     if after == seg_from {
                         last.0.to = seg_to;
-                        if win_seq > last.1 { last.1 = win_seq; }
                         continue;
                     }
                 }
@@ -185,11 +191,10 @@ fn coalesce_adjacent<K: IpKey>(records: &[DesiredRecord<K>], seqs: &[u64]) -> Ve
     for i in 1..records.len() {
         let curr = &records[i];
         let last = out.len() - 1;
-        if out[last].0.scope_id == curr.scope_id {
+        if out[last].0.scope_id == curr.scope_id && out[last].1 == seqs[i] {
             if let Some(a) = out[last].0.to.checked_inc() {
                 if a == curr.from {
                     out[last].0.to = curr.to;
-                    if seqs[i] > out[last].1 { out[last].1 = seqs[i]; }
                     continue;
                 }
             }
@@ -222,7 +227,23 @@ impl<K: IpKey> SortedStream<K> {
             indexed.into_iter().unzip();
         let seqs: Vec<u64> = seqs_local.into_iter().map(|s| s as u64).collect();
         let normalized = normalize_chunk(&sorted, &seqs);
-        let recs: Vec<DesiredRecord<K>> = normalized.into_iter().map(|(r, _)| r).collect();
+        // Presentation coalesce: this is a final output stream (seqs are
+        // discarded), so adjacent same-scope segments are always safe to
+        // merge regardless of their (now-irrelevant) winning seqs.
+        let mut recs: Vec<DesiredRecord<K>> = Vec::with_capacity(normalized.len());
+        for (r, _) in normalized {
+            if let Some(last) = recs.last_mut() {
+                if last.scope_id == r.scope_id {
+                    if let Some(after) = last.to.checked_inc() {
+                        if after == r.from {
+                            last.to = r.to;
+                            continue;
+                        }
+                    }
+                }
+            }
+            recs.push(r);
+        }
         SortedStream { records: recs, pos: 0 }
     }
 }
@@ -301,9 +322,15 @@ impl<K: IpKey> KWayMerge<K> {
 
     /// Compute the next coalesced/normalized record. Handles cross-run overlaps.
     ///
-    /// Each record carries a global input seq. When two records from different
-    /// runs overlap with different scopes, the one with the higher seq wins
-    /// (last-wins by global input order). Same-scope overlaps are always merged.
+    /// Each record carries a global input seq. When two records overlap, the
+    /// one with the higher seq wins the overlapping region (last-wins by global
+    /// input order) — regardless of whether their scopes happen to match. This
+    /// is critical: same-scope records from different runs must NOT be merged
+    /// by blindly extending the range and bumping the seq, because the inflated
+    /// seq would then beat a different-scope record that should win in a part
+    /// of the range the high-seq constituent does not even cover. Resolving
+    /// every overlap by seq keeps each emitted segment's seq truthful for its
+    /// whole span.
     fn compute_next(&mut self) -> Option<(DesiredRecord<K>, u64)> {
         let mut result = self.pop_min()?;
         loop {
@@ -312,61 +339,57 @@ impl<K: IpKey> KWayMerge<K> {
                 Some(v) => v,
             };
             if next_from > result.0.to {
-                // No overlap — check adjacency for same-scope coalescing.
-                if next_scope == result.0.scope_id {
+                // No overlap. Adjacent same-scope segments may be coalesced
+                // only when they carry the same seq — then the merged segment's
+                // seq is valid for the whole range. When seqs differ, keep them
+                // separate so each retains its true last-wins seq.
+                if next_scope == result.0.scope_id && next_seq == result.1 {
                     if let Some(after) = result.0.to.checked_inc() {
                         if after == next_from {
-                            let (popped, popped_seq) = self.pop_min().unwrap();
+                            let (popped, _popped_seq) = self.pop_min().unwrap();
                             if popped.to > result.0.to { result.0.to = popped.to; }
-                            if popped_seq > result.1 { result.1 = popped_seq; }
                             continue;
                         }
                     }
                 }
                 break;
             }
-            if next_scope == result.0.scope_id {
-                // Same scope → extend result, keep max seq.
-                let (popped, popped_seq) = self.pop_min().unwrap();
-                if popped.to > result.0.to { result.0.to = popped.to; }
-                if popped_seq > result.1 { result.1 = popped_seq; }
-            } else {
-                // Different scope, overlapping ranges — resolve by global seq.
-                let result_seq = result.1;
-                if next_seq > result_seq {
-                    // Next is newer → next wins (last-wins). Trim/split result.
-                    let original_to = result.0.to;
-                    let original_scope = result.0.scope_id;
-                    if next_from > result.0.from {
-                        // Partial overlap → truncate result at next_from-1.
-                        result.0.to = next_from.checked_dec().unwrap_or(next_from);
-                        if original_to > next_to {
-                            if let Some(ts) = next_to.checked_inc() {
-                                self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
-                            }
+            // Overlap (same or different scope) — resolve by global seq. The
+            // record with the higher seq wins the overlapping region.
+            let result_seq = result.1;
+            if next_seq > result_seq {
+                // Next is newer → next wins (last-wins). Trim/split result.
+                let original_to = result.0.to;
+                let original_scope = result.0.scope_id;
+                if next_from > result.0.from {
+                    // Partial overlap → truncate result at next_from-1.
+                    result.0.to = next_from.checked_dec().unwrap_or(next_from);
+                    if original_to > next_to {
+                        if let Some(ts) = next_to.checked_inc() {
+                            self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
                         }
-                        break;
-                    } else {
-                        // next_from == result.from → next fully covers result start.
-                        // Defer result's surviving tail, then take next as result.
-                        if original_to > next_to {
-                            if let Some(ts) = next_to.checked_inc() {
-                                self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
-                            }
-                        }
-                        result = self.pop_min().unwrap();
                     }
+                    break;
                 } else {
-                    // Result is newer (or equal) → result wins. Consume next;
-                    // if next extends beyond result, defer its tail.
-                    let (popped, popped_seq) = self.pop_min().unwrap();
-                    if popped.to > result.0.to {
-                        if let Some(ts) = result.0.to.checked_inc() {
-                            self.pending.push((DesiredRecord { from: ts, to: popped.to, scope_id: next_scope }, popped_seq));
+                    // next_from == result.from → next fully covers result start.
+                    // Defer result's surviving tail, then take next as result.
+                    if original_to > next_to {
+                        if let Some(ts) = next_to.checked_inc() {
+                            self.pending.push((DesiredRecord { from: ts, to: original_to, scope_id: original_scope }, result_seq));
                         }
                     }
-                    // result unchanged, continue scanning.
+                    result = self.pop_min().unwrap();
                 }
+            } else {
+                // Result is newer (or equal) → result wins. Consume next;
+                // if next extends beyond result, defer its tail.
+                let (popped, popped_seq) = self.pop_min().unwrap();
+                if popped.to > result.0.to {
+                    if let Some(ts) = result.0.to.checked_inc() {
+                        self.pending.push((DesiredRecord { from: ts, to: popped.to, scope_id: next_scope }, popped_seq));
+                    }
+                }
+                // result unchanged, continue scanning.
             }
         }
         Some(result)
@@ -403,6 +426,54 @@ impl<K: IpKey> DesiredStream<K> for MergeStream<K> {
 }
 impl<K: IpKey> Drop for MergeStream<K> {
     fn drop(&mut self) { for p in &self.run_paths { let _ = std::fs::remove_file(p); } }
+}
+
+/// Presentation wrapper that merges adjacent same-scope records emitted by an
+/// inner stream into maximal segments. The cross-run merge deliberately keeps
+/// same-scope records that have different winning seqs as separate segments so
+/// each one's seq stays truthful for its whole span (required for correct
+/// last-wins resolution). Once the merge is done, no seq-based comparison ever
+/// happens again, so collapsing adjacent same-scope segments is purely a
+/// segment-count reduction that never changes any IP's assigned scope.
+#[allow(missing_debug_implementations)]
+struct CoalesceStream<K: IpKey> {
+    inner: Box<dyn DesiredStream<K>>,
+    pending: Option<DesiredRecord<K>>,
+}
+
+impl<K: IpKey> CoalesceStream<K> {
+    fn new(inner: Box<dyn DesiredStream<K>>) -> Self {
+        let mut s = CoalesceStream { inner, pending: None };
+        s.fill();
+        s
+    }
+    fn fill(&mut self) {
+        self.pending = self.inner.next();
+        while let Some(p) = self.pending {
+            let n = match self.inner.peek() {
+                Some(n) => *n,
+                None => return,
+            };
+            if n.scope_id != p.scope_id { return; }
+            match p.to.checked_inc() {
+                Some(after) if after == n.from => {
+                    let new_to = if n.to > p.to { n.to } else { p.to };
+                    self.pending = Some(DesiredRecord { from: p.from, to: new_to, scope_id: p.scope_id });
+                    self.inner.next(); // consume the merged-in record
+                }
+                _ => return,
+            }
+        }
+    }
+}
+
+impl<K: IpKey> DesiredStream<K> for CoalesceStream<K> {
+    fn peek(&self) -> Option<&DesiredRecord<K>> { self.pending.as_ref() }
+    fn next(&mut self) -> Option<DesiredRecord<K>> {
+        let r = self.pending.take();
+        self.fill();
+        r
+    }
 }
 
 // ── File I/O ──

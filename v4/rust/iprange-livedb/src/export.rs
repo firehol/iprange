@@ -131,18 +131,20 @@ mod tests {
         }
     }
 
-    // Build a committed v4 IPv4 image from `(from, to, scope)` ranges with `scope_width`.
+    // Build a committed v4 IPv4 image from `(from, to, scope_id)` ranges in scalar
+    // scope mode (mode 0). Under v4.3 every scope is a u32; the export bridge emits
+    // `scope_id.to_le_bytes()` as the v3 value bytes.
     fn v4_image_v4(ranges: &[(u32, u32, u32)]) -> Vec<u8> {
-        let mut w = V4Writer::<Ipv4Key>::create(0, 0);
+        let mut w = V4Writer::<Ipv4Key>::create(0, 0).unwrap();
         for &(from, to, scope) in ranges {
             w.set(Ipv4Key(from), Ipv4Key(to), scope).unwrap();
         }
         w.commit(0, u64::MAX).unwrap();
-        w.into_image()
+        w.into_image().unwrap()
     }
 
     fn v4_image_v6(ranges: &[(u64, u64, u32)]) -> Vec<u8> {
-        let mut w = V4Writer::<Ipv6Key>::create(0, 0);
+        let mut w = V4Writer::<Ipv6Key>::create(0, 0).unwrap();
         for &(from, to, scope) in ranges {
             w.set(
                 Ipv6Key { hi: 0, lo: from },
@@ -152,7 +154,7 @@ mod tests {
             .unwrap();
         }
         w.commit(0, u64::MAX).unwrap();
-        w.into_image()
+        w.into_image().unwrap()
     }
 
     // --- ROUND-TRIP: v4 -> export_v3 -> v3 Reader, asserting parity ---
@@ -160,12 +162,8 @@ mod tests {
     #[test]
     fn roundtrip_v4_scope_width_4() {
         // Distinct scopes so no coalescing collapses the records.
-        let ranges: &[(u32, u32, &[u8])] = &[
-            (10, 20, &[1, 0, 0, 0]),
-            (30, 40, &[2, 0, 0, 0]),
-            (100, 200, &[3, 0, 0, 0]),
-        ];
-        let img = v4_image_v4(4, ranges);
+        let ranges: &[(u32, u32, u32)] = &[(10, 20, 1), (30, 40, 2), (100, 200, 3)];
+        let img = v4_image_v4(ranges);
         let type_id = 7u32;
         let v3 = export_v3(&img, type_id, meta()).unwrap();
 
@@ -182,7 +180,11 @@ mod tests {
                 let hit = r.lookup_v4(V3Ipv4Key(ip)).unwrap().expect("present");
                 let v = r.value(hit.value_id).expect("has value");
                 assert_eq!(v.type_id, type_id);
-                assert_eq!(v.bytes, scope, "v3 value bytes == v4 scope, verbatim");
+                assert_eq!(
+                    v.bytes,
+                    scope.to_le_bytes(),
+                    "v3 value bytes == v4 scope_id LE"
+                );
             }
         }
         // gaps are absent.
@@ -192,20 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_v4_scope_width_0_presence() {
-        // scope_width == 0 => v3 "present, no value" sentinel; type_id ignored.
-        let ranges: &[(u32, u32, &[u8])] = &[(10, 20, &[][..]), (100, 110, &[][..])];
-        let img = v4_image_v4( ranges);
-        let v3 = export_v3(&img, /* ignored */ 1, meta()).unwrap();
+    fn roundtrip_v4_scope_zero_exports_zero_bytes() {
+        // v4.3 always emits Some(value) via scope_id.to_le_bytes(); scope_id 0 maps to
+        // four zero bytes. There is no "present, no value" None path in the bridge.
+        let ranges: &[(u32, u32, u32)] = &[(10, 20, 0), (100, 110, 0)];
+        let img = v4_image_v4(ranges);
+        let v3 = export_v3(&img, 7, meta()).unwrap();
 
         let r = V3Reader::open(&v3).unwrap();
         assert_eq!(r.record_count(), 2);
         for &(from, to, _) in ranges {
             for ip in [from, to] {
                 let hit = r.lookup_v4(V3Ipv4Key(ip)).unwrap().expect("present");
-                // sentinel: present, no value.
-                assert_eq!(hit.value_id, 0xFFFF_FFFF, "present-no-value sentinel");
-                assert!(r.value(hit.value_id).is_none());
+                let v = r.value(hit.value_id).expect("has value");
+                assert_eq!(v.bytes, &[0, 0, 0, 0][..], "scope_id 0 -> 4 zero bytes");
             }
         }
         assert!(r.lookup_v4(V3Ipv4Key(50)).unwrap().is_none());
@@ -213,8 +215,8 @@ mod tests {
 
     #[test]
     fn roundtrip_v6_scope_width_4() {
-        let ranges: &[(u64, u64, &[u8])] = &[(10, 20, &[9, 9, 9, 9]), (1000, 2000, &[8, 8, 8, 8])];
-        let img = v4_image_v6(4, ranges);
+        let ranges: &[(u64, u64, u32)] = &[(10, 20, 0x09090909), (1000, 2000, 0x08080808)];
+        let img = v4_image_v6(ranges);
         let type_id = 2u32;
         let v3 = export_v3(&img, type_id, meta()).unwrap();
 
@@ -228,27 +230,28 @@ mod tests {
                     .expect("present");
                 let v = r.value(hit.value_id).expect("has value");
                 assert_eq!(v.type_id, type_id);
-                assert_eq!(v.bytes, scope);
+                assert_eq!(v.bytes, scope.to_le_bytes());
             }
         }
         assert!(r.lookup_v6(V3Ipv6Key { hi: 0, lo: 500 }).unwrap().is_none());
     }
 
     #[test]
-    fn roundtrip_v6_scope_width_0_presence() {
-        let ranges: &[(u64, u64, &[u8])] = &[(5, 9, &[][..]), (50, 60, &[][..])];
-        let img = v4_image_v6( ranges);
-        let v3 = export_v3(&img, 1, meta()).unwrap();
+    fn roundtrip_v6_scope_zero_exports_zero_bytes() {
+        let ranges: &[(u64, u64, u32)] = &[(5, 9, 0), (50, 60, 0)];
+        let img = v4_image_v6(ranges);
+        let v3 = export_v3(&img, 7, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         assert_eq!(r.record_count(), 2);
         let hit = r.lookup_v6(V3Ipv6Key { hi: 0, lo: 7 }).unwrap().unwrap();
-        assert_eq!(hit.value_id, 0xFFFF_FFFF);
+        let v = r.value(hit.value_id).unwrap();
+        assert_eq!(v.bytes, &[0, 0, 0, 0][..]);
         assert!(r.lookup_v6(V3Ipv6Key { hi: 0, lo: 100 }).unwrap().is_none());
     }
 
     #[test]
     fn empty_v4_exports_empty_v3() {
-        let img = v4_image_v4(4, &[]);
+        let img = v4_image_v4(&[]);
         let v3 = export_v3(&img, 1, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         assert_eq!(r.record_count(), 0);
@@ -259,21 +262,17 @@ mod tests {
 
     #[test]
     fn coalesces_adjacent_equal_scopes() {
-        // The v4 writer already coalesces same-scope adjacent `set`s into one record,
-        // but force two physically-separate v4 records (via a deleted gap that is then
-        // refilled) to prove the v3 writer also coalesces the exported stream. Simpler:
-        // build two contiguous records with the SAME scope but a non-contiguous third,
-        // then confirm the v3 reader sees them merged into fewer records than the v4 file
-        // would if it did not coalesce. We rely on the v3 writer's coalescing (§9).
-        let mut w = V4Writer::<Ipv4Key>::create(4, 0);
+        // Two contiguous records with the SAME scope_id coalesce into one v3 record
+        // ([10,60]); a different scope after a gap ([100,110]) stays separate.
+        let mut w = V4Writer::<Ipv4Key>::create(0, 0).unwrap();
         // Insert as one set so v4 keeps it as a single record across [10,40]...
-        w.set(Ipv4Key(10), Ipv4Key(40), &[5, 0, 0, 0]).unwrap();
+        w.set(Ipv4Key(10), Ipv4Key(40), 5).unwrap();
         // ...plus a contiguous same-scope continuation [41,60]: v4 coalesces these.
-        w.set(Ipv4Key(41), Ipv4Key(60), &[5, 0, 0, 0]).unwrap();
+        w.set(Ipv4Key(41), Ipv4Key(60), 5).unwrap();
         // A different scope after a gap: stays separate.
-        w.set(Ipv4Key(100), Ipv4Key(110), &[6, 0, 0, 0]).unwrap();
+        w.set(Ipv4Key(100), Ipv4Key(110), 6).unwrap();
         w.commit(0, u64::MAX).unwrap();
-        let img = w.into_image();
+        let img = w.into_image().unwrap();
 
         let v3 = export_v3(&img, 1, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
@@ -286,18 +285,18 @@ mod tests {
         // the merged span is fully covered and resolves to the shared scope.
         for ip in [10u32, 40, 41, 60] {
             let hit = r.lookup_v4(V3Ipv4Key(ip)).unwrap().expect("present");
-            assert_eq!(r.value(hit.value_id).unwrap().bytes, &[5, 0, 0, 0][..]);
+            assert_eq!(r.value(hit.value_id).unwrap().bytes, 5u32.to_le_bytes());
         }
         assert!(r.lookup_v4(V3Ipv4Key(70)).unwrap().is_none()); // the gap
         let hit = r.lookup_v4(V3Ipv4Key(105)).unwrap().unwrap();
-        assert_eq!(r.value(hit.value_id).unwrap().bytes, &[6, 0, 0, 0][..]);
+        assert_eq!(r.value(hit.value_id).unwrap().bytes, 6u32.to_le_bytes());
     }
 
     #[test]
     fn distinct_scopes_share_one_interned_value() {
         // Two non-contiguous records with byte-equal scope intern to one value_id.
-        let ranges: &[(u32, u32, &[u8])] = &[(10, 20, &[1, 1, 1, 1]), (100, 200, &[1, 1, 1, 1])];
-        let img = v4_image_v4(4, ranges);
+        let ranges: &[(u32, u32, u32)] = &[(10, 20, 0x01010101), (100, 200, 0x01010101)];
+        let img = v4_image_v4(ranges);
         let v3 = export_v3(&img, 3, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         assert_eq!(r.record_count(), 2);
@@ -309,52 +308,31 @@ mod tests {
         );
     }
 
-    // --- ExportUnrepresentable: the v3 writer rejects the stream ---
+    // --- membership (type_id 1): under v4.3 a scope_id is one 4-byte LE value, i.e.
+    // exactly one feed-id, which is always a conforming membership value. Variable-width
+    // scenarios (3-byte, or non-ascending multi-feed) that were unrepresentable under
+    // the old byte-scope API are no longer reachable through the u32-only API. ---
 
     #[test]
-    fn unrepresentable_bad_membership_value() {
-        // type_id == 1 is a v3 membership set: bytes must be a non-empty, %4==0,
-        // strictly-ascending list of LE u32 feed-ids. A 3-byte scope under type_id 1 is
-        // not %4 == 0 => the v3 writer rejects => ExportUnrepresentable.
-        let img = v4_image_v4(3, &[(10, 20, &[1, 2, 3])]);
-        let err = export_v3(&img, 1, meta()).unwrap_err();
-        assert!(
-            matches!(err, Error::ExportUnrepresentable(_)),
-            "expected ExportUnrepresentable, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn unrepresentable_membership_not_ascending() {
-        // 8-byte scope under type_id 1 = two LE u32 feed-ids; make them non-ascending
-        // (5, then 5) => v3 rejects "strictly ascending" => ExportUnrepresentable.
-        let scope: &[u8] = &[5, 0, 0, 0, 5, 0, 0, 0];
-        let img = v4_image_v4(8, &[(10, 20, scope)]);
-        let err = export_v3(&img, 1, meta()).unwrap_err();
-        assert!(matches!(err, Error::ExportUnrepresentable(_)), "{err:?}");
-    }
-
-    #[test]
-    fn membership_value_well_formed_roundtrips() {
-        // A *conforming* type_id 1 scope (ascending LE u32 ids) exports fine — proving
-        // the rejection above is about conformance, not type_id 1 itself.
-        let scope: &[u8] = &[1, 0, 0, 0, 2, 0, 0, 0]; // feed-ids 1, 2
-        let img = v4_image_v4(8, &[(10, 20, scope)]);
+    fn membership_single_feed_id_roundtrips() {
+        // scope_id 2 -> bytes [2,0,0,0] -> a single, trivially-ascending feed-id 2,
+        // which is a conforming type_id 1 membership value.
+        let img = v4_image_v4(&[(10, 20, 2)]);
         let v3 = export_v3(&img, 1, meta()).unwrap();
         let r = V3Reader::open(&v3).unwrap();
         let hit = r.lookup_v4(V3Ipv4Key(15)).unwrap().unwrap();
         let v = r.value(hit.value_id).unwrap();
         assert_eq!(v.type_id, 1);
-        assert_eq!(v.bytes, scope);
+        assert_eq!(v.bytes, 2u32.to_le_bytes());
     }
 
     // --- determinism: same v4 input -> identical v3 bytes (canonical) ---
 
     #[test]
     fn export_is_deterministic() {
-        let ranges: &[(u32, u32, &[u8])] = &[(10, 20, &[1, 0, 0, 0]), (100, 200, &[2, 0, 0, 0])];
-        let a = export_v3(&v4_image_v4(4, ranges), 9, meta()).unwrap();
-        let b = export_v3(&v4_image_v4(4, ranges), 9, meta()).unwrap();
+        let ranges: &[(u32, u32, u32)] = &[(10, 20, 1), (100, 200, 2)];
+        let a = export_v3(&v4_image_v4(ranges), 9, meta()).unwrap();
+        let b = export_v3(&v4_image_v4(ranges), 9, meta()).unwrap();
         assert_eq!(a, b, "same v4 input -> byte-identical v3 snapshot");
     }
 
@@ -401,12 +379,12 @@ mod tests {
             license_flags: 0,
             generation_unixtime: 1_700_000_000,
         };
-        let mut w = V4Writer::<Ipv4Key>::create(4, 0);
-        w.set(Ipv4Key(10), Ipv4Key(20), &[1, 0, 0, 0]).unwrap();
-        w.set(Ipv4Key(30), Ipv4Key(40), &[2, 0, 0, 0]).unwrap();
-        w.set(Ipv4Key(100), Ipv4Key(200), &[3, 0, 0, 0]).unwrap();
+        let mut w = V4Writer::<Ipv4Key>::create(0, 0).unwrap();
+        w.set(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+        w.set(Ipv4Key(30), Ipv4Key(40), 2).unwrap();
+        w.set(Ipv4Key(100), Ipv4Key(200), 3).unwrap();
         w.commit(0, u64::MAX).unwrap();
-        let out = export_v3(&w.into_image(), 7, m).unwrap();
+        let out = export_v3(&w.into_image().unwrap(), 7, m).unwrap();
         assert_eq!(
             out,
             decode_hex(CROSS_GOLDEN_HEX),

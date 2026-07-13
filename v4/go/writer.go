@@ -130,6 +130,9 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	// verifies, fall back to the txn_id comparison (best-effort).
 	validA := verifyPage(store.page(0))
 	validB := verifyPage(store.page(1))
+	if !validA && !validB {
+		return nil, fmt.Errorf("both meta pages fail CRC")
+	}
 	var active meta
 	var activeNo uint32
 	switch {
@@ -438,25 +441,114 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		return entriesToWrite[i].FreedTxnID < entriesToWrite[j].FreedTxnID
 	})
 
-	// Allocate chain pages (NOT tracked as consumed — see allocChainPage).
-	needed := ChainPageCount(entriesToWrite)
-	chainPages := make([]uint32, 0, needed)
-	for len(chainPages) < needed {
-		pgno, err := w.allocChainPage()
+	// A1: when the existing chain is large (≥20 pages), compact it instead
+	// of appending. Read old entries, merge with new entries (newest-wins
+	// dedup), filter tombstones, and rewrite as a single clean chain. Old
+	// chain pages are freed (added as reclaimable entries) so they can be
+	// reused by future transactions.
+	var oldChainPages []uint32
+	if w.freeListHead != 0 {
+		oldChainPages = ReadChainPageNumbers(w.store, w.freeListHead)
+	}
+
+	var chainPages []uint32
+
+	if len(oldChainPages) >= 20 {
+		// Compaction path: read old entries, deduplicate, rewrite.
+		var oldEntries []FreeEntry
+		if w.freeListHead != 0 {
+			oldEntries, _ = ReadChain(w.store, w.freeListHead)
+		}
+
+		// Merge: new entries take priority (they are this txn's state).
+		// ReadChain returns newest-first, so first-seen among old entries is
+		// the newest old entry — matching Rust's entry().or_insert() order.
+		merged := make(map[uint32]uint64, len(oldEntries)+len(entriesToWrite))
+		for _, e := range oldEntries {
+			if _, ok := merged[e.Pgno]; !ok {
+				merged[e.Pgno] = e.FreedTxnID
+			}
+		}
+		for _, e := range entriesToWrite {
+			merged[e.Pgno] = e.FreedTxnID
+		}
+
+		compactEntries := make([]FreeEntry, 0, len(merged))
+		for pgno, ftxn := range merged {
+			if ftxn == ^uint64(0) {
+				continue
+			}
+			if pgno >= newTotal {
+				continue
+			}
+			compactEntries = append(compactEntries, FreeEntry{Pgno: pgno, FreedTxnID: ftxn})
+		}
+
+		// Old chain pages are being replaced by the compact chain. Add them
+		// as freed entries so they appear in the compact chain and can be
+		// reused by future transactions.
+		for _, pgno := range oldChainPages {
+			if pgno < newTotal {
+				compactEntries = append(compactEntries, FreeEntry{Pgno: pgno, FreedTxnID: newTxnIDVal})
+			}
+		}
+		sort.Slice(compactEntries, func(i, j int) bool {
+			return compactEntries[i].FreedTxnID < compactEntries[j].FreedTxnID
+		})
+
+		needed := ChainPageCount(compactEntries)
+		chainPages = make([]uint32, 0, needed)
+		for len(chainPages) < needed {
+			pgno, err := w.allocChainPage()
+			if err != nil {
+				return err
+			}
+			chainPages = append(chainPages, pgno)
+		}
+
+		// F1 fix: drop entries whose page was just allocated as a chain page
+		// (it is now metadata, not free data).
+		chainSet := make(map[uint32]struct{}, len(chainPages))
+		for _, p := range chainPages {
+			chainSet[p] = struct{}{}
+		}
+		kept := compactEntries[:0]
+		for _, e := range compactEntries {
+			if _, isChain := chainSet[e.Pgno]; !isChain {
+				kept = append(kept, e)
+			}
+		}
+		compactEntries = kept
+
+		if len(compactEntries) == 0 {
+			w.freeListHead = 0
+		} else {
+			head, err := WriteChain(w.store, compactEntries, chainPages)
+			if err != nil {
+				return err
+			}
+			w.freeListHead = head
+		}
+	} else {
+		// Append-only path: prepend new segment to existing chain. Old chain
+		// pages stay reachable (append-only) — they are never freed here.
+		needed := ChainPageCount(entriesToWrite)
+		chainPages = make([]uint32, 0, needed)
+		for len(chainPages) < needed {
+			pgno, err := w.allocChainPage()
+			if err != nil {
+				return err
+			}
+			chainPages = append(chainPages, pgno)
+		}
+
+		oldHead := w.freeListHead
+		head, err := AppendSegment(w.store, entriesToWrite, chainPages, oldHead)
 		if err != nil {
 			return err
 		}
-		chainPages = append(chainPages, pgno)
+		w.freeListHead = head
 	}
-
-	// Append the new segment to the front of the existing chain. Old chain
-	// pages stay reachable (append-only) — they are never freed here.
-	oldHead := w.freeListHead
-	head, err := AppendSegment(w.store, entriesToWrite, chainPages, oldHead)
-	if err != nil {
-		return err
-	}
-	w.freeListHead = head
 
 	// F9 fix: finalize CRCs on the newly written chain pages.
 	for _, pgno := range chainPages {
@@ -978,38 +1070,133 @@ func (w *Writer[K]) compactIfNeeded() error {
 	return nil
 }
 
-// rebuildCompact extracts all records from the pending tree, returns the old
-// COW pages to the free pool for immediate reuse, and re-inserts the records
-// into a fresh compact tree. The COW copies were never committed, so no reader
-// can reference them — they are safe to recycle within the same transaction.
+// rebuildCompact rebuilds the pending tree compactly, streaming one leaf at a
+// time so that only one leaf's worth of records is held in memory.
+//
+// Leaves are processed in tree (key) order, which yields globally sorted
+// records → a densely packed tree. Only one leaf's records are buffered at a
+// time.
+//
+// Only PRIVATE pages (uncommitted COW copies) may be recycled. Pages still
+// shared with the committed tree may be referenced by pinned readers, so they
+// are read for their records but never freed here — they are reclaimed later
+// via MVCC reclamation of the superseded generation.
+//
+// Safety (cross-leaf overwrite): each private leaf is returned to the free pool
+// only AFTER its records have been buffered. When leaf L_k is being read, the
+// pool holds only non-leaf pages and the private leaves processed before L_k —
+// never L_k itself or any later leaf — so the allocator cannot clobber an
+// unread leaf. This holds for any processing order; tree order is chosen for
+// dense packing.
+//
+// Placement: each freed leaf is inserted at its sorted position within the
+// unconsumed tail of the free pool, so the allocator keeps consuming the lowest
+// page numbers first. The new compact tree then lands in the lowest available
+// pages and the trailing gap above it is truncated away at commit.
 func (w *Writer[K]) rebuildCompact() error {
-	records := make([]overlapRecord[K], 0, w.pendingRecordCount)
-	if err := w.scanNode(w.pendingRoot, func(from, to K, scopeID uint32) {
-		records = append(records, overlapRecord[K]{from: from, to: to, scope: scopeID})
-	}); err != nil {
+	oldRoot := w.pendingRoot
+	oldHeight := w.pendingHeight
+
+	// Collect old leaf page numbers in tree (left-to-right = key) order.
+	leafPages := make([]uint32, 0)
+	if err := w.collectLeafPages(oldRoot, oldHeight, &leafPages); err != nil {
 		return err
 	}
-	var reusable []uint32
+	leafSet := make(map[uint32]struct{}, len(leafPages))
+	for _, p := range leafPages {
+		leafSet[p] = struct{}{}
+	}
+
+	// New pool = unconsumed tail ∪ old non-leaf private pages (disjoint,
+	// sorted). Old leaf pages are returned to the pool one-at-a-time after
+	// buffering (private) or not at all (shared).
+	newFree := append([]uint32(nil), w.freePages[w.freePos:]...)
+	var nonLeaf []uint32
 	for _, pgno := range w.privatePages.iter() {
 		if pgno >= 2 {
-			reusable = append(reusable, pgno)
+			if _, isLeaf := leafSet[pgno]; !isLeaf {
+				nonLeaf = append(nonLeaf, pgno)
+			}
 		}
 	}
-	sort.Slice(reusable, func(i, j int) bool { return reusable[i] < reusable[j] })
-	// Record freed pages for the persistent free-list chain and make them
-	// immediately available to allocPage so the rebuild does not grow the file.
-	w.freedThisTxn = append(w.freedThisTxn, reusable...)
-	w.freePages = append(w.freePages, reusable...)
-	sort.Slice(w.freePages, func(i, j int) bool { return w.freePages[i] < w.freePages[j] })
+	sort.Slice(nonLeaf, func(i, j int) bool { return nonLeaf[i] < nonLeaf[j] })
+	for _, pgno := range nonLeaf {
+		w.freedThisTxn = append(w.freedThisTxn, pgno)
+		newFree = append(newFree, pgno)
+	}
+	sort.Slice(newFree, func(i, j int) bool { return newFree[i] < newFree[j] })
+	w.freePages = newFree
+	w.freePos = 0
+	// Capture private-leaf set before clearing privatePages.
+	privateLeaf := make(map[uint32]struct{}, len(leafPages))
+	for _, p := range leafPages {
+		if w.privatePages.contains(p) {
+			privateLeaf[p] = struct{}{}
+		}
+	}
 	w.privatePages.clear()
 	w.pendingRoot = 0
 	w.pendingHeight = 0
 	w.pendingRecordCount = 0
-	for _, r := range records {
-		if err := w.cowInsert(r.from, r.to, r.scope); err != nil {
+
+	// Single pass in tree (key) order: dense insertion. Private leaves are
+	// recycled after buffering; shared leaves are read but kept in place.
+	var buf []overlapRecord[K]
+	var zero K
+	kw := zero.width()
+	for _, leafPgno := range leafPages {
+		buf = buf[:0]
+		{
+			page := w.store.page(leafPgno)
+			h := decodeHeader(page)
+			lv := newLeafView(page, int(h.entryCount), kw)
+			for i := 0; i < lv.len(); i++ {
+				buf = append(buf, overlapRecord[K]{
+					from:  zero.readLE(lv.recordFrom(i)),
+					to:    zero.readLE(lv.recordTo(i)),
+					scope: lv.recordScopeID(i),
+				})
+			}
+		}
+		if _, isPrivate := privateLeaf[leafPgno]; isPrivate {
+			// Records are owned in buf; safe to recycle this leaf now.
+			w.freedThisTxn = append(w.freedThisTxn, leafPgno)
+			// Insert into the unconsumed tail at its sorted position so the
+			// allocator keeps reusing the lowest page numbers first.
+			lo := w.freePos
+			pos := lo + sort.Search(len(w.freePages)-lo, func(i int) bool {
+				return w.freePages[lo+i] >= leafPgno
+			})
+			w.freePages = append(w.freePages, 0)
+			copy(w.freePages[pos+1:], w.freePages[pos:])
+			w.freePages[pos] = leafPgno
+		}
+		for _, r := range buf {
+			if err := w.cowInsert(r.from, r.to, r.scope); err != nil {
+				return err
+			}
+			w.pendingRecordCount++
+		}
+	}
+	return nil
+}
+
+// collectLeafPages appends the pending tree's leaf page numbers to *out in
+// tree (left-to-right) order. Used by rebuildCompact to stream leaves.
+func (w *Writer[K]) collectLeafPages(pgno uint32, height uint32, out *[]uint32) error {
+	if height <= 1 {
+		*out = append(*out, pgno)
+		return nil
+	}
+	var zero K
+	kw := zero.width()
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	bv := newBranchView(page, int(h.entryCount), kw)
+	for j := 0; j < bv.childCount(); j++ {
+		if err := w.collectLeafPages(bv.child(j), height-1, out); err != nil {
 			return err
 		}
-		w.pendingRecordCount++
 	}
 	return nil
 }
@@ -1330,6 +1517,9 @@ func (w *Writer[K]) Scan(f func(from, to K, scopeID uint32)) error {
 func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
+	}
+	if len(bitmap) > MaxBitmapWidth {
+		return 0, fmt.Errorf("bitmap exceeds %d bytes (2048 feeds)", MaxBitmapWidth)
 	}
 	id, wasNew := w.scopeRegistry.Intern(bitmap)
 	if wasNew {
