@@ -74,9 +74,17 @@ type Writer[K ipKey[K]] struct {
 	// only when no readers are active (oldestReaderTxnID == MaxUint64).
 	canRecycle bool
 
-	scopeRegistry      *ScopeRegistry
-	scopeTableRootCache uint32
-	scopeDirty         bool
+	scopeRegistry *ScopeRegistry
+	scopeDirty    bool
+}
+
+// scopeRoot returns the committed scope-table root (the registry is the single
+// source of truth), or 0 when there is no scope table.
+func (w *Writer[K]) scopeRoot() uint32 {
+	if w.scopeRegistry != nil {
+		return w.scopeRegistry.CommittedRoot()
+	}
+	return 0
 }
 
 func scopeRegForMode(scopeMode uint8) *ScopeRegistry {
@@ -107,8 +115,8 @@ func Create[K ipKey[K]](scopeMode uint8, createdUnix uint64) (*Writer[K], error)
 		freedThisTxn:        make([]uint32, 0, 4096),
 		consumedThisTxn:     make([]uint32, 0, 4096),
 		canRecycle:          true,
-		scopeRegistry:       scopeRegForMode(scopeMode),
-		scopeTableRootCache: 0, scopeDirty: false,
+		scopeRegistry: scopeRegForMode(scopeMode),
+		scopeDirty:    false,
 	}
 	if err := w.writeMetaPage(0, 1, 0, 0, 0, 2, 0); err != nil {
 		return nil, err
@@ -190,19 +198,20 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		consumedThisTxn:     make([]uint32, 0, 4096),
 		canRecycle:          true,
 		scopeRegistry:       nil,
-		scopeTableRootCache: active.scopeTableRoot, scopeDirty: false,
+		scopeDirty:          false,
 	}
-	// Load scope table for mode 2 (CRC-validating).
+	// Open the scope registry WITHOUT materializing the table (issue-1 fix):
+	// CRC-validate every scope page (O(S) time, O(log S) heap) to preserve the
+	// corruption guard, then compute nextID via a rightmost-leaf descent.
 	if active.scopeMode == ScopeModeIndirect {
-		entries, err := readAllScopesChecked(w.store.committedBytes(), active.scopeTableRoot, uint32(active.totalPages))
-		if err != nil {
+		if err := ValidateScopeCRC(w.store.committedBytes(), active.scopeTableRoot); err != nil {
 			return nil, fmt.Errorf("corrupt scope table on open: %w", err)
 		}
-		if entries != nil {
-			w.scopeRegistry = ScopeRegistryFromEntries(entries)
-		} else {
-			w.scopeRegistry = NewScopeRegistry()
+		nextID := uint32(1)
+		if maxID, ok := ReadMaxScopeID(w.store.committedBytes(), active.scopeTableRoot); ok {
+			nextID = maxID + 1
 		}
+		w.scopeRegistry = OpenScopeRegistry(active.scopeTableRoot, nextID)
 	}
 	// Strict CRC validation of the persistent free-list chain. At open time
 	// chain pages are intact from the previous commit; a CRC failure here means
@@ -290,10 +299,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		// Old scope pages are committed-region pages reachable from the old
 		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
 		// a reader pinned at the old txn would see corrupted scope data.
+		oldRoot := w.scopeRoot()
 		oldScopePageCount := 0
-		if w.scopeTableRootCache != 0 {
+		if oldRoot != 0 {
 			before := len(w.freedThisTxn)
-			w.collectScopePageNumbers(w.scopeTableRootCache, 0, &w.freedThisTxn)
+			w.collectScopePageNumbers(oldRoot, 0, &w.freedThisTxn)
 			oldScopePageCount = len(w.freedThisTxn) - before
 		}
 		// F2 fix: pre-populate freePool from the Writer's free-list so scope
@@ -318,10 +328,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		// consumed pages are now live scope data and must NOT reappear as
 		// free, so they are recorded for tombstoning at commit.
 		scopePoolSnapshot := append([]uint32(nil), freePool...)
-		w.scopeTableRootCache = 0
+		newRoot := uint32(0)
 		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
+			// EntriesForCommit re-reads the committed table (still at oldRoot,
+			// since Promote has not run) and merges this-txn new entries.
+			all := w.scopeRegistry.EntriesForCommit(w.store.committedBytes())
 			var allocated []uint32
-			root, err := buildScopeTree(w.store, w.scopeRegistry.Entries(), &allocated, &freePool)
+			root, err := buildScopeTree(w.store, all, &allocated, &freePool)
 			if err != nil {
 				return err
 			}
@@ -329,7 +342,12 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 			for _, pgno := range allocated {
 				w.privatePages.insert(pgno)
 			}
-			w.scopeTableRootCache = root
+			newRoot = root
+		}
+		// Advance the registry to the newly-committed root (folds new entries
+		// into the warm committed index, clears the new set).
+		if w.scopeRegistry != nil {
+			w.scopeRegistry.Promote(newRoot)
 		}
 		// Return unused freePool pages to the Writer's free-list and tombstone
 		// the ones buildScopeTree actually consumed.
@@ -1532,7 +1550,7 @@ func (w *Writer[K]) writeMetaPage(pgno uint32, txnID uint64, root uint32, height
 		recordCount:    recordCount,
 		txnID:          txnID,
 		updatedUnix:    updatedUnix,
-		scopeTableRoot: w.scopeTableRootCache,
+		scopeTableRoot: w.scopeRoot(),
 		freeListHead:   w.freeListHead,
 	}
 	m.encodeInto(w.store.pageMut(pgno))
@@ -1557,7 +1575,7 @@ func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
 	if len(bitmap) > MaxBitmapWidth {
 		return 0, fmt.Errorf("bitmap exceeds %d bytes (2048 feeds)", MaxBitmapWidth)
 	}
-	id, wasNew := w.scopeRegistry.Intern(bitmap)
+	id, wasNew := w.scopeRegistry.Intern(bitmap, w.store.committedBytes())
 	if wasNew {
 		w.scopeDirty = true
 	}
@@ -1568,18 +1586,19 @@ func (w *Writer[K]) ScopeResolve(scopeID uint32) []byte {
 	if w.scopeRegistry == nil {
 		return nil
 	}
-	return w.scopeRegistry.Resolve(scopeID)
+	return w.scopeRegistry.Resolve(scopeID, w.store.committedBytes())
 }
 
 // ScopePageCount returns the number of pages in the current scope-table tree
 // (mode 2 only). Returns 0 when there is no scope table. Used by tests/audits
 // to verify that scope pages are reused across commits rather than accumulated.
 func (w *Writer[K]) ScopePageCount() int {
-	if w.scopeTableRootCache == 0 {
+	root := w.scopeRoot()
+	if root == 0 {
 		return 0
 	}
 	var pages []uint32
-	w.collectScopePageNumbers(w.scopeTableRootCache, 0, &pages)
+	w.collectScopePageNumbers(root, 0, &pages)
 	return len(pages)
 }
 
@@ -1588,7 +1607,7 @@ func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, 
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit), nil
+	return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes()), nil
 }
 
 func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32, error) {
@@ -1596,7 +1615,7 @@ func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit), nil
+	return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes()), nil
 }
 
 func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
@@ -1882,7 +1901,7 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 		}
 		bm := make([]byte, feedBit/8+1)
 		bm[feedBit/8] |= 1 << (feedBit % 8)
-		id, wasNew := w.scopeRegistry.Intern(bm)
+		id, wasNew := w.scopeRegistry.Intern(bm, w.store.committedBytes())
 		if wasNew {
 			w.scopeDirty = true
 		}
@@ -1909,7 +1928,7 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit), nil
+		return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes()), nil
 	default:
 		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}
@@ -1933,7 +1952,7 @@ func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit), nil
+		return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes()), nil
 	default:
 		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}

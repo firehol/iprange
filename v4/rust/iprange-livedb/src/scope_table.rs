@@ -28,13 +28,28 @@ pub struct ScopeEntry {
     pub bitmap: Vec<u8>,
 }
 
-/// In-memory scope registry. Maintained during a transaction, bulk-rebuilt
-/// into the scope table B+tree at commit time.
+/// In-memory scope registry. Does NOT materialize the committed scope table
+/// into a heap HashMap (issue-1/issue-2 fix).
+///
+/// Design:
+///   - The committed scope table stays on disk (a B+tree keyed by scope_id).
+///     `resolve()` descends it via `find_scope` → O(log S), zero heap.
+///   - Only THIS transaction's newly-interned entries live in RAM.
+///   - `intern()` dedups against the new set (O(1)); against the committed set
+///     it lazily builds a bitmap→scope_id index once, then O(1). The index
+///     materializes only when an intern actually misses the new set AND there
+///     is committed data — read/record-write workloads never pay the heap cost
+///     that used to be paid eagerly at open.
+///
+/// `committed_bytes` is passed into resolve/intern by the caller (the Writer,
+/// which owns the page store). The registry does not hold a reference to it.
 #[allow(missing_debug_implementations)]
 pub struct ScopeRegistry {
-    entries: Vec<ScopeEntry>,
-    /// O(1) bitmap → scope_id lookup (fixes #6: was linear search).
-    bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32>,
+    new_entries: Vec<ScopeEntry>,
+    new_bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32>,
+    committed_root: u32,
+    /// Lazily-built bitmap → scope_id index over the committed table.
+    committed_index: Option<FxHashMap<alloc::vec::Vec<u8>, u32>>,
     next_id: u32,
 }
 
@@ -47,51 +62,100 @@ impl Default for ScopeRegistry {
 impl ScopeRegistry {
     pub fn new() -> Self {
         ScopeRegistry {
-            entries: Vec::new(),
-            bitmap_index: FxHashMap::default(),
+            new_entries: Vec::new(),
+            new_bitmap_index: FxHashMap::default(),
+            committed_root: 0,
+            committed_index: None,
             next_id: 1,
         }
     }
 
-    /// Load from a committed scope table (at open time).
-    pub fn from_entries(entries: Vec<ScopeEntry>) -> Self {
-        let next_id = entries.iter().map(|e| e.scope_id).max().unwrap_or(0) + 1;
-        let mut bitmap_index: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
-        for e in &entries {
-            bitmap_index.insert(e.bitmap.clone(), e.scope_id);
+    /// Open a registry over an existing committed scope table WITHOUT loading
+    /// it. `next_id` must be max committed scope_id + 1 (caller computes via
+    /// `read_max_scope_id`).
+    pub fn open(committed_root: u32, next_id: u32) -> Self {
+        ScopeRegistry {
+            new_entries: Vec::new(),
+            new_bitmap_index: FxHashMap::default(),
+            committed_root,
+            committed_index: None,
+            next_id,
         }
-        ScopeRegistry { entries, bitmap_index, next_id }
     }
 
-    /// Find or create a scope_id for the given bitmap.
-    /// Returns the scope_id. If the bitmap already exists, reuses its id.
-    /// Intern a bitmap. Returns (scope_id, was_new).
-    /// was_new = true only when a new entry was actually created.
-    pub fn intern(&mut self, bitmap: &[u8]) -> (u32, bool) {
-        if let Some(&id) = self.bitmap_index.get(bitmap) {
+    /// Build a registry with a pre-populated committed index (tests). No
+    /// on-disk root is referenced, so resolve/intern never touch bytes.
+    pub fn from_entries(entries: Vec<ScopeEntry>) -> Self {
+        let next_id = entries.iter().map(|e| e.scope_id).max().unwrap_or(0) + 1;
+        let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
+        for e in &entries {
+            idx.insert(e.bitmap.clone(), e.scope_id);
+        }
+        ScopeRegistry {
+            new_entries: Vec::new(),
+            new_bitmap_index: FxHashMap::default(),
+            committed_root: 0,
+            committed_index: Some(idx),
+            next_id,
+        }
+    }
+
+    fn ensure_committed_index(&mut self, committed_bytes: &[u8]) {
+        if self.committed_index.is_some() || self.committed_root == 0 {
+            return;
+        }
+        if let Ok(entries) = read_all(committed_bytes, self.committed_root) {
+            let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
+            for e in &entries {
+                idx.insert(e.bitmap.clone(), e.scope_id);
+            }
+            self.committed_index = Some(idx);
+        }
+    }
+
+    /// Find or create a scope_id for `bitmap`. Returns (scope_id, was_new).
+    pub fn intern(&mut self, bitmap: &[u8], committed_bytes: &[u8]) -> (u32, bool) {
+        if let Some(&id) = self.new_bitmap_index.get(bitmap) {
             return (id, false);
+        }
+        if self.committed_root != 0 && self.committed_index.is_none() {
+            self.ensure_committed_index(committed_bytes);
+        }
+        if let Some(ref idx) = self.committed_index {
+            if let Some(&id) = idx.get(bitmap) {
+                return (id, false);
+            }
         }
         let id = self.next_id;
         self.next_id += 1;
+        // to_vec (not to_vec on empty → empty non-nil Vec) keeps an empty
+        // bitmap distinguishable from None on resolve.
         let bm = bitmap.to_vec();
-        self.bitmap_index.insert(bm.clone(), id);
-        self.entries.push(ScopeEntry { scope_id: id, bitmap: bm });
+        self.new_bitmap_index.insert(bm.clone(), id);
+        self.new_entries.push(ScopeEntry { scope_id: id, bitmap: bm });
         (id, true)
     }
 
-    /// Resolve a scope_id to its bitmap. Returns None if not found.
-    pub fn resolve(&self, scope_id: u32) -> Option<&[u8]> {
-        self.entries.iter()
-            .find(|e| e.scope_id == scope_id)
-            .map(|e| e.bitmap.as_slice())
+    /// Resolve a scope_id to its bitmap. O(log S) via find_scope for committed
+    /// scopes; linear over this-txn new entries (small). Returns an owned Vec
+    /// because find_scope decodes from the page image.
+    pub fn resolve(&self, scope_id: u32, committed_bytes: &[u8]) -> Option<Vec<u8>> {
+        for e in &self.new_entries {
+            if e.scope_id == scope_id {
+                return Some(e.bitmap.clone());
+            }
+        }
+        if self.committed_root != 0 {
+            return find_scope(committed_bytes, self.committed_root, scope_id).ok().flatten();
+        }
+        None
     }
 
-    /// Set a feed bit in a bitmap. Returns the new scope_id (may differ if
-    /// the resulting bitmap is new).
-    pub fn bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> u32 {
-        let bitmap = match self.resolve(scope_id) {
-            Some(b) => b.to_vec(),
-            None => return 0, // unknown scope_id
+    /// Set a feed bit in a bitmap. Returns the new scope_id.
+    pub fn bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32, committed_bytes: &[u8]) -> u32 {
+        let bitmap = match self.resolve(scope_id, committed_bytes) {
+            Some(b) => b,
+            None => return 0,
         };
         let mut new_bitmap = bitmap;
         let byte_idx = (feed_bit / 8) as usize;
@@ -100,14 +164,14 @@ impl ScopeRegistry {
             new_bitmap.resize(byte_idx + 1, 0);
         }
         new_bitmap[byte_idx] |= 1 << bit_idx;
-        self.intern(&new_bitmap).0
+        self.intern(&new_bitmap, committed_bytes).0
     }
 
     /// Clear a feed bit from a bitmap. Returns the new scope_id, or 0 if the
-    /// bitmap becomes empty (no feeds left).
-    pub fn bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32) -> u32 {
-        let bitmap = match self.resolve(scope_id) {
-            Some(b) => b.to_vec(),
+    /// bitmap becomes empty.
+    pub fn bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32, committed_bytes: &[u8]) -> u32 {
+        let bitmap = match self.resolve(scope_id, committed_bytes) {
+            Some(b) => b,
             None => return 0,
         };
         let mut new_bitmap = bitmap;
@@ -116,24 +180,66 @@ impl ScopeRegistry {
         if byte_idx < new_bitmap.len() {
             new_bitmap[byte_idx] &= !(1 << bit_idx);
         }
-        // Check if bitmap is all-zero → no feeds left.
         if new_bitmap.iter().all(|&b| b == 0) {
-            return 0; // empty
+            return 0;
         }
-        self.intern(&new_bitmap).0
+        self.intern(&new_bitmap, committed_bytes).0
     }
 
-    /// All entries (for commit-time bulk rebuild).
-    pub fn entries(&self) -> &[ScopeEntry] {
-        &self.entries
+    /// Full entry list (committed ∪ new) for the bulk rebuild at commit, and
+    /// warms the committed index from the read.
+    pub fn entries_for_commit(&mut self, committed_bytes: &[u8]) -> Vec<ScopeEntry> {
+        let mut all: Vec<ScopeEntry> = Vec::new();
+        if self.committed_root != 0 {
+            if let Ok(committed) = read_all(committed_bytes, self.committed_root) {
+                if self.committed_index.is_none() {
+                    let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
+                    for e in &committed {
+                        idx.insert(e.bitmap.clone(), e.scope_id);
+                    }
+                    self.committed_index = Some(idx);
+                }
+                all = committed;
+            }
+        }
+        all.extend(self.new_entries.iter().cloned());
+        all
+    }
+
+    /// Advance the registry to the newly-committed root: fold this-txn new
+    /// entries into the (warm) committed index, clear the new set.
+    pub fn promote(&mut self, new_root: u32) {
+        if self.committed_index.is_some() {
+            if let Some(ref mut idx) = self.committed_index {
+                for e in &self.new_entries {
+                    idx.insert(e.bitmap.clone(), e.scope_id);
+                }
+            }
+        } else if !self.new_entries.is_empty() {
+            let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
+            for e in &self.new_entries {
+                idx.insert(e.bitmap.clone(), e.scope_id);
+            }
+            self.committed_index = Some(idx);
+        }
+        self.new_entries.clear();
+        self.new_bitmap_index.clear();
+        self.committed_root = new_root;
+    }
+
+    pub fn committed_root(&self) -> u32 {
+        self.committed_root
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.new_entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        if !self.new_entries.is_empty() {
+            return false;
+        }
+        self.committed_root == 0
     }
 }
 
@@ -448,6 +554,81 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
     Err(Error::Invariant("scope table descent exceeded TREE_HEIGHT_MAX"))
 }
 
+/// Return the highest scope_id in the committed scope table by descending to
+/// the rightmost leaf (O(log S)). Used at open to compute next_id = max + 1
+/// without loading the table.
+pub fn read_max_scope_id(bytes: &[u8], root_pgno: u32) -> Option<u32> {
+    if root_pgno == 0 {
+        return None;
+    }
+    let mut pgno = root_pgno;
+    for _ in 0..spec::TREE_HEIGHT_MAX {
+        let off = pgno as usize * spec::PAGE_SIZE;
+        if off + spec::PAGE_SIZE > bytes.len() {
+            return None;
+        }
+        let page = &bytes[off..off + spec::PAGE_SIZE];
+        let h = PageHeader::decode(page);
+        match h.page_type {
+            spec::PAGE_TYPE_SCOPE_LEAF => {
+                let count = h.entry_count as usize;
+                if count == 0 {
+                    return None;
+                }
+                let rec_off = spec::PAGE_HEADER_SIZE + (count - 1) * SCOPE_ENTRY_SIZE;
+                return Some(wire::u32_le(page, rec_off));
+            }
+            spec::PAGE_TYPE_SCOPE_BRANCH => {
+                let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                    page, h.entry_count as usize,
+                );
+                let cc = branch.child_count();
+                if cc == 0 {
+                    return None;
+                }
+                pgno = branch.child(cc - 1);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Walk every page of the committed scope tree and verify its per-page CRC32C
+/// WITHOUT materializing entries. O(S pages) time, O(log S) heap (descent
+/// stack). Preserves the open-time corruption guard the old eager
+/// `read_all_checked` provided, while fixing the heap load.
+pub fn validate_scope_crc(bytes: &[u8], root_pgno: u32) -> Result<()> {
+    if root_pgno == 0 {
+        return Ok(());
+    }
+    validate_scope_crc_node(bytes, root_pgno, 0)
+}
+
+fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32) -> Result<()> {
+    if depth > spec::TREE_HEIGHT_MAX {
+        return Err(Error::Invariant("scope table too deep"));
+    }
+    let off = pgno as usize * spec::PAGE_SIZE;
+    if off + spec::PAGE_SIZE > bytes.len() {
+        return Err(Error::Structural("scope page out of bounds"));
+    }
+    let page = &bytes[off..off + spec::PAGE_SIZE];
+    if !crate::crc32c::verify_page(page) {
+        return Err(Error::ChecksumFailed("scope table page fails CRC"));
+    }
+    let h = PageHeader::decode(page);
+    if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
+        let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+            page, h.entry_count as usize,
+        );
+        for j in 0..branch.child_count() {
+            validate_scope_crc_node(bytes, branch.child(j), depth + 1)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,27 +636,27 @@ mod tests {
     #[test]
     fn intern_and_resolve() {
         let mut reg = ScopeRegistry::new();
-        let (id1, _) = reg.intern(&[0b00000001]); // feed 0
-        let (id2, _) = reg.intern(&[0b00000010]); // feed 1
-        let (id1b, _) = reg.intern(&[0b00000001]); // same as id1
+        let (id1, _) = reg.intern(&[0b00000001], &[]); // feed 0
+        let (id2, _) = reg.intern(&[0b00000010], &[]); // feed 1
+        let (id1b, _) = reg.intern(&[0b00000001], &[]); // same as id1
 
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id1b, 1); // reuse
-        assert_eq!(reg.resolve(id1), Some(&[0b00000001][..]));
-        assert_eq!(reg.resolve(id2), Some(&[0b00000010][..]));
+        assert_eq!(reg.resolve(id1, &[]), Some(vec![0b00000001]));
+        assert_eq!(reg.resolve(id2, &[]), Some(vec![0b00000010]));
     }
 
     #[test]
     fn bitmap_set_clear_feed() {
         let mut reg = ScopeRegistry::new();
-        let (empty, _) = reg.intern(&[]); // empty bitmap (presence only)
-        let with_feed0 = reg.bitmap_set_feed(empty, 0);
+        let (empty, _) = reg.intern(&[], &[]); // empty bitmap (presence only)
+        let with_feed0 = reg.bitmap_set_feed(empty, 0, &[]);
         assert_ne!(with_feed0, empty);
-        let resolved = reg.resolve(with_feed0).unwrap();
+        let resolved = reg.resolve(with_feed0, &[]).unwrap();
         assert_eq!(resolved[0] & 1, 1); // bit 0 set
 
-        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0);
+        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0, &[]);
         assert_eq!(without_feed0, 0); // empty again
     }
 
@@ -498,13 +679,13 @@ mod tests {
         for i in 0..100u32 {
             let mut bitmap = vec![0u8; (i / 8 + 1) as usize];
             bitmap[i as usize / 8] = 1 << (i % 8);
-            let _ = reg.intern(&bitmap);
+            let _ = reg.intern(&bitmap, &[]);
         }
         assert_eq!(reg.len(), 100);
         // Each unique bitmap gets its own scope_id
         for i in 0..100u32 {
             let id = i + 1;
-            let bitmap = reg.resolve(id).unwrap();
+            let bitmap = reg.resolve(id, &[]).unwrap();
             assert!(bitmap[i as usize / 8] & (1 << (i % 8)) != 0);
         }
     }

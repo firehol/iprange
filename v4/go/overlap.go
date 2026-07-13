@@ -78,19 +78,30 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 	}
 }
 
-// ForeignVsAll compares a foreign feed against all stored feeds. For each
-// foreign range, it descends the tree (binary-search pruned) to find
-// overlapping records and reports which feeds cover the overlap region.
+// ForeignVsAll compares a foreign feed against all stored feeds. The foreign
+// ranges are streamed via nextForeign: each call returns the next (from, to) and
+// true, or a zero pair and false when exhausted. This lets a caller feed ranges
+// from a file/iterator without materializing a slice (issue-4 fix).
 //
 // onOverlap receives (feed, foreignID, ipCount) for every overlapping feed.
-// foreignID is 0 (the foreign feed marker).
-func ForeignVsAll[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+// foreignID is always 0 (the foreign feed marker).
+func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
 	if w.pendingRoot == 0 {
+		// Drain the stream so the caller's iterator state is fully consumed
+		// even when there is nothing to compare against.
+		for {
+			_, _, ok := nextForeign()
+			if !ok {
+				break
+			}
+		}
 		return nil
 	}
-	for _, fr := range foreign {
-		from := fr.From
-		to := fr.To
+	for {
+		from, to, ok := nextForeign()
+		if !ok {
+			return nil
+		}
 		// Callback-driven descent: no intermediate slice of overlapping records.
 		if err := descendOverlapping[K](w, w.pendingRoot, from, to, func(recFrom, recTo K, scopeID uint32) {
 			overlapFrom := from
@@ -109,7 +120,21 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], onOverlap
 			return err
 		}
 	}
-	return nil
+}
+
+// ForeignVsAllFromSlice is a convenience wrapper around ForeignVsAll that takes
+// a materialized slice of foreign ranges (backward-compatible shape).
+func ForeignVsAllFromSlice[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+	i := 0
+	return ForeignVsAll[K](w, func() (K, K, bool) {
+		if i >= len(foreign) {
+			var zero K
+			return zero, zero, false
+		}
+		r := foreign[i]
+		i++
+		return r.From, r.To, true
+	}, onOverlap)
 }
 
 // descendOverlapping descends the pending tree, invoking onRec for every leaf

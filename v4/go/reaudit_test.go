@@ -29,7 +29,7 @@ func assertNoReachablePageIsFree[K ipKey[K]](t *testing.T, w *Writer[K]) {
 	reachable := make(map[uint32]bool)
 	collectTreePagesForAudit(w, w.committedRoot, w.committedHeight, reachable)
 	var scopes []uint32
-	w.collectScopePageNumbers(w.scopeTableRootCache, 0, &scopes)
+	w.collectScopePageNumbers(w.scopeRoot(), 0, &scopes)
 	for _, p := range scopes {
 		reachable[p] = true
 	}

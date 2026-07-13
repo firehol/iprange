@@ -53,7 +53,6 @@ pub struct Writer<K: IpKey> {
     /// Set by FileWriter based on oldest_reader_txn_id.
     pub(crate) can_recycle: bool,
     scope_registry: Option<crate::scope_table::ScopeRegistry>,
-    scope_table_root_cache: u32,
     scope_dirty: bool,
     free_list_head: u32,
     freed_this_txn: alloc::vec::Vec<u32>,
@@ -77,7 +76,6 @@ impl<K: IpKey> Writer<K> {
             scope_registry: if scope_mode == spec::SCOPE_MODE_INDIRECT {
                 Some(crate::scope_table::ScopeRegistry::new())
             } else { None },
-            scope_table_root_cache: 0,
             scope_dirty: false,
             free_list_head: 0,
             freed_this_txn: alloc::vec::Vec::with_capacity(4096),
@@ -112,13 +110,19 @@ impl<K: IpKey> Writer<K> {
         if active.key_width != K::WIDTH as u8 { return Err(Error::Structural("key_width mismatch")); }
         if active.record_size != record_size::<K>() as u32 { return Err(Error::Structural("record_size mismatch")); }
 
-        let scope_reg = if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
-            let entries = crate::scope_table::read_all_checked(
-                store.committed_bytes(), active.scope_table_root, active.total_pages as u32,
+        // Open the scope registry WITHOUT materializing the table (issue-1 fix):
+        // CRC-validate every scope page (O(S) time, O(log S) heap) to preserve
+        // the corruption guard, then compute next_id via a rightmost-leaf
+        // descent. The committed root stays on disk; resolve/intern read it on
+        // demand.
+        let scope_reg = if active.scope_mode == spec::SCOPE_MODE_INDIRECT {
+            crate::scope_table::validate_scope_crc(
+                store.committed_bytes(), active.scope_table_root,
             ).map_err(|_| Error::Structural("corrupt scope table on open"))?;
-            Some(crate::scope_table::ScopeRegistry::from_entries(entries))
-        } else if active.scope_mode == spec::SCOPE_MODE_INDIRECT {
-            Some(crate::scope_table::ScopeRegistry::new())
+            let next_id = crate::scope_table::read_max_scope_id(
+                store.committed_bytes(), active.scope_table_root,
+            ).map(|m| m + 1).unwrap_or(1);
+            Some(crate::scope_table::ScopeRegistry::open(active.scope_table_root, next_id))
         } else { None };
 
         let mut w = Writer {
@@ -131,7 +135,7 @@ impl<K: IpKey> Writer<K> {
             pending_record_count: active.record_count, poisoned: false,
             private_pages: PageSet::new(active.total_pages as usize),
             free_pages: vec![], free_pos: 0, can_recycle: true,
-            scope_registry: scope_reg, scope_table_root_cache: active.scope_table_root,
+            scope_registry: scope_reg,
             scope_dirty: false,
             free_list_head: active.free_list_head,
             freed_this_txn: alloc::vec::Vec::with_capacity((active.total_pages as usize).max(4096)),
@@ -192,11 +196,11 @@ impl<K: IpKey> Writer<K> {
             // old meta's scope_table_root. They MUST NOT be overwritten
             // in-place — a reader pinned at the old txn would see corrupted
             // scope data. Free them for reclamation at the next commit.
+            let old_root = self.scope_root();
             let mut old_scope_page_count = 0;
-            if self.scope_table_root_cache != 0 {
-                let root = self.scope_table_root_cache;
+            if old_root != 0 {
                 let mut pages = alloc::vec::Vec::new();
-                self.collect_scope_page_numbers(root, 0, &mut pages);
+                self.collect_scope_page_numbers(old_root, 0, &mut pages);
                 old_scope_page_count = pages.len();
                 self.freed_this_txn.extend(pages);
             }
@@ -223,19 +227,32 @@ impl<K: IpKey> Writer<K> {
             // consumed pages are now live scope data and must NOT reappear as
             // free, so they are recorded for tombstoning at commit.
             let scope_pool_snapshot: alloc::vec::Vec<u32> = free_pool.clone();
-            self.scope_table_root_cache = if let Some(ref reg) = self.scope_registry {
-                if reg.is_empty() { 0 } else {
+            // EntriesForCommit re-reads the committed table (still at old_root,
+            // since promote has not run) and merges this-txn new entries. The
+            // committed_bytes borrow is scoped so self.store is free for the
+            // mutable build_scope_tree call below.
+            let mut new_root: u32 = 0;
+            if let Some(reg) = self.scope_registry.as_mut() {
+                if !reg.is_empty() {
+                    let all = {
+                        let bytes = self.store.committed_bytes();
+                        reg.entries_for_commit(bytes)
+                    };
                     let mut allocated = Vec::new();
                     let root = crate::scope_table::build_scope_tree(
-                        self.store.as_mut(), reg.entries(), &mut allocated, &mut free_pool,
+                        self.store.as_mut(), &all, &mut allocated, &mut free_pool,
                     )?;
-                    // Register scope pages in private_pages for CRC finalization.
                     for pgno in &allocated {
                         self.private_pages.insert(*pgno);
                     }
-                    root
+                    new_root = root;
                 }
-            } else { 0 };
+            }
+            // Advance the registry to the newly-committed root (folds new
+            // entries into the warm committed index, clears the new set).
+            if let Some(reg) = self.scope_registry.as_mut() {
+                reg.promote(new_root);
+            }
             // Return unused free_pool pages to the Writer's free-list and
             // tombstone the ones build_scope_tree actually consumed.
             let mut returned: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -1116,7 +1133,7 @@ impl<K: IpKey> Writer<K> {
             record_size: record_size::<K>() as u32, created_unixtime: self.created_unixtime,
             root_pgno: root, tree_height: height, total_pages: total_pages as u64,
             record_count, txn_id, updated_unixtime: updated,
-            scope_table_root: self.scope_table_root_cache,
+            scope_table_root: self.scope_root(),
             free_list_head: self.free_list_head,
         };
         meta.encode_into(self.store.page_mut(pgno));
@@ -1150,13 +1167,20 @@ impl<K: IpKey> Writer<K> {
 
     // ── scope table operations (mode 2 only) ──
 
+    /// The committed scope-table root (registry is the single source of
+    /// truth), or 0 when there is no scope table.
+    pub(crate) fn scope_root(&self) -> u32 {
+        self.scope_registry.as_ref().map(|r| r.committed_root()).unwrap_or(0)
+    }
+
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
         if bitmap.len() > crate::scope_table::MAX_BITMAP_WIDTH {
             return Err(Error::InvalidInput("bitmap exceeds 256 bytes (2048 feeds)"));
         }
+        let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
             Some(reg) => {
-                let (id, was_new) = reg.intern(bitmap);
+                let (id, was_new) = reg.intern(bitmap, bytes);
                 if was_new { self.scope_dirty = true; }
                 Ok(id)
             }
@@ -1164,38 +1188,45 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
-    pub fn scope_resolve(&self, scope_id: u32) -> Option<&[u8]> {
-        self.scope_registry.as_ref()?.resolve(scope_id)
+    /// Resolve a scope_id to its bitmap. Returns an owned Vec because
+    /// committed scopes are decoded from the page image via find_scope.
+    pub fn scope_resolve(&self, scope_id: u32) -> Option<Vec<u8>> {
+        let bytes = self.store.committed_bytes();
+        self.scope_registry.as_ref()?.resolve(scope_id, bytes)
     }
 
     /// Number of pages in the current scope-table tree (mode 2 only).
     /// Returns 0 when there is no scope table. Used by tests/audits to verify
     /// that scope pages are reused across commits rather than accumulated.
     pub fn scope_page_count(&self) -> usize {
-        if self.scope_table_root_cache == 0 { return 0; }
+        let root = self.scope_root();
+        if root == 0 { return 0; }
         let mut pages = alloc::vec::Vec::new();
-        self.collect_scope_page_numbers(self.scope_table_root_cache, 0, &mut pages);
+        self.collect_scope_page_numbers(root, 0, &mut pages);
         pages.len()
     }
 
     pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         self.scope_dirty = true;
+        let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
+            Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
             None => Err(Error::State("requires scope_mode == 2")),
         }
     }
 
     pub fn scope_bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         self.scope_dirty = true;
+        let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit)),
+            Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
             None => Err(Error::State("requires scope_mode == 2")),
         }
     }
 
     pub(crate) fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
+        let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
@@ -1203,7 +1234,7 @@ impl<K: IpKey> Writer<K> {
             }
             spec::SCOPE_MODE_INDIRECT => {
                 match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit)),
+                    Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
                     None => Err(Error::State("requires scope_mode == 2")),
                 }
             }
@@ -1213,6 +1244,7 @@ impl<K: IpKey> Writer<K> {
 
     pub(crate) fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
         if self.scope_mode == spec::SCOPE_MODE_INDIRECT { self.scope_dirty = true; }
+        let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 { return Err(Error::InvalidInput("feed_bit >= 32 in bitmap mode")); }
@@ -1220,7 +1252,7 @@ impl<K: IpKey> Writer<K> {
             }
             spec::SCOPE_MODE_INDIRECT => {
                 match &mut self.scope_registry {
-                    Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit)),
+                    Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
                     None => Err(Error::State("requires scope_mode == 2")),
                 }
             }
@@ -1241,7 +1273,8 @@ impl<K: IpKey> Writer<K> {
                 bm[byte_idx] |= 1 << (feed_bit % 8);
                 match &mut self.scope_registry {
                     Some(reg) => {
-                        let (id, was_new) = reg.intern(&bm);
+                        let bytes = self.store.committed_bytes();
+                        let (id, was_new) = reg.intern(&bm, bytes);
                         if was_new { self.scope_dirty = true; }
                         Ok(id)
                     }

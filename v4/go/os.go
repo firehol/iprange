@@ -309,8 +309,15 @@ func (fw *FileWriter[K]) AllToAllOverlap(onOverlap func(FeedOverlap)) error {
 	return AllToAllOverlap(fw.w, onOverlap)
 }
 
-func (fw *FileWriter[K]) ForeignVsAll(foreign []ForeignRange[K], onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
-	return ForeignVsAll(fw.w, foreign, onOverlap)
+// ForeignVsAll streams foreign ranges via nextForeign (closure form), avoiding
+// a materialized slice. See overlap.ForeignVsAll.
+func (fw *FileWriter[K]) ForeignVsAll(nextForeign func() (K, K, bool), onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+	return ForeignVsAll(fw.w, nextForeign, onOverlap)
+}
+
+// ForeignVsAllFromSlice is the slice-based convenience wrapper.
+func (fw *FileWriter[K]) ForeignVsAllFromSlice(foreign []ForeignRange[K], onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+	return ForeignVsAllFromSlice(fw.w, foreign, onOverlap)
 }
 
 func (fw *FileWriter[K]) Close() error {

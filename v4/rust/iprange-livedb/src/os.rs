@@ -201,7 +201,7 @@ impl<K: IpKey> FileWriter<K> {
 
     // Delegated API (scope operations — mode 2)
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> { self.writer.scope_intern(bitmap) }
-    pub fn scope_resolve(&self, scope_id: u32) -> Option<&[u8]> { self.writer.scope_resolve(scope_id) }
+    pub fn scope_resolve(&self, scope_id: u32) -> Option<Vec<u8>> { self.writer.scope_resolve(scope_id) }
 
     // Delegated API (migration)
     pub fn migrate(&mut self, desired: &mut dyn crate::migrate::DesiredStream<K>,
@@ -219,8 +219,15 @@ impl<K: IpKey> FileWriter<K> {
         crate::overlap::all_to_all_overlap(&self.writer, on_overlap)
     }
 
-    pub fn foreign_vs_all<F: FnMut(u32, u32, u64)>(&self, foreign: &[(K, K)], on_overlap: &mut F) -> Result<()> {
-        crate::overlap::foreign_vs_all(&self.writer, foreign, on_overlap)
+    pub fn foreign_vs_all(
+        &self, next_foreign: &mut dyn FnMut() -> Option<(K, K)>,
+        on_overlap: &mut dyn FnMut(u32, u32, u64),
+    ) -> Result<()> {
+        crate::overlap::foreign_vs_all(&self.writer, next_foreign, on_overlap)
+    }
+
+    pub fn foreign_vs_all_slice(&self, foreign: &[(K, K)], on_overlap: &mut dyn FnMut(u32, u32, u64)) -> Result<()> {
+        crate::overlap::foreign_vs_all_slice(&self.writer, foreign, on_overlap)
     }
 
     pub fn close(self) {

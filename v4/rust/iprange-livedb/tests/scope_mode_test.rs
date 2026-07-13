@@ -20,9 +20,9 @@ fn mode2_intern_resolve() {
     
     w.commit(0, u64::MAX).unwrap();
     
-    // Resolve and verify
-    assert_eq!(w.scope_resolve(id1), Some(&[0b00000001][..]));
-    assert_eq!(w.scope_resolve(id2), Some(&[0b00000011][..]));
+    // Resolve and verify (scope_resolve returns an owned Vec).
+    assert_eq!(w.scope_resolve(id1), Some(vec![0b00000001]));
+    assert_eq!(w.scope_resolve(id2), Some(vec![0b00000011]));
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn mode2_persist_across_commit() {
     
     // scope_resolve should work from the loaded registry
     let bitmap = w2.scope_resolve(1);
-    assert_eq!(bitmap, Some(&[0b00000101][..]));
+    assert_eq!(bitmap, Some(vec![0b00000101]));
 }
 
 #[test]

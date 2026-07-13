@@ -20,7 +20,7 @@ use crate::spec;
 use crate::wire::PageHeader;
 
 /// A pairwise overlap result: feeds A and B share `ip_count` addresses.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeedOverlap {
     pub feed_a: u32,
     pub feed_b: u32,
@@ -116,7 +116,7 @@ fn for_each_feed_pair<K: IpKey>(
         }
         spec::SCOPE_MODE_INDIRECT => {
             if let Some(bitmap) = writer.scope_resolve(scope_id) {
-                for_each_set_bit_pair(bitmap, on_pair);
+                for_each_set_bit_pair(&bitmap, on_pair);
             }
         }
         _ => {}
@@ -140,7 +140,7 @@ fn for_each_feed<K: IpKey>(
         }
         spec::SCOPE_MODE_INDIRECT => {
             if let Some(bitmap) = writer.scope_resolve(scope_id) {
-                for_each_set_bit(bitmap, on_feed);
+                for_each_set_bit(&bitmap, on_feed);
             }
         }
         _ => {}
@@ -211,21 +211,27 @@ fn ip_range_count<K: IpKey>(from: K, to: K) -> u64 {
 
 /// Foreign-vs-all comparison: scan a foreign feed against the multi-feed file.
 ///
-/// For each IP range in the foreign feed, descend the tree and report every
-/// feed covering each overlap region. Descent is callback-driven — no
-/// intermediate `Vec` of overlapping records is materialized.
+/// The foreign ranges are streamed via `next_foreign`: each call returns the
+/// next `(from, to)` and `true`, or a zero pair and `false` when exhausted.
+/// This lets a caller feed ranges from a file/iterator without materializing
+/// a `Vec` (issue-4 fix). For each IP range in the foreign feed, descend the
+/// tree and report every feed covering each overlap region. Descent is
+/// callback-driven — no intermediate `Vec` of overlapping records is built.
 ///
 /// This is the ASN/Geo/critical-infra use case: compare one external feed
 /// against all stored feeds in a single pass.
 pub fn foreign_vs_all<K: IpKey>(
     writer: &Writer<K>,
-    foreign: &[(K, K)], // sorted, disjoint ranges from the foreign feed
+    mut next_foreign: impl FnMut() -> Option<(K, K)>,
     on_overlap: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
     if writer.pending_root == 0 {
+        // Drain the stream so the caller's iterator state is fully consumed
+        // even when there is nothing to compare against.
+        while next_foreign().is_some() {}
         return Ok(());
     }
-    for &(from, to) in foreign {
+    while let Some((from, to)) = next_foreign() {
         descend_overlapping(writer, writer.pending_root, from, to, &mut |rec_from, rec_to, scope_id| {
             let overlap_from = if from >= rec_from { from } else { rec_from };
             let overlap_to = if to <= rec_to { to } else { rec_to };
@@ -236,6 +242,24 @@ pub fn foreign_vs_all<K: IpKey>(
         })?;
     }
     Ok(())
+}
+
+/// Slice-based convenience wrapper around `foreign_vs_all`.
+pub fn foreign_vs_all_slice<K: IpKey>(
+    writer: &Writer<K>,
+    foreign: &[(K, K)],
+    on_overlap: &mut dyn FnMut(u32, u32, u64),
+) -> Result<()> {
+    let mut i = 0;
+    foreign_vs_all(writer, || {
+        if i < foreign.len() {
+            let r = foreign[i];
+            i += 1;
+            Some(r)
+        } else {
+            None
+        }
+    }, on_overlap)
 }
 
 /// Descend the pending tree, invoking `on_rec` for every leaf record that
