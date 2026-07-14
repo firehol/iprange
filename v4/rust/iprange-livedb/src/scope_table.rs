@@ -16,6 +16,16 @@ use crate::error::{Error, Result};
 use crate::spec;
 use crate::wire::{self, PageHeader};
 
+/// Canonical form of a scope bitmap: trailing zero bytes removed, so two
+/// bitmaps with the same set bits map to the same scope_id.
+fn canonicalize(bitmap: &[u8]) -> Vec<u8> {
+    let mut end = bitmap.len();
+    while end > 0 && bitmap[end - 1] == 0 {
+        end -= 1;
+    }
+    bitmap[..end].to_vec()
+}
+
 /// Maximum bitmap width in bytes (2048 feeds).
 pub const MAX_BITMAP_WIDTH: usize = 256;
 /// Scope table leaf entry: scope_id(u32) + bitmap_len(u16) + bitmap(u8[256]) = 262.
@@ -181,12 +191,15 @@ impl ScopeRegistry {
         None
     }
 
-    /// Set a feed bit in a bitmap. Returns the new scope_id.
-    pub fn bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32, committed_bytes: &[u8]) -> u32 {
-        let bitmap = match self.resolve(scope_id, committed_bytes) {
-            Some(b) => b,
-            None => return 0,
-        };
+    /// Set a feed bit in a bitmap. Returns the new scope_id, or `None` if the
+    /// input `scope_id` does not resolve to a known scope.
+    pub fn bitmap_set_feed(
+        &mut self,
+        scope_id: u32,
+        feed_bit: u32,
+        committed_bytes: &[u8],
+    ) -> Option<u32> {
+        let bitmap = self.resolve(scope_id, committed_bytes)?;
         let mut new_bitmap = bitmap;
         let byte_idx = (feed_bit / 8) as usize;
         let bit_idx = (feed_bit % 8) as u8;
@@ -194,31 +207,31 @@ impl ScopeRegistry {
             new_bitmap.resize(byte_idx + 1, 0);
         }
         new_bitmap[byte_idx] |= 1 << bit_idx;
-        self.intern(&new_bitmap, committed_bytes).0
+        Some(self.intern(&new_bitmap, committed_bytes).0)
     }
 
-    /// Clear a feed bit from a bitmap. Returns the new scope_id, or 0 if the
-    /// bitmap becomes empty.
+    /// Clear a feed bit from a bitmap. Returns the new scope_id (0 if the
+    /// bitmap becomes empty), or `None` if the input `scope_id` does not
+    /// resolve to a known scope. Trailing zero bytes are trimmed so that
+    /// clearing the highest set bit returns to the canonical (original) scope.
     pub fn bitmap_clear_feed(
         &mut self,
         scope_id: u32,
         feed_bit: u32,
         committed_bytes: &[u8],
-    ) -> u32 {
-        let bitmap = match self.resolve(scope_id, committed_bytes) {
-            Some(b) => b,
-            None => return 0,
-        };
+    ) -> Option<u32> {
+        let bitmap = self.resolve(scope_id, committed_bytes)?;
         let mut new_bitmap = bitmap;
         let byte_idx = (feed_bit / 8) as usize;
         let bit_idx = (feed_bit % 8) as u8;
         if byte_idx < new_bitmap.len() {
             new_bitmap[byte_idx] &= !(1 << bit_idx);
         }
-        if new_bitmap.iter().all(|&b| b == 0) {
-            return 0;
+        let trimmed = canonicalize(&new_bitmap);
+        if trimmed.iter().all(|&b| b == 0) {
+            return Some(0);
         }
-        self.intern(&new_bitmap, committed_bytes).0
+        Some(self.intern(&trimmed, committed_bytes).0)
     }
 
     /// Full entry list (committed ∪ new) for the bulk rebuild at commit.
@@ -272,23 +285,113 @@ impl ScopeRegistry {
     }
 }
 
-/// Encode a scope entry into a fixed-size record (SCOPE_ENTRY_SIZE bytes).
+/// Sentinel stored in the inline `bitmap_len` field when a scope entry's bitmap
+/// is too large for the inline slot (more than `MAX_BITMAP_WIDTH` bytes). The
+/// true bitmap then lives in a chain of PAGE_TYPE_OVERFLOW pages; the inline
+/// record carries the true length and the first overflow page number.
+pub const SCOPE_BITMAP_OVERFLOW: u16 = 0xFFFF;
+
+/// Offset of the next-page pointer within an OVERFLOW page (right after the
+/// 16-byte page header).
+const OVERFLOW_NEXT_OFF: usize = spec::PAGE_HEADER_SIZE;
+/// Offset of the payload within an OVERFLOW page.
+const OVERFLOW_PAYLOAD_OFF: usize = spec::PAGE_HEADER_SIZE + 4;
+
+/// Read the bitmap for the entry located at `rec_off` within `page`, following
+/// the overflow chain when the inline `bitmap_len` is the overflow sentinel.
+/// `bytes` is the full page image (needed to follow overflow pages).
+fn read_entry_bitmap(bytes: &[u8], page: &[u8], rec_off: usize) -> Vec<u8> {
+    let bitmap_len = wire::u16_le(page, rec_off + 4);
+    if bitmap_len == SCOPE_BITMAP_OVERFLOW {
+        let true_len = wire::u32_le(page, rec_off + 6) as usize;
+        let payload_cap = spec::PAGE_SIZE - OVERFLOW_PAYLOAD_OFF;
+        let mut out = Vec::with_capacity(true_len);
+        let mut pgno = wire::u32_le(page, rec_off + 10);
+        let mut guard = 0u32;
+        while pgno != 0 && out.len() < true_len {
+            guard += 1;
+            if guard > spec::TREE_HEIGHT_MAX {
+                break;
+            }
+            let base = pgno as usize * spec::PAGE_SIZE;
+            if base + spec::PAGE_SIZE > bytes.len() {
+                break;
+            }
+            let opage = &bytes[base..base + spec::PAGE_SIZE];
+            let next = wire::u32_le(opage, OVERFLOW_NEXT_OFF);
+            let need = (true_len - out.len()).min(payload_cap);
+            out.extend_from_slice(&opage[OVERFLOW_PAYLOAD_OFF..OVERFLOW_PAYLOAD_OFF + need]);
+            pgno = next;
+        }
+        out
+    } else {
+        let n = (bitmap_len as usize).min(MAX_BITMAP_WIDTH);
+        page[rec_off + 6..rec_off + 6 + n].to_vec()
+    }
+}
+
+/// Write a bitmap that exceeds the inline slot to a fresh chain of OVERFLOW
+/// pages. Returns the first page number of the chain. The allocated page
+/// numbers are recorded in `allocated` (so the writer tracks them as private
+/// pages) and removed from `free_pool`.
+fn write_overflow_chain(
+    store: &mut dyn crate::page_store::PageStore,
+    bitmap: &[u8],
+    allocated: &mut Vec<u32>,
+    free_pool: &mut Vec<u32>,
+) -> Result<u32> {
+    let payload_cap = spec::PAGE_SIZE - OVERFLOW_PAYLOAD_OFF;
+    let n_pages = bitmap.len().div_ceil(payload_cap).max(1);
+    let mut pages: Vec<u32> = Vec::with_capacity(n_pages);
+    for _ in 0..n_pages {
+        let pgno = if let Some(p) = free_pool.pop() {
+            p
+        } else {
+            store.alloc_page()?
+        };
+        allocated.push(pgno);
+        pages.push(pgno);
+    }
+    for (i, &pgno) in pages.iter().enumerate() {
+        let page = store.page_mut(pgno);
+        page.fill(0);
+        let next = if i + 1 < pages.len() { pages[i + 1] } else { 0 };
+        PageHeader::write(page, spec::PAGE_TYPE_OVERFLOW, 0, pgno);
+        wire::put_u32(page, OVERFLOW_NEXT_OFF, next);
+        let start = i * payload_cap;
+        let end = (start + payload_cap).min(bitmap.len());
+        page[OVERFLOW_PAYLOAD_OFF..OVERFLOW_PAYLOAD_OFF + (end - start)]
+            .copy_from_slice(&bitmap[start..end]);
+    }
+    Ok(pages[0])
+}
+
+/// Encode an inline scope entry into a fixed-size record (SCOPE_ENTRY_SIZE
+/// bytes). Only valid for bitmaps that fit inline (len <= MAX_BITMAP_WIDTH);
+/// larger bitmaps are handled by [`write_overflow_chain`] at build time.
 pub fn encode_entry(out: &mut [u8], entry: &ScopeEntry) {
     debug_assert_eq!(out.len(), SCOPE_ENTRY_SIZE);
     out.fill(0);
     wire::put_u32(out, 0, entry.scope_id);
-    wire::put_u16(out, 4, entry.bitmap.len() as u16);
     let n = entry.bitmap.len().min(MAX_BITMAP_WIDTH);
+    wire::put_u16(out, 4, n as u16);
     out[6..6 + n].copy_from_slice(&entry.bitmap[..n]);
 }
 
-/// Decode a scope entry from a fixed-size record.
+/// Decode an inline scope entry from a fixed-size record. Overflow entries
+/// (sentinel bitmap_len) cannot be decoded from the 262-byte record alone —
+/// use [`read_entry_bitmap`] with the full page image.
 pub fn decode_entry(rec: &[u8]) -> ScopeEntry {
     debug_assert_eq!(rec.len(), SCOPE_ENTRY_SIZE);
     let scope_id = wire::u32_le(rec, 0);
-    let bitmap_len = wire::u16_le(rec, 4) as usize;
-    let bitmap_len = bitmap_len.min(MAX_BITMAP_WIDTH);
-    let bitmap = rec[6..6 + bitmap_len].to_vec();
+    let bitmap_len = wire::u16_le(rec, 4);
+    let bitmap = if bitmap_len == SCOPE_BITMAP_OVERFLOW {
+        // Overflow entries need the full image; from a bare record return empty.
+        Vec::new()
+    } else {
+        let n = (bitmap_len as usize).min(MAX_BITMAP_WIDTH);
+        rec[6..6 + n].to_vec()
+    };
     ScopeEntry { scope_id, bitmap }
 }
 
@@ -313,7 +416,6 @@ pub fn build_scope_tree(
 
     // Build leaf pages.
     let mut leaf_pgnos: Vec<u32> = Vec::new();
-    let mut seps: Vec<u32> = Vec::new(); // first scope_id of each leaf after the first
 
     for chunk in sorted.chunks(leaf_max) {
         let pgno = if let Some(p) = free_pool.pop() {
@@ -322,135 +424,93 @@ pub fn build_scope_tree(
             store.alloc_page()?
         };
         allocated.push(pgno);
+        // Spill any oversized bitmaps to OVERFLOW chains BEFORE borrowing the
+        // leaf page (the chain writer needs the store). Record each overflow
+        // entry's first page by index.
+        let mut overflow_first: Vec<(usize, u32)> = Vec::new();
+        for (i, entry) in chunk.iter().enumerate() {
+            if entry.bitmap.len() > MAX_BITMAP_WIDTH {
+                let first = write_overflow_chain(store, &entry.bitmap, allocated, free_pool)?;
+                overflow_first.push((i, first));
+            }
+        }
         let page = store.page_mut(pgno);
         page.fill(0);
         PageHeader::write(page, spec::PAGE_TYPE_SCOPE_LEAF, chunk.len() as u16, pgno);
         for (i, entry) in chunk.iter().enumerate() {
             let off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
-            encode_entry(&mut page[off..off + SCOPE_ENTRY_SIZE], entry);
+            let rec = &mut page[off..off + SCOPE_ENTRY_SIZE];
+            if entry.bitmap.len() > MAX_BITMAP_WIDTH {
+                rec.fill(0);
+                wire::put_u32(rec, 0, entry.scope_id);
+                wire::put_u16(rec, 4, SCOPE_BITMAP_OVERFLOW);
+                wire::put_u32(rec, 6, entry.bitmap.len() as u32);
+                let first = overflow_first
+                    .iter()
+                    .find(|(idx, _)| *idx == i)
+                    .map(|(_, p)| *p)
+                    .unwrap();
+                wire::put_u32(rec, 10, first);
+            } else {
+                encode_entry(rec, entry);
+            }
         }
         leaf_pgnos.push(pgno);
-        // The separator is the first scope_id of the NEXT leaf (not this one).
-    }
-    // Separators: for leaf[i] (i >= 1), the separator is leaf[i]'s first scope_id.
-    for &pgno in leaf_pgnos.iter().skip(1) {
-        let page = store.page(pgno);
-        let first_id = wire::u32_le(page, spec::PAGE_HEADER_SIZE);
-        seps.push(first_id);
     }
 
     if leaf_pgnos.len() == 1 {
         return Ok(leaf_pgnos[0]);
     }
 
-    // Build branch pages (single level for now; handles up to ~7500 leaves).
+    // Build branch levels bottom-up. Each level is a list of (pgno, min_scope_id)
+    // pairs. The separator between two sibling subtrees is the MIN scope_id of
+    // the right subtree (= its first child's min, carried up from the level
+    // below). This is the only correct way to key a multi-level B+tree: a
+    // branch's leftmost separator at the parent level must be the min of that
+    // branch's whole subtree, not the min of its second child.
     let sep_width = spec::SCOPE_KEY_WIDTH; // 4
     let branch_max = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (sep_width + 4);
 
-    let mut branch_pgnos: Vec<u32> = Vec::new();
-    let mut child_idx = 0;
-    while child_idx < leaf_pgnos.len() {
-        let remaining = leaf_pgnos.len() - child_idx;
-        let count = remaining.min(branch_max);
-        let pgno = if let Some(p) = free_pool.pop() {
-            p
-        } else {
-            store.alloc_page()?
-        };
-        allocated.push(pgno);
-        let page = store.page_mut(pgno);
-        page.fill(0);
-        // child[0]
-        wire::put_u32(page, spec::PAGE_HEADER_SIZE, leaf_pgnos[child_idx]);
-        let mut sep_idx = child_idx; // first separator index for this branch
-        for i in 0..count - 1 {
-            let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
-            let sep = seps[sep_idx];
-            wire::put_u32(page, off, sep);
-            wire::put_u32(page, off + sep_width, leaf_pgnos[child_idx + i + 1]);
-            sep_idx += 1;
-        }
-        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count - 1) as u16, pgno);
-        branch_pgnos.push(pgno);
-        child_idx += count;
-    }
+    let mut level: Vec<(u32, u32)> = leaf_pgnos
+        .iter()
+        .map(|&pgno| {
+            let page = store.page(pgno);
+            // The first entry's scope_id is this leaf's minimum.
+            (pgno, wire::u32_le(page, spec::PAGE_HEADER_SIZE))
+        })
+        .collect();
 
-    build_branch_levels(
-        allocated,
-        free_pool,
-        store,
-        &branch_pgnos,
-        &seps,
-        sep_width,
-        branch_max,
-    )
-}
-
-/// Recursively build branch levels until a single root remains.
-fn build_branch_levels(
-    allocated: &mut Vec<u32>,
-    free_pool: &mut Vec<u32>,
-    store: &mut dyn crate::page_store::PageStore,
-    children: &[u32],
-    all_seps: &[u32],
-    sep_width: usize,
-    branch_max: usize,
-) -> Result<u32> {
-    if children.len() == 1 {
-        return Ok(children[0]);
-    }
-
-    // Build one level of branches.
-    let mut branch_pgnos: Vec<u32> = Vec::new();
-    let mut new_seps: Vec<u32> = Vec::new();
-    let mut child_idx = 0;
-    let mut sep_idx = 0;
-
-    while child_idx < children.len() {
-        let remaining = children.len() - child_idx;
-        let count = remaining.min(branch_max);
-        let pgno = if let Some(p) = free_pool.pop() {
-            p
-        } else {
-            store.alloc_page()?
-        };
-        allocated.push(pgno);
-        let page = store.page_mut(pgno);
-        page.fill(0);
-        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count - 1) as u16, pgno);
-        wire::put_u32(page, spec::PAGE_HEADER_SIZE, children[child_idx]);
-        for i in 0..count - 1 {
-            let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
-            if sep_idx < all_seps.len() {
-                wire::put_u32(page, off, all_seps[sep_idx]);
+    while level.len() > 1 {
+        let mut next: Vec<(u32, u32)> = Vec::new();
+        let mut child_idx = 0;
+        while child_idx < level.len() {
+            let remaining = level.len() - child_idx;
+            let count = remaining.min(branch_max);
+            let pgno = if let Some(p) = free_pool.pop() {
+                p
+            } else {
+                store.alloc_page()?
+            };
+            allocated.push(pgno);
+            let page = store.page_mut(pgno);
+            page.fill(0);
+            // child[0]
+            wire::put_u32(page, spec::PAGE_HEADER_SIZE, level[child_idx].0);
+            for i in 0..count - 1 {
+                let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
+                // Separator between child[i] and child[i+1] = min of child[i+1].
+                wire::put_u32(page, off, level[child_idx + i + 1].1);
+                wire::put_u32(page, off + sep_width, level[child_idx + i + 1].0);
             }
-            wire::put_u32(page, off + sep_width, children[child_idx + i + 1]);
-            sep_idx += 1;
+            PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count - 1) as u16, pgno);
+            // This branch's min is its first child's min.
+            next.push((pgno, level[child_idx].1));
+            child_idx += count;
         }
-        branch_pgnos.push(pgno);
-        child_idx += count;
+        level = next;
     }
 
-    // Separators for the next level: first scope_id of each branch after the first.
-    for &pgno in branch_pgnos.iter().skip(1) {
-        let page = store.page(pgno);
-        let off = spec::PAGE_HEADER_SIZE + 4; // first sep in this branch
-        new_seps.push(wire::u32_le(page, off));
-    }
-
-    if branch_pgnos.len() == 1 {
-        Ok(branch_pgnos[0])
-    } else {
-        build_branch_levels(
-            allocated,
-            free_pool,
-            store,
-            &branch_pgnos,
-            &new_seps,
-            sep_width,
-            branch_max,
-        )
-    }
+    Ok(level[0].0)
 }
 
 /// Read all scope entries from a committed scope table. Used at open time.
@@ -502,8 +562,9 @@ fn read_node_checked(
             let count = h.entry_count as usize;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
-                let entry = decode_entry(&page[rec_off..rec_off + SCOPE_ENTRY_SIZE]);
-                out.push(entry);
+                let scope_id = wire::u32_le(page, rec_off);
+                let bitmap = read_entry_bitmap(bytes, page, rec_off);
+                out.push(ScopeEntry { scope_id, bitmap });
             }
             Ok(())
         }
@@ -534,8 +595,9 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
             let count = h.entry_count as usize;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
-                let entry = decode_entry(&page[rec_off..rec_off + SCOPE_ENTRY_SIZE]);
-                out.push(entry);
+                let scope_id = wire::u32_le(page, rec_off);
+                let bitmap = read_entry_bitmap(bytes, page, rec_off);
+                out.push(ScopeEntry { scope_id, bitmap });
             }
             Ok(())
         }
@@ -548,6 +610,88 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
             Ok(())
         }
         _ => Err(Error::Structural("unexpected page type in scope table")),
+    }
+}
+
+/// Check whether `target_id` is a defined scope, WITHOUT materializing its
+/// bitmap. O(log S) time, O(1) heap — used by the open-time data-record scope
+/// validation so it does not allocate per record.
+pub fn scope_id_exists(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<bool> {
+    Ok(match find_scope_ref(bytes, root_pgno, target_id)? {
+        // find_scope_ref returns None for overflow entries (no single slice);
+        // those still exist, so fall back to a descent that only checks id
+        // presence via a leaf binary search.
+        Some(_) => true,
+        None => scope_id_leaf_contains(bytes, root_pgno, target_id),
+    })
+}
+
+/// Descend the scope tree and report whether any leaf holds `target_id`, without
+/// allocating the bitmap. Covers overflow entries (which find_scope_ref skips).
+fn scope_id_leaf_contains(bytes: &[u8], root_pgno: u32, target_id: u32) -> bool {
+    let mut pgno = root_pgno;
+    if pgno == 0 {
+        return false;
+    }
+    for _ in 0..spec::TREE_HEIGHT_MAX {
+        let off = pgno as usize * spec::PAGE_SIZE;
+        if off + spec::PAGE_SIZE > bytes.len() {
+            return false;
+        }
+        let page = &bytes[off..off + spec::PAGE_SIZE];
+        match PageHeader::decode(page).page_type {
+            spec::PAGE_TYPE_SCOPE_LEAF => {
+                let count = page_header_entry_count(page);
+                let (mut lo, mut hi) = (0usize, count);
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    let rec_off = spec::PAGE_HEADER_SIZE + mid * SCOPE_ENTRY_SIZE;
+                    let id = wire::u32_le(page, rec_off);
+                    if id < target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if lo < count {
+                    let rec_off = spec::PAGE_HEADER_SIZE + lo * SCOPE_ENTRY_SIZE;
+                    return wire::u32_le(page, rec_off) == target_id;
+                }
+                return false;
+            }
+            spec::PAGE_TYPE_SCOPE_BRANCH => {
+                let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                    page,
+                    page_header_entry_count(page),
+                );
+                let (mut lo, mut hi) = (0usize, branch.sep_count());
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if branch.sep(mid).0 <= target_id {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                pgno = branch.child(lo);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Read a scope page's entry_count, clamped to a safe capacity for the page
+/// type, so a corrupt (CRC-valid) value cannot drive an out-of-range slice.
+fn page_header_entry_count(page: &[u8]) -> usize {
+    let raw = PageHeader::decode(page).entry_count as usize;
+    let h = PageHeader::decode(page);
+    match h.page_type {
+        spec::PAGE_TYPE_SCOPE_LEAF => {
+            raw.min((spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / SCOPE_ENTRY_SIZE)
+        }
+        spec::PAGE_TYPE_SCOPE_BRANCH => raw.min((spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / 8),
+        _ => raw,
     }
 }
 
@@ -584,8 +728,8 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
                     let rec_off = spec::PAGE_HEADER_SIZE + lo * SCOPE_ENTRY_SIZE;
                     let id = wire::u32_le(page, rec_off);
                     if id == target_id {
-                        let entry = decode_entry(&page[rec_off..rec_off + SCOPE_ENTRY_SIZE]);
-                        return Ok(Some(entry.bitmap));
+                        let bitmap = read_entry_bitmap(bytes, page, rec_off);
+                        return Ok(Some(bitmap));
                     }
                 }
                 return Ok(None);
@@ -650,9 +794,15 @@ pub fn find_scope_ref(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Op
                     let rec_off = spec::PAGE_HEADER_SIZE + lo * SCOPE_ENTRY_SIZE;
                     let id = wire::u32_le(page, rec_off);
                     if id == target_id {
-                        let bm_len = wire::u16_le(page, rec_off + 4) as usize;
-                        let bm_len = bm_len.min(MAX_BITMAP_WIDTH);
-                        return Ok(Some(&page[rec_off + 6..rec_off + 6 + bm_len]));
+                        let bm_len = wire::u16_le(page, rec_off + 4);
+                        // Overflow entries span pages and cannot be returned as
+                        // a single borrowed slice; the overlap scans that use
+                        // this zero-copy path only encounter inline bitmaps.
+                        if bm_len == SCOPE_BITMAP_OVERFLOW {
+                            return Ok(None);
+                        }
+                        let n = (bm_len as usize).min(MAX_BITMAP_WIDTH);
+                        return Ok(Some(&page[rec_off + 6..rec_off + 6 + n]));
                     }
                 }
                 return Ok(None);
@@ -710,13 +860,16 @@ fn find_scope_by_bitmap_node(bytes: &[u8], pgno: u32, depth: u32, target: &[u8])
             let count = h.entry_count as usize;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
-                let bm_len = wire::u16_le(page, rec_off + 4) as usize;
-                let bm_len = bm_len.min(MAX_BITMAP_WIDTH);
-                if bm_len == target.len() {
-                    let bm = &page[rec_off + 6..rec_off + 6 + bm_len];
-                    if bm == target {
-                        return Some(wire::u32_le(page, rec_off));
-                    }
+                let raw_len = wire::u16_le(page, rec_off + 4);
+                // Compare the full bitmap (inline or overflow) against target.
+                let bm = if raw_len == SCOPE_BITMAP_OVERFLOW {
+                    read_entry_bitmap(bytes, page, rec_off)
+                } else {
+                    let n = (raw_len as usize).min(MAX_BITMAP_WIDTH);
+                    page[rec_off + 6..rec_off + 6 + n].to_vec()
+                };
+                if bm == target {
+                    return Some(wire::u32_le(page, rec_off));
                 }
             }
             None
@@ -793,10 +946,17 @@ pub fn validate_scope_crc(bytes: &[u8], root_pgno: u32) -> Result<()> {
         return Ok(());
     }
     let total_pages = (bytes.len() / spec::PAGE_SIZE) as u32;
-    validate_scope_crc_node(bytes, root_pgno, 0, total_pages)
+    let mut prev_max: Option<u32> = None;
+    validate_scope_crc_node(bytes, root_pgno, 0, total_pages, &mut prev_max)
 }
 
-fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32, total_pages: u32) -> Result<()> {
+fn validate_scope_crc_node(
+    bytes: &[u8],
+    pgno: u32,
+    depth: u32,
+    total_pages: u32,
+    prev_max: &mut Option<u32>,
+) -> Result<()> {
     if depth > spec::TREE_HEIGHT_MAX {
         return Err(Error::Invariant("scope table too deep"));
     }
@@ -821,6 +981,27 @@ fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32, total_pages: u32
             if entry_count < 1 || entry_count > max_entries {
                 return Err(Error::Invariant("scope leaf entry_count out of range"));
             }
+            for i in 0..entry_count {
+                let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
+                let id = wire::u32_le(page, rec_off);
+                let bitmap_len = wire::u16_le(page, rec_off + 4);
+                // An inline bitmap_len beyond the on-disk slot would read past
+                // the entry's payload. The overflow sentinel is the one
+                // legitimate value > MAX_BITMAP_WIDTH.
+                if bitmap_len != SCOPE_BITMAP_OVERFLOW && (bitmap_len as usize) > MAX_BITMAP_WIDTH {
+                    return Err(Error::Invariant("scope bitmap_len exceeds payload"));
+                }
+                // Strictly increasing across leaves (prev_max threads the
+                // largest scope_id seen so far in the in-order walk).
+                if let Some(pm) = *prev_max {
+                    if id <= pm {
+                        return Err(Error::Invariant(
+                            "scope_ids not strictly increasing across leaves",
+                        ));
+                    }
+                }
+                *prev_max = Some(id);
+            }
             Ok(())
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
@@ -839,7 +1020,7 @@ fn validate_scope_crc_node(bytes: &[u8], pgno: u32, depth: u32, total_pages: u32
                 if child < 2 || child as u64 >= total_pages as u64 {
                     return Err(Error::Structural("scope child pgno out of range"));
                 }
-                validate_scope_crc_node(bytes, child, depth + 1, total_pages)?;
+                validate_scope_crc_node(bytes, child, depth + 1, total_pages, prev_max)?;
             }
             Ok(())
         }
@@ -869,12 +1050,12 @@ mod tests {
     fn bitmap_set_clear_feed() {
         let mut reg = ScopeRegistry::new();
         let (empty, _) = reg.intern(&[], &[]); // empty bitmap (presence only)
-        let with_feed0 = reg.bitmap_set_feed(empty, 0, &[]);
+        let with_feed0 = reg.bitmap_set_feed(empty, 0, &[]).unwrap();
         assert_ne!(with_feed0, empty);
         let resolved = reg.resolve(with_feed0, &[]).unwrap();
         assert_eq!(resolved[0] & 1, 1); // bit 0 set
 
-        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0, &[]);
+        let without_feed0 = reg.bitmap_clear_feed(with_feed0, 0, &[]).unwrap();
         assert_eq!(without_feed0, 0); // empty again
     }
 

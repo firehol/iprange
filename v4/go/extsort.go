@@ -4,8 +4,21 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 )
+
+// freshSpillPath returns a process-unique path inside dir for a new spill run.
+func freshSpillPath(dir string, salt int) string {
+	f, err := os.CreateTemp(dir, "iprange_extsort_*")
+	if err != nil {
+		return filepath.Join(dir, fmt.Sprintf("iprange_extsort_%d_%d", os.Getpid(), salt))
+	}
+	p := f.Name()
+	f.Close()
+	os.Remove(p)
+	return p
+}
 
 // SortedStream is an in-memory sorted, coalesced stream of desired records.
 type SortedStream[K ipKey[K]] struct {
@@ -419,6 +432,62 @@ type kWayMerge[K ipKey[K]] struct {
 	err     error          // first truncation/IO error from any run
 }
 
+// extSortMergeFan bounds the file descriptors used by a single merge pass: a
+// batch opens at most this many input runs + 1 output. Keeps the sort within a
+// tight RLIMIT_NOFILE.
+const extSortMergeFan = 32
+
+// mergeRunsToFile merges a batch of spill runs (≤ extSortMergeFan) into a single
+// new run file, preserving each record's winning global seq for re-merging.
+func mergeRunsToFile[K ipKey[K]](paths []string, out string) error {
+	merge, err := newKWayMerge[K](paths)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		for _, r := range merge.runs {
+			if r.file != nil {
+				r.file.Close()
+				r.file = nil
+			}
+		}
+		return err
+	}
+	var zero K
+	kw := zero.width()
+	buf := make([]byte, spillRecordSize(kw))
+	for {
+		rec, seq := merge.computeNextTagged()
+		if rec == nil {
+			break
+		}
+		writeSpillRecord[K](buf, rec, seq, kw)
+		if _, err := f.Write(buf); err != nil {
+			f.Close()
+			os.Remove(out)
+			for _, r := range merge.runs {
+				if r.file != nil {
+					r.file.Close()
+				}
+			}
+			return err
+		}
+	}
+	for _, r := range merge.runs {
+		if r.file != nil {
+			r.file.Close()
+			r.file = nil
+		}
+	}
+	if err := merge.err; err != nil {
+		f.Close()
+		os.Remove(out)
+		return err
+	}
+	return f.Close()
+}
+
 func newKWayMerge[K ipKey[K]](paths []string) (*kWayMerge[K], error) {
 	runs := make([]*runReader[K], 0, len(paths))
 	for _, p := range paths {
@@ -519,10 +588,10 @@ func (m *kWayMerge[K]) popMin() (DesiredRecord[K], uint64, bool) {
 // that should win in a part of the range the high-seq constituent does not
 // cover. Resolving every overlap by seq keeps each emitted segment's seq
 // truthful for its whole span.
-func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
+func (m *kWayMerge[K]) computeNextTagged() (*DesiredRecord[K], uint64) {
 	result, resultSeq, ok := m.popMin()
 	if !ok {
-		return nil
+		return nil, 0
 	}
 	for {
 		nextFrom, nextTo, nextScope, nextSeq, hasMin := m.peekMin()
@@ -598,7 +667,14 @@ func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
 		}
 	}
 	r := result
-	return &r
+	return &r, resultSeq
+}
+
+// computeNext keeps the old single-return API (discards the seq) for callers
+// that stream records directly.
+func (m *kWayMerge[K]) computeNext() *DesiredRecord[K] {
+	rec, _ := m.computeNextTagged()
+	return rec
 }
 
 // MergeStream wraps a kWayMerge, cleaning up temp files when exhausted.
@@ -634,6 +710,13 @@ func (m *MergeStream[K]) Next() *DesiredRecord[K] {
 // distinguish "exhausted" from "truncated" should check Err() after Next()
 // returns nil.
 func (m *MergeStream[K]) Err() error { return m.merge.err }
+
+// Close releases the merge's temp files early (io.Closer). Safe to call before
+// the stream is exhausted (early abandonment).
+func (m *MergeStream[K]) Close() error {
+	m.cleanup()
+	return nil
+}
 
 func (m *MergeStream[K]) cleanup() {
 	if m.cleaned {
@@ -704,6 +787,15 @@ func (c *coalesceStream[K]) Next() *DesiredRecord[K] {
 // Err propagates the inner stream's deferred read error so Migrate/MigrateFeed
 // can reject a truncated spill instead of committing partial data.
 func (c *coalesceStream[K]) Err() error { return c.inner.Err() }
+
+// Close delegates to the inner stream if it supports early closure, releasing
+// any temp files (io.Closer).
+func (c *coalesceStream[K]) Close() error {
+	if cl, ok := c.inner.(io.Closer); ok {
+		return cl.Close()
+	}
+	return nil
+}
 
 // --- entry point ---
 
@@ -821,13 +913,25 @@ func NewExtSorter[K ipKey[K]](config *ExtSortConfig) *ExtSorter[K] {
 	if config == nil {
 		config = DefaultExtSortConfig()
 	}
-	if config.ChunkSize <= 0 {
-		config = DefaultExtSortConfig()
+	// Copy the caller's config so later mutation of the caller's struct (or the
+	// TempDir path) cannot change this sorter's live configuration.
+	cfg := *config
+	if cfg.ChunkSize <= 0 {
+		cfg = *DefaultExtSortConfig()
 	}
-	return &ExtSorter[K]{config: config}
+	return &ExtSorter[K]{config: &cfg}
 }
 
 func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
+	if s.finished {
+		return fmt.Errorf("Add after Finish")
+	}
+	if s.config.ChunkSize <= 0 {
+		return fmt.Errorf("extsort chunk_size must be >= 1")
+	}
+	if from.cmp(to) > 0 {
+		return fmt.Errorf("extsort add: from > to")
+	}
 	s.chunk = append(s.chunk, DesiredRecord[K]{From: from, To: to, ScopeID: scopeID})
 	s.globalSeq++
 	if len(s.chunk) >= s.config.ChunkSize {
@@ -837,22 +941,61 @@ func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
 }
 
 func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
+	if s.finished {
+		return nil, fmt.Errorf("Finish called twice")
+	}
 	s.finished = true
 
 	if len(s.chunk) > 0 {
 		if err := s.spillChunk(); err != nil {
+			s.abort()
 			return nil, err
 		}
 	}
 
-	if len(s.runPaths) == 0 {
+	dir := s.config.TempDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+
+	// Multi-pass reduction: while there are more runs than the merge fan-out,
+	// merge them in batches so the open-FD count stays bounded.
+	paths := s.runPaths
+	for len(paths) > extSortMergeFan {
+		var next []string
+		for i := 0; i < len(paths); i += extSortMergeFan {
+			end := i + extSortMergeFan
+			if end > len(paths) {
+				end = len(paths)
+			}
+			batch := paths[i:end]
+			if len(batch) == 1 {
+				next = append(next, batch[0])
+				continue
+			}
+			out := freshSpillPath(dir, len(next))
+			if err := mergeRunsToFile[K](batch, out); err != nil {
+				os.Remove(out)
+				s.runPaths = append(next, batch...)
+				return nil, err
+			}
+			for _, p := range batch {
+				os.Remove(p)
+			}
+			next = append(next, out)
+		}
+		paths = next
+	}
+	s.runPaths = paths
+
+	if len(paths) == 0 {
 		return newCoalesceStream[K](&SortedStream[K]{}), nil
 	}
 
-	if len(s.runPaths) == 1 {
+	if len(paths) == 1 {
 		var zero K
 		kw := zero.width()
-		f, err := os.Open(s.runPaths[0])
+		f, err := os.Open(paths[0])
 		if err != nil {
 			s.abort()
 			return nil, err
@@ -872,7 +1015,7 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 			recs = append(recs, rec)
 		}
 		f.Close()
-		os.Remove(s.runPaths[0])
+		os.Remove(paths[0])
 		if truncErr != nil {
 			s.abort()
 			return nil, truncErr
@@ -880,15 +1023,16 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
 	}
 
-	merge, err := newKWayMerge[K](s.runPaths)
+	merge, err := newKWayMerge[K](paths)
 	if err != nil {
 		s.abort()
 		return nil, err
 	}
-	return newCoalesceStream[K](&MergeStream[K]{merge: merge, runPaths: s.runPaths}), nil
+	return newCoalesceStream[K](&MergeStream[K]{merge: merge, runPaths: paths}), nil
 }
 
 func (s *ExtSorter[K]) Abort() {
+	s.finished = true
 	s.abort()
 }
 

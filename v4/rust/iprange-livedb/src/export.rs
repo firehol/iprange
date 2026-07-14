@@ -55,6 +55,9 @@ pub struct V3Meta {
 /// other errors (a corrupt v4 file) are surfaced as-is.
 pub fn export_v3(v4_bytes: &[u8], type_id: u32, meta: V3Meta) -> Result<Vec<u8>> {
     let reader = Reader::open(v4_bytes)?;
+    // Exporting from a structurally invalid (but checksum-valid) image would
+    // silently produce a wrong v3 file. Run the full §9 structural walk first.
+    reader.validate()?;
     match reader.version() {
         IpVersion::V4 => {
             export_inner::<Ipv4Key, V3Ipv4Key, _>(&reader, type_id, meta, |k| V3Ipv4Key(k.0))

@@ -56,7 +56,52 @@ func (r *Reader) Validate() error {
 	if err := r.validateTree(); err != nil {
 		return err
 	}
-	return r.validateScopeTable()
+	if err := r.validateScopeTable(); err != nil {
+		return err
+	}
+	// In indirect mode every data record's scope_id MUST resolve to a defined
+	// scope in the scope table (defense against a corrupt/hostile file).
+	if r.meta.scopeMode == ScopeModeIndirect && r.meta.scopeTableRoot != 0 && r.meta.rootPgno != 0 {
+		if err := r.validateRecordScopes(r.meta.rootPgno, 1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRecordScopes walks the data tree and verifies every record's
+// scope_id resolves to a defined scope. scope_id 0 (FILE_SCOPE_ID) is allowed.
+func (r *Reader) validateRecordScopes(pgno uint32, depth uint32) error {
+	if depth > r.meta.treeHeight {
+		return errf("invariant", "path deeper than tree_height")
+	}
+	page := r.page(pgno)
+	if page == nil {
+		return errf("structural", "page out of bounds")
+	}
+	h := decodeHeader(page)
+	if depth == r.meta.treeHeight {
+		count := min(int(h.entryCount), leafMax(r.meta.keyWidth))
+		lv := newLeafView(page, count, int(r.meta.keyWidth))
+		for i := 0; i < lv.len(); i++ {
+			scopeID := lv.recordScopeID(i)
+			if scopeID == FileScopeID {
+				continue
+			}
+			if !scopeIDExists(r.bytes, r.meta.scopeTableRoot, scopeID) {
+				return errf("invariant", "record references an undefined scope")
+			}
+		}
+		return nil
+	}
+	count := min(int(h.entryCount), branchMax(r.meta.keyWidth))
+	bv := newBranchView(page, count, int(r.meta.keyWidth))
+	for j := 0; j < bv.childCount(); j++ {
+		if err := r.validateRecordScopes(bv.child(j), depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Reader) RecordCount() uint64 { return r.meta.recordCount }
@@ -398,12 +443,15 @@ func (r *Reader) validateScopeTable() error {
 	if r.meta.scopeTableRoot == 0 {
 		return nil
 	}
-	return r.validateScopeNode(r.meta.scopeTableRoot, 0)
+	prevMax := uint32(0)
+	havePrev := false
+	return r.validateScopeNode(r.meta.scopeTableRoot, 0, &prevMax, &havePrev)
 }
 
 // validateScopeNode is the recursive structural walk over scope-table pages.
-// It is panic-safe: r.page bounds-checks every access.
-func (r *Reader) validateScopeNode(pgno uint32, depth uint32) error {
+// It is panic-safe: r.page bounds-checks every access. prevMax threads the
+// largest scope_id seen so far for cross-leaf monotonicity.
+func (r *Reader) validateScopeNode(pgno uint32, depth uint32, prevMax *uint32, havePrev *bool) error {
 	if depth > TreeHeightMax {
 		return errf("structural", "scope table too deep")
 	}
@@ -429,16 +477,21 @@ func (r *Reader) validateScopeNode(pgno uint32, depth uint32) error {
 		if count < 1 || count > maxEntries {
 			return errf("invariant", "scope leaf entry_count out of range")
 		}
-		var prevID uint32
-		havePrev := false
 		for i := 0; i < count; i++ {
 			recOff := PageHeaderSize + i*ScopeEntrySize
 			id := u32le(page, recOff)
-			if havePrev && id <= prevID {
-				return errf("invariant", "scope_ids not strictly increasing in leaf")
+			bmLen := u16le(page, recOff+4)
+			// An inline bitmap_len beyond the on-disk slot would read past the
+			// entry's payload. The overflow sentinel is the one legitimate
+			// value > MaxBitmapWidth.
+			if bmLen != ScopeBitmapOverflow && int(bmLen) > MaxBitmapWidth {
+				return errf("invariant", "scope bitmap_len exceeds payload")
 			}
-			prevID = id
-			havePrev = true
+			if *havePrev && id <= *prevMax {
+				return errf("invariant", "scope_ids not strictly increasing across leaves")
+			}
+			*prevMax = id
+			*havePrev = true
 		}
 		return nil
 	case PageTypeScopeBranch:
@@ -450,14 +503,14 @@ func (r *Reader) validateScopeNode(pgno uint32, depth uint32) error {
 		}
 		bv := newBranchView(page, s, sepWidth)
 		var prevSep uint32
-		havePrev := false
+		havePrevSep := false
 		for i := 0; i < s; i++ {
 			sep := u32le(bv.sep(i), 0)
-			if havePrev && sep <= prevSep {
+			if havePrevSep && sep <= prevSep {
 				return errf("invariant", "scope branch separators not strictly increasing")
 			}
 			prevSep = sep
-			havePrev = true
+			havePrevSep = true
 		}
 		cc := bv.childCount()
 		for j := 0; j < cc; j++ {
@@ -467,7 +520,7 @@ func (r *Reader) validateScopeNode(pgno uint32, depth uint32) error {
 			}
 		}
 		for j := 0; j < cc; j++ {
-			if err := r.validateScopeNode(bv.child(j), depth+1); err != nil {
+			if err := r.validateScopeNode(bv.child(j), depth+1, prevMax, havePrev); err != nil {
 				return err
 			}
 		}

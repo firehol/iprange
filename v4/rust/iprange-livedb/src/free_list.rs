@@ -75,6 +75,7 @@ pub fn validate_chain_crc(store: &dyn PageStore, head: u32) -> Result<()> {
     if head == 0 {
         return Ok(());
     }
+    let total_pages = store.total_pages();
     let mut pgno = head;
     let mut seen = 0u32;
     while pgno != 0 {
@@ -84,7 +85,14 @@ pub fn validate_chain_crc(store: &dyn PageStore, head: u32) -> Result<()> {
                 "free-list chain exceeds 10M pages — corrupt",
             ));
         }
-        if pgno as u64 >= store.total_pages() as u64 {
+        // Cycle defense: a valid chain visits only distinct pages, so it can
+        // never be longer than total_pages. A self-referential or cyclic chain
+        // would otherwise loop forever re-reading pages; reject it here before
+        // re-reading any page (keeps the traversal within file bounds).
+        if seen > total_pages {
+            return Err(Error::Structural("free-list chain cycle detected"));
+        }
+        if pgno as u64 >= total_pages as u64 {
             return Ok(()); // chain page beyond file — stop
         }
         let page = store.page(pgno);
@@ -95,6 +103,90 @@ pub fn validate_chain_crc(store: &dyn PageStore, head: u32) -> Result<()> {
             return Err(Error::ChecksumFailed("free-list chain page fails CRC"));
         }
         pgno = wire::u32_le(page, spec::TXN_FREE_NEXT);
+    }
+    Ok(())
+}
+
+/// Validate the CONTENTS of the free-list chain at open time.
+///
+/// Two complementary checks:
+///   1. Self-reference (raw, per chain page): a chain page's freed-pgno array
+///      must never contain its OWN page number — a chain page is allocated, not
+///      freed, in the transaction that writes it. This catches a corrupt chain
+///      that lists its own (or another chain page's) number, e.g. the head page
+///      pointing at itself.
+///   2. Live-metadata (newest-entry-wins): a page whose authoritative state is
+///      "free" (its newest chain entry is a real freed_txn_id, not a tombstone
+///      and not a truncated page) must never be a meta page (0/1), the active
+///      data root, or the scope-table root. Stale entries for a page that was
+///      later reused (tombstoned) or truncated are harmless and skipped.
+pub fn validate_free_entries(
+    store: &dyn PageStore,
+    head: u32,
+    data_root: u32,
+    scope_root: u32,
+) -> Result<()> {
+    if head == 0 {
+        return Ok(());
+    }
+    let total = store.total_pages();
+
+    // Pass 1: raw self-reference check + collect entries for newest-wins.
+    let mut entries: Vec<FreeEntry> = Vec::new();
+    let mut pgno = head;
+    let mut seen = 0u32;
+    while pgno != 0 {
+        seen += 1;
+        if seen > total {
+            return Err(Error::Structural("free-list chain cycle detected"));
+        }
+        if pgno as u64 >= total as u64 {
+            break; // chain page beyond file — stop
+        }
+        let page = store.page(pgno);
+        if PageHeader::decode(page).page_type != spec::PAGE_TYPE_TXN_FREE {
+            break; // not a chain page — stop
+        }
+        if !crate::crc32c::verify_page(page) {
+            return Err(Error::ChecksumFailed("free-list chain page fails CRC"));
+        }
+        let freed_txn = wire::u64_le(page, spec::TXN_FREE_FREED_IN);
+        let count =
+            (wire::u32_le(page, spec::TXN_FREE_COUNT) as usize).min(spec::TXN_FREE_CAPACITY);
+        for i in 0..count {
+            let p = wire::u32_le(page, spec::TXN_FREE_ARRAY + i * 4);
+            if p == pgno {
+                return Err(Error::Structural(
+                    "free-list entry self-references chain page",
+                ));
+            }
+            entries.push(FreeEntry {
+                pgno: p,
+                freed_txn_id: freed_txn,
+            });
+        }
+        pgno = wire::u32_le(page, spec::TXN_FREE_NEXT);
+    }
+
+    // Pass 2: newest-entry-wins (entries are newest-first), then reject any
+    // live metadata page whose authoritative state is "free".
+    let mut latest: rustc_hash::FxHashMap<u32, u64> = rustc_hash::FxHashMap::default();
+    for e in &entries {
+        latest.entry(e.pgno).or_insert(e.freed_txn_id);
+    }
+    for (p, ftxn) in &latest {
+        if *ftxn == u64::MAX {
+            continue; // tombstoned (reused) — not actually free
+        }
+        if *p as u64 >= total as u64 {
+            continue; // stale entry for a truncated page; load_free_list filters it
+        }
+        if *p < 2 {
+            return Err(Error::Structural("free-list entry points to meta page"));
+        }
+        if *p == data_root || *p == scope_root {
+            return Err(Error::Structural("free-list entry points to live root"));
+        }
     }
     Ok(())
 }

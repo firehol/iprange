@@ -275,49 +275,68 @@ pub fn normalize_overlapping<K: IpKey>(input: &[(K, K, u32)]) -> Vec<CoverageSeg
         return Vec::new();
     }
 
-    // Collect all boundary points.
+    // Collect all boundary points. A record [f, t] contributes `f` and the
+    // first key AFTER its coverage (`t + 1`). When `t` is the family maximum,
+    // `t + 1` does not exist — that coverage reaches the end of the key space,
+    // so the trailing segment is bounded by `t` itself (handled below via
+    // `global_max_to`).
     let mut boundaries: Vec<K> = Vec::new();
+    let mut global_max_to = input[0].1;
     for &(f, t, _) in input {
         boundaries.push(f);
         if let Some(after) = t.checked_inc() {
             boundaries.push(after);
+        }
+        if t > global_max_to {
+            global_max_to = t;
         }
     }
     boundaries.sort();
     boundaries.dedup();
 
     // For each consecutive pair of boundaries, find all covering scopes.
+    // The segment end is `next_boundary - 1`. After the last boundary, a
+    // trailing segment may remain (always present when any record reaches the
+    // family maximum, since its `t + 1` was not added); bound it by
+    // `global_max_to`.
     let mut segments: Vec<CoverageSegment<K>> = Vec::new();
-    for i in 0..boundaries.len().saturating_sub(1) {
-        let seg_from = boundaries[i];
-        // The segment end is the next boundary - 1, or boundaries[i+1] - 1.
-        // But we need to be careful with the boundary semantics.
-        // boundaries[i] is a start point; the segment goes until boundaries[i+1]-1.
-        let seg_to = boundaries[i + 1].checked_dec().unwrap_or(boundaries[i + 1]);
+    let emit = |seg_from: K, seg_to: K, segments: &mut Vec<CoverageSegment<K>>| {
         if seg_from > seg_to {
-            continue;
+            return;
         }
-
         let mut scopes: Vec<u32> = Vec::new();
         for &(f, t, s) in input {
             if f <= seg_from && t >= seg_to {
                 scopes.push(s);
             }
         }
-        if !scopes.is_empty() {
-            // Merge with previous segment if same scope set and adjacent.
-            if let Some(last) = segments.last_mut() {
-                let adjacent = last.to.checked_inc() == Some(seg_from);
-                if adjacent && last.scopes == scopes {
-                    last.to = seg_to;
-                    continue;
-                }
+        if scopes.is_empty() {
+            return;
+        }
+        // Merge with previous segment if same scope set and adjacent.
+        if let Some(last) = segments.last_mut() {
+            let adjacent = last.to.checked_inc() == Some(seg_from);
+            if adjacent && last.scopes == scopes {
+                last.to = seg_to;
+                return;
             }
-            segments.push(CoverageSegment {
-                from: seg_from,
-                to: seg_to,
-                scopes,
-            });
+        }
+        segments.push(CoverageSegment {
+            from: seg_from,
+            to: seg_to,
+            scopes,
+        });
+    };
+
+    for i in 0..boundaries.len().saturating_sub(1) {
+        let seg_from = boundaries[i];
+        let seg_to = boundaries[i + 1].checked_dec().unwrap_or(boundaries[i + 1]);
+        emit(seg_from, seg_to, &mut segments);
+    }
+    // Trailing segment: coverage from the last boundary up to the global max.
+    if let Some(&last) = boundaries.last() {
+        if last <= global_max_to {
+            emit(last, global_max_to, &mut segments);
         }
     }
 

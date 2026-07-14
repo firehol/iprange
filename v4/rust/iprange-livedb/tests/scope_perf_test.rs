@@ -5,6 +5,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 use iprange_livedb::page_store::{PageStore, VecPageStore};
@@ -14,6 +15,11 @@ use iprange_livedb::{Ipv4Key, Reader, Writer};
 
 struct Counting;
 static ALLOCED: AtomicUsize = AtomicUsize::new(0);
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_test() -> MutexGuard<'static, ()> {
+    TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -76,6 +82,7 @@ fn open_writer(img: Vec<u8>) -> Writer<Ipv4Key> {
 
 #[test]
 fn scope_resolve_correct_after_reopen() {
+    let _guard = lock_test();
     const N: usize = 2000;
     const WIDTH: usize = 8;
     let (img, ids) = build_mode2_db(N, WIDTH);
@@ -89,6 +96,7 @@ fn scope_resolve_correct_after_reopen() {
 
 #[test]
 fn scope_open_alloc_is_constant() {
+    let _guard = lock_test();
     // The headline issue-1 proof: opening a mode-2 writer must allocate roughly
     // CONSTANT bytes regardless of scope count, because the table is read on
     // demand. Before the fix the delta grew ~10x (eager HashMap load); after it
@@ -125,6 +133,7 @@ fn scope_open_alloc_is_constant() {
 
 #[test]
 fn scope_resolve_is_sublinear() {
+    let _guard = lock_test();
     const N: usize = 20000;
     const WIDTH: usize = 8;
     let (img, ids) = build_mode2_db(N, WIDTH);
@@ -170,6 +179,7 @@ fn time_ns(reps: usize, mut f: impl FnMut()) -> u128 {
 
 #[test]
 fn scope_intern_dedup_across_reopen() {
+    let _guard = lock_test();
     let (img, ids) = build_mode2_db(3, 4);
     let bms = make_unique_bitmaps(3, 4);
     let mut w = open_writer(img);
@@ -192,6 +202,7 @@ fn scope_intern_dedup_across_reopen() {
 
 #[test]
 fn scope_intern_dedup_within_txn_after_reopen() {
+    let _guard = lock_test();
     let (img, _ids) = build_mode2_db(5, 4);
     let mut w = open_writer(img);
     let bm = vec![0x7Fu8, 0x7F, 0x7F, 0x7F];
@@ -210,6 +221,7 @@ fn scope_intern_dedup_within_txn_after_reopen() {
 // constant as the scope count grows (NOT proportional to S).
 #[test]
 fn scope_intern_after_reopen_alloc_is_constant() {
+    let _guard = lock_test();
     const WIDTH: usize = 8;
     let measure = |n: usize| -> usize {
         let (img, _ids) = build_mode2_db(n, WIDTH);
@@ -246,6 +258,7 @@ fn scope_intern_after_reopen_alloc_is_constant() {
 
 #[test]
 fn issue3_record_only_commit_does_not_rebuild_scope() {
+    let _guard = lock_test();
     let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap();
     let id1 = w.scope_intern(&[0x01]).unwrap();
     let id2 = w.scope_intern(&[0x02]).unwrap();
@@ -276,6 +289,7 @@ fn issue3_record_only_commit_does_not_rebuild_scope() {
 
 #[test]
 fn issue4_foreign_vs_all_closure_and_slice() {
+    let _guard = lock_test();
     use iprange_livedb::overlap::{foreign_vs_all, foreign_vs_all_slice, FeedOverlap};
 
     let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap(); // bitmap mode

@@ -57,6 +57,11 @@ func ExportV3(v4Bytes []byte, typeID uint32, meta V3Meta) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Exporting from a structurally invalid (but checksum-valid) image would
+	// silently produce a wrong v3 file. Run the full structural walk first.
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
 	switch r.KeyWidth() {
 	case 4:
 		w := v3.NewWriterV4(meta.FeedMeta, meta.LicenseFlags, meta.GenerationUnixtime)

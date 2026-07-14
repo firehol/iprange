@@ -14,6 +14,7 @@
 //!   8. migrate    — streaming migrate (100k → 100k, 20% changed)
 //!   9. feed_add_range — bitmap feed-bit OR over 1000 ranges (mode 1, 100k DB)
 //!   10. extsort   — external sort of 100k unsorted records
+//!   11. nested_normalization — adversarial containment scaling curve
 //!
 //! All base scenarios are parameterized by record count (10k, 100k, 1M) and use IPv4
 //! with scope_mode=0 (scalar, the simplest and most common production shape).
@@ -413,6 +414,26 @@ fn bench_extsort(c: &mut Criterion) {
     group.finish();
 }
 
+// --- Scenario 11: nested normalization scaling ---
+
+fn bench_nested_normalization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("11_nested_normalization");
+    for &n in &[2_000usize, 4_000, 8_000, 16_000] {
+        let records: Vec<DesiredRecord<Ipv4Key>> = (0..n)
+            .map(|i| DesiredRecord {
+                from: Ipv4Key(0),
+                to: Ipv4Key((n - i) as u32),
+                scope_id: (i % 7 + 1) as u32,
+            })
+            .collect();
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(n), &records, |b, records| {
+            b.iter(|| black_box(SortedStream::from_unsorted(records.clone())));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_scan,
@@ -426,5 +447,6 @@ criterion_group!(
     bench_migrate,
     bench_feed_add_range,
     bench_extsort,
+    bench_nested_normalization,
 );
 criterion_main!(benches);

@@ -346,54 +346,73 @@ func NormalizeOverlapping[K ipKey[K]](input []IntervalRecord[K]) []CoverageSegme
 		return nil
 	}
 
-	// Collect all boundary points.
+	// Collect all boundary points. A record [f, t] contributes `f` and the
+	// first key AFTER its coverage (`t + 1`). When `t` is the family maximum,
+	// `t + 1` does not exist — that coverage reaches the end of the key space,
+	// so the trailing segment is bounded by `t` itself (handled below via
+	// globalMaxTo).
 	var boundaries []K
+	globalMaxTo := input[0].To
 	for _, r := range input {
 		boundaries = append(boundaries, r.From)
 		if after, ok := r.To.checkedInc(); ok {
 			boundaries = append(boundaries, after)
 		}
+		if r.To.cmp(globalMaxTo) > 0 {
+			globalMaxTo = r.To
+		}
 	}
 	sortKeys(boundaries)
 	boundaries = dedupKeys(boundaries)
 
-	// For each consecutive pair of boundaries, find all covering scopes.
+	// For each consecutive pair of boundaries, find all covering scopes. After
+	// the last boundary, a trailing segment may remain (always present when any
+	// record reaches the family maximum, since its `t + 1` was not added);
+	// bound it by globalMaxTo.
 	var segments []CoverageSegment[K]
-	for i := 0; i+1 < len(boundaries); i++ {
-		segFrom := boundaries[i]
-		segTo, ok := boundaries[i+1].checkedDec()
-		if !ok {
-			segTo = boundaries[i+1]
-		}
+	emit := func(segFrom, segTo K) {
 		if segFrom.cmp(segTo) > 0 {
-			continue
+			return
 		}
-
 		var scopes []uint32
 		for _, r := range input {
 			if r.From.cmp(segFrom) <= 0 && r.To.cmp(segTo) >= 0 {
 				scopes = append(scopes, r.Scope)
 			}
 		}
-		if len(scopes) > 0 {
-			// Merge with previous segment if same scope set and adjacent.
-			if len(segments) > 0 {
-				last := &segments[len(segments)-1]
-				adjacent := false
-				if inc, ok := last.To.checkedInc(); ok && inc.cmp(segFrom) == 0 {
-					adjacent = true
-				}
-				if adjacent && scopeSliceEqual(last.Scopes, scopes) {
-					last.To = segTo
-					continue
-				}
-			}
-			segments = append(segments, CoverageSegment[K]{
-				From:   segFrom,
-				To:     segTo,
-				Scopes: scopes,
-			})
+		if len(scopes) == 0 {
+			return
 		}
+		// Merge with previous segment if same scope set and adjacent.
+		if len(segments) > 0 {
+			last := &segments[len(segments)-1]
+			adjacent := false
+			if inc, ok := last.To.checkedInc(); ok && inc.cmp(segFrom) == 0 {
+				adjacent = true
+			}
+			if adjacent && scopeSliceEqual(last.Scopes, scopes) {
+				last.To = segTo
+				return
+			}
+		}
+		segments = append(segments, CoverageSegment[K]{
+			From:   segFrom,
+			To:     segTo,
+			Scopes: scopes,
+		})
+	}
+
+	for i := 0; i+1 < len(boundaries); i++ {
+		segFrom := boundaries[i]
+		segTo, ok := boundaries[i+1].checkedDec()
+		if !ok {
+			segTo = boundaries[i+1]
+		}
+		emit(segFrom, segTo)
+	}
+	// Trailing segment: coverage from the last boundary up to the global max.
+	if last := boundaries[len(boundaries)-1]; last.cmp(globalMaxTo) <= 0 {
+		emit(last, globalMaxTo)
 	}
 
 	return segments

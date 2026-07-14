@@ -9,10 +9,34 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *synchronizedBuffer) contains(s string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Contains(b.b.Bytes(), []byte(s))
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
 
 // Audit round 3: 7 hardening fixes, each with a failing-then-passing test.
 //
@@ -549,7 +573,7 @@ func TestI1_ReaderDuringCommitRemainsStable(t *testing.T) {
 		"IPRANGE_I1_CHILD=1",
 		"IPRANGE_I1_PATH="+path,
 	)
-	var childOut bytes.Buffer
+	var childOut synchronizedBuffer
 	cmd.Stdout = &childOut
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -559,13 +583,14 @@ func TestI1_ReaderDuringCommitRemainsStable(t *testing.T) {
 	// Wait for the child to signal it has registered and read key 500.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if bytes.Contains(childOut.Bytes(), []byte("CHILD_READY")) {
+		if childOut.contains("CHILD_READY") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !bytes.Contains(childOut.Bytes(), []byte("CHILD_READY")) {
-		cmd.Process.Kill()
+	if !childOut.contains("CHILD_READY") {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		t.Fatal("child reader did not signal ready in time")
 	}
 	// Give the child a moment to settle into its sleep.

@@ -170,6 +170,18 @@ impl<K: IpKey> Writer<K> {
             None
         };
 
+        // In indirect mode every data record's scope_id MUST resolve to a
+        // defined scope. validate_scope_crc (above) guards the scope tree
+        // structure; this guards the data tree's references into it.
+        if active.scope_mode == spec::SCOPE_MODE_INDIRECT
+            && active.scope_table_root != 0
+            && active.root_pgno != 0
+        {
+            let bytes = store.committed_bytes();
+            let reader = Reader::open(bytes)?;
+            reader.validate_record_scopes()?;
+        }
+
         let mut w = Writer {
             store,
             key_width: active.key_width,
@@ -199,6 +211,13 @@ impl<K: IpKey> Writer<K> {
         };
         // Strict CRC validation of the persistent free-list chain at open time.
         crate::free_list::validate_chain_crc(w.store.as_ref(), w.free_list_head)?;
+        // Validate free-list contents: no entry may point to reserved/live pages.
+        crate::free_list::validate_free_entries(
+            w.store.as_ref(),
+            w.free_list_head,
+            active.root_pgno,
+            active.scope_table_root,
+        )?;
         w.load_free_list(u64::MAX);
         // Issue-8: seed committed_tree_pages once (one-time walk, not per
         // commit) so compact_if_needed can compare counts without walking.
@@ -217,8 +236,15 @@ impl<K: IpKey> Writer<K> {
         if from > to {
             return Err(Error::InvalidInput("from > to"));
         }
-        self.delete_range(from, to)?;
-        self.cow_insert(from, to, scope_id)?;
+        self.validate_record_scope(scope_id)?;
+        if let Err(e) = self.delete_range(from, to) {
+            self.poisoned = true;
+            return Err(e);
+        }
+        if let Err(e) = self.cow_insert(from, to, scope_id) {
+            self.poisoned = true;
+            return Err(e);
+        }
         self.pending_record_count += 1;
         Ok(())
     }
@@ -229,7 +255,10 @@ impl<K: IpKey> Writer<K> {
             return Err(Error::InvalidInput("from > to"));
         }
         let before = self.pending_record_count;
-        self.delete_range(from, to)?;
+        if let Err(e) = self.delete_range(from, to) {
+            self.poisoned = true;
+            return Err(e);
+        }
         Ok(if self.pending_record_count < before {
             Changed::Changed
         } else {
@@ -242,9 +271,42 @@ impl<K: IpKey> Writer<K> {
         if from > to {
             return Err(Error::InvalidInput("from > to"));
         }
-        self.cow_insert(from, to, scope_id)?;
+        self.validate_record_scope(scope_id)?;
+        if let Err(e) = self.cow_insert(from, to, scope_id) {
+            self.poisoned = true;
+            return Err(e);
+        }
         self.pending_record_count += 1;
         Ok(())
+    }
+
+    /// In indirect mode, every record's scope_id MUST reference a defined scope
+    /// (either interned this transaction or present in the committed scope
+    /// tree). Rejects dangling scope_ids before they reach the data tree.
+    fn validate_record_scope(&self, scope_id: u32) -> Result<()> {
+        if self.scope_mode == spec::SCOPE_MODE_INDIRECT && scope_id != spec::FILE_SCOPE_ID {
+            let bytes = self.store.committed_bytes();
+            match &self.scope_registry {
+                Some(reg) => {
+                    if reg.resolve(scope_id, bytes).is_none() {
+                        return Err(Error::InvalidInput("unknown scope_id"));
+                    }
+                }
+                None => return Err(Error::State("indirect mode without scope registry")),
+            }
+        }
+        Ok(())
+    }
+
+    /// Flush pending writes to durable storage, poisoning the writer on failure
+    /// so no further mutation can publish a half-flushed transaction.
+    fn flush_or_poison(&mut self) -> Result<()> {
+        if let Err(e) = self.store.sync() {
+            self.poisoned = true;
+            Err(e)
+        } else {
+            Ok(())
+        }
     }
 
     /// Commit the pending transaction.
@@ -362,10 +424,14 @@ impl<K: IpKey> Writer<K> {
         let nothing_consumed = self.consumed_this_txn.is_empty();
         if nothing_freed && nothing_consumed && !scope_rebuilt {
             // The existing chain is valid — just write the meta and flip.
+            // Ordering: flush data pages BEFORE publishing metadata, then flush
+            // the metadata. A crash between the two syncs leaves the previous
+            // meta authoritative (the new one was never synced).
             let total = self.store.total_pages();
             let inactive = 1 - self.active_meta;
             let new_txn_id = self.committed_txn_id + 1;
-            self.write_meta_page(
+            self.flush_or_poison()?;
+            if let Err(e) = self.write_meta_page(
                 inactive,
                 new_txn_id,
                 self.pending_root,
@@ -373,8 +439,11 @@ impl<K: IpKey> Writer<K> {
                 self.pending_record_count,
                 total,
                 updated_unixtime,
-            )?;
-            self.store.sync()?;
+            ) {
+                self.poisoned = true;
+                return Err(e);
+            }
+            self.flush_or_poison()?;
             self.active_meta = inactive;
             self.committed_txn_id = new_txn_id;
             self.committed_root = self.pending_root;
@@ -572,7 +641,10 @@ impl<K: IpKey> Writer<K> {
 
         let inactive = 1 - self.active_meta;
         let new_txn_id = self.committed_txn_id + 1;
-        self.write_meta_page(
+        // Flush data + chain pages BEFORE publishing metadata, then flush the
+        // metadata page (commit ordering: data sync → meta write → meta sync).
+        self.flush_or_poison()?;
+        if let Err(e) = self.write_meta_page(
             inactive,
             new_txn_id,
             self.pending_root,
@@ -580,8 +652,11 @@ impl<K: IpKey> Writer<K> {
             self.pending_record_count,
             total,
             updated_unixtime,
-        )?;
-        self.store.sync()?;
+        ) {
+            self.poisoned = true;
+            return Err(e);
+        }
+        self.flush_or_poison()?;
         self.active_meta = inactive;
         self.committed_txn_id = new_txn_id;
         self.committed_root = self.pending_root;
@@ -634,6 +709,13 @@ impl<K: IpKey> Writer<K> {
         } else {
             Ok(())
         }
+    }
+
+    /// Mark the writer poisoned so no further mutation or commit can publish a
+    /// partially-applied transaction. Used by multi-step operations (e.g.
+    /// migration) that detect an inconsistency after some mutations succeeded.
+    pub(crate) fn poison(&mut self) {
+        self.poisoned = true;
     }
 
     fn cow_page(&mut self, pgno: u32) -> Result<u32> {
@@ -703,6 +785,33 @@ impl<K: IpKey> Writer<K> {
             let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
                 self.collect_scope_page_numbers(branch.child(j), depth + 1, out);
+            }
+        } else if h.page_type == spec::PAGE_TYPE_SCOPE_LEAF {
+            // Follow OVERFLOW chains for entries whose bitmap spilled; those
+            // pages are private and must be freed/reused on the next rebuild.
+            let count = h.entry_count as usize;
+            for i in 0..count {
+                let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
+                let bm_len = crate::wire::u16_le(page, rec_off + 4);
+                if bm_len == crate::scope_table::SCOPE_BITMAP_OVERFLOW {
+                    let mut opgno = crate::wire::u32_le(page, rec_off + 10);
+                    let mut guard = 0u32;
+                    while opgno != 0 && guard <= spec::TREE_HEIGHT_MAX {
+                        guard += 1;
+                        if opgno as u64 >= self.store.total_pages() as u64 {
+                            break;
+                        }
+                        out.push(opgno);
+                        let obase = opgno as usize * spec::PAGE_SIZE;
+                        if obase + spec::PAGE_SIZE
+                            > self.store.total_pages() as usize * spec::PAGE_SIZE
+                        {
+                            break;
+                        }
+                        let opage = self.store.page(opgno);
+                        opgno = crate::wire::u32_le(opage, spec::PAGE_HEADER_SIZE);
+                    }
+                }
             }
         }
     }
@@ -1465,9 +1574,6 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn scope_intern(&mut self, bitmap: &[u8]) -> Result<u32> {
-        if bitmap.len() > crate::scope_table::MAX_BITMAP_WIDTH {
-            return Err(Error::InvalidInput("bitmap exceeds 256 bytes (2048 feeds)"));
-        }
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
             Some(reg) => {
@@ -1525,7 +1631,10 @@ impl<K: IpKey> Writer<K> {
         self.scope_dirty = true;
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
+            Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes) {
+                Some(id) => Ok(id),
+                None => Err(Error::InvalidInput("unknown scope_id")),
+            },
             None => Err(Error::State("requires scope_mode == 2")),
         }
     }
@@ -1534,7 +1643,10 @@ impl<K: IpKey> Writer<K> {
         self.scope_dirty = true;
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
+            Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes) {
+                Some(id) => Ok(id),
+                None => Err(Error::InvalidInput("unknown scope_id")),
+            },
             None => Err(Error::State("requires scope_mode == 2")),
         }
     }
@@ -1552,7 +1664,10 @@ impl<K: IpKey> Writer<K> {
                 Ok(scope_id | (1u32 << feed_bit))
             }
             spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
-                Some(reg) => Ok(reg.bitmap_set_feed(scope_id, feed_bit, bytes)),
+                Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes) {
+                    Some(id) => Ok(id),
+                    None => Err(Error::InvalidInput("unknown scope_id")),
+                },
                 None => Err(Error::State("requires scope_mode == 2")),
             },
             _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
@@ -1572,7 +1687,10 @@ impl<K: IpKey> Writer<K> {
                 Ok(scope_id & !(1u32 << feed_bit))
             }
             spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
-                Some(reg) => Ok(reg.bitmap_clear_feed(scope_id, feed_bit, bytes)),
+                Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes) {
+                    Some(id) => Ok(id),
+                    None => Err(Error::InvalidInput("unknown scope_id")),
+                },
                 None => Err(Error::State("requires scope_mode == 2")),
             },
             _ => Err(Error::State("feed operations require scope_mode 1 or 2")),
@@ -1621,17 +1739,24 @@ impl<K: IpKey> Writer<K> {
         for (of, ot, _) in &overlaps {
             self.delete(*of, *ot)?;
         }
-        let mut cursor = from;
+        // cursor = the next unscribed key. None once it advances past the family
+        // maximum (a checked_inc overflow) so the trailing-gap insert is skipped
+        // instead of duplicating the tail at [family_max..family_max].
+        let mut cursor: Option<K> = Some(from);
         for (of, ot, os) in &overlaps {
-            if *of > cursor && cursor <= to {
+            let c = match cursor {
+                Some(c) => c,
+                None => break,
+            };
+            if *of > c && c <= to {
                 let gap_to = if *of <= to {
                     of.checked_dec().unwrap_or(*of)
                 } else {
                     to
                 };
-                if gap_to >= cursor {
+                if gap_to >= c {
                     let ns = self.fresh_feed_scope(feed_bit)?;
-                    self.cow_insert(cursor, gap_to, ns)?;
+                    self.cow_insert(c, gap_to, ns)?;
                     self.pending_record_count += 1;
                 }
             }
@@ -1650,12 +1775,14 @@ impl<K: IpKey> Writer<K> {
                 self.cow_insert(trim_start, *ot, *os)?;
                 self.pending_record_count += 1;
             }
-            cursor = ot.checked_inc().unwrap_or(*ot);
+            cursor = ot.checked_inc();
         }
-        if cursor <= to {
-            let ns = self.fresh_feed_scope(feed_bit)?;
-            self.cow_insert(cursor, to, ns)?;
-            self.pending_record_count += 1;
+        if let Some(c) = cursor {
+            if c <= to {
+                let ns = self.fresh_feed_scope(feed_bit)?;
+                self.cow_insert(c, to, ns)?;
+                self.pending_record_count += 1;
+            }
         }
         Ok(())
     }

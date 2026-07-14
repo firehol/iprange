@@ -132,7 +132,59 @@ impl<'a> Reader<'a> {
         }
         self.validate_tree()?;
         self.validate_scope_table()?;
+        // In indirect mode every data record's scope_id MUST resolve to a
+        // defined scope in the scope table (defense against a corrupt or
+        // hostile file that points a record at an undefined scope).
+        if self.meta.scope_mode == spec::SCOPE_MODE_INDIRECT
+            && self.meta.scope_table_root != 0
+            && self.meta.root_pgno != 0
+        {
+            self.validate_record_scopes()?;
+        }
         Ok(())
+    }
+
+    /// Walk the data tree and verify every record's `scope_id` resolves to a
+    /// defined entry in the scope table (indirect mode only). `scope_id == 0`
+    /// (FILE_SCOPE_ID) is allowed as the dataset-metadata target.
+    pub(crate) fn validate_record_scopes(&self) -> Result<()> {
+        match self.version {
+            IpVersion::V4 => self.validate_record_scopes_node::<Ipv4Key>(self.meta.root_pgno, 1),
+            IpVersion::V6 => self.validate_record_scopes_node::<Ipv6Key>(self.meta.root_pgno, 1),
+        }
+    }
+
+    fn validate_record_scopes_node<K: IpKey>(&self, pgno: u32, depth: u32) -> Result<()> {
+        if depth > self.meta.tree_height {
+            return Err(Error::Invariant("path deeper than tree_height"));
+        }
+        let page = self.page_bytes(pgno);
+        let raw = PageHeader::decode(page).entry_count as usize;
+        if depth == self.meta.tree_height {
+            let leaf = LeafView::<K>::new(page, raw.min(self.leaf_max));
+            for i in 0..leaf.len() {
+                let scope_id = leaf.record(i).scope_id();
+                if scope_id == spec::FILE_SCOPE_ID {
+                    continue;
+                }
+                let resolves = crate::scope_table::scope_id_exists(
+                    self.bytes,
+                    self.meta.scope_table_root,
+                    scope_id,
+                )
+                .unwrap_or(false);
+                if !resolves {
+                    return Err(Error::Invariant("record references an undefined scope"));
+                }
+            }
+            Ok(())
+        } else {
+            let branch = BranchView::<K>::new(page, raw.min(self.branch_max));
+            for j in 0..branch.child_count() {
+                self.validate_record_scopes_node::<K>(branch.child(j), depth + 1)?;
+            }
+            Ok(())
+        }
     }
 
     /// Validate the v4.1 scope table: walk every scope page verifying per-page
@@ -144,10 +196,11 @@ impl<'a> Reader<'a> {
         if root == 0 {
             return Ok(());
         }
-        self.validate_scope_node(root, 0)
+        let mut prev_max: Option<u32> = None;
+        self.validate_scope_node(root, 0, &mut prev_max)
     }
 
-    fn validate_scope_node(&self, pgno: u32, depth: u32) -> Result<()> {
+    fn validate_scope_node(&self, pgno: u32, depth: u32, prev_max: &mut Option<u32>) -> Result<()> {
         if depth > spec::TREE_HEIGHT_MAX {
             return Err(Error::Structural("scope table too deep"));
         }
@@ -174,18 +227,29 @@ impl<'a> Reader<'a> {
                 if count < 1 || count > max_entries {
                     return Err(Error::Invariant("scope leaf entry_count out of range"));
                 }
-                let mut have_prev = false;
-                let mut prev_id = 0u32;
                 for i in 0..count {
                     let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
                     let id = crate::wire::u32_le(page, rec_off);
-                    if have_prev && id <= prev_id {
-                        return Err(Error::Invariant(
-                            "scope_ids not strictly increasing in leaf",
-                        ));
+                    let bitmap_len = crate::wire::u16_le(page, rec_off + 4);
+                    // An inline bitmap_len beyond the on-disk slot would read
+                    // past the entry's payload. The overflow sentinel is the
+                    // one legitimate value > MAX_BITMAP_WIDTH.
+                    if bitmap_len != crate::scope_table::SCOPE_BITMAP_OVERFLOW
+                        && (bitmap_len as usize) > crate::scope_table::MAX_BITMAP_WIDTH
+                    {
+                        return Err(Error::Invariant("scope bitmap_len exceeds payload"));
                     }
-                    prev_id = id;
-                    have_prev = true;
+                    // Strictly increasing within the leaf AND across leaves
+                    // (prev_max threads the largest id seen so far).
+                    match *prev_max {
+                        Some(pm) if id <= pm => {
+                            return Err(Error::Invariant(
+                                "scope_ids not strictly increasing across leaves",
+                            ));
+                        }
+                        _ => {}
+                    }
+                    *prev_max = Some(id);
                 }
                 Ok(())
             }
@@ -226,7 +290,8 @@ impl<'a> Reader<'a> {
                         return Err(Error::Structural("scope child pgno out of range"));
                     }
                 }
-                // Recurse into each child.
+                // Recurse into each child, threading prev_max for cross-leaf
+                // scope_id ordering.
                 for j in 0..cc {
                     let child_off = if j == 0 {
                         spec::PAGE_HEADER_SIZE
@@ -234,7 +299,7 @@ impl<'a> Reader<'a> {
                         spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (sep_width + 4) + sep_width
                     };
                     let cj = crate::wire::u32_le(page, child_off);
-                    self.validate_scope_node(cj, depth + 1)?;
+                    self.validate_scope_node(cj, depth + 1, prev_max)?;
                 }
                 Ok(())
             }
@@ -433,12 +498,15 @@ impl<'a> Reader<'a> {
         let mut depth = 1u32;
         loop {
             let page = self.page_bytes(pgno);
-            let count = PageHeader::decode(page).entry_count as usize;
+            // Clamp entry_count to the page capacity: a corrupt (but CRC-valid)
+            // entry_count must not drive a slice out of bounds and panic. The
+            // trusted path never exceeds capacity; validate() rejects the rest.
+            let raw = PageHeader::decode(page).entry_count as usize;
             if depth == height {
-                let leaf = LeafView::<K>::new(page, count);
+                let leaf = LeafView::<K>::new(page, raw.min(self.leaf_max));
                 return leaf_lookup(&leaf, ip);
             }
-            let branch = BranchView::<K>::new(page, count);
+            let branch = BranchView::<K>::new(page, raw.min(self.branch_max));
             pgno = branch.child(branch_descend(&branch, ip));
             depth += 1;
         }
@@ -446,15 +514,17 @@ impl<'a> Reader<'a> {
 
     fn scan_node<K: IpKey, F: FnMut(K, K, u32)>(&self, pgno: u32, depth: u32, f: &mut F) {
         let page = self.page_bytes(pgno);
-        let count = PageHeader::decode(page).entry_count as usize;
+        // Clamp entry_count to the page capacity (defense against a corrupt
+        // but CRC-valid entry_count that would slice out of bounds and panic).
+        let raw = PageHeader::decode(page).entry_count as usize;
         if depth == self.meta.tree_height {
-            let leaf = LeafView::<K>::new(page, count);
+            let leaf = LeafView::<K>::new(page, raw.min(self.leaf_max));
             for i in 0..leaf.len() {
                 let r = leaf.record(i);
                 f(r.from(), r.to(), r.scope_id());
             }
         } else {
-            let branch = BranchView::<K>::new(page, count);
+            let branch = BranchView::<K>::new(page, raw.min(self.branch_max));
             for j in 0..branch.child_count() {
                 self.scan_node::<K, F>(branch.child(j), depth + 1, f);
             }

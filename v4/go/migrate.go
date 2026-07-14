@@ -77,6 +77,38 @@ type DesiredStream[K ipKey[K]] interface {
 // private page), so reading from the live store would also be safe. The
 // snapshot is retained as a defensive measure.
 func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
+	// A migration that fails after applying some changes leaves the writer in a
+	// partially-applied state. Poison it so the caller cannot commit a half-
+	// migrated transaction (the caller MUST treat a migrate error as fatal and
+	// discard the writer).
+	counters, err := migrateInner[K](w, desired, opts)
+	if err != nil {
+		w.Poison()
+		return nil, err
+	}
+	return counters, nil
+}
+
+// advanceDesired consumes the current desired record and reads the next,
+// validating that the stream stays sorted ascending and pairwise disjoint with
+// from <= to. Returns the next record (or nil at EOF).
+func advanceDesired[K ipKey[K]](desired DesiredStream[K], prevTo *K, prevOk *bool) (*DesiredRecord[K], error) {
+	desired.Next()
+	rec := desired.Peek()
+	if rec != nil {
+		if rec.From.cmp(rec.To) > 0 {
+			return nil, fmt.Errorf("desired record has from > to")
+		}
+		if *prevOk && rec.From.cmp(*prevTo) <= 0 {
+			return nil, fmt.Errorf("desired stream must be sorted and disjoint")
+		}
+		*prevTo = rec.To
+		*prevOk = true
+	}
+	return rec, nil
+}
+
+func migrateInner[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOptions[K]) (*MigrateCounters, error) {
 	if opts == nil {
 		opts = &MigrateOptions[K]{}
 	}
@@ -99,6 +131,17 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 	oldFrom, oldTo, oldScope, hasOld := walker.peek()
 	desRec := desired.Peek()
 	hasDes := desRec != nil
+	// Validate the desired stream as it is consumed: from <= to, and successive
+	// records sorted ascending and pairwise disjoint.
+	var prevDesTo K
+	prevDesOk := false
+	if hasDes {
+		if desRec.From.cmp(desRec.To) > 0 {
+			return nil, fmt.Errorf("desired record has from > to")
+		}
+		prevDesTo = desRec.To
+		prevDesOk = true
+	}
 
 	// Trimmed starts (for partial overlap handling).
 	var oldTrim K
@@ -166,8 +209,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 			}
 			counters.Added++
 			counters.DesiredScanned++
-			desired.Next()
-			desRec = desired.Peek()
+			{
+				nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+				if dErr != nil {
+					return nil, dErr
+				}
+				desRec = nr
+			}
 			hasDes = desRec != nil
 			if hasDes {
 				desTrim = desRec.From
@@ -205,8 +253,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 			}
 			counters.Added++
 			counters.DesiredScanned++
-			desired.Next()
-			desRec = desired.Peek()
+			{
+				nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+				if dErr != nil {
+					return nil, dErr
+				}
+				desRec = nr
+			}
 			hasDes = desRec != nil
 			if hasDes {
 				desTrim = desRec.From
@@ -282,8 +335,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 			} else {
 				oldTrimOk = false
 			}
-			desired.Next()
-			desRec = desired.Peek()
+			{
+				nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+				if dErr != nil {
+					return nil, dErr
+				}
+				desRec = nr
+			}
 			hasDes = desRec != nil
 			if hasDes {
 				desTrim = desRec.From
@@ -324,8 +382,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 			trimNext, ok := oEffTo.checkedInc()
 			if !ok {
 				// Desired fully consumed.
-				desired.Next()
-				desRec = desired.Peek()
+				{
+					nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+					if dErr != nil {
+						return nil, dErr
+					}
+					desRec = nr
+				}
 				hasDes = desRec != nil
 				if hasDes {
 					desTrim = desRec.From
@@ -338,8 +401,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 				desTrimOk = true
 				if desTrim.cmp(dEffTo) > 0 {
 					// Trimmed past desired end → advance.
-					desired.Next()
-					desRec = desired.Peek()
+					{
+						nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+						if dErr != nil {
+							return nil, dErr
+						}
+						desRec = nr
+					}
 					hasDes = desRec != nil
 					if hasDes {
 						desTrim = desRec.From
@@ -371,8 +439,13 @@ func Migrate[K ipKey[K]](w *Writer[K], desired DesiredStream[K], opts *MigrateOp
 			}
 			counters.DesiredScanned++
 			// Advance desired, trim old's start.
-			desired.Next()
-			desRec = desired.Peek()
+			{
+				nr, dErr := advanceDesired[K](desired, &prevDesTo, &prevDesOk)
+				if dErr != nil {
+					return nil, dErr
+				}
+				desRec = nr
+			}
 			hasDes = desRec != nil
 			if hasDes {
 				desTrim = desRec.From

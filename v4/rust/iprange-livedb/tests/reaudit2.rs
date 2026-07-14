@@ -231,30 +231,47 @@ fn reaudit2_c3_writer_open_rejects_corrupt_meta() {
     );
 }
 
-// ── C4: scope_intern must reject a bitmap wider than MAX_BITMAP_WIDTH (256) ───
+// ── C4: scope_intern must round-trip a bitmap wider than MAX_BITMAP_WIDTH ────
 //
-// The scope-table leaf entry is a fixed-size record (SCOPE_ENTRY_SIZE = 4 + 2 +
-// 256 = 262 bytes); `encode_entry` silently truncates the bitmap at
-// MAX_BITMAP_WIDTH. Interning a 257-byte bitmap therefore loses the trailing
-// byte on disk — a silent data-corruption bug. `scope_intern` must reject it up
-// front.
+// Scope bitmaps wider than MAX_BITMAP_WIDTH (256 bytes / 2048 feeds) spill to a
+// chain of OVERFLOW pages instead of being silently truncated by the fixed-size
+// inline entry. Interning a 257-byte bitmap therefore MUST preserve every byte
+// on disk — the original C4 "silent truncation" bug is fixed by overflow.
 #[test]
-fn reaudit2_c4_scope_intern_rejects_oversized_bitmap() {
+fn reaudit2_c4_scope_intern_round_trips_oversized_bitmap() {
     let mut w = Writer::<Ipv4Key>::create(2, 0).unwrap(); // scope_mode = indirect
-    let oversized = vec![0u8; 257];
-    let result = w.scope_intern(&oversized);
-    assert!(
-        result.is_err(),
-        "scope_intern accepted a 257-byte bitmap (MAX_BITMAP_WIDTH is 256) — silent truncation on encode"
-    );
-
-    // A 256-byte bitmap is the maximum legal width and must be accepted.
+                                                          // A 256-byte bitmap is the maximum inline width and must be accepted.
     let legal = vec![0u8; 256];
     let id = w.scope_intern(&legal);
     assert!(
         id.is_ok(),
-        "256-byte bitmap (the cap) should be accepted: {:?}",
+        "256-byte bitmap (the inline cap) should be accepted: {:?}",
         id
+    );
+
+    // A 257-byte bitmap spills to overflow and must round-trip without losing
+    // the trailing byte.
+    let mut oversized = vec![0u8; 257];
+    oversized[256] = 0b1000_0001; // mark the byte that the old truncation dropped
+    let over_id = w
+        .scope_intern(&oversized)
+        .expect("scope_intern must accept a 257-byte bitmap (stored via overflow, no truncation)");
+    w.set(Ipv4Key(1), Ipv4Key(1), over_id).unwrap();
+    w.commit(1, u64::MAX).unwrap();
+    let image = w.into_image().unwrap();
+    let reader = iprange_livedb::Reader::open(&image).unwrap();
+    let stored_id = reader.lookup_v4(Ipv4Key(1)).unwrap().unwrap();
+    let bitmap = reader.scope_resolve(stored_id).unwrap();
+    assert_eq!(
+        bitmap.len(),
+        257,
+        "257-byte bitmap was truncated to {} bytes",
+        bitmap.len()
+    );
+    assert_eq!(
+        &bitmap[255..257],
+        &oversized[255..257],
+        "overflow bitmap bytes were not preserved"
     );
 }
 

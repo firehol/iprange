@@ -19,6 +19,32 @@ use crate::spec::{self, PAGE_SIZE};
 use crate::wire::{read_magic, read_version_major, Meta};
 use crate::writer::{Changed, Writer};
 
+/// Validate the pinned meta's geometry against the actual file size. This
+/// catches a checksum-valid but structurally impossible meta (invalid
+/// scope_mode, root/height mismatch, root beyond total_pages, or total_pages
+/// exceeding the file) BEFORE any store is constructed or the file is touched.
+fn validate_meta_geometry(meta: &Meta, file_len: usize) -> Result<()> {
+    if meta.scope_mode > spec::SCOPE_MODE_INDIRECT {
+        return Err(Error::Structural("invalid scope_mode"));
+    }
+    if meta.total_pages < 2 {
+        return Err(Error::Structural("total_pages out of range"));
+    }
+    if (meta.total_pages as usize) > file_len / PAGE_SIZE {
+        return Err(Error::Structural("total_pages exceeds file size"));
+    }
+    if meta.tree_height > spec::TREE_HEIGHT_MAX {
+        return Err(Error::Structural("tree_height > 32"));
+    }
+    if (meta.tree_height == 0) != (meta.root_pgno == 0) {
+        return Err(Error::Structural("tree_height/root_pgno inconsistent"));
+    }
+    if meta.root_pgno != 0 && (meta.root_pgno < 2 || meta.root_pgno as u64 >= meta.total_pages) {
+        return Err(Error::Structural("root_pgno out of range"));
+    }
+    Ok(())
+}
+
 /// A read-only mmap of a v4 file. Registers in the reader table on open.
 /// Pins the meta at open time for MVCC — subsequent reader() calls always
 /// see the transaction snapshot from open time, not the writer's latest commit.
@@ -89,6 +115,11 @@ impl MmapReader {
             return Err(Error::Structural("committed region is sparse (hole)"));
         }
 
+        // Validate pinned metadata: a checksum-valid meta can still hold an
+        // impossible scope_mode or root/height geometry. Reject it before
+        // handing the snapshot to callers.
+        validate_meta_geometry(&pinned_meta, len)?;
+
         // Update the reader slot with the real txn_id now that we've pinned.
         table.update_txn_id(guard.slot, guard.pid, guard.reader_id, pinned_meta.txn_id);
 
@@ -120,6 +151,12 @@ pub struct FileWriter<K: IpKey> {
 impl<K: IpKey> FileWriter<K> {
     pub fn create(path: &Path, scope_mode: u8, created_unixtime: u64) -> Result<FileWriter<K>> {
         use std::io::Write;
+        // Validate the scope_mode BEFORE touching the file: create() truncates
+        // an existing file, so an invalid mode must be rejected without
+        // destroying the caller's data.
+        if scope_mode > spec::SCOPE_MODE_INDIRECT {
+            return Err(Error::InvalidInput("invalid scope_mode"));
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -175,21 +212,28 @@ impl<K: IpKey> FileWriter<K> {
         // If neither verifies, the file is corrupt.
         let crc_a_ok = crate::crc32c::verify_page(&buf[..PAGE_SIZE]);
         let crc_b_ok = crate::crc32c::verify_page(&buf[PAGE_SIZE..2 * PAGE_SIZE]);
-        let committed_pages = match (crc_a_ok, crc_b_ok) {
+        let active = match (crc_a_ok, crc_b_ok) {
             (true, true) => {
                 if meta_a.txn_id >= meta_b.txn_id {
-                    meta_a.total_pages as u32
+                    meta_a
                 } else {
-                    meta_b.total_pages as u32
+                    meta_b
                 }
             }
-            (true, false) => meta_a.total_pages as u32,
-            (false, true) => meta_b.total_pages as u32,
+            (true, false) => meta_a,
+            (false, true) => meta_b,
             (false, false) => {
                 let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
                 return Err(Error::Structural("both meta pages fail CRC — corrupt file"));
             }
         };
+        // Validate geometry against the ACTUAL file size before constructing the
+        // store: MmapStore::open extends the file, and Writer::open does not
+        // re-check root/height against total_pages, so an impossible meta (e.g.
+        // total_pages=2 with a live root far beyond it) must be rejected here
+        // without modifying the file.
+        validate_meta_geometry(&active, len)?;
+        let committed_pages = active.total_pages as u32;
 
         let store = MmapStore::open(file.try_clone().map_err(Error::Io)?, committed_pages)?;
         let mut writer = Writer::<K>::open(Box::new(store))?;

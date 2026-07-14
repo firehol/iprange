@@ -221,10 +221,23 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		}
 		w.scopeRegistry = OpenScopeRegistry(active.scopeTableRoot, nextID)
 	}
+	// In indirect mode every data record's scope_id MUST resolve to a defined
+	// scope. ValidateScopeCRC (above) guards the scope tree; this guards the
+	// data tree's references into it.
+	if active.scopeMode == ScopeModeIndirect && active.scopeTableRoot != 0 && active.rootPgno != 0 {
+		if r, err := Open(w.store.committedBytes()); err != nil {
+			return nil, err
+		} else if err := r.validateRecordScopes(active.rootPgno, 1); err != nil {
+			return nil, err
+		}
+	}
 	// Strict CRC validation of the persistent free-list chain. At open time
 	// chain pages are intact from the previous commit; a CRC failure here means
 	// genuine corruption (not the commit-time dangling-head case).
 	if err := ValidateChainCRC(w.store, w.freeListHead); err != nil {
+		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
+	}
+	if err := validateFreeEntries(w.store, w.freeListHead, active.rootPgno, active.scopeTableRoot); err != nil {
 		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
 	}
 	if err := w.LoadFreeList(^uint64(0)); err != nil {
@@ -249,10 +262,15 @@ func (w *Writer[K]) Set(from, to K, scopeID uint32) error {
 	if from.cmp(to) > 0 {
 		return fmt.Errorf("from > to")
 	}
+	if err := w.validateRecordScope(scopeID); err != nil {
+		return err
+	}
 	if err := w.deleteRange(from, to); err != nil {
+		w.poisoned = true
 		return err
 	}
 	if err := w.cowInsert(from, to, scopeID); err != nil {
+		w.poisoned = true
 		return err
 	}
 	w.pendingRecordCount++
@@ -268,6 +286,7 @@ func (w *Writer[K]) Delete(from, to K) (Changed, error) {
 	}
 	before := w.pendingRecordCount
 	if err := w.deleteRange(from, to); err != nil {
+		w.poisoned = true
 		return Unchanged, err
 	}
 	if w.pendingRecordCount < before {
@@ -283,11 +302,46 @@ func (w *Writer[K]) Append(from, to K, scopeID uint32) error {
 	if from.cmp(to) > 0 {
 		return fmt.Errorf("from > to")
 	}
+	if err := w.validateRecordScope(scopeID); err != nil {
+		return err
+	}
 	if err := w.cowInsert(from, to, scopeID); err != nil {
+		w.poisoned = true
 		return err
 	}
 	w.pendingRecordCount++
 	return nil
+}
+
+// validateRecordScope ensures that, in indirect mode, scopeID references a
+// defined scope (interned this txn or present in the committed scope tree).
+func (w *Writer[K]) validateRecordScope(scopeID uint32) error {
+	if w.scopeMode != ScopeModeIndirect || scopeID == FileScopeID {
+		return nil
+	}
+	if w.scopeRegistry == nil {
+		return fmt.Errorf("indirect mode without scope registry")
+	}
+	if w.scopeRegistry.Resolve(scopeID, w.store.committedBytes()) == nil {
+		return fmt.Errorf("unknown scope_id")
+	}
+	return nil
+}
+
+// flushOrPoison flushes pending writes, poisoning the writer on failure so no
+// further mutation can publish a half-flushed transaction.
+func (w *Writer[K]) flushOrPoison() error {
+	if err := w.store.sync(); err != nil {
+		w.poisoned = true
+		return err
+	}
+	return nil
+}
+
+// Poison marks the writer poisoned. Used by multi-step operations (migration)
+// that detect an inconsistency after some mutations succeeded.
+func (w *Writer[K]) Poison() {
+	w.poisoned = true
 }
 
 // Commit commits the pending transaction.
@@ -400,11 +454,16 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		total := w.store.totalPages()
 		inactive := 1 - w.activeMeta
 		newTxnID := w.committedTxnID + 1
-		if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
-			w.pendingHeight, w.pendingRecordCount, total, updatedUnix); err != nil {
+		// Flush data BEFORE publishing metadata, then flush metadata.
+		if err := w.flushOrPoison(); err != nil {
 			return err
 		}
-		if err := w.store.sync(); err != nil {
+		if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
+			w.pendingHeight, w.pendingRecordCount, total, updatedUnix); err != nil {
+			w.poisoned = true
+			return err
+		}
+		if err := w.flushOrPoison(); err != nil {
 			return err
 		}
 		w.activeMeta = inactive
@@ -649,11 +708,16 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 
 	inactive := 1 - w.activeMeta
 	newTxnID := w.committedTxnID + 1
-	if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
-		w.pendingHeight, w.pendingRecordCount, total, updatedUnix); err != nil {
+	// Flush data + chain pages BEFORE publishing metadata, then flush metadata.
+	if err := w.flushOrPoison(); err != nil {
 		return err
 	}
-	if err := w.store.sync(); err != nil {
+	if err := w.writeMetaPage(inactive, newTxnID, w.pendingRoot,
+		w.pendingHeight, w.pendingRecordCount, total, updatedUnix); err != nil {
+		w.poisoned = true
+		return err
+	}
+	if err := w.flushOrPoison(); err != nil {
 		return err
 	}
 	w.activeMeta = inactive
@@ -840,6 +904,26 @@ func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]ui
 		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
 		for j := 0; j < bv.childCount(); j++ {
 			w.collectScopePageNumbers(bv.child(j), depth+1, out)
+		}
+	} else if h.pageType == PageTypeScopeLeaf {
+		// Follow overflow chains for spilled bitmaps; those pages are private
+		// and must be freed/reused on the next rebuild.
+		count := int(h.entryCount)
+		for i := 0; i < count; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			if u16le(page, recOff+4) == ScopeBitmapOverflow {
+				opgno := u32le(page, recOff+10)
+				guard := uint32(0)
+				for opgno != 0 && guard <= TreeHeightMax {
+					guard++
+					if uint64(opgno) >= uint64(w.store.totalPages()) {
+						break
+					}
+					*out = append(*out, opgno)
+					opage := w.store.page(opgno)
+					opgno = u32le(opage, PageHeaderSize)
+				}
+			}
 		}
 	}
 }
@@ -1657,9 +1741,6 @@ func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
 	}
-	if len(bitmap) > MaxBitmapWidth {
-		return 0, fmt.Errorf("bitmap exceeds %d bytes (2048 feeds)", MaxBitmapWidth)
-	}
 	id, wasNew := w.scopeRegistry.Intern(bitmap, w.store.committedBytes())
 	if wasNew {
 		w.scopeDirty = true
@@ -1715,7 +1796,11 @@ func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, 
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes()), nil
+	id, ok := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+	if !ok {
+		return 0, fmt.Errorf("unknown scope_id")
+	}
+	return id, nil
 }
 
 func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32, error) {
@@ -1723,7 +1808,11 @@ func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes()), nil
+	id, ok := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+	if !ok {
+		return 0, fmt.Errorf("unknown scope_id")
+	}
+	return id, nil
 }
 
 func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
@@ -1774,9 +1863,13 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 	}
 
 	var cursor K
+	pastEnd := false
 	cursor = from
 
 	for _, o := range overlaps {
+		if pastEnd {
+			break
+		}
 		if o.from.cmp(cursor) > 0 && cursor.cmp(to) <= 0 {
 			var gapTo K
 			if o.from.cmp(to) <= 0 {
@@ -1843,14 +1936,16 @@ func (w *Writer[K]) FeedAddRange(from, to K, feedBit uint32) error {
 			w.pendingRecordCount++
 		}
 
-		next, ok := o.to.checkedInc()
-		if !ok {
-			next = o.to
+		if next, ok := o.to.checkedInc(); ok {
+			cursor = next
+		} else {
+			// o.t is the family maximum: the overlap reaches the end of the key
+			// space, so there is no trailing gap (cursor is past `to`).
+			pastEnd = true
 		}
-		cursor = next
 	}
 
-	if cursor.cmp(to) <= 0 {
+	if !pastEnd && cursor.cmp(to) <= 0 {
 		newScope, err := w.freshFeedScope(feedBit)
 		if err != nil {
 			return err
@@ -2036,7 +2131,11 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		return w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes()), nil
+		id, ok := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+		if !ok {
+			return 0, fmt.Errorf("unknown scope_id")
+		}
+		return id, nil
 	default:
 		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}
@@ -2060,7 +2159,11 @@ func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		return w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes()), nil
+		id, ok := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+		if !ok {
+			return 0, fmt.Errorf("unknown scope_id")
+		}
+		return id, nil
 	default:
 		return 0, fmt.Errorf("feed operations require scope_mode 1 or 2")
 	}

@@ -96,12 +96,20 @@ func ValidateChainCRC(store PageReader, head uint32) error {
 	}
 	pgno := head
 	seenPages := uint32(0)
+	totalPages := store.totalPages()
 	for pgno != 0 {
 		seenPages++
 		if seenPages > 10_000_000 {
 			return fmt.Errorf("free-list chain exceeds 10M pages — corrupt")
 		}
-		if uint64(pgno) >= uint64(store.totalPages()) {
+		// Cycle defense: a valid chain visits only distinct pages, so it can
+		// never be longer than totalPages. A self-referential or cyclic chain
+		// would otherwise loop forever re-reading pages; reject it here before
+		// re-reading any page (keeps the traversal within file bounds).
+		if seenPages > totalPages {
+			return fmt.Errorf("free-list chain cycle detected")
+		}
+		if uint64(pgno) >= uint64(totalPages) {
 			return nil // chain page beyond file — stop (not a CRC failure)
 		}
 		page := store.page(pgno)
@@ -112,6 +120,81 @@ func ValidateChainCRC(store PageReader, head uint32) error {
 			return fmt.Errorf("free-list chain page %d fails CRC", pgno)
 		}
 		pgno = u32le(page, TxnFreeNext)
+	}
+	return nil
+}
+
+// validateFreeEntries validates the CONTENTS of the free-list chain at open
+// time. Two complementary checks:
+//  1. Self-reference (raw, per chain page): a chain page's freed-pgno array
+//     must never contain its OWN page number.
+//  2. Live-metadata (newest-entry-wins): a page whose authoritative state is
+//     "free" must never be a meta page (0/1), the active data root, or the
+//     scope-table root. Stale entries for a reused (tombstoned) or truncated
+//     page are harmless and skipped.
+func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, scopeRoot uint32) error {
+	if head == 0 {
+		return nil
+	}
+	total := store.totalPages()
+	// Pass 1: raw self-reference check + collect entries for newest-wins.
+	type ent struct {
+		pgno uint32
+		ftxn uint64
+	}
+	var entries []ent
+	pgno := head
+	seen := uint32(0)
+	for pgno != 0 {
+		seen++
+		if seen > total {
+			return fmt.Errorf("free-list chain cycle detected")
+		}
+		if uint64(pgno) >= uint64(total) {
+			break
+		}
+		page := store.page(pgno)
+		if decodeHeader(page).pageType != PageTypeTxnFree {
+			break
+		}
+		if !verifyPage(page) {
+			return fmt.Errorf("free-list chain page %d fails CRC", pgno)
+		}
+		freedIn := u64le(page, TxnFreeFreedIn)
+		count := int(u32le(page, TxnFreeCount))
+		if count > TxnFreeCapacity {
+			count = TxnFreeCapacity
+		}
+		for i := 0; i < count; i++ {
+			p := u32le(page, TxnFreeArray+i*4)
+			if p == pgno {
+				return fmt.Errorf("free-list entry self-references chain page")
+			}
+			entries = append(entries, ent{pgno: p, ftxn: freedIn})
+		}
+		pgno = u32le(page, TxnFreeNext)
+	}
+	// Pass 2: newest-entry-wins (entries are newest-first), then reject live
+	// metadata whose authoritative state is "free".
+	latest := make(map[uint32]uint64, len(entries))
+	for _, e := range entries {
+		if _, ok := latest[e.pgno]; !ok {
+			latest[e.pgno] = e.ftxn
+		}
+	}
+	for p, ftxn := range latest {
+		if ftxn == ^uint64(0) {
+			continue // tombstoned (reused)
+		}
+		if uint64(p) >= uint64(total) {
+			continue // truncated; LoadFreeList filters it
+		}
+		if p < 2 {
+			return fmt.Errorf("free-list entry points to meta page")
+		}
+		if p == dataRoot || p == scopeRoot {
+			return fmt.Errorf("free-list entry points to live root")
+		}
 	}
 	return nil
 }

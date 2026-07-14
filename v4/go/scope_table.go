@@ -11,6 +11,99 @@ import (
 const MaxBitmapWidth = 256
 const ScopeEntrySize = 4 + 2 + MaxBitmapWidth // 262
 
+// ScopeBitmapOverflow is the sentinel stored in the inline bitmap_len field when
+// a scope entry's bitmap is too large for the inline slot (more than
+// MaxBitmapWidth bytes). The true bitmap then lives in a chain of
+// PageTypeOverflow pages; the inline record carries the true length and the
+// first overflow page number.
+const ScopeBitmapOverflow uint16 = 0xFFFF
+
+const overflowPayloadOff = PageHeaderSize + 4
+
+// readEntryBitmap reads the bitmap for the entry at recOff within page,
+// following the overflow chain when the inline bitmap_len is the sentinel.
+func readEntryBitmap(bytes, page []byte, recOff int) []byte {
+	bitmapLen := u16le(page, recOff+4)
+	if bitmapLen == ScopeBitmapOverflow {
+		trueLen := int(u32le(page, recOff+6))
+		payloadCap := PageSize - overflowPayloadOff
+		out := make([]byte, 0, trueLen)
+		pgno := u32le(page, recOff+10)
+		guard := uint32(0)
+		for pgno != 0 && len(out) < trueLen {
+			guard++
+			if guard > TreeHeightMax {
+				break
+			}
+			base := int(pgno) * PageSize
+			if base+PageSize > len(bytes) {
+				break
+			}
+			opage := bytes[base : base+PageSize]
+			next := u32le(opage, PageHeaderSize)
+			need := trueLen - len(out)
+			if need > payloadCap {
+				need = payloadCap
+			}
+			out = append(out, opage[overflowPayloadOff:overflowPayloadOff+need]...)
+			pgno = next
+		}
+		return out
+	}
+	n := int(bitmapLen)
+	if n > MaxBitmapWidth {
+		n = MaxBitmapWidth
+	}
+	out := make([]byte, n)
+	copy(out, page[recOff+6:recOff+6+n])
+	return out
+}
+
+// writeOverflowChain writes a bitmap that exceeds the inline slot to a fresh
+// chain of overflow pages and returns the first page number.
+func writeOverflowChain(store pageStore, bitmap []byte, allocated *[]uint32, freePool *[]uint32) (uint32, error) {
+	payloadCap := PageSize - overflowPayloadOff
+	nPages := (len(bitmap) + payloadCap - 1) / payloadCap
+	if nPages == 0 {
+		nPages = 1
+	}
+	pages := make([]uint32, 0, nPages)
+	for i := 0; i < nPages; i++ {
+		var pgno uint32
+		if len(*freePool) > 0 {
+			pgno = (*freePool)[len(*freePool)-1]
+			*freePool = (*freePool)[:len(*freePool)-1]
+		} else {
+			var err error
+			pgno, err = store.allocPage()
+			if err != nil {
+				return 0, err
+			}
+		}
+		*allocated = append(*allocated, pgno)
+		pages = append(pages, pgno)
+	}
+	for i, pgno := range pages {
+		page := store.pageMut(pgno)
+		for j := range page {
+			page[j] = 0
+		}
+		var next uint32
+		if i+1 < len(pages) {
+			next = pages[i+1]
+		}
+		writeHeader(page, PageTypeOverflow, 0, pgno)
+		putU32(page, PageHeaderSize, next)
+		start := i * payloadCap
+		end := start + payloadCap
+		if end > len(bitmap) {
+			end = len(bitmap)
+		}
+		copy(page[overflowPayloadOff:overflowPayloadOff+(end-start)], bitmap[start:end])
+	}
+	return pages[0], nil
+}
+
 // ScopeEntry is an in-memory scope registry entry.
 type ScopeEntry struct {
 	ScopeID uint32
@@ -155,11 +248,22 @@ func (r *ScopeRegistry) ResolveRef(scopeID uint32, committedBytes []byte) []byte
 	return nil
 }
 
-// BitmapSetFeed sets a feed bit. Returns the new scope_id.
-func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedBytes []byte) uint32 {
+// canonicalize drops trailing zero bytes from a scope bitmap so two bitmaps
+// with the same set of feeds map to the same scope_id.
+func canonicalize(bitmap []byte) []byte {
+	end := len(bitmap)
+	for end > 0 && bitmap[end-1] == 0 {
+		end--
+	}
+	return bitmap[:end]
+}
+
+// BitmapSetFeed sets a feed bit. Returns the new scope_id and false if the
+// input scope_id does not resolve to a known scope.
+func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool) {
 	bm := r.Resolve(scopeID, committedBytes)
 	if bm == nil {
-		return 0
+		return 0, false
 	}
 	newBm := append([]byte(nil), bm...)
 	byteIdx := int(feedBit / 8)
@@ -171,14 +275,17 @@ func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedB
 	}
 	newBm[byteIdx] |= 1 << bitIdx
 	id, _ := r.Intern(newBm, committedBytes)
-	return id
+	return id, true
 }
 
-// BitmapClearFeed clears a feed bit. Returns the new scope_id (0 if empty).
-func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committedBytes []byte) uint32 {
+// BitmapClearFeed clears a feed bit. Returns the new scope_id (0 if empty) and
+// false if the input scope_id does not resolve to a known scope. Trailing zero
+// bytes are trimmed so clearing the highest set bit returns to the canonical
+// (original) scope.
+func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool) {
 	bm := r.Resolve(scopeID, committedBytes)
 	if bm == nil {
-		return 0
+		return 0, false
 	}
 	newBm := append([]byte(nil), bm...)
 	byteIdx := int(feedBit / 8)
@@ -186,18 +293,19 @@ func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committe
 	if byteIdx < len(newBm) {
 		newBm[byteIdx] &= ^(1 << bitIdx)
 	}
+	trimmed := canonicalize(newBm)
 	allZero := true
-	for _, b := range newBm {
+	for _, b := range trimmed {
 		if b != 0 {
 			allZero = false
 			break
 		}
 	}
 	if allZero {
-		return 0
+		return 0, true
 	}
-	id, _ := r.Intern(newBm, committedBytes)
-	return id
+	id, _ := r.Intern(trimmed, committedBytes)
+	return id, true
 }
 
 // EntriesForCommit returns the full entry list (committed ∪ new) for the
@@ -259,27 +367,38 @@ func bytesEqual(a, b []byte) bool {
 
 // Encode/decode scope entries for the on-disk format.
 
+// encodeScopeEntry encodes an inline scope entry. Only valid for bitmaps that
+// fit inline (len <= MaxBitmapWidth); larger bitmaps are spilled by
+// writeOverflowChain at build time.
 func encodeScopeEntry(out []byte, entry *ScopeEntry) {
 	for i := range out {
 		out[i] = 0
 	}
 	putU32(out, 0, entry.ScopeID)
-	putU16(out, 4, uint16(len(entry.Bitmap)))
 	n := len(entry.Bitmap)
 	if n > MaxBitmapWidth {
 		n = MaxBitmapWidth
 	}
+	putU16(out, 4, uint16(n))
 	copy(out[6:6+n], entry.Bitmap[:n])
 }
 
+// decodeScopeEntry decodes an inline scope entry. Overflow entries (sentinel
+// bitmap_len) cannot be decoded from the bare record — use readEntryBitmap.
 func decodeScopeEntry(rec []byte) ScopeEntry {
 	scopeID := u32le(rec, 0)
-	bitmapLen := int(u16le(rec, 4))
-	if bitmapLen > MaxBitmapWidth {
-		bitmapLen = MaxBitmapWidth
+	bitmapLen := u16le(rec, 4)
+	var bitmap []byte
+	if bitmapLen == ScopeBitmapOverflow {
+		bitmap = []byte{}
+	} else {
+		n := int(bitmapLen)
+		if n > MaxBitmapWidth {
+			n = MaxBitmapWidth
+		}
+		bitmap = make([]byte, n)
+		copy(bitmap, rec[6:6+n])
 	}
-	bitmap := make([]byte, bitmapLen)
-	copy(bitmap, rec[6:6+bitmapLen])
 	return ScopeEntry{ScopeID: scopeID, Bitmap: bitmap}
 }
 
@@ -299,7 +418,6 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32, 
 
 	leafMax := (PageSize - PageHeaderSize) / ScopeEntrySize
 	var leafPgnos []uint32
-	var seps []uint32
 
 	for i := 0; i < len(sorted); i += leafMax {
 		end := i + leafMax
@@ -319,6 +437,23 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32, 
 			}
 		}
 		*allocated = append(*allocated, pgno)
+		// Spill any oversized bitmaps to overflow chains BEFORE fetching the
+		// leaf page: allocating overflow pages may grow the store and invalidate
+		// a page slice fetched now.
+		type ov struct {
+			idx   int
+			first uint32
+		}
+		var overflows []ov
+		for j, entry := range chunk {
+			if len(entry.Bitmap) > MaxBitmapWidth {
+				first, err := writeOverflowChain(store, entry.Bitmap, allocated, freePool)
+				if err != nil {
+					return 0, err
+				}
+				overflows = append(overflows, ov{idx: j, first: first})
+			}
+		}
 		page := store.pageMut(pgno)
 		for j := range page {
 			page[j] = 0
@@ -326,122 +461,88 @@ func buildScopeTree(store pageStore, entries []ScopeEntry, allocated *[]uint32, 
 		writeHeader(page, PageTypeScopeLeaf, uint16(len(chunk)), pgno)
 		for j, entry := range chunk {
 			off := PageHeaderSize + j*ScopeEntrySize
-			encodeScopeEntry(page[off:off+ScopeEntrySize], entry)
+			rec := page[off : off+ScopeEntrySize]
+			if len(entry.Bitmap) > MaxBitmapWidth {
+				for k := range rec {
+					rec[k] = 0
+				}
+				putU32(rec, 0, entry.ScopeID)
+				putU16(rec, 4, ScopeBitmapOverflow)
+				putU32(rec, 6, uint32(len(entry.Bitmap)))
+				first := uint32(0)
+				for _, ov := range overflows {
+					if ov.idx == j {
+						first = ov.first
+						break
+					}
+				}
+				putU32(rec, 10, first)
+			} else {
+				encodeScopeEntry(rec, entry)
+			}
 		}
 		leafPgnos = append(leafPgnos, pgno)
-	}
-	for i := 1; i < len(leafPgnos); i++ {
-		page := store.page(leafPgnos[i])
-		seps = append(seps, u32le(page, PageHeaderSize))
 	}
 
 	if len(leafPgnos) == 1 {
 		return leafPgnos[0], nil
 	}
 
+	// Build branch levels bottom-up. Each level is a list of (pgno, minScopeID)
+	// pairs. The separator between two sibling subtrees is the MIN scope_id of
+	// the right subtree (carried up from the level below). A branch's min for
+	// the parent level is the min of its whole subtree = its first child's min.
 	sepWidth := ScopeKeyWidth // 4
 	branchMax := (PageSize - PageHeaderSize - 4) / (sepWidth + 4)
 
-	var branchPgnos []uint32
-	childIdx := 0
-	for childIdx < len(leafPgnos) {
-		remaining := len(leafPgnos) - childIdx
-		count := remaining
-		if count > branchMax {
-			count = branchMax
-		}
-		var pgno uint32
-		if len(*freePool) > 0 {
-			pgno = (*freePool)[len(*freePool)-1]
-			*freePool = (*freePool)[:len(*freePool)-1]
-		} else {
-			var err error
-			pgno, err = store.allocPage()
-			if err != nil {
-				return 0, err
+	type subtree struct {
+		pgno uint32
+		min  uint32
+	}
+	level := make([]subtree, len(leafPgnos))
+	for i, pgno := range leafPgnos {
+		page := store.page(pgno)
+		level[i] = subtree{pgno: pgno, min: u32le(page, PageHeaderSize)}
+	}
+
+	for len(level) > 1 {
+		var next []subtree
+		childIdx := 0
+		for childIdx < len(level) {
+			remaining := len(level) - childIdx
+			count := remaining
+			if count > branchMax {
+				count = branchMax
 			}
-		}
-		*allocated = append(*allocated, pgno)
-		page := store.pageMut(pgno)
-		for j := range page {
-			page[j] = 0
-		}
-		putU32(page, PageHeaderSize, leafPgnos[childIdx])
-		sepIdx := childIdx
-		for i := 0; i < count-1; i++ {
-			off := PageHeaderSize + 4 + i*(sepWidth+4)
-			putU32(page, off, seps[sepIdx])
-			putU32(page, off+sepWidth, leafPgnos[childIdx+i+1])
-			sepIdx++
-		}
-		writeHeader(page, PageTypeScopeBranch, uint16(count-1), pgno)
-		branchPgnos = append(branchPgnos, pgno)
-		childIdx += count
-	}
-
-	return buildBranchLevels(allocated, freePool, store, branchPgnos, seps, sepWidth, branchMax)
-}
-
-// buildBranchLevels recursively builds branch levels until a single root remains.
-// This removes the old single-level 7635-leaf limit (fixes #6).
-func buildBranchLevels(allocated *[]uint32, freePool *[]uint32, store pageStore, children []uint32, allSeps []uint32, sepWidth, branchMax int) (uint32, error) {
-	if len(children) == 1 {
-		return children[0], nil
-	}
-
-	// Build one level of branches.
-	var branchPgnos []uint32
-	var newSeps []uint32
-	childIdx := 0
-	sepIdx := 0
-
-	for childIdx < len(children) {
-		remaining := len(children) - childIdx
-		count := remaining
-		if count > branchMax {
-			count = branchMax
-		}
-		var pgno uint32
-		if len(*freePool) > 0 {
-			pgno = (*freePool)[len(*freePool)-1]
-			*freePool = (*freePool)[:len(*freePool)-1]
-		} else {
-			var err error
-			pgno, err = store.allocPage()
-			if err != nil {
-				return 0, err
+			var pgno uint32
+			if len(*freePool) > 0 {
+				pgno = (*freePool)[len(*freePool)-1]
+				*freePool = (*freePool)[:len(*freePool)-1]
+			} else {
+				var err error
+				pgno, err = store.allocPage()
+				if err != nil {
+					return 0, err
+				}
 			}
-		}
-		*allocated = append(*allocated, pgno)
-		page := store.pageMut(pgno)
-		for j := range page {
-			page[j] = 0
-		}
-		writeHeader(page, PageTypeScopeBranch, uint16(count-1), pgno)
-		putU32(page, PageHeaderSize, children[childIdx])
-		for i := 0; i < count-1; i++ {
-			off := PageHeaderSize + 4 + i*(sepWidth+4)
-			if sepIdx < len(allSeps) {
-				putU32(page, off, allSeps[sepIdx])
+			*allocated = append(*allocated, pgno)
+			page := store.pageMut(pgno)
+			for j := range page {
+				page[j] = 0
 			}
-			putU32(page, off+sepWidth, children[childIdx+i+1])
-			sepIdx++
+			putU32(page, PageHeaderSize, level[childIdx].pgno)
+			for i := 0; i < count-1; i++ {
+				off := PageHeaderSize + 4 + i*(sepWidth+4)
+				putU32(page, off, level[childIdx+i+1].min)
+				putU32(page, off+sepWidth, level[childIdx+i+1].pgno)
+			}
+			writeHeader(page, PageTypeScopeBranch, uint16(count-1), pgno)
+			next = append(next, subtree{pgno: pgno, min: level[childIdx].min})
+			childIdx += count
 		}
-		branchPgnos = append(branchPgnos, pgno)
-		childIdx += count
+		level = next
 	}
-
-	// Separators for the next level: first separator stored in each branch
-	// after the first is the boundary between subtrees.
-	for i := 1; i < len(branchPgnos); i++ {
-		page := store.page(branchPgnos[i])
-		newSeps = append(newSeps, u32le(page, PageHeaderSize+4))
-	}
-
-	if len(branchPgnos) == 1 {
-		return branchPgnos[0], nil
-	}
-	return buildBranchLevels(allocated, freePool, store, branchPgnos, newSeps, sepWidth, branchMax)
+	return level[0].pgno, nil
 }
 
 // ReadAllScopes reads all scope entries from a committed scope table.
@@ -469,8 +570,9 @@ func readScopeNode(bytes []byte, pgno uint32, depth uint32, out *[]ScopeEntry) e
 		count := int(h.entryCount)
 		for i := 0; i < count; i++ {
 			recOff := PageHeaderSize + i*ScopeEntrySize
-			entry := decodeScopeEntry(page[recOff : recOff+ScopeEntrySize])
-			*out = append(*out, entry)
+			scopeID := u32le(page, recOff)
+			bitmap := readEntryBitmap(bytes, page, recOff)
+			*out = append(*out, ScopeEntry{ScopeID: scopeID, Bitmap: bitmap})
 		}
 		return nil
 	case PageTypeScopeBranch:
@@ -522,8 +624,9 @@ func readScopeNodeChecked(bytes []byte, pgno uint32, depth uint32, total uint32,
 		count := int(h.entryCount)
 		for i := 0; i < count; i++ {
 			recOff := PageHeaderSize + i*ScopeEntrySize
-			entry := decodeScopeEntry(page[recOff : recOff+ScopeEntrySize])
-			*out = append(*out, entry)
+			scopeID := u32le(page, recOff)
+			bitmap := readEntryBitmap(bytes, page, recOff)
+			*out = append(*out, ScopeEntry{ScopeID: scopeID, Bitmap: bitmap})
 		}
 		return nil
 	case PageTypeScopeBranch:
@@ -537,6 +640,60 @@ func readScopeNodeChecked(bytes []byte, pgno uint32, depth uint32, total uint32,
 	default:
 		return fmt.Errorf("unexpected page type %d in scope table", h.pageType)
 	}
+}
+
+// scopeIDExists reports whether targetID is a defined scope, without
+// materializing its bitmap. O(log S) time, O(1) heap — used by the open-time
+// data-record scope validation so it does not allocate per record.
+func scopeIDExists(bytes []byte, rootPgno uint32, targetID uint32) bool {
+	if rootPgno == 0 {
+		return false
+	}
+	pgno := rootPgno
+	for guard := 0; guard < TreeHeightMax; guard++ {
+		off := int(pgno) * PageSize
+		if off+PageSize > len(bytes) {
+			return false
+		}
+		page := bytes[off : off+PageSize]
+		h := decodeHeader(page)
+		switch h.pageType {
+		case PageTypeScopeLeaf:
+			count := min(int(h.entryCount), (PageSize-PageHeaderSize)/ScopeEntrySize)
+			lo, hi := 0, count
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				recOff := PageHeaderSize + mid*ScopeEntrySize
+				id := u32le(page, recOff)
+				if id < targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			if lo < count {
+				recOff := PageHeaderSize + lo*ScopeEntrySize
+				return u32le(page, recOff) == targetID
+			}
+			return false
+		case PageTypeScopeBranch:
+			bv := newBranchView(page, min(int(h.entryCount), (PageSize-PageHeaderSize-4)/(int(ScopeKeyWidth)+4)), int(ScopeKeyWidth))
+			lo, hi := 0, bv.sepCount
+			for lo < hi {
+				mid := lo + (hi-lo)/2
+				sep := u32le(bv.sep(mid), 0)
+				if sep <= targetID {
+					lo = mid + 1
+				} else {
+					hi = mid
+				}
+			}
+			pgno = bv.child(lo)
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // FindScope finds a single scope entry by scope_id via B+tree descent.
@@ -571,8 +728,7 @@ func findScope(bytes []byte, rootPgno uint32, targetID uint32) []byte {
 				recOff := PageHeaderSize + lo*ScopeEntrySize
 				id := u32le(page, recOff)
 				if id == targetID {
-					entry := decodeScopeEntry(page[recOff : recOff+ScopeEntrySize])
-					return entry.Bitmap
+					return readEntryBitmap(bytes, page, recOff)
 				}
 			}
 			return nil
@@ -629,11 +785,18 @@ func findScopeRef(bytes []byte, rootPgno uint32, targetID uint32) []byte {
 				recOff := PageHeaderSize + lo*ScopeEntrySize
 				id := u32le(page, recOff)
 				if id == targetID {
-					bmLen := int(u16le(page, recOff+4))
-					if bmLen > MaxBitmapWidth {
-						bmLen = MaxBitmapWidth
+					bmLen := u16le(page, recOff+4)
+					// Overflow entries span pages and cannot be returned as a
+					// single borrowed slice; the overlap scans that use this
+					// zero-copy path only encounter inline bitmaps.
+					if bmLen == ScopeBitmapOverflow {
+						return nil
 					}
-					return page[recOff+6 : recOff+6+bmLen]
+					n := int(bmLen)
+					if n > MaxBitmapWidth {
+						n = MaxBitmapWidth
+					}
+					return page[recOff+6 : recOff+6+n]
 				}
 			}
 			return nil
@@ -685,14 +848,21 @@ func findScopeByBitmapNode(bytes []byte, pgno uint32, depth uint32, target []byt
 		count := int(h.entryCount)
 		for i := 0; i < count; i++ {
 			recOff := PageHeaderSize + i*ScopeEntrySize
-			bmLen := int(u16le(page, recOff+4))
-			if bmLen > MaxBitmapWidth {
-				bmLen = MaxBitmapWidth
-			}
-			if bmLen == len(target) {
-				if bytesEqual(page[recOff+6:recOff+6+bmLen], target) {
+			rawLen := u16le(page, recOff+4)
+			// Fast path: inline entries (the common case) compare without
+			// allocating. Only overflow entries need readEntryBitmap.
+			if rawLen != ScopeBitmapOverflow {
+				n := int(rawLen)
+				if n > MaxBitmapWidth {
+					n = MaxBitmapWidth
+				}
+				if n == len(target) && bytesEqual(page[recOff+6:recOff+6+n], target) {
 					return u32le(page, recOff), true
 				}
+				continue
+			}
+			if bytesEqual(readEntryBitmap(bytes, page, recOff), target) {
+				return u32le(page, recOff), true
 			}
 		}
 		return 0, false
@@ -762,10 +932,12 @@ func ValidateScopeCRC(bytes []byte, rootPgno uint32) error {
 		return nil
 	}
 	totalPages := uint32(len(bytes) / PageSize)
-	return validateScopeCRCNode(bytes, rootPgno, 0, totalPages)
+	prevMax := uint32(0)
+	havePrev := false
+	return validateScopeCRCNode(bytes, rootPgno, 0, totalPages, &prevMax, &havePrev)
 }
 
-func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages uint32) error {
+func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages uint32, prevMax *uint32, havePrev *bool) error {
 	if depth > TreeHeightMax {
 		return fmt.Errorf("scope table too deep")
 	}
@@ -790,6 +962,22 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 		if count < 1 || count > maxEntries {
 			return fmt.Errorf("scope leaf entry_count out of range: %d (max %d)", count, maxEntries)
 		}
+		for i := 0; i < count; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			id := u32le(page, recOff)
+			bmLen := u16le(page, recOff+4)
+			// An inline bitmap_len beyond the on-disk slot would read past the
+			// entry's payload. The overflow sentinel is the one legitimate
+			// value > MaxBitmapWidth.
+			if bmLen != ScopeBitmapOverflow && int(bmLen) > MaxBitmapWidth {
+				return fmt.Errorf("scope bitmap_len exceeds payload")
+			}
+			if *havePrev && id <= *prevMax {
+				return fmt.Errorf("scope_ids not strictly increasing across leaves")
+			}
+			*prevMax = id
+			*havePrev = true
+		}
 		return nil
 	case PageTypeScopeBranch:
 		sepCount := int(h.entryCount)
@@ -806,7 +994,9 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 			if child < 2 || uint64(child) >= uint64(totalPages) {
 				return fmt.Errorf("scope child pgno out of range: %d", child)
 			}
-			if err := validateScopeCRCNode(bytes, child, depth+1, totalPages); err != nil {
+		}
+		for j := 0; j < bv.childCount(); j++ {
+			if err := validateScopeCRCNode(bytes, bv.child(j), depth+1, totalPages, prevMax, havePrev); err != nil {
 				return err
 			}
 		}

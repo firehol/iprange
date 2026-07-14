@@ -17,6 +17,32 @@ type MmapReader struct {
 	path  string
 }
 
+// validateMetaGeometry validates a pinned meta against the actual file size,
+// catching a checksum-valid but structurally impossible meta (invalid
+// scope_mode, root/height mismatch, root beyond total_pages, or total_pages
+// exceeding the file) BEFORE any store is constructed or the file is touched.
+func validateMetaGeometry(m meta, fileLen int) error {
+	if m.scopeMode > ScopeModeIndirect {
+		return fmt.Errorf("invalid scope_mode")
+	}
+	if m.totalPages < 2 {
+		return fmt.Errorf("total_pages out of range")
+	}
+	if m.totalPages > uint64(fileLen/PageSize) {
+		return fmt.Errorf("total_pages exceeds file size")
+	}
+	if m.treeHeight > TreeHeightMax {
+		return fmt.Errorf("tree_height > 32")
+	}
+	if (m.treeHeight == 0) != (m.rootPgno == 0) {
+		return fmt.Errorf("tree_height/root_pgno inconsistent")
+	}
+	if m.rootPgno != 0 && (m.rootPgno < 2 || uint64(m.rootPgno) >= m.totalPages) {
+		return fmt.Errorf("root_pgno out of range")
+	}
+	return nil
+}
+
 func OpenMmap(path string) (*MmapReader, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -82,6 +108,17 @@ func OpenMmap(path string) (*MmapReader, error) {
 		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
 	}
 
+	// Validate pinned metadata: a checksum-valid meta can still hold an
+	// impossible scope_mode or root/height geometry. Reject it before handing
+	// the snapshot to callers.
+	if err := validateMetaGeometry(pinnedMeta, length); err != nil {
+		guard.Close()
+		table.Close()
+		syscall.Munmap(data)
+		file.Close()
+		return nil, err
+	}
+
 	// Update the reader slot with the real txn_id.
 	table.UpdateTxnID(guard.Slot, guard.Pid, guard.ReaderID,
 		pinnedMeta.txnID, pinnedMeta.rootPgno, pinnedMeta.treeHeight)
@@ -124,6 +161,12 @@ type FileWriter[K ipKey[K]] struct {
 }
 
 func CreateFile[K ipKey[K]](path string, scopeMode uint8, createdUnix uint64) (*FileWriter[K], error) {
+	// Validate the scope_mode BEFORE touching the file: create() truncates an
+	// existing file, so an invalid mode must be rejected without destroying the
+	// caller's data.
+	if scopeMode > ScopeModeIndirect {
+		return nil, fmt.Errorf("invalid scope_mode")
+	}
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("create: %w", err)
@@ -195,16 +238,25 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		file.Close()
 		return nil, fmt.Errorf("both meta pages fail CRC — corrupt file")
 	}
+	var active meta
 	var committedPages uint32
 	switch {
 	case validA && !validB:
-		committedPages = uint32(metaA.totalPages)
+		active, committedPages = metaA, uint32(metaA.totalPages)
 	case !validA && validB:
-		committedPages = uint32(metaB.totalPages)
+		active, committedPages = metaB, uint32(metaB.totalPages)
 	case metaA.txnID >= metaB.txnID:
-		committedPages = uint32(metaA.totalPages)
+		active, committedPages = metaA, uint32(metaA.totalPages)
 	default:
-		committedPages = uint32(metaB.totalPages)
+		active, committedPages = metaB, uint32(metaB.totalPages)
+	}
+	// Validate geometry against the ACTUAL file size before constructing the
+	// store: newMmapStore extends the file, and openWriter does not re-check
+	// root/height against total_pages, so an impossible meta must be rejected
+	// here without modifying the file.
+	if err := validateMetaGeometry(active, length); err != nil {
+		file.Close()
+		return nil, err
 	}
 	// Defensive cap: never let a (possibly corrupt) total_pages exceed the real
 	// file size, so newMmapStore never extends/truncates the file erroneously.

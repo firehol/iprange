@@ -252,6 +252,50 @@ pub fn migrate<K: IpKey>(
     desired: &mut dyn DesiredStream<K>,
     opts: &MigrateOptions<K>,
 ) -> Result<MigrateCounters> {
+    // A migration that fails after applying some changes leaves the writer in a
+    // partially-applied state. Poison it so the caller cannot commit a half-
+    // migrated transaction (the caller MUST treat a migrate error as fatal and
+    // discard the writer).
+    let result = migrate_inner(writer, desired, opts);
+    if result.is_err() {
+        writer.poison();
+    }
+    result
+}
+
+/// Advance `desired` to the next record, validating that the stream stays
+/// sorted ascending and pairwise disjoint with `from <= to`. Returns the next
+/// record (or `None` at a clean EOF). `prev_to` is the `to` of the most
+/// recently consumed raw desired record.
+fn advance_desired<K: IpKey>(
+    desired: &mut dyn DesiredStream<K>,
+    prev_to: &mut Option<K>,
+) -> Result<Option<DesiredRecord<K>>> {
+    desired.next();
+    let next = desired.peek().copied();
+    if let Some(r) = &next {
+        if r.from > r.to {
+            return Err(crate::error::Error::InvalidInput(
+                "desired record has from > to",
+            ));
+        }
+        if let Some(pt) = *prev_to {
+            if r.from <= pt {
+                return Err(crate::error::Error::InvalidInput(
+                    "desired stream must be sorted and disjoint",
+                ));
+            }
+        }
+        *prev_to = Some(r.to);
+    }
+    Ok(next)
+}
+
+fn migrate_inner<K: IpKey>(
+    writer: &mut Writer<K>,
+    desired: &mut dyn DesiredStream<K>,
+    opts: &MigrateOptions<K>,
+) -> Result<MigrateCounters> {
     let mut counters = MigrateCounters::default();
 
     // Enable migration mode: prevents alloc_or_reuse from reusing pages
@@ -267,6 +311,19 @@ pub fn migrate<K: IpKey>(
     // we track trimmed starts for the current record on each side.
     let mut old_cur = walker.peek();
     let mut des_cur = desired.peek().copied();
+    // Validate the desired stream as it is consumed: each record must satisfy
+    // from <= to, and successive records must be sorted ascending and pairwise
+    // disjoint. Unsorted/overlapping/reversed input is rejected.
+    let mut prev_des_to: Option<K> = None;
+    if let Some(r) = &des_cur {
+        if r.from > r.to {
+            writer.can_recycle = prev_can_recycle;
+            return Err(crate::error::Error::InvalidInput(
+                "desired record has from > to",
+            ));
+        }
+        prev_des_to = Some(r.to);
+    }
 
     // Trimmed starts (for partial overlap handling).
     let mut old_trim_start: Option<K> = old_cur.map(|r| r.0);
@@ -323,8 +380,7 @@ pub fn migrate<K: IpKey>(
                 counters.added += 1;
                 counters.desired_scanned += 1;
                 // Advance desired.
-                desired.next();
-                des_cur = desired.peek().copied();
+                des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                 des_trim_start = des_cur.map(|r| r.from);
             }
 
@@ -359,8 +415,7 @@ pub fn migrate<K: IpKey>(
                     writer.set(df, dt, ds)?;
                     counters.added += 1;
                     counters.desired_scanned += 1;
-                    desired.next();
-                    des_cur = desired.peek().copied();
+                    des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                     des_trim_start = des_cur.map(|r| r.from);
                 } else {
                     // Overlap! Split at boundaries.
@@ -436,8 +491,7 @@ pub fn migrate<K: IpKey>(
                         walker.advance(writer.store.as_ref());
                         old_cur = walker.peek();
                         old_trim_start = old_cur.map(|r| r.0);
-                        desired.next();
-                        des_cur = desired.peek().copied();
+                        des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                         des_trim_start = des_cur.map(|r| r.from);
                     } else if ot < dt {
                         // Old ends first → overlap [overlap_start, ot], then desired continues.
@@ -480,14 +534,12 @@ pub fn migrate<K: IpKey>(
                         // Trim desired start to ot+1
                         des_trim_start = ot.checked_inc();
                         if des_trim_start.is_none() {
-                            desired.next();
-                            des_cur = desired.peek().copied();
+                            des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                             des_trim_start = des_cur.map(|r| r.from);
                         } else if let Some(ts) = des_trim_start {
                             if ts > dt {
                                 // Trimmed past the desired end → advance.
-                                desired.next();
-                                des_cur = desired.peek().copied();
+                                des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                                 des_trim_start = des_cur.map(|r| r.from);
                             }
                         }
@@ -526,8 +578,7 @@ pub fn migrate<K: IpKey>(
                         }
                         counters.desired_scanned += 1;
                         // Advance desired, trim old's start.
-                        desired.next();
-                        des_cur = desired.peek().copied();
+                        des_cur = advance_desired::<K>(desired, &mut prev_des_to)?;
                         des_trim_start = des_cur.map(|r| r.from);
                         // Trim old start to dt+1
                         old_trim_start = dt.checked_inc();

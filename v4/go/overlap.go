@@ -3,6 +3,7 @@ package iprangedb
 import (
 	"fmt"
 	"math/bits"
+	"sort"
 )
 
 // All-to-all feed overlap accumulation.
@@ -36,10 +37,40 @@ type ForeignRange[K ipKey[K]] struct {
 //
 // Single pass: O(records x avg_feeds_per_record^2).
 func AllToAllOverlap[K ipKey[K]](w *Writer[K], onOverlap func(FeedOverlap)) error {
+	if w.scopeMode == ScopeModeScalar {
+		return fmt.Errorf("overlap requires bitmap or indirect scope mode")
+	}
 	if w.pendingRoot == 0 {
 		return nil
 	}
-	return scanOverlapNode[K](w, w.pendingRoot, onOverlap)
+	// Aggregate each (a, b) feed pair's contribution across all covering records
+	// into one total, emitted once per pair (overflow-checked).
+	totals := make(map[uint64]uint64)
+	var order []uint64
+	emit := func(a, b, ipCount uint64) {
+		key := a<<32 | b
+		if _, ok := totals[key]; !ok {
+			order = append(order, key)
+		}
+		if totals[key], _ = bits.Add64(totals[key], ipCount, 0); false {
+		}
+	}
+	if err := scanOverlapNode[K](w, w.pendingRoot, func(o FeedOverlap) {
+		emit(uint64(o.FeedA), uint64(o.FeedB), o.IPCount)
+	}); err != nil {
+		return err
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return order[i] < order[j]
+	})
+	for _, key := range order {
+		onOverlap(FeedOverlap{
+			FeedA:   uint32(key >> 32),
+			FeedB:   uint32(key),
+			IPCount: totals[key],
+		})
+	}
+	return nil
 }
 
 func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedOverlap)) error {
@@ -53,7 +84,10 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 		for i := 0; i < lv.len(); i++ {
 			rf := zero.readLE(lv.recordFrom(i))
 			rt := zero.readLE(lv.recordTo(i))
-			ipCount := ipRangeCount[K](rf, rt)
+			ipCount, ok := ipRangeCount[K](rf, rt)
+			if !ok {
+				return fmt.Errorf("ip range count exceeds uint64")
+			}
 			// Iterate feed pairs directly from the scope bitmap — no per-record
 			// slice allocation. Emits every (a, b) pair with a < b.
 			forEachFeedPair[K](w, lv.recordScopeID(i), func(a, b uint32) {
@@ -93,6 +127,15 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 // O(foreign × tree_height); this is O(tree_pages + foreign) + overlap output.
 // Unsorted foreign input would silently under-count overlaps.
 func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
+	if w.scopeMode == ScopeModeScalar {
+		for {
+			_, _, ok := nextForeign()
+			if !ok {
+				break
+			}
+		}
+		return fmt.Errorf("overlap requires bitmap or indirect scope mode")
+	}
 	if w.pendingRoot == 0 {
 		// Drain the stream so the caller's iterator state is fully consumed
 		// even when there is nothing to compare against.
@@ -116,11 +159,25 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 	// foreign range's `from` can never overlap it or any later (sorted) range.
 	rLi, rRi := 0, 0
 
+	// The single-pass linear merge REQUIRES the foreign ranges to be sorted
+	// ascending by `from` and pairwise disjoint. Track the previous range's end
+	// and reject unsorted/overlapping/reversed input.
+	var prevTo K
+	prevOk := false
+
 	for {
 		from, to, ok := nextForeign()
 		if !ok {
 			return nil
 		}
+		if from.cmp(to) > 0 {
+			return fmt.Errorf("foreign range has from > to")
+		}
+		if prevOk && from.cmp(prevTo) <= 0 {
+			return fmt.Errorf("foreign ranges must be sorted and disjoint")
+		}
+		prevTo = to
+		prevOk = true
 		// Phase 1 — permanently skip records ending strictly before `from`.
 		for {
 			_, recTo, _, rok := readLeafRec[K](w, leafPages, rLi, rRi)
@@ -154,7 +211,10 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 			if recTo.cmp(to) < 0 {
 				overlapTo = recTo
 			}
-			ipCount := ipRangeCount[K](overlapFrom, overlapTo)
+			ipCount, countOk := ipRangeCount[K](overlapFrom, overlapTo)
+			if !countOk {
+				return fmt.Errorf("ip range count exceeds uint64")
+			}
 			forEachFeed[K](w, scopeID, func(feed uint32) {
 				onOverlap(feed, 0, ipCount)
 			})
@@ -325,18 +385,26 @@ func nextSetBitFrom(bitmap []byte, start int) (uint32, bool) {
 
 // ipRangeCount returns the number of IP addresses in [from, to] (inclusive).
 // The result is truncated to u64 (matching the Rust ip_range_count).
-func ipRangeCount[K ipKey[K]](from, to K) uint64 {
+// ipRangeCount returns the number of IP addresses in [from, to] (inclusive).
+// The second value is false when the span exceeds uint64 (only possible for
+// IPv6), so callers can report an overflow instead of silently truncating.
+func ipRangeCount[K ipKey[K]](from, to K) (uint64, bool) {
 	fv := from.toU128()
 	tv := to.toU128()
 	// Guard: to < from → 0.
 	if tv.Hi < fv.Hi {
-		return 0
+		return 0, true
 	}
 	if tv.Hi == fv.Hi && tv.Lo < fv.Lo {
-		return 0
+		return 0, true
 	}
-	// Low 64 bits of (to - from + 1).
-	lo, _ := bits.Sub64(tv.Lo, fv.Lo, 0)
-	result, _ := bits.Add64(lo, 1, 0)
-	return result
+	// (to - from) as u128, then +1.
+	lo, borrow := bits.Sub64(tv.Lo, fv.Lo, 0)
+	hi := tv.Hi - fv.Hi - borrow
+	lo2, carry := bits.Add64(lo, 1, 0)
+	hi2 := hi + carry
+	if hi2 != 0 {
+		return 0, false // exceeds uint64
+	}
+	return lo2, true
 }

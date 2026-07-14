@@ -242,25 +242,54 @@ func TestReaudit2_C3_WriterOpenRejectsCorruptMeta(t *testing.T) {
 	}
 }
 
-// ── C4: ScopeIntern must reject a bitmap wider than MaxBitmapWidth (256) ──────
+// ── C4: ScopeIntern must round-trip a bitmap wider than MaxBitmapWidth ───────
 //
-// The scope-table leaf entry is a fixed-size record; encode silently truncates
-// the bitmap at MaxBitmapWidth. Interning a 257-byte bitmap loses the trailing
-// byte on disk — a silent data-corruption bug. ScopeIntern must reject it.
+// Scope bitmaps wider than MaxBitmapWidth (256 bytes / 2048 feeds) spill to a
+// chain of overflow pages instead of being silently truncated by the fixed-size
+// inline entry. Interning a 257-byte bitmap MUST preserve every byte on disk.
 func TestReaudit2_C4_ScopeInternRejectsOversizedBitmap(t *testing.T) {
 	w, err := Create[Ipv4Key](ScopeModeIndirect, 0) // mode 2
 	if err != nil {
 		t.Fatal(err)
 	}
-	oversized := make([]byte, 257)
-	if _, err := w.ScopeIntern(oversized); err == nil {
-		t.Fatal("ScopeIntern accepted a 257-byte bitmap (MaxBitmapWidth is 256) — silent truncation on encode")
-	}
-
-	// A 256-byte bitmap is the maximum legal width and must be accepted.
+	// A 256-byte bitmap is the maximum inline width and must be accepted.
 	legal := make([]byte, 256)
 	if _, err := w.ScopeIntern(legal); err != nil {
-		t.Fatalf("256-byte bitmap (the cap) should be accepted: %v", err)
+		t.Fatalf("256-byte bitmap (the inline cap) should be accepted: %v", err)
+	}
+
+	// A 257-byte bitmap spills to overflow and must round-trip without losing
+	// the trailing byte.
+	oversized := make([]byte, 257)
+	oversized[256] = 0b1000_0001
+	id, err := w.ScopeIntern(oversized)
+	if err != nil {
+		t.Fatalf("ScopeIntern must accept a 257-byte bitmap (stored via overflow, no truncation): %v", err)
+	}
+	if err := w.Set(1, 1, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(1, ^uint64(0)); err != nil {
+		t.Fatal(err)
+	}
+	img, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("missing image")
+	}
+	r, err := Open(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedID, ok := r.LookupV4(1)
+	if !ok {
+		t.Fatal("stored range missing")
+	}
+	bitmap := r.ScopeResolve(storedID)
+	if len(bitmap) != 257 {
+		t.Fatalf("257-byte bitmap was truncated to %d bytes", len(bitmap))
+	}
+	if bitmap[255] != 0 || bitmap[256] != 0b1000_0001 {
+		t.Fatalf("overflow bitmap bytes were not preserved: %v", bitmap[255:])
 	}
 }
 

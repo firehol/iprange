@@ -11,6 +11,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Maximum number of spill runs a single merge pass opens at once. Bounds the
+/// file-descriptor usage of the k-way merge: a sort with thousands of runs is
+/// reduced in passes of at most `MERGE_FAN` inputs + 1 output, so the open-FD
+/// count stays small even under a tight RLIMIT_NOFILE.
+const MERGE_FAN: usize = 32;
+
+/// Allocate a fresh, process-unique spill path inside `dir`. The PID (so two
+/// concurrent processes cannot collide) plus a process-local counter make the
+/// name unique; `salt` disambiguates within a single pass.
+fn fresh_temp_path(dir: &Path, salt: usize) -> PathBuf {
+    let pid = std::process::id();
+    let unique = RUN_COUNTER.fetch_add(1, Ordering::SeqCst);
+    dir.join(format!("iprange_extsort_{}_{}_{}", pid, unique, salt))
+}
+
 #[derive(Clone, Debug)]
 pub struct ExtSortConfig {
     pub chunk_size: usize,
@@ -47,6 +62,12 @@ impl<K: IpKey> ExtSorter<K> {
     }
 
     pub fn add(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
+        if self.config.chunk_size == 0 {
+            return Err(Error::InvalidInput("extsort chunk_size must be >= 1"));
+        }
+        if from > to {
+            return Err(Error::InvalidInput("extsort add: from > to"));
+        }
         let seq = self.global_seq;
         self.global_seq += 1;
         self.chunk.push((DesiredRecord { from, to, scope_id }, seq));
@@ -60,6 +81,46 @@ impl<K: IpKey> ExtSorter<K> {
         if !self.chunk.is_empty() {
             self.spill_chunk()?;
         }
+        let dir: PathBuf = self
+            .config
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+
+        // Multi-pass reduction: while there are more runs than the merge
+        // fan-out, merge them in batches of MERGE_FAN. This bounds the number
+        // of simultaneously open file descriptors to MERGE_FAN inputs + 1
+        // output per batch, so the sort succeeds under a tight RLIMIT_NOFILE.
+        while self.run_paths.len() > MERGE_FAN {
+            let mut next: Vec<PathBuf> = Vec::new();
+            let mut i = 0;
+            while i < self.run_paths.len() {
+                let end = (i + MERGE_FAN).min(self.run_paths.len());
+                let batch = &self.run_paths[i..end];
+                if batch.len() == 1 {
+                    next.push(batch[0].clone());
+                } else {
+                    let out = fresh_temp_path(&dir, next.len());
+                    if let Err(e) = merge_to_file::<K>(batch, &out) {
+                        let _ = std::fs::remove_file(&out);
+                        for p in &next {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        // self.run_paths still holds the current pass inputs;
+                        // they are cleaned by Drop via the partial state below.
+                        self.run_paths = next;
+                        return Err(e);
+                    }
+                    for p in batch {
+                        let _ = std::fs::remove_file(p);
+                    }
+                    next.push(out);
+                }
+                i = end;
+            }
+            self.run_paths = next;
+        }
+
         let inner: Box<dyn DesiredStream<K>> = if self.run_paths.is_empty() {
             Box::new(SortedStream {
                 records: Vec::new(),
@@ -74,7 +135,7 @@ impl<K: IpKey> ExtSorter<K> {
             let merge = KWayMerge::<K>::new(&self.run_paths)?;
             Box::new(MergeStream {
                 merge: Some(merge),
-                run_paths: self.run_paths,
+                run_paths: std::mem::take(&mut self.run_paths),
             })
         };
         Ok(Box::new(CoalesceStream::new(inner)))
@@ -97,23 +158,43 @@ impl<K: IpKey> ExtSorter<K> {
             .temp_dir
             .clone()
             .unwrap_or_else(|| PathBuf::from("/tmp"));
-        // Issue 4: include the PID so two concurrent processes cannot collide on
-        // the same spill filename. RUN_COUNTER is process-local, so without the
-        // PID two processes would both write `iprange_extsort_0_0` and silently
-        // corrupt each other's spill (create+truncate overwrote the file).
-        let pid = std::process::id();
-        let unique = RUN_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = dir.join(format!(
-            "iprange_extsort_{}_{}_{}",
-            pid,
-            unique,
-            self.run_paths.len()
-        ));
+        let path = fresh_temp_path(&dir, self.run_paths.len());
         write_run::<K>(&path, &normalized)?;
         self.run_paths.push(path);
         self.chunk.clear();
         Ok(())
     }
+}
+
+impl<K: IpKey> Drop for ExtSorter<K> {
+    fn drop(&mut self) {
+        // If the sorter is abandoned before finish() consumes its spill runs,
+        // remove the temp files so they do not accumulate on disk.
+        for p in &self.run_paths {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Merge a batch of spill runs (≤ MERGE_FAN) into a single new run file. The
+/// k-way merge normalizes cross-run overlaps with last-wins-by-seq semantics;
+/// the emitted (record, seq) pairs are written verbatim so a later pass can
+/// re-merge them identically. Caller is responsible for removing the inputs.
+fn merge_to_file<K: IpKey>(paths: &[PathBuf], out: &Path) -> Result<()> {
+    let mut merge = KWayMerge::<K>::new(paths)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out)
+        .map_err(Error::Io)?;
+    while let Some((rec, seq)) = merge.cached.take() {
+        write_record::<K>(&mut file, &rec, seq)?;
+        merge.cached = merge.compute_next();
+    }
+    if let Some(e) = merge.err {
+        return Err(Error::Structural(e));
+    }
+    file.flush().map_err(Error::Io)
 }
 
 /// O(n log n) normalization using a sweep line with an interval tree.

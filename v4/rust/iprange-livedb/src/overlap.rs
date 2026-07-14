@@ -12,12 +12,13 @@
 //! The overlap matrix is accumulated via a callback that receives
 //! (feed_a, feed_b, overlap_ip_count) for every non-zero pair.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::node::{BranchView, LeafView};
 use crate::spec;
 use crate::wire::PageHeader;
 use crate::writer::Writer;
+use alloc::vec::Vec;
 
 /// A pairwise overlap result: feeds A and B share `ip_count` addresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,9 +30,11 @@ pub struct FeedOverlap {
 
 /// Scan all records and compute the pairwise feed overlap matrix.
 ///
-/// Calls `on_overlap` for every (feed_a, feed_b) pair where feed_a < feed_b
-/// and they share at least one IP address. The `ip_count` is the total number
-/// of IP addresses shared by both feeds.
+/// Calls `on_overlap` ONCE per `(feed_a, feed_b)` pair (feed_a < feed_b) they
+/// share at least one IP address, with `ip_count` being the TOTAL number of
+/// shared addresses summed across every covering record. Aggregation is
+/// overflow-checked: an IPv6 span larger than `u64::MAX` addresses is reported
+/// as an error rather than silently wrapping.
 ///
 /// For mode 1 (bitmap): each record's scope_id bits are the feeds.
 /// For mode 2 (indirect): each record's scope_id is resolved to a bitmap via
@@ -43,16 +46,43 @@ pub fn all_to_all_overlap<K: IpKey>(
     writer: &Writer<K>,
     on_overlap: &mut dyn FnMut(FeedOverlap),
 ) -> Result<()> {
+    if writer.scope_mode == spec::SCOPE_MODE_SCALAR {
+        return Err(Error::InvalidInput(
+            "overlap requires bitmap or indirect scope mode",
+        ));
+    }
     if writer.pending_root == 0 {
         return Ok(());
     }
-    scan_overlap_node(writer, writer.pending_root, on_overlap)
+    // Aggregate the per-record contribution of each (a, b) feed pair into a
+    // single total, emitted once per pair. Use a small flat list since the
+    // number of distinct pairs is bounded by the feed count.
+    let mut totals: Vec<(u32, u32, u64)> = Vec::new();
+    scan_overlap_node(writer, writer.pending_root, &mut |a, b, ip_count| {
+        if let Some(t) = totals.iter_mut().find(|(fa, fb, _)| *fa == a && *fb == b) {
+            t.2 = match t.2.checked_add(ip_count) {
+                Some(v) => v,
+                None => u64::MAX, // overflow sentinel; surfaced below
+            };
+        } else {
+            totals.push((a, b, ip_count));
+        }
+    })?;
+    totals.sort_by_key(|(a, b, _)| (*a, *b));
+    for (a, b, n) in totals {
+        on_overlap(FeedOverlap {
+            feed_a: a,
+            feed_b: b,
+            ip_count: n,
+        });
+    }
+    Ok(())
 }
 
 fn scan_overlap_node<K: IpKey>(
     writer: &Writer<K>,
     pgno: u32,
-    on_overlap: &mut dyn FnMut(FeedOverlap),
+    on_pair_count: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
     let page = writer.store.as_ref().page(pgno);
     let h = PageHeader::decode(page);
@@ -62,16 +92,13 @@ fn scan_overlap_node<K: IpKey>(
             let leaf = LeafView::<K>::new(page, count);
             for i in 0..leaf.len() {
                 let r = leaf.record(i);
-                let ip_count = ip_range_count(r.from(), r.to());
+                let ip_count = ip_range_count(r.from(), r.to())
+                    .ok_or(Error::Overflow("ip range count exceeds u64::MAX"))?;
 
                 // Iterate feed pairs directly from the scope bitmap — no
                 // per-record Vec allocation. Emits every (a, b) with a < b.
                 for_each_feed_pair(writer, r.scope_id(), &mut |a, b| {
-                    on_overlap(FeedOverlap {
-                        feed_a: a,
-                        feed_b: b,
-                        ip_count,
-                    });
+                    on_pair_count(a, b, ip_count);
                 });
             }
             Ok(())
@@ -79,7 +106,7 @@ fn scan_overlap_node<K: IpKey>(
         spec::PAGE_TYPE_BRANCH => {
             let branch = BranchView::<K>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
-                scan_overlap_node(writer, branch.child(j), on_overlap)?;
+                scan_overlap_node(writer, branch.child(j), on_pair_count)?;
             }
             Ok(())
         }
@@ -196,14 +223,20 @@ fn next_set_bit_from(bitmap: &[u8], start: usize) -> Option<u32> {
     None
 }
 
-/// Count the number of IP addresses in [from, to] (inclusive).
-fn ip_range_count<K: IpKey>(from: K, to: K) -> u64 {
+/// Count the number of IP addresses in [from, to] (inclusive). Returns `None`
+/// when the span exceeds `u64::MAX` (only possible for IPv6), so callers can
+/// report an overflow rather than silently truncating to a wrong count.
+fn ip_range_count<K: IpKey>(from: K, to: K) -> Option<u64> {
     let from_u128 = from.to_u128();
     let to_u128 = to.to_u128();
-    if to_u128 >= from_u128 {
-        (to_u128 - from_u128 + 1) as u64
+    if to_u128 < from_u128 {
+        return Some(0);
+    }
+    let count = to_u128 - from_u128 + 1;
+    if count > u64::MAX as u128 {
+        None
     } else {
-        0
+        Some(count as u64)
     }
 }
 
@@ -229,6 +262,13 @@ pub fn foreign_vs_all<K: IpKey>(
     mut next_foreign: impl FnMut() -> Option<(K, K)>,
     on_overlap: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
+    if writer.scope_mode == spec::SCOPE_MODE_SCALAR {
+        // Drain the stream so the caller's iterator state is fully consumed.
+        while next_foreign().is_some() {}
+        return Err(Error::InvalidInput(
+            "overlap requires bitmap or indirect scope mode",
+        ));
+    }
     if writer.pending_root == 0 {
         // Drain the stream so the caller's iterator state is fully consumed
         // even when there is nothing to compare against.
@@ -245,7 +285,24 @@ pub fn foreign_vs_all<K: IpKey>(
     let mut r_li = 0usize;
     let mut r_ri = 0usize;
 
+    // The single-pass linear merge REQUIRES the foreign ranges to be sorted
+    // ascending by `from` and pairwise disjoint (from <= to, and each range
+    // starts strictly after the previous one ends). Unsorted or overlapping
+    // input would silently under-count; reject it instead.
+    let mut prev_to: Option<K> = None;
+
     while let Some((f_from, f_to)) = next_foreign() {
+        if f_from > f_to {
+            return Err(Error::InvalidInput("foreign range has from > to"));
+        }
+        if let Some(pt) = prev_to {
+            if f_from <= pt {
+                return Err(Error::InvalidInput(
+                    "foreign ranges must be sorted and disjoint",
+                ));
+            }
+        }
+        prev_to = Some(f_to);
         // Phase 1 — permanently skip records ending strictly before f_from.
         while let Some((_, rec_to, _)) = read_leaf_rec::<K>(writer, &leaf_pages, r_li, r_ri) {
             if rec_to >= f_from {
@@ -268,7 +325,8 @@ pub fn foreign_vs_all<K: IpKey>(
             // Overlap is guaranteed: rec_to >= f_from (phase 1) and rec_from <= f_to.
             let overlap_from = if f_from >= rec_from { f_from } else { rec_from };
             let overlap_to = if f_to <= rec_to { f_to } else { rec_to };
-            let ip_count = ip_range_count::<K>(overlap_from, overlap_to);
+            let ip_count = ip_range_count::<K>(overlap_from, overlap_to)
+                .ok_or(Error::Overflow("ip range count exceeds u64::MAX"))?;
             for_each_feed(writer, scope_id, &mut |feed| {
                 on_overlap(feed, 0, ip_count); // feed_bit=0 means "foreign feed"
             });
