@@ -221,14 +221,23 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		}
 		w.scopeRegistry = OpenScopeRegistry(active.scopeTableRoot, nextID)
 	}
-	// In indirect mode every data record's scope_id MUST resolve to a defined
-	// scope. ValidateScopeCRC (above) guards the scope tree; this guards the
-	// data tree's references into it.
-	if active.scopeMode == ScopeModeIndirect && active.scopeTableRoot != 0 && active.rootPgno != 0 {
-		if r, err := Open(w.store.committedBytes()); err != nil {
+	// Validate the committed DATA tree: per-page CRC32C, separators, record
+	// ordering, and record_count vs. the walked tally. A corrupt data tree must
+	// be rejected at open rather than silently loaded for mutation. In indirect
+	// mode every data record's scope_id MUST additionally resolve to a defined
+	// scope (ValidateScopeCRC above guards the scope tree itself).
+	if active.rootPgno != 0 {
+		r, err := Open(w.store.committedBytes())
+		if err != nil {
 			return nil, err
-		} else if err := r.validateRecordScopes(active.rootPgno, 1); err != nil {
+		}
+		if err := r.validateTree(); err != nil {
 			return nil, err
+		}
+		if active.scopeMode == ScopeModeIndirect && active.scopeTableRoot != 0 {
+			if err := r.validateRecordScopes(active.rootPgno, 1); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// Strict CRC validation of the persistent free-list chain. At open time
@@ -237,7 +246,7 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	if err := ValidateChainCRC(w.store, w.freeListHead); err != nil {
 		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
 	}
-	if err := validateFreeEntries(w.store, w.freeListHead, active.rootPgno, active.scopeTableRoot); err != nil {
+	if err := validateFreeEntries(w.store, w.freeListHead, active.rootPgno, uint32(active.keyWidth), active.scopeTableRoot); err != nil {
 		return nil, fmt.Errorf("corrupt free-list on open: %w", err)
 	}
 	if err := w.LoadFreeList(^uint64(0)); err != nil {
@@ -352,6 +361,13 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	if err := w.check(); err != nil {
 		return err
 	}
+	// txn_id is the monotonic generation counter. The next generation is
+	// committedTxnID + 1; if the current generation is already MaxUint64 that
+	// would wrap to 0 and collide with the fresh-DB generation, so refuse
+	// before mutating anything — the existing data stays readable.
+	if w.committedTxnID == ^uint64(0) {
+		return fmt.Errorf("txn_id space exhausted")
+	}
 	// Refresh MVCC state BEFORE any commit logic uses canRecycle.
 	w.canRecycle = oldestReaderTxnID == ^uint64(0)
 
@@ -369,6 +385,16 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
 		// a reader pinned at the old txn would see corrupted scope data.
 		oldRoot := w.scopeRoot()
+		// Revalidate the committed scope table at commit time: a scope mutation
+		// dirties the table and forces a rebuild that re-reads the committed
+		// entries. If the committed scope data became corrupt AFTER open
+		// (e.g. an external edit, or a store that serves different bytes), the
+		// rebuild would silently drop the unreadable committed scopes. Detect
+		// it here and refuse + poison instead of silently rebuilding.
+		if err := ValidateScopeCRC(w.store.committedBytes(), oldRoot); err != nil {
+			w.poisoned = true
+			return fmt.Errorf("committed scope table corrupt at commit: %w", err)
+		}
 		oldScopePageCount := 0
 		if oldRoot != 0 {
 			before := len(w.freedThisTxn)
@@ -405,6 +431,12 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 			var allocated []uint32
 			root, err := buildScopeTree(w.store, all, &allocated, &freePool)
 			if err != nil {
+				// The rebuild performs irreversible page allocations; an
+				// allocation failure leaves the allocator/registry in an
+				// indeterminate state. The on-disk meta is still unwritten, so
+				// the file is the last committed state — but this writer must
+				// be discarded and reopened.
+				w.poisoned = true
 				return err
 			}
 			// Register scope pages in privatePages for CRC finalization.
@@ -572,6 +604,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 			var err error
 			oldEntries, err = ReadChain(w.store, w.freeListHead)
 			if err != nil {
+				w.poisoned = true
 				return err
 			}
 		}
@@ -617,6 +650,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		for len(chainPages) < needed {
 			pgno, err := w.allocChainPage()
 			if err != nil {
+				w.poisoned = true
 				return err
 			}
 			chainPages = append(chainPages, pgno)
@@ -641,6 +675,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		} else {
 			head, err := WriteChain(w.store, compactEntries, chainPages)
 			if err != nil {
+				w.poisoned = true
 				return err
 			}
 			w.freeListHead = head
@@ -653,6 +688,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		for len(chainPages) < needed {
 			pgno, err := w.allocChainPage()
 			if err != nil {
+				w.poisoned = true
 				return err
 			}
 			chainPages = append(chainPages, pgno)
@@ -661,6 +697,7 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		oldHead := w.freeListHead
 		head, err := AppendSegment(w.store, entriesToWrite, chainPages, oldHead)
 		if err != nil {
+			w.poisoned = true
 			return err
 		}
 		w.freeListHead = head
@@ -671,9 +708,11 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		finalizeChecksum(w.store.pageMut(pgno))
 	}
 
-	// Truncate. Chain pages allocated from the growth region may sit at
-	// positions >= newTotal; the effective total must preserve them so they are
-	// not truncated away.
+	// Compute the new logical total. The PHYSICAL truncate to this size happens
+	// AFTER the new metadata is durable (below), so a sync or truncate failure
+	// can never destroy the previous generation's pages before the new meta is
+	// safely on disk. Chain pages allocated from the growth region may sit at
+	// positions >= newTotal; the effective total must preserve them.
 	var maxChainPage uint32
 	for _, p := range chainPages {
 		if p > maxChainPage {
@@ -681,17 +720,14 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 		}
 	}
 	var total uint32
+	needTruncate := false
 	if trailing > 0 {
 		effectiveTotal := newTotal
 		if maxChainPage+1 > effectiveTotal {
 			effectiveTotal = maxChainPage + 1
 		}
-		if effectiveTotal < preTruncateTotal {
-			if err := w.store.truncate(effectiveTotal); err != nil {
-				return err
-			}
-		}
 		total = effectiveTotal
+		needTruncate = effectiveTotal < preTruncateTotal
 	} else {
 		// No trailing free pages to reclaim, BUT chain pages may still have been
 		// allocated beyond preTruncateTotal (in the growth region, because
@@ -708,7 +744,10 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 
 	inactive := 1 - w.activeMeta
 	newTxnID := w.committedTxnID + 1
-	// Flush data + chain pages BEFORE publishing metadata, then flush metadata.
+	// Publish durable metadata BEFORE physical truncation: sync data + chain
+	// pages, write the new meta page, then sync the meta. Only once the new
+	// generation is durable do we reclaim trailing pages. A sync failure here
+	// leaves the previous generation fully intact and readable.
 	if err := w.flushOrPoison(); err != nil {
 		return err
 	}
@@ -720,6 +759,19 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	if err := w.flushOrPoison(); err != nil {
 		return err
 	}
+
+	// Physical truncation now that the new generation's metadata is durable.
+	// The reclaimed pages were already superseded (free, beyond the new root),
+	// so losing them does not affect readability — but a truncate failure means
+	// the file length no longer matches the just-published meta, so the writer
+	// is in an indeterminate state and MUST be poisoned.
+	if needTruncate {
+		if err := w.store.truncate(total); err != nil {
+			w.poisoned = true
+			return err
+		}
+	}
+
 	w.activeMeta = inactive
 	w.committedTxnID = newTxnID
 	// Save previous committed root/height BEFORE flipping, so the old
@@ -780,6 +832,12 @@ func (w *Writer[K]) cowPage(pgno uint32) (uint32, error) {
 		return 0, err
 	}
 	w.store.copyPage(pgno, newPgno)
+	// copyPage duplicates the source header verbatim, leaving the self-pgno
+	// field pointing at the OLD page. Stamp the new page's own number so the
+	// committed page verifies (pgno == actual) after CRC finalization — a
+	// COW'd branch that only receives a child-pointer update (branchUpdateChild)
+	// would otherwise keep a stale self-pgno.
+	putU32(w.store.pageMut(newPgno), PHPgno, newPgno)
 	w.privatePages.insert(newPgno)
 	// The old page is a COW victim — record it for the free-list chain and
 	// same-transaction recycling.
@@ -1741,7 +1799,10 @@ func (w *Writer[K]) ScopeIntern(bitmap []byte) (uint32, error) {
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("scope_intern requires scope_mode == 2")
 	}
-	id, wasNew := w.scopeRegistry.Intern(bitmap, w.store.committedBytes())
+	id, wasNew, err := w.scopeRegistry.Intern(bitmap, w.store.committedBytes())
+	if err != nil {
+		return 0, err
+	}
 	if wasNew {
 		w.scopeDirty = true
 	}
@@ -1792,25 +1853,38 @@ func (w *Writer[K]) TreePageCount() uint64 {
 }
 
 func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {
-	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	id, ok := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+	id, ok, created, err := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+	if err != nil {
+		return 0, err
+	}
 	if !ok {
 		return 0, fmt.Errorf("unknown scope_id")
+	}
+	// The scope table only needs rebuilding when a NEW scope_id is minted.
+	// Setting an already-present feed, or deduping onto an existing scope,
+	// leaves the committed table unchanged — mark dirty only on creation.
+	if created {
+		w.scopeDirty = true
 	}
 	return id, nil
 }
 
 func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32, error) {
-	w.scopeDirty = true
 	if w.scopeRegistry == nil {
 		return 0, fmt.Errorf("requires scope_mode == 2")
 	}
-	id, ok := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+	id, ok, created, err := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+	if err != nil {
+		return 0, err
+	}
 	if !ok {
 		return 0, fmt.Errorf("unknown scope_id")
+	}
+	if created {
+		w.scopeDirty = true
 	}
 	return id, nil
 }
@@ -2104,8 +2178,11 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 		}
 		bm := make([]byte, feedBit/8+1)
 		bm[feedBit/8] |= 1 << (feedBit % 8)
-		id, wasNew := w.scopeRegistry.Intern(bm, w.store.committedBytes())
-		if wasNew {
+		id, created, err := w.scopeRegistry.Intern(bm, w.store.committedBytes())
+		if err != nil {
+			return 0, err
+		}
+		if created {
 			w.scopeDirty = true
 		}
 		return id, nil
@@ -2116,11 +2193,6 @@ func (w *Writer[K]) freshFeedScope(feedBit uint32) (uint32, error) {
 
 // applyFeedBit OR's a feed bit into a scope_id, returning the new scope_id.
 func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
-	// F3 fix: indirect mode interns a new bitmap here — mark the registry
-	// dirty so the scope table is rebuilt at commit.
-	if w.scopeMode == ScopeModeIndirect {
-		w.scopeDirty = true
-	}
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		if feedBit >= 32 {
@@ -2131,9 +2203,15 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		id, ok := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+		id, ok, created, err := w.scopeRegistry.BitmapSetFeed(scopeID, feedBit, w.store.committedBytes())
+		if err != nil {
+			return 0, err
+		}
 		if !ok {
 			return 0, fmt.Errorf("unknown scope_id")
+		}
+		if created {
+			w.scopeDirty = true
 		}
 		return id, nil
 	default:
@@ -2144,11 +2222,6 @@ func (w *Writer[K]) applyFeedBit(scopeID, feedBit uint32) (uint32, error) {
 // clearFeedBit clears a feed bit from a scope_id, returning the new scope_id
 // (0 if the bitmap becomes empty).
 func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
-	// F3 fix: indirect mode interns a new bitmap here — mark the registry
-	// dirty so the scope table is rebuilt at commit.
-	if w.scopeMode == ScopeModeIndirect {
-		w.scopeDirty = true
-	}
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		if feedBit >= 32 {
@@ -2159,9 +2232,15 @@ func (w *Writer[K]) clearFeedBit(scopeID, feedBit uint32) (uint32, error) {
 		if w.scopeRegistry == nil {
 			return 0, fmt.Errorf("requires scope_mode == 2")
 		}
-		id, ok := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+		id, ok, created, err := w.scopeRegistry.BitmapClearFeed(scopeID, feedBit, w.store.committedBytes())
+		if err != nil {
+			return 0, err
+		}
 		if !ok {
 			return 0, fmt.Errorf("unknown scope_id")
+		}
+		if created {
+			w.scopeDirty = true
 		}
 		return id, nil
 	default:

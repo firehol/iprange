@@ -160,7 +160,10 @@ impl<K: IpKey> Writer<K> {
                 store.committed_bytes(),
                 active.scope_table_root,
             )
-            .map(|m| m + 1)
+            // saturating: if the table already uses u32::MAX, next_id becomes 0
+            // and the registry refuses to mint (scope_id space exhausted) while
+            // still allowing existing scopes to be re-interned/resolved.
+            .map(|m| m.wrapping_add(1))
             .unwrap_or(1);
             Some(crate::scope_table::ScopeRegistry::open(
                 active.scope_table_root,
@@ -170,16 +173,19 @@ impl<K: IpKey> Writer<K> {
             None
         };
 
-        // In indirect mode every data record's scope_id MUST resolve to a
-        // defined scope. validate_scope_crc (above) guards the scope tree
-        // structure; this guards the data tree's references into it.
-        if active.scope_mode == spec::SCOPE_MODE_INDIRECT
-            && active.scope_table_root != 0
-            && active.root_pgno != 0
-        {
+        // Validate the committed DATA tree: per-page CRC32C, separators, record
+        // ordering, and record_count vs. the walked tally. A corrupt data tree
+        // must be rejected at open rather than silently loaded for mutation. In
+        // indirect mode every data record's scope_id MUST additionally resolve
+        // to a defined scope (validate_scope_crc above guards the scope tree
+        // itself).
+        if active.root_pgno != 0 {
             let bytes = store.committed_bytes();
             let reader = Reader::open(bytes)?;
-            reader.validate_record_scopes()?;
+            reader.validate_tree()?;
+            if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
+                reader.validate_record_scopes()?;
+            }
         }
 
         let mut w = Writer {
@@ -216,6 +222,7 @@ impl<K: IpKey> Writer<K> {
             w.store.as_ref(),
             w.free_list_head,
             active.root_pgno,
+            active.key_width as u32,
             active.scope_table_root,
         )?;
         w.load_free_list(u64::MAX);
@@ -315,6 +322,13 @@ impl<K: IpKey> Writer<K> {
     /// at call time (not cached) to prevent MVCC violations from stale state.
     pub fn commit(&mut self, updated_unixtime: u64, oldest_reader_txn_id: u64) -> Result<()> {
         self.check()?;
+        // txn_id is the monotonic generation counter. The next generation is
+        // committed_txn_id + 1; if the current generation is already u64::MAX
+        // that would wrap to 0 and collide with the fresh-DB generation, so
+        // refuse before mutating anything — the existing data stays readable.
+        if self.committed_txn_id == u64::MAX {
+            return Err(Error::State("txn_id space exhausted"));
+        }
         // Refresh MVCC state BEFORE any commit logic uses can_recycle.
         self.can_recycle = oldest_reader_txn_id == u64::MAX;
 
@@ -331,6 +345,19 @@ impl<K: IpKey> Writer<K> {
             // in-place — a reader pinned at the old txn would see corrupted
             // scope data. Free them for reclamation at the next commit.
             let old_root = self.scope_root();
+            // Revalidate the committed scope table at commit time: a scope
+            // mutation dirties the table and forces a rebuild that re-reads
+            // the committed entries. If the committed scope data became corrupt
+            // AFTER open, the rebuild would silently drop the unreadable
+            // committed scopes. Detect it here and refuse + poison instead of
+            // silently rebuilding.
+            {
+                let bytes = self.store.committed_bytes();
+                if let Err(e) = crate::scope_table::validate_scope_crc(bytes, old_root) {
+                    self.poisoned = true;
+                    return Err(e);
+                }
+            }
             let mut old_scope_page_count = 0;
             if old_root != 0 {
                 let mut pages = alloc::vec::Vec::new();
@@ -373,12 +400,22 @@ impl<K: IpKey> Writer<K> {
                         reg.entries_for_commit(bytes)
                     };
                     let mut allocated = Vec::new();
+                    // The rebuild performs irreversible page allocations; an
+                    // allocation failure leaves the allocator/registry in an
+                    // indeterminate state. The on-disk meta is still unwritten,
+                    // so the file is the last committed state — but this writer
+                    // must be discarded and reopened.
                     let root = crate::scope_table::build_scope_tree(
                         self.store.as_mut(),
                         &all,
                         &mut allocated,
                         &mut free_pool,
-                    )?;
+                    );
+                    if let Err(e) = root {
+                        self.poisoned = true;
+                        return Err(e);
+                    }
+                    let root = root.unwrap();
                     for pgno in &allocated {
                         self.private_pages.insert(*pgno);
                     }
@@ -546,8 +583,13 @@ impl<K: IpKey> Writer<K> {
         if old_chain_pages.len() >= 20 {
             // Compaction path: read old entries, deduplicate, rewrite.
             let old_entries = if self.free_list_head != 0 {
-                crate::free_list::read_chain(self.store.as_ref(), self.free_list_head)
-                    .unwrap_or_default()
+                match crate::free_list::read_chain(self.store.as_ref(), self.free_list_head) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e);
+                    }
+                }
             } else {
                 Vec::new()
             };
@@ -587,7 +629,13 @@ impl<K: IpKey> Writer<K> {
             let needed = crate::free_list::chain_page_count(&compact_entries);
             chain_pages = alloc::vec::Vec::with_capacity(needed);
             while chain_pages.len() < needed {
-                chain_pages.push(self.alloc_chain_page()?);
+                match self.alloc_chain_page() {
+                    Ok(pgno) => chain_pages.push(pgno),
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e);
+                    }
+                }
             }
             let chain_set: std::collections::HashSet<u32> = chain_pages.iter().copied().collect();
             compact_entries.retain(|e| !chain_set.contains(&e.pgno));
@@ -595,23 +643,45 @@ impl<K: IpKey> Writer<K> {
             self.free_list_head = if compact_entries.is_empty() {
                 0
             } else {
-                crate::free_list::write_chain(self.store.as_mut(), &compact_entries, &chain_pages)?
+                match crate::free_list::write_chain(
+                    self.store.as_mut(),
+                    &compact_entries,
+                    &chain_pages,
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e);
+                    }
+                }
             };
         } else {
             // Append-only path: prepend new segment to existing chain.
             let needed = crate::free_list::chain_page_count(&entries_to_write);
             chain_pages = alloc::vec::Vec::with_capacity(needed);
             while chain_pages.len() < needed {
-                chain_pages.push(self.alloc_chain_page()?);
+                match self.alloc_chain_page() {
+                    Ok(pgno) => chain_pages.push(pgno),
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e);
+                    }
+                }
             }
 
             let old_head = self.free_list_head;
-            self.free_list_head = crate::free_list::append_segment(
+            match crate::free_list::append_segment(
                 self.store.as_mut(),
                 &entries_to_write,
                 &chain_pages,
                 old_head,
-            )?;
+            ) {
+                Ok(h) => self.free_list_head = h,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e);
+                }
+            }
         }
 
         // F9 fix: finalize CRCs on the newly written chain pages.
@@ -619,15 +689,15 @@ impl<K: IpKey> Writer<K> {
             finalize_checksum(self.store.page_mut(pgno));
         }
 
-        // Truncate. Chain pages allocated from the growth region may sit at
-        // positions >= new_total; preserve them so they are not truncated away.
+        // Compute the new logical total. The PHYSICAL truncate to this size
+        // happens AFTER the new metadata is durable (below), so a sync or
+        // truncate failure can never destroy the previous generation's pages
+        // before the new meta is safely on disk. Chain pages allocated from the
+        // growth region may sit at positions >= new_total; preserve them.
         let max_chain_page = chain_pages.iter().copied().max().unwrap_or(0);
-        let total = if trailing > 0 {
+        let (total, need_truncate) = if trailing > 0 {
             let effective_total = new_total.max(max_chain_page + 1);
-            if effective_total < pre_truncate_total {
-                self.store.truncate(effective_total)?;
-            }
-            effective_total
+            (effective_total, effective_total < pre_truncate_total)
         } else {
             // No trailing free pages to reclaim, BUT chain pages may still have
             // been allocated beyond pre_truncate_total (in the growth region,
@@ -636,13 +706,16 @@ impl<K: IpKey> Writer<K> {
             // free-list head points past committed_pages and load_free_list
             // silently drops it (the chain page looks out-of-bounds), so freed
             // pages are never reclaimed and the file grows ~1 page per reopen.
-            pre_truncate_total.max(max_chain_page + 1)
+            (pre_truncate_total.max(max_chain_page + 1), false)
         };
 
         let inactive = 1 - self.active_meta;
         let new_txn_id = self.committed_txn_id + 1;
-        // Flush data + chain pages BEFORE publishing metadata, then flush the
-        // metadata page (commit ordering: data sync → meta write → meta sync).
+        // Publish durable metadata BEFORE physical truncation: flush data +
+        // chain pages, write the new meta page, then flush the meta. Only once
+        // the new generation is durable do we reclaim trailing pages. A sync
+        // failure here leaves the previous generation fully intact and
+        // readable (commit ordering: data sync → meta write → meta sync).
         self.flush_or_poison()?;
         if let Err(e) = self.write_meta_page(
             inactive,
@@ -657,6 +730,20 @@ impl<K: IpKey> Writer<K> {
             return Err(e);
         }
         self.flush_or_poison()?;
+
+        // Physical truncation now that the new generation's metadata is
+        // durable. The reclaimed pages were already superseded (free, beyond
+        // the new root), so losing them does not affect readability — but a
+        // truncate failure means the file length no longer matches the
+        // just-published meta, so the writer is in an indeterminate state and
+        // MUST be poisoned.
+        if need_truncate {
+            if let Err(e) = self.store.truncate(total) {
+                self.poisoned = true;
+                return Err(e);
+            }
+        }
+
         self.active_meta = inactive;
         self.committed_txn_id = new_txn_id;
         self.committed_root = self.pending_root;
@@ -724,6 +811,12 @@ impl<K: IpKey> Writer<K> {
         }
         let new = self.alloc_page()?;
         self.store.copy_page(pgno, new);
+        // copy_page duplicates the source header verbatim, leaving the
+        // self-pgno field pointing at the OLD page. Stamp the new page's own
+        // number so the committed page verifies (pgno == actual) after CRC
+        // finalization — a COW'd branch that only receives a child-pointer
+        // update (branch_update_child) would otherwise keep a stale self-pgno.
+        crate::wire::put_u32(self.store.page_mut(new), spec::PH_PGNO, new);
         self.private_pages.insert(new);
         self.freed_this_txn.push(pgno);
         Ok(new)
@@ -1577,8 +1670,8 @@ impl<K: IpKey> Writer<K> {
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
             Some(reg) => {
-                let (id, was_new) = reg.intern(bitmap, bytes);
-                if was_new {
+                let (id, created) = reg.intern(bitmap, bytes)?;
+                if created {
                     self.scope_dirty = true;
                 }
                 Ok(id)
@@ -1628,11 +1721,19 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn scope_bitmap_set_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        self.scope_dirty = true;
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes) {
-                Some(id) => Ok(id),
+            Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes)? {
+                Some((id, created)) => {
+                    // The scope table only needs rebuilding when a NEW
+                    // scope_id is minted. Setting an already-present feed, or
+                    // deduping onto an existing scope, leaves the committed
+                    // table unchanged.
+                    if created {
+                        self.scope_dirty = true;
+                    }
+                    Ok(id)
+                }
                 None => Err(Error::InvalidInput("unknown scope_id")),
             },
             None => Err(Error::State("requires scope_mode == 2")),
@@ -1640,11 +1741,15 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub fn scope_bitmap_clear_feed(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        self.scope_dirty = true;
         let bytes = self.store.committed_bytes();
         match &mut self.scope_registry {
-            Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes) {
-                Some(id) => Ok(id),
+            Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes)? {
+                Some((id, created)) => {
+                    if created {
+                        self.scope_dirty = true;
+                    }
+                    Ok(id)
+                }
                 None => Err(Error::InvalidInput("unknown scope_id")),
             },
             None => Err(Error::State("requires scope_mode == 2")),
@@ -1652,9 +1757,6 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn apply_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
-            self.scope_dirty = true;
-        }
         let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
@@ -1664,8 +1766,13 @@ impl<K: IpKey> Writer<K> {
                 Ok(scope_id | (1u32 << feed_bit))
             }
             spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
-                Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes) {
-                    Some(id) => Ok(id),
+                Some(reg) => match reg.bitmap_set_feed(scope_id, feed_bit, bytes)? {
+                    Some((id, created)) => {
+                        if created {
+                            self.scope_dirty = true;
+                        }
+                        Ok(id)
+                    }
                     None => Err(Error::InvalidInput("unknown scope_id")),
                 },
                 None => Err(Error::State("requires scope_mode == 2")),
@@ -1675,9 +1782,6 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn clear_feed_bit(&mut self, scope_id: u32, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
-            self.scope_dirty = true;
-        }
         let bytes = self.store.committed_bytes();
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
@@ -1687,8 +1791,13 @@ impl<K: IpKey> Writer<K> {
                 Ok(scope_id & !(1u32 << feed_bit))
             }
             spec::SCOPE_MODE_INDIRECT => match &mut self.scope_registry {
-                Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes) {
-                    Some(id) => Ok(id),
+                Some(reg) => match reg.bitmap_clear_feed(scope_id, feed_bit, bytes)? {
+                    Some((id, created)) => {
+                        if created {
+                            self.scope_dirty = true;
+                        }
+                        Ok(id)
+                    }
                     None => Err(Error::InvalidInput("unknown scope_id")),
                 },
                 None => Err(Error::State("requires scope_mode == 2")),
@@ -1698,9 +1807,6 @@ impl<K: IpKey> Writer<K> {
     }
 
     pub(crate) fn fresh_feed_scope(&mut self, feed_bit: u32) -> Result<u32> {
-        if self.scope_mode == spec::SCOPE_MODE_INDIRECT {
-            self.scope_dirty = true;
-        }
         match self.scope_mode {
             spec::SCOPE_MODE_BITMAP => {
                 if feed_bit >= 32 {
@@ -1715,8 +1821,8 @@ impl<K: IpKey> Writer<K> {
                 match &mut self.scope_registry {
                     Some(reg) => {
                         let bytes = self.store.committed_bytes();
-                        let (id, was_new) = reg.intern(&bm, bytes);
-                        if was_new {
+                        let (id, created) = reg.intern(&bm, bytes)?;
+                        if created {
                             self.scope_dirty = true;
                         }
                         Ok(id)

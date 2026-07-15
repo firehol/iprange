@@ -47,18 +47,25 @@ func AllToAllOverlap[K ipKey[K]](w *Writer[K], onOverlap func(FeedOverlap)) erro
 	// into one total, emitted once per pair (overflow-checked).
 	totals := make(map[uint64]uint64)
 	var order []uint64
+	overflow := false
 	emit := func(a, b, ipCount uint64) {
 		key := a<<32 | b
 		if _, ok := totals[key]; !ok {
 			order = append(order, key)
 		}
-		if totals[key], _ = bits.Add64(totals[key], ipCount, 0); false {
+		var carry uint64
+		totals[key], carry = bits.Add64(totals[key], ipCount, 0)
+		if carry != 0 {
+			overflow = true
 		}
 	}
 	if err := scanOverlapNode[K](w, w.pendingRoot, func(o FeedOverlap) {
 		emit(uint64(o.FeedA), uint64(o.FeedB), o.IPCount)
 	}); err != nil {
 		return err
+	}
+	if overflow {
+		return fmt.Errorf("accumulated overlap pair count exceeds uint64")
 	}
 	sort.Slice(order, func(i, j int) bool {
 		return order[i] < order[j]
@@ -299,6 +306,12 @@ func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b 
 		}
 	case ScopeModeIndirect:
 		bitmap := w.ScopeResolveRef(scopeID)
+		if bitmap == nil {
+			// ResolveRef returns nil for overflow scopes (they span pages and
+			// cannot be returned as one borrowed slice). Materialize them so
+			// committed overflow scopes participate in overlap scans.
+			bitmap = w.ScopeResolve(scopeID)
+		}
 		if bitmap != nil {
 			forEachSetBitPair(bitmap, onPair)
 		}
@@ -318,6 +331,10 @@ func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, onFeed func(bit uint3
 	case ScopeModeIndirect:
 		// Zero-copy ref (issue-6): sub-slice of the committed page image.
 		bitmap := w.ScopeResolveRef(scopeID)
+		if bitmap == nil {
+			// Overflow scopes span pages — materialize so they are not skipped.
+			bitmap = w.ScopeResolve(scopeID)
+		}
 		if bitmap != nil {
 			forEachSetBit(bitmap, onFeed)
 		}

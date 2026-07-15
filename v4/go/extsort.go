@@ -814,7 +814,7 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		config = DefaultExtSortConfig()
 	}
 	if config.ChunkSize <= 0 {
-		config = DefaultExtSortConfig()
+		return nil, fmt.Errorf("extsort chunk_size must be >= 1")
 	}
 
 	if len(records) <= config.ChunkSize {
@@ -906,6 +906,7 @@ type ExtSorter[K ipKey[K]] struct {
 	chunk     []DesiredRecord[K]
 	runPaths  []string
 	finished  bool
+	failed    bool
 	globalSeq uint64
 }
 
@@ -914,17 +915,19 @@ func NewExtSorter[K ipKey[K]](config *ExtSortConfig) *ExtSorter[K] {
 		config = DefaultExtSortConfig()
 	}
 	// Copy the caller's config so later mutation of the caller's struct (or the
-	// TempDir path) cannot change this sorter's live configuration.
+	// TempDir path) cannot change this sorter's live configuration. An
+	// explicitly invalid ChunkSize (<= 0) is preserved so Add/Finish reject it
+	// instead of silently substituting a default.
 	cfg := *config
-	if cfg.ChunkSize <= 0 {
-		cfg = *DefaultExtSortConfig()
-	}
 	return &ExtSorter[K]{config: &cfg}
 }
 
 func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
 	if s.finished {
 		return fmt.Errorf("Add after Finish")
+	}
+	if s.failed {
+		return fmt.Errorf("extsort failed earlier")
 	}
 	if s.config.ChunkSize <= 0 {
 		return fmt.Errorf("extsort chunk_size must be >= 1")
@@ -935,9 +938,21 @@ func (s *ExtSorter[K]) Add(from, to K, scopeID uint32) error {
 	s.chunk = append(s.chunk, DesiredRecord[K]{From: from, To: to, ScopeID: scopeID})
 	s.globalSeq++
 	if len(s.chunk) >= s.config.ChunkSize {
-		return s.spillChunk()
+		if err := s.spillChunk(); err != nil {
+			s.markFailed()
+			return err
+		}
 	}
 	return nil
+}
+
+// markFailed makes the sorter terminal: it drops every owned run file and
+// latches the failed state so no further Add/Finish can accept records. A
+// spill/merge I/O failure must not leave partial state that a later call could
+// publish as a complete, silently-truncated result.
+func (s *ExtSorter[K]) markFailed() {
+	s.failed = true
+	s.abort()
 }
 
 func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
@@ -945,10 +960,17 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 		return nil, fmt.Errorf("Finish called twice")
 	}
 	s.finished = true
+	if s.failed {
+		return nil, fmt.Errorf("extsort failed earlier")
+	}
+	if s.config.ChunkSize <= 0 {
+		s.abort()
+		return nil, fmt.Errorf("extsort chunk_size must be >= 1")
+	}
 
 	if len(s.chunk) > 0 {
 		if err := s.spillChunk(); err != nil {
-			s.abort()
+			s.markFailed()
 			return nil, err
 		}
 	}
@@ -976,7 +998,15 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 			out := freshSpillPath(dir, len(next))
 			if err := mergeRunsToFile[K](batch, out); err != nil {
 				os.Remove(out)
-				s.runPaths = append(next, batch...)
+				// A failed multi-pass merge must clean EVERY owned run file:
+				// the merged outputs produced so far this pass (next), the
+				// failing batch inputs (batch), and the inputs not yet reached
+				// this pass (paths[end:]). Leaking any of them would leave
+				// orphaned spill files behind.
+				cleanupRunFiles(next)
+				cleanupRunFiles(batch)
+				cleanupRunFiles(paths[end:])
+				s.runPaths = nil
 				return nil, err
 			}
 			for _, p := range batch {
@@ -1042,6 +1072,14 @@ func (s *ExtSorter[K]) abort() {
 	}
 	s.runPaths = nil
 	s.chunk = nil
+}
+
+// cleanupRunFiles removes every file in paths (ignoring errors) so a failed
+// merge does not leak owned spill runs.
+func cleanupRunFiles(paths []string) {
+	for _, p := range paths {
+		os.Remove(p)
+	}
 }
 
 func (s *ExtSorter[K]) spillChunk() error {

@@ -58,16 +58,24 @@ pub fn all_to_all_overlap<K: IpKey>(
     // single total, emitted once per pair. Use a small flat list since the
     // number of distinct pairs is bounded by the feed count.
     let mut totals: Vec<(u32, u32, u64)> = Vec::new();
+    let mut overflow = false;
     scan_overlap_node(writer, writer.pending_root, &mut |a, b, ip_count| {
         if let Some(t) = totals.iter_mut().find(|(fa, fb, _)| *fa == a && *fb == b) {
-            t.2 = match t.2.checked_add(ip_count) {
-                Some(v) => v,
-                None => u64::MAX, // overflow sentinel; surfaced below
+            match t.2.checked_add(ip_count) {
+                Some(v) => t.2 = v,
+                // Two individually representable spans whose summed IP count
+                // overflows u64 must be reported, not silently truncated.
+                None => overflow = true,
             };
         } else {
             totals.push((a, b, ip_count));
         }
     })?;
+    if overflow {
+        return Err(Error::Overflow(
+            "accumulated overlap pair count exceeds u64::MAX",
+        ));
+    }
     totals.sort_by_key(|(a, b, _)| (*a, *b));
     for (a, b, n) in totals {
         on_overlap(FeedOverlap {
@@ -143,9 +151,22 @@ fn for_each_feed_pair<K: IpKey>(
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            if let Some(bitmap) = writer.scope_resolve_ref(scope_id) {
-                for_each_set_bit_pair(bitmap, on_pair);
-            }
+            // scope_resolve_ref returns None for overflow scopes (they span
+            // pages and cannot be returned as one borrowed slice). Fall back to
+            // materializing them so committed overflow scopes participate in
+            // the pair scan.
+            let bitmap_owned;
+            let bitmap: &[u8] = match writer.scope_resolve_ref(scope_id) {
+                Some(b) => b,
+                None => {
+                    bitmap_owned = writer.scope_resolve(scope_id);
+                    match &bitmap_owned {
+                        Some(v) => v.as_slice(),
+                        None => &[],
+                    }
+                }
+            };
+            for_each_set_bit_pair(bitmap, on_pair);
         }
         _ => {}
     }
@@ -163,10 +184,20 @@ fn for_each_feed<K: IpKey>(writer: &Writer<K>, scope_id: u32, on_feed: &mut dyn 
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            // Zero-copy ref (issue-6): borrows the committed page image.
-            if let Some(bitmap) = writer.scope_resolve_ref(scope_id) {
-                for_each_set_bit(bitmap, on_feed);
-            }
+            // Zero-copy ref (issue-6): borrows the committed page image, with a
+            // materialization fallback for overflow scopes.
+            let bitmap_owned;
+            let bitmap: &[u8] = match writer.scope_resolve_ref(scope_id) {
+                Some(b) => b,
+                None => {
+                    bitmap_owned = writer.scope_resolve(scope_id);
+                    match &bitmap_owned {
+                        Some(v) => v.as_slice(),
+                        None => &[],
+                    }
+                }
+            };
+            for_each_set_bit(bitmap, on_feed);
         }
         _ => {}
     }

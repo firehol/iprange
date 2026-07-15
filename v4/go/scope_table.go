@@ -29,14 +29,22 @@ func readEntryBitmap(bytes, page []byte, recOff int) []byte {
 		payloadCap := PageSize - overflowPayloadOff
 		out := make([]byte, 0, trueLen)
 		pgno := u32le(page, recOff+10)
-		guard := uint32(0)
+		// The chain length is bounded by the declared bitmap length: at most
+		// ceil(trueLen/payloadCap) pages. Stop after that many so a corrupt or
+		// cyclic chain cannot drive an unbounded read here. Validation rejects
+		// over-/under-length chains before any normal read reaches them.
+		maxPages := 0
+		if trueLen > 0 {
+			maxPages = (trueLen + payloadCap - 1) / payloadCap
+		}
+		pagesRead := 0
 		for pgno != 0 && len(out) < trueLen {
-			guard++
-			if guard > TreeHeightMax {
+			if pagesRead >= maxPages {
 				break
 			}
+			pagesRead++
 			base := int(pgno) * PageSize
-			if base+PageSize > len(bytes) {
+			if base < 0 || base+PageSize > len(bytes) {
 				break
 			}
 			opage := bytes[base : base+PageSize]
@@ -192,19 +200,26 @@ func ScopeRegistryFromEntries(entries []ScopeEntry) *ScopeRegistry {
 //  3. committed on-disk scope tree via findScopeByBitmap
 //     (O(scope_pages) time, O(1) heap — no eager O(S) load)
 //  4. miss → mint a new id.
-func (r *ScopeRegistry) Intern(bitmap []byte, committedBytes []byte) (uint32, bool) {
+func (r *ScopeRegistry) Intern(bitmap []byte, committedBytes []byte) (uint32, bool, error) {
 	if id, ok := r.newBitmapIndex[string(bitmap)]; ok {
-		return id, false
+		return id, false, nil
 	}
 	if r.committedIndex != nil {
 		if id, ok := r.committedIndex[string(bitmap)]; ok {
-			return id, false
+			return id, false, nil
 		}
 	}
 	if r.committedRoot != 0 {
 		if id, ok := findScopeByBitmap(committedBytes, r.committedRoot, bitmap); ok {
-			return id, false
+			return id, false, nil
 		}
+	}
+	// scope_id 0 is reserved (FileScopeID); valid ids are 1..MaxUint32. nextID
+	// wraps to 0 only after MaxUint32 has been minted, or when the opened table
+	// already maxed out the id space — either way the id space is exhausted and
+	// a new id cannot be minted without wrapping/colliding.
+	if r.nextID == 0 {
+		return 0, false, fmt.Errorf("scope_id space exhausted")
 	}
 	id := r.nextID
 	r.nextID++
@@ -214,7 +229,7 @@ func (r *ScopeRegistry) Intern(bitmap []byte, committedBytes []byte) (uint32, bo
 	copy(stored, bitmap)
 	r.newBitmapIndex[string(stored)] = id
 	r.newEntries = append(r.newEntries, ScopeEntry{ScopeID: id, Bitmap: stored})
-	return id, true
+	return id, true, nil
 }
 
 // Resolve returns the bitmap for a scope_id, or nil if not found.
@@ -258,12 +273,13 @@ func canonicalize(bitmap []byte) []byte {
 	return bitmap[:end]
 }
 
-// BitmapSetFeed sets a feed bit. Returns the new scope_id and false if the
-// input scope_id does not resolve to a known scope.
-func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool) {
+// BitmapSetFeed sets a feed bit. Returns the new scope_id, found=false if the
+// input scope_id does not resolve to a known scope, and created=true if a new
+// scope_id had to be minted (the only case that dirties the scope table).
+func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool, bool, error) {
 	bm := r.Resolve(scopeID, committedBytes)
 	if bm == nil {
-		return 0, false
+		return 0, false, false, nil
 	}
 	newBm := append([]byte(nil), bm...)
 	byteIdx := int(feedBit / 8)
@@ -274,18 +290,21 @@ func (r *ScopeRegistry) BitmapSetFeed(scopeID uint32, feedBit uint32, committedB
 		newBm = padded
 	}
 	newBm[byteIdx] |= 1 << bitIdx
-	id, _ := r.Intern(newBm, committedBytes)
-	return id, true
+	id, created, err := r.Intern(newBm, committedBytes)
+	if err != nil {
+		return 0, true, false, err
+	}
+	return id, true, created, nil
 }
 
-// BitmapClearFeed clears a feed bit. Returns the new scope_id (0 if empty) and
-// false if the input scope_id does not resolve to a known scope. Trailing zero
-// bytes are trimmed so clearing the highest set bit returns to the canonical
-// (original) scope.
-func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool) {
+// BitmapClearFeed clears a feed bit. Returns the new scope_id (0 if empty),
+// found=false if the input scope_id does not resolve to a known scope, and
+// created=true if a new scope_id had to be minted. Trailing zero bytes are
+// trimmed so clearing the highest set bit returns to the canonical scope.
+func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committedBytes []byte) (uint32, bool, bool, error) {
 	bm := r.Resolve(scopeID, committedBytes)
 	if bm == nil {
-		return 0, false
+		return 0, false, false, nil
 	}
 	newBm := append([]byte(nil), bm...)
 	byteIdx := int(feedBit / 8)
@@ -302,10 +321,13 @@ func (r *ScopeRegistry) BitmapClearFeed(scopeID uint32, feedBit uint32, committe
 		}
 	}
 	if allZero {
-		return 0, true
+		return 0, true, false, nil
 	}
-	id, _ := r.Intern(trimmed, committedBytes)
-	return id, true
+	id, created, err := r.Intern(trimmed, committedBytes)
+	if err != nil {
+		return 0, true, false, err
+	}
+	return id, true, created, nil
 }
 
 // EntriesForCommit returns the full entry list (committed ∪ new) for the
@@ -927,6 +949,12 @@ func ReadMaxScopeID(bytes []byte, rootPgno uint32) (uint32, bool) {
 // that still verifies against a recomputed CRC would otherwise pass the CRC
 // guard and later cause an out-of-bounds slice access (panic) when the leaf is
 // read by findScope/readScopeNode.
+//
+// Overflow scope bitmaps (bitmaps larger than the inline MaxBitmapWidth slot)
+// live in a chain of PageTypeOverflow pages. validateOverflowChain verifies
+// each chain's CRC, page type, self-pgno, declared length vs. actual page
+// count, unused-tail zeroing, and that no overflow page is shared between two
+// scopes or aliases live (non-overflow) data.
 func ValidateScopeCRC(bytes []byte, rootPgno uint32) error {
 	if rootPgno == 0 {
 		return nil
@@ -934,10 +962,84 @@ func ValidateScopeCRC(bytes []byte, rootPgno uint32) error {
 	totalPages := uint32(len(bytes) / PageSize)
 	prevMax := uint32(0)
 	havePrev := false
-	return validateScopeCRCNode(bytes, rootPgno, 0, totalPages, &prevMax, &havePrev)
+	seenOverflow := make(map[uint32]struct{})
+	return validateScopeCRCNode(bytes, rootPgno, 0, totalPages, &prevMax, &havePrev, seenOverflow)
 }
 
-func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages uint32, prevMax *uint32, havePrev *bool) error {
+// validateOverflowChain validates the overflow chain for the scope-leaf entry
+// at recOff. It verifies each page's CRC, type, self-pgno, reserved/entry_count
+// fields, that the page count matches the declared bitmap length, that the
+// unused payload tail of the final page is zero, and (via seenOverflow) that no
+// overflow page is shared by two scopes. A chain that points at a non-overflow
+// page (e.g. a live data/scope-tree page) is rejected by the type check, which
+// also covers the "overflow page aliases live data" case.
+func validateOverflowChain(bytes []byte, page []byte, recOff int, totalPages uint32, seenOverflow map[uint32]struct{}) error {
+	trueLen := u32le(page, recOff+6)
+	// Overflow is only canonical when the bitmap exceeds the inline slot.
+	if uint64(trueLen) <= uint64(MaxBitmapWidth) {
+		return fmt.Errorf("noncanonical scope overflow length")
+	}
+	first := u32le(page, recOff+10)
+	if first == 0 {
+		return fmt.Errorf("scope overflow chain has zero first page")
+	}
+	payloadCap := uint64(PageSize - overflowPayloadOff)
+	expectedPages := (uint64(trueLen) + payloadCap - 1) / payloadCap
+	pgno := first
+	count := uint64(0)
+	for pgno != 0 {
+		count++
+		if count > expectedPages {
+			return fmt.Errorf("scope overflow chain longer than declared length")
+		}
+		if pgno < 2 || pgno >= totalPages {
+			return fmt.Errorf("scope overflow page out of bounds: %d", pgno)
+		}
+		if _, dup := seenOverflow[pgno]; dup {
+			return fmt.Errorf("scope overflow page owned by multiple scopes: %d", pgno)
+		}
+		seenOverflow[pgno] = struct{}{}
+		base := int(pgno) * PageSize
+		if base+PageSize > len(bytes) {
+			return fmt.Errorf("scope overflow page out of bounds: %d", pgno)
+		}
+		opage := bytes[base : base+PageSize]
+		if !verifyPage(opage) {
+			return fmt.Errorf("scope overflow page %d fails CRC", pgno)
+		}
+		h := decodeHeader(opage)
+		if h.pageType != PageTypeOverflow {
+			return fmt.Errorf("scope overflow page %d wrong type %d", pgno, h.pageType)
+		}
+		if h.reserved != 0 {
+			return fmt.Errorf("scope overflow page %d has nonzero reserved byte", pgno)
+		}
+		if h.entryCount != 0 {
+			return fmt.Errorf("scope overflow page %d has nonzero entry_count", pgno)
+		}
+		if h.pgno != pgno {
+			return fmt.Errorf("scope overflow page %d self-pgno mismatch", pgno)
+		}
+		// The final page's unused payload tail (beyond the declared length)
+		// must be zero so a later reader does not interpret stale bytes.
+		if count == expectedPages {
+			used := uint64(trueLen) - (expectedPages-1)*payloadCap
+			tailStart := overflowPayloadOff + int(used)
+			for _, b := range opage[tailStart:] {
+				if b != 0 {
+					return fmt.Errorf("scope overflow page %d has nonzero unused tail", pgno)
+				}
+			}
+		}
+		pgno = u32le(opage, PageHeaderSize)
+	}
+	if count != expectedPages {
+		return fmt.Errorf("scope overflow chain shorter than declared length")
+	}
+	return nil
+}
+
+func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages uint32, prevMax *uint32, havePrev *bool, seenOverflow map[uint32]struct{}) error {
 	if depth > TreeHeightMax {
 		return fmt.Errorf("scope table too deep")
 	}
@@ -953,6 +1055,12 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 		return fmt.Errorf("scope table page %d fails CRC", pgno)
 	}
 	h := decodeHeader(page)
+	if h.reserved != 0 {
+		return fmt.Errorf("scope page %d has nonzero reserved byte", pgno)
+	}
+	if h.pgno != pgno {
+		return fmt.Errorf("scope page %d self-pgno mismatch", pgno)
+	}
 	switch h.pageType {
 	case PageTypeScopeLeaf:
 		// entry_count MUST be within the page capacity, or a later read
@@ -971,6 +1079,11 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 			// value > MaxBitmapWidth.
 			if bmLen != ScopeBitmapOverflow && int(bmLen) > MaxBitmapWidth {
 				return fmt.Errorf("scope bitmap_len exceeds payload")
+			}
+			if bmLen == ScopeBitmapOverflow {
+				if err := validateOverflowChain(bytes, page, recOff, totalPages, seenOverflow); err != nil {
+					return err
+				}
 			}
 			if *havePrev && id <= *prevMax {
 				return fmt.Errorf("scope_ids not strictly increasing across leaves")
@@ -995,8 +1108,20 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 				return fmt.Errorf("scope child pgno out of range: %d", child)
 			}
 		}
+		// Each separator MUST equal the minimum scope_id of its right subtree:
+		// the scope tree is keyed by scope_id, and a separator smaller or
+		// larger than the right child's minimum would mis-route lookups. The
+		// minimum of a subtree is the leftmost leaf's first entry; find it by
+		// descending the leftmost child at each level.
+		for j := 0; j < sepCount; j++ {
+			sep := u32le(bv.sep(j), 0)
+			rightMin, ok := scopeSubtreeMin(bytes, bv.child(j+1), totalPages)
+			if !ok || rightMin != sep {
+				return fmt.Errorf("scope branch separator %d does not equal right child minimum", sep)
+			}
+		}
 		for j := 0; j < bv.childCount(); j++ {
-			if err := validateScopeCRCNode(bytes, bv.child(j), depth+1, totalPages, prevMax, havePrev); err != nil {
+			if err := validateScopeCRCNode(bytes, bv.child(j), depth+1, totalPages, prevMax, havePrev, seenOverflow); err != nil {
 				return err
 			}
 		}
@@ -1004,4 +1129,38 @@ func validateScopeCRCNode(bytes []byte, pgno uint32, depth uint32, totalPages ui
 	default:
 		return fmt.Errorf("unexpected page type %d in scope table", h.pageType)
 	}
+}
+
+// scopeSubtreeMin returns the minimum scope_id of the subtree rooted at pgno by
+// descending the leftmost child at each level. Returns (0, false) on a
+// structural error (bad page, bad type, empty leaf).
+func scopeSubtreeMin(bytes []byte, pgno uint32, totalPages uint32) (uint32, bool) {
+	for guard := 0; guard < TreeHeightMax; guard++ {
+		if pgno < 2 || pgno >= totalPages {
+			return 0, false
+		}
+		off := int(pgno) * PageSize
+		if off+PageSize > len(bytes) {
+			return 0, false
+		}
+		page := bytes[off : off+PageSize]
+		h := decodeHeader(page)
+		switch h.pageType {
+		case PageTypeScopeLeaf:
+			count := int(h.entryCount)
+			if count < 1 {
+				return 0, false
+			}
+			return u32le(page, PageHeaderSize), true
+		case PageTypeScopeBranch:
+			bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+			if bv.childCount() == 0 {
+				return 0, false
+			}
+			pgno = bv.child(0)
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
 }

@@ -264,6 +264,22 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		committedPages = pageLimit
 	}
 
+	// Pre-validate the committed image BEFORE newMmapStore, which extends the
+	// file by a growth chunk. openWriter runs the full corruption guard (data
+	// tree CRC/structure, scope table including overflow chains, free-list); a
+	// corrupt file must be rejected WITHOUT being grown or modified. The
+	// throwaway writer is discarded — the real mmap-backed writer is
+	// constructed below.
+	preImage := make([]byte, int(committedPages)*PageSize)
+	if _, err := file.ReadAt(preImage, 0); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	if _, err := openWriter[K](newVecPageStore(append([]byte(nil), preImage...))); err != nil {
+		file.Close()
+		return nil, err
+	}
+
 	store, err := newMmapStore(file, committedPages)
 	if err != nil {
 		file.Close()

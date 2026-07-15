@@ -15,11 +15,13 @@
 //!   9. feed_add_range — bitmap feed-bit OR over 1000 ranges (mode 1, 100k DB)
 //!   10. extsort   — external sort of 100k unsorted records
 //!   11. nested_normalization — adversarial containment scaling curve
+//!   12. all_to_all_pair_scaling — indirect-scope pair aggregation by feed count
 //!
 //! All base scenarios are parameterized by record count (10k, 100k, 1M) and use IPv4
 //! with scope_mode=0 (scalar, the simplest and most common production shape).
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use iprange_livedb::overlap::all_to_all_overlap;
 use iprange_livedb::{
     ext_sort, migrate::migrate, page_store::VecPageStore, DesiredRecord, ExtSortConfig, Ipv4Key,
     MigrateOptions, Reader, SortedStream, Writer,
@@ -434,6 +436,29 @@ fn bench_nested_normalization(c: &mut Criterion) {
     group.finish();
 }
 
+// --- Scenario 12: all-to-all pair aggregation scaling ---
+
+fn bench_all_to_all_pair_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("12_all_to_all_pair_scaling");
+    for feeds in [8usize, 16, 32, 64] {
+        let mut writer = Writer::<Ipv4Key>::create(2, 0).unwrap();
+        let bitmap = vec![0xff; feeds.div_ceil(8)];
+        let scope_id = writer.scope_intern(&bitmap).unwrap();
+        writer.set(Ipv4Key(0), Ipv4Key(0), scope_id).unwrap();
+        writer.commit(0, u64::MAX).unwrap();
+        let pair_count = feeds * (feeds - 1) / 2;
+        group.throughput(Throughput::Elements(pair_count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(feeds), &writer, |b, writer| {
+            b.iter(|| {
+                let mut callbacks = 0usize;
+                all_to_all_overlap(writer, &mut |_| callbacks += 1).unwrap();
+                black_box(callbacks);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_scan,
@@ -448,5 +473,6 @@ criterion_group!(
     bench_feed_add_range,
     bench_extsort,
     bench_nested_normalization,
+    bench_all_to_all_pair_scaling,
 );
 criterion_main!(benches);

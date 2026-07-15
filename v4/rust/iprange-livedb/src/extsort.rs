@@ -48,6 +48,7 @@ pub struct ExtSorter<K: IpKey> {
     config: ExtSortConfig,
     chunk: Vec<(DesiredRecord<K>, u64)>,
     run_paths: Vec<PathBuf>,
+    failed: bool,
     global_seq: u64,
 }
 
@@ -57,11 +58,15 @@ impl<K: IpKey> ExtSorter<K> {
             config,
             chunk: Vec::new(),
             run_paths: Vec::new(),
+            failed: false,
             global_seq: 0,
         }
     }
 
     pub fn add(&mut self, from: K, to: K, scope_id: u32) -> Result<()> {
+        if self.failed {
+            return Err(Error::State("extsort failed earlier"));
+        }
         if self.config.chunk_size == 0 {
             return Err(Error::InvalidInput("extsort chunk_size must be >= 1"));
         }
@@ -72,14 +77,27 @@ impl<K: IpKey> ExtSorter<K> {
         self.global_seq += 1;
         self.chunk.push((DesiredRecord { from, to, scope_id }, seq));
         if self.chunk.len() >= self.config.chunk_size {
-            self.spill_chunk()?;
+            if let Err(e) = self.spill_chunk() {
+                self.mark_failed();
+                return Err(e);
+            }
         }
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<Box<dyn DesiredStream<K>>> {
+        if self.failed {
+            return Err(Error::State("extsort failed earlier"));
+        }
+        if self.config.chunk_size == 0 {
+            self.abort();
+            return Err(Error::InvalidInput("extsort chunk_size must be >= 1"));
+        }
         if !self.chunk.is_empty() {
-            self.spill_chunk()?;
+            if let Err(e) = self.spill_chunk() {
+                self.mark_failed();
+                return Err(e);
+            }
         }
         let dir: PathBuf = self
             .config
@@ -103,12 +121,21 @@ impl<K: IpKey> ExtSorter<K> {
                     let out = fresh_temp_path(&dir, next.len());
                     if let Err(e) = merge_to_file::<K>(batch, &out) {
                         let _ = std::fs::remove_file(&out);
+                        // A failed multi-pass merge must clean EVERY owned run:
+                        // merged outputs so far this pass (next), the failing
+                        // batch inputs (batch), and the unprocessed runs
+                        // (self.run_paths[end..]). Leaking any leaves orphaned
+                        // spill files behind.
                         for p in &next {
                             let _ = std::fs::remove_file(p);
                         }
-                        // self.run_paths still holds the current pass inputs;
-                        // they are cleaned by Drop via the partial state below.
-                        self.run_paths = next;
+                        for p in batch {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        for p in &self.run_paths[end..] {
+                            let _ = std::fs::remove_file(p);
+                        }
+                        self.run_paths.clear();
                         return Err(e);
                     }
                     for p in batch {
@@ -163,6 +190,23 @@ impl<K: IpKey> ExtSorter<K> {
         self.run_paths.push(path);
         self.chunk.clear();
         Ok(())
+    }
+
+    // mark_failed makes the sorter terminal: it drops every owned run file and
+    // latches the failed state so no further add/finish can accept records. A
+    // spill/merge I/O failure must not leave partial state that a later call
+    // could publish as a complete, silently-truncated result.
+    fn mark_failed(&mut self) {
+        self.failed = true;
+        self.abort();
+    }
+
+    fn abort(&mut self) {
+        for p in &self.run_paths {
+            let _ = std::fs::remove_file(p);
+        }
+        self.run_paths.clear();
+        self.chunk.clear();
     }
 }
 

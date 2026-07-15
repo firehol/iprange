@@ -235,6 +235,23 @@ impl<K: IpKey> FileWriter<K> {
         validate_meta_geometry(&active, len)?;
         let committed_pages = active.total_pages as u32;
 
+        // Pre-validate the committed image BEFORE MmapStore::open, which
+        // extends the file by a growth chunk. Writer::open runs the full
+        // corruption guard (data tree CRC/structure, scope table including
+        // overflow chains, free-list); a corrupt file must be rejected WITHOUT
+        // being grown or modified.
+        {
+            use std::os::unix::fs::FileExt;
+            let committed_bytes = committed_pages as usize * PAGE_SIZE;
+            let mut pre_image = vec![0u8; committed_bytes];
+            file.read_at(&mut pre_image, 0).map_err(Error::Io)?;
+            let pre_store = crate::page_store::VecPageStore::new(pre_image);
+            if let Err(e) = Writer::<K>::open(Box::new(pre_store)) {
+                let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+                return Err(e);
+            }
+        }
+
         let store = MmapStore::open(file.try_clone().map_err(Error::Io)?, committed_pages)?;
         let mut writer = Writer::<K>::open(Box::new(store))?;
 

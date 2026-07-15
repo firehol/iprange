@@ -478,9 +478,9 @@ func TestSortedStreamClone(t *testing.T) {
 func TestScopeRegistryHashMapIntern(t *testing.T) {
 	reg := NewScopeRegistry()
 	// No committed table on disk → nil committedBytes is fine.
-	id1, _ := reg.Intern([]byte{0x01}, nil)
-	id2, _ := reg.Intern([]byte{0x03}, nil)
-	id1b, _ := reg.Intern([]byte{0x01}, nil)
+	id1, _, _ := reg.Intern([]byte{0x01}, nil)
+	id2, _, _ := reg.Intern([]byte{0x03}, nil)
+	id1b, _, _ := reg.Intern([]byte{0x01}, nil)
 	if id1 != 1 || id2 != 2 || id1b != 1 {
 		t.Fatalf("intern: %d %d %d", id1, id2, id1b)
 	}
@@ -494,16 +494,16 @@ func TestScopeRegistryFromEntriesBuildsIndex(t *testing.T) {
 	reg := ScopeRegistryFromEntries(entries)
 	// Interning an existing bitmap should return the existing ID (via the
 	// pre-populated committed index).
-	id, _ := reg.Intern([]byte{0xAB}, nil)
+	id, _, _ := reg.Intern([]byte{0xAB}, nil)
 	if id != 1 {
 		t.Fatalf("expected id=1, got %d", id)
 	}
-	id, _ = reg.Intern([]byte{0xCD}, nil)
+	id, _, _ = reg.Intern([]byte{0xCD}, nil)
 	if id != 2 {
 		t.Fatalf("expected id=2, got %d", id)
 	}
 	// New bitmap gets a new ID.
-	id, _ = reg.Intern([]byte{0xEF}, nil)
+	id, _, _ = reg.Intern([]byte{0xEF}, nil)
 	if id != 3 {
 		t.Fatalf("expected id=3, got %d", id)
 	}

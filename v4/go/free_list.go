@@ -128,21 +128,25 @@ func ValidateChainCRC(store PageReader, head uint32) error {
 // time. Two complementary checks:
 //  1. Self-reference (raw, per chain page): a chain page's freed-pgno array
 //     must never contain its OWN page number.
-//  2. Live-metadata (newest-entry-wins): a page whose authoritative state is
-//     "free" must never be a meta page (0/1), the active data root, or the
-//     scope-table root. Stale entries for a reused (tombstoned) or truncated
-//     page are harmless and skipped.
-func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, scopeRoot uint32) error {
+//  2. Reachable-page (newest-entry-wins): a page whose authoritative state is
+//     "free" must never be a reachable (live) page — i.e. a meta page (0/1),
+//     any data-tree page (root + all branch/leaf children), any scope-tree
+//     page (root + all branch/leaf children + overflow chain pages), or a
+//     free-list chain page itself. Stale entries for a tombstoned (reused) or
+//     truncated page are harmless and skipped.
+func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, dataKeyWidth uint32, scopeRoot uint32) error {
 	if head == 0 {
 		return nil
 	}
 	total := store.totalPages()
-	// Pass 1: raw self-reference check + collect entries for newest-wins.
 	type ent struct {
 		pgno uint32
 		ftxn uint64
 	}
 	var entries []ent
+	// Pass 1: raw self-reference check + collect entries. (Chain page numbers
+	// are not recorded: a freed entry pointing to a different chain page is
+	// harmless — LoadFreeList excludes chain pages via ReadChainPageNumbers.)
 	pgno := head
 	seen := uint32(0)
 	for pgno != 0 {
@@ -174,14 +178,28 @@ func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, scopeRo
 		}
 		pgno = u32le(page, TxnFreeNext)
 	}
-	// Pass 2: newest-entry-wins (entries are newest-first), then reject live
-	// metadata whose authoritative state is "free".
+	// Pass 2: newest-entry-wins (entries are newest-first).
 	latest := make(map[uint32]uint64, len(entries))
 	for _, e := range entries {
 		if _, ok := latest[e.pgno]; !ok {
 			latest[e.pgno] = e.ftxn
 		}
 	}
+	// Build the set of reachable LIVE data pages (data tree + scope tree +
+	// overflow chains) plus the meta pages. Chain pages are intentionally NOT
+	// included here: a freed entry that points to a (different) free-list chain
+	// page is harmless because load_free_list excludes chain pages via
+	// read_chain_page_numbers. A freed entry pointing to its OWN chain page is
+	// caught by the self-reference check above. Stale entries pointing at chain
+	// pages arise legitimately when chain compaction frees old chain pages that
+	// are later reused as chain pages (no tombstone, by design).
+	reachable := make(map[uint32]struct{}, 16)
+	reachable[0] = struct{}{}
+	reachable[1] = struct{}{}
+	collectReachableDataPages(store, dataRoot, dataKeyWidth, reachable)
+	collectReachableScopePages(store, scopeRoot, reachable)
+	// Reject any authoritative-free entry that aliases a reachable data/scope
+	// page.
 	for p, ftxn := range latest {
 		if ftxn == ^uint64(0) {
 			continue // tombstoned (reused)
@@ -189,14 +207,129 @@ func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, scopeRo
 		if uint64(p) >= uint64(total) {
 			continue // truncated; LoadFreeList filters it
 		}
-		if p < 2 {
-			return fmt.Errorf("free-list entry points to meta page")
-		}
-		if p == dataRoot || p == scopeRoot {
-			return fmt.Errorf("free-list entry points to live root")
+		if _, live := reachable[p]; live {
+			return fmt.Errorf("free-list entry points to reachable page %d", p)
 		}
 	}
 	return nil
+}
+
+// collectReachableDataPages walks the data B+tree from root and adds every
+// reachable branch/leaf page to out. Panic-safe: bounds-checks every page
+// access, clamps entry counts to the page capacity, and guards against cycles.
+func collectReachableDataPages(store PageReader, root, keyWidth uint32, out map[uint32]struct{}) {
+	total := store.totalPages()
+	if root == 0 || root >= total {
+		return
+	}
+	maxBranch := (PageSize - PageHeaderSize - 4) / (int(keyWidth) + 4)
+	stack := []uint32{root}
+	for len(stack) > 0 {
+		pgno := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if pgno >= total {
+			continue
+		}
+		if _, seen := out[pgno]; seen {
+			continue
+		}
+		out[pgno] = struct{}{}
+		page := store.page(pgno)
+		if len(page) < PageSize {
+			continue
+		}
+		h := decodeHeader(page)
+		if h.pageType == PageTypeBranch {
+			cnt := int(h.entryCount)
+			if cnt > maxBranch {
+				cnt = maxBranch
+			}
+			bv := newBranchView(page, cnt, int(keyWidth))
+			for j := 0; j < bv.childCount(); j++ {
+				c := bv.child(j)
+				if c < total {
+					if _, seen := out[c]; !seen {
+						stack = append(stack, c)
+					}
+				}
+			}
+		}
+	}
+}
+
+// collectReachableScopePages walks the scope B+tree from scopeRoot and adds
+// every reachable scope branch/leaf page PLUS every overflow-chain page to out.
+// Panic-safe: bounds-checks, clamps counts, cycle-guards the overflow chains.
+func collectReachableScopePages(store PageReader, scopeRoot uint32, out map[uint32]struct{}) {
+	total := store.totalPages()
+	if scopeRoot == 0 || scopeRoot >= total {
+		return
+	}
+	maxBranch := (PageSize - PageHeaderSize - 4) / (int(ScopeKeyWidth) + 4)
+	maxLeaf := (PageSize - PageHeaderSize) / ScopeEntrySize
+	stack := []uint32{scopeRoot}
+	for len(stack) > 0 {
+		pgno := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if pgno >= total {
+			continue
+		}
+		if _, seen := out[pgno]; seen {
+			continue
+		}
+		out[pgno] = struct{}{}
+		page := store.page(pgno)
+		if len(page) < PageSize {
+			continue
+		}
+		h := decodeHeader(page)
+		switch h.pageType {
+		case PageTypeScopeBranch:
+			cnt := int(h.entryCount)
+			if cnt > maxBranch {
+				cnt = maxBranch
+			}
+			bv := newBranchView(page, cnt, int(ScopeKeyWidth))
+			for j := 0; j < bv.childCount(); j++ {
+				c := bv.child(j)
+				if c < total {
+					if _, seen := out[c]; !seen {
+						stack = append(stack, c)
+					}
+				}
+			}
+		case PageTypeScopeLeaf:
+			cnt := int(h.entryCount)
+			if cnt > maxLeaf {
+				cnt = maxLeaf
+			}
+			for i := 0; i < cnt; i++ {
+				recOff := PageHeaderSize + i*ScopeEntrySize
+				if u16le(page, recOff+4) == ScopeBitmapOverflow {
+					opgno := u32le(page, recOff+10)
+					guard := uint32(0)
+					for opgno != 0 {
+						if _, seen := out[opgno]; seen {
+							break
+						}
+						if opgno >= total {
+							break
+						}
+						guard++
+						if guard > total {
+							break // cycle guard
+						}
+						out[opgno] = struct{}{}
+						opage := store.page(opgno)
+						if len(opage) < PageSize {
+							break
+						}
+						opgno = u32le(opage, PageHeaderSize)
+					}
+				}
+			}
+		}
+	}
 }
 
 // ReadChainPageNumbers returns the page numbers of the chain pages themselves

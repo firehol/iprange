@@ -196,115 +196,12 @@ impl<'a> Reader<'a> {
         if root == 0 {
             return Ok(());
         }
-        let mut prev_max: Option<u32> = None;
-        self.validate_scope_node(root, 0, &mut prev_max)
-    }
-
-    fn validate_scope_node(&self, pgno: u32, depth: u32, prev_max: &mut Option<u32>) -> Result<()> {
-        if depth > spec::TREE_HEIGHT_MAX {
-            return Err(Error::Structural("scope table too deep"));
-        }
-        if pgno as u64 >= self.meta.total_pages {
-            return Err(Error::Structural("scope page out of bounds"));
-        }
-        let page = self.page_bytes(pgno);
-        // Per-page CRC: a corrupt scope page must be rejected.
-        if !crc32c::verify_page(page) {
-            return Err(Error::ChecksumFailed("scope table page"));
-        }
-        let h = crate::wire::PageHeader::decode(page);
-        if h.reserved != 0 {
-            return Err(Error::NonZeroReserved("scope page header"));
-        }
-        if h.pgno != pgno {
-            return Err(Error::Structural("scope page self-pgno mismatch"));
-        }
-        match h.page_type {
-            spec::PAGE_TYPE_SCOPE_LEAF => {
-                let count = h.entry_count as usize;
-                let max_entries = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE)
-                    / crate::scope_table::SCOPE_ENTRY_SIZE;
-                if count < 1 || count > max_entries {
-                    return Err(Error::Invariant("scope leaf entry_count out of range"));
-                }
-                for i in 0..count {
-                    let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
-                    let id = crate::wire::u32_le(page, rec_off);
-                    let bitmap_len = crate::wire::u16_le(page, rec_off + 4);
-                    // An inline bitmap_len beyond the on-disk slot would read
-                    // past the entry's payload. The overflow sentinel is the
-                    // one legitimate value > MAX_BITMAP_WIDTH.
-                    if bitmap_len != crate::scope_table::SCOPE_BITMAP_OVERFLOW
-                        && (bitmap_len as usize) > crate::scope_table::MAX_BITMAP_WIDTH
-                    {
-                        return Err(Error::Invariant("scope bitmap_len exceeds payload"));
-                    }
-                    // Strictly increasing within the leaf AND across leaves
-                    // (prev_max threads the largest id seen so far).
-                    match *prev_max {
-                        Some(pm) if id <= pm => {
-                            return Err(Error::Invariant(
-                                "scope_ids not strictly increasing across leaves",
-                            ));
-                        }
-                        _ => {}
-                    }
-                    *prev_max = Some(id);
-                }
-                Ok(())
-            }
-            spec::PAGE_TYPE_SCOPE_BRANCH => {
-                let s = h.entry_count as usize; // separator count
-                let sep_width = spec::SCOPE_KEY_WIDTH;
-                let max_seps = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (sep_width + 4);
-                if s < 1 || s > max_seps {
-                    return Err(Error::Invariant(
-                        "scope branch separator count out of range",
-                    ));
-                }
-                // Separators and children are laid out directly in the page:
-                // [first_child(4)] [sep(4) child(4)]*s
-                let mut have_prev = false;
-                let mut prev_sep = 0u32;
-                for i in 0..s {
-                    let off = spec::PAGE_HEADER_SIZE + 4 + i * (sep_width + 4);
-                    let sep = crate::wire::u32_le(page, off);
-                    if have_prev && sep <= prev_sep {
-                        return Err(Error::Invariant(
-                            "scope branch separators not strictly increasing",
-                        ));
-                    }
-                    prev_sep = sep;
-                    have_prev = true;
-                }
-                // child_count = s + 1. Verify each child is in range.
-                let cc = s + 1;
-                for j in 0..cc {
-                    let child_off = if j == 0 {
-                        spec::PAGE_HEADER_SIZE
-                    } else {
-                        spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (sep_width + 4) + sep_width
-                    };
-                    let cj = crate::wire::u32_le(page, child_off);
-                    if cj < 2 || cj as u64 >= self.meta.total_pages {
-                        return Err(Error::Structural("scope child pgno out of range"));
-                    }
-                }
-                // Recurse into each child, threading prev_max for cross-leaf
-                // scope_id ordering.
-                for j in 0..cc {
-                    let child_off = if j == 0 {
-                        spec::PAGE_HEADER_SIZE
-                    } else {
-                        spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (sep_width + 4) + sep_width
-                    };
-                    let cj = crate::wire::u32_le(page, child_off);
-                    self.validate_scope_node(cj, depth + 1, prev_max)?;
-                }
-                Ok(())
-            }
-            _ => Err(Error::Structural("unexpected page type in scope table")),
-        }
+        // Delegate to the shared comprehensive validator: per-page CRC +
+        // structural checks (entry_count, child range, scope_id monotonicity),
+        // overflow chain integrity (CRC, type, declared-length vs. page count,
+        // unused tail, no shared/aliased pages), and branch separator ==
+        // right-child minimum.
+        crate::scope_table::validate_scope_crc(self.bytes, root)
     }
 
     /// The file's IP family.
@@ -531,7 +428,7 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn validate_tree(&self) -> Result<()> {
+    pub(crate) fn validate_tree(&self) -> Result<()> {
         if self.meta.root_pgno == 0 {
             // Empty tree: the full pass enforces the exact record_count (§9 step 5).
             if self.meta.record_count != 0 {
@@ -604,8 +501,18 @@ impl<'a> Reader<'a> {
                 return Err(Error::Structural("expected leaf at tree_height"));
             }
             let r = h.entry_count as usize;
-            if r < 1 || r > self.leaf_max {
+            if r > self.leaf_max {
                 return Err(Error::Invariant("leaf entry_count out of range"));
+            }
+            if r == 0 {
+                // An empty leaf is a degenerate sparse-tree state the writer
+                // leaves behind after deletes (compaction reclaims it once the
+                // tree is sparse enough). It carries no records, so the
+                // record-level ordering/tail checks do not apply; the CRC and
+                // page-type guards above already ran. Leaving prev_to untouched
+                // makes the empty leaf transparent to the cross-leaf
+                // disjointness check.
+                return Ok(());
             }
             let leaf = LeafView::<K>::new(page, r);
             // Tail after the records MUST be zero (full pass).

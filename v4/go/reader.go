@@ -443,9 +443,11 @@ func (r *Reader) validateScopeTable() error {
 	if r.meta.scopeTableRoot == 0 {
 		return nil
 	}
-	prevMax := uint32(0)
-	havePrev := false
-	return r.validateScopeNode(r.meta.scopeTableRoot, 0, &prevMax, &havePrev)
+	// Delegate to the shared comprehensive validator: per-page CRC + structural
+	// checks (entry_count, child range, scope_id monotonicity), overflow chain
+	// integrity (CRC, type, declared-length vs. page count, unused tail, no
+	// shared/aliased pages), and branch separator == right-child minimum.
+	return ValidateScopeCRC(r.bytes, r.meta.scopeTableRoot)
 }
 
 // validateScopeNode is the recursive structural walk over scope-table pages.
@@ -559,11 +561,20 @@ func validateNode[K ipKey[K]](r *Reader, pgno uint32, depth uint32, lo, hi K, st
 		if h.pageType != PageTypeLeaf {
 			return errf("structural", "expected leaf at tree_height")
 		}
-		rc := int(h.entryCount)
-		if rc < 1 || rc > leafMax(r.meta.keyWidth) {
-			return errf("invariant", "leaf entry_count out of range")
-		}
-		lv := newLeafView(page, rc, kw)
+	rc := int(h.entryCount)
+	if rc < 0 || rc > leafMax(r.meta.keyWidth) {
+		return errf("invariant", "leaf entry_count out of range")
+	}
+	if rc == 0 {
+		// An empty leaf is a degenerate sparse-tree state the writer leaves
+		// behind after deletes (compaction reclaims it once the tree is sparse
+		// enough). It carries no records, so the record-level ordering/tail
+		// checks do not apply; the CRC and page-type guards above already ran.
+		// Leaving st.prevTo untouched makes the empty leaf transparent to the
+		// cross-leaf disjointness check.
+		return nil
+	}
+	lv := newLeafView(page, rc, kw)
 		for _, b := range page[PageHeaderSize+lv.bodyLen():] {
 			if b != 0 {
 				return errf("reserved", "leaf tail")
