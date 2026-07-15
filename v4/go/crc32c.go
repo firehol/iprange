@@ -15,6 +15,15 @@ import (
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
+// checksumZeroField is the 8-byte zero stand-in for the checksum field when a
+// page CRC is computed. Hoisted to package scope (rather than a per-call local)
+// so it does NOT escape to the heap on every pageChecksum call — verifyPage is
+// called once per page during open-time validation (ValidateScopeCRC / data
+// validation), and a stack-local [8]byte passed to crc32.Update escaped, costing
+// one heap allocation per page and making open-time heap scale with page count
+// (Rule 1 violation). Read-only by convention; never mutated.
+var checksumZeroField [8]byte
+
 // crc32c returns the CRC32C/Castagnoli of b (full init + xorout, D9).
 func crc32c(b []byte) uint32 {
 	return crc32.Update(0, castagnoli, b)
@@ -24,11 +33,10 @@ func crc32c(b []byte) uint32 {
 // bytes with the 8-byte checksum field ([8, 16)) taken as zero, in the low 4 bytes of a
 // u64 (the high 4 bytes are 0). page MUST be exactly pageSize bytes.
 func pageChecksum(page []byte) uint64 {
-	crc := crc32.Update(0, castagnoli, page[:PHChecksum]) // [0, 8)
-	var zero [8]byte
-	crc = crc32.Update(crc, castagnoli, zero[:])             // checksum field as zero
-	crc = crc32.Update(crc, castagnoli, page[PHChecksum+8:]) // [16, pageSize)
-	return uint64(crc)                                       // high 32 bits zero by construction
+	crc := crc32.Update(0, castagnoli, page[:PHChecksum])     // [0, 8)
+	crc = crc32.Update(crc, castagnoli, checksumZeroField[:]) // checksum field as zero
+	crc = crc32.Update(crc, castagnoli, page[PHChecksum+8:])  // [16, pageSize)
+	return uint64(crc)                                        // high 32 bits zero by construction
 }
 
 // verifyPage reports whether a page matches its stored checksum (D9), enforcing the

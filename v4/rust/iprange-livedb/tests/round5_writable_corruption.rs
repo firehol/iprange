@@ -84,6 +84,27 @@ fn writable_open_rejects_every_committed_data_corruption_without_changing_file()
     finalize_checksum(root);
     cases.push(("branch-separator-mismatch", separator));
 
+    let mut empty_leaf_tail = branch_tree.clone();
+    let meta = active_meta(&empty_leaf_tail);
+    let root_base = meta.root_pgno as usize * spec::PAGE_SIZE;
+    let root = &empty_leaf_tail[root_base..root_base + spec::PAGE_SIZE];
+    let root_header = PageHeader::decode(root);
+    assert_eq!(root_header.page_type, spec::PAGE_TYPE_BRANCH);
+    assert!(root_header.entry_count > 0);
+    let leaf_pgno = u32_at(root, spec::PAGE_HEADER_SIZE);
+    let leaf_base = leaf_pgno as usize * spec::PAGE_SIZE;
+    let leaf = &mut empty_leaf_tail[leaf_base..leaf_base + spec::PAGE_SIZE];
+    let leaf_header = PageHeader::decode(leaf);
+    assert_eq!(leaf_header.page_type, spec::PAGE_TYPE_LEAF);
+    assert!(leaf_header.entry_count > 0);
+    leaf[spec::PH_ENTRY_COUNT..spec::PH_ENTRY_COUNT + 2].copy_from_slice(&0u16.to_le_bytes());
+    finalize_checksum(leaf);
+    let record_count = meta.record_count - u64::from(leaf_header.entry_count);
+    let meta_page = active_meta_page(&mut empty_leaf_tail);
+    put_u64(meta_page, spec::META_RECORD_COUNT, record_count);
+    finalize_checksum(meta_page);
+    cases.push(("empty-leaf-nonzero-tail", empty_leaf_tail));
+
     let mut failures = Vec::new();
     for (name, image) in cases {
         let reader = Reader::open(&image).expect("cheap read open should defer tree validation");

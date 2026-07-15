@@ -148,16 +148,15 @@ impl<K: IpKey> ExtSorter<K> {
             self.run_paths = next;
         }
 
+        // A single spill run is streamed through the SAME k-way merge path as
+        // the multi-run case (a one-element merge). Materializing it into a Vec
+        // would scale heap with the run size (Rules 1/3); RunReader streams one
+        // record at a time, so finish() stays O(1) heap regardless of run count.
         let inner: Box<dyn DesiredStream<K>> = if self.run_paths.is_empty() {
             Box::new(SortedStream {
                 records: Vec::new(),
                 pos: 0,
             })
-        } else if self.run_paths.len() == 1 {
-            let tagged = read_run::<K>(&self.run_paths[0])?;
-            let _ = std::fs::remove_file(&self.run_paths[0]);
-            let records: Vec<DesiredRecord<K>> = tagged.into_iter().map(|(r, _)| r).collect();
-            Box::new(SortedStream { records, pos: 0 })
         } else {
             let merge = KWayMerge::<K>::new(&self.run_paths)?;
             Box::new(MergeStream {
@@ -876,6 +875,9 @@ fn write_run<K: IpKey>(path: &Path, records: &[(DesiredRecord<K>, u64)]) -> Resu
     file.flush().map_err(Error::Io)
 }
 
+/// Read an entire spill run into a Vec. Test/diagnostic utility only — the
+/// streaming finish() path never materializes a run (it uses RunReader).
+#[cfg(test)]
 fn read_run<K: IpKey>(path: &Path) -> Result<Vec<(DesiredRecord<K>, u64)>> {
     let mut file = OpenOptions::new()
         .read(true)

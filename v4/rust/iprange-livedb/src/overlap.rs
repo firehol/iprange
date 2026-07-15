@@ -11,10 +11,16 @@
 //!
 //! The overlap matrix is accumulated via a callback that receives
 //! (feed_a, feed_b, overlap_ip_count) for every non-zero pair.
+//!
+//! Heap discipline: both overlap scans run with heap that is FLAT in the
+//! stored record / leaf count. Leaf iteration uses an O(tree-height) cursor
+//! (never a materialized `Vec` of leaf page numbers), and overflow scope
+//! bitmaps are resolved once and cached per operation (never per record).
 
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::node::{BranchView, LeafView};
+use crate::page_store::PageStore;
 use crate::spec;
 use crate::wire::PageHeader;
 use crate::writer::Writer;
@@ -38,7 +44,8 @@ pub struct FeedOverlap {
 ///
 /// For mode 1 (bitmap): each record's scope_id bits are the feeds.
 /// For mode 2 (indirect): each record's scope_id is resolved to a bitmap via
-/// the scope table.
+/// the scope table. Overflow (multi-page) scopes are resolved once and cached
+/// for the duration of the scan.
 ///
 /// **Single pass: O(records × avg_feeds_per_record²).** For a typical record
 /// covered by 3 feeds, that's 3 choose 2 = 3 comparisons per record.
@@ -58,19 +65,25 @@ pub fn all_to_all_overlap<K: IpKey>(
     // single total, emitted once per pair. Use a small flat list since the
     // number of distinct pairs is bounded by the feed count.
     let mut totals: Vec<(u32, u32, u64)> = Vec::new();
+    let mut cache = ScopeCache::new();
     let mut overflow = false;
-    scan_overlap_node(writer, writer.pending_root, &mut |a, b, ip_count| {
-        if let Some(t) = totals.iter_mut().find(|(fa, fb, _)| *fa == a && *fb == b) {
-            match t.2.checked_add(ip_count) {
-                Some(v) => t.2 = v,
-                // Two individually representable spans whose summed IP count
-                // overflows u64 must be reported, not silently truncated.
-                None => overflow = true,
-            };
-        } else {
-            totals.push((a, b, ip_count));
-        }
-    })?;
+    scan_overlap_node(
+        writer,
+        writer.pending_root,
+        &mut cache,
+        &mut |a, b, ip_count| {
+            if let Some(t) = totals.iter_mut().find(|(fa, fb, _)| *fa == a && *fb == b) {
+                match t.2.checked_add(ip_count) {
+                    Some(v) => t.2 = v,
+                    // Two individually representable spans whose summed IP count
+                    // overflows u64 must be reported, not silently truncated.
+                    None => overflow = true,
+                };
+            } else {
+                totals.push((a, b, ip_count));
+            }
+        },
+    )?;
     if overflow {
         return Err(Error::Overflow(
             "accumulated overlap pair count exceeds u64::MAX",
@@ -90,6 +103,7 @@ pub fn all_to_all_overlap<K: IpKey>(
 fn scan_overlap_node<K: IpKey>(
     writer: &Writer<K>,
     pgno: u32,
+    cache: &mut ScopeCache,
     on_pair_count: &mut dyn FnMut(u32, u32, u64),
 ) -> Result<()> {
     let page = writer.store.as_ref().page(pgno);
@@ -105,7 +119,7 @@ fn scan_overlap_node<K: IpKey>(
 
                 // Iterate feed pairs directly from the scope bitmap — no
                 // per-record Vec allocation. Emits every (a, b) with a < b.
-                for_each_feed_pair(writer, r.scope_id(), &mut |a, b| {
+                for_each_feed_pair(writer, r.scope_id(), cache, &mut |a, b| {
                     on_pair_count(a, b, ip_count);
                 });
             }
@@ -114,7 +128,7 @@ fn scan_overlap_node<K: IpKey>(
         spec::PAGE_TYPE_BRANCH => {
             let branch = BranchView::<K>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
-                scan_overlap_node(writer, branch.child(j), on_pair_count)?;
+                scan_overlap_node(writer, branch.child(j), cache, on_pair_count)?;
             }
             Ok(())
         }
@@ -126,11 +140,13 @@ fn scan_overlap_node<K: IpKey>(
 /// calling `on_pair(a, b)` for each. Avoids materializing a feed `Vec`.
 ///
 /// - bitmap mode: `scope_id` IS the bitmap; walk set bits with `x & (x - 1)`.
-/// - indirect mode: resolve to the bitmap byte slice (zero-copy ref, issue-6)
-///   and scan it directly — no per-record Vec allocation.
+/// - indirect mode: resolve to the bitmap byte slice (zero-copy ref for inline
+///   scopes, cached owned slice for overflow scopes), then scan it directly —
+///   no per-record Vec allocation.
 fn for_each_feed_pair<K: IpKey>(
     writer: &Writer<K>,
     scope_id: u32,
+    cache: &mut ScopeCache,
     on_pair: &mut dyn FnMut(u32, u32),
 ) {
     match writer.scope_mode {
@@ -151,29 +167,28 @@ fn for_each_feed_pair<K: IpKey>(
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            // scope_resolve_ref returns None for overflow scopes (they span
-            // pages and cannot be returned as one borrowed slice). Fall back to
-            // materializing them so committed overflow scopes participate in
-            // the pair scan.
-            let bitmap_owned;
-            let bitmap: &[u8] = match writer.scope_resolve_ref(scope_id) {
-                Some(b) => b,
-                None => {
-                    bitmap_owned = writer.scope_resolve(scope_id);
-                    match &bitmap_owned {
-                        Some(v) => v.as_slice(),
-                        None => &[],
-                    }
-                }
-            };
-            for_each_set_bit_pair(bitmap, on_pair);
+            // Inline scopes resolve zero-copy. Overflow scopes span pages and
+            // cannot be borrowed as one slice, so they are decoded once and
+            // cached for the rest of this overlap operation — a scope's bitmap
+            // is immutable within a transaction, so caching is safe.
+            if let Some(b) = writer.scope_resolve_ref(scope_id) {
+                for_each_set_bit_pair(b, on_pair);
+            } else {
+                let b = cache.overflow_bitmap(writer, scope_id);
+                for_each_set_bit_pair(b, on_pair);
+            }
         }
         _ => {}
     }
 }
 
 /// Iterate every set feed bit in `scope_id`, calling `on_feed(bit)` for each.
-fn for_each_feed<K: IpKey>(writer: &Writer<K>, scope_id: u32, on_feed: &mut dyn FnMut(u32)) {
+fn for_each_feed<K: IpKey>(
+    writer: &Writer<K>,
+    scope_id: u32,
+    cache: &mut ScopeCache,
+    on_feed: &mut dyn FnMut(u32),
+) {
     match writer.scope_mode {
         spec::SCOPE_MODE_BITMAP => {
             let mut bits = scope_id;
@@ -184,22 +199,182 @@ fn for_each_feed<K: IpKey>(writer: &Writer<K>, scope_id: u32, on_feed: &mut dyn 
             }
         }
         spec::SCOPE_MODE_INDIRECT => {
-            // Zero-copy ref (issue-6): borrows the committed page image, with a
-            // materialization fallback for overflow scopes.
-            let bitmap_owned;
-            let bitmap: &[u8] = match writer.scope_resolve_ref(scope_id) {
-                Some(b) => b,
-                None => {
-                    bitmap_owned = writer.scope_resolve(scope_id);
-                    match &bitmap_owned {
-                        Some(v) => v.as_slice(),
-                        None => &[],
-                    }
-                }
-            };
-            for_each_set_bit(bitmap, on_feed);
+            // Zero-copy ref for inline scopes; cached decode for overflow scopes.
+            if let Some(b) = writer.scope_resolve_ref(scope_id) {
+                for_each_set_bit(b, on_feed);
+            } else {
+                let b = cache.overflow_bitmap(writer, scope_id);
+                for_each_set_bit(b, on_feed);
+            }
         }
         _ => {}
+    }
+}
+
+/// Resolve-once cache for overflow (multi-page) scope bitmaps within a single
+/// overlap operation.
+///
+/// `scope_resolve_ref` returns `None` for overflow scopes (they cannot be
+/// borrowed as one slice). Without a cache, every record referencing such a
+/// scope would pay a fresh `Vec` decode — O(records × bitmap_size) heap that
+/// grows with the record count. Since a scope's bitmap is immutable within a
+/// transaction, each distinct overflow scope need only be decoded once.
+///
+/// Heap is bounded by the number of DISTINCT overflow scopes (typically 1–5),
+/// which is independent of the record count — flat.
+#[derive(Debug)]
+struct ScopeCache {
+    entries: Vec<(u32, Vec<u8>)>,
+}
+
+impl ScopeCache {
+    fn new() -> Self {
+        ScopeCache {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Return the overflow bitmap for `scope_id`, decoding it on first access
+    /// and reusing the cached copy thereafter. Only call this after
+    /// `scope_resolve_ref` has already returned `None` (i.e. this is an
+    /// overflow scope). Returns an empty slice for an unknown id.
+    fn overflow_bitmap<K: IpKey>(&mut self, writer: &Writer<K>, scope_id: u32) -> &[u8] {
+        if let Some(idx) = self.entries.iter().position(|(id, _)| *id == scope_id) {
+            return self.entries[idx].1.as_slice();
+        }
+        let bitmap = writer.scope_resolve(scope_id).unwrap_or_default();
+        self.entries.push((scope_id, bitmap));
+        self.entries.last().expect("just pushed").1.as_slice()
+    }
+}
+
+/// In-order leaf traversal of the pending B+tree using O(tree height) state.
+///
+/// Replaces the previous `pending_leaf_pages()` materialization, which pushed
+/// every leaf page number into a `Vec<u32>` — O(leaf count) heap that grows
+/// with the database. This cursor keeps a stack of `(branch_pgno, child_index)`
+/// frames (at most `TREE_HEIGHT_MAX`), so its heap footprint is a fixed-size
+/// constant regardless of how many leaves the tree holds.
+///
+/// Invariant: when `valid`, `record_index` is a valid slot within
+/// `current_leaf_pgno` OR the cursor is positioned at the first slot of a leaf
+/// that may still need to be advanced over (handled by `current_record`/`advance`).
+#[derive(Clone, Copy, Debug)]
+struct LeafCursor {
+    /// Path from the root: each frame is the branch page and the child index
+    /// currently being visited. Capped at the maximum legal tree height.
+    stack: [(u32, u16); STACK_CAP],
+    /// Number of valid frames in `stack`.
+    depth: usize,
+    current_leaf_pgno: u32,
+    record_index: u16,
+    valid: bool,
+}
+
+/// Maximum cursor stack depth. The tree height is bounded by `TREE_HEIGHT_MAX`
+/// (32); a height-H tree has H-1 branch levels, so 32 frames always suffice.
+const STACK_CAP: usize = spec::TREE_HEIGHT_MAX as usize;
+
+impl LeafCursor {
+    /// Descend from `root` to its leftmost leaf. `root` MUST be non-zero and
+    /// point at a well-formed tree (caller checks `pending_root != 0`).
+    fn new<K: IpKey>(root: u32, store: &dyn PageStore) -> Self {
+        let mut stack = [(0u32, 0u16); STACK_CAP];
+        let mut depth = 0usize;
+        let mut pgno = root;
+        loop {
+            let page = store.page(pgno);
+            let h = PageHeader::decode(page);
+            if h.page_type == spec::PAGE_TYPE_LEAF {
+                break;
+            }
+            // Branch: record this frame and descend into the leftmost child.
+            if depth >= STACK_CAP {
+                break;
+            }
+            let branch = BranchView::<K>::new(page, h.entry_count as usize);
+            stack[depth] = (pgno, 0);
+            depth += 1;
+            pgno = branch.child(0);
+        }
+        LeafCursor {
+            stack,
+            depth,
+            current_leaf_pgno: pgno,
+            record_index: 0,
+            valid: true,
+        }
+    }
+
+    /// The record at the current cursor position, or `None` past the last leaf.
+    /// Returns owned key/scope values so no store borrow escapes the call.
+    #[inline]
+    fn current_record<K: IpKey>(&self, store: &dyn PageStore) -> Option<(K, K, u32)> {
+        if !self.valid {
+            return None;
+        }
+        let page = store.page(self.current_leaf_pgno);
+        let h = PageHeader::decode(page);
+        let count = h.entry_count as usize;
+        if self.record_index as usize >= count {
+            return None;
+        }
+        let leaf = LeafView::<K>::new(page, count);
+        let r = leaf.record(self.record_index as usize);
+        Some((r.from(), r.to(), r.scope_id()))
+    }
+
+    /// Advance by one record, crossing leaf boundaries. O(height) amortized
+    /// over a full scan: each page is pushed/popped a constant number of times.
+    #[inline]
+    fn advance<K: IpKey>(&mut self, store: &dyn PageStore) {
+        if !self.valid {
+            return;
+        }
+        self.record_index += 1;
+        let page = store.page(self.current_leaf_pgno);
+        let h = PageHeader::decode(page);
+        if (self.record_index as usize) < h.entry_count as usize {
+            return;
+        }
+        self.descend_to_next_leaf::<K>(store);
+    }
+
+    /// Move from the end of the current leaf to the first record of the next
+    /// leaf in key order, popping the ancestor stack until a branch has an
+    /// unvisited child. Sets `valid = false` when no more leaves remain.
+    fn descend_to_next_leaf<K: IpKey>(&mut self, store: &dyn PageStore) {
+        while self.depth > 0 {
+            self.depth -= 1;
+            let (pgno, child_idx) = self.stack[self.depth];
+            let next_child = child_idx + 1;
+            let page = store.page(pgno);
+            let h = PageHeader::decode(page);
+            let branch = BranchView::<K>::new(page, h.entry_count as usize);
+            if (next_child as usize) < branch.child_count() {
+                self.stack[self.depth] = (pgno, next_child);
+                self.depth += 1;
+                let mut pgno = branch.child(next_child as usize);
+                loop {
+                    let dpage = store.page(pgno);
+                    let dh = PageHeader::decode(dpage);
+                    if dh.page_type == spec::PAGE_TYPE_LEAF {
+                        self.current_leaf_pgno = pgno;
+                        self.record_index = 0;
+                        return;
+                    }
+                    if self.depth >= STACK_CAP {
+                        self.valid = false;
+                        return;
+                    }
+                    let dbranch = BranchView::<K>::new(dpage, dh.entry_count as usize);
+                    self.stack[self.depth] = (pgno, 0);
+                    self.depth += 1;
+                    pgno = dbranch.child(0);
+                }
+            }
+        }
+        self.valid = false;
     }
 }
 
@@ -286,6 +461,9 @@ fn ip_range_count<K: IpKey>(from: K, to: K) -> Option<u64> {
 /// tree_height); this is O(tree_pages + foreign) + overlap output. Unsorted
 /// foreign input would silently under-count overlaps.
 ///
+/// Tree records are streamed leaf-by-leaf via an O(tree-height) [`LeafCursor`]
+/// — no materialized leaf-page list — so heap is flat in the leaf count.
+///
 /// This is the ASN/Geo/critical-infra use case: compare one external feed
 /// against all stored feeds in a single pass.
 pub fn foreign_vs_all<K: IpKey>(
@@ -306,15 +484,9 @@ pub fn foreign_vs_all<K: IpKey>(
         while next_foreign().is_some() {}
         return Ok(());
     }
-    // Collect leaf page numbers in tree (key) order once — page numbers only,
-    // no record materialization. The records inside are globally sorted.
-    let leaf_pages = writer.pending_leaf_pages()?;
 
-    // Permanent cursor over tree records (leaf idx, record idx). Only advances
-    // forward across foreign ranges — records that end before the current
-    // foreign range's `from` can never overlap it or any later (sorted) range.
-    let mut r_li = 0usize;
-    let mut r_ri = 0usize;
+    let mut cursor = LeafCursor::new::<K>(writer.pending_root, writer.store.as_ref());
+    let mut cache = ScopeCache::new();
 
     // The single-pass linear merge REQUIRES the foreign ranges to be sorted
     // ascending by `from` and pairwise disjoint (from <= to, and each range
@@ -335,20 +507,21 @@ pub fn foreign_vs_all<K: IpKey>(
         }
         prev_to = Some(f_to);
         // Phase 1 — permanently skip records ending strictly before f_from.
-        while let Some((_, rec_to, _)) = read_leaf_rec::<K>(writer, &leaf_pages, r_li, r_ri) {
+        // Records that end before the current foreign range's `from` can never
+        // overlap it or any later (sorted) range.
+        while let Some((_, rec_to, _)) = cursor.current_record::<K>(writer.store.as_ref()) {
             if rec_to >= f_from {
                 break;
             }
-            step_leaf_rec::<K>(writer, &leaf_pages, &mut r_li, &mut r_ri);
+            cursor.advance::<K>(writer.store.as_ref());
         }
-        // Phase 2 — scan forward from the permanent cursor, emitting overlaps,
-        // until a record starts after f_to. The scan cursor is a COPY of the
-        // permanent one: records that overlap this foreign range may also
-        // overlap the next, so the permanent cursor is not advanced past them.
-        let mut s_li = r_li;
-        let mut s_ri = r_ri;
+        // Phase 2 — scan forward from a COPY of the permanent cursor, emitting
+        // overlaps, until a record starts after f_to. The scan cursor is a copy
+        // because records overlapping this foreign range may also overlap the
+        // next, so the permanent cursor is not advanced past them.
+        let mut scan = cursor;
         while let Some((rec_from, rec_to, scope_id)) =
-            read_leaf_rec::<K>(writer, &leaf_pages, s_li, s_ri)
+            scan.current_record::<K>(writer.store.as_ref())
         {
             if rec_from > f_to {
                 break;
@@ -358,51 +531,13 @@ pub fn foreign_vs_all<K: IpKey>(
             let overlap_to = if f_to <= rec_to { f_to } else { rec_to };
             let ip_count = ip_range_count::<K>(overlap_from, overlap_to)
                 .ok_or(Error::Overflow("ip range count exceeds u64::MAX"))?;
-            for_each_feed(writer, scope_id, &mut |feed| {
+            for_each_feed(writer, scope_id, &mut cache, &mut |feed| {
                 on_overlap(feed, 0, ip_count); // feed_bit=0 means "foreign feed"
             });
-            step_leaf_rec::<K>(writer, &leaf_pages, &mut s_li, &mut s_ri);
+            scan.advance::<K>(writer.store.as_ref());
         }
     }
     Ok(())
-}
-
-/// Read the record at leaf-pages cursor `(li, ri)`, or `None` past the end.
-#[inline]
-fn read_leaf_rec<K: IpKey>(
-    writer: &Writer<K>,
-    leaf_pages: &[u32],
-    li: usize,
-    ri: usize,
-) -> Option<(K, K, u32)> {
-    if li >= leaf_pages.len() {
-        return None;
-    }
-    let page = writer.store.as_ref().page(leaf_pages[li]);
-    let h = PageHeader::decode(page);
-    let count = h.entry_count as usize;
-    if ri >= count {
-        return None;
-    }
-    let leaf = LeafView::<K>::new(page, count);
-    let r = leaf.record(ri);
-    Some((r.from(), r.to(), r.scope_id()))
-}
-
-/// Advance the leaf-pages cursor by one record, crossing leaf boundaries.
-#[inline]
-fn step_leaf_rec<K: IpKey>(writer: &Writer<K>, leaf_pages: &[u32], li: &mut usize, ri: &mut usize) {
-    *ri += 1;
-    while *li < leaf_pages.len() {
-        let page = writer.store.as_ref().page(leaf_pages[*li]);
-        let h = PageHeader::decode(page);
-        let count = h.entry_count as usize;
-        if *ri < count {
-            return;
-        }
-        *li += 1;
-        *ri = 0;
-    }
 }
 
 /// Slice-based convenience wrapper around `foreign_vs_all`.
@@ -558,6 +693,151 @@ mod tests {
         assert_eq!(
             hits, 1000,
             "every foreign range must hit its record exactly once"
+        );
+    }
+
+    // Multi-leaf tree: assert the LeafCursor crosses leaf boundaries correctly.
+    // Insert enough records to force several leaf pages, then verify a spanning
+    // foreign range reports every record exactly once.
+    #[test]
+    fn foreign_vs_all_multi_leaf_cursor() {
+        let mut w = Writer::<Ipv4Key>::create(1, 0).unwrap();
+        // IPv4 leaf holds ~340 records; insert 2000 disjoint single-IP records
+        // (feed 0) → at least 5 leaf pages, exercising cursor leaf crossings.
+        const N: u32 = 2000;
+        for i in 0u32..N {
+            w.set(Ipv4Key(10_000 + i), Ipv4Key(10_000 + i), 0b001)
+                .unwrap();
+        }
+        // One foreign range spanning the whole key range.
+        let mut yielded = false;
+        let mut hits = 0u64;
+        foreign_vs_all(
+            &w,
+            || {
+                if yielded {
+                    None
+                } else {
+                    yielded = true;
+                    Some((Ipv4Key(10_000), Ipv4Key(10_000 + N - 1)))
+                }
+            },
+            &mut |_f, _fid, _c| hits += 1,
+        )
+        .unwrap();
+        assert_eq!(hits, N as u64, "spanning range must hit every record once");
+    }
+}
+
+// Heap-scaling proof for both fixes. Lives in a separate module because it
+// installs a `#[global_allocator]` (valid only once per test binary); the lib
+// unit-test binary has no other global allocator, so this is unambiguous.
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    use crate::key::Ipv4Key;
+    use crate::spec;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    struct CountingAlloc;
+
+    unsafe impl GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if COUNTING.load(Ordering::Relaxed) {
+                ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            }
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            if COUNTING.load(Ordering::Relaxed) {
+                ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            }
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            if COUNTING.load(Ordering::Relaxed) {
+                ALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+            }
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAlloc = CountingAlloc;
+    static COUNTING: AtomicBool = AtomicBool::new(false);
+    static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    // Build a tree of `records` single-IP records, ALL referencing the same
+    // committed overflow scope (bitmap > MAX_BITMAP_WIDTH = 256 bytes). This
+    // exercises BOTH fixes at once:
+    //   - Fix 1: many leaves (≈records/340) → LeafCursor must not materialize them.
+    //   - Fix 2: one overflow scope repeated per record → must be cached, not
+    //            decoded fresh each time.
+    fn overflow_scope_writer(records: u32) -> Writer<Ipv4Key> {
+        let mut w = Writer::<Ipv4Key>::create(spec::SCOPE_MODE_INDIRECT, 0).unwrap();
+        // 300-byte bitmap (300 > 256) with a high bit set so canonicalization
+        // keeps the full width → stored as an overflow chain.
+        let mut bitmap = vec![0u8; 300];
+        bitmap[0] = 0x01; // feed 0
+        bitmap[299] = 0x80; // force length 300 → overflow
+        let scope_id = w.scope_intern(&bitmap).unwrap();
+        // Commit so the scope leaves `new_entries` and is resolved from the
+        // committed scope tree — where overflow entries return `None` from
+        // `scope_resolve_ref` (triggering the cached decode path).
+        w.commit(1, u64::MAX).unwrap();
+        for i in 0..records {
+            let ip = Ipv4Key(i * 2);
+            w.append(ip, ip, scope_id).unwrap();
+        }
+        w.commit(2, u64::MAX).unwrap();
+        w
+    }
+
+    fn overflow_overlap_allocated_bytes(records: u32) -> usize {
+        let writer = overflow_scope_writer(records);
+        let mut yielded = false;
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
+        COUNTING.store(true, Ordering::Relaxed);
+        foreign_vs_all(
+            &writer,
+            || {
+                if yielded {
+                    None
+                } else {
+                    yielded = true;
+                    Some((Ipv4Key(0), Ipv4Key((records - 1) * 2)))
+                }
+            },
+            &mut |_, _, _| {},
+        )
+        .unwrap();
+        COUNTING.store(false, Ordering::Relaxed);
+        ALLOCATED_BYTES.load(Ordering::Relaxed)
+    }
+
+    // Heap must stay flat as the stored leaf/record count grows: the overflow
+    // scope is decoded once (cache) and leaves are streamed (cursor), so the
+    // 500k-record case allocates essentially the same bytes as the 1k case.
+    #[test]
+    fn foreign_vs_all_overflow_scope_heap_flat() {
+        let small = overflow_overlap_allocated_bytes(1_000);
+        let large = overflow_overlap_allocated_bytes(500_000);
+        // Tolerance stays below the un-fixed costs so the assertion catches a
+        // regression of EITHER fix: a materialized leaf-page Vec (~5.9 KB for
+        // 500k IPv4 records) or a per-record overflow decode (~150 MB). With
+        // both fixes the measured delta is 0 (one cached bitmap, O(height)
+        // cursor on the stack).
+        const TOLERANCE: usize = 4 << 10;
+        assert!(
+            large <= small + TOLERANCE,
+            "overlap heap scaled with records/leaves: small={small} large={large}"
         );
     }
 }

@@ -127,26 +127,30 @@ func ValidateChainCRC(store PageReader, head uint32) error {
 // validateFreeEntries validates the CONTENTS of the free-list chain at open
 // time. Two complementary checks:
 //  1. Self-reference (raw, per chain page): a chain page's freed-pgno array
-//     must never contain its OWN page number.
-//  2. Reachable-page (newest-entry-wins): a page whose authoritative state is
-//     "free" must never be a reachable (live) page — i.e. a meta page (0/1),
-//     any data-tree page (root + all branch/leaf children), any scope-tree
-//     page (root + all branch/leaf children + overflow chain pages), or a
-//     free-list chain page itself. Stale entries for a tombstoned (reused) or
-//     truncated page are harmless and skipped.
+//     must never contain its OWN page number — a chain page is allocated, not
+//     freed, in the transaction that writes it.
+//  2. Live-metadata (newest-entry-wins): a page whose authoritative state is
+//     "free" (its newest chain entry is a real freed_txn_id, not a tombstone
+//     and not a truncated page) must never be a meta page (0/1), the active
+//     data root, a reachable data/scope-tree page, or a reachable scope
+//     overflow page. Stale entries for a tombstoned (reused) or truncated page
+//     are harmless and skipped.
+//
+// The reachability check is INVERTED (Rules 1/7): instead of materializing a
+// reachable set that scales with the live-tree size, it builds a SMALL free set
+// (scales with free count) and stream-walks the data/scope trees probing that
+// set. Heap stays O(free count + tree height), independent of tree size.
 func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, dataKeyWidth uint32, scopeRoot uint32) error {
 	if head == 0 {
 		return nil
 	}
 	total := store.totalPages()
-	type ent struct {
-		pgno uint32
-		ftxn uint64
-	}
-	var entries []ent
-	// Pass 1: raw self-reference check + collect entries. (Chain page numbers
-	// are not recorded: a freed entry pointing to a different chain page is
-	// harmless — LoadFreeList excludes chain pages via ReadChainPageNumbers.)
+
+	// Pass 1: raw self-reference check + newest-entry-wins dedup. The chain is
+	// newest-first, so the first time a pgno is seen it carries its authoritative
+	// (newest) freed_txn_id. This map scales with FREE COUNT (a handful of COW
+	// victims per transaction), NOT with the live-tree size (Rules 1/7).
+	latest := make(map[uint32]uint64)
 	pgno := head
 	seen := uint32(0)
 	for pgno != 0 {
@@ -174,110 +178,137 @@ func validateFreeEntries(store PageReader, head uint32, dataRoot uint32, dataKey
 			if p == pgno {
 				return fmt.Errorf("free-list entry self-references chain page")
 			}
-			entries = append(entries, ent{pgno: p, ftxn: freedIn})
+			if _, ok := latest[p]; !ok {
+				latest[p] = freedIn
+			}
 		}
 		pgno = u32le(page, TxnFreeNext)
 	}
-	// Pass 2: newest-entry-wins (entries are newest-first).
-	latest := make(map[uint32]uint64, len(entries))
-	for _, e := range entries {
-		if _, ok := latest[e.pgno]; !ok {
-			latest[e.pgno] = e.ftxn
-		}
-	}
-	// Build the set of reachable LIVE data pages (data tree + scope tree +
-	// overflow chains) plus the meta pages. Chain pages are intentionally NOT
-	// included here: a freed entry that points to a (different) free-list chain
-	// page is harmless because load_free_list excludes chain pages via
-	// read_chain_page_numbers. A freed entry pointing to its OWN chain page is
-	// caught by the self-reference check above. Stale entries pointing at chain
-	// pages arise legitimately when chain compaction frees old chain pages that
-	// are later reused as chain pages (no tombstone, by design).
-	reachable := make(map[uint32]struct{}, 16)
-	reachable[0] = struct{}{}
-	reachable[1] = struct{}{}
-	collectReachableDataPages(store, dataRoot, dataKeyWidth, reachable)
-	collectReachableScopePages(store, scopeRoot, reachable)
-	// Reject any authoritative-free entry that aliases a reachable data/scope
-	// page.
+
+	// Derive the authoritative free set: pages whose newest entry is a real free
+	// (not a tombstone ^uint64(0)) and that still exist in the file. Tombstoned
+	// (reused) and truncated pages are not actually free.
+	freeSet := make(map[uint32]struct{}, len(latest))
 	for p, ftxn := range latest {
 		if ftxn == ^uint64(0) {
-			continue // tombstoned (reused)
+			continue
 		}
 		if uint64(p) >= uint64(total) {
-			continue // truncated; LoadFreeList filters it
+			continue
 		}
-		if _, live := reachable[p]; live {
-			return fmt.Errorf("free-list entry points to reachable page %d", p)
-		}
+		freeSet[p] = struct{}{}
 	}
-	return nil
+	if len(freeSet) == 0 {
+		return nil
+	}
+
+	// Meta pages are always live.
+	if _, ok := freeSet[0]; ok {
+		return fmt.Errorf("free-list entry points to a meta page")
+	}
+	if _, ok := freeSet[1]; ok {
+		return fmt.Errorf("free-list entry points to a meta page")
+	}
+
+	// INVERTED reachability (Rules 1/7): stream-walk every reachable
+	// data/scope/overflow page and probe the SMALL free set. A page that is both
+	// reachable and authoritatively free is corruption. The walks use an
+	// O(height) explicit stack + a visited counter for cycle defense — no
+	// reachable set is ever built.
+	if err := checkDataReachable(store, dataRoot, dataKeyWidth, freeSet, total); err != nil {
+		return err
+	}
+	return checkScopeReachable(store, scopeRoot, freeSet, total)
 }
 
-// collectReachableDataPages walks the data B+tree from root and adds every
-// reachable branch/leaf page to out. Panic-safe: bounds-checks every page
-// access, clamps entry counts to the page capacity, and guards against cycles.
-func collectReachableDataPages(store PageReader, root, keyWidth uint32, out map[uint32]struct{}) {
-	total := store.totalPages()
+// checkDataReachable stream-walks the data B+tree from root, probing freeSet
+// for every reachable page. Returns an error if any reachable page is
+// authoritatively free. Child-pointer offsets are computed from keyWidth so
+// IPv6 files (16-byte separators) are decoded correctly. O(height) stack, no
+// reachable set; a visited counter bounds traversal at total pops (cycle
+// defense).
+func checkDataReachable(store PageReader, root uint32, keyWidth uint32, freeSet map[uint32]struct{}, total uint32) error {
 	if root == 0 || root >= total {
-		return
+		return nil
 	}
-	maxBranch := (PageSize - PageHeaderSize - 4) / (int(keyWidth) + 4)
+	kw := int(keyWidth)
+	maxBranch := (PageSize - PageHeaderSize - 4) / (kw + 4)
 	stack := []uint32{root}
+	visited := uint32(0)
 	for len(stack) > 0 {
 		pgno := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		visited++
+		if visited > total {
+			return fmt.Errorf("data tree cycle detected")
+		}
 		if pgno >= total {
 			continue
 		}
-		if _, seen := out[pgno]; seen {
-			continue
+		if _, isFree := freeSet[pgno]; isFree {
+			return fmt.Errorf("free-list entry points to reachable data page")
 		}
-		out[pgno] = struct{}{}
 		page := store.page(pgno)
 		if len(page) < PageSize {
 			continue
 		}
 		h := decodeHeader(page)
-		if h.pageType == PageTypeBranch {
-			cnt := int(h.entryCount)
-			if cnt > maxBranch {
-				cnt = maxBranch
+		if h.pageType != PageTypeBranch {
+			continue
+		}
+		cnt := int(h.entryCount)
+		if cnt > maxBranch {
+			cnt = maxBranch
+		}
+		// A branch holds `cnt` separators and `cnt + 1` child pointers. Layout
+		// (matches branchView.child / node.go): child[0] at PageHeaderSize, then
+		// for j >= 1: child[j] at PageHeaderSize + 4 + (j-1)*(kw+4) + kw.
+		for j := 0; j <= cnt; j++ {
+			var off int
+			if j == 0 {
+				off = PageHeaderSize
+			} else {
+				off = PageHeaderSize + 4 + (j-1)*(kw+4) + kw
 			}
-			bv := newBranchView(page, cnt, int(keyWidth))
-			for j := 0; j < bv.childCount(); j++ {
-				c := bv.child(j)
-				if c < total {
-					if _, seen := out[c]; !seen {
-						stack = append(stack, c)
-					}
-				}
+			if off+4 > PageSize {
+				break
+			}
+			c := u32le(page, off)
+			if c < total {
+				stack = append(stack, c)
 			}
 		}
 	}
+	return nil
 }
 
-// collectReachableScopePages walks the scope B+tree from scopeRoot and adds
-// every reachable scope branch/leaf page PLUS every overflow-chain page to out.
-// Panic-safe: bounds-checks, clamps counts, cycle-guards the overflow chains.
-func collectReachableScopePages(store PageReader, scopeRoot uint32, out map[uint32]struct{}) {
-	total := store.totalPages()
+// checkScopeReachable stream-walks the scope B+tree from scopeRoot plus every
+// reachable overflow chain page, probing freeSet. Returns an error if any
+// reachable scope or overflow page is authoritatively free. Scope keys are
+// always ScopeKeyWidth bytes. O(height) stack, no reachable set; the overflow
+// chains are bounded by a per-chain guard counter (cycle defense).
+func checkScopeReachable(store PageReader, scopeRoot uint32, freeSet map[uint32]struct{}, total uint32) error {
 	if scopeRoot == 0 || scopeRoot >= total {
-		return
+		return nil
 	}
-	maxBranch := (PageSize - PageHeaderSize - 4) / (int(ScopeKeyWidth) + 4)
+	kw := int(ScopeKeyWidth)
+	maxBranch := (PageSize - PageHeaderSize - 4) / (kw + 4)
 	maxLeaf := (PageSize - PageHeaderSize) / ScopeEntrySize
 	stack := []uint32{scopeRoot}
+	visited := uint32(0)
 	for len(stack) > 0 {
 		pgno := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		visited++
+		if visited > total {
+			return fmt.Errorf("scope tree cycle detected")
+		}
 		if pgno >= total {
 			continue
 		}
-		if _, seen := out[pgno]; seen {
-			continue
+		if _, isFree := freeSet[pgno]; isFree {
+			return fmt.Errorf("free-list entry points to reachable scope page")
 		}
-		out[pgno] = struct{}{}
 		page := store.page(pgno)
 		if len(page) < PageSize {
 			continue
@@ -289,13 +320,19 @@ func collectReachableScopePages(store PageReader, scopeRoot uint32, out map[uint
 			if cnt > maxBranch {
 				cnt = maxBranch
 			}
-			bv := newBranchView(page, cnt, int(ScopeKeyWidth))
-			for j := 0; j < bv.childCount(); j++ {
-				c := bv.child(j)
+			for j := 0; j <= cnt; j++ {
+				var off int
+				if j == 0 {
+					off = PageHeaderSize
+				} else {
+					off = PageHeaderSize + 4 + (j-1)*(kw+4) + kw
+				}
+				if off+4 > PageSize {
+					break
+				}
+				c := u32le(page, off)
 				if c < total {
-					if _, seen := out[c]; !seen {
-						stack = append(stack, c)
-					}
+					stack = append(stack, c)
 				}
 			}
 		case PageTypeScopeLeaf:
@@ -305,21 +342,23 @@ func collectReachableScopePages(store PageReader, scopeRoot uint32, out map[uint
 			}
 			for i := 0; i < cnt; i++ {
 				recOff := PageHeaderSize + i*ScopeEntrySize
+				if recOff+14 > PageSize {
+					break
+				}
 				if u16le(page, recOff+4) == ScopeBitmapOverflow {
 					opgno := u32le(page, recOff+10)
 					guard := uint32(0)
 					for opgno != 0 {
-						if _, seen := out[opgno]; seen {
-							break
+						guard++
+						if guard > total {
+							return fmt.Errorf("scope overflow chain cycle detected")
 						}
 						if opgno >= total {
 							break
 						}
-						guard++
-						if guard > total {
-							break // cycle guard
+						if _, isFree := freeSet[opgno]; isFree {
+							return fmt.Errorf("free-list entry points to reachable overflow page")
 						}
-						out[opgno] = struct{}{}
 						opage := store.page(opgno)
 						if len(opage) < PageSize {
 							break
@@ -330,6 +369,7 @@ func collectReachableScopePages(store PageReader, scopeRoot uint32, out map[uint
 			}
 		}
 	}
+	return nil
 }
 
 // ReadChainPageNumbers returns the page numbers of the chain pages themselves

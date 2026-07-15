@@ -502,3 +502,105 @@ func TestRound5OverflowScopeSurvivesReopenAndScopeTableRebuild(t *testing.T) {
 		}
 	}
 }
+
+func TestRound5OverflowScopeRebuildReclaimsEveryLongChainPage(t *testing.T) {
+	image, _, _, oldPages := round5CommittedOverflowFixture(t, round5Bitmap(34*round5OverflowPayload+1))
+	if len(oldPages) <= int(TreeHeightMax)+1 {
+		t.Fatalf("fixture overflow chain has %d pages, want more than %d", len(oldPages), TreeHeightMax+1)
+	}
+	w, err := openWriter[Ipv4Key](newVecPageStore(append([]byte(nil), image...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.ScopeIntern([]byte{0x55, 0x01}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(2, math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	after, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("missing rebuilt image")
+	}
+	m, err := selectActiveMeta(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.freeListHead == 0 {
+		t.Fatal("scope rebuild produced no free-list entries")
+	}
+	store := newVecPageStore(after)
+	entries, err := ReadChain(store, m.freeListHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freed := make(map[uint32]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.FreedTxnID != math.MaxUint64 {
+			freed[entry.Pgno] = struct{}{}
+		}
+	}
+	for _, pgno := range oldPages {
+		if _, ok := freed[pgno]; !ok {
+			t.Errorf("scope rebuild orphaned overflow page %d from a %d-page chain", pgno, len(oldPages))
+		}
+	}
+}
+
+func round5OverflowOverlapWriter(t *testing.T, records int) *Writer[Ipv4Key] {
+	t.Helper()
+	w, err := Create[Ipv4Key](ScopeModeIndirect, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bitmap := make([]byte, MaxBitmapWidth+1)
+	bitmap[0] = 1
+	bitmap[MaxBitmapWidth] = 1
+	id, err := w.ScopeIntern(bitmap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < records; i++ {
+		ip := Ipv4Key(i * 2)
+		if err := w.Append(ip, ip, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(1, math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func TestRound5OverflowAllToAllAllocationsDoNotScaleWithRecordCount(t *testing.T) {
+	measure := func(records int) float64 {
+		w := round5OverflowOverlapWriter(t, records)
+		return testing.AllocsPerRun(10, func() {
+			if err := AllToAllOverlap(w, func(FeedOverlap) {}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	one := measure(1)
+	many := measure(100)
+	if many > one+4 {
+		t.Fatalf("all-to-all allocations scale with records sharing one overflow scope: one=%.0f many=%.0f", one, many)
+	}
+}
+
+func TestRound5OverflowForeignVsAllAllocationsDoNotScaleWithRecordCount(t *testing.T) {
+	measure := func(records int) float64 {
+		w := round5OverflowOverlapWriter(t, records)
+		foreign := []ForeignRange[Ipv4Key]{{From: 0, To: Ipv4Key((records - 1) * 2)}}
+		return testing.AllocsPerRun(10, func() {
+			if err := ForeignVsAllFromSlice(w, foreign, func(uint32, uint32, uint64) {}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	one := measure(1)
+	many := measure(100)
+	if many > one+4 {
+		t.Fatalf("foreign-vs-all allocations scale with records sharing one overflow scope: one=%.0f many=%.0f", one, many)
+	}
+}

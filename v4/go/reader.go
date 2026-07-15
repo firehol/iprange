@@ -122,48 +122,78 @@ func (r *Reader) page(pgno uint32) []byte {
 	return r.bytes[off : off+PageSize]
 }
 
-// LookupV4 finds the scope_id covering ip (IPv4). Returns (scope_id, true) or (0, false).
+// LookupV4 finds the scope_id covering ip (IPv4). Returns (scope_id, true), or
+// (0, false) on a miss or a key-family mismatch (an IPv6 file). O(log n), O(1) heap.
 func (r *Reader) LookupV4(ip Ipv4Key) (uint32, bool) {
-	return r.lookup(ip, 4)
+	return readerLookup[Ipv4Key](r, ip)
 }
 
-// LookupV6 finds the scope_id covering ip (IPv6).
+// LookupV6 finds the scope_id covering ip (IPv6). Returns (scope_id, true), or
+// (0, false) on a miss or a key-family mismatch (an IPv4 file). O(log n), O(1) heap.
 func (r *Reader) LookupV6(ip Ipv6Key) (uint32, bool) {
-	return r.lookup(ip, 16)
+	return readerLookup[Ipv6Key](r, ip)
 }
 
-func (r *Reader) lookup(key interface{}, kw int) (uint32, bool) {
+// readerLookup is the bounded B+tree descent mirroring reader.rs lookup_inner.
+// (A top-level generic — Go methods cannot take type parameters.) The
+// leaf/branch decision is driven by page_type (NOT by depth), the loop runs at
+// most tree_height times, and every pgno is bounds-checked via page() before any
+// byte is read. A cyclic branch (a child pointing back to an ancestor) therefore
+// can neither loop forever nor be misread as a leaf (which would fabricate
+// records): a cycle that never reaches a leaf simply exhausts tree_height →
+// miss. entry_count is clamped to the page capacity so a corrupt but CRC-valid
+// count cannot drive a slice out of bounds. O(height) time, O(1) heap.
+func readerLookup[K ipKey[K]](r *Reader, key K) (uint32, bool) {
+	if key.width() != int(r.meta.keyWidth) {
+		return 0, false // key-family mismatch
+	}
 	if r.meta.rootPgno == 0 {
 		return 0, false
 	}
 	pgno := r.meta.rootPgno
-	for depth := uint32(0); depth < r.meta.treeHeight-1; depth++ {
+	for depth := uint32(0); depth < r.meta.treeHeight; depth++ {
+		// page() returns nil for a pgno >= total_pages (or past the file end):
+		// corruption returns a miss rather than panicking on an OOB slice.
 		page := r.page(pgno)
 		if page == nil {
 			return 0, false
 		}
 		h := decodeHeader(page)
-		count := min(int(h.entryCount), branchMax(r.meta.keyWidth))
-		bv := newBranchView(page, count, kw)
-		idx := branchFindChildInterface(bv, key, kw)
-		pgno = bv.child(idx)
+		raw := int(h.entryCount)
+		switch h.pageType {
+		case PageTypeLeaf:
+			lv := newLeafView(page, min(raw, leafMax(r.meta.keyWidth)), int(r.meta.keyWidth))
+			return leafLookup(lv, key)
+		case PageTypeBranch:
+			bv := newBranchView(page, min(raw, branchMax(r.meta.keyWidth)), int(r.meta.keyWidth))
+			pgno = bv.child(branchDescend(bv, key))
+		default:
+			// Unexpected page type on the descent → corrupt tree → miss.
+			return 0, false
+		}
 	}
-	page := r.page(pgno)
-	if page == nil {
+	// No leaf reached within tree_height steps → corrupt/cyclic tree → miss.
+	return 0, false
+}
+
+// leafLookup binary-searches a leaf for the record covering ip: the record with
+// the greatest from <= ip, a hit iff ip <= to. Mirrors reader.rs leaf_lookup.
+// O(log records), zero heap.
+func leafLookup[K ipKey[K]](lv leafView, ip K) (uint32, bool) {
+	lo, hi := 0, lv.len()
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if readKey[K](lv.recordFrom(mid)).cmp(ip) <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == 0 {
 		return 0, false
 	}
-	h := decodeHeader(page)
-	count := min(int(h.entryCount), leafMax(r.meta.keyWidth))
-	lv := newLeafView(page, count, kw)
-	for i := 0; i < lv.len(); i++ {
-		from := readKeyInterface(lv.recordFrom(i), kw)
-		to := readKeyInterface(lv.recordTo(i), kw)
-		if cmpInterface(from, key) <= 0 && cmpInterface(key, to) <= 0 {
-			return lv.recordScopeID(i), true
-		}
-		if cmpInterface(from, key) > 0 {
-			break
-		}
+	if ip.cmp(readKey[K](lv.recordTo(lo-1))) <= 0 {
+		return lv.recordScopeID(lo - 1), true
 	}
 	return 0, false
 }
@@ -183,10 +213,13 @@ func (r *Reader) ScanV6(f func(from, to Ipv6Key, scopeID uint32)) error {
 }
 
 func (r *Reader) scan(kw int, f func(fromLE, toLE []byte, scopeID uint32)) error {
+	if kw != int(r.meta.keyWidth) {
+		return errf("incompatible", "scan key family mismatch")
+	}
 	if r.meta.rootPgno == 0 {
 		return nil
 	}
-	return r.scanNode(r.meta.rootPgno, kw, f)
+	return r.scanNode(r.meta.rootPgno, 1, kw, f)
 }
 
 // ScopeResolve resolves a scope_id to its interned bitmap (mode 2 / indirect
@@ -203,67 +236,43 @@ func (r *Reader) ScopeResolve(scopeID uint32) []byte {
 	return findScope(r.bytes, r.meta.scopeTableRoot, scopeID)
 }
 
-func (r *Reader) scanNode(pgno uint32, kw int, f func([]byte, []byte, uint32)) error {
+func (r *Reader) scanNode(pgno uint32, depth uint32, kw int, f func([]byte, []byte, uint32)) error {
+	// Cycle/DoS defense mirroring validate_node: a path deeper than tree_height
+	// (including any pgno cycle, which revisits a branch at ever-increasing
+	// depth) is corruption — bail with a structural error instead of recursing
+	// forever. Recursion depth is thus bounded by tree_height (≤ TreeHeightMax),
+	// so there is no stack-overflow risk and heap stays O(1).
+	if depth > r.meta.treeHeight {
+		return errf("invariant", "scan path deeper than tree_height")
+	}
 	page := r.page(pgno)
 	if page == nil {
-		return errf("structural", "page out of bounds")
+		return errf("structural", "scan page pgno out of range")
 	}
 	h := decodeHeader(page)
+	// Clamp entry_count to the page capacity (defense against a corrupt but
+	// CRC-valid count that would slice out of bounds). The leaf/branch decision
+	// is driven by page_type, not depth: a cyclic branch that returns to a branch
+	// page at the leaf level is NOT misread as a leaf (fabricated records).
+	raw := int(h.entryCount)
 	switch h.pageType {
 	case PageTypeLeaf:
-		count := min(int(h.entryCount), leafMax(r.meta.keyWidth))
-		lv := newLeafView(page, count, kw)
+		lv := newLeafView(page, min(raw, leafMax(r.meta.keyWidth)), kw)
 		for i := 0; i < lv.len(); i++ {
 			f(lv.recordFrom(i), lv.recordTo(i), lv.recordScopeID(i))
 		}
 		return nil
 	case PageTypeBranch:
-		count := min(int(h.entryCount), branchMax(r.meta.keyWidth))
-		bv := newBranchView(page, count, kw)
+		bv := newBranchView(page, min(raw, branchMax(r.meta.keyWidth)), kw)
 		for j := 0; j < bv.childCount(); j++ {
-			if err := r.scanNode(bv.child(j), kw, f); err != nil {
+			if err := r.scanNode(bv.child(j), depth+1, kw, f); err != nil {
 				return err
 			}
 		}
 		return nil
 	default:
-		return fmt.Errorf("structural: unexpected page type %d", h.pageType)
+		return fmt.Errorf("structural: unexpected page type %d in scan", h.pageType)
 	}
-}
-
-// --- helpers for interface{} key comparison ---
-
-func branchFindChildInterface(bv branchView, key interface{}, kw int) int {
-	lo, hi := 0, bv.sepCount
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		sep := readKeyInterface(bv.sep(mid), kw)
-		if cmpInterface(sep, key) <= 0 {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
-}
-
-func readKeyInterface(b []byte, kw int) interface{} {
-	if kw == 4 {
-		return Ipv4Key(u32le(b, 0))
-	}
-	return Ipv6Key{Hi: u64le(b, 0), Lo: u64le(b, 8)}
-}
-
-func cmpInterface(a, b interface{}) int {
-	switch av := a.(type) {
-	case Ipv4Key:
-		bv := b.(Ipv4Key)
-		return av.cmp(bv)
-	case Ipv6Key:
-		bv := b.(Ipv6Key)
-		return av.cmp(bv)
-	}
-	return 0
 }
 
 // versionFromFlag inverts flags bit0 → IP family.
@@ -561,20 +570,27 @@ func validateNode[K ipKey[K]](r *Reader, pgno uint32, depth uint32, lo, hi K, st
 		if h.pageType != PageTypeLeaf {
 			return errf("structural", "expected leaf at tree_height")
 		}
-	rc := int(h.entryCount)
-	if rc < 0 || rc > leafMax(r.meta.keyWidth) {
-		return errf("invariant", "leaf entry_count out of range")
-	}
-	if rc == 0 {
-		// An empty leaf is a degenerate sparse-tree state the writer leaves
-		// behind after deletes (compaction reclaims it once the tree is sparse
-		// enough). It carries no records, so the record-level ordering/tail
-		// checks do not apply; the CRC and page-type guards above already ran.
-		// Leaving st.prevTo untouched makes the empty leaf transparent to the
-		// cross-leaf disjointness check.
-		return nil
-	}
-	lv := newLeafView(page, rc, kw)
+		rc := int(h.entryCount)
+		if rc < 0 || rc > leafMax(r.meta.keyWidth) {
+			return errf("invariant", "leaf entry_count out of range")
+		}
+		if rc == 0 {
+			// An empty leaf is a degenerate sparse-tree state the writer leaves
+			// behind after deletes (compaction reclaims it once the tree is sparse
+			// enough). It carries no records, so the record-level ordering checks do
+			// not apply and st.prevTo is left untouched (transparent to the
+			// cross-leaf disjointness check). The CRC and page-type guards above
+			// already ran; the one remaining obligation is that the unused body (the
+			// whole region after the header) MUST be zero — stale record bytes left
+			// behind a decremented entry_count are corruption.
+			for _, b := range page[PageHeaderSize:] {
+				if b != 0 {
+					return errf("reserved", "empty leaf body")
+				}
+			}
+			return nil
+		}
+		lv := newLeafView(page, rc, kw)
 		for _, b := range page[PageHeaderSize+lv.bodyLen():] {
 			if b != 0 {
 				return errf("reserved", "leaf tail")

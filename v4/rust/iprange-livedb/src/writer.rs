@@ -144,6 +144,16 @@ impl<K: IpKey> Writer<K> {
         if active.record_size != record_size::<K>() as u32 {
             return Err(Error::Structural("record_size mismatch"));
         }
+        // The committed byte image is the ground truth for how many pages
+        // actually exist. `meta.total_pages` is untrusted (attacker/hardware
+        // can set it to anything). Reject BEFORE any structure is sized off it
+        // — otherwise a 2-page store claiming 32 GiB would reserve O(claimed)
+        // heap (PageSet/Vec capacity) before the structural checks below. This
+        // keeps open-time heap a fixed small constant regardless of file size.
+        let committed_page_count = (store.committed_bytes().len() / PAGE_SIZE) as u64;
+        if active.total_pages > committed_page_count {
+            return Err(Error::Structural("total_pages exceeds committed image"));
+        }
 
         // Open the scope registry WITHOUT materializing the table (issue-1 fix):
         // CRC-validate every scope page (O(S) time, O(log S) heap) to preserve
@@ -204,15 +214,21 @@ impl<K: IpKey> Writer<K> {
             pending_height: active.tree_height,
             pending_record_count: active.record_count,
             poisoned: false,
-            private_pages: PageSet::new(active.total_pages as usize),
+            // Rule 1: open-time heap must be a FIXED SMALL CONSTANT, never
+            // scaling with database/file/page count. private_pages grows on
+            // demand via ensure_capacity(pgno+1) in the COW/insert path;
+            // freed_this_txn grows amortized as COW victims are pushed. Sizing
+            // either off the untrusted total_pages reserved O(file size) heap
+            // at open (PageSet bitset + Vec capacity).
+            private_pages: PageSet::new(0),
             free_pages: vec![],
             free_pos: 0,
             can_recycle: true,
             scope_registry: scope_reg,
             scope_dirty: false,
             free_list_head: active.free_list_head,
-            freed_this_txn: alloc::vec::Vec::with_capacity((active.total_pages as usize).max(4096)),
-            consumed_this_txn: alloc::vec::Vec::with_capacity(4096),
+            freed_this_txn: alloc::vec::Vec::new(),
+            consumed_this_txn: alloc::vec::Vec::new(),
             _k: PhantomData,
         };
         // Strict CRC validation of the persistent free-list chain at open time.
@@ -340,17 +356,12 @@ impl<K: IpKey> Writer<K> {
         // Rebuild scope table (mode 2) only if the registry changed.
         let scope_rebuilt = self.scope_dirty;
         if self.scope_dirty {
-            // Old scope pages are committed-region pages reachable from the
-            // old meta's scope_table_root. They MUST NOT be overwritten
-            // in-place — a reader pinned at the old txn would see corrupted
-            // scope data. Free them for reclamation at the next commit.
-            let old_root = self.scope_root();
             // Revalidate the committed scope table at commit time: a scope
-            // mutation dirties the table and forces a rebuild that re-reads
-            // the committed entries. If the committed scope data became corrupt
-            // AFTER open, the rebuild would silently drop the unreadable
-            // committed scopes. Detect it here and refuse + poison instead of
-            // silently rebuilding.
+            // mutation dirties the table. If the committed scope data became
+            // corrupt AFTER open, the incremental insert would read garbage.
+            // Detect it here and refuse + poison instead of silently building a
+            // corrupt tree.
+            let old_root = self.scope_root();
             {
                 let bytes = self.store.committed_bytes();
                 if let Err(e) = crate::scope_table::validate_scope_crc(bytes, old_root) {
@@ -358,91 +369,47 @@ impl<K: IpKey> Writer<K> {
                     return Err(e);
                 }
             }
-            let mut old_scope_page_count = 0;
-            if old_root != 0 {
-                let mut pages = alloc::vec::Vec::new();
-                self.collect_scope_page_numbers(old_root, 0, &mut pages);
-                old_scope_page_count = pages.len();
-                self.freed_this_txn.extend(pages);
-            }
-            // F2 fix: pre-populate free_pool from the Writer's free-list so
-            // that scope page allocation reuses freed pages instead of
-            // extending the file. The old scope pages freed above are not
-            // available yet (they're in the current txn's free chain), but
-            // pages freed in PREVIOUS transactions are in free_pages.
-            let mut free_pool = Vec::new();
-            let estimate = old_scope_page_count + 2;
-            for _ in 0..estimate {
-                if self.free_pos < self.free_pages.len() {
-                    let pgno = self.free_pages[self.free_pos];
-                    self.free_pos += 1;
-                    self.private_pages.insert(pgno);
-                    free_pool.push(pgno);
-                } else {
-                    break;
-                }
-            }
-            // Remember the speculative pre-pop so we can tombstone the pages
-            // actually consumed by the scope rebuild. build_scope_tree pops the
-            // pages it needs from free_pool; the rest are returned below. Those
-            // consumed pages are now live scope data and must NOT reappear as
-            // free, so they are recorded for tombstoning at commit.
-            let scope_pool_snapshot: alloc::vec::Vec<u32> = free_pool.clone();
-            // EntriesForCommit re-reads the committed table (still at old_root,
-            // since promote has not run) and merges this-txn new entries. The
-            // committed_bytes borrow is scoped so self.store is free for the
-            // mutable build_scope_tree call below.
-            let mut new_root: u32 = 0;
-            if let Some(reg) = self.scope_registry.as_mut() {
-                if !reg.is_empty() {
-                    let all = {
-                        let bytes = self.store.committed_bytes();
-                        reg.entries_for_commit(bytes)
+            // Snapshot this-txn NEW entries only (O(new), never O(all scopes)).
+            // The committed entries stay on disk; the incremental COW insert
+            // descends the existing tree instead of materializing it.
+            let new_entries: alloc::vec::Vec<crate::scope_table::ScopeEntry> =
+                match &self.scope_registry {
+                    Some(reg) => reg.snapshot_new_entries(),
+                    None => alloc::vec::Vec::new(),
+                };
+            if !new_entries.is_empty() {
+                // Incremental COW insert: for each new entry, COW-descend from
+                // the committed root to the target leaf (O(log S) pages touched,
+                // O(height) heap) and insert it. Unchanged subtrees are shared
+                // across the old/new roots (correct COW/MVCC). The target leaf
+                // is rebuilt fresh, which re-allocates its overflow chains and
+                // frees the old ones (scope overflow reclamation). COW victims
+                // (old path pages) are pushed to freed_this_txn by cow_page,
+                // exactly like the data tree. This replaces the old
+                // O(all scopes) rebuild that read every committed scope into a
+                // Vec — a streaming SDK must keep commit heap flat.
+                let mut working_root = old_root;
+                for entry in &new_entries {
+                    // Allocation failure during the incremental insert is
+                    // irreversible (pages may already be allocated/freed), so
+                    // poison the writer — the on-disk meta is still unwritten,
+                    // but this writer must be discarded and reopened.
+                    working_root = match self.scope_cow_insert(working_root, entry) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            self.poisoned = true;
+                            return Err(e);
+                        }
                     };
-                    let mut allocated = Vec::new();
-                    // The rebuild performs irreversible page allocations; an
-                    // allocation failure leaves the allocator/registry in an
-                    // indeterminate state. The on-disk meta is still unwritten,
-                    // so the file is the last committed state — but this writer
-                    // must be discarded and reopened.
-                    let root = crate::scope_table::build_scope_tree(
-                        self.store.as_mut(),
-                        &all,
-                        &mut allocated,
-                        &mut free_pool,
-                    );
-                    if let Err(e) = root {
-                        self.poisoned = true;
-                        return Err(e);
-                    }
-                    let root = root.unwrap();
-                    for pgno in &allocated {
-                        self.private_pages.insert(*pgno);
-                    }
-                    new_root = root;
+                }
+                if let Some(reg) = self.scope_registry.as_mut() {
+                    reg.promote(working_root);
                 }
             }
-            // Advance the registry to the newly-committed root (folds new
-            // entries into the warm committed index, clears the new set).
-            if let Some(reg) = self.scope_registry.as_mut() {
-                reg.promote(new_root);
-            }
-            // Return unused free_pool pages to the Writer's free-list and
-            // tombstone the ones build_scope_tree actually consumed.
-            let mut returned: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            for pgno in free_pool.drain(..) {
-                if self.free_pos > 0 {
-                    self.free_pos -= 1;
-                }
-                self.free_pages[self.free_pos] = pgno;
-                self.private_pages.remove(pgno);
-                returned.insert(pgno);
-            }
-            for pgno in scope_pool_snapshot {
-                if !returned.contains(&pgno) {
-                    self.consumed_this_txn.push(pgno);
-                }
-            }
+            // Fix 4: if scope_dirty but new_entries is empty (a no-op or a
+            // rejected scope mutation that did not mint a new id), the scope
+            // tree is NOT touched at all — promote is skipped, the committed
+            // root stays unchanged.
             self.scope_dirty = false;
         }
         // Finalize CRCs on all private pages.
@@ -765,7 +732,7 @@ impl<K: IpKey> Writer<K> {
         if self.pending_root == 0 {
             return Ok(());
         }
-        self.scan_node(self.pending_root, &mut f)
+        self.scan_node(self.pending_root, 0, &mut f)
     }
 
     pub fn record_count(&self) -> u64 {
@@ -867,38 +834,43 @@ impl<K: IpKey> Writer<K> {
         }
     }
 
-    fn collect_scope_page_numbers(&self, pgno: u32, depth: u32, out: &mut alloc::vec::Vec<u32>) {
-        if depth > spec::TREE_HEIGHT_MAX || pgno as u64 >= self.store.total_pages() as u64 {
-            return;
+    /// Count every page of the scope tree (branch/leaf + overflow chain pages)
+    /// WITHOUT materializing them into a Vec — O(height) stack, O(1) heap. Used
+    /// by `scope_page_count` (an audit/assignment-count API). The overflow chain
+    /// walk is bounded by `total_pages` (the file's page count), NOT by
+    /// `TREE_HEIGHT_MAX`: a spilled scope bitmap can chain across arbitrarily
+    /// many pages, and bounding the walk by the tree height orphaned the tail of
+    /// any chain longer than 32 pages (Fix 5). Mirrors the free-list validation
+    /// path (`check_scope_reachable`).
+    fn count_scope_pages(&self, pgno: u32, depth: u32) -> u64 {
+        let total = self.store.total_pages();
+        if depth > spec::TREE_HEIGHT_MAX || pgno as u64 >= total as u64 {
+            return 0;
         }
-        out.push(pgno);
+        let mut count = 1u64; // this page
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         if h.page_type == spec::PAGE_TYPE_SCOPE_BRANCH {
             let branch = BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
             for j in 0..branch.child_count() {
-                self.collect_scope_page_numbers(branch.child(j), depth + 1, out);
+                count += self.count_scope_pages(branch.child(j), depth + 1);
             }
         } else if h.page_type == spec::PAGE_TYPE_SCOPE_LEAF {
-            // Follow OVERFLOW chains for entries whose bitmap spilled; those
-            // pages are private and must be freed/reused on the next rebuild.
-            let count = h.entry_count as usize;
-            for i in 0..count {
+            let entry_count = h.entry_count as usize;
+            for i in 0..entry_count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
                 let bm_len = crate::wire::u16_le(page, rec_off + 4);
                 if bm_len == crate::scope_table::SCOPE_BITMAP_OVERFLOW {
                     let mut opgno = crate::wire::u32_le(page, rec_off + 10);
                     let mut guard = 0u32;
-                    while opgno != 0 && guard <= spec::TREE_HEIGHT_MAX {
+                    while opgno != 0 && guard <= total {
                         guard += 1;
-                        if opgno as u64 >= self.store.total_pages() as u64 {
+                        if opgno as u64 >= total as u64 {
                             break;
                         }
-                        out.push(opgno);
+                        count += 1;
                         let obase = opgno as usize * spec::PAGE_SIZE;
-                        if obase + spec::PAGE_SIZE
-                            > self.store.total_pages() as usize * spec::PAGE_SIZE
-                        {
+                        if obase + spec::PAGE_SIZE > total as usize * spec::PAGE_SIZE {
                             break;
                         }
                         let opage = self.store.page(opgno);
@@ -907,6 +879,7 @@ impl<K: IpKey> Writer<K> {
                 }
             }
         }
+        count
     }
 
     /// Load the free-list from the persistent chain.
@@ -963,8 +936,11 @@ impl<K: IpKey> Writer<K> {
         self.private_pages.clear();
         self.freed_this_txn.clear();
         self.consumed_this_txn.clear();
-        self.private_pages
-            .ensure_capacity(self.store.total_pages() as usize);
+        // Rule 1: do NOT pre-size private_pages to total_pages here. That
+        // reserved O(file size) heap at every commit. clear() zeroes the bits
+        // while keeping the existing capacity; the next transaction grows the
+        // bitset on demand via ensure_capacity(pgno+1), so its footprint tracks
+        // this-txn COW activity, not the file size.
     }
 
     // ── B+tree insert ──
@@ -1236,15 +1212,6 @@ impl<K: IpKey> Writer<K> {
         Ok(())
     }
 
-    /// Collect leaf page numbers of the pending tree in tree (left-to-right)
-    /// order. Used by `rebuild_compact` to stream leaves one at a time, and by
-    /// the foreign_vs_all linear merge (issue-5).
-    pub(crate) fn pending_leaf_pages(&self) -> Result<Vec<u32>> {
-        let mut out = Vec::new();
-        self.collect_leaf_pages(self.pending_root, self.pending_height, &mut out)?;
-        Ok(out)
-    }
-
     fn rebuild_compact(&mut self) -> Result<()> {
         // Streaming rebuild: bound memory to one leaf's worth of records.
         //
@@ -1363,15 +1330,31 @@ impl<K: IpKey> Writer<K> {
         if self.pending_root == 0 {
             return Ok(None);
         }
-        self.scan_overlap_node(self.pending_root, from, to)
+        self.scan_overlap_node(self.pending_root, 0, from, to)
     }
 
-    fn scan_overlap_node(&self, pgno: u32, from: K, to: K) -> Result<Option<OverlapHit<K>>> {
+    fn scan_overlap_node(
+        &self,
+        pgno: u32,
+        depth: u32,
+        from: K,
+        to: K,
+    ) -> Result<Option<OverlapHit<K>>> {
+        if depth > spec::TREE_HEIGHT_MAX {
+            return Err(Error::Structural(
+                "overlap scan exceeded tree height (cycle?)",
+            ));
+        }
+        if pgno as u64 >= self.store.total_pages() as u64 {
+            return Err(Error::Structural("overlap scan page number out of bounds"));
+        }
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         match h.page_type {
             spec::PAGE_TYPE_LEAF => {
-                let leaf = LeafView::<K>::new(page, h.entry_count as usize);
+                let max = spec::leaf_max(K::WIDTH as u8);
+                let count = (h.entry_count as usize).min(max);
+                let leaf = LeafView::<K>::new(page, count);
                 for i in 0..leaf.len() {
                     let r = leaf.record(i);
                     if r.from() > to {
@@ -1384,21 +1367,18 @@ impl<K: IpKey> Writer<K> {
                 Ok(None)
             }
             spec::PAGE_TYPE_BRANCH => {
-                let branch = BranchView::<K>::new(page, h.entry_count as usize);
+                let max = spec::branch_max(K::WIDTH as u8);
+                let count = (h.entry_count as usize).min(max);
+                let branch = BranchView::<K>::new(page, count);
                 let start = Self::branch_find_child(&branch, from);
                 for j in start..branch.child_count() {
-                    // I7: separator-based early exit. The separator at j-1 is
-                    // the lower bound of child j's key range. If it exceeds
-                    // `to`, child j and all later children can't overlap
-                    // [from, to] — stop scanning. Without this, a point delete
-                    // re-scans ALL remaining leaves on the second scan.
                     if j > 0 {
                         let sep = branch.sep(j - 1);
                         if sep > to {
                             return Ok(None);
                         }
                     }
-                    if let Some(r) = self.scan_overlap_node(branch.child(j), from, to)? {
+                    if let Some(r) = self.scan_overlap_node(branch.child(j), depth + 1, from, to)? {
                         return Ok(Some(r));
                     }
                 }
@@ -1632,12 +1612,20 @@ impl<K: IpKey> Writer<K> {
 
     // ── scan ──
 
-    fn scan_node(&self, pgno: u32, f: &mut impl FnMut(K, K, u32)) -> Result<()> {
+    fn scan_node(&self, pgno: u32, depth: u32, f: &mut impl FnMut(K, K, u32)) -> Result<()> {
+        if depth > spec::TREE_HEIGHT_MAX {
+            return Err(Error::Structural("scan exceeded tree height (cycle?)"));
+        }
+        if pgno as u64 >= self.store.total_pages() as u64 {
+            return Err(Error::Structural("scan page number out of bounds"));
+        }
         let page = self.store.page(pgno);
         let h = PageHeader::decode(page);
         match h.page_type {
             spec::PAGE_TYPE_LEAF => {
-                let leaf = LeafView::<K>::new(page, h.entry_count as usize);
+                let max = spec::leaf_max(K::WIDTH as u8);
+                let count = (h.entry_count as usize).min(max);
+                let leaf = LeafView::<K>::new(page, count);
                 for i in 0..leaf.len() {
                     let r = leaf.record(i);
                     f(r.from(), r.to(), r.scope_id());
@@ -1645,9 +1633,11 @@ impl<K: IpKey> Writer<K> {
                 Ok(())
             }
             spec::PAGE_TYPE_BRANCH => {
-                let branch = BranchView::<K>::new(page, h.entry_count as usize);
+                let max = spec::branch_max(K::WIDTH as u8);
+                let count = (h.entry_count as usize).min(max);
+                let branch = BranchView::<K>::new(page, count);
                 for j in 0..branch.child_count() {
-                    self.scan_node(branch.child(j), f)?;
+                    self.scan_node(branch.child(j), depth + 1, f)?;
                 }
                 Ok(())
             }
@@ -1703,9 +1693,437 @@ impl<K: IpKey> Writer<K> {
         if root == 0 {
             return 0;
         }
-        let mut pages = alloc::vec::Vec::new();
-        self.collect_scope_page_numbers(root, 0, &mut pages);
-        pages.len()
+        self.count_scope_pages(root, 0) as usize
+    }
+
+    // ── scope tree incremental COW insert (mode 2) ──────────────────────────
+    //
+    // Replaces the old O(all scopes) rebuild (read every committed scope into a
+    // Vec, then bulk-build). Instead, each new entry is COW-inserted into the
+    // EXISTING committed scope B+tree, mirroring the data tree's cow_insert:
+    //   - cow_page copies a committed page into a fresh private page and frees
+    //     the old one as a COW victim (freed_this_txn), exactly like the data
+    //     tree. Unchanged subtrees are SHARED across old/new roots (correct COW
+    //     + MVCC).
+    //   - Only the root→target-leaf path is COW'd: O(log S) pages touched,
+    //     O(height) heap — flat regardless of committed scope count.
+    //   - The target leaf is rebuilt fresh (re-encoding its entries), which
+    //     re-allocates overflow chains and frees the old ones. This preserves
+    //     the scope-overflow reclamation guarantee (a spilled bitmap's chain
+    //     pages are reclaimed when their leaf is rewritten) without touching any
+    //     other leaf.
+
+    /// Maximum scope entries per leaf: `(page_size − header) / entry_size`.
+    const SCOPE_LEAF_MAX: usize =
+        (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / crate::scope_table::SCOPE_ENTRY_SIZE;
+    /// Maximum separators in a scope branch: 4-byte (scope_id) keys.
+    const SCOPE_BRANCH_MAX: usize =
+        (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (spec::SCOPE_KEY_WIDTH + 4);
+
+    /// Binary-search a scope branch (4-byte scope_id separators) for the child
+    /// index whose key range contains `scope_id`. The scope tree is ALWAYS
+    /// 4-byte keyed, independent of the data tree's `K`.
+    fn scope_branch_find_child(
+        branch: &BranchView<'_, crate::key::Ipv4Key>,
+        scope_id: u32,
+    ) -> usize {
+        let (mut lo, mut hi) = (0usize, branch.sep_count());
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if branch.sep(mid).0 <= scope_id {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
+    /// COW-insert one new scope entry into the tree rooted at `root`, returning
+    /// the new root. `root == 0` creates a single-leaf tree.
+    fn scope_cow_insert(
+        &mut self,
+        root: u32,
+        entry: &crate::scope_table::ScopeEntry,
+    ) -> Result<u32> {
+        if root == 0 {
+            let leaf = self.alloc_page()?;
+            self.scope_write_leaf_range(leaf, core::slice::from_ref(entry), &[None])?;
+            return Ok(leaf);
+        }
+        let new_root = self.cow_page(root)?;
+        let split = self.scope_insert_descend(new_root, entry)?;
+        if let Some((sep, right)) = split {
+            let branch = self.alloc_page()?;
+            self.write_scope_branch_new(branch, new_root, sep, right)?;
+            Ok(branch)
+        } else {
+            Ok(new_root)
+        }
+    }
+
+    /// Descend from `pgno` (already COW'd/private) and insert `entry`. Returns
+    /// `Some((sep_scope_id, right_pgno))` when the child split, to be absorbed
+    /// by the caller's branch.
+    fn scope_insert_descend(
+        &mut self,
+        pgno: u32,
+        entry: &crate::scope_table::ScopeEntry,
+    ) -> Result<Option<(u32, u32)>> {
+        let page_type = PageHeader::decode(self.store.page(pgno)).page_type;
+        if page_type == spec::PAGE_TYPE_SCOPE_LEAF {
+            self.scope_leaf_rebuild_insert(pgno, entry)
+        } else {
+            let (child_idx, child_pgno) = {
+                let page = self.store.page(pgno);
+                let count = crate::scope_table::validated_entry_count(page)?;
+                let branch = BranchView::<crate::key::Ipv4Key>::new(page, count);
+                let idx = Self::scope_branch_find_child(&branch, entry.scope_id);
+                (idx, branch.child(idx))
+            };
+            let cow_child = self.cow_page(child_pgno)?;
+            if cow_child != child_pgno {
+                self.branch_update_child(pgno, child_idx, cow_child)?;
+            }
+            let split = self.scope_insert_descend(cow_child, entry)?;
+            if let Some((sep, right)) = split {
+                self.scope_branch_absorb_split(pgno, child_idx, cow_child, sep, right)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+
+    /// Rebuild the target leaf (already COW'd/private) fresh with its existing
+    /// entries plus `entry`. Overflow chains that are already PRIVATE to this
+    /// transaction are RETAINED (their pointer is reused) so a bulk intern of
+    /// many scopes does not re-allocate the same chain once per insert. Overflow
+    /// chains that are COMMITTED (shared with the previous generation) are freed
+    /// and re-allocated into fresh private pages — this is what reclaims a
+    /// spilled bitmap's chain when its leaf is rewritten (scope-overflow
+    /// reclamation). Returns a split when the leaf overflows capacity.
+    fn scope_leaf_rebuild_insert(
+        &mut self,
+        pgno: u32,
+        entry: &crate::scope_table::ScopeEntry,
+    ) -> Result<Option<(u32, u32)>> {
+        // Read existing entries + per-entry overflow-chain state. Heap is
+        // bounded by ONE leaf (≤ SCOPE_LEAF_MAX entries + their bitmaps),
+        // never by the committed scope count.
+        let (mut entries, mut retain, committed_chains) = self.scope_read_leaf_entries(pgno)?;
+        // Free committed overflow chains: they are shared with the previous
+        // generation and are about to be re-allocated into fresh private pages.
+        // (Private chains are retained via `retain` and left untouched.)
+        for chain_pgno in &committed_chains {
+            self.freed_this_txn.push(*chain_pgno);
+        }
+        // Merge the new entry at its sorted position (entries are sorted by
+        // scope_id; new ids are always greater than committed ones, so this is
+        // typically a rightmost append, but a general linear search is used for
+        // safety — the leaf holds at most SCOPE_LEAF_MAX entries).
+        let pos = entries
+            .iter()
+            .position(|e| e.scope_id > entry.scope_id)
+            .unwrap_or(entries.len());
+        // Duplicate scope_id must never happen (intern mints strictly increasing
+        // ids), but guard defensively against a logic error by replacing.
+        if pos < entries.len() && entries[pos].scope_id == entry.scope_id {
+            entries[pos] = entry.clone();
+            retain[pos] = None; // re-encode this entry's chain afresh
+        } else {
+            entries.insert(pos, entry.clone());
+            retain.insert(pos, None); // new entry: allocate its chain fresh
+        }
+
+        if entries.len() <= Self::SCOPE_LEAF_MAX {
+            self.scope_write_leaf_range(pgno, &entries, &retain)?;
+            Ok(None)
+        } else {
+            // Split: left keeps the first half in `pgno`, right gets the rest in
+            // a freshly allocated leaf. The separator promoted upward is the
+            // right leaf's minimum scope_id.
+            let mid = entries.len() / 2;
+            let left: alloc::vec::Vec<_> = entries.drain(..mid).collect();
+            let right_entries: alloc::vec::Vec<_> = entries.into_iter().collect();
+            let left_retain: alloc::vec::Vec<_> = retain.drain(..mid).collect();
+            let right_retain = retain;
+            let sep = right_entries[0].scope_id;
+            self.scope_write_leaf_range(pgno, &left, &left_retain)?;
+            let right_pgno = self.alloc_page()?;
+            self.scope_write_leaf_range(right_pgno, &right_entries, &right_retain)?;
+            Ok(Some((sep, right_pgno)))
+        }
+    }
+
+    /// Read every entry of a scope leaf into a Vec, plus per-entry overflow-chain
+    /// state. Returns `(entries, retain, committed_chains)`:
+    ///   - `retain[i]` = `Some(first_pg)` iff entry `i` has an overflow chain
+    ///     that is already PRIVATE to this transaction (its pages were allocated
+    ///     earlier this txn and should be reused, not re-allocated).
+    ///   - `committed_chains` lists every page of overflow chains that are
+    ///     COMMITTED (shared with the previous generation); the caller frees
+    ///     them before re-encoding.
+    ///
+    /// Uses `store.page` (not committed_bytes) so it works for both committed
+    /// chains and chains allocated earlier this transaction.
+    #[allow(clippy::type_complexity)]
+    fn scope_read_leaf_entries(
+        &self,
+        pgno: u32,
+    ) -> Result<(
+        alloc::vec::Vec<crate::scope_table::ScopeEntry>,
+        alloc::vec::Vec<Option<u32>>,
+        alloc::vec::Vec<u32>,
+    )> {
+        let page = self.store.page(pgno);
+        let count = crate::scope_table::validated_entry_count(page)?;
+        let mut entries = alloc::vec::Vec::with_capacity(count);
+        let mut retain = alloc::vec::Vec::with_capacity(count);
+        let mut committed_chains = alloc::vec::Vec::new();
+        for i in 0..count {
+            let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
+            let scope_id = crate::wire::u32_le(page, rec_off);
+            let bm_len = crate::wire::u16_le(page, rec_off + 4);
+            if bm_len == crate::scope_table::SCOPE_BITMAP_OVERFLOW {
+                let true_len = crate::wire::u32_le(page, rec_off + 6) as usize;
+                let payload_cap = spec::PAGE_SIZE - crate::scope_table::OVERFLOW_PAYLOAD_OFF;
+                let mut bitmap = alloc::vec::Vec::with_capacity(true_len);
+                let first = crate::wire::u32_le(page, rec_off + 10);
+                let mut opgno = first;
+                let max_pages = if true_len == 0 {
+                    0
+                } else {
+                    true_len.div_ceil(payload_cap)
+                };
+                // A chain is private iff its first page was allocated this
+                // transaction (tracked in private_pages). Private chains are
+                // retained; committed chains are collected for freeing.
+                let is_private = self.private_pages.contains(first);
+                let mut read = 0usize;
+                while opgno != 0 && bitmap.len() < true_len && read < max_pages {
+                    read += 1;
+                    if opgno as u64 >= self.store.total_pages() as u64 {
+                        return Err(Error::Structural("scope overflow page out of bounds"));
+                    }
+                    if !is_private {
+                        committed_chains.push(opgno);
+                    }
+                    let opage = self.store.page(opgno);
+                    let next = crate::wire::u32_le(opage, crate::scope_table::OVERFLOW_NEXT_OFF);
+                    let need = (true_len - bitmap.len()).min(payload_cap);
+                    bitmap.extend_from_slice(
+                        &opage[crate::scope_table::OVERFLOW_PAYLOAD_OFF
+                            ..crate::scope_table::OVERFLOW_PAYLOAD_OFF + need],
+                    );
+                    opgno = next;
+                }
+                entries.push(crate::scope_table::ScopeEntry { scope_id, bitmap });
+                retain.push(if is_private { Some(first) } else { None });
+            } else {
+                let n = (bm_len as usize).min(crate::scope_table::MAX_BITMAP_WIDTH);
+                let bitmap = page[rec_off + 6..rec_off + 6 + n].to_vec();
+                entries.push(crate::scope_table::ScopeEntry { scope_id, bitmap });
+                retain.push(None);
+            }
+        }
+        Ok((entries, retain, committed_chains))
+    }
+
+    /// Write a fresh set of sorted entries into leaf `pgno`, re-encoding each
+    /// entry. `retain[i]` = `Some(first_pg)` means entry `i` has an overflow
+    /// chain already private to this transaction that should be reused as-is;
+    /// `None` means allocate a fresh chain (or inline). The page header is
+    /// stamped with the scope-leaf type and entry count.
+    fn scope_write_leaf_range(
+        &mut self,
+        pgno: u32,
+        entries: &[crate::scope_table::ScopeEntry],
+        retain: &[Option<u32>],
+    ) -> Result<()> {
+        // Resolve each entry's overflow first-page: reuse a retained private
+        // chain, or allocate a fresh one for oversized bitmaps.
+        let mut overflow_first: alloc::vec::Vec<u32> =
+            alloc::vec::Vec::with_capacity(entries.len());
+        for (i, e) in entries.iter().enumerate() {
+            if e.bitmap.len() > crate::scope_table::MAX_BITMAP_WIDTH {
+                if let Some(first) = retain.get(i).copied().flatten() {
+                    overflow_first.push(first); // reuse private chain
+                } else {
+                    overflow_first.push(self.scope_alloc_overflow_chain(&e.bitmap)?);
+                }
+            } else {
+                overflow_first.push(0);
+            }
+        }
+        let page = self.store.page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_LEAF, entries.len() as u16, pgno);
+        for (i, e) in entries.iter().enumerate() {
+            let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
+            let rec = &mut page[rec_off..rec_off + crate::scope_table::SCOPE_ENTRY_SIZE];
+            rec.fill(0);
+            crate::wire::put_u32(rec, 0, e.scope_id);
+            if e.bitmap.len() > crate::scope_table::MAX_BITMAP_WIDTH {
+                crate::wire::put_u16(rec, 4, crate::scope_table::SCOPE_BITMAP_OVERFLOW);
+                crate::wire::put_u32(rec, 6, e.bitmap.len() as u32);
+                crate::wire::put_u32(rec, 10, overflow_first[i]);
+            } else {
+                crate::wire::put_u16(rec, 4, e.bitmap.len() as u16);
+                rec[6..6 + e.bitmap.len()].copy_from_slice(&e.bitmap);
+            }
+        }
+        Ok(())
+    }
+
+    /// Allocate a fresh overflow chain for `bitmap` (> MAX_BITMAP_WIDTH bytes)
+    /// using the writer's allocator (reuses free-list pages, tracks the pages
+    /// as private + consumed). Returns the first page of the chain.
+    fn scope_alloc_overflow_chain(&mut self, bitmap: &[u8]) -> Result<u32> {
+        let payload_cap = spec::PAGE_SIZE - crate::scope_table::OVERFLOW_PAYLOAD_OFF;
+        let n_pages = bitmap.len().div_ceil(payload_cap).max(1);
+        let mut pages: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(n_pages);
+        for _ in 0..n_pages {
+            pages.push(self.alloc_page()?);
+        }
+        for (i, &pgno) in pages.iter().enumerate() {
+            let page = self.store.page_mut(pgno);
+            page.fill(0);
+            let next = if i + 1 < pages.len() { pages[i + 1] } else { 0 };
+            PageHeader::write(page, spec::PAGE_TYPE_OVERFLOW, 0, pgno);
+            crate::wire::put_u32(page, crate::scope_table::OVERFLOW_NEXT_OFF, next);
+            let start = i * payload_cap;
+            let end = (start + payload_cap).min(bitmap.len());
+            page[crate::scope_table::OVERFLOW_PAYLOAD_OFF
+                ..crate::scope_table::OVERFLOW_PAYLOAD_OFF + (end - start)]
+                .copy_from_slice(&bitmap[start..end]);
+        }
+        Ok(pages[0])
+    }
+
+    /// Insert `(sep, right)` into the scope branch at `pgno` after child
+    /// `child_idx`. Splits the branch when full, mirroring the data-tree
+    /// `branch_absorb_split` but with the scope-branch page type and 4-byte
+    /// scope_id separators.
+    fn scope_branch_absorb_split(
+        &mut self,
+        pgno: u32,
+        child_idx: usize,
+        left: u32,
+        sep: u32,
+        right: u32,
+    ) -> Result<Option<(u32, u32)>> {
+        let count = crate::scope_table::validated_entry_count(self.store.page(pgno))?;
+        if count < Self::SCOPE_BRANCH_MAX {
+            let kw = spec::SCOPE_KEY_WIDTH;
+            let page = self.store.page_mut(pgno);
+            let ins_off = spec::PAGE_HEADER_SIZE + 4 + child_idx * (kw + 4);
+            let end_off = spec::PAGE_HEADER_SIZE + 4 + count * (kw + 4);
+            page.copy_within(ins_off..end_off, ins_off + kw + 4);
+            crate::wire::put_u32(page, ins_off, sep);
+            crate::wire::put_u32(page, ins_off + kw, right);
+            let left_off = if child_idx == 0 {
+                spec::PAGE_HEADER_SIZE
+            } else {
+                spec::PAGE_HEADER_SIZE + 4 + (child_idx - 1) * (kw + 4) + kw
+            };
+            crate::wire::put_u32(page, left_off, left);
+            PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, (count + 1) as u16, pgno);
+            Ok(None)
+        } else {
+            let mut src = [0u8; spec::PAGE_SIZE];
+            src.copy_from_slice(self.store.page(pgno));
+            let total = count + 1;
+            let mid = total / 2;
+            self.write_scope_branch_split(pgno, &src, count, child_idx, left, sep, right, 0, mid)?;
+            let right_pgno = self.alloc_page()?;
+            self.write_scope_branch_split(
+                right_pgno,
+                &src,
+                count,
+                child_idx,
+                left,
+                sep,
+                right,
+                mid + 1,
+                total - mid - 1,
+            )?;
+            let kw = spec::SCOPE_KEY_WIDTH;
+            let promoted = if mid == child_idx {
+                sep
+            } else {
+                let old_i = if mid < child_idx { mid } else { mid - 1 };
+                crate::wire::u32_le(&src[..], spec::PAGE_HEADER_SIZE + 4 + old_i * (kw + 4))
+            };
+            Ok(Some((promoted, right_pgno)))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_scope_branch_split(
+        &mut self,
+        pgno: u32,
+        src: &[u8],
+        _old_count: usize,
+        insert_idx: usize,
+        ins_left: u32,
+        ins_sep: u32,
+        ins_right: u32,
+        start_idx: usize,
+        sep_count: usize,
+    ) -> Result<()> {
+        let kw = spec::SCOPE_KEY_WIDTH;
+        let page = self.store.page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, sep_count as u16, pgno);
+        let first_child = if start_idx == 0 && insert_idx == 0 {
+            ins_left
+        } else if start_idx == 0 {
+            crate::wire::u32_le(src, spec::PAGE_HEADER_SIZE)
+        } else if start_idx == insert_idx {
+            ins_left
+        } else if start_idx == insert_idx + 1 {
+            ins_right
+        } else if start_idx < insert_idx {
+            // child[j] (j>=1) lives at PAGE_HEADER_SIZE + 4 + (j-1)*(kw+4) + kw.
+            crate::wire::u32_le(
+                src,
+                spec::PAGE_HEADER_SIZE + 4 + (start_idx - 1) * (kw + 4) + kw,
+            )
+        } else {
+            crate::wire::u32_le(
+                src,
+                spec::PAGE_HEADER_SIZE + 4 + (start_idx - 2) * (kw + 4) + kw,
+            )
+        };
+        crate::wire::put_u32(page, spec::PAGE_HEADER_SIZE, first_child);
+        for out_i in 0..sep_count {
+            let abs_i = start_idx + out_i;
+            let (s, c) = if abs_i == insert_idx {
+                (ins_sep, ins_right)
+            } else {
+                let old_i = if abs_i < insert_idx { abs_i } else { abs_i - 1 };
+                let off = spec::PAGE_HEADER_SIZE + 4 + old_i * (kw + 4);
+                (
+                    crate::wire::u32_le(src, off),
+                    crate::wire::u32_le(src, off + kw),
+                )
+            };
+            let out_off = spec::PAGE_HEADER_SIZE + 4 + out_i * (kw + 4);
+            crate::wire::put_u32(page, out_off, s);
+            crate::wire::put_u32(page, out_off + kw, c);
+        }
+        Ok(())
+    }
+
+    fn write_scope_branch_new(&mut self, pgno: u32, left: u32, sep: u32, right: u32) -> Result<()> {
+        let kw = spec::SCOPE_KEY_WIDTH;
+        let page = self.store.page_mut(pgno);
+        page.fill(0);
+        PageHeader::write(page, spec::PAGE_TYPE_SCOPE_BRANCH, 1, pgno);
+        crate::wire::put_u32(page, spec::PAGE_HEADER_SIZE, left);
+        crate::wire::put_u32(page, spec::PAGE_HEADER_SIZE + 4, sep);
+        crate::wire::put_u32(page, spec::PAGE_HEADER_SIZE + 4 + kw, right);
+        Ok(())
     }
 
     /// Number of pages in the committed IP tree (tests/audits). Walks the tree,

@@ -103,7 +103,15 @@ impl ScopeRegistry {
     /// Build a registry with a pre-populated committed index (tests). No
     /// on-disk root is referenced, so resolve/intern never touch bytes.
     pub fn from_entries(entries: Vec<ScopeEntry>) -> Self {
-        let next_id = entries.iter().map(|e| e.scope_id).max().unwrap_or(0) + 1;
+        // wrapping_add: if the max scope_id is already u32::MAX, next_id
+        // becomes 0 and the registry reports exhaustion on the next mint
+        // (matching read_max_scope_id's open path), instead of panicking.
+        let next_id = entries
+            .iter()
+            .map(|e| e.scope_id)
+            .max()
+            .unwrap_or(0)
+            .wrapping_add(1);
         let mut idx: FxHashMap<alloc::vec::Vec<u8>, u32> = FxHashMap::default();
         for e in &entries {
             idx.insert(e.bitmap.clone(), e.scope_id);
@@ -152,7 +160,10 @@ impl ScopeRegistry {
             return Err(Error::State("scope_id space exhausted"));
         }
         let id = self.next_id;
-        self.next_id += 1;
+        // wrapping_add: after minting u32::MAX, next_id wraps to 0 and the
+        // next mint reports exhaustion (next_id == 0 guard above) instead of
+        // panicking on overflow.
+        self.next_id = self.next_id.wrapping_add(1);
         // to_vec (not to_vec on empty → empty non-nil Vec) keeps an empty
         // bitmap distinguishable from None on resolve.
         let bm = bitmap.to_vec();
@@ -253,20 +264,6 @@ impl ScopeRegistry {
         Ok(Some((id, created)))
     }
 
-    /// Full entry list (committed ∪ new) for the bulk rebuild at commit.
-    /// Reads the committed table from disk (no index warming — issue-7) and
-    /// appends this-txn new entries.
-    pub fn entries_for_commit(&mut self, committed_bytes: &[u8]) -> Vec<ScopeEntry> {
-        let mut all: Vec<ScopeEntry> = Vec::new();
-        if self.committed_root != 0 {
-            if let Ok(committed) = read_all(committed_bytes, self.committed_root) {
-                all = committed;
-            }
-        }
-        all.extend(self.new_entries.iter().cloned());
-        all
-    }
-
     /// Advance the registry to the newly-committed root: fold this-txn new
     /// entries into the (warm) committed index, clear the new set.
     pub fn promote(&mut self, new_root: u32) {
@@ -296,6 +293,13 @@ impl ScopeRegistry {
         self.new_entries.len()
     }
 
+    /// Snapshot this-txn NEW entries (O(new), never O(committed scopes)). Used
+    /// by the writer's incremental scope COW insert so commit heap stays flat
+    /// regardless of committed scope count.
+    pub(crate) fn snapshot_new_entries(&self) -> Vec<ScopeEntry> {
+        self.new_entries.clone()
+    }
+
     pub fn is_empty(&self) -> bool {
         if !self.new_entries.is_empty() {
             return false;
@@ -312,9 +316,9 @@ pub const SCOPE_BITMAP_OVERFLOW: u16 = 0xFFFF;
 
 /// Offset of the next-page pointer within an OVERFLOW page (right after the
 /// 16-byte page header).
-const OVERFLOW_NEXT_OFF: usize = spec::PAGE_HEADER_SIZE;
+pub(crate) const OVERFLOW_NEXT_OFF: usize = spec::PAGE_HEADER_SIZE;
 /// Offset of the payload within an OVERFLOW page.
-const OVERFLOW_PAYLOAD_OFF: usize = spec::PAGE_HEADER_SIZE + 4;
+pub(crate) const OVERFLOW_PAYLOAD_OFF: usize = spec::PAGE_HEADER_SIZE + 4;
 
 /// Read the bitmap for the entry located at `rec_off` within `page`, following
 /// the overflow chain when the inline `bitmap_len` is the overflow sentinel.
@@ -587,7 +591,7 @@ fn read_node_checked(
     let h = PageHeader::decode(page);
     match h.page_type {
         spec::PAGE_TYPE_SCOPE_LEAF => {
-            let count = h.entry_count as usize;
+            let count = validated_entry_count(page)?;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
                 let scope_id = wire::u32_le(page, rec_off);
@@ -597,8 +601,10 @@ fn read_node_checked(
             Ok(())
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
-            let branch =
-                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                page,
+                validated_entry_count(page)?,
+            );
             for j in 0..branch.child_count() {
                 read_node_checked(bytes, branch.child(j), depth + 1, total, out)?;
             }
@@ -620,7 +626,7 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
     let h = PageHeader::decode(page);
     match h.page_type {
         spec::PAGE_TYPE_SCOPE_LEAF => {
-            let count = h.entry_count as usize;
+            let count = validated_entry_count(page)?;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
                 let scope_id = wire::u32_le(page, rec_off);
@@ -630,8 +636,10 @@ fn read_node(bytes: &[u8], pgno: u32, depth: u32, out: &mut Vec<ScopeEntry>) -> 
             Ok(())
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
-            let branch =
-                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                page,
+                validated_entry_count(page)?,
+            );
             for j in 0..branch.child_count() {
                 read_node(bytes, branch.child(j), depth + 1, out)?;
             }
@@ -669,7 +677,10 @@ fn scope_id_leaf_contains(bytes: &[u8], root_pgno: u32, target_id: u32) -> bool 
         let page = &bytes[off..off + spec::PAGE_SIZE];
         match PageHeader::decode(page).page_type {
             spec::PAGE_TYPE_SCOPE_LEAF => {
-                let count = page_header_entry_count(page);
+                let count = match validated_entry_count(page) {
+                    Ok(c) => c,
+                    Err(_) => return false,
+                };
                 let (mut lo, mut hi) = (0usize, count);
                 while lo < hi {
                     let mid = lo + (hi - lo) / 2;
@@ -690,7 +701,10 @@ fn scope_id_leaf_contains(bytes: &[u8], root_pgno: u32, target_id: u32) -> bool 
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
                     page,
-                    page_header_entry_count(page),
+                    match validated_entry_count(page) {
+                        Ok(c) => c,
+                        Err(_) => return false,
+                    },
                 );
                 let (mut lo, mut hi) = (0usize, branch.sep_count());
                 while lo < hi {
@@ -709,18 +723,24 @@ fn scope_id_leaf_contains(bytes: &[u8], root_pgno: u32, target_id: u32) -> bool 
     false
 }
 
-/// Read a scope page's entry_count, clamped to a safe capacity for the page
-/// type, so a corrupt (CRC-valid) value cannot drive an out-of-range slice.
-fn page_header_entry_count(page: &[u8]) -> usize {
-    let raw = PageHeader::decode(page).entry_count as usize;
+/// Read a scope page's entry_count, validating it against the page-type
+/// capacity. Returns `Err` on an out-of-range count so a corrupt (CRC-valid)
+/// value cannot drive an out-of-bounds read or return fabricated data (Fix 6).
+/// The reader's scope APIs convert this error to `None`/empty rather than
+/// panicking; the open-time CRC/structural validation rejects such a page
+/// before any normal read reaches it.
+pub(crate) fn validated_entry_count(page: &[u8]) -> Result<usize> {
     let h = PageHeader::decode(page);
-    match h.page_type {
-        spec::PAGE_TYPE_SCOPE_LEAF => {
-            raw.min((spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / SCOPE_ENTRY_SIZE)
-        }
-        spec::PAGE_TYPE_SCOPE_BRANCH => raw.min((spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / 8),
-        _ => raw,
+    let raw = h.entry_count as usize;
+    let cap = match h.page_type {
+        spec::PAGE_TYPE_SCOPE_LEAF => (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / SCOPE_ENTRY_SIZE,
+        spec::PAGE_TYPE_SCOPE_BRANCH => (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / 8,
+        _ => return Ok(raw),
+    };
+    if raw > cap {
+        return Err(Error::Invariant("scope entry_count exceeds page capacity"));
     }
+    Ok(raw)
 }
 
 /// Find a single scope entry by scope_id via B+tree descent.
@@ -739,7 +759,7 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
         let h = PageHeader::decode(page);
         match h.page_type {
             spec::PAGE_TYPE_SCOPE_LEAF => {
-                let count = h.entry_count as usize;
+                let count = validated_entry_count(page)?;
                 // Binary search the sorted entries by scope_id.
                 let (mut lo, mut hi) = (0usize, count);
                 while lo < hi {
@@ -765,7 +785,7 @@ pub fn find_scope(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Option
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
                     page,
-                    h.entry_count as usize,
+                    validated_entry_count(page)?,
                 );
                 // Binary search for the child index.
                 let (mut lo, mut hi) = (0usize, branch.sep_count());
@@ -806,7 +826,7 @@ pub fn find_scope_ref(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Op
         let h = PageHeader::decode(page);
         match h.page_type {
             spec::PAGE_TYPE_SCOPE_LEAF => {
-                let count = h.entry_count as usize;
+                let count = validated_entry_count(page)?;
                 let (mut lo, mut hi) = (0usize, count);
                 while lo < hi {
                     let mid = lo + (hi - lo) / 2;
@@ -838,7 +858,7 @@ pub fn find_scope_ref(bytes: &[u8], root_pgno: u32, target_id: u32) -> Result<Op
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
                     page,
-                    h.entry_count as usize,
+                    validated_entry_count(page)?,
                 );
                 let (mut lo, mut hi) = (0usize, branch.sep_count());
                 while lo < hi {
@@ -885,26 +905,33 @@ fn find_scope_by_bitmap_node(bytes: &[u8], pgno: u32, depth: u32, target: &[u8])
     let h = PageHeader::decode(page);
     match h.page_type {
         spec::PAGE_TYPE_SCOPE_LEAF => {
-            let count = h.entry_count as usize;
+            let count = validated_entry_count(page).ok()?;
             for i in 0..count {
                 let rec_off = spec::PAGE_HEADER_SIZE + i * SCOPE_ENTRY_SIZE;
                 let raw_len = wire::u16_le(page, rec_off + 4);
-                // Compare the full bitmap (inline or overflow) against target.
-                let bm = if raw_len == SCOPE_BITMAP_OVERFLOW {
-                    read_entry_bitmap(bytes, page, rec_off)
+                // Compare against target WITHOUT allocating: inline bitmaps
+                // (the common case, len <= MAX_BITMAP_WIDTH) compare directly
+                // as byte slices. Only a spilled (overflow) bitmap — rare, and
+                // spanning pages — is decoded into a Vec. This keeps the dedup
+                // scan O(1) heap in the common case instead of O(scopes).
+                let matches = if raw_len == SCOPE_BITMAP_OVERFLOW {
+                    read_entry_bitmap(bytes, page, rec_off) == target
                 } else {
                     let n = (raw_len as usize).min(MAX_BITMAP_WIDTH);
-                    page[rec_off + 6..rec_off + 6 + n].to_vec()
+                    let inline: &[u8] = &page[rec_off + 6..rec_off + 6 + n];
+                    inline == target
                 };
-                if bm == target {
+                if matches {
                     return Some(wire::u32_le(page, rec_off));
                 }
             }
             None
         }
         spec::PAGE_TYPE_SCOPE_BRANCH => {
-            let branch =
-                crate::node::BranchView::<crate::key::Ipv4Key>::new(page, h.entry_count as usize);
+            let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
+                page,
+                validated_entry_count(page).ok()?,
+            );
             for j in 0..branch.child_count() {
                 if let Some(id) =
                     find_scope_by_bitmap_node(bytes, branch.child(j), depth + 1, target)
@@ -935,7 +962,7 @@ pub fn read_max_scope_id(bytes: &[u8], root_pgno: u32) -> Option<u32> {
         let h = PageHeader::decode(page);
         match h.page_type {
             spec::PAGE_TYPE_SCOPE_LEAF => {
-                let count = h.entry_count as usize;
+                let count = validated_entry_count(page).ok()?;
                 if count == 0 {
                     return None;
                 }
@@ -945,7 +972,7 @@ pub fn read_max_scope_id(bytes: &[u8], root_pgno: u32) -> Option<u32> {
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let branch = crate::node::BranchView::<crate::key::Ipv4Key>::new(
                     page,
-                    h.entry_count as usize,
+                    validated_entry_count(page).ok()?,
                 );
                 let cc = branch.child_count();
                 if cc == 0 {
@@ -1096,7 +1123,7 @@ fn scope_subtree_min(bytes: &[u8], mut pgno: u32, total_pages: u32) -> Option<u3
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let bv = crate::node::BranchView::<crate::key::Ipv4Key>::new(
                     page,
-                    h.entry_count as usize,
+                    validated_entry_count(page).ok()?,
                 );
                 if bv.child_count() == 0 {
                     return None;

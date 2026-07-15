@@ -415,3 +415,33 @@ fn overflow_scope_survives_reopen_and_scope_table_rebuild() {
         );
     }
 }
+
+#[test]
+fn overflow_scope_rebuild_reclaims_every_long_chain_page() {
+    let (image, _, _, old_pages) = committed_overflow_fixture(&bitmap(34 * OVERFLOW_PAYLOAD + 1));
+    assert!(old_pages.len() > spec::TREE_HEIGHT_MAX as usize + 1);
+
+    let mut writer = Writer::<Ipv4Key>::open(Box::new(VecPageStore::new(image))).unwrap();
+    writer.scope_intern(&[0x55, 0x01]).unwrap();
+    writer.commit(2, u64::MAX).unwrap();
+    let after = writer.into_image().unwrap();
+    let meta = active_meta(&after);
+    assert_ne!(meta.free_list_head, 0);
+    let store = VecPageStore::new(after);
+    let entries = iprange_livedb::free_list::read_chain(&store, meta.free_list_head).unwrap();
+    let freed: std::collections::BTreeSet<u32> = entries
+        .into_iter()
+        .filter(|entry| entry.freed_txn_id != u64::MAX)
+        .map(|entry| entry.pgno)
+        .collect();
+    let missing: Vec<u32> = old_pages
+        .iter()
+        .copied()
+        .filter(|pgno| !freed.contains(pgno))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "scope rebuild orphaned overflow pages {missing:?} from a {}-page chain",
+        old_pages.len()
+    );
+}

@@ -1,4 +1,5 @@
 use iprange_livedb::page_store::VecPageStore;
+use iprange_livedb::scope_table::{ScopeEntry, ScopeRegistry};
 use iprange_livedb::spec;
 use iprange_livedb::wire::{finalize_checksum, Meta, PageHeader};
 use iprange_livedb::{Ipv4Key, Reader, Writer};
@@ -96,5 +97,44 @@ fn transaction_id_exhaustion_returns_error_instead_of_wrapping() {
     assert!(
         committed.unwrap().is_err(),
         "Commit wrapped txn_id after the maximum generation"
+    );
+}
+
+#[test]
+fn scope_registry_can_mint_maximum_id_then_reports_exhaustion() {
+    let mut registry = ScopeRegistry::from_entries(vec![ScopeEntry {
+        scope_id: u32::MAX - 1,
+        bitmap: vec![1],
+    }]);
+    let minted = catch_unwind(AssertUnwindSafe(|| registry.intern(&[2], &[])));
+    assert!(minted.is_ok(), "minting the maximum scope_id panicked");
+    let (id, created) = minted.unwrap().expect("maximum scope_id should be legal");
+    assert_eq!(id, u32::MAX);
+    assert!(created);
+    assert!(
+        registry.intern(&[3], &[]).is_err(),
+        "registry minted a wrapped/reserved scope_id after the maximum"
+    );
+}
+
+#[test]
+fn scope_registry_constructs_at_maximum_id_without_panic() {
+    let constructed = catch_unwind(AssertUnwindSafe(|| {
+        ScopeRegistry::from_entries(vec![ScopeEntry {
+            scope_id: u32::MAX,
+            bitmap: vec![1],
+        }])
+    }));
+    assert!(
+        constructed.is_ok(),
+        "ScopeRegistry::from_entries panicked at maximum scope_id"
+    );
+    let mut registry = constructed.unwrap();
+    let (id, created) = registry.intern(&[1], &[]).unwrap();
+    assert_eq!(id, u32::MAX);
+    assert!(!created);
+    assert!(
+        registry.intern(&[2], &[]).is_err(),
+        "registry minted a wrapped/reserved scope_id after construction at maximum"
     );
 }

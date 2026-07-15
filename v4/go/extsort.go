@@ -857,40 +857,11 @@ func ExtSort[K ipKey[K]](records []DesiredRecord[K], config *ExtSortConfig) (Des
 		runPaths = append(runPaths, path)
 	}
 
-	// Single run: read back into memory.
-	if len(runPaths) == 1 {
-		var zero K
-		kw := zero.width()
-		f, err := os.Open(runPaths[0])
-		if err != nil {
-			dropAll()
-			return nil, err
-		}
-		buf := make([]byte, spillRecordSize(kw))
-		recs := make([]DesiredRecord[K], 0)
-		var truncErr error
-		for {
-			n, err := io.ReadFull(f, buf)
-			if err != nil {
-				// A partial final record (io.ErrUnexpectedEOF with bytes read)
-				// means the spill file is truncated — IPs were lost.
-				if err != io.EOF && (err == io.ErrUnexpectedEOF || n > 0) {
-					truncErr = fmt.Errorf("truncated spill file: short read (%d bytes)", n)
-				}
-				break
-			}
-			rec, _ := readSpillRecord[K](buf, kw)
-			recs = append(recs, rec)
-		}
-		f.Close()
-		os.Remove(runPaths[0])
-		if truncErr != nil {
-			return nil, truncErr
-		}
-		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
-	}
-
-	// K-way merge across run files.
+	// Stream every spill run through the k-way merge path. A single run is a
+	// one-element merge: runReader streams one record at a time, so heap stays
+	// O(1) regardless of run size (Rules 1/3). Materializing a run into a slice
+	// would scale heap with the run size. (The fast path above already handles
+	// the in-memory case without spilling.)
 	merge, err := newKWayMerge[K](runPaths)
 	if err != nil {
 		dropAll()
@@ -1018,41 +989,15 @@ func (s *ExtSorter[K]) Finish() (DesiredStream[K], error) {
 	}
 	s.runPaths = paths
 
+	// A single spill run is streamed through the SAME k-way merge path as the
+	// multi-run case (a one-element merge). Materializing it into a slice would
+	// scale heap with the run size (Rules 1/3); runReader streams one record at
+	// a time, so Finish stays O(1) heap regardless of run count. A truncated
+	// tail surfaces lazily via the stream's Err(), exactly like the multi-run
+	// path — Finish never reads the whole run eagerly.
 	if len(paths) == 0 {
 		return newCoalesceStream[K](&SortedStream[K]{}), nil
 	}
-
-	if len(paths) == 1 {
-		var zero K
-		kw := zero.width()
-		f, err := os.Open(paths[0])
-		if err != nil {
-			s.abort()
-			return nil, err
-		}
-		buf := make([]byte, spillRecordSize(kw))
-		recs := make([]DesiredRecord[K], 0)
-		var truncErr error
-		for {
-			n, err := io.ReadFull(f, buf)
-			if err != nil {
-				if err != io.EOF && (err == io.ErrUnexpectedEOF || n > 0) {
-					truncErr = fmt.Errorf("truncated spill file: short read (%d bytes)", n)
-				}
-				break
-			}
-			rec, _ := readSpillRecord[K](buf, kw)
-			recs = append(recs, rec)
-		}
-		f.Close()
-		os.Remove(paths[0])
-		if truncErr != nil {
-			s.abort()
-			return nil, truncErr
-		}
-		return newCoalesceStream[K](&SortedStream[K]{records: recs}), nil
-	}
-
 	merge, err := newKWayMerge[K](paths)
 	if err != nil {
 		s.abort()

@@ -101,3 +101,57 @@ func TestRound5FreeListRejectsEveryReachablePageClass(t *testing.T) {
 		})
 	}
 }
+
+func TestRound5FreeListRejectsReachableIPv6NonFirstChild(t *testing.T) {
+	w, err := Create[Ipv6Key](ScopeModeScalar, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(0); i < 800; i++ {
+		ip := Ipv6Key{Hi: 1, Lo: i * 2}
+		if err := w.Set(ip, ip, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(1, math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(100); i < 300; i++ {
+		ip := Ipv6Key{Hi: 1, Lo: i * 2}
+		if _, err := w.Delete(ip, ip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Commit(2, math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	image, ok := w.IntoImage()
+	if !ok {
+		t.Fatal("missing committed image")
+	}
+	m, err := selectActiveMeta(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.freeListHead == 0 || m.rootPgno == 0 {
+		t.Fatalf("fixture lacks roots: free=%d data=%d", m.freeListHead, m.rootPgno)
+	}
+	root := image[int(m.rootPgno)*PageSize : int(m.rootPgno+1)*PageSize]
+	h := decodeHeader(root)
+	if h.pageType != PageTypeBranch || h.entryCount < 1 {
+		t.Fatalf("fixture data root type=%d separators=%d, want a branch with two children", h.pageType, h.entryCount)
+	}
+	branch := newBranchView(root, int(h.entryCount), int(m.keyWidth))
+	reachableChild := branch.child(1)
+	freePage := image[int(m.freeListHead)*PageSize : int(m.freeListHead+1)*PageSize]
+	if u32le(freePage, TxnFreeCount) == 0 {
+		t.Fatal("fixture free-list page has no entries")
+	}
+	putU32(freePage, TxnFreeArray, reachableChild)
+	finalizeChecksum(freePage)
+
+	if writer, err := openWriter[Ipv6Key](newVecPageStore(image)); err == nil {
+		_ = writer
+		t.Fatalf("writable open accepted reachable IPv6 non-first child page %d as authoritative free state", reachableChild)
+	}
+}

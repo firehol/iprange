@@ -306,7 +306,7 @@ impl<'a> Reader<'a> {
             return Err(Error::InvalidInput("scan key family mismatch"));
         }
         if self.meta.root_pgno != 0 {
-            self.scan_node::<K, F>(self.meta.root_pgno, 1, &mut f);
+            self.scan_node::<K, F>(self.meta.root_pgno, 1, &mut f)?;
         }
         Ok(())
     }
@@ -390,41 +390,84 @@ impl<'a> Reader<'a> {
         if self.meta.root_pgno == 0 {
             return None;
         }
+        // Bounded descent: a correct tree reaches a leaf in exactly `tree_height`
+        // steps, so the loop runs at most `tree_height` times. This is the same
+        // bound `validate_node` enforces — a cyclic branch (a child pointing back
+        // to an ancestor) cannot loop forever or be misread as a leaf, because
+        // the leaf/branch decision is driven by `page_type`, not by `depth`, and
+        // a cycle that never reaches a leaf simply exhausts the bound → miss.
+        // O(height) time, O(1) heap (only the loop counter).
         let height = self.meta.tree_height;
         let mut pgno = self.meta.root_pgno;
-        let mut depth = 1u32;
-        loop {
+        for _ in 0..height {
+            // A pgno outside the file is corruption — return a miss, never panic
+            // on an out-of-bounds slice in `page_bytes`.
+            if pgno as u64 >= self.meta.total_pages {
+                return None;
+            }
             let page = self.page_bytes(pgno);
+            let h = PageHeader::decode(page);
             // Clamp entry_count to the page capacity: a corrupt (but CRC-valid)
             // entry_count must not drive a slice out of bounds and panic. The
             // trusted path never exceeds capacity; validate() rejects the rest.
-            let raw = PageHeader::decode(page).entry_count as usize;
-            if depth == height {
+            let raw = h.entry_count as usize;
+            if h.page_type == spec::PAGE_TYPE_LEAF {
                 let leaf = LeafView::<K>::new(page, raw.min(self.leaf_max));
                 return leaf_lookup(&leaf, ip);
             }
+            if h.page_type != spec::PAGE_TYPE_BRANCH {
+                return None;
+            }
             let branch = BranchView::<K>::new(page, raw.min(self.branch_max));
             pgno = branch.child(branch_descend(&branch, ip));
-            depth += 1;
         }
+        // No leaf was reached within `tree_height` steps → corrupt/cyclic tree.
+        None
     }
 
-    fn scan_node<K: IpKey, F: FnMut(K, K, u32)>(&self, pgno: u32, depth: u32, f: &mut F) {
+    fn scan_node<K: IpKey, F: FnMut(K, K, u32)>(
+        &self,
+        pgno: u32,
+        depth: u32,
+        f: &mut F,
+    ) -> Result<()> {
+        // Cycle/DoS defense mirroring `validate_node`: a path deeper than
+        // `tree_height` (including any pgno cycle, which revisits a branch at
+        // ever-increasing depth) is corruption — bail with a structural error
+        // instead of recursing forever. The recursion depth is thus bounded by
+        // `tree_height` (≤ TREE_HEIGHT_MAX = 32), so there is no stack-overflow
+        // risk and heap stays O(1).
+        if depth > self.meta.tree_height {
+            return Err(Error::Invariant("scan path deeper than tree_height"));
+        }
+        // A pgno outside the file is corruption — return an error, never panic
+        // on an out-of-bounds slice in `page_bytes`.
+        if pgno as u64 >= self.meta.total_pages {
+            return Err(Error::Structural("scan page pgno out of range"));
+        }
         let page = self.page_bytes(pgno);
+        let h = PageHeader::decode(page);
         // Clamp entry_count to the page capacity (defense against a corrupt
         // but CRC-valid entry_count that would slice out of bounds and panic).
-        let raw = PageHeader::decode(page).entry_count as usize;
-        if depth == self.meta.tree_height {
+        let raw = h.entry_count as usize;
+        // The leaf/branch decision is driven by `page_type`, not by `depth`
+        // alone: a cyclic branch that returns to a branch page at the leaf
+        // level is NOT misread as a leaf (which would emit fabricated records).
+        if h.page_type == spec::PAGE_TYPE_LEAF {
             let leaf = LeafView::<K>::new(page, raw.min(self.leaf_max));
             for i in 0..leaf.len() {
                 let r = leaf.record(i);
                 f(r.from(), r.to(), r.scope_id());
             }
-        } else {
+            Ok(())
+        } else if h.page_type == spec::PAGE_TYPE_BRANCH {
             let branch = BranchView::<K>::new(page, raw.min(self.branch_max));
             for j in 0..branch.child_count() {
-                self.scan_node::<K, F>(branch.child(j), depth + 1, f);
+                self.scan_node::<K, F>(branch.child(j), depth + 1, f)?;
             }
+            Ok(())
+        } else {
+            Err(Error::Structural("unexpected page type in scan"))
         }
     }
 
@@ -508,10 +551,16 @@ impl<'a> Reader<'a> {
                 // An empty leaf is a degenerate sparse-tree state the writer
                 // leaves behind after deletes (compaction reclaims it once the
                 // tree is sparse enough). It carries no records, so the
-                // record-level ordering/tail checks do not apply; the CRC and
-                // page-type guards above already ran. Leaving prev_to untouched
-                // makes the empty leaf transparent to the cross-leaf
-                // disjointness check.
+                // record-level ordering checks do not apply, and `prev_to` is
+                // left untouched to keep the empty leaf transparent to the
+                // cross-leaf disjointness check. The CRC and page-type guards
+                // above already ran; the one remaining obligation is that the
+                // unused body (the whole region after the header) MUST be zero —
+                // stale record bytes left behind a decremented entry_count are
+                // corruption.
+                if page[spec::PAGE_HEADER_SIZE..].iter().any(|&b| b != 0) {
+                    return Err(Error::NonZeroReserved("empty leaf body"));
+                }
                 return Ok(());
             }
             let leaf = LeafView::<K>::new(page, r);
@@ -1052,6 +1101,73 @@ mod tests {
                 matches!(r.validate(), Err(Error::NonZeroReserved(m)) if m == "meta tail"),
                 "validate must reject non-zero meta tail"
             );
+        }
+    }
+
+    /// A cyclic branch (child[0] points back to the root) must NOT cause the
+    /// hot-path descent to loop forever or reinterpret branch bytes as a leaf
+    /// record. The descent is bounded by `tree_height` and driven by
+    /// `page_type`, so it returns a clean miss. (reader.rs lookup/scan hardening.)
+    #[test]
+    fn lookup_and_scan_on_self_cyclic_branch_are_bounded() {
+        let left: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1)];
+        let right: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(100), v4(110), 2)];
+        let mut file = build_two_level::<Ipv4Key>(
+            IpVersion::V4,
+            spec::SCOPE_MODE_SCALAR,
+            v4(100),
+            left,
+            right,
+        );
+        // Rewire the root branch's first child to point at the root itself (pgno 2).
+        let root = &mut file[2 * PAGE_SIZE..3 * PAGE_SIZE];
+        root[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + 4].copy_from_slice(&2u32.to_le_bytes());
+        finalize_checksum(root);
+
+        let r = Reader::open(&file).unwrap();
+        // A lookup that routes to the cyclic child (ip < sep=100 ⇒ child[0]=root)
+        // never reaches a leaf within `tree_height` steps → clean miss, not
+        // fabricated data and not an infinite loop. (The right leaf at child[1]
+        // is untouched, so ips ≥ 100 still resolve normally — those are real
+        // hits, not cycle artifacts, and are not asserted here.)
+        assert_eq!(r.lookup_v4(v4(15)).unwrap(), None);
+        assert_eq!(r.lookup_v4(v4(50)).unwrap(), None);
+        // Scan surfaces the structural corruption as a typed error instead of
+        // recursing forever / stack-overflowing on the cycle.
+        assert!(
+            matches!(
+                r.scan_v4(|_, _, _| {}),
+                Err(Error::Invariant(_)) | Err(Error::Structural(_))
+            ),
+            "scan on a cyclic branch must return a structural error"
+        );
+    }
+
+    /// An empty reachable leaf (entry_count == 0) whose unused body still holds
+    /// stale record bytes is corruption: `validate` must reject it rather than
+    /// treating the early `entry_count == 0` path as a clean pass.
+    /// (reader.rs empty-leaf-body validation.)
+    #[test]
+    fn validate_rejects_empty_leaf_with_nonzero_body() {
+        let recs: &[(Ipv4Key, Ipv4Key, u32)] = &[(v4(10), v4(20), 1)];
+        let mut file = build_single_leaf::<Ipv4Key>(IpVersion::V4, spec::SCOPE_MODE_SCALAR, recs);
+        // Drop the leaf's entry_count to 0 while leaving its record bytes in place.
+        let leaf = &mut file[2 * PAGE_SIZE..3 * PAGE_SIZE];
+        leaf[spec::PH_ENTRY_COUNT..spec::PH_ENTRY_COUNT + 2].copy_from_slice(&0u16.to_le_bytes());
+        finalize_checksum(leaf);
+        // Keep meta consistent (0 records) so the only failing check is the tail.
+        let meta_page = &mut file[..PAGE_SIZE];
+        meta_page[spec::META_RECORD_COUNT..spec::META_RECORD_COUNT + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        finalize_checksum(meta_page);
+
+        let r = Reader::open(&file).unwrap();
+        match r.validate() {
+            Err(Error::NonZeroReserved(m)) => assert_eq!(
+                m, "empty leaf body",
+                "empty leaf with stale body must be rejected as a non-zero reserved region"
+            ),
+            other => panic!("expected NonZeroReserved(\"empty leaf body\"), got {other:?}"),
         }
     }
 }

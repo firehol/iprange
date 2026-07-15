@@ -81,6 +81,29 @@ func TestRound5WritableOpenRejectsEveryCommittedDataCorruptionWithoutChangingFil
 				finalizeChecksum(root)
 			},
 		},
+		{
+			name: "empty-leaf-nonzero-tail",
+			base: branchTree,
+			mutate: func(image []byte) {
+				active, m := round5ActiveMetaPage(t, image)
+				root := image[int(m.rootPgno)*PageSize : int(m.rootPgno+1)*PageSize]
+				h := decodeHeader(root)
+				if h.pageType != PageTypeBranch || h.entryCount == 0 {
+					t.Fatal("fixture root is not a populated branch")
+				}
+				branch := newBranchView(root, int(h.entryCount), int(m.keyWidth))
+				leafPgno := branch.child(0)
+				leaf := image[int(leafPgno)*PageSize : int(leafPgno+1)*PageSize]
+				leafHeader := decodeHeader(leaf)
+				if leafHeader.pageType != PageTypeLeaf || leafHeader.entryCount == 0 {
+					t.Fatal("fixture child is not a populated leaf")
+				}
+				putU16(leaf, PHEntryCount, 0)
+				finalizeChecksum(leaf)
+				putU64(active, MetaRecordCount, m.recordCount-uint64(leafHeader.entryCount))
+				finalizeChecksum(active)
+			},
+		},
 	}
 
 	for _, tt := range tests {

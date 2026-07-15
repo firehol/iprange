@@ -13,7 +13,11 @@ import (
 // scope_id], the scope is resolved to feed bits and every (feed_a, feed_b) pair
 // is emitted via the callback.
 //
-// Mirrors the Rust overlap.rs.
+// Heap discipline: both overlap scans run with heap that is FLAT in the stored
+// record / leaf count. Leaf iteration uses an O(tree-height) cursor (never a
+// materialized slice of leaf page numbers), and overflow scope bitmaps are
+// resolved once and cached per operation (never per record). Mirrors the Rust
+// overlap.rs.
 
 // FeedOverlap is a pairwise overlap result: feeds A and B share IPCount addresses.
 type FeedOverlap struct {
@@ -34,6 +38,7 @@ type ForeignRange[K ipKey[K]] struct {
 //
 // Mode 1 (bitmap): each record's scope_id bits are the feeds.
 // Mode 2 (indirect): each scope_id is resolved to a bitmap via the scope registry.
+// Overflow (multi-page) scopes are resolved once and cached for the scan.
 //
 // Single pass: O(records x avg_feeds_per_record^2).
 func AllToAllOverlap[K ipKey[K]](w *Writer[K], onOverlap func(FeedOverlap)) error {
@@ -59,7 +64,10 @@ func AllToAllOverlap[K ipKey[K]](w *Writer[K], onOverlap func(FeedOverlap)) erro
 			overflow = true
 		}
 	}
-	if err := scanOverlapNode[K](w, w.pendingRoot, func(o FeedOverlap) {
+	// One cache shared across the whole scan: each distinct overflow scope is
+	// decoded exactly once regardless of how many records reference it.
+	cache := &scopeCache{}
+	if err := scanOverlapNode[K](w, w.pendingRoot, cache, func(o FeedOverlap) {
 		emit(uint64(o.FeedA), uint64(o.FeedB), o.IPCount)
 	}); err != nil {
 		return err
@@ -80,7 +88,7 @@ func AllToAllOverlap[K ipKey[K]](w *Writer[K], onOverlap func(FeedOverlap)) erro
 	return nil
 }
 
-func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedOverlap)) error {
+func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, cache *scopeCache, onOverlap func(FeedOverlap)) error {
 	var zero K
 	kw := zero.width()
 	page := w.store.page(pgno)
@@ -96,8 +104,9 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 				return fmt.Errorf("ip range count exceeds uint64")
 			}
 			// Iterate feed pairs directly from the scope bitmap — no per-record
-			// slice allocation. Emits every (a, b) pair with a < b.
-			forEachFeedPair[K](w, lv.recordScopeID(i), func(a, b uint32) {
+			// slice allocation. Overflow scopes are resolved via the shared
+			// cache (decode-once). Emits every (a, b) pair with a < b.
+			forEachFeedPair[K](w, lv.recordScopeID(i), cache, func(a, b uint32) {
 				onOverlap(FeedOverlap{
 					FeedA:   a,
 					FeedB:   b,
@@ -109,7 +118,7 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 	case PageTypeBranch:
 		bv := newBranchView(page, int(h.entryCount), kw)
 		for j := 0; j < bv.childCount(); j++ {
-			if err := scanOverlapNode[K](w, bv.child(j), onOverlap); err != nil {
+			if err := scanOverlapNode[K](w, bv.child(j), cache, onOverlap); err != nil {
 				return err
 			}
 		}
@@ -133,6 +142,10 @@ func scanOverlapNode[K ipKey[K]](w *Writer[K], pgno uint32, onOverlap func(FeedO
 // The old implementation walked the tree once per foreign range —
 // O(foreign × tree_height); this is O(tree_pages + foreign) + overlap output.
 // Unsorted foreign input would silently under-count overlaps.
+//
+// Tree records are streamed leaf-by-leaf via an O(tree-height) leafCursor — no
+// materialized leaf-page list — so heap is flat in the leaf count. Overflow
+// scopes are resolved once via a per-operation cache (flat in record count).
 func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onOverlap func(feed, foreignID uint32, ipCount uint64)) error {
 	if w.scopeMode == ScopeModeScalar {
 		for {
@@ -154,17 +167,13 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 		}
 		return nil
 	}
-	// Collect leaf page numbers in tree (key) order once — page numbers only,
-	// no record materialization. The records inside are globally sorted.
-	leafPages, err := w.pendingLeafPages()
-	if err != nil {
-		return err
-	}
 
-	// Permanent cursor over tree records (leaf idx, record idx). Only advances
-	// forward across foreign ranges — records that end before the current
-	// foreign range's `from` can never overlap it or any later (sorted) range.
-	rLi, rRi := 0, 0
+	// Permanent cursor over tree records — O(tree height) state, never a
+	// materialized leaf-page slice. Only advances forward across foreign
+	// ranges: records ending before the current foreign range's `from` can
+	// never overlap it or any later (sorted) range.
+	cursor := newLeafCursor[K](w.pendingRoot, w.store)
+	cache := &scopeCache{}
 
 	// The single-pass linear merge REQUIRES the foreign ranges to be sorted
 	// ascending by `from` and pairwise disjoint. Track the previous range's end
@@ -187,22 +196,22 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 		prevOk = true
 		// Phase 1 — permanently skip records ending strictly before `from`.
 		for {
-			_, recTo, _, rok := readLeafRec[K](w, leafPages, rLi, rRi)
+			_, recTo, _, rok := cursor.currentRecord(w.store)
 			if !rok {
 				break
 			}
 			if recTo.cmp(from) >= 0 {
 				break
 			}
-			stepLeafRec[K](w, leafPages, &rLi, &rRi)
+			cursor.advance(w.store)
 		}
-		// Phase 2 — scan forward from the permanent cursor, emitting overlaps,
-		// until a record starts after `to`. The scan cursor is a COPY of the
-		// permanent one: records that overlap this foreign range may also
-		// overlap the next, so the permanent cursor is not advanced past them.
-		sLi, sRi := rLi, rRi
+		// Phase 2 — scan forward from a COPY of the permanent cursor, emitting
+		// overlaps, until a record starts after `to`. The scan cursor is a copy:
+		// records that overlap this foreign range may also overlap the next, so
+		// the permanent cursor is not advanced past them.
+		scan := cursor
 		for {
-			recFrom, recTo, scopeID, rok := readLeafRec[K](w, leafPages, sLi, sRi)
+			recFrom, recTo, scopeID, rok := scan.currentRecord(w.store)
 			if !rok {
 				break
 			}
@@ -222,47 +231,11 @@ func ForeignVsAll[K ipKey[K]](w *Writer[K], nextForeign func() (K, K, bool), onO
 			if !countOk {
 				return fmt.Errorf("ip range count exceeds uint64")
 			}
-			forEachFeed[K](w, scopeID, func(feed uint32) {
+			forEachFeed[K](w, scopeID, cache, func(feed uint32) {
 				onOverlap(feed, 0, ipCount)
 			})
-			stepLeafRec[K](w, leafPages, &sLi, &sRi)
+			scan.advance(w.store)
 		}
-	}
-}
-
-// readLeafRec returns the record at the leaf-pages cursor (li, ri), or the
-// zero value and false past the end.
-func readLeafRec[K ipKey[K]](w *Writer[K], leafPages []uint32, li, ri int) (K, K, uint32, bool) {
-	var zero K
-	if li >= len(leafPages) {
-		return zero, zero, 0, false
-	}
-	kw := zero.width()
-	page := w.store.page(leafPages[li])
-	h := decodeHeader(page)
-	count := int(h.entryCount)
-	if ri >= count {
-		return zero, zero, 0, false
-	}
-	lv := newLeafView(page, count, kw)
-	rf := zero.readLE(lv.recordFrom(ri))
-	rt := zero.readLE(lv.recordTo(ri))
-	return rf, rt, lv.recordScopeID(ri), true
-}
-
-// stepLeafRec advances the leaf-pages cursor by one record, crossing leaf
-// boundaries.
-func stepLeafRec[K ipKey[K]](w *Writer[K], leafPages []uint32, li, ri *int) {
-	*ri++
-	for *li < len(leafPages) {
-		page := w.store.page(leafPages[*li])
-		h := decodeHeader(page)
-		count := int(h.entryCount)
-		if *ri < count {
-			return
-		}
-		*li++
-		*ri = 0
 	}
 }
 
@@ -281,13 +254,187 @@ func ForeignVsAllFromSlice[K ipKey[K]](w *Writer[K], foreign []ForeignRange[K], 
 	}, onOverlap)
 }
 
+// leafFrame is one stack frame: the branch page number and the child index
+// currently being visited within it.
+type leafFrame struct {
+	pgno     uint32
+	childIdx uint16
+}
+
+// leafStackCap bounds the cursor stack depth. The tree height is bounded by
+// TreeHeightMax (32); a height-H tree has H-1 branch levels, so 32 frames
+// always suffice.
+const leafStackCap = TreeHeightMax
+
+// leafCursor is an in-order leaf traversal of the pending B+tree using O(tree
+// height) state. It replaces the previous pendingLeafPages() materialization,
+// which pushed every leaf page number into a []uint32 — O(leaf count) heap that
+// grows with the database. The cursor keeps a stack of (branch_pgno,
+// child_index) frames (at most leafStackCap), so its heap footprint is a
+// fixed-size constant regardless of how many leaves the tree holds.
+//
+// Mirrors Rust LeafCursor (overlap.rs:263). Stored by value: the scan phase
+// copies it (scan := cursor) the way Rust relies on Copy.
+type leafCursor[K ipKey[K]] struct {
+	// Path from the root: each frame is the branch page and the child index
+	// currently being visited.
+	stack [leafStackCap]leafFrame
+	// depth is the number of valid frames in stack.
+	depth   int
+	curLeaf uint32
+	recIdx  uint16
+	valid   bool
+}
+
+// newLeafCursor descends from root to its leftmost leaf. root MUST be non-zero
+// and point at a well-formed tree (caller checks pendingRoot != 0).
+func newLeafCursor[K ipKey[K]](root uint32, store pageStore) leafCursor[K] {
+	var zero K
+	kw := zero.width()
+	var c leafCursor[K]
+	pgno := root
+	for {
+		page := store.page(pgno)
+		h := decodeHeader(page)
+		if h.pageType == PageTypeLeaf {
+			break
+		}
+		// Branch: record this frame and descend into the leftmost child.
+		if c.depth >= leafStackCap {
+			break
+		}
+		bv := newBranchView(page, int(h.entryCount), kw)
+		c.stack[c.depth] = leafFrame{pgno: pgno, childIdx: 0}
+		c.depth++
+		pgno = bv.child(0)
+	}
+	c.curLeaf = pgno
+	c.recIdx = 0
+	c.valid = true
+	return c
+}
+
+// currentRecord returns the record at the current cursor position as owned key
+// values (no store borrow escapes the call), or the zero value and false past
+// the last leaf.
+func (c *leafCursor[K]) currentRecord(store pageStore) (K, K, uint32, bool) {
+	var zero K
+	if !c.valid {
+		return zero, zero, 0, false
+	}
+	kw := zero.width()
+	page := store.page(c.curLeaf)
+	h := decodeHeader(page)
+	count := int(h.entryCount)
+	if int(c.recIdx) >= count {
+		return zero, zero, 0, false
+	}
+	lv := newLeafView(page, count, kw)
+	rf := zero.readLE(lv.recordFrom(int(c.recIdx)))
+	rt := zero.readLE(lv.recordTo(int(c.recIdx)))
+	return rf, rt, lv.recordScopeID(int(c.recIdx)), true
+}
+
+// advance moves forward by one record, crossing leaf boundaries. O(height)
+// amortized over a full scan: each page is pushed/popped a constant number of
+// times.
+func (c *leafCursor[K]) advance(store pageStore) {
+	if !c.valid {
+		return
+	}
+	c.recIdx++
+	page := store.page(c.curLeaf)
+	h := decodeHeader(page)
+	if int(c.recIdx) < int(h.entryCount) {
+		return
+	}
+	c.descendToNextLeaf(store)
+}
+
+// descendToNextLeaf moves from the end of the current leaf to the first record
+// of the next leaf in key order, popping the ancestor stack until a branch has
+// an unvisited child. Sets valid = false when no more leaves remain.
+func (c *leafCursor[K]) descendToNextLeaf(store pageStore) {
+	var zero K
+	kw := zero.width()
+	for c.depth > 0 {
+		c.depth--
+		frame := c.stack[c.depth]
+		nextChild := frame.childIdx + 1
+		page := store.page(frame.pgno)
+		h := decodeHeader(page)
+		bv := newBranchView(page, int(h.entryCount), kw)
+		if int(nextChild) < bv.childCount() {
+			c.stack[c.depth] = leafFrame{pgno: frame.pgno, childIdx: nextChild}
+			c.depth++
+			pgno := bv.child(int(nextChild))
+			for {
+				dpage := store.page(pgno)
+				dh := decodeHeader(dpage)
+				if dh.pageType == PageTypeLeaf {
+					c.curLeaf = pgno
+					c.recIdx = 0
+					return
+				}
+				if c.depth >= leafStackCap {
+					c.valid = false
+					return
+				}
+				dbv := newBranchView(dpage, int(dh.entryCount), kw)
+				c.stack[c.depth] = leafFrame{pgno: pgno, childIdx: 0}
+				c.depth++
+				pgno = dbv.child(0)
+			}
+		}
+	}
+	c.valid = false
+}
+
+// scopeCacheEntry is one cached overflow-scope bitmap.
+type scopeCacheEntry struct {
+	id     uint32
+	bitmap []byte
+}
+
+// scopeCache is a resolve-once cache for overflow (multi-page) scope bitmaps
+// within a single overlap operation.
+//
+// ScopeResolveRef returns nil for overflow scopes (they span pages and cannot
+// be returned as one borrowed slice). Without a cache, every record referencing
+// such a scope would pay a fresh []byte decode — O(records × bitmap_size) heap
+// that grows with the record count. Since a scope's bitmap is immutable within
+// a transaction, each distinct overflow scope need only be decoded once.
+//
+// Heap is bounded by the number of DISTINCT overflow scopes (typically 1–5),
+// which is independent of the record count — flat. Mirrors Rust ScopeCache
+// (overlap.rs:226).
+type scopeCache struct {
+	entries []scopeCacheEntry
+}
+
+// scopeCacheOverflowBitmap returns the overflow bitmap for scopeID, decoding it
+// on first access and reusing the cached copy thereafter. Only call this after
+// ScopeResolveRef has already returned nil (i.e. this is an overflow scope).
+// Returns nil for an unknown id (treated as an empty bitmap by the callers).
+func scopeCacheOverflowBitmap[K ipKey[K]](c *scopeCache, w *Writer[K], scopeID uint32) []byte {
+	for i := range c.entries {
+		if c.entries[i].id == scopeID {
+			return c.entries[i].bitmap
+		}
+	}
+	bitmap := w.ScopeResolve(scopeID)
+	c.entries = append(c.entries, scopeCacheEntry{id: scopeID, bitmap: bitmap})
+	return c.entries[len(c.entries)-1].bitmap
+}
+
 // forEachFeedPair iterates every ordered feed pair (a, b) with a < b covered by
 // scopeID, invoking onPair(a, b) for each. Avoids materializing a feed slice.
 //
 // Bitmap mode: scopeID IS the bitmap; walk set bits with x & (x-1).
-// Indirect mode: resolve to the bitmap byte slice (zero-copy ref, issue-6) and
-// scan it directly — no per-record slice allocation.
-func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b uint32)) {
+// Indirect mode: resolve to the bitmap byte slice — zero-copy ref for inline
+// scopes (issue-6), decode-once-via-cache for overflow scopes — and scan it
+// directly. No per-record slice allocation.
+func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, cache *scopeCache, onPair func(a, b uint32)) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		// outer always holds the bits strictly greater than the current a;
@@ -307,19 +454,16 @@ func forEachFeedPair[K ipKey[K]](w *Writer[K], scopeID uint32, onPair func(a, b 
 	case ScopeModeIndirect:
 		bitmap := w.ScopeResolveRef(scopeID)
 		if bitmap == nil {
-			// ResolveRef returns nil for overflow scopes (they span pages and
-			// cannot be returned as one borrowed slice). Materialize them so
-			// committed overflow scopes participate in overlap scans.
-			bitmap = w.ScopeResolve(scopeID)
+			// Overflow scope: resolve once via the per-operation cache so the
+			// same multi-page bitmap is never re-decoded per record.
+			bitmap = scopeCacheOverflowBitmap[K](cache, w, scopeID)
 		}
-		if bitmap != nil {
-			forEachSetBitPair(bitmap, onPair)
-		}
+		forEachSetBitPair(bitmap, onPair)
 	}
 }
 
 // forEachFeed iterates every set feed bit in scopeID, invoking onFeed(bit).
-func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, onFeed func(bit uint32)) {
+func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, cache *scopeCache, onFeed func(bit uint32)) {
 	switch w.scopeMode {
 	case ScopeModeBitmap:
 		remaining := scopeID
@@ -329,15 +473,13 @@ func forEachFeed[K ipKey[K]](w *Writer[K], scopeID uint32, onFeed func(bit uint3
 			onFeed(bit)
 		}
 	case ScopeModeIndirect:
-		// Zero-copy ref (issue-6): sub-slice of the committed page image.
+		// Zero-copy ref (issue-6) for inline scopes; decode-once-via-cache for
+		// overflow scopes.
 		bitmap := w.ScopeResolveRef(scopeID)
 		if bitmap == nil {
-			// Overflow scopes span pages — materialize so they are not skipped.
-			bitmap = w.ScopeResolve(scopeID)
+			bitmap = scopeCacheOverflowBitmap[K](cache, w, scopeID)
 		}
-		if bitmap != nil {
-			forEachSetBit(bitmap, onFeed)
-		}
+		forEachSetBit(bitmap, onFeed)
 	}
 }
 
@@ -400,8 +542,6 @@ func nextSetBitFrom(bitmap []byte, start int) (uint32, bool) {
 	return 0, false
 }
 
-// ipRangeCount returns the number of IP addresses in [from, to] (inclusive).
-// The result is truncated to u64 (matching the Rust ip_range_count).
 // ipRangeCount returns the number of IP addresses in [from, to] (inclusive).
 // The second value is false when the span exceeds uint64 (only possible for
 // IPv6), so callers can report an overflow instead of silently truncating.

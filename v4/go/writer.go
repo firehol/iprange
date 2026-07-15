@@ -168,6 +168,17 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	if active.recordSize != rs {
 		return nil, fmt.Errorf("record_size mismatch")
 	}
+	// The committed byte image is the ground truth for how many pages actually
+	// exist. active.totalPages is untrusted (attacker/hardware can set it to
+	// anything). Reject BEFORE any structure is sized off it — otherwise a
+	// 2-page store claiming 32 GiB would reserve O(claimed) heap (PageSet/Vec
+	// capacity) before the structural checks below. This keeps open-time heap a
+	// fixed small constant regardless of file size (Rule 1). Mirrors Rust
+	// writer.rs:153.
+	committedPageCount := uint64(len(store.committedBytes())) / PageSize
+	if active.totalPages > committedPageCount {
+		return nil, fmt.Errorf("total_pages exceeds committed image")
+	}
 	// Previous committed root/height come from the inactive meta (the one
 	// with the lower txn_id). A reader opened before the last commit reads
 	// from that generation; its pages must stay reachable until next commit.
@@ -178,10 +189,6 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 	} else {
 		prevRoot = metaA.rootPgno
 		prevHeight = metaA.treeHeight
-	}
-	capacity := int(active.totalPages)
-	if capacity < 4096 {
-		capacity = 4096
 	}
 	w := &Writer[K]{
 		store:                store,
@@ -200,13 +207,18 @@ func openWriter[K ipKey[K]](store pageStore) (*Writer[K], error) {
 		pendingRoot:          active.rootPgno,
 		pendingHeight:        active.treeHeight,
 		pendingRecordCount:   active.recordCount,
-		privatePages:         newPageSet(int(active.totalPages)),
-		freeListHead:         active.freeListHead,
-		freedThisTxn:         make([]uint32, 0, capacity),
-		consumedThisTxn:      make([]uint32, 0, 4096),
-		canRecycle:           true,
-		scopeRegistry:        nil,
-		scopeDirty:           false,
+		// Rule 1: open-time heap must be a FIXED SMALL CONSTANT, never scaling
+		// with database/file/page count. privatePages grows on demand via
+		// ensureCapacity(pgno+1) in the COW/insert path; freedThisTxn grows
+		// amortized as COW victims are pushed. Sizing either off the untrusted
+		// totalPages reserved O(file size) heap at open. Mirrors Rust writer.rs:223.
+		privatePages:    newPageSet(0),
+		freeListHead:    active.freeListHead,
+		freedThisTxn:    make([]uint32, 0),
+		consumedThisTxn: make([]uint32, 0),
+		canRecycle:      true,
+		scopeRegistry:   nil,
+		scopeDirty:      false,
 	}
 	// Open the scope registry WITHOUT materializing the table (issue-1 fix):
 	// CRC-validate every scope page (O(S) time, O(log S) heap) to preserve the
@@ -381,89 +393,54 @@ func (w *Writer[K]) Commit(updatedUnix uint64, oldestReaderTxnID uint64) error {
 	// Rebuild scope table (mode 2) only if the registry changed.
 	scopeRebuilt := w.scopeDirty
 	if w.scopeDirty {
-		// Old scope pages are committed-region pages reachable from the old
-		// meta's scopeTableRoot. They MUST NOT be overwritten in-place —
-		// a reader pinned at the old txn would see corrupted scope data.
-		oldRoot := w.scopeRoot()
 		// Revalidate the committed scope table at commit time: a scope mutation
-		// dirties the table and forces a rebuild that re-reads the committed
-		// entries. If the committed scope data became corrupt AFTER open
-		// (e.g. an external edit, or a store that serves different bytes), the
-		// rebuild would silently drop the unreadable committed scopes. Detect
-		// it here and refuse + poison instead of silently rebuilding.
+		// dirties the table. If the committed scope data became corrupt AFTER
+		// open, the incremental insert would read garbage. Detect it here and
+		// refuse + poison instead of silently building a corrupt tree.
+		oldRoot := w.scopeRoot()
 		if err := ValidateScopeCRC(w.store.committedBytes(), oldRoot); err != nil {
 			w.poisoned = true
 			return fmt.Errorf("committed scope table corrupt at commit: %w", err)
 		}
-		oldScopePageCount := 0
-		if oldRoot != 0 {
-			before := len(w.freedThisTxn)
-			w.collectScopePageNumbers(oldRoot, 0, &w.freedThisTxn)
-			oldScopePageCount = len(w.freedThisTxn) - before
-		}
-		// F2 fix: pre-populate freePool from the Writer's free-list so scope
-		// page allocation reuses freed pages instead of always extending the
-		// file. Pages freed in PREVIOUS transactions live in freePages; the
-		// old scope pages freed above are not reclaimable yet.
-		var freePool []uint32
-		estimate := oldScopePageCount + 2
-		for i := 0; i < estimate; i++ {
-			if w.freePos < len(w.freePages) {
-				pgno := w.freePages[w.freePos]
-				w.freePos++
-				w.privatePages.insert(pgno)
-				freePool = append(freePool, pgno)
-			} else {
-				break
-			}
-		}
-		// Remember the speculative pre-pop so we can tombstone the pages
-		// actually consumed by the scope rebuild. buildScopeTree pops the
-		// pages it needs from freePool; the rest are returned below. Those
-		// consumed pages are now live scope data and must NOT reappear as
-		// free, so they are recorded for tombstoning at commit.
-		scopePoolSnapshot := append([]uint32(nil), freePool...)
-		newRoot := uint32(0)
-		if w.scopeRegistry != nil && !w.scopeRegistry.IsEmpty() {
-			// EntriesForCommit re-reads the committed table (still at oldRoot,
-			// since Promote has not run) and merges this-txn new entries.
-			all := w.scopeRegistry.EntriesForCommit(w.store.committedBytes())
-			var allocated []uint32
-			root, err := buildScopeTree(w.store, all, &allocated, &freePool)
-			if err != nil {
-				// The rebuild performs irreversible page allocations; an
-				// allocation failure leaves the allocator/registry in an
-				// indeterminate state. The on-disk meta is still unwritten, so
-				// the file is the last committed state — but this writer must
-				// be discarded and reopened.
-				w.poisoned = true
-				return err
-			}
-			// Register scope pages in privatePages for CRC finalization.
-			for _, pgno := range allocated {
-				w.privatePages.insert(pgno)
-			}
-			newRoot = root
-		}
-		// Advance the registry to the newly-committed root (folds new entries
-		// into the warm committed index, clears the new set).
+		// Snapshot this-txn NEW entries only (O(new), never O(all scopes)).
+		// The committed entries stay on disk; the incremental COW insert
+		// descends the existing tree instead of materializing it.
+		var newEntries []ScopeEntry
 		if w.scopeRegistry != nil {
-			w.scopeRegistry.Promote(newRoot)
+			newEntries = w.scopeRegistry.SnapshotNewEntries()
 		}
-		// Return unused freePool pages to the Writer's free-list and tombstone
-		// the ones buildScopeTree actually consumed.
-		returned := make(map[uint32]struct{}, len(freePool))
-		for _, pgno := range freePool {
-			w.freePos--
-			w.freePages[w.freePos] = pgno
-			w.privatePages.remove(pgno)
-			returned[pgno] = struct{}{}
-		}
-		for _, pgno := range scopePoolSnapshot {
-			if _, ok := returned[pgno]; !ok {
-				w.consumedThisTxn = append(w.consumedThisTxn, pgno)
+		if len(newEntries) > 0 {
+			// Incremental COW insert: for each new entry, COW-descend from the
+			// committed root to the target leaf (O(log S) pages touched,
+			// O(height) heap) and insert it. Unchanged subtrees are shared
+			// across the old/new roots (correct COW/MVCC). The target leaf is
+			// rebuilt fresh, which re-allocates its overflow chains and frees
+			// the old ones (scope overflow reclamation). COW victims (old
+			// path pages) are pushed to freedThisTxn by cowPage, exactly like
+			// the data tree. This replaces the old O(all scopes) rebuild that
+			// read every committed scope into a slice — a streaming SDK must
+			// keep commit heap flat. Mirrors Rust scope_cow_insert
+			// (writer.rs:1724).
+			workingRoot := oldRoot
+			for i := range newEntries {
+				var err error
+				workingRoot, err = w.scopeCowInsert(workingRoot, &newEntries[i])
+				if err != nil {
+					// Allocation failure during the incremental insert is
+					// irreversible (pages may already be allocated/freed), so
+					// poison the writer — the on-disk meta is still unwritten,
+					// but this writer must be discarded and reopened.
+					w.poisoned = true
+					return err
+				}
+			}
+			if w.scopeRegistry != nil {
+				w.scopeRegistry.Promote(workingRoot)
 			}
 		}
+		// If scopeDirty but newEntries is empty (a no-op or a rejected scope
+		// mutation that did not mint a new id), the scope tree is NOT touched
+		// at all — Promote is skipped, the committed root stays unchanged.
 		w.scopeDirty = false
 	}
 
@@ -952,34 +929,47 @@ func (w *Writer[K]) LoadFreeList(oldestReaderTxnID uint64) error {
 // resetTxn clears the private-pages bitset for the next transaction.
 
 func (w *Writer[K]) collectScopePageNumbers(pgno uint32, depth uint32, out *[]uint32) {
-	if depth > TreeHeightMax || uint64(pgno) >= uint64(w.store.totalPages()) {
+	total := w.store.totalPages()
+	if depth > TreeHeightMax || uint64(pgno) >= uint64(total) {
 		return
 	}
 	*out = append(*out, pgno)
 	page := w.store.page(pgno)
 	h := decodeHeader(page)
 	if h.pageType == PageTypeScopeBranch {
-		bv := newBranchView(page, int(h.entryCount), int(ScopeKeyWidth))
+		count, err := validatedEntryCount(page)
+		if err != nil {
+			return
+		}
+		bv := newBranchView(page, count, int(ScopeKeyWidth))
 		for j := 0; j < bv.childCount(); j++ {
 			w.collectScopePageNumbers(bv.child(j), depth+1, out)
 		}
 	} else if h.pageType == PageTypeScopeLeaf {
 		// Follow overflow chains for spilled bitmaps; those pages are private
 		// and must be freed/reused on the next rebuild.
-		count := int(h.entryCount)
+		count, err := validatedEntryCount(page)
+		if err != nil {
+			return
+		}
 		for i := 0; i < count; i++ {
 			recOff := PageHeaderSize + i*ScopeEntrySize
 			if u16le(page, recOff+4) == ScopeBitmapOverflow {
 				opgno := u32le(page, recOff+10)
 				guard := uint32(0)
-				for opgno != 0 && guard <= TreeHeightMax {
+				// Bound the overflow-chain walk by the file's page count, NOT by
+				// TreeHeightMax: a spilled scope bitmap can chain across
+				// arbitrarily many pages, and bounding by tree height orphaned
+				// the tail of any chain longer than 32 pages (Fix 4). Mirrors
+				// Rust writer.rs:866.
+				for opgno != 0 && guard <= total {
 					guard++
-					if uint64(opgno) >= uint64(w.store.totalPages()) {
+					if uint64(opgno) >= uint64(total) {
 						break
 					}
 					*out = append(*out, opgno)
 					opage := w.store.page(opgno)
-					opgno = u32le(opage, PageHeaderSize)
+					opgno = u32le(opage, overflowNextOff)
 				}
 			}
 		}
@@ -990,7 +980,11 @@ func (w *Writer[K]) resetTxn() {
 	w.privatePages.clear()
 	w.freedThisTxn = w.freedThisTxn[:0]
 	w.consumedThisTxn = w.consumedThisTxn[:0]
-	w.privatePages.ensureCapacity(int(w.store.totalPages()))
+	// Rule 1: do NOT pre-size privatePages to totalPages here. That reserved
+	// O(file size) heap at every commit. clear() zeroes the bits while keeping
+	// the existing capacity; the next transaction grows the bitset on demand via
+	// ensureCapacity(pgno+1), so its footprint tracks this-txn COW activity, not
+	// the file size. Mirrors Rust reset_txn (writer.rs:935).
 }
 
 func (w *Writer[K]) cowRoot() (uint32, error) {
@@ -1460,17 +1454,6 @@ func (w *Writer[K]) collectLeafPages(pgno uint32, height uint32, out *[]uint32) 
 	return nil
 }
 
-// pendingLeafPages returns the pending tree's leaf page numbers in tree
-// (left-to-right = key) order. Used by the foreign-vs-all linear merge
-// (issue-5).
-func (w *Writer[K]) pendingLeafPages() ([]uint32, error) {
-	var out []uint32
-	if err := w.collectLeafPages(w.pendingRoot, w.pendingHeight, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 type overlapInfo[K ipKey[K]] struct {
 	recFrom  K
 	recTo    K
@@ -1484,18 +1467,30 @@ func (w *Writer[K]) scanFirstOverlap(from, to K) (overlapInfo[K], bool, error) {
 		var zero overlapInfo[K]
 		return zero, false, nil
 	}
-	return w.scanOverlapNode(w.pendingRoot, from, to)
+	return w.scanOverlapNode(w.pendingRoot, 0, from, to)
 }
 
-func (w *Writer[K]) scanOverlapNode(pgno uint32, from, to K) (overlapInfo[K], bool, error) {
+func (w *Writer[K]) scanOverlapNode(pgno uint32, depth uint32, from, to K) (overlapInfo[K], bool, error) {
 	var zero overlapInfo[K]
+	if depth > TreeHeightMax {
+		return zero, false, fmt.Errorf("overlap scan exceeded tree height (cycle?)")
+	}
+	if uint64(pgno) >= uint64(w.store.totalPages()) {
+		return zero, false, fmt.Errorf("overlap scan page number out of bounds")
+	}
 	var z K
 	kw := z.width()
 	page := w.store.page(pgno)
 	h := decodeHeader(page)
+	leafMax := (PageSize - PageHeaderSize) / (2*kw + 4)
+	branchMax := (PageSize - PageHeaderSize - 4) / (kw + 4)
 	switch h.pageType {
 	case PageTypeLeaf:
-		lv := newLeafView(page, int(h.entryCount), kw)
+		count := int(h.entryCount)
+		if count > leafMax {
+			count = leafMax
+		}
+		lv := newLeafView(page, count, kw)
 		for i := 0; i < lv.len(); i++ {
 			rf := z.readLE(lv.recordFrom(i))
 			if rf.cmp(to) > 0 {
@@ -1511,19 +1506,20 @@ func (w *Writer[K]) scanOverlapNode(pgno uint32, from, to K) (overlapInfo[K], bo
 		}
 		return zero, false, nil
 	case PageTypeBranch:
-		bv := newBranchView(page, int(h.entryCount), kw)
+		count := int(h.entryCount)
+		if count > branchMax {
+			count = branchMax
+		}
+		bv := newBranchView(page, count, kw)
 		start := branchFindChild[K](&bv, from)
 		for j := start; j < bv.childCount(); j++ {
-			// I7: separator-based early exit. The separator at j-1 is the
-			// lower bound of child j's key range. If it exceeds `to`, child j
-			// and all later children can't overlap [from, to] — stop scanning.
 			if j > 0 {
 				sep := readKey[K](bv.sep(j - 1))
 				if sep.cmp(to) > 0 {
 					return zero, false, nil
 				}
 			}
-			r, found, err := w.scanOverlapNode(bv.child(j), from, to)
+			r, found, err := w.scanOverlapNode(bv.child(j), depth+1, from, to)
 			if err != nil {
 				return zero, false, err
 			}
@@ -1790,7 +1786,7 @@ func (w *Writer[K]) Scan(f func(from, to K, scopeID uint32)) error {
 	if w.pendingRoot == 0 {
 		return nil
 	}
-	return w.scanNode(w.pendingRoot, f)
+	return w.scanNode(w.pendingRoot, 0, f)
 }
 
 // --- scope table operations (mode 2 only) ---
@@ -1830,14 +1826,63 @@ func (w *Writer[K]) ScopeResolveRef(scopeID uint32) []byte {
 // ScopePageCount returns the number of pages in the current scope-table tree
 // (mode 2 only). Returns 0 when there is no scope table. Used by tests/audits
 // to verify that scope pages are reused across commits rather than accumulated.
+//
+// Counts via a recursive walk WITHOUT materializing a slice (O(1) heap,
+// mirrors Rust count_scope_pages) so an audit call does not make heap scale
+// with scope count (Rule 1).
 func (w *Writer[K]) ScopePageCount() int {
 	root := w.scopeRoot()
 	if root == 0 {
 		return 0
 	}
-	var pages []uint32
-	w.collectScopePageNumbers(root, 0, &pages)
-	return len(pages)
+	return int(w.countScopePages(root, 0))
+}
+
+// countScopePages counts every page of the scope tree (branch/leaf + overflow
+// chain pages) WITHOUT materializing them — O(height) stack, O(1) heap. The
+// overflow chain walk is bounded by total (the file's page count), NOT by
+// TreeHeightMax: a spilled scope bitmap can chain across arbitrarily many
+// pages (Fix 4). Mirrors Rust count_scope_pages (writer.rs:845).
+func (w *Writer[K]) countScopePages(pgno uint32, depth uint32) uint64 {
+	total := w.store.totalPages()
+	if depth > TreeHeightMax || uint64(pgno) >= uint64(total) {
+		return 0
+	}
+	page := w.store.page(pgno)
+	h := decodeHeader(page)
+	count := uint64(1) // this page
+	if h.pageType == PageTypeScopeBranch {
+		c, err := validatedEntryCount(page)
+		if err != nil {
+			return count
+		}
+		bv := newBranchView(page, c, int(ScopeKeyWidth))
+		for j := 0; j < bv.childCount(); j++ {
+			count += w.countScopePages(bv.child(j), depth+1)
+		}
+	} else if h.pageType == PageTypeScopeLeaf {
+		c, err := validatedEntryCount(page)
+		if err != nil {
+			return count
+		}
+		for i := 0; i < c; i++ {
+			recOff := PageHeaderSize + i*ScopeEntrySize
+			if u16le(page, recOff+4) == ScopeBitmapOverflow {
+				opgno := u32le(page, recOff+10)
+				guard := uint32(0)
+				for opgno != 0 && guard <= total {
+					guard++
+					if uint64(opgno) >= uint64(total) {
+						break
+					}
+					count++
+					opage := w.store.page(opgno)
+					opgno = u32le(opage, overflowNextOff)
+				}
+			}
+		}
+	}
+	return count
 }
 
 // TreePageCount returns the number of pages in the committed IP tree
@@ -1850,6 +1895,512 @@ func (w *Writer[K]) TreePageCount() uint64 {
 	var pages uint64
 	w.countTreePages(w.committedRoot, w.committedHeight, &pages)
 	return pages
+}
+
+// ── scope tree incremental COW insert (mode 2) ──────────────────────────
+//
+// Replaces the old O(all scopes) rebuild (read every committed scope into a
+// slice, then bulk-build). Each new entry is COW-inserted into the EXISTING
+// committed scope B+tree, mirroring the data tree's cowInsert:
+//   - cowPage copies a committed page into a fresh private page and frees the
+//     old one as a COW victim (freedThisTxn), exactly like the data tree.
+//     Unchanged subtrees are SHARED across old/new roots (correct COW + MVCC).
+//   - Only the root→target-leaf path is COW'd: O(log S) pages touched,
+//     O(height) heap — flat regardless of committed scope count.
+//   - The target leaf is rebuilt fresh (re-encoding its entries), which
+//     re-allocates overflow chains and frees the old ones. This preserves the
+//     scope-overflow reclamation guarantee (a spilled bitmap's chain pages are
+//     reclaimed when their leaf is rewritten) without touching any other leaf.
+//
+// The scope tree is ALWAYS 4-byte keyed (ScopeKeyWidth), independent of the
+// data tree's K. All branch offsets here use ScopeKeyWidth.
+
+// scopeLeafMaxEntries is the maximum scope entries per leaf:
+// (page_size − header) / entry_size. Mirrors Rust SCOPE_LEAF_MAX.
+func scopeLeafMaxEntries() int { return (PageSize - PageHeaderSize) / ScopeEntrySize }
+
+// scopeBranchMaxEntries is the maximum separators in a scope branch:
+// (page_size − header − 4) / (scope_key_width + 4). Mirrors Rust SCOPE_BRANCH_MAX.
+func scopeBranchMaxEntries() int {
+	return (PageSize - PageHeaderSize - 4) / (int(ScopeKeyWidth) + 4)
+}
+
+// scopeSplit is the scope-tree analogue of branchSplit: a promoted 4-byte
+// scope_id separator and the new right sibling page.
+type scopeSplit struct {
+	sep   uint32
+	right uint32
+}
+
+// scopeRetain records an entry's overflow-chain reuse state. When ok is true,
+// first is the first page of a chain already private to this transaction that
+// must be reused as-is; when ok is false the chain (if any) is freshly
+// allocated. Mirrors Rust Option<u32>.
+type scopeRetain struct {
+	first uint32
+	ok    bool
+}
+
+// scopeBranchFindChild binary-searches a scope branch (4-byte scope_id
+// separators) for the child index whose key range contains scopeID.
+func scopeBranchFindChild(bv *branchView, scopeID uint32) int {
+	lo, hi := 0, bv.sepCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		sep := u32le(bv.sep(mid), 0)
+		if sep <= scopeID {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// scopeBranchUpdateChild rewrites child[j] in a scope branch page. Uses
+// ScopeKeyWidth (the scope tree is always 4-byte keyed), independent of the
+// data tree's K — kept separate from branchUpdateChild so it is correct for
+// every key width.
+func (w *Writer[K]) scopeBranchUpdateChild(pgno uint32, childIdx int, newChild uint32) {
+	kw := int(ScopeKeyWidth)
+	var off int
+	if childIdx == 0 {
+		off = PageHeaderSize
+	} else {
+		off = PageHeaderSize + 4 + (childIdx-1)*(kw+4) + kw
+	}
+	putU32(w.store.pageMut(pgno), off, newChild)
+}
+
+// scopeCowInsert COW-inserts one new scope entry into the tree rooted at root,
+// returning the new root. root == 0 creates a single-leaf tree. Mirrors Rust
+// scope_cow_insert (writer.rs:1744).
+func (w *Writer[K]) scopeCowInsert(root uint32, entry *ScopeEntry) (uint32, error) {
+	if root == 0 {
+		leaf, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		one := []ScopeEntry{*entry}
+		retain := []scopeRetain{{}}
+		if err := w.scopeWriteLeafRange(leaf, one, retain); err != nil {
+			return 0, err
+		}
+		return leaf, nil
+	}
+	newRoot, err := w.cowPage(root)
+	if err != nil {
+		return 0, err
+	}
+	split, err := w.scopeInsertDescend(newRoot, entry)
+	if err != nil {
+		return 0, err
+	}
+	if split != nil {
+		branch, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		if err := w.writeScopeBranchNew(branch, newRoot, split.sep, split.right); err != nil {
+			return 0, err
+		}
+		return branch, nil
+	}
+	return newRoot, nil
+}
+
+// scopeInsertDescend descends from pgno (already COW'd/private) and inserts
+// entry. Returns a non-nil scopeSplit when the child split, to be absorbed by
+// the caller's branch. Mirrors Rust scope_insert_descend (writer.rs:1768).
+func (w *Writer[K]) scopeInsertDescend(pgno uint32, entry *ScopeEntry) (*scopeSplit, error) {
+	pageType := decodeHeader(w.store.page(pgno)).pageType
+	if pageType == PageTypeScopeLeaf {
+		return w.scopeLeafRebuildInsert(pgno, entry)
+	}
+	var childIdx int
+	var childPgno uint32
+	{
+		page := w.store.page(pgno)
+		count, err := validatedEntryCount(page)
+		if err != nil {
+			return nil, err
+		}
+		bv := newBranchView(page, count, int(ScopeKeyWidth))
+		childIdx = scopeBranchFindChild(&bv, entry.ScopeID)
+		childPgno = bv.child(childIdx)
+	}
+	cowChild, err := w.cowPage(childPgno)
+	if err != nil {
+		return nil, err
+	}
+	if cowChild != childPgno {
+		w.scopeBranchUpdateChild(pgno, childIdx, cowChild)
+	}
+	split, err := w.scopeInsertDescend(cowChild, entry)
+	if err != nil {
+		return nil, err
+	}
+	if split != nil {
+		return w.scopeBranchAbsorbSplit(pgno, childIdx, cowChild, split.sep, split.right)
+	}
+	return nil, nil
+}
+
+// scopeLeafRebuildInsert rebuilds the target leaf (already COW'd/private) fresh
+// with its existing entries plus entry. Overflow chains already PRIVATE to this
+// transaction are RETAINED (their pointer is reused) so a bulk intern of many
+// scopes does not re-allocate the same chain once per insert. Overflow chains
+// that are COMMITTED (shared with the previous generation) are freed and
+// re-allocated into fresh private pages — this is what reclaims a spilled
+// bitmap's chain when its leaf is rewritten (scope-overflow reclamation).
+// Returns a split when the leaf overflows capacity. Mirrors Rust
+// scope_leaf_rebuild_insert (writer.rs:1805).
+func (w *Writer[K]) scopeLeafRebuildInsert(pgno uint32, entry *ScopeEntry) (*scopeSplit, error) {
+	// Read existing entries + per-entry overflow-chain state. Heap is bounded
+	// by ONE leaf (≤ scopeLeafMaxEntries entries + their bitmaps), never by the
+	// committed scope count.
+	entries, retain, committedChains, err := w.scopeReadLeafEntries(pgno)
+	if err != nil {
+		return nil, err
+	}
+	// Free committed overflow chains: they are shared with the previous
+	// generation and are about to be re-allocated into fresh private pages.
+	// (Private chains are retained via `retain` and left untouched.)
+	for _, chainPgno := range committedChains {
+		w.freedThisTxn = append(w.freedThisTxn, chainPgno)
+	}
+	// Merge the new entry at its sorted position (entries are sorted by
+	// scope_id; new ids are always greater than committed ones, so this is
+	// typically a rightmost append, but a general linear search is used for
+	// safety — the leaf holds at most scopeLeafMaxEntries entries).
+	pos := 0
+	for pos < len(entries) && entries[pos].ScopeID <= entry.ScopeID {
+		pos++
+	}
+	// Duplicate scope_id must never happen (intern mints strictly increasing
+	// ids), but guard defensively against a logic error by replacing.
+	if pos < len(entries) && entries[pos].ScopeID == entry.ScopeID {
+		entries[pos] = *entry
+		retain[pos] = scopeRetain{} // re-encode this entry's chain afresh
+	} else {
+		entries = append(entries, ScopeEntry{})
+		copy(entries[pos+1:], entries[pos:])
+		entries[pos] = *entry
+		retain = append(retain, scopeRetain{})
+		copy(retain[pos+1:], retain[pos:])
+		retain[pos] = scopeRetain{} // new entry: allocate its chain fresh
+	}
+
+	if len(entries) <= scopeLeafMaxEntries() {
+		if err := w.scopeWriteLeafRange(pgno, entries, retain); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	// Split: left keeps the first half in pgno, right gets the rest in a
+	// freshly allocated leaf. The separator promoted upward is the right leaf's
+	// minimum scope_id.
+	mid := len(entries) / 2
+	left := entries[:mid]
+	rightEntries := append([]ScopeEntry(nil), entries[mid:]...)
+	leftRetain := retain[:mid]
+	rightRetain := append([]scopeRetain(nil), retain[mid:]...)
+	sep := rightEntries[0].ScopeID
+	if err := w.scopeWriteLeafRange(pgno, left, leftRetain); err != nil {
+		return nil, err
+	}
+	rightPgno, err := w.allocPage()
+	if err != nil {
+		return nil, err
+	}
+	if err := w.scopeWriteLeafRange(rightPgno, rightEntries, rightRetain); err != nil {
+		return nil, err
+	}
+	return &scopeSplit{sep: sep, right: rightPgno}, nil
+}
+
+// scopeReadLeafEntries reads every entry of a scope leaf into a slice, plus
+// per-entry overflow-chain state. Returns (entries, retain, committedChains):
+//   - retain[i].ok is true iff entry i has an overflow chain already PRIVATE to
+//     this transaction (its pages were allocated earlier this txn and should be
+//     reused, not re-allocated); retain[i].first is its first page.
+//   - committedChains lists every page of overflow chains that are COMMITTED
+//     (shared with the previous generation); the caller frees them before
+//     re-encoding.
+//
+// Uses store.page (not committedBytes) so it works for both committed chains
+// and chains allocated earlier this transaction. Mirrors Rust
+// scope_read_leaf_entries (writer.rs:1870).
+func (w *Writer[K]) scopeReadLeafEntries(pgno uint32) (entries []ScopeEntry, retain []scopeRetain, committedChains []uint32, err error) {
+	page := w.store.page(pgno)
+	count, vErr := validatedEntryCount(page)
+	if vErr != nil {
+		return nil, nil, nil, vErr
+	}
+	entries = make([]ScopeEntry, 0, count)
+	retain = make([]scopeRetain, 0, count)
+	for i := 0; i < count; i++ {
+		recOff := PageHeaderSize + i*ScopeEntrySize
+		scopeID := u32le(page, recOff)
+		bmLen := u16le(page, recOff+4)
+		if bmLen == ScopeBitmapOverflow {
+			trueLen := int(u32le(page, recOff+6))
+			payloadCap := PageSize - overflowPayloadOff
+			bitmap := make([]byte, 0, trueLen)
+			first := u32le(page, recOff+10)
+			opgno := first
+			maxPages := 0
+			if trueLen > 0 {
+				maxPages = (trueLen + payloadCap - 1) / payloadCap
+			}
+			// A chain is private iff its first page was allocated this
+			// transaction (tracked in privatePages). Private chains are
+			// retained; committed chains are collected for freeing.
+			isPrivate := w.privatePages.contains(first)
+			read := 0
+			for opgno != 0 && len(bitmap) < trueLen && read < maxPages {
+				read++
+				if uint64(opgno) >= uint64(w.store.totalPages()) {
+					return nil, nil, nil, fmt.Errorf("scope overflow page out of bounds")
+				}
+				if !isPrivate {
+					committedChains = append(committedChains, opgno)
+				}
+				opage := w.store.page(opgno)
+				next := u32le(opage, overflowNextOff)
+				need := trueLen - len(bitmap)
+				if need > payloadCap {
+					need = payloadCap
+				}
+				bitmap = append(bitmap, opage[overflowPayloadOff:overflowPayloadOff+need]...)
+				opgno = next
+			}
+			entries = append(entries, ScopeEntry{ScopeID: scopeID, Bitmap: bitmap})
+			if isPrivate {
+				retain = append(retain, scopeRetain{first: first, ok: true})
+			} else {
+				retain = append(retain, scopeRetain{})
+			}
+		} else {
+			n := int(bmLen)
+			if n > MaxBitmapWidth {
+				n = MaxBitmapWidth
+			}
+			bitmap := make([]byte, n)
+			copy(bitmap, page[recOff+6:recOff+6+n])
+			entries = append(entries, ScopeEntry{ScopeID: scopeID, Bitmap: bitmap})
+			retain = append(retain, scopeRetain{})
+		}
+	}
+	return entries, retain, committedChains, nil
+}
+
+// scopeWriteLeafRange writes a fresh set of sorted entries into leaf pgno,
+// re-encoding each entry. retain[i].ok means entry i has an overflow chain
+// already private to this transaction that should be reused as-is; otherwise a
+// fresh chain (or inline) is allocated. Mirrors Rust scope_write_leaf_range
+// (writer.rs:1937).
+func (w *Writer[K]) scopeWriteLeafRange(pgno uint32, entries []ScopeEntry, retain []scopeRetain) error {
+	// Resolve each entry's overflow first-page: reuse a retained private chain,
+	// or allocate a fresh one for oversized bitmaps.
+	overflowFirst := make([]uint32, len(entries))
+	for i := range entries {
+		if len(entries[i].Bitmap) > MaxBitmapWidth {
+			if i < len(retain) && retain[i].ok {
+				overflowFirst[i] = retain[i].first // reuse private chain
+			} else {
+				first, err := w.scopeAllocOverflowChain(entries[i].Bitmap)
+				if err != nil {
+					return err
+				}
+				overflowFirst[i] = first
+			}
+		} else {
+			overflowFirst[i] = 0
+		}
+	}
+	page := w.store.pageMut(pgno)
+	for i := range page {
+		page[i] = 0
+	}
+	writeHeader(page, PageTypeScopeLeaf, uint16(len(entries)), pgno)
+	for i := range entries {
+		recOff := PageHeaderSize + i*ScopeEntrySize
+		rec := page[recOff : recOff+ScopeEntrySize]
+		for j := range rec {
+			rec[j] = 0
+		}
+		putU32(rec, 0, entries[i].ScopeID)
+		if len(entries[i].Bitmap) > MaxBitmapWidth {
+			putU16(rec, 4, ScopeBitmapOverflow)
+			putU32(rec, 6, uint32(len(entries[i].Bitmap)))
+			putU32(rec, 10, overflowFirst[i])
+		} else {
+			putU16(rec, 4, uint16(len(entries[i].Bitmap)))
+			copy(rec[6:], entries[i].Bitmap)
+		}
+	}
+	return nil
+}
+
+// scopeAllocOverflowChain allocates a fresh overflow chain for bitmap
+// (> MaxBitmapWidth bytes) using the writer's allocator (reuses free-list
+// pages, tracks the pages as private + consumed). Returns the first page of
+// the chain. Mirrors Rust scope_alloc_overflow_chain (writer.rs:1981).
+func (w *Writer[K]) scopeAllocOverflowChain(bitmap []byte) (uint32, error) {
+	payloadCap := PageSize - overflowPayloadOff
+	nPages := (len(bitmap) + payloadCap - 1) / payloadCap
+	if nPages == 0 {
+		nPages = 1
+	}
+	pages := make([]uint32, 0, nPages)
+	for i := 0; i < nPages; i++ {
+		pgno, err := w.allocPage()
+		if err != nil {
+			return 0, err
+		}
+		pages = append(pages, pgno)
+	}
+	for i, pgno := range pages {
+		page := w.store.pageMut(pgno)
+		for j := range page {
+			page[j] = 0
+		}
+		var next uint32
+		if i+1 < len(pages) {
+			next = pages[i+1]
+		}
+		writeHeader(page, PageTypeOverflow, 0, pgno)
+		putU32(page, overflowNextOff, next)
+		start := i * payloadCap
+		end := start + payloadCap
+		if end > len(bitmap) {
+			end = len(bitmap)
+		}
+		copy(page[overflowPayloadOff:overflowPayloadOff+(end-start)], bitmap[start:end])
+	}
+	return pages[0], nil
+}
+
+// scopeBranchAbsorbSplit inserts (sep, right) into the scope branch at pgno
+// after child childIdx. Splits the branch when full, mirroring the data-tree
+// branchAbsorbSplit but with the scope-branch page type and 4-byte scope_id
+// separators. Mirrors Rust scope_branch_absorb_split (writer.rs:2007).
+func (w *Writer[K]) scopeBranchAbsorbSplit(pgno uint32, childIdx int, left uint32, sep uint32, right uint32) (*scopeSplit, error) {
+	page := w.store.page(pgno)
+	count, err := validatedEntryCount(page)
+	if err != nil {
+		return nil, err
+	}
+	if count < scopeBranchMaxEntries() {
+		kw := int(ScopeKeyWidth)
+		pageMut := w.store.pageMut(pgno)
+		insOff := PageHeaderSize + 4 + childIdx*(kw+4)
+		endOff := PageHeaderSize + 4 + count*(kw+4)
+		copy(pageMut[insOff+kw+4:endOff+kw+4], pageMut[insOff:endOff])
+		putU32(pageMut, insOff, sep)
+		putU32(pageMut, insOff+kw, right)
+		var leftOff int
+		if childIdx == 0 {
+			leftOff = PageHeaderSize
+		} else {
+			leftOff = PageHeaderSize + 4 + (childIdx-1)*(kw+4) + kw
+		}
+		putU32(pageMut, leftOff, left)
+		writeHeader(pageMut, PageTypeScopeBranch, uint16(count+1), pgno)
+		return nil, nil
+	}
+	// Branch split: copy to stack buffer, redistribute into two pages.
+	var src [PageSize]byte
+	copy(src[:], w.store.page(pgno))
+	total := count + 1
+	mid := total / 2
+	if err := w.writeScopeBranchSplit(pgno, src[:], count, childIdx, left, sep, right, 0, mid); err != nil {
+		return nil, err
+	}
+	rightPgno, err := w.allocPage()
+	if err != nil {
+		return nil, err
+	}
+	// Right page starts at mid+1: the separator at combined index mid is
+	// promoted up and must NOT remain in either child page.
+	if err := w.writeScopeBranchSplit(rightPgno, src[:], count, childIdx, left, sep, right, mid+1, total-mid-1); err != nil {
+		return nil, err
+	}
+	kw := int(ScopeKeyWidth)
+	var promoted uint32
+	if mid == childIdx {
+		promoted = sep
+	} else {
+		oldI := mid
+		if mid > childIdx {
+			oldI = mid - 1
+		}
+		promoted = u32le(src[:], PageHeaderSize+4+oldI*(kw+4))
+	}
+	return &scopeSplit{sep: promoted, right: rightPgno}, nil
+}
+
+// writeScopeBranchSplit writes one half of a split scope branch page. Mirrors
+// Rust write_scope_branch_split (writer.rs:2062).
+func (w *Writer[K]) writeScopeBranchSplit(pgno uint32, src []byte, oldCount, insertIdx int,
+	insLeft uint32, insSep uint32, insRight uint32, startIdx, sepCount int) error {
+	kw := int(ScopeKeyWidth)
+	page := w.store.pageMut(pgno)
+	for i := range page {
+		page[i] = 0
+	}
+	writeHeader(page, PageTypeScopeBranch, uint16(sepCount), pgno)
+	var firstChild uint32
+	switch {
+	case startIdx == 0 && insertIdx == 0:
+		firstChild = insLeft
+	case startIdx == 0:
+		firstChild = u32le(src, PageHeaderSize)
+	case startIdx == insertIdx:
+		firstChild = insLeft
+	case startIdx == insertIdx+1:
+		firstChild = insRight
+	case startIdx < insertIdx:
+		firstChild = readOldChildSrc(src, startIdx, kw)
+	default: // startIdx > insertIdx+1: shifted by the insertion
+		firstChild = readOldChildSrc(src, startIdx-1, kw)
+	}
+	putU32(page, PageHeaderSize, firstChild)
+	for outI := 0; outI < sepCount; outI++ {
+		absI := startIdx + outI
+		var s, c uint32
+		if absI == insertIdx {
+			s, c = insSep, insRight
+		} else {
+			oldI := absI
+			if absI > insertIdx {
+				oldI = absI - 1
+			}
+			off := PageHeaderSize + 4 + oldI*(kw+4)
+			s = u32le(src, off)
+			c = u32le(src, off+kw)
+		}
+		outOff := PageHeaderSize + 4 + outI*(kw+4)
+		putU32(page, outOff, s)
+		putU32(page, outOff+kw, c)
+	}
+	return nil
+}
+
+// writeScopeBranchNew writes a fresh scope-branch root holding two children
+// separated by sep. Mirrors Rust write_scope_branch_new (writer.rs:2118).
+func (w *Writer[K]) writeScopeBranchNew(pgno uint32, left uint32, sep uint32, right uint32) error {
+	kw := int(ScopeKeyWidth)
+	page := w.store.pageMut(pgno)
+	for i := range page {
+		page[i] = 0
+	}
+	writeHeader(page, PageTypeScopeBranch, 1, pgno)
+	putU32(page, PageHeaderSize, left)
+	putU32(page, PageHeaderSize+4, sep)
+	putU32(page, PageHeaderSize+4+kw, right)
+	return nil
 }
 
 func (w *Writer[K]) ScopeBitmapSetFeed(scopeID uint32, feedBit uint32) (uint32, error) {
@@ -1889,22 +2440,38 @@ func (w *Writer[K]) ScopeBitmapClearFeed(scopeID uint32, feedBit uint32) (uint32
 	return id, nil
 }
 
-func (w *Writer[K]) scanNode(pgno uint32, f func(K, K, uint32)) error {
+func (w *Writer[K]) scanNode(pgno uint32, depth uint32, f func(K, K, uint32)) error {
+	if depth > TreeHeightMax {
+		return fmt.Errorf("scan exceeded tree height (cycle?)")
+	}
+	if uint64(pgno) >= uint64(w.store.totalPages()) {
+		return fmt.Errorf("scan page number out of bounds")
+	}
 	var zero K
 	kw := zero.width()
 	page := w.store.page(pgno)
 	h := decodeHeader(page)
+	leafMax := (PageSize - PageHeaderSize) / (2*kw + 4)
+	branchMax := (PageSize - PageHeaderSize - 4) / (kw + 4)
 	switch h.pageType {
 	case PageTypeLeaf:
-		lv := newLeafView(page, int(h.entryCount), kw)
+		count := int(h.entryCount)
+		if count > leafMax {
+			count = leafMax
+		}
+		lv := newLeafView(page, count, kw)
 		for i := 0; i < lv.len(); i++ {
 			f(zero.readLE(lv.recordFrom(i)), zero.readLE(lv.recordTo(i)), lv.recordScopeID(i))
 		}
 		return nil
 	case PageTypeBranch:
-		bv := newBranchView(page, int(h.entryCount), kw)
+		count := int(h.entryCount)
+		if count > branchMax {
+			count = branchMax
+		}
+		bv := newBranchView(page, count, kw)
 		for j := 0; j < bv.childCount(); j++ {
-			if err := w.scanNode(bv.child(j), f); err != nil {
+			if err := w.scanNode(bv.child(j), depth+1, f); err != nil {
 				return err
 			}
 		}

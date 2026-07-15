@@ -193,6 +193,60 @@ func CreateFile[K ipKey[K]](path string, scopeMode uint8, createdUnix uint64) (*
 	return OpenFile[K](path)
 }
 
+// readOnlyMmapStore is a read-only PageReader view over a read-only mmap, used
+// ONLY for in-place open-time validation. It implements just the PageReader
+// surface (page + totalPages) that the free-list validators need; it never
+// mutates. Lives only for the duration of the pre-growth validation block in
+// OpenFile, so the open path stays flat regardless of file size (Rule 1) — no
+// heap copy of the file is ever made.
+type readOnlyMmapStore struct {
+	data  []byte
+	total uint32
+}
+
+func (s *readOnlyMmapStore) page(pgno uint32) []byte {
+	base := int(pgno) * PageSize
+	return s.data[base : base+PageSize]
+}
+
+func (s *readOnlyMmapStore) totalPages() uint32 { return s.total }
+
+// validateCommittedImage runs the open-time corruption guard IN-PLACE over a
+// read-only mmap of the committed region, mirroring the Rust FileWriter::open
+// pre-growth validation block. It walks the data tree (CRC + structure +
+// record scopes in indirect mode), the scope table (CRC + overflow chains), and
+// the persistent free-list (chain CRC + inverted reachability probe). It never
+// copies the image and never constructs a full Writer, so heap stays flat
+// regardless of file size (Rules 1/7). Open/validateTree switch on the meta
+// key_width, so the same path validates both IPv4 and IPv6 files.
+func validateCommittedImage(roData []byte, committedPages uint32, active meta) error {
+	bytes := roData[:int(committedPages)*PageSize]
+	if active.rootPgno != 0 {
+		r, err := Open(bytes)
+		if err != nil {
+			return err
+		}
+		if err := r.validateTree(); err != nil {
+			return err
+		}
+		if active.scopeMode == ScopeModeIndirect && active.scopeTableRoot != 0 {
+			if err := r.validateRecordScopes(active.rootPgno, 1); err != nil {
+				return err
+			}
+		}
+	}
+	if active.scopeMode == ScopeModeIndirect && active.scopeTableRoot != 0 {
+		if err := ValidateScopeCRC(bytes, active.scopeTableRoot); err != nil {
+			return err
+		}
+	}
+	roStore := &readOnlyMmapStore{data: roData, total: committedPages}
+	if err := ValidateChainCRC(roStore, active.freeListHead); err != nil {
+		return err
+	}
+	return validateFreeEntries(roStore, active.freeListHead, active.rootPgno, uint32(active.keyWidth), active.scopeTableRoot)
+}
+
 func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -264,20 +318,26 @@ func OpenFile[K ipKey[K]](path string) (*FileWriter[K], error) {
 		committedPages = pageLimit
 	}
 
-	// Pre-validate the committed image BEFORE newMmapStore, which extends the
-	// file by a growth chunk. openWriter runs the full corruption guard (data
-	// tree CRC/structure, scope table including overflow chains, free-list); a
-	// corrupt file must be rejected WITHOUT being grown or modified. The
-	// throwaway writer is discarded — the real mmap-backed writer is
-	// constructed below.
-	preImage := make([]byte, int(committedPages)*PageSize)
-	if _, err := file.ReadAt(preImage, 0); err != nil {
+	// Pre-validate the committed image IN-PLACE over a read-only mmap, BEFORE
+	// newMmapStore extends the file by a growth chunk. The geometry check above
+	// guarantees the file already has committedPages*PageSize bytes, so a
+	// read-only MAP_SHARED mapping covers the whole committed region with O(1)
+	// heap — no heap copy of the file (Rule 1). The validation primitives run
+	// directly over the mmap bytes, so a corrupt file is rejected WITHOUT being
+	// grown or modified. A full Writer is NOT built here (that would reserve
+	// per-page heap on an untrusted total_pages); only the byte-slice /
+	// PageReader validation primitives run, keeping this path flat regardless of
+	// file size.
+	roData, err := syscall.Mmap(fd, 0, length, syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
 		file.Close()
-		return nil, fmt.Errorf("read: %w", err)
+		return nil, fmt.Errorf("validation mmap: %w", err)
 	}
-	if _, err := openWriter[K](newVecPageStore(append([]byte(nil), preImage...))); err != nil {
+	vErr := validateCommittedImage(roData, committedPages, active)
+	syscall.Munmap(roData)
+	if vErr != nil {
 		file.Close()
-		return nil, err
+		return nil, vErr
 	}
 
 	store, err := newMmapStore(file, committedPages)

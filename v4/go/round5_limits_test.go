@@ -125,3 +125,33 @@ func TestRound5TransactionIDExhaustionReturnsErrorInsteadOfWrapping(t *testing.T
 		t.Fatal("Commit wrapped txn_id after the maximum generation")
 	}
 }
+
+func TestRound5ScopeRegistryCanMintMaximumIDThenReportsExhaustion(t *testing.T) {
+	reg := ScopeRegistryFromEntries([]ScopeEntry{{ScopeID: math.MaxUint32 - 1, Bitmap: []byte{1}}})
+	id, created, err := reg.Intern([]byte{2}, nil)
+	if err != nil || !created || id != math.MaxUint32 {
+		t.Fatalf("mint maximum scope_id=(%d,%v,%v), want (%d,true,nil)", id, created, err, uint32(math.MaxUint32))
+	}
+	if id, _, err := reg.Intern([]byte{3}, nil); err == nil {
+		t.Fatalf("registry minted wrapped/reserved scope_id %d after the maximum", id)
+	}
+}
+
+func TestRound5ScopeRegistryConstructsAtMaximumIDWithoutPanic(t *testing.T) {
+	var reg *ScopeRegistry
+	var panicValue any
+	func() {
+		defer func() { panicValue = recover() }()
+		reg = ScopeRegistryFromEntries([]ScopeEntry{{ScopeID: math.MaxUint32, Bitmap: []byte{1}}})
+	}()
+	if panicValue != nil {
+		t.Fatalf("ScopeRegistryFromEntries panicked at maximum scope_id: %v", panicValue)
+	}
+	id, created, err := reg.Intern([]byte{1}, nil)
+	if err != nil || created || id != math.MaxUint32 {
+		t.Fatalf("re-intern maximum scope_id=(%d,%v,%v)", id, created, err)
+	}
+	if id, _, err := reg.Intern([]byte{2}, nil); err == nil {
+		t.Fatalf("registry minted wrapped/reserved scope_id %d after construction at maximum", id)
+	}
+}

@@ -2,7 +2,7 @@ use iprange_livedb::page_store::VecPageStore;
 use iprange_livedb::scope_table::MAX_BITMAP_WIDTH;
 use iprange_livedb::spec;
 use iprange_livedb::wire::{finalize_checksum, Meta, PageHeader};
-use iprange_livedb::{Ipv4Key, Writer};
+use iprange_livedb::{Ipv4Key, Ipv6Key, Writer};
 
 fn active_meta(image: &[u8]) -> Meta {
     let first = Meta::decode(&image[..spec::PAGE_SIZE]);
@@ -96,5 +96,43 @@ fn free_list_rejects_every_reachable_page_class() {
     assert!(
         accepted.is_empty(),
         "writable open accepted reachable pages as free: {accepted:?}"
+    );
+}
+
+#[test]
+fn free_list_rejects_reachable_ipv6_non_first_child() {
+    let mut writer = Writer::<Ipv6Key>::create(spec::SCOPE_MODE_SCALAR, 0).unwrap();
+    for i in 0..800u64 {
+        let ip = Ipv6Key { hi: 1, lo: i * 2 };
+        writer.set(ip, ip, 1).unwrap();
+    }
+    writer.commit(1, u64::MAX).unwrap();
+    for i in 100..300u64 {
+        let ip = Ipv6Key { hi: 1, lo: i * 2 };
+        writer.delete(ip, ip).unwrap();
+    }
+    writer.commit(2, u64::MAX).unwrap();
+    let mut image = writer.into_image().unwrap();
+    let meta = active_meta(&image);
+    assert_ne!(meta.free_list_head, 0);
+    assert_ne!(meta.root_pgno, 0);
+
+    let data_base = meta.root_pgno as usize * spec::PAGE_SIZE;
+    let data_root = &image[data_base..data_base + spec::PAGE_SIZE];
+    let header = PageHeader::decode(data_root);
+    assert_eq!(header.page_type, spec::PAGE_TYPE_BRANCH);
+    assert!(header.entry_count >= 1);
+    let child_one_offset = spec::PAGE_HEADER_SIZE + 4 + 16;
+    let reachable_child = u32_at(data_root, child_one_offset);
+
+    let free_base = meta.free_list_head as usize * spec::PAGE_SIZE;
+    let free_page = &mut image[free_base..free_base + spec::PAGE_SIZE];
+    assert!(u32_at(free_page, spec::TXN_FREE_COUNT) > 0);
+    put_u32(free_page, spec::TXN_FREE_ARRAY, reachable_child);
+    finalize_checksum(free_page);
+
+    assert!(
+        Writer::<Ipv6Key>::open(Box::new(VecPageStore::new(image))).is_err(),
+        "writable open accepted reachable IPv6 non-first child page {reachable_child} as authoritative free state"
     );
 }

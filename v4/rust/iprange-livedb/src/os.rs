@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::error::{Error, Result};
 use crate::key::IpKey;
-use crate::page_store::MmapStore;
+use crate::page_store::{MmapStore, PageStore};
 use crate::reader::Reader;
 use crate::readers::{ReaderGuard, ReaderTable};
 use crate::spec::{self, PAGE_SIZE};
@@ -43,6 +43,61 @@ fn validate_meta_geometry(meta: &Meta, file_len: usize) -> Result<()> {
         return Err(Error::Structural("root_pgno out of range"));
     }
     Ok(())
+}
+
+/// Read-only `PageStore` over a read-only mmap, used ONLY for in-place
+/// open-time validation. The write methods panic: validation never mutates the
+/// store. A full `Writer` is intentionally NOT constructed over this store, so
+/// the validation path does not reserve per-page heap on an untrusted
+/// `total_pages` (Rule 1) — it stays flat regardless of file size. Lives only
+/// for the duration of the pre-growth validation block in [`FileWriter::open`].
+#[allow(missing_debug_implementations)]
+struct ReadOnlyMmapStore {
+    mmap: memmap2::Mmap,
+    total: u32,
+}
+
+impl ReadOnlyMmapStore {
+    fn new(mmap: memmap2::Mmap, total: u32) -> Self {
+        ReadOnlyMmapStore { mmap, total }
+    }
+}
+
+impl PageStore for ReadOnlyMmapStore {
+    fn page(&self, pgno: u32) -> &[u8] {
+        let base = pgno as usize * PAGE_SIZE;
+        &self.mmap[base..base + PAGE_SIZE]
+    }
+    fn page_mut(&mut self, _pgno: u32) -> &mut [u8] {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
+    fn copy_page(&mut self, _src_pgno: u32, _dst_pgno: u32) {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
+    fn alloc_page(&mut self) -> Result<u32> {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
+    fn total_pages(&self) -> u32 {
+        self.total
+    }
+    fn committed_pages(&self) -> u32 {
+        self.total
+    }
+    fn set_committed_pages(&mut self, _pages: u32) {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
+    fn committed_bytes(&self) -> &[u8] {
+        &self.mmap[..self.total as usize * PAGE_SIZE]
+    }
+    fn ensure_capacity(&mut self, _min_pages: u32) -> Result<()> {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
+    fn sync(&self) -> Result<()> {
+        Ok(())
+    }
+    fn truncate(&mut self, _new_total_pages: u32) -> Result<()> {
+        panic!("ReadOnlyMmapStore is validation-only")
+    }
 }
 
 /// A read-only mmap of a v4 file. Registers in the reader table on open.
@@ -235,21 +290,39 @@ impl<K: IpKey> FileWriter<K> {
         validate_meta_geometry(&active, len)?;
         let committed_pages = active.total_pages as u32;
 
-        // Pre-validate the committed image BEFORE MmapStore::open, which
-        // extends the file by a growth chunk. Writer::open runs the full
-        // corruption guard (data tree CRC/structure, scope table including
-        // overflow chains, free-list); a corrupt file must be rejected WITHOUT
-        // being grown or modified.
+        // Pre-validate the committed image IN-PLACE over a read-only mmap,
+        // BEFORE MmapStore::open extends the file by a growth chunk. The geometry
+        // check above guarantees the file already has committed_pages*PAGE_SIZE
+        // bytes, so a read-only MAP_SHARED mapping covers the whole committed
+        // region with O(1) heap — no Vec copy of the file (Rule 1). Validation
+        // primitives run directly over the mmap bytes, so a corrupt file is
+        // rejected WITHOUT being grown or modified. A full `Writer` is NOT built
+        // here (that would reserve per-page heap on an untrusted total_pages);
+        // only the byte-slice / PageStore validation primitives are run, keeping
+        // this path flat regardless of file size.
         {
-            use std::os::unix::fs::FileExt;
+            let ro_mmap = unsafe { memmap2::Mmap::map(&file).map_err(Error::Io)? };
             let committed_bytes = committed_pages as usize * PAGE_SIZE;
-            let mut pre_image = vec![0u8; committed_bytes];
-            file.read_at(&mut pre_image, 0).map_err(Error::Io)?;
-            let pre_store = crate::page_store::VecPageStore::new(pre_image);
-            if let Err(e) = Writer::<K>::open(Box::new(pre_store)) {
-                let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
-                return Err(e);
+            let bytes = &ro_mmap[..committed_bytes];
+            if active.root_pgno != 0 {
+                let reader = Reader::open(bytes)?;
+                reader.validate_tree()?;
+                if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
+                    reader.validate_record_scopes()?;
+                }
             }
+            if active.scope_mode == spec::SCOPE_MODE_INDIRECT && active.scope_table_root != 0 {
+                crate::scope_table::validate_scope_crc(bytes, active.scope_table_root)?;
+            }
+            let ro_store = ReadOnlyMmapStore::new(ro_mmap, committed_pages);
+            crate::free_list::validate_chain_crc(&ro_store, active.free_list_head)?;
+            crate::free_list::validate_free_entries(
+                &ro_store,
+                active.free_list_head,
+                active.root_pgno,
+                active.key_width as u32,
+                active.scope_table_root,
+            )?;
         }
 
         let store = MmapStore::open(file.try_clone().map_err(Error::Io)?, committed_pages)?;

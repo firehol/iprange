@@ -132,11 +132,11 @@ pub fn validate_free_entries(
     }
     let total = store.total_pages();
 
-    // Pass 1: raw self-reference check + collect entries for newest-wins.
-    // (Chain page numbers are not recorded: a freed entry pointing to a
-    // different chain page is harmless — load_free_list excludes chain pages
-    // via read_chain_page_numbers.)
-    let mut entries: Vec<FreeEntry> = Vec::new();
+    // Pass 1: raw self-reference check + newest-entry-wins dedup. The chain is
+    // newest-first, so the first time a pgno is seen it carries its authoritative
+    // (newest) freed_txn_id. These structures scale with FREE COUNT (a handful of
+    // COW victims per transaction), NOT with the live-tree size (Rules 1/7).
+    let mut latest: rustc_hash::FxHashMap<u32, u64> = rustc_hash::FxHashMap::default();
     let mut pgno = head;
     let mut seen = 0u32;
     while pgno != 0 {
@@ -164,68 +164,76 @@ pub fn validate_free_entries(
                     "free-list entry self-references chain page",
                 ));
             }
-            entries.push(FreeEntry {
-                pgno: p,
-                freed_txn_id: freed_txn,
-            });
+            latest.entry(p).or_insert(freed_txn);
         }
         pgno = wire::u32_le(page, spec::TXN_FREE_NEXT);
     }
 
-    // Pass 2: newest-entry-wins (entries are newest-first).
-    let mut latest: rustc_hash::FxHashMap<u32, u64> = rustc_hash::FxHashMap::default();
-    for e in &entries {
-        latest.entry(e.pgno).or_insert(e.freed_txn_id);
-    }
-
-    // Build the set of reachable LIVE data pages (data tree + scope tree +
-    // overflow chains) plus the meta pages. Chain pages are intentionally NOT
-    // included: a freed entry pointing to a different chain page is harmless
-    // (load_free_list excludes chain pages); a self-reference is caught above.
-    let mut reachable: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
-    reachable.insert(0);
-    reachable.insert(1);
-    collect_reachable_data_pages(store, data_root, data_key_width, &mut reachable);
-    collect_reachable_scope_pages(store, scope_root, &mut reachable);
-
-    // Reject any authoritative-free entry that aliases a reachable data/scope
-    // page.
-    for (p, ftxn) in &latest {
-        if *ftxn == u64::MAX {
+    // Derive the authoritative free set: pages whose newest entry is a real free
+    // (not a tombstone u64::MAX) and that still exist in the file. Tombstoned
+    // (reused) and truncated pages are not actually free.
+    let mut free_set: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
+    for (&p, &ftxn) in &latest {
+        if ftxn == u64::MAX {
             continue; // tombstoned (reused) — not actually free
         }
-        if *p as u64 >= total as u64 {
+        if p as u64 >= total as u64 {
             continue; // stale entry for a truncated page; load_free_list filters it
         }
-        if reachable.contains(p) {
-            return Err(Error::Structural(
-                "free-list entry points to reachable page",
-            ));
-        }
+        free_set.insert(p);
     }
+    if free_set.is_empty() {
+        return Ok(());
+    }
+
+    // Meta pages are always live.
+    if free_set.contains(&0) || free_set.contains(&1) {
+        return Err(Error::Structural("free-list entry points to a meta page"));
+    }
+
+    // INVERTED reachability check (Rules 1/7): stream-walk every reachable
+    // data/scope/overflow page and probe the SMALL free set, instead of
+    // materializing a reachable set that scales with the live-tree size. A page
+    // that is both reachable and authoritatively free is corruption. The walks
+    // use an O(height) explicit stack and a visited counter for cycle defense —
+    // no reachable set is ever built.
+    check_data_reachable(store, data_root, data_key_width, &free_set, total)?;
+    check_scope_reachable(store, scope_root, &free_set, total)?;
     Ok(())
 }
 
-/// Walks the data B+tree from `root` and adds every reachable branch/leaf page
-/// to `out`. Panic-safe: bounds-checks every access, clamps entry counts to the
-/// page capacity, and guards against cycles.
-fn collect_reachable_data_pages(
+/// Stream-walk the data B+tree from `root`, probing `free_set` for every
+/// reachable page. Returns an error if any reachable page is authoritatively
+/// free. Child-pointer offsets are computed from `key_width` so IPv6 files
+/// (16-byte separators) are decoded correctly. O(height) stack, no reachable
+/// set; a visited counter bounds traversal at `total` pops (cycle defense).
+fn check_data_reachable(
     store: &dyn PageStore,
     root: u32,
     key_width: u32,
-    out: &mut rustc_hash::FxHashSet<u32>,
-) {
-    let total = store.total_pages();
+    free_set: &rustc_hash::FxHashSet<u32>,
+    total: u32,
+) -> Result<()> {
     if root == 0 || root >= total {
-        return;
+        return Ok(());
     }
-    let max_branch = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (key_width as usize + 4);
+    let kw = key_width as usize;
+    let max_branch = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (kw + 4);
     let mut stack: alloc::vec::Vec<u32> = alloc::vec![root];
+    let mut visited = 0u32;
     while let Some(pgno) = stack.pop() {
-        if pgno >= total || out.contains(&pgno) {
+        visited += 1;
+        if visited > total {
+            return Err(Error::Structural("data tree cycle detected"));
+        }
+        if pgno >= total {
             continue;
         }
-        out.insert(pgno);
+        if free_set.contains(&pgno) {
+            return Err(Error::Structural(
+                "free-list entry points to reachable data page",
+            ));
+        }
         let page = store.page(pgno);
         if page.len() < spec::PAGE_SIZE {
             continue;
@@ -233,38 +241,60 @@ fn collect_reachable_data_pages(
         let h = PageHeader::decode(page);
         if h.page_type == spec::PAGE_TYPE_BRANCH {
             let cnt = (h.entry_count as usize).min(max_branch);
-            let bv = crate::node::BranchView::<crate::key::Ipv4Key>::new(page, cnt);
-            for j in 0..bv.child_count() {
-                let c = bv.child(j);
-                if c < total && !out.contains(&c) {
+            // A branch holds `cnt` separators and `cnt + 1` child pointers.
+            // Layout (matches node::BranchView): child[0] at PAGE_HEADER_SIZE,
+            // then for j >= 1: child[j] at PAGE_HEADER_SIZE + 4 + (j-1)*(kw+4) + kw.
+            for j in 0..=cnt {
+                let off = if j == 0 {
+                    spec::PAGE_HEADER_SIZE
+                } else {
+                    spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (kw + 4) + kw
+                };
+                if off + 4 > spec::PAGE_SIZE {
+                    break;
+                }
+                let c = wire::u32_le(page, off);
+                if c < total {
                     stack.push(c);
                 }
             }
         }
     }
+    Ok(())
 }
 
-/// Walks the scope B+tree from `scope_root` and adds every reachable scope
-/// branch/leaf page PLUS every overflow-chain page to `out`. Panic-safe,
-/// cycle-guards the overflow chains.
-fn collect_reachable_scope_pages(
+/// Stream-walk the scope B+tree from `scope_root` plus every reachable overflow
+/// chain page, probing `free_set`. Returns an error if any reachable scope or
+/// overflow page is authoritatively free. Scope keys are always 4 bytes
+/// (SCOPE_KEY_WIDTH). O(height) stack, no reachable set; cycle-guarded.
+fn check_scope_reachable(
     store: &dyn PageStore,
     scope_root: u32,
-    out: &mut rustc_hash::FxHashSet<u32>,
-) {
-    let total = store.total_pages();
+    free_set: &rustc_hash::FxHashSet<u32>,
+    total: u32,
+) -> Result<()> {
     if scope_root == 0 || scope_root >= total {
-        return;
+        return Ok(());
     }
-    let max_branch = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (spec::SCOPE_KEY_WIDTH + 4);
+    let kw = spec::SCOPE_KEY_WIDTH;
+    let max_branch = (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE - 4) / (kw + 4);
     let max_leaf =
         (spec::PAGE_SIZE - spec::PAGE_HEADER_SIZE) / crate::scope_table::SCOPE_ENTRY_SIZE;
     let mut stack: alloc::vec::Vec<u32> = alloc::vec![scope_root];
+    let mut visited = 0u32;
     while let Some(pgno) = stack.pop() {
-        if pgno >= total || out.contains(&pgno) {
+        visited += 1;
+        if visited > total {
+            return Err(Error::Structural("scope tree cycle detected"));
+        }
+        if pgno >= total {
             continue;
         }
-        out.insert(pgno);
+        if free_set.contains(&pgno) {
+            return Err(Error::Structural(
+                "free-list entry points to reachable scope page",
+            ));
+        }
         let page = store.page(pgno);
         if page.len() < spec::PAGE_SIZE {
             continue;
@@ -273,10 +303,17 @@ fn collect_reachable_scope_pages(
         match h.page_type {
             spec::PAGE_TYPE_SCOPE_BRANCH => {
                 let cnt = (h.entry_count as usize).min(max_branch);
-                let bv = crate::node::BranchView::<crate::key::Ipv4Key>::new(page, cnt);
-                for j in 0..bv.child_count() {
-                    let c = bv.child(j);
-                    if c < total && !out.contains(&c) {
+                for j in 0..=cnt {
+                    let off = if j == 0 {
+                        spec::PAGE_HEADER_SIZE
+                    } else {
+                        spec::PAGE_HEADER_SIZE + 4 + (j - 1) * (kw + 4) + kw
+                    };
+                    if off + 4 > spec::PAGE_SIZE {
+                        break;
+                    }
+                    let c = wire::u32_le(page, off);
+                    if c < total {
                         stack.push(c);
                     }
                 }
@@ -285,19 +322,28 @@ fn collect_reachable_scope_pages(
                 let cnt = (h.entry_count as usize).min(max_leaf);
                 for i in 0..cnt {
                     let rec_off = spec::PAGE_HEADER_SIZE + i * crate::scope_table::SCOPE_ENTRY_SIZE;
+                    if rec_off + 14 > spec::PAGE_SIZE {
+                        break;
+                    }
                     if wire::u16_le(page, rec_off + 4) == crate::scope_table::SCOPE_BITMAP_OVERFLOW
                     {
                         let mut opgno = wire::u32_le(page, rec_off + 10);
                         let mut guard = 0u32;
                         while opgno != 0 {
-                            if out.contains(&opgno) || opgno >= total {
-                                break;
-                            }
                             guard += 1;
                             if guard > total {
-                                break; // cycle guard
+                                return Err(Error::Structural(
+                                    "scope overflow chain cycle detected",
+                                ));
                             }
-                            out.insert(opgno);
+                            if opgno >= total {
+                                break;
+                            }
+                            if free_set.contains(&opgno) {
+                                return Err(Error::Structural(
+                                    "free-list entry points to reachable overflow page",
+                                ));
+                            }
                             let opage = store.page(opgno);
                             if opage.len() < spec::PAGE_SIZE {
                                 break;
@@ -310,6 +356,7 @@ fn collect_reachable_scope_pages(
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// Read the page numbers of the chain pages themselves (for freeing at commit).
