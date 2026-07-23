@@ -34,7 +34,9 @@ use crate::writer_fixed_point::{
 };
 #[cfg(test)]
 use crate::writer_fixed_point::{
-    FixedPointCoordinatorSession, FixedPointWorkspaceBacking, FixedPointWorkspaceRecordSlot,
+    DraftPrivatePageEntry, FixedPointCellJournalBacking, FixedPointCellWrite,
+    FixedPointCoordinatorJournals, FixedPointCoordinatorSession, FixedPointWorkspaceBacking,
+    FixedPointWorkspaceRecordSlot,
 };
 use core::cell::{Cell, RefCell};
 
@@ -6465,7 +6467,7 @@ mod tests {
     use crate::page_source::SlicePageSource;
     use crate::private_page_pool::{
         PrivatePagePreparedScopeSlot, PrivatePageSelectiveOverlayNode,
-        PrivatePageSelectivePathEntry, PrivatePageSparseReplaySlot,
+        PrivatePageSelectivePathEntry, PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     use crate::test_alloc::count_thread_allocations;
     use crate::writer_fixed_point::{
@@ -6767,6 +6769,24 @@ mod tests {
                 let workspace_entries = [const { Cell::new(None) }; 3];
                 let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
                 let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
+                let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+                let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
+                let mut source_journal = [source_journal_neutral; 3];
+                let map_journal_sink = Cell::new(usize::MAX);
+                let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+                let mut map_journal = [map_journal_neutral; 6];
+                let tombstone_journal_sink = Cell::new(false);
+                let tombstone_journal_neutral =
+                    FixedPointCellWrite::new(&tombstone_journal_sink, false);
+                let mut tombstone_journal = [tombstone_journal_neutral; 3];
+                let journals = FixedPointCoordinatorJournals::new(
+                    FixedPointCellJournalBacking::new(&mut source_journal, source_journal_neutral),
+                    FixedPointCellJournalBacking::new(&mut map_journal, map_journal_neutral),
+                    FixedPointCellJournalBacking::new(
+                        &mut tombstone_journal,
+                        tombstone_journal_neutral,
+                    ),
+                );
                 let workspace = FixedPointWorkspaceBacking::new(
                     &workspace_records,
                     &workspace_entries,
@@ -6776,11 +6796,13 @@ mod tests {
                 )
                 .unwrap();
                 let mut session =
-                    FixedPointCoordinatorSession::new(&workspace, &committed, live_pool).unwrap();
+                    FixedPointCoordinatorSession::new(&workspace, &committed, live_pool, journals)
+                        .unwrap();
                 let mut ordered_prior_locations = [];
                 let mut pool_returns = [];
                 let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
                 let mut replay_slots = vec![PrivatePageSparseReplaySlot::empty(); 16];
+                let mut replay_index = vec![PrivatePageSparseReplayIndex::empty(); 3];
 
                 let (produced, error) = match produced.prepare_aggregate(
                     coordinator,
@@ -6793,6 +6815,7 @@ mod tests {
                     1,
                     &mut new_locations,
                     &mut replay_slots,
+                    &mut replay_index,
                 ) {
                     Err(failure) => failure,
                     Ok(_) => panic!("wrong ledger index must fail before consume"),
@@ -6818,6 +6841,7 @@ mod tests {
                     0,
                     &mut new_locations,
                     &mut replay_slots,
+                    &mut replay_index,
                 ) {
                     Ok(aggregate) => aggregate,
                     Err(_) => panic!("restored aggregate preparation must succeed"),

@@ -468,8 +468,6 @@ pub(crate) struct PrivatePagePoolSlot {
     saved_scope_root: usize,
     saved_scope_vacant_head: usize,
     saved_scope_bound: usize,
-    sparse_replay_generation: u64,
-    sparse_replay_entry: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -485,6 +483,24 @@ impl PrivatePageSparseReplaySlot {
             slot: NO_SLOT,
             after: PrivatePagePoolSlot::empty(),
             occupied: false,
+        }
+    }
+}
+
+/// Caller-owned direct map from a pool slot to its sparse overlay after-image.
+/// It is intentionally outside `PrivatePagePoolSlot`: preparation must not add
+/// per-slot runtime state or mutate live pool slots before replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivatePageSparseReplayIndex {
+    generation: u64,
+    entry: usize,
+}
+
+impl PrivatePageSparseReplayIndex {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            generation: 0,
+            entry: NO_SLOT,
         }
     }
 }
@@ -515,6 +531,7 @@ pub(crate) struct PrivatePagePreparedSparseReplay<'pool, 'slots, 'scratch> {
     pool: &'pool PrivatePagePool<'slots>,
     live: RefMut<'pool, &'slots mut [PrivatePagePoolSlot]>,
     slots: &'scratch mut [PrivatePageSparseReplaySlot],
+    index: &'scratch mut [PrivatePageSparseReplayIndex],
     len: usize,
     index_visits: usize,
     state: PrivatePageSparseReplayState,
@@ -525,6 +542,7 @@ pub(crate) struct PrivatePagePreparedSparseReplay<'pool, 'slots, 'scratch> {
 struct PrivatePageSparseOverlay<'live, 'scratch> {
     live: &'live mut [PrivatePagePoolSlot],
     slots: &'scratch mut [PrivatePageSparseReplaySlot],
+    index: &'scratch mut [PrivatePageSparseReplayIndex],
     generation: u64,
     index_visits: Cell<usize>,
     len: usize,
@@ -541,8 +559,11 @@ fn private_page_scope_payload_revision(slot: &PrivatePagePoolSlot) -> u64 {
         } => authority_epoch,
         _ => 0,
     };
-    slot.binding_epoch
-        .wrapping_add(slot.allocation_generation.rotate_left(11))
+    // `binding_epoch` only fences stale page authorities. A checkpoint
+    // rollback deliberately advances it while restoring the represented page,
+    // so it cannot participate in a rollback-stable scope aggregate.
+    slot.allocation_generation
+        .rotate_left(11)
         .wrapping_add(authority_epoch.rotate_left(23))
 }
 
@@ -598,7 +619,6 @@ fn private_page_scope_payload_digest(index: usize, slot: &PrivatePagePoolSlot) -
         authority_epoch,
         disposition,
         slot.allocation_generation,
-        slot.binding_epoch,
         slot.scope_id,
         slot.scope_anchor_index as u64,
         slot.scope_member_ordinal as u64,
@@ -613,6 +633,7 @@ impl<'live, 'scratch> PrivatePageSparseOverlay<'live, 'scratch> {
     fn new(
         live: &'live mut [PrivatePagePoolSlot],
         slots: &'scratch mut [PrivatePageSparseReplaySlot],
+        index: &'scratch mut [PrivatePageSparseReplayIndex],
         generation: u64,
     ) -> Result<Self, PrivatePagePoolError> {
         if slots.is_empty() || generation == 0 {
@@ -621,9 +642,16 @@ impl<'live, 'scratch> PrivatePageSparseOverlay<'live, 'scratch> {
                 actual: slots.len(),
             });
         }
+        if index.len() < live.len() {
+            return Err(PrivatePagePoolError::ReservationBudget {
+                required: live.len(),
+                actual: index.len(),
+            });
+        }
         Ok(Self {
             live,
             slots,
+            index,
             generation,
             index_visits: Cell::new(0),
             len: 0,
@@ -634,8 +662,8 @@ impl<'live, 'scratch> PrivatePageSparseOverlay<'live, 'scratch> {
     fn mapped_entry(&self, slot: usize) -> Option<usize> {
         self.index_visits
             .set(self.index_visits.get().saturating_add(1));
-        let mapped = &self.live[slot];
-        (mapped.sparse_replay_generation == self.generation).then_some(mapped.sparse_replay_entry)
+        let mapped = self.index[slot];
+        (mapped.generation == self.generation).then_some(mapped.entry)
     }
 
     fn get(&self, slot: usize) -> &PrivatePagePoolSlot {
@@ -662,8 +690,10 @@ impl<'live, 'scratch> PrivatePageSparseOverlay<'live, 'scratch> {
                     after: self.live[slot].clone(),
                     occupied: true,
                 };
-                self.live[slot].sparse_replay_generation = self.generation;
-                self.live[slot].sparse_replay_entry = entry;
+                self.index[slot] = PrivatePageSparseReplayIndex {
+                    generation: self.generation,
+                    entry,
+                };
                 entry
             }
         };
@@ -986,8 +1016,7 @@ impl Drop for PrivatePageSparseOverlay<'_, '_> {
             return;
         }
         for entry in &mut self.slots[..self.len] {
-            self.live[entry.slot].sparse_replay_generation = 0;
-            self.live[entry.slot].sparse_replay_entry = NO_SLOT;
+            self.index[entry.slot] = PrivatePageSparseReplayIndex::empty();
             *entry = PrivatePageSparseReplaySlot::empty();
         }
         self.len = 0;
@@ -1018,9 +1047,9 @@ impl<'pool, 'slots, 'scratch> PrivatePagePreparedSparseReplay<'pool, 'slots, 'sc
     }
 
     pub(crate) fn simulated_slot(&self, slot: usize) -> &PrivatePagePoolSlot {
-        let mapping = &self.live[slot];
-        if mapping.sparse_replay_generation == self.work_generation() {
-            return &self.slots[mapping.sparse_replay_entry].after;
+        let mapping = self.index[slot];
+        if mapping.generation == self.work_generation() {
+            return &self.slots[mapping.entry].after;
         }
         &self.live[slot]
     }
@@ -1159,7 +1188,6 @@ impl<'pool, 'slots, 'scratch> PrivatePagePreparedSparseReplay<'pool, 'slots, 'sc
             .set(state.coordinator_work_start_epoch);
         pool.coordinator_mutation_started.set(true);
         for entry in &self.slots[..self.len] {
-            debug_assert!(entry.occupied);
             self.live[entry.slot].clone_from(&entry.after);
         }
         pool.authorized_len.set(state.authorized_len);
@@ -1189,8 +1217,7 @@ impl<'pool, 'slots, 'scratch> PrivatePagePreparedSparseReplay<'pool, 'slots, 'sc
 
     fn clear_sparse_index(&mut self) {
         for entry in &mut self.slots[..self.len] {
-            self.live[entry.slot].sparse_replay_generation = 0;
-            self.live[entry.slot].sparse_replay_entry = NO_SLOT;
+            self.index[entry.slot] = PrivatePageSparseReplayIndex::empty();
             *entry = PrivatePageSparseReplaySlot::empty();
         }
     }
@@ -1275,8 +1302,6 @@ impl PrivatePagePoolSlot {
             saved_scope_root: NO_SLOT,
             saved_scope_vacant_head: NO_SLOT,
             saved_scope_bound: 0,
-            sparse_replay_generation: 0,
-            sparse_replay_entry: NO_SLOT,
         }
     }
 
@@ -1351,8 +1376,6 @@ impl PrivatePagePoolSlot {
             saved_scope_root: NO_SLOT,
             saved_scope_vacant_head: NO_SLOT,
             saved_scope_bound: 0,
-            sparse_replay_generation: 0,
-            sparse_replay_entry: NO_SLOT,
         }
     }
 
@@ -4115,6 +4138,7 @@ impl<'slots> PrivatePagePool<'slots> {
         terminal: &PrivatePagePreparedCoordinatorTerminal<'pages>,
         prior: &PrivatePagePreparedCoordinatorPriorReturns<'returns>,
         replay_slots: &'scratch mut [PrivatePageSparseReplaySlot],
+        replay_index: &'scratch mut [PrivatePageSparseReplayIndex],
     ) -> Result<PrivatePagePreparedSparseReplay<'pool, 'slots, 'scratch>, PrivatePagePoolError>
     {
         let scope_slot = &*prepared_scope.slot;
@@ -4177,7 +4201,8 @@ impl<'slots> PrivatePagePool<'slots> {
             .map_err(|_| PrivatePagePoolError::BorrowConflict)?;
         self.validate_unscoped_vacancy_boundary(&live)?;
         let anchor = self.validate_unscoped_vacancy_prefix(&live, scope_slot.count)?;
-        let mut overlay = PrivatePageSparseOverlay::new(&mut live, replay_slots, work_generation)?;
+        let mut overlay =
+            PrivatePageSparseOverlay::new(&mut live, replay_slots, replay_index, work_generation)?;
         let mut epoch = self.epoch.get();
         let mut unscoped_head = self.unscoped_vacant_head.get();
         let mut unscoped_tail = self.unscoped_vacant_tail.get();
@@ -4217,8 +4242,8 @@ impl<'slots> PrivatePagePool<'slots> {
             slot.scope_vacant_next = NO_SLOT;
             slot.binding_epoch += 1;
             scope_vacant_count += 1;
-            scope_vacant_revision = scope_vacant_revision
-                .wrapping_add(private_page_scope_payload_revision(slot));
+            scope_vacant_revision =
+                scope_vacant_revision.wrapping_add(private_page_scope_payload_revision(slot));
             scope_vacant_digest ^= private_page_scope_payload_digest(index, slot);
             epoch += 1;
             previous = index;
@@ -4248,8 +4273,7 @@ impl<'slots> PrivatePagePool<'slots> {
                 return Err(PrivatePagePoolError::StaleScope);
             }
             let next_vacant = overlay.get(vacant).scope_vacant_next;
-            let removed_vacant_revision =
-                private_page_scope_payload_revision(overlay.get(vacant));
+            let removed_vacant_revision = private_page_scope_payload_revision(overlay.get(vacant));
             let removed_vacant_digest =
                 private_page_scope_payload_digest(vacant, overlay.get(vacant));
             {
@@ -4431,6 +4455,7 @@ impl<'slots> PrivatePagePool<'slots> {
             pool: self,
             live,
             slots: replay_slots,
+            index: replay_index,
             len,
             index_visits,
             state,
@@ -7726,6 +7751,7 @@ impl<'slots> PrivatePagePool<'slots> {
             _ => return Err(PrivatePagePoolError::PageUnavailable(pgno)),
         }
         self.epoch.set(next_epoch);
+        self.refresh_slot_counts(&mut slots, slot);
         Ok(self.make_authority(slot, &slots[slot]))
     }
 
@@ -7817,6 +7843,7 @@ impl<'slots> PrivatePagePool<'slots> {
             authority_epoch: next_epoch,
         };
         self.epoch.set(next_epoch);
+        self.refresh_slot_counts(&mut slots, authority.slot);
         Ok(self.make_authority(authority.slot, &slots[authority.slot]))
     }
 
@@ -8294,11 +8321,10 @@ impl<'slots> PrivatePagePool<'slots> {
             let slot = &mut slots[index];
             if slot.checkpoint_generation != checkpoint.generation {
                 if slot.saved_index_generation == checkpoint.generation {
-                    slot.saved_index_generation = 0;
-                    slot.saved_index_next = NO_SLOT;
+                    Self::clear_saved_index_metadata(slot);
                 }
                 if slot.saved_scope_generation == checkpoint.generation {
-                    slot.saved_scope_generation = 0;
+                    Self::clear_saved_scope_header_metadata(slot);
                 }
                 continue;
             }
@@ -8637,8 +8663,7 @@ impl<'slots> PrivatePagePool<'slots> {
         while index != NO_SLOT {
             let next = slots[index].saved_index_next;
             debug_assert_eq!(slots[index].saved_index_generation, generation);
-            slots[index].saved_index_generation = 0;
-            slots[index].saved_index_next = NO_SLOT;
+            Self::clear_saved_index_metadata(&mut slots[index]);
             index = next;
         }
         self.checkpoint_index_head.set(NO_SLOT);
@@ -8671,8 +8696,7 @@ impl<'slots> PrivatePagePool<'slots> {
             slots[index].scope_vacant_count = slots[index].saved_scope_vacant_count;
             slots[index].scope_vacant_revision = slots[index].saved_scope_vacant_revision;
             slots[index].scope_vacant_digest = slots[index].saved_scope_vacant_digest;
-            slots[index].saved_index_generation = 0;
-            slots[index].saved_index_next = NO_SLOT;
+            Self::clear_saved_index_metadata(&mut slots[index]);
             index = next;
         }
         self.checkpoint_index_head.set(NO_SLOT);
@@ -8781,7 +8805,7 @@ impl<'slots> PrivatePagePool<'slots> {
             member = next;
         }
         if slots[anchor].saved_scope_generation == checkpoint.generation {
-            slots[anchor].saved_scope_generation = 0;
+            Self::clear_saved_scope_header_metadata(&mut slots[anchor]);
         }
         self.clear_checkpoint_index_journal_prepared(&mut slots, checkpoint.generation);
         self.active_checkpoint.set(0);
@@ -9008,14 +9032,13 @@ impl<'slots> PrivatePagePool<'slots> {
                 slot.scope_vacant_count = slot.saved_scope_vacant_count;
                 slot.scope_vacant_revision = slot.saved_scope_vacant_revision;
                 slot.scope_vacant_digest = slot.saved_scope_vacant_digest;
-                slot.saved_index_generation = 0;
-                slot.saved_index_next = NO_SLOT;
+                Self::clear_saved_index_metadata(slot);
             }
             if slot.saved_scope_generation == checkpoint.generation {
                 slot.scope_root = slot.saved_scope_root;
                 slot.scope_vacant_head = slot.saved_scope_vacant_head;
                 slot.scope_bound = slot.saved_scope_bound;
-                slot.saved_scope_generation = 0;
+                Self::clear_saved_scope_header_metadata(slot);
             }
         }
         self.index_root.set(checkpoint.index_root);
@@ -9491,12 +9514,40 @@ impl<'slots> PrivatePagePool<'slots> {
             slot.saved_binding = SavedBinding::None;
         }
         if slot.saved_index_generation == generation {
-            slot.saved_index_generation = 0;
-            slot.saved_index_next = NO_SLOT;
+            Self::clear_saved_index_metadata(slot);
         }
         if slot.saved_scope_generation == generation {
-            slot.saved_scope_generation = 0;
+            Self::clear_saved_scope_header_metadata(slot);
         }
+    }
+
+    fn clear_saved_index_metadata(slot: &mut PrivatePagePoolSlot) {
+        slot.saved_index_generation = 0;
+        slot.saved_index_next = NO_SLOT;
+        slot.saved_index_left = NO_SLOT;
+        slot.saved_index_right = NO_SLOT;
+        slot.saved_index_height = 0;
+        slot.saved_index_available = 0;
+        slot.saved_index_in_use = 0;
+        slot.saved_index_unscoped_available = 0;
+        slot.saved_scope_left = NO_SLOT;
+        slot.saved_scope_right = NO_SLOT;
+        slot.saved_scope_height = 0;
+        slot.saved_scope_available = 0;
+        slot.saved_scope_in_use = 0;
+        slot.saved_scope_count = 0;
+        slot.saved_scope_revision = 0;
+        slot.saved_scope_digest = 0;
+        slot.saved_scope_vacant_count = 0;
+        slot.saved_scope_vacant_revision = 0;
+        slot.saved_scope_vacant_digest = 0;
+    }
+
+    fn clear_saved_scope_header_metadata(slot: &mut PrivatePagePoolSlot) {
+        slot.saved_scope_generation = 0;
+        slot.saved_scope_root = NO_SLOT;
+        slot.saved_scope_vacant_head = NO_SLOT;
+        slot.saved_scope_bound = 0;
     }
 
     fn make_authority<'pool>(

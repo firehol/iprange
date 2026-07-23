@@ -17,6 +17,34 @@ snapshots, public SDKs, and the Rust-provided C ABI remain pending. Snapshot
 signing remains wholly in pending SOW-0017 and cannot block the core SDK. The
 prior adversarial audit and its red tests remain the evidence baseline.
 
+2026-07-24 restart execution: the Rust coordinator now uses three
+caller-provided fixed journals of prebound `Cell` writes instead of heap
+`Vec`s; it resets only their used prefixes. Generic checkpoint cleanup now
+clears all stale index/scope scratch, and scope aggregates exclude the
+deliberately-changing stale-authority epoch while refreshing after authority and
+transfer changes. Both Rust test matrices are green: 419 no-default tests and
+511 all-feature tests. Scoped checkpoint header rollback was inspected rather
+than changed: scoped checkpoints intentionally reject scope-header mutation,
+while generic rollback already restores it.
+
+The first restart chunk completed decision 69A literally: the two permanent
+`sparse_replay_*` fields were removed from every private-pool slot and replaced
+with a caller-owned, generation-stamped slot-to-overlay index. Preparation now
+mutates only detached scratch and exact after-images; cancellation/drop and
+replay clear only touched sidecar entries. Permanent 4,096-slot coverage proves
+undersized sidecars reject before mutation, cancellation restores the complete
+live pool state, and both scratch classes are reset after cancellation and
+replay. This is a direct implementation of the selected bounded-memory
+contract, not a new product decision.
+
+The remaining coordinator sequence is now concrete: first move the fixed
+journals and overlay sidecar into one opaque, transaction-budgeted workspace
+instead of the current test-local construction; then connect the typed bitmap
+and retirement export to the real writer lifecycle, so production—not a test
+only call graph—constructs and consumes the aggregate. Only after those two
+steps can chunks 4-6 be re-audited as a whole for producer authority, exact
+cleanup ownership, persistent records, and Active-suffix guarantees.
+
 ## Requirements
 
 ### Purpose
@@ -5951,6 +5979,33 @@ requirements are normative in the Pre-Implementation Gate above.
   an infallible private replay. These cases require permanent exhaustion,
   competing-aggregate, and postconsume-static-call-graph tests in addition to
   the previously recorded commitment/resync/producer/budget/scaling matrix.
+
+### 2026-07-24 - Rust coordinator restart baseline and detached overlay
+
+- Committed the reconciled exact-v4 cutover as checkpoint `93ea0ff`; generated
+  build output remains untracked and excluded. This is an in-progress recovery
+  point, not a claim that the Phase-1 SDK is complete.
+- Repaired the Rust no-default coordinator build by replacing its heap `Vec`
+  journals with caller-provided fixed journals of prebound cell writes. The
+  journal replays only its used prefix and Active remains allocation-free.
+- Repaired rollback/aggregate consistency: stale checkpoint index and scope
+  scratch now clears completely; scope aggregates no longer include the
+  deliberately changing stale-authority epoch; authority and transfer refresh
+  their owning aggregate paths.
+- Replaced the per-slot sparse-replay generation/index fields with a
+  caller-owned generation-stamped direct sidecar. The sidecar is checked against
+  pool capacity, changes only touched entries, and is cleared on cancellation,
+  drop, and Active replay. Preparation no longer changes a live pool slot.
+- Added permanent 4,096-slot coverage for undersized-sidecar atomic rejection,
+  byte-exact live-pool restoration after cancellation, sidecar cleanup after
+  both cancellation and replay, and zero-allocation/touched-path bounds. Removed
+  the remaining debug assertion from the Active sparse replay and made the
+  static Active-suffix test reject debug assertions too.
+- Verified `cargo check --workspace --no-default-features`, formatting,
+  `git diff --check`, and both full Rust suites: 419 no-default tests and 511
+  all-feature tests pass. The coordinator still has only test-local aggregate
+  construction; production workspace/lifecycle wiring remains the next required
+  implementation chunk.
 
 ## Validation
 

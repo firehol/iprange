@@ -12,7 +12,7 @@ use crate::private_page_pool::{
     PrivatePagePreparedCoordinatorPriorReturns, PrivatePagePreparedCoordinatorTerminal,
     PrivatePagePreparedScopeReservation, PrivatePagePreparedScopeSlot,
     PrivatePagePreparedSparseReplay, PrivatePageReservationScope, PrivatePageSealedProvenance,
-    PrivatePageSparseReplaySlot,
+    PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
 };
 use crate::retirement_writer::{PreparedProducedTerminalExport, RetirementTreeEditResult};
 use core::cell::{Cell, RefCell};
@@ -198,9 +198,96 @@ impl<'backing, 'scratch, 'pool, 'slots>
 }
 
 #[derive(Clone, Copy)]
-struct FixedPointCellWrite<'backing, T: Copy> {
+pub(crate) struct FixedPointCellWrite<'backing, T: Copy> {
     destination: &'backing Cell<T>,
     value: T,
+}
+
+impl<'backing, T: Copy> FixedPointCellWrite<'backing, T> {
+    pub(crate) const fn new(destination: &'backing Cell<T>, value: T) -> Self {
+        Self { destination, value }
+    }
+}
+
+pub(crate) struct FixedPointCellJournalBacking<'backing, T: Copy> {
+    entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+    neutral: FixedPointCellWrite<'backing, T>,
+}
+
+impl<'backing, T: Copy> FixedPointCellJournalBacking<'backing, T> {
+    pub(crate) const fn new(
+        entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+        neutral: FixedPointCellWrite<'backing, T>,
+    ) -> Self {
+        Self { entries, neutral }
+    }
+}
+
+pub(crate) struct FixedPointCoordinatorJournals<'backing> {
+    source: FixedPointCellJournalBacking<'backing, Option<DraftPrivatePageEntry>>,
+    map: FixedPointCellJournalBacking<'backing, usize>,
+    tombstone: FixedPointCellJournalBacking<'backing, bool>,
+}
+
+impl<'backing> FixedPointCoordinatorJournals<'backing> {
+    pub(crate) const fn new(
+        source: FixedPointCellJournalBacking<'backing, Option<DraftPrivatePageEntry>>,
+        map: FixedPointCellJournalBacking<'backing, usize>,
+        tombstone: FixedPointCellJournalBacking<'backing, bool>,
+    ) -> Self {
+        Self {
+            source,
+            map,
+            tombstone,
+        }
+    }
+}
+
+/// Fixed caller storage for prebound writes. Only the used prefix is reset, and
+/// replay reads that prefix directly without allocation or dynamic lookup.
+struct FixedPointCellJournal<'backing, T: Copy> {
+    entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+    neutral: FixedPointCellWrite<'backing, T>,
+    len: usize,
+}
+
+impl<'backing, T: Copy> FixedPointCellJournal<'backing, T> {
+    const fn from_backing(backing: FixedPointCellJournalBacking<'backing, T>) -> Self {
+        Self {
+            entries: backing.entries,
+            neutral: backing.neutral,
+            len: 0,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn clear(&mut self) {
+        for entry in &mut self.entries[..self.len] {
+            *entry = self.neutral;
+        }
+        self.len = 0;
+    }
+
+    fn push(&mut self, write: FixedPointCellWrite<'backing, T>) -> Result<(), FixedPointError> {
+        let required = self
+            .len
+            .checked_add(1)
+            .ok_or(FixedPointError::IdentityExhausted)?;
+        let actual = self.entries.len();
+        if required > actual {
+            return Err(FixedPointError::SourceScratchTooSmall { required, actual });
+        }
+        self.entries[self.len] = write;
+        self.len = required;
+        Ok(())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = FixedPointCellWrite<'backing, T>> + '_ {
+        self.entries[..self.len].iter().copied()
+    }
 }
 
 pub(crate) struct FixedPointCoordinatorSession<
@@ -214,9 +301,9 @@ pub(crate) struct FixedPointCoordinatorSession<
     backing: &'backing FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots>,
     committed: &'committed S,
     pool: &'pool PrivatePagePool<'slots>,
-    source_writes: Vec<FixedPointCellWrite<'backing, Option<DraftPrivatePageEntry>>>,
-    map_writes: Vec<FixedPointCellWrite<'backing, usize>>,
-    tombstone_writes: Vec<FixedPointCellWrite<'backing, bool>>,
+    source_writes: FixedPointCellJournal<'backing, Option<DraftPrivatePageEntry>>,
+    map_writes: FixedPointCellJournal<'backing, usize>,
+    tombstone_writes: FixedPointCellJournal<'backing, bool>,
 }
 
 impl<'backing, 'scratch, 'pool, 'slots, 'committed, S: CommittedPageSource + ?Sized>
@@ -229,6 +316,7 @@ where
         backing: &'backing FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots>,
         committed: &'committed S,
         pool: &'pool PrivatePagePool<'slots>,
+        journals: FixedPointCoordinatorJournals<'backing>,
     ) -> Result<Self, FixedPointError> {
         committed
             .check_access()
@@ -237,13 +325,31 @@ where
             .len()
             .checked_mul(2)
             .ok_or(FixedPointError::IdentityExhausted)?;
+        if journals.source.entries.len() < pool.len() {
+            return Err(FixedPointError::SourceScratchTooSmall {
+                required: pool.len(),
+                actual: journals.source.entries.len(),
+            });
+        }
+        if journals.map.entries.len() < writes {
+            return Err(FixedPointError::SourceScratchTooSmall {
+                required: writes,
+                actual: journals.map.entries.len(),
+            });
+        }
+        if journals.tombstone.entries.len() < pool.len() {
+            return Err(FixedPointError::SourceScratchTooSmall {
+                required: pool.len(),
+                actual: journals.tombstone.entries.len(),
+            });
+        }
         Ok(Self {
             backing,
             committed,
             pool,
-            source_writes: Vec::with_capacity(pool.len()),
-            map_writes: Vec::with_capacity(writes),
-            tombstone_writes: Vec::with_capacity(pool.len()),
+            source_writes: FixedPointCellJournal::from_backing(journals.source),
+            map_writes: FixedPointCellJournal::from_backing(journals.map),
+            tombstone_writes: FixedPointCellJournal::from_backing(journals.tombstone),
         })
     }
 
@@ -251,6 +357,40 @@ where
         self.source_writes.clear();
         self.map_writes.clear();
         self.tombstone_writes.clear();
+    }
+
+    fn append_prior_return(
+        &mut self,
+        returned: &'backing Cell<bool>,
+        source_entry: &'backing Cell<Option<DraftPrivatePageEntry>>,
+        source_map: &'backing Cell<usize>,
+        record_map: &'backing Cell<usize>,
+    ) -> Result<(), FixedPointError> {
+        self.tombstone_writes
+            .push(FixedPointCellWrite::new(returned, true))?;
+        self.source_writes
+            .push(FixedPointCellWrite::new(source_entry, None))?;
+        self.map_writes
+            .push(FixedPointCellWrite::new(source_map, usize::MAX))?;
+        self.map_writes
+            .push(FixedPointCellWrite::new(record_map, usize::MAX))
+    }
+
+    fn append_new_binding(
+        &mut self,
+        source_entry: &'backing Cell<Option<DraftPrivatePageEntry>>,
+        entry: DraftPrivatePageEntry,
+        source_map: &'backing Cell<usize>,
+        source_slot: usize,
+        record_map: &'backing Cell<usize>,
+        record_index: usize,
+    ) -> Result<(), FixedPointError> {
+        self.source_writes
+            .push(FixedPointCellWrite::new(source_entry, Some(entry)))?;
+        self.map_writes
+            .push(FixedPointCellWrite::new(source_map, source_slot))?;
+        self.map_writes
+            .push(FixedPointCellWrite::new(record_map, record_index))
     }
 }
 
@@ -1160,13 +1300,13 @@ impl<S: CommittedPageSource + ?Sized>
     }
 
     fn replay(&mut self) {
-        for write in &self.session.tombstone_writes {
+        for write in self.session.tombstone_writes.iter() {
             write.destination.set(write.value);
         }
-        for write in &self.session.source_writes {
+        for write in self.session.source_writes.iter() {
             write.destination.set(write.value);
         }
-        for write in &self.session.map_writes {
+        for write in self.session.map_writes.iter() {
             write.destination.set(write.value);
         }
         self.session.backing.len.set(self.next_len);
@@ -1481,6 +1621,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         record_index: usize,
         new_locations: &'new_locations mut [DraftPrivatePageLocation],
         replay_slots: &'pool_replay mut [PrivatePageSparseReplaySlot],
+        replay_index: &'pool_replay mut [PrivatePageSparseReplayIndex],
     ) -> Result<
         FixedPointPreparedAggregateWork<
             'slot,
@@ -1634,22 +1775,17 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 return Err((self, FixedPointError::StalePredecessor));
             }
             pool_returns[index] = planned;
-            session.tombstone_writes.push(FixedPointCellWrite {
-                destination: returned,
-                value: true,
-            });
-            session.source_writes.push(FixedPointCellWrite {
-                destination: &backing.source_entries[page.slot],
-                value: None,
-            });
-            session.map_writes.push(FixedPointCellWrite {
-                destination: &backing.source_slot_to_entry[page.slot],
-                value: usize::MAX,
-            });
-            session.map_writes.push(FixedPointCellWrite {
-                destination: &backing.slot_to_record[page.slot],
-                value: usize::MAX,
-            });
+            if let Err(error) = session.append_prior_return(
+                returned,
+                &backing.source_entries[page.slot],
+                &backing.source_slot_to_entry[page.slot],
+                &backing.slot_to_record[page.slot],
+            ) {
+                ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
+                pool_returns.fill(PrivatePageCoordinatorPriorReturn::empty());
+                session.reset_journal();
+                return Err((self, error));
+            }
             previous_slot = Some(page.slot);
         }
         if session.committed.check_access().is_err() {
@@ -1681,6 +1817,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 terminal,
                 &prior_plan,
                 replay_slots,
+                replay_index,
             )
             .map_err(|_| FixedPointError::StalePredecessor);
         let pool_replay = match pool_replay {
@@ -1755,24 +1892,28 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 binding_index,
             };
             new_locations[binding_index] = location;
-            session.source_writes.push(FixedPointCellWrite {
-                destination: source_entry,
-                value: Some(DraftPrivatePageEntry {
-                    work_unit: facts.work_identity,
-                    nonce: terminal.nonce(),
-                    record_index,
-                    binding_index,
-                    page: provenance,
-                }),
-            });
-            session.map_writes.push(FixedPointCellWrite {
-                destination: source_map,
-                value: provenance.slot,
-            });
-            session.map_writes.push(FixedPointCellWrite {
-                destination: record_map,
-                value: record_index,
-            });
+            let entry = DraftPrivatePageEntry {
+                work_unit: facts.work_identity,
+                nonce: terminal.nonce(),
+                record_index,
+                binding_index,
+                page: provenance,
+            };
+            if let Err(error) = session.append_new_binding(
+                source_entry,
+                entry,
+                source_map,
+                provenance.slot,
+                record_map,
+                record_index,
+            ) {
+                new_locations.fill(DraftPrivatePageLocation::EMPTY);
+                pool_replay.cancel();
+                ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
+                pool_returns.fill(PrivatePageCoordinatorPriorReturn::empty());
+                session.reset_journal();
+                return Err((self, error));
+            }
             binding_index += 1;
         }
         let Some(record_scratch) = record_slot.scratch.replace(None) else {
@@ -3272,7 +3413,7 @@ mod tests {
     use crate::private_page_pool::{
         PrivatePageAuthorization, PrivatePageOwner, PrivatePagePoolError, PrivatePagePoolSlot,
         PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
-        PrivatePageSparseReplaySlot,
+        PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     use crate::test_alloc::count_thread_allocations;
     use std::vec;
@@ -3404,6 +3545,39 @@ mod tests {
             .unwrap();
         let FixedPointPreparedTerminalWork { prepared, terminal } = terminal;
         let mut replay_slots = vec![PrivatePageSparseReplaySlot::empty(); 32];
+        let mut replay_index = vec![PrivatePageSparseReplayIndex::empty(); 4096];
+        let mut undersized_index = vec![PrivatePageSparseReplayIndex::empty(); 4095];
+        let mut rejected_returns = [];
+        let fence = pool
+            .preflight_coordinator_prior_returns(&prepared.scope, &terminal, &rejected_returns)
+            .unwrap();
+        let rejected_prior =
+            pool.seal_coordinator_prior_returns_preflighted(fence, &mut rejected_returns);
+        let before = pool.test_mutation_snapshot();
+        let error = match pool.prepare_sparse_coordinator_replay(
+            &prepared.scope,
+            &terminal,
+            &rejected_prior,
+            &mut replay_slots,
+            &mut undersized_index,
+        ) {
+            Ok(_) => panic!("undersized sparse index must reject before preparation"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            PrivatePagePoolError::ReservationBudget {
+                required: 4096,
+                actual: 4095,
+            }
+        );
+        assert_eq!(pool.test_mutation_snapshot(), before);
+        assert!(replay_slots
+            .iter()
+            .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));
+        assert!(undersized_index
+            .iter()
+            .all(|entry| *entry == PrivatePageSparseReplayIndex::empty()));
         for _ in 0..32 {
             let mut canceled_returns = [];
             let fence = pool
@@ -3411,12 +3585,14 @@ mod tests {
                 .unwrap();
             let prior =
                 pool.seal_coordinator_prior_returns_preflighted(fence, &mut canceled_returns);
+            let before = pool.test_mutation_snapshot();
             let (replay, allocations) = count_thread_allocations(|| {
                 pool.prepare_sparse_coordinator_replay(
                     &prepared.scope,
                     &terminal,
                     &prior,
                     &mut replay_slots,
+                    &mut replay_index,
                 )
             });
             assert_eq!(allocations, 0);
@@ -3427,6 +3603,14 @@ mod tests {
             assert!(replay_slots
                 .iter()
                 .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));
+            assert!(replay_index
+                .iter()
+                .all(|entry| *entry == PrivatePageSparseReplayIndex::empty()));
+            assert_eq!(
+                pool.test_mutation_snapshot(),
+                before,
+                "preparation and cancellation must not alter live pool state"
+            );
         }
         let mut returns = [];
         let fence = pool
@@ -3439,6 +3623,7 @@ mod tests {
                 &terminal,
                 &prior,
                 &mut replay_slots,
+                &mut replay_index,
             )
         });
         assert_eq!(allocations, 0);
@@ -3452,6 +3637,12 @@ mod tests {
             "direct sparse indexing must remain bounded by simulated path visits"
         );
         let (_, scope, _) = replay.replay();
+        assert!(replay_slots
+            .iter()
+            .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));
+        assert!(replay_index
+            .iter()
+            .all(|entry| *entry == PrivatePageSparseReplayIndex::empty()));
         assert_eq!(pool.scoped_in_use(&scope).unwrap(), 2);
         assert_eq!(
             pool.coordinator_work_phase(),
@@ -3478,6 +3669,7 @@ mod tests {
             ".unwrap(",
             "panic!(",
             "unreachable!(",
+            "debug_assert!(",
             "callback",
         ] {
             assert!(
@@ -3486,7 +3678,7 @@ mod tests {
             );
         }
         let replay_start = source
-            .find("    fn replay(&mut self) {\n        for write in &self.session.tombstone_writes")
+            .find("    fn replay(&mut self) {\n        for write in self.session.tombstone_writes.iter()")
             .unwrap();
         let replay_suffix = &source[replay_start..];
         let replay_end = replay_suffix
@@ -3501,6 +3693,7 @@ mod tests {
             ".unwrap(",
             "panic!(",
             "unreachable!(",
+            "debug_assert!(",
             "callback",
         ] {
             assert!(
