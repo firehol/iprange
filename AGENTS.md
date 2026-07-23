@@ -7,19 +7,35 @@
 `update-ipsets` for set operations (union, intersect, exclude, dedup, compare)
 over large IPv4/IPv6 lists.
 
-**Direction:** evolve `iprange` into a multi-language **engine** (C, Rust, Go)
-with a portable, architecture-neutral **binary threat-intel format** and
-ready-to-use **SDKs**. `update-ipsets` becomes a public threat-intel source;
-Netdata is the first consumer — **indirectly**, via the update-ipsets SDK (Rust
-for netflow, Go for topology/network-viewer), which embeds `iprange`.
+**Direction:** evolve `iprange` into native Rust and pure-Go engines with a
+Rust-provided C ABI, one portable architecture-neutral **v4 threat-intel
+database**, and ready-to-use SDKs. `update-ipsets` becomes a public
+threat-intelligence publisher; Netdata is the first consumer through Rust, Go,
+and C SDK surfaces.
 
-The full engine/format/SDK design (decisions, binary layout, interval-map core,
-phasing) is the target-direction spec at
+Product architecture is defined by
 [`.agents/sow/specs/design-iprange-engine.md`](.agents/sow/specs/design-iprange-engine.md).
+The exact portable contract is defined by
+[`.agents/sow/specs/binary-format-v4.md`](.agents/sow/specs/binary-format-v4.md).
+The stable Rust-provided C boundary is defined by
+[`.agents/sow/specs/c-abi-v4.md`](.agents/sow/specs/c-abi-v4.md).
 
-Success = a correct, fast, dual-stack engine where all three language
-implementations pass one shared conformance corpus and stay within a 5–10%
-performance band, plus a portable signed binary format consumable across C/Rust/Go.
+Success = correct, fast, dual-stack Rust and Go engines that cross-open one
+shared semantic conformance corpus, a stable C ABI over Rust, bounded-memory
+live operation, and compact unsigned snapshots that prove SDK reliability and
+performance. Authenticated public snapshots are Phase 2, tracked by pending
+SOW-0017, and must not delay the core SDK.
+
+### Design authority
+
+During active work, authority is ordered as follows:
+
+1. resolved user decisions in the sole active SOW;
+2. the current normative specifications under `.agents/sow/specs/`;
+3. implementation and tests as evidence of current behavior.
+
+Completed SOWs are historical records. An old `locked`, `production grade`, or
+acceptance claim does not override a later regression finding or current spec.
 
 ## SOW System
 
@@ -304,7 +320,10 @@ Skills must be updated during retrospection when:
 
 ### Project Skills Index
 
-No runtime input project skills exist yet. **Decision (2026-06-21): defer project-skill creation** — this project grows skills incrementally; a missing skill is better than a generic one. Strong candidates to capture once concrete: (a) the multi-language conformance + benchmark harness workflow, (b) the C build/test/sanitizer workflow, (c) the binary-format/interval-map invariants. Tracked by `.agents/sow/pending/SOW-0001-20260621-iprange-engine-and-binary-format.md`.
+No runtime input project skills exist yet. This project grows skills
+incrementally; a missing skill is better than a generic one. The active v4 SOW
+must decide at close whether the proven multi-language conformance, benchmark,
+and binary-format workflows are concrete enough to capture as project skills.
 
 Legacy runtime skills:
 
@@ -327,8 +346,8 @@ Build (CMake): `cmake -S . -B build-cmake && cmake --build build-cmake` (see `CM
 Test (Rust v4):
 
 ```bash
-cargo test --manifest-path v4/rust/Cargo.toml          # quick tests (~1s, 103 tests)
-cargo test --manifest-path v4/rust/Cargo.toml --features slow-tests  # includes robustness fuzz (~53s)
+cargo test --manifest-path v4/rust/Cargo.toml
+cargo test --manifest-path v4/rust/Cargo.toml --all-features
 ```
 
 Test (Go v4):
@@ -349,18 +368,12 @@ Legacy C tests (not v4):
 > Many untracked `build-*/` directories and autotools-generated files exist in the
 > working tree. Never `git add -A`/`git add .`; add specific files by name.
 
-**Multi-language format libraries** (the C CLI is the legacy `iprange`; the binary
-formats live in language libraries):
-
-- `v3/` — the sealed v3 snapshot format. Rust: `cargo test --manifest-path v3/rust/Cargo.toml`;
-  Go: `go -C v3/go test ./...`. Shared corpus in `v3/conformance/`.
-- `v4/` — the v4.3 **streaming mmap COW engine** (`iprange-livedb`). The engine was
-  rebuilt under SOW-0014 (four rules: zero-heap writer, concurrent readers+writer,
-  migration APIs, fixed scope_id record). Rust: `cargo test --manifest-path
-  v4/rust/iprange-livedb/Cargo.toml`; Go: `go -C v4/go test ./...`. The v4.0–v4.2
-  scope_width/flock/heap-dirty-page model is superseded; conformance goldens are
-  being regenerated for v4.3. Pending: Phase 3 (reader registration companion file),
-  Phase 4c (scope/KV metadata re-implementation).
+**Multi-language v4 libraries:** the C CLI remains the released legacy tool; the
+new database engine lives under `v4/` in Rust and Go. During SOW-0016, only the
+exact current unsigned Phase-1 v4 contract is supported. Rust:
+`cargo test --manifest-path v4/rust/Cargo.toml`;
+Go: `go -C v4/go test ./...`. Shared cross-language artifacts live in
+`v4/conformance/` and must be opened by both readers.
 
 ### Project-specific overrides
 
@@ -381,7 +394,8 @@ formats live in language libraries):
   `bootstrap-repo`) was fully incorporated into `## Goals` and
   `### Project-specific overrides` above. No `AGENTS.md.pre-sow.bak` was needed
   (no project memory to preserve).
-- `design-iprange-engine.md` was authored before bootstrap and moved into
-  `.agents/sow/specs/`; preserved as the engine target-direction spec.
+- Engine architecture and the exact v4 format are maintained under
+  `.agents/sow/specs/` as current specifications; old SOWs remain historical
+  evidence only.
 
 Project SOW status: initialized

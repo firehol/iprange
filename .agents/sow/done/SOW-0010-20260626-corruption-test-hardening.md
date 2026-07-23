@@ -72,7 +72,7 @@ Unknowns:
 - Rust↔Go parity: the targeted-test set and the fuzz behavior match 1:1 (including the previously
   Go-only `minor1_meta_size_pinned`). Verify: test-name diff between languages is empty for the
   corruption suite.
-- Full suites green both languages: `cargo test` (default + `export-v3`) + `clippy --all-targets
+- Full suites green both languages: `cargo test` + `clippy --all-targets
   --all-features -D warnings` + `cargo fmt --check`; `go test ./...` + `go test -race -timeout 30m`
   + `go vet` + `gofmt -l`.
 - Dead `BadMagic` error variant removed in both languages (or kept with a documented reason).
@@ -283,7 +283,7 @@ Acceptance criteria evidence:
 
 Tests or equivalent validation:
 
-- Rust: `cargo test` (default) + `cargo test --features export-v3` → 89 lib + 1 conformance + 2
+- Rust: `cargo test` → 89 lib + 1 conformance + 2
   metadata + **111 robustness**, all pass; `clippy --all-targets --all-features -D warnings` + `fmt
   --check` clean.
 - Go: `go test ./...` + `go test -race -timeout 30m ./...` (~506s) + `go vet` + `gofmt -l .` — all

@@ -27,7 +27,7 @@ reader validation (recursive, bounds-safe, never-panic), and allocator integrati
 writer keeps the registry **in memory and bulk-rebuilds at commit** (valid since tree shape
 is implementation-defined, §D); reads descend the committed tree `O(log)`. Tests: scope CRUD
 + reopen round-trip, v4.1 upgrade / drop-all-returns-to-v4.0, a multi-level scope tree (100
-scopes), name validation; `cargo test` (default + `export-v3`) + `clippy -D warnings` +
+scopes), name validation; `cargo test` + `clippy -D warnings` +
 `fmt` clean; `no_std`/`no_std+alloc` builds clean.
 
 **Done (Rust KV, green — 2026-06-24):** the **per-scope KV** (page types 6/7 + overflow 8)
@@ -41,7 +41,7 @@ reopen, large value spanning an overflow chain + inline/overflow boundary, multi
 tree, UTF-8/NUL rejection (inline + spanning overflow), missing→None / delete-absent→Unchanged
 / bad-key→InvalidInput, allocator reclaim across commits, scope_drop frees KV+overflow, and
 robustness fuzzers extended to a file WITH KV. Verified by me (not the agent's claim):
-`cargo test` 75 lib + 1 conformance + 5 robustness (87 lib with `export-v3`); `clippy
+`cargo test` 75 lib + 1 conformance + 5 robustness; `clippy
 --all-targets --all-features -D warnings` clean; `fmt --check` clean; `no_std`/`+alloc` clean.
 Targeted security audit of the hostile-input hotspots: `read_overflow`'s `with_capacity(total)`
 is provably bounded by file size (`total ≤ want_pages·payload ≤ total_pages·4076 < bytes.len()`,
@@ -57,7 +57,7 @@ encoding (§D) byte-for-byte. Verified by me: `go test -count=1 ./...` ok, `vet`
 read API now also lives on the `Reader` (Rust `reader.rs`: `scope_list`/`scope_name`/
 `scope_version`/`scope_type`/`meta_get`/`meta_list` via a new bounds-safe `scope::find`
 by-id descent; Go `reader.go`: the same via `findScopeByID`), descending the on-disk
-committed tree. Verified green by me in both languages (Rust 79 lib + export-v3 91; Go
+committed tree. Verified green by me in both languages (Rust 79 lib; Go
 test/vet/gofmt/race).
 
 **Done (bidirectional metadata cross-read conformance — 2026-06-24):** `v4/conformance/
@@ -175,7 +175,7 @@ The locked v4 core: the fixed-record B+tree *pattern* (the scope table is a **ne
 with its own value layout, not a code reuse of the IP tree), COW + dirty-set + double-meta
 commit, the derived allocator (extended to walk `scope_table_root` + each `kv_root`'s KV
 tree + overflow pages), per-page CRC, the bounds-safety/fuzz discipline from SOW-0007, and
-the v3/v4 shared conformance harness.
+the shared cross-language conformance harness.
 
 ### Risk and blast radius
 
@@ -251,8 +251,8 @@ no cap).
   (`meta_set`/`get`/`delete`/`list`, overflow chains, `FILE` target = scope 0); v4.0→v4.1 minor
   bump with forward-compat (old reader skips metadata; old writer refuses v4.1) + in-place
   upgrade; reader-side metadata reads (shared-lock path); Rust + Go.
-- **Tests (re-verified by the assistant, not trusting the implementer/fork)** — Rust: lib **85 /
-  97** (`--features export-v3`), conformance 1, metadata-conformance 2, robustness/fuzz **11**
+- **Tests (re-verified by the assistant, not trusting the implementer/fork)** — Rust: lib **85**,
+  conformance 1, metadata-conformance 2, robustness/fuzz **11**
   (incl. scope-table + KV + overflow + structural-mutation-with-CRC-restamp), clippy
   `--all-targets --all-features -D warnings` clean, `fmt --check` clean, `no_std` + `no_std+alloc`
   clean. Go: `test ./...`, `vet`, `gofmt -l` clean; **`test -race -count=1` (421s) clean**. The
@@ -379,7 +379,7 @@ the "validate before expose" model.
 - The F3 guards were **proven non-vacuous**: with the leaf bound checks temporarily removed, all
   four misroute tests fail (Open accepts the crafted files); with them restored, they pass. Done
   in both languages.
-- Rust: `cargo test` (default + `export-v3`), `clippy --all-targets --all-features -D warnings`,
+- Rust: `cargo test`, `clippy --all-targets --all-features -D warnings`,
   `fmt --check` — clean. Go: `go test -race`, `go vet`, `gofmt` — clean. Goldens unchanged (the
   writer always produced correct separators; the bound checks only reject hostile files).
 

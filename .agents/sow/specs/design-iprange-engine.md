@@ -1,543 +1,381 @@
-# iprange — Multi-Language Engine, Binary Format & Threat-Intel SDK
-
-**Status:** Design — decisions captured, pre-implementation
-**Last updated:** 2026-06-21
-**Scope:** The future of `iprange` as a multi-language engine + a portable binary
-threat-intel format + ready-to-use SDKs, with `update-ipsets` and Netdata as the
-first consumers.
-
-> This is a living design document. Decisions are marked **DECIDED** or **OPEN**.
-> Nothing here is implemented yet. No code has been changed.
-
----
-
-## 0. Architecture update (2026-06-21) — SUPERSEDES affected sections below
-
-After grounding in the C oracle + prior art, the language architecture changed.
-Where this section conflicts with §2/§7/§8/§11 below, **this section wins**; those
-sections are pending a full refresh. Authoritative decision record:
-`.agents/sow/pending/SOW-0001-20260621-iprange-engine-and-binary-format.md`.
-
-- **Two full native libraries — Rust and Go — with 100% feature parity.** Both
-  implement the complete engine (format + set algebra + lookup). Rust also produces
-  a **C library** (`cdylib`/`staticlib` + cbindgen) so C consumers use Rust. The Go
-  library is **pure Go, no cgo** (hard constraint). **Native C is dropped**; legacy
-  C survives only as the **behavioral oracle** for the conformance corpus, then
-  retires. Rust is the reference; Go must match it (and the oracle).
-- **Consumers:** `netflow.plugin` (Rust) → Rust library; `network-viewer.plugin`
-  (C) → Rust's C library; `go.d.plugin` (Go) + `update-ipsets` (Go) → the Go
-  library. Go consumers need the **full** operations, not just lookups — hence a
-  full Go library.
-- **Parity risk (real):** Go (garbage collector, less low-level control) may
-  struggle to hit the 5–10% band against Rust on the heaviest set algebra; the
-  shared test corpus + benchmark harness surfaces this per operation.
-- **v4/v6 are unified** via generics over an integer width (`u32`/`u128`) in both
-  languages — written once per library, not duplicated.
-- **Format:** little-endian; IP keys are integer pairs compared numerically (v6 =
-  two `u64` **hi-then-lo**, so a v6 key is **NOT** castable to a native `u128`; v4
-  `u32[]` may be cast only on an endianness-matching, suitably-aligned host —
-  otherwise parse field-by-field); typed-section **directory** `{kind, offset:u64,
-  length, sha256}`; **Ed25519** signature over header+directory; **bounds-check
-  structure → verify signature → read** ("signed ≠ safe"). Lookup = sorted-range
-  binary search baseline (optional DIR-24-8 v4 / Poptrie v6 accel are additive —
-  deferred). Authoritative byte-level contract: `binary-format-v3.md`.
-- **Build order = three steps:** (1) format library, (2) processing engine,
-  (3) backwards-compatible CLI. Step 1 = `SOW-0002`.
-
-The interval-map core (§3), format layout (§4), metadata tiers (§5), and multi-feed
-design (§6) below remain valid as written.
-
----
-
-## 1. Purpose (fit-for-purpose)
-
-Add **threat intelligence to Netdata**. Netdata's NetFlow, L2/L3/L7 topologies,
-and network-viewer (service map) must **annotate IPs with threat-intel data in
-real time** — for every flow/connection/edge, answer: *"which threat-intel feeds
-and categories does this IP belong to?"*
-
-To serve this, `update-ipsets` becomes a **public, open-source, professional,
-high-performance threat-intel source** that publishes feeds in a portable binary
-format, with **ready-to-use SDKs** for custom applications. Netdata is the **first
-consumer**, not the only one.
-
-The SDKs need a **very fast `iprange`** at their core for real-time IP
-comparisons (membership lookups).
-
-### Two halves with opposite characteristics
-
-| | **Producer** (update-ipsets) | **Consumer** (SDK in Netdata C/Go/Rust) |
-|---|---|---|
-| Job | fetch, parse, dedup, merge, compute metrics, build + sign artifacts | **lookup**: "which feeds/categories is this IP in?" |
-| Pattern | batch, periodic | real-time, per-flow/per-packet |
-| Bottleneck | throughput | **latency** (millions of lookups/sec/core) |
-| Allocation | may allocate | **zero/minimal allocation** (lookups produce no output) |
-| Set algebra | full (union/intersect/exclude) | none — membership / range-containment only |
-
-The consumer hot path is read-only longest-prefix-match — a small, well-defined
-kernel. This is what makes zero-copy / mmap / zero-alloc natural there.
-
----
-
-## 2. Architecture (DECIDED)
-
-### 2.1 Three full native libraries — C, Rust, Go
-
-Full `iprange` libraries in **C, Rust, Go** — not thin readers. They map exactly
-onto Netdata's stack (C core, Go topology, Rust netflow) and serve arbitrary
-third-party SDK consumers who want to *process* feeds, not just look them up.
-
-**No FFI on the hot path.** Three native implementations mean the Go consumer is
-**pure Go (no cgo)** — required for Netdata's static, cross-platform, IoT-grade
-distribution. cgo per-call overhead (tens of ns) would dominate a single-digit-ns
-lookup and break cross-compilation.
-
-### 2.2 Three CLI binaries — as a shared conformance + benchmark harness
-
-The three CLIs exist **not to be published**, but as the vehicle for **one**
-black-box conformance corpus and **one** benchmark harness that drive all three
-implementations (the model used by the protobuf conformance suite and the
-WebAssembly spec tests). Tests and benchmarks are written **once**, not 3×.
-Per-language unit tests cannot prove cross-language equivalence; a shared
-black-box corpus can.
-
-### 2.3 Decision table
-
-| # | Decision | Choice | Status |
-|---|----------|--------|:------:|
-| 1 | Library scope | Full native libraries in C, Rust, Go | **DECIDED** |
-| 2 | Three CLIs | Shared conformance + benchmark harness (not products) | **DECIDED** |
-| 3 | Performance parity tolerance | **5–10%** delta between implementations; beyond requires strong written justification | **DECIDED** |
-| 4 | Benchmark metrics | wall-time **+ allocation count + RSS**, exposed via CLI benchmark modes | **DECIDED** |
-| 5 | Format as conformance check | All three read/write **byte-identical** binary files | **DECIDED** |
-| 6 | Behavioral oracle | **C** (incumbent defines correctness); freeze format + corpus against it; Rust then Go chase it; C/Rust set the perf ceiling | **DECIDED** |
-| 7 | Dossier storage | **Single self-contained, signed, sectioned file** per feed (computed metrics recompute every update → same cadence as index) | **DECIDED** |
-| 8 | Multi-feed model (phase 2) | **Merged index + catalog + per-feed dossiers** (one lookup = all memberships), not a concatenated bundle | **DECIDED** |
-| 9 | IPv6 | **Dual-stack from day one** — key type generalizes to 128-bit, not just the value | **DECIDED** |
-| 10 | Public artifact licensing | **Include** `dont_redistribute` feeds, **marked** via the header license/redistribute flag (handling deferred; may become a no-op later) | **DECIDED** |
-| 11 | Delivery to Netdata | **Indirect**: iprange → replaces update-ipsets `pkg/iprange` → update-ipsets SDK (Rust/Go) embeds iprange → Netdata consumes the SDK | **DECIDED** |
-
-### 2.4 Engine unification & consumption layering
-
-`update-ipsets` already depends on an `iprange` engine for all set operations,
-binary persistence, and merge-joins. Therefore the engine we design **is**
-update-ipsets' engine. There are **two SDK layers**, and Netdata consumes the
-upper one — it does **not** depend on `iprange` directly:
-
-```
-   ┌──────────────────────── iprange (C / Rust / Go) ────────────────────────┐
-   │  interval-map engine + portable binary format (reader/writer, lookups)   │
-   │  generic, domain-agnostic                                                 │
-   └──────────────────────────────────────────────────────────────────────────┘
-                 ▲                                   ▲
-                 │ replaces pkg/iprange              │ embedded in
-                 │                                   │
-   ┌─────────────┴───────────┐        ┌─────────────┴────────────────────────┐
-   │  update-ipsets (Go)      │        │  update-ipsets SDK (Rust / Go)        │
-   │  the producer/service    │ feeds  │  threat-intel client (fetch/sync      │
-   │  builds + signs artifacts│ ─────► │  artifacts, dossier schema, feed-id   │
-   │                          │artifacts│  registry) on top of iprange         │
-   └──────────────────────────┘        └─────────────┬─────────────────────────┘
-                                                      │ consumed by
-                                          ┌───────────┴───────────┐
-                                          │  Netdata               │
-                                          │  netflow (Rust),       │
-                                          │  topology/viewer (Go)  │
-                                          └────────────────────────┘
-```
-
-Sequence (DECIDED — Decision 11):
-
-1. **Finish `iprange`** (C/Rust/Go engine + portable binary format).
-2. **Replace update-ipsets' own `pkg/iprange`** with it (update-ipsets adopts the
-   new engine + format). *(The current `pkg/iprange` is being rewritten separately
-   and was intentionally **not examined** for this design to avoid bias.)*
-3. **Build the update-ipsets SDK** (Rust + Go) — the threat-intel layer
-   (artifact fetch/sync, dossier schema, feed-id registry) embedding `iprange`.
-4. **Netdata consumes the update-ipsets SDK** (Rust for netflow, Go for
-   topology/network-viewer) → it gets `iprange` **indirectly**.
-
-So `iprange` stays the generic engine (Rule B); the **update-ipsets SDK owns the
-threat-intel schema and the artifact-fetch client**. C `iprange` remains a
-first-class library and the behavioral **oracle** (Decision 6) even though the
-Netdata consumption path is Rust/Go.
-
-This is not "add an engine" — it is "finish and generalize the engine that
-update-ipsets is already built on, then wrap it in a threat-intel SDK."
-
----
-
-## 3. The interval-map core primitive (DECIDED)
-
-The central data structure generalizes `iprange`'s from-to model by attaching an
-**interned attribute value** to each range, splitting a range wherever the value
-changes.
-
-```
-IntervalMap<V> =
-    sorted disjoint intervals { start, end, value_id }   // the index
-  + interned table of distinct V                          // dedup of values
-```
-
-- A new boundary is introduced wherever the attribute changes; each elementary
-  interval has one constant value.
-- **V is opaque to the core** — an interned blob with equality (dedup by hash).
-  The consumer assigns meaning. This keeps the core domain-agnostic.
-- Value types in practice: `feed-id set` (multi-feed membership), `ASN`,
-  `country`, `first_seen timestamp`, severity, count, …
-
-### Operations
-
-| Operation | Description |
-|---|---|
-| point lookup | `ip → V` via binary search (or trie) over the index |
-| merge-join | walk two sorted maps once, apply a **combine/reduce** function on overlaps (e.g. set-union, `min(timestamp)`) → new map |
-| aggregate | fold over `(range, V)` → per-value counts (geo/ASN composition, retention histograms) |
-| build | sweep-line over `+1/−1` boundary events; emit an interval when the active value changes; intern the value |
-
-Today's set operations (union/intersect/exclude) become the special case
-`V = present/absent`.
-
-### Worked example (membership)
-
-Three feeds → disjoint elementary intervals, each with a constant membership set:
-
-| start | end | members | set-id |
-|------|------|---------|:------:|
-| 10.0.0.0 | 10.0.0.49 | {A} | 1 |
-| 10.0.0.50 | 10.0.0.100 | {A, B} | 2 |
-| 10.0.0.101 | 10.0.0.150 | {B} | 3 |
-| 10.0.0.200 | 10.0.0.255 | {C} | 4 |
-
-Lookup `10.0.0.70` → interval `{50..100, set_id=2}` → `set_table[2] = {A,B}` →
-**one probe returns all memberships.**
-
-### Representation choices (OPEN — recommendation noted)
-
-- **Interval array (recommended):** `{start, end, value_id}` — closest to the
-  existing from-to model; gaps cost nothing; 12 B/entry IPv4 (wider for IPv6).
-- Breakpoint array: `{start, value_id}`, end implied by next start − 1; ~33%
-  smaller but needs a sentinel and tiles the whole space.
-
-### Value (set) encoding (OPEN — recommendation noted)
-
-- **Interned sorted feed-id lists (recommended):** `{count, id₀, id₁, …}` —
-  compact for sparse membership (the common case: an IP is in 1–3 feeds).
-- Bitset (`⌈N_feeds/8⌉` bytes): fixed-width, fast for set algebra, wasteful when
-  membership is sparse.
-
-### Scale note (estimate)
-
-Merging all ~430 feeds may yield millions of elementary intervals → tens of MB
-for the index. That is precisely why it is **mmap'd**: the consumer faults in only
-the pages its binary searches touch. Distinct membership sets stay modest
-(bounded by combinations that actually occur, not 2^N) and are interned.
-
----
-
-## 4. Binary file format — phase 1 (single feed) (DECIDED)
-
-A single self-contained, **streamed**, **signed**, **sectioned** file per feed.
-
-### 4.1 Layout
-
-```
-┌──────────────────────────────────────────────┐
-│ FRONT HEADER (fixed, front)                    │  magic, format version, flags,
-│   identity + ALL operational data              │  feed-id, ip-version, counts,
-│                                                │  generation ts, source version,
-│                                                │  category, license/redistribute,
-│                                                │  health, cadence summary,
-│                                                │  → directory offset/len
-├──────────────────────────────────────────────┤
-│ DIRECTORY (front)                              │  per section: {type-id, offset,
-│   + SIGNATURE (covers header+directory)        │  length, SECTION-HASH}; key-id; algo-id
-├──────────────────────────────────────────────┤
-│ INDEX SECTION   ◄── HOT PATH (mmap, zero-copy) │  the interval-map index
-├──────────────────────────────────────────────┤
-│ METRIC SECTIONS (Tier 3a, per-update, struct.) │  asn[], geo[], overlap[], retention[],
-│                                                │  behavior[], crit_infra[], bogons[] …
-├──────────────────────────────────────────────┤
-│ DESCRIPTIVE SECTIONS (Tier 3b, rare)           │  maintainer, about, policies, sources[]
-├──────────────────────────────────────────────┤
-│ STRING TABLE                                   │  ASN names, prose — referenced by offset
-└──────────────────────────────────────────────┘
-```
-
-### 4.2 Streaming producer + front-loaded metadata (DECIDED)
-
-These do not conflict:
-
-- The producer **streams the body forward** (index → metrics → prose), hashing
-  each section incrementally. Bounded memory — never holds a whole feed (e.g.
-  600M-IP firehol_level1) in RAM.
-- Then **one seek back** to write the fixed-size front header + directory +
-  signature ("backpatch"). The output is a regular seekable file.
-
-Result: bounded producer memory **and** front-loaded operational data + selective
-verification for consumers.
-
-### 4.3 Integrity: signed directory + per-section hashes (DECIDED)
-
-- The directory carries a **hash per section**.
-- The **signature covers only header + directory** (small, instant to verify).
-- Because the directory lists each section's hash, signing it **transitively
-  authenticates the whole file**, yet a consumer can:
-  1. read front header + directory (a few pages),
-  2. verify the directory signature (cheap),
-  3. mmap **only the index**, hash that one section, compare to its directory entry,
-  4. never fault metric/prose pages unless needed.
-- **Crypto agility:** `algorithm-id` + `key-id` in the header. Reserve header room
-  for a Merkle root if finer-grained lazy verification is ever required (not now —
-  per-section granularity matches the access pattern; no over-engineering).
-- A consumer can render a full operational summary (name, category, counts,
-  health, license, generation time) from the **header alone, zero body I/O**.
-
-### 4.4 Extensibility (DECIDED)
-
-- **Typed section registry + skip-unknown:** each section has a `type-id`;
-  consumers skip types they don't know → forward/backward compatibility.
-- **Core stays domain-agnostic (Rule B):** core `iprange` understands exactly one
-  section type (the index) and treats all others as **opaque typed blobs it
-  carries and signs but never interprets**. `update-ipsets` owns the threat-intel
-  metric/prose schema.
-
----
-
-## 5. Metadata tiers (DECIDED)
-
-`update-ipsets` produces a rich per-feed research dossier (identity, insights,
-prose, ASN/geo/overlap/critical-infra/bogon tables, behavior/retention curves,
-sources). It is stored as **structured fields, not markdown** (markdown is a
-*rendering*; structured records are queryable and can be made byte-identical
-across implementations — which serves the conformance harness).
-
-| Tier | Content | Size | Cadence | Where |
-|---|---|---|---|---|
-| **0 — Identity** | name, category, maintainer, counts, health, generation ts, source version, **license/redistribute**, integrity+signature | tiny | per update | header |
-| **1 — Index** | the interval-map ranges | bulk | per update | hot-path section (mmap) |
-| **2 — Summary stats** | cadence, churn/rotation medians, IPs/entries range, tracked-since | small | per update | header / section |
-| **3a — Computed metrics** | ASN, geo, overlap matrix, critical-infra, bogons, behavior, retention, age, churn | large | **per update** | metric sections |
-| **3b — Descriptive** | maintainer, about, how-built, detection method, listing/removal policy, sources | small | rare | descriptive sections |
-
-> Tier 3a recomputes **every update** (same cadence as the index) — which is why a
-> single self-contained file (Decision 7) is correct: splitting it out would save
-> no bandwidth, since it re-ships every update regardless. A consumer that wants
-> only the index can still issue an **HTTP range request** for the index byte
-> range (the directory gives offsets), so single-file does not penalize
-> index-only consumers.
-
-The hot-path lookup returns the **annotation record** per matching feed: Tier-0
-identity (`feed-id, name, category, severity/health`). The dossier (Tier 3) is
-fetched on demand (local section or remote API/MCP).
-
----
-
-## 6. Multi-feed format — phase 2 (DECIDED: merged index)
-
-The reason multi-feed exists is **one lookup returning all memberships** for
-real-time annotation. A concatenated bundle of independent feeds would **not**
-deliver this (it stays N searches). The merged index does:
-
-```
-FILE HEADER                                          ◄── front (streamed + backpatched)
-FEED CATALOG  {feed-id → name, category, → dossier offset}
-MERGED INDEX  ◄── HOT PATH: elementary ranges → membership-set id   (ONE lookup)
-MEMBERSHIP-SET TABLE  (interned distinct feed-id sets)
-PER-FEED DOSSIERS  (metric + descriptive sections — same structure as single-feed, minus the index)
-SIGNATURE (over header + catalog + per-section hashes)
-```
-
-- One search → membership-set id → feed-ids → join catalog for names/categories.
-- Per-feed dossiers reuse the single-feed metadata structure (the "same
-  structure" elegance survives for dossiers; only the index is merged, stored once).
-- A single feed's IP list is reconstructable (filter elementary ranges where its
-  bit is set, coalesce) — no redundant per-feed indexes.
-- **Requires a stable global feed-id registry** (feed name → fixed numeric id),
-  owned by `update-ipsets`, so membership sets stay consistent across files and
-  versions.
-
-Direction: one merged index is far cheaper than N separate per-feed searches, so
-the merged approach is right. **CORRECTION (design review):** the earlier absolute
-figures here were wrong. A plain binary search over a merged index of *millions to
-tens of millions* of ranges is **~20+ cache misses (µs-scale when cold)**, not
-"1–2 / ~100–200 ns", and the merged file may be **~1–2 GB**, not "tens of MB". So
-a lookup **accelerator** (e.g. a direct-indexed first stage) is likely **required**
-for per-flow real-time speed, not optional. **Measure at full (~430-feed) scale
-before committing.** *(Estimates — must be measured.)*
-
-A concatenated **bundle** may still be kept as a separate *distribution* artifact
-(download many named feeds at once), but it is not what the annotator queries.
-
----
-
-## 7. IPv6 / dual-stack (DECIDED)
-
-The current IPv4-only model is a structural hole for the purpose: NetFlow
-annotation is IPv6-heavy. The engine must be **dual-stack from day one** — the
-**key type** generalizes to 128-bit (not just the value type). This is the single
-largest design + effort item the format forces. *(Note: this repo's C `iprange`
-already has some IPv6 handling — see `wiki/ipv6.md` — to be reconciled with the
-new model.)*
-
----
-
-## 8. Performance baselines (DECIDED philosophy)
-
-"Optimal / nothing faster" is reframed as **defined, benchmarked baselines**,
-regression-gated in CI, measured per operation and split into:
-
-- **CPU-bound ops** (in-memory set algebra, merged-index build): C/Rust set the
-  ceiling; Go within the 5–10% tolerance (Decision 3) or justified.
-- **I/O-bound ops** (parse, load): language differences wash out.
-- **Lookup hot path:** memory-latency-bound → all three can reach parity (the
-  cache miss dominates Go's bounds-check overhead).
-
-Consumer hot path = **zero/minimal allocation** (no output to allocate). Producer
-may allocate (batch). Harness reports allocations + RSS (Decision 4).
-
----
-
-## 9. `update-ipsets` fit — evidence & adoption roadmap
-
-Investigation of `update-ipsets` (excluding the off-limits Go `pkg/iprange`)
-confirms the format is a **generalization of what it already does**, not a graft.
-
-### 9.1 Already ~80% there (for IPv4)
-
-- Core set = **sorted disjoint `{Lo,Hi uint32}` ranges**, coalesced — not a hash
-  set. (`pkg/engine/bogons_rfc.go:144`, `geo_provider_cache.go:245`)
-- **Binary mmap range files already exist** (`WriteBinary`/`FileSet`) for
-  `latest`, history snapshots, retention cohorts.
-  (`pkg/engine/binary_write.go:11-52`, `finalize.go:44`, `fileset_helpers.go:43-89`)
-- **Geo is already this exact interval map**: sweep-line over `+1/−1` events →
-  disjoint segments carrying interned membership sets (`codes []uint16`),
-  coalesced on change, merge-joined to feeds.
-  (`pkg/engine/geo_provider_cache.go:141-259`, `:17-20`, `:187-191`, `:248-254`,
-  `:269-277`) ASN is a sorted range table with skip-the-span lookup
-  (`pkg/asnloc/backend_rangetable.go:11-16`, `pkg/asnloc/asnloc.go:268-292`).
-- Set ops are already streaming merge-joins
-  (`iprange.UnionSourcesContext`/`IntersectSourcesContext`/`Exclude`/
-  `OverlapCountIterContext`).
-
-### 9.2 The gap
-
-The whole range/binary pipeline is **IPv4-`uint32`-only**; IPv6 is carried as
-opaque text outside the model (`pkg/processor/primitives.go:366`,
-`stream_filters.go:87`). The new format must close this.
-
-### 9.3 Where the format/engine actually helps (measured)
-
-Measured on the live server (`iplists`, **423 sources + 13 merges = 436 ipsets**),
-average **full run ≈ 206 s**:
-
-| Phase | Per run | % | Interval-map impact |
-|---|---:|---:|---|
-| **metadata** | 63.0s | 30.6% | **Partly** — O(N²) overlap matrix (~89K pairs) ✅ + reflection JSON ❌ |
-| **publish** | 56.8s | 27.6% | **No** — pure I/O (byte-compare, fsync, atomic rename) |
-| **sources** | 42.3s | 20.5% | **Partly** — retention/cohort reconcile ✅ + text parse ❌ |
-| **asn** | 24.9s | 12.1% | Partly (MMDB + overlaps) |
-| bogons | 5.4s | 2.6% | ✅ pure set-ops |
-| entities | 4.8s | 2.3% | mostly no |
-| critical_infra | 3.5s | 1.7% | partly |
-| insights | 2.7s | 1.3% | no |
-| **geoip** | 2.5s | 1.2% | **No — already an interval-map** |
-
-- Incremental runs (1–6 changed feeds): **13–46 s**. Peak RSS **1.5 GB**.
-  Startup full-rebuild is **CPU-limited** (~1 core; ~12 MB/s disk = not disk-bound).
-- **`max_ingest_workers: 1` is active** (`configs .../runtime.yaml:78`,
-  `pkg/engine/runtime.go:253-262`) → pipeline effectively single-threaded.
-  **Raising it is the cheapest win and is orthogonal to the format.**
-- Honest ceiling: the format can attack ~**40–55%** of a full run (overlap matrix
-  + retention + bogon/ASN overlaps). It **cannot** touch `publish` (I/O, 27.6%),
-  JSON serialization, text parsing, or downloads.
-
-### 9.4 Standout win: age/retention
-
-Today age is a **fan-out of per-cohort binary snapshots** (`new/<unix>.set`),
-reconciled with **O(#cohorts) compare+intersect+rewrite on every tick with
-removals** (`pkg/engine/retention_update.go:257-459`), and `_1d/_7d/_30d` are
-**fully duplicated retention pipelines** (4× machinery) fed by a parallel snapshot
-store (`pkg/config/expand.go:170-235`, `pkg/engine/feed_body_stage.go:400-446`).
-
-An `IntervalMap<first_seen>` collapses reconciliation to **one merge-join per
-update**, and windows become a **filter predicate** (`first_seen ≥ now−window`).
-The unbounded `new/*.set` corpus and duplicated pipelines disappear.
-
-> Caveat: the removed-IP "age at removal" distribution (`retention.csv` `past[]`)
-> is not captured by a live `first_seen` map alone — it needs a small
-> **removal-event emission** at merge-join time (bounded, not free).
-
-### 9.5 Adoption sequence (recommended)
-
-1. Build the `iprange` interval-map engine + format (needed for the SDK anyway).
-2. Adopt in `update-ipsets` **incrementally, highest-ROI first**:
-   **(a) overlap matrix** → merged-membership sweep; **(b) age/retention** →
-   `first_seen` interval map.
-3. Independently: **raise `max_ingest_workers`** (config-only quick win).
-
----
-
-## 10. Conformance & benchmark harness (DECIDED)
-
-- One black-box corpus: `(args, stdin) → expected (stdout, exit)`, run against all
-  three CLIs. Divergence = bug.
-- Includes **byte-identical binary read/write** cases (cross-validates the format).
-- Library-only behaviors (mmap, zero-alloc) exposed through CLI modes/flags so the
-  same harness measures them (e.g. `--mmap`, a benchmark mode reporting
-  allocation counts + RSS).
-- One benchmark harness: same inputs, compare wall-time / allocations / RSS across
-  the three; gate on the 5–10% tolerance.
-- C is the oracle; Rust then Go are brought to green against the same corpus.
-
----
-
-## 11. Phasing
-
-Critical path to Netdata threat-intel annotation (Decision 11):
-**iprange → update-ipsets adoption → update-ipsets SDK → Netdata.**
-
-| Phase | Deliverable |
-|---|---|
-| **1 — Engine + format** | iprange interval-map engine (**dual-stack**), C as oracle; single-feed format (sectioned, signed, streamed); conformance + benchmark harness; Rust + Go to green within 5–10%. |
-| **2 — Merged multi-feed** | Catalog + merged index + per-feed dossiers + feed-id registry → one-lookup all-memberships (the real-time-annotation enabler). |
-| **3 — update-ipsets adoption** | Replace `pkg/iprange` with iprange; migrate **overlap matrix**, then **age/retention**, onto the engine. *(Independent quick win: raise `max_ingest_workers`.)* |
-| **4 — update-ipsets SDK** | Rust + Go SDK: artifact fetch/sync + dossier schema + feed-id registry, embedding iprange. |
-| **5 — Netdata** | netflow (Rust) + topology/network-viewer (Go) consume the SDK → real-time IP annotation. |
-
-> **Sequencing (DECIDED — Decision 11):** real-time Netdata annotation lands at
-> **phase 5**, gated on **phase 2** (merged format) + **phase 4** (the SDK).
-> Phase 1 is the foundation (single-feed + cached/non-real-time use). Netdata
-> never depends on iprange directly — only via the update-ipsets SDK.
-
----
-
-## 12. Open decisions
-
-| # | Open item | Options | Status |
-|---|-----------|---------|--------|
-| O1 | License/redistribution policy | include + mark | **RESOLVED → Decision 10** |
-| O2 | Consumption / sequencing | indirect via update-ipsets SDK | **RESOLVED → Decision 11, §2.4, §11** |
-| O3 | Index representation | explicit `{start,end,value_id}` vs breakpoints | **OPEN** — explicit recommended (closest to current model) |
-| O4 | Membership-set encoding | interned sorted id-lists vs bitset | **OPEN** — interned sorted id-lists recommended (sparse) |
-
----
-
-## Appendix A — Evidence sources
-
-- **update-ipsets code** (`firehol/update-ipsets`, the Go repo, excluding
-  `pkg/iprange`): data model, analytics, retention, pipeline — file:line refs in §9.
-- **Live server** (the new update-ipsets daemon, internal host — see the parent
-  FireHOL operations notes for host/endpoint details):
-  - `/api/v1/status` → 423 sources + 13 merges.
-  - admin `/metrics` (Prometheus) → `engine_phase_duration_ms` per-phase split (§9.3).
-  - `/proc/<pid>/io` + `ps` → CPU-bound, ~1 core, 7 GB reads / 2.8 GB writes in 9.5 min.
-  - systemd journal → incremental runs 13–46 s; service instances burning 40 min–
-    hours CPU per restart; peak RSS 1.5 GB.
-  - `runtime.yaml` → `max_ingest_workers: 1` active.
-
-## Appendix B — Naming & compatibility rules
-
-- Keep pre-existing `update-ipsets` ipset **names** stable (URLs, history,
-  retention, comparison data all key off them).
-- Public PRs/commits describe code only — no infrastructure/server details.
+# iprange Engine and SDK Architecture
+
+**Status:** Current unsigned Phase-1 target architecture
+**Last updated:** 2026-07-21
+
+This document defines the product and language architecture for the next
+`iprange` engine. The exact portable file contract is defined by
+[`binary-format-v4.md`](binary-format-v4.md). The active SOW records approved
+work and temporary implementation evidence; completed SOWs are historical and
+are not normative.
+
+The stable Rust-provided C boundary is defined by
+[`c-abi-v4.md`](c-abi-v4.md).
+
+## Purpose
+
+`iprange` is the high-performance IP interval engine used by FireHOL tooling.
+The new engine makes `update-ipsets` a reliable publisher of portable,
+self-contained threat-intelligence databases and gives consumers ready-to-use
+SDKs for real-time address annotation.
+
+Netdata is the first consumer:
+
+- Rust consumers, including netflow, use the Rust library.
+- Go consumers, including topology/network-viewer integrations and
+  `update-ipsets`, use the pure-Go library.
+- C consumers use the stable C ABI exported by the Rust implementation.
+
+The existing C CLI remains the released `iprange` implementation and the
+behavioral oracle for legacy set algebra while the new engine is developed. It
+is not a third native implementation of the v4 database.
+
+## Fit-for-purpose outcome
+
+The engine is successful when it provides all of the following:
+
+- exact IPv4 and IPv6 interval semantics;
+- one portable, architecture-neutral v4 database contract;
+- native Rust and pure-Go implementations with equivalent public behavior;
+- a stable Rust-provided C ABI for C consumers;
+- bounded-memory processing of databases larger than RAM;
+- low-latency, allocation-free steady-state lookups;
+- one writer with concurrent snapshot readers for live databases;
+- explicit validation and recovery, without implicit full-file scans;
+- compact unsigned snapshots for SDK correctness and performance proof;
+- shared semantic conformance and comparable performance measurements.
+
+Authenticated public snapshots are intentionally excluded from Phase 1. They
+are tracked by pending SOW-0017 and begin only after this core SDK is reliable
+and measured.
+
+Correctness, crash durability, bounded resources, security, and recovery are
+release requirements. They are not optional hardening phases.
+
+## Architecture
+
+### Two native engines, three SDK surfaces
+
+Rust and Go each implement the complete v4 behavior: creation, lookup, scans,
+advanced logical transactions, exact high-level replacement/import workflows,
+feed lifecycle, retention refresh, validation, recovery, reclamation, and
+unsigned snapshotting.
+
+The Go implementation is pure Go and must not require cgo. The C SDK is built
+from the Rust implementation, so there is one low-level implementation for Rust
+and C rather than two implementations that can drift.
+
+Rust and Go are peers for public behavior. Neither implementation's physical
+tree layout, page allocation order, or zlib output is the wire oracle. The
+normative specification and shared corpus are the oracle.
+
+### Two semantic API layers
+
+Both implementations expose two public layers over one private transaction
+engine:
+
+- The **advanced logical layer** has separate direct and membership transaction
+  surfaces. Direct callers assign semantic `u32` values to ranges. Membership
+  callers use SDK-issued feed and membership references and may intentionally
+  change several feeds atomically. The SDK alone owns feed indexes, bitmaps,
+  membership IDs, dictionary entries, refcounts, pages, roots, allocation, and
+  publication.
+- The **high-level workflow layer** implements single-use named-feed
+  create/replace, direct-map replacement, exact retention refresh, whole-file
+  snapshot/copy, and membership-file import. Ingestion is
+  `Begin -> AddRanges` in bounded batches `-> FinishInput ->` optional one JSON
+  metadata change `-> Commit` or `Abort`.
+
+Both layers accept unordered, duplicate, and overlapping range input and produce
+the canonical normalized map inside the same caller-facing operation. Public
+APIs expose logical state changes, never physical storage operations. Go and
+Rust may use idiomatic names, while the versioned Rust-provided C ABI freezes
+its exact symbol and layout manifest.
+
+### One v4 format, two operating modes
+
+There is one exact v4 main-file format:
+
+- A **live database** uses the main file plus a local external reader table.
+- An **immutable snapshot** uses the same main-file bytes without that sidecar.
+
+The sidecar is coordination state, not database content. It is never
+distributed or embedded. Opening mode is explicit because the main
+file alone cannot say whether local live coordination is required.
+
+The public constructors are distinct: immutable reader, live reader, and live
+writer. They never auto-create, repair, reset, initialize, or switch mode.
+`CreateLive` creates only the canonical empty live pair and returns a creation
+result; acquiring a writer is a separate open. Direct live rename/relink is not
+a Phase-1 operation: relocation uses snapshot, explicit live initialization,
+and an application-controlled switch.
+
+The compact `SnapshotTo` operation streams one pinned committed generation into an
+ordinary v4 file, excluding free, retired, unreachable, unpublished, and deleted
+bytes. Phase 1 uses these unsigned artifacts for SDK conformance, durability,
+and update-ipsets-shaped integration proof. Authenticated public publication is
+not part of this phase.
+
+There is no parallel snapshot format and no conversion between two current
+formats.
+
+### One address family and value model per file
+
+Every database has immutable static identity:
+
+- IPv4 or IPv6 address family;
+- `direct` or `membership` value kind;
+- a 16-byte value tag;
+- a nonzero random 128-bit database ID.
+
+Every stored interval has a fixed `value: u32`:
+
+- In a direct database, the value is caller-defined and opaque. Zero is valid.
+- In a membership database, the value is an internal `membership_id` for a
+  canonical in-file feed bitmap. ID zero means absence and is not stored.
+
+Membership databases contain their own structured feed catalog. The engine
+owns feed indexes; callers use names or snapshot/transaction-bound handles and
+never assign bare bits. Application annotations belong in the optional opaque
+file-level JSON payload, not in the structural catalog.
+
+The exact `retention` direct tag enables the specialized full-snapshot
+retention refresh. Existing addresses preserve their original values, new
+addresses receive the new refresh value, and removed addresses disappear.
+
+## Processing model
+
+### Interval map core
+
+The logical model is a canonical map of non-overlapping inclusive address
+ranges. Mutations split and coalesce ranges as required. Adjacent ranges with
+equal values coalesce; absent membership is represented by no range.
+
+Generic direct assignments are applied exactly in arrival order, within and
+across input batches. A later assignment overwrites only its own inclusive
+interval; earlier values survive on uncovered sides. Implementations may batch
+or reorder only work proven not to change that per-address result.
+
+High-level feed/direct/retention ingestion normalizes unordered input directly
+into operation-private COW state in the destination. It never requires the
+caller to presort input and never creates an external sorting file.
+
+Public cardinalities use the exact fixed-size 129-bit type, which represents
+the full IPv6 space and combined-family counts without wrapping or saturation.
+
+### Transactions and durability
+
+Mutations are copy-on-write and publish through double metadata pages. A public
+operation either leaves the pending transaction untouched because it failed
+before mutation, or aborts the entire pending transaction after any possible
+mutation. Cleanup failure poisons the writer.
+
+Exact high-level replacements/imports, feed lifecycle operations, and retention
+refresh use clean writers and private transactional drafts. `SnapshotTo` instead
+owns an isolated destination output and may coexist with source writes by pinning
+one reader generation; it releases source protection before taking blocking
+destination locks. None exposes partial work at the canonical destination, and
+every unresolved cleanup artifact is reported by an exact bounded residue
+ledger. `Commit` reports the attempted transaction, its random 128-bit commit
+nonce, and one of `NotCommitted`, `Committed`, or `OutcomeUnknown`. Reopen resolves an unknown
+attempt only by the exact database/transaction/nonce tuple; callers are never
+asked to infer publication from a generic I/O error or a later transaction
+number.
+
+A writer owns at most one active advanced transaction or high-level workflow.
+An ordinary transaction may stage at most one metadata set/clear alongside its
+range or feed changes. `Abort` discards the whole draft; explicit `Close` on a
+healthy pending writer runs that abort protocol and never commits. Automatic
+destructors/finalizers never begin coordination cleanup. `Reclaim` is a separate
+bounded clean-writer maintenance operation that commits itself only when it
+actually reclaims pages.
+
+### Readers and reclamation
+
+Readers pin one committed generation. A live database supports concurrent
+readers and one writer through a strict external reader table. Retired pages
+remain protected until no registered reader can observe them, then flow into a
+persistent hierarchical free-page bitmap.
+
+There is no permanent transaction history. Open and normal operation must not
+materialize allocator state proportional to file size or past transaction
+count.
+
+The transaction-private allocator is one shared pool divided into exact
+work-unit scopes. Bitmap and retirement consumers for one work unit share that
+unit's capacity; they do not reserve the same payload twice. A work-unit scope
+is active only while those consumers hold mutation authority. Finalization is an
+atomic exact-scope transition that resolves every unused committed, safely
+reclaimed, and appended page to the allocator fixed point, synchronizes the
+shared unpublished tail, retains output bindings, seals the scope, and
+invalidates every earlier mutation handle. Sealing is not cleanup: retained
+pages remain readable and bound until they are written or the transaction is
+aborted. Later cleanup unbinds those pages and closes the empty scope. A later
+work unit receives only a single-use successor authority and may read an earlier
+sealed scope without reopening its mutation authority. Foreign scopes are never
+released or finalized by another work unit.
+
+### Validation and recovery
+
+Main-file bootstrap performs only O(1) identity, geometry, alignment, and
+memory-safety checks. A live open additionally performs O(reader_capacity)
+sidecar coordination checks. Normal access uses checked bounds and arithmetic
+but does not calculate data-page checksums. The narrow exception verifies each
+committed allocator page at most once per transaction before it authorizes
+destructive reuse.
+
+`Validate` is an explicit streaming graph and integrity audit. Recovery is a
+separate operation that creates a new database ID and copies only fully
+verifiable reachable content into a new file. It reports verified content and
+reason-coded rejected or unknown coverage; it never guesses from damaged or
+unreachable bytes. A proven current, recovery-readable meta is labelled
+`Newest`, is the default, and is the only live-recovery candidate. Previous or
+generation-order-ambiguous candidates require explicit selection from an
+immutable copy or caller-certified offline source; candidates are never merged.
+
+Validation mode is explicit: current live, current immutable, or a selected
+offline recovery candidate. When bootstrap damage prevents selecting a normal
+generation, validation reports the trustworthy bootstrap findings and unknown
+extent instead of hiding the corruption behind a generic open error.
+
+## Resource and performance contract
+
+Files may be much larger than available RAM. "Bounded application working
+memory" means engine-owned heap and explicit scratch; it excludes caller-owned
+output, mapped virtual address space, kernel page cache, page faults, and
+one-time runtime initialization. Resource use follows these rules:
+
+- a warmed successful lookup or cursor step allocates nothing through the
+  language allocator and returns borrowed data or writes into caller storage;
+- an advanced range mutation is allocation-free only while the existing
+  mapping, free pages, and preallocated transaction scratch suffice; a growth
+  path remains bounded and must fail before mutation if its declared budget
+  cannot suffice;
+- `Commit` and open use working memory independent of database page count and
+  transaction history;
+- open performs no page-graph scan and allocates no file-sized structures;
+- catalog/dictionary work, metadata compression, normalization, validation,
+  recovery, and snapshotting use explicit memory budgets plus documented fixed
+  overhead;
+- normal ingestion, metadata staging, transactions, commit, abort, snapshot
+  construction, and ordered algebra create no external scratch files. They use
+  bounded heap plus unpublished same-file COW pages or the private final output
+  inode. Only explicit validation and recovery graph-safety work may use a
+  caller-authorized bounded external scratch file;
+- open file descriptors, authorized scratch, decompression output, arithmetic,
+  and persisted lengths have explicit checked limits;
+- sparse page numbers must not produce page-number-sized heap structures;
+- virtual address use from a full-file mmap is proportional to file size and is
+  measured separately from heap and resident memory;
+- algorithms must be measured for time, allocations, RSS, descriptors, and
+  scaling shape, not only happy-path throughput.
+
+Every potentially long operation has cancellation checkpoints with bounded
+engine work between them. Cancellation never disguises a factual committed,
+published, or outcome-unknown result and cannot interrupt an OS call already in
+progress. Reader lookups and independent scans may run concurrently without a
+per-call mutex, atomic, or active counter; Go/C callers must not race `Close`
+with reader work.
+
+Every engine-created artifact starts creator-private (`0600` on POSIX and the
+equivalent protected user-only Windows DACL), independent of process defaults.
+Applications deliberately widen or change ownership only after publication.
+
+Rust and Go are compared operation by operation. A 5–10% performance band is a
+target where the runtimes permit it, not permission to trade correctness or
+bounded resources for a benchmark. Any material exception needs measured,
+documented cause.
+
+## Cross-language conformance
+
+Conformance is semantic, not byte-identical:
+
+- both implementations must open current Phase-1 v4 files produced by the other;
+- both expose identical ranges, direct values, feed names and indexes,
+  memberships, cardinalities, and exact decompressed JSON bytes;
+- both reject the same invalid bootstrap and structural cases through the
+  appropriate explicit API;
+- both implement equivalent transaction, recovery, and unsigned snapshot
+  outcomes;
+- both implement the same advanced logical operations, high-level workflows,
+  handle invalidation, metadata read-your-writes, batched source/sink, and
+  cancellation semantics;
+- mixed Go/Rust subprocesses must coordinate on the same live database in both
+  directions, including reader/writer slots, process-start tokens, reclamation,
+  sidecar identity/replacement, reservation phases, and SHA-512-bound
+  publication/transition resolution;
+- mutable tree shape, membership IDs, page placement, and zlib byte streams may
+  differ when the observable committed state is the same.
+
+The Rust-provided C ABI is generation 1 under the
+`iprange_v4_abi1_` symbol prefix. Its generated header and frozen manifest are
+normative for symbols, numeric statuses, structure sizes/offsets, path and IP
+encoding, ownership, callback behavior, and panic containment. Native C tests
+compile, link, and exercise that exact contract. The binding rules and required
+semantic surface are specified in [`c-abi-v4.md`](c-abi-v4.md).
+
+The committed corpus must contain files produced independently by both writers,
+and every reader must actually open both producer sets. A JSON manifest alone
+does not prove cross-read compatibility.
+
+## update-ipsets integration
+
+`update-ipsets` remains responsible for downloading, parsing, application
+metadata, scheduling, and text artifacts. The engine owns durable IP interval
+state and exact transformations.
+
+The Phase-1 high-level integration is:
+
+1. download and parse feed streams, potentially in parallel, without requiring
+   caller-side sorting or normalization;
+2. serialize independent high-level `CreateFeed` or `ReplaceFeed` workflows
+   through one membership writer;
+3. preserve each previously committed feed when its replacement fails;
+4. pin a reader after the selected successful feed commits for later aggregate
+   comparisons and publication;
+5. refresh each retention database from the complete downloaded snapshot;
+6. produce compact unsigned snapshots for side-by-side SDK proof, never a live
+   file or its sidecar.
+
+The high-level update-ipsets workflow has no general atomic multi-feed batch.
+One failed feed does not roll back unrelated feeds that already committed
+successfully. This does not restrict the advanced logical membership layer,
+which may intentionally update several feeds in one transaction.
+
+Phase 1 implements the format-facing primitives, named-feed/direct/retention
+workflows, exact snapshot/copy, and membership multi-feed import. Detailed
+general multi-file algebra and every set-producing result are Phase-2 work; a
+result feed is a published v4 file, never an in-memory feed object. Same-named
+feeds across input files form one virtual global feed through ordered
+enumeration rather than a mandatory temporary combined file.
+
+Adoption should proceed only from proven behavior. Existing text outputs and
+released operational workflows remain until the v4 path and later high-level
+operations prove semantic and performance parity.
+
+## Compatibility boundaries
+
+- Readers and writers accept one exact current `v4` layout only. Until the first
+  v4 release, an approved incompatible correction replaces the experimental
+  bytes rather than adding a compatibility mode.
+- No earlier experimental layout, alias, importer, exporter, or golden is part
+  of the supported product.
+- The released C v1.0 IPv4 and v2.0 IPv6 formats remain documented separately
+  as legacy C behavior; they are not v4 compatibility modes.
+- After the first v4 release, a future incompatible on-disk contract is `v5`.
+
+## Non-goals
+
+- Parsing, validating, normalizing, or merging the opaque JSON payload.
+- Caller-assigned feed bits or feed-index aliases.
+- Public membership IDs, bitmap words, page numbers, roots, allocator state, or
+  other physical storage controls.
+- Implicit full validation during open, lookup, scan, or mutation.
+- Recovering data by guessing from checksum-failed or unreachable pages.
+- Shipping live coordination state.
+- Maintaining unreachable membership combinations or permanent page history.
+- Guaranteeing byte-identical files from Rust and Go writers.
+- External sorting files for ordinary ingestion or snapshot construction.
+- Automatic open-mode detection or direct live-file rename/relink in Phase 1.
+- Snapshot signing, verification, key handling, or authenticated public
+  publication during Phase 1; pending SOW-0017 owns that later work.

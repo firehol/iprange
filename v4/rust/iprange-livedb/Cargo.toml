@@ -2,59 +2,19 @@
 name = "iprange-livedb"
 version = "0.0.0"
 description = "Reader/writer for the iprange v4 live mutable on-disk DB format"
+autobenches = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["std", "os"]
-# `std`: the in-memory writer + reader over byte slices.
+default = ["std"]
 std = ["alloc"]
 alloc = []
-# `os`: the Unix file layer — mmap reader (memmap2) and the pread/pwrite+fsync+flock
-# writer (libc) with the §10 O_NOFOLLOW / hole-detection / fstat hardening.
-os = ["std", "dep:memmap2", "dep:libc"]
-# `export-v3`: the v4 -> v3 snapshot bridge (§13). Opt-in so the core stays free of the
-# v3 crate dependency; pulls in the sibling v3 writer to seal the export.
-export-v3 = ["std", "dep:iprange-format"]
-# `slow-tests`: enable long-running robustness fuzz tests (~53s). Not in default.
-# Run with: cargo test --features slow-tests
-slow-tests = []
+os = ["std", "dep:getrandom", "dep:libc"]
 
 [dependencies]
-memmap2 = { workspace = true, optional = true }
-libc = { workspace = true, optional = true }
-rustc-hash = { workspace = true }
-# The v3 snapshot writer (§13 export target). Optional, gated behind `export-v3`.
-iprange-format = { path = "../../../v3/rust/iprange-format", optional = true }
-
-# Test-only: the conformance harness parses the shared language-neutral cases.json.
-# criterion powers the SOW-0013 benchmark harness (benches/core.rs, benches/os_bench.rs).
-[dev-dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-
-# Quick tests (default): conformance (~0.1s each).
-[[test]]
-name = "conformance"
-required-features = ["std"]
-
-# Slow tests (~53s): robustness fuzz. Run with: cargo test --features slow-tests
-[[test]]
-name = "robustness"
-required-features = ["slow-tests"]
-
-# --- Benchmarks (criterion, SOW-0013) ---
-# Run: cargo bench --manifest-path iprange-livedb/Cargo.toml
-# Or:  cargo bench --manifest-path iprange-livedb/Cargo.toml --bench core -- 100000
-[[bench]]
-name = "core"
-harness = false
-required-features = ["std"]
-
-[[bench]]
-name = "os_bench"
-harness = false
-required-features = ["os"]
+getrandom = { version = "0.3.4", optional = true }
+libc = { version = "0.2.186", optional = true }
+sha2 = { version = "0.10.9", default-features = false }

@@ -1,29 +1,9 @@
-//! Reader and writer for the **iprange v4 live mutable on-disk DB format**.
+//! Rust implementation of the exact unsigned Phase-1 iprange v4 database.
 //!
-//! The on-disk contract is specified in
-//! `.agents/sow/specs/design-iprange-v4-livedb.md` (LOCKED 2026-06-22). This crate is
-//! the Rust **reference** implementation (and the C-facing library, decision O3); a
-//! pure-Go implementation must read/write the same files (cross-read, §12).
-//!
-//! v4 is the **live working store** — a portable, mmap'd, copy-on-write B+tree of
-//! fixed-size `[from, to, scope]` records, mutated in place (`set` / `delete`) without
-//! a full rewrite. It complements the sealed v3 snapshot (`iprange-format`), which v4
-//! exports to (§13).
-//!
-//! Layering (built bottom-up; this crate currently holds the foundation):
-//! - [`spec`] — format constants, the §5.1 meta byte offsets, page geometry
-//!   (`leaf_max`, `branch_max`), and limits.
-//! - [`crc32c`] — the per-page CRC32C (Castagnoli) checksum (D9).
-//! - [`key`] — IPv4 / IPv6 keys, compared numerically (v6 = `hi` then `lo`, no native
-//!   128-bit type on the hot path), with the §4 `u128_inc` / `u128_dec` helpers.
-//! - [`record`] — the fixed `[from, to, scope]` leaf record; `scope` is opaque (D11)
-//!   and always **borrowed** (zero-copy).
-//! - [`wire`] — unaligned little-endian field access (D8 forbids struct-pointer casts
-//!   over the mmap'd bytes), the common 16-byte page header, and the meta page.
-//! - `reader` / `writer` — the mmap reader and the COW writer (later increments).
-//!
-//! The core ([`spec`], [`crc32c`], [`key`], [`record`], [`wire`], [`error`]) is
-//! `no_std`; the filesystem reader/writer will require `std`.
+//! The normative contract is `.agents/sow/specs/binary-format-v4.md`. Physical
+//! pages, roots, membership IDs, bitmap words, allocator state, and publication
+//! machinery remain private; public APIs expose semantic database operations.
+
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
@@ -31,59 +11,68 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-pub mod crc32c;
-pub mod cursor;
+#[allow(dead_code)]
+mod bitmap_cow;
+#[allow(dead_code)]
+mod bitmap_page;
+#[allow(dead_code)]
+mod bitmap_reader;
+#[allow(dead_code)]
+mod blob_page;
+#[allow(dead_code)]
+mod blob_reader;
+#[allow(dead_code)]
+mod bootstrap;
+pub mod cardinality;
+#[allow(dead_code)]
+mod contract;
+mod crc32c;
 pub mod error;
 pub mod key;
-pub mod node;
-pub mod reader;
-pub mod record;
-pub mod spec;
-pub mod wire;
-
-pub mod extsort;
-pub mod feed_migrate;
-pub mod interval;
-pub mod migrate;
-pub mod overlap;
+#[allow(dead_code)]
+mod name_binding;
 #[cfg(feature = "os")]
-pub mod readers;
-pub mod scope_table;
-#[cfg(feature = "alloc")]
-pub mod writer;
+#[allow(dead_code)]
+mod os;
+#[allow(dead_code)]
+mod page;
+#[allow(dead_code)]
+mod page_source;
+#[allow(dead_code)]
+mod private_page_pool;
+#[allow(dead_code)]
+mod process_identity;
+#[allow(dead_code)]
+mod range_page;
+#[allow(dead_code)]
+mod range_reader;
+#[allow(dead_code)]
+mod reservation;
+#[allow(dead_code)]
+mod retirement_page;
+#[allow(dead_code)]
+mod retirement_reader;
+#[allow(dead_code)]
+mod retirement_writer;
+#[allow(dead_code)]
+mod sidecar;
+#[allow(dead_code)]
+mod sidecar_transition;
+#[allow(dead_code)]
+mod writer_fixed_point;
+#[allow(dead_code)]
+mod writer_result_contract;
+#[allow(dead_code)]
+mod writer_transaction_contract;
+#[allow(dead_code)]
+mod writer_transaction_core;
 
-pub mod free_list;
-pub mod page_set;
-#[cfg(feature = "alloc")]
-pub mod page_store;
+pub use cardinality::{Cardinality129, CardinalityOverflow};
+pub use contract::{AddressFamily, ValueKind, ValueTag};
+pub use error::{Error, ErrorCode, Result};
+pub use key::{Ipv4Key, Ipv6Key};
 
-/// The v4 -> v3 snapshot bridge (§13): export a sealed, canonical v3 file from a
-/// validated v4 image. Opt-in (`export-v3` feature) so the core stays free of the v3
-/// crate dependency.
-#[cfg(feature = "export-v3")]
-pub mod export;
-
-/// The Unix file layer (mmap reader + pread/pwrite writer with `flock` and the §10
-/// hardening). Unix-only; on other targets use [`Reader`] over bytes and [`Writer`]
-/// over an in-memory image.
-#[cfg(all(feature = "os", unix))]
-pub mod os;
-
-pub use cursor::Cursor;
-pub use error::{Error, Result};
-pub use key::{IpKey, Ipv4Key, Ipv6Key};
-pub use reader::Reader;
-pub use record::RecordRef;
-pub use spec::IpVersion;
-pub use wire::Meta;
-
-pub use extsort::{ext_sort, ExtSortConfig, SortedStream};
-pub use migrate::{
-    migrate, migrate_retention, Change, DesiredRecord, DesiredStream, MigrateCounters,
-    MigrateOptions,
-};
-#[cfg(feature = "alloc")]
-pub use writer::{Changed, Writer};
-
-#[cfg(feature = "export-v3")]
-pub use export::{export_v3, V3Meta};
+#[cfg(test)]
+extern crate std;
+#[cfg(test)]
+mod test_alloc;

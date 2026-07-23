@@ -1,10 +1,12 @@
-# Legacy iprange binary format (v1.0 / v2.0) — read-only migration spec
+# Released C iprange binary formats (v1.0 / v2.0)
 
-This documents the **legacy** `iprange --print-binary` output, so the v3 engine can
-read old files for migration (§14 of `binary-format-v3.md`). It is **current
-reality** reverse-engineered from this repo's C source and verified against real
-artifacts produced by the built `iprange` binary (2026-06-21). Read-only: we never
-write this format.
+This documents the binary output produced and consumed by the released C
+`iprange` CLI. Version 1.0 is the IPv4 format and version 2.0 is the IPv6 format.
+These are current C behavior, established from this repository's source and
+verified against files produced by the built CLI on 2026-06-21.
+
+This document does not make these bytes a compatibility mode of the new engine.
+The final v4 database is a separate exact format.
 
 Evidence (firehol/iprange, this repo):
 - `src/ipset_binary.h:4` — `BINARY_HEADER_V10 "iprange binary format v1.0\n"` (IPv4)
@@ -57,11 +59,10 @@ begins at the byte **immediately after** the final header line's `\n`.
 - on-disk `4D 3C 2B 1A` ⇒ **little-endian** writer (the real-world case: x86-64),
 - on-disk `1A 2B 3C 4D` ⇒ big-endian writer.
 
-**Only little-endian is accepted.** The legacy C loader refuses a marker that does
-not match its own host, and `binary-format-v3.md` §14 rejects a big-endian marker;
-real legacy artifacts come from x86-64. Our readers therefore accept only
-`4D 3C 2B 1A` and reject anything else (no big-endian code path — it would be
-untested). Record integers are decoded little-endian.
+The released C loader requires the marker to match the host's native byte order.
+Files are therefore architecture-dependent. Known operational artifacts are
+little-endian (`4D 3C 2B 1A`), but the on-disk contract itself records native
+writer order rather than defining one portable order.
 
 ### Records
 
@@ -72,23 +73,14 @@ Each record is an inclusive `[addr, broadcast]` range (start, end).
 - **IPv6 (32 bytes):** `addr` then `broadcast`, each a `uint128_t`. On a
   little-endian writer the in-memory order is `{ lo, hi }`, so each 16-byte address is
   on disk as **`lo` (bytes 0–7) then `hi` (bytes 8–15)**, each a u64 in the marker's
-  endianness. This is the **opposite** of v3's `hi`-then-`lo` key layout — migrating a
-  legacy IPv6 address to a v3 key requires this **hi/lo transposition**:
-  `key = Ipv6Key{ hi = u64(disk[8:16]), lo = u64(disk[0:8]) }`.
+  endianness.
 
-### Validation enforced (mirrored by our reader)
+### Validation enforced by the released C loader
 
-- `record size` equals 8 (v4) / 32 (v6); `bytes == record_size*records + 4`.
+- `record size` equals 8 bytes (IPv4) / 32 bytes (IPv6);
+  `bytes == record_size*records + 4`.
 - per record `addr ≤ broadcast`.
 - no trailing bytes after the last record.
 - `unique ips ≥ records` and `lines ≥ records`.
 - if `optimized`, records are sorted + disjoint and `Σ(broadcast−addr+1) == unique ips`
   (we recompute and check). `non-optimized` files are parsed without the sort/sum check.
-
-## Migration to v3
-
-Read → list of `[start, end]` ranges (already sorted+disjoint when `optimized`) →
-feed into the v3 `Writer` with caller-supplied feed-meta / license / generation
-(legacy files carry none) → emit a v3 file. The conformance fixtures under
-`conformance/legacy/` are real `iprange --print-binary` outputs with a JSON manifest
-of their expected ranges; both the Rust and Go readers parse them and must agree.

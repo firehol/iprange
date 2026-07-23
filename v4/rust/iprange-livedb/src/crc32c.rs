@@ -14,8 +14,6 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use crate::spec::{PAGE_SIZE, PH_CHECKSUM};
-
 const POLY: u32 = 0x82F6_3B78;
 const INIT: u32 = 0xFFFF_FFFF;
 const XOROUT: u32 = 0xFFFF_FFFF;
@@ -271,33 +269,41 @@ unsafe fn update_x86(crc: u32, bytes: &[u8]) -> u32 {
 }
 
 #[inline]
+#[cfg(test)]
 pub fn crc32c(bytes: &[u8]) -> u32 {
     update(INIT, bytes) ^ XOROUT
 }
 
+/// CRC-32C over `bytes` with one checked range treated as zero without copying.
+///
+/// The exact v4 format uses a four-byte checksum field at different offsets in
+/// meta and non-meta pages. Keeping the zeroing here avoids a page-sized scratch
+/// allocation in bootstrap and validation paths.
 #[inline]
-pub fn page_checksum(page: &[u8]) -> u64 {
-    debug_assert_eq!(page.len(), PAGE_SIZE);
-    let crc = update(INIT, &page[..PH_CHECKSUM]);
-    let crc = update(crc, &[0u8; 8]);
-    let crc = update(crc, &page[PH_CHECKSUM + 8..]);
-    (crc ^ XOROUT) as u64
-}
-
-#[inline]
-pub fn verify_page(page: &[u8]) -> bool {
-    let mut field = [0u8; 8];
-    field.copy_from_slice(&page[PH_CHECKSUM..PH_CHECKSUM + 8]);
-    let stored = u64::from_le_bytes(field);
-    if stored >> 32 != 0 {
-        return false;
+pub(crate) fn crc32c_with_zeroed(bytes: &[u8], zero_at: usize, zero_len: usize) -> Option<u32> {
+    let zero_end = zero_at.checked_add(zero_len)?;
+    if zero_end > bytes.len() {
+        return None;
     }
-    page_checksum(page) == stored
+    let crc = update(INIT, &bytes[..zero_at]);
+    let zeros = [0u8; 8];
+    let mut crc = crc;
+    let mut remaining = zero_len;
+    while remaining >= zeros.len() {
+        crc = update(crc, &zeros);
+        remaining -= zeros.len();
+    }
+    if remaining != 0 {
+        crc = update(crc, &zeros[..remaining]);
+    }
+    Some(update(crc, &bytes[zero_end..]) ^ XOROUT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::PAGE_SIZE;
+    use std::vec;
 
     #[test]
     fn crc32c_test_vector() {
@@ -308,32 +314,6 @@ mod tests {
     fn crc32c_known_vectors() {
         assert_eq!(crc32c(b""), 0x0000_0000);
         assert_eq!(crc32c(&[0u8]), 0x527D_5351);
-    }
-
-    #[test]
-    fn page_checksum_ignores_the_checksum_field() {
-        let mut page = [0u8; PAGE_SIZE];
-        for (i, b) in page.iter_mut().enumerate() {
-            *b = (i % 251) as u8;
-        }
-        let sum = page_checksum(&page);
-        page[PH_CHECKSUM..PH_CHECKSUM + 8].copy_from_slice(&sum.to_le_bytes());
-        assert_eq!(page_checksum(&page), sum);
-        assert!(verify_page(&page));
-    }
-
-    #[test]
-    fn verify_rejects_corruption_and_nonzero_high_half() {
-        let mut page = [7u8; PAGE_SIZE];
-        let sum = page_checksum(&page);
-        page[PH_CHECKSUM..PH_CHECKSUM + 8].copy_from_slice(&sum.to_le_bytes());
-        assert!(verify_page(&page));
-        let mut bad = page;
-        bad[100] ^= 0x01;
-        assert!(!verify_page(&bad));
-        let mut hi = page;
-        hi[PH_CHECKSUM + 4] = 0x01;
-        assert!(!verify_page(&hi));
     }
 
     #[test]

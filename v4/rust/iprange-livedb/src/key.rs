@@ -1,25 +1,21 @@
-//! IP keys for the index: IPv4 = one `u32`, IPv6 = two `u64` (`hi` then `lo`),
-//! compared **numerically** (§4). The hot path uses only `u64` comparisons — no native
-//! 128-bit type — so the same algorithm compiles for Go. The `[from, to, scope]`
-//! record size is fixed `2*width + 4` (scope_id is always u32), so the width is
-//! kept here but the record size is not (it lives in [`crate::spec::record_size`]).
+//! Numeric IPv4 and IPv6 keys used by the exact v4 range map.
 //!
-//! [`IpKey::checked_inc`] / [`IpKey::checked_dec`] implement the §4 `u128_inc` /
-//! `u128_dec` boundary rules used by `set` / `delete` to trim at `from − 1` / `to + 1`.
+//! Checked increment/decrement implement the numeric boundary rules used by
+//! mutation code to trim at `from - 1` and `to + 1`.
 
-use crate::spec::IpVersion;
+use crate::contract::AddressFamily;
 
-/// Common interface over the two key widths, so the index/reader/writer algorithms are
-/// written once and width-specialized at compile time (monomorphization), never
-/// widening IPv4 to 128-bit (§4).
-pub trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
+/// Common private interface over the two key widths, so physical algorithms are
+/// written once and width-specialized at compile time.
+#[allow(dead_code)] // Mutation/CIDR layers use the remaining key operations in later chunks.
+pub(crate) trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// Key width in bytes (4 or 16).
     const WIDTH: usize;
     /// The IP family.
-    const VERSION: IpVersion;
-    /// The minimum address (`0.0.0.0` / `::`), i.e. `family_min` (§4).
+    const FAMILY: AddressFamily;
+    /// The minimum address (`0.0.0.0` / `::`).
     const MIN: Self;
-    /// The maximum address (all-ones), i.e. `family_max` (§4).
+    /// The maximum address (all-ones).
     const MAX: Self;
 
     /// Serialize the key little-endian into the first [`WIDTH`](Self::WIDTH) bytes of
@@ -30,24 +26,17 @@ pub trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// if `src` is shorter than `WIDTH`.
     fn read_le(src: &[u8]) -> Self;
 
-    /// `self + 1`, or `None` if `self` is `family_max` (no `+1` exists, §4). Used to
+    /// right-trim at `to + 1` after the family-boundary pre-check.
+    /// `self + 1`, or `None` at the family maximum.
     /// right-trim at `to + 1` after the family-boundary pre-check.
     fn checked_inc(self) -> Option<Self>;
 
-    /// `self - 1`, or `None` if `self` is `family_min` (§4). Used to left-trim at
-    /// `from − 1`.
+    /// `self - 1`, or `None` at the family minimum.
     fn checked_dec(self) -> Option<Self>;
 
-    /// Bit width of the family: 32 (IPv4) or 128 (IPv6). Used by CIDR decomposition.
-    const BITS: u32;
-
-    /// Widen the key to `u128` for CIDR decomposition (an output path, not the hot
-    /// compare path). The value occupies the low [`BITS`](Self::BITS) bits.
+    /// Widen the key to `u128` for exact cardinality arithmetic outside the hot
+    /// comparison path.
     fn to_u128(self) -> u128;
-
-    /// Narrow a `u128` (its low [`BITS`](Self::BITS) bits) back to a key — the inverse of
-    /// [`to_u128`](Self::to_u128) for in-range values.
-    fn from_u128(v: u128) -> Self;
 }
 
 /// An IPv4 address as a big-endian-valued `u32` (e.g. `192.0.2.1` = `0xC000_0201`),
@@ -55,11 +44,32 @@ pub trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Ipv4Key(pub u32);
 
+impl Ipv4Key {
+    pub const MIN: Self = Self(0);
+    pub const MAX: Self = Self(u32::MAX);
+
+    #[inline]
+    pub const fn checked_next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    #[inline]
+    pub const fn checked_previous(self) -> Option<Self> {
+        match self.0.checked_sub(1) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+}
+
 impl IpKey for Ipv4Key {
     const WIDTH: usize = 4;
-    const VERSION: IpVersion = IpVersion::V4;
-    const MIN: Self = Ipv4Key(0);
-    const MAX: Self = Ipv4Key(u32::MAX);
+    const FAMILY: AddressFamily = AddressFamily::Ipv4;
+    const MIN: Self = Self::MIN;
+    const MAX: Self = Self::MAX;
 
     #[inline]
     fn write_le(self, out: &mut [u8]) {
@@ -73,30 +83,23 @@ impl IpKey for Ipv4Key {
 
     #[inline]
     fn checked_inc(self) -> Option<Self> {
-        self.0.checked_add(1).map(Ipv4Key)
+        self.checked_next()
     }
 
     #[inline]
     fn checked_dec(self) -> Option<Self> {
-        self.0.checked_sub(1).map(Ipv4Key)
+        self.checked_previous()
     }
-
-    const BITS: u32 = 32;
 
     #[inline]
     fn to_u128(self) -> u128 {
         self.0 as u128
     }
-
-    #[inline]
-    fn from_u128(v: u128) -> Self {
-        Ipv4Key(v as u32)
-    }
 }
 
 /// An IPv6 address as a `(hi, lo)` pair of `u64` — `hi` is the most-significant 64
-/// bits. Stored on disk as `hi` little-endian then `lo` little-endian (§4). Field
-/// order `(hi, lo)` makes the **derived** `Ord` exactly the numeric 128-bit order.
+/// bits. The struct keeps `(hi, lo)` so derived `Ord` is numeric; exact v4 wire
+/// bytes are one little-endian `u128`, therefore the low limb is stored first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Ipv6Key {
     /// Most-significant 64 bits.
@@ -106,6 +109,12 @@ pub struct Ipv6Key {
 }
 
 impl Ipv6Key {
+    pub const MIN: Self = Self { hi: 0, lo: 0 };
+    pub const MAX: Self = Self {
+        hi: u64::MAX,
+        lo: u64::MAX,
+    };
+
     /// Construct from the full 128-bit value.
     #[inline]
     pub const fn from_u128(v: u128) -> Self {
@@ -120,29 +129,60 @@ impl Ipv6Key {
     pub const fn to_u128(self) -> u128 {
         ((self.hi as u128) << 64) | (self.lo as u128)
     }
+
+    #[inline]
+    pub const fn checked_next(self) -> Option<Self> {
+        if self.hi == u64::MAX && self.lo == u64::MAX {
+            None
+        } else if self.lo == u64::MAX {
+            Some(Self {
+                hi: self.hi + 1,
+                lo: 0,
+            })
+        } else {
+            Some(Self {
+                hi: self.hi,
+                lo: self.lo + 1,
+            })
+        }
+    }
+
+    #[inline]
+    pub const fn checked_previous(self) -> Option<Self> {
+        if self.hi == 0 && self.lo == 0 {
+            None
+        } else if self.lo == 0 {
+            Some(Self {
+                hi: self.hi - 1,
+                lo: u64::MAX,
+            })
+        } else {
+            Some(Self {
+                hi: self.hi,
+                lo: self.lo - 1,
+            })
+        }
+    }
 }
 
 impl IpKey for Ipv6Key {
     const WIDTH: usize = 16;
-    const VERSION: IpVersion = IpVersion::V6;
-    const MIN: Self = Ipv6Key { hi: 0, lo: 0 };
-    const MAX: Self = Ipv6Key {
-        hi: u64::MAX,
-        lo: u64::MAX,
-    };
+    const FAMILY: AddressFamily = AddressFamily::Ipv6;
+    const MIN: Self = Self::MIN;
+    const MAX: Self = Self::MAX;
 
     #[inline]
     fn write_le(self, out: &mut [u8]) {
-        out[..8].copy_from_slice(&self.hi.to_le_bytes());
-        out[8..16].copy_from_slice(&self.lo.to_le_bytes());
+        out[..8].copy_from_slice(&self.lo.to_le_bytes());
+        out[8..16].copy_from_slice(&self.hi.to_le_bytes());
     }
 
     #[inline]
     fn read_le(src: &[u8]) -> Self {
         let mut h = [0u8; 8];
         let mut l = [0u8; 8];
-        h.copy_from_slice(&src[0..8]);
-        l.copy_from_slice(&src[8..16]);
+        l.copy_from_slice(&src[0..8]);
+        h.copy_from_slice(&src[8..16]);
         Ipv6Key {
             hi: u64::from_le_bytes(h),
             lo: u64::from_le_bytes(l),
@@ -151,55 +191,17 @@ impl IpKey for Ipv6Key {
 
     #[inline]
     fn checked_inc(self) -> Option<Self> {
-        // `u128_inc` (§4): lo' = lo + 1; hi' = hi + carry; None at all-ones.
-        if self == Self::MAX {
-            return None;
-        }
-        Some(if self.lo == u64::MAX {
-            Ipv6Key {
-                hi: self.hi + 1,
-                lo: 0,
-            }
-        } else {
-            Ipv6Key {
-                hi: self.hi,
-                lo: self.lo + 1,
-            }
-        })
+        self.checked_next()
     }
 
     #[inline]
     fn checked_dec(self) -> Option<Self> {
-        // `u128_dec` (§4): borrow from hi when lo underflows; None at the minimum.
-        if self == Self::MIN {
-            return None;
-        }
-        Some(if self.lo == 0 {
-            Ipv6Key {
-                hi: self.hi - 1,
-                lo: u64::MAX,
-            }
-        } else {
-            Ipv6Key {
-                hi: self.hi,
-                lo: self.lo - 1,
-            }
-        })
+        self.checked_previous()
     }
-
-    const BITS: u32 = 128;
 
     #[inline]
     fn to_u128(self) -> u128 {
         ((self.hi as u128) << 64) | (self.lo as u128)
-    }
-
-    #[inline]
-    fn from_u128(v: u128) -> Self {
-        Ipv6Key {
-            hi: (v >> 64) as u64,
-            lo: v as u64,
-        }
     }
 }
 
@@ -209,7 +211,7 @@ mod tests {
 
     #[test]
     fn ipv6_worked_example_2001_db8_1() {
-        // 2001:db8::1 -> hi=0x2001_0db8_0000_0000, lo=1 (key encoding shared with v3 §3).
+        // 2001:db8::1 as one little-endian u128: low limb, then high limb.
         let k = Ipv6Key {
             hi: 0x2001_0db8_0000_0000,
             lo: 0x1,
@@ -217,8 +219,8 @@ mod tests {
         let mut buf = [0u8; 16];
         k.write_le(&mut buf);
         let expected: [u8; 16] = [
-            0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // lo, little-endian
+            0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
         ];
         assert_eq!(
             buf, expected,

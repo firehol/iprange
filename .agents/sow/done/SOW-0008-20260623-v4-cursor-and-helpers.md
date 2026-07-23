@@ -94,7 +94,7 @@ interval map.
 
 v4 reader scan + `validate_node` (the cursor is a stateful form of the existing
 descent/scan); writer COW + commit (the pending-tree side of the mutate-during-iteration
-contract); the v3/v4 shared conformance harness (extend for cursor + helper goldens); the
+contract); the shared conformance harness (extend for cursor + helper goldens); the
 bounds-safety/fuzz discipline from SOW-0007 (cursor must never OOB on hostile input).
 
 ### Risk and blast radius
@@ -152,8 +152,8 @@ None — all resolved (see Design decisions). Remaining choices are implementati
   + standard SDK helpers (`query_ranges[_merged]`, `query_cidrs[_merged]`, `count_ips`,
   `count_cidrs`), selectors as caller predicates over opaque scope, canonical minimal-cover
   CIDR, in **Rust + Go** with shared conformance. No on-disk format change.
-- **Tests (re-verified by the assistant, not trusting the implementer)** — Rust: lib 85 / 97
-  (`--features export-v3`), conformance + metadata-conformance + robustness/fuzz green; clippy
+- **Tests (re-verified by the assistant, not trusting the implementer)** — Rust: lib 85,
+  conformance + metadata-conformance + robustness/fuzz green; clippy
   `--all-targets --all-features -D warnings` clean; `fmt --check` clean; `no_std` and
   `no_std+alloc` builds clean. Go: `test ./...`, `vet`, `gofmt -l` clean; `test -race -count=1`
   clean (421s). Cursor + helper goldens value-identical Rust↔Go.

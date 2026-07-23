@@ -1,113 +1,204 @@
-# Findings: update-ipsets workflows ↔ v4 scope-aware engine
+# update-ipsets Adoption Evidence for iprange v4
 
-Investigation 2026-06-23 — four parallel read-only agents over
-`github.com/firehol/update-ipsets` (525 Go files / 124k LoC). Companion to
-`design-iprange-v4-scope-api.md`; input to the eventual implementation SOW. All
-`file:line` refer to the update-ipsets repo unless noted.
+**Status:** Non-normative consumer analysis
+**Evidence checked:** `firehol/update-ipsets @ e593366f7b0a`
+**Last updated:** 2026-07-21
 
-## Scale (measured/documented)
+This document explains how the unsigned Phase-1 v4 contracts fit the current
+`update-ipsets` workflow. It does not define the wire format; the normative
+contract is [`binary-format-v4.md`](binary-format-v4.md).
 
-- ~423 sources + ~13 merges ≈ **436 feeds**; ~342 source YAMLs (history/window variants
-  expand at runtime); 5 geo + 4 ASN + 6 bogon + 21 critical providers.
-- ~436 feeds × ~10 published artifacts ≈ **3,500–4,400 output files** + per-feed `latest`
-  binary + retention cohort dirs.
-- Full run ≈ **206 s**, incremental 13–46 s, peak RSS ~1.5 GB, **single-threaded today**
-  (`max_ingest_workers: 1`).
-- Geo dimensions today: **country (ISO, ~250)** and **ASN (~70k routed; exact count
-  data-dependent)**. **No city dimension exists** (`pkg/engine/format_handlers.go:80-97`).
+## Established current behavior
 
-## Convergent findings (all four agents)
+### One scheduler run may contain several independent feeds
 
-1. **update-ipsets is a per-feed-FILE engine.** Each feed → own `latest` binary set,
-   `new/<ts>.set` cohort dir, append CSVs, ~10 JSON/CSV artifacts. No global cross-feed
-   index.
-2. **The dominant cost is the O(N²) pairwise comparison** — `436·435/2 ≈ 95k` pairs
-   (`pkg/engine/output_comparison.go:198`), with **>1,000 lines of machinery built solely
-   to make separate-file N×N tractable**: disjointness prefilter
-   (`pkg/iprange/range_overlap_filter.go`, ~440 LoC), content-hash ledger
-   (`output_comparison_pair_ledger.go`, ~521 LoC), one-to-many heap (`compare_pairs.go`).
-   **The data model, not the algorithm, is the bottleneck.**
-3. **v4 reframes set algebra**: union/intersect/exclude/compare stop being *materializing
-   ops that emit files* and become **scope-predicate over one `scan`**. The N×N matrix →
-   one `O(records · popcount)` scan reading per-record membership; the prefilter+ledger
-   apparatus retires. Coalesce/`Optimize` becomes free (maintained per `set`).
-4. **Retention is the heaviest per-file I/O**: every run re-`ReadDir`s `lib/<feed>/new/`
-   and opens+intersects **every cohort file** (`retention_update.go:270-531`); history
-   `_30d`-style variants re-union N daily snapshots (`feed_body_stage.go:400-452`).
-   Exactly v4's `O(log n)` per-IP delete target — and the **biggest, most self-contained**
-   simplification.
-5. **ASN is already an interval map** (`pkg/asnloc/backend_rangetable.go`: sorted,
-   same-ASN-merged ranges + binary search) — v4 categorical generalizes an existing
-   pattern. The clearest single deletion target is the nested country×ASN cross-walk
-   (`pkg/engine/home_entity_precompute.go:234-297`).
+The scheduler drains queued work into one run and passes the selected names to
+the engine:
 
-## What v4 does NOT touch (honest scope boundary)
+- `pkg/scheduler/processing_loop.go:47-74`
 
-- **Ingest** (download/HTTP-cache/parse/DNS/`.new`→`.processing`) — upstream-bound,
-  dominates wall-clock, unchanged.
-- **Text `.ipset`/`.netset` outputs** — git-committed, consumer-facing hard contract
-  (`finalize.go:54-68`); v4 supplies ranges, the CIDR `Reduce`/print layer
-  (`pkg/iprange/print.go:131`) stays.
-- **~3,500 published JSON/CSV artifacts** — must still be materialized; v4 speeds
-  *computing* the numbers, not serving.
-- **Append-only `history.csv`/`changesets.csv`** — already one row/run, leave as-is.
-- **`max_ingest_workers: 1`** is the current clamp — raising it is the cheapest near-term
-  win and is partly orthogonal to v4; don't measure v4 against the clamped baseline.
+Source workers execute independently and the final report can contain a mixture
+of updated, skipped, and failed feeds:
 
-## P1–P4 resolved (recommendations, pending user confirmation)
+- `pkg/engine/run_pipeline.go:40-119`
+- `pkg/engine/run_pipeline.go:121-136`
 
-- **P1 — feed-set encoding.** A raw 436-bit membership bitmap = **55 bytes/record → ~71-B
-  IPv4 records vs 8 B today (~9× inflation)**. Recommend **interned set-id + canonical
-  dictionary** (compact 8-B records, dictionary maps id→membership; canonical interning so
-  coalescing stays id-equality). Preserves the comparison win (deref id→bitmap, popcount)
-  without the inflation.
-- **P2 — `rangeMove`.** **No current use case** — geo is rebuilt from providers, not
-  incrementally reassigned. Recommend **defer** (don't build speculative API); keep
-  `range-replace` for categorical.
-- **P3 — file granularity.** One global tuple file is blocked by **multi-provider
-  comparison** (4 ASN + N country providers shown side-by-side; one value/range = one
-  provider) and **overlapping country attribution** across providers. Recommend
-  **per-(dimension, provider) categorical files** (each a clean categorical interval map);
-  feeds are a **separate** set-membership file. Cross-file joins (country×ASN) are rare /
-  precompute-able.
-- **P4 — counters at scale.** ~70k ASNs × 16 B ≈ 1.1 MB; ~250 countries trivial; ~436
-  feeds trivial. **Maintained per-scope counters are affordable** at current scale; keep
-  on-demand fallback only if a dimension exceeds ~1M distinct values (e.g. future cities).
+This is why v4 intentionally does not make a scheduler run one atomic
+multi-feed transaction. Successful replacements commit independently; a failed
+feed keeps its previously committed membership.
 
-## New decisions the investigation forced
+### Each feed currently publishes its own durable artifacts
 
-- **Architecture — live DB vs derived index.** The shared-file write-amplification /
-  single-failure-domain / phase-recoupling risk (flagged by 3 agents) is real. Recommended
-  resolution: the multi-scope v4 file is the **live mutable DB** (so incremental retention
-  is `O(log n)`), while **per-feed files are retained** as ingest staging + text-output
-  rendering + **rebuild source** (disaster recovery). Write-amplification is the residual
-  risk → **measure** (SOW-0005) before committing.
-- **Retention timestamp model.** The biggest win requires a **per-interval first-seen
-  timestamp** dimension in v4 to replace cohort files; the "hours-alive" histogram +
-  incomplete-flag semantics (`retention.go:122`, `retention_update.go:533`) are subtle and
-  must be preserved. This is the next design sub-problem.
-- **Phased adoption (surgical → long-term):** (1) **retention** (most per-file I/O,
-  contained blast radius) → (2) **pairwise comparison** → (3) **query/compose read path**
-  → (4) **merge/history composition** → (5) **geo as categorical files**. Items 4–5 are
-  larger/riskier; defer until the core proves parity.
+Finalization writes a per-feed binary `latest` artifact before promoting the
+canonical text output:
 
-## Risks to carry into the SOW
+- `pkg/engine/finalize.go:41-61`
 
-- Retention "hours-alive cohort" exactness + incomplete-flag parity.
-- Per-IP/first-seen timestamp storage cost.
-- Crash-safety/atomicity must match current temp-write+rename guarantees
-  (`binary_write.go`, `writeFileAtomic`).
-- Single shared file = contention/locking point the per-feed model avoids.
-- **IPv6 parity**: current `pkg/iprange` has full dual-stack (`fileset6*`,
-  `range_source6_indexed*`, `iter6_ops*`); v4 must match. Catalog/comparison pipeline is
-  IPv4-only today — v4 dual-stack is net-new surface.
-- Record-size inflation / scan cost vs scope encoding (P1).
+The binary writer uses a temporary file, sync, close, and rename sequence:
 
-## Key files for the implementation SOW
+- `pkg/engine/binary_write.go:11-51`
 
-`pkg/engine/`: `retention_update.go`, `retention.go`, `output_comparison.go`,
-`output_comparison_pair_ledger.go`, `query.go`, `feed_body_stage.go`, `merge_inputs.go`,
-`run_pipeline.go`, `finalize.go`, `latest_set_cache.go`, `unique_share.go`,
-`home_entity_precompute.go`, `geo_provider_cache.go`, `asn.go`, `geoloc.go`.
-`pkg/iprange/`: `range_overlap_filter.go`, `compare_pairs.go`, `set_ops.go`, `iter_ops.go`,
-`fileset*.go`, `binary.go`. `pkg/asnloc/`, `pkg/geoloc/`.
+The v4 integration must retain at least this failure isolation and atomic
+publication behavior. It must not expose a partially replaced feed or generate
+a missing public artifact in a request handler.
+
+### Retention currently rebuilds state from cohort files
+
+Retention enumerates a feed's saved cohorts, opens batches of historical files,
+compares each cohort with the complete current set, and rewrites or deletes the
+surviving cohorts:
+
+- `pkg/engine/retention_update.go:303-335`
+- `pkg/engine/retention_update.go:440-463`
+- `pkg/engine/retention_update.go:493-550`
+
+History-window derivatives similarly reopen and union the current feed plus
+eligible saved snapshots:
+
+- `pkg/engine/feed_body_stage.go:400-462`
+
+This is the direct fit for a `direct` v4 database tagged `retention`: keep each
+continuously present address's original timestamp, add only new addresses with
+the refresh timestamp, and remove addresses missing from the complete new
+download.
+
+### Pairwise comparisons scale quadratically in feed count
+
+The current comparison path enumerates every unordered feed pair:
+
+- `pkg/engine/output_comparison.go:205-230`
+
+A named-feed membership database changes the data model: one scan can aggregate
+membership combinations because every interval already says which cataloged
+feeds contain it. This removes repeated independent range searches, but the
+replacement must be benchmarked at real feed and range counts before old
+comparison machinery is retired.
+
+## Phase-1 v4 adoption contract
+
+### Membership state
+
+- Use a separate membership database per address family.
+- The database's in-file feed catalog is authoritative for name-to-bit mapping.
+- The caller identifies feeds by name; it never persists or assigns a bare bit.
+- `CreateFeed`, `ReplaceFeed`, `DeleteFeed`, and `RenameFeed` are exact
+  feed-lifecycle transactions.
+- An empty feed remains cataloged with no member addresses; deletion removes the
+  catalog entry and makes its index reusable.
+- Feed replacements are serialized through one writer, even if download and
+  parsing run concurrently. The v4 SDK normalizes each feed's unordered batches
+  inside its own replacement workflow.
+- After the selected replacements finish, aggregate work pins one reader so the
+  catalog, dictionary, ranges, and JSON are from one generation.
+
+`update-ipsets` uses these high-level one-feed workflows; it does not manipulate
+feed indexes, membership IDs, or bitmap combinations. The Phase-1 advanced
+membership layer may update several named feeds atomically for other callers,
+and the dedicated name-based import copies a multi-feed membership file while
+translating all source indexes and membership IDs inside the SDK.
+
+### Retention state
+
+Each retained feed uses a direct database whose immutable tag is exactly
+`retention`.
+
+For a complete downloaded set at refresh value `tN`:
+
+- addresses in both old and new snapshots preserve their old value;
+- addresses only in the new snapshot receive `tN`;
+- addresses only in the old snapshot are removed;
+- partial overlaps split so the rule applies per address;
+- an address removed earlier and later reappearing receives the later value.
+
+The refresh requires a clean writer and a private draft. Any failure before
+commit discards the complete draft, so unreadable input cannot be published as
+mass deletion.
+
+### Application metadata
+
+The engine-defined catalog is structural. Publisher annotations, source facts,
+licenses, descriptions, and similar application data belong in the optional
+opaque JSON payload.
+
+The engine preserves the exact uncompressed bytes but does not understand or
+merge them. `update-ipsets` owns their JSON schema and must update any
+application-level feed-name references when renaming a feed.
+
+### Phase-1 snapshot proof
+
+The live database and its `.readers` sidecar are private producer state. The
+Phase-1 v4 integration path is:
+
+1. finish the selected independent feed commits;
+2. pin the exact committed generation used for evaluation;
+3. invoke explicit `Validate` only when the test/operator intentionally requests
+   a full proof; normal SDK and snapshot paths do not invoke it implicitly;
+4. use `SnapshotTo` to compact away unpublished, free, retired, unreachable, and
+   deleted bytes into the one private final-output inode;
+5. atomically publish that unsigned snapshot only to the Phase-1 test/integration
+   destination through the durable namespace reservation protocol; and
+6. reopen, compare, and benchmark it through both SDK implementations.
+
+Phase 1 does not replace update-ipsets' current public distribution path and
+does not introduce signing keys, signature verification, trust rotation, or
+replay policy. Authenticated v4 public publication is pending SOW-0017 and starts
+only after the unsigned SDK passes reliability and performance gates.
+
+## Failure and recovery behavior
+
+- A failed feed replacement leaves that feed's prior committed membership
+  intact and does not roll back unrelated successful feed commits.
+- A structured commit result tells the caller whether retry is safe, forbidden,
+  or requires reopen and exact database/transaction/commit-nonce resolution.
+  A later transaction number alone never proves that the caller's unknown
+  attempt committed.
+- Main-file bootstrap is O(1); live open additionally scans the configured
+  reader table in O(reader_capacity). Neither proves the complete database
+  healthy.
+- Ordinary access performs no general page-CRC scan. A writer verifies each
+  committed allocator page at most once per transaction only when that metadata
+  is about to authorize destructive page reuse.
+- When corruption is suspected, the caller runs explicit detailed validation.
+- Recovery writes a new database ID and copies only fully verifiable reachable
+  content; the report distinguishes verified address coverage from rejected or
+  structurally unknown gaps.
+- Recovery defaults only to a recovery-readable meta independently proven to be
+  the actual current generation. A previous or generation-order-ambiguous
+  candidate is available only from an immutable copy or caller-certified offline
+  source; `update-ipsets` must select it explicitly and review its independent
+  report. Ambiguity is never promoted into live recovery.
+- The caller chooses whether to retain the old published artifact, retry the
+  source, or publish a reviewed recovered subset. Recovery is never silently
+  treated as a normal feed refresh.
+
+## Deliberate scope boundaries
+
+V4 does not replace these `update-ipsets` responsibilities:
+
+- HTTP download/cache, parsing, DNS expansion, and source configuration;
+- canonical text `.ipset`/`.netset` output required by existing consumers;
+- application JSON/CSV reports and append-only operational history;
+- publisher key management, trusted-key rotation, or replay state;
+- public artifact routing and HTTP cache policy.
+
+Those surfaces may consume v4 results, but they remain application behavior and
+must be migrated and tested separately.
+
+## Adoption order
+
+The long-term-best order is:
+
+1. exact retention refresh, because its current cohort-file loop is isolated and
+   I/O-heavy;
+2. named-feed create/replace/delete plus compact unsigned snapshot proof;
+3. membership-based comparison/query reads after scale benchmarks prove the
+   replacement;
+4. history/merge composition where semantic parity is demonstrated;
+5. broader direct-value uses such as ASN or geography only when each consumer's
+   provider and overlap model fits one value per address.
+
+Authenticated public snapshot publication is the separate Phase 2 tracked by
+SOW-0017 after this sequence proves the SDK reliable and measures its behavior.
+
+Old artifacts and paths should be removed only after side-by-side semantic,
+durability, recovery, and performance evidence is clean.

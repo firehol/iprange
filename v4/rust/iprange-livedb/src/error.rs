@@ -1,129 +1,212 @@
-//! Error type for reading/writing the v4 format.
-//!
-//! The spec mandates that on any `reader MUST reject` check a conforming reader
-//! "discards all partial state, returns a typed error, and exposes nothing from the
-//! file" (§ intro). [`Error`] is that typed error; it carries enough context (kind,
-//! location tag) to debug a rejection without echoing attacker-influenced bytes
-//! (scope, counts) into a message.
+//! Stable Phase-1 error classification.
 
 use core::fmt;
 
-/// Result alias for this crate.
-pub type Result<T> = core::result::Result<T, Error>;
-
-/// A structural, safety, or I/O failure while reading or writing a v4 file.
-///
-/// Variants map to the normative `reader MUST reject` / writer-side error rules in
-/// `design-iprange-v4-livedb.md`. The message is for diagnostics; never trust
-/// attacker-influenced bytes echoed into a message without escaping.
-#[derive(Debug)]
+/// Stable semantic error codes shared by Rust, Go, and the C ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum Error {
-    /// `version_major` is not 4 (§5.1 forward-compat).
-    UnsupportedMajor(u16),
-    /// `meta_size` is < 90, > `page_size`, or (for `version_minor == 0`) not exactly
-    /// 90 (§5.1).
-    BadMetaSize(u16),
-    /// The file is shorter than `2·page_size` or its claimed `total_pages` (§5/§9).
-    FileTooShort {
-        /// Bytes the structure needs.
-        need: u64,
-        /// Bytes actually available.
-        have: u64,
-    },
-    /// The real file size is not a multiple of `page_size`, or disagrees with
-    /// `total_pages` (§5/§9 step 2).
-    FileSizeMismatch {
-        /// Value implied by the meta (`total_pages · page_size`).
-        header: u64,
-        /// Real size from `fstat`.
-        real: u64,
-    },
-    /// A reserved field, pad, or zero-fill region was non-zero (§5); carries a short
-    /// location tag.
-    NonZeroReserved(&'static str),
-    /// An unsigned arithmetic operation on untrusted counts/offsets would overflow
-    /// (§9 overflow rule).
-    Overflow(&'static str),
-    /// A structural invariant was violated (geometry, page type vs depth, separators,
-    /// child pgnos, ordering, …). The static string is the specific rule.
-    Structural(&'static str),
-    /// A per-record / per-node invariant was violated during the §9 walk (e.g.
-    /// unsorted, overlapping, leaf/branch occupancy, cross-leaf disjointness).
-    Invariant(&'static str),
-    /// A page CRC32C did not verify, or its high 32 bits were non-zero (D9, §9 step 3).
-    ChecksumFailed(&'static str),
-    /// An undamaged meta announces an unsupported format and the reader fails closed
-    /// (§5.1 bootstrap class 2: `page_size`, `checksum_algo`, an unknown `flags` bit,
-    /// or another fail-closed condition).
-    Incompatible(&'static str),
-    /// The file is locked by another writer.
-    Locked(&'static str),
-    /// The caller gave the writer input it cannot apply (e.g. `from > to`, wrong scope
-    /// width, wrong key family, or growth past the `2^32`-page / `TREE_HEIGHT_MAX`
-    /// limit). §8.
-    InvalidInput(&'static str),
-    /// The writer was poisoned by a failed commit: the commit's rebuild phase performs
-    /// irreversible page alloc/free, so on a mid-phase error the in-memory allocator/registry
-    /// state is indeterminate. The on-disk meta is unwritten — the file is still the last
-    /// committed valid state — so the writer must be discarded and reopened. Every mutating
-    /// op and commit refuses once poisoned.
-    State(&'static str),
-    /// The v4 state cannot be expressed as a v3 snapshot: the v3 writer rejected the
-    /// exported `(range, value)` stream (§13 — `unique_ip_count` reaches `2^128`, the
-    /// distinct `(type_id, value)` pairs exceed v3's values-table cap, or the caller's
-    /// `type_id` / `scope` is not a conforming v3 value). Carries the v3 writer's
-    /// reason. Distinct from a corrupt-v4 or family-mismatch error, which are normal.
-    #[cfg(all(feature = "alloc", feature = "export-v3"))]
-    ExportUnrepresentable(alloc::string::String),
-    /// An underlying I/O error (only with `std`).
+#[repr(u32)]
+pub enum ErrorCode {
+    InvalidArgument = 1,
+    NullPointer = 2,
+    MisalignedPointer = 3,
+    InvalidLength = 4,
+    InvalidEnum = 5,
+    ReservedNonzero = 6,
+    BufferTooSmall = 7,
+    WrongHandleKind = 8,
+    HandleClosed = 9,
+    HandleBusy = 10,
+    WrongState = 11,
+    WrongAddressFamily = 12,
+    WrongValueKind = 13,
+    WrongValueTag = 14,
+    RangeReversed = 15,
+    NameInvalid = 16,
+    NameExists = 17,
+    NameNotFound = 18,
+    StaleReference = 19,
+    ForeignReference = 20,
+    NoPendingTransaction = 21,
+    TransactionAborted = 22,
+    AbortIncomplete = 23,
+    InsufficientResourceBudget = 24,
+    PageSpaceExhausted = 25,
+    WorkLimitTooSmall = 26,
+    Cancelled = 27,
+    SourceFailed = 28,
+    SinkFailed = 29,
+    StoppedBySink = 30,
+    Io = 31,
+    FormatInvalid = 32,
+    NotV4 = 33,
+    DurabilityUnsupported = 34,
+    PublicationUnsupported = 35,
+    AccessPolicyUnsupported = 36,
+    Conflict = 37,
+    Unresolvable = 38,
+    WriterBusy = 39,
+    DirectoryIdentityMismatch = 40,
+    DestinationNameMismatch = 41,
+    CleanupConflict = 42,
+    CoordinationSequenceExhausted = 43,
+    LiveCoordinationUnsupported = 44,
+    LiveCoordinationCleanupRequired = 45,
+    LiveCoordinationDomainMismatchRequiresReset = 46,
+    LiveOpenCleanupRequired = 47,
+    LiveRecoveryCoordinationUnavailable = 48,
+    LiveRecoveryCurrentGenerationUnprovable = 49,
+    LiveRecoveryCurrentGenerationUnreadable = 50,
+    RecoveryCandidateChanged = 51,
+    RecoveryPreparationFailed = 52,
+    SnapshotPreparationFailed = 53,
+    TransitionSuperseded = 54,
+    CurrentGenerationUnprovable = 55,
+    ForkedHandle = 56,
+    Panic = 57,
+    OsUnsupported = 58,
+    TransactionIdExhausted = 59,
+    ArithmeticOverflow = 60,
+    FeedIndexExhausted = 61,
+    MembershipIdExhausted = 62,
+    ReaderCapacityExhausted = 63,
+    CleanupInProgress = 64,
+}
+
+/// One typed SDK failure. `detail` is implementation-owned text and never
+/// contains unescaped attacker-controlled file bytes.
+#[derive(Debug)]
+pub struct Error {
+    code: ErrorCode,
+    detail: &'static str,
     #[cfg(feature = "std")]
-    Io(std::io::Error),
+    source: Option<std::io::Error>,
+}
+
+impl Error {
+    #[allow(dead_code)] // Used by the exact reader in the next implementation chunk.
+    pub(crate) const fn new(code: ErrorCode, detail: &'static str) -> Self {
+        Self {
+            code,
+            detail,
+            #[cfg(feature = "std")]
+            source: None,
+        }
+    }
+
+    #[inline]
+    pub const fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    #[inline]
+    pub const fn detail(&self) -> &'static str {
+        self.detail
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::UnsupportedMajor(v) => write!(f, "unsupported version_major {v} (expected 4)"),
-            Error::BadMetaSize(s) => write!(f, "invalid meta_size {s}"),
-            Error::FileTooShort { need, have } => {
-                write!(f, "file too short: need {need} bytes, have {have}")
-            }
-            Error::FileSizeMismatch { header, real } => {
-                write!(f, "file_size mismatch: meta implies {header}, real {real}")
-            }
-            Error::NonZeroReserved(w) => write!(f, "non-zero reserved/pad field: {w}"),
-            Error::Overflow(w) => write!(f, "arithmetic overflow validating {w}"),
-            Error::Structural(w) => write!(f, "structural error: {w}"),
-            Error::Invariant(w) => write!(f, "node/record invariant violated: {w}"),
-            Error::ChecksumFailed(w) => write!(f, "page checksum failed: {w}"),
-            Error::Incompatible(w) => write!(f, "incompatible (fail closed): {w}"),
-            Error::InvalidInput(w) => write!(f, "invalid writer input: {w}"),
-            Error::State(w) => write!(f, "invalid writer state: {w}"),
-            #[cfg(all(feature = "alloc", feature = "export-v3"))]
-            Error::ExportUnrepresentable(w) => {
-                write!(f, "v4 state not representable as a v3 snapshot: {w}")
-            }
-            #[cfg(feature = "std")]
-            Error::Locked(w) => write!(f, "locked: {w}"),
-            Error::Io(e) => write!(f, "io error: {e}"),
-        }
+        write!(f, "{:?}: {}", self.code, self.detail)
     }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Io(e) => Some(e),
-            _ => None,
-        }
+        self.source
+            .as_ref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
     }
 }
 
 #[cfg(feature = "std")]
 impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Error::Io(e)
+    fn from(source: std::io::Error) -> Self {
+        Self {
+            code: ErrorCode::Io,
+            detail: "operating-system I/O failure",
+            source: Some(source),
+        }
+    }
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_numeric_registry_is_contiguous() {
+        let codes = [
+            ErrorCode::InvalidArgument,
+            ErrorCode::NullPointer,
+            ErrorCode::MisalignedPointer,
+            ErrorCode::InvalidLength,
+            ErrorCode::InvalidEnum,
+            ErrorCode::ReservedNonzero,
+            ErrorCode::BufferTooSmall,
+            ErrorCode::WrongHandleKind,
+            ErrorCode::HandleClosed,
+            ErrorCode::HandleBusy,
+            ErrorCode::WrongState,
+            ErrorCode::WrongAddressFamily,
+            ErrorCode::WrongValueKind,
+            ErrorCode::WrongValueTag,
+            ErrorCode::RangeReversed,
+            ErrorCode::NameInvalid,
+            ErrorCode::NameExists,
+            ErrorCode::NameNotFound,
+            ErrorCode::StaleReference,
+            ErrorCode::ForeignReference,
+            ErrorCode::NoPendingTransaction,
+            ErrorCode::TransactionAborted,
+            ErrorCode::AbortIncomplete,
+            ErrorCode::InsufficientResourceBudget,
+            ErrorCode::PageSpaceExhausted,
+            ErrorCode::WorkLimitTooSmall,
+            ErrorCode::Cancelled,
+            ErrorCode::SourceFailed,
+            ErrorCode::SinkFailed,
+            ErrorCode::StoppedBySink,
+            ErrorCode::Io,
+            ErrorCode::FormatInvalid,
+            ErrorCode::NotV4,
+            ErrorCode::DurabilityUnsupported,
+            ErrorCode::PublicationUnsupported,
+            ErrorCode::AccessPolicyUnsupported,
+            ErrorCode::Conflict,
+            ErrorCode::Unresolvable,
+            ErrorCode::WriterBusy,
+            ErrorCode::DirectoryIdentityMismatch,
+            ErrorCode::DestinationNameMismatch,
+            ErrorCode::CleanupConflict,
+            ErrorCode::CoordinationSequenceExhausted,
+            ErrorCode::LiveCoordinationUnsupported,
+            ErrorCode::LiveCoordinationCleanupRequired,
+            ErrorCode::LiveCoordinationDomainMismatchRequiresReset,
+            ErrorCode::LiveOpenCleanupRequired,
+            ErrorCode::LiveRecoveryCoordinationUnavailable,
+            ErrorCode::LiveRecoveryCurrentGenerationUnprovable,
+            ErrorCode::LiveRecoveryCurrentGenerationUnreadable,
+            ErrorCode::RecoveryCandidateChanged,
+            ErrorCode::RecoveryPreparationFailed,
+            ErrorCode::SnapshotPreparationFailed,
+            ErrorCode::TransitionSuperseded,
+            ErrorCode::CurrentGenerationUnprovable,
+            ErrorCode::ForkedHandle,
+            ErrorCode::Panic,
+            ErrorCode::OsUnsupported,
+            ErrorCode::TransactionIdExhausted,
+            ErrorCode::ArithmeticOverflow,
+            ErrorCode::FeedIndexExhausted,
+            ErrorCode::MembershipIdExhausted,
+            ErrorCode::ReaderCapacityExhausted,
+            ErrorCode::CleanupInProgress,
+        ];
+        for (index, code) in codes.into_iter().enumerate() {
+            assert_eq!(code as u32, index as u32 + 1);
+        }
     }
 }
