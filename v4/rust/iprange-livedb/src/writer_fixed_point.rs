@@ -19,6 +19,7 @@ use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_FIXED_POINT_IDENTITY: AtomicUsize = AtomicUsize::new(1);
+static NEXT_FIXED_POINT_WORKSPACE_IDENTITY: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FixedPointError {
@@ -87,24 +88,47 @@ pub(crate) enum FixedPointWorkspaceRecordState {
     Live(u64),
 }
 
-pub(crate) struct FixedPointWorkspaceRecordSlot<'scratch, 'pool, 'slots> {
+pub(crate) struct FixedPointWorkspaceRecordSlot<'arena, 'cleanup> {
     state: Cell<FixedPointWorkspaceRecordState>,
-    scratch: Cell<Option<SealedFreeBitmapCoordinatorScratch<'pool, 'scratch>>>,
-    record: Cell<Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'pool, 'slots>>>,
+    scratch: Cell<Option<SealedFreeBitmapCoordinatorScratch<'arena, 'cleanup>>>,
+    record: Cell<Option<PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup>>>,
 }
 
-impl<'scratch, 'pool, 'slots> FixedPointWorkspaceRecordSlot<'scratch, 'pool, 'slots> {
-    pub(crate) const fn new(scratch: SealedFreeBitmapCoordinatorScratch<'pool, 'scratch>) -> Self {
+impl<'arena, 'cleanup> FixedPointWorkspaceRecordSlot<'arena, 'cleanup> {
+    pub(crate) const fn new(scratch: SealedFreeBitmapCoordinatorScratch<'arena, 'cleanup>) -> Self {
         Self {
             state: Cell::new(FixedPointWorkspaceRecordState::Vacant),
             scratch: Cell::new(Some(scratch)),
             record: Cell::new(None),
         }
     }
+
+    fn retained_scratch_bytes(&self) -> Result<u64, FixedPointError> {
+        let Some(scratch) = self.scratch.replace(None) else {
+            return Err(FixedPointError::InvalidArgument);
+        };
+        let result = [
+            core::mem::size_of_val(scratch.arena_bindings),
+            core::mem::size_of_val(scratch.replacements),
+            core::mem::size_of_val(scratch.index_nodes),
+            core::mem::size_of_val(scratch.returned),
+            core::mem::size_of_val(scratch.cleanup_nodes),
+            core::mem::size_of_val(scratch.cleanup_path),
+            core::mem::size_of_val(scratch.cleanup_targets),
+        ]
+        .into_iter()
+        .try_fold(0u64, |total, bytes| {
+            total
+                .checked_add(u64::try_from(bytes).map_err(|_| FixedPointError::IdentityExhausted)?)
+                .ok_or(FixedPointError::IdentityExhausted)
+        });
+        self.scratch.set(Some(scratch));
+        result
+    }
 }
 
-pub(crate) struct FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots> {
-    records: &'backing [FixedPointWorkspaceRecordSlot<'scratch, 'pool, 'slots>],
+pub(crate) struct FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup> {
+    records: &'backing [FixedPointWorkspaceRecordSlot<'arena, 'cleanup>],
     source_entries: &'backing [Cell<Option<DraftPrivatePageEntry>>],
     source_slot_to_entry: &'backing [Cell<usize>],
     slot_to_record: &'backing [Cell<usize>],
@@ -114,11 +138,9 @@ pub(crate) struct FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots> 
     digest: Cell<u64>,
 }
 
-impl<'backing, 'scratch, 'pool, 'slots>
-    FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots>
-{
+impl<'backing, 'arena, 'cleanup> FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup> {
     pub(crate) fn new(
-        records: &'backing [FixedPointWorkspaceRecordSlot<'scratch, 'pool, 'slots>],
+        records: &'backing [FixedPointWorkspaceRecordSlot<'arena, 'cleanup>],
         source_entries: &'backing [Cell<Option<DraftPrivatePageEntry>>],
         source_slot_to_entry: &'backing [Cell<usize>],
         slot_to_record: &'backing [Cell<usize>],
@@ -209,20 +231,22 @@ impl<'backing, T: Copy> FixedPointCellWrite<'backing, T> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FixedPointCellJournalBacking<'backing, T: Copy> {
-    entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+    entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
     neutral: FixedPointCellWrite<'backing, T>,
 }
 
 impl<'backing, T: Copy> FixedPointCellJournalBacking<'backing, T> {
     pub(crate) const fn new(
-        entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+        entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
         neutral: FixedPointCellWrite<'backing, T>,
     ) -> Self {
         Self { entries, neutral }
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct FixedPointCoordinatorJournals<'backing> {
     source: FixedPointCellJournalBacking<'backing, Option<DraftPrivatePageEntry>>,
     map: FixedPointCellJournalBacking<'backing, usize>,
@@ -246,7 +270,7 @@ impl<'backing> FixedPointCoordinatorJournals<'backing> {
 /// Fixed caller storage for prebound writes. Only the used prefix is reset, and
 /// replay reads that prefix directly without allocation or dynamic lookup.
 struct FixedPointCellJournal<'backing, T: Copy> {
-    entries: &'backing mut [FixedPointCellWrite<'backing, T>],
+    entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
     neutral: FixedPointCellWrite<'backing, T>,
     len: usize,
 }
@@ -265,8 +289,8 @@ impl<'backing, T: Copy> FixedPointCellJournal<'backing, T> {
     }
 
     fn clear(&mut self) {
-        for entry in &mut self.entries[..self.len] {
-            *entry = self.neutral;
+        for entry in &self.entries[..self.len] {
+            entry.set(self.neutral);
         }
         self.len = 0;
     }
@@ -280,25 +304,27 @@ impl<'backing, T: Copy> FixedPointCellJournal<'backing, T> {
         if required > actual {
             return Err(FixedPointError::SourceScratchTooSmall { required, actual });
         }
-        self.entries[self.len] = write;
+        self.entries[self.len].set(write);
         self.len = required;
         Ok(())
     }
 
     fn iter(&self) -> impl Iterator<Item = FixedPointCellWrite<'backing, T>> + '_ {
-        self.entries[..self.len].iter().copied()
+        self.entries[..self.len].iter().map(Cell::get)
     }
 }
 
 pub(crate) struct FixedPointCoordinatorSession<
+    'session,
     'backing,
-    'scratch,
+    'arena,
+    'cleanup,
     'pool,
     'slots,
     'committed,
     S: CommittedPageSource + ?Sized,
 > {
-    backing: &'backing FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots>,
+    backing: &'session FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup>,
     committed: &'committed S,
     pool: &'pool PrivatePagePool<'slots>,
     source_writes: FixedPointCellJournal<'backing, Option<DraftPrivatePageEntry>>,
@@ -306,14 +332,22 @@ pub(crate) struct FixedPointCoordinatorSession<
     tombstone_writes: FixedPointCellJournal<'backing, bool>,
 }
 
-impl<'backing, 'scratch, 'pool, 'slots, 'committed, S: CommittedPageSource + ?Sized>
-    FixedPointCoordinatorSession<'backing, 'scratch, 'pool, 'slots, 'committed, S>
+impl<
+        'session,
+        'backing,
+        'arena,
+        'cleanup,
+        'pool,
+        'slots,
+        'committed,
+        S: CommittedPageSource + ?Sized,
+    >
+    FixedPointCoordinatorSession<'session, 'backing, 'arena, 'cleanup, 'pool, 'slots, 'committed, S>
 where
-    'scratch: 'backing,
-    'pool: 'backing,
+    'arena: 'backing,
 {
     pub(crate) fn new(
-        backing: &'backing FixedPointWorkspaceBacking<'backing, 'scratch, 'pool, 'slots>,
+        backing: &'session FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup>,
         committed: &'committed S,
         pool: &'pool PrivatePagePool<'slots>,
         journals: FixedPointCoordinatorJournals<'backing>,
@@ -391,6 +425,360 @@ where
             .push(FixedPointCellWrite::new(source_map, source_slot))?;
         self.map_writes
             .push(FixedPointCellWrite::new(record_map, record_index))
+    }
+}
+
+impl<S: CommittedPageSource + ?Sized> Drop
+    for FixedPointCoordinatorSession<'_, '_, '_, '_, '_, '_, '_, S>
+{
+    fn drop(&mut self) {
+        self.reset_journal();
+    }
+}
+
+/// One caller-backed aggregate partition for a single private writer
+/// transaction. The partition is intentionally fixed before preparation so
+/// Active only consumes prebound journal and overlay storage.
+pub(crate) struct FixedPointCoordinatorWorkspace<'backing, 'arena, 'cleanup> {
+    identity: usize,
+    backing: FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup>,
+    journals: FixedPointCoordinatorJournals<'backing>,
+    ordered_prior_locations: &'backing mut [DraftPrivatePageLocation],
+    pool_returns: &'backing mut [PrivatePageCoordinatorPriorReturn],
+    new_locations: &'backing mut [DraftPrivatePageLocation],
+    replay_slots: &'backing mut [PrivatePageSparseReplaySlot],
+    replay_index: &'backing mut [PrivatePageSparseReplayIndex],
+    retained_bytes: u64,
+}
+
+impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena, 'cleanup> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        records: &'backing [FixedPointWorkspaceRecordSlot<'arena, 'cleanup>],
+        source_entries: &'backing [Cell<Option<DraftPrivatePageEntry>>],
+        source_slot_to_entry: &'backing [Cell<usize>],
+        slot_to_record: &'backing [Cell<usize>],
+        journals: FixedPointCoordinatorJournals<'backing>,
+        ordered_prior_locations: &'backing mut [DraftPrivatePageLocation],
+        pool_returns: &'backing mut [PrivatePageCoordinatorPriorReturn],
+        new_locations: &'backing mut [DraftPrivatePageLocation],
+        replay_slots: &'backing mut [PrivatePageSparseReplaySlot],
+        replay_index: &'backing mut [PrivatePageSparseReplayIndex],
+        pool_slots: usize,
+    ) -> Result<Self, FixedPointError> {
+        if replay_slots.is_empty()
+            || replay_index.len() < pool_slots
+            || ordered_prior_locations
+                .iter()
+                .any(|location| *location != DraftPrivatePageLocation::EMPTY)
+            || pool_returns
+                .iter()
+                .any(|planned| *planned != PrivatePageCoordinatorPriorReturn::empty())
+            || new_locations
+                .iter()
+                .any(|location| *location != DraftPrivatePageLocation::EMPTY)
+            || replay_slots
+                .iter()
+                .any(|slot| *slot != PrivatePageSparseReplaySlot::empty())
+            || replay_index
+                .iter()
+                .any(|entry| *entry != PrivatePageSparseReplayIndex::empty())
+            || !Self::journals_are_neutral(journals)
+            || !Self::ranges_are_disjoint([
+                Self::slice_range(records),
+                Self::slice_range(source_entries),
+                Self::slice_range(source_slot_to_entry),
+                Self::slice_range(slot_to_record),
+                Self::slice_range(journals.source.entries),
+                Self::slice_range(journals.map.entries),
+                Self::slice_range(journals.tombstone.entries),
+                Self::slice_range(ordered_prior_locations),
+                Self::slice_range(pool_returns),
+                Self::slice_range(new_locations),
+                Self::slice_range(replay_slots),
+                Self::slice_range(replay_index),
+            ])
+        {
+            return Err(FixedPointError::InvalidArgument);
+        }
+        let retained_bytes = Self::calculate_retained_bytes(
+            records,
+            source_entries,
+            source_slot_to_entry,
+            slot_to_record,
+            journals,
+            ordered_prior_locations,
+            pool_returns,
+            new_locations,
+            replay_slots,
+            replay_index,
+        )?;
+        let identity = NEXT_FIXED_POINT_WORKSPACE_IDENTITY
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| FixedPointError::IdentityExhausted)?;
+        let backing = FixedPointWorkspaceBacking::new(
+            records,
+            source_entries,
+            source_slot_to_entry,
+            slot_to_record,
+            pool_slots,
+        )?;
+        Ok(Self {
+            identity,
+            backing,
+            journals,
+            ordered_prior_locations,
+            pool_returns,
+            new_locations,
+            replay_slots,
+            replay_index,
+            retained_bytes,
+        })
+    }
+
+    pub(crate) const fn identity(&self) -> usize {
+        self.identity
+    }
+
+    pub(crate) const fn retained_bytes(&self) -> u64 {
+        self.retained_bytes
+    }
+
+    pub(crate) fn is_idle(&self) -> bool {
+        self.backing.len() == 0 && self.backing.last_work_unit.get() == 0
+    }
+
+    #[allow(clippy::type_complexity, clippy::result_large_err)]
+    pub(crate) fn prepare_aggregate<
+        'workspace,
+        'slot,
+        'scope_slot,
+        'preparation_scratch,
+        'carried,
+        'plan,
+        'pool,
+        'slots,
+        'committed,
+        S: CommittedPageSource + ?Sized,
+        B,
+    >(
+        &'workspace mut self,
+        produced: FixedPointPreparedProducedTerminalWork<
+            'slot,
+            'scope_slot,
+            'preparation_scratch,
+            'carried,
+            'plan,
+            B,
+        >,
+        coordinator: &FixedPointCoordinator,
+        predecessor: &FixedPointPredecessor,
+        pool: &'pool PrivatePagePool<'slots>,
+        committed: &'committed S,
+        requested_prior_returns: &[DraftPrivatePageLocation],
+    ) -> Result<
+        FixedPointPreparedAggregateWork<
+            'slot,
+            'preparation_scratch,
+            'carried,
+            'pool,
+            'slots,
+            'plan,
+            'workspace,
+            'workspace,
+            'backing,
+            'arena,
+            'cleanup,
+            'committed,
+            'workspace,
+            'workspace,
+            'workspace,
+            S,
+            B,
+        >,
+        (
+            FixedPointPreparedProducedTerminalWork<
+                'slot,
+                'scope_slot,
+                'preparation_scratch,
+                'carried,
+                'plan,
+                B,
+            >,
+            FixedPointError,
+        ),
+    >
+    where
+        'arena: 'backing,
+    {
+        let record_index = self.backing.len();
+        let session = match FixedPointCoordinatorSession::new(
+            &self.backing,
+            committed,
+            pool,
+            self.journals,
+        ) {
+            Ok(session) => session,
+            Err(error) => return Err((produced, error)),
+        };
+        produced.prepare_aggregate(
+            coordinator,
+            predecessor,
+            pool,
+            session,
+            requested_prior_returns,
+            &mut *self.ordered_prior_locations,
+            &mut *self.pool_returns,
+            record_index,
+            &mut *self.new_locations,
+            &mut *self.replay_slots,
+            &mut *self.replay_index,
+            self.identity,
+        )
+    }
+
+    pub(crate) fn cancel(&mut self) -> Result<(), FixedPointError> {
+        for slot in self.backing.records {
+            if slot.state.get() == FixedPointWorkspaceRecordState::Vacant {
+                continue;
+            }
+            let Some(record) = slot.record.replace(None) else {
+                return Err(FixedPointError::InvalidWorkUnit);
+            };
+            let scratch = record.cancel_into_scratch();
+            slot.scratch.set(Some(scratch));
+            slot.state.set(FixedPointWorkspaceRecordState::Vacant);
+        }
+        for entry in self.backing.source_entries {
+            entry.set(None);
+        }
+        for entry in self.backing.source_slot_to_entry {
+            entry.set(usize::MAX);
+        }
+        for entry in self.backing.slot_to_record {
+            entry.set(usize::MAX);
+        }
+        self.backing.len.set(0);
+        self.backing.last_work_unit.set(0);
+        self.backing.revision.set(0);
+        self.backing.digest.set(0);
+        self.ordered_prior_locations
+            .fill(DraftPrivatePageLocation::EMPTY);
+        self.pool_returns
+            .fill(PrivatePageCoordinatorPriorReturn::empty());
+        self.new_locations.fill(DraftPrivatePageLocation::EMPTY);
+        self.replay_slots.fill(PrivatePageSparseReplaySlot::empty());
+        self.replay_index
+            .fill(PrivatePageSparseReplayIndex::empty());
+        Self::reset_journal_cells(self.journals);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_state(&self, index: usize) -> Option<FixedPointWorkspaceRecordState> {
+        self.backing.record_state(index)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_slot_ready(&self, index: usize, page_count: usize) -> bool {
+        self.backing.record_slot_ready(index, page_count)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn calculate_retained_bytes(
+        records: &[FixedPointWorkspaceRecordSlot<'arena, 'cleanup>],
+        source_entries: &[Cell<Option<DraftPrivatePageEntry>>],
+        source_slot_to_entry: &[Cell<usize>],
+        slot_to_record: &[Cell<usize>],
+        journals: FixedPointCoordinatorJournals<'_>,
+        ordered_prior_locations: &[DraftPrivatePageLocation],
+        pool_returns: &[PrivatePageCoordinatorPriorReturn],
+        new_locations: &[DraftPrivatePageLocation],
+        replay_slots: &[PrivatePageSparseReplaySlot],
+        replay_index: &[PrivatePageSparseReplayIndex],
+    ) -> Result<u64, FixedPointError> {
+        let mut total = u64::try_from(core::mem::size_of::<Self>())
+            .map_err(|_| FixedPointError::IdentityExhausted)?;
+        for bytes in [
+            core::mem::size_of_val(records),
+            core::mem::size_of_val(source_entries),
+            core::mem::size_of_val(source_slot_to_entry),
+            core::mem::size_of_val(slot_to_record),
+            core::mem::size_of_val(journals.source.entries),
+            core::mem::size_of_val(journals.map.entries),
+            core::mem::size_of_val(journals.tombstone.entries),
+            core::mem::size_of_val(ordered_prior_locations),
+            core::mem::size_of_val(pool_returns),
+            core::mem::size_of_val(new_locations),
+            core::mem::size_of_val(replay_slots),
+            core::mem::size_of_val(replay_index),
+        ] {
+            total = total
+                .checked_add(u64::try_from(bytes).map_err(|_| FixedPointError::IdentityExhausted)?)
+                .ok_or(FixedPointError::IdentityExhausted)?;
+        }
+        for record in records {
+            total = total
+                .checked_add(record.retained_scratch_bytes()?)
+                .ok_or(FixedPointError::IdentityExhausted)?;
+        }
+        Ok(total)
+    }
+
+    fn journals_are_neutral(journals: FixedPointCoordinatorJournals<'_>) -> bool {
+        fn entries_are_neutral<'journal, T: Copy + PartialEq>(
+            entries: &[Cell<FixedPointCellWrite<'journal, T>>],
+            neutral: FixedPointCellWrite<'journal, T>,
+        ) -> bool {
+            entries.iter().all(|entry| {
+                let current = entry.get();
+                core::ptr::eq(current.destination, neutral.destination)
+                    && current.value == neutral.value
+            })
+        }
+
+        entries_are_neutral(journals.source.entries, journals.source.neutral)
+            && entries_are_neutral(journals.map.entries, journals.map.neutral)
+            && entries_are_neutral(journals.tombstone.entries, journals.tombstone.neutral)
+    }
+
+    fn reset_journal_cells(journals: FixedPointCoordinatorJournals<'_>) {
+        fn reset<'journal, T: Copy>(
+            entries: &[Cell<FixedPointCellWrite<'journal, T>>],
+            neutral: FixedPointCellWrite<'journal, T>,
+        ) {
+            for entry in entries {
+                entry.set(neutral);
+            }
+        }
+
+        reset(journals.source.entries, journals.source.neutral);
+        reset(journals.map.entries, journals.map.neutral);
+        reset(journals.tombstone.entries, journals.tombstone.neutral);
+    }
+
+    fn slice_range<T>(slice: &[T]) -> Option<(usize, usize)> {
+        let start = slice.as_ptr() as usize;
+        let bytes = core::mem::size_of_val(slice);
+        start.checked_add(bytes).map(|end| (start, end))
+    }
+
+    fn ranges_are_disjoint<const N: usize>(ranges: [Option<(usize, usize)>; N]) -> bool {
+        ranges.iter().enumerate().all(|(left_index, left)| {
+            ranges[..left_index]
+                .iter()
+                .all(|right| match (left, right) {
+                    (Some((left_start, left_end)), Some((right_start, right_end))) => {
+                        left_start >= right_end
+                            || right_start >= left_end
+                            || left_start == left_end
+                            || right_start == right_end
+                    }
+                    _ => true,
+                })
+        })
     }
 }
 
@@ -1232,12 +1620,12 @@ pub(crate) struct FixedPointPreparedProducedTerminalWork<
     bitmap: B,
 }
 
-struct FixedPointPreparedWorkspaceRecord<'backing, 'scratch, 'pool, 'slots> {
-    slot: &'backing FixedPointWorkspaceRecordSlot<'scratch, 'pool, 'slots>,
+struct FixedPointPreparedWorkspaceRecord<'backing, 'arena, 'cleanup> {
+    slot: &'backing FixedPointWorkspaceRecordSlot<'arena, 'cleanup>,
     generation: u64,
 }
 
-impl FixedPointPreparedWorkspaceRecord<'_, '_, '_, '_> {
+impl FixedPointPreparedWorkspaceRecord<'_, '_, '_> {
     fn publish(&self) {
         self.slot
             .state
@@ -1245,16 +1633,14 @@ impl FixedPointPreparedWorkspaceRecord<'_, '_, '_, '_> {
     }
 }
 
-impl Drop for FixedPointPreparedWorkspaceRecord<'_, '_, '_, '_> {
+impl Drop for FixedPointPreparedWorkspaceRecord<'_, '_, '_> {
     fn drop(&mut self) {
         if self.slot.state.get() != FixedPointWorkspaceRecordState::Prepared(self.generation) {
             return;
         }
         self.slot.state.set(FixedPointWorkspaceRecordState::Vacant);
         if let Some(record) = self.slot.record.replace(None) {
-            if let Some(scratch) = record.cancel_inactive_into_scratch() {
-                self.slot.scratch.set(Some(scratch));
-            }
+            self.slot.scratch.set(Some(record.cancel_into_scratch()));
         }
     }
 }
@@ -1262,7 +1648,8 @@ impl Drop for FixedPointPreparedWorkspaceRecord<'_, '_, '_, '_> {
 struct FixedPointPreparedWorkspaceReplay<
     'session,
     'backing,
-    'scratch,
+    'arena,
+    'cleanup,
     'pool,
     'slots,
     'committed,
@@ -1271,9 +1658,11 @@ struct FixedPointPreparedWorkspaceReplay<
     'returns,
     S: CommittedPageSource + ?Sized,
 > {
-    session: &'session mut FixedPointCoordinatorSession<
+    session: FixedPointCoordinatorSession<
+        'session,
         'backing,
-        'scratch,
+        'arena,
+        'cleanup,
         'pool,
         'slots,
         'committed,
@@ -1286,11 +1675,11 @@ struct FixedPointPreparedWorkspaceReplay<
     next_len: usize,
     next_revision: u64,
     next_digest: u64,
-    record: FixedPointPreparedWorkspaceRecord<'backing, 'scratch, 'pool, 'slots>,
+    record: FixedPointPreparedWorkspaceRecord<'backing, 'arena, 'cleanup>,
 }
 
 impl<S: CommittedPageSource + ?Sized>
-    FixedPointPreparedWorkspaceReplay<'_, '_, '_, '_, '_, '_, '_, '_, '_, S>
+    FixedPointPreparedWorkspaceReplay<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, S>
 {
     fn clear_scratch(&mut self) {
         self.prior_locations.fill(DraftPrivatePageLocation::EMPTY);
@@ -1322,7 +1711,7 @@ impl<S: CommittedPageSource + ?Sized>
 }
 
 impl<S: CommittedPageSource + ?Sized> Drop
-    for FixedPointPreparedWorkspaceReplay<'_, '_, '_, '_, '_, '_, '_, '_, '_, S>
+    for FixedPointPreparedWorkspaceReplay<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, S>
 {
     fn drop(&mut self) {
         self.clear_scratch();
@@ -1340,8 +1729,8 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     'pool_replay,
     'session,
     'backing,
-    'record_scratch,
-    'record_pool,
+    'record_arena,
+    'record_cleanup,
     'committed,
     'prior_locations,
     'new_locations,
@@ -1353,12 +1742,14 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     terminal: PrivatePagePreparedCoordinatorTerminal<'plan>,
     retirement: RetirementTreeEditResult,
     bitmap: B,
+    workspace_identity: usize,
     pool_replay: PrivatePagePreparedSparseReplay<'pool, 'slots, 'pool_replay>,
     workspace_replay: FixedPointPreparedWorkspaceReplay<
         'session,
         'backing,
-        'record_scratch,
-        'record_pool,
+        'record_arena,
+        'record_cleanup,
+        'pool,
         'slots,
         'committed,
         'prior_locations,
@@ -1368,13 +1759,13 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     >,
 }
 
-pub(crate) struct FixedPointSealedAggregateWork<'record_scratch, 'pool, 'slots, B> {
+pub(crate) struct FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B> {
     pub(crate) active: FixedPointActiveWork<'slots>,
     pub(crate) retirement: RetirementTreeEditResult,
     pub(crate) bitmap: B,
     pub(crate) record_index: usize,
     _record: core::marker::PhantomData<
-        SealedFreeBitmapCoordinatorRecord<'record_scratch, 'pool, 'slots>,
+        PreparedFreeBitmapCoordinatorRecord<'record_arena, 'record_cleanup>,
     >,
 }
 
@@ -1383,6 +1774,7 @@ pub(crate) trait FixedPointPreparedAggregateAuthority: Sized {
 
     fn work_identity(&self) -> u64;
     fn work_generation(&self) -> u64;
+    fn workspace_identity(&self) -> usize;
     fn preflight_authority(
         &self,
         coordinator: &FixedPointCoordinator,
@@ -1405,8 +1797,8 @@ impl<
         'pool_replay,
         'session,
         'backing,
-        'record_scratch,
-        'record_pool,
+        'record_arena,
+        'record_cleanup,
         'committed,
         'prior_locations,
         'new_locations,
@@ -1424,8 +1816,8 @@ impl<
         'pool_replay,
         'session,
         'backing,
-        'record_scratch,
-        'record_pool,
+        'record_arena,
+        'record_cleanup,
         'committed,
         'prior_locations,
         'new_locations,
@@ -1434,8 +1826,7 @@ impl<
         B,
     >
 where
-    'record_scratch: 'backing,
-    'record_pool: 'backing,
+    'record_arena: 'backing,
 {
     pub(crate) fn preflight_execute(
         &self,
@@ -1458,12 +1849,13 @@ where
         self,
         coordinator: &FixedPointCoordinator,
         predecessor: FixedPointPredecessor,
-    ) -> FixedPointSealedAggregateWork<'record_scratch, 'pool, 'slots, B> {
+    ) -> FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B> {
         let Self {
             base,
             terminal: _terminal,
             retirement,
             bitmap,
+            workspace_identity: _,
             pool_replay,
             mut workspace_replay,
         } = self;
@@ -1511,8 +1903,8 @@ impl<
         'pool_replay,
         'session,
         'backing,
-        'record_scratch,
-        'record_pool,
+        'record_arena,
+        'record_cleanup,
         'committed,
         'prior_locations,
         'new_locations,
@@ -1530,8 +1922,8 @@ impl<
         'pool_replay,
         'session,
         'backing,
-        'record_scratch,
-        'record_pool,
+        'record_arena,
+        'record_cleanup,
         'committed,
         'prior_locations,
         'new_locations,
@@ -1540,10 +1932,9 @@ impl<
         B,
     >
 where
-    'record_scratch: 'backing,
-    'record_pool: 'backing,
+    'record_arena: 'backing,
 {
-    type Sealed = FixedPointSealedAggregateWork<'record_scratch, 'pool, 'slots, B>;
+    type Sealed = FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B>;
 
     fn work_identity(&self) -> u64 {
         self.base.work_identity
@@ -1551,6 +1942,10 @@ where
 
     fn work_generation(&self) -> u64 {
         self.pool_replay.work_generation()
+    }
+
+    fn workspace_identity(&self) -> usize {
+        self.workspace_identity
     }
 
     fn preflight_authority(
@@ -1600,6 +1995,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         'prior_locations,
         'new_locations,
         'returns,
+        'arena,
         'cleanup,
         S: CommittedPageSource + ?Sized,
     >(
@@ -1607,8 +2003,10 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         coordinator: &FixedPointCoordinator,
         predecessor: &FixedPointPredecessor,
         pool: &'pool PrivatePagePool<'slots>,
-        session: &'session mut FixedPointCoordinatorSession<
+        mut session: FixedPointCoordinatorSession<
+            'session,
             'backing,
+            'arena,
             'cleanup,
             'pool,
             'slots,
@@ -1622,6 +2020,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         new_locations: &'new_locations mut [DraftPrivatePageLocation],
         replay_slots: &'pool_replay mut [PrivatePageSparseReplaySlot],
         replay_index: &'pool_replay mut [PrivatePageSparseReplayIndex],
+        workspace_identity: usize,
     ) -> Result<
         FixedPointPreparedAggregateWork<
             'slot,
@@ -1633,8 +2032,8 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             'pool_replay,
             'session,
             'backing,
+            'arena,
             'cleanup,
-            'pool,
             'committed,
             'prior_locations,
             'new_locations,
@@ -1645,9 +2044,11 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         (Self, FixedPointError),
     >
     where
-        'cleanup: 'backing,
-        'pool: 'backing,
+        'arena: 'backing,
     {
+        if workspace_identity == 0 {
+            return Err((self, FixedPointError::InvalidArgument));
+        }
         session.reset_journal();
         let facts =
             match self
@@ -1761,7 +2162,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
                 return Err((self, FixedPointError::StalePredecessor));
             };
-            let validated = record.validate_private_return(location);
+            let validated = record.validate_private_return(pool, location);
             let returned = record.returned_cell(location.binding_index);
             owner_slot.record.set(Some(record));
             let (Ok(planned), Some(returned)) = (validated, returned) else {
@@ -1985,8 +2386,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                     .wrapping_add(page.binding_epoch);
             }
         }
-        let live_record = record.materialize(pool);
-        record_slot.record.set(Some(live_record));
+        record_slot.record.set(Some(record));
         record_slot
             .state
             .set(FixedPointWorkspaceRecordState::Prepared(
@@ -2007,6 +2407,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             terminal,
             retirement,
             bitmap,
+            workspace_identity,
             pool_replay,
             workspace_replay: FixedPointPreparedWorkspaceReplay {
                 session,

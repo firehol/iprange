@@ -856,6 +856,84 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
 }
 
 impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
+    fn binding_returned(&self, binding_index: usize) -> bool {
+        self.returned.get(binding_index).is_some_and(Cell::get)
+    }
+
+    pub(crate) fn returned_cell(&self, binding_index: usize) -> Option<&'arena Cell<bool>> {
+        self.returned.get(binding_index)
+    }
+
+    fn private_provenance(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        pgno: u32,
+    ) -> Result<Option<crate::writer_fixed_point::DraftPageProvenance>, PrivatePagePoolError> {
+        let Some(IndexedPage::Arena(slot)) =
+            page_index_find(self.index_nodes, self.index_root, pgno)
+        else {
+            return Ok(None);
+        };
+        let node = page_index_find_node(self.index_nodes, self.index_root, pgno)
+            .ok_or(PrivatePagePoolError::InvalidState(slot))?;
+        if self.binding_returned(node) {
+            return Ok(None);
+        }
+        let scope = self.scope.materialize(pool);
+        let page = pool.sealed_page_provenance(&scope, self.nonce, slot)?;
+        Ok(Some(
+            crate::writer_fixed_point::DraftPageProvenance::Private {
+                work_unit: self.work_unit,
+                page,
+            },
+        ))
+    }
+
+    pub(crate) fn validate_private_return(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        location: crate::writer_fixed_point::DraftPrivatePageLocation,
+    ) -> Result<PrivatePageCoordinatorPriorReturn, FreeBitmapCowError> {
+        let provenance = location.provenance;
+        let crate::writer_fixed_point::DraftPageProvenance::Private { work_unit, page } =
+            provenance
+        else {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        };
+        if work_unit != self.work_unit
+            || location.nonce != self.nonce
+            || location.record_index != self.record_index
+        {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        }
+        let node = page_index_find_node(self.index_nodes, self.index_root, page.pgno)
+            .ok_or(FreeBitmapCowError::ArenaPageConflict(page.pgno))?;
+        if self.index_nodes[node].page != IndexedPage::Arena(page.slot) {
+            return Err(FreeBitmapCowError::ArenaPageConflict(page.pgno));
+        }
+        let binding = self
+            .arena_bindings
+            .get(location.binding_index)
+            .ok_or(FreeBitmapCowError::ArenaPageConflict(page.pgno))?;
+        if !binding.bound
+            || self.binding_returned(location.binding_index)
+            || binding.pool_slot != page.slot
+            || binding.page_number != page.pgno
+            || binding.active_node != node
+            || binding.pool_epoch != page.binding_epoch
+            || self
+                .private_provenance(pool, page.pgno)
+                .map_err(FreeBitmapCowError::PrivatePool)?
+                != Some(provenance)
+        {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        }
+        Ok(PrivatePageCoordinatorPriorReturn {
+            page,
+            nonce: location.nonce,
+        })
+    }
+
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn prepare_from_simulated_terminal(
         replay: &PrivatePagePreparedSparseReplay<'_, '_, '_>,

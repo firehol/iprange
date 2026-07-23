@@ -35,8 +35,7 @@ use crate::writer_fixed_point::{
 #[cfg(test)]
 use crate::writer_fixed_point::{
     DraftPrivatePageEntry, FixedPointCellJournalBacking, FixedPointCellWrite,
-    FixedPointCoordinatorJournals, FixedPointCoordinatorSession, FixedPointWorkspaceBacking,
-    FixedPointWorkspaceRecordSlot,
+    FixedPointCoordinatorJournals, FixedPointCoordinatorWorkspace, FixedPointWorkspaceRecordSlot,
 };
 use core::cell::{Cell, RefCell};
 
@@ -6466,8 +6465,9 @@ mod tests {
     use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag};
     use crate::page_source::SlicePageSource;
     use crate::private_page_pool::{
-        PrivatePagePreparedScopeSlot, PrivatePageSelectiveOverlayNode,
-        PrivatePageSelectivePathEntry, PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
+        PrivatePageCoordinatorPriorReturn, PrivatePagePreparedScopeSlot,
+        PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
+        PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     use crate::test_alloc::count_thread_allocations;
     use crate::writer_fixed_point::{
@@ -6708,16 +6708,116 @@ mod tests {
                     free_bitmap_root: 0,
                     retirement_root: 0,
                 };
+                let mut record_bindings = [BitmapCowArenaBinding::empty(); 1];
+                let mut record_replacements = [];
+                let mut record_index_nodes = [BitmapCowIndexNode::empty(); 1];
+                let record_returned = [const { Cell::new(false) }; 1];
+                let mut cleanup_nodes: [PrivatePageSelectiveOverlayNode; 0] = [];
+                let mut cleanup_path: [PrivatePageSelectivePathEntry; 0] = [];
+                let mut cleanup_targets = [usize::MAX; 1];
+                let workspace_records = [FixedPointWorkspaceRecordSlot::new(
+                    SealedFreeBitmapCoordinatorScratch {
+                        arena_bindings: &mut record_bindings,
+                        replacements: &mut record_replacements,
+                        index_nodes: &mut record_index_nodes,
+                        returned: &record_returned,
+                        cleanup_nodes: &mut cleanup_nodes,
+                        cleanup_path: &mut cleanup_path,
+                        cleanup_targets: &mut cleanup_targets,
+                    },
+                )];
+                let workspace_entries = [const { Cell::new(None) }; 3];
+                let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
+                let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
+                let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+                let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
+                let source_journal = [
+                    Cell::new(source_journal_neutral),
+                    Cell::new(source_journal_neutral),
+                    Cell::new(source_journal_neutral),
+                ];
+                let map_journal_sink = Cell::new(usize::MAX);
+                let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+                let map_journal = [
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
+                ];
+                let tombstone_journal_sink = Cell::new(false);
+                let tombstone_journal_neutral =
+                    FixedPointCellWrite::new(&tombstone_journal_sink, false);
+                let tombstone_journal = [
+                    Cell::new(tombstone_journal_neutral),
+                    Cell::new(tombstone_journal_neutral),
+                    Cell::new(tombstone_journal_neutral),
+                ];
+                let journals = FixedPointCoordinatorJournals::new(
+                    FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
+                    FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
+                    FixedPointCellJournalBacking::new(
+                        &tombstone_journal,
+                        tombstone_journal_neutral,
+                    ),
+                );
+                let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
+                let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
+                let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
+                let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
+                let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
+                let mut workspace = FixedPointCoordinatorWorkspace::new(
+                    &workspace_records,
+                    &workspace_entries,
+                    &workspace_source_map,
+                    &workspace_record_map,
+                    journals,
+                    &mut ordered_prior_locations,
+                    &mut pool_returns,
+                    &mut new_locations,
+                    &mut replay_slots,
+                    &mut replay_index,
+                    3,
+                )
+                .unwrap();
+                let workspace_bytes = workspace.retained_bytes();
+                let mut insufficient_slots = [const { PrivatePagePoolSlot::empty() }; 3];
+                let mut insufficient_cleanup = [];
+                let mut insufficient =
+                    PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
+                        selected,
+                        PrivateWriterResourceBudget::new(workspace_bytes - 1, 3, 3, 2),
+                        &mut insufficient_slots,
+                        &mut insufficient_cleanup,
+                    )
+                    .unwrap();
+                let insufficient_handle = insufficient.begin([3; 16]).unwrap();
+                assert!(matches!(
+                    insufficient.reserve_fixed_point_workspace(&insufficient_handle, &workspace),
+                    Err(crate::writer_transaction_core::PrivateWriterTransactionError::InsufficientBudget {
+                        required,
+                        actual,
+                    }) if required == workspace_bytes && actual == workspace_bytes - 1
+                ));
+                assert!(workspace.is_idle());
+                assert_eq!(insufficient.abort().unwrap(), 3);
                 let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
                 let mut cleanup = [];
                 let mut core = PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
                     selected,
-                    PrivateWriterResourceBudget::new(1024, 3, 3, 2),
+                    PrivateWriterResourceBudget::new(workspace_bytes, 3, 3, 2),
                     &mut live_slots,
                     &mut cleanup,
                 )
                 .unwrap();
                 let handle = core.begin([3; 16]).unwrap();
+                core.reserve_fixed_point_workspace(&handle, &workspace)
+                    .unwrap();
+                assert!(matches!(
+                    core.abort(),
+                    Err(crate::writer_transaction_core::PrivateWriterTransactionError::AbortIncompleteResource)
+                ));
                 let live_pool = core.draft(&handle).unwrap();
                 let coordinator = core.fixed_point(&handle).unwrap();
                 let predecessor = coordinator.predecessor().unwrap();
@@ -6745,117 +6845,48 @@ mod tests {
                     Ok(produced) => produced,
                     Err(_) => panic!("typed producer export must bind"),
                 };
-
                 let committed_bytes = vec![0; 100 * PAGE_SIZE];
                 let committed = SlicePageSource::new(&committed_bytes, 100);
-                let mut record_bindings = [BitmapCowArenaBinding::empty(); 1];
-                let mut record_replacements = [];
-                let mut record_index_nodes = [BitmapCowIndexNode::empty(); 1];
-                let record_returned = [const { Cell::new(false) }; 1];
-                let mut cleanup_nodes: [PrivatePageSelectiveOverlayNode; 0] = [];
-                let mut cleanup_path: [PrivatePageSelectivePathEntry; 0] = [];
-                let mut cleanup_targets = [usize::MAX; 1];
-                let workspace_records = [FixedPointWorkspaceRecordSlot::new(
-                    SealedFreeBitmapCoordinatorScratch {
-                        arena_bindings: &mut record_bindings,
-                        replacements: &mut record_replacements,
-                        index_nodes: &mut record_index_nodes,
-                        returned: &record_returned,
-                        cleanup_nodes: &mut cleanup_nodes,
-                        cleanup_path: &mut cleanup_path,
-                        cleanup_targets: &mut cleanup_targets,
-                    },
-                )];
-                let workspace_entries = [const { Cell::new(None) }; 3];
-                let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
-                let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-                let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-                let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-                let mut source_journal = [source_journal_neutral; 3];
-                let map_journal_sink = Cell::new(usize::MAX);
-                let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-                let mut map_journal = [map_journal_neutral; 6];
-                let tombstone_journal_sink = Cell::new(false);
-                let tombstone_journal_neutral =
-                    FixedPointCellWrite::new(&tombstone_journal_sink, false);
-                let mut tombstone_journal = [tombstone_journal_neutral; 3];
-                let journals = FixedPointCoordinatorJournals::new(
-                    FixedPointCellJournalBacking::new(&mut source_journal, source_journal_neutral),
-                    FixedPointCellJournalBacking::new(&mut map_journal, map_journal_neutral),
-                    FixedPointCellJournalBacking::new(
-                        &mut tombstone_journal,
-                        tombstone_journal_neutral,
-                    ),
-                );
-                let workspace = FixedPointWorkspaceBacking::new(
-                    &workspace_records,
-                    &workspace_entries,
-                    &workspace_source_map,
-                    &workspace_record_map,
-                    3,
-                )
-                .unwrap();
-                let mut session =
-                    FixedPointCoordinatorSession::new(&workspace, &committed, live_pool, journals)
-                        .unwrap();
-                let mut ordered_prior_locations = [];
-                let mut pool_returns = [];
-                let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
-                let mut replay_slots = vec![PrivatePageSparseReplaySlot::empty(); 16];
-                let mut replay_index = vec![PrivatePageSparseReplayIndex::empty(); 3];
-
-                let (produced, error) = match produced.prepare_aggregate(
+                let invalid_prior_returns = [DraftPrivatePageLocation::EMPTY];
+                let (produced, error) = match workspace.prepare_aggregate(
+                    produced,
                     coordinator,
                     &predecessor,
                     live_pool,
-                    &mut session,
-                    &[],
-                    &mut ordered_prior_locations,
-                    &mut pool_returns,
-                    1,
-                    &mut new_locations,
-                    &mut replay_slots,
-                    &mut replay_index,
+                    &committed,
+                    &invalid_prior_returns,
                 ) {
                     Err(failure) => failure,
-                    Ok(_) => panic!("wrong ledger index must fail before consume"),
+                    Ok(_) => panic!("invalid prior provenance must fail before consume"),
                 };
-                assert_eq!(error, FixedPointError::InvalidWorkUnit);
-                assert!(new_locations
-                    .iter()
-                    .all(|location| *location == DraftPrivatePageLocation::EMPTY));
-                assert!(replay_slots
-                    .iter()
-                    .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));
-                assert_eq!(workspace.len(), 0);
+                assert_eq!(error, FixedPointError::StalePredecessor);
+                assert!(workspace.is_idle());
                 assert!(workspace.record_slot_ready(0, 1));
 
-                let aggregate = match produced.prepare_aggregate(
+                let aggregate = match workspace.prepare_aggregate(
+                    produced,
                     coordinator,
                     &predecessor,
                     live_pool,
-                    &mut session,
+                    &committed,
                     &[],
-                    &mut ordered_prior_locations,
-                    &mut pool_returns,
-                    0,
-                    &mut new_locations,
-                    &mut replay_slots,
-                    &mut replay_index,
                 ) {
                     Ok(aggregate) => aggregate,
                     Err(_) => panic!("restored aggregate preparation must succeed"),
                 };
-                let (sealed, allocations) = count_thread_allocations(|| {
-                    core.execute_fixed_point_aggregate(&handle, predecessor, aggregate)
-                });
-                assert_eq!(allocations, 0);
-                let sealed = match sealed {
-                    Ok(sealed) => sealed,
-                    Err(_) => panic!("production core must execute the prepared aggregate"),
+                let (sealed_retirement, sealed_record_index, allocations) = {
+                    let (execution, allocations) = count_thread_allocations(|| {
+                        core.execute_fixed_point_aggregate(&handle, predecessor, aggregate)
+                    });
+                    let sealed = match execution {
+                        Ok(sealed) => sealed,
+                        Err(_) => panic!("production core must execute the prepared aggregate"),
+                    };
+                    (sealed.retirement, sealed.record_index, allocations)
                 };
-                assert_eq!(sealed.retirement, combined);
-                assert_eq!(sealed.record_index, 0);
+                assert_eq!(allocations, 0);
+                assert_eq!(sealed_retirement, combined);
+                assert_eq!(sealed_record_index, 0);
                 assert_eq!(
                     workspace.record_state(0),
                     Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
@@ -6864,6 +6895,10 @@ mod tests {
                 for page in produced_pages.iter() {
                     assert!(live_pool.find_bound_page(page.pgno).unwrap().is_some());
                 }
+                core.cancel_fixed_point_workspace(&handle, &mut workspace)
+                    .unwrap();
+                assert!(workspace.is_idle());
+                assert_eq!(core.abort().unwrap(), 3);
             },
         );
 

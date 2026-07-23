@@ -14,7 +14,7 @@ use crate::private_page_pool::{
 #[cfg(test)]
 use crate::writer_fixed_point::{FixedPointActiveWork, FixedPointPreparedWork};
 use crate::writer_fixed_point::{
-    FixedPointCoordinator, FixedPointError, FixedPointPredecessor,
+    FixedPointCoordinator, FixedPointCoordinatorWorkspace, FixedPointError, FixedPointPredecessor,
     FixedPointPreparedAggregateAuthority,
 };
 #[cfg(test)]
@@ -124,6 +124,8 @@ pub(crate) struct PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E> {
     fixed_point_registered_work: Cell<u64>,
     fixed_point_registered_generation: Cell<u64>,
     fixed_point_registered_phase: Cell<PrivatePageCoordinatorWorkPhase>,
+    fixed_point_workspace_identity: Cell<usize>,
+    fixed_point_workspace_bytes: Cell<u64>,
     abort_visits: usize,
 }
 
@@ -170,6 +172,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             fixed_point_registered_work: Cell::new(0),
             fixed_point_registered_generation: Cell::new(0),
             fixed_point_registered_phase: Cell::new(PrivatePageCoordinatorWorkPhase::None),
+            fixed_point_workspace_identity: Cell::new(0),
+            fixed_point_workspace_bytes: Cell::new(0),
             abort_visits: 0,
         })
     }
@@ -217,6 +221,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             || self.fixed_point_registered_work.get() != 0
             || self.fixed_point_registered_generation.get() != 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.fixed_point_workspace_identity.get() != 0
+            || self.fixed_point_workspace_bytes.get() != 0
         {
             return Err(PrivateWriterTransactionError::AbortIncompleteCoordination);
         }
@@ -271,6 +277,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         self.fixed_point_registered_generation.set(0);
         self.fixed_point_registered_phase
             .set(PrivatePageCoordinatorWorkPhase::None);
+        self.fixed_point_workspace_identity.set(0);
+        self.fixed_point_workspace_bytes.set(0);
         self.abort_visits = 0;
         Ok(PrivateWriterTransactionHandle {
             identity: handle_identity,
@@ -317,6 +325,78 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
         Ok(coordinator)
+    }
+
+    pub(crate) fn reserve_fixed_point_workspace(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &FixedPointCoordinatorWorkspace<'_, '_, '_>,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        if self.state.get() != PrivateWriterTransactionState::Pending {
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if self.fixed_point_workspace_identity.get() != 0
+            || self.fixed_point_workspace_bytes.get() != 0
+            || !workspace.is_idle()
+        {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        let bytes = workspace.retained_bytes();
+        self.resources
+            .acquire(PrivateWriterResourceDelta::new(bytes, 0, 0, 0))
+            .map_err(|error| match error {
+                PrivateWriterContractError::InsufficientResourceBudget {
+                    required, actual, ..
+                } => PrivateWriterTransactionError::InsufficientBudget { required, actual },
+                PrivateWriterContractError::ArithmeticOverflow(_) => {
+                    PrivateWriterTransactionError::InsufficientBudget {
+                        required: u64::MAX,
+                        actual: self.resources.budget().max_heap_bytes(),
+                    }
+                }
+                _ => PrivateWriterTransactionError::FixedPoint(FixedPointError::InvalidWorkUnit),
+            })?;
+        self.fixed_point_workspace_identity
+            .set(workspace.identity());
+        self.fixed_point_workspace_bytes.set(bytes);
+        Ok(())
+    }
+
+    pub(crate) fn cancel_fixed_point_workspace(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'_, '_, '_>,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        let bytes = self.fixed_point_workspace_bytes.get();
+        if self.fixed_point_workspace_identity.get() == 0
+            || self.fixed_point_workspace_identity.get() != workspace.identity()
+            || bytes == 0
+        {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::StalePredecessor,
+            ));
+        }
+        workspace
+            .cancel()
+            .map_err(PrivateWriterTransactionError::FixedPoint)?;
+        if !workspace.is_idle() {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        self.resources
+            .release(PrivateWriterResourceDelta::new(bytes, 0, 0, 0))
+            .map_err(|_| PrivateWriterTransactionError::AbortIncompleteResource)?;
+        self.fixed_point_workspace_identity.set(0);
+        self.fixed_point_workspace_bytes.set(0);
+        if self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -385,6 +465,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             || self.state.get() != PrivateWriterTransactionState::Pending
             || self.fixed_point_registered_work.get() != 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.fixed_point_workspace_identity.get() == 0
+            || self.fixed_point_workspace_identity.get() != prepared.workspace_identity()
         {
             return Err((prepared, predecessor, FixedPointError::StalePredecessor));
         }
@@ -603,6 +685,11 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if self.state.get() == PrivateWriterTransactionState::Clean {
             return Err(PrivateWriterTransactionError::NoPendingTransaction);
         }
+        if self.fixed_point_workspace_identity.get() != 0
+            || self.fixed_point_workspace_bytes.get() != 0
+        {
+            return Err(PrivateWriterTransactionError::AbortIncompleteResource);
+        }
 
         if self.draft.is_some() {
             if self.handle_identity == usize::MAX || self.abort_identity != self.handle_identity + 1
@@ -620,6 +707,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
                     self.fixed_point_registered_generation.set(0);
                     self.fixed_point_registered_phase
                         .set(PrivatePageCoordinatorWorkPhase::None);
+                    self.fixed_point_workspace_identity.set(0);
+                    self.fixed_point_workspace_bytes.set(0);
                     self.target = None;
                     self.handle_identity = self.abort_identity;
                     self.abort_identity = 0;
@@ -658,7 +747,12 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if !self.coordination.is_none() {
             return Err(PrivateWriterTransactionError::AbortIncompleteCoordination);
         }
-        if self.clean_slots.is_none() || self.draft.is_some() || self.fixed_point.is_some() {
+        if self.clean_slots.is_none()
+            || self.draft.is_some()
+            || self.fixed_point.is_some()
+            || self.fixed_point_workspace_identity.get() != 0
+            || self.fixed_point_workspace_bytes.get() != 0
+        {
             return Err(PrivateWriterTransactionError::AbortIncompleteCoordination);
         }
         self.state.set(PrivateWriterTransactionState::Clean);

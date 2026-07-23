@@ -10,12 +10,13 @@ retirement/selective-finalization work are implemented and accepted in Go and
 Rust. Go fixed-point coordinator chunks 1-3 are accepted. Rust chunks 1-3 have
 subsequently been changed by the unfinished sparse aggregate chunks 4-6 and must
 be reviewed again as one whole. The aggregate work is active: the current Rust
-no-default build does not compile and its all-features test suite has one known
-rollback failure. Transaction durability, the remaining fixed-point coordinator
-work, feed catalog/membership, metadata, normalization/workflows, recovery,
-snapshots, public SDKs, and the Rust-provided C ABI remain pending. Snapshot
-signing remains wholly in pending SOW-0017 and cannot block the core SDK. The
-prior adversarial audit and its red tests remain the evidence baseline.
+no-default and all-features matrices compile and pass, but its production
+lifecycle and canonical-record finalization are still incomplete. Transaction
+durability, the remaining fixed-point coordinator work, feed catalog/membership,
+metadata, normalization/workflows, recovery, snapshots, public SDKs, and the
+Rust-provided C ABI remain pending. Snapshot signing remains wholly in pending
+SOW-0017 and cannot block the core SDK. The prior adversarial audit and its red
+tests remain the evidence baseline.
 
 2026-07-24 restart execution: the Rust coordinator now uses three
 caller-provided fixed journals of prebound `Cell` writes instead of heap
@@ -44,6 +45,27 @@ and retirement export to the real writer lifecycle, so production—not a test
 only call graph—constructs and consumes the aggregate. Only after those two
 steps can chunks 4-6 be re-audited as a whole for producer authority, exact
 cleanup ownership, persistent records, and Active-suffix guarantees.
+
+2026-07-24 workspace milestone: Rust now has one private caller-backed
+coordinator workspace containing stable ledger slots, all three fixed
+`Cell`-write journals, prior-return/new-location scratch, and the detached
+sparse-overlay sidecar. The core charges its complete retained capacity before
+preparation, binds it to one workspace identity, rejects a substituted workspace
+at execute, and refuses to discard the transaction until explicit cancellation
+returns the reservation. Stable records retain only a pool-free prepared image;
+later provenance checks receive the live pool explicitly. This removes the
+otherwise self-referential draft borrow that Rust correctly rejected during
+cancellation/abort.
+
+The production-shaped permanent integration test now proves exact workspace
+budget acceptance and one-byte-short rejection, atomic restoration after an
+invalid prior return, allocation-free Active replay, abort rejection while the
+reservation is live, and cancellation followed by a successful whole-draft
+abort. This stage deliberately keeps commit rejected after a sealed aggregate:
+pages remain in the coordinator scope until the later canonical-record
+finalization stage transfers or cleans that authority. A commit-success claim
+before that stage would be false. The next work remains the real writer
+lifecycle and final-record handoff, not a public API claim.
 
 ## Requirements
 
