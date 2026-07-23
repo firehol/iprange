@@ -15,7 +15,8 @@ use crate::private_page_pool::{
 use crate::writer_fixed_point::{FixedPointActiveWork, FixedPointPreparedWork};
 use crate::writer_fixed_point::{
     FixedPointCoordinator, FixedPointCoordinatorWorkspace, FixedPointError, FixedPointPredecessor,
-    FixedPointPreparedAggregateAuthority, FixedPointSealedAggregateWork,
+    FixedPointPreparedAggregateAuthority, FixedPointPrivateOutputDrainError,
+    FixedPointSealedAggregateWork,
 };
 #[cfg(test)]
 use crate::writer_fixed_point::{FixedPointPreparedOutput, FixedPointPreparedWorkSlot};
@@ -78,6 +79,7 @@ pub(crate) enum PrivateWriterTransactionError<E> {
     AbortIncompleteCoordination,
     StaleHandle,
     FixedPoint(FixedPointError),
+    FixedPointOutput(FixedPointPrivateOutputDrainError<E>),
     Pool(PrivatePagePoolError),
 }
 
@@ -98,6 +100,10 @@ impl<E> PrivateWriterTransactionError<E> {
             | Self::AbortIncompleteCoordination => ErrorCode::AbortIncomplete,
             Self::StaleHandle => ErrorCode::StaleReference,
             Self::FixedPoint(_) => ErrorCode::WrongState,
+            Self::FixedPointOutput(FixedPointPrivateOutputDrainError::Sink(_)) => {
+                ErrorCode::SinkFailed
+            }
+            Self::FixedPointOutput(_) => ErrorCode::TransactionAborted,
             Self::Pool(_) => ErrorCode::WrongState,
         }
     }
@@ -633,6 +639,65 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
                     PrivateWriterTransactionError::FixedPoint(error),
                 )
             })
+    }
+
+    /// Writes and releases every page retained by completed coordinator work.
+    /// Once this starts, any failure makes the draft non-publishable because a
+    /// sink may already have received a strict prefix of its private pages.
+    pub(crate) fn drain_fixed_point_private_pages<'backing, 'arena, 'record_cleanup, F>(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        write: &mut F,
+    ) -> Result<usize, PrivateWriterTransactionError<E>>
+    where
+        F: FnMut(u32, &[u8]) -> Result<(), E>,
+    {
+        self.validate_handle(handle)?;
+        if self.state.get() != PrivateWriterTransactionState::Pending {
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if self.fixed_point_workspace_identity.get() == 0
+            || self.fixed_point_workspace_identity.get() != workspace.identity()
+            || self.fixed_point_workspace_bytes.get() == 0
+            || workspace.is_idle()
+        {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let Some(coordinator) = self.fixed_point.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let (pool_work, _pool_generation, pool_phase) = draft.coordinator_registered_work();
+        let registration_finished = self.fixed_point_registered_work.get() == 0
+            && self.fixed_point_registered_generation.get() == 0
+            && self.fixed_point_registered_phase.get() == PrivatePageCoordinatorWorkPhase::None
+            && pool_work == 0
+            && pool_phase == PrivatePageCoordinatorWorkPhase::None
+            && coordinator.registered_work() == 0
+            && coordinator.is_quiescent();
+        if !registration_finished {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::StalePredecessor,
+            ));
+        }
+        if draft.requires_abort() || coordinator.requires_abort() {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        match workspace.drain_private_pages(draft, write) {
+            Ok(written) => Ok(written),
+            Err(error) => {
+                self.state.set(PrivateWriterTransactionState::AbortRequired);
+                Err(PrivateWriterTransactionError::FixedPointOutput(error))
+            }
+        }
     }
 
     #[cfg(test)]

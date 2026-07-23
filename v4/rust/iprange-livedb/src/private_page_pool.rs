@@ -259,6 +259,65 @@ pub(crate) struct PrivatePageCallbackIsolation<'borrow, 'slots> {
     _slots: RefMut<'borrow, &'slots mut [PrivatePagePoolSlot]>,
 }
 
+/// Move-only authority for the one post-input cleanup path that may mutate an
+/// accepted sealed coordinator scope. Ordinary scoped mutation stays closed
+/// once coordinator work has finished.
+pub(crate) struct PrivatePageSealedCoordinatorCleanup<'pool, 'slots> {
+    pool: &'pool PrivatePagePool<'slots>,
+    scope_id: u64,
+    nonce: u64,
+    anchor: usize,
+    active: bool,
+}
+
+impl<'pool, 'slots> PrivatePageSealedCoordinatorCleanup<'pool, 'slots> {
+    pub(crate) fn finish(mut self) -> Result<(), PrivatePagePoolError> {
+        if !self.active
+            || self.pool.sealed_coordinator_cleanup_scope_id.get() != self.scope_id
+            || self.pool.sealed_coordinator_cleanup_nonce.get() != self.nonce
+        {
+            return Err(PrivatePagePoolError::CoordinatorMismatch);
+        }
+        let slots = self
+            .pool
+            .slots
+            .try_borrow()
+            .map_err(|_| PrivatePagePoolError::BorrowConflict)?;
+        let anchor = slots
+            .get(self.anchor)
+            .ok_or(PrivatePagePoolError::StaleScope)?;
+        if anchor.scope_id != 0 || anchor.scope_anchor {
+            return Err(PrivatePagePoolError::ScopeNotEmpty(
+                self.pool.active_scopes.get(),
+            ));
+        }
+        drop(slots);
+        let cleanup = self
+            .pool
+            .coordinator_cleanup_pending
+            .get()
+            .checked_sub(1)
+            .ok_or(PrivatePagePoolError::CoordinatorMismatch)?;
+        self.pool.coordinator_cleanup_pending.set(cleanup);
+        self.pool.sealed_coordinator_cleanup_scope_id.set(0);
+        self.pool.sealed_coordinator_cleanup_nonce.set(0);
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for PrivatePageSealedCoordinatorCleanup<'_, '_> {
+    fn drop(&mut self) {
+        if self.active
+            && self.pool.sealed_coordinator_cleanup_scope_id.get() == self.scope_id
+            && self.pool.sealed_coordinator_cleanup_nonce.get() == self.nonce
+        {
+            self.pool.sealed_coordinator_cleanup_scope_id.set(0);
+            self.pool.sealed_coordinator_cleanup_nonce.set(0);
+        }
+    }
+}
+
 impl PrivatePageCoordinatorFence {
     pub(crate) fn seal(self) -> u64 {
         let mut seal = 1_469_598_103_934_665_603u64;
@@ -347,6 +406,8 @@ pub(crate) struct PrivatePagePoolTestSnapshot {
     coordinator_scope_id: u64,
     coordinator_unaccepted_scopes: usize,
     coordinator_cleanup_pending: usize,
+    sealed_coordinator_cleanup_scope_id: u64,
+    sealed_coordinator_cleanup_nonce: u64,
     scope_sequence: u64,
     active_scopes: usize,
     unscoped_vacant_count: usize,
@@ -2004,6 +2065,8 @@ pub(crate) struct PrivatePagePool<'slots> {
     coordinator_scope_id: Cell<u64>,
     coordinator_unaccepted_scopes: Cell<usize>,
     coordinator_cleanup_pending: Cell<usize>,
+    sealed_coordinator_cleanup_scope_id: Cell<u64>,
+    sealed_coordinator_cleanup_nonce: Cell<u64>,
     scope_sequence: Cell<u64>,
     active_scopes: Cell<usize>,
     unscoped_vacant_count: Cell<usize>,
@@ -2170,6 +2233,8 @@ impl<'slots> PrivatePagePool<'slots> {
             coordinator_scope_id: Cell::new(0),
             coordinator_unaccepted_scopes: Cell::new(0),
             coordinator_cleanup_pending: Cell::new(0),
+            sealed_coordinator_cleanup_scope_id: Cell::new(0),
+            sealed_coordinator_cleanup_nonce: Cell::new(0),
             scope_sequence: Cell::new(0),
             active_scopes: Cell::new(0),
             unscoped_vacant_count: Cell::new(unscoped_vacant_count),
@@ -2244,6 +2309,8 @@ impl<'slots> PrivatePagePool<'slots> {
             coordinator_scope_id: Cell::new(0),
             coordinator_unaccepted_scopes: Cell::new(0),
             coordinator_cleanup_pending: Cell::new(0),
+            sealed_coordinator_cleanup_scope_id: Cell::new(0),
+            sealed_coordinator_cleanup_nonce: Cell::new(0),
             scope_sequence: Cell::new(0),
             active_scopes: Cell::new(0),
             unscoped_vacant_count: Cell::new(unscoped_vacant_count),
@@ -2334,6 +2401,8 @@ impl<'slots> PrivatePagePool<'slots> {
             coordinator_scope_id: Cell::new(0),
             coordinator_unaccepted_scopes: Cell::new(0),
             coordinator_cleanup_pending: Cell::new(0),
+            sealed_coordinator_cleanup_scope_id: Cell::new(0),
+            sealed_coordinator_cleanup_nonce: Cell::new(0),
             scope_sequence: Cell::new(0),
             active_scopes: Cell::new(0),
             unscoped_vacant_count: Cell::new(unscoped_vacant_count),
@@ -3519,6 +3588,8 @@ impl<'slots> PrivatePagePool<'slots> {
             || self.coordinator_work_identity.get() != 0
             || self.coordinator_work_generation.get() != 0
             || self.coordinator_work_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.sealed_coordinator_cleanup_scope_id.get() != 0
+            || self.sealed_coordinator_cleanup_nonce.get() != 0
             || self.epoch.get() != 1
             || self.generation.get() != 1
             || self.operation_sequence.get() != 0
@@ -4753,6 +4824,46 @@ impl<'slots> PrivatePagePool<'slots> {
         Ok(())
     }
 
+    /// Opens the only mutation window allowed for a sealed coordinator scope
+    /// after its work registration has finished. The guard keeps ordinary
+    /// scope APIs closed to every other retained record.
+    pub(crate) fn begin_sealed_coordinator_cleanup(
+        &self,
+        scope: &PrivatePageReservationScope<'_>,
+        nonce: u64,
+    ) -> Result<Option<PrivatePageSealedCoordinatorCleanup<'_, 'slots>>, PrivatePagePoolError> {
+        if self.coordinator_session_identity.get() == 0 {
+            return Ok(None);
+        }
+        if self.abort_required.get() {
+            return Err(PrivatePagePoolError::AbortRequired);
+        }
+        if self.coordinator_work_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.coordinator_unaccepted_scopes.get() != 0
+            || self.coordinator_scope_id.get() != 0
+            || self.coordinator_cleanup_pending.get() == 0
+            || self.sealed_coordinator_cleanup_scope_id.get() != 0
+            || self.sealed_coordinator_cleanup_nonce.get() != 0
+            || self.active_checkpoint.get() != 0
+            || self.active_operation_id.get() != 0
+        {
+            return Err(PrivatePagePoolError::CoordinatorMismatch);
+        }
+        let status = self.validate_sealed_scope(scope, nonce)?;
+        if !status.successor_consumed {
+            return Err(PrivatePagePoolError::StaleAuthority);
+        }
+        self.sealed_coordinator_cleanup_scope_id.set(scope.id);
+        self.sealed_coordinator_cleanup_nonce.set(nonce);
+        Ok(Some(PrivatePageSealedCoordinatorCleanup {
+            pool: self,
+            scope_id: scope.id,
+            nonce,
+            anchor: scope.anchor,
+            active: true,
+        }))
+    }
+
     pub(crate) fn finish_coordinator_work(
         &self,
         work: PrivatePageCoordinatorWork,
@@ -4839,6 +4950,11 @@ impl<'slots> PrivatePagePool<'slots> {
 
     pub(crate) fn coordinator_commit_fence(&self) -> Result<(), PrivatePagePoolError> {
         if self.coordinator_work_phase.get() != PrivatePageCoordinatorWorkPhase::None {
+            return Err(PrivatePagePoolError::CoordinatorWorkActive);
+        }
+        if self.sealed_coordinator_cleanup_scope_id.get() != 0
+            || self.sealed_coordinator_cleanup_nonce.get() != 0
+        {
             return Err(PrivatePagePoolError::CoordinatorWorkActive);
         }
         if self.coordinator_unaccepted_scopes.get() != 0 {
@@ -6554,9 +6670,13 @@ impl<'slots> PrivatePagePool<'slots> {
         }
         if self.coordinator_session_identity.get() != 0 {
             #[cfg(not(test))]
-            if self.coordinator_work_phase.get() == PrivatePageCoordinatorWorkPhase::None
-                || self.coordinator_scope_id.get() != scope.id
-            {
+            if self.coordinator_work_phase.get() == PrivatePageCoordinatorWorkPhase::None {
+                if self.sealed_coordinator_cleanup_scope_id.get() != scope.id
+                    || self.sealed_coordinator_cleanup_nonce.get() == 0
+                {
+                    return Err(PrivatePagePoolError::CoordinatorMismatch);
+                }
+            } else if self.coordinator_scope_id.get() != scope.id {
                 return Err(PrivatePagePoolError::CoordinatorMismatch);
             }
             #[cfg(test)]
@@ -8223,7 +8343,9 @@ impl<'slots> PrivatePagePool<'slots> {
     pub(crate) fn preflight_checkpoint(
         &self,
     ) -> Result<PrivatePagePoolCheckpoint<'slots>, PrivatePagePoolError> {
-        if self.coordinator_session_identity.get() != 0 {
+        if self.coordinator_session_identity.get() != 0
+            && self.sealed_coordinator_cleanup_scope_id.get() == 0
+        {
             return Err(PrivatePagePoolError::CoordinatorRequired);
         }
         self.preflight_checkpoint_steps(2)
@@ -8233,7 +8355,9 @@ impl<'slots> PrivatePagePool<'slots> {
         &self,
         epoch_steps: usize,
     ) -> Result<PrivatePagePoolCheckpoint<'slots>, PrivatePagePoolError> {
-        if self.coordinator_session_identity.get() != 0 {
+        if self.coordinator_session_identity.get() != 0
+            && self.sealed_coordinator_cleanup_scope_id.get() == 0
+        {
             return Err(PrivatePagePoolError::CoordinatorRequired);
         }
         self.preflight_checkpoint_steps_inner(epoch_steps)
@@ -8293,7 +8417,9 @@ impl<'slots> PrivatePagePool<'slots> {
         &self,
         checkpoint: &PrivatePagePoolCheckpoint<'_>,
     ) -> Result<(), PrivatePagePoolError> {
-        if self.coordinator_session_identity.get() != 0 {
+        if self.coordinator_session_identity.get() != 0
+            && self.sealed_coordinator_cleanup_scope_id.get() == 0
+        {
             return Err(PrivatePagePoolError::CoordinatorRequired);
         }
         self.begin_checkpoint_prepared_inner(checkpoint)
@@ -9467,6 +9593,8 @@ impl<'slots> PrivatePagePool<'slots> {
             coordinator_scope_id: self.coordinator_scope_id.get(),
             coordinator_unaccepted_scopes: self.coordinator_unaccepted_scopes.get(),
             coordinator_cleanup_pending: self.coordinator_cleanup_pending.get(),
+            sealed_coordinator_cleanup_scope_id: self.sealed_coordinator_cleanup_scope_id.get(),
+            sealed_coordinator_cleanup_nonce: self.sealed_coordinator_cleanup_nonce.get(),
             scope_sequence: self.scope_sequence.get(),
             active_scopes: self.active_scopes.get(),
             unscoped_vacant_count: self.unscoped_vacant_count.get(),

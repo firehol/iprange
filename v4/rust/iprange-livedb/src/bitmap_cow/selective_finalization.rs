@@ -117,21 +117,21 @@ pub(crate) struct FreeBitmapFinalizationPredecessor<'a, 'slots> {
 /// bitmap work unit seals. The committed source is deliberately dropped; later
 /// draft reads consult this exact private-page index and otherwise fall back to
 /// the transaction's selected committed source.
-pub(crate) struct SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots> {
+pub(crate) struct SealedFreeBitmapCoordinatorRecord<'scratch, 'arena, 'pool, 'slots> {
     pub(crate) record_index: usize,
     pub(crate) work_unit: u64,
-    pool: &'a PrivatePagePool<'slots>,
+    pool: &'pool PrivatePagePool<'slots>,
     scope: PrivatePageReservationScope<'slots>,
     nonce: u64,
-    cleanup: FreeBitmapFinalizationPredecessor<'a, 'slots>,
+    cleanup: FreeBitmapFinalizationPredecessor<'pool, 'slots>,
     root: u32,
     pending_page_count: u64,
-    arena_bindings: &'a mut [BitmapCowArenaBinding],
-    replacements: &'a mut [u32],
+    arena_bindings: &'arena mut [BitmapCowArenaBinding],
+    replacements: &'arena mut [u32],
     replacement_len: usize,
-    index_nodes: &'a mut [BitmapCowIndexNode],
+    index_nodes: &'arena mut [BitmapCowIndexNode],
     index_root: usize,
-    returned: Option<&'a [Cell<bool>]>,
+    returned: &'arena [Cell<bool>],
     cleanup_nodes: &'scratch mut [PrivatePageSelectiveOverlayNode],
     cleanup_path: &'scratch mut [PrivatePageSelectivePathEntry],
     cleanup_targets: &'scratch mut [usize],
@@ -169,6 +169,12 @@ pub(crate) struct SealedFreeBitmapCoordinatorScratch<'arena, 'scratch> {
     pub(crate) cleanup_nodes: &'scratch mut [PrivatePageSelectiveOverlayNode],
     pub(crate) cleanup_path: &'scratch mut [PrivatePageSelectivePathEntry],
     pub(crate) cleanup_targets: &'scratch mut [usize],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FreeBitmapCoordinatorOutputError<E> {
+    Sink(E),
+    Record(FreeBitmapCowError),
 }
 
 impl SealedFreeBitmapCoordinatorScratch<'_, '_> {
@@ -216,7 +222,7 @@ impl SealedFreeBitmapCoordinatorScratch<'_, '_> {
     }
 }
 
-impl core::fmt::Debug for SealedFreeBitmapCoordinatorRecord<'_, '_, '_> {
+impl core::fmt::Debug for SealedFreeBitmapCoordinatorRecord<'_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("SealedFreeBitmapCoordinatorRecord")
@@ -229,21 +235,20 @@ impl core::fmt::Debug for SealedFreeBitmapCoordinatorRecord<'_, '_, '_> {
     }
 }
 
-impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots> {
+impl<'scratch, 'arena, 'pool, 'slots>
+    SealedFreeBitmapCoordinatorRecord<'scratch, 'arena, 'pool, 'slots>
+{
     fn binding_returned(&self, binding_index: usize) -> bool {
-        self.returned
-            .and_then(|returned| returned.get(binding_index))
-            .is_some_and(Cell::get)
+        self.returned.get(binding_index).is_some_and(Cell::get)
     }
 
-    pub(crate) fn returned_cell(&self, binding_index: usize) -> Option<&'a Cell<bool>> {
-        self.returned
-            .and_then(|returned| returned.get(binding_index))
+    pub(crate) fn returned_cell(&self, binding_index: usize) -> Option<&'arena Cell<bool>> {
+        self.returned.get(binding_index)
     }
 
     pub(crate) fn cancel_inactive_into_scratch(
         self,
-    ) -> Option<SealedFreeBitmapCoordinatorScratch<'a, 'scratch>> {
+    ) -> SealedFreeBitmapCoordinatorScratch<'arena, 'scratch> {
         let Self {
             arena_bindings,
             replacements,
@@ -254,7 +259,6 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
             cleanup_targets,
             ..
         } = self;
-        let returned = returned?;
         arena_bindings.fill(BitmapCowArenaBinding::empty());
         replacements.fill(0);
         index_nodes.fill(BitmapCowIndexNode::empty());
@@ -264,7 +268,7 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
         cleanup_nodes.fill(PrivatePageSelectiveOverlayNode::empty());
         cleanup_path.fill(PrivatePageSelectivePathEntry::empty());
         cleanup_targets.fill(NO_INDEX);
-        Some(SealedFreeBitmapCoordinatorScratch {
+        SealedFreeBitmapCoordinatorScratch {
             arena_bindings,
             replacements,
             index_nodes,
@@ -272,7 +276,7 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
             cleanup_nodes,
             cleanup_path,
             cleanup_targets,
-        })
+        }
     }
 
     pub(crate) const fn root(&self) -> u32 {
@@ -645,7 +649,17 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
     }
 
     #[allow(clippy::result_large_err)] // Failure must return the move-only cleanup authority.
-    pub(crate) fn cleanup(mut self) -> Result<(), (Self, FreeBitmapCowError)> {
+    pub(crate) fn cleanup(
+        mut self,
+    ) -> Result<SealedFreeBitmapCoordinatorScratch<'arena, 'scratch>, (Self, FreeBitmapCowError)>
+    {
+        let coordinator_cleanup = match self
+            .pool
+            .begin_sealed_coordinator_cleanup(&self.scope, self.nonce)
+        {
+            Ok(cleanup) => cleanup,
+            Err(error) => return Err((self, FreeBitmapCowError::PrivatePool(error))),
+        };
         if let Err(error) = self.cleanup.refresh_commitment() {
             return Err((self, FreeBitmapCowError::PrivatePool(error)));
         }
@@ -763,14 +777,48 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
             .commit_selective_checkpoint_in_scope_terminal_prepared(checkpoint, &self.scope);
         self.pool
             .close_sealed_scope_terminal_prepared(&self.scope, self.nonce);
-        Ok(())
+        if let Some(cleanup) = coordinator_cleanup {
+            if let Err(error) = cleanup.finish() {
+                return Err((self, FreeBitmapCowError::PrivatePool(error)));
+            }
+        }
+        let Self {
+            arena_bindings,
+            replacements,
+            index_nodes,
+            returned,
+            cleanup_nodes,
+            cleanup_path,
+            cleanup_targets,
+            ..
+        } = self;
+        arena_bindings.fill(BitmapCowArenaBinding::empty());
+        replacements.fill(0);
+        index_nodes.fill(BitmapCowIndexNode::empty());
+        cleanup_nodes.fill(PrivatePageSelectiveOverlayNode::empty());
+        cleanup_path.fill(PrivatePageSelectivePathEntry::empty());
+        cleanup_targets.fill(NO_INDEX);
+        for returned in returned {
+            returned.set(false);
+        }
+        Ok(SealedFreeBitmapCoordinatorScratch {
+            arena_bindings,
+            replacements,
+            index_nodes,
+            returned,
+            cleanup_nodes,
+            cleanup_path,
+            cleanup_targets,
+        })
     }
 }
 
-impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots> {
+impl<'scratch, 'arena, 'pool, 'slots>
+    SealedFreeBitmapCoordinatorRecord<'scratch, 'arena, 'pool, 'slots>
+{
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn from_coordinator_terminal(
-        pool: &'a PrivatePagePool<'slots>,
+        pool: &'pool PrivatePagePool<'slots>,
         scope: PrivatePageReservationScope<'slots>,
         nonce: u64,
         work_unit: u64,
@@ -778,7 +826,7 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
         root: u32,
         pending_page_count: u64,
         pages: &[PrivatePageCoordinatorTerminalPage],
-        scratch: SealedFreeBitmapCoordinatorScratch<'a, 'scratch>,
+        scratch: SealedFreeBitmapCoordinatorScratch<'arena, 'scratch>,
     ) -> Result<Self, FreeBitmapCowError> {
         let terminal_pages = pages.len();
         if nonce == 0
@@ -848,7 +896,7 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
             replacement_len: 0,
             index_nodes: scratch.index_nodes,
             index_root,
-            returned: Some(scratch.returned),
+            returned: scratch.returned,
             cleanup_nodes: scratch.cleanup_nodes,
             cleanup_path: scratch.cleanup_path,
             cleanup_targets: scratch.cleanup_targets,
@@ -985,6 +1033,59 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
             return Err(FreeBitmapCowError::StaleReservationPredecessor);
         }
         Ok(())
+    }
+
+    /// Streams only pages still owned by this sealed record. The pool retains
+    /// the bytes until a later successful cleanup consumes the record.
+    pub(crate) fn write_private_pages<E>(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        write: &mut impl FnMut(u32, &[u8]) -> Result<(), E>,
+    ) -> Result<usize, FreeBitmapCoordinatorOutputError<E>> {
+        let scope = self.scope.materialize(pool);
+        let status = pool
+            .validate_sealed_scope(&scope, self.nonce)
+            .map_err(|error| {
+                FreeBitmapCoordinatorOutputError::Record(FreeBitmapCowError::PrivatePool(error))
+            })?;
+        if !status.successor_consumed {
+            return Err(FreeBitmapCoordinatorOutputError::Record(
+                FreeBitmapCowError::StaleReservationPredecessor,
+            ));
+        }
+        let mut written = 0usize;
+        for (binding_index, binding) in self.arena_bindings.iter().enumerate() {
+            if !binding.bound || self.binding_returned(binding_index) {
+                continue;
+            }
+            let page = pool
+                .sealed_page_provenance(&scope, self.nonce, binding.pool_slot)
+                .map_err(|error| {
+                    FreeBitmapCoordinatorOutputError::Record(FreeBitmapCowError::PrivatePool(error))
+                })?;
+            if page.binding_epoch != binding.pool_epoch || page.pgno != binding.page_number {
+                return Err(FreeBitmapCoordinatorOutputError::Record(
+                    FreeBitmapCowError::StaleReservationPredecessor,
+                ));
+            }
+            let bytes = pool
+                .borrow_sealed_page(&scope, self.nonce, binding.pool_slot)
+                .map_err(|error| {
+                    FreeBitmapCoordinatorOutputError::Record(FreeBitmapCowError::PrivatePool(error))
+                })?;
+            write(page.pgno, &bytes[..]).map_err(FreeBitmapCoordinatorOutputError::Sink)?;
+            written = written
+                .checked_add(1)
+                .ok_or(FreeBitmapCoordinatorOutputError::Record(
+                    FreeBitmapCowError::CoverageOverflow,
+                ))?;
+        }
+        if written != status.bound {
+            return Err(FreeBitmapCoordinatorOutputError::Record(
+                FreeBitmapCowError::ArenaPageConflict(0),
+            ));
+        }
+        Ok(written)
     }
 
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
@@ -1126,10 +1227,7 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
     pub(crate) fn materialize<'pool, 'slots>(
         self,
         pool: &'pool PrivatePagePool<'slots>,
-    ) -> SealedFreeBitmapCoordinatorRecord<'cleanup, 'pool, 'slots>
-    where
-        'arena: 'pool,
-    {
+    ) -> SealedFreeBitmapCoordinatorRecord<'cleanup, 'arena, 'pool, 'slots> {
         let scope = self.scope.materialize(pool);
         SealedFreeBitmapCoordinatorRecord {
             record_index: self.record_index,
@@ -1150,7 +1248,7 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
             replacement_len: 0,
             index_nodes: self.index_nodes,
             index_root: self.index_root,
-            returned: Some(self.returned),
+            returned: self.returned,
             cleanup_nodes: self.cleanup_nodes,
             cleanup_path: self.cleanup_path,
             cleanup_targets: self.cleanup_targets,
@@ -2476,7 +2574,7 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
         work_unit: u64,
         record_index: usize,
     ) -> Result<
-        SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>,
+        SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>,
         (
             Self,
             FreeBitmapFinalizationSuccessorSeed<'a, 'slots>,
@@ -2536,7 +2634,7 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             replacement_len,
             index_nodes,
             index_root,
-            returned: None,
+            returned: &[],
             cleanup_nodes,
             cleanup_path,
             cleanup_targets,

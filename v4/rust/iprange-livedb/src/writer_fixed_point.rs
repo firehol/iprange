@@ -1,8 +1,8 @@
 //! Private sequencing for transaction-local fixed-point work units.
 
 use crate::bitmap_cow::{
-    FreeBitmapCowError, PreparedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorRecord,
-    SealedFreeBitmapCoordinatorScratch,
+    FreeBitmapCoordinatorOutputError, FreeBitmapCowError, PreparedFreeBitmapCoordinatorRecord,
+    SealedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorScratch,
 };
 use crate::contract::{MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::page_source::{CommittedPageSource, PageSourceError};
@@ -34,6 +34,13 @@ pub(crate) enum FixedPointError {
     ScratchAlias,
     AdvertisedOwnedPage(u32),
     AbortRequired,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FixedPointPrivateOutputDrainError<E> {
+    Sink(E),
+    Record(FreeBitmapCowError),
+    Workspace(FixedPointError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -676,6 +683,81 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
         Ok(())
     }
 
+    /// Writes every retained private page before releasing the scope that owns
+    /// it. A caller must only invoke this after input is finished; failures
+    /// leave publication forbidden and let the transaction take its normal
+    /// cancel-and-abort path.
+    pub(crate) fn drain_private_pages<E>(
+        &mut self,
+        pool: &PrivatePagePool<'_>,
+        write: &mut impl FnMut(u32, &[u8]) -> Result<(), E>,
+    ) -> Result<usize, FixedPointPrivateOutputDrainError<E>> {
+        let len = self.backing.len.get();
+        if len == 0 || self.backing.last_work_unit.get() == 0 {
+            return Err(FixedPointPrivateOutputDrainError::Workspace(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        let mut written = 0usize;
+        for index in 0..len {
+            let Some(slot) = self.backing.records.get(index) else {
+                return Err(FixedPointPrivateOutputDrainError::Workspace(
+                    FixedPointError::StalePredecessor,
+                ));
+            };
+            if !matches!(slot.state.get(), FixedPointWorkspaceRecordState::Live(_)) {
+                return Err(FixedPointPrivateOutputDrainError::Workspace(
+                    FixedPointError::StalePredecessor,
+                ));
+            }
+            let scratch = slot.scratch.replace(None);
+            if scratch.is_some() {
+                slot.scratch.set(scratch);
+                return Err(FixedPointPrivateOutputDrainError::Workspace(
+                    FixedPointError::StalePredecessor,
+                ));
+            }
+            let Some(record) = slot.record.replace(None) else {
+                return Err(FixedPointPrivateOutputDrainError::Workspace(
+                    FixedPointError::StalePredecessor,
+                ));
+            };
+            let record_pages = match record.write_private_pages(pool, write) {
+                Ok(count) => count,
+                Err(FreeBitmapCoordinatorOutputError::Sink(error)) => {
+                    slot.record.set(Some(record));
+                    return Err(FixedPointPrivateOutputDrainError::Sink(error));
+                }
+                Err(FreeBitmapCoordinatorOutputError::Record(error)) => {
+                    slot.record.set(Some(record));
+                    return Err(FixedPointPrivateOutputDrainError::Record(error));
+                }
+            };
+            let Some(next_written) = written.checked_add(record_pages) else {
+                slot.record.set(Some(record));
+                return Err(FixedPointPrivateOutputDrainError::Workspace(
+                    FixedPointError::IdentityExhausted,
+                ));
+            };
+            let sealed = record.materialize(pool);
+            let scratch = match sealed.cleanup() {
+                Ok(scratch) => scratch,
+                Err((sealed, error)) => {
+                    slot.scratch
+                        .set(Some(sealed.cancel_inactive_into_scratch()));
+                    slot.state.set(FixedPointWorkspaceRecordState::Vacant);
+                    return Err(FixedPointPrivateOutputDrainError::Record(error));
+                }
+            };
+            slot.scratch.set(Some(scratch));
+            slot.state.set(FixedPointWorkspaceRecordState::Vacant);
+            written = next_written;
+        }
+        self.cancel()
+            .map_err(FixedPointPrivateOutputDrainError::Workspace)?;
+        Ok(written)
+    }
+
     fn validate_live_record_handoff(
         &self,
         pool: &PrivatePagePool<'_>,
@@ -1103,7 +1185,7 @@ impl<'a, 'index, 'slots, S: CommittedPageSource + ?Sized>
 }
 
 pub(crate) struct FixedPointSealedLedger<'records, 'scratch, 'a, 'slots> {
-    records: &'records mut [Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>>],
+    records: &'records mut [Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>>],
     slot_to_record: &'records mut [usize],
     len: usize,
     last_work_unit: u64,
@@ -1140,7 +1222,9 @@ impl core::fmt::Debug for FixedPointSealedLedger<'_, '_, '_, '_> {
 
 impl<'records, 'scratch, 'a, 'slots> FixedPointSealedLedger<'records, 'scratch, 'a, 'slots> {
     pub(crate) fn new(
-        records: &'records mut [Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>>],
+        records: &'records mut [Option<
+            SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>,
+        >],
         slot_to_record: &'records mut [usize],
         pool_slots: usize,
     ) -> Result<Self, FixedPointError> {
@@ -1168,32 +1252,32 @@ impl<'records, 'scratch, 'a, 'slots> FixedPointSealedLedger<'records, 'scratch, 
     pub(crate) fn record(
         &self,
         index: usize,
-    ) -> Option<&SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>> {
+    ) -> Option<&SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>> {
         self.records.get(index).and_then(Option::as_ref)
     }
 
     pub(crate) fn record_mut(
         &mut self,
         index: usize,
-    ) -> Option<&mut SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>> {
+    ) -> Option<&mut SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>> {
         self.records.get_mut(index).and_then(Option::as_mut)
     }
 
     pub(crate) fn into_records(
         self,
-    ) -> &'records mut [Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>>] {
+    ) -> &'records mut [Option<SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>>] {
         self.records
     }
 
     #[allow(clippy::result_large_err)] // Failure returns the move-only sealed record.
     pub(crate) fn push<S: CommittedPageSource + ?Sized>(
         &mut self,
-        record: SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>,
+        record: SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>,
         source: &FixedPointDraftSource<'_, '_, 'slots, S>,
     ) -> Result<
         (),
         (
-            SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots>,
+            SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'a, 'slots>,
             FixedPointError,
         ),
     > {
@@ -2915,7 +2999,7 @@ impl FixedPointActiveTerminalWork<'_, '_> {
 #[cfg(test)]
 pub(crate) struct FixedPointSealedCanonicalWork<'cleanup, 'pool, 'slots> {
     active: FixedPointActiveWork<'slots>,
-    pub(crate) record: SealedFreeBitmapCoordinatorRecord<'cleanup, 'pool, 'slots>,
+    pub(crate) record: SealedFreeBitmapCoordinatorRecord<'cleanup, 'pool, 'pool, 'slots>,
 }
 
 #[cfg(test)]

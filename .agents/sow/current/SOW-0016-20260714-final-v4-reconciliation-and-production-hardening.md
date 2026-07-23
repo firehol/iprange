@@ -74,6 +74,14 @@ releasing those records, so commit remains blocked until the pending output-drai
 and exact scope-cleanup stage. Full Rust/Go validation is green for this internal
 milestone; durable private-file output and public SDK behavior remain pending.
 
+2026-07-24 private-output cleanup milestone: Rust now drains every retained
+private page through a bounded callback before cleaning its exact sealed scope.
+The coordinator's pending-cleanup count is released only after scope closure,
+so the internal commit fence can pass after a complete drain. A sink failure
+makes the draft abort-required and preserves the normal explicit
+cancel-and-abort route. This is still not durable file output or a public SDK;
+the OS writer and target-meta publication remain pending.
+
 ## Requirements
 
 ### Purpose
@@ -6122,6 +6130,72 @@ requirements are normative in the Pre-Implementation Gate above.
   -- -D warnings`; `cargo check --manifest-path v4/rust/Cargo.toml --workspace
   --all-features --benches`; `go -C v4/go test ./...`; `go -C v4/go vet ./...`;
   `git diff --check`; and `./.agents/sow/audit.sh`.
+
+### 2026-07-24 - Rust private-output drain and sealed-cleanup plan
+
+- Inspection after the all-page handoff found a production-only lifecycle
+  defect: after `complete_sealed_work` releases the active coordinator work,
+  ordinary scope/checkpoint validation intentionally rejects the retained
+  sealed scope. Test builds relax that guard, so the existing generic record
+  cleanup can appear to work in tests but cannot be the production drain.
+  Also, accepting a sealed scope increments `coordinator_cleanup_pending`, but
+  no successful cleanup currently decrements it. A later commit can therefore
+  never pass its coordinator fence.
+- The required repair is internal and follows the already-approved state
+  machine. A move-only, exact-scope cleanup guard will temporarily authorize
+  only one accepted sealed scope after input completion. It permits the
+  existing preflighted selective cleanup machinery without reopening ordinary
+  scoped mutation. Successful closure consumes exactly one pending-cleanup
+  count; any preflight failure drops the guard without changing the pool.
+- The workspace will add a bounded private-output drain. For each canonical
+  record it checks every retained page's sealed provenance, sends the original
+  page bytes to a caller callback, and only then cleans that record's scope.
+  No page copy, sort, heap allocation, or external temporary file is added.
+  The callback failure path leaves unpublished bytes irrelevant, marks the
+  entire draft abort-required, and preserves explicit workspace cancellation
+  followed by whole-draft abort.
+- This is not a public writer API and does not claim durable file publication:
+  the later OS writer still owns file synchronization and target-meta
+  publication. It establishes the necessary in-memory authority boundary so
+  that future durable output cannot omit pages or commit after a failed sink.
+- Permanent coverage must prove all bitmap and retirement pages reach the
+  callback, successful drain clears every retained scope and unblocks the
+  internal commit fence, a sink failure blocks commit and permits cancellation
+  plus abort, and both paths allocate zero heap bytes.
+
+### 2026-07-24 - Rust private-output drain and sealed-cleanup implementation
+
+- Implemented a move-only exact-scope cleanup guard in the private-page pool.
+  After coordinator work finishes, it opens only the accepted sealed scope
+  being drained, serializes that cleanup against every other retained record,
+  and releases exactly one `coordinator_cleanup_pending` count only after the
+  scope is closed. A failed cleanup drops the temporary authority and leaves
+  the draft fenced for cancellation/abort.
+- Split the sealed coordinator record's caller scratch lifetime from its live
+  pool lifetime. The record can now return its original fixed scratch after
+  successful cleanup without extending the writer borrow or allocating.
+- Added the internal fixed-point private-output drain. It validates each
+  retained page's sealed provenance, invokes a caller callback with the
+  original page bytes, and then performs the exact selective scope cleanup.
+  It returns caller scratch to the workspace only after cleanup. A callback,
+  record, or workspace error marks the transaction abort-required; no retry or
+  commit can reuse a partially emitted draft.
+- The production-shaped mixed-owner test covers one bitmap plus two retirement
+  pages. It proves byte-exact, zero-allocation success output, scope release,
+  internal fence/preflight success, and explicit cancellation plus abort. Its
+  second run fails the sink after the first page, proves the stable `SinkFailed`
+  classification and abort-required state, retains the live record for
+  cancellation, and rejects preflight commit.
+- No normative specification update is required: no durable byte layout,
+  public API, or publication ordering changed. No runtime project skill or
+  end-user documentation is affected because this remains an unpublished
+  internal writer lifecycle boundary.
+- Validation passed: targeted mixed-owner drain coverage; `cargo test
+  --manifest-path v4/rust/Cargo.toml --workspace --no-default-features` (419
+  tests); `cargo test --manifest-path v4/rust/Cargo.toml --workspace
+  --all-features` (511 tests); Rust formatting; Clippy with warnings denied;
+  Rust benchmark compilation; `go -C v4/go test ./...`; `go -C v4/go vet
+  ./...`; `git diff --check`; and `./.agents/sow/audit.sh`.
 
 ## Validation
 

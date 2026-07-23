@@ -27,13 +27,14 @@ use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod selective_finalization;
+pub(crate) use selective_finalization::{
+    FreeBitmapCoordinatorOutputError, PreparedFreeBitmapCoordinatorRecord,
+    PreparedFreeBitmapTerminalExport, SealedFreeBitmapCoordinatorRecord,
+    SealedFreeBitmapCoordinatorScratch,
+};
 #[cfg(test)]
 pub(crate) use selective_finalization::{
     FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationScratch,
-};
-pub(crate) use selective_finalization::{
-    PreparedFreeBitmapCoordinatorRecord, PreparedFreeBitmapTerminalExport,
-    SealedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorScratch,
 };
 
 const FREE_PATH_CAPACITY: usize = 4;
