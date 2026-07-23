@@ -2177,12 +2177,8 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             return Err((self, FixedPointError::InvalidWorkUnit));
         }
         let terminal = &self.terminal.terminal;
-        let bitmap_pages = terminal
-            .pages()
-            .iter()
-            .filter(|page| page.owner == crate::private_page_pool::PrivatePageOwner::Bitmap)
-            .count();
-        if new_locations.len() != bitmap_pages
+        let terminal_page_count = terminal.pages().len();
+        if new_locations.len() != terminal_page_count
             || new_locations
                 .iter()
                 .any(|location| *location != DraftPrivatePageLocation::EMPTY)
@@ -2190,7 +2186,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             return Err((
                 self,
                 FixedPointError::SourceScratchTooSmall {
-                    required: bitmap_pages,
+                    required: terminal_page_count,
                     actual: new_locations.len(),
                 },
             ));
@@ -2203,8 +2199,9 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             || pool_returns
                 .iter()
                 .any(|planned| *planned != PrivatePageCoordinatorPriorReturn::empty())
-            || requested_prior_returns.len() + bitmap_pages > session.source_writes.capacity()
-            || (requested_prior_returns.len() + bitmap_pages)
+            || requested_prior_returns.len() + terminal_page_count
+                > session.source_writes.capacity()
+            || (requested_prior_returns.len() + terminal_page_count)
                 .checked_mul(2)
                 .map_or(true, |writes| writes > session.map_writes.capacity())
             || requested_prior_returns.len() > session.tombstone_writes.capacity()
@@ -2212,7 +2209,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             return Err((
                 self,
                 FixedPointError::SourceScratchTooSmall {
-                    required: requested_prior_returns.len() + bitmap_pages,
+                    required: requested_prior_returns.len() + terminal_page_count,
                     actual: session.source_writes.capacity(),
                 },
             ));
@@ -2333,11 +2330,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 return Err((self, error));
             }
         };
-        let mut binding_index = 0usize;
-        for page in terminal.pages() {
-            if page.owner != crate::private_page_pool::PrivatePageOwner::Bitmap {
-                continue;
-            }
+        for (binding_index, page) in terminal.pages().iter().enumerate() {
             let provenance = match pool_replay.future_sealed_page_provenance(page.pool_slot) {
                 Ok(provenance) => provenance,
                 Err(_) => {
@@ -2416,7 +2409,6 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 session.reset_journal();
                 return Err((self, error));
             }
-            binding_index += 1;
         }
         let Some(record_scratch) = record_slot.scratch.replace(None) else {
             new_locations.fill(DraftPrivatePageLocation::EMPTY);

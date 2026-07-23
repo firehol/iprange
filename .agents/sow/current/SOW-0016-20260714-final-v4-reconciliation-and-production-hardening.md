@@ -67,6 +67,13 @@ finalization stage transfers or cleans that authority. A commit-success claim
 before that stage would be false. The next work remains the real writer
 lifecycle and final-record handoff, not a public API claim.
 
+2026-07-24 canonical-record correction: the retained record now covers every
+sealed terminal page, including retirement pages, rather than only the bitmap
+subset. The private input-finish boundary consumes the final successor without
+releasing those records, so commit remains blocked until the pending output-drain
+and exact scope-cleanup stage. Full Rust/Go validation is green for this internal
+milestone; durable private-file output and public SDK behavior remain pending.
+
 ## Requirements
 
 ### Purpose
@@ -6069,6 +6076,52 @@ requirements are normative in the Pre-Implementation Gate above.
 - Validation: 419 Rust no-default tests, 511 Rust all-feature tests, Rust
   formatting, Clippy with warnings denied, Rust benchmark compilation, all Go
   tests, Go vet, `git diff --check`, and the project SOW audit pass.
+
+### 2026-07-24 - Rust canonical-record all-page correction
+
+- Inspection of the first production-shaped combined bitmap/retirement handoff
+  found that its sealed scope correctly retains every terminal page, but the
+  canonical workspace record indexed only `Bitmap` owner pages. A later output
+  drain could therefore omit retirement bytes, while scope cleanup would reject
+  the incomplete record because its binding count was smaller than the sealed
+  scope's bound count. The test fixture at
+  `v4/rust/iprange-livedb/src/retirement_writer.rs` already creates this exact
+  one-bitmap/two-retirement scope.
+- This is an implementation gap in chunk 7, not a new format or public-API
+  decision. The approved canonical-record rule already requires output, cleanup
+  authority, and the complete sealed result to remain inseparable.
+- The derived repair is to retain/index every terminal page in page-number
+  order, regardless of owner, in the existing transaction-budgeted record
+  partition. Record handoff must prove exact full-scope coverage; later private
+  page lookup, output streaming, prior-page return, and cleanup use that same
+  authoritative set. Bytes remain in the bounded private-page pool until the
+  later output drain; no heap copy or external scratch is introduced.
+- The already-added internal `finish_fixed_point_input` boundary remains valid:
+  it consumes only the final successor after all aggregates are accepted, while
+  retained records continue to block commit until the future output-drain and
+  scope-cleanup transition succeeds. It does not authorize publication.
+- Validation for this correction must prove the mixed-owner scope is fully
+  retained, `FinishInput` leaves commit blocked by its live scope, cancellation
+  returns all workspace authority, and no allocation occurs in the Active and
+  handoff paths. No normative specification update is required because the
+  public storage and lifecycle contract is unchanged.
+
+### 2026-07-24 - Rust canonical-record validation
+
+- The permanent cross-owner lifecycle test now reserves a three-page scope
+  containing one bitmap and two retirement pages. It proves handoff accepts the
+  scope only when the canonical record covers every bound page, retains the
+  target metadata/successor, consumes `FinishInput` with zero allocation, keeps
+  commit blocked by the live scope, and permits explicit workspace cancellation
+  followed by whole-draft abort.
+- Validation passed: `cargo test --manifest-path v4/rust/Cargo.toml --workspace
+  --no-default-features` (419 tests); `cargo test --manifest-path
+  v4/rust/Cargo.toml --workspace --all-features` (511 tests); `cargo fmt
+  --manifest-path v4/rust/Cargo.toml --all -- --check`; `cargo clippy
+  --manifest-path v4/rust/Cargo.toml --workspace --all-features --all-targets
+  -- -D warnings`; `cargo check --manifest-path v4/rust/Cargo.toml --workspace
+  --all-features --benches`; `go -C v4/go test ./...`; `go -C v4/go vet ./...`;
+  `git diff --check`; and `./.agents/sow/audit.sh`.
 
 ## Validation
 

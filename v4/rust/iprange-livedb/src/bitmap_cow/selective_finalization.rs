@@ -139,6 +139,10 @@ pub(crate) struct SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slots> {
 
 /// Fully constructed live-pool record image whose only remaining step is to
 /// attach the already-proved live pool reference after future-state replay.
+///
+/// Despite the historical bitmap name, this canonical record owns every page
+/// in its sealed coordinator scope. Bitmap and retirement pages remain
+/// inseparable until output and scope cleanup complete.
 pub(crate) struct PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
     record_index: usize,
     work_unit: u64,
@@ -776,14 +780,11 @@ impl<'scratch, 'a, 'slots> SealedFreeBitmapCoordinatorRecord<'scratch, 'a, 'slot
         pages: &[PrivatePageCoordinatorTerminalPage],
         scratch: SealedFreeBitmapCoordinatorScratch<'a, 'scratch>,
     ) -> Result<Self, FreeBitmapCowError> {
-        let bitmap_pages = pages
-            .iter()
-            .filter(|page| page.owner == PrivatePageOwner::Bitmap)
-            .count();
+        let terminal_pages = pages.len();
         if nonce == 0
             || work_unit == 0
-            || bitmap_pages == 0
-            || !scratch.is_canonical_for(bitmap_pages)
+            || terminal_pages == 0
+            || !scratch.is_canonical_for(terminal_pages)
             || (root != 0
                 && !pages
                     .iter()
@@ -963,7 +964,7 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
         pool.validate_coordinator_scope_commitment(scope, &self.commitment)
             .map_err(FreeBitmapCowError::PrivatePool)?;
 
-        let mut bitmap_bindings = 0usize;
+        let mut terminal_bindings = 0usize;
         let mut root_found = root == 0;
         for binding in self.arena_bindings.iter() {
             if !binding.bound {
@@ -975,12 +976,12 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
             if page.binding_epoch != binding.pool_epoch || page.pgno != binding.page_number {
                 return Err(FreeBitmapCowError::StaleReservationPredecessor);
             }
-            root_found |= page.pgno == root;
-            bitmap_bindings = bitmap_bindings
+            root_found |= page.pgno == root && page.owner == PrivatePageOwner::Bitmap;
+            terminal_bindings = terminal_bindings
                 .checked_add(1)
                 .ok_or(FreeBitmapCowError::CoverageOverflow)?;
         }
-        if !root_found || bitmap_bindings > status.bound {
+        if !root_found || terminal_bindings != status.bound {
             return Err(FreeBitmapCowError::StaleReservationPredecessor);
         }
         Ok(())
@@ -1003,15 +1004,11 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
             FreeBitmapCowError,
         ),
     > {
-        let bitmap_pages = pages
-            .iter()
-            .filter(|page| page.owner == PrivatePageOwner::Bitmap)
-            .count();
+        let terminal_pages = pages.len();
         if nonce == 0
             || work_unit == 0
             || pages.is_empty()
-            || bitmap_pages == 0
-            || !scratch.is_canonical_for(bitmap_pages)
+            || !scratch.is_canonical_for(terminal_pages)
             || (root != 0
                 && !pages
                     .iter()
@@ -1021,11 +1018,7 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
             return Err((scratch, FreeBitmapCowError::StaleReservationPredecessor));
         }
         let mut index_root = NO_INDEX;
-        let mut binding_index = 0usize;
-        for page in pages {
-            if page.owner != PrivatePageOwner::Bitmap {
-                continue;
-            }
+        for (binding_index, page) in pages.iter().enumerate() {
             let provenance = match replay.future_sealed_page_provenance(page.pool_slot) {
                 Ok(provenance) => provenance,
                 Err(error) => {
@@ -1056,7 +1049,6 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
                 page.pgno,
                 IndexedPage::Arena(page.pool_slot),
             );
-            binding_index += 1;
         }
         let commitment = match replay.future_commitment() {
             Ok(commitment) => commitment,

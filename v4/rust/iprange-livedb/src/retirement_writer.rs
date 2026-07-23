@@ -6708,13 +6708,13 @@ mod tests {
                     free_bitmap_root: 0,
                     retirement_root: 0,
                 };
-                let mut record_bindings = [BitmapCowArenaBinding::empty(); 1];
+                let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
                 let mut record_replacements = [];
-                let mut record_index_nodes = [BitmapCowIndexNode::empty(); 1];
-                let record_returned = [const { Cell::new(false) }; 1];
+                let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
+                let record_returned = [const { Cell::new(false) }; 3];
                 let mut cleanup_nodes: [PrivatePageSelectiveOverlayNode; 0] = [];
                 let mut cleanup_path: [PrivatePageSelectivePathEntry; 0] = [];
-                let mut cleanup_targets = [usize::MAX; 1];
+                let mut cleanup_targets = [usize::MAX; 3];
                 let workspace_records = [FixedPointWorkspaceRecordSlot::new(
                     SealedFreeBitmapCoordinatorScratch {
                         arena_bindings: &mut record_bindings,
@@ -6735,10 +6735,13 @@ mod tests {
                     Cell::new(source_journal_neutral),
                     Cell::new(source_journal_neutral),
                     Cell::new(source_journal_neutral),
+                    Cell::new(source_journal_neutral),
                 ];
                 let map_journal_sink = Cell::new(usize::MAX);
                 let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
                 let map_journal = [
+                    Cell::new(map_journal_neutral),
+                    Cell::new(map_journal_neutral),
                     Cell::new(map_journal_neutral),
                     Cell::new(map_journal_neutral),
                     Cell::new(map_journal_neutral),
@@ -6764,7 +6767,7 @@ mod tests {
                 );
                 let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
                 let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
-                let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
+                let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
                 let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
                 let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
                 let mut workspace = FixedPointCoordinatorWorkspace::new(
@@ -6861,7 +6864,7 @@ mod tests {
                 };
                 assert_eq!(error, FixedPointError::StalePredecessor);
                 assert!(workspace.is_idle());
-                assert!(workspace.record_slot_ready(0, 1));
+                assert!(workspace.record_slot_ready(0, 3));
 
                 let aggregate = match workspace.prepare_aggregate(
                     produced,
@@ -6906,13 +6909,34 @@ mod tests {
                 assert_eq!(target.page_count, 100 + appended);
                 assert_eq!(target.retirement_root, combined.root);
                 assert_eq!(target.retirement_batch_count, combined.batch_count);
+                assert!(matches!(
+                    core.preflight_commit(&handle),
+                    Err(
+                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
+                            FixedPointError::StalePredecessor
+                        )
+                    )
+                ));
+                let (_, finish_allocations) = count_thread_allocations(|| {
+                    core.finish_fixed_point_input(&handle, &workspace, successor)
+                        .unwrap();
+                });
+                assert_eq!(finish_allocations, 0);
+                assert!(core.fixed_point(&handle).unwrap().is_quiescent());
                 let live_pool = core.draft(&handle).unwrap();
                 assert!(live_pool.has_active_scopes());
                 assert_eq!(
                     live_pool.coordinator_commit_fence(),
                     Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
                 );
-                assert!(core.preflight_commit(&handle).is_err());
+                assert!(matches!(
+                    core.preflight_commit(&handle),
+                    Err(
+                        crate::writer_transaction_core::PrivateWriterTransactionError::Pool(
+                            crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
+                        )
+                    )
+                ));
                 core.cancel_fixed_point_workspace(&handle, &mut workspace)
                     .unwrap();
                 assert!(workspace.is_idle());
