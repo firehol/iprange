@@ -934,6 +934,58 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
         })
     }
 
+    /// Confirms that the immutable record image matches the sealed scope
+    /// aggregate that the coordinator is about to retain. This is the last
+    /// fallible check before the coordinator releases active-work registration.
+    pub(crate) fn validate_sealed_handoff(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        scope: &PrivatePageReservationScope<'_>,
+        work_unit: u64,
+        record_index: usize,
+        root: u32,
+        pending_page_count: u64,
+    ) -> Result<(), FreeBitmapCowError> {
+        if self.record_index != record_index
+            || self.work_unit != work_unit
+            || self.root != root
+            || self.pending_page_count != pending_page_count
+            || self.scope != scope.seed()
+        {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        }
+        let status = pool
+            .validate_sealed_scope(scope, self.nonce)
+            .map_err(FreeBitmapCowError::PrivatePool)?;
+        if !status.successor_consumed {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        }
+        pool.validate_coordinator_scope_commitment(scope, &self.commitment)
+            .map_err(FreeBitmapCowError::PrivatePool)?;
+
+        let mut bitmap_bindings = 0usize;
+        let mut root_found = root == 0;
+        for binding in self.arena_bindings.iter() {
+            if !binding.bound {
+                continue;
+            }
+            let page = pool
+                .sealed_page_provenance(scope, self.nonce, binding.pool_slot)
+                .map_err(FreeBitmapCowError::PrivatePool)?;
+            if page.binding_epoch != binding.pool_epoch || page.pgno != binding.page_number {
+                return Err(FreeBitmapCowError::StaleReservationPredecessor);
+            }
+            root_found |= page.pgno == root;
+            bitmap_bindings = bitmap_bindings
+                .checked_add(1)
+                .ok_or(FreeBitmapCowError::CoverageOverflow)?;
+        }
+        if !root_found || bitmap_bindings > status.bound {
+            return Err(FreeBitmapCowError::StaleReservationPredecessor);
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn prepare_from_simulated_terminal(
         replay: &PrivatePagePreparedSparseReplay<'_, '_, '_>,

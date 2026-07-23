@@ -15,7 +15,7 @@ use crate::private_page_pool::{
 use crate::writer_fixed_point::{FixedPointActiveWork, FixedPointPreparedWork};
 use crate::writer_fixed_point::{
     FixedPointCoordinator, FixedPointCoordinatorWorkspace, FixedPointError, FixedPointPredecessor,
-    FixedPointPreparedAggregateAuthority,
+    FixedPointPreparedAggregateAuthority, FixedPointSealedAggregateWork,
 };
 #[cfg(test)]
 use crate::writer_fixed_point::{FixedPointPreparedOutput, FixedPointPreparedWorkSlot};
@@ -486,6 +486,71 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         self.fixed_point_registered_phase
             .set(PrivatePageCoordinatorWorkPhase::Sealed);
         Ok(sealed)
+    }
+
+    /// Retains a sealed aggregate as one canonical coordinator record and
+    /// returns the only predecessor authority for the following work unit.
+    /// This deliberately does not write or publish pages: terminal record
+    /// materialization and cleanup are a later transaction-lifecycle stage.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn complete_fixed_point_aggregate<'backing, 'arena, 'record_cleanup>(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        sealed: FixedPointSealedAggregateWork<'arena, 'record_cleanup, 'slots>,
+    ) -> Result<FixedPointPredecessor, PrivateWriterTransactionError<E>> {
+        let invalid = self.validate_handle(handle).is_err()
+            || self.state.get() != PrivateWriterTransactionState::Pending
+            || self.fixed_point_registered_work.get() == 0
+            || self.fixed_point_registered_generation.get() == 0
+            || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::Sealed
+            || self.fixed_point_workspace_identity.get() == 0
+            || self.fixed_point_workspace_identity.get() != workspace.identity()
+            || self.fixed_point_workspace_bytes.get() == 0;
+        if invalid {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        let Some(target) = self.target else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let Some(draft) = self.draft.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let Some(coordinator) = self.fixed_point.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let (pool_work, pool_generation, pool_phase) = draft.coordinator_registered_work();
+        if pool_work != self.fixed_point_registered_work.get()
+            || pool_generation != self.fixed_point_registered_generation.get()
+            || pool_phase != PrivatePageCoordinatorWorkPhase::Sealed
+            || coordinator.registered_work() != pool_work
+        {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        let completion = match sealed.finish(coordinator, draft, workspace) {
+            Ok(completion) => completion,
+            Err(error) => {
+                self.state.set(PrivateWriterTransactionState::AbortRequired);
+                return Err(PrivateWriterTransactionError::FixedPoint(error));
+            }
+        };
+        let (successor, retirement) = completion.into_parts();
+        let mut target = target;
+        target.page_count = successor.pending_page_count();
+        target.free_bitmap_root = successor.root();
+        target.retirement_root = retirement.root;
+        target.retirement_batch_count = retirement.batch_count;
+        self.target = Some(target);
+        self.fixed_point_registered_work.set(0);
+        self.fixed_point_registered_generation.set(0);
+        self.fixed_point_registered_phase
+            .set(PrivatePageCoordinatorWorkPhase::None);
+        Ok(successor)
     }
 
     #[cfg(test)]

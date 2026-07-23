@@ -676,6 +676,39 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
         Ok(())
     }
 
+    fn validate_live_record_handoff(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        record_index: usize,
+        scope: &PrivatePageReservationScope<'_>,
+        work_unit: u64,
+        root: u32,
+        pending_page_count: u64,
+    ) -> Result<(), FixedPointError> {
+        let Some(slot) = self.backing.records.get(record_index) else {
+            return Err(FixedPointError::StalePredecessor);
+        };
+        if record_index >= self.backing.len.get()
+            || self.backing.last_work_unit.get() != work_unit
+            || slot.state.get() != FixedPointWorkspaceRecordState::Live(work_unit)
+        {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        let Some(record) = slot.record.replace(None) else {
+            return Err(FixedPointError::StalePredecessor);
+        };
+        let result = record.validate_sealed_handoff(
+            pool,
+            scope,
+            work_unit,
+            record_index,
+            root,
+            pending_page_count,
+        );
+        slot.record.set(Some(record));
+        result.map_err(|_| FixedPointError::StalePredecessor)
+    }
+
     #[cfg(test)]
     pub(crate) fn record_state(&self, index: usize) -> Option<FixedPointWorkspaceRecordState> {
         self.backing.record_state(index)
@@ -1759,14 +1792,29 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     >,
 }
 
-pub(crate) struct FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B> {
-    pub(crate) active: FixedPointActiveWork<'slots>,
-    pub(crate) retirement: RetirementTreeEditResult,
-    pub(crate) bitmap: B,
-    pub(crate) record_index: usize,
+pub(crate) struct FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots> {
+    active: FixedPointActiveWork<'slots>,
+    retirement: RetirementTreeEditResult,
+    record_index: usize,
+    nonce: u64,
     _record: core::marker::PhantomData<
         PreparedFreeBitmapCoordinatorRecord<'record_arena, 'record_cleanup>,
     >,
+}
+
+/// The only successor emitted after a sealed aggregate has been accepted into
+/// its transaction-owned canonical record. Terminal page bytes remain private
+/// to that record and the pool; no producer output escapes this handoff.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FixedPointAggregateCompletion {
+    predecessor: FixedPointPredecessor,
+    retirement: RetirementTreeEditResult,
+}
+
+impl FixedPointAggregateCompletion {
+    pub(crate) fn into_parts(self) -> (FixedPointPredecessor, RetirementTreeEditResult) {
+        (self.predecessor, self.retirement)
+    }
 }
 
 pub(crate) trait FixedPointPreparedAggregateAuthority: Sized {
@@ -1849,16 +1897,20 @@ where
         self,
         coordinator: &FixedPointCoordinator,
         predecessor: FixedPointPredecessor,
-    ) -> FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B> {
+    ) -> FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots> {
         let Self {
             base,
-            terminal: _terminal,
+            terminal,
             retirement,
             bitmap,
             workspace_identity: _,
             pool_replay,
             mut workspace_replay,
         } = self;
+        let nonce = terminal.nonce();
+        // The producer authority is fully represented by the sealed terminal
+        // journal now. Keeping it would retain a draft borrow after Active.
+        drop(bitmap);
         let record_index = workspace_replay.record_index;
         coordinator.registered_work.set(base.work_identity);
         coordinator.predecessor_outstanding.set(false);
@@ -1886,8 +1938,8 @@ where
         FixedPointSealedAggregateWork {
             active,
             retirement,
-            bitmap,
             record_index,
+            nonce,
             _record: core::marker::PhantomData,
         }
     }
@@ -1934,7 +1986,7 @@ impl<
 where
     'record_arena: 'backing,
 {
-    type Sealed = FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots, B>;
+    type Sealed = FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots>;
 
     fn work_identity(&self) -> u64 {
         self.base.work_identity
@@ -1962,6 +2014,55 @@ where
         predecessor: FixedPointPredecessor,
     ) -> Self::Sealed {
         self.execute(coordinator, predecessor)
+    }
+}
+
+impl<'record_arena, 'record_cleanup, 'slots>
+    FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots>
+{
+    pub(crate) fn finish(
+        self,
+        coordinator: &FixedPointCoordinator,
+        pool: &PrivatePagePool<'slots>,
+        workspace: &FixedPointCoordinatorWorkspace<'_, 'record_arena, 'record_cleanup>,
+    ) -> Result<FixedPointAggregateCompletion, FixedPointError> {
+        let Self {
+            active,
+            retirement,
+            record_index,
+            nonce,
+            _record: _,
+        } = self;
+        if (retirement.root == 0) != (retirement.batch_count == 0)
+            || (retirement.root != 0
+                && (retirement.root < 2
+                    || u64::from(retirement.root) >= active.output.pending_page_count))
+        {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        workspace.validate_live_record_handoff(
+            pool,
+            record_index,
+            &active.scope,
+            active.work_identity,
+            active.output.root,
+            active.output.pending_page_count,
+        )?;
+        let predecessor = coordinator.complete_sealed_work(pool, active, nonce)?;
+        Ok(FixedPointAggregateCompletion {
+            predecessor,
+            retirement,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn record_index(&self) -> usize {
+        self.record_index
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn retirement_result(&self) -> RetirementTreeEditResult {
+        self.retirement
     }
 }
 
@@ -3693,6 +3794,57 @@ impl FixedPointCoordinator {
             active: sealed.active,
             record,
         })
+    }
+
+    /// Consumes one already-replayed aggregate work unit after its canonical
+    /// record has been validated. A sealed-scope failure is not retryable: the
+    /// private draft has already changed and must be discarded as a whole.
+    pub(crate) fn complete_sealed_work<'pool>(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        active: FixedPointActiveWork<'pool>,
+        nonce: u64,
+    ) -> Result<FixedPointPredecessor, FixedPointError> {
+        if self.abort_required.get()
+            || active.coordinator_identity != self.identity
+            || active.predecessor_generation.checked_add(1)
+                != Some(self.predecessor_generation.get())
+            || active.work_identity == 0
+            || active.work_identity != self.registered_work.get()
+            || nonce == 0
+        {
+            self.abort_required.set(true);
+            return Err(FixedPointError::AbortRequired);
+        }
+        if pool
+            .accept_sealed_coordinator_scope(&active.pool_work, &active.scope, nonce)
+            .is_err()
+        {
+            self.abort_required.set(true);
+            return Err(FixedPointError::AbortRequired);
+        }
+        let FixedPointActiveWork {
+            output,
+            carried,
+            pool_work,
+            scope: _,
+            ..
+        } = active;
+        if pool.finish_coordinator_work(pool_work).is_err() {
+            self.abort_required.set(true);
+            return Err(FixedPointError::AbortRequired);
+        }
+        self.root.set(output.root);
+        self.pending_page_count.set(output.pending_page_count);
+        self.carried.set(carried);
+        self.registered_work.set(0);
+        match self.predecessor() {
+            Ok(successor) => Ok(successor),
+            Err(_) => {
+                self.abort_required.set(true);
+                Err(FixedPointError::AbortRequired)
+            }
+        }
     }
 
     #[cfg(test)]

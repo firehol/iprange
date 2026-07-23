@@ -6029,6 +6029,47 @@ requirements are normative in the Pre-Implementation Gate above.
   construction; production workspace/lifecycle wiring remains the next required
   implementation chunk.
 
+### 2026-07-24 - Rust sealed-record handoff plan
+
+- The next internal boundary is not durable publication. A completed aggregate
+  must first verify that its exact workspace record, sealed scope, root, page
+  tail, and retirement result still agree; it then accepts that sealed scope
+  into the coordinator record and releases the work registration while retaining
+  the page bytes in the transaction pool. The returned successor is the sole
+  authority for a later work unit.
+- This is required to make the typed bitmap/retirement result part of the real
+  writer-core lifecycle instead of a test-only terminal object. The later
+  terminal writer still must stream the retained records to the private output,
+  clean their scopes, finish the input, and publish the meta pair. Until that
+  later step exists, `preflight_commit` must continue to reject the draft due to
+  retained cleanup work. No commit-success behavior is authorized by this
+  handoff.
+- Completion validates every fallible condition before accepting the sealed
+  scope. A mismatch after Active is a whole-draft `AbortRequired` condition;
+  it never issues a successor or permits partial publication. The permanent
+  test will cover the accepted record, target-meta handoff, successor issuance,
+  retained commit fence, zero allocation, and explicit cancellation plus abort.
+
+### 2026-07-24 - Rust sealed-record handoff implementation
+
+- Implemented the private Sealed-to-record handoff. It verifies the workspace
+  record identity, sealed scope, root, pending tail, retirement result, and
+  every retained bitmap-page provenance before accepting the scope and releasing
+  the coordinator work registration.
+- The retained record uses the same constant-work scope/vacancy aggregate that
+  sparse replay sealed. It deliberately does not make ordinary lifecycle paths
+  scan the whole scope: caller-requested full validation remains separate.
+- The core updates only its private target metadata and returns the next
+  predecessor after acceptance. The sealed page bytes and record remain in the
+  transaction pool. `preflight_commit` is still blocked by the active retained
+  scope, so this change cannot publish a partial or non-durable update.
+- Extended the production-shaped cross-owner test to prove the accepted record,
+  metadata handoff, successor, zero allocations, retained commit fence, and
+  explicit workspace cancellation followed by whole-draft abort.
+- Validation: 419 Rust no-default tests, 511 Rust all-feature tests, Rust
+  formatting, Clippy with warnings denied, Rust benchmark compilation, all Go
+  tests, Go vet, `git diff --check`, and the project SOW audit pass.
+
 ## Validation
 
 ### Historical adversarial-audit evidence

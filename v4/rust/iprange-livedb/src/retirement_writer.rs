@@ -6874,19 +6874,15 @@ mod tests {
                     Ok(aggregate) => aggregate,
                     Err(_) => panic!("restored aggregate preparation must succeed"),
                 };
-                let (sealed_retirement, sealed_record_index, allocations) = {
-                    let (execution, allocations) = count_thread_allocations(|| {
-                        core.execute_fixed_point_aggregate(&handle, predecessor, aggregate)
-                    });
-                    let sealed = match execution {
+                let (sealed, allocations) = count_thread_allocations(|| {
+                    match core.execute_fixed_point_aggregate(&handle, predecessor, aggregate) {
                         Ok(sealed) => sealed,
                         Err(_) => panic!("production core must execute the prepared aggregate"),
-                    };
-                    (sealed.retirement, sealed.record_index, allocations)
-                };
+                    }
+                });
                 assert_eq!(allocations, 0);
-                assert_eq!(sealed_retirement, combined);
-                assert_eq!(sealed_record_index, 0);
+                assert_eq!(sealed.retirement_result(), combined);
+                assert_eq!(sealed.record_index(), 0);
                 assert_eq!(
                     workspace.record_state(0),
                     Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
@@ -6895,6 +6891,28 @@ mod tests {
                 for page in produced_pages.iter() {
                     assert!(live_pool.find_bound_page(page.pgno).unwrap().is_some());
                 }
+                let (completion, completion_allocations) = count_thread_allocations(|| {
+                    core.complete_fixed_point_aggregate(&handle, &workspace, sealed)
+                });
+                let successor = match completion {
+                    Ok(successor) => successor,
+                    Err(error) => panic!("sealed aggregate handoff must complete: {error:?}"),
+                };
+                assert_eq!(completion_allocations, 0);
+                assert_eq!(successor.root(), bitmap_root);
+                assert_eq!(successor.pending_page_count(), 100 + appended);
+                let target = core.target().unwrap();
+                assert_eq!(target.free_bitmap_root, bitmap_root);
+                assert_eq!(target.page_count, 100 + appended);
+                assert_eq!(target.retirement_root, combined.root);
+                assert_eq!(target.retirement_batch_count, combined.batch_count);
+                let live_pool = core.draft(&handle).unwrap();
+                assert!(live_pool.has_active_scopes());
+                assert_eq!(
+                    live_pool.coordinator_commit_fence(),
+                    Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
+                );
+                assert!(core.preflight_commit(&handle).is_err());
                 core.cancel_fixed_point_workspace(&handle, &mut workspace)
                     .unwrap();
                 assert!(workspace.is_idle());

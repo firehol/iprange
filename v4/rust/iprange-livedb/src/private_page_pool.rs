@@ -5508,6 +5508,113 @@ impl<'slots> PrivatePagePool<'slots> {
         self.commitment_with_slots(&slots, scope)
     }
 
+    /// Constant-work coordinator commitment. Unlike `exact_commitment`, this
+    /// uses the maintained scope-tree and vacancy aggregates so a retained
+    /// record does not rescan every page in an earlier sealed scope.
+    pub(crate) fn coordinator_scope_commitment(
+        &self,
+        scope: &PrivatePageReservationScope<'_>,
+    ) -> Result<PrivatePagePoolCommitment, PrivatePagePoolError> {
+        let slots = self
+            .slots
+            .try_borrow()
+            .map_err(|_| PrivatePagePoolError::BorrowConflict)?;
+        let anchor = self.validate_scope(&slots, scope)?;
+        let scope_slot = &slots[anchor];
+        let mut hash = 1_469_598_103_934_665_603u64;
+        for value in [
+            self.slot_count as u64,
+            self.authorized_len.get() as u64,
+            self.available_count.get() as u64,
+            self.lowest_available.get() as u64,
+            self.committed_page_count,
+            self.pending_page_count.get(),
+            self.pending_txn,
+            self.identity as u64,
+            self.identity_epoch as u64,
+            self.generation.get(),
+            self.epoch.get(),
+            self.active_checkpoint.get(),
+            self.checkpoint_cleanup_slots.get() as u64,
+            self.checkpoint_index_head.get() as u64,
+            self.checkpoint_index_count.get() as u64,
+            self.scope_sequence.get(),
+            self.active_scopes.get() as u64,
+            self.unscoped_vacant_count.get() as u64,
+            self.unscoped_vacant_head.get() as u64,
+            self.unscoped_vacant_tail.get() as u64,
+            self.index_root.get() as u64,
+        ] {
+            hash = pool_hash_u64(hash, value);
+        }
+        for value in [
+            scope.id,
+            anchor as u64,
+            scope_slot.scope_member_head as u64,
+            scope_slot.scope_root as u64,
+            scope_slot.scope_vacant_head as u64,
+            scope_slot.scope_capacity as u64,
+            scope_slot.scope_bound as u64,
+        ] {
+            hash = pool_hash_u64(hash, value);
+        }
+        let (bound, tree_revision, tree_digest) = if scope_slot.scope_root == NO_SLOT {
+            (0, 0, 0)
+        } else {
+            let root = slots
+                .get(scope_slot.scope_root)
+                .ok_or(PrivatePagePoolError::StaleScope)?;
+            if root.scope_id != scope.id || root.scope_anchor_index != anchor {
+                return Err(PrivatePagePoolError::StaleScope);
+            }
+            (root.scope_count, root.scope_revision, root.scope_digest)
+        };
+        if bound != scope_slot.scope_bound
+            || scope_slot.scope_vacant_count
+                != scope_slot
+                    .scope_capacity
+                    .checked_sub(scope_slot.scope_bound)
+                    .ok_or(PrivatePagePoolError::StaleScope)?
+        {
+            return Err(PrivatePagePoolError::StaleScope);
+        }
+        for value in [
+            bound as u64,
+            tree_revision,
+            tree_digest,
+            scope_slot.scope_vacant_count as u64,
+            scope_slot.scope_vacant_revision,
+            scope_slot.scope_vacant_digest,
+        ] {
+            hash = pool_hash_u64(hash, value);
+        }
+        Ok(PrivatePagePoolCommitment {
+            identity: self.identity,
+            identity_epoch: self.identity_epoch,
+            generation: self.generation.get(),
+            epoch: self.epoch.get(),
+            operation_sequence: self.operation_sequence.get(),
+            active_operation_id: self.active_operation_id.get(),
+            operation_start_epoch: self.operation_start_epoch.get(),
+            abort_required: self.abort_required.get(),
+            pending_page_count: self.pending_page_count.get(),
+            scope_id: scope.id,
+            scope_anchor: anchor,
+            fingerprint: hash,
+        })
+    }
+
+    pub(crate) fn validate_coordinator_scope_commitment(
+        &self,
+        scope: &PrivatePageReservationScope<'_>,
+        expected: &PrivatePagePoolCommitment,
+    ) -> Result<(), PrivatePagePoolError> {
+        if &self.coordinator_scope_commitment(scope)? != expected {
+            return Err(PrivatePagePoolError::StaleAuthority);
+        }
+        Ok(())
+    }
+
     pub(crate) fn exact_commitment_terminal_prepared(
         &self,
         scope: &PrivatePageReservationScope<'_>,
