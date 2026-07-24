@@ -37,6 +37,8 @@ mod os;
 #[allow(dead_code)]
 mod page;
 #[allow(dead_code)]
+mod page_number_index;
+#[allow(dead_code)]
 mod page_source;
 #[allow(dead_code)]
 mod private_page_pool;

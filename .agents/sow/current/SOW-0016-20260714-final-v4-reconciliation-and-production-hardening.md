@@ -8018,6 +8018,70 @@ requirements are normative in the Pre-Implementation Gate above.
   Clippy with warnings denied, benchmark compilation, `git diff --check`, and
   `.agents/sow/audit.sh`.
 
+### 2026-07-24 - range-root retirement prerequisite plan
+
+- A materialized replacement range root cannot be handed to target metadata by
+  itself. Replacing a committed range root makes every page in the selected old
+  range tree unreachable. The v4 contract requires every such page to enter
+  the reader-protected retirement batch or the directly-free set; it cannot be
+  reused by the same draft (`binary-format-v4.md:935-1025`). The current Rust
+  and Go fixed-point target handoffs update only allocator and retirement
+  fields, so adding `range_root` there now would leak old range pages.
+- An old range tree is traversed in key order, not necessarily physical page
+  number order. A valid file is not required to have range pages allocated in
+  that traversal order, while a retirement blob requires strictly increasing,
+  unique physical page numbers (`binary-format-v4.md:1045-1085`). Collecting
+  all old pages in a `Vec`/slice then sorting would reintroduce the
+  input-sized-memory defect; an external sort file is forbidden.
+- First add a private fixed-page `u32` ordered set in Rust and Go. It will use
+  caller-provided logical 4 KiB workspace pages, contain dense sorted leaf
+  entries and bounded branch pages, accept arbitrary insertion order with set
+  semantics, and visit its values in strictly increasing order. All workspace
+  capacity is explicit before input; an insufficient budget rejects before the
+  insertion changes state. It creates no file, physical page identity,
+  terminal-journal entry, heap growth after setup, or public API.
+- The following slices will make a narrow range-tree ownership walker insert
+  each selected old range page into that index, teach the retirement blob
+  builder to consume its sorted stream without a full slice, and only then
+  bind the new range root/count plus old-page retirement into the existing
+  lock-bound fixed point. This order prevents a partial root handoff from
+  being mistaken for an implementation milestone.
+- Tests for this first prerequisite cover arbitrary/permuted insertion,
+  duplicates, ascending traversal, dense and sparse growth, exact
+  pre-mutation capacity rejection, stale-workspace rejection and scrub, and
+  zero allocations after fixed workspace setup. No default validation,
+  portable byte, or public SDK behavior changes in this slice.
+
+### 2026-07-24 - range-retirement ordered-index implementation and validation
+
+- Added matching private `PageNumberIndex` implementations in Rust and Go.
+  Each uses caller-provided logical 4 KiB pages, dense sorted `u32` leaves,
+  and bounded branch pages. Three branch levels cover the complete `u32`
+  page-number space. It accepts arbitrary order, preserves one copy of each
+  number, and visits the result in strictly increasing order.
+- Every insert calculates the exact split pages before changing a node. A
+  one-page workspace that has a full leaf rejects the next insert with a typed
+  capacity error and byte-for-byte unchanged workspace/index state. Abort
+  scrub clears only this unpublished workspace and makes it reusable.
+- The normal insertion path checks only constant-time private-workspace shape
+  and bounds facts. It does not rescan a node for global ordering or act as
+  implicit file validation; the index is private state created by the active
+  writer. Binary branch selection keeps large index growth logarithmic rather
+  than adding a hidden scan of each full branch.
+- Focused tests in both engines cover permuted inputs, duplicates, dense
+  reverse growth, a full branch-root split into a second branch level,
+  increasing replay, exact pre-mutation capacity failure, stale workspace,
+  explicit scrub, and zero heap allocations after workspace construction.
+- Validation passed: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`, `cargo test
+  --manifest-path v4/rust/Cargo.toml` (509 tests), `cargo test
+  --manifest-path v4/rust/Cargo.toml --all-features` (630 tests), Rust format,
+  warnings-denied Clippy, benchmark compilation, `git diff --check`, and
+  `.agents/sow/audit.sh`.
+- This checkpoint deliberately does not inspect an old range tree, change a
+  retirement blob, update target metadata, or publish a file. It is the
+  bounded sorted primitive required before any of those steps can be correct.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
