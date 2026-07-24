@@ -2907,6 +2907,10 @@ impl<'pages> PreparedCombinedRetirementTerminalExport<'pages> {
 }
 
 impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
+    pub(crate) fn pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
+        self.pages
+    }
+
     pub(crate) fn bitmap(&self) -> &B {
         &self.bitmap
     }
@@ -6910,8 +6914,8 @@ mod tests {
     };
     use crate::test_alloc::count_thread_allocations;
     use crate::writer_fixed_point::{
-        FixedPointCoordinator, FixedPointPreparedOutput, FixedPointPreparedWorkSlot,
-        FixedPointPrivateOutputDrainError,
+        FixedPointCoordinator, FixedPointError, FixedPointPreparedOutput,
+        FixedPointPreparedWorkSlot, FixedPointPrivateOutputDrainError,
     };
     use crate::writer_transaction_contract::PrivateWriterResourceBudget;
     use crate::writer_transaction_core::{
@@ -9421,6 +9425,26 @@ mod tests {
                                 Ok(export) => export,
                                 Err((_retirement, _bitmap, _pages, error)) => panic!("{error:?}"),
                             };
+                            assert_eq!(produced.pages.len(), 3);
+                            expected_terminal_pages
+                                .borrow_mut()
+                                .clone_from_slice(produced.pages);
+                            let live_pool = core.draft(handle)?;
+                            let produced = reserved
+                                .take()
+                                .expect("one reserved coordinator scope")
+                                .with_finalized_produced_terminal_export(
+                                    live_pool,
+                                    FixedPointPreparedOutput {
+                                        root: bitmap_root,
+                                        pending_page_count,
+                                    },
+                                    produced,
+                                    77,
+                                )
+                                .map_err(|(_reserved, _produced, error)| {
+                                    PrivateWriterTransactionError::FixedPoint(error)
+                                })?;
                             (retirement, bitmap_root, pending_page_count, produced)
                         }
                         LinuxFinalizerReclamationCase::SelectedBatch => {
@@ -9609,32 +9633,42 @@ mod tests {
                             );
                             let bitmap_root = prepared.bitmap_root();
                             let pending_page_count = prepared.pending_page_count();
-                            (retirement, bitmap_root, pending_page_count, prepared.into_export())
+                            assert_eq!(prepared.terminal_pages().len(), 3);
+                            expected_terminal_pages
+                                .borrow_mut()
+                                .clone_from_slice(prepared.terminal_pages());
+                            let live_pool = core.draft(handle)?;
+                            let (reserved_work, prepared) = match prepared.bind_to_reserved_work(
+                                reserved.take().expect("one reserved coordinator scope"),
+                                live_pool,
+                                0,
+                            ) {
+                                Ok(_) => panic!("zero nonce must reject coordinator binding"),
+                                Err((
+                                    reserved_work,
+                                    prepared,
+                                    FixedPointError::StalePredecessor,
+                                )) => (reserved_work, prepared),
+                                Err((_reserved_work, _prepared, error)) => {
+                                    panic!("zero nonce returned wrong bind error: {error:?}")
+                                }
+                            };
+                            {
+                                let expected = expected_terminal_pages.borrow();
+                                assert_eq!(prepared.terminal_pages(), &expected[..]);
+                            }
+                            let produced = prepared
+                                .bind_to_reserved_work(reserved_work, live_pool, 77)
+                                .map_err(|(_reserved, _prepared, error)| {
+                                    PrivateWriterTransactionError::FixedPoint(error)
+                                })?;
+                            (retirement, bitmap_root, pending_page_count, produced)
                         }
                     };
-                    assert_eq!(produced.pages.len(), 3);
-                    expected_terminal_pages
-                        .borrow_mut()
-                        .clone_from_slice(produced.pages);
                     final_bitmap_root.set(bitmap_root);
                     final_retirement_root.set(retirement.root);
 
                     let live_pool = core.draft(handle)?;
-                    let produced = reserved
-                        .take()
-                        .expect("one reserved coordinator scope")
-                        .with_finalized_produced_terminal_export(
-                            live_pool,
-                            FixedPointPreparedOutput {
-                                root: bitmap_root,
-                                pending_page_count,
-                            },
-                            produced,
-                            77,
-                        )
-                        .map_err(|(_reserved, _produced, error)| {
-                            PrivateWriterTransactionError::FixedPoint(error)
-                        })?;
                     let coordinator = core.fixed_point(handle)?;
                     let aggregate = workspace
                         .prepare_aggregate(

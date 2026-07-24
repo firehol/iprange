@@ -7210,7 +7210,55 @@ requirements are normative in the Pre-Implementation Gate above.
   the project SOW audit pass. No normative spec update is needed: this remains
   private Rust lifecycle composition with no public API or on-disk change.
 
+### 2026-07-24 - selected-reclaim coordinator-bind plan
+
+- Evidence: the selected Linux lifecycle fixture now obtains one typed,
+  complete terminal export, but still manually extracts its bitmap root and
+  pending page count before calling the reserved coordinator bind
+  (`retirement_writer.rs:9622-9642`). That separation makes the caller
+  responsible for keeping three inseparable facts together.
+- Add one crate-private method on the typed selected-reclaim export. It will
+  consume the already-reserved coordinator work, use only the root/page count
+  retained by that export, and invoke the existing late terminal bind. It stops
+  before aggregate execution, target mutation, page draining, and publication.
+- A failed bind will return both the untouched reserved work and the original
+  selected export. The coordinator's bind preflight runs before it assigns live
+  pool slots, so this preserves an exact retry path without rebuilding the
+  shadow output or silently continuing a partial transaction.
+- Rewire only the selected Linux fixture. It will deliberately reject nonce
+  zero, retain both returned authorities, and retry them successfully with the
+  normal nonce. No public `Reclaim`, SDK API, on-disk byte, default validation,
+  Go behavior, or publication behavior is part of this step.
+
+### 2026-07-24 - selected-reclaim coordinator-bind implementation
+
+- Added a crate-private move-only bind method to the typed selected-reclaim
+  export. It carries its own exact bitmap root, pending page count, retirement
+  result, bitmap proof, and combined terminal journal into the existing
+  `FixedPointReservedWork` late-bind boundary.
+- A rejected bind returns the same reserved coordinator work and complete
+  selected export. This makes retry explicit without rebuilding the already
+  changed shadow attempt; successful binding continues into the existing
+  aggregate path and does not itself execute, drain, or publish.
+- The selected Linux fixture now deliberately supplies nonce zero, confirms the
+  complete terminal journal is unchanged, and then binds the returned values
+  with the normal nonce before its existing aggregate/publication assertions.
+  The no-change fixture keeps its separate ordinary-finalization path.
+
 ## Validation
+
+### 2026-07-24 - selected-reclaim coordinator bind
+
+- Focused Linux tests pass for selected reclaim, no-change finalization, exact
+  bitmap terminal export, and retained retirement pages. The selected test
+  proves failed binding preserves both retry authorities and the terminal bytes
+  before successfully retrying inside its existing zero-allocation assertion.
+- Rust workspace matrices pass: 449 tests without optional features and 564
+  with all features. Warnings-denied all-target Clippy and all-feature benchmark
+  compilation pass.
+- Go `test ./...` and `vet ./...`, Rust formatting, whitespace checking, and
+  the project SOW audit pass. No specification update is needed: this remains
+  private Rust lifecycle plumbing with no public API or on-disk change.
 
 ### 2026-07-24 - selected-reclaim retirement stage
 

@@ -29,6 +29,10 @@ use crate::retirement_writer::{
     PrivatePageArena, PrivateReleaseBuffer, RetirementBlobBuilder, RetirementPathFrame,
     RetirementTreeEditResult, RetirementTreeEditor, RetirementTreeState, RetirementWriteError,
 };
+use crate::writer_fixed_point::{
+    FixedPointError, FixedPointPreparedOutput, FixedPointPreparedProducedTerminalWork,
+    FixedPointReservedWork,
+};
 use core::cell::Cell;
 
 /// Bounded work limits and bitmap payload capacity for one lock-held attempt.
@@ -244,6 +248,72 @@ where
 
     pub(crate) fn bitmap_replacements(&self) -> &[u32] {
         self.export.bitmap().replacements()
+    }
+
+    pub(crate) fn terminal_pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
+        self.export.pages()
+    }
+
+    /// Binds this complete selected-reclaim output to its pre-reserved
+    /// coordinator scope. A failed preflight returns both move-only inputs, so
+    /// the caller can retry without reconstructing the shadow output.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn bind_to_reserved_work<'slot, 'scope_slot, 'scratch, 'carried>(
+        self,
+        reserved: FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>,
+        pool: &PrivatePagePool<'_>,
+        nonce: u64,
+    ) -> Result<
+        FixedPointPreparedProducedTerminalWork<
+            'slot,
+            'scope_slot,
+            'scratch,
+            'carried,
+            'combined,
+            PreparedFreeBitmapTerminalExport<
+                'bitmap_terminal,
+                'bitmap_scratch,
+                'a,
+                'slots,
+                'scope,
+                S,
+            >,
+        >,
+        (
+            FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>,
+            Self,
+            FixedPointError,
+        ),
+    > {
+        let Self {
+            pass,
+            bitmap_root,
+            pending_page_count,
+            retirement,
+            export,
+        } = self;
+        match reserved.with_finalized_produced_terminal_export(
+            pool,
+            FixedPointPreparedOutput {
+                root: bitmap_root,
+                pending_page_count,
+            },
+            export,
+            nonce,
+        ) {
+            Ok(work) => Ok(work),
+            Err((reserved, export, error)) => Err((
+                reserved,
+                Self {
+                    pass,
+                    bitmap_root,
+                    pending_page_count,
+                    retirement,
+                    export,
+                },
+                error,
+            )),
+        }
     }
 
     pub(crate) fn into_export(
