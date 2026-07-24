@@ -9,6 +9,118 @@ use core::cell::{Cell, RefCell};
 
 static FINALIZATION_NONCE: AtomicU64 = AtomicU64::new(0);
 
+// Both preview and terminal finalization must construct the identical detached
+// bitmap state. Keeping this as one expansion prevents their COW rules from
+// drifting while preserving the stack-only lifetime of the stage pool.
+macro_rules! build_finalization_shadow {
+    (
+        $bound:ident,
+        $live_scope:ident,
+        $source:expr,
+        $pool:ident,
+        $scope:ident,
+        $shadow:ident
+    ) => {
+        $bound.stage.arena_bindings[..$bound.private_pages].fill(BitmapCowArenaBinding::empty());
+        $bound.stage.replacements.fill(0);
+        $bound.stage.candidates.fill(0);
+        $bound.stage.index_nodes.fill(BitmapCowIndexNode::empty());
+        $bound.stage.available_slots.fill(0);
+        for page in $bound.stage.verified_pages.iter_mut() {
+            *page = VerifiedBitmapPage::empty();
+        }
+        $bound.stage.replacements[..$bound.cow.replacements.len()]
+            .copy_from_slice($bound.cow.replacements);
+        $bound.stage.candidates[..$bound.cow.candidates.len()]
+            .copy_from_slice($bound.cow.candidates);
+        let $pool = PrivatePagePool::new_vacant(
+            &mut $bound.stage.arena[..$bound.private_pages],
+            $bound.cow.committed_page_count,
+            $bound.cow.pending_page_count,
+            $bound.cow.pending_txn,
+        )
+        .map_err(FreeBitmapCowError::PrivatePool)?;
+        let $scope = $pool
+            .reserve_scope($bound.private_pages)
+            .map_err(FreeBitmapCowError::PrivatePool)?;
+        let ledger = ScopedFreeBitmapCowLedger::new(
+            &mut $bound.stage.arena_bindings[..$bound.private_pages],
+            &mut $bound.stage.replacements[..$bound.cow.replacements.len()],
+            $bound.cow.replacement_len,
+            &mut $bound.stage.candidates[..$bound.cow.candidates.len()],
+            0,
+            &mut $bound.stage.index_nodes[..$bound.cow.index_nodes.len()],
+            &mut $bound.stage.available_slots[..$bound.private_pages],
+            &mut $bound.stage.verified_pages[..0],
+            $bound.cow.planned_candidate_len,
+            $bound.cow.reservation_planned,
+            $bound.cow.payload_page_budget,
+            $bound.cow.planned_required_private_pages,
+        );
+        let mut $shadow = FreeBitmapCow::from_scoped_pool_with_pending_txn(
+            $source,
+            $bound.cow.selected_txn,
+            $bound.cow.pending_txn,
+            $bound.cow.pending_page_count,
+            $bound.cow.root,
+            &$pool,
+            &$scope,
+            ledger,
+        )?;
+        let mut checkpoint = Some(
+            $pool
+                .begin_checkpoint()
+                .map_err(FreeBitmapCowError::PrivatePool)?,
+        );
+        for binding in &$bound.cow.arena_bindings[..$bound.private_pages] {
+            let info = $bound.cow.scoped_slot_info(binding.pool_slot)?;
+            let authorization = info
+                .authorization
+                .ok_or(FreeBitmapCowError::ArenaPageConflict(info.pgno))?;
+            let active_checkpoint = checkpoint
+                .as_ref()
+                .ok_or(FreeBitmapCowError::ArenaPageConflict(info.pgno))?;
+            if let Err(error) =
+                $pool.bind_page(active_checkpoint, &$scope, info.pgno, authorization)
+            {
+                let rollback = checkpoint
+                    .take()
+                    .ok_or(FreeBitmapCowError::ArenaPageConflict(info.pgno))?;
+                match $pool.rollback_checkpoint(rollback) {
+                    Ok(()) => Err(FreeBitmapCowError::PrivatePool(error))?,
+                    Err((_checkpoint, rollback_error)) => {
+                        Err(FreeBitmapCowError::PrivatePool(rollback_error))?
+                    }
+                }
+            }
+        }
+        $pool
+            .commit_checkpoint(
+                checkpoint
+                    .take()
+                    .ok_or(FreeBitmapCowError::ArenaPageConflict(0))?,
+            )
+            .map_err(|(_checkpoint, error)| FreeBitmapCowError::PrivatePool(error))?;
+        for index in 0..$bound.private_pages {
+            let live_slot = $bound.cow.arena_bindings[index].pool_slot;
+            let desired = $bound
+                .cow
+                .pool()
+                .finalized_slot(&$live_scope, live_slot)
+                .map_err(finalization_error)?;
+            let stage_slot = $shadow.arena_bindings[index].pool_slot;
+            $pool
+                .install_finalized_slot_in_shadow(&$scope, stage_slot, &desired)
+                .map_err(finalization_error)?;
+        }
+        let selected_target = $bound.cow.selected_candidate_target();
+        $shadow.select_planned_candidate_prefix(selected_target)?;
+        $shadow.synchronize_scoped_bindings_for_candidate_prefix(&$scope, selected_target)?;
+        $shadow.candidate_len = $bound.cow.candidate_len;
+        $shadow.validate_scoped_bindings()?;
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FreeBitmapFinalizationCachedPage {
     pgno: u32,
@@ -2060,6 +2172,121 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         Ok(())
     }
 
+    /// Predicts the complete committed bitmap replacement list after terminal
+    /// finalization without changing the live scope or bitmap COW.
+    pub(crate) fn preview_terminal_replacements(
+        &mut self,
+        scratch: FreeBitmapFinalizationScratch<'_>,
+        output: &mut [u32],
+    ) -> Result<usize, FreeBitmapCowError> {
+        self.validate_finalization_scratch(&scratch)?;
+        let output_required = self.cow.replacements.len();
+        if output.len() < output_required {
+            return Err(FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::ReplacementPages,
+                required: output_required,
+                available: output.len(),
+            });
+        }
+
+        let result = (|| {
+            let live_scope = self
+                .cow
+                .scoped()
+                .ok_or(FreeBitmapCowError::ArenaPageConflict(0))?
+                .share();
+            let commitment = self
+                .cow
+                .pool()
+                .exact_commitment(&live_scope)
+                .map_err(FreeBitmapCowError::PrivatePool)?;
+            let (expected_release, expected_reclaimed, expected_root, expected_tail, cached_len) = {
+                let discovery_cache = FinalizationCachedSource {
+                    base: self.cow.committed,
+                    pages: RefCell::new(scratch.cached_pages),
+                    length: Cell::new(0),
+                    replay: false,
+                };
+                build_finalization_shadow!(
+                    self,
+                    live_scope,
+                    &discovery_cache,
+                    stage_pool,
+                    stage_scope,
+                    shadow
+                );
+                let (released, reclaimed) = run_fixed_point(
+                    &mut shadow,
+                    scratch.release_pages,
+                    scratch.insert_pages,
+                    scratch.index_stack,
+                )?;
+                (
+                    released,
+                    reclaimed,
+                    shadow.root,
+                    shadow.pending_page_count,
+                    discovery_cache.length.get(),
+                )
+            };
+            let cache_seal = cache_fingerprint(scratch.cached_pages, cached_len);
+
+            let final_access = self.cow.committed.check_access();
+            let live_commitment = self
+                .cow
+                .pool()
+                .validate_exact_commitment(&live_scope, &commitment);
+            if live_commitment.is_err() {
+                return Err(FreeBitmapCowError::StaleInsertionPlan);
+            }
+            if cache_fingerprint(scratch.cached_pages, cached_len) != cache_seal {
+                return Err(FreeBitmapCowError::StaleInsertionPlan);
+            }
+            final_access.map_err(FreeBitmapCowError::Source)?;
+
+            let output_len = {
+                let replay_cache = FinalizationCachedSource {
+                    base: self.cow.committed,
+                    pages: RefCell::new(scratch.cached_pages),
+                    length: Cell::new(cached_len),
+                    replay: true,
+                };
+                build_finalization_shadow!(
+                    self,
+                    live_scope,
+                    &replay_cache,
+                    stage_pool,
+                    stage_scope,
+                    shadow
+                );
+                let (released, reclaimed) = run_fixed_point(
+                    &mut shadow,
+                    scratch.release_pages,
+                    scratch.insert_pages,
+                    scratch.index_stack,
+                )?;
+                if released != expected_release
+                    || reclaimed != expected_reclaimed
+                    || shadow.root != expected_root
+                    || shadow.pending_page_count != expected_tail
+                    || replay_cache.length.get() != cached_len
+                    || cache_fingerprint(&replay_cache.pages.borrow(), cached_len) != cache_seal
+                {
+                    return Err(FreeBitmapCowError::StaleInsertionPlan);
+                }
+                output[..shadow.replacement_len]
+                    .copy_from_slice(&shadow.replacements[..shadow.replacement_len]);
+                shadow.replacement_len
+            };
+
+            Ok(output_len)
+        })();
+        scratch
+            .cached_pages
+            .fill(FreeBitmapFinalizationCachedPage::empty());
+        result
+    }
+
     fn prepare_terminal_finalization<'scratch>(
         &mut self,
         scratch: FreeBitmapFinalizationScratch<'scratch>,
@@ -2075,105 +2302,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             .pool()
             .exact_commitment(&live_scope)
             .map_err(FreeBitmapCowError::PrivatePool)?;
-        let selected_target = self.cow.selected_candidate_target();
         let private_pages = self.private_pages;
-        let replacement_len = self.cow.replacement_len;
-        let planned_candidate_len = self.cow.planned_candidate_len;
-        let reservation_planned = self.cow.reservation_planned;
-        let payload_page_budget = self.cow.payload_page_budget;
-        let planned_private_pages = self.cow.planned_required_private_pages;
         let live_pending = self.cow.pending_page_count;
-        let live_root = self.cow.root;
-
-        macro_rules! build_shadow {
-            ($pool:ident, $scope:ident, $shadow:ident, $source:expr) => {
-                self.stage.arena_bindings[..private_pages].fill(BitmapCowArenaBinding::empty());
-                self.stage.replacements.fill(0);
-                self.stage.candidates.fill(0);
-                self.stage.index_nodes.fill(BitmapCowIndexNode::empty());
-                self.stage.available_slots.fill(0);
-                for page in self.stage.verified_pages.iter_mut() {
-                    *page = VerifiedBitmapPage::empty();
-                }
-                self.stage.replacements[..self.cow.replacements.len()]
-                    .copy_from_slice(self.cow.replacements);
-                self.stage.candidates[..self.cow.candidates.len()]
-                    .copy_from_slice(self.cow.candidates);
-                let $pool = PrivatePagePool::new_vacant(
-                    &mut self.stage.arena[..private_pages],
-                    self.cow.committed_page_count,
-                    live_pending,
-                    self.cow.pending_txn,
-                )
-                .map_err(FreeBitmapCowError::PrivatePool)?;
-                let $scope = $pool
-                    .reserve_scope(private_pages)
-                    .map_err(FreeBitmapCowError::PrivatePool)?;
-                let ledger = ScopedFreeBitmapCowLedger::new(
-                    &mut self.stage.arena_bindings[..private_pages],
-                    &mut self.stage.replacements[..self.cow.replacements.len()],
-                    replacement_len,
-                    &mut self.stage.candidates[..self.cow.candidates.len()],
-                    0,
-                    &mut self.stage.index_nodes[..self.cow.index_nodes.len()],
-                    &mut self.stage.available_slots[..private_pages],
-                    &mut self.stage.verified_pages[..0],
-                    planned_candidate_len,
-                    reservation_planned,
-                    payload_page_budget,
-                    planned_private_pages,
-                );
-                let mut $shadow = FreeBitmapCow::from_scoped_pool_with_pending_txn(
-                    $source,
-                    self.cow.selected_txn,
-                    self.cow.pending_txn,
-                    live_pending,
-                    live_root,
-                    &$pool,
-                    &$scope,
-                    ledger,
-                )?;
-                let checkpoint = $pool
-                    .begin_checkpoint()
-                    .map_err(FreeBitmapCowError::PrivatePool)?;
-                for binding in &self.cow.arena_bindings[..private_pages] {
-                    let info = self.cow.scoped_slot_info(binding.pool_slot)?;
-                    let authorization = info
-                        .authorization
-                        .ok_or(FreeBitmapCowError::ArenaPageConflict(info.pgno))?;
-                    if let Err(error) =
-                        $pool.bind_page(&checkpoint, &$scope, info.pgno, authorization)
-                    {
-                        return match $pool.rollback_checkpoint(checkpoint) {
-                            Ok(()) => Err(FreeBitmapCowError::PrivatePool(error)),
-                            Err((_checkpoint, rollback_error)) => {
-                                Err(FreeBitmapCowError::PrivatePool(rollback_error))
-                            }
-                        };
-                    }
-                }
-                $pool
-                    .commit_checkpoint(checkpoint)
-                    .map_err(|(_checkpoint, error)| FreeBitmapCowError::PrivatePool(error))?;
-                for index in 0..private_pages {
-                    let live_slot = self.cow.arena_bindings[index].pool_slot;
-                    let desired = self
-                        .cow
-                        .pool()
-                        .finalized_slot(&live_scope, live_slot)
-                        .map_err(finalization_error)?;
-                    let stage_slot = $shadow.arena_bindings[index].pool_slot;
-                    $pool
-                        .install_finalized_slot_in_shadow(&$scope, stage_slot, &desired)
-                        .map_err(finalization_error)?;
-                }
-                $shadow.select_planned_candidate_prefix(selected_target)?;
-                $shadow
-                    .synchronize_scoped_bindings_for_candidate_prefix(&$scope, selected_target)?;
-                $shadow.candidate_len = self.cow.candidate_len;
-                $shadow.validate_scoped_bindings()?;
-            };
-        }
 
         let (expected_release, expected_reclaimed, expected_root, expected_tail, cached_len) = {
             let discovery_cache = FinalizationCachedSource {
@@ -2182,7 +2312,14 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 length: Cell::new(0),
                 replay: false,
             };
-            build_shadow!(stage_pool, stage_scope, shadow, &discovery_cache);
+            build_finalization_shadow!(
+                self,
+                live_scope,
+                &discovery_cache,
+                stage_pool,
+                stage_scope,
+                shadow
+            );
             let (released, reclaimed) = run_fixed_point(
                 &mut shadow,
                 scratch.release_pages,
@@ -2219,7 +2356,14 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 length: Cell::new(cached_len),
                 replay: true,
             };
-            build_shadow!(stage_pool, stage_scope, shadow, &replay_cache);
+            build_finalization_shadow!(
+                self,
+                live_scope,
+                &replay_cache,
+                stage_pool,
+                stage_scope,
+                shadow
+            );
             let (released, reclaimed) = run_fixed_point(
                 &mut shadow,
                 scratch.release_pages,

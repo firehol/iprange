@@ -8438,6 +8438,268 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn locked_reclamation_preview_is_read_only_and_matches_finalization() {
+        // Returning this reclaimed page touches the second committed leaf only
+        // during finalization. The preview must discover that leaf without
+        // changing the live scope, then permit the real finalizer to replay it.
+        let source = SparsePages::new([
+            branch_many(11, 1, 1, &[(0, 12), (1, 13)]),
+            leaf(12, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(13, 1, &[2]),
+        ]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 40_000, 40_000, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+        bound.cow.apply_planned_reservation().unwrap();
+        let commitment = pool.exact_commitment(&scope).unwrap();
+        let root_before = bound.cow.root();
+        let pending_before = bound.cow.pending_page_count();
+        let candidates_before = bound.cow.candidates().to_vec();
+        let replacements_before = bound.cow.replacements().to_vec();
+        let available_before = bound.cow.available_private_pages();
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let mut preview = vec![0; bound.cow.replacements.len()];
+
+        let (preview_len, allocations) = count_thread_allocations(|| {
+            bound.preview_terminal_replacements(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut preview,
+            )
+        });
+        assert_eq!(allocations, 0);
+        let preview_len = preview_len.unwrap();
+        assert!(preview[..preview_len].contains(&13));
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+        pool.validate_exact_commitment(&scope, &commitment).unwrap();
+        assert_eq!(bound.cow.root(), root_before);
+        assert_eq!(bound.cow.pending_page_count(), pending_before);
+        assert_eq!(bound.cow.candidates(), candidates_before);
+        assert_eq!(bound.cow.replacements(), replacements_before);
+        assert_eq!(bound.cow.available_private_pages(), available_before);
+        bound.cow.validate_scoped_bindings().unwrap();
+
+        let finalized = bound
+            .finalize(FreeBitmapFinalizationScratch {
+                release_pages: &mut release,
+                insert_pages: &mut insert,
+                cached_pages: &mut cache,
+                index_stack: &mut stack,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            })
+            .unwrap();
+        let record = match finalized
+            .output
+            .into_coordinator_record(finalized.successor, 1, 0)
+        {
+            Ok(record) => record,
+            Err((_output, _successor, error)) => panic!("{error:?}"),
+        };
+        assert_eq!(record.replacements(), &preview[..preview_len]);
+        record.cleanup().unwrap();
+    }
+
+    #[test]
+    fn locked_reclamation_preview_rejects_short_output_before_source_traversal() {
+        let source = SparsePages::new([
+            branch_many(11, 1, 1, &[(0, 12), (1, 13)]),
+            leaf(12, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(13, 1, &[2]),
+        ]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 40_000, 40_000, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+        bound.cow.apply_planned_reservation().unwrap();
+        let commitment = pool.exact_commitment(&scope).unwrap();
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let required = bound.cow.replacements.len();
+        assert!(required > 0);
+        let mut output = vec![0; required - 1];
+        let reads_before = source.reads.get();
+
+        let error = bound
+            .preview_terminal_replacements(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut output,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::ReplacementPages,
+                required,
+                available: required - 1,
+            }
+        );
+        assert_eq!(source.reads.get(), reads_before);
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+        pool.validate_exact_commitment(&scope, &commitment).unwrap();
+    }
+
+    #[test]
+    fn locked_reclamation_preview_clears_cache_after_source_failure() {
+        let source = AccessControlledPages::new([
+            branch_many(11, 1, 1, &[(0, 12), (1, 13)]),
+            leaf(12, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(13, 1, &[2]),
+        ]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 40_000, 40_000, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+        bound.cow.apply_planned_reservation().unwrap();
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let mut output = vec![0; bound.cow.replacements.len()];
+
+        let checks_before = source.checks.get();
+        bound
+            .preview_terminal_replacements(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut output,
+            )
+            .unwrap();
+        let preview_checks = source.checks.get() - checks_before;
+        assert!(preview_checks > 1);
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+
+        let commitment = pool.exact_commitment(&scope).unwrap();
+        let output_before = output.clone();
+        let reads_before = source.source.reads.get();
+        let fail_at = source.checks.get() + preview_checks;
+        source.fail_on_check(fail_at);
+        let error = bound
+            .preview_terminal_replacements(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut output,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            FreeBitmapCowError::Source(PageSourceError::ForkedHandle)
+        );
+        assert_eq!(source.checks.get(), fail_at);
+        assert!(source.source.reads.get() > reads_before);
+        assert_eq!(output, output_before);
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+        pool.validate_exact_commitment(&scope, &commitment).unwrap();
+    }
+
+    #[test]
     fn locked_reclamation_rejects_finalization_replacement_shortage_before_binding() {
         let source = SparsePages::new([
             branch_many(11, 1, 1, &[(0, 12), (1, 13)]),

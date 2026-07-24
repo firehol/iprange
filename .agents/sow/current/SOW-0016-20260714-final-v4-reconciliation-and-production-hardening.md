@@ -6834,6 +6834,40 @@ requirements are normative in the Pre-Implementation Gate above.
   the retirement record, and it does not claim a generic clean-writer
   operation.
 
+### 2026-07-24 - read-only bitmap-finalization preview plan
+
+- Extract the existing staged-shadow construction so finalization and preview
+  execute the same COW logic. A private preview will run the existing
+  discovery/replay checks, return the complete post-finalization bitmap
+  replacement list into caller-provided bounded storage, and leave the live
+  pool, reservation scope, and live bitmap COW unchanged.
+- Require output capacity equal to the already reserved replacement ledger and
+  reject shortage before source traversal with a typed resource error. Clear
+  cached source slots before every preview return so the same fixed scratch can
+  be retried or used by the real finalizer.
+- Add coverage that a two-leaf preview sees the later leaf, does not alter the
+  live commitment, and agrees with a subsequent real finalization. This is a
+  necessary bitmap component only: prospective retirement blob/tree output
+  still creates a separate bounded fixed-point problem, so this slice cannot
+  claim generic reclamation completion.
+
+### 2026-07-24 - read-only bitmap-finalization preview implementation
+
+- The terminal finalizer and preview now share one detached-stage bitmap COW
+  construction path. Preview runs the same bounded discovery/replay checks and
+  copies the complete post-finalization bitmap replacement list only after the
+  replay agrees.
+- Preview validates caller output capacity before it traverses the committed
+  source. It changes only detached stage scratch, clears cached source slots on
+  success and failure, and leaves the live pool commitment, scope, and live
+  bitmap COW unchanged.
+- Permanent tests cover the previously missed second leaf, exact agreement with
+  a subsequent real finalization using the same scratch, zero preview
+  allocations, pre-traversal output shortage, and cache/output cleanup after a
+  late source-access failure. This is private Rust infrastructure; no public
+  API, Go parity, retirement-output preview, or generic clean-writer operation
+  is claimed.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -7010,6 +7044,18 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
   audit pass. Go behavior is unchanged; this remains Rust-only internal
   capacity preparation.
+
+### 2026-07-24 - read-only bitmap-finalization preview
+
+- Focused Rust coverage passes for the read-only/replay match, pre-traversal
+  output capacity failure, source-failure cleanup, and the complete locked
+  reclamation group.
+- Rust workspace matrices pass: 442 no-default tests and 557 all-feature
+  tests. Rust formatting, warnings-denied all-target Clippy, and all-feature
+  benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. This checkpoint remains a private prerequisite for the later
+  retirement/blob/tree fixed point, not its completion.
 
 ### Historical adversarial-audit evidence
 
