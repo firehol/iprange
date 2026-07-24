@@ -6354,6 +6354,57 @@ requirements are normative in the Pre-Implementation Gate above.
   binding, because no physical live-commit path invokes this code yet. That
   remains the next integration requirement rather than a false completion claim.
 
+### 2026-07-24 - Linux physical-publication implementation plan
+
+- The next implementation is a private, move-only Linux publication attempt
+  that owns the already-acquired operation barrier. It will begin the existing
+  source-to-target attempt record before any output page write, expose only a
+  bounded page sink for pages `2..target.page_count`, synchronize non-meta
+  output, write the parity-selected target meta page, synchronize it, confirm
+  the target, and update the retained writer lease while the same barrier stays
+  held.
+- Its error authority will preserve the exact phase boundary: failures before
+  target-meta writing are `NotCommitted`; any failure from the first target-meta
+  byte through failed phase-4 confirmation is `OutcomeUnknown`; a failed
+  phase-5 lease update is `Committed` but close-only. No destructor will clear
+  a lease or discard a tail. Every post-attempt failure will mark the writer
+  close-only before returning its retained barrier; the caller drops that
+  barrier before `Close` performs the existing retained-descriptor cleanup.
+- This layer will remain private and callback-based. It does not invent a
+  public writer API or duplicate fixed-point logic. The following core-wiring
+  slice will pass the core's bounded private-page drain through this sink and
+  accept transaction success only after the publisher returns a durable target.
+- Permanent Linux tests will inject private-page write, phase-2 sync,
+  target-meta write, phase-4 sync/confirmation, and phase-5 update failures;
+  they will assert old-meta cleanup, close-only outcome handling, and durable
+  target retention exactly at the phase boundaries.
+
+### 2026-07-24 - Linux physical-publication implementation
+
+- Implemented the private Linux publication state machine in
+  `v4/rust/iprange-livedb/src/os/linux/live_writer.rs`. While one already-held
+  operation barrier remains live, it records the source-to-target attempt,
+  accepts only complete non-meta pages inside `2..target.page_count`, syncs the
+  main file, writes the parity-selected complete meta page, syncs again,
+  confirms the target, and updates the exact writer lease.
+- `RetainedRegular::set_len` now performs retained-descriptor growth, so phase
+  2 synchronizes both output bytes and the target file length. The
+  page sink intentionally permits an authorized reusable page below the old
+  file length: v4 allocation may reuse only a committed-free or
+  reader-safe-reclaimed page, and the still-pending core integration owns that
+  proof.
+- A failure before target-meta writing is returned as `NotCommitted`; phase-3
+  write, phase-4 sync, and target-confirmation failures are `OutcomeUnknown`;
+  phase-5 lease-update failures are `Committed`. Every recorded attempt is
+  automatically close-only. A target that reached phase 4 can also be made
+  close-only if later core completion fails, and an unlock failure after phase
+  5 has the same protection.
+- This is deliberately not a public SDK API and has no production caller yet.
+  It does not claim that the core's allocator/retirement fixed point runs under
+  this barrier; the next slice must wire that existing exact private-page proof
+  into this physical publisher without allowing a raw page-number caller to
+  bypass it.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6369,6 +6420,22 @@ requirements are normative in the Pre-Implementation Gate above.
 - This validates the in-memory ownership proof only. It does not claim phase-2
   or phase-4 durability, a physical metadata writer, commit-result mapping, or
   a public writer API.
+
+### 2026-07-24 - Linux physical publication
+
+- Targeted tests cover successful publication, preflight reuse, a private-page
+  sink failure after a real page write, phase-2 sync failure, phase-3 meta-write
+  failure, phase-4 sync and confirmation failures, phase-5 update failure,
+  explicit post-publication close-only handling, and an injected unlock failure.
+  They prove source-tail truncation only when the source remains selected and
+  target preservation once the target meta is selected.
+- The physical publisher is allocation-free at reader capacities 1, 64, and
+  1024. The full Rust no-default matrix passes 421 tests and the all-feature
+  matrix passes 533 tests.
+- Rust Clippy with warnings denied and all-feature benchmark compilation pass.
+  Go `test` and `vet` also pass. This validation still does not make a public
+  writer, does not add default full validation, and does not prove the required
+  core-to-barrier finalization integration.
 
 ### Historical adversarial-audit evidence
 

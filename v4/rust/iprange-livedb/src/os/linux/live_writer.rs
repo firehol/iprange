@@ -67,6 +67,120 @@ pub(crate) enum LinuxLiveWriterBarrierReleaseError {
     Os(LinuxOsError),
 }
 
+/// Bounded page-output errors inside one already-recorded publication attempt.
+#[derive(Debug)]
+pub(crate) enum LinuxLiveWriterPageSinkError {
+    PageOutOfBounds { pgno: u32, page_count: u64 },
+    PageLength { actual: usize },
+    OffsetOverflow,
+    Os(LinuxOsError),
+}
+
+/// The immediate cause of a physical-publication failure.
+#[derive(Debug)]
+pub(crate) enum LinuxLiveWriterPublicationCause<E> {
+    Sink(E),
+    Os(LinuxOsError),
+    Lease(LinuxWriterLeaseError),
+}
+
+/// Phase-classified physical-publication failure.
+///
+/// Only `Preflight` leaves the established writer reusable. Every other
+/// variant owns a recorded attempt or a potentially durable meta page. The
+/// publisher transitions that writer to explicit close-only cleanup before it
+/// returns the error.
+#[derive(Debug)]
+pub(crate) enum LinuxLiveWriterPublicationError<E> {
+    Preflight(LinuxWriterLeaseError),
+    NotCommitted(LinuxLiveWriterPublicationCause<E>),
+    OutcomeUnknown(LinuxLiveWriterPublicationCause<E>),
+    Committed(LinuxLiveWriterPublicationCause<E>),
+}
+
+impl<E> LinuxLiveWriterPublicationError<E> {
+    pub(crate) const fn requires_close_only(&self) -> bool {
+        !matches!(self, Self::Preflight(_))
+    }
+}
+
+/// Restricted writer for the non-meta pages of one target generation.
+///
+/// It deliberately cannot write either meta page and cannot address a page
+/// outside the target's exact committed length.
+#[derive(Debug)]
+pub(crate) struct LinuxLiveWriterPageSink<'a> {
+    main: &'a RetainedRegular,
+    target_page_count: u64,
+}
+
+impl LinuxLiveWriterPageSink<'_> {
+    pub(crate) fn write_page(
+        &mut self,
+        pgno: u32,
+        bytes: &[u8],
+    ) -> Result<(), LinuxLiveWriterPageSinkError> {
+        if bytes.len() != PAGE_SIZE {
+            return Err(LinuxLiveWriterPageSinkError::PageLength {
+                actual: bytes.len(),
+            });
+        }
+        if pgno < 2 || u64::from(pgno) >= self.target_page_count {
+            return Err(LinuxLiveWriterPageSinkError::PageOutOfBounds {
+                pgno,
+                page_count: self.target_page_count,
+            });
+        }
+        let offset = u64::from(pgno)
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(LinuxLiveWriterPageSinkError::OffsetOverflow)?;
+        self.main
+            .write_all_at(bytes, offset)
+            .map_err(LinuxLiveWriterPageSinkError::Os)
+    }
+}
+
+/// A phase-4-confirmed target that still owns the operation barrier.
+///
+/// The caller must either release it normally after the transaction core has
+/// accepted success, or make it close-only if later in-memory completion fails.
+#[derive(Debug)]
+pub(crate) struct LinuxLiveWriterPublication<'a> {
+    barrier: LinuxLiveWriterOperationBarrier<'a>,
+    target: Bootstrap,
+}
+
+impl LinuxLiveWriterPublication<'_> {
+    pub(crate) const fn target(&self) -> Bootstrap {
+        self.target
+    }
+
+    pub(crate) fn release(self) -> Result<(), (Self, LinuxLiveWriterBarrierReleaseError)> {
+        self.release_with(RetainedRegular::release_lock)
+    }
+
+    fn release_with(
+        mut self,
+        release: impl FnOnce(&mut RetainedRegular) -> Result<(), LinuxOsError>,
+    ) -> Result<(), (Self, LinuxLiveWriterBarrierReleaseError)> {
+        match self.barrier.release_with(release) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.barrier.force_close_only_after_publication();
+                Err((self, error))
+            }
+        }
+    }
+
+    pub(crate) fn into_close_only(self) -> Result<(), (Self, LinuxLiveWriterBarrierReleaseError)> {
+        let Self { barrier, target } = self;
+        match barrier.into_close_only() {
+            Ok(()) => Ok(()),
+            Err((barrier, error)) => Err((Self { barrier, target }, error)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LinuxLiveWriterReaderFacts {
     registering_readers: u32,
@@ -449,6 +563,236 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         ))
     }
 
+    fn force_close_only_after_publication(&mut self) {
+        if self.inner.state == WriterState::OperationLocked {
+            self.protection = None;
+            self.inner.state = WriterState::CleanupOnly;
+        }
+    }
+
+    fn publication_failure<E>(
+        mut self,
+        error: LinuxLiveWriterPublicationError<E>,
+    ) -> (Self, LinuxLiveWriterPublicationError<E>) {
+        debug_assert!(error.requires_close_only());
+        self.force_close_only_after_publication();
+        (self, error)
+    }
+
+    /// Runs phases 2-5 for pages already finalized under this operation lock.
+    ///
+    /// The callback receives only the target's non-meta pages. It may stream
+    /// the transaction core's bounded private output without allocating or
+    /// retaining another file handle. On every post-attempt error this method
+    /// marks the writer close-only before returning the retained barrier; the
+    /// caller drops that barrier, then uses `LinuxLiveWriter::close` for
+    /// recovery.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn publish_private_pages<E>(
+        self,
+        target: MetaV4,
+        write: impl FnOnce(&mut LinuxLiveWriterPageSink<'_>) -> Result<(), E>,
+    ) -> Result<LinuxLiveWriterPublication<'a>, (Self, LinuxLiveWriterPublicationError<E>)> {
+        self.publish_private_pages_with(
+            target,
+            write,
+            |file| file.sync_all(),
+            write_target_meta_page,
+            |files, owned| files.update_writer_lease_after_meta(owned),
+        )
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn publish_private_pages_with<E, W, S, M, U>(
+        mut self,
+        target: MetaV4,
+        write: W,
+        mut synchronize: S,
+        write_meta: M,
+        update_lease: U,
+    ) -> Result<LinuxLiveWriterPublication<'a>, (Self, LinuxLiveWriterPublicationError<E>)>
+    where
+        W: FnOnce(&mut LinuxLiveWriterPageSink<'_>) -> Result<(), E>,
+        S: FnMut(&std::fs::File) -> std::io::Result<()>,
+        M: FnOnce(&RetainedRegular, MetaV4) -> Result<(), LinuxOsError>,
+        U: FnOnce(
+            &mut RetainedLiveFiles,
+            &mut OwnedWriterLease,
+        ) -> Result<(), LinuxWriterLeaseError>,
+    {
+        if std::process::id() != self.creator_pid {
+            return Err((
+                self,
+                LinuxLiveWriterPublicationError::Preflight(LinuxWriterLeaseError::Os(
+                    LinuxOsError::ForkedHandle,
+                )),
+            ));
+        }
+        if self.protection.is_none() {
+            return Err((
+                self,
+                LinuxLiveWriterPublicationError::Preflight(LinuxWriterLeaseError::ScanRequired),
+            ));
+        }
+
+        {
+            let LinuxLiveWriterInner { files, owned, .. } = &mut *self.inner;
+            let files = files.as_mut().expect("locked writer retains files");
+            let owned = owned.as_ref().expect("locked writer retains exact lease");
+            if let Err(error) = files.begin_writer_commit_attempt(owned, target) {
+                return Err((self, LinuxLiveWriterPublicationError::Preflight(error)));
+            }
+        }
+
+        {
+            let files = self
+                .inner
+                .files
+                .as_ref()
+                .expect("locked writer retains files");
+            let mut sink = LinuxLiveWriterPageSink {
+                main: &files.main,
+                target_page_count: target.page_count,
+            };
+            if let Err(error) = write(&mut sink) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::NotCommitted(
+                        LinuxLiveWriterPublicationCause::Sink(error),
+                    ),
+                ));
+            }
+        }
+
+        let target_bytes = match target.page_count.checked_mul(PAGE_SIZE as u64) {
+            Some(bytes) => bytes,
+            None => {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::NotCommitted(
+                        LinuxLiveWriterPublicationCause::Lease(
+                            LinuxWriterLeaseError::CommitAttemptMismatch,
+                        ),
+                    ),
+                ));
+            }
+        };
+        {
+            let files = self
+                .inner
+                .files
+                .as_mut()
+                .expect("locked writer retains files");
+            if let Err(error) = files.main.set_len(target_bytes) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::NotCommitted(
+                        LinuxLiveWriterPublicationCause::Os(error),
+                    ),
+                ));
+            }
+            if let Err(error) = synchronize_retained_main(&files.main, &mut synchronize) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::NotCommitted(
+                        LinuxLiveWriterPublicationCause::Os(error),
+                    ),
+                ));
+            }
+        }
+
+        {
+            let LinuxLiveWriterInner { files, owned, .. } = &mut *self.inner;
+            let files = files.as_mut().expect("locked writer retains files");
+            let owned = owned.as_ref().expect("locked writer retains exact lease");
+            if let Err(error) = files.begin_writer_meta_write(owned, target) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::NotCommitted(
+                        LinuxLiveWriterPublicationCause::Lease(error),
+                    ),
+                ));
+            }
+        }
+
+        {
+            let files = self
+                .inner
+                .files
+                .as_ref()
+                .expect("locked writer retains files");
+            if let Err(error) = write_meta(&files.main, target) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::OutcomeUnknown(
+                        LinuxLiveWriterPublicationCause::Os(error),
+                    ),
+                ));
+            }
+            if let Err(error) = synchronize_retained_main(&files.main, &mut synchronize) {
+                return Err(self.publication_failure(
+                    LinuxLiveWriterPublicationError::OutcomeUnknown(
+                        LinuxLiveWriterPublicationCause::Os(error),
+                    ),
+                ));
+            }
+        }
+
+        let confirmed = {
+            let LinuxLiveWriterInner { files, owned, .. } = &mut *self.inner;
+            let files = files.as_mut().expect("locked writer retains files");
+            let owned = owned.as_ref().expect("locked writer retains exact lease");
+            match files.confirm_writer_meta_sync(owned, target) {
+                Ok(confirmed) => confirmed,
+                Err(error) => {
+                    return Err(self.publication_failure(
+                        LinuxLiveWriterPublicationError::OutcomeUnknown(
+                            LinuxLiveWriterPublicationCause::Lease(error),
+                        ),
+                    ));
+                }
+            }
+        };
+
+        let update_result = {
+            let LinuxLiveWriterInner { files, owned, .. } = &mut *self.inner;
+            let files = files.as_mut().expect("locked writer retains files");
+            let owned = owned.as_mut().expect("locked writer retains exact lease");
+            update_lease(files, owned)
+        };
+        if let Err(error) = update_result {
+            return Err(
+                self.publication_failure(LinuxLiveWriterPublicationError::Committed(
+                    LinuxLiveWriterPublicationCause::Lease(error),
+                )),
+            );
+        }
+
+        {
+            let LinuxLiveWriterInner { bootstrap, .. } = &mut *self.inner;
+            *bootstrap = confirmed;
+        }
+
+        Ok(LinuxLiveWriterPublication {
+            barrier: self,
+            target: confirmed,
+        })
+    }
+
+    /// Leaves the retained sidecar lock in place for `Close` to clean up and
+    /// drops only the in-process operation guard. This is required after any
+    /// recorded publication attempt, including a phase-5 interrupted update.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn into_close_only(
+        mut self,
+    ) -> Result<(), (Self, LinuxLiveWriterBarrierReleaseError)> {
+        if std::process::id() != self.creator_pid {
+            return Err((self, LinuxLiveWriterBarrierReleaseError::ForkedHandle));
+        }
+        if self.inner.state == WriterState::CleanupOnly {
+            return Ok(());
+        }
+        if self.inner.state != WriterState::OperationLocked {
+            return Err((self, LinuxLiveWriterBarrierReleaseError::NotHeld));
+        }
+        self.force_close_only_after_publication();
+        Ok(())
+    }
+
     pub(crate) fn release(&mut self) -> Result<(), LinuxLiveWriterBarrierReleaseError> {
         self.release_with(RetainedRegular::release_lock)
     }
@@ -480,6 +824,26 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         self.inner.state = WriterState::Open;
         Ok(())
     }
+}
+
+fn synchronize_retained_main(
+    main: &RetainedRegular,
+    synchronize: &mut impl FnMut(&File) -> io::Result<()>,
+) -> Result<(), LinuxOsError> {
+    main.check_creator()?;
+    synchronize(&main.file).map_err(|source| LinuxOsError::Io {
+        operation: "synchronize retained main file",
+        source,
+    })
+}
+
+fn write_target_meta_page(main: &RetainedRegular, target: MetaV4) -> Result<(), LinuxOsError> {
+    let mut page = [0u8; PAGE_SIZE];
+    target.encode_into(&mut page);
+    let offset = (target.txn_id & 1)
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(LinuxOsError::OffsetOverflow)?;
+    main.write_all_at(&page, offset)
 }
 
 fn operation_barrier_pair_cause(cause: LinuxLivePairError) -> LinuxLiveWriterBarrierCause {
@@ -713,6 +1077,414 @@ mod tests {
             commit_nonce: inner.bootstrap.meta.commit_nonce,
             committed_length: inner.bootstrap.committed_bytes,
             observed_end_exclusive: observed_pages * PAGE_SIZE as u64,
+        }
+    }
+
+    fn next_publication_target(writer: &LinuxLiveWriter, page_count: u64, nonce: u8) -> MetaV4 {
+        let source = writer.lock_inner().bootstrap;
+        let mut target = source.meta;
+        target.txn_id += 1;
+        target.commit_nonce = [nonce; 16];
+        target.page_count = page_count;
+        target
+    }
+
+    fn selected_bootstrap(database: &TestDatabase) -> Bootstrap {
+        crate::bootstrap::open(&std::fs::read(&database.main).unwrap(), OpenMode::Writer).unwrap()
+    }
+
+    #[test]
+    fn private_page_publication_commits_target_and_releases_after_success() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xa1);
+        let page = [0xa2; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let publication = barrier
+            .publish_private_pages(target, |sink| sink.write_page(2, &page))
+            .unwrap();
+        assert_eq!(publication.target().meta, target);
+        let StableSlot::Active(active) = decode_stable_slot(
+            &database.slot(0),
+            SlotRole::Writer,
+            linux_slot_host_limits(),
+        )
+        .unwrap() else {
+            panic!("phase five did not retain the target writer lease");
+        };
+        assert_eq!(active.txn_id, target.txn_id);
+
+        publication.release().unwrap();
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, target);
+        assert_eq!(
+            std::fs::read(&database.main).unwrap()[2 * PAGE_SIZE..],
+            page
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_publication_preflight_failure_keeps_writer_reusable() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let mut target = next_publication_target(&writer, 3, 0xa3);
+        target.txn_id += 1;
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (mut barrier, error) = barrier
+            .publish_private_pages(target, |_| Ok::<(), ()>(()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::Preflight(
+                LinuxWriterLeaseError::CommitAttemptMismatch
+            )
+        ));
+        assert!(!error.requires_close_only());
+        assert_eq!(barrier.inner.state, WriterState::OperationLocked);
+        barrier.release().unwrap();
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, database.meta);
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_sink_failure_is_not_committed_and_forces_close_only() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xa4);
+        let page = [0xa5; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (mut barrier, error) = barrier
+            .publish_private_pages(target, |sink| {
+                sink.write_page(2, &page).unwrap();
+                Err::<(), ()>(())
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::NotCommitted(
+                LinuxLiveWriterPublicationCause::Sink(())
+            )
+        ));
+        assert!(error.requires_close_only());
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        assert!(matches!(
+            barrier.release(),
+            Err(LinuxLiveWriterBarrierReleaseError::NotHeld)
+        ));
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, database.meta);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            2 * PAGE_SIZE as u64
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_phase_two_sync_failure_is_not_committed_and_cleans_old_tail() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xa6);
+        let page = [0xa7; PAGE_SIZE];
+        let synchronizations = Cell::new(0u8);
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (barrier, error) = barrier
+            .publish_private_pages_with(
+                target,
+                |sink| {
+                    sink.write_page(2, &page).unwrap();
+                    Ok::<(), ()>(())
+                },
+                |_| {
+                    synchronizations.set(synchronizations.get() + 1);
+                    Err(std::io::Error::other("injected phase-two sync failure"))
+                },
+                write_target_meta_page,
+                |files, owned| files.update_writer_lease_after_meta(owned),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::NotCommitted(LinuxLiveWriterPublicationCause::Os(_))
+        ));
+        assert_eq!(synchronizations.get(), 1);
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, database.meta);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            2 * PAGE_SIZE as u64
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_meta_write_failure_is_outcome_unknown_and_cleans_old_tail() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xa8);
+        let page = [0xa9; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (barrier, error) = barrier
+            .publish_private_pages_with(
+                target,
+                |sink| {
+                    sink.write_page(2, &page).unwrap();
+                    Ok::<(), ()>(())
+                },
+                |file| file.sync_all(),
+                |_, _| Err(LinuxOsError::RandomFailure),
+                |files, owned| files.update_writer_lease_after_meta(owned),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::OutcomeUnknown(LinuxLiveWriterPublicationCause::Os(
+                LinuxOsError::RandomFailure
+            ))
+        ));
+        assert!(error.requires_close_only());
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, database.meta);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            2 * PAGE_SIZE as u64
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_phase_four_sync_failure_retains_the_target() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xaa);
+        let page = [0xab; PAGE_SIZE];
+        let synchronizations = Cell::new(0u8);
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (barrier, error) = barrier
+            .publish_private_pages_with(
+                target,
+                |sink| {
+                    sink.write_page(2, &page).unwrap();
+                    Ok::<(), ()>(())
+                },
+                |file| {
+                    let next = synchronizations.get() + 1;
+                    synchronizations.set(next);
+                    if next == 2 {
+                        Err(std::io::Error::other("injected phase-four sync failure"))
+                    } else {
+                        file.sync_all()
+                    }
+                },
+                write_target_meta_page,
+                |files, owned| files.update_writer_lease_after_meta(owned),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::OutcomeUnknown(LinuxLiveWriterPublicationCause::Os(_))
+        ));
+        assert_eq!(synchronizations.get(), 2);
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, target);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            3 * PAGE_SIZE as u64
+        );
+        assert_eq!(
+            std::fs::read(&database.main).unwrap()[2 * PAGE_SIZE..],
+            page
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_phase_four_confirmation_failure_is_outcome_unknown() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let source = writer.lock_inner().bootstrap.meta;
+        let target = next_publication_target(&writer, 3, 0xac);
+        let page = [0xad; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (barrier, error) = barrier
+            .publish_private_pages_with(
+                target,
+                |sink| {
+                    sink.write_page(2, &page).unwrap();
+                    Ok::<(), ()>(())
+                },
+                |file| file.sync_all(),
+                |main, target| {
+                    write_target_meta_page(main, target)?;
+                    let mut source_page = [0u8; PAGE_SIZE];
+                    source.encode_into(&mut source_page);
+                    main.write_all_at(&source_page, (target.txn_id & 1) * PAGE_SIZE as u64)
+                },
+                |files, owned| files.update_writer_lease_after_meta(owned),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::OutcomeUnknown(
+                LinuxLiveWriterPublicationCause::Lease(
+                    LinuxWriterLeaseError::CommitOutcomeUnresolved
+                )
+            )
+        ));
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, database.meta);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            2 * PAGE_SIZE as u64
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_phase_five_failure_is_committed_and_retains_the_target() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xae);
+        let page = [0xaf; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let (barrier, error) = barrier
+            .publish_private_pages_with(
+                target,
+                |sink| {
+                    sink.write_page(2, &page).unwrap();
+                    Ok::<(), ()>(())
+                },
+                |file| file.sync_all(),
+                write_target_meta_page,
+                |_, _| Err(LinuxWriterLeaseError::GenerationChanged),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterPublicationError::Committed(LinuxLiveWriterPublicationCause::Lease(
+                LinuxWriterLeaseError::GenerationChanged
+            ))
+        ));
+        assert!(error.requires_close_only());
+        assert_eq!(barrier.inner.state, WriterState::CleanupOnly);
+        drop(barrier);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, target);
+        assert_eq!(
+            std::fs::metadata(&database.main).unwrap().len(),
+            3 * PAGE_SIZE as u64
+        );
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_publication_can_be_made_close_only_after_phase_four() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xb0);
+        let page = [0xb1; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let publication = barrier
+            .publish_private_pages(target, |sink| sink.write_page(2, &page))
+            .unwrap();
+        publication.into_close_only().unwrap();
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, target);
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_publication_release_failure_forces_close_only() {
+        let database = TestDatabase::new(7, 2, 2, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let target = next_publication_target(&writer, 3, 0xb2);
+        let page = [0xb3; PAGE_SIZE];
+
+        let barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+        let publication = barrier
+            .publish_private_pages(target, |sink| sink.write_page(2, &page))
+            .unwrap();
+        let (publication, error) = publication
+            .release_with(|_| Err(LinuxOsError::RandomFailure))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LinuxLiveWriterBarrierReleaseError::Os(LinuxOsError::RandomFailure)
+        ));
+        assert_eq!(publication.barrier.inner.state, WriterState::CleanupOnly);
+        drop(publication);
+
+        writer.close().unwrap();
+        assert_eq!(selected_bootstrap(&database).meta, target);
+        assert_eq!(database.slot(0), [0; SLOT_SIZE as usize]);
+    }
+
+    #[test]
+    fn private_page_publication_is_allocation_free_at_reader_capacity() {
+        for capacity in [1, 64, 1024] {
+            let database = TestDatabase::new(7, 2, 2, capacity);
+            let writer = LinuxLiveWriter::open(&database.main).unwrap();
+            let target = next_publication_target(&writer, 3, 0xb4);
+            let page = [0xb5; PAGE_SIZE];
+
+            let (result, allocations) = count_thread_allocations(|| {
+                let barrier = writer
+                    .acquire_operation_barrier_with_cancel(|| false)
+                    .unwrap();
+                barrier.publish_private_pages(target, |sink| sink.write_page(2, &page))
+            });
+            assert_eq!(allocations, 0, "reader capacity {capacity}");
+            result.unwrap().release().unwrap();
+            writer.close().unwrap();
         }
     }
 

@@ -697,6 +697,18 @@ impl RetainedRegular {
         Ok(())
     }
 
+    pub(crate) fn set_len(&mut self, length: u64) -> Result<(), LinuxOsError> {
+        self.check_creator()?;
+        self.file
+            .set_len(length)
+            .map_err(|source| LinuxOsError::Io {
+                operation: "resize retained regular file",
+                source,
+            })?;
+        self.length = length;
+        Ok(())
+    }
+
     pub(crate) fn read_main_bootstrap(&self, mode: OpenMode) -> Result<Bootstrap, LinuxOsError> {
         self.check_creator()?;
         let metadata = self.file.metadata().map_err(|source| LinuxOsError::Io {
