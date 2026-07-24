@@ -10908,8 +10908,14 @@ mod tests {
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]
-    #[test]
-    fn linux_finalizer_publishes_proof_bound_ordinary_range_replacement() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum LinuxOrdinaryRangeReplacementCase {
+        Publish,
+        RejectLateCoreBinding,
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    fn run_linux_ordinary_range_replacement_case(case: LinuxOrdinaryRangeReplacementCase) {
         const PAGE_COUNT: u64 = 64;
         const MAX_PRIVATE_PAGES: usize = RANGE_ROOT_LIVE_PRIVATE_PAGE_CAPACITY;
 
@@ -11289,10 +11295,60 @@ mod tests {
                         },
                     )
                     .unwrap();
-                    let range = produced.range_target().unwrap();
-                    let retirement = produced.retirement_result();
                     let bitmap_root = produced.bitmap().root();
                     let pending_page_count = produced.bitmap().pending_page_count();
+                    if case == LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding {
+                        let live_pool = core.draft(handle)?;
+                        let (reserved_work, produced) = match reserved
+                            .take()
+                            .expect("one reserved coordinator scope")
+                            .with_finalized_produced_terminal_export(
+                                live_pool,
+                                FixedPointPreparedOutput {
+                                    root: bitmap_root,
+                                    pending_page_count,
+                                },
+                                produced,
+                                0,
+                            ) {
+                            Ok(_) => panic!("zero nonce must reject the terminal bind"),
+                            Err((reserved_work, produced, FixedPointError::StalePredecessor)) => {
+                                (reserved_work, produced)
+                            }
+                            Err((_reserved_work, _produced, error)) => {
+                                panic!("zero nonce returned the wrong error: {error:?}")
+                            }
+                        };
+                        shadow_pool.require_abort();
+                        let (_retirement, _range, bitmap, _provenance, pages, _rebind) =
+                            produced.into_bind_parts();
+                        bitmap.discard_after_abort();
+                        pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                        assert!(bitmap_terminal_pages
+                            .iter()
+                            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                        assert!(range_terminal_pages
+                            .iter()
+                            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                        assert!(retirement_terminal_pages
+                            .iter()
+                            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                        assert!(combined_terminal_pages
+                            .iter()
+                            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                        assert!(seed.is_empty_and_clean());
+                        assert!(first.is_empty_and_clean());
+                        assert!(second.is_empty_and_clean());
+                        reserved_work
+                            .cancel(live_pool)
+                            .map_err(PrivateWriterTransactionError::FixedPoint)?;
+                        core.require_abort(handle)?;
+                        return Err(PrivateWriterTransactionError::FixedPoint(
+                            FixedPointError::StalePredecessor,
+                        ));
+                    }
+                    let range = produced.range_target().unwrap();
+                    let retirement = produced.retirement_result();
                     let terminal_pages = produced.pages();
                     assert!(terminal_pages.len() <= MAX_PRIVATE_PAGES);
                     expected_terminal_pages.borrow_mut()[..terminal_pages.len()]
@@ -11367,43 +11423,110 @@ mod tests {
         });
         assert_eq!(allocations, 0);
         assert!(finalizer_ran.get());
-        let target = publication.unwrap().meta;
-        assert_eq!(target.free_bitmap_root, final_bitmap_root.get());
-        assert_eq!(target.range_root, final_range_root.get());
-        assert_eq!(target.range_record_count, final_range_records.get());
-        assert_eq!(target.retirement_root, final_retirement_root.get());
-        assert_eq!(
-            target.retirement_batch_count,
-            final_retirement_batches.get()
-        );
-        assert_ne!(target.range_root, selected.range_root);
-        assert_eq!(target.range_record_count, 1);
-        assert_eq!(target.txn_id, selected.txn_id + 1);
-        assert!(target.retirement_batch_count > selected.retirement_batch_count);
-        assert!(workspace.is_idle());
-        assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
-        assert_eq!(core.selected(), target);
-        assert_eq!(core.target(), None);
-        writer.close().unwrap();
-        contender.acquire_lock(LockMode::Exclusive, true).unwrap();
-        contender.release_lock().unwrap();
+        match case {
+            LinuxOrdinaryRangeReplacementCase::Publish => {
+                let target = publication.unwrap().meta;
+                assert_eq!(target.free_bitmap_root, final_bitmap_root.get());
+                assert_eq!(target.range_root, final_range_root.get());
+                assert_eq!(target.range_record_count, final_range_records.get());
+                assert_eq!(target.retirement_root, final_retirement_root.get());
+                assert_eq!(
+                    target.retirement_batch_count,
+                    final_retirement_batches.get()
+                );
+                assert_ne!(target.range_root, selected.range_root);
+                assert_eq!(target.range_record_count, 1);
+                assert_eq!(target.txn_id, selected.txn_id + 1);
+                assert!(target.retirement_batch_count > selected.retirement_batch_count);
+                assert!(workspace.is_idle());
+                assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+                assert_eq!(core.selected(), target);
+                assert_eq!(core.target(), None);
+                writer.close().unwrap();
+                contender.acquire_lock(LockMode::Exclusive, true).unwrap();
+                contender.release_lock().unwrap();
 
-        let committed = std::fs::read(&database.main).unwrap();
-        assert_eq!(
-            crate::bootstrap::open(&committed, OpenMode::Writer)
-                .unwrap()
-                .meta,
-            target
-        );
-        let expected = expected_terminal_pages.borrow();
-        for page in &expected[..expected_terminal_len.get()] {
-            let offset = usize::try_from(page.pgno).unwrap() * PAGE_SIZE;
-            assert_eq!(
-                &committed[offset..offset + PAGE_SIZE],
-                &page.bytes,
-                "the ordinary replacement must publish the exact lock-bound terminal page"
-            );
+                let committed = std::fs::read(&database.main).unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(&committed, OpenMode::Writer)
+                        .unwrap()
+                        .meta,
+                    target
+                );
+                let expected = expected_terminal_pages.borrow();
+                for page in &expected[..expected_terminal_len.get()] {
+                    let offset = usize::try_from(page.pgno).unwrap() * PAGE_SIZE;
+                    assert_eq!(
+                        &committed[offset..offset + PAGE_SIZE],
+                        &page.bytes,
+                        "the ordinary replacement must publish the exact lock-bound terminal page"
+                    );
+                }
+            }
+            LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding => {
+                assert!(matches!(
+                    publication,
+                    Err(
+                        crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
+                            PrivateWriterTransactionError::FixedPoint(
+                                FixedPointError::StalePredecessor
+                            )
+                        )
+                    )
+                ));
+                assert_eq!(expected_terminal_len.get(), 0);
+                assert_eq!(core.state(), PrivateWriterTransactionState::AbortRequired);
+                assert_eq!(core.selected(), selected);
+                let private_target = core
+                    .target()
+                    .expect("pending draft retains its base target");
+                assert_eq!(private_target.range_root, selected.range_root);
+                assert_eq!(
+                    private_target.range_record_count,
+                    selected.range_record_count
+                );
+                assert_eq!(private_target.free_bitmap_root, selected.free_bitmap_root);
+                assert_eq!(private_target.retirement_root, selected.retirement_root);
+                assert_eq!(
+                    private_target.retirement_batch_count,
+                    selected.retirement_batch_count
+                );
+                writer.close().unwrap();
+                contender.acquire_lock(LockMode::Exclusive, true).unwrap();
+                contender.release_lock().unwrap();
+                assert_eq!(
+                    std::fs::read(&database.main).unwrap(),
+                    initial,
+                    "a late terminal/core failure must not publish data or metadata"
+                );
+
+                core.cancel_fixed_point_workspace(&handle, &mut workspace)
+                    .unwrap();
+                assert!(workspace.is_idle());
+                let abort_visits = core.abort().unwrap();
+                assert!(abort_visits > 0);
+                assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+                assert_eq!(core.target(), None);
+                let fresh = core.begin([4; 16]).unwrap();
+                assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+                assert!(!core.draft(&fresh).unwrap().requires_abort());
+                assert!(core.abort().unwrap() > 0);
+            }
         }
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_publishes_proof_bound_ordinary_range_replacement() {
+        run_linux_ordinary_range_replacement_case(LinuxOrdinaryRangeReplacementCase::Publish);
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_late_ordinary_range_failure_requires_whole_draft_abort() {
+        run_linux_ordinary_range_replacement_case(
+            LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding,
+        );
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]

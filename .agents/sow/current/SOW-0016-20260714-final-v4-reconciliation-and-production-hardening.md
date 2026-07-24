@@ -9080,10 +9080,31 @@ requirements are normative in the Pre-Implementation Gate above.
   the all-feature suite (677 tests) pass. Formatting, warnings-denied
   all-target/all-feature Clippy, whitespace checks, and the SOW audit also
   pass.
-- The required late-failure/whole-draft-abort companion is still pending. This
-  checkpoint intentionally claims only the successful end-to-end seam; no
-  public API, format byte, default validation behavior, temporary file, or
-  production writer surface changed.
+- The late-failure/whole-draft-abort companion is recorded below. These tests
+  remain an integration proof only: no public API, format byte, default
+  validation behavior, temporary file, or production writer surface changed.
+
+### 2026-07-24 - ordinary range-replacement late-failure integration
+
+- The same real Linux operation now has an injected late core-bind failure
+  after the protected range/bitmap/retirement terminal exists. It rejects a
+  zero terminal nonce, marks the shadow pool abort-required, clears all three
+  typed terminal journals and the merged journal, and proves every fixed-point
+  proof index is clean before the callback returns its typed error.
+- The Linux publisher releases the operation barrier without writing the main
+  file. The test compares every main-file byte with its original image, checks
+  that the selected metadata is unchanged, and checks that the private base
+  target did not receive any range, bitmap, or retirement replacement. (A
+  pending transaction legitimately has a private next-generation base target;
+  it is not published metadata.)
+- The canceled coordinator reservation and workspace are then released, and
+  only explicit whole-draft abort returns the core to `Clean`. A fresh
+  transaction proves the old abort latch and handle do not contaminate the
+  next draft.
+- Focused success and late-failure tests pass. Rust default (555 tests) and
+  all-feature (678 tests) suites, warnings-denied all-target/all-feature
+  Clippy, all-feature benchmark compilation, whitespace checks, and the SOW
+  audit pass for this companion.
 
 ### 2026-07-24 - transaction abort-latch validation
 
