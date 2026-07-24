@@ -2630,11 +2630,14 @@ func promoteFinalizationEmptyRoot(cow *freeBitmapCOW, pageNumber uint32) freeBit
 	if poolProblem.failed() {
 		return rollbackDisposableBitmapShadow(cow.pool, checkpoint, bitmapPoolError(poolProblem))
 	}
-	var page [PageSize]byte
+	// The shadow owns fixed output pages for COW encoding. Reuse one here so
+	// promoting a legal empty root stays within the caller-reserved workspace.
+	page := &cow.outputs[0]
+	clear(page[:])
 	writeFreeBitmapHeader(
-		&page, PageTypeBitmapLeaf, cow.pendingTxn, 0, 0, bitmapLeafLower,
+		page, PageTypeBitmapLeaf, cow.pendingTxn, 0, 0, bitmapLeafLower,
 	)
-	if poolProblem = cow.pool.writePageInScope(cow.scope, token, &page); poolProblem.failed() {
+	if poolProblem = cow.pool.writePageInScope(cow.scope, token, page); poolProblem.failed() {
 		return rollbackDisposableBitmapShadow(cow.pool, checkpoint, bitmapPoolError(poolProblem))
 	}
 	if poolProblem = cow.pool.setCommittedOriginInScope(cow.scope, token, 0); poolProblem.failed() {
@@ -3060,6 +3063,151 @@ func (p *freeBitmapReservationAttachment) compactFinalizedBindings(boundLen int)
 		)
 		p.cow.indexLen++
 	}
+}
+
+// previewTerminalReplacements runs the same two-pass bitmap finalization in
+// the attachment's detached shadow storage, but never applies the result to
+// the live scope. It is the range-root fixed-point's read-only bitmap input.
+// The caller owns output; no error writes to it.
+func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
+	scratch freeBitmapFinalizationScratch,
+	output []uint32,
+) (int, freeBitmapCOWError) {
+	seal, problem := captureFreeBitmapFinalizationLiveSeal(p)
+	if problem.failed() {
+		return 0, problem
+	}
+	if problem = validateFreeBitmapFinalizationScratch(p, scratch); problem.failed() {
+		return 0, problem
+	}
+	if len(output) < len(p.cow.replacements) {
+		return 0, freeBitmapCOWError{
+			code:     freeBitmapCOWErrInsufficientResourceBudget,
+			resource: freeBitmapResourceReplacementPages,
+			required: len(p.cow.replacements), actual: len(output),
+		}
+	}
+	for _, live := range [9][]uint32{
+		p.cow.candidates,
+		p.cow.replacements,
+		p.buffers.poolValidation,
+		p.buffers.candidates,
+		p.buffers.replacements,
+		p.buffers.stage.poolValidation,
+		p.buffers.stage.replacements,
+		p.cow.singleInsertPage[:],
+		p.buffers.stage.cow.singleInsertPage[:],
+	} {
+		if reservationSlicesOverlap(output, live) {
+			return 0, freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict}
+		}
+	}
+	if (p.reclamationRequest.ticket != nil &&
+		reservationSlicesOverlap(output, p.reclamationRequest.ticket.pages)) ||
+		reservationSlicesOverlap(output, scratch.releasePages) {
+		return 0, freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict}
+	}
+
+	// The replay cleanup is only useful to a real finalization apply. Keeping
+	// it canonical here makes the supplied scratch immediately reusable.
+	defer scratch.cleanup.clear()
+	cacheKey, ok := mintFreeBitmapFinalizationNonce()
+	if !ok {
+		return 0, freeBitmapCOWError{code: freeBitmapCOWErrMutationEpochExhausted}
+	}
+	clear(scratch.cachedPages)
+	cache := scratch.cache
+	*cache = freeBitmapFinalizationCachedSource{
+		base: p.cow.committed, cow: &p.cow, pages: scratch.cachedPages,
+		root: bitmapCOWNoIndex, stack: scratch.indexStack, sealKey: cacheKey,
+	}
+
+	// The discovery pass is allowed to read the committed source into the
+	// cache, but all COW and pool mutation remains in the detached stage.
+	discovery, problem := p.buildFinalizationShadow(cache)
+	if problem.failed() {
+		if problem.code == freeBitmapCOWErrSource {
+			if fenceProblem := validateFreeBitmapFinalizationSourceFailure(p, seal, cache); fenceProblem.failed() {
+				return 0, fenceProblem
+			}
+		}
+		return 0, problem
+	}
+	discovered, problem := runFreeBitmapFinalizationFixedPoint(discovery, scratch)
+	if problem.failed() {
+		if cache.problem.failed() {
+			return 0, cache.problem
+		}
+		if problem.code == freeBitmapCOWErrSource {
+			if fenceProblem := validateFreeBitmapFinalizationSourceFailure(p, seal, cache); fenceProblem.failed() {
+				return 0, fenceProblem
+			}
+		}
+		return 0, problem
+	}
+	scratch.cleanup.clear()
+	discoveryRoot := discovery.root
+	discoveryPageCount := discovery.pageCount
+	if problem = cache.validate(); problem.failed() {
+		return 0, problem
+	}
+	cacheFingerprint := finalizationCacheFingerprint(cache.pages[:cache.length])
+	discoverySeal := sealFreeBitmapReservationCOW(discovery)
+	discoveryFingerprint := freeBitmapReservationCOWFingerprint(discovery)
+	discoveryPoolSeal := sealFreeBitmapReservationPool(discovery.pool)
+	discoveryScopeFingerprint := freeBitmapReservationScopeFingerprint(discovery.pool, discovery.scope)
+	if cache.base != nil {
+		status := cache.checkAccessStatus()
+		if cache.problem.failed() {
+			return 0, cache.problem
+		}
+		// The content/source fence must complete before a source status is
+		// returned, so corruption cannot be hidden by the final callback.
+		if !seal.matches(p) ||
+			finalizationCacheFingerprint(cache.pages[:cache.length]) != cacheFingerprint ||
+			!finalizationCOWSealMatches(discoverySeal, discovery) ||
+			freeBitmapReservationCOWFingerprint(discovery) != discoveryFingerprint ||
+			!discoveryPoolSeal.matches(discovery.pool) ||
+			freeBitmapReservationScopeFingerprint(discovery.pool, discovery.scope) != discoveryScopeFingerprint {
+			return 0, staleFreeBitmapReservationBind()
+		}
+		if status.failed() {
+			return 0, freeBitmapCOWError{code: freeBitmapCOWErrSource, source: status}
+		}
+	} else if !seal.matches(p) ||
+		finalizationCacheFingerprint(cache.pages[:cache.length]) != cacheFingerprint ||
+		!finalizationCOWSealMatches(discoverySeal, discovery) ||
+		freeBitmapReservationCOWFingerprint(discovery) != discoveryFingerprint ||
+		!discoveryPoolSeal.matches(discovery.pool) ||
+		freeBitmapReservationScopeFingerprint(discovery.pool, discovery.scope) != discoveryScopeFingerprint {
+		return 0, staleFreeBitmapReservationBind()
+	}
+	cache.sealed = true
+	shadow, problem := p.buildFinalizationShadow(cache)
+	if problem.failed() {
+		return 0, problem
+	}
+	released, problem := runFreeBitmapFinalizationFixedPoint(shadow, scratch)
+	if problem.failed() {
+		return 0, problem
+	}
+	if released != discovered || shadow.root != discoveryRoot ||
+		shadow.pageCount != discoveryPageCount || cache.problem.failed() {
+		return 0, freeBitmapCOWError{
+			code: freeBitmapCOWErrStaleInsertionPlan, page: shadow.root, previousPage: discoveryRoot,
+			pageCount: shadow.pageCount,
+		}
+	}
+	replacements := shadow.replacementPages()
+	if len(replacements) > len(output) {
+		return 0, freeBitmapCOWError{
+			code:     freeBitmapCOWErrInsufficientResourceBudget,
+			resource: freeBitmapResourceReplacementPages,
+			required: len(replacements), actual: len(output),
+		}
+	}
+	copy(output, replacements)
+	return len(replacements), freeBitmapCOWError{}
 }
 
 // finalize resolves the complete scope in shadow and has no fallible branch

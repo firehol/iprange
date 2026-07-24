@@ -8300,6 +8300,69 @@ requirements are normative in the Pre-Implementation Gate above.
   bitmap/retirement previews, range metadata, allocator ownership,
   publication, a public SDK API, or v4 bytes.
 
+### 2026-07-24 - range-root transaction bridge plan
+
+- The next missing behavior is now concrete. `stageRangePayload` /
+  `RangeTreeStaging::reserve_payload` can materialize a new range root into
+  private `Range` terminal pages, and the selected old root can be walked into
+  a `PageNumberIndex`. Neither result may change target metadata alone: every
+  selected old range page, every committed bitmap replacement, and every
+  committed retirement-tree/blob replacement must enter the same monotonic
+  protected set before the new root is eligible for publication
+  (`binary-format-v4.md:935-1025`).
+- The bridge will therefore be built as one private transaction proof, not as
+  an empty-tree shortcut. It will retain: (1) the selected range-root identity
+  and materialized replacement root/count, (2) the strict unbound `Range`
+  terminal journal, and (3) the converged protected-page index. The proof is
+  produced only after detached bitmap/retirement previews have added every
+  selected committed replacement page to the index. A root handoff without
+  that proof is rejected.
+- Rust already exposes the necessary detached preview boundary in
+  `bitmap_cow/selective_finalization.rs`, and its retirement blob builder can
+  stream a `PageNumberIndex` directly. Go has the same finalization shadow
+  state but currently keeps that discovery/replay sequence inside
+  `freeBitmapReservationAttachment.finalize`; the first implementation slice
+  must extract an equivalent private read-only preview there. It must preserve
+  the current two-pass source fence and never mutate the live scope.
+- Once both engines can produce the proof, the next slice will stage exactly
+  one final retirement blob/tree from the converged index, merge Range, bitmap,
+  and retirement journals through the existing three-source merger, and then
+  authorize the target `range_root` / `range_record_count` update. The root
+  handoff and terminal ownership must be one indivisible private result.
+- This work adds no public API, format byte, implicit validation, temporary
+  file, or special handling for an empty selected root. Tests will cover an
+  old nonempty root, a legal empty selected root, replacement pages discovered
+  over multiple iterations, direct-free versus reader-protected disposition,
+  failed detached preview cleanup, and zero post-setup allocations.
+
+### 2026-07-24 - detached Go bitmap finalization preview
+
+- Added a private `previewTerminalReplacements` path for the Go bitmap
+  attachment. It executes the existing two-pass, source-fenced finalization
+  entirely in detached shadow storage and returns the exact terminal bitmap
+  replacement-page sequence through caller-owned output. It never applies the
+  shadow to the live pool, scope, COW state, terminal journal, metadata, or
+  file bytes.
+- Output capacity and ordinary slice-alias failures are rejected before any
+  shadow work; later failures never write output. Preview always clears the
+  cleanup overlay before returning, so the same finalization scratch can be
+  retried after a source failure. The eventual range-root bridge can now use
+  this preview as one fixed-point producer without mutating bitmap state.
+- The reachable-empty-bitmap-root path had one stack temporary whose address
+  escaped to the Go heap. It now reuses the shadow COW's fixed output page and
+  clears it before encoding. This preserves the page bytes while making the
+  legal-empty-root preview allocation-free after setup.
+- New tests prove exact equivalence with real finalization, live-state
+  immutability, output capacity and alias rejection, source failure cleanup
+  and retry, and zero warmed-path heap allocations. Validation passed:
+  `go -C v4/go test ./...`, `go -C v4/go vet ./...`,
+  `go -C v4/go test -race ./internal/exactv4 -count=1`, and
+  `cargo test --manifest-path v4/rust/Cargo.toml`,
+  `cargo test --manifest-path v4/rust/Cargo.toml --all-features`,
+  `cargo fmt --manifest-path v4/rust/Cargo.toml --check`,
+  `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features
+  -- -D warnings`, and `./.agents/sow/audit.sh`.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
