@@ -7497,6 +7497,65 @@ requirements are normative in the Pre-Implementation Gate above.
   allocate temporary sorting files, or expose a public SDK API. It is only the
   safe page-writing primitive required by those later layers.
 
+### 2026-07-24 - ordered range-tree builder plan
+
+- The next private component is an ordered canonical-tree packer, not a second
+  storage implementation. It accepts already-normalized records in increasing
+  address order and writes each completed page through a narrow allocator-owned
+  page sink. The real transaction allocator will own page selection, uniqueness,
+  and rollback; the packer owns no free-list, page map, or temporary file.
+- It retains one leaf record buffer and two branch buffers at each compact tree
+  level. The second branch buffer is required because a completed branch cannot
+  be sealed until the next branch supplies its exclusive upper fence. At input
+  end it rebalances a singleton final group with its predecessor, then collapses
+  a one-child root. This produces the compact canonical shape rather than a
+  legal-but-redundant chain.
+- Six branch levels are sufficient for writer-created compact trees: the
+  smallest range-branch fanout is 50 (IPv6), `50^6` exceeds the maximum
+  `u32`-addressable non-meta page population, and a canonical writer never
+  creates an otherwise avoidable one-child branch. Readers will continue to
+  accept the full format maximum depth for older/legal malformed-shape files.
+- The workspace is fixed and supplied by the owning transaction/SDK layer;
+  streaming records allocate neither heap storage nor an external sort/spill
+  file. Every record is rechecked across leaf boundaries for family/order,
+  overlap, and equal-value adjacency. Sink failure leaves the private draft for
+  the existing whole-operation abort path.
+- Tests will construct leaf, branch, and multilevel trees in both languages,
+  reopen them through the existing readers, prove final-group rebalancing and
+  root collapse, check cross-leaf rejection and sink-bound errors, and measure
+  zero allocations after workspace construction. This remains below public
+  `AddRanges`; the later sequential assignment engine alone will accept
+  unordered overlapping input in arrival order.
+
+### 2026-07-24 - ordered range-tree builder implementation
+
+- Rust (`v4/rust/iprange-livedb/src/range_builder.rs`) and Go
+  (`v4/go/internal/exactv4/range_builder.go`) now contain matching private
+  bounded packers for an already-canonical ordered range stream. They use the
+  existing exact leaf/branch encoders and return only the root page, root level,
+  and exact record count required by a later meta-page writer.
+- The narrow page-sink contract receives a complete page and returns an
+  allocator-selected page number. The sink must preserve the page before it
+  returns; it remains responsible for uniqueness, physical authorization, and
+  whole-draft rollback. The packer owns none of those concerns and is not yet
+  connected to the existing private-page pool, whose owner taxonomy does not
+  yet include range-tree pages.
+- A caller-owned fixed workspace retains one leaf, one pending and one current
+  branch group at each of six levels, plus one reusable page buffer. It has no
+  vector, map, spill file, or per-record allocation. Input is rechecked across
+  leaf boundaries for reversed ranges, overlap, equal-value adjacency, and
+  membership zero; any failure poisons the builder so its enclosing draft must
+  be discarded.
+- Completed branches wait for their next sibling's lower fence. At end of
+  input, a singleton final non-root group borrows its predecessor's last child;
+  one-child roots collapse to their child. This emits compact writer-created
+  trees while preserving the reader's acceptance of every legal format shape.
+- New private tests in both languages cover empty input, single-leaf roots,
+  IPv4/IPv6 leaf splits, multi-level final-group rebalancing, reader reopening,
+  cross-leaf rejection, sink failures and invalid returned pages, start bounds,
+  and zero allocation after workspace construction. No public SDK API,
+  metadata root, normalizer, temporary sort, or on-disk contract changed.
+
 ## Validation
 
 ### 2026-07-24 - canonical range-page encoders
@@ -7511,6 +7570,19 @@ requirements are normative in the Pre-Implementation Gate above.
 - No normative spec change is needed: this private implementation applies the
   existing range-page contract. It adds no public API, default validation, or
   on-disk format behavior beyond that already specified.
+
+### 2026-07-24 - ordered range-tree builder validation
+
+- `go -C v4/go test ./...` and `go -C v4/go vet ./...` pass, including the new
+  zero-allocation and reader-reopen tests.
+- `cargo test --manifest-path v4/rust/Cargo.toml --no-default-features` passes
+  466 tests; `cargo test --manifest-path v4/rust/Cargo.toml --all-features`
+  passes 587 tests. Formatting, warnings-denied all-target/all-feature Clippy,
+  and all-feature benchmark compilation pass.
+- The packers are intentionally not attached to a live transaction yet. The
+  next implementation boundary is a range-tree page-pool owner/sink adapter,
+  followed by the page-backed sequential assignment engine; neither can be
+  substituted by this ordered-only component.
 
 ### 2026-07-24 - selected-reclaim coordinator bind
 

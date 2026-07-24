@@ -43,6 +43,8 @@ mod private_page_pool;
 #[allow(dead_code)]
 mod process_identity;
 #[allow(dead_code)]
+mod range_builder;
+#[allow(dead_code)]
 mod range_page;
 #[allow(dead_code)]
 mod range_reader;
