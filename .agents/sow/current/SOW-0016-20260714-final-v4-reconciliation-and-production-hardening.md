@@ -7677,7 +7677,63 @@ requirements are normative in the Pre-Implementation Gate above.
   realizes the existing ordered-normalization contract without adding a public
   API, default validation, or new v4 bytes.
 
+### 2026-07-24 - transaction abort-latch plan
+
+- The new normalizer records its own failed state, but it has no live writer
+  transaction owner yet. The existing cores only poison drafts through
+  operation-specific paths: Go `writer_transaction_core.go:277-295,601-643`
+  and Rust `writer_transaction_core.rs:1134-1186`. A generic failed component
+  therefore cannot currently make the enclosing transaction uncommittable.
+- Add one private, handle-checked `requireAbort`/`require_abort` operation to
+  the Go and Rust transaction cores. It is valid only for a pending,
+  pre-publication draft. It marks both the core and its underlying private page
+  pool abort-required, so fresh core calls and already-borrowed pool
+  capabilities reject further work. `Abort` remains the sole recovery path.
+- The latch must not reinterpret a stale handle, an incomplete abort, an
+  outcome-unknown transaction, or a committed-cleanup transaction. Those
+  states retain their existing typed result and are never changed to an
+  abortable draft.
+- Tests in both implementations will prove an explicit latch blocks draft
+  access and commit preflight, rejects a pool operation held before the latch,
+  aborts every private slot, invalidates the old handle, and permits a fresh
+  transaction afterward. This is a transaction-private prerequisite only: the
+  later normalizer/workflow integration will call it on every normalizer error;
+  this slice does not claim that integration or expose an SDK method.
+
+### 2026-07-24 - transaction abort-latch implementation
+
+- Go and Rust transaction cores now expose one crate/package-private,
+  handle-checked abort latch. It accepts only an active pre-publication draft,
+  marks the core abort-required, and marks the underlying private pool
+  abort-required. This blocks both a later commit attempt and a pool capability
+  that was borrowed before the latch.
+- Rust keeps the latch unavailable once publication could be in progress and
+  preserves its existing `OutcomeUnknown` and committed-cleanup results. Go
+  preserves its stale-handle boundary and has no publication phase in this
+  private core. In both implementations only whole-draft `Abort` restores
+  reusability and invalidates the old handle.
+- This creates the required transaction safety boundary for later normalizer
+  integration. The normalizer is still not handed live writer allocation or
+  range-root authority, so no public workflow is claimed and no partial
+  normalizer result can yet reach publication.
+
 ## Validation
+
+### 2026-07-24 - transaction abort-latch validation
+
+- New Go and Rust tests prove the explicit latch blocks commit preflight and
+  both fresh and already-held pool operations; whole-draft abort visits every
+  private slot, invalidates the old handle, and permits a clean new
+  transaction. Rust additionally proves the latch preserves resolve-only and
+  committed-cleanup transaction states.
+- Go `test ./...`, `vet ./...`, and the exact-v4 race suite pass. Rust passes
+  484 tests without optional features and 605 with all features. Rust
+  formatting, warnings-denied all-target Clippy, and all-feature benchmark
+  compilation pass. Whitespace checking and the project SOW audit pass.
+- No normative spec, public SDK, default-validation, or v4-byte change is
+  needed: this is private transaction control flow. The next boundary remains
+  live allocation/range-root integration for the normalizer, followed only then
+  by direct and membership workflows.
 
 ### 2026-07-24 - page-backed sequential-assignment validation
 

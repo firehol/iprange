@@ -274,6 +274,22 @@ func (c *privateWriterTransactionCore) validateHandle(
 	return privateWriterTransactionError{}
 }
 
+// requireAbort makes a pending draft unusable after an enclosing component
+// reports a failure that cannot safely be resumed.
+func (c *privateWriterTransactionCore) requireAbort(
+	handle privateWriterTransactionHandle,
+) privateWriterTransactionError {
+	if problem := c.validateHandle(handle); problem.failed() {
+		return problem
+	}
+	if c.state != privateWriterTransactionPending {
+		return privateWriterTransactionError{code: privateWriterTransactionErrAbortRequired}
+	}
+	c.pool.abortRequired = true
+	c.state = privateWriterTransactionAbortRequired
+	return privateWriterTransactionError{}
+}
+
 func (c *privateWriterTransactionCore) operationFailed(
 	handle privateWriterTransactionHandle,
 	operation privatePagePoolOperation,

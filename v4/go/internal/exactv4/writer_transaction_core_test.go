@@ -240,6 +240,49 @@ func TestPrivateWriterTransactionPreMutationFailureIsDraftNeutral(t *testing.T) 
 	}
 }
 
+func TestPrivateWriterTransactionExplicitAbortLatchPoisonsWholeDraft(t *testing.T) {
+	var core privateWriterTransactionCore
+	slots := make([]privatePagePoolSlot, 2)
+	selected := initPrivateWriterTestCore(t, &core, slots, make([]uint32, 2), nil, nil)
+	handle, problem := core.begin([16]byte{3})
+	if problem.failed() {
+		t.Fatal(problem)
+	}
+	scope := bindPrivateWriterTestScope(t, &core, 1)
+	operation, poolProblem := core.pool.beginOperationInScope(scope)
+	if poolProblem.failed() {
+		t.Fatal(poolProblem)
+	}
+
+	if problem = core.requireAbort(handle); problem.failed() ||
+		core.state != privateWriterTransactionAbortRequired || !core.pool.abortRequired {
+		t.Fatalf("require abort = state %d pool=%+v error %+v", core.state, core.pool, problem)
+	}
+	if poolProblem = core.pool.commitOperation(operation); poolProblem.code != privatePagePoolErrAbortRequired {
+		t.Fatalf("held operation survived abort latch: %+v", poolProblem)
+	}
+	if _, poolProblem = core.pool.begin(); poolProblem.code != privatePagePoolErrAbortRequired {
+		t.Fatalf("fresh checkpoint survived abort latch: %+v", poolProblem)
+	}
+	if problem = core.preflightCommit(handle); problem.code != privateWriterTransactionErrAbortRequired {
+		t.Fatalf("commit preflight survived abort latch: %+v", problem)
+	}
+
+	visits, problem := core.abort()
+	if problem.failed() || visits != uint64(len(slots)) || core.state != privateWriterTransactionClean {
+		t.Fatalf("abort = visits %d state %d error %+v", visits, core.state, problem)
+	}
+	fresh, problem := core.begin([16]byte{4})
+	if problem.failed() || core.state != privateWriterTransactionPending || core.pool.abortRequired ||
+		fresh.epoch == handle.epoch || core.target.TxnID != selected.TxnID+1 {
+		t.Fatalf("fresh transaction after latch = handle %#v core %#v error %+v", fresh, core, problem)
+	}
+	if problem = core.requireAbort(handle); problem.code != privateWriterTransactionErrStaleHandle ||
+		core.state != privateWriterTransactionPending || core.pool.abortRequired {
+		t.Fatalf("stale latch changed fresh transaction: state %d pool=%+v error %+v", core.state, core.pool, problem)
+	}
+}
+
 func TestPrivateWriterTransactionHandleIdentitySurvivesCoreReinitialization(t *testing.T) {
 	var core privateWriterTransactionCore
 	slots := make([]privatePagePoolSlot, 1)

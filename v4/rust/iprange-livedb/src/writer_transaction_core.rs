@@ -385,6 +385,25 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         Ok(())
     }
 
+    /// Makes this pre-publication draft unusable after an enclosing component
+    /// reports a failure that cannot safely be resumed.
+    pub(crate) fn require_abort(
+        &self,
+        handle: &PrivateWriterTransactionHandle,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        if self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+        {
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if let Some(draft) = self.draft.as_ref() {
+            draft.require_abort();
+        }
+        self.state.set(PrivateWriterTransactionState::AbortRequired);
+        Ok(())
+    }
+
     fn validate_private_output_preparation(
         &self,
         handle: &PrivateWriterTransactionHandle,
@@ -1389,7 +1408,8 @@ mod tests {
     use super::*;
     use crate::contract::{AddressFamily, ValueKind, ValueTag};
     use crate::private_page_pool::{
-        PrivatePageAuthorization, PrivatePageOwner, PrivatePageScopedOperationSlot,
+        PrivatePageAuthorization, PrivatePageOwner, PrivatePagePoolError,
+        PrivatePageScopedOperationSlot,
     };
     use crate::test_alloc::count_thread_allocations;
 
@@ -1546,6 +1566,56 @@ mod tests {
             Err(PrivateWriterTransactionError::AbortRequired(None))
         );
         assert_eq!(core.abort().unwrap(), 1);
+    }
+
+    #[test]
+    fn explicit_abort_latch_poisons_the_whole_draft_and_preserves_state_boundaries() {
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 2];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(2),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        {
+            let pool = core.draft(&handle).unwrap();
+            let scope = pool.test_reserve_scope_direct(1).unwrap();
+            let mut plan = [];
+            let operation = pool
+                .preflight_operation_in_scope(&scope, 0, &mut plan)
+                .unwrap();
+
+            core.require_abort(&handle).unwrap();
+            assert_eq!(core.state(), PrivateWriterTransactionState::AbortRequired);
+            assert!(pool.requires_abort());
+            assert!(matches!(
+                pool.abandon_unmutated_operation(operation),
+                Err((_, PrivatePagePoolError::AbortRequired))
+            ));
+            assert_eq!(
+                core.preflight_commit(&handle),
+                Err(PrivateWriterTransactionError::AbortRequired(None))
+            );
+            assert!(matches!(
+                core.draft(&handle),
+                Err(PrivateWriterTransactionError::AbortRequired(None))
+            ));
+        }
+        assert_eq!(core.abort().unwrap(), 2);
+
+        let fresh = core.begin([4; 16]).unwrap();
+        assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+        assert!(!core.draft(&fresh).unwrap().requires_abort());
+        assert_eq!(
+            core.require_abort(&handle),
+            Err(PrivateWriterTransactionError::StaleHandle)
+        );
+        assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+        assert!(!core.draft(&fresh).unwrap().requires_abort());
+        assert_eq!(core.abort().unwrap(), 2);
     }
 
     #[test]
@@ -2333,6 +2403,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(core.state(), PrivateWriterTransactionState::OutcomeUnknown);
+        assert_eq!(
+            core.require_abort(&handle),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        );
+        assert_eq!(core.state(), PrivateWriterTransactionState::OutcomeUnknown);
         assert_eq!(core.selected(), meta(7));
         assert_eq!(core.target(), Some(target));
         assert_eq!(
@@ -2417,6 +2492,14 @@ mod tests {
                 },
             ),
             Err(PrivateWriterTransactionError::CommittedCleanupIncompleteCoordination)
+        );
+        assert_eq!(
+            core.state(),
+            PrivateWriterTransactionState::CommittedCleanupRequired
+        );
+        assert_eq!(
+            core.require_abort(&handle),
+            Err(PrivateWriterTransactionError::CommittedCleanupRequired)
         );
         assert_eq!(
             core.state(),

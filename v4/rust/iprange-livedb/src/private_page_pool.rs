@@ -3633,6 +3633,10 @@ impl<'slots> PrivatePagePool<'slots> {
         self.abort_required.get()
     }
 
+    pub(crate) fn require_abort(&self) {
+        self.abort_required.set(true);
+    }
+
     pub(crate) fn register_coordinator_session(
         &self,
         session_identity: u64,
