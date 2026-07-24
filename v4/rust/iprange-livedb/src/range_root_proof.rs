@@ -9,6 +9,7 @@
 use crate::bitmap_cow::{
     BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapFinalizationCachedPage,
     FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
+    PreparedFreeBitmapRangeRetirementTerminalExport,
 };
 use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
 use crate::key::IpKey;
@@ -32,9 +33,9 @@ use crate::range_staging::RangeTreeMaterializedResult;
 use crate::retirement_writer::RetirementTreeState;
 use crate::retirement_writer::{
     BlobBuildScratch, CommittedPageReplacement, CommittedReplacementLedger, PageRoleIndex,
-    PageRoleIndexSlot, PrivatePageArena, PrivateReleaseBuffer, RetirementAppendReplacementProbe,
-    RetirementBlobBuilder, RetirementPathFrame, RetirementTreeEditResult, RetirementTreeEditor,
-    RetirementWriteError,
+    PageRoleIndexSlot, PreparedProducedTerminalExport, PrivatePageArena, PrivateReleaseBuffer,
+    RetirementAppendReplacementProbe, RetirementBlobBuilder, RetirementPathFrame,
+    RetirementTreeEditResult, RetirementTreeEditor, RetirementWriteError,
 };
 
 const RANGE_ROOT_PROOF_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325 ^ 0x98f0_4adf_c3e2_719b;
@@ -107,6 +108,20 @@ pub(crate) struct RangeRootReplacementProofScratch<'a> {
     pub(crate) final_cleanup_targets: &'a mut [usize],
 }
 
+/// Caller-owned backing for the one real terminal-composition attempt after a
+/// replacement range payload is already staged in the shared shadow scope.
+///
+/// The returned produced terminal retains the finalization and journal backing
+/// until the fixed-point coordinator consumes it or the enclosing draft aborts.
+pub(crate) struct RangeRootReplacementTerminalScratch<'a> {
+    pub(crate) retirement: RangeRootRetirementStageScratch<'a>,
+    pub(crate) bitmap_finalization: FreeBitmapFinalizationScratch<'a>,
+    pub(crate) bitmap_pages: &'a mut [PrivatePageCoordinatorTerminalPage],
+    pub(crate) range_pages: &'a mut [PrivatePageCoordinatorTerminalPage],
+    pub(crate) retirement_pages: &'a mut [PrivatePageCoordinatorTerminalPage],
+    pub(crate) combined_pages: &'a mut [PrivatePageCoordinatorTerminalPage],
+}
+
 /// Failure before an ordinary range replacement has a complete protected-page
 /// proof. No variant here authorizes publication or changes target metadata.
 #[derive(Debug)]
@@ -125,6 +140,36 @@ pub(crate) enum RangeRootReplacementPreviewError {
     Retirement(RetirementWriteError),
     Index(PageNumberIndexError),
     AppendWitnessChanged,
+}
+
+/// Failure while composing the real terminal output of an already-staged
+/// range replacement. Every variant is post-payload: the enclosing draft must
+/// be abandoned rather than retried as a partial transaction.
+#[derive(Debug)]
+pub(crate) enum RangeRootReplacementTerminalError {
+    Stage(RangeRootRetirementStageError),
+    Finalization(FreeBitmapCowError),
+    TerminalScratch {
+        journal: RangeRootReplacementTerminalJournal,
+        required: usize,
+        actual: usize,
+    },
+    Export(FreeBitmapCowError),
+    Merge(RetirementWriteError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RangeRootReplacementTerminalJournal {
+    Bitmap,
+    Range,
+    Retirement,
+    Combined,
+}
+
+impl RangeRootReplacementTerminalError {
+    pub(crate) const fn discard_required(&self) -> bool {
+        true
+    }
 }
 
 /// Failure while privately staging the required retirement batch. A
@@ -589,7 +634,6 @@ impl RangeRootRetirementStage {
             || u64::from(self.retirement.root) >= self.pending_page_count
             || self.retirement.batch_count != expected_batch_count
             || self.retirement.private_pages == 0
-            || self.retirement.committed_replacements != 0
             || self.retirement.prior_private_replacements != 0
             || self.blob_private_pages == 0
             || self
@@ -694,6 +738,7 @@ impl RangeRootRetirementStage {
                 || self.retirement.batch_count != expected_batch_count
                 || !self.has_arena
                 || self.blob_private_pages == 0
+                || self.retirement.prior_private_replacements != 0
                 || self
                     .blob_private_pages
                     .checked_add(self.retirement.private_pages)
@@ -892,6 +937,177 @@ pub(crate) fn stage_range_root_retirement<
     };
     stage.seal = seal_range_root_retirement_stage(&stage);
     Ok(stage)
+}
+
+/// Consumes the post-payload shadow state of one ordinary range replacement
+/// into the sole proof-bound three-owner terminal journal.
+///
+/// A range payload already exists before this function starts. Therefore no
+/// error can safely leave the enclosing transaction usable: every failure
+/// marks the shadow pool abort-required, clears this helper's export journals,
+/// and releases the proof indexes. The caller must run its normal whole-draft
+/// abort before exposing another operation.
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub(crate) fn finalize_range_root_replacement_terminal<'a, 'proof, 'workspace, 'storage, S>(
+    mut bound: BoundFreeBitmapReservation<'a, 'a, 'a, 'a, 'a, S>,
+    shadow_pool: &'a PrivatePagePool<'a>,
+    shadow_scope: &'a PrivatePageReservationScope<'a>,
+    mut proof: RangeRootTransactionProof<'proof, 'workspace, 'storage>,
+    scratch: RangeRootReplacementTerminalScratch<'a>,
+) -> Result<
+    PreparedProducedTerminalExport<
+        'a,
+        PreparedFreeBitmapRangeRetirementTerminalExport<'a, 'a, 'a, 'a, 'a, 'a, 'a, S>,
+    >,
+    RangeRootReplacementTerminalError,
+>
+where
+    S: CommittedPageSource + ?Sized,
+{
+    let RangeRootReplacementTerminalScratch {
+        retirement,
+        bitmap_finalization,
+        bitmap_pages,
+        range_pages,
+        retirement_pages,
+        combined_pages,
+    } = scratch;
+
+    let stage = match stage_range_root_retirement(
+        &mut bound,
+        shadow_pool,
+        shadow_scope,
+        &mut proof,
+        retirement,
+    ) {
+        Ok(stage) => stage,
+        Err(error) => {
+            shadow_pool.require_abort();
+            bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            proof.discard_after_abort();
+            return Err(RangeRootReplacementTerminalError::Stage(error));
+        }
+    };
+
+    let finalized =
+        match bound.finalize_range_root_retirement(&stage, &mut proof, bitmap_finalization) {
+            Ok(finalized) => finalized,
+            Err((_bound, error)) => {
+                shadow_pool.require_abort();
+                bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                stage.discard_after_abort(proof);
+                return Err(RangeRootReplacementTerminalError::Finalization(error));
+            }
+        };
+    let bitmap_len = finalized.output.bitmap_terminal_page_count();
+    let range_len = finalized.output.range_terminal_page_count();
+    let retirement_len = finalized.output.retirement_terminal_page_count();
+    let combined_len = bitmap_len
+        .checked_add(range_len)
+        .and_then(|count| count.checked_add(retirement_len));
+    let terminal_scratch_error = combined_len.and_then(|combined_len| {
+        if bitmap_len > bitmap_pages.len() {
+            Some((
+                RangeRootReplacementTerminalJournal::Bitmap,
+                bitmap_len,
+                bitmap_pages.len(),
+            ))
+        } else if range_len > range_pages.len() {
+            Some((
+                RangeRootReplacementTerminalJournal::Range,
+                range_len,
+                range_pages.len(),
+            ))
+        } else if retirement_len > retirement_pages.len() {
+            Some((
+                RangeRootReplacementTerminalJournal::Retirement,
+                retirement_len,
+                retirement_pages.len(),
+            ))
+        } else if combined_len > combined_pages.len() {
+            Some((
+                RangeRootReplacementTerminalJournal::Combined,
+                combined_len,
+                combined_pages.len(),
+            ))
+        } else {
+            None
+        }
+    });
+    if let Some((journal, required, actual)) = terminal_scratch_error {
+        shadow_pool.require_abort();
+        bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        stage.discard_after_abort(proof);
+        return Err(RangeRootReplacementTerminalError::TerminalScratch {
+            journal,
+            required,
+            actual,
+        });
+    }
+    let Some(combined_len) = combined_len else {
+        shadow_pool.require_abort();
+        bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        stage.discard_after_abort(proof);
+        return Err(RangeRootReplacementTerminalError::TerminalScratch {
+            journal: RangeRootReplacementTerminalJournal::Combined,
+            required: usize::MAX,
+            actual: combined_pages.len(),
+        });
+    };
+    let bitmap_pages = &mut bitmap_pages[..bitmap_len];
+    let range_pages = &mut range_pages[..range_len];
+    let retirement_pages = &mut retirement_pages[..retirement_len];
+    let combined_pages = &mut combined_pages[..combined_len];
+    let output = finalized.output;
+    let successor = finalized.successor;
+    let export = match output.prepare_range_bitmap_retirement_terminal_export(
+        successor,
+        &stage,
+        &mut proof,
+        bitmap_pages,
+        range_pages,
+        retirement_pages,
+    ) {
+        Ok(export) => export,
+        Err((output, successor, bitmap_pages, range_pages, retirement_pages, error)) => {
+            shadow_pool.require_abort();
+            let _ = (output, successor);
+            bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            stage.discard_after_abort(proof);
+            return Err(RangeRootReplacementTerminalError::Export(error));
+        }
+    };
+    let produced = match export.merge_terminal_journals(combined_pages) {
+        Ok(produced) => produced,
+        Err((export, combined_pages, error)) => {
+            shadow_pool.require_abort();
+            export.discard_after_abort();
+            combined_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            stage.discard_after_abort(proof);
+            return Err(RangeRootReplacementTerminalError::Merge(error));
+        }
+    };
+    stage.discard_after_abort(proof);
+    Ok(produced)
 }
 
 /// Collects the selected old range tree and converges all prospective selected
@@ -1327,6 +1543,16 @@ mod tests {
     impl RetirementReclaimBarrier for RangeReplacementBarrier {}
 
     static RANGE_REPLACEMENT_BARRIER: RangeReplacementBarrier = RangeReplacementBarrier;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum OrdinaryReplacementTerminalCase {
+        Success,
+        ShortRetirementBlobScratch,
+        ShortFinalizationScratch,
+        ShortCombinedJournal,
+        DirtyRangeJournal,
+        DirtyCombinedJournal,
+    }
 
     fn ownership_image() -> (Vec<u8>, MetaV4) {
         ownership_image_with_page_count(12)
@@ -2416,6 +2642,7 @@ mod tests {
         free_pages: &[u32],
         expected_seed: &[u32],
         expected_protected: &[u32],
+        terminal_case: OrdinaryReplacementTerminalCase,
     ) {
         selected.free_bitmap_root = 2;
         free_bitmap_leaf(page_mut(&mut bytes, 2), selected.txn_id, free_pages);
@@ -2582,7 +2809,162 @@ mod tests {
             PageNumberIndexFixedPointCandidate::Second => &mut *proof.second,
         };
         assert_eq!(collect(protected), expected_protected);
-        proof.discard_after_abort();
+
+        let mut terminal_blob_pages = [0_u32; 1];
+        let mut terminal_path = [RetirementPathFrame::new(); 8];
+        let mut terminal_replacements = [CommittedPageReplacement {
+            pgno: 0,
+            origin: CommittedPageOrigin::RetirementTree,
+        }; 8];
+        let mut terminal_releases = [0_u32; 8];
+        let mut terminal_roles = [PageRoleIndexSlot::new(); 16];
+        let mut terminal_release = vec![0; requirements.release_pages];
+        let mut terminal_insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut terminal_cache =
+            vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut terminal_stack = vec![usize::MAX; requirements.index_stack];
+        let mut terminal_cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut terminal_cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut terminal_cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let mut bitmap_terminal = [const { PrivatePageCoordinatorTerminalPage::empty() }; 24];
+        let mut retained_range_terminal =
+            [const { PrivatePageCoordinatorTerminalPage::empty() }; 24];
+        let mut retirement_terminal = [const { PrivatePageCoordinatorTerminalPage::empty() }; 24];
+        let mut combined_terminal = [const { PrivatePageCoordinatorTerminalPage::empty() }; 72];
+        let retirement_blob_len = match terminal_case {
+            OrdinaryReplacementTerminalCase::ShortRetirementBlobScratch => 0,
+            _ => terminal_blob_pages.len(),
+        };
+        let finalization_cache_len = match terminal_case {
+            OrdinaryReplacementTerminalCase::ShortFinalizationScratch => 0,
+            _ => terminal_cache.len(),
+        };
+        let combined_len = match terminal_case {
+            OrdinaryReplacementTerminalCase::ShortCombinedJournal => 1,
+            _ => combined_terminal.len(),
+        };
+        if terminal_case == OrdinaryReplacementTerminalCase::DirtyRangeJournal {
+            retained_range_terminal[0].pgno = 1;
+        }
+        if terminal_case == OrdinaryReplacementTerminalCase::DirtyCombinedJournal {
+            combined_terminal[0].pgno = 1;
+        }
+        let (produced, allocations) = count_thread_allocations(|| {
+            finalize_range_root_replacement_terminal(
+                bound,
+                &pool,
+                &scope,
+                proof,
+                RangeRootReplacementTerminalScratch {
+                    retirement: RangeRootRetirementStageScratch {
+                        blob_pages: &mut terminal_blob_pages[..retirement_blob_len],
+                        upsert_path: &mut terminal_path,
+                        replacements: &mut terminal_replacements,
+                        releases: &mut terminal_releases,
+                        roles: &mut terminal_roles,
+                    },
+                    bitmap_finalization: FreeBitmapFinalizationScratch {
+                        release_pages: &mut terminal_release,
+                        insert_pages: &mut terminal_insert,
+                        cached_pages: &mut terminal_cache[..finalization_cache_len],
+                        index_stack: &mut terminal_stack,
+                        cleanup_nodes: &mut terminal_cleanup_nodes,
+                        cleanup_path: &mut terminal_cleanup_path,
+                        cleanup_targets: &mut terminal_cleanup_targets,
+                    },
+                    bitmap_pages: &mut bitmap_terminal,
+                    range_pages: &mut retained_range_terminal,
+                    retirement_pages: &mut retirement_terminal,
+                    combined_pages: &mut combined_terminal[..combined_len],
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        match terminal_case {
+            OrdinaryReplacementTerminalCase::Success => {
+                let produced = match produced {
+                    Ok(produced) => produced,
+                    Err(error) => panic!("ordinary replacement terminal failed: {error:?}"),
+                };
+                assert_eq!(produced.range_target(), Some(materialized));
+                assert!(produced
+                    .pages()
+                    .windows(2)
+                    .all(|pages| pages[0].pgno < pages[1].pgno));
+                assert!(produced
+                    .pages()
+                    .iter()
+                    .any(|page| page.owner == PrivatePageOwner::Range));
+                if selected.retirement_root == 0 {
+                    assert_eq!(produced.retirement_result().committed_replacements, 0);
+                } else {
+                    assert_eq!(produced.retirement_result().committed_replacements, 1);
+                }
+                assert_eq!(produced.retirement_result().prior_private_replacements, 0);
+                assert!(!pool.requires_abort());
+            }
+            OrdinaryReplacementTerminalCase::ShortRetirementBlobScratch => {
+                assert!(matches!(
+                    produced,
+                    Err(RangeRootReplacementTerminalError::Stage(
+                        RangeRootRetirementStageError::PreMutationRetirement(
+                            RetirementWriteError::BlobBuildScratchTooSmall { .. }
+                        )
+                    ))
+                ));
+            }
+            OrdinaryReplacementTerminalCase::ShortFinalizationScratch => {
+                assert!(matches!(
+                    produced,
+                    Err(RangeRootReplacementTerminalError::Finalization(_))
+                ));
+            }
+            OrdinaryReplacementTerminalCase::ShortCombinedJournal => {
+                assert!(matches!(
+                    produced,
+                    Err(RangeRootReplacementTerminalError::TerminalScratch {
+                        journal: RangeRootReplacementTerminalJournal::Combined,
+                        actual: 1,
+                        ..
+                    })
+                ));
+            }
+            OrdinaryReplacementTerminalCase::DirtyRangeJournal => {
+                assert!(matches!(
+                    produced,
+                    Err(RangeRootReplacementTerminalError::Export(_))
+                ));
+            }
+            OrdinaryReplacementTerminalCase::DirtyCombinedJournal => {
+                assert!(matches!(
+                    produced,
+                    Err(RangeRootReplacementTerminalError::Merge(_))
+                ));
+            }
+        }
+        if terminal_case != OrdinaryReplacementTerminalCase::Success {
+            assert!(pool.requires_abort());
+            assert!(bitmap_terminal
+                .iter()
+                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+            assert!(retained_range_terminal
+                .iter()
+                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+            assert!(retirement_terminal
+                .iter()
+                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+            assert!(combined_terminal
+                .iter()
+                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+        }
         assert!(seed.is_empty_and_clean());
         assert!(first.is_empty_and_clean());
         assert!(second.is_empty_and_clean());
@@ -2597,6 +2979,7 @@ mod tests {
             &[5, 6, 7, 9, 10],
             &[3, 4, 8, 11],
             &[2, 3, 4, 8, 11],
+            OrdinaryReplacementTerminalCase::Success,
         );
     }
 
@@ -2621,7 +3004,29 @@ mod tests {
             &[7, 9, 12, 13, 14, 15],
             &[3, 4, 5, 8, 11],
             &[2, 3, 4, 5, 8, 11],
+            OrdinaryReplacementTerminalCase::Success,
         );
+    }
+
+    #[test]
+    fn ordinary_replacement_terminal_aborts_and_scrubs_every_post_payload_failure() {
+        for terminal_case in [
+            OrdinaryReplacementTerminalCase::ShortRetirementBlobScratch,
+            OrdinaryReplacementTerminalCase::ShortFinalizationScratch,
+            OrdinaryReplacementTerminalCase::ShortCombinedJournal,
+            OrdinaryReplacementTerminalCase::DirtyRangeJournal,
+            OrdinaryReplacementTerminalCase::DirtyCombinedJournal,
+        ] {
+            let (bytes, selected) = ownership_image();
+            assert_ordinary_replacement_proof_converges(
+                bytes,
+                selected,
+                &[5, 6, 7, 9, 10],
+                &[3, 4, 8, 11],
+                &[2, 3, 4, 8, 11],
+                terminal_case,
+            );
+        }
     }
 
     #[test]

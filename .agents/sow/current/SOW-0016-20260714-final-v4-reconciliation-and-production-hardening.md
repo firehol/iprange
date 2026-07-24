@@ -8937,6 +8937,94 @@ requirements are normative in the Pre-Implementation Gate above.
   public API, default-validation behavior, v4 byte layout, or file-publication
   path changed.
 
+### 2026-07-24 - ordinary range-replacement terminal-composition plan
+
+- Evidence: after `stage_range_payload` has claimed the new range pages in the
+  shared shadow scope, the remaining steps are real mutation, not a harmless
+  preview: `stage_range_root_retirement` appends the protected-page batch,
+  `finalize_range_root_retirement` seals the bitmap, and the three-owner
+  exporter/merger produces the only terminal journal accepted by the fixed-point
+  coordinator (`range_root_proof.rs:727-827`,
+  `bitmap_cow/selective_finalization.rs:2885-3158`, and
+  `retirement_writer.rs:3107-3182`). The existing tests repeat that sequence
+  inline, so a future live caller could accidentally return after one stage
+  while leaving a partially changed private scope.
+- Add one crate-private, consuming terminal-composition helper. It will accept
+  only the already-bound reservation, replacement proof, exact shared scope,
+  caller-owned finalization/export scratch, and the range payload that was
+  already staged there. It will perform the real retirement append, bitmap
+  finalization, typed three-owner export, and sorted journal merge as one
+  sequence, returning only the proof-bound produced terminal authority.
+- Because the range payload exists before this helper starts, every failure in
+  this helper is post-mutation for the enclosing operation. It will mark the
+  shadow pool abort-required, clear its supplied export/merge journals, and
+  scrub the proof indexes before returning a typed stage/finalize/export/merge
+  error. The immutable range-payload journal remains evidence for the outer
+  whole-draft abort; this helper cannot make it look reusable. It will not
+  offer an unsafe partial retry path.
+- This boundary deliberately stops before the live transaction core/coordinator
+  consumes the produced terminal authority. The following slice will bind that
+  authority to the core and use the existing Linux durable publisher while the
+  same operation barrier remains held. No public API, data-format byte,
+  temporary file, or implicit validation is added here.
+- Tests must cover a nonempty selected range/retirement tree, legal empty old
+  range/retirement shapes, every injected post-payload failure class, zero heap
+  allocations after caller scratch setup, proof-index scrubbing, and an
+  abort-required pool on every returned failure.
+
+### 2026-07-24 - ordinary range-replacement terminal integration finding and repair plan
+
+- The new real terminal test exposed a contradiction that proof-only tests did
+  not reach: a legal selected retirement leaf reaches
+  `finalize_range_root_retirement` with one committed retirement-tree
+  replacement and is rejected as stale (`range_root_proof.rs:2700-2900`,
+  `bitmap_cow/selective_finalization.rs:2901-2905`). The stage itself remains
+  valid, and its protected-page proof already contains that old tree page.
+- This committed replacement is normal copy-on-write behavior. The append
+  editor replaces the selected tree path and refuses success unless every such
+  page is listed in the newly built protected-page blob
+  (`retirement_writer.rs:4886-5008`, `retirement_writer.rs:6732-6771`). The
+  finalizer and its sealed-stage recheck must therefore allow committed
+  replacements. They must continue to reject prior-private replacements: an
+  ordinary one-shot range replacement has no prior retirement draft to reuse.
+- Repair only that false exclusion, keep the exact proof/stage/terminal checks,
+  and make the real nonempty-retirement test assert that the resulting terminal
+  contains the expected committed replacement. This is an internal correctness
+  repair; it changes no format, public API, validation default, or durable
+  publication behavior.
+
+### 2026-07-24 - ordinary range-replacement terminal composition implementation
+
+- Rust now has one crate-private consuming helper for the post-payload path.
+  It runs the real protected retirement append, proof-bound bitmap
+  finalization, typed three-owner export, and sorted terminal merge, returning
+  only the existing produced-terminal authority for the later coordinator.
+- Every returned error marks the shared pool abort-required, clears supplied
+  export/merge journals, and scrubs the proof indexes. It does not publish a
+  file, alter metadata, expose a public API, or add a temporary file.
+- The false nonzero-committed-replacement rejection is removed from both
+  terminal rechecks. Existing proof-bound retirement editing remains the
+  authority that proves each replaced selected page was recorded in the new
+  retirement batch. Prior-private retirement replacements remain rejected as
+  stale for this one-shot operation.
+
+### 2026-07-24 - ordinary range-replacement terminal composition validation
+
+- Focused Rust tests now execute a real terminal sequence for both empty and
+  nonempty selected retirement trees. The nonempty case proves a legal
+  committed retirement-tree replacement reaches the produced terminal.
+- One failure matrix proves bad retirement scratch, bad bitmap-finalization
+  scratch, an undersized combined journal, a dirty range journal, and a dirty
+  combined journal all latch abort, clear export/merge scratch, and scrub every
+  page-index workspace. The warmed success and failure paths allocate zero
+  heap bytes after caller scratch setup.
+- Validation passed: Rust default (555 tests) and all-features (676 tests),
+  warnings-denied all-target/all-feature Clippy, all-feature benchmark
+  compilation, Go tests/vet/race/32-bit tests, Rust formatting, `git diff
+  --check`, and the SOW audit. No normative spec, public API,
+  default-validation behavior, v4 byte layout, or durable file-publication
+  path changed.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

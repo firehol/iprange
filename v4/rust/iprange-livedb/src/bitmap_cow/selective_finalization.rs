@@ -2899,7 +2899,11 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             return Err((self, range_root_retirement_stage_error(error)));
         }
         let retirement = stage.retirement_result();
-        if retirement.committed_replacements != 0 || retirement.prior_private_replacements != 0 {
+        // A normal append COW-replaces the selected retirement-tree path. The
+        // proof-bound editor has already listed those committed pages in the
+        // new retirement batch. Prior-private replacements, however, would
+        // mean a different draft state leaked into this one-shot operation.
+        if retirement.prior_private_replacements != 0 {
             return Err((self, FreeBitmapCowError::StaleReservationPredecessor));
         }
         self.finalize(scratch)
@@ -3773,6 +3777,22 @@ impl<
 
     pub(crate) fn retirement_pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
         self.retirement_pages
+    }
+
+    /// Clears the exported journals after the enclosing private transaction
+    /// has already become abort-only. The sealed scope itself is abandoned by
+    /// that outer abort; this method only prevents caller-owned journals from
+    /// looking reusable.
+    pub(crate) fn discard_after_abort(self) {
+        let Self {
+            bitmap_pages,
+            range_pages,
+            retirement_pages,
+            ..
+        } = self;
+        bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        retirement_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
     }
 }
 

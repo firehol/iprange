@@ -3214,6 +3214,11 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
         self.pages
     }
 
+    #[cfg(test)]
+    pub(crate) const fn retirement_result(&self) -> RetirementTreeEditResult {
+        self.result
+    }
+
     pub(crate) fn bitmap(&self) -> &B {
         &self.bitmap
     }
