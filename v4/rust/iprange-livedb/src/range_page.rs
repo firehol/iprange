@@ -2,9 +2,11 @@
 
 use core::marker::PhantomData;
 
-use crate::contract::{u32_le, u64_le, AddressFamily, ValueKind, PAGE_SIZE};
+use crate::contract::{
+    u32_le, u64_le, AddressFamily, ValueKind, MAX_PAGE_COUNT, MAX_TREE_LEVEL, PAGE_SIZE,
+};
 use crate::key::IpKey;
-use crate::page::{PageHeader, PageHeaderError, PageType, PAGE_HEADER_SIZE};
+use crate::page::{write_crc32c, PageHeader, PageHeaderError, PageType, PAGE_HEADER_SIZE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RangePageError {
@@ -29,6 +31,35 @@ impl From<PageHeaderError> for RangePageError {
     }
 }
 
+/// Input rejected before the range-page encoder changes its destination page.
+///
+/// This is deliberately separate from [`RangePageError`]: decoder errors
+/// describe bytes already on disk, while these errors describe an attempted
+/// private COW page that was never written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RangePageWriteError {
+    BornTransactionZero,
+    TooManyRecords { required: usize, actual: usize },
+    RangeReversed,
+    MembershipValueZero,
+    RangeOverlap,
+    AdjacentEqualValue,
+    BranchLevel { level: u16 },
+    PageCount { page_count: u64 },
+    EmptyBranch,
+    TooManyChildren { required: usize, actual: usize },
+    FirstFence,
+    FenceBounds,
+    FenceOrder,
+    ChildOutOfBounds(u32),
+    DuplicateChild(u32),
+    EmptySummaryNonzero,
+    SummaryOrder,
+    SummaryBeforeFence,
+    SummaryOutsideFence,
+    SummaryOverlap,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RangeRecord<K: IpKey> {
     pub(crate) from: K,
@@ -51,6 +82,203 @@ impl<K: IpKey> RangeBranchEntry<K> {
     pub(crate) const fn is_empty(self) -> bool {
         self.subtree_record_count == 0
     }
+}
+
+/// Maximum complete records that fit in one exact range leaf.
+#[inline]
+pub(crate) const fn leaf_capacity<K: IpKey>() -> usize {
+    (PAGE_SIZE - PAGE_HEADER_SIZE as usize) / record_size::<K>()
+}
+
+/// Maximum complete entries that fit in one exact range branch.
+#[inline]
+pub(crate) const fn branch_capacity<K: IpKey>() -> usize {
+    (PAGE_SIZE - PAGE_HEADER_SIZE as usize) / branch_entry_size::<K>()
+}
+
+/// Encodes one canonical range leaf and seals it with CRC-32C.
+///
+/// The whole input is checked before the destination is changed. This makes a
+/// capacity or canonicality failure safe for a private COW slot to retry.
+pub(crate) fn encode_leaf<K: IpKey>(
+    page: &mut [u8; PAGE_SIZE],
+    born_txn: u64,
+    value_kind: ValueKind,
+    records: &[RangeRecord<K>],
+) -> Result<(), RangePageWriteError> {
+    if born_txn == 0 {
+        return Err(RangePageWriteError::BornTransactionZero);
+    }
+    let actual = leaf_capacity::<K>();
+    if records.len() > actual {
+        return Err(RangePageWriteError::TooManyRecords {
+            required: records.len(),
+            actual,
+        });
+    }
+    for (index, record) in records.iter().enumerate() {
+        if record.from > record.to {
+            return Err(RangePageWriteError::RangeReversed);
+        }
+        if value_kind == ValueKind::Membership && record.value == 0 {
+            return Err(RangePageWriteError::MembershipValueZero);
+        }
+        if index == 0 {
+            continue;
+        }
+        let previous = records[index - 1];
+        if previous.to >= record.from {
+            return Err(RangePageWriteError::RangeOverlap);
+        }
+        if previous.value == record.value && previous.to.checked_inc() == Some(record.from) {
+            return Err(RangePageWriteError::AdjacentEqualValue);
+        }
+    }
+
+    page.fill(0);
+    let lower = usize::from(PAGE_HEADER_SIZE) + records.len() * record_size::<K>();
+    PageHeader {
+        page_type: PageType::RangeLeaf,
+        born_txn,
+        item_count: records.len() as u16,
+        level: 0,
+        lower: lower as u16,
+        upper: PAGE_SIZE as u16,
+        aux: K::FAMILY as u32,
+        page_crc32c: 0,
+    }
+    .encode_into(page);
+    for (index, record) in records.iter().enumerate() {
+        let at = usize::from(PAGE_HEADER_SIZE) + index * record_size::<K>();
+        record.from.write_le(&mut page[at..at + K::WIDTH]);
+        record
+            .to
+            .write_le(&mut page[at + K::WIDTH..at + 2 * K::WIDTH]);
+        page[at + 2 * K::WIDTH..at + record_size::<K>()]
+            .copy_from_slice(&record.value.to_le_bytes());
+    }
+    write_crc32c(page);
+    Ok(())
+}
+
+/// Encodes one canonical range branch and seals it with CRC-32C.
+///
+/// `lower_fence` is the exact lower bound inherited from the parent. Root
+/// callers pass `K::MIN`. `upper_fence` is the exclusive upper bound inherited
+/// from the parent; `None` represents the unrepresentable endpoint just past
+/// the family maximum.
+pub(crate) fn encode_branch<K: IpKey>(
+    page: &mut [u8; PAGE_SIZE],
+    born_txn: u64,
+    level: u16,
+    page_count: u64,
+    lower_fence: K,
+    upper_fence: Option<K>,
+    entries: &[RangeBranchEntry<K>],
+) -> Result<(), RangePageWriteError> {
+    if born_txn == 0 {
+        return Err(RangePageWriteError::BornTransactionZero);
+    }
+    if level == 0 || level > MAX_TREE_LEVEL {
+        return Err(RangePageWriteError::BranchLevel { level });
+    }
+    if !(3..=MAX_PAGE_COUNT).contains(&page_count) {
+        return Err(RangePageWriteError::PageCount { page_count });
+    }
+    if entries.is_empty() {
+        return Err(RangePageWriteError::EmptyBranch);
+    }
+    let actual = branch_capacity::<K>();
+    if entries.len() > actual {
+        return Err(RangePageWriteError::TooManyChildren {
+            required: entries.len(),
+            actual,
+        });
+    }
+    if entries[0].lower_fence != lower_fence {
+        return Err(RangePageWriteError::FirstFence);
+    }
+    if upper_fence.is_some_and(|upper| lower_fence >= upper) {
+        return Err(RangePageWriteError::FenceBounds);
+    }
+
+    let mut previous_nonempty: Option<RangeBranchEntry<K>> = None;
+    for (index, entry) in entries.iter().copied().enumerate() {
+        if upper_fence.is_some_and(|upper| entry.lower_fence >= upper) {
+            return Err(RangePageWriteError::FenceBounds);
+        }
+        if entry.child_pgno < 2 || u64::from(entry.child_pgno) >= page_count {
+            return Err(RangePageWriteError::ChildOutOfBounds(entry.child_pgno));
+        }
+        if entries[..index]
+            .iter()
+            .any(|prior| prior.child_pgno == entry.child_pgno)
+        {
+            return Err(RangePageWriteError::DuplicateChild(entry.child_pgno));
+        }
+        if index != 0 && entries[index - 1].lower_fence >= entry.lower_fence {
+            return Err(RangePageWriteError::FenceOrder);
+        }
+        if entry.is_empty() {
+            if entry.first_from != K::MIN || entry.last_from != K::MIN || entry.last_to != K::MIN {
+                return Err(RangePageWriteError::EmptySummaryNonzero);
+            }
+            continue;
+        }
+        if entry.first_from < entry.lower_fence {
+            return Err(RangePageWriteError::SummaryBeforeFence);
+        }
+        if entry.first_from > entry.last_from || entry.last_from > entry.last_to {
+            return Err(RangePageWriteError::SummaryOrder);
+        }
+        let next_fence = entries
+            .get(index + 1)
+            .map(|next| next.lower_fence)
+            .or(upper_fence);
+        if next_fence.is_some_and(|fence| entry.last_from >= fence) {
+            return Err(RangePageWriteError::SummaryOutsideFence);
+        }
+        if let Some(previous) = previous_nonempty {
+            if previous.last_to >= entry.first_from {
+                return Err(RangePageWriteError::SummaryOverlap);
+            }
+        }
+        previous_nonempty = Some(entry);
+    }
+
+    page.fill(0);
+    let lower = usize::from(PAGE_HEADER_SIZE) + entries.len() * branch_entry_size::<K>();
+    PageHeader {
+        page_type: PageType::RangeBranch,
+        born_txn,
+        item_count: entries.len() as u16,
+        level,
+        lower: lower as u16,
+        upper: PAGE_SIZE as u16,
+        aux: K::FAMILY as u32,
+        page_crc32c: 0,
+    }
+    .encode_into(page);
+    for (index, entry) in entries.iter().enumerate() {
+        let at = usize::from(PAGE_HEADER_SIZE) + index * branch_entry_size::<K>();
+        if K::WIDTH == 4 {
+            entry.lower_fence.write_le(&mut page[at..at + 4]);
+            page[at + 4..at + 8].copy_from_slice(&entry.child_pgno.to_le_bytes());
+            page[at + 8..at + 16].copy_from_slice(&entry.subtree_record_count.to_le_bytes());
+            entry.first_from.write_le(&mut page[at + 16..at + 20]);
+            entry.last_from.write_le(&mut page[at + 20..at + 24]);
+            entry.last_to.write_le(&mut page[at + 24..at + 28]);
+        } else {
+            entry.lower_fence.write_le(&mut page[at..at + 16]);
+            page[at + 16..at + 20].copy_from_slice(&entry.child_pgno.to_le_bytes());
+            page[at + 24..at + 32].copy_from_slice(&entry.subtree_record_count.to_le_bytes());
+            entry.first_from.write_le(&mut page[at + 32..at + 48]);
+            entry.last_from.write_le(&mut page[at + 48..at + 64]);
+            entry.last_to.write_le(&mut page[at + 64..at + 80]);
+        }
+    }
+    write_crc32c(page);
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -461,5 +689,243 @@ mod tests {
                 last_to: to,
             }
         );
+    }
+
+    #[test]
+    fn leaf_encoder_is_canonical_atomic_and_round_trips() {
+        assert_eq!(leaf_capacity::<Ipv4Key>(), 338);
+        assert_eq!(leaf_capacity::<Ipv6Key>(), 112);
+
+        let records = [
+            RangeRecord {
+                from: Ipv4Key(10),
+                to: Ipv4Key(20),
+                value: 0,
+            },
+            RangeRecord {
+                from: Ipv4Key(21),
+                to: Ipv4Key(30),
+                value: 7,
+            },
+        ];
+        let mut page = [0xa5; PAGE_SIZE];
+        encode_leaf(&mut page, 7, ValueKind::Direct, &records).unwrap();
+        assert!(crate::page::verify_crc32c(&page));
+        let header = PageHeader::decode(&page, 7).unwrap();
+        assert_eq!(header.page_type, PageType::RangeLeaf);
+        assert_eq!(header.item_count, 2);
+        assert!(page[usize::from(header.lower)..]
+            .iter()
+            .all(|&byte| byte == 0));
+        let leaf =
+            RangeLeaf::<Ipv4Key>::open(&page, 7, AddressFamily::Ipv4, ValueKind::Direct).unwrap();
+        assert_eq!(leaf.record(0).unwrap(), records[0]);
+        assert_eq!(leaf.record(1).unwrap(), records[1]);
+
+        let before = page;
+        assert_eq!(
+            encode_leaf(
+                &mut page,
+                7,
+                ValueKind::Membership,
+                &[RangeRecord {
+                    from: Ipv4Key(10),
+                    to: Ipv4Key(20),
+                    value: 0,
+                }],
+            ),
+            Err(RangePageWriteError::MembershipValueZero)
+        );
+        assert_eq!(page, before);
+
+        assert_eq!(
+            encode_leaf(
+                &mut page,
+                7,
+                ValueKind::Direct,
+                &[RangeRecord {
+                    from: Ipv4Key(20),
+                    to: Ipv4Key(10),
+                    value: 7,
+                }],
+            ),
+            Err(RangePageWriteError::RangeReversed)
+        );
+        assert_eq!(page, before);
+
+        assert_eq!(
+            encode_leaf(
+                &mut page,
+                7,
+                ValueKind::Direct,
+                &[
+                    RangeRecord {
+                        from: Ipv4Key(10),
+                        to: Ipv4Key(20),
+                        value: 1,
+                    },
+                    RangeRecord {
+                        from: Ipv4Key(20),
+                        to: Ipv4Key(30),
+                        value: 2,
+                    },
+                ],
+            ),
+            Err(RangePageWriteError::RangeOverlap)
+        );
+        assert_eq!(page, before);
+
+        assert_eq!(
+            encode_leaf(
+                &mut page,
+                7,
+                ValueKind::Direct,
+                &[
+                    RangeRecord {
+                        from: Ipv4Key(10),
+                        to: Ipv4Key(20),
+                        value: 7,
+                    },
+                    RangeRecord {
+                        from: Ipv4Key(21),
+                        to: Ipv4Key(30),
+                        value: 7,
+                    },
+                ],
+            ),
+            Err(RangePageWriteError::AdjacentEqualValue)
+        );
+        assert_eq!(page, before);
+
+        let too_many = std::vec![
+            RangeRecord {
+                from: Ipv4Key(0),
+                to: Ipv4Key(0),
+                value: 1,
+            };
+            leaf_capacity::<Ipv4Key>() + 1
+        ];
+        assert_eq!(
+            encode_leaf(&mut page, 7, ValueKind::Direct, &too_many),
+            Err(RangePageWriteError::TooManyRecords {
+                required: leaf_capacity::<Ipv4Key>() + 1,
+                actual: leaf_capacity::<Ipv4Key>(),
+            })
+        );
+        assert_eq!(page, before);
+    }
+
+    #[test]
+    fn branch_encoder_is_canonical_atomic_and_round_trips() {
+        assert_eq!(branch_capacity::<Ipv4Key>(), 127);
+        assert_eq!(branch_capacity::<Ipv6Key>(), 50);
+
+        let entries = [
+            RangeBranchEntry {
+                lower_fence: Ipv4Key::MIN,
+                child_pgno: 2,
+                subtree_record_count: 1,
+                first_from: Ipv4Key(10),
+                last_from: Ipv4Key(10),
+                last_to: Ipv4Key(20),
+            },
+            RangeBranchEntry {
+                lower_fence: Ipv4Key(100),
+                child_pgno: 3,
+                subtree_record_count: 0,
+                first_from: Ipv4Key::MIN,
+                last_from: Ipv4Key::MIN,
+                last_to: Ipv4Key::MIN,
+            },
+            RangeBranchEntry {
+                lower_fence: Ipv4Key(200),
+                child_pgno: 4,
+                subtree_record_count: 1,
+                first_from: Ipv4Key(210),
+                last_from: Ipv4Key(210),
+                last_to: Ipv4Key(220),
+            },
+        ];
+        let mut page = [0x5a; PAGE_SIZE];
+        encode_branch(&mut page, 7, 1, 6, Ipv4Key::MIN, None, &entries).unwrap();
+        assert!(crate::page::verify_crc32c(&page));
+        let branch = RangeBranch::<Ipv4Key>::open(&page, 7, AddressFamily::Ipv4, 6).unwrap();
+        assert_eq!(branch.entry(0).unwrap(), entries[0]);
+        assert_eq!(branch.entry(1).unwrap(), entries[1]);
+        assert_eq!(branch.entry(2).unwrap(), entries[2]);
+
+        let before = page;
+        let mut wrong_first = entries;
+        wrong_first[0].lower_fence = Ipv4Key(1);
+        assert_eq!(
+            encode_branch(&mut page, 7, 1, 6, Ipv4Key::MIN, None, &wrong_first),
+            Err(RangePageWriteError::FirstFence)
+        );
+        assert_eq!(page, before);
+
+        let invalid_bounds = [RangeBranchEntry {
+            lower_fence: Ipv4Key(100),
+            child_pgno: 2,
+            subtree_record_count: 1,
+            first_from: Ipv4Key(110),
+            last_from: Ipv4Key(110),
+            last_to: Ipv4Key(120),
+        }];
+        assert_eq!(
+            encode_branch(
+                &mut page,
+                7,
+                1,
+                4,
+                Ipv4Key(100),
+                Some(Ipv4Key(100)),
+                &invalid_bounds,
+            ),
+            Err(RangePageWriteError::FenceBounds)
+        );
+        assert_eq!(page, before);
+
+        let mut overlapping = entries;
+        overlapping[0].last_to = Ipv4Key(220);
+        assert_eq!(
+            encode_branch(&mut page, 7, 1, 6, Ipv4Key::MIN, None, &overlapping),
+            Err(RangePageWriteError::SummaryOverlap)
+        );
+        assert_eq!(page, before);
+
+        let outside_fence = [RangeBranchEntry {
+            lower_fence: Ipv4Key(100),
+            child_pgno: 2,
+            subtree_record_count: 1,
+            first_from: Ipv4Key(110),
+            last_from: Ipv4Key(200),
+            last_to: Ipv4Key(220),
+        }];
+        assert_eq!(
+            encode_branch(
+                &mut page,
+                7,
+                1,
+                4,
+                Ipv4Key(100),
+                Some(Ipv4Key(200)),
+                &outside_fence,
+            ),
+            Err(RangePageWriteError::SummaryOutsideFence)
+        );
+        assert_eq!(page, before);
+
+        let v6 = [RangeBranchEntry {
+            lower_fence: Ipv6Key::MIN,
+            child_pgno: 3,
+            subtree_record_count: 1,
+            first_from: Ipv6Key { hi: 1, lo: 2 },
+            last_from: Ipv6Key { hi: 1, lo: 2 },
+            last_to: Ipv6Key { hi: 1, lo: 3 },
+        }];
+        encode_branch(&mut page, 7, 1, 4, Ipv6Key::MIN, None, &v6).unwrap();
+        assert!(page[52..56].iter().all(|&byte| byte == 0));
+        let branch = RangeBranch::<Ipv6Key>::open(&page, 7, AddressFamily::Ipv6, 4).unwrap();
+        assert_eq!(branch.entry(0).unwrap(), v6[0]);
     }
 }

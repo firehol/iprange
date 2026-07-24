@@ -7446,7 +7446,71 @@ requirements are normative in the Pre-Implementation Gate above.
 - This is internal Rust lifecycle work only. It changes no v4 on-disk byte,
   public SDK signature, validation default, Go behavior, or Phase-2 scope.
 
+### 2026-07-24 - semantic range-construction foundation plan
+
+- A fresh public-surface audit shows that neither engine has a usable v4 SDK
+  yet. Rust exports only primitive value types from `lib.rs:72-75`, and Go
+  exports only the same semantic foundation from `types.go:6-55`. The existing
+  Linux reader/writer and Reclaim path are crate-private test infrastructure,
+  not an externally usable format implementation.
+- The exact range tree is also reader-only today. Rust decodes leaves and
+  branches in `range_page.rs:64-206`, while all physical range-page creation is
+  test-local helper code (`range_reader.rs:650-722`); Go has the matching
+  reader-only split in `internal/exactv4/range_page.go:46-180`. No generic
+  range-page encoder, ordered tree builder, or page-backed sequential mutation
+  engine exists in either implementation.
+- The next work therefore begins at the shared semantic-data foundation, not a
+  public wrapper around incomplete internals. First add a bounded, allocation-
+  free range leaf/branch encoder in Rust and Go: it must enforce the exact
+  family, transaction, capacity, ordering, non-overlap, membership-zero, page
+  summary, reserved-byte, and CRC rules. This is only the physical codec used by
+  later builders; it does **not** accept unordered input as a public workflow.
+- Then add an ordered bottom-up range-tree builder and, separately, the
+  operation-private page-backed sequential assignment engine required by
+  decision 47. The latter is the first component allowed to accept unordered,
+  overlapping direct or membership input; it must mutate private COW pages in
+  arrival order and create no sorting file or per-record heap allocation. Only
+  after that engine exists can direct replacement, retention refresh, named-feed
+  workflow, or public `AddRanges` be honestly exposed.
+- This sequencing follows the normative range layout (`binary-format-v4.md:434-
+  525`) and no-external-scratch/arrival-order rules (`binary-format-v4.md:1600-
+  1668`). It introduces no new public behavior or product decision; the first
+  encoder chunk is an internal, cross-language testable prerequisite.
+
+### 2026-07-24 - canonical range-page encoders
+
+- Rust and Go now have private exact encoders for one already-canonical range
+  leaf or branch (`v4/rust/iprange-livedb/src/range_page.rs` and
+  `v4/go/internal/exactv4/range_page.go`). They write the fixed layout, zero
+  unused bytes, and seal the completed page with CRC-32C.
+- Both encoders validate all supplied records or child summaries before they
+  touch the destination page. They reject invalid transaction IDs, capacity
+  overflow, reversed/overlapping ranges, uncoalesced equal adjacency,
+  membership value zero, invalid branch geometry, duplicate child pages,
+  invalid fences, and invalid summaries.
+- The branch encoder receives an inherited lower fence and an optional
+  exclusive upper fence; no upper value represents the endpoint past the
+  family maximum. This proves that every child record start belongs to that
+  child. A record endpoint may still cross a later fence, as the format permits.
+  Legal empty children remain encodable.
+- This does not normalize unordered input, build a tree, change metadata roots,
+  allocate temporary sorting files, or expose a public SDK API. It is only the
+  safe page-writing primitive required by those later layers.
+
 ## Validation
+
+### 2026-07-24 - canonical range-page encoders
+
+- Focused Rust and Go encoder tests prove exact IPv4/IPv6 capacity, page
+  layout/CRC round trips, zeroed tails, and atomic rejection. The branch tests
+  also prove inherited-fence rejection without changing the existing page.
+- Full Go `test ./...` and `vet ./...` pass. Rust passes 456 no-default-feature
+  tests and 577 all-feature tests, formatting, warnings-denied all-target
+  Clippy, and all-feature benchmark compilation. `git diff --check` and the
+  project SOW audit pass.
+- No normative spec change is needed: this private implementation applies the
+  existing range-page contract. It adds no public API, default validation, or
+  on-disk format behavior beyond that already specified.
 
 ### 2026-07-24 - selected-reclaim coordinator bind
 

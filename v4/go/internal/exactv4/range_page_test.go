@@ -102,6 +102,21 @@ func requireRangePageCode(t *testing.T, err error, want rangePageErrorCode) *ran
 	return got
 }
 
+func requireRangePageWriteCode(t *testing.T, err error, want rangePageWriteErrorCode) *rangePageWriteError {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected range-page write error %d", want)
+	}
+	var got *rangePageWriteError
+	if !errors.As(err, &got) {
+		t.Fatalf("error type = %T, want *rangePageWriteError: %v", err, err)
+	}
+	if got.code != want {
+		t.Fatalf("range-page write code = %d, want %d", got.code, want)
+	}
+	return got
+}
+
 func TestRangeLeafAcceptsLegalEmptyPagesForBothFamilies(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -327,5 +342,165 @@ func TestIPv6BranchEntryUsesLowLimbFirstWireLayout(t *testing.T) {
 	}
 	if entry.lowerFence != lower || entry.firstFrom != first || entry.lastFrom != last || entry.lastTo != to {
 		t.Fatalf("decoded IPv6 entry = %+v", entry)
+	}
+}
+
+func TestRangeLeafEncoderIsCanonicalAtomicAndRoundTrips(t *testing.T) {
+	if got := rangeLeafCapacity[IPv4](); got != 338 {
+		t.Fatalf("IPv4 leaf capacity = %d, want 338", got)
+	}
+	if got := rangeLeafCapacity[IPv6](); got != 112 {
+		t.Fatalf("IPv6 leaf capacity = %d, want 112", got)
+	}
+	records := []rangeRecord[IPv4]{
+		{from: 10, to: 20, value: 0},
+		{from: 21, to: 30, value: 7},
+	}
+	page := make([]byte, PageSize)
+	for index := range page {
+		page[index] = 0xa5
+	}
+	if err := encodeRangeLeaf(page, 7, ValueKindDirect, records); err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyPageCRC32C(page) {
+		t.Fatal("encoded leaf CRC is invalid")
+	}
+	header, err := DecodePageHeader(page, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.PageType != PageTypeRangeLeaf || header.ItemCount != 2 {
+		t.Fatalf("encoded leaf header = %#v", header)
+	}
+	for _, value := range page[header.Lower:] {
+		if value != 0 {
+			t.Fatal("encoded leaf did not zero unused bytes")
+		}
+	}
+	leaf, err := openRangeLeaf[IPv4](page, 7, AddressFamilyIPv4, ValueKindDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range records {
+		got, err := leaf.record(index)
+		if err != nil || got != want {
+			t.Fatalf("record %d = %#v/%v, want %#v", index, got, err, want)
+		}
+	}
+
+	before := append([]byte(nil), page...)
+	requireRangePageWriteCode(t, encodeRangeLeaf(page, 7, ValueKindMembership, []rangeRecord[IPv4]{{from: 10, to: 20}}), rangePageWriteErrMembershipValueZero)
+	if string(page) != string(before) {
+		t.Fatal("membership-value rejection changed destination page")
+	}
+	requireRangePageWriteCode(t, encodeRangeLeaf(page, 7, ValueKindDirect, []rangeRecord[IPv4]{{from: 20, to: 10, value: 7}}), rangePageWriteErrRangeReversed)
+	if string(page) != string(before) {
+		t.Fatal("reversed-range rejection changed destination page")
+	}
+	requireRangePageWriteCode(t, encodeRangeLeaf(page, 7, ValueKindDirect, []rangeRecord[IPv4]{{from: 10, to: 20, value: 1}, {from: 20, to: 30, value: 2}}), rangePageWriteErrRangeOverlap)
+	if string(page) != string(before) {
+		t.Fatal("overlap rejection changed destination page")
+	}
+	requireRangePageWriteCode(t, encodeRangeLeaf(page, 7, ValueKindDirect, []rangeRecord[IPv4]{{from: 10, to: 20, value: 7}, {from: 21, to: 30, value: 7}}), rangePageWriteErrAdjacentEqualValue)
+	if string(page) != string(before) {
+		t.Fatal("adjacent-value rejection changed destination page")
+	}
+
+	tooMany := make([]rangeRecord[IPv4], rangeLeafCapacity[IPv4]()+1)
+	err = encodeRangeLeaf(page, 7, ValueKindDirect, tooMany)
+	got := requireRangePageWriteCode(t, err, rangePageWriteErrTooManyRecords)
+	if got.required != len(tooMany) || got.actual != rangeLeafCapacity[IPv4]() {
+		t.Fatalf("capacity = %#v", got)
+	}
+	if string(page) != string(before) {
+		t.Fatal("capacity rejection changed destination page")
+	}
+}
+
+func TestRangeBranchEncoderIsCanonicalAtomicAndRoundTrips(t *testing.T) {
+	if got := rangeBranchCapacity[IPv4](); got != 127 {
+		t.Fatalf("IPv4 branch capacity = %d, want 127", got)
+	}
+	if got := rangeBranchCapacity[IPv6](); got != 50 {
+		t.Fatalf("IPv6 branch capacity = %d, want 50", got)
+	}
+	entries := []rangeBranchEntry[IPv4]{
+		{lowerFence: 0, childPage: 2, subtreeRecordCount: 1, firstFrom: 10, lastFrom: 10, lastTo: 20},
+		{lowerFence: 100, childPage: 3},
+		{lowerFence: 200, childPage: 4, subtreeRecordCount: 1, firstFrom: 210, lastFrom: 210, lastTo: 220},
+	}
+	page := make([]byte, PageSize)
+	for index := range page {
+		page[index] = 0x5a
+	}
+	if err := encodeRangeBranch(page, 7, 1, 6, IPv4(0), IPv4(0), false, entries); err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyPageCRC32C(page) {
+		t.Fatal("encoded branch CRC is invalid")
+	}
+	branch, err := openRangeBranch[IPv4](page, 7, AddressFamilyIPv4, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range entries {
+		got, err := branch.entry(index)
+		if err != nil || got != want {
+			t.Fatalf("entry %d = %#v/%v, want %#v", index, got, err, want)
+		}
+	}
+
+	before := append([]byte(nil), page...)
+	wrongFirst := append([]rangeBranchEntry[IPv4](nil), entries...)
+	wrongFirst[0].lowerFence = 1
+	requireRangePageWriteCode(t, encodeRangeBranch(page, 7, 1, 6, IPv4(0), IPv4(0), false, wrongFirst), rangePageWriteErrFirstFence)
+	if string(page) != string(before) {
+		t.Fatal("first-fence rejection changed destination page")
+	}
+	invalidBounds := []rangeBranchEntry[IPv4]{
+		{lowerFence: 100, childPage: 2, subtreeRecordCount: 1, firstFrom: 110, lastFrom: 110, lastTo: 120},
+	}
+	requireRangePageWriteCode(t, encodeRangeBranch(page, 7, 1, 4, IPv4(100), IPv4(100), true, invalidBounds), rangePageWriteErrFenceBounds)
+	if string(page) != string(before) {
+		t.Fatal("fence-bounds rejection changed destination page")
+	}
+	overlapping := append([]rangeBranchEntry[IPv4](nil), entries...)
+	overlapping[0].lastTo = 220
+	requireRangePageWriteCode(t, encodeRangeBranch(page, 7, 1, 6, IPv4(0), IPv4(0), false, overlapping), rangePageWriteErrSummaryOverlap)
+	if string(page) != string(before) {
+		t.Fatal("summary-overlap rejection changed destination page")
+	}
+	outsideFence := []rangeBranchEntry[IPv4]{
+		{lowerFence: 100, childPage: 2, subtreeRecordCount: 1, firstFrom: 110, lastFrom: 200, lastTo: 220},
+	}
+	requireRangePageWriteCode(t, encodeRangeBranch(page, 7, 1, 4, IPv4(100), IPv4(200), true, outsideFence), rangePageWriteErrSummaryOutsideFence)
+	if string(page) != string(before) {
+		t.Fatal("summary-outside-fence rejection changed destination page")
+	}
+
+	v6 := []rangeBranchEntry[IPv6]{
+		{
+			childPage:          3,
+			subtreeRecordCount: 1,
+			firstFrom:          IPv6{Hi: 1, Lo: 2},
+			lastFrom:           IPv6{Hi: 1, Lo: 2},
+			lastTo:             IPv6{Hi: 1, Lo: 3},
+		},
+	}
+	if err := encodeRangeBranch(page, 7, 1, 4, IPv6{}, IPv6{}, false, v6); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range page[52:56] {
+		if value != 0 {
+			t.Fatal("IPv6 branch reserved bytes are nonzero")
+		}
+	}
+	branchV6, err := openRangeBranch[IPv6](page, 7, AddressFamilyIPv6, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := branchV6.entry(0); err != nil || got != v6[0] {
+		t.Fatalf("IPv6 entry = %#v/%v, want %#v", got, err, v6[0])
 	}
 }

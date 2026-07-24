@@ -13,6 +13,7 @@ type rangeKey[K any] interface {
 	compare(K) int
 	minimum() K
 	maximum() K
+	next() (K, bool)
 	width() int
 	family() AddressFamily
 	halves() (uint64, uint64)
@@ -26,6 +27,7 @@ func (IPv4) readLE(src []byte) IPv4              { return IPv4(binary.LittleEndi
 func (IPv4) fromHalves(_ uint64, lo uint64) IPv4 { return IPv4(uint32(lo)) }
 func (IPv4) minimum() IPv4                       { return 0 }
 func (IPv4) maximum() IPv4                       { return ^IPv4(0) }
+func (k IPv4) next() (IPv4, bool)                { return k.Next() }
 func (IPv4) width() int                          { return 4 }
 func (IPv4) family() AddressFamily               { return AddressFamilyIPv4 }
 func (k IPv4) halves() (uint64, uint64)          { return 0, uint64(k) }
@@ -83,6 +85,7 @@ func (IPv6) fromHalves(hi, lo uint64) IPv6 { return IPv6{Hi: hi, Lo: lo} }
 
 func (IPv6) minimum() IPv6              { return IPv6{} }
 func (IPv6) maximum() IPv6              { return IPv6{Hi: ^uint64(0), Lo: ^uint64(0)} }
+func (k IPv6) next() (IPv6, bool)       { return k.Next() }
 func (IPv6) width() int                 { return 16 }
 func (IPv6) family() AddressFamily      { return AddressFamilyIPv6 }
 func (k IPv6) halves() (uint64, uint64) { return k.Hi, k.Lo }

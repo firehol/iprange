@@ -30,6 +30,47 @@ func (e *rangePageError) Error() string {
 	return fmt.Sprintf("exact v4 range page: error %d", e.code)
 }
 
+// rangePageWriteError describes input rejected before an encoder changes the
+// destination COW page. It is distinct from rangePageError, which describes
+// bytes that were already read from a file.
+type rangePageWriteErrorCode uint8
+
+const (
+	rangePageWriteErrBornTransactionZero rangePageWriteErrorCode = iota + 1
+	rangePageWriteErrTooManyRecords
+	rangePageWriteErrRangeReversed
+	rangePageWriteErrMembershipValueZero
+	rangePageWriteErrRangeOverlap
+	rangePageWriteErrAdjacentEqualValue
+	rangePageWriteErrBranchLevel
+	rangePageWriteErrPageCount
+	rangePageWriteErrEmptyBranch
+	rangePageWriteErrTooManyChildren
+	rangePageWriteErrFirstFence
+	rangePageWriteErrFenceBounds
+	rangePageWriteErrFenceOrder
+	rangePageWriteErrChildOutOfBounds
+	rangePageWriteErrDuplicateChild
+	rangePageWriteErrEmptySummaryNonzero
+	rangePageWriteErrSummaryOrder
+	rangePageWriteErrSummaryBeforeFence
+	rangePageWriteErrSummaryOutsideFence
+	rangePageWriteErrSummaryOverlap
+)
+
+type rangePageWriteError struct {
+	code     rangePageWriteErrorCode
+	required int
+	actual   int
+	level    uint16
+	pages    uint64
+	child    uint32
+}
+
+func (e *rangePageWriteError) Error() string {
+	return fmt.Sprintf("exact v4 range page write: error %d", e.code)
+}
+
 type rangeRecord[K rangeKey[K]] struct {
 	from  K
 	to    K
@@ -46,6 +87,204 @@ type rangeBranchEntry[K rangeKey[K]] struct {
 }
 
 func (e rangeBranchEntry[K]) empty() bool { return e.subtreeRecordCount == 0 }
+
+func rangeLeafCapacity[K rangeKey[K]]() int {
+	return (PageSize - int(PageHeaderSize)) / rangeRecordSize[K]()
+}
+
+func rangeBranchCapacity[K rangeKey[K]]() int {
+	return (PageSize - int(PageHeaderSize)) / rangeBranchEntrySize[K]()
+}
+
+// encodeRangeLeaf validates the complete canonical record slice before it
+// changes page, then writes one exact CRC-sealed leaf.
+func encodeRangeLeaf[K rangeKey[K]](
+	page []byte,
+	bornTxn uint64,
+	valueKind ValueKind,
+	records []rangeRecord[K],
+) error {
+	if len(page) != PageSize {
+		return &PageHeaderError{Code: PageHeaderErrPageSize, Length: len(page)}
+	}
+	if bornTxn == 0 {
+		return &rangePageWriteError{code: rangePageWriteErrBornTransactionZero}
+	}
+	if len(records) > rangeLeafCapacity[K]() {
+		return &rangePageWriteError{
+			code:     rangePageWriteErrTooManyRecords,
+			required: len(records),
+			actual:   rangeLeafCapacity[K](),
+		}
+	}
+	for index, record := range records {
+		if record.from.compare(record.to) > 0 {
+			return &rangePageWriteError{code: rangePageWriteErrRangeReversed}
+		}
+		if valueKind == ValueKindMembership && record.value == 0 {
+			return &rangePageWriteError{code: rangePageWriteErrMembershipValueZero}
+		}
+		if index == 0 {
+			continue
+		}
+		previous := records[index-1]
+		if previous.to.compare(record.from) >= 0 {
+			return &rangePageWriteError{code: rangePageWriteErrRangeOverlap}
+		}
+		if next, ok := previous.to.next(); ok && next.compare(record.from) == 0 && previous.value == record.value {
+			return &rangePageWriteError{code: rangePageWriteErrAdjacentEqualValue}
+		}
+	}
+
+	clear(page)
+	var key K
+	lower := int(PageHeaderSize) + len(records)*rangeRecordSize[K]()
+	if err := (PageHeader{
+		PageType:  PageTypeRangeLeaf,
+		BornTxn:   bornTxn,
+		ItemCount: uint16(len(records)),
+		Level:     0,
+		Lower:     uint16(lower),
+		Upper:     PageSize,
+		Aux:       uint32(key.family()),
+	}).EncodeInto(page); err != nil {
+		return err
+	}
+	width := key.width()
+	for index, record := range records {
+		at := int(PageHeaderSize) + index*rangeRecordSize[K]()
+		record.from.writeLE(page[at : at+width])
+		record.to.writeLE(page[at+width : at+2*width])
+		binary.LittleEndian.PutUint32(page[at+2*width:at+2*width+4], record.value)
+	}
+	_, err := WritePageCRC32C(page)
+	return err
+}
+
+// encodeRangeBranch validates the complete child-summary sequence before it
+// changes page, then writes one exact CRC-sealed branch. lowerFence is the
+// exact lower bound inherited from the parent. upperFence is the exclusive
+// upper bound inherited from the parent; hasUpperFence false represents the
+// unrepresentable endpoint just past the family maximum.
+func encodeRangeBranch[K rangeKey[K]](
+	page []byte,
+	bornTxn uint64,
+	level uint16,
+	pageCount uint64,
+	lowerFence K,
+	upperFence K,
+	hasUpperFence bool,
+	entries []rangeBranchEntry[K],
+) error {
+	if len(page) != PageSize {
+		return &PageHeaderError{Code: PageHeaderErrPageSize, Length: len(page)}
+	}
+	if bornTxn == 0 {
+		return &rangePageWriteError{code: rangePageWriteErrBornTransactionZero}
+	}
+	if level == 0 || level > MaxTreeLevel {
+		return &rangePageWriteError{code: rangePageWriteErrBranchLevel, level: level}
+	}
+	if pageCount < 3 || pageCount > MaxPageCount {
+		return &rangePageWriteError{code: rangePageWriteErrPageCount, pages: pageCount}
+	}
+	if len(entries) == 0 {
+		return &rangePageWriteError{code: rangePageWriteErrEmptyBranch}
+	}
+	if len(entries) > rangeBranchCapacity[K]() {
+		return &rangePageWriteError{
+			code:     rangePageWriteErrTooManyChildren,
+			required: len(entries),
+			actual:   rangeBranchCapacity[K](),
+		}
+	}
+	if entries[0].lowerFence.compare(lowerFence) != 0 {
+		return &rangePageWriteError{code: rangePageWriteErrFirstFence}
+	}
+	if hasUpperFence && lowerFence.compare(upperFence) >= 0 {
+		return &rangePageWriteError{code: rangePageWriteErrFenceBounds}
+	}
+
+	var previous rangeBranchEntry[K]
+	havePrevious := false
+	for index, entry := range entries {
+		if hasUpperFence && entry.lowerFence.compare(upperFence) >= 0 {
+			return &rangePageWriteError{code: rangePageWriteErrFenceBounds}
+		}
+		if entry.childPage < 2 || uint64(entry.childPage) >= pageCount {
+			return &rangePageWriteError{code: rangePageWriteErrChildOutOfBounds, child: entry.childPage}
+		}
+		for _, prior := range entries[:index] {
+			if prior.childPage == entry.childPage {
+				return &rangePageWriteError{code: rangePageWriteErrDuplicateChild, child: entry.childPage}
+			}
+		}
+		if index != 0 && entries[index-1].lowerFence.compare(entry.lowerFence) >= 0 {
+			return &rangePageWriteError{code: rangePageWriteErrFenceOrder}
+		}
+		if entry.empty() {
+			if entry.firstFrom.compare(entry.firstFrom.minimum()) != 0 ||
+				entry.lastFrom.compare(entry.lastFrom.minimum()) != 0 ||
+				entry.lastTo.compare(entry.lastTo.minimum()) != 0 {
+				return &rangePageWriteError{code: rangePageWriteErrEmptySummaryNonzero}
+			}
+			continue
+		}
+		if entry.firstFrom.compare(entry.lowerFence) < 0 {
+			return &rangePageWriteError{code: rangePageWriteErrSummaryBeforeFence}
+		}
+		if entry.firstFrom.compare(entry.lastFrom) > 0 || entry.lastFrom.compare(entry.lastTo) > 0 {
+			return &rangePageWriteError{code: rangePageWriteErrSummaryOrder}
+		}
+		nextFence, hasNextFence := upperFence, hasUpperFence
+		if index+1 < len(entries) {
+			nextFence, hasNextFence = entries[index+1].lowerFence, true
+		}
+		if hasNextFence && entry.lastFrom.compare(nextFence) >= 0 {
+			return &rangePageWriteError{code: rangePageWriteErrSummaryOutsideFence}
+		}
+		if havePrevious && previous.lastTo.compare(entry.firstFrom) >= 0 {
+			return &rangePageWriteError{code: rangePageWriteErrSummaryOverlap}
+		}
+		previous = entry
+		havePrevious = true
+	}
+
+	clear(page)
+	var key K
+	lower := int(PageHeaderSize) + len(entries)*rangeBranchEntrySize[K]()
+	if err := (PageHeader{
+		PageType:  PageTypeRangeBranch,
+		BornTxn:   bornTxn,
+		ItemCount: uint16(len(entries)),
+		Level:     level,
+		Lower:     uint16(lower),
+		Upper:     PageSize,
+		Aux:       uint32(key.family()),
+	}).EncodeInto(page); err != nil {
+		return err
+	}
+	width := key.width()
+	for index, entry := range entries {
+		at := int(PageHeaderSize) + index*rangeBranchEntrySize[K]()
+		entry.lowerFence.writeLE(page[at : at+width])
+		if width == 4 {
+			binary.LittleEndian.PutUint32(page[at+4:at+8], entry.childPage)
+			binary.LittleEndian.PutUint64(page[at+8:at+16], entry.subtreeRecordCount)
+			entry.firstFrom.writeLE(page[at+16 : at+20])
+			entry.lastFrom.writeLE(page[at+20 : at+24])
+			entry.lastTo.writeLE(page[at+24 : at+28])
+		} else {
+			binary.LittleEndian.PutUint32(page[at+16:at+20], entry.childPage)
+			binary.LittleEndian.PutUint64(page[at+24:at+32], entry.subtreeRecordCount)
+			entry.firstFrom.writeLE(page[at+32 : at+48])
+			entry.lastFrom.writeLE(page[at+48 : at+64])
+			entry.lastTo.writeLE(page[at+64 : at+80])
+		}
+	}
+	_, err := WritePageCRC32C(page)
+	return err
+}
 
 type rangeLeaf[K rangeKey[K]] struct {
 	page      []byte
