@@ -16,7 +16,7 @@ const PATH_CAPACITY: usize = MAX_TREE_LEVEL as usize + 1;
 /// A reclaim fence retains this borrow through both retirement passes. The
 /// concrete Linux implementation therefore prevents the operation lock from
 /// being released between deciding a batch is safe and using its pages.
-pub(crate) trait RetirementReclaimBarrier: core::fmt::Debug {}
+pub(crate) trait RetirementReclaimBarrier: core::fmt::Debug + Sync {}
 
 /// Reader-table facts that authorize a bounded reclamation attempt.
 ///
@@ -92,9 +92,11 @@ pub(crate) enum RetirementReadError {
     WorkLimitTooSmall { required_pages: u64 },
     ArithmeticOverflow,
     VerificationBufferTooSmall { required_batches: u64 },
+    ReclamationBufferTooSmall { required_pages: u64 },
     ReaderProtectionLost { retired_by_txn: u64 },
     SelectionChanged,
     ListedPageOutOfBounds(u32),
+    ListedPageOrder { previous: u32, current: u32 },
     BlobPageCountMismatch { declared: u64, actual: u64 },
     PathChanged(u32),
     CursorFailed,
@@ -143,6 +145,68 @@ pub(crate) enum RetirementSelectionResult<'barrier> {
 pub(crate) struct RetirementPassResult {
     pub(crate) batch_count: u64,
     pub(crate) page_count: u64,
+}
+
+/// Exact page sequence produced by the verified retirement second pass.
+///
+/// Its fields remain private so normal allocator code cannot substitute an
+/// arbitrary page slice for pages proved safe under the held reclaim fence.
+#[derive(Debug)]
+pub(crate) struct RetirementReclaimedPages<'selection, 'barrier, 'pages> {
+    selection: &'selection RetirementSelection<'barrier>,
+    pages: &'pages [u32],
+}
+
+impl<'selection, 'barrier, 'pages> RetirementReclaimedPages<'selection, 'barrier, 'pages> {
+    pub(crate) fn pages(&self) -> &'pages [u32] {
+        self.pages
+    }
+
+    pub(crate) const fn selection_id(&self) -> u64 {
+        self.selection.last_retired_by_txn
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct TestOnlyReclaimBarrier;
+
+#[cfg(test)]
+impl RetirementReclaimBarrier for TestOnlyReclaimBarrier {}
+
+#[cfg(test)]
+static TEST_ONLY_RECLAIM_BARRIER: TestOnlyReclaimBarrier = TestOnlyReclaimBarrier;
+
+#[cfg(test)]
+static TEST_ONLY_RECLAIM_SELECTION: RetirementSelection<'static> = RetirementSelection {
+    identity: RetirementIdentity {
+        database_id: [1; 16],
+        txn_id: 2,
+        commit_nonce: [2; 16],
+        page_count: 10,
+        root: 2,
+        batch_count: 1,
+    },
+    batch_count: 1,
+    page_count: 2,
+    last_retired_by_txn: 2,
+    fence: RetirementReclaimFence::from_stable_reader_table(&TEST_ONLY_RECLAIM_BARRIER, 0, None),
+};
+
+/// Test-only adapter for allocator fixtures that are not retirement-reader
+/// fixtures. Production code cannot construct reclaimed-page authority this way.
+#[cfg(test)]
+pub(crate) fn test_reclaimed_pages<'pages>(
+    pages: &'pages [u32],
+) -> Option<RetirementReclaimedPages<'static, 'static, 'pages>> {
+    if pages.is_empty() {
+        None
+    } else {
+        Some(RetirementReclaimedPages {
+            selection: &TEST_ONLY_RECLAIM_SELECTION,
+            pages,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -298,6 +362,7 @@ impl<S: CommittedPageSource> RetirementTree<S> {
         let mut cursor = self.cursor(RetirementPageCheck::VerifyCrc);
         let mut actual_pages = 0u64;
         let mut actual_last = 0u64;
+        let mut previous_page = None;
         for slot in &mut scratch[..required] {
             let batch = cursor
                 .next_batch()?
@@ -307,7 +372,7 @@ impl<S: CommittedPageSource> RetirementTree<S> {
                     retired_by_txn: batch.retired_by_txn,
                 });
             }
-            self.verify_batch_blob(batch)?;
+            self.verify_batch_blob(batch, &mut previous_page)?;
             *slot = batch;
             actual_pages = actual_pages
                 .checked_add(batch.page_count)
@@ -323,7 +388,11 @@ impl<S: CommittedPageSource> RetirementTree<S> {
         })
     }
 
-    fn verify_batch_blob(&self, batch: RetirementBatch) -> Result<(), RetirementReadError> {
+    fn verify_batch_blob(
+        &self,
+        batch: RetirementBatch,
+        previous_page: &mut Option<u32>,
+    ) -> Result<(), RetirementReadError> {
         let length = batch.blob_length()?;
         let blob = BlobTree::from_source(
             &self.pages,
@@ -337,6 +406,15 @@ impl<S: CommittedPageSource> RetirementTree<S> {
         let mut count = 0u64;
         while let Some(page) = reader.next_page()? {
             self.require_listed_page(page)?;
+            if let Some(previous) = *previous_page {
+                if page <= previous {
+                    return Err(RetirementReadError::ListedPageOrder {
+                        previous,
+                        current: page,
+                    });
+                }
+            }
+            *previous_page = Some(page);
             count = count
                 .checked_add(1)
                 .ok_or(RetirementReadError::ArithmeticOverflow)?;
@@ -619,7 +697,46 @@ pub(crate) enum RetirementSecondPassError<E> {
     Sink(E),
 }
 
-impl VerifiedRetirementSelection<'_, '_, '_> {
+impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'barrier, 'batches> {
+    /// Streams the verified selection into caller-owned page scratch and
+    /// returns the only allocator authority for those reclaimed pages.
+    pub(crate) fn second_pass_into<'pages, S>(
+        &self,
+        tree: &RetirementTree<S>,
+        pages: &'pages mut [u32],
+    ) -> Result<RetirementReclaimedPages<'selection, 'barrier, 'pages>, RetirementReadError>
+    where
+        S: CommittedPageSource,
+    {
+        let required = usize::try_from(self.selection.page_count).map_err(|_| {
+            RetirementReadError::ReclamationBufferTooSmall {
+                required_pages: self.selection.page_count,
+            }
+        })?;
+        if pages.len() < required {
+            return Err(RetirementReadError::ReclamationBufferTooSmall {
+                required_pages: self.selection.page_count,
+            });
+        }
+
+        let mut written = 0usize;
+        match self.second_pass(tree, |_, page| {
+            pages[written] = page;
+            written += 1;
+            Ok::<_, ()>(())
+        }) {
+            Ok(result) if result.page_count == self.selection.page_count && written == required => {
+                Ok(RetirementReclaimedPages {
+                    selection: self.selection,
+                    pages: &pages[..required],
+                })
+            }
+            Ok(_) => Err(RetirementReadError::SelectionChanged),
+            Err(RetirementSecondPassError::Read(error)) => Err(error),
+            Err(RetirementSecondPassError::Sink(())) => Err(RetirementReadError::SelectionChanged),
+        }
+    }
+
     pub(crate) fn second_pass<E, F, S>(
         &self,
         tree: &RetirementTree<S>,
@@ -659,6 +776,7 @@ impl VerifiedRetirementSelection<'_, '_, '_> {
 
         let mut cursor = tree.cursor(RetirementPageCheck::Ordinary);
         let mut pages = 0u64;
+        let mut previous_page = None;
         for expected in self.batches {
             if !self.selection.fence.allows_reclaim(expected.retired_by_txn) {
                 return Err(RetirementSecondPassError::Read(
@@ -703,6 +821,17 @@ impl VerifiedRetirementSelection<'_, '_, '_> {
             {
                 tree.require_listed_page(page)
                     .map_err(RetirementSecondPassError::Read)?;
+                if let Some(previous) = previous_page {
+                    if page <= previous {
+                        return Err(RetirementSecondPassError::Read(
+                            RetirementReadError::ListedPageOrder {
+                                previous,
+                                current: page,
+                            },
+                        ));
+                    }
+                }
+                previous_page = Some(page);
                 sink(batch, page).map_err(RetirementSecondPassError::Sink)?;
                 pages = pages.checked_add(1).ok_or(RetirementSecondPassError::Read(
                     RetirementReadError::ArithmeticOverflow,
@@ -1084,6 +1213,31 @@ mod tests {
     }
 
     #[test]
+    fn verified_second_pass_into_returns_bounded_reclaim_authority() {
+        let bytes = sample_image();
+        let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
+        );
+        let mut scratch = [EMPTY_BATCH; 2];
+        let verified = tree.verify_selection(&selection, &mut scratch).unwrap();
+
+        let mut too_small = [0; 2];
+        assert_eq!(
+            verified
+                .second_pass_into(&tree, &mut too_small)
+                .unwrap_err(),
+            RetirementReadError::ReclamationBufferTooSmall { required_pages: 3 }
+        );
+
+        let mut pages = [0; 4];
+        let reclaimed = verified.second_pass_into(&tree, &mut pages).unwrap();
+        assert_eq!(reclaimed.selection_id(), 4);
+        assert_eq!(reclaimed.pages(), &[10, 11, 12]);
+    }
+
+    #[test]
     fn verification_checks_crc_blob_length_order_range_and_scratch() {
         let bytes = sample_image();
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
@@ -1129,6 +1283,19 @@ mod tests {
                 }
             ))
         ));
+
+        bad = bytes.clone();
+        retirement_blob(page_mut(&mut bad, 4), &[11]);
+        let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
+        assert_eq!(
+            bad_tree
+                .verify_selection(&selection, &mut [EMPTY_BATCH; 2])
+                .unwrap_err(),
+            RetirementReadError::ListedPageOrder {
+                previous: 11,
+                current: 11,
+            }
+        );
 
         bad = bytes.clone();
         retirement_blob(page_mut(&mut bad, 3), &[1, 10]);

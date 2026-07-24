@@ -23,6 +23,7 @@ use crate::private_page_pool::{
     PrivatePageReservationScope, PrivatePageReservationScopeSeed, PrivatePageReturn,
     PrivatePageScopedOperation, PrivatePageScopedOperationSlot, PrivatePageScopedSlotInfo,
 };
+use crate::retirement_reader::RetirementReclaimedPages;
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -700,12 +701,12 @@ pub(crate) struct FreeBitmapReclamationRequest<'a> {
 
 /// Move-only verifier proof. The binder consumes it before its final callback.
 #[derive(Debug)]
-pub(crate) struct FreeBitmapReclamationProof<'a> {
+pub(crate) struct FreeBitmapReclamationProof<'ticket, 'pages> {
     nonce: u64,
     selection_id: u64,
-    pages: &'a [u32],
+    pages: &'pages [u32],
     fingerprint: u64,
-    ticket: &'a FreeBitmapReclamationTicket,
+    ticket: &'ticket FreeBitmapReclamationTicket,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1131,11 +1132,24 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
     }
 }
 
-pub(crate) fn complete_free_bitmap_reclamation<'a>(
-    request: FreeBitmapReclamationRequest<'a>,
+/// Completes bitmap late binding from pages emitted by the verified retirement
+/// second pass. Normal allocator code cannot supply an arbitrary page slice.
+pub(crate) fn complete_free_bitmap_reclamation<'ticket, 'selection, 'barrier, 'pages>(
+    request: FreeBitmapReclamationRequest<'ticket>,
+    reclaimed: Option<&RetirementReclaimedPages<'selection, 'barrier, 'pages>>,
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
+    let (selection_id, pages) = match reclaimed {
+        Some(reclaimed) => (reclaimed.selection_id(), reclaimed.pages()),
+        None => (0, &[] as &[u32]),
+    };
+    complete_free_bitmap_reclamation_pages(request, selection_id, pages)
+}
+
+fn complete_free_bitmap_reclamation_pages<'ticket, 'pages>(
+    request: FreeBitmapReclamationRequest<'ticket>,
     selection_id: u64,
-    pages: &'a [u32],
-) -> Result<FreeBitmapReclamationProof<'a>, FreeBitmapCowError> {
+    pages: &'pages [u32],
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
     let ticket = request.ticket;
     if request.nonce == 0
         || (pages.is_empty() != (selection_id == 0))
@@ -1164,6 +1178,15 @@ pub(crate) fn complete_free_bitmap_reclamation<'a>(
     })
 }
 
+#[cfg(test)]
+fn complete_free_bitmap_reclamation_for_test<'ticket, 'pages>(
+    request: FreeBitmapReclamationRequest<'ticket>,
+    selection_id: u64,
+    pages: &'pages [u32],
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
+    complete_free_bitmap_reclamation_pages(request, selection_id, pages)
+}
+
 struct CallbackFreeCommittedSource;
 
 impl CommittedPageSource for CallbackFreeCommittedSource {
@@ -1177,9 +1200,9 @@ static CALLBACK_FREE_COMMITTED_SOURCE: CallbackFreeCommittedSource = CallbackFre
 impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
     FreeBitmapReservationAttachment<'a, 'slots, 'scope, S>
 {
-    pub(crate) fn bind<'proof>(
+    pub(crate) fn bind<'ticket, 'pages>(
         mut self,
-        proof: FreeBitmapReclamationProof<'proof>,
+        proof: FreeBitmapReclamationProof<'ticket, 'pages>,
     ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, S>, FreeBitmapCowError> {
         if !core::ptr::eq(proof.ticket, self.ticket)
             || proof.nonce != self.nonce
@@ -7860,7 +7883,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let mut bound = attachment.bind(proof).unwrap();
         bound.cow.apply_planned_reservation().unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
@@ -8094,7 +8117,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn late_binding_capacity_attaches_to_shared_pool_and_selects_global_lowest_prefix() {
+    fn late_binding_attaches_verified_reclaim_authority_to_shared_pool() {
         let source = AccessControlledPages::new([leaf(11, 1, &[5, 9])]);
         let mut storage = PlannerStorage::new(3, 4, 4, 8);
         // Production capacity planning owns no legacy all-bound arena.
@@ -8140,7 +8163,8 @@ pub(crate) mod tests {
             foreign_before
         );
         let reclaimed = [3, 7];
-        let proof = complete_free_bitmap_reclamation(request, 41, &reclaimed).unwrap();
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed);
+        let proof = complete_free_bitmap_reclamation(request, reclaimed.as_ref()).unwrap();
         let (bound, allocations) = count_thread_allocations(|| attachment.bind(proof));
         let bound = bound.unwrap();
         assert_eq!(allocations, 0);
@@ -8218,7 +8242,7 @@ pub(crate) mod tests {
             .unwrap();
         let (attachment, request) = plan.attach(&pool, &target).unwrap();
         let reclaimed = [3, 7];
-        let proof = complete_free_bitmap_reclamation(request, 51, &reclaimed).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 51, &reclaimed).unwrap();
         source.armed.set(true);
         assert!(matches!(
             attachment.bind(proof),
@@ -8251,7 +8275,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         assert_eq!(
             bound.binding,
@@ -8294,7 +8318,7 @@ pub(crate) mod tests {
             .reserve_scope(first_plan.required_private_pages())
             .unwrap();
         let (first_attachment, first_request) = first_plan.attach(&pool, &first_scope).unwrap();
-        let first_proof = complete_free_bitmap_reclamation(first_request, 0, &[]).unwrap();
+        let first_proof = complete_free_bitmap_reclamation_for_test(first_request, 0, &[]).unwrap();
         let first_bound = first_attachment.bind(first_proof).unwrap();
         let first_required = first_bound.finalization_scratch_requirements().unwrap();
         let mut first_release = vec![0; first_required.release_pages];
@@ -8381,7 +8405,8 @@ pub(crate) mod tests {
         let (second_attachment, second_request) = second_plan
             .attach_current_draft(&pool, &second_scope)
             .unwrap();
-        let second_proof = complete_free_bitmap_reclamation(second_request, 0, &[]).unwrap();
+        let second_proof =
+            complete_free_bitmap_reclamation_for_test(second_request, 0, &[]).unwrap();
         let second_bound = second_attachment.bind(second_proof).unwrap();
         let second_required = second_bound.finalization_scratch_requirements().unwrap();
         let mut second_release = vec![0; second_required.release_pages];
@@ -8507,7 +8532,7 @@ pub(crate) mod tests {
         let (third_attachment, third_request) = third_plan
             .attach_current_draft(&pool, &third_scope)
             .unwrap();
-        let third_proof = complete_free_bitmap_reclamation(third_request, 0, &[]).unwrap();
+        let third_proof = complete_free_bitmap_reclamation_for_test(third_request, 0, &[]).unwrap();
         let third_bound = third_attachment.bind(third_proof).unwrap();
         let third_required = third_bound.finalization_scratch_requirements().unwrap();
         let mut third_release = vec![0; third_required.release_pages];
@@ -8569,7 +8594,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let mut bound = attachment.bind(proof).unwrap();
         assert_eq!(bound.cow.candidates(), &[5]);
         bound.cow.apply_planned_reservation().unwrap();
@@ -8659,7 +8684,8 @@ pub(crate) mod tests {
         let (second_attachment, second_request) = second_plan
             .attach_current_draft(&pool, &second_scope)
             .unwrap();
-        let second_proof = complete_free_bitmap_reclamation(second_request, 0, &[]).unwrap();
+        let second_proof =
+            complete_free_bitmap_reclamation_for_test(second_request, 0, &[]).unwrap();
         let mut second_bound = second_attachment.bind(second_proof).unwrap();
         second_bound.cow.apply_planned_reservation().unwrap();
         let checkpoint = pool.begin_checkpoint().unwrap();
@@ -8761,7 +8787,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let mut bound = attachment.bind(proof).unwrap();
         bound.cow.apply_planned_reservation().unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
@@ -8823,7 +8849,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let mut bound = attachment.bind(proof).unwrap();
 
         let retirement_pgno = bound.cow.candidates()[0];
@@ -8989,7 +9015,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 8).unwrap();
         let first_scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
         let (attachment, request) = plan.attach(&pool, &first_scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let mut bound = attachment.bind(proof).unwrap();
         let retirement_pgno = bound.cow.candidates()[0];
         let checkpoint = pool.begin_checkpoint().unwrap();
@@ -9167,7 +9193,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         let mut release_pages = vec![0; required.release_pages];
@@ -9247,7 +9273,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         pool.test_set_scope_sealed(&scope, true);
@@ -9333,7 +9359,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         let mut release_pages = vec![0; required.release_pages];
@@ -9421,7 +9447,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(3).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let bound = attachment.bind(proof).unwrap();
             let required = bound.finalization_scratch_requirements().unwrap();
             let mut release_pages = vec![0; required.release_pages];
@@ -9549,7 +9575,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(3).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let bound = attachment.bind(proof).unwrap();
             let required = bound.finalization_scratch_requirements().unwrap();
             let mut release_pages = vec![0; required.release_pages];
@@ -9678,7 +9704,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(3).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let bound = attachment.bind(proof).unwrap();
             let required = bound.finalization_scratch_requirements().unwrap();
             let mut release_pages = vec![0; required.release_pages];
@@ -9763,7 +9789,7 @@ pub(crate) mod tests {
         }
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         let mut release_pages = vec![0; required.release_pages];
@@ -9819,7 +9845,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         assert!(required.release_pages > 0);
@@ -9915,7 +9941,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(3).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let bound = attachment.bind(proof).unwrap();
             let required = bound.finalization_scratch_requirements().unwrap();
             let before = source.checks.get();
@@ -9967,7 +9993,7 @@ pub(crate) mod tests {
         let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let commitment = pool.exact_commitment(&scope).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
@@ -10078,7 +10104,7 @@ pub(crate) mod tests {
                 .plan_capacity()
                 .unwrap();
             let (attachment, request) = plan.attach(&pool, &target).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let bound = attachment.bind(proof).unwrap();
             let required = bound.finalization_scratch_requirements().unwrap();
             let before = source.checks.get();
@@ -10152,7 +10178,7 @@ pub(crate) mod tests {
             .plan_capacity()
             .unwrap();
         let (attachment, request) = plan.attach(&pool, &target).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         let required = bound.finalization_scratch_requirements().unwrap();
         let target_before: Vec<_> = bound.cow.arena_bindings[..3]
@@ -10268,7 +10294,8 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(private_pages).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, selection_id, reclaimed).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, selection_id, reclaimed)
+                .unwrap();
             let bound = attachment.bind(proof).unwrap();
             let pages = bound.cow.arena_bindings[..private_pages]
                 .iter()
@@ -10338,7 +10365,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
             let scope = pool.reserve_scope(3).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 91, reclaimed).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 91, reclaimed).unwrap();
             assert!(attachment.bind(proof).is_err(), "accepted {reclaimed:?}");
             assert_eq!(pool.scope_status(&scope).unwrap().bound, 0);
             assert_eq!(pool.pending_page_count(), 20);
@@ -10363,7 +10390,7 @@ pub(crate) mod tests {
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
         let reclaimed = [3, 7];
-        let proof = complete_free_bitmap_reclamation(request, 101, &reclaimed).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 101, &reclaimed).unwrap();
         source.deny_access(PageSourceError::ForkedHandle);
         assert!(matches!(
             attachment.bind(proof),
@@ -10393,7 +10420,7 @@ pub(crate) mod tests {
         let scope = pool.reserve_scope(3).unwrap();
         let (attachment, request) = plan.attach(&pool, &scope).unwrap();
         let reclaimed = [3, 7];
-        let proof = complete_free_bitmap_reclamation(request, 61, &reclaimed).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 61, &reclaimed).unwrap();
         assert!(matches!(
             attachment.bind(proof),
             Err(FreeBitmapCowError::InsufficientResourceBudget {
@@ -10427,7 +10454,8 @@ pub(crate) mod tests {
             }
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
             let reclaimed = [3, 7];
-            let proof = complete_free_bitmap_reclamation(request, 111, &reclaimed).unwrap();
+            let proof =
+                complete_free_bitmap_reclamation_for_test(request, 111, &reclaimed).unwrap();
             assert!(matches!(
                 attachment.bind(proof),
                 Err(FreeBitmapCowError::MutationEpochExhausted)
@@ -10550,7 +10578,7 @@ pub(crate) mod tests {
         assert_eq!(target_order, [4, 5, 0]);
 
         let (attachment, request) = plan.attach(&pool, &target).unwrap();
-        let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+        let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
         let bound = attachment.bind(proof).unwrap();
         assert_eq!(
             bound.binding,
@@ -10663,7 +10691,7 @@ pub(crate) mod tests {
             if accepted {
                 let (attachment, request) = attached.unwrap();
                 assert_eq!(request.ticket.state.load(Ordering::Acquire), 1);
-                let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+                let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
                 assert!(attachment.bind(proof).is_ok());
             } else {
                 assert!(matches!(
@@ -10700,7 +10728,7 @@ pub(crate) mod tests {
             let scope = pool.reserve_scope(private_pages).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
             let reclaimed: Vec<u32> = (0..count).map(|index| 3 + index as u32).collect();
-            let proof = complete_free_bitmap_reclamation(request, 71, &reclaimed).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 71, &reclaimed).unwrap();
             let (bound, allocations) = count_thread_allocations(|| attachment.bind(proof));
             let bound = bound.unwrap();
             assert_eq!(allocations, 0);
@@ -10732,7 +10760,7 @@ pub(crate) mod tests {
             let pool = PrivatePagePool::new_vacant(&mut slots, 30_000, 30_000, 2).unwrap();
             let scope = pool.reserve_scope(private_pages).unwrap();
             let (attachment, request) = plan.attach(&pool, &scope).unwrap();
-            let proof = complete_free_bitmap_reclamation(request, 0, &[]).unwrap();
+            let proof = complete_free_bitmap_reclamation_for_test(request, 0, &[]).unwrap();
             let (bound, allocations) = count_thread_allocations(|| attachment.bind(proof));
             let bound = bound.unwrap();
             assert_eq!(allocations, 0);

@@ -109,6 +109,17 @@ no-default and 521 all-feature tests; formatting, benchmark compilation,
 warnings-denied Clippy, Go test/vet, SOW audit, and whitespace checks also pass.
 Real allocation/finalization and file publication remain separate pending work.
 
+2026-07-24 trusted-reclamation handoff milestone: Rust now exposes reclaimed
+pages to the bitmap allocator only through an opaque result produced by the
+verified retirement second pass into caller-owned bounded scratch. The first
+and second passes reject duplicate or descending pages across batch boundaries,
+not only inside one blob. The raw page-slice completion helper is test-only;
+normal builds cannot claim arbitrary pages as safely reclaimed. This is not yet
+the end-to-end operation-barrier lifetime proof: no live physical commit calls
+the allocator/finalizer yet, so the following physical-commit slice must keep
+the Linux operation barrier held through finalization, page output, metadata
+publication, and the lease update.
+
 ## Requirements
 
 ### Purpose
@@ -6323,6 +6334,25 @@ requirements are normative in the Pre-Implementation Gate above.
   and refusal to begin a new commit while old transition provenance is armed.
   This is not a physical commit implementation: no page write, metadata write,
   synchronization, result classification, or public API is connected yet.
+
+### 2026-07-24 - Trusted reclamation-to-allocator handoff
+
+- Implemented the internal authority repair in
+  `retirement_reader.rs` and `bitmap_cow.rs`. Production bitmap late binding
+  accepts `RetirementReclaimedPages`, which only the verified second pass can
+  construct; a raw numeric selection ID and arbitrary page slice are available
+  only to `#[cfg(test)]` fixtures.
+- The first verification pass and the second pass now enforce global strict
+  order across all selected retirement batches. The bounded `second_pass_into`
+  API rejects inadequate caller scratch before it writes and returns exactly the
+  selected page prefix.
+- Focused tests prove the scratch bound, exact output, cross-batch duplicate
+  rejection, and allocator handoff. Full Rust no-default and all-feature
+  matrices pass with 421 and 522 tests respectively. This adds no file write,
+  metadata publication, public SDK API, or default validation.
+- The type boundary alone does not prove the barrier remains held after bitmap
+  binding, because no physical live-commit path invokes this code yet. That
+  remains the next integration requirement rather than a false completion claim.
 
 ## Validation
 
