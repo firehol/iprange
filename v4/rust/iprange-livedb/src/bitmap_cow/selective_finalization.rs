@@ -2105,6 +2105,15 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         Ok(result)
     }
 
+    /// Checks caller-owned finalization scratch before another stage mutates
+    /// the shared shadow scope.
+    pub(crate) fn preflight_terminal_finalization_scratch(
+        &self,
+        scratch: &FreeBitmapFinalizationScratch<'_>,
+    ) -> Result<(), FreeBitmapCowError> {
+        self.validate_finalization_scratch(scratch)
+    }
+
     fn validate_finalization_scratch(
         &self,
         scratch: &FreeBitmapFinalizationScratch<'_>,
@@ -3169,6 +3178,10 @@ impl<'pages, 'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
 
     pub(crate) fn pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
         self.pages
+    }
+
+    pub(crate) fn replacements(&self) -> &[u32] {
+        self.output.replacements()
     }
 
     pub(super) fn into_parts(

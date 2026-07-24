@@ -1,15 +1,16 @@
 //! Lock-bound input construction for private bitmap/retirement finalization.
 //!
-//! This module deliberately stops before retirement output construction and
-//! coordinator execution. Its one job is to make the required live sequence
-//! non-optional: use the selected source and held reader fence to verify a
-//! reclaimable prefix, bind bitmap pages in a caller-owned shadow scope, and
-//! apply the planned bitmap reservation before later finalization consumes it.
+//! This module deliberately stops before coordinator execution. It makes the
+//! required live sequence non-optional: use the selected source and held
+//! reader fence to verify a reclaimable prefix, bind bitmap pages in a
+//! caller-owned shadow scope, construct the exact combined terminal output,
+//! then hand that move-only output to the existing coordinator boundary.
 
 use crate::bitmap_cow::{
     BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapFinalizationCachedPage,
     FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
-    FreeBitmapReservationBuffers, FreeBitmapReservationPlanner, ReservationResource,
+    FreeBitmapReservationBuffers, FreeBitmapReservationPlanner, PreparedFreeBitmapTerminalExport,
+    ReservationResource,
 };
 use crate::contract::MetaV4;
 use crate::page_source::CommittedPageSource;
@@ -24,9 +25,9 @@ use crate::retirement_reader::{
 };
 use crate::retirement_writer::{
     BlobBuildScratch, CommittedPageReplacement, CommittedReplacementLedger, PageRoleIndex,
-    PageRoleIndexSlot, PreparedRetirementTerminalExport, PrivatePageArena, PrivateReleaseBuffer,
-    RetirementBlobBuilder, RetirementPathFrame, RetirementTreeEditor, RetirementTreeState,
-    RetirementWriteError,
+    PageRoleIndexSlot, PreparedProducedTerminalExport, PreparedRetirementTerminalExport,
+    PrivatePageArena, PrivateReleaseBuffer, RetirementBlobBuilder, RetirementPathFrame,
+    RetirementTreeEditResult, RetirementTreeEditor, RetirementTreeState, RetirementWriteError,
 };
 use core::cell::Cell;
 
@@ -158,6 +159,140 @@ pub(crate) enum SelectedReclamationRetirementStageError {
     PostMutationBitmap(FreeBitmapCowError),
     PostMutationTerminalPageCountOverflow,
     PostMutationCapacityMismatch { actual: usize, budget: usize },
+}
+
+impl SelectedReclamationRetirementStageError {
+    const fn is_pre_mutation(&self) -> bool {
+        matches!(
+            self,
+            Self::MissingSelectedIdentity
+                | Self::BlobScratchTooSmall { .. }
+                | Self::TerminalPagesTooSmall { .. }
+                | Self::TerminalPagesNotEmpty
+                | Self::PreMutationBitmap(_)
+                | Self::PreMutationRetirement(_)
+        )
+    }
+}
+
+/// Caller-owned storage for the terminal half of one selected-reclaim
+/// attempt. The maximum journals are sized to the already-reserved shadow
+/// scope; the helper returns only their exact used prefixes.
+pub(crate) struct SelectedReclamationTerminalScratch<
+    'retirement_terminal,
+    'retirement_scratch,
+    'bitmap_terminal,
+    'bitmap_scratch,
+    'combined,
+> {
+    pub(crate) retirement:
+        SelectedReclamationRetirementScratch<'retirement_terminal, 'retirement_scratch>,
+    pub(crate) bitmap_finalization: FreeBitmapFinalizationScratch<'bitmap_scratch>,
+    pub(crate) bitmap_terminal_pages: &'bitmap_terminal mut [PrivatePageCoordinatorTerminalPage],
+    pub(crate) combined_terminal_pages: &'combined mut [PrivatePageCoordinatorTerminalPage],
+}
+
+/// A real selected-reclaim terminal export ready for the existing coordinator
+/// bind step, but not yet bound or published.
+pub(crate) struct PreparedSelectedReclamationTerminalExport<
+    'combined,
+    'bitmap_terminal,
+    'bitmap_scratch,
+    'a,
+    'slots,
+    'scope,
+    S: CommittedPageSource + ?Sized,
+> {
+    pass: crate::retirement_reader::RetirementPassResult,
+    bitmap_root: u32,
+    pending_page_count: u64,
+    retirement: RetirementTreeEditResult,
+    export: PreparedProducedTerminalExport<
+        'combined,
+        PreparedFreeBitmapTerminalExport<'bitmap_terminal, 'bitmap_scratch, 'a, 'slots, 'scope, S>,
+    >,
+}
+
+impl<'combined, 'bitmap_terminal, 'bitmap_scratch, 'a, 'slots, 'scope, S>
+    PreparedSelectedReclamationTerminalExport<
+        'combined,
+        'bitmap_terminal,
+        'bitmap_scratch,
+        'a,
+        'slots,
+        'scope,
+        S,
+    >
+where
+    S: CommittedPageSource + ?Sized,
+{
+    pub(crate) const fn pass(&self) -> crate::retirement_reader::RetirementPassResult {
+        self.pass
+    }
+
+    pub(crate) const fn bitmap_root(&self) -> u32 {
+        self.bitmap_root
+    }
+
+    pub(crate) const fn pending_page_count(&self) -> u64 {
+        self.pending_page_count
+    }
+
+    pub(crate) const fn retirement_result(&self) -> RetirementTreeEditResult {
+        self.retirement
+    }
+
+    pub(crate) fn bitmap_replacements(&self) -> &[u32] {
+        self.export.bitmap().replacements()
+    }
+
+    pub(crate) fn into_export(
+        self,
+    ) -> PreparedProducedTerminalExport<
+        'combined,
+        PreparedFreeBitmapTerminalExport<'bitmap_terminal, 'bitmap_scratch, 'a, 'slots, 'scope, S>,
+    > {
+        self.export
+    }
+}
+
+/// The non-output reason a selected-reclaim terminal composition stopped.
+#[derive(Debug)]
+pub(crate) enum SelectedReclamationTerminalCompositionError {
+    PreMutationBitmap(FreeBitmapCowError),
+    BitmapTerminalPagesTooSmall { required: usize, actual: usize },
+    BitmapTerminalPagesNotEmpty,
+    CombinedTerminalPagesTooSmall { required: usize, actual: usize },
+    CombinedTerminalPagesNotEmpty,
+    RetirementStage(SelectedReclamationRetirementStageError),
+    PostMutationBitmapFinalization(FreeBitmapCowError),
+    PostMutationBitmapTerminalPageCountExceedsScope { actual: usize, capacity: usize },
+    PostMutationBitmapExport(FreeBitmapCowError),
+    PostMutationCombinedTerminalPageCountOverflow,
+    PostMutationCombinedTerminalPageCountExceedsScope { actual: usize, capacity: usize },
+    PostMutationMerge(RetirementWriteError),
+}
+
+/// Terminal composition either returns its untouched reservation for retry or
+/// consumes the shadow attempt after a real retirement mutation. The latter
+/// has no retry authority by design: the caller must discard the attempt and
+/// use the outer transaction's existing abort/restart path.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum SelectedReclamationTerminalCompositionFailure<
+    'a,
+    'slots,
+    'scope,
+    'barrier,
+    S: CommittedPageSource + ?Sized,
+> {
+    Retry {
+        reservation: LockedReclamationBitmapReservation<'a, 'slots, 'scope, 'barrier, S>,
+        error: SelectedReclamationTerminalCompositionError,
+    },
+    Discard {
+        error: SelectedReclamationTerminalCompositionError,
+    },
 }
 
 /// Typed read-only fixed-point failure before terminal finalization begins.
@@ -731,6 +866,211 @@ pub(crate) fn stage_selected_reclamation_retirement<
         .synchronize_reclamation_scope(shadow_scope)
         .map_err(SelectedReclamationRetirementStageError::PostMutationBitmap)?;
     Ok(export)
+}
+
+/// Completes the mutable selected-reclaim terminal sequence in one isolated
+/// shadow attempt. Retryable failures happen before the retirement edit; every
+/// later failure consumes the attempt because the shared shadow scope changed.
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub(crate) fn finalize_selected_reclamation_terminal_export<
+    'retirement_terminal,
+    'retirement_scratch,
+    'bitmap_terminal,
+    'bitmap_scratch,
+    'combined,
+    'a,
+    'slots,
+    'barrier,
+    S: CommittedPageSource + ?Sized,
+>(
+    reservation: LockedReclamationBitmapReservation<'a, 'slots, 'slots, 'barrier, S>,
+    shadow_pool: &'slots PrivatePagePool<'slots>,
+    shadow_scope: &PrivatePageReservationScope<'slots>,
+    protected: SelectedReclamationProtectedPages<'_>,
+    scratch: SelectedReclamationTerminalScratch<
+        'retirement_terminal,
+        'retirement_scratch,
+        'bitmap_terminal,
+        'bitmap_scratch,
+        'combined,
+    >,
+) -> Result<
+    PreparedSelectedReclamationTerminalExport<
+        'combined,
+        'bitmap_terminal,
+        'bitmap_scratch,
+        'a,
+        'slots,
+        'slots,
+        S,
+    >,
+    SelectedReclamationTerminalCompositionFailure<'a, 'slots, 'slots, 'barrier, S>,
+> {
+    if let Err(error) = reservation.bound.validate_reclamation_scope(shadow_scope) {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::PreMutationBitmap(error),
+        });
+    }
+    let scope_capacity = match shadow_pool.scope_status(shadow_scope) {
+        Ok(status) => status.capacity,
+        Err(error) => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+                reservation,
+                error: SelectedReclamationTerminalCompositionError::PreMutationBitmap(
+                    FreeBitmapCowError::PrivatePool(error),
+                ),
+            });
+        }
+    };
+    if scratch.bitmap_terminal_pages.len() < scope_capacity {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::BitmapTerminalPagesTooSmall {
+                required: scope_capacity,
+                actual: scratch.bitmap_terminal_pages.len(),
+            },
+        });
+    }
+    if scratch.combined_terminal_pages.len() < scope_capacity {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::CombinedTerminalPagesTooSmall {
+                required: scope_capacity,
+                actual: scratch.combined_terminal_pages.len(),
+            },
+        });
+    }
+    if scratch.bitmap_terminal_pages[..scope_capacity]
+        .iter()
+        .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+    {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::BitmapTerminalPagesNotEmpty,
+        });
+    }
+    if scratch.combined_terminal_pages[..scope_capacity]
+        .iter()
+        .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+    {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::CombinedTerminalPagesNotEmpty,
+        });
+    }
+    if let Err(error) = reservation
+        .bound
+        .preflight_terminal_finalization_scratch(&scratch.bitmap_finalization)
+    {
+        return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+            reservation,
+            error: SelectedReclamationTerminalCompositionError::PreMutationBitmap(error),
+        });
+    }
+
+    let LockedReclamationBitmapReservation { pass, mut bound } = reservation;
+    let SelectedReclamationTerminalScratch {
+        retirement,
+        bitmap_finalization,
+        bitmap_terminal_pages,
+        combined_terminal_pages,
+    } = scratch;
+    let retirement = match stage_selected_reclamation_retirement(
+        &mut bound,
+        shadow_pool,
+        shadow_scope,
+        protected,
+        retirement,
+    ) {
+        Ok(export) => export,
+        Err(error) if error.is_pre_mutation() => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Retry {
+                reservation: LockedReclamationBitmapReservation { pass, bound },
+                error: SelectedReclamationTerminalCompositionError::RetirementStage(error),
+            });
+        }
+        Err(error) => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                error: SelectedReclamationTerminalCompositionError::RetirementStage(error),
+            });
+        }
+    };
+    let finalized = match bound.finalize(bitmap_finalization) {
+        Ok(finalized) => finalized,
+        Err((_bound, error)) => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                error: SelectedReclamationTerminalCompositionError::PostMutationBitmapFinalization(
+                    error,
+                ),
+            });
+        }
+    };
+    let bitmap_root = finalized.output.root();
+    let pending_page_count = finalized.output.pending_page_count();
+    let bitmap_terminal_page_count = finalized.output.bitmap_terminal_page_count();
+    if bitmap_terminal_page_count > scope_capacity {
+        return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+            error: SelectedReclamationTerminalCompositionError::PostMutationBitmapTerminalPageCountExceedsScope {
+                actual: bitmap_terminal_page_count,
+                capacity: scope_capacity,
+            },
+        });
+    }
+    let bitmap_export = match finalized.output.prepare_terminal_export(
+        finalized.successor,
+        &mut bitmap_terminal_pages[..bitmap_terminal_page_count],
+    ) {
+        Ok(export) => export,
+        Err((_output, _successor, _pages, error)) => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                error: SelectedReclamationTerminalCompositionError::PostMutationBitmapExport(error),
+            });
+        }
+    };
+    let combined_terminal_page_count = match retirement
+        .pages()
+        .len()
+        .checked_add(bitmap_export.pages().len())
+    {
+        Some(count) => count,
+        None => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                error: SelectedReclamationTerminalCompositionError::PostMutationCombinedTerminalPageCountOverflow,
+            });
+        }
+    };
+    if combined_terminal_page_count > scope_capacity {
+        return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+            error: SelectedReclamationTerminalCompositionError::PostMutationCombinedTerminalPageCountExceedsScope {
+                actual: combined_terminal_page_count,
+                capacity: scope_capacity,
+            },
+        });
+    }
+    let retirement_result = retirement.result();
+    let export = match retirement.merge_with_bitmap_export(
+        bitmap_export,
+        &mut combined_terminal_pages[..combined_terminal_page_count],
+    ) {
+        Ok(export) => export,
+        Err((_retirement, _bitmap, _pages, error)) => {
+            return Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                error: SelectedReclamationTerminalCompositionError::PostMutationMerge(error),
+            });
+        }
+    };
+    Ok(PreparedSelectedReclamationTerminalExport {
+        pass,
+        bitmap_root,
+        pending_page_count,
+        retirement: retirement_result,
+        export,
+    })
 }
 
 #[cfg(test)]

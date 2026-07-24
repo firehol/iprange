@@ -2907,6 +2907,10 @@ impl<'pages> PreparedCombinedRetirementTerminalExport<'pages> {
 }
 
 impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
+    pub(crate) fn bitmap(&self) -> &B {
+        &self.bitmap
+    }
+
     pub(crate) fn from_bind_parts(
         result: RetirementTreeEditResult,
         bitmap: B,
@@ -6889,10 +6893,13 @@ mod tests {
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
+        finalize_selected_reclamation_terminal_export,
         prepare_locked_reclamation_bitmap_reservation,
         preview_selected_reclamation_protected_pages, stage_selected_reclamation_retirement,
         LockedReclamationFinalizerLimits, LockedReclamationFinalizerScratch,
         ReclamationProtectedPagesScratch, SelectedReclamationRetirementScratch,
+        SelectedReclamationTerminalCompositionError, SelectedReclamationTerminalCompositionFailure,
+        SelectedReclamationTerminalScratch,
     };
     use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -8893,7 +8900,11 @@ mod tests {
             PrivatePageCoordinatorTerminalPage::empty(),
             PrivatePageCoordinatorTerminalPage::empty(),
         ];
-        let mut bitmap_terminal_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        let mut bitmap_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
         let mut produced_terminal_pages = [
             PrivatePageCoordinatorTerminalPage::empty(),
             PrivatePageCoordinatorTerminalPage::empty(),
@@ -8940,7 +8951,7 @@ mod tests {
                         LinuxFinalizerReclamationCase::NoChange => (1, 8),
                         LinuxFinalizerReclamationCase::SelectedBatch => (1, 2),
                     };
-                    let reservation = prepare_locked_reclamation_bitmap_reservation(
+                    let mut reservation = prepare_locked_reclamation_bitmap_reservation(
                         selected,
                         &pages,
                         reclaim_fence,
@@ -8998,12 +9009,11 @@ mod tests {
                             );
                         }
                     }
-                    let mut bound = reservation.bound;
                     assert_eq!(
-                        bound.binding.reclaimed,
+                        reservation.bound.binding.reclaimed,
                         usize::from(case == LinuxFinalizerReclamationCase::SelectedBatch) * 2
                     );
-                    assert_eq!(bound.cow.available_private_pages(), 2);
+                    assert_eq!(reservation.bound.cow.available_private_pages(), 2);
                     let retirement_state = RetirementTreeState {
                         selected_txn: selected.txn_id,
                         page_count: selected.page_count,
@@ -9017,7 +9027,7 @@ mod tests {
                         LinuxFinalizerReclamationCase::SelectedBatch => {
                             let helper_protected =
                                 preview_selected_reclamation_protected_pages(
-                                    &mut bound,
+                                    &mut reservation.bound,
                                     ReclamationProtectedPagesScratch {
                                         probe_delete_path: &mut probe_delete_path,
                                         probe_upsert_path: &mut probe_upsert_path,
@@ -9046,7 +9056,7 @@ mod tests {
                             assert_eq!(helper_protected.blob_private_pages(), blob_pages.len());
                             assert_eq!(
                                 helper_protected.retirement_private_page_budget(),
-                                bound.cow.available_private_pages()
+                                reservation.bound.cow.available_private_pages()
                             );
                             assert_eq!(
                                 helper_protected.retirement_private_page_budget(),
@@ -9076,7 +9086,7 @@ mod tests {
                                     batch_count: selected.retirement_batch_count,
                                 },
                                 retirement_identity,
-                                bound.reclamation_authority(),
+                                reservation.bound.reclamation_authority(),
                                 &mut probe_arena,
                                 &mut probe_delete_path,
                                 &mut probe_upsert_path,
@@ -9090,7 +9100,7 @@ mod tests {
                             assert_eq!(probe_arena.in_use_count().unwrap(), 0);
 
                             let mut protected_len = compose_reclamation_protected_pages(
-                                bound.cow.replacements(),
+                                reservation.bound.cow.replacements(),
                                 probe_replacements.entries(),
                                 &mut protected_replacement_pages,
                             );
@@ -9102,7 +9112,7 @@ mod tests {
                                 blob_pages.len()
                             );
                             let preview_requirements =
-                                bound.finalization_scratch_requirements().unwrap();
+                                reservation.bound.finalization_scratch_requirements().unwrap();
                             assert!(preview_requirements.release_pages <= final_release_pages.len());
                             assert!(preview_requirements.insert_pages <= final_insert_pages.len());
                             assert!(preview_requirements.cached_pages <= final_cached_pages.len());
@@ -9117,7 +9127,8 @@ mod tests {
                             for _ in 0..=protected_replacement_pages.len() {
                                 let candidate = &protected_replacement_pages[..protected_len];
                                 let preview_replacement_len = Cell::new(0usize);
-                                let preview_len = bound
+                                let preview_len = reservation
+                                    .bound
                                     .preview_terminal_replacements_with_stage(
                                         FreeBitmapFinalizationScratch {
                                             release_pages: &mut final_release_pages
@@ -9236,15 +9247,15 @@ mod tests {
                                     commit_nonce: [9; 16],
                                     ..retirement_identity
                                 },
-                                bound.reclamation_authority().batch_count(),
-                                bound.reclamation_authority(),
+                                reservation.bound.reclamation_authority().batch_count(),
+                                reservation.bound.reclamation_authority(),
                             ),
                             Err(RetirementWriteError::ReclamationStateMismatch)
                         );
                         let scope_before = shadow_pool.scope_status(&shadow_scope).unwrap();
                         let mut short_blob_pages = [];
                         let error = match stage_selected_reclamation_retirement(
-                            &mut bound,
+                            &mut reservation.bound,
                             &shadow_pool,
                             &shadow_scope,
                             selected_protected
@@ -9273,7 +9284,7 @@ mod tests {
 
                         let mut short_terminal_pages = [PrivatePageCoordinatorTerminalPage::empty()];
                         let error = match stage_selected_reclamation_retirement(
-                            &mut bound,
+                            &mut reservation.bound,
                             &shadow_pool,
                             &shadow_scope,
                             selected_protected
@@ -9302,7 +9313,7 @@ mod tests {
 
                         let replacement_scope = shadow_scope.seed().materialize(&shadow_pool);
                         let error = match stage_selected_reclamation_retirement(
-                            &mut bound,
+                            &mut reservation.bound,
                             &shadow_pool,
                             &replacement_scope,
                             selected_protected
@@ -9328,8 +9339,9 @@ mod tests {
                         ));
                         assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
                     }
-                    let (retirement, retirement_export) = match case {
+                    let (retirement, bitmap_root, pending_page_count, produced) = match case {
                         LinuxFinalizerReclamationCase::NoChange => {
+                            let mut bound = reservation.bound;
                             let mut arena = PrivatePageArena::from_scoped_pool(
                                 &shadow_pool,
                                 &shadow_scope,
@@ -9366,82 +9378,239 @@ mod tests {
                                 ),
                             };
                             bound.synchronize_reclamation_scope(&shadow_scope).unwrap();
-                            (retirement, retirement_export)
+                            let requirements = bound.finalization_scratch_requirements().unwrap();
+                            assert!(requirements.release_pages <= final_release_pages.len());
+                            assert!(requirements.insert_pages <= final_insert_pages.len());
+                            assert!(requirements.cached_pages <= final_cached_pages.len());
+                            assert!(requirements.index_stack <= final_index_stack.len());
+                            assert!(requirements.cleanup_nodes <= final_cleanup_nodes.len());
+                            assert!(requirements.cleanup_path <= final_cleanup_path.len());
+                            assert!(requirements.cleanup_targets <= final_cleanup_targets.len());
+                            let finalized = match bound.finalize(FreeBitmapFinalizationScratch {
+                                release_pages: &mut final_release_pages[..requirements.release_pages],
+                                insert_pages: &mut final_insert_pages[..requirements.insert_pages],
+                                cached_pages: &mut final_cached_pages[..requirements.cached_pages],
+                                index_stack: &mut final_index_stack[..requirements.index_stack],
+                                cleanup_nodes: &mut final_cleanup_nodes[..requirements.cleanup_nodes],
+                                cleanup_path: &mut final_cleanup_path[..requirements.cleanup_path],
+                                cleanup_targets: &mut final_cleanup_targets[..requirements.cleanup_targets],
+                            }) {
+                                Ok(finalized) => finalized,
+                                Err((_bound, error)) => {
+                                    panic!("bitmap finalization failed: {error:?}")
+                                }
+                            };
+                            let bitmap_root = finalized.output.root();
+                            let pending_page_count = finalized.output.pending_page_count();
+                            let bitmap_terminal_page_count =
+                                finalized.output.bitmap_terminal_page_count();
+                            assert_eq!(bitmap_terminal_page_count, 1);
+                            let bitmap_export = match finalized
+                                .output
+                                .prepare_terminal_export(
+                                    finalized.successor,
+                                    &mut bitmap_terminal_pages[..bitmap_terminal_page_count],
+                                )
+                            {
+                                Ok(export) => export,
+                                Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
+                            };
+                            let produced = match retirement_export
+                                .merge_with_bitmap_export(bitmap_export, &mut produced_terminal_pages)
+                            {
+                                Ok(export) => export,
+                                Err((_retirement, _bitmap, _pages, error)) => panic!("{error:?}"),
+                            };
+                            (retirement, bitmap_root, pending_page_count, produced)
                         }
                         LinuxFinalizerReclamationCase::SelectedBatch => {
-                            let retirement_export = stage_selected_reclamation_retirement(
-                                &mut bound,
+                            let requirements = reservation
+                                .bound
+                                .finalization_scratch_requirements()
+                                .unwrap();
+                            let scope_before = shadow_pool.scope_status(&shadow_scope).unwrap();
+                            let mut short_combined_pages = [
+                                PrivatePageCoordinatorTerminalPage::empty(),
+                                PrivatePageCoordinatorTerminalPage::empty(),
+                            ];
+                            let retry_reservation = match finalize_selected_reclamation_terminal_export(
+                                reservation,
                                 &shadow_pool,
                                 &shadow_scope,
                                 selected_protected
                                     .expect("selected reclamation must produce protected pages"),
-                                SelectedReclamationRetirementScratch {
-                                    blob_pages: &mut blob_pages,
-                                    delete_path: &mut delete_path,
-                                    upsert_path: &mut upsert_path,
-                                    replacements: &mut retirement_replacements,
-                                    releases: &mut retirement_releases,
-                                    roles: &mut retirement_roles,
-                                    terminal_pages: &mut retirement_terminal_pages,
+                                SelectedReclamationTerminalScratch {
+                                    retirement: SelectedReclamationRetirementScratch {
+                                        blob_pages: &mut blob_pages,
+                                        delete_path: &mut delete_path,
+                                        upsert_path: &mut upsert_path,
+                                        replacements: &mut retirement_replacements,
+                                        releases: &mut retirement_releases,
+                                        roles: &mut retirement_roles,
+                                        terminal_pages: &mut retirement_terminal_pages,
+                                    },
+                                    bitmap_finalization: FreeBitmapFinalizationScratch {
+                                        release_pages: &mut final_release_pages
+                                            [..requirements.release_pages],
+                                        insert_pages: &mut final_insert_pages
+                                            [..requirements.insert_pages],
+                                        cached_pages: &mut final_cached_pages
+                                            [..requirements.cached_pages],
+                                        index_stack: &mut final_index_stack
+                                            [..requirements.index_stack],
+                                        cleanup_nodes: &mut final_cleanup_nodes
+                                            [..requirements.cleanup_nodes],
+                                        cleanup_path: &mut final_cleanup_path
+                                            [..requirements.cleanup_path],
+                                        cleanup_targets: &mut final_cleanup_targets
+                                            [..requirements.cleanup_targets],
+                                    },
+                                    bitmap_terminal_pages: &mut bitmap_terminal_pages,
+                                    combined_terminal_pages: &mut short_combined_pages,
                                 },
-                            )
-                            .unwrap();
-                            (retirement_export.result(), retirement_export)
+                            ) {
+                                Ok(_) => panic!("short combined journal must fail before mutation"),
+                                Err(SelectedReclamationTerminalCompositionFailure::Retry {
+                                    reservation,
+                                    error,
+                                }) => {
+                                    assert!(matches!(
+                                        error,
+                                        SelectedReclamationTerminalCompositionError::CombinedTerminalPagesTooSmall {
+                                            required: 3,
+                                            actual: 2,
+                                        }
+                                    ));
+                                    reservation
+                                }
+                                Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                                    error,
+                                }) => panic!("short combined journal must be retryable: {error:?}"),
+                            };
+                            assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
+
+                            let scope_before = shadow_pool.scope_status(&shadow_scope).unwrap();
+                            let mut short_bitmap_pages = [
+                                PrivatePageCoordinatorTerminalPage::empty(),
+                                PrivatePageCoordinatorTerminalPage::empty(),
+                            ];
+                            let retry_reservation = match finalize_selected_reclamation_terminal_export(
+                                retry_reservation,
+                                &shadow_pool,
+                                &shadow_scope,
+                                selected_protected
+                                    .expect("selected reclamation must produce protected pages"),
+                                SelectedReclamationTerminalScratch {
+                                    retirement: SelectedReclamationRetirementScratch {
+                                        blob_pages: &mut blob_pages,
+                                        delete_path: &mut delete_path,
+                                        upsert_path: &mut upsert_path,
+                                        replacements: &mut retirement_replacements,
+                                        releases: &mut retirement_releases,
+                                        roles: &mut retirement_roles,
+                                        terminal_pages: &mut retirement_terminal_pages,
+                                    },
+                                    bitmap_finalization: FreeBitmapFinalizationScratch {
+                                        release_pages: &mut final_release_pages
+                                            [..requirements.release_pages],
+                                        insert_pages: &mut final_insert_pages
+                                            [..requirements.insert_pages],
+                                        cached_pages: &mut final_cached_pages
+                                            [..requirements.cached_pages],
+                                        index_stack: &mut final_index_stack
+                                            [..requirements.index_stack],
+                                        cleanup_nodes: &mut final_cleanup_nodes
+                                            [..requirements.cleanup_nodes],
+                                        cleanup_path: &mut final_cleanup_path
+                                            [..requirements.cleanup_path],
+                                        cleanup_targets: &mut final_cleanup_targets
+                                            [..requirements.cleanup_targets],
+                                    },
+                                    bitmap_terminal_pages: &mut short_bitmap_pages,
+                                    combined_terminal_pages: &mut produced_terminal_pages,
+                                },
+                            ) {
+                                Ok(_) => panic!("short bitmap journal must fail before mutation"),
+                                Err(SelectedReclamationTerminalCompositionFailure::Retry {
+                                    reservation,
+                                    error,
+                                }) => {
+                                    assert!(matches!(
+                                        error,
+                                        SelectedReclamationTerminalCompositionError::BitmapTerminalPagesTooSmall {
+                                            required: 3,
+                                            actual: 2,
+                                        }
+                                    ));
+                                    reservation
+                                }
+                                Err(SelectedReclamationTerminalCompositionFailure::Discard {
+                                    error,
+                                }) => panic!("short bitmap journal must be retryable: {error:?}"),
+                            };
+                            assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
+
+                            let prepared = match finalize_selected_reclamation_terminal_export(
+                                retry_reservation,
+                                &shadow_pool,
+                                &shadow_scope,
+                                selected_protected
+                                    .expect("selected reclamation must produce protected pages"),
+                                SelectedReclamationTerminalScratch {
+                                    retirement: SelectedReclamationRetirementScratch {
+                                        blob_pages: &mut blob_pages,
+                                        delete_path: &mut delete_path,
+                                        upsert_path: &mut upsert_path,
+                                        replacements: &mut retirement_replacements,
+                                        releases: &mut retirement_releases,
+                                        roles: &mut retirement_roles,
+                                        terminal_pages: &mut retirement_terminal_pages,
+                                    },
+                                    bitmap_finalization: FreeBitmapFinalizationScratch {
+                                        release_pages: &mut final_release_pages
+                                            [..requirements.release_pages],
+                                        insert_pages: &mut final_insert_pages
+                                            [..requirements.insert_pages],
+                                        cached_pages: &mut final_cached_pages
+                                            [..requirements.cached_pages],
+                                        index_stack: &mut final_index_stack
+                                            [..requirements.index_stack],
+                                        cleanup_nodes: &mut final_cleanup_nodes
+                                            [..requirements.cleanup_nodes],
+                                        cleanup_path: &mut final_cleanup_path
+                                            [..requirements.cleanup_path],
+                                        cleanup_targets: &mut final_cleanup_targets
+                                            [..requirements.cleanup_targets],
+                                    },
+                                    bitmap_terminal_pages: &mut bitmap_terminal_pages,
+                                    combined_terminal_pages: &mut produced_terminal_pages,
+                                },
+                            ) {
+                                Ok(prepared) => prepared,
+                                Err(error) => panic!("selected terminal composition failed: {error:?}"),
+                            };
+                            assert_eq!(
+                                prepared.pass(),
+                                crate::retirement_reader::RetirementPassResult {
+                                    batch_count: 1,
+                                    page_count: 2,
+                                }
+                            );
+                            let retirement = prepared.retirement_result();
+                            let actual_len = compose_reclamation_protected_pages(
+                                prepared.bitmap_replacements(),
+                                &retirement_replacements[..retirement.committed_replacements],
+                                &mut actual_protected_replacement_pages,
+                            );
+                            assert_eq!(
+                                &actual_protected_replacement_pages[..actual_len],
+                                protected_replacements,
+                                "the staged fixed point must equal the actual terminal replacements"
+                            );
+                            let bitmap_root = prepared.bitmap_root();
+                            let pending_page_count = prepared.pending_page_count();
+                            (retirement, bitmap_root, pending_page_count, prepared.into_export())
                         }
-                    };
-                    let requirements = bound.finalization_scratch_requirements().unwrap();
-                    assert!(requirements.release_pages <= final_release_pages.len());
-                    assert!(requirements.insert_pages <= final_insert_pages.len());
-                    assert!(requirements.cached_pages <= final_cached_pages.len());
-                    assert!(requirements.index_stack <= final_index_stack.len());
-                    assert!(requirements.cleanup_nodes <= final_cleanup_nodes.len());
-                    assert!(requirements.cleanup_path <= final_cleanup_path.len());
-                    assert!(requirements.cleanup_targets <= final_cleanup_targets.len());
-                    let finalized = match bound.finalize(FreeBitmapFinalizationScratch {
-                        release_pages: &mut final_release_pages[..requirements.release_pages],
-                        insert_pages: &mut final_insert_pages[..requirements.insert_pages],
-                        cached_pages: &mut final_cached_pages[..requirements.cached_pages],
-                        index_stack: &mut final_index_stack[..requirements.index_stack],
-                        cleanup_nodes: &mut final_cleanup_nodes[..requirements.cleanup_nodes],
-                        cleanup_path: &mut final_cleanup_path[..requirements.cleanup_path],
-                        cleanup_targets: &mut final_cleanup_targets[..requirements.cleanup_targets],
-                    }) {
-                        Ok(finalized) => finalized,
-                        Err((_bound, error)) => {
-                            panic!("bitmap finalization failed: {error:?}")
-                        }
-                    };
-                    if case == LinuxFinalizerReclamationCase::SelectedBatch {
-                        let actual_len = compose_reclamation_protected_pages(
-                            finalized.output.replacements(),
-                            &retirement_replacements[..retirement.committed_replacements],
-                            &mut actual_protected_replacement_pages,
-                        );
-                        assert_eq!(
-                            &actual_protected_replacement_pages[..actual_len],
-                            protected_replacements,
-                            "the staged fixed point must equal the actual terminal replacements"
-                        );
-                    }
-                    let bitmap_root = finalized.output.root();
-                    let pending_page_count = finalized.output.pending_page_count();
-                    let bitmap_terminal_page_count = finalized.output.bitmap_terminal_page_count();
-                    assert_eq!(bitmap_terminal_page_count, 1);
-                    let bitmap_export = match finalized
-                        .output
-                        .prepare_terminal_export(
-                            finalized.successor,
-                            &mut bitmap_terminal_pages[..bitmap_terminal_page_count],
-                        )
-                    {
-                        Ok(export) => export,
-                        Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
-                    };
-                    let produced = match retirement_export
-                        .merge_with_bitmap_export(bitmap_export, &mut produced_terminal_pages)
-                    {
-                        Ok(export) => export,
-                        Err((_retirement, _bitmap, _pages, error)) => panic!("{error:?}"),
                     };
                     assert_eq!(produced.pages.len(), 3);
                     expected_terminal_pages
@@ -9500,6 +9669,14 @@ mod tests {
             )
         });
         assert_eq!(publication_allocations, 0);
+        assert_eq!(
+            bitmap_terminal_pages[1],
+            PrivatePageCoordinatorTerminalPage::empty()
+        );
+        assert_eq!(
+            bitmap_terminal_pages[2],
+            PrivatePageCoordinatorTerminalPage::empty()
+        );
         assert!(finalizer_ran.get());
         let target = publication.unwrap().meta;
         assert_eq!(target.free_bitmap_root, final_bitmap_root.get());

@@ -7157,6 +7157,59 @@ requirements are normative in the Pre-Implementation Gate above.
   project SOW audit are run for the checkpoint. Go behavior is unchanged: this
   is private Rust output sizing for a later composition step.
 
+### 2026-07-24 - selected-reclaim terminal-composition plan
+
+- Evidence: after the normal retirement stage returns, the selected Linux
+  fixture still directly finalizes the bitmap, slices its journal, merges it
+  with retirement output, and binds the result to the coordinator
+  (`retirement_writer.rs:9372-9483`). That is the last mutable composition
+  sequence trapped in test code before the existing coordinator handoff.
+- Extract one crate-private selected-reclaim terminal helper. It consumes the
+  move-only lock-bound reservation, runs the normal retirement stage, seals
+  the bitmap, uses the sealed exact bitmap-page count to export only the needed
+  bitmap prefix, and produces the existing sorted combined terminal export.
+  It will not bind or publish to the writer core in this step.
+- Preflight every caller-owned terminal buffer before the retirement edit:
+  bitmap and combined journals must hold the bounded shadow-scope maximum and
+  their usable prefixes must be empty; bitmap finalization scratch is checked
+  before the edit. This keeps capacity/input failures retryable. Once the
+  retirement edit starts, a later failure explicitly discards this isolated
+  shadow attempt; the outer transaction remains pending and follows its
+  existing abort/restart contract.
+- Rewire only the selected Linux fixture to the helper and add permanent tests
+  for pre-mutation combined-journal rejection and exact bounded prefix use.
+  No public `Reclaim`, SDK API, format byte, default validation, Go parity, or
+  direct writer-core binding is part of this step.
+
+### 2026-07-24 - selected-reclaim terminal-composition implementation
+
+- Added one private terminal-composition helper. It owns the selected
+  reservation until it either returns a prepared combined export or reports a
+  failure. Pre-mutation failures return the unchanged reservation for retry;
+  post-mutation failures return only a discard outcome, so callers cannot
+  accidentally reuse a changed shadow attempt.
+- It checks finalization scratch and maximum journal capacity before the
+  retirement edit. After sealing, it uses the exact bitmap count already
+  recorded by finalization, slices caller-owned bitmap and combined journals to
+  their exact used prefixes, and merges the existing producer-bound exports.
+- The selected Linux lifecycle fixture now uses this helper. It proves short
+  combined and bitmap journals leave the scope unchanged, return retry
+  authority, and then succeeds with that same authority. The maximum three-page
+  bitmap journal keeps its unused two-page suffix empty after publication.
+
+### 2026-07-24 - selected-reclaim terminal-composition validation
+
+- Focused selected and no-change Linux finalizer tests pass. The selected case
+  exercises both retryable short-journal failures, reuses the returned
+  reservation, preserves the established fixed-point replacement oracle, and
+  remains inside the finalizer-wide zero-allocation assertion.
+- Rust workspace matrices pass: 449 no-default tests and 564 all-feature
+  tests. Warnings-denied all-target Clippy and all-feature benchmark
+  compilation pass.
+- Go `test ./...` and `vet ./...` pass. Rust formatting, diff checking, and
+  the project SOW audit pass. No normative spec update is needed: this remains
+  private Rust lifecycle composition with no public API or on-disk change.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim retirement stage
