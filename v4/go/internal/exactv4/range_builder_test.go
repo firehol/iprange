@@ -24,7 +24,7 @@ func newRangeTreeBuildTestSink() *rangeTreeBuildTestSink {
 	return &rangeTreeBuildTestSink{nextPage: 2}
 }
 
-func (s *rangeTreeBuildTestSink) writeRangePage(page []byte) (uint32, error) {
+func (s *rangeTreeBuildTestSink) writeRangePage(page *[PageSize]byte) (uint32, error) {
 	if s.fail {
 		return 0, errRangeTreeBuildSink
 	}
@@ -34,7 +34,7 @@ func (s *rangeTreeBuildTestSink) writeRangePage(page []byte) (uint32, error) {
 	}
 	s.nextPage++
 	var copied [PageSize]byte
-	copy(copied[:], page)
+	copied = *page
 	s.pages = append(s.pages, rangeTreeBuildTestPage{pageNumber: pageNumber, page: copied})
 	return pageNumber, nil
 }
@@ -50,11 +50,11 @@ func (s *fixedRangeTreeBuildSink) reset() {
 	s.length = 0
 }
 
-func (s *fixedRangeTreeBuildSink) writeRangePage(page []byte) (uint32, error) {
+func (s *fixedRangeTreeBuildSink) writeRangePage(page *[PageSize]byte) (uint32, error) {
 	if s.length == len(s.pages) {
 		return 0, errRangeTreeBuildSink
 	}
-	copy(s.pages[s.length][:], page)
+	s.pages[s.length] = *page
 	s.length++
 	pageNumber := s.nextPage
 	s.nextPage++

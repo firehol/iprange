@@ -7556,6 +7556,57 @@ requirements are normative in the Pre-Implementation Gate above.
   and zero allocation after workspace construction. No public SDK API,
   metadata root, normalizer, temporary sort, or on-disk contract changed.
 
+### 2026-07-24 - range page-pool sink plan
+
+- The ordered packer currently proves only its narrow sink boundary. A direct
+  audit of the shared private allocators found that Rust recognizes only
+  `Bitmap` and `Retirement` owner bytes when it validates a candidate terminal
+  page (`private_page_pool.rs:4066-4094`), while Go likewise permits only those
+  owner/origin pairs (`private_page_pool.go:20-33`). Reusing either label for a
+  range page would make allocator ownership evidence false.
+- Add one private `Range` owner in both implementations. Rust's owner tag is
+  the address family (`4` or `6`) and its pool validation must require the
+  matching range page type and `aux`. Go adds the matching `Range` origin.
+  These are transaction-private bookkeeping values, not portable v4 bytes or
+  public identifiers.
+- Add a checkpoint-bound adapter implementing the ordered packer's existing
+  page-sink boundary. It verifies that the requested born transaction equals
+  the pool's pending transaction; each write claims the lowest authorized page
+  as `Range`, copies the complete CRC-sealed page into that actual pool slot,
+  and returns its physical page number. It retains no parallel page store,
+  heap journal, or external scratch.
+- The pool checkpoint remains the sole cleanup owner. A claim/write failure
+  leaves the checkpoint for the caller's existing whole-draft rollback; a
+  successful adapter build is still private and unpublished. This chunk does
+  not invent range-root publication, allow direct mutation, or bypass the
+  allocator's later fixed-point/retirement work.
+- Tests will prove exact pool ownership/type/family checks, direct range-tree
+  construction into real pool bytes, rollback after a partial build, capacity
+  failure without a hidden alternate store, and zero allocations after fixed
+  storage construction in both languages.
+
+### 2026-07-24 - range page-pool sink implementation
+
+- Added the private `Range` owner in both page pools. Rust tags it with `4` or
+  `6`, and its terminal-page proof now requires that same family in both the
+  range-page header and `aux`; Go uses its matching private `Range` origin.
+  No physical identifier or owner value reaches a public API or v4 bytes.
+- Added checkpoint-bound range-page sinks in Rust and Go. Each builder output
+  claims the lowest authorized pool page, copies the finished 4 KiB page into
+  that exact slot, and returns the physical page number to the builder. A
+  constant-time checkpoint capability check happens before the claim, so a
+  stale token cannot strand a page; it does not inspect a file or validate a
+  tree.
+- Rust's pool requires checkpoint epoch headroom before streaming begins. The
+  adapter therefore preflights its already-fixed pool capacity (three steps per
+  possible page plus two boundaries), which reserves no memory and prevents a
+  late counter failure during a bounded build or its rollback. Go's existing
+  checkpoint accounting performs the equivalent check per mutation.
+- The Go sink boundary now passes the reusable fixed `[4096]byte` page directly
+  rather than a slice. This removes a needless conversion at the direct pool
+  write boundary. The work remains private and unpublished: no metadata root,
+  feed API, normalizer, scratch file, or live writer behavior changed.
+
 ## Validation
 
 ### 2026-07-24 - canonical range-page encoders
@@ -7583,6 +7634,22 @@ requirements are normative in the Pre-Implementation Gate above.
   next implementation boundary is a range-tree page-pool owner/sink adapter,
   followed by the page-backed sequential assignment engine; neither can be
   substituted by this ordered-only component.
+
+### 2026-07-24 - range page-pool sink validation
+
+- New Rust and Go tests construct a split range tree directly in real private
+  pool slots, prove `Range` ownership and exact range header/family bytes, and
+  verify CRCs. They also prove wrong transactions and stale Go checkpoints
+  claim nothing, a page-capacity failure leaves its partial build for the one
+  checkpoint rollback path, and the warmed build/rollback path allocates zero
+  heap memory.
+- Full Go `test ./...` and `vet ./...` pass. Rust passes 471 no-default-feature
+  tests and 592 all-feature tests, formatting, warnings-denied all-target/all-
+  feature Clippy, and all-feature benchmark compilation. Whitespace checking
+  and the project SOW audit pass.
+- No normative specification update is needed: this is private writer plumbing
+  that applies the existing range-page contract and explicitly adds no default
+  reader/writer validation or on-disk behavior.
 
 ### 2026-07-24 - selected-reclaim coordinator bind
 

@@ -47,6 +47,8 @@ mod range_builder;
 #[allow(dead_code)]
 mod range_page;
 #[allow(dead_code)]
+mod range_pool_sink;
+#[allow(dead_code)]
 mod range_reader;
 #[allow(dead_code)]
 mod reclamation_finalizer;

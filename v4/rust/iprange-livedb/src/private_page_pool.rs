@@ -69,6 +69,7 @@ pub(crate) enum PrivatePageAuthorization {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PrivatePageOwner {
     Bitmap,
+    Range,
     Retirement,
 }
 
@@ -3608,6 +3609,13 @@ impl<'slots> PrivatePagePool<'slots> {
         self.pending_txn
     }
 
+    pub(crate) fn validate_checkpoint_handle(
+        &self,
+        checkpoint: &PrivatePagePoolCheckpoint<'_>,
+    ) -> Result<(), PrivatePagePoolError> {
+        self.validate_checkpoint(checkpoint)
+    }
+
     pub(crate) fn has_active_scopes(&self) -> bool {
         self.active_scopes.get() != 0
     }
@@ -4063,31 +4071,13 @@ impl<'slots> PrivatePagePool<'slots> {
                 }
             }
             if page.owner_generation != self.pending_txn
-                || (page.owner == PrivatePageOwner::Retirement && !matches!(page.tag, 1 | 2))
+                || !valid_terminal_owner_tag(page.owner, page.tag)
             {
                 return Err(PrivatePagePoolError::InvalidState(vacant));
             }
             let header = PageHeader::decode(&page.bytes, self.pending_txn)
                 .map_err(|_| PrivatePagePoolError::InvalidState(vacant))?;
-            let expected_type = match (page.owner, page.tag) {
-                (PrivatePageOwner::Bitmap, _) => {
-                    if header.aux != 1 {
-                        return Err(PrivatePagePoolError::InvalidState(vacant));
-                    }
-                    matches!(
-                        header.page_type,
-                        PageType::BitmapBranch | PageType::BitmapLeaf
-                    )
-                }
-                (PrivatePageOwner::Retirement, 1) => matches!(
-                    header.page_type,
-                    PageType::RetirementBranch | PageType::RetirementLeaf
-                ),
-                (PrivatePageOwner::Retirement, 2) => {
-                    matches!(header.page_type, PageType::BlobBranch | PageType::BlobLeaf)
-                }
-                _ => false,
-            };
+            let expected_type = terminal_page_matches_owner(page.owner, page.tag, header);
             if !expected_type
                 || header.born_txn != page.owner_generation
                 || !page::verify_crc32c(&page.bytes)
@@ -10281,6 +10271,41 @@ fn state_tag(state: PrivatePageState) -> u64 {
     }
 }
 
+fn valid_terminal_owner_tag(owner: PrivatePageOwner, tag: u64) -> bool {
+    match owner {
+        PrivatePageOwner::Bitmap => true,
+        PrivatePageOwner::Range => matches!(tag, 4 | 6),
+        PrivatePageOwner::Retirement => matches!(tag, 1 | 2),
+    }
+}
+
+fn terminal_page_matches_owner(owner: PrivatePageOwner, tag: u64, header: PageHeader) -> bool {
+    match (owner, tag) {
+        (PrivatePageOwner::Bitmap, _) => {
+            header.aux == 1
+                && matches!(
+                    header.page_type,
+                    PageType::BitmapBranch | PageType::BitmapLeaf
+                )
+        }
+        (PrivatePageOwner::Range, family) => {
+            header.aux == family as u32
+                && matches!(
+                    header.page_type,
+                    PageType::RangeBranch | PageType::RangeLeaf
+                )
+        }
+        (PrivatePageOwner::Retirement, 1) => matches!(
+            header.page_type,
+            PageType::RetirementBranch | PageType::RetirementLeaf
+        ),
+        (PrivatePageOwner::Retirement, 2) => {
+            matches!(header.page_type, PageType::BlobBranch | PageType::BlobLeaf)
+        }
+        _ => false,
+    }
+}
+
 fn apply_return(slot: &mut PrivatePagePoolSlot, disposition: PrivatePageReturn) {
     slot.bytes.fill(0);
     slot.allocation_generation = 0;
@@ -10294,6 +10319,7 @@ fn apply_return(slot: &mut PrivatePagePoolSlot, disposition: PrivatePageReturn) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page::PAGE_HEADER_SIZE;
     use crate::test_alloc::count_thread_allocations;
 
     fn slots() -> [PrivatePagePoolSlot; 4] {
@@ -10303,6 +10329,39 @@ mod tests {
             PrivatePagePoolSlot::authorized(20, PrivatePageAuthorization::Appended),
             PrivatePagePoolSlot::empty(),
         ]
+    }
+
+    #[test]
+    fn terminal_range_owner_requires_a_matching_family_and_range_type() {
+        let v4_leaf = PageHeader {
+            page_type: PageType::RangeLeaf,
+            born_txn: 2,
+            item_count: 1,
+            level: 0,
+            lower: PAGE_HEADER_SIZE,
+            upper: PAGE_SIZE as u16,
+            aux: 4,
+            page_crc32c: 0,
+        };
+        assert!(valid_terminal_owner_tag(PrivatePageOwner::Range, 4));
+        assert!(valid_terminal_owner_tag(PrivatePageOwner::Range, 6));
+        assert!(!valid_terminal_owner_tag(PrivatePageOwner::Range, 0));
+        assert!(!valid_terminal_owner_tag(PrivatePageOwner::Range, 5));
+        assert!(terminal_page_matches_owner(
+            PrivatePageOwner::Range,
+            4,
+            v4_leaf
+        ));
+        assert!(!terminal_page_matches_owner(
+            PrivatePageOwner::Range,
+            6,
+            v4_leaf
+        ));
+        assert!(!terminal_page_matches_owner(
+            PrivatePageOwner::Bitmap,
+            0,
+            v4_leaf
+        ));
     }
 
     fn vacant_pool(

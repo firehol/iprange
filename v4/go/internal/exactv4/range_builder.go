@@ -14,7 +14,7 @@ const (
 // or persist page before returning: the packer reuses its page buffer after
 // every call and never owns allocation, cleanup, or rollback.
 type rangeTreePageSink interface {
-	writeRangePage(page []byte) (uint32, error)
+	writeRangePage(page *[PageSize]byte) (uint32, error)
 }
 
 type rangeTreeBuildStartErrorCode uint8
@@ -366,7 +366,7 @@ func (b *rangeTreeBuilder[K]) emitBranch(
 }
 
 func (b *rangeTreeBuilder[K]) writeEncodedPage(sink rangeTreePageSink) (uint32, error) {
-	page, err := sink.writeRangePage(b.workspace.page[:])
+	page, err := sink.writeRangePage(&b.workspace.page)
 	if err != nil {
 		return 0, &rangeTreeBuildError{code: rangeTreeBuildErrSink, cause: err}
 	}
