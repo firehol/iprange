@@ -61,6 +61,12 @@ pub(crate) enum PrivateWriterTransactionState {
     Pending,
     AbortRequired,
     AbortIncomplete,
+    /// Target-meta durability is ambiguous. The exact attempt must be resolved
+    /// after close and reopen; this core can neither publish nor abort it.
+    OutcomeUnknown,
+    /// The target meta is already durable. Only in-memory cleanup may remain;
+    /// this transaction can never take the abort path again.
+    CommittedCleanupRequired,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +83,7 @@ pub(crate) enum PrivateWriterTransactionError<E> {
     TransactionExhausted,
     InsufficientBudget { required: u64, actual: u64 },
     AlreadyPending,
+    SelectedGenerationMismatch,
     NoPendingTransaction,
     AbortRequired(Option<PrivatePagePoolError>),
     AbortIncompleteIdentity,
@@ -85,6 +92,12 @@ pub(crate) enum PrivateWriterTransactionError<E> {
     AbortIncompleteCleanup(E),
     AbortIncompleteResource,
     AbortIncompleteCoordination,
+    OutcomeUnknown,
+    CommittedCleanupRequired,
+    CommittedCleanupIncompleteIdentity,
+    CommittedCleanupIncompletePool(PrivatePagePoolError),
+    CommittedCleanupIncompleteResource,
+    CommittedCleanupIncompleteCoordination,
     StaleHandle,
     FixedPoint(FixedPointError),
     FixedPointOutput(FixedPointPrivateOutputDrainError<E>),
@@ -98,6 +111,7 @@ impl<E> PrivateWriterTransactionError<E> {
             Self::TransactionExhausted => ErrorCode::TransactionIdExhausted,
             Self::InsufficientBudget { .. } => ErrorCode::InsufficientResourceBudget,
             Self::AlreadyPending => ErrorCode::WrongState,
+            Self::SelectedGenerationMismatch => ErrorCode::Conflict,
             Self::NoPendingTransaction => ErrorCode::NoPendingTransaction,
             Self::AbortRequired(_) => ErrorCode::TransactionAborted,
             Self::AbortIncompletePool(_)
@@ -106,6 +120,12 @@ impl<E> PrivateWriterTransactionError<E> {
             | Self::AbortIncompleteCleanup(_)
             | Self::AbortIncompleteResource
             | Self::AbortIncompleteCoordination => ErrorCode::AbortIncomplete,
+            Self::OutcomeUnknown => ErrorCode::Unresolvable,
+            Self::CommittedCleanupRequired
+            | Self::CommittedCleanupIncompleteIdentity
+            | Self::CommittedCleanupIncompletePool(_)
+            | Self::CommittedCleanupIncompleteResource
+            | Self::CommittedCleanupIncompleteCoordination => ErrorCode::CleanupInProgress,
             Self::StaleHandle => ErrorCode::StaleReference,
             Self::FixedPoint(_) => ErrorCode::WrongState,
             Self::FixedPointOutput(FixedPointPrivateOutputDrainError::Sink(_)) => {
@@ -257,6 +277,12 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if commit_nonce == [0; 16] {
             return Err(PrivateWriterTransactionError::InvalidArgument);
         }
+        if self.state.get() == PrivateWriterTransactionState::OutcomeUnknown {
+            return Err(PrivateWriterTransactionError::OutcomeUnknown);
+        }
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
+        }
         if self.state.get() != PrivateWriterTransactionState::Clean
             || self.clean_slots.is_none()
             || self.draft.is_some()
@@ -335,12 +361,26 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         })
     }
 
-    fn validate_handle(
+    fn validate_handle_identity(
         &self,
         handle: &PrivateWriterTransactionHandle,
     ) -> Result<(), PrivateWriterTransactionError<E>> {
         if handle.identity == 0 || handle.identity != self.handle_identity {
             return Err(PrivateWriterTransactionError::StaleHandle);
+        }
+        Ok(())
+    }
+
+    fn validate_handle(
+        &self,
+        handle: &PrivateWriterTransactionHandle,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle_identity(handle)?;
+        if self.state.get() == PrivateWriterTransactionState::OutcomeUnknown {
+            return Err(PrivateWriterTransactionError::OutcomeUnknown);
+        }
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
         }
         Ok(())
     }
@@ -459,6 +499,9 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         handle: &PrivateWriterTransactionHandle,
     ) -> Result<&PrivatePagePool<'slots>, PrivateWriterTransactionError<E>> {
         self.validate_handle(handle)?;
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
+        }
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
@@ -477,6 +520,9 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         handle: &PrivateWriterTransactionHandle,
     ) -> Result<&FixedPointCoordinator, PrivateWriterTransactionError<E>> {
         self.validate_handle(handle)?;
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
+        }
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
@@ -671,8 +717,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         workspace: &FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
         sealed: FixedPointSealedAggregateWork<'arena, 'record_cleanup, 'slots>,
     ) -> Result<FixedPointPredecessor, PrivateWriterTransactionError<E>> {
-        let invalid = self.validate_handle(handle).is_err()
-            || self.state.get() != PrivateWriterTransactionState::Pending
+        self.validate_handle(handle)?;
+        let invalid = self.state.get() != PrivateWriterTransactionState::Pending
             || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
             || self.fixed_point_registered_work.get() == 0
             || self.fixed_point_registered_generation.get() == 0
@@ -820,7 +866,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         write: &mut F,
     ) -> Result<usize, PrivateWriterTransactionError<E>>
     where
-        F: FnMut(u32, &[u8]) -> Result<(), E>,
+        F: for<'page> FnMut(u32, &'page [u8]) -> Result<(), E>,
     {
         self.validate_private_output_preparation(
             handle,
@@ -911,6 +957,143 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             handle_identity: preparation.handle_identity,
             target,
         })
+    }
+
+    /// Records the exact target only after the physical publisher has proved
+    /// that its target meta page is durable.
+    ///
+    /// A failure while scrubbing transaction-private state does not reopen the
+    /// abort path: the selected on-disk generation has already advanced. The
+    /// caller must retain the associated live writer for close-only cleanup and
+    /// retry this core-local cleanup before the core can accept another draft.
+    pub(crate) fn confirm_durable_publication(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        publication: PrivateWriterMetaPublication,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
+        }
+        if self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::MetaPublicationAuthorized
+            || publication.handle_identity != self.handle_identity
+            || self.target != Some(publication.target)
+        {
+            return Err(PrivateWriterTransactionError::StaleHandle);
+        }
+
+        // The physical publisher has already made this exact meta durable.
+        // Preserve that fact before doing any fallible in-memory cleanup.
+        self.selected = publication.target;
+        self.target = None;
+        self.state
+            .set(PrivateWriterTransactionState::CommittedCleanupRequired);
+        self.retry_committed_cleanup(handle)
+    }
+
+    /// Records the phase-3/4 ambiguity after the physical publisher has
+    /// entered target-meta publication. This is deliberately conservative: a
+    /// later resolver decides whether `target` became durable, so normal work
+    /// and abort are both forbidden on this core.
+    ///
+    /// The Linux publication bridge calls this only after it holds the exact
+    /// phase-1 authorization. If an internal invariant is already broken, the
+    /// core is still poisoned before the error returns; falling back to abort
+    /// would describe an unproved on-disk generation as absent.
+    pub(crate) fn mark_publication_outcome_unknown(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        publication: &PrivateWriterMetaPublication,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        let valid = handle.identity != 0
+            && handle.identity == self.handle_identity
+            && self.state.get() == PrivateWriterTransactionState::Pending
+            && self.commit_phase.get() == PrivateWriterCommitPhase::MetaPublicationAuthorized
+            && publication.handle_identity == self.handle_identity
+            && self.target == Some(publication.target);
+        self.state
+            .set(PrivateWriterTransactionState::OutcomeUnknown);
+        if valid {
+            Ok(())
+        } else {
+            Err(PrivateWriterTransactionError::StaleHandle)
+        }
+    }
+
+    /// Conservatively disables this core when a physical publisher reports an
+    /// ambiguous publication but its matching phase-1 authority is unavailable
+    /// due to an internal invariant failure. It exists only to keep that broken
+    /// path from falling back to abort.
+    pub(crate) fn force_publication_outcome_unknown(&self) {
+        self.state
+            .set(PrivateWriterTransactionState::OutcomeUnknown);
+    }
+
+    /// Retries only post-durability core cleanup. It cannot modify the selected
+    /// generation or convert the durable commit into an abort.
+    pub(crate) fn retry_committed_cleanup(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+    ) -> Result<(), PrivateWriterTransactionError<E>> {
+        self.validate_handle_identity(handle)?;
+        if self.state.get() != PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::NoPendingTransaction);
+        }
+        if self.commit_phase.get() != PrivateWriterCommitPhase::MetaPublicationAuthorized
+            || self.target.is_some()
+        {
+            return Err(PrivateWriterTransactionError::CommittedCleanupIncompleteCoordination);
+        }
+        if self.handle_identity == usize::MAX || self.abort_identity != self.handle_identity + 1 {
+            return Err(PrivateWriterTransactionError::CommittedCleanupIncompleteIdentity);
+        }
+
+        if self.draft.is_some() {
+            let draft = self.draft.take().expect("draft ownership checked above");
+            match draft.discard_transaction_draft() {
+                Ok((slots, _visits)) => {
+                    self.clean_slots = Some(slots);
+                    self.fixed_point = None;
+                    self.fixed_point_registered_work.set(0);
+                    self.fixed_point_registered_generation.set(0);
+                    self.fixed_point_registered_phase
+                        .set(PrivatePageCoordinatorWorkPhase::None);
+                    self.fixed_point_workspace_identity.set(0);
+                    self.fixed_point_workspace_bytes.set(0);
+                }
+                Err((draft, error)) => {
+                    self.draft = Some(draft);
+                    return Err(
+                        PrivateWriterTransactionError::CommittedCleanupIncompletePool(error),
+                    );
+                }
+            }
+        }
+
+        if self.resources.current() != PrivateWriterResourceDelta::default() {
+            return Err(PrivateWriterTransactionError::CommittedCleanupIncompleteResource);
+        }
+        if !self.cleanup.is_empty() || !self.coordination.is_none() {
+            return Err(PrivateWriterTransactionError::CommittedCleanupIncompleteCoordination);
+        }
+        if self.clean_slots.is_none()
+            || self.draft.is_some()
+            || self.fixed_point.is_some()
+            || self.fixed_point_registered_work.get() != 0
+            || self.fixed_point_registered_generation.get() != 0
+            || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.fixed_point_workspace_identity.get() != 0
+            || self.fixed_point_workspace_bytes.get() != 0
+        {
+            return Err(PrivateWriterTransactionError::CommittedCleanupIncompleteCoordination);
+        }
+
+        self.handle_identity = self.abort_identity;
+        self.abort_identity = 0;
+        self.commit_phase.set(PrivateWriterCommitPhase::Idle);
+        self.state.set(PrivateWriterTransactionState::Clean);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1014,6 +1197,9 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         ) {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
+        }
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::NoPendingTransaction);
         }
@@ -1114,6 +1300,12 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     {
         if self.state.get() == PrivateWriterTransactionState::Clean {
             return Err(PrivateWriterTransactionError::NoPendingTransaction);
+        }
+        if self.state.get() == PrivateWriterTransactionState::OutcomeUnknown {
+            return Err(PrivateWriterTransactionError::OutcomeUnknown);
+        }
+        if self.state.get() == PrivateWriterTransactionState::CommittedCleanupRequired {
+            return Err(PrivateWriterTransactionError::CommittedCleanupRequired);
         }
         if self.fixed_point_workspace_identity.get() != 0
             || self.fixed_point_workspace_bytes.get() != 0
@@ -2032,6 +2224,231 @@ mod tests {
             assert_eq!(core.abort().unwrap(), 4);
         });
         assert_eq!(allocations, 0);
+    }
+
+    #[test]
+    fn durable_publication_advances_selected_only_after_exact_authorization() {
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 2];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(2),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        let target = core.target().unwrap();
+
+        core.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+        let publication = PrivateWriterMetaPublication {
+            handle_identity: handle.identity,
+            target,
+        };
+        let (result, allocations) =
+            count_thread_allocations(|| core.confirm_durable_publication(&handle, publication));
+        assert_eq!(allocations, 0);
+        assert_eq!(result, Ok(()));
+        assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+        assert_eq!(core.selected(), target);
+        assert_eq!(core.target(), None);
+        assert!(core.clean_slots.is_some());
+        assert!(core.draft.is_none());
+        assert_eq!(
+            core.abort(),
+            Err(PrivateWriterTransactionError::NoPendingTransaction)
+        );
+        assert_eq!(
+            core.preflight_commit(&handle),
+            Err(PrivateWriterTransactionError::StaleHandle)
+        );
+
+        let next = core.begin([4; 16]).unwrap();
+        assert_eq!(core.target().unwrap().txn_id, target.txn_id + 1);
+        assert_eq!(core.abort().unwrap(), 2);
+        assert!(matches!(
+            core.preflight_commit(&next),
+            Err(PrivateWriterTransactionError::StaleHandle)
+        ));
+    }
+
+    #[test]
+    fn durable_publication_rejects_substituted_authorization_without_advancing_selected() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(1),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        let target = core.target().unwrap();
+        let mut substituted = target;
+        substituted.commit_nonce = [4; 16];
+
+        core.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+        assert_eq!(
+            core.confirm_durable_publication(
+                &handle,
+                PrivateWriterMetaPublication {
+                    handle_identity: handle.identity,
+                    target: substituted,
+                },
+            ),
+            Err(PrivateWriterTransactionError::StaleHandle)
+        );
+        assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+        assert_eq!(core.selected(), meta(7));
+        assert_eq!(core.target(), Some(target));
+        assert_eq!(core.abort().unwrap(), 1);
+    }
+
+    #[test]
+    fn outcome_unknown_publication_is_resolve_only_and_never_reopens_abort() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(1),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        let target = core.target().unwrap();
+        core.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+
+        core.mark_publication_outcome_unknown(
+            &handle,
+            &PrivateWriterMetaPublication {
+                handle_identity: handle.identity,
+                target,
+            },
+        )
+        .unwrap();
+        assert_eq!(core.state(), PrivateWriterTransactionState::OutcomeUnknown);
+        assert_eq!(core.selected(), meta(7));
+        assert_eq!(core.target(), Some(target));
+        assert_eq!(
+            core.abort(),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        );
+        assert_eq!(
+            core.begin([4; 16]),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        );
+        assert_eq!(
+            core.preflight_commit(&handle),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        );
+        assert!(matches!(
+            core.draft(&handle),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        ));
+        assert_eq!(
+            PrivateWriterTransactionError::<CleanupError>::OutcomeUnknown.code(),
+            ErrorCode::Unresolvable
+        );
+    }
+
+    #[test]
+    fn malformed_unknown_publication_authority_still_poison_the_core() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(1),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        let mut target = core.target().unwrap();
+        target.commit_nonce = [4; 16];
+        core.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+
+        assert_eq!(
+            core.mark_publication_outcome_unknown(
+                &handle,
+                &PrivateWriterMetaPublication {
+                    handle_identity: handle.identity,
+                    target,
+                },
+            ),
+            Err(PrivateWriterTransactionError::StaleHandle)
+        );
+        assert_eq!(core.state(), PrivateWriterTransactionState::OutcomeUnknown);
+        assert_eq!(
+            core.abort(),
+            Err(PrivateWriterTransactionError::OutcomeUnknown)
+        );
+    }
+
+    #[test]
+    fn durable_cleanup_never_reopens_abort_and_can_resume_after_residue_is_removed() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let mut cleanup = [None];
+        let mut core = PrivateWriterTransactionCore::<(), (), CleanupError>::new(
+            meta(7),
+            budget(1),
+            &mut slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        let target = core.target().unwrap();
+        core.cleanup_mut().append((), ()).unwrap();
+        core.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+
+        assert_eq!(
+            core.confirm_durable_publication(
+                &handle,
+                PrivateWriterMetaPublication {
+                    handle_identity: handle.identity,
+                    target,
+                },
+            ),
+            Err(PrivateWriterTransactionError::CommittedCleanupIncompleteCoordination)
+        );
+        assert_eq!(
+            core.state(),
+            PrivateWriterTransactionState::CommittedCleanupRequired
+        );
+        assert_eq!(core.selected(), target);
+        assert_eq!(core.target(), None);
+        assert!(core.clean_slots.is_some());
+        assert!(core.draft.is_none());
+        assert_eq!(
+            core.abort(),
+            Err(PrivateWriterTransactionError::CommittedCleanupRequired)
+        );
+        assert_eq!(
+            core.begin([4; 16]),
+            Err(PrivateWriterTransactionError::CommittedCleanupRequired)
+        );
+        assert!(matches!(
+            core.draft(&handle),
+            Err(PrivateWriterTransactionError::CommittedCleanupRequired)
+        ));
+
+        let mut cleanup_executor = |_: &(), _: &mut ()| Ok::<(), CleanupError>(());
+        assert_eq!(
+            core.cleanup_mut()
+                .retry_all(Some(&mut cleanup_executor))
+                .unwrap()
+                .remaining(),
+            0
+        );
+        core.retry_committed_cleanup(&handle).unwrap();
+        assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+        assert_eq!(core.selected(), target);
     }
 
     #[test]

@@ -6462,12 +6462,24 @@ mod tests {
         BitmapCowArenaBinding, BitmapCowIndexNode, FreeBitmapCow, FreeBitmapInsertPage,
         ScopedFreeBitmapCowLedger, SealedFreeBitmapCoordinatorScratch, SharedFreeBitmapCowLedger,
     };
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::bootstrap::OpenMode;
     use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag};
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::name_binding::{basename_commitment, BasenameEncoding};
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::os::linux::live_writer::{LinuxLiveWriter, LinuxLiveWriterPageSinkError};
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::os::linux::{linux_process_domain_token, RetainedDirectory};
     use crate::page_source::SlicePageSource;
     use crate::private_page_pool::{
         PrivatePageCoordinatorPriorReturn, PrivatePagePreparedScopeSlot,
         PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
         PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
+    };
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::sidecar::{
+        LocalIdentityKind, ProcessDomainKind, SidecarHeader, SidecarOrigin, SidecarState, SLOT_SIZE,
     };
     use crate::test_alloc::count_thread_allocations;
     use crate::writer_fixed_point::{
@@ -6479,6 +6491,14 @@ mod tests {
         PrivateWriterTransactionCore, PrivateWriterTransactionError, PrivateWriterTransactionState,
     };
     use core::cell::Cell;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use std::fs::File;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use std::path::PathBuf;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::{boxed::Box, vec, vec::Vec};
 
     const EMPTY_REPLACEMENT: CommittedPageReplacement = CommittedPageReplacement {
@@ -6500,12 +6520,115 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     struct AggregateCleanupError;
 
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    impl From<LinuxLiveWriterPageSinkError> for AggregateCleanupError {
+        fn from(_: LinuxLiveWriterPageSinkError) -> Self {
+            Self
+        }
+    }
+
+    enum CompletedPrivateOutputPath {
+        Sink {
+            fail_on_sink_call: Option<usize>,
+        },
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxSuccess,
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxSelectedMismatch,
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxPhaseTwoNotCommitted,
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxPhaseFourUnknown,
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxPhaseFiveCommitted,
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    static NEXT_LIVE_DATABASE: AtomicU64 = AtomicU64::new(1);
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    struct LiveTestDatabase {
+        directory: PathBuf,
+        main: PathBuf,
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    impl Drop for LiveTestDatabase {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    fn live_test_database(meta: MetaV4, physical_pages: usize) -> LiveTestDatabase {
+        assert!(physical_pages >= usize::try_from(meta.page_count).unwrap());
+        let ordinal = NEXT_LIVE_DATABASE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-v4-retirement-writer-{}-{ordinal}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let main = directory.join("main.iprdb");
+        let sidecar = directory.join("main.iprdb.readers");
+        let mut bytes = vec![0u8; physical_pages * PAGE_SIZE];
+        meta.encode_into((&mut bytes[..PAGE_SIZE]).try_into().unwrap());
+        meta.encode_into((&mut bytes[PAGE_SIZE..2 * PAGE_SIZE]).try_into().unwrap());
+        std::fs::write(&main, bytes).unwrap();
+
+        let (parent, main_component) = RetainedDirectory::open_parent(&main).unwrap();
+        let sidecar_component = parent.sidecar_component(&main_component).unwrap();
+        let created = File::create(&sidecar).unwrap();
+        created
+            .set_len(2 * PAGE_SIZE as u64 + 2 * u64::from(SLOT_SIZE))
+            .unwrap();
+        drop(created);
+        let retained_main = parent.open_regular(&main_component, true).unwrap();
+        let retained_sidecar = parent.open_regular(&sidecar_component, true).unwrap();
+        let header = SidecarHeader {
+            identity_kind: LocalIdentityKind::Posix,
+            capacity: 1,
+            state: SidecarState::Ready,
+            database_id: meta.database_id,
+            main_identity: retained_main.identity().encode(),
+            sidecar_identity: retained_sidecar.identity().encode(),
+            sidecar_id: [7; 16],
+            origin: SidecarOrigin::CreateLive,
+            attempted_txn_id: meta.txn_id,
+            attempted_commit_nonce: meta.commit_nonce,
+            attempted_main_bytes: meta.page_count * PAGE_SIZE as u64,
+            attempted_main_sha512: [8; 64],
+            process_domain_kind: ProcessDomainKind::LinuxPidNamespace,
+            process_domain_token: linux_process_domain_token().unwrap(),
+            basename_encoding: BasenameEncoding::PosixBytes as u16,
+            basename_len: main_component.as_bytes().len() as u32,
+            basename_commitment: basename_commitment(
+                BasenameEncoding::PosixBytes,
+                main_component.as_bytes(),
+            )
+            .unwrap(),
+            creation_security_kind: 1,
+            creation_security_commitment: [9; 32],
+            header_seq: 1,
+        };
+        let mut block = [0u8; PAGE_SIZE];
+        header.encode_into(&mut block);
+        retained_sidecar.write_all_at(&block, 0).unwrap();
+        retained_sidecar
+            .write_all_at(&block, PAGE_SIZE as u64)
+            .unwrap();
+        drop(retained_sidecar);
+        drop(retained_main);
+        drop(parent);
+
+        LiveTestDatabase { directory, main }
+    }
+
     fn drain_completed_fixed_point_private_output<'pages, B>(
         produced: PreparedProducedTerminalExport<'pages, B>,
         bitmap_root: u32,
         appended: u64,
         expected_retirement: RetirementTreeEditResult,
-        fail_on_sink_call: Option<usize>,
+        path: CompletedPrivateOutputPath,
     ) {
         assert_eq!(produced.pages.len(), 3);
         let mut expected_pages = [
@@ -6770,93 +6893,314 @@ mod tests {
                 crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
             ))
         ));
-        let (preparation, preparation_allocations) = count_thread_allocations(|| {
-            core.prepare_fixed_point_private_output(&handle, &workspace)
-        });
-        assert_eq!(preparation_allocations, 0);
-        let preparation = preparation.unwrap();
-        assert_eq!(preparation.target(), target);
-        assert!(matches!(
-            core.draft(&handle),
-            Err(PrivateWriterTransactionError::FixedPoint(
-                FixedPointError::InvalidWorkUnit
-            ))
-        ));
-        assert!(matches!(
-            core.fixed_point(&handle),
-            Err(PrivateWriterTransactionError::FixedPoint(
-                FixedPointError::InvalidWorkUnit
-            ))
-        ));
-
-        let mut output_pages = [0u32; 3];
-        let mut output_len = 0usize;
-        let (drained, drain_allocations) = count_thread_allocations(|| {
-            let mut sink = |pgno: u32, bytes: &[u8]| {
-                let Some(expected) = expected_pages.iter().find(|page| page.pgno == pgno) else {
-                    panic!("private output must be one of the sealed terminal pages");
-                };
-                assert_eq!(bytes, &expected.bytes[..]);
-                output_pages[output_len] = pgno;
-                output_len += 1;
-                if fail_on_sink_call == Some(output_len) {
-                    Err(AggregateCleanupError)
-                } else {
-                    Ok(())
-                }
-            };
-            core.drain_fixed_point_private_pages(&handle, &preparation, &mut workspace, &mut sink)
-        });
-        assert_eq!(drain_allocations, 0);
-        match fail_on_sink_call {
-            Some(failing_call) => {
-                assert_eq!(output_len, failing_call);
-                let error = drained.unwrap_err();
-                assert_eq!(error.code(), crate::error::ErrorCode::SinkFailed);
+        match path {
+            CompletedPrivateOutputPath::Sink { fail_on_sink_call } => {
+                let (preparation, preparation_allocations) = count_thread_allocations(|| {
+                    core.prepare_fixed_point_private_output(&handle, &workspace)
+                });
+                assert_eq!(preparation_allocations, 0);
+                let preparation = preparation.unwrap();
+                assert_eq!(preparation.target(), target);
                 assert!(matches!(
-                    error,
-                    PrivateWriterTransactionError::FixedPointOutput(
-                        FixedPointPrivateOutputDrainError::Sink(AggregateCleanupError)
-                    )
+                    core.draft(&handle),
+                    Err(PrivateWriterTransactionError::FixedPoint(
+                        FixedPointError::InvalidWorkUnit
+                    ))
                 ));
-                assert_eq!(core.state(), PrivateWriterTransactionState::AbortRequired);
-                assert_eq!(
-                    workspace.record_state(0),
-                    Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
-                );
+                assert!(matches!(
+                    core.fixed_point(&handle),
+                    Err(PrivateWriterTransactionError::FixedPoint(
+                        FixedPointError::InvalidWorkUnit
+                    ))
+                ));
+
+                let mut output_pages = [0u32; 3];
+                let mut output_len = 0usize;
+                let (drained, drain_allocations) = count_thread_allocations(|| {
+                    let mut sink = |pgno: u32, bytes: &[u8]| {
+                        let Some(expected) = expected_pages.iter().find(|page| page.pgno == pgno)
+                        else {
+                            panic!("private output must be one of the sealed terminal pages");
+                        };
+                        assert_eq!(bytes, &expected.bytes[..]);
+                        output_pages[output_len] = pgno;
+                        output_len += 1;
+                        if fail_on_sink_call == Some(output_len) {
+                            Err(AggregateCleanupError)
+                        } else {
+                            Ok(())
+                        }
+                    };
+                    core.drain_fixed_point_private_pages(
+                        &handle,
+                        &preparation,
+                        &mut workspace,
+                        &mut sink,
+                    )
+                });
+                assert_eq!(drain_allocations, 0);
+                match fail_on_sink_call {
+                    Some(failing_call) => {
+                        assert_eq!(output_len, failing_call);
+                        let error = drained.unwrap_err();
+                        assert_eq!(error.code(), crate::error::ErrorCode::SinkFailed);
+                        assert!(matches!(
+                            error,
+                            PrivateWriterTransactionError::FixedPointOutput(
+                                FixedPointPrivateOutputDrainError::Sink(AggregateCleanupError)
+                            )
+                        ));
+                        assert_eq!(core.state(), PrivateWriterTransactionState::AbortRequired);
+                        assert_eq!(
+                            workspace.record_state(0),
+                            Some(
+                                crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1)
+                            )
+                        );
+                        assert!(matches!(
+                            core.preflight_commit(&handle),
+                            Err(PrivateWriterTransactionError::AbortRequired(None))
+                        ));
+                        core.cancel_fixed_point_workspace(&handle, &mut workspace)
+                            .unwrap();
+                        assert!(workspace.is_idle());
+                        assert!(matches!(
+                            core.finish_fixed_point_private_output(
+                                &handle,
+                                preparation,
+                                &mut workspace,
+                            ),
+                            Err(PrivateWriterTransactionError::StaleHandle)
+                        ));
+                        assert_eq!(core.abort().unwrap(), 3);
+                    }
+                    None => {
+                        assert_eq!(drained.unwrap(), expected_pages.len());
+                        assert_eq!(output_len, expected_pages.len());
+                        for expected in expected_pages.iter() {
+                            assert!(output_pages[..output_len].contains(&expected.pgno));
+                        }
+                        let (publication, publication_allocations) =
+                            count_thread_allocations(|| {
+                                core.finish_fixed_point_private_output(
+                                    &handle,
+                                    preparation,
+                                    &mut workspace,
+                                )
+                            });
+                        assert_eq!(publication_allocations, 0);
+                        assert_eq!(publication.unwrap().target(), target);
+                        assert!(workspace.is_idle());
+                        core.preflight_commit(&handle).unwrap();
+                        assert_eq!(core.abort().unwrap(), 3);
+                    }
+                }
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxSuccess => {
+                let database = live_test_database(selected, selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.publish_fixed_point_private_output(&mut core, &handle, &mut workspace)
+                });
+                assert_eq!(publication_allocations, 0);
+                assert_eq!(publication.unwrap().meta, target);
+                assert!(workspace.is_idle());
+                assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+                assert_eq!(core.selected(), target);
+                assert_eq!(core.target(), None);
                 assert!(matches!(
                     core.preflight_commit(&handle),
-                    Err(PrivateWriterTransactionError::AbortRequired(None))
+                    Err(PrivateWriterTransactionError::StaleHandle)
                 ));
+                writer.close().unwrap();
+
+                let committed = std::fs::read(&database.main).unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(&committed, OpenMode::Writer)
+                        .unwrap()
+                        .meta,
+                    target
+                );
+                for expected in expected_pages.iter() {
+                    let offset = usize::try_from(expected.pgno).unwrap() * PAGE_SIZE;
+                    assert_eq!(
+                        &committed[offset..offset + PAGE_SIZE],
+                        &expected.bytes[..],
+                        "bridge must publish each exact fixed-point terminal page"
+                    );
+                }
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxPhaseTwoNotCommitted => {
+                let database = live_test_database(selected, selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.publish_fixed_point_private_output_with(
+                        &mut core,
+                        &handle,
+                        &mut workspace,
+                        |_| Err(std::io::Error::from_raw_os_error(libc::EIO)),
+                        |main, target| {
+                            let mut page = [0u8; PAGE_SIZE];
+                            target.encode_into(&mut page);
+                            main.write_all_at(&page, (target.txn_id & 1) * PAGE_SIZE as u64)
+                        },
+                        |files, owned| files.update_writer_lease_after_meta(owned),
+                    )
+                });
+                assert_eq!(publication_allocations, 0);
+                assert!(matches!(
+                    publication,
+                    Err(crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Publication(
+                        crate::os::linux::live_writer::LinuxLiveWriterPublicationError::NotCommitted(_)
+                    ))
+                ));
+                assert!(workspace.is_idle());
+                assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+                assert_eq!(core.selected(), selected);
+                assert_eq!(core.target(), Some(target));
+                assert_eq!(core.abort().unwrap(), 3);
+                writer.close().unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(
+                        &std::fs::read(&database.main).unwrap(),
+                        OpenMode::Writer
+                    )
+                    .unwrap()
+                    .meta,
+                    selected
+                );
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxPhaseFourUnknown => {
+                let database = live_test_database(selected, selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let synchronizations = Cell::new(0u8);
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.publish_fixed_point_private_output_with(
+                        &mut core,
+                        &handle,
+                        &mut workspace,
+                        |file| {
+                            let next = synchronizations.get() + 1;
+                            synchronizations.set(next);
+                            if next == 2 {
+                                Err(std::io::Error::from_raw_os_error(libc::EIO))
+                            } else {
+                                file.sync_all()
+                            }
+                        },
+                        |main, target| {
+                            let mut page = [0u8; PAGE_SIZE];
+                            target.encode_into(&mut page);
+                            main.write_all_at(&page, (target.txn_id & 1) * PAGE_SIZE as u64)
+                        },
+                        |files, owned| files.update_writer_lease_after_meta(owned),
+                    )
+                });
+                assert_eq!(publication_allocations, 0);
+                assert_eq!(synchronizations.get(), 2);
+                assert!(matches!(
+                    publication,
+                    Err(crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Publication(
+                        crate::os::linux::live_writer::LinuxLiveWriterPublicationError::OutcomeUnknown(_)
+                    ))
+                ));
+                assert_eq!(core.state(), PrivateWriterTransactionState::OutcomeUnknown);
+                assert_eq!(core.selected(), selected);
+                assert_eq!(core.target(), Some(target));
+                assert_eq!(
+                    core.abort(),
+                    Err(PrivateWriterTransactionError::OutcomeUnknown)
+                );
+                writer.close().unwrap();
+
+                let committed = std::fs::read(&database.main).unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(&committed, OpenMode::Writer)
+                        .unwrap()
+                        .meta,
+                    target
+                );
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxPhaseFiveCommitted => {
+                let database = live_test_database(selected, selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.publish_fixed_point_private_output_with(
+                        &mut core,
+                        &handle,
+                        &mut workspace,
+                        |file| file.sync_all(),
+                        |main, target| {
+                            let mut page = [0u8; PAGE_SIZE];
+                            target.encode_into(&mut page);
+                            main.write_all_at(&page, (target.txn_id & 1) * PAGE_SIZE as u64)
+                        },
+                        |_, _| Err(crate::os::linux::LinuxWriterLeaseError::GenerationChanged),
+                    )
+                });
+                assert_eq!(publication_allocations, 0);
+                assert!(matches!(
+                    publication,
+                    Err(crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Publication(
+                        crate::os::linux::live_writer::LinuxLiveWriterPublicationError::Committed(_)
+                    ))
+                ));
+                assert!(workspace.is_idle());
+                assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+                assert_eq!(core.selected(), target);
+                assert_eq!(core.target(), None);
+                assert!(matches!(
+                    core.abort(),
+                    Err(PrivateWriterTransactionError::NoPendingTransaction)
+                ));
+                writer.close().unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(
+                        &std::fs::read(&database.main).unwrap(),
+                        OpenMode::Writer
+                    )
+                    .unwrap()
+                    .meta,
+                    target
+                );
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxSelectedMismatch => {
+                let mut writer_selected = selected;
+                writer_selected.commit_nonce = [9; 16];
+                let database =
+                    live_test_database(writer_selected, writer_selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.publish_fixed_point_private_output(&mut core, &handle, &mut workspace)
+                });
+                assert_eq!(publication_allocations, 0);
+                assert!(matches!(
+                    publication,
+                    Err(
+                        crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
+                            PrivateWriterTransactionError::SelectedGenerationMismatch
+                        )
+                    )
+                ));
+                assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+                assert_eq!(core.selected(), selected);
+                assert_eq!(core.target(), Some(target));
+                writer.close().unwrap();
                 core.cancel_fixed_point_workspace(&handle, &mut workspace)
                     .unwrap();
                 assert!(workspace.is_idle());
-                assert!(matches!(
-                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace,),
-                    Err(PrivateWriterTransactionError::StaleHandle)
-                ));
-                assert_eq!(core.abort().unwrap(), 3);
-            }
-            None => {
-                assert_eq!(drained.unwrap(), expected_pages.len());
-                assert_eq!(output_len, expected_pages.len());
-                for expected in expected_pages.iter() {
-                    assert!(output_pages[..output_len].contains(&expected.pgno));
-                }
-                let (publication, publication_allocations) = count_thread_allocations(|| {
-                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace)
-                });
-                assert_eq!(publication_allocations, 0);
-                assert_eq!(publication.unwrap().target(), target);
-                assert!(workspace.is_idle());
-                core.preflight_commit(&handle).unwrap();
                 assert_eq!(core.abort().unwrap(), 3);
             }
         }
     }
 
     #[test]
-    fn scoped_arena_uses_only_its_bound_pages_with_a_foreign_lower_page() {
+    fn scoped_arena_preserves_scope_isolation_through_linux_publication() {
         let mut storage = vec![PrivatePageSlot::empty(); 8];
         let pool = PrivatePagePool::new_vacant(&mut storage, 100, 100, 2).unwrap();
         let target = pool.reserve_scope(4).unwrap();
@@ -7039,238 +7383,240 @@ mod tests {
                     .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
                     .count() as u64;
 
-                #[derive(Debug)]
-                struct AggregateCleanupError;
-
-                let selected = MetaV4 {
-                    address_family: AddressFamily::Ipv4,
-                    value_kind: ValueKind::Direct,
-                    value_tag: ValueTag::RETENTION,
-                    database_id: [1; 16],
-                    txn_id: 1,
-                    commit_nonce: [2; 16],
-                    page_count: 100,
-                    range_record_count: 0,
-                    active_feed_count: 0,
-                    feed_index_limit: 0,
-                    membership_entry_count: 0,
-                    membership_id_limit: 0,
-                    metadata_uncompressed_len: 0,
-                    metadata_compressed_len: 0,
-                    retirement_batch_count: 0,
-                    range_root: 0,
-                    catalog_name_root: 0,
-                    catalog_index_root: 0,
-                    feed_used_root: 0,
-                    membership_id_root: 0,
-                    membership_hash_root: 0,
-                    membership_used_root: 0,
-                    metadata_root: 0,
-                    free_bitmap_root: 0,
-                    retirement_root: 0,
-                };
-                let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
-                let mut record_replacements = [];
-                let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
-                let record_returned = [const { Cell::new(false) }; 3];
-                let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 16];
-                let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 16];
-                let mut cleanup_targets = [usize::MAX; 3];
-                let workspace_records = [FixedPointWorkspaceRecordSlot::new(
-                    SealedFreeBitmapCoordinatorScratch {
-                        arena_bindings: &mut record_bindings,
-                        replacements: &mut record_replacements,
-                        index_nodes: &mut record_index_nodes,
-                        returned: &record_returned,
-                        cleanup_nodes: &mut cleanup_nodes,
-                        cleanup_path: &mut cleanup_path,
-                        cleanup_targets: &mut cleanup_targets,
-                    },
-                )];
-                let workspace_entries = [const { Cell::new(None) }; 3];
-                let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
-                let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-                let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-                let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-                let source_journal = [
-                    Cell::new(source_journal_neutral),
-                    Cell::new(source_journal_neutral),
-                    Cell::new(source_journal_neutral),
-                    Cell::new(source_journal_neutral),
-                ];
-                let map_journal_sink = Cell::new(usize::MAX);
-                let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-                let map_journal = [
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                    Cell::new(map_journal_neutral),
-                ];
-                let tombstone_journal_sink = Cell::new(false);
-                let tombstone_journal_neutral =
-                    FixedPointCellWrite::new(&tombstone_journal_sink, false);
-                let tombstone_journal = [
-                    Cell::new(tombstone_journal_neutral),
-                    Cell::new(tombstone_journal_neutral),
-                    Cell::new(tombstone_journal_neutral),
-                ];
-                let journals = FixedPointCoordinatorJournals::new(
-                    FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-                    FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-                    FixedPointCellJournalBacking::new(
-                        &tombstone_journal,
-                        tombstone_journal_neutral,
-                    ),
-                );
-                let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
-                let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
-                let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
-                let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
-                let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
-                let mut workspace = FixedPointCoordinatorWorkspace::new(
-                    &workspace_records,
-                    &workspace_entries,
-                    &workspace_source_map,
-                    &workspace_record_map,
-                    journals,
-                    &mut ordered_prior_locations,
-                    &mut pool_returns,
-                    &mut new_locations,
-                    &mut replay_slots,
-                    &mut replay_index,
-                    3,
-                )
-                .unwrap();
-                let workspace_bytes = workspace.retained_bytes();
-                let mut insufficient_slots = [const { PrivatePagePoolSlot::empty() }; 3];
-                let mut insufficient_cleanup = [];
-                let mut insufficient =
-                    PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
-                        selected,
-                        PrivateWriterResourceBudget::new(workspace_bytes - 1, 3, 3, 2),
-                        &mut insufficient_slots,
-                        &mut insufficient_cleanup,
+                #[cfg(all(feature = "os", target_os = "linux"))]
+                {
+                    let selected = MetaV4 {
+                        address_family: AddressFamily::Ipv4,
+                        value_kind: ValueKind::Direct,
+                        value_tag: ValueTag::RETENTION,
+                        database_id: [1; 16],
+                        txn_id: 1,
+                        commit_nonce: [2; 16],
+                        page_count: 100,
+                        range_record_count: 0,
+                        active_feed_count: 0,
+                        feed_index_limit: 0,
+                        membership_entry_count: 0,
+                        membership_id_limit: 0,
+                        metadata_uncompressed_len: 0,
+                        metadata_compressed_len: 0,
+                        retirement_batch_count: 0,
+                        range_root: 0,
+                        catalog_name_root: 0,
+                        catalog_index_root: 0,
+                        feed_used_root: 0,
+                        membership_id_root: 0,
+                        membership_hash_root: 0,
+                        membership_used_root: 0,
+                        metadata_root: 0,
+                        free_bitmap_root: 0,
+                        retirement_root: 0,
+                    };
+                    let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
+                    let mut record_replacements = [];
+                    let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
+                    let record_returned = [const { Cell::new(false) }; 3];
+                    let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 16];
+                    let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 16];
+                    let mut cleanup_targets = [usize::MAX; 3];
+                    let workspace_records = [FixedPointWorkspaceRecordSlot::new(
+                        SealedFreeBitmapCoordinatorScratch {
+                            arena_bindings: &mut record_bindings,
+                            replacements: &mut record_replacements,
+                            index_nodes: &mut record_index_nodes,
+                            returned: &record_returned,
+                            cleanup_nodes: &mut cleanup_nodes,
+                            cleanup_path: &mut cleanup_path,
+                            cleanup_targets: &mut cleanup_targets,
+                        },
+                    )];
+                    let workspace_entries = [const { Cell::new(None) }; 3];
+                    let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
+                    let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
+                    let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+                    let source_journal_neutral =
+                        FixedPointCellWrite::new(&source_journal_sink, None);
+                    let source_journal = [
+                        Cell::new(source_journal_neutral),
+                        Cell::new(source_journal_neutral),
+                        Cell::new(source_journal_neutral),
+                        Cell::new(source_journal_neutral),
+                    ];
+                    let map_journal_sink = Cell::new(usize::MAX);
+                    let map_journal_neutral =
+                        FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+                    let map_journal = [
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                        Cell::new(map_journal_neutral),
+                    ];
+                    let tombstone_journal_sink = Cell::new(false);
+                    let tombstone_journal_neutral =
+                        FixedPointCellWrite::new(&tombstone_journal_sink, false);
+                    let tombstone_journal = [
+                        Cell::new(tombstone_journal_neutral),
+                        Cell::new(tombstone_journal_neutral),
+                        Cell::new(tombstone_journal_neutral),
+                    ];
+                    let journals = FixedPointCoordinatorJournals::new(
+                        FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
+                        FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
+                        FixedPointCellJournalBacking::new(
+                            &tombstone_journal,
+                            tombstone_journal_neutral,
+                        ),
+                    );
+                    let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
+                    let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
+                    let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
+                    let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
+                    let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
+                    let mut workspace = FixedPointCoordinatorWorkspace::new(
+                        &workspace_records,
+                        &workspace_entries,
+                        &workspace_source_map,
+                        &workspace_record_map,
+                        journals,
+                        &mut ordered_prior_locations,
+                        &mut pool_returns,
+                        &mut new_locations,
+                        &mut replay_slots,
+                        &mut replay_index,
+                        3,
                     )
                     .unwrap();
-                let insufficient_handle = insufficient.begin([3; 16]).unwrap();
-                assert!(matches!(
-                    insufficient.reserve_fixed_point_workspace(&insufficient_handle, &workspace),
-                    Err(crate::writer_transaction_core::PrivateWriterTransactionError::InsufficientBudget {
-                        required,
-                        actual,
-                    }) if required == workspace_bytes && actual == workspace_bytes - 1
-                ));
-                assert!(workspace.is_idle());
-                assert_eq!(insufficient.abort().unwrap(), 3);
-                let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
-                let mut cleanup = [];
-                let mut core = PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
-                    selected,
-                    PrivateWriterResourceBudget::new(workspace_bytes, 3, 3, 2),
-                    &mut live_slots,
-                    &mut cleanup,
-                )
-                .unwrap();
-                let handle = core.begin([3; 16]).unwrap();
-                core.reserve_fixed_point_workspace(&handle, &workspace)
-                    .unwrap();
-                assert!(matches!(
+                    let workspace_bytes = workspace.retained_bytes();
+                    let mut insufficient_slots = [const { PrivatePagePoolSlot::empty() }; 3];
+                    let mut insufficient_cleanup = [];
+                    let mut insufficient =
+                        PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
+                            selected,
+                            PrivateWriterResourceBudget::new(workspace_bytes - 1, 3, 3, 2),
+                            &mut insufficient_slots,
+                            &mut insufficient_cleanup,
+                        )
+                        .unwrap();
+                    let insufficient_handle = insufficient.begin([3; 16]).unwrap();
+                    assert!(matches!(
+                        insufficient.reserve_fixed_point_workspace(&insufficient_handle, &workspace),
+                        Err(crate::writer_transaction_core::PrivateWriterTransactionError::InsufficientBudget {
+                            required,
+                            actual,
+                        }) if required == workspace_bytes && actual == workspace_bytes - 1
+                    ));
+                    assert!(workspace.is_idle());
+                    assert_eq!(insufficient.abort().unwrap(), 3);
+                    let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
+                    let mut cleanup = [];
+                    let mut core =
+                        PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
+                            selected,
+                            PrivateWriterResourceBudget::new(workspace_bytes, 3, 3, 2),
+                            &mut live_slots,
+                            &mut cleanup,
+                        )
+                        .unwrap();
+                    let handle = core.begin([3; 16]).unwrap();
+                    core.reserve_fixed_point_workspace(&handle, &workspace)
+                        .unwrap();
+                    assert!(matches!(
                     core.abort(),
                     Err(crate::writer_transaction_core::PrivateWriterTransactionError::AbortIncompleteResource)
                 ));
-                let live_pool = core.draft(&handle).unwrap();
-                let coordinator = core.fixed_point(&handle).unwrap();
-                let predecessor = coordinator.predecessor().unwrap();
-                let mut work_slot = FixedPointPreparedWorkSlot::empty();
-                let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
-                let mut preparation_scratch = [];
-                let prepared = coordinator
-                    .prepare_work(
+                    let live_pool = core.draft(&handle).unwrap();
+                    let coordinator = core.fixed_point(&handle).unwrap();
+                    let predecessor = coordinator.predecessor().unwrap();
+                    let mut work_slot = FixedPointPreparedWorkSlot::empty();
+                    let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+                    let mut preparation_scratch = [];
+                    let prepared = coordinator
+                        .prepare_work(
+                            &predecessor,
+                            live_pool,
+                            1,
+                            3,
+                            &mut work_slot,
+                            &mut scope_slot,
+                            &mut preparation_scratch,
+                            || {
+                                Ok(FixedPointPreparedOutput {
+                                    root: bitmap_root,
+                                    pending_page_count: 100 + appended,
+                                })
+                            },
+                        )
+                        .unwrap();
+                    let produced = match produced.bind_to_prepared_work(prepared, live_pool, 77) {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer export must bind"),
+                    };
+                    let committed_bytes = vec![0; 100 * PAGE_SIZE];
+                    let committed = SlicePageSource::new(&committed_bytes, 100);
+                    let invalid_prior_returns = [DraftPrivatePageLocation::EMPTY];
+                    let (produced, error) = match workspace.prepare_aggregate(
+                        produced,
+                        coordinator,
                         &predecessor,
                         live_pool,
-                        1,
-                        3,
-                        &mut work_slot,
-                        &mut scope_slot,
-                        &mut preparation_scratch,
-                        || {
-                            Ok(FixedPointPreparedOutput {
-                                root: bitmap_root,
-                                pending_page_count: 100 + appended,
-                            })
-                        },
-                    )
-                    .unwrap();
-                let produced = match produced.bind_to_prepared_work(prepared, live_pool, 77) {
-                    Ok(produced) => produced,
-                    Err(_) => panic!("typed producer export must bind"),
-                };
-                let committed_bytes = vec![0; 100 * PAGE_SIZE];
-                let committed = SlicePageSource::new(&committed_bytes, 100);
-                let invalid_prior_returns = [DraftPrivatePageLocation::EMPTY];
-                let (produced, error) = match workspace.prepare_aggregate(
-                    produced,
-                    coordinator,
-                    &predecessor,
-                    live_pool,
-                    &committed,
-                    &invalid_prior_returns,
-                ) {
-                    Err(failure) => failure,
-                    Ok(_) => panic!("invalid prior provenance must fail before consume"),
-                };
-                assert_eq!(error, FixedPointError::StalePredecessor);
-                assert!(workspace.is_idle());
-                assert!(workspace.record_slot_ready(0, 3));
+                        &committed,
+                        &invalid_prior_returns,
+                    ) {
+                        Err(failure) => failure,
+                        Ok(_) => panic!("invalid prior provenance must fail before consume"),
+                    };
+                    assert_eq!(error, FixedPointError::StalePredecessor);
+                    assert!(workspace.is_idle());
+                    assert!(workspace.record_slot_ready(0, 3));
 
-                let aggregate = match workspace.prepare_aggregate(
-                    produced,
-                    coordinator,
-                    &predecessor,
-                    live_pool,
-                    &committed,
-                    &[],
-                ) {
-                    Ok(aggregate) => aggregate,
-                    Err(_) => panic!("restored aggregate preparation must succeed"),
-                };
-                let (sealed, allocations) = count_thread_allocations(|| {
-                    match core.execute_fixed_point_aggregate(&handle, predecessor, aggregate) {
-                        Ok(sealed) => sealed,
-                        Err(_) => panic!("production core must execute the prepared aggregate"),
+                    let aggregate = match workspace.prepare_aggregate(
+                        produced,
+                        coordinator,
+                        &predecessor,
+                        live_pool,
+                        &committed,
+                        &[],
+                    ) {
+                        Ok(aggregate) => aggregate,
+                        Err(_) => panic!("restored aggregate preparation must succeed"),
+                    };
+                    let (sealed, allocations) = count_thread_allocations(|| {
+                        match core.execute_fixed_point_aggregate(&handle, predecessor, aggregate) {
+                            Ok(sealed) => sealed,
+                            Err(_) => panic!("production core must execute the prepared aggregate"),
+                        }
+                    });
+                    assert_eq!(allocations, 0);
+                    assert_eq!(sealed.retirement_result(), combined);
+                    assert_eq!(sealed.record_index(), 0);
+                    assert_eq!(
+                        workspace.record_state(0),
+                        Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
+                    );
+                    assert!(live_pool.find_bound_page(bitmap_root).unwrap().is_some());
+                    for page in produced_pages.iter() {
+                        assert!(live_pool.find_bound_page(page.pgno).unwrap().is_some());
                     }
-                });
-                assert_eq!(allocations, 0);
-                assert_eq!(sealed.retirement_result(), combined);
-                assert_eq!(sealed.record_index(), 0);
-                assert_eq!(
-                    workspace.record_state(0),
-                    Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
-                );
-                assert!(live_pool.find_bound_page(bitmap_root).unwrap().is_some());
-                for page in produced_pages.iter() {
-                    assert!(live_pool.find_bound_page(page.pgno).unwrap().is_some());
-                }
-                let (completion, completion_allocations) = count_thread_allocations(|| {
-                    core.complete_fixed_point_aggregate(&handle, &workspace, sealed)
-                });
-                let successor = match completion {
-                    Ok(successor) => successor,
-                    Err(error) => panic!("sealed aggregate handoff must complete: {error:?}"),
-                };
-                assert_eq!(completion_allocations, 0);
-                assert_eq!(successor.root(), bitmap_root);
-                assert_eq!(successor.pending_page_count(), 100 + appended);
-                let target = core.target().unwrap();
-                assert_eq!(target.free_bitmap_root, bitmap_root);
-                assert_eq!(target.page_count, 100 + appended);
-                assert_eq!(target.retirement_root, combined.root);
-                assert_eq!(target.retirement_batch_count, combined.batch_count);
-                assert!(matches!(
+                    let (completion, completion_allocations) = count_thread_allocations(|| {
+                        core.complete_fixed_point_aggregate(&handle, &workspace, sealed)
+                    });
+                    let successor = match completion {
+                        Ok(successor) => successor,
+                        Err(error) => panic!("sealed aggregate handoff must complete: {error:?}"),
+                    };
+                    assert_eq!(completion_allocations, 0);
+                    assert_eq!(successor.root(), bitmap_root);
+                    assert_eq!(successor.pending_page_count(), 100 + appended);
+                    let target = core.target().unwrap();
+                    assert_eq!(target.free_bitmap_root, bitmap_root);
+                    assert_eq!(target.page_count, 100 + appended);
+                    assert_eq!(target.retirement_root, combined.root);
+                    assert_eq!(target.retirement_batch_count, combined.batch_count);
+                    assert!(matches!(
                     core.preflight_commit(&handle),
                     Err(
                         crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
@@ -7278,82 +7624,75 @@ mod tests {
                         )
                     )
                 ));
-                let (_, finish_allocations) = count_thread_allocations(|| {
-                    core.finish_fixed_point_input(&handle, &workspace, successor)
-                        .unwrap();
-                });
-                assert_eq!(finish_allocations, 0);
-                assert!(core.fixed_point(&handle).unwrap().is_quiescent());
-                let live_pool = core.draft(&handle).unwrap();
-                assert!(live_pool.has_active_scopes());
-                assert_eq!(
-                    live_pool.coordinator_commit_fence(),
-                    Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
-                );
-                assert!(matches!(
+                    let (_, finish_allocations) = count_thread_allocations(|| {
+                        core.finish_fixed_point_input(&handle, &workspace, successor)
+                            .unwrap();
+                    });
+                    assert_eq!(finish_allocations, 0);
+                    assert!(core.fixed_point(&handle).unwrap().is_quiescent());
+                    let live_pool = core.draft(&handle).unwrap();
+                    assert!(live_pool.has_active_scopes());
+                    assert_eq!(
+                        live_pool.coordinator_commit_fence(),
+                        Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
+                    );
+                    assert!(matches!(
+                        core.preflight_commit(&handle),
+                        Err(
+                            crate::writer_transaction_core::PrivateWriterTransactionError::Pool(
+                                crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
+                            )
+                        )
+                    ));
+                    let database = live_test_database(selected, selected.page_count as usize);
+                    let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                    let (publication, publication_allocations) = count_thread_allocations(|| {
+                        writer.publish_fixed_point_private_output(
+                            &mut core,
+                            &handle,
+                            &mut workspace,
+                        )
+                    });
+                    assert_eq!(publication_allocations, 0);
+                    assert_eq!(publication.unwrap().meta, target);
+                    assert!(workspace.is_idle());
+                    assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+                    assert_eq!(core.selected(), target);
+                    assert_eq!(core.target(), None);
+                    assert!(matches!(
                     core.preflight_commit(&handle),
-                    Err(
-                        crate::writer_transaction_core::PrivateWriterTransactionError::Pool(
-                            crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
-                        )
-                    )
+                    Err(crate::writer_transaction_core::PrivateWriterTransactionError::StaleHandle)
                 ));
-                let (preparation, preparation_allocations) = count_thread_allocations(|| {
-                    core.prepare_fixed_point_private_output(&handle, &workspace)
-                });
-                assert_eq!(preparation_allocations, 0);
-                let preparation = preparation.unwrap();
-                assert_eq!(preparation.target(), target);
-                assert!(matches!(
-                    core.draft(&handle),
-                    Err(
-                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
-                            FixedPointError::InvalidWorkUnit
-                        )
-                    )
-                ));
-                assert!(matches!(
-                    core.fixed_point(&handle),
-                    Err(
-                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
-                            FixedPointError::InvalidWorkUnit
-                        )
-                    )
-                ));
-                let mut output_pages = [0u32; 3];
-                let mut output_len = 0usize;
-                let (drained, drain_allocations) = count_thread_allocations(|| {
-                    let mut sink = |pgno: u32, bytes: &[u8]| {
-                        let Some(expected) = produced_pages.iter().find(|page| page.pgno == pgno)
-                        else {
-                            panic!("private output must be one of the sealed terminal pages");
-                        };
-                        assert_eq!(bytes, &expected.bytes[..]);
-                        output_pages[output_len] = pgno;
-                        output_len += 1;
-                        Ok::<(), AggregateCleanupError>(())
-                    };
-                    core.drain_fixed_point_private_pages(
-                        &handle,
-                        &preparation,
-                        &mut workspace,
-                        &mut sink,
-                    )
-                });
-                assert_eq!(drain_allocations, 0);
-                assert_eq!(drained.unwrap(), produced_pages.len());
-                assert_eq!(output_len, produced_pages.len());
-                for expected in produced_pages.iter() {
-                    assert!(output_pages[..output_len].contains(&expected.pgno));
+                    writer.close().unwrap();
+
+                    let committed = std::fs::read(&database.main).unwrap();
+                    assert_eq!(
+                        crate::bootstrap::open(&committed, OpenMode::Writer)
+                            .unwrap()
+                            .meta,
+                        target
+                    );
+                    for expected in produced_pages.iter() {
+                        let offset = usize::try_from(expected.pgno).unwrap() * PAGE_SIZE;
+                        assert_eq!(
+                            &committed[offset..offset + PAGE_SIZE],
+                            &expected.bytes[..],
+                            "bridge must publish each exact fixed-point terminal page"
+                        );
+                    }
                 }
-                let (publication, publication_allocations) = count_thread_allocations(|| {
-                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace)
-                });
-                assert_eq!(publication_allocations, 0);
-                assert_eq!(publication.unwrap().target(), target);
-                assert!(workspace.is_idle());
-                core.preflight_commit(&handle).unwrap();
-                assert_eq!(core.abort().unwrap(), 3);
+                #[cfg(not(all(feature = "os", target_os = "linux")))]
+                {
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::Sink {
+                            fail_on_sink_call: None,
+                        },
+                    );
+                }
             },
         );
 
@@ -7390,10 +7729,176 @@ mod tests {
                     bitmap_root,
                     appended,
                     combined,
-                    Some(2),
+                    CompletedPrivateOutputPath::Sink {
+                        fail_on_sink_call: Some(2),
+                    },
                 );
             },
         );
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut phase_two_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let phase_two_retirement = arena
+                .prepare_terminal_export(combined, &mut phase_two_retirement_pages)
+                .unwrap();
+            let mut phase_two_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut phase_two_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match phase_two_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxPhaseTwoNotCommitted,
+                    );
+                },
+            );
+        }
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut unknown_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let unknown_retirement = arena
+                .prepare_terminal_export(combined, &mut unknown_retirement_pages)
+                .unwrap();
+            let mut unknown_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut unknown_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match unknown_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxPhaseFourUnknown,
+                    );
+                },
+            );
+        }
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut phase_five_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let phase_five_retirement = arena
+                .prepare_terminal_export(combined, &mut phase_five_retirement_pages)
+                .unwrap();
+            let mut phase_five_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut phase_five_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match phase_five_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxPhaseFiveCommitted,
+                    );
+                },
+            );
+        }
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut mismatch_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let mismatch_retirement = arena
+                .prepare_terminal_export(combined, &mut mismatch_retirement_pages)
+                .unwrap();
+            let mut mismatch_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut mismatch_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match mismatch_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxSelectedMismatch,
+                    );
+                },
+            );
+        }
 
         let mut bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
         bitmap_pages[0].pgno = 24;

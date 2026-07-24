@@ -10,6 +10,11 @@ use super::live_cleanup::{
 };
 use super::*;
 use crate::retirement_reader::{RetirementReclaimBarrier, RetirementReclaimFence};
+use crate::writer_fixed_point::FixedPointCoordinatorWorkspace;
+use crate::writer_transaction_core::{
+    PrivateWriterMetaPublication, PrivateWriterTransactionCore, PrivateWriterTransactionError,
+    PrivateWriterTransactionHandle,
+};
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -98,6 +103,40 @@ pub(crate) enum LinuxLiveWriterPublicationError<E> {
     Committed(LinuxLiveWriterPublicationCause<E>),
 }
 
+/// Exact outcome of connecting a fixed-point transaction core to one Linux
+/// physical publication attempt.
+///
+/// `CoreAfterDurablePublication` and
+/// `MissingCorePublicationAuthority` are always committed outcomes. Their
+/// optional phase-five cause is present only when the target meta was durable
+/// but the writer-lease update failed afterward.
+#[derive(Debug)]
+pub(crate) enum LinuxLiveWriterCoreCommitError<E> {
+    Barrier(LinuxLiveWriterBarrierCause),
+    Core(PrivateWriterTransactionError<E>),
+    CoreRelease {
+        core: PrivateWriterTransactionError<E>,
+        release: LinuxLiveWriterBarrierReleaseError,
+    },
+    Publication(LinuxLiveWriterPublicationError<PrivateWriterTransactionError<E>>),
+    PublicationRelease {
+        publication: LinuxLiveWriterPublicationError<PrivateWriterTransactionError<E>>,
+        release: LinuxLiveWriterBarrierReleaseError,
+    },
+    CoreAfterDurablePublication {
+        phase_five: Option<LinuxLiveWriterPublicationCause<PrivateWriterTransactionError<E>>>,
+        core: PrivateWriterTransactionError<E>,
+    },
+    CoreAfterOutcomeUnknown {
+        publication: LinuxLiveWriterPublicationCause<PrivateWriterTransactionError<E>>,
+        core: PrivateWriterTransactionError<E>,
+    },
+    MissingCorePublicationAuthority {
+        phase_five: Option<LinuxLiveWriterPublicationCause<PrivateWriterTransactionError<E>>>,
+    },
+    ReleaseAfterDurablePublication(LinuxLiveWriterBarrierReleaseError),
+}
+
 impl<E> LinuxLiveWriterPublicationError<E> {
     pub(crate) const fn requires_close_only(&self) -> bool {
         !matches!(self, Self::Preflight(_))
@@ -178,6 +217,10 @@ impl LinuxLiveWriterPublication<'_> {
             Ok(()) => Ok(()),
             Err((barrier, error)) => Err((Self { barrier, target }, error)),
         }
+    }
+
+    fn force_close_only(mut self) {
+        self.barrier.force_close_only_after_publication();
     }
 }
 
@@ -492,6 +535,218 @@ impl LinuxLiveWriter {
         }
     }
 
+    /// Holds one Linux operation barrier from core preparation through durable
+    /// metadata publication, phase-five lease handling, and core completion.
+    ///
+    /// The caller retains the transaction core after every error so it can run
+    /// the appropriate explicit abort or committed-cleanup route. This method
+    /// never leaves an undisposed barrier behind: a failed unlock becomes
+    /// close-only and is recovered by `close`.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn publish_fixed_point_private_output<
+        'slots,
+        'cleanup,
+        'backing,
+        'arena,
+        'record_cleanup,
+        I,
+        O,
+        E,
+    >(
+        &self,
+        core: &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+    ) -> Result<Bootstrap, LinuxLiveWriterCoreCommitError<E>>
+    where
+        E: From<LinuxLiveWriterPageSinkError>,
+    {
+        self.publish_fixed_point_private_output_with(
+            core,
+            handle,
+            workspace,
+            |file| file.sync_all(),
+            write_target_meta_page,
+            |files, owned| files.update_writer_lease_after_meta(owned),
+        )
+    }
+
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn publish_fixed_point_private_output_with<
+        'slots,
+        'cleanup,
+        'backing,
+        'arena,
+        'record_cleanup,
+        I,
+        O,
+        E,
+        S,
+        M,
+        U,
+    >(
+        &self,
+        core: &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        synchronize: S,
+        write_meta: M,
+        update_lease: U,
+    ) -> Result<Bootstrap, LinuxLiveWriterCoreCommitError<E>>
+    where
+        E: From<LinuxLiveWriterPageSinkError>,
+        S: FnMut(&File) -> io::Result<()>,
+        M: FnOnce(&RetainedRegular, MetaV4) -> Result<(), LinuxOsError>,
+        U: FnOnce(
+            &mut RetainedLiveFiles,
+            &mut OwnedWriterLease,
+        ) -> Result<(), LinuxWriterLeaseError>,
+    {
+        let barrier = match self.acquire_operation_barrier_with_cancel(|| false) {
+            Ok(barrier) => barrier,
+            Err(LinuxLiveWriterBarrierError::Failed(cause)) => {
+                return Err(LinuxLiveWriterCoreCommitError::Barrier(cause));
+            }
+            Err(LinuxLiveWriterBarrierError::Locked { cause, mut barrier }) => {
+                barrier.force_close_only_after_publication();
+                return Err(LinuxLiveWriterCoreCommitError::Barrier(cause));
+            }
+        };
+
+        if core.selected() != barrier.selected_meta() {
+            return match barrier.release_after_nonpublication() {
+                Ok(()) => Err(LinuxLiveWriterCoreCommitError::Core(
+                    PrivateWriterTransactionError::SelectedGenerationMismatch,
+                )),
+                Err(release) => Err(LinuxLiveWriterCoreCommitError::CoreRelease {
+                    core: PrivateWriterTransactionError::SelectedGenerationMismatch,
+                    release,
+                }),
+            };
+        }
+
+        let preparation = match core.prepare_fixed_point_private_output(handle, workspace) {
+            Ok(preparation) => preparation,
+            Err(core_error) => {
+                return match barrier.release_after_nonpublication() {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::Core(core_error)),
+                    Err(release) => Err(LinuxLiveWriterCoreCommitError::CoreRelease {
+                        core: core_error,
+                        release,
+                    }),
+                };
+            }
+        };
+        let target = preparation.target();
+        let mut authorization = None::<PrivateWriterMetaPublication>;
+        let publication = barrier.publish_private_pages_with(
+            target,
+            |sink| {
+                let mut write = |pgno: u32, bytes: &[u8]| -> Result<(), E> {
+                    sink.write_page(pgno, bytes).map_err(E::from)
+                };
+                core.drain_fixed_point_private_pages(handle, &preparation, workspace, &mut write)?;
+                let completed =
+                    core.finish_fixed_point_private_output(handle, preparation, workspace)?;
+                debug_assert_eq!(completed.target(), target);
+                authorization = Some(completed);
+                Ok(())
+            },
+            synchronize,
+            write_meta,
+            update_lease,
+        );
+
+        match publication {
+            Ok(publication) => {
+                let Some(authorization) = authorization else {
+                    publication.force_close_only();
+                    return Err(
+                        LinuxLiveWriterCoreCommitError::MissingCorePublicationAuthority {
+                            phase_five: None,
+                        },
+                    );
+                };
+                let target = publication.target();
+                if let Err(core_error) = core.confirm_durable_publication(handle, authorization) {
+                    publication.force_close_only();
+                    return Err(
+                        LinuxLiveWriterCoreCommitError::CoreAfterDurablePublication {
+                            phase_five: None,
+                            core: core_error,
+                        },
+                    );
+                }
+                match publication.release() {
+                    Ok(()) => Ok(target),
+                    Err((publication, release)) => {
+                        drop(publication);
+                        Err(LinuxLiveWriterCoreCommitError::ReleaseAfterDurablePublication(release))
+                    }
+                }
+            }
+            Err((barrier, LinuxLiveWriterPublicationError::Preflight(publication))) => {
+                let publication = LinuxLiveWriterPublicationError::Preflight(publication);
+                match barrier.release_after_nonpublication() {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::Publication(publication)),
+                    Err(release) => Err(LinuxLiveWriterCoreCommitError::PublicationRelease {
+                        publication,
+                        release,
+                    }),
+                }
+            }
+            Err((barrier, LinuxLiveWriterPublicationError::Committed(phase_five))) => {
+                let Some(authorization) = authorization else {
+                    drop(barrier);
+                    return Err(
+                        LinuxLiveWriterCoreCommitError::MissingCorePublicationAuthority {
+                            phase_five: Some(phase_five),
+                        },
+                    );
+                };
+                let completion = core.confirm_durable_publication(handle, authorization);
+                drop(barrier);
+                match completion {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::Publication(
+                        LinuxLiveWriterPublicationError::Committed(phase_five),
+                    )),
+                    Err(core_error) => Err(
+                        LinuxLiveWriterCoreCommitError::CoreAfterDurablePublication {
+                            phase_five: Some(phase_five),
+                            core: core_error,
+                        },
+                    ),
+                }
+            }
+            Err((barrier, LinuxLiveWriterPublicationError::OutcomeUnknown(publication))) => {
+                let completion = match authorization.as_ref() {
+                    Some(authorization) => {
+                        core.mark_publication_outcome_unknown(handle, authorization)
+                    }
+                    None => {
+                        core.force_publication_outcome_unknown();
+                        Err(PrivateWriterTransactionError::StaleHandle)
+                    }
+                };
+                drop(barrier);
+                match completion {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::Publication(
+                        LinuxLiveWriterPublicationError::OutcomeUnknown(publication),
+                    )),
+                    Err(core) => Err(LinuxLiveWriterCoreCommitError::CoreAfterOutcomeUnknown {
+                        publication,
+                        core,
+                    }),
+                }
+            }
+            Err((barrier, publication)) => {
+                debug_assert!(publication.requires_close_only());
+                drop(barrier);
+                Err(LinuxLiveWriterCoreCommitError::Publication(publication))
+            }
+        }
+    }
+
     pub(crate) fn close(
         &self,
     ) -> Result<Option<LiveClaimCleanupOutcome>, LinuxLiveWriterCloseError> {
@@ -551,6 +806,10 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         }
     }
 
+    fn selected_meta(&self) -> MetaV4 {
+        self.inner.bootstrap.meta
+    }
+
     /// Returns the stable reader-table facts as a borrow-bound reclamation
     /// authority. Reclamation retains this borrow until its second pass ends,
     /// which also keeps the operation lock held.
@@ -577,6 +836,19 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         debug_assert!(error.requires_close_only());
         self.force_close_only_after_publication();
         (self, error)
+    }
+
+    /// Releases a barrier after no publication attempt was recorded. If the
+    /// sidecar unlock itself fails, retain close-only cleanup instead of leaving
+    /// an inaccessible locked writer state behind.
+    fn release_after_nonpublication(mut self) -> Result<(), LinuxLiveWriterBarrierReleaseError> {
+        match self.release() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.force_close_only_after_publication();
+                Err(error)
+            }
+        }
     }
 
     /// Runs phases 2-5 for pages already finalized under this operation lock.

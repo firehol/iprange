@@ -6399,11 +6399,51 @@ requirements are normative in the Pre-Implementation Gate above.
   automatically close-only. A target that reached phase 4 can also be made
   close-only if later core completion fails, and an unlock failure after phase
   5 has the same protection.
-- This is deliberately not a public SDK API and has no production caller yet.
-  It does not claim that the core's allocator/retirement fixed point runs under
-  this barrier; the next slice must wire that existing exact private-page proof
-  into this physical publisher without allowing a raw page-number caller to
-  bypass it.
+- This is deliberately not a public SDK API. At that checkpoint it had no
+  core-to-publisher caller; the private bridge below now owns that connection.
+  It still does not claim that the core's allocator/retirement fixed point runs
+  under this barrier.
+
+### 2026-07-24 - durable core-completion boundary plan
+
+- A phase-4-confirmed target must change the transaction core's selected
+  generation only after the physical publisher has proved durability. The core
+  must then scrub its private slots and invalidate the finished transaction
+  handle before another transaction can begin.
+- If that in-memory scrub or retained cleanup cannot complete after the target
+  is durable, the outcome remains `Committed`: aborting would describe the
+  wrong on-disk reality. The core therefore enters a distinct committed
+  cleanup-required state that blocks normal work and can only finish its own
+  cleanup; the Linux writer is made close-only by the physical layer.
+- This is a direct consequence of section 14.2's committed-after-phase-4 rule,
+  not a new public API. Targeted tests will prove exact authorization matching,
+  selected-generation advancement only after durable confirmation, handle
+  invalidation, retryable committed cleanup, and refusal to abort a committed
+  transaction.
+
+### 2026-07-24 - durable core-to-Linux publication integration
+
+- Implemented the private bridge from `PrivateWriterTransactionCore` to the
+  Linux publisher. It acquires one operation barrier, verifies that the core's
+  exact selected metadata equals the file's selected metadata, prepares the
+  fixed-point output, streams only its authorized terminal pages to the Linux
+  page sink, then accepts core success only after phase-4 confirmation.
+- The core now has distinct `OutcomeUnknown` and
+  `CommittedCleanupRequired` states. A phase-2 failure remains explicitly
+  abortable. A phase-3/4 failure poisons the core before the barrier is
+  released, so no normal operation or abort can reinterpret an ambiguous target
+  as absent. A phase-5 failure is still committed: the core advances to the
+  target before its fallible in-memory cleanup and never reopens abort.
+- The bridge rejects a full selected-generation mismatch before any page output.
+  It also fails closed if a broken internal path loses its exact core
+  publication authority after an ambiguous physical attempt.
+- The composed path remains private; no user-facing writer or SDK surface was
+  added. This does **not** satisfy the remaining section 14.2 requirement that
+  allocator selection, verified retirement reclamation, and final fixed-point
+  work themselves occur while the same Linux operation barrier is held. The
+  bridge only holds the barrier from existing private-output preparation through
+  physical publication. That allocator/finalizer integration is the next
+  critical slice.
 
 ## Validation
 
@@ -6436,6 +6476,22 @@ requirements are normative in the Pre-Implementation Gate above.
   Go `test` and `vet` also pass. This validation still does not make a public
   writer, does not add default full validation, and does not prove the required
   core-to-barrier finalization integration.
+
+### 2026-07-24 - durable core-to-Linux publication integration
+
+- Focused core tests prove exact durable authorization, selected-generation
+  advancement only after confirmation, committed-cleanup retry, stale-handle
+  invalidation, and refusal to abort or begin while a durable cleanup remains.
+- The composed Linux test drives real mixed bitmap/retirement terminal pages
+  through the bridge and reopens the file to prove byte-exact page output and
+  the target metadata. It also injects a selected-generation mismatch, phase-2
+  `NotCommitted`, phase-4 `OutcomeUnknown`, and phase-5 `Committed` failure.
+  The assertions prove the core's corresponding abortable, resolve-only, and
+  committed states rather than only the physical writer classification.
+- Final checkpoint validation passes: Rust no-default matrix 426 tests;
+  Rust all-feature matrix 538 tests; warnings-denied all-target Clippy;
+  all-feature benchmark compilation; Go `test` and `vet`; Rust formatting;
+  `git diff --check`; and the project SOW audit.
 
 ### Historical adversarial-audit evidence
 
