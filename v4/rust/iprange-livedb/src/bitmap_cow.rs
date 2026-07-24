@@ -23,7 +23,9 @@ use crate::private_page_pool::{
     PrivatePageReservationScope, PrivatePageReservationScopeSeed, PrivatePageReturn,
     PrivatePageScopedOperation, PrivatePageScopedOperationSlot, PrivatePageScopedSlotInfo,
 };
-use crate::retirement_reader::RetirementReclaimedPages;
+#[cfg(test)]
+use crate::retirement_reader::test_reclaim_guard;
+use crate::retirement_reader::{RetirementReclaimGuard, RetirementReclamation};
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -700,13 +702,17 @@ pub(crate) struct FreeBitmapReclamationRequest<'a> {
 }
 
 /// Move-only verifier proof. The binder consumes it before its final callback.
+///
+/// The retained reclaim guard keeps the exact live operation barrier held until
+/// the resulting bound reservation is finalized or discarded.
 #[derive(Debug)]
-pub(crate) struct FreeBitmapReclamationProof<'ticket, 'pages> {
+pub(crate) struct FreeBitmapReclamationProof<'ticket, 'pages, 'barrier> {
     nonce: u64,
     selection_id: u64,
     pages: &'pages [u32],
     fingerprint: u64,
     ticket: &'ticket FreeBitmapReclamationTicket,
+    reclaim_guard: RetirementReclaimGuard<'barrier>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -791,13 +797,20 @@ pub(crate) struct FreeBitmapReservationAttachment<
 }
 
 #[derive(Debug)]
-pub(crate) struct BoundFreeBitmapReservation<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized> {
+pub(crate) struct BoundFreeBitmapReservation<
+    'a,
+    'slots,
+    'scope,
+    'barrier,
+    S: CommittedPageSource + ?Sized,
+> {
     pub(crate) cow: FreeBitmapCow<'a, 'slots, 'scope, S>,
     pub(crate) binding: FreeBitmapReservationBinding,
     private_pages: usize,
     source_nodes: &'a mut [FreeBitmapReservationSourceNode],
     pool_validation: &'a mut [PrivatePageCompositeBind],
     stage: FreeBitmapReservationStageBuffers<'a>,
+    reclaim_guard: RetirementReclaimGuard<'barrier>,
 }
 
 #[cfg(test)]
@@ -1132,24 +1145,23 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
     }
 }
 
-/// Completes bitmap late binding from pages emitted by the verified retirement
-/// second pass. Normal allocator code cannot supply an arbitrary page slice.
+/// Completes bitmap late binding from a verified retirement result. Normal
+/// allocator code cannot supply an arbitrary page slice or detach the result
+/// from the operation barrier that made it safe.
 pub(crate) fn complete_free_bitmap_reclamation<'ticket, 'selection, 'barrier, 'pages>(
     request: FreeBitmapReclamationRequest<'ticket>,
-    reclaimed: Option<&RetirementReclaimedPages<'selection, 'barrier, 'pages>>,
-) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
-    let (selection_id, pages) = match reclaimed {
-        Some(reclaimed) => (reclaimed.selection_id(), reclaimed.pages()),
-        None => (0, &[] as &[u32]),
-    };
-    complete_free_bitmap_reclamation_pages(request, selection_id, pages)
+    reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>, FreeBitmapCowError> {
+    let (selection_id, pages, reclaim_guard) = reclamation.into_parts();
+    complete_free_bitmap_reclamation_pages(request, selection_id, pages, reclaim_guard)
 }
 
-fn complete_free_bitmap_reclamation_pages<'ticket, 'pages>(
+fn complete_free_bitmap_reclamation_pages<'ticket, 'pages, 'barrier>(
     request: FreeBitmapReclamationRequest<'ticket>,
     selection_id: u64,
     pages: &'pages [u32],
-) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
+    reclaim_guard: RetirementReclaimGuard<'barrier>,
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>, FreeBitmapCowError> {
     let ticket = request.ticket;
     if request.nonce == 0
         || (pages.is_empty() != (selection_id == 0))
@@ -1175,6 +1187,7 @@ fn complete_free_bitmap_reclamation_pages<'ticket, 'pages>(
         pages,
         fingerprint,
         ticket,
+        reclaim_guard,
     })
 }
 
@@ -1183,8 +1196,8 @@ fn complete_free_bitmap_reclamation_for_test<'ticket, 'pages>(
     request: FreeBitmapReclamationRequest<'ticket>,
     selection_id: u64,
     pages: &'pages [u32],
-) -> Result<FreeBitmapReclamationProof<'ticket, 'pages>, FreeBitmapCowError> {
-    complete_free_bitmap_reclamation_pages(request, selection_id, pages)
+) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'static>, FreeBitmapCowError> {
+    complete_free_bitmap_reclamation_pages(request, selection_id, pages, test_reclaim_guard())
 }
 
 struct CallbackFreeCommittedSource;
@@ -1200,10 +1213,11 @@ static CALLBACK_FREE_COMMITTED_SOURCE: CallbackFreeCommittedSource = CallbackFre
 impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
     FreeBitmapReservationAttachment<'a, 'slots, 'scope, S>
 {
-    pub(crate) fn bind<'ticket, 'pages>(
+    pub(crate) fn bind<'ticket, 'pages, 'barrier>(
         mut self,
-        proof: FreeBitmapReclamationProof<'ticket, 'pages>,
-    ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, S>, FreeBitmapCowError> {
+        proof: FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>,
+    ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, S>, FreeBitmapCowError>
+    {
         if !core::ptr::eq(proof.ticket, self.ticket)
             || proof.nonce != self.nonce
             || proof.nonce == 0
@@ -1588,6 +1602,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             source_nodes: self.source_nodes,
             pool_validation: self.pool_validation,
             stage: self.stage,
+            reclaim_guard: proof.reclaim_guard,
         })
     }
 }
@@ -8164,7 +8179,11 @@ pub(crate) mod tests {
         );
         let reclaimed = [3, 7];
         let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed);
-        let proof = complete_free_bitmap_reclamation(request, reclaimed.as_ref()).unwrap();
+        let proof = complete_free_bitmap_reclamation(
+            request,
+            RetirementReclamation::Reclaimed(reclaimed.unwrap()),
+        )
+        .unwrap();
         let (bound, allocations) = count_thread_allocations(|| attachment.bind(proof));
         let bound = bound.unwrap();
         assert_eq!(allocations, 0);

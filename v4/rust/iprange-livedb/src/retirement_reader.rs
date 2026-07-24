@@ -31,6 +31,17 @@ pub(crate) struct RetirementReclaimFence<'barrier> {
     oldest_reader_txn: Option<u64>,
 }
 
+/// Move-only proof that the originating operation barrier remains held.
+///
+/// Selection consumes a reclaim fence into either a selected batch or a
+/// no-change result. Allocator binding then carries this guard through its
+/// fixed-point finalization, so verified reclaimed page numbers cannot outlive
+/// the lock that made them safe.
+#[derive(Debug)]
+pub(crate) struct RetirementReclaimGuard<'barrier> {
+    _barrier: &'barrier dyn RetirementReclaimBarrier,
+}
+
 impl<'barrier> RetirementReclaimFence<'barrier> {
     pub(crate) const fn from_stable_reader_table(
         barrier: &'barrier dyn RetirementReclaimBarrier,
@@ -58,6 +69,18 @@ impl<'barrier> RetirementReclaimFence<'barrier> {
                 Some(oldest) => oldest >= retired_by_txn,
                 None => true,
             }
+    }
+
+    fn into_guard(self) -> RetirementReclaimGuard<'barrier> {
+        RetirementReclaimGuard {
+            _barrier: self._barrier,
+        }
+    }
+
+    fn guard(&self) -> RetirementReclaimGuard<'barrier> {
+        RetirementReclaimGuard {
+            _barrier: self._barrier,
+        }
     }
 }
 
@@ -135,9 +158,16 @@ pub(crate) struct RetirementSelection<'barrier> {
     fence: RetirementReclaimFence<'barrier>,
 }
 
+/// A valid no-change reclamation outcome that still retains operation-lock
+/// authority for allocator/finalizer work.
+#[derive(Debug)]
+pub(crate) struct RetirementNoReclamation<'barrier> {
+    guard: RetirementReclaimGuard<'barrier>,
+}
+
 #[derive(Debug)]
 pub(crate) enum RetirementSelectionResult<'barrier> {
-    NoChange,
+    NoChange(RetirementNoReclamation<'barrier>),
     Selected(RetirementSelection<'barrier>),
 }
 
@@ -167,6 +197,30 @@ impl<'selection, 'barrier, 'pages> RetirementReclaimedPages<'selection, 'barrier
     }
 }
 
+/// Exact allocator input from a completed reclamation attempt.
+///
+/// Both variants retain the operation-barrier guard. This lets the allocator
+/// carry a no-change or reclaimed-page result into finalization without
+/// reducing live-reader safety to an unbound page slice.
+#[derive(Debug)]
+pub(crate) enum RetirementReclamation<'selection, 'barrier, 'pages> {
+    NoChange(RetirementNoReclamation<'barrier>),
+    Reclaimed(RetirementReclaimedPages<'selection, 'barrier, 'pages>),
+}
+
+impl<'selection, 'barrier, 'pages> RetirementReclamation<'selection, 'barrier, 'pages> {
+    pub(crate) fn into_parts(self) -> (u64, &'pages [u32], RetirementReclaimGuard<'barrier>) {
+        match self {
+            Self::NoChange(no_change) => (0, &[], no_change.guard),
+            Self::Reclaimed(reclaimed) => (
+                reclaimed.selection_id(),
+                reclaimed.pages(),
+                reclaimed.selection.fence.guard(),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 #[derive(Debug)]
 struct TestOnlyReclaimBarrier;
@@ -176,6 +230,12 @@ impl RetirementReclaimBarrier for TestOnlyReclaimBarrier {}
 
 #[cfg(test)]
 static TEST_ONLY_RECLAIM_BARRIER: TestOnlyReclaimBarrier = TestOnlyReclaimBarrier;
+
+#[cfg(test)]
+pub(crate) fn test_reclaim_guard() -> RetirementReclaimGuard<'static> {
+    RetirementReclaimFence::from_stable_reader_table(&TEST_ONLY_RECLAIM_BARRIER, 0, None)
+        .into_guard()
+}
 
 #[cfg(test)]
 static TEST_ONLY_RECLAIM_SELECTION: RetirementSelection<'static> = RetirementSelection {
@@ -285,7 +345,11 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             return Err(RetirementReadError::WorkLimitZero);
         }
         if self.identity.root == 0 {
-            return Ok(RetirementSelectionResult::NoChange);
+            return Ok(RetirementSelectionResult::NoChange(
+                RetirementNoReclamation {
+                    guard: fence.into_guard(),
+                },
+            ));
         }
 
         let mut cursor = self.cursor(RetirementPageCheck::Ordinary);
@@ -320,7 +384,11 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             last_retired_by_txn = batch.retired_by_txn;
         }
         if selected_batches == 0 {
-            return Ok(RetirementSelectionResult::NoChange);
+            return Ok(RetirementSelectionResult::NoChange(
+                RetirementNoReclamation {
+                    guard: fence.into_guard(),
+                },
+            ));
         }
         Ok(RetirementSelectionResult::Selected(RetirementSelection {
             identity: self.identity,
@@ -1054,7 +1122,7 @@ mod tests {
     ) -> RetirementSelection<'barrier> {
         match result {
             RetirementSelectionResult::Selected(selection) => selection,
-            RetirementSelectionResult::NoChange => panic!("expected a selection"),
+            RetirementSelectionResult::NoChange(_) => panic!("expected a selection"),
         }
     }
 
@@ -1109,8 +1177,21 @@ mod tests {
             empty
                 .select_oldest_eligible(reclaim_fence(8), 1, 1)
                 .unwrap(),
-            RetirementSelectionResult::NoChange
+            RetirementSelectionResult::NoChange(_)
         ));
+    }
+
+    #[test]
+    fn no_change_retains_reclamation_authority_for_allocator_binding() {
+        let bytes = image(2);
+        let tree = RetirementTree::new(&bytes, identity(2, 0, 0)).unwrap();
+        let no_change = match tree.select_oldest_eligible(reclaim_fence(8), 1, 1).unwrap() {
+            RetirementSelectionResult::NoChange(no_change) => no_change,
+            RetirementSelectionResult::Selected(_) => panic!("expected no reclaimable batches"),
+        };
+        let (selection_id, pages, _guard) = RetirementReclamation::NoChange(no_change).into_parts();
+        assert_eq!(selection_id, 0);
+        assert!(pages.is_empty());
     }
 
     #[test]
@@ -1137,12 +1218,12 @@ mod tests {
         assert!(matches!(
             tree.select_oldest_eligible(reclaim_fence(1), 10, 10)
                 .unwrap(),
-            RetirementSelectionResult::NoChange
+            RetirementSelectionResult::NoChange(_)
         ));
         assert!(matches!(
             tree.select_oldest_eligible(reclaim_fence(0), 10, 10)
                 .unwrap(),
-            RetirementSelectionResult::NoChange
+            RetirementSelectionResult::NoChange(_)
         ));
         assert_eq!(
             selected(

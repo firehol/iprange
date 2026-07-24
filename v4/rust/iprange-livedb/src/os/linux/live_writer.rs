@@ -231,6 +231,34 @@ struct LinuxLiveWriterReaderFacts {
 }
 
 #[derive(Debug)]
+pub(crate) enum LinuxLiveWriterFinalizationContextError {
+    ReaderFactsUnavailable,
+    Source(PageSourceError),
+}
+
+/// Exact selected-generation state usable only while one operation barrier is
+/// held. The higher-ranked callback on the barrier prevents this context, its
+/// page source, and its reclaim fence from escaping into later unlocked work.
+#[derive(Debug)]
+pub(crate) struct LinuxLiveWriterFinalizationContext<'a> {
+    selected: Bootstrap,
+    pages: PinnedPageSource<'a, RetainedRegular>,
+    reclaim_fence: RetirementReclaimFence<'a>,
+}
+
+impl<'a> LinuxLiveWriterFinalizationContext<'a> {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Bootstrap,
+        PinnedPageSource<'a, RetainedRegular>,
+        RetirementReclaimFence<'a>,
+    ) {
+        (self.selected, self.pages, self.reclaim_fence)
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct LinuxLiveWriterOperationBarrier<'a> {
     inner: MutexGuard<'a, LinuxLiveWriterInner>,
     creator_pid: u32,
@@ -810,16 +838,39 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         self.inner.bootstrap.meta
     }
 
-    /// Returns the stable reader-table facts as a borrow-bound reclamation
-    /// authority. Reclamation retains this borrow until its second pass ends,
-    /// which also keeps the operation lock held.
-    pub(crate) fn retirement_reclaim_fence(&self) -> Option<RetirementReclaimFence<'_>> {
-        let protection = self.protection?;
-        Some(RetirementReclaimFence::from_stable_reader_table(
+    /// Runs allocator/retirement finalization against the exact selected file
+    /// while this same operation barrier remains held.
+    ///
+    /// The closure is higher-ranked: values that borrow this context cannot
+    /// escape it. A caller may then consume the still-held barrier directly for
+    /// physical publication.
+    pub(crate) fn with_finalization_context<R>(
+        &self,
+        finalizer: impl for<'context> FnOnce(LinuxLiveWriterFinalizationContext<'context>) -> R,
+    ) -> Result<R, LinuxLiveWriterFinalizationContextError> {
+        let protection = self
+            .protection
+            .ok_or(LinuxLiveWriterFinalizationContextError::ReaderFactsUnavailable)?;
+        let selected = self.inner.bootstrap;
+        let main = &self
+            .inner
+            .files
+            .as_ref()
+            .expect("operation barrier retains live files")
+            .main;
+        let pages = main
+            .pinned_page_source(selected)
+            .map_err(LinuxLiveWriterFinalizationContextError::Source)?;
+        let reclaim_fence = RetirementReclaimFence::from_stable_reader_table(
             self,
             protection.registering_readers,
             protection.oldest_reader_txn,
-        ))
+        );
+        Ok(finalizer(LinuxLiveWriterFinalizationContext {
+            selected,
+            pages,
+            reclaim_fence,
+        }))
     }
 
     fn force_close_only_after_publication(&mut self) {
@@ -1183,6 +1234,7 @@ mod tests {
     use super::*;
     use crate::bootstrap::tests::empty_direct_meta;
     use crate::contract::MetaV4;
+    use crate::retirement_reader::{RetirementIdentity, RetirementSelectionResult, RetirementTree};
     use crate::sidecar::{encode_active_slot, SidecarOrigin};
     use crate::test_alloc::count_thread_allocations;
     use std::cell::Cell;
@@ -1799,7 +1851,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_barrier_returns_reclaim_fence_with_exact_reader_facts() {
+    fn operation_barrier_finalization_context_reports_exact_reader_facts() {
         let database = TestDatabase::new(7, 2, 2, 4);
         let writer = LinuxLiveWriter::open(&database.main).unwrap();
         database.put_active(1, current_active_slot(0, [0x81; 16]));
@@ -1809,15 +1861,61 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        {
-            let protection = barrier.retirement_reclaim_fence().unwrap();
-            assert_eq!(protection.registering_readers(), 1);
-            assert_eq!(protection.oldest_reader_txn(), Some(2));
-            assert!(!protection.allows_reclaim(1));
-        }
+        barrier
+            .with_finalization_context(|context| {
+                let (_, pages, protection) = context.into_parts();
+                pages.check_access().unwrap();
+                assert_eq!(protection.registering_readers(), 1);
+                assert_eq!(protection.oldest_reader_txn(), Some(2));
+                assert!(!protection.allows_reclaim(1));
+            })
+            .unwrap();
         assert_eq!(barrier.inner.state, WriterState::OperationLocked);
         assert!(barrier.inner.files.as_ref().unwrap().sidecar.lock_held());
         barrier.release().unwrap();
+        drop(barrier);
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn finalization_context_binds_the_selected_retained_source_to_the_held_barrier() {
+        let database = TestDatabase::new(7, 3, 3, 1);
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let mut barrier = writer
+            .acquire_operation_barrier_with_cancel(|| false)
+            .unwrap();
+
+        barrier
+            .with_finalization_context(|context| {
+                let (selected, pages, fence) = context.into_parts();
+                assert_eq!(pages.bootstrap(), selected);
+                let mut page = [0u8; PAGE_SIZE];
+                pages.read_page(2, &mut page).unwrap();
+                assert_eq!(page, [0; PAGE_SIZE]);
+
+                let meta = selected.meta;
+                let tree = RetirementTree::from_source(
+                    pages,
+                    RetirementIdentity {
+                        database_id: meta.database_id,
+                        txn_id: meta.txn_id,
+                        commit_nonce: meta.commit_nonce,
+                        page_count: meta.page_count,
+                        root: meta.retirement_root,
+                        batch_count: meta.retirement_batch_count,
+                    },
+                )
+                .unwrap();
+                assert!(matches!(
+                    tree.select_oldest_eligible(fence, 1, 1).unwrap(),
+                    RetirementSelectionResult::NoChange(_)
+                ));
+            })
+            .unwrap();
+
+        assert_eq!(barrier.inner.state, WriterState::OperationLocked);
+        assert!(barrier.inner.files.as_ref().unwrap().sidecar.lock_held());
+        barrier.abort().unwrap();
         drop(barrier);
         writer.close().unwrap();
     }
@@ -1840,12 +1938,14 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        {
-            let protection = barrier.retirement_reclaim_fence().unwrap();
-            assert_eq!(protection.registering_readers(), 0);
-            assert_eq!(protection.oldest_reader_txn(), None);
-            assert!(protection.allows_reclaim(3));
-        }
+        barrier
+            .with_finalization_context(|context| {
+                let (_, _, protection) = context.into_parts();
+                assert_eq!(protection.registering_readers(), 0);
+                assert_eq!(protection.oldest_reader_txn(), None);
+                assert!(protection.allows_reclaim(3));
+            })
+            .unwrap();
         assert_eq!(database.slot(1), [0; SLOT_SIZE as usize]);
         barrier.abort().unwrap();
         drop(barrier);
@@ -2103,24 +2203,30 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        assert!(barrier.retirement_reclaim_fence().is_some());
+        assert!(barrier.with_finalization_context(|_| ()).is_ok());
         assert!(matches!(
             barrier.release_with(|_| Err(LinuxOsError::RandomFailure)),
             Err(LinuxLiveWriterBarrierReleaseError::Os(
                 LinuxOsError::RandomFailure
             ))
         ));
-        assert!(barrier.retirement_reclaim_fence().is_some());
+        assert!(barrier.with_finalization_context(|_| ()).is_ok());
         assert_eq!(barrier.inner.state, WriterState::OperationLocked);
         assert!(barrier.inner.files.as_ref().unwrap().sidecar.lock_held());
         barrier.abort().unwrap();
-        assert!(barrier.retirement_reclaim_fence().is_none());
+        assert!(matches!(
+            barrier.with_finalization_context(|_| ()),
+            Err(LinuxLiveWriterFinalizationContextError::ReaderFactsUnavailable)
+        ));
         assert_eq!(barrier.inner.state, WriterState::Open);
         assert!(matches!(
             barrier.release(),
             Err(LinuxLiveWriterBarrierReleaseError::NotHeld)
         ));
-        assert!(barrier.retirement_reclaim_fence().is_none());
+        assert!(matches!(
+            barrier.with_finalization_context(|_| ()),
+            Err(LinuxLiveWriterFinalizationContextError::ReaderFactsUnavailable)
+        ));
         drop(barrier);
         writer.close().unwrap();
     }
@@ -2169,11 +2275,13 @@ mod tests {
             let mut barrier = writer
                 .acquire_operation_barrier_with_cancel(|| false)
                 .unwrap();
-            {
-                let protection = barrier.retirement_reclaim_fence().unwrap();
-                assert_eq!(protection.registering_readers(), 0);
-                assert_eq!(protection.oldest_reader_txn(), None);
-            }
+            barrier
+                .with_finalization_context(|context| {
+                    let (_, _, protection) = context.into_parts();
+                    assert_eq!(protection.registering_readers(), 0);
+                    assert_eq!(protection.oldest_reader_txn(), None);
+                })
+                .unwrap();
             barrier.release().unwrap();
             drop(barrier);
             assert_eq!(writer.lock_inner().owned.as_ref().unwrap().active, lease);

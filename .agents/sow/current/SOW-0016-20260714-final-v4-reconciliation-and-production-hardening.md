@@ -6445,6 +6445,41 @@ requirements are normative in the Pre-Implementation Gate above.
   physical publication. That allocator/finalizer integration is the next
   critical slice.
 
+### 2026-07-24 - lock-scoped finalization-context plan
+
+- Evidence: the current `retirement_reclaim_fence` returns a borrow-bound
+  reader-safety value, but a later allocator can reduce a verified reclamation
+  result to page numbers. There is no live entry point that supplies both the
+  exact retained selected-page source and that reader-safety value under one
+  unbroken operation barrier.
+- The next narrow repair adds a private callback context to an already-held
+  Linux operation barrier. It supplies only the selected bootstrap, its pinned
+  retained page source, and a move-only retirement reclaim fence. The context
+  cannot escape the callback, so the selection, second pass, allocator binding,
+  and finalizer work that consume it must complete before the barrier can be
+  released or consumed for physical publication.
+- The loose fence accessor will be removed. Tests will use the context to open
+  a real retirement reader over the retained selected file and prove that the
+  operation lock remains held through and after the callback. This establishes
+  the safe live entry point; the following slice must make the actual
+  allocator/retirement fixed point consume it.
+
+### 2026-07-24 - lock-scoped finalization-context implementation
+
+- Implemented the private Linux callback context. It creates the exact pinned
+  source from the retained selected file and its stable reader-table reclaim
+  fence under the already-held operation barrier. Its higher-ranked callback
+  cannot return either borrow into later unlocked work.
+- A reclamation result now carries an opaque operation-barrier guard from
+  selection through bitmap late binding and the bound reservation. The guard is
+  retained until that reservation is finalized or discarded; the old proof
+  could retain only a page slice and therefore lost this lifetime.
+- The former raw Linux fence accessor is removed. The direct pre-finalized
+  publisher remains the only current composed path, so this is a type-safe
+  finalization prerequisite, not a claim that live allocator/retirement work is
+  already invoked by the transaction core. The next slice must require that
+  finalizer before the existing page-drain/publication path begins.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6492,6 +6527,21 @@ requirements are normative in the Pre-Implementation Gate above.
   Rust all-feature matrix 538 tests; warnings-denied all-target Clippy;
   all-feature benchmark compilation; Go `test` and `vet`; Rust formatting;
   `git diff --check`; and the project SOW audit.
+
+### 2026-07-24 - lock-scoped finalization context
+
+- Focused Rust coverage proves the no-change reclamation path retains an
+  allocator authority, a verified reclaimed-page path carries that authority
+  through bitmap binding, and Linux exposes the actual retained selected source
+  with the stable reader facts only while its sidecar operation lock remains
+  held.
+- Final checkpoint validation passes: Rust no-default workspace matrix 427
+  tests; Rust all-feature workspace matrix 540 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
+- This validates the lifetime boundary and source/fence pairing. It does not
+  yet prove a production allocator or retirement finalizer is invoked through
+  that context before the existing core page-drain path.
 
 ### Historical adversarial-audit evidence
 
