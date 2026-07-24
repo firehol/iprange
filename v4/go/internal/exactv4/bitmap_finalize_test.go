@@ -48,6 +48,7 @@ func finalizationScratchForAttachment(attachment *freeBitmapReservationAttachmen
 		cachedPages:  make([]freeBitmapFinalizationCachedPage, capacity*freeBitmapPathCapacity),
 		indexStack:   make([]int, len(attachment.cow.indexNodes)),
 		cache:        &freeBitmapFinalizationCachedSource{},
+		stage:        &freeBitmapFinalizationDetachedStage{},
 		cleanup:      cleanupScratchForAttachment(attachment),
 	}
 }

@@ -10,6 +10,7 @@ type freeBitmapFinalizationScratch struct {
 	cachedPages  []freeBitmapFinalizationCachedPage
 	indexStack   []int
 	cache        *freeBitmapFinalizationCachedSource
+	stage        *freeBitmapFinalizationDetachedStage
 	cleanup      freeBitmapCleanupScratch
 }
 
@@ -3065,6 +3066,72 @@ func (p *freeBitmapReservationAttachment) compactFinalizedBindings(boundLen int)
 	}
 }
 
+// freeBitmapFinalizationPreviewProblem keeps a detached-stage failure distinct
+// from a bitmap finalization failure. The embedded bitmap error preserves the
+// existing error inspection contract for the no-stage preview.
+type freeBitmapFinalizationPreviewProblem struct {
+	freeBitmapCOWError
+	stage error
+}
+
+func (problem freeBitmapFinalizationPreviewProblem) failed() bool {
+	return problem.freeBitmapCOWError.failed() || problem.stage != nil
+}
+
+type freeBitmapFinalizationStageErrorCode uint8
+
+const (
+	freeBitmapFinalizationStageErrMissing freeBitmapFinalizationStageErrorCode = iota + 1
+)
+
+func (code freeBitmapFinalizationStageErrorCode) Error() string {
+	return "exact v4 bitmap finalization stage failure"
+}
+
+// freeBitmapFinalizationDetachedStage gives prospective work an attachment
+// whose COW and private pool are both detached. Existing range staging can use
+// it directly without ever seeing the live attachment.
+type freeBitmapFinalizationDetachedStage struct {
+	attachment freeBitmapReservationAttachment
+}
+
+func initializeFreeBitmapFinalizationDetachedStage(
+	stage *freeBitmapFinalizationDetachedStage,
+	p *freeBitmapReservationAttachment,
+	shadow *freeBitmapCOW,
+) freeBitmapCOWError {
+	if stage == nil || p == nil || shadow == nil {
+		return staleFreeBitmapReservationBind()
+	}
+	// Do not copy the reservation plan, buffers, reclamation ticket, or terminal
+	// work: those fields can retain live caller-owned storage. Prospective work
+	// needs only the detached COW and its private scope.
+	stage.attachment = freeBitmapReservationAttachment{
+		cow:   *shadow,
+		scope: shadow.scope,
+	}
+	return freeBitmapCOWError{}
+}
+
+func (stage *freeBitmapFinalizationDetachedStage) synchronize(
+	shadow *freeBitmapCOW,
+) freeBitmapCOWError {
+	if stage == nil || shadow == nil || stage.attachment.scope != shadow.scope ||
+		stage.attachment.cow.pool != shadow.pool || stage.attachment.cow.scope != shadow.scope ||
+		!stage.attachment.cow.scoped ||
+		!sameFreeBitmapReservationCommittedSource(stage.attachment.cow.committed, shadow.committed) {
+		return staleFreeBitmapReservationBind()
+	}
+	*shadow = stage.attachment.cow
+	return shadow.synchronizeScopedBindings(shadow.scope)
+}
+
+func (stage *freeBitmapFinalizationDetachedStage) clear() {
+	if stage != nil {
+		*stage = freeBitmapFinalizationDetachedStage{}
+	}
+}
+
 // previewTerminalReplacements runs the same two-pass bitmap finalization in
 // the attachment's detached shadow storage, but never applies the result to
 // the live scope. It is the range-root fixed-point's read-only bitmap input.
@@ -3072,20 +3139,48 @@ func (p *freeBitmapReservationAttachment) compactFinalizedBindings(boundLen int)
 func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 	scratch freeBitmapFinalizationScratch,
 	output []uint32,
-) (int, freeBitmapCOWError) {
+) (int, freeBitmapFinalizationPreviewProblem) {
+	return previewTerminalReplacementsWithStage[struct{}](
+		p, scratch, output,
+		func(*freeBitmapFinalizationDetachedStage) (struct{}, error) { return struct{}{}, nil },
+	)
+}
+
+// previewTerminalReplacementsWithStage runs caller-owned prospective work in
+// each detached bitmap pass. The stage may mutate only the supplied detached
+// attachment; its COW is synchronized into the shadow before finalization. The
+// callback must not retain the detached stage and returns an equality witness
+// that must reproduce during replay.
+func previewTerminalReplacementsWithStage[T comparable](
+	p *freeBitmapReservationAttachment,
+	scratch freeBitmapFinalizationScratch,
+	output []uint32,
+	stage func(*freeBitmapFinalizationDetachedStage) (T, error),
+) (int, freeBitmapFinalizationPreviewProblem) {
+	if stage == nil {
+		return 0, freeBitmapFinalizationPreviewProblem{
+			stage: freeBitmapFinalizationStageErrMissing,
+		}
+	}
 	seal, problem := captureFreeBitmapFinalizationLiveSeal(p)
 	if problem.failed() {
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	if problem = validateFreeBitmapFinalizationScratch(p, scratch); problem.failed() {
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
+	}
+	if scratch.stage == nil {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: freeBitmapCOWError{
+			code: freeBitmapCOWErrInsufficientResourceBudget, resource: freeBitmapResourceFinalizationStage,
+			required: 1,
+		}}
 	}
 	if len(output) < len(p.cow.replacements) {
-		return 0, freeBitmapCOWError{
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: freeBitmapCOWError{
 			code:     freeBitmapCOWErrInsufficientResourceBudget,
 			resource: freeBitmapResourceReplacementPages,
 			required: len(p.cow.replacements), actual: len(output),
-		}
+		}}
 	}
 	for _, live := range [9][]uint32{
 		p.cow.candidates,
@@ -3099,21 +3194,28 @@ func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 		p.buffers.stage.cow.singleInsertPage[:],
 	} {
 		if reservationSlicesOverlap(output, live) {
-			return 0, freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict}
+			return 0, freeBitmapFinalizationPreviewProblem{
+				freeBitmapCOWError: freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict},
+			}
 		}
 	}
 	if (p.reclamationRequest.ticket != nil &&
 		reservationSlicesOverlap(output, p.reclamationRequest.ticket.pages)) ||
 		reservationSlicesOverlap(output, scratch.releasePages) {
-		return 0, freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict}
+		return 0, freeBitmapFinalizationPreviewProblem{
+			freeBitmapCOWError: freeBitmapCOWError{code: freeBitmapCOWErrArenaPageConflict},
+		}
 	}
 
 	// The replay cleanup is only useful to a real finalization apply. Keeping
 	// it canonical here makes the supplied scratch immediately reusable.
 	defer scratch.cleanup.clear()
+	defer scratch.stage.clear()
 	cacheKey, ok := mintFreeBitmapFinalizationNonce()
 	if !ok {
-		return 0, freeBitmapCOWError{code: freeBitmapCOWErrMutationEpochExhausted}
+		return 0, freeBitmapFinalizationPreviewProblem{
+			freeBitmapCOWError: freeBitmapCOWError{code: freeBitmapCOWErrMutationEpochExhausted},
+		}
 	}
 	clear(scratch.cachedPages)
 	cache := scratch.cache
@@ -3128,28 +3230,38 @@ func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 	if problem.failed() {
 		if problem.code == freeBitmapCOWErrSource {
 			if fenceProblem := validateFreeBitmapFinalizationSourceFailure(p, seal, cache); fenceProblem.failed() {
-				return 0, fenceProblem
+				return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: fenceProblem}
 			}
 		}
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
+	}
+	if problem = initializeFreeBitmapFinalizationDetachedStage(scratch.stage, p, discovery); problem.failed() {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
+	}
+	discoveryStage, stageProblem := stage(scratch.stage)
+	if stageProblem != nil {
+		return 0, freeBitmapFinalizationPreviewProblem{stage: stageProblem}
+	}
+	if problem = scratch.stage.synchronize(discovery); problem.failed() {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	discovered, problem := runFreeBitmapFinalizationFixedPoint(discovery, scratch)
 	if problem.failed() {
 		if cache.problem.failed() {
-			return 0, cache.problem
+			return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: cache.problem}
 		}
 		if problem.code == freeBitmapCOWErrSource {
 			if fenceProblem := validateFreeBitmapFinalizationSourceFailure(p, seal, cache); fenceProblem.failed() {
-				return 0, fenceProblem
+				return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: fenceProblem}
 			}
 		}
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	scratch.cleanup.clear()
 	discoveryRoot := discovery.root
 	discoveryPageCount := discovery.pageCount
 	if problem = cache.validate(); problem.failed() {
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	cacheFingerprint := finalizationCacheFingerprint(cache.pages[:cache.length])
 	discoverySeal := sealFreeBitmapReservationCOW(discovery)
@@ -3159,7 +3271,7 @@ func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 	if cache.base != nil {
 		status := cache.checkAccessStatus()
 		if cache.problem.failed() {
-			return 0, cache.problem
+			return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: cache.problem}
 		}
 		// The content/source fence must complete before a source status is
 		// returned, so corruption cannot be hidden by the final callback.
@@ -3169,10 +3281,12 @@ func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 			freeBitmapReservationCOWFingerprint(discovery) != discoveryFingerprint ||
 			!discoveryPoolSeal.matches(discovery.pool) ||
 			freeBitmapReservationScopeFingerprint(discovery.pool, discovery.scope) != discoveryScopeFingerprint {
-			return 0, staleFreeBitmapReservationBind()
+			return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: staleFreeBitmapReservationBind()}
 		}
 		if status.failed() {
-			return 0, freeBitmapCOWError{code: freeBitmapCOWErrSource, source: status}
+			return 0, freeBitmapFinalizationPreviewProblem{
+				freeBitmapCOWError: freeBitmapCOWError{code: freeBitmapCOWErrSource, source: status},
+			}
 		}
 	} else if !seal.matches(p) ||
 		finalizationCacheFingerprint(cache.pages[:cache.length]) != cacheFingerprint ||
@@ -3180,34 +3294,44 @@ func (p *freeBitmapReservationAttachment) previewTerminalReplacements(
 		freeBitmapReservationCOWFingerprint(discovery) != discoveryFingerprint ||
 		!discoveryPoolSeal.matches(discovery.pool) ||
 		freeBitmapReservationScopeFingerprint(discovery.pool, discovery.scope) != discoveryScopeFingerprint {
-		return 0, staleFreeBitmapReservationBind()
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: staleFreeBitmapReservationBind()}
 	}
 	cache.sealed = true
 	shadow, problem := p.buildFinalizationShadow(cache)
 	if problem.failed() {
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
+	}
+	if problem = initializeFreeBitmapFinalizationDetachedStage(scratch.stage, p, shadow); problem.failed() {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
+	}
+	replayStage, stageProblem := stage(scratch.stage)
+	if stageProblem != nil {
+		return 0, freeBitmapFinalizationPreviewProblem{stage: stageProblem}
+	}
+	if problem = scratch.stage.synchronize(shadow); problem.failed() {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	released, problem := runFreeBitmapFinalizationFixedPoint(shadow, scratch)
 	if problem.failed() {
-		return 0, problem
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: problem}
 	}
 	if released != discovered || shadow.root != discoveryRoot ||
-		shadow.pageCount != discoveryPageCount || cache.problem.failed() {
-		return 0, freeBitmapCOWError{
+		shadow.pageCount != discoveryPageCount || replayStage != discoveryStage || cache.problem.failed() {
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: freeBitmapCOWError{
 			code: freeBitmapCOWErrStaleInsertionPlan, page: shadow.root, previousPage: discoveryRoot,
 			pageCount: shadow.pageCount,
-		}
+		}}
 	}
 	replacements := shadow.replacementPages()
 	if len(replacements) > len(output) {
-		return 0, freeBitmapCOWError{
+		return 0, freeBitmapFinalizationPreviewProblem{freeBitmapCOWError: freeBitmapCOWError{
 			code:     freeBitmapCOWErrInsufficientResourceBudget,
 			resource: freeBitmapResourceReplacementPages,
 			required: len(replacements), actual: len(output),
-		}
+		}}
 	}
 	copy(output, replacements)
-	return len(replacements), freeBitmapCOWError{}
+	return len(replacements), freeBitmapFinalizationPreviewProblem{}
 }
 
 // finalize resolves the complete scope in shadow and has no fallible branch

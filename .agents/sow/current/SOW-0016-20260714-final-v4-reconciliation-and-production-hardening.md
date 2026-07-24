@@ -8363,6 +8363,36 @@ requirements are normative in the Pre-Implementation Gate above.
   `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features
   -- -D warnings`, and `./.agents/sow/audit.sh`.
 
+### 2026-07-24 - staged detached bitmap preview for the range-root bridge
+
+- Extended the Go detached bitmap preview with a caller-owned staged attachment.
+  This is deliberately not a raw pool callback: `stageRangePayload` also
+  maintains the COW binding ledger, so a raw claim could look valid in the pool
+  while leaving the detached COW inconsistent. The staged attachment preserves
+  that ledger and copies its complete detached state back into the shadow before
+  each finalization pass. It exposes only the detached COW and scope, never live
+  reservation buffers, a reclamation ticket, or terminal work storage.
+- A prospective range/retirement producer now runs once for discovery and once
+  for replay, returns a comparable caller witness, and cannot mutate live state
+  or publish output. A witness mismatch is rejected as a stale insertion plan;
+  a producer failure remains distinct from a bitmap failure. The required stage
+  scratch is supplied by the caller, cleared on every exit, and keeps the warmed
+  preview path allocation-free.
+- Tests exercise real `Range` payload staging through both passes, unstable
+  witnesses, producer errors, missing stage scratch, source-failure cleanup and
+  retry, live-state immutability, scratch reuse, and zero warmed-path heap
+  allocation. Validation passed: `go -C v4/go test ./...`,
+  `go -C v4/go vet ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`,
+  `cargo test --manifest-path v4/rust/Cargo.toml`,
+  `cargo test --manifest-path v4/rust/Cargo.toml --all-features`,
+  `cargo fmt --manifest-path v4/rust/Cargo.toml --check`,
+  `cargo clippy --manifest-path v4/rust/Cargo.toml --all-targets --all-features
+  -- -D warnings`, `git diff --check`, and `./.agents/sow/audit.sh`.
+- This remains private transaction plumbing: it changes no public SDK, v4 byte,
+  metadata/root publication, implicit validation, or temporary-file behavior.
+  The next slice connects this producer with selected-old-root collection and
+  prospective retirement replacements to form the protected-page proof.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

@@ -118,6 +118,7 @@ const (
 	freeBitmapResourceSourceNodes
 	freeBitmapResourceStagedArenaPages
 	freeBitmapResourceReclamationTicket
+	freeBitmapResourceFinalizationStage
 )
 
 type freeBitmapCOWError struct {
