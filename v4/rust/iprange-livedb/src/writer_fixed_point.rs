@@ -226,59 +226,123 @@ impl<'backing, 'arena, 'cleanup> FixedPointWorkspaceBacking<'backing, 'arena, 'c
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct FixedPointCellWrite<'backing, T: Copy> {
-    destination: &'backing Cell<T>,
-    value: T,
+/// One prevalidated draft-source entry update. The index is resolved before
+/// Active, which lets an owning workspace retain the journal without storing a
+/// self-reference to one of its own cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FixedPointSourceJournalWrite {
+    destination: usize,
+    previous: Option<DraftPrivatePageEntry>,
+    value: Option<DraftPrivatePageEntry>,
 }
 
-impl<'backing, T: Copy> FixedPointCellWrite<'backing, T> {
-    pub(crate) const fn new(destination: &'backing Cell<T>, value: T) -> Self {
-        Self { destination, value }
-    }
+impl FixedPointSourceJournalWrite {
+    pub(crate) const EMPTY: Self = Self {
+        destination: usize::MAX,
+        previous: None,
+        value: None,
+    };
+}
+
+/// The two independently maintained maps in a fixed-point draft source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FixedPointMapJournalTarget {
+    SourceSlotToEntry,
+    SlotToRecord,
+}
+
+/// One prevalidated draft-source map update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FixedPointMapJournalWrite {
+    target: FixedPointMapJournalTarget,
+    destination: usize,
+    previous: usize,
+    value: usize,
+}
+
+impl FixedPointMapJournalWrite {
+    pub(crate) const EMPTY: Self = Self {
+        target: FixedPointMapJournalTarget::SourceSlotToEntry,
+        destination: usize::MAX,
+        previous: usize::MAX,
+        value: usize::MAX,
+    };
+}
+
+/// One prevalidated returned-page marker on a retained coordinator record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FixedPointTombstoneJournalWrite {
+    record_index: usize,
+    binding_index: usize,
+    previous: bool,
+    value: bool,
+}
+
+impl FixedPointTombstoneJournalWrite {
+    pub(crate) const EMPTY: Self = Self {
+        record_index: usize::MAX,
+        binding_index: usize::MAX,
+        previous: false,
+        value: false,
+    };
+}
+
+/// The complete prevalidated state transition for returning one prior private
+/// page. Grouping it keeps the journal append boundary explicit and prevents
+/// the caller from accidentally pairing values from different source slots.
+#[derive(Clone, Copy)]
+struct FixedPointPriorReturnJournal {
+    record_index: usize,
+    binding_index: usize,
+    returned_previous: bool,
+    source_slot: usize,
+    source_previous: Option<DraftPrivatePageEntry>,
+    source_map_previous: usize,
+    record_map_previous: usize,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct FixedPointCellJournalBacking<'backing, T: Copy> {
-    entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
-    neutral: FixedPointCellWrite<'backing, T>,
+struct FixedPointCellJournalBacking<'backing, T: Copy> {
+    entries: &'backing [Cell<T>],
+    neutral: T,
 }
 
 impl<'backing, T: Copy> FixedPointCellJournalBacking<'backing, T> {
-    pub(crate) const fn new(
-        entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
-        neutral: FixedPointCellWrite<'backing, T>,
-    ) -> Self {
+    const fn new(entries: &'backing [Cell<T>], neutral: T) -> Self {
         Self { entries, neutral }
     }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct FixedPointCoordinatorJournals<'backing> {
-    source: FixedPointCellJournalBacking<'backing, Option<DraftPrivatePageEntry>>,
-    map: FixedPointCellJournalBacking<'backing, usize>,
-    tombstone: FixedPointCellJournalBacking<'backing, bool>,
+    source: FixedPointCellJournalBacking<'backing, FixedPointSourceJournalWrite>,
+    map: FixedPointCellJournalBacking<'backing, FixedPointMapJournalWrite>,
+    tombstone: FixedPointCellJournalBacking<'backing, FixedPointTombstoneJournalWrite>,
 }
 
 impl<'backing> FixedPointCoordinatorJournals<'backing> {
     pub(crate) const fn new(
-        source: FixedPointCellJournalBacking<'backing, Option<DraftPrivatePageEntry>>,
-        map: FixedPointCellJournalBacking<'backing, usize>,
-        tombstone: FixedPointCellJournalBacking<'backing, bool>,
+        source: &'backing [Cell<FixedPointSourceJournalWrite>],
+        map: &'backing [Cell<FixedPointMapJournalWrite>],
+        tombstone: &'backing [Cell<FixedPointTombstoneJournalWrite>],
     ) -> Self {
         Self {
-            source,
-            map,
-            tombstone,
+            source: FixedPointCellJournalBacking::new(source, FixedPointSourceJournalWrite::EMPTY),
+            map: FixedPointCellJournalBacking::new(map, FixedPointMapJournalWrite::EMPTY),
+            tombstone: FixedPointCellJournalBacking::new(
+                tombstone,
+                FixedPointTombstoneJournalWrite::EMPTY,
+            ),
         }
     }
 }
 
-/// Fixed caller storage for prebound writes. Only the used prefix is reset, and
-/// replay reads that prefix directly without allocation or dynamic lookup.
+/// Fixed caller storage for prebound writes. Only the used prefix is reset.
+/// Destination indexes are validated and applied before Active, so the Active
+/// suffix consumes only already-prepared workspace state.
 struct FixedPointCellJournal<'backing, T: Copy> {
-    entries: &'backing [Cell<FixedPointCellWrite<'backing, T>>],
-    neutral: FixedPointCellWrite<'backing, T>,
+    entries: &'backing [Cell<T>],
+    neutral: T,
     len: usize,
 }
 
@@ -302,7 +366,7 @@ impl<'backing, T: Copy> FixedPointCellJournal<'backing, T> {
         self.len = 0;
     }
 
-    fn push(&mut self, write: FixedPointCellWrite<'backing, T>) -> Result<(), FixedPointError> {
+    fn push(&mut self, write: T) -> Result<(), FixedPointError> {
         let required = self
             .len
             .checked_add(1)
@@ -316,8 +380,12 @@ impl<'backing, T: Copy> FixedPointCellJournal<'backing, T> {
         Ok(())
     }
 
-    fn iter(&self) -> impl Iterator<Item = FixedPointCellWrite<'backing, T>> + '_ {
+    fn iter(&self) -> impl Iterator<Item = T> + '_ {
         self.entries[..self.len].iter().map(Cell::get)
+    }
+
+    fn iter_rev(&self) -> impl Iterator<Item = T> + '_ {
+        self.entries[..self.len].iter().rev().map(Cell::get)
     }
 }
 
@@ -334,9 +402,9 @@ pub(crate) struct FixedPointCoordinatorSession<
     backing: &'session FixedPointWorkspaceBacking<'backing, 'arena, 'cleanup>,
     committed: &'committed S,
     pool: &'pool PrivatePagePool<'slots>,
-    source_writes: FixedPointCellJournal<'backing, Option<DraftPrivatePageEntry>>,
-    map_writes: FixedPointCellJournal<'backing, usize>,
-    tombstone_writes: FixedPointCellJournal<'backing, bool>,
+    source_writes: FixedPointCellJournal<'backing, FixedPointSourceJournalWrite>,
+    map_writes: FixedPointCellJournal<'backing, FixedPointMapJournalWrite>,
+    tombstone_writes: FixedPointCellJournal<'backing, FixedPointTombstoneJournalWrite>,
 }
 
 impl<
@@ -402,36 +470,60 @@ where
 
     fn append_prior_return(
         &mut self,
-        returned: &'backing Cell<bool>,
-        source_entry: &'backing Cell<Option<DraftPrivatePageEntry>>,
-        source_map: &'backing Cell<usize>,
-        record_map: &'backing Cell<usize>,
+        prior: FixedPointPriorReturnJournal,
     ) -> Result<(), FixedPointError> {
         self.tombstone_writes
-            .push(FixedPointCellWrite::new(returned, true))?;
-        self.source_writes
-            .push(FixedPointCellWrite::new(source_entry, None))?;
-        self.map_writes
-            .push(FixedPointCellWrite::new(source_map, usize::MAX))?;
-        self.map_writes
-            .push(FixedPointCellWrite::new(record_map, usize::MAX))
+            .push(FixedPointTombstoneJournalWrite {
+                record_index: prior.record_index,
+                binding_index: prior.binding_index,
+                previous: prior.returned_previous,
+                value: true,
+            })?;
+        self.source_writes.push(FixedPointSourceJournalWrite {
+            destination: prior.source_slot,
+            previous: prior.source_previous,
+            value: None,
+        })?;
+        self.map_writes.push(FixedPointMapJournalWrite {
+            target: FixedPointMapJournalTarget::SourceSlotToEntry,
+            destination: prior.source_slot,
+            previous: prior.source_map_previous,
+            value: usize::MAX,
+        })?;
+        self.map_writes.push(FixedPointMapJournalWrite {
+            target: FixedPointMapJournalTarget::SlotToRecord,
+            destination: prior.source_slot,
+            previous: prior.record_map_previous,
+            value: usize::MAX,
+        })
     }
 
     fn append_new_binding(
         &mut self,
-        source_entry: &'backing Cell<Option<DraftPrivatePageEntry>>,
         entry: DraftPrivatePageEntry,
-        source_map: &'backing Cell<usize>,
         source_slot: usize,
-        record_map: &'backing Cell<usize>,
+        source_previous: Option<DraftPrivatePageEntry>,
+        source_map_previous: usize,
+        record_map_previous: usize,
         record_index: usize,
     ) -> Result<(), FixedPointError> {
-        self.source_writes
-            .push(FixedPointCellWrite::new(source_entry, Some(entry)))?;
-        self.map_writes
-            .push(FixedPointCellWrite::new(source_map, source_slot))?;
-        self.map_writes
-            .push(FixedPointCellWrite::new(record_map, record_index))
+        self.source_writes.push(FixedPointSourceJournalWrite {
+            destination: source_slot,
+            previous: source_previous,
+            value: Some(entry),
+        })?;
+        self.map_writes.push(FixedPointMapJournalWrite {
+            target: FixedPointMapJournalTarget::SourceSlotToEntry,
+            destination: source_slot,
+            previous: source_map_previous,
+            value: source_slot,
+        })?;
+        self.map_writes.push(FixedPointMapJournalWrite {
+            target: FixedPointMapJournalTarget::SlotToRecord,
+            destination: source_slot,
+            previous: record_map_previous,
+            value: record_index,
+        })
     }
 }
 
@@ -455,6 +547,7 @@ pub(crate) struct FixedPointCoordinatorWorkspace<'backing, 'arena, 'cleanup> {
     new_locations: &'backing mut [DraftPrivatePageLocation],
     replay_slots: &'backing mut [PrivatePageSparseReplaySlot],
     replay_index: &'backing mut [PrivatePageSparseReplayIndex],
+    minimum_retained_bytes: u64,
     retained_bytes: u64,
 }
 
@@ -541,6 +634,7 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
             new_locations,
             replay_slots,
             replay_index,
+            minimum_retained_bytes: retained_bytes,
             retained_bytes,
         })
     }
@@ -551,6 +645,21 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
 
     pub(crate) const fn retained_bytes(&self) -> u64 {
         self.retained_bytes
+    }
+
+    /// Charges this borrowing view as part of a larger opaque workspace. The
+    /// owner may increase the charge to include its other fixed partitions, but
+    /// it may never hide this coordinator's own retained storage or change the
+    /// charge while work is live.
+    pub(crate) fn set_transaction_retained_bytes(
+        &mut self,
+        retained_bytes: u64,
+    ) -> Result<(), FixedPointError> {
+        if !self.is_idle() || retained_bytes < self.minimum_retained_bytes {
+            return Err(FixedPointError::InvalidArgument);
+        }
+        self.retained_bytes = retained_bytes;
+        Ok(())
     }
 
     pub(crate) fn is_idle(&self) -> bool {
@@ -844,15 +953,8 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
     }
 
     fn journals_are_neutral(journals: FixedPointCoordinatorJournals<'_>) -> bool {
-        fn entries_are_neutral<'journal, T: Copy + PartialEq>(
-            entries: &[Cell<FixedPointCellWrite<'journal, T>>],
-            neutral: FixedPointCellWrite<'journal, T>,
-        ) -> bool {
-            entries.iter().all(|entry| {
-                let current = entry.get();
-                core::ptr::eq(current.destination, neutral.destination)
-                    && current.value == neutral.value
-            })
+        fn entries_are_neutral<T: Copy + PartialEq>(entries: &[Cell<T>], neutral: T) -> bool {
+            entries.iter().all(|entry| entry.get() == neutral)
         }
 
         entries_are_neutral(journals.source.entries, journals.source.neutral)
@@ -861,10 +963,7 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
     }
 
     fn reset_journal_cells(journals: FixedPointCoordinatorJournals<'_>) {
-        fn reset<'journal, T: Copy>(
-            entries: &[Cell<FixedPointCellWrite<'journal, T>>],
-            neutral: FixedPointCellWrite<'journal, T>,
-        ) {
+        fn reset<T: Copy>(entries: &[Cell<T>], neutral: T) {
             for entry in entries {
                 entry.set(neutral);
             }
@@ -2056,6 +2155,7 @@ struct FixedPointPreparedWorkspaceReplay<
     next_revision: u64,
     next_digest: u64,
     record: FixedPointPreparedWorkspaceRecord<'backing, 'arena, 'cleanup>,
+    applied: bool,
 }
 
 impl<S: CommittedPageSource + ?Sized>
@@ -2068,16 +2168,142 @@ impl<S: CommittedPageSource + ?Sized>
             .fill(PrivatePageCoordinatorPriorReturn::empty());
     }
 
-    fn replay(&mut self) {
+    /// Check every deferred workspace write before the aggregate enters its
+    /// mechanically-infallible Active suffix. No callback can run between this
+    /// proof and Active, so the validated indexes remain stable.
+    fn preflight_apply(&mut self) -> Result<(), FixedPointError> {
         for write in self.session.tombstone_writes.iter() {
-            write.destination.set(write.value);
+            let Some(slot) = self.session.backing.records.get(write.record_index) else {
+                return Err(FixedPointError::StalePredecessor);
+            };
+            let Some(record) = slot.record.replace(None) else {
+                return Err(FixedPointError::StalePredecessor);
+            };
+            let valid = record
+                .returned_cell(write.binding_index)
+                .is_some_and(|returned| returned.get() == write.previous);
+            slot.record.set(Some(record));
+            if !valid {
+                return Err(FixedPointError::StalePredecessor);
+            }
         }
         for write in self.session.source_writes.iter() {
-            write.destination.set(write.value);
+            if self
+                .session
+                .backing
+                .source_entries
+                .get(write.destination)
+                .map(Cell::get)
+                != Some(write.previous)
+            {
+                return Err(FixedPointError::StalePredecessor);
+            }
         }
         for write in self.session.map_writes.iter() {
-            write.destination.set(write.value);
+            let entries = match write.target {
+                FixedPointMapJournalTarget::SourceSlotToEntry => {
+                    self.session.backing.source_slot_to_entry
+                }
+                FixedPointMapJournalTarget::SlotToRecord => self.session.backing.slot_to_record,
+            };
+            if entries.get(write.destination).map(Cell::get) != Some(write.previous) {
+                return Err(FixedPointError::StalePredecessor);
+            }
         }
+
+        // Every index and current value is now proven. Keep the rollback guard
+        // armed while applying so an internal invariant regression is reported
+        // as a normal pre-Active failure rather than as a process panic.
+        self.applied = true;
+        let applied = {
+            let session = &self.session;
+            (|| -> Result<(), FixedPointError> {
+                for write in session.tombstone_writes.iter() {
+                    let Some(slot) = session.backing.records.get(write.record_index) else {
+                        return Err(FixedPointError::StalePredecessor);
+                    };
+                    let Some(record) = slot.record.replace(None) else {
+                        return Err(FixedPointError::StalePredecessor);
+                    };
+                    let Some(returned) = record.returned_cell(write.binding_index) else {
+                        slot.record.set(Some(record));
+                        return Err(FixedPointError::StalePredecessor);
+                    };
+                    returned.set(write.value);
+                    slot.record.set(Some(record));
+                }
+                for write in session.source_writes.iter() {
+                    let Some(destination) = session.backing.source_entries.get(write.destination)
+                    else {
+                        return Err(FixedPointError::StalePredecessor);
+                    };
+                    destination.set(write.value);
+                }
+                for write in session.map_writes.iter() {
+                    let entries = match write.target {
+                        FixedPointMapJournalTarget::SourceSlotToEntry => {
+                            session.backing.source_slot_to_entry
+                        }
+                        FixedPointMapJournalTarget::SlotToRecord => session.backing.slot_to_record,
+                    };
+                    let Some(destination) = entries.get(write.destination) else {
+                        return Err(FixedPointError::StalePredecessor);
+                    };
+                    destination.set(write.value);
+                }
+                Ok(())
+            })()
+        };
+        if let Err(error) = applied {
+            self.rollback_applied();
+            self.applied = false;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn rollback_applied(&mut self) {
+        for write in self.session.map_writes.iter_rev() {
+            match write.target {
+                FixedPointMapJournalTarget::SourceSlotToEntry => {
+                    if let Some(destination) = self
+                        .session
+                        .backing
+                        .source_slot_to_entry
+                        .get(write.destination)
+                    {
+                        destination.set(write.previous);
+                    }
+                }
+                FixedPointMapJournalTarget::SlotToRecord => {
+                    if let Some(destination) =
+                        self.session.backing.slot_to_record.get(write.destination)
+                    {
+                        destination.set(write.previous);
+                    }
+                }
+            }
+        }
+        for write in self.session.source_writes.iter_rev() {
+            if let Some(destination) = self.session.backing.source_entries.get(write.destination) {
+                destination.set(write.previous);
+            }
+        }
+        for write in self.session.tombstone_writes.iter_rev() {
+            let Some(slot) = self.session.backing.records.get(write.record_index) else {
+                continue;
+            };
+            let Some(record) = slot.record.replace(None) else {
+                continue;
+            };
+            if let Some(returned) = record.returned_cell(write.binding_index) {
+                returned.set(write.previous);
+            }
+            slot.record.set(Some(record));
+        }
+    }
+
+    fn replay(&mut self) {
         self.session.backing.len.set(self.next_len);
         self.session
             .backing
@@ -2087,6 +2313,7 @@ impl<S: CommittedPageSource + ?Sized>
         self.session.backing.digest.set(self.next_digest);
         self.clear_scratch();
         self.record.publish();
+        self.applied = false;
     }
 }
 
@@ -2094,6 +2321,9 @@ impl<S: CommittedPageSource + ?Sized> Drop
     for FixedPointPreparedWorkspaceReplay<'_, '_, '_, '_, '_, '_, '_, '_, '_, '_, S>
 {
     fn drop(&mut self) {
+        if self.applied {
+            self.rollback_applied();
+        }
         self.clear_scratch();
         self.session.reset_journal();
     }
@@ -2172,7 +2402,7 @@ pub(crate) trait FixedPointPreparedAggregateAuthority: Sized {
     fn work_generation(&self) -> u64;
     fn workspace_identity(&self) -> usize;
     fn preflight_authority(
-        &self,
+        &mut self,
         coordinator: &FixedPointCoordinator,
         predecessor: &FixedPointPredecessor,
     ) -> Result<(), FixedPointError>;
@@ -2227,7 +2457,7 @@ where
     'record_arena: 'backing,
 {
     pub(crate) fn preflight_execute(
-        &self,
+        &mut self,
         coordinator: &FixedPointCoordinator,
         predecessor: &FixedPointPredecessor,
     ) -> Result<(), FixedPointError> {
@@ -2244,7 +2474,7 @@ where
         {
             return Err(FixedPointError::StalePredecessor);
         }
-        Ok(())
+        self.workspace_replay.preflight_apply()
     }
 
     /// Cancels an aggregate that has not entered its Active suffix.
@@ -2406,7 +2636,7 @@ where
     }
 
     fn preflight_authority(
-        &self,
+        &mut self,
         coordinator: &FixedPointCoordinator,
         predecessor: &FixedPointPredecessor,
     ) -> Result<(), FixedPointError> {
@@ -2669,7 +2899,10 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 binding_index: location.binding_index,
                 page,
             };
-            if backing.source_entries.get(page.slot).map(Cell::get) != Some(Some(expected)) {
+            let source_previous = backing.source_entries[page.slot].get();
+            let source_map_previous = backing.source_slot_to_entry[page.slot].get();
+            let record_map_previous = backing.slot_to_record[page.slot].get();
+            if source_previous != Some(expected) {
                 ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
                 return Err((self, FixedPointError::StalePredecessor));
             }
@@ -2685,18 +2918,22 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 pool_returns.fill(PrivatePageCoordinatorPriorReturn::empty());
                 return Err((self, FixedPointError::StalePredecessor));
             };
-            if returned.get() {
+            let returned_previous = returned.get();
+            if returned_previous {
                 ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
                 pool_returns.fill(PrivatePageCoordinatorPriorReturn::empty());
                 return Err((self, FixedPointError::StalePredecessor));
             }
             pool_returns[index] = planned;
-            if let Err(error) = session.append_prior_return(
-                returned,
-                &backing.source_entries[page.slot],
-                &backing.source_slot_to_entry[page.slot],
-                &backing.slot_to_record[page.slot],
-            ) {
+            if let Err(error) = session.append_prior_return(FixedPointPriorReturnJournal {
+                record_index: location.record_index,
+                binding_index: location.binding_index,
+                returned_previous,
+                source_slot: page.slot,
+                source_previous,
+                source_map_previous,
+                record_map_previous,
+            }) {
                 ordered_prior_locations.fill(DraftPrivatePageLocation::EMPTY);
                 pool_returns.fill(PrivatePageCoordinatorPriorReturn::empty());
                 session.reset_journal();
@@ -2783,9 +3020,12 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 session.reset_journal();
                 return Err((self, FixedPointError::StalePredecessor));
             };
-            if source_entry.get().is_some()
-                || source_map.get() != usize::MAX
-                || record_map.get() != usize::MAX
+            let source_previous = source_entry.get();
+            let source_map_previous = source_map.get();
+            let record_map_previous = record_map.get();
+            if source_previous.is_some()
+                || source_map_previous != usize::MAX
+                || record_map_previous != usize::MAX
             {
                 new_locations.fill(DraftPrivatePageLocation::EMPTY);
                 pool_replay.cancel();
@@ -2812,11 +3052,11 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 page: provenance,
             };
             if let Err(error) = session.append_new_binding(
-                source_entry,
                 entry,
-                source_map,
                 provenance.slot,
-                record_map,
+                source_previous,
+                source_map_previous,
+                record_map_previous,
                 record_index,
             ) {
                 new_locations.fill(DraftPrivatePageLocation::EMPTY);
@@ -2929,6 +3169,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 next_revision,
                 next_digest,
                 record,
+                applied: false,
             },
         })
     }
@@ -4777,9 +5018,7 @@ mod tests {
                 "Active aggregate suffix contains forbidden site {forbidden}"
             );
         }
-        let replay_start = source
-            .find("    fn replay(&mut self) {\n        for write in self.session.tombstone_writes.iter()")
-            .unwrap();
+        let replay_start = source.find("    fn replay(&mut self) {").unwrap();
         let replay_suffix = &source[replay_start..];
         let replay_end = replay_suffix
             .find("\n    }\n}\n\nimpl<")

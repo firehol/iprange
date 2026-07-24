@@ -35,8 +35,8 @@ use crate::writer_fixed_point::{
 };
 #[cfg(test)]
 use crate::writer_fixed_point::{
-    DraftPrivatePageEntry, FixedPointCellJournalBacking, FixedPointCellWrite,
-    FixedPointCoordinatorJournals, FixedPointCoordinatorWorkspace, FixedPointWorkspaceRecordSlot,
+    FixedPointCoordinatorJournals, FixedPointCoordinatorWorkspace, FixedPointMapJournalWrite,
+    FixedPointSourceJournalWrite, FixedPointTombstoneJournalWrite, FixedPointWorkspaceRecordSlot,
 };
 use core::cell::{Cell, RefCell};
 
@@ -6889,7 +6889,7 @@ mod tests {
     use crate::os::linux::live_writer::{
         LinuxLiveWriter, LinuxLiveWriterPageSinkError, LinuxLiveWriterReclaimError,
         LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits, LinuxLiveWriterReclaimOutcome,
-        LinuxLiveWriterReclaimScratch,
+        LinuxLiveWriterReclaimWorkspace, LinuxLiveWriterReclaimWorkspaceCapacity,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
@@ -7223,23 +7223,11 @@ mod tests {
         let workspace_entries = [const { Cell::new(None) }; 1];
         let workspace_source_map = [const { Cell::new(usize::MAX) }; 1];
         let workspace_record_map = [const { Cell::new(usize::MAX) }; 1];
-        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-        let source_journal = [Cell::new(source_journal_neutral)];
-        let map_journal_sink = Cell::new(usize::MAX);
-        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-        let map_journal = [
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-        ];
-        let tombstone_journal_sink = Cell::new(false);
-        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
-        let tombstone_journal = [Cell::new(tombstone_journal_neutral)];
-        let journals = FixedPointCoordinatorJournals::new(
-            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
-        );
+        let source_journal = [const { Cell::new(FixedPointSourceJournalWrite::EMPTY) }];
+        let map_journal = [const { Cell::new(FixedPointMapJournalWrite::EMPTY) }; 2];
+        let tombstone_journal = [const { Cell::new(FixedPointTombstoneJournalWrite::EMPTY) }];
+        let journals =
+            FixedPointCoordinatorJournals::new(&source_journal, &map_journal, &tombstone_journal);
         let mut ordered_prior_locations = [];
         let mut pool_returns = [];
         let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
@@ -7434,38 +7422,11 @@ mod tests {
         let workspace_entries = [const { Cell::new(None) }; 3];
         let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
         let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-        let source_journal = [
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-        ];
-        let map_journal_sink = Cell::new(usize::MAX);
-        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-        let map_journal = [
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-        ];
-        let tombstone_journal_sink = Cell::new(false);
-        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
-        let tombstone_journal = [
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-        ];
-        let journals = FixedPointCoordinatorJournals::new(
-            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
-        );
+        let source_journal = [const { Cell::new(FixedPointSourceJournalWrite::EMPTY) }; 4];
+        let map_journal = [const { Cell::new(FixedPointMapJournalWrite::EMPTY) }; 8];
+        let tombstone_journal = [const { Cell::new(FixedPointTombstoneJournalWrite::EMPTY) }; 3];
+        let journals =
+            FixedPointCoordinatorJournals::new(&source_journal, &map_journal, &tombstone_journal);
         let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
         let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
         let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
@@ -8253,43 +8214,15 @@ mod tests {
                     let workspace_entries = [const { Cell::new(None) }; 3];
                     let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
                     let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-                    let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-                    let source_journal_neutral =
-                        FixedPointCellWrite::new(&source_journal_sink, None);
-                    let source_journal = [
-                        Cell::new(source_journal_neutral),
-                        Cell::new(source_journal_neutral),
-                        Cell::new(source_journal_neutral),
-                        Cell::new(source_journal_neutral),
-                    ];
-                    let map_journal_sink = Cell::new(usize::MAX);
-                    let map_journal_neutral =
-                        FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-                    let map_journal = [
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                        Cell::new(map_journal_neutral),
-                    ];
-                    let tombstone_journal_sink = Cell::new(false);
-                    let tombstone_journal_neutral =
-                        FixedPointCellWrite::new(&tombstone_journal_sink, false);
-                    let tombstone_journal = [
-                        Cell::new(tombstone_journal_neutral),
-                        Cell::new(tombstone_journal_neutral),
-                        Cell::new(tombstone_journal_neutral),
-                    ];
+                    let source_journal =
+                        [const { Cell::new(FixedPointSourceJournalWrite::EMPTY) }; 4];
+                    let map_journal = [const { Cell::new(FixedPointMapJournalWrite::EMPTY) }; 8];
+                    let tombstone_journal =
+                        [const { Cell::new(FixedPointTombstoneJournalWrite::EMPTY) }; 3];
                     let journals = FixedPointCoordinatorJournals::new(
-                        FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-                        FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-                        FixedPointCellJournalBacking::new(
-                            &tombstone_journal,
-                            tombstone_journal_neutral,
-                        ),
+                        &source_journal,
+                        &map_journal,
+                        &tombstone_journal,
                     );
                     let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
                     let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
@@ -9014,38 +8947,11 @@ mod tests {
         let workspace_entries = [const { Cell::new(None) }; 3];
         let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
         let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-        let source_journal = [
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-        ];
-        let map_journal_sink = Cell::new(usize::MAX);
-        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-        let map_journal = [
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-        ];
-        let tombstone_journal_sink = Cell::new(false);
-        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
-        let tombstone_journal = [
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-        ];
-        let journals = FixedPointCoordinatorJournals::new(
-            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
-        );
+        let source_journal = [const { Cell::new(FixedPointSourceJournalWrite::EMPTY) }; 4];
+        let map_journal = [const { Cell::new(FixedPointMapJournalWrite::EMPTY) }; 8];
+        let tombstone_journal = [const { Cell::new(FixedPointTombstoneJournalWrite::EMPTY) }; 3];
+        let journals =
+            FixedPointCoordinatorJournals::new(&source_journal, &map_journal, &tombstone_journal);
         let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
         let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
         let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
@@ -10124,218 +10030,26 @@ mod tests {
             }
         };
 
-        let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
-        let mut record_replacements = [];
-        let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
-        let record_returned = [const { Cell::new(false) }; 3];
-        let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 16];
-        let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 16];
-        let mut cleanup_targets = [usize::MAX; 3];
-        let workspace_records = [FixedPointWorkspaceRecordSlot::new(
-            SealedFreeBitmapCoordinatorScratch {
-                arena_bindings: &mut record_bindings,
-                replacements: &mut record_replacements,
-                index_nodes: &mut record_index_nodes,
-                returned: &record_returned,
-                cleanup_nodes: &mut cleanup_nodes,
-                cleanup_path: &mut cleanup_path,
-                cleanup_targets: &mut cleanup_targets,
-            },
-        )];
-        let workspace_entries = [const { Cell::new(None) }; 3];
-        let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
-        let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
-        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
-        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
-        let source_journal = [
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-            Cell::new(source_journal_neutral),
-        ];
-        let map_journal_sink = Cell::new(usize::MAX);
-        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
-        let map_journal = [
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-            Cell::new(map_journal_neutral),
-        ];
-        let tombstone_journal_sink = Cell::new(false);
-        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
-        let tombstone_journal = [
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-            Cell::new(tombstone_journal_neutral),
-        ];
-        let journals = FixedPointCoordinatorJournals::new(
-            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
-            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
-            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
-        );
-        let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
-        let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
-        let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
-        let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
-        let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
-        let mut workspace = FixedPointCoordinatorWorkspace::new(
-            &workspace_records,
-            &workspace_entries,
-            &workspace_source_map,
-            &workspace_record_map,
-            journals,
-            &mut ordered_prior_locations,
-            &mut pool_returns,
-            &mut new_locations,
-            &mut replay_slots,
-            &mut replay_index,
-            3,
-        )
-        .unwrap();
-
-        // All backing exists before the clean-writer operation begins. The
-        // Reclaim owner may only borrow these bounded partitions.
-        let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
-        let mut cleanup_entries = [];
-        let mut work_slot = FixedPointPreparedWorkSlot::empty();
-        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
-        let mut preparation_scratch = [];
-        let mut planner_arena = [const { PrivatePagePoolSlot::empty() }; 4];
-        let mut planner_pool_validation = [PrivatePageCompositeBind::empty(); 4];
-        let mut planner_bindings = [BitmapCowArenaBinding::empty(); 4];
-        let mut planner_candidates = [0u32; 4];
-        let mut planner_verified = [const { VerifiedBitmapPage::empty() }; 4];
-        let mut planner_replacements = [0u32; 16];
-        let mut planner_index = [BitmapCowIndexNode::empty(); 32];
-        let mut planner_available = [0usize; 4];
-        let mut planner_source_nodes = [const { FreeBitmapReservationSourceNode::empty() }; 8];
-        let reclamation_ticket = FreeBitmapReclamationTicket::new();
-        let mut stage_arena = [const { PrivatePagePoolSlot::empty() }; 4];
-        let mut stage_bindings = [BitmapCowArenaBinding::empty(); 4];
-        let mut stage_candidates = [0u32; 4];
-        let mut stage_verified = [const { VerifiedBitmapPage::empty() }; 4];
-        let mut stage_replacements = [0u32; 16];
-        let mut stage_index = [BitmapCowIndexNode::empty(); 32];
-        let mut stage_available = [0usize; 4];
-        let mut verified_reclamation_batches = [RetirementBatch {
-            retired_by_txn: 0,
-            page_count: 0,
-            page_list_blob_root: 0,
-        }];
-        let mut verified_reclaimed_pages = [0u32; 2];
-        let mut shadow_slots = [const { PrivatePagePoolSlot::empty() }; 4];
-        let mut probe_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut probe_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut probe_replacement_entries = [EMPTY_REPLACEMENT; 4];
-        let mut probe_release_pages = [0u32; 4];
-        let mut probe_roles = [PageRoleIndexSlot::new(); 16];
-        let mut helper_protected_snapshot = [0u32; 4];
-        let mut next_protected_replacement_pages = [0u32; 4];
-        let mut preview_bitmap_replacements = [0u32; 16];
-        let mut preview_blob_pages = [0u32; 1];
-        let mut preview_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut preview_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut preview_replacement_entries = [EMPTY_REPLACEMENT; 4];
-        let mut preview_release_pages = [0u32; 4];
-        let mut preview_roles = [PageRoleIndexSlot::new(); 16];
-        let mut final_release_pages = [0u32; 4];
-        let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
-        let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 12];
-        let mut final_index_stack = [usize::MAX; 32];
-        let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
-        let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
-        let mut final_cleanup_targets = [usize::MAX; 4];
-        let mut terminal_blob_pages = [0u32; 1];
-        let mut terminal_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut terminal_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut terminal_replacements = [EMPTY_REPLACEMENT; 4];
-        let mut terminal_releases = [0u32; 4];
-        let mut terminal_roles = [PageRoleIndexSlot::new(); 16];
-        let mut retirement_terminal_pages = [
-            PrivatePageCoordinatorTerminalPage::empty(),
-            PrivatePageCoordinatorTerminalPage::empty(),
-        ];
-        let mut bitmap_terminal_pages = [
-            PrivatePageCoordinatorTerminalPage::empty(),
-            PrivatePageCoordinatorTerminalPage::empty(),
-            PrivatePageCoordinatorTerminalPage::empty(),
-        ];
-        let mut combined_terminal_pages = [
-            PrivatePageCoordinatorTerminalPage::empty(),
-            PrivatePageCoordinatorTerminalPage::empty(),
-            PrivatePageCoordinatorTerminalPage::empty(),
-        ];
+        let mut workspace =
+            LinuxLiveWriterReclaimWorkspace::new(LinuxLiveWriterReclaimWorkspaceCapacity {
+                max_live_pages: 3,
+                max_shadow_pages: 4,
+                max_reclamation_batches: 1,
+                max_reclaimed_pages: 2,
+                max_bitmap_payload_pages: 2,
+                scratch_slots: 4,
+            })
+            .unwrap();
 
         let writer = LinuxLiveWriter::open(&database.main).unwrap();
         let cancellation_checks = Cell::new(0usize);
         let (result, allocations) = count_thread_allocations(|| {
-            writer.reclaim_with_private_scratch(
+            writer.reclaim_with_workspace(
                 &mut workspace,
                 LinuxLiveWriterReclaimLimits {
                     max_batches: 1,
                     max_pages: 2,
                     bitmap_payload_pages: 2,
-                },
-                LinuxLiveWriterReclaimScratch {
-                    live_slots: &mut live_slots,
-                    cleanup_entries: &mut cleanup_entries,
-                    work_slot: &mut work_slot,
-                    scope_slot: &mut scope_slot,
-                    preparation_scratch: &mut preparation_scratch,
-                    planner_arena: &mut planner_arena,
-                    planner_pool_validation: &mut planner_pool_validation,
-                    planner_bindings: &mut planner_bindings,
-                    planner_candidates: &mut planner_candidates,
-                    planner_verified: &mut planner_verified,
-                    planner_replacements: &mut planner_replacements,
-                    planner_index: &mut planner_index,
-                    planner_available: &mut planner_available,
-                    planner_source_nodes: &mut planner_source_nodes,
-                    reclamation_ticket: &reclamation_ticket,
-                    stage_arena: &mut stage_arena,
-                    stage_bindings: &mut stage_bindings,
-                    stage_candidates: &mut stage_candidates,
-                    stage_verified: &mut stage_verified,
-                    stage_replacements: &mut stage_replacements,
-                    stage_index: &mut stage_index,
-                    stage_available: &mut stage_available,
-                    verified_batches: &mut verified_reclamation_batches,
-                    verified_pages: &mut verified_reclaimed_pages,
-                    shadow_slots: &mut shadow_slots,
-                    probe_delete_path: &mut probe_delete_path,
-                    probe_upsert_path: &mut probe_upsert_path,
-                    probe_replacements: &mut probe_replacement_entries,
-                    probe_releases: &mut probe_release_pages,
-                    probe_roles: &mut probe_roles,
-                    protected_pages: &mut helper_protected_snapshot,
-                    next_protected_pages: &mut next_protected_replacement_pages,
-                    preview_bitmap_replacements: &mut preview_bitmap_replacements,
-                    preview_blob_pages: &mut preview_blob_pages,
-                    preview_delete_path: &mut preview_delete_path,
-                    preview_upsert_path: &mut preview_upsert_path,
-                    preview_replacements: &mut preview_replacement_entries,
-                    preview_releases: &mut preview_release_pages,
-                    preview_roles: &mut preview_roles,
-                    final_release_pages: &mut final_release_pages,
-                    final_insert_pages: &mut final_insert_pages,
-                    final_cached_pages: &mut final_cached_pages,
-                    final_index_stack: &mut final_index_stack,
-                    final_cleanup_nodes: &mut final_cleanup_nodes,
-                    final_cleanup_path: &mut final_cleanup_path,
-                    final_cleanup_targets: &mut final_cleanup_targets,
-                    terminal_blob_pages: &mut terminal_blob_pages,
-                    terminal_delete_path: &mut terminal_delete_path,
-                    terminal_upsert_path: &mut terminal_upsert_path,
-                    terminal_replacements: &mut terminal_replacements,
-                    terminal_releases: &mut terminal_releases,
-                    terminal_roles: &mut terminal_roles,
-                    retirement_terminal_pages: &mut retirement_terminal_pages,
-                    bitmap_terminal_pages: &mut bitmap_terminal_pages,
-                    combined_terminal_pages: &mut combined_terminal_pages,
                 },
                 || {
                     let check = cancellation_checks
@@ -10347,10 +10061,9 @@ mod tests {
                 },
             )
         });
-        assert_eq!(allocations, 0, "Reclaim must use only its supplied backing");
-        assert!(
-            workspace.is_idle(),
-            "Reclaim must leave its workspace reusable"
+        assert_eq!(
+            allocations, 0,
+            "Reclaim must use only its SDK-owned workspace"
         );
 
         match (case, cancel_at_probe, result) {
@@ -10427,13 +10140,25 @@ mod tests {
             );
         }
         if cancel_at_probe == Some(14) {
+            let (retry, retry_allocations) = count_thread_allocations(|| {
+                writer.reclaim_with_workspace(
+                    &mut workspace,
+                    LinuxLiveWriterReclaimLimits {
+                        max_batches: 1,
+                        max_pages: 2,
+                        bitmap_payload_pages: 2,
+                    },
+                    || false,
+                )
+            });
             assert_eq!(
-                live_slots,
-                [const { PrivatePagePoolSlot::empty() }; 3],
-                "whole-draft abort must return every transaction slot"
+                retry_allocations, 0,
+                "a reset and retry must stay within the retained workspace"
             );
-            assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
-            assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+            assert!(
+                matches!(retry, Ok(LinuxLiveWriterReclaimOutcome::Reclaimed(_))),
+                "whole-draft abort must leave the opaque workspace reusable: {retry:?}"
+            );
         }
 
         writer.close().unwrap();

@@ -678,6 +678,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         predecessor: FixedPointPredecessor,
         prepared: A,
     ) -> Result<A::Sealed, (A, FixedPointPredecessor, FixedPointError)> {
+        let mut prepared = prepared;
         if self.validate_handle(handle).is_err()
             || self.state.get() != PrivateWriterTransactionState::Pending
             || self.commit_phase.get() != PrivateWriterCommitPhase::Idle

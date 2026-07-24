@@ -25,7 +25,8 @@ mod live_reclaim;
 #[cfg(test)]
 pub(crate) use live_reclaim::{
     LinuxLiveWriterReclaimError, LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits,
-    LinuxLiveWriterReclaimOutcome, LinuxLiveWriterReclaimScratch,
+    LinuxLiveWriterReclaimOutcome, LinuxLiveWriterReclaimWorkspace,
+    LinuxLiveWriterReclaimWorkspaceCapacity,
 };
 
 #[derive(Debug)]

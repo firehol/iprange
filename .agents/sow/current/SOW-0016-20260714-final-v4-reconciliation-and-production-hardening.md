@@ -7387,6 +7387,65 @@ requirements are normative in the Pre-Implementation Gate above.
   resolved opaque SDK-owned workspace before exposing Reclaim outside the
   crate. No v4 bytes, Go behavior, public API, or validation default changed.
 
+### 2026-07-24 - opaque Reclaim workspace implementation plan
+
+- Evidence: the new owner still receives one borrowed coordinator workspace and
+  57 independently borrowed scratch partitions (`live_reclaim.rs:64-145,273-279`).
+  That is not an SDK-owned workspace, even though the type is crate-private.
+  The current coordinator workspace also cannot simply become an owning Rust
+  struct: its fixed journals store references to mutable cells and each retained
+  record borrows its scratch arrays (`writer_fixed_point.rs:98-102,229-321`).
+  Putting those references beside their targets would create a self-referential
+  object.
+- The repair remains internal. Rework the coordinator journals into typed,
+  prevalidated destination indexes. Before Active, aggregate preparation will
+  validate every index and apply those workspace-only changes; Active then has
+  no indexed lookup or fallible mutation. This preserves the existing
+  mechanically-infallible Active suffix without a self-referential or raw-pointer
+  workspace.
+- Add one opaque Linux Reclaim workspace that owns every vector once, checks its
+  complete logical retained capacity before allocation, and constructs one
+  short-lived borrowing coordinator view for each operation. The view is only
+  an implementation adapter: the operation receives no caller-owned array, and
+  its charged byte count is the complete opaque workspace rather than just the
+  old coordinator subset. Workspace reset will occur at most once before a
+  subsequent attempt, never both in the owner and in the transaction core.
+- Permanent Linux coverage will replace the raw fixture backing with that owner,
+  prove zero allocations after construction, exact complete-resource charging,
+  reuse after cancellation, and unchanged `NoChange`/abort behavior. This adds
+  no public SDK method, format byte, default validation, or Go behavior.
+
+### 2026-07-24 - opaque SDK-owned Reclaim workspace
+
+- The raw 57-partition test fixture is gone. `LinuxLiveWriterReclaimWorkspace`
+  now owns every Reclaim vector and fixed slot
+  (`os/linux/live_writer/live_reclaim.rs:68-1185`); it checks every multiplied
+  capacity and the complete logical retained-byte charge before the first
+  allocation. An attempt validates its requested batch/page/payload limits
+  before it takes the Linux operation barrier.
+- A temporary borrowing coordinator view is built only inside the operation.
+  Its transaction charge is raised from the coordinator subset to the opaque
+  workspace's complete charge, and a debug invariant verifies the exact value
+  at that handoff (`live_reclaim.rs:956-1010`). The workspace is canonical at
+  construction and resets its retained partitions exactly once before a later
+  attempt, never inside the live transaction path.
+- Fixed-point journals now retain typed prevalidated indexes rather than
+  references into caller storage (`writer_fixed_point.rs:229-536`). Their
+  workspace writes are checked and applied before Active; an unexpected
+  internal mismatch rolls those writes back as a typed pre-Active failure
+  rather than panicking (`writer_fixed_point.rs:2168-2314`). This is what makes
+  the owning workspace safe without raw pointers or a self-referential Rust
+  object.
+- The real Linux Reclaim tests now construct the opaque workspace outside the
+  allocation counter. They prove no-change, selected publication, both
+  cancellation positions, zero operation-time allocations, and retry from the
+  same workspace after a whole-draft cancellation
+  (`retirement_writer.rs:9973-10200`). Dedicated workspace tests cover invalid
+  and overflowing capacities plus out-of-capacity limits before an attempt
+  (`live_reclaim.rs:2101-2153`).
+- This is internal Rust lifecycle work only. It changes no v4 on-disk byte,
+  public SDK signature, validation default, Go behavior, or Phase-2 scope.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim coordinator bind
@@ -7453,6 +7512,22 @@ requirements are normative in the Pre-Implementation Gate above.
 - No normative specification update is needed. This is the internal lifecycle
   order required by the existing Reclaim contract; it does not yet expose the
   public SDK operation or its opaque owned workspace.
+
+### 2026-07-24 - opaque SDK-owned Reclaim workspace
+
+- Focused evidence passes: the two new workspace construction/preflight tests,
+  all four end-to-end Linux Reclaim tests, and all 29 fixed-point lifecycle
+  tests. The cancellation-after-draft test performs a second selected Reclaim
+  on the same workspace and confirms it publishes without a heap allocation.
+- Full Rust matrices pass: 454 tests without optional features and 575 with all
+  features. Warnings-denied all-target/all-feature Clippy and all-feature
+  benchmark compilation pass. Rust formatting and whitespace checks pass.
+- Cross-language regression checks remain green: Go `test ./...` and `vet ./...`
+  pass. The project SOW audit passes with the single active SOW and no durable
+  sensitive-data findings.
+- No normative specification or project skill update is needed: this remains a
+  private Rust implementation boundary. The format, public SDK, operator docs,
+  and Phase-2 signing/high-level-algebra SOWs are unaffected.
 
 ### 2026-07-24 - selected-reclaim retirement stage
 
