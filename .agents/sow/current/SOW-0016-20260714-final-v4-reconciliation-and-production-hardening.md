@@ -7884,6 +7884,71 @@ requirements are normative in the Pre-Implementation Gate above.
   pages through the existing coordinator and update the private range-root
   target, with whole-draft abort on every post-mutation failure.
 
+### 2026-07-24 - staged range payload finalization plan
+
+- The sealed normalizer result already materializes to a strict, unbound
+  `Range` terminal-page journal in both engines, but it has no reservation-scope
+  owner yet (`range_staging.rs` and `range_staging.go`). Conversely, the
+  free-bitmap planner deliberately reserves caller-declared payload capacity,
+  but finalization currently retains only bitmap and retirement-owned slots
+  (`bitmap_cow/selective_finalization.rs:2517-2540` and
+  `bitmap_finalize.go:2783-2977`). Leaving the two paths unconnected would
+  return a materialized range page to the free bitmap.
+- The next internal sequence is therefore fixed by the existing allocator
+  contract, not a new public design choice: (1) merge independently produced
+  terminal journals with no sorting or allocation; (2) under the existing
+  lock-bound shadow reservation, consume exactly the staged range-page count
+  from the payload capacity, materialize into those ordered physical pages,
+  and mark the same shadow slots `Range`; (3) retain those range slots through
+  bitmap finalization and combine range, bitmap, and retirement journals before
+  the coordinator binds them; and only then (4) extend the private target-meta
+  handoff with the materialized range root/count.
+- Start with the journal merger as a separate no-mutation milestone. It will
+  accept only individually strict unbound journals, reject duplicate physical
+  pages and dirty/wrong-sized output before writing it, and merge in linear
+  time using caller-owned output. Rust currently has a retirement-plus-bitmap
+  merger in `retirement_writer.rs`; Go hard-codes the same two-way merge in
+  `writer_fixed_point_aggregate.go`. Replacing those with one shared private
+  primitive removes the two-source assumption before a third `Range` source is
+  introduced.
+- The following payload bridge will use the free-bitmap reservation's existing
+  available-slot order, verify its exact physical ordering, and never sort or
+  allocate. Any error before a shadow slot is claimed leaves the attempt
+  reusable. Any error after a shadow mutation is an explicit whole-draft
+  abort/discard condition, matching the transaction rule already recorded in
+  sections 13 and 14 of `binary-format-v4.md`.
+- This plan adds no public operation, on-disk field, default validation, or
+  scratch file. Tests must cover two- and three-source ordering, duplicate and
+  dirty-output rejection without output mutation, zero post-setup allocations,
+  and later exact range-slot retention through finalization.
+
+### 2026-07-24 - terminal journal merger implementation and validation
+
+- Rust and Go now share the same fixed three-source private merge boundary for
+  `Range`, `Bitmap`, and `Retirement` terminal journals. It accepts only strict
+  ascending source streams, requires an exactly sized empty caller output,
+  rejects cross-source duplicate physical pages before touching that output,
+  and then performs a linear merge with no sorting or heap allocation.
+- The existing retirement-plus-bitmap paths now delegate to that primitive;
+  their caller-visible behavior and error mapping remain unchanged. The merger
+  deliberately verifies only terminal identity, owner, physical order, and
+  output state. It does not decode page payloads or turn ordinary commit into
+  implicit file validation.
+- New tests in both implementations cover three-source ordering, duplicate
+  rejection, dirty/wrong-sized output rejection with byte-for-byte unchanged
+  caller storage, and zero allocations after setup. The pre-existing
+  retirement/fixed-point tests continue to cover the bitmap-plus-retirement
+  integration path.
+- `go -C v4/go test ./... -count=1`, `go -C v4/go vet ./...`, and
+  `go -C v4/go test -race ./internal/exactv4 -count=1` pass. Rust passes 496
+  tests without optional features and 617 with all features; Rust formatting,
+  warnings-denied all-target/all-feature Clippy, and all-feature benchmark
+  compilation pass. `git diff --check` and `./.agents/sow/audit.sh` pass.
+- Same-failure search confirms that the old hard-coded two-source merge exists
+  nowhere in the active Go or Rust fixed-point paths. This checkpoint still
+  does not reserve or retain range payload pages, update a range root, or
+  publish a file; those remain the next bounded implementation slice.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

@@ -1740,6 +1740,261 @@ impl PrivatePageCoordinatorTerminalPage {
     }
 }
 
+/// A structural error in the fixed three-source terminal-page merge.
+///
+/// Range, bitmap, and retirement output are produced independently, but the
+/// coordinator consumes one strictly ordered physical-page journal.  Keeping
+/// this check separate from page decoding avoids turning an internal handoff
+/// into an implicit file-validation pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivatePageTerminalJournalError {
+    LengthOverflow,
+    OutputLength {
+        required: usize,
+        actual: usize,
+    },
+    OutputDirty,
+    BoundSourcePage {
+        source: usize,
+        pgno: u32,
+    },
+    InvalidSourcePage {
+        source: usize,
+        pgno: u32,
+    },
+    SourceOrder {
+        source: usize,
+        previous: u32,
+        current: u32,
+    },
+    DuplicatePage(u32),
+}
+
+fn validate_unbound_terminal_journal_source(
+    source_index: usize,
+    source: &[PrivatePageCoordinatorTerminalPage],
+) -> Result<(), PrivatePageTerminalJournalError> {
+    let mut previous = None;
+    for page in source {
+        if page.pool_slot != NO_SLOT {
+            return Err(PrivatePageTerminalJournalError::BoundSourcePage {
+                source: source_index,
+                pgno: page.pgno,
+            });
+        }
+        if page.pgno < 2 || !valid_terminal_owner_tag(page.owner, page.tag) {
+            return Err(PrivatePageTerminalJournalError::InvalidSourcePage {
+                source: source_index,
+                pgno: page.pgno,
+            });
+        }
+        if let Some(last) = previous {
+            if page.pgno <= last {
+                return Err(PrivatePageTerminalJournalError::SourceOrder {
+                    source: source_index,
+                    previous: last,
+                    current: page.pgno,
+                });
+            }
+        }
+        previous = Some(page.pgno);
+    }
+    Ok(())
+}
+
+/// Merge the fixed range/bitmap/retirement terminal journals without sorting.
+///
+/// Empty sources are permitted. All checks complete before `output` changes,
+/// so callers retain a clean journal on rejection. The three sources are a
+/// deliberate format-level bound: these are the only transaction-private page
+/// owners that can reach the coordinator terminal boundary.
+pub(crate) fn merge_unbound_terminal_page_journals(
+    sources: [&[PrivatePageCoordinatorTerminalPage]; 3],
+    output: &mut [PrivatePageCoordinatorTerminalPage],
+) -> Result<(), PrivatePageTerminalJournalError> {
+    let mut required = 0usize;
+    for (source_index, source) in sources.iter().enumerate() {
+        validate_unbound_terminal_journal_source(source_index, source)?;
+        required = required
+            .checked_add(source.len())
+            .ok_or(PrivatePageTerminalJournalError::LengthOverflow)?;
+    }
+    if output.len() != required {
+        return Err(PrivatePageTerminalJournalError::OutputLength {
+            required,
+            actual: output.len(),
+        });
+    }
+    if output
+        .iter()
+        .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+    {
+        return Err(PrivatePageTerminalJournalError::OutputDirty);
+    }
+
+    // Dry-run the merge first. This detects cross-source duplicates before the
+    // caller's output journal receives a single page.
+    let mut cursors = [0usize; 3];
+    for _ in 0..required {
+        let mut selected = None;
+        let mut selected_pgno = 0u32;
+        for source_index in 0..sources.len() {
+            let Some(page) = sources[source_index].get(cursors[source_index]) else {
+                continue;
+            };
+            match selected {
+                None => {
+                    selected = Some(source_index);
+                    selected_pgno = page.pgno;
+                }
+                Some(_) if page.pgno == selected_pgno => {
+                    return Err(PrivatePageTerminalJournalError::DuplicatePage(page.pgno));
+                }
+                Some(_) if page.pgno < selected_pgno => {
+                    selected = Some(source_index);
+                    selected_pgno = page.pgno;
+                }
+                Some(_) => {}
+            }
+        }
+        let source_index = selected.expect("required journal entry has one source");
+        cursors[source_index] += 1;
+    }
+
+    cursors.fill(0);
+    for destination in output {
+        let mut selected = None;
+        let mut selected_pgno = 0u32;
+        for source_index in 0..sources.len() {
+            let Some(page) = sources[source_index].get(cursors[source_index]) else {
+                continue;
+            };
+            if selected.is_none() || page.pgno < selected_pgno {
+                selected = Some(source_index);
+                selected_pgno = page.pgno;
+            }
+        }
+        let source_index = selected.expect("dry-run proved an exact source entry");
+        destination.clone_from(&sources[source_index][cursors[source_index]]);
+        cursors[source_index] += 1;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod terminal_journal_tests {
+    use super::*;
+    use crate::test_alloc::count_thread_allocations;
+
+    fn page(pgno: u32, owner: PrivatePageOwner, tag: u64) -> PrivatePageCoordinatorTerminalPage {
+        PrivatePageCoordinatorTerminalPage {
+            pool_slot: NO_SLOT,
+            pgno,
+            authorization: PrivatePageAuthorization::CommittedFree,
+            owner,
+            owner_generation: 9,
+            tag,
+            bytes: [0; PAGE_SIZE],
+        }
+    }
+
+    #[test]
+    fn terminal_journal_merge_orders_three_sources_without_allocation() {
+        let range = [
+            page(2, PrivatePageOwner::Range, 4),
+            page(8, PrivatePageOwner::Range, 4),
+        ];
+        let bitmap = [
+            page(3, PrivatePageOwner::Bitmap, 0),
+            page(9, PrivatePageOwner::Bitmap, 0),
+        ];
+        let retirement = [
+            page(4, PrivatePageOwner::Retirement, 1),
+            page(10, PrivatePageOwner::Retirement, 2),
+        ];
+        let mut output: [PrivatePageCoordinatorTerminalPage; 6] =
+            core::array::from_fn(|_| PrivatePageCoordinatorTerminalPage::empty());
+
+        let (result, allocations) = count_thread_allocations(|| {
+            merge_unbound_terminal_page_journals([&range, &bitmap, &retirement], &mut output)
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(allocations, 0);
+        assert_eq!(
+            [
+                output[0].pgno,
+                output[1].pgno,
+                output[2].pgno,
+                output[3].pgno,
+                output[4].pgno,
+                output[5].pgno,
+            ],
+            [2, 3, 4, 8, 9, 10]
+        );
+        assert!(output.iter().all(|page| page.pool_slot == NO_SLOT));
+    }
+
+    #[test]
+    fn terminal_journal_merge_rejects_before_touching_output() {
+        let range = [page(4, PrivatePageOwner::Range, 4)];
+        let bitmap_duplicate = [page(4, PrivatePageOwner::Bitmap, 0)];
+        let retirement: [PrivatePageCoordinatorTerminalPage; 0] = [];
+        let mut output: [PrivatePageCoordinatorTerminalPage; 2] =
+            core::array::from_fn(|_| PrivatePageCoordinatorTerminalPage::empty());
+        let before = output.clone();
+        assert_eq!(
+            merge_unbound_terminal_page_journals(
+                [&range, &bitmap_duplicate, &retirement],
+                &mut output,
+            ),
+            Err(PrivatePageTerminalJournalError::DuplicatePage(4))
+        );
+        assert_eq!(output, before);
+
+        let bitmap = [page(5, PrivatePageOwner::Bitmap, 0)];
+        let mut short_output = [PrivatePageCoordinatorTerminalPage::empty()];
+        let before = short_output.clone();
+        assert_eq!(
+            merge_unbound_terminal_page_journals([&range, &bitmap, &retirement], &mut short_output),
+            Err(PrivatePageTerminalJournalError::OutputLength {
+                required: 2,
+                actual: 1,
+            })
+        );
+        assert_eq!(short_output, before);
+
+        output[0] = page(99, PrivatePageOwner::Bitmap, 0);
+        let before = output.clone();
+        assert_eq!(
+            merge_unbound_terminal_page_journals([&range, &bitmap, &retirement], &mut output),
+            Err(PrivatePageTerminalJournalError::OutputDirty)
+        );
+        assert_eq!(output, before);
+
+        output.fill(PrivatePageCoordinatorTerminalPage::empty());
+        let unordered = [
+            page(7, PrivatePageOwner::Bitmap, 0),
+            page(6, PrivatePageOwner::Bitmap, 0),
+        ];
+        let mut exact_output: [PrivatePageCoordinatorTerminalPage; 3] =
+            core::array::from_fn(|_| PrivatePageCoordinatorTerminalPage::empty());
+        let before = exact_output.clone();
+        assert_eq!(
+            merge_unbound_terminal_page_journals(
+                [&range, &unordered, &retirement],
+                &mut exact_output
+            ),
+            Err(PrivatePageTerminalJournalError::SourceOrder {
+                source: 1,
+                previous: 7,
+                current: 6,
+            })
+        );
+        assert_eq!(exact_output, before);
+    }
+}
+
 /// Move-only proof for the callback-free terminal scope apply.
 #[derive(Debug)]
 pub(crate) struct PrivatePagePreparedCoordinatorTerminal<'plan> {

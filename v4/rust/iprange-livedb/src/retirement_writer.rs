@@ -16,9 +16,10 @@ use crate::page_source::{CommittedPageSource, PageSourceError};
 #[cfg(test)]
 use crate::private_page_pool::PrivatePageRef;
 use crate::private_page_pool::{
-    PrivatePageAuthority, PrivatePageAuthorization, PrivatePageCoordinatorTerminalPage,
-    PrivatePageOwner, PrivatePagePool, PrivatePagePoolCheckpoint, PrivatePagePoolCommitment,
-    PrivatePagePoolError, PrivatePagePoolSlot, PrivatePagePoolSnapshot, PrivatePagePoolState,
+    merge_unbound_terminal_page_journals, PrivatePageAuthority, PrivatePageAuthorization,
+    PrivatePageCoordinatorTerminalPage, PrivatePageOwner, PrivatePagePool,
+    PrivatePagePoolCheckpoint, PrivatePagePoolCommitment, PrivatePagePoolError,
+    PrivatePagePoolSlot, PrivatePagePoolSnapshot, PrivatePagePoolState,
     PrivatePageReservationScope, PrivatePageReturn,
 };
 use crate::retirement_page::{
@@ -2742,11 +2743,7 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
                 ));
             }
         };
-        if combined.len() != required
-            || combined
-                .iter()
-                .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
-        {
+        if combined.len() != required {
             return Err((
                 self,
                 bitmap,
@@ -2754,43 +2751,15 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
                 RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
             ));
         }
-        let bitmap_pages = bitmap.pages();
-        let mut bitmap_index = 0usize;
-        let mut retirement = 0usize;
-        while let (Some(bitmap_page), Some(retirement_page)) =
-            (bitmap_pages.get(bitmap_index), self.pages.get(retirement))
+        if merge_unbound_terminal_page_journals([bitmap.pages(), self.pages, &[]], combined)
+            .is_err()
         {
-            match bitmap_page.pgno.cmp(&retirement_page.pgno) {
-                core::cmp::Ordering::Less => bitmap_index += 1,
-                core::cmp::Ordering::Greater => retirement += 1,
-                core::cmp::Ordering::Equal => {
-                    return Err((
-                        self,
-                        bitmap,
-                        combined,
-                        RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
-                    ));
-                }
-            }
-        }
-        let mut bitmap_index = 0usize;
-        let mut retirement = 0usize;
-        for destination in combined.iter_mut() {
-            let take_bitmap = match (bitmap_pages.get(bitmap_index), self.pages.get(retirement)) {
-                (Some(bitmap_page), Some(retirement_page)) => {
-                    bitmap_page.pgno < retirement_page.pgno
-                }
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (None, None) => unreachable!("combined length was proved exact"),
-            };
-            if take_bitmap {
-                destination.clone_from(&bitmap_pages[bitmap_index]);
-                bitmap_index += 1;
-            } else {
-                destination.clone_from(&self.pages[retirement]);
-                retirement += 1;
-            }
+            return Err((
+                self,
+                bitmap,
+                combined,
+                RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+            ));
         }
         Ok(PreparedProducedTerminalExport {
             result: self.result,
@@ -2820,15 +2789,9 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
             }
         };
         if combined.len() != required
-            || combined
-                .iter()
-                .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
             || bitmap_pages
                 .iter()
-                .any(|page| page.pool_slot != usize::MAX || page.owner != PrivatePageOwner::Bitmap)
-            || bitmap_pages
-                .windows(2)
-                .any(|pair| pair[0].pgno >= pair[1].pgno)
+                .any(|page| page.owner != PrivatePageOwner::Bitmap)
         {
             return Err((
                 self,
@@ -2836,41 +2799,13 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
                 RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
             ));
         }
-        let mut bitmap = 0usize;
-        let mut retirement = 0usize;
-        while let (Some(bitmap_page), Some(retirement_page)) =
-            (bitmap_pages.get(bitmap), self.pages.get(retirement))
+        if merge_unbound_terminal_page_journals([bitmap_pages, self.pages, &[]], combined).is_err()
         {
-            match bitmap_page.pgno.cmp(&retirement_page.pgno) {
-                core::cmp::Ordering::Less => bitmap += 1,
-                core::cmp::Ordering::Greater => retirement += 1,
-                core::cmp::Ordering::Equal => {
-                    return Err((
-                        self,
-                        combined,
-                        RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
-                    ));
-                }
-            }
-        }
-        let mut bitmap = 0usize;
-        let mut retirement = 0usize;
-        for destination in combined.iter_mut() {
-            let take_bitmap = match (bitmap_pages.get(bitmap), self.pages.get(retirement)) {
-                (Some(bitmap_page), Some(retirement_page)) => {
-                    bitmap_page.pgno < retirement_page.pgno
-                }
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (None, None) => unreachable!("combined length was proved exact"),
-            };
-            if take_bitmap {
-                destination.clone_from(&bitmap_pages[bitmap]);
-                bitmap += 1;
-            } else {
-                destination.clone_from(&self.pages[retirement]);
-                retirement += 1;
-            }
+            return Err((
+                self,
+                combined,
+                RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+            ));
         }
         Ok(PreparedCombinedRetirementTerminalExport {
             result: self.result,

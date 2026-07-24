@@ -11,6 +11,124 @@ type privateWriterProducedTerminalPage struct {
 	bytes           [PageSize]byte
 }
 
+type privateWriterTerminalJournalErrorCode uint8
+
+const (
+	privateWriterTerminalJournalErrLengthOverflow privateWriterTerminalJournalErrorCode = iota + 1
+	privateWriterTerminalJournalErrOutputLength
+	privateWriterTerminalJournalErrOutputDirty
+	privateWriterTerminalJournalErrInvalidSourcePage
+	privateWriterTerminalJournalErrSourceOrder
+	privateWriterTerminalJournalErrDuplicatePage
+)
+
+type privateWriterTerminalJournalError struct {
+	code             privateWriterTerminalJournalErrorCode
+	source           int
+	required, actual int
+	page, previous   uint32
+}
+
+func (e privateWriterTerminalJournalError) failed() bool { return e.code != 0 }
+
+func validatePrivateWriterTerminalJournalSource(
+	sourceIndex int,
+	source []privateWriterProducedTerminalPage,
+) privateWriterTerminalJournalError {
+	var previous uint32
+	havePrevious := false
+	for _, page := range source {
+		if page.pageNumber < 2 || !validPrivatePageOwnerOrigin(page.owner, page.origin) {
+			return privateWriterTerminalJournalError{
+				code:   privateWriterTerminalJournalErrInvalidSourcePage,
+				source: sourceIndex, page: page.pageNumber,
+			}
+		}
+		if havePrevious && page.pageNumber <= previous {
+			return privateWriterTerminalJournalError{
+				code:   privateWriterTerminalJournalErrSourceOrder,
+				source: sourceIndex, previous: previous, page: page.pageNumber,
+			}
+		}
+		previous, havePrevious = page.pageNumber, true
+	}
+	return privateWriterTerminalJournalError{}
+}
+
+// mergePrivateWriterTerminalJournals combines the only three private page
+// owners that can reach the coordinator: range, bitmap, and retirement. It
+// validates every input before it changes output, so callers retain a clean
+// journal on every rejection and need no sorting or allocation.
+func mergePrivateWriterTerminalJournals(
+	sources [3][]privateWriterProducedTerminalPage,
+	output []privateWriterProducedTerminalPage,
+) privateWriterTerminalJournalError {
+	required := 0
+	for sourceIndex, source := range sources {
+		if problem := validatePrivateWriterTerminalJournalSource(sourceIndex, source); problem.failed() {
+			return problem
+		}
+		if len(source) > int(^uint(0)>>1)-required {
+			return privateWriterTerminalJournalError{code: privateWriterTerminalJournalErrLengthOverflow}
+		}
+		required += len(source)
+	}
+	if len(output) != required {
+		return privateWriterTerminalJournalError{
+			code: privateWriterTerminalJournalErrOutputLength, required: required, actual: len(output),
+		}
+	}
+	var empty privateWriterProducedTerminalPage
+	for _, page := range output {
+		if page != empty {
+			return privateWriterTerminalJournalError{code: privateWriterTerminalJournalErrOutputDirty}
+		}
+	}
+
+	// First merge only cursors. Cross-source duplicate pages must fail before
+	// the caller-owned output buffer receives any page.
+	cursors := [3]int{}
+	for range required {
+		selected, selectedPage := -1, uint32(0)
+		for sourceIndex, source := range sources {
+			if cursors[sourceIndex] == len(source) {
+				continue
+			}
+			page := source[cursors[sourceIndex]].pageNumber
+			if selected == -1 {
+				selected, selectedPage = sourceIndex, page
+				continue
+			}
+			if page == selectedPage {
+				return privateWriterTerminalJournalError{
+					code: privateWriterTerminalJournalErrDuplicatePage, page: page,
+				}
+			}
+			if page < selectedPage {
+				selected, selectedPage = sourceIndex, page
+			}
+		}
+		cursors[selected]++
+	}
+
+	cursors = [3]int{}
+	for index := range output {
+		selected, selectedPage := -1, uint32(0)
+		for sourceIndex, source := range sources {
+			if cursors[sourceIndex] == len(source) {
+				continue
+			}
+			page := source[cursors[sourceIndex]].pageNumber
+			if selected == -1 || page < selectedPage {
+				selected, selectedPage = sourceIndex, page
+			}
+		}
+		output[index] = sources[selected][cursors[selected]]
+		cursors[selected]++
+	}
+	return privateWriterTerminalJournalError{}
+}
+
 type privateWriterProducedBitmapTerminalContent struct {
 	pages     []privateWriterProducedTerminalPage
 	prior     []privateWriterDraftPageProvenance
@@ -1294,36 +1412,15 @@ func (c *privateWriterTransactionCore) prepareFixedPointAggregate(
 		return fail(privateWriterFixedPointErrExhausted)
 	}
 
-	// Both producers emit strict physical-page order. Merge without sorting so
-	// preparation is linear and duplicate pages are rejected before mutation.
-	left, right := 0, 0
-	for output := 0; output < totalPages; output++ {
-		var page privateWriterProducedTerminalPage
-		switch {
-		case left == bitmapProduced.pageLen:
-			page = retirementProduced.pages[right]
-			right++
-		case right == retirementProduced.pageLen:
-			page = bitmapProduced.pages[left]
-			left++
-		case bitmapProduced.pages[left].pageNumber <
-			retirementProduced.pages[right].pageNumber:
-			page = bitmapProduced.pages[left]
-			left++
-		case retirementProduced.pages[right].pageNumber <
-			bitmapProduced.pages[left].pageNumber:
-			page = retirementProduced.pages[right]
-			right++
-		default:
-			return fail(privateWriterFixedPointErrStaleProvenance)
-		}
-		if output != 0 && page.pageNumber <= workspace.pages[output-1].pageNumber {
-			return fail(privateWriterFixedPointErrStaleProvenance)
-		}
-		if !validPrivatePageOwnerOrigin(page.owner, page.origin) {
-			return fail(privateWriterFixedPointErrStaleProvenance)
-		}
-		workspace.pages[output] = page
+	if problem := mergePrivateWriterTerminalJournals(
+		[3][]privateWriterProducedTerminalPage{
+			bitmapProduced.pages[:bitmapProduced.pageLen],
+			retirementProduced.pages[:retirementProduced.pageLen],
+			nil,
+		},
+		workspace.pages[:totalPages],
+	); problem.failed() {
+		return fail(privateWriterFixedPointErrStaleProvenance)
 	}
 
 	source := &c.fixedPointCoordinator.sourceState
