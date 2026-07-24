@@ -5503,6 +5503,19 @@ pub(crate) struct RetirementReclamationReplacementProbe {
     pub(crate) tree_private_page_budget: usize,
 }
 
+/// Committed retirement-tree pages that an ordinary append will replace before
+/// the new batch is built.
+///
+/// Unlike [`RetirementReclamationReplacementProbe`], this never deletes an
+/// existing batch. The caller owns the returned entries through the supplied
+/// replacement ledger. `tree_private_page_budget` is the exact number of
+/// private tree pages required by this append path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RetirementAppendReplacementProbe {
+    pub(crate) replacement_count: usize,
+    pub(crate) tree_private_page_budget: usize,
+}
+
 pub(crate) struct RetirementTreeEditor;
 
 impl RetirementTreeEditor {
@@ -5607,6 +5620,83 @@ impl RetirementTreeEditor {
             Some((reclamation, selected_identity)),
         )?
         .apply()
+    }
+
+    /// Validates the exact selected append path and discovers the committed
+    /// retirement-tree pages it will replace, without building a blob or
+    /// mutating the supplied arena.
+    ///
+    /// The placeholder batch contains only the successor transaction key;
+    /// append geometry depends on that key and the selected tree, not on the
+    /// later protected-page list or blob root. The caller must use fresh
+    /// scratch for the real append edit.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn probe_append_newest<S: RetirementMetadataSource + ?Sized>(
+        source: &S,
+        state: RetirementTreeState,
+        arena: &mut PrivatePageArena<'_>,
+        upsert_path: &mut [RetirementPathFrame],
+        replacements: &mut CommittedReplacementLedger<'_>,
+        releases: &mut PrivateReleaseBuffer<'_>,
+        roles: &mut PageRoleIndex<'_>,
+    ) -> Result<RetirementAppendReplacementProbe, RetirementWriteError> {
+        let guarded = GuardedRetirementSource::new(
+            source,
+            arena,
+            None,
+            Some(upsert_path),
+            replacements,
+            releases,
+            roles,
+            None,
+        );
+        guarded.resolve(
+            guarded
+                .check_retirement_access()
+                .map_err(RetirementWriteError::Source),
+        )?;
+        let _upsert_epoch = next_scratch_epoch(upsert_path)?;
+        validate_edit_inputs(state, arena, replacements)?;
+        roles.prepare(arena, replacements)?;
+        roles.require_new_replacements();
+        let pool_snapshot = arena.capture_fence()?;
+        arena
+            .generation
+            .get()
+            .checked_add(1)
+            .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+        let replacement_base = replacements.len;
+        let mut staging = RetirementEditStaging::new(replacements, releases, &guarded);
+        let append = guarded.resolve(preflight_upsert(
+            &guarded,
+            state,
+            RetirementBatch {
+                retired_by_txn: arena.born_txn,
+                page_count: 1,
+                page_list_blob_root: 2,
+            },
+            arena,
+            &pool_snapshot,
+            None,
+            upsert_path,
+            &mut staging,
+            roles,
+        ))?;
+        let (staged_replacements, _staged_releases, _prior_release_base, _staged_prior_releases) =
+            staging.finish();
+        guarded.resolve(
+            guarded
+                .check_retirement_access()
+                .map_err(RetirementWriteError::Source),
+        )?;
+        arena.validate_fence(&pool_snapshot)?;
+        replacements.len = replacement_base
+            .checked_add(staged_replacements)
+            .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+        Ok(RetirementAppendReplacementProbe {
+            replacement_count: staged_replacements,
+            tree_private_page_budget: append.pages,
+        })
     }
 
     /// Discover the exact committed retirement tree/blob pages that a clean
@@ -12914,6 +13004,163 @@ mod tests {
             assert_eq!(arena.in_use_count().unwrap(), 0);
             assert!(replacements.entries().is_empty());
         }
+    }
+
+    #[test]
+    fn append_probe_empty_tree_needs_one_tree_page_without_mutation() {
+        let committed = 10u64;
+        let source = SlicePageSource::new(&[], committed);
+        let mut slots: [PrivatePageSlot; 0] = [];
+        let mut arena = PrivatePageArena::new(&mut slots, committed, committed, 3).unwrap();
+        let mut path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut replacement_storage = [];
+        let mut replacements = CommittedReplacementLedger::new(&mut replacement_storage);
+        let mut release_storage = [];
+        let mut releases = PrivateReleaseBuffer::new(&mut release_storage);
+        let mut role_storage = [PageRoleIndexSlot::new(); 4];
+        let mut roles = PageRoleIndex::new(&mut role_storage);
+        let generation = arena.generation.get();
+
+        let probe = RetirementTreeEditor::probe_append_newest(
+            &source,
+            state(2, committed, 0, 0),
+            &mut arena,
+            &mut path,
+            &mut replacements,
+            &mut releases,
+            &mut roles,
+        )
+        .unwrap();
+
+        assert_eq!(
+            probe,
+            RetirementAppendReplacementProbe {
+                replacement_count: 0,
+                tree_private_page_budget: 1,
+            }
+        );
+        assert_eq!(arena.generation.get(), generation);
+        assert_eq!(arena.in_use_count().unwrap(), 0);
+        assert!(replacements.entries().is_empty());
+        assert!(releases.entries_from(0).is_empty());
+    }
+
+    #[test]
+    fn append_probe_matches_real_append_without_allocating() {
+        let committed = 10u64;
+        let mut bytes = image(committed as usize);
+        put_retirement_leaf(page_mut(&mut bytes, 2), 2, &[batch(2, 3, 1)]);
+        put_blob_leaf(page_mut(&mut bytes, 3), 2, &[5]);
+        let source = SlicePageSource::new(&bytes, committed);
+        let mut probe_slots: [PrivatePageSlot; 0] = [];
+        let mut probe_arena =
+            PrivatePageArena::new(&mut probe_slots, committed, committed, 3).unwrap();
+        let mut probe_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_replacement_storage = [EMPTY_REPLACEMENT; 2];
+        let mut probe_replacements =
+            CommittedReplacementLedger::new(&mut probe_replacement_storage);
+        let mut probe_release_storage = [];
+        let mut probe_releases = PrivateReleaseBuffer::new(&mut probe_release_storage);
+        let mut probe_role_storage = [PageRoleIndexSlot::new(); 16];
+        let mut probe_roles = PageRoleIndex::new(&mut probe_role_storage);
+        let generation = probe_arena.generation.get();
+
+        let (probe, allocations) = count_thread_allocations(|| {
+            RetirementTreeEditor::probe_append_newest(
+                &source,
+                state(2, committed, 2, 1),
+                &mut probe_arena,
+                &mut probe_path,
+                &mut probe_replacements,
+                &mut probe_releases,
+                &mut probe_roles,
+            )
+        });
+        assert_eq!(allocations, 0);
+        let probe = probe.unwrap();
+        assert_eq!(
+            probe,
+            RetirementAppendReplacementProbe {
+                replacement_count: 1,
+                tree_private_page_budget: 1,
+            }
+        );
+        assert_eq!(probe_arena.generation.get(), generation);
+        assert_eq!(probe_arena.in_use_count().unwrap(), 0);
+        assert!(probe_releases.entries_from(0).is_empty());
+        assert_eq!(
+            probe_replacements.entries(),
+            &[CommittedPageReplacement {
+                pgno: 2,
+                origin: CommittedPageOrigin::RetirementTree,
+            }]
+        );
+
+        let mut actual_slots = appended_slots(committed as u32, 2);
+        let mut actual_arena =
+            PrivatePageArena::new(&mut actual_slots, committed, committed + 2, 3).unwrap();
+        let mut blob_pages = [0u32; 1];
+        let blob = RetirementBlobBuilder::build(
+            &[2],
+            &mut actual_arena,
+            &mut BlobBuildScratch::new(&mut blob_pages),
+        )
+        .unwrap();
+        let mut actual_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut actual_replacement_storage = [EMPTY_REPLACEMENT; 2];
+        let mut actual_replacements =
+            CommittedReplacementLedger::new(&mut actual_replacement_storage);
+        let mut actual_release_storage = [];
+        let mut actual_releases = PrivateReleaseBuffer::new(&mut actual_release_storage);
+        let mut actual_role_storage = [PageRoleIndexSlot::new(); 16];
+        let mut actual_roles = PageRoleIndex::new(&mut actual_role_storage);
+        let result = RetirementTreeEditor::upsert_newest(
+            &source,
+            state(2, committed, 2, 1),
+            blob,
+            &mut actual_path,
+            &mut actual_replacements,
+            &mut actual_releases,
+            &mut actual_roles,
+        )
+        .unwrap();
+        assert_eq!(result.private_pages, probe.tree_private_page_budget);
+        assert_eq!(actual_replacements.entries(), probe_replacements.entries());
+    }
+
+    #[test]
+    fn append_probe_rejects_malformed_tree_before_arena_mutation() {
+        let committed = 10u64;
+        let mut bytes = image(committed as usize);
+        put_retirement_leaf(page_mut(&mut bytes, 2), 2, &[batch(2, 3, 1)]);
+        put_blob_leaf(page_mut(&mut bytes, 3), 2, &[5]);
+        page_mut(&mut bytes, 2)[PAGE_HEADER_SIZE as usize] ^= 1;
+        let source = SlicePageSource::new(&bytes, committed);
+        let mut slots: [PrivatePageSlot; 0] = [];
+        let mut arena = PrivatePageArena::new(&mut slots, committed, committed, 3).unwrap();
+        let mut path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut replacement_storage = [EMPTY_REPLACEMENT; 2];
+        let mut replacements = CommittedReplacementLedger::new(&mut replacement_storage);
+        let mut release_storage = [];
+        let mut releases = PrivateReleaseBuffer::new(&mut release_storage);
+        let mut role_storage = [PageRoleIndexSlot::new(); 16];
+        let mut roles = PageRoleIndex::new(&mut role_storage);
+        let generation = arena.generation.get();
+
+        assert!(RetirementTreeEditor::probe_append_newest(
+            &source,
+            state(2, committed, 2, 1),
+            &mut arena,
+            &mut path,
+            &mut replacements,
+            &mut releases,
+            &mut roles,
+        )
+        .is_err());
+        assert_eq!(arena.generation.get(), generation);
+        assert_eq!(arena.in_use_count().unwrap(), 0);
+        assert!(replacements.entries().is_empty());
+        assert!(releases.entries_from(0).is_empty());
     }
 
     #[test]

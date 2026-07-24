@@ -8818,6 +8818,50 @@ requirements are normative in the Pre-Implementation Gate above.
   before it assigns any physical range page. No Go source changed for the
   reason stated in the plan.
 
+### 2026-07-24 - append-only retirement capacity-probe plan
+
+- Evidence: `stage_range_root_retirement` can build the new retirement blob and
+  append it to the selected tree, but it discovers a short exact scope only
+  after it has claimed private shadow pages (`range_root_proof.rs:677-827`).
+  The selected-reclaim finalizer already avoids that class of late discovery
+  with `RetirementTreeEditor::probe_reclaimed_oldest_and_append_newest`
+  (`retirement_writer.rs:5621-5744`), which validates the selected tree and
+  reports the required replacement-tree capacity without allocating pages.
+- That existing probe is intentionally wrong for an ordinary range replacement:
+  it first deletes a proven oldest retirement prefix. A normal range update
+  must preserve every existing retirement batch and append exactly one new
+  batch for the selected transaction's successor.
+- Add one crate-private append-only counterpart. It will read and locally
+  validate the exact selected retirement-tree append path, record the committed
+  tree pages that the append will replace, and return its checked private tree
+  page budget. It will not build a blob, choose a physical page number, mutate
+  the pool, consume a reclamation batch, change metadata, or expose a public
+  operation.
+- The following normalizer bridge will combine this fact with range ownership
+  and bitmap-preview evidence to reserve its bounded shadow capacity before it
+  materializes the final range payload. Tests here must prove an empty tree and
+  a nonempty tree, exact agreement with the real append edit, malformed input
+  rejection before pool mutation, and zero allocations after workspace setup.
+
+### 2026-07-24 - append-only retirement capacity-probe implementation
+
+- Added `RetirementTreeEditor::probe_append_newest` in Rust. It uses the same
+  selected-source checks and append-path planner as the real tree edit, but a
+  placeholder successor batch supplies only the transaction key needed for
+  structural planning. The probe records replacement-tree facts in dedicated
+  caller scratch and leaves its arena generation and in-use count unchanged.
+- The result contains only the replacement-entry count and the exact private
+  tree-page budget. It has no blob-page estimate because that depends on the
+  converged protected-page list, which remains the next fixed-point step.
+- Focused tests cover the legal empty retirement tree, a nonempty leaf with
+  one existing batch, agreement with the real append edit, corrupted-tree
+  rejection before arena mutation, and zero allocations after setup.
+- Validation passed: Rust default (551 tests) and all-features (672 tests),
+  Rust formatting, warnings-denied all-target/all-feature Clippy, and
+  all-feature benchmark compilation; Go tests, vet, race, and 32-bit tests;
+  `git diff --check`; and the SOW audit. No normative spec, public API,
+  default-validation behavior, format byte, or file publication path changed.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
