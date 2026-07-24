@@ -6703,6 +6703,41 @@ requirements are normative in the Pre-Implementation Gate above.
 - This is an internal lifecycle repair consistent with the existing section
   13/14.2 contract. It changes neither the v4 byte format nor the public SDK.
 
+### 2026-07-24 - reusable locked reclamation protocol plan
+
+- The selected-batch integration fixture still spells out the same critical
+  sequence inline: select under the live fence, verify every selected batch,
+  perform the second pass into bounded page scratch, then hand the opaque result
+  to the bitmap planner. That is correct in the fixture, but it leaves a future
+  normal caller able to accidentally omit one required step while still holding
+  a raw finalization context.
+- Add one private `RetirementTree` callback boundary that owns the complete
+  select/verify/second-pass sequence. It accepts the already-held fence, both
+  nonzero work limits, caller-owned batch/page scratch, and a synchronous
+  consumer. It passes the consumer only a no-change or verified reclamation
+  authority plus exact batch/page counters. A read/verification failure invokes
+  no consumer; a consumer failure is preserved without publishing anything.
+- Route the real Linux selected-batch fixture through this boundary. This does
+  not yet create public `Reclaim`, resource-budget construction, or generic
+  allocator/retirement fixed-point geometry. It makes the required proof
+  sequence reusable so that later writer work has one normal internal path.
+
+### 2026-07-24 - reusable locked reclamation protocol implementation
+
+- `RetirementTree::with_reclamation` now owns selection, full first-pass
+  verification, and the bounded second pass before its synchronous consumer can
+  receive a no-change or verified reclamation authority. It reports the exact
+  selected batch/page counters and preserves a consumer error without starting
+  publication. A corrupt selected tree/blob proves the consumer is never
+  invoked.
+- The selected-batch Linux finalizer fixture now uses that one protocol instead
+  of spelling out selection, verification, and second-pass sequencing inline.
+  Its allocator binding still receives the same opaque authority and retains
+  the held operation barrier through finalization.
+- This is a Rust private-lifecycle consolidation only. Go has no corresponding
+  lock-bound finalization caller yet, so this checkpoint does not claim a Go
+  reclamation-operation implementation or public cross-language SDK parity.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6834,6 +6869,16 @@ requirements are normative in the Pre-Implementation Gate above.
 - This closes the specific selected-batch composition gap. It remains an
   internal Linux lifecycle path; broader writer/SDK work is still pending and
   is not claimed by this checkpoint.
+
+### 2026-07-24 - reusable locked reclamation protocol
+
+- Focused Rust coverage passes for the complete selected/no-change protocol,
+  read failure before consumer invocation, consumer-error preservation, and the
+  Linux selected-batch finalizer using the shared boundary.
+- Full checkpoint validation passes: Rust no-default workspace matrix 432
+  tests; Rust all-feature workspace matrix 547 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
 
 ### Historical adversarial-audit evidence
 

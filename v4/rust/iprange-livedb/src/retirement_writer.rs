@@ -6696,9 +6696,7 @@ mod tests {
         PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
-    use crate::retirement_reader::{
-        RetirementIdentity, RetirementReclamation, RetirementSelectionResult, RetirementTree,
-    };
+    use crate::retirement_reader::{RetirementIdentity, RetirementSelectionResult, RetirementTree};
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::sidecar::{
         LocalIdentityKind, ProcessDomainKind, SidecarHeader, SidecarOrigin, SidecarState, SLOT_SIZE,
@@ -8733,48 +8731,42 @@ mod tests {
                         }};
                     }
 
-                    let mut bound = match case {
-                        LinuxFinalizerReclamationCase::NoChange => {
-                            assert_eq!(reclaim_fence.registering_readers(), 0);
-                            assert_eq!(reclaim_fence.oldest_reader_txn(), None);
-                            let reclamation = match retirement_tree
-                                .select_oldest_eligible(reclaim_fence, 1, 8)
-                                .unwrap()
-                            {
-                                RetirementSelectionResult::NoChange(no_change) => {
-                                    RetirementReclamation::NoChange(no_change)
-                                }
-                                RetirementSelectionResult::Selected(_) => {
-                                    panic!("empty retirement tree must not select a batch")
-                                }
-                            };
-                            bind_locked_plan!(reclamation)
-                        }
-                        LinuxFinalizerReclamationCase::SelectedBatch => {
-                            assert_eq!(reclaim_fence.registering_readers(), 0);
-                            assert_eq!(reclaim_fence.oldest_reader_txn(), Some(selected.txn_id));
-                            let selection = match retirement_tree
-                                .select_oldest_eligible(reclaim_fence, 1, 2)
-                                .unwrap()
-                            {
-                                RetirementSelectionResult::Selected(selection) => selection,
-                                RetirementSelectionResult::NoChange(_) => {
-                                    panic!("the pinned transaction makes the oldest batch reclaimable")
-                                }
-                            };
-                            assert_eq!(selection.batch_count, 1);
-                            assert_eq!(selection.page_count, 2);
-                            assert_eq!(selection.last_retired_by_txn, selected.txn_id);
-                            let verified = retirement_tree
-                                .verify_selection(&selection, &mut verified_reclamation_batches)
-                                .unwrap();
-                            let reclaimed = verified
-                                .second_pass_into(&retirement_tree, &mut verified_reclaimed_pages)
-                                .unwrap();
-                            assert_eq!(reclaimed.pages(), &[21, 23]);
-                            bind_locked_plan!(RetirementReclamation::Reclaimed(reclaimed))
-                        }
+                    let (max_batches, max_pages) = match case {
+                        LinuxFinalizerReclamationCase::NoChange => (1, 8),
+                        LinuxFinalizerReclamationCase::SelectedBatch => (1, 2),
                     };
+                    let mut bound = retirement_tree
+                        .with_reclamation(
+                            reclaim_fence,
+                            max_batches,
+                            max_pages,
+                            &mut verified_reclamation_batches,
+                            &mut verified_reclaimed_pages,
+                            |result, reclamation| {
+                                match case {
+                                    LinuxFinalizerReclamationCase::NoChange => {
+                                        assert_eq!(
+                                            result,
+                                            crate::retirement_reader::RetirementPassResult {
+                                                batch_count: 0,
+                                                page_count: 0,
+                                            }
+                                        );
+                                    }
+                                    LinuxFinalizerReclamationCase::SelectedBatch => {
+                                        assert_eq!(
+                                            result,
+                                            crate::retirement_reader::RetirementPassResult {
+                                                batch_count: 1,
+                                                page_count: 2,
+                                            }
+                                        );
+                                    }
+                                }
+                                Ok::<_, ()>(bind_locked_plan!(reclamation))
+                            },
+                        )
+                        .unwrap();
                     assert_eq!(
                         bound.binding.reclaimed,
                         usize::from(case == LinuxFinalizerReclamationCase::SelectedBatch) * 2

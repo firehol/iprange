@@ -833,6 +833,17 @@ pub(crate) enum RetirementSecondPassError<E> {
     Sink(E),
 }
 
+/// One complete, lock-bound retirement reclamation attempt.
+///
+/// The consumer cannot receive selected page numbers until selection, full
+/// verification, and the bounded second pass have all succeeded. This keeps
+/// the required section-13 sequence in one reusable private boundary.
+#[derive(Debug)]
+pub(crate) enum RetirementReclamationExecutionError<E> {
+    Read(RetirementReadError),
+    Consumer(E),
+}
+
 impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'barrier, 'batches> {
     /// Streams the verified selection into caller-owned page scratch and
     /// returns the only allocator authority for those reclaimed pages.
@@ -983,6 +994,56 @@ impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'ba
             batch_count: self.selection.batch_count,
             page_count: pages,
         })
+    }
+}
+
+impl<S: CommittedPageSource> RetirementTree<S> {
+    /// Runs selection, full verification, and the second pass while the
+    /// supplied live-operation fence remains owned by this attempt.
+    ///
+    /// The synchronous higher-ranked consumer cannot return selection-bound
+    /// state. It may transfer the derived opaque authority only through a
+    /// later bounded owner such as the bitmap reservation. A failed read or
+    /// verification never invokes the consumer.
+    pub(crate) fn with_reclamation<'barrier, 'batches, 'pages, R, E>(
+        &self,
+        fence: RetirementReclaimFence<'barrier>,
+        max_batches: u64,
+        max_pages: u64,
+        batch_scratch: &'batches mut [RetirementBatch],
+        page_scratch: &'pages mut [u32],
+        consume: impl for<'selection> FnOnce(
+            RetirementPassResult,
+            RetirementReclamation<'selection, 'barrier, 'pages>,
+        ) -> Result<R, E>,
+    ) -> Result<R, RetirementReclamationExecutionError<E>> {
+        match self
+            .select_oldest_eligible(fence, max_batches, max_pages)
+            .map_err(RetirementReclamationExecutionError::Read)?
+        {
+            RetirementSelectionResult::NoChange(no_change) => consume(
+                RetirementPassResult {
+                    batch_count: 0,
+                    page_count: 0,
+                },
+                RetirementReclamation::NoChange(no_change),
+            )
+            .map_err(RetirementReclamationExecutionError::Consumer),
+            RetirementSelectionResult::Selected(selection) => {
+                let result = RetirementPassResult {
+                    batch_count: selection.batch_count,
+                    page_count: selection.page_count,
+                };
+                let verified = self
+                    .verify_selection(&selection, batch_scratch)
+                    .map_err(RetirementReclamationExecutionError::Read)?;
+                let reclaimed = verified
+                    .second_pass_into(self, page_scratch)
+                    .map_err(RetirementReclamationExecutionError::Read)?;
+                consume(result, RetirementReclamation::Reclaimed(reclaimed))
+                    .map_err(RetirementReclamationExecutionError::Consumer)
+            }
+        }
     }
 }
 
@@ -1386,6 +1447,110 @@ mod tests {
         let reclaimed = verified.second_pass_into(&tree, &mut pages).unwrap();
         assert_eq!(reclaimed.selection_id(), 4);
         assert_eq!(reclaimed.pages(), &[10, 11, 12]);
+    }
+
+    #[test]
+    fn locked_reclamation_runs_the_complete_two_pass_protocol_before_consuming() {
+        let bytes = sample_image();
+        let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
+        let mut batches = [EMPTY_BATCH; 2];
+        let mut pages = [0; 3];
+        let consumed = tree
+            .with_reclamation(
+                reclaim_fence(4),
+                10,
+                10,
+                &mut batches,
+                &mut pages,
+                |result, reclamation| {
+                    assert_eq!(
+                        result,
+                        RetirementPassResult {
+                            batch_count: 2,
+                            page_count: 3,
+                        }
+                    );
+                    let (authority, _guard) = reclamation.into_parts();
+                    assert_eq!(authority.identity(), Some(identity(20, 2, 3)));
+                    assert_eq!(authority.batch_count(), 2);
+                    assert_eq!(authority.last_retired_by_txn(), 4);
+                    assert_eq!(authority.pages(), &[10, 11, 12]);
+                    Ok::<_, ()>(true)
+                },
+            )
+            .unwrap();
+        assert!(consumed);
+
+        let empty_bytes = image(2);
+        let empty = RetirementTree::new(&empty_bytes, identity(2, 0, 0)).unwrap();
+        empty
+            .with_reclamation(
+                reclaim_fence(8),
+                1,
+                1,
+                &mut [],
+                &mut [],
+                |result, reclamation| {
+                    assert_eq!(
+                        result,
+                        RetirementPassResult {
+                            batch_count: 0,
+                            page_count: 0,
+                        }
+                    );
+                    let (authority, _guard) = reclamation.into_parts();
+                    assert!(authority.identity().is_none());
+                    assert!(authority.pages().is_empty());
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn locked_reclamation_does_not_call_the_consumer_before_full_verification() {
+        let mut corrupt = sample_image();
+        page_mut(&mut corrupt, 3)[PAGE_CRC_OFFSET] ^= 1;
+        let tree = RetirementTree::new(&corrupt, identity(20, 2, 3)).unwrap();
+        let mut batches = [EMPTY_BATCH; 2];
+        let mut pages = [0; 3];
+        let mut calls = 0;
+        let error = tree
+            .with_reclamation(
+                reclaim_fence(4),
+                10,
+                10,
+                &mut batches,
+                &mut pages,
+                |_, _| {
+                    calls += 1;
+                    Ok::<_, ()>(())
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            RetirementReclamationExecutionError::Read(RetirementReadError::Blob(
+                BlobReadError::Page(BlobPageError::Checksum)
+            ))
+        ));
+        assert_eq!(calls, 0);
+
+        let bytes = sample_image();
+        let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
+        let mut batches = [EMPTY_BATCH; 2];
+        let mut pages = [0; 3];
+        assert!(matches!(
+            tree.with_reclamation(
+                reclaim_fence(4),
+                10,
+                10,
+                &mut batches,
+                &mut pages,
+                |_, _| Err::<(), _>(7u8),
+            ),
+            Err(RetirementReclamationExecutionError::Consumer(7))
+        ));
     }
 
     #[test]
