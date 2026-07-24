@@ -775,6 +775,20 @@ pub(crate) struct FreeBitmapReservationCapacityPlan<'a, S: CommittedPageSource +
     buffers: FreeBitmapReservationCapacityBuffers<'a>,
 }
 
+/// A physical bitmap plan that cannot outlive the verified live-reader
+/// authority which permitted its page selection.
+#[derive(Debug)]
+pub(crate) struct LockedFreeBitmapReservationPlan<
+    'a,
+    'selection,
+    'barrier,
+    'pages,
+    S: CommittedPageSource + ?Sized,
+> {
+    plan: FreeBitmapReservationCapacityPlan<'a, S>,
+    reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
+}
+
 #[derive(Debug)]
 pub(crate) struct FreeBitmapReservationAttachment<
     'a,
@@ -1142,6 +1156,27 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
             },
             request,
         ))
+    }
+}
+
+impl<'a, 'selection, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
+    LockedFreeBitmapReservationPlan<'a, 'selection, 'barrier, 'pages, S>
+{
+    pub(crate) const fn required_private_pages(&self) -> usize {
+        self.plan.required_private_pages()
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn bind<'slots, 'scope>(
+        self,
+        pool: &'a PrivatePagePool<'slots>,
+        scope: &'a PrivatePageReservationScope<'scope>,
+    ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, S>, FreeBitmapCowError>
+    {
+        let Self { plan, reclamation } = self;
+        let (attachment, request) = plan.attach(pool, scope)?;
+        let proof = complete_free_bitmap_reclamation(request, reclamation)?;
+        attachment.bind(proof)
     }
 }
 
@@ -2186,7 +2221,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
         }
     }
 
-    pub(crate) fn plan_capacity(
+    fn plan_capacity_impl(
         mut self,
     ) -> Result<FreeBitmapReservationCapacityPlan<'a, S>, FreeBitmapCowError> {
         self.capacity_planning = true;
@@ -2207,6 +2242,32 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
             };
             self.reserve_candidate(candidate, &path[..path_len])?;
         }
+    }
+
+    /// Test-only direct capacity planning. Normal callers must bind the
+    /// allocator to a live retirement-reclamation authority instead.
+    #[cfg(test)]
+    pub(crate) fn plan_capacity(
+        self,
+    ) -> Result<FreeBitmapReservationCapacityPlan<'a, S>, FreeBitmapCowError> {
+        self.plan_capacity_impl()
+    }
+
+    /// Selects physical bitmap pages only while a verified retirement result
+    /// retains the live operation-barrier authority. The returned plan keeps
+    /// that authority until it binds the exact shadow scope.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn plan_under_reclamation<'selection, 'barrier, 'pages>(
+        self,
+        reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
+    ) -> Result<
+        LockedFreeBitmapReservationPlan<'a, 'selection, 'barrier, 'pages, S>,
+        FreeBitmapCowError,
+    > {
+        Ok(LockedFreeBitmapReservationPlan {
+            plan: self.plan_capacity_impl()?,
+            reclamation,
+        })
     }
 
     fn next_candidate(

@@ -614,7 +614,24 @@ impl<'a> PrivatePageArena<'a> {
 
     pub(crate) fn in_use_count(&self) -> Result<usize, RetirementWriteError> {
         if let Some(scope) = self.scope() {
-            return self.pool().scoped_in_use(scope).map_err(map_pool_error);
+            // A lock-bound finalizer shares one shadow scope between bitmap and
+            // retirement construction. Count only this arena's retirement
+            // pages; a bitmap page must not make its terminal export stale.
+            let mut retirement_pages = 0usize;
+            self.pool()
+                .visit_exact_scope_layout(scope, |_, _, info| {
+                    if matches!(
+                        info.state,
+                        PrivatePagePoolState::InUse {
+                            owner: PrivatePageOwner::Retirement,
+                            ..
+                        }
+                    ) {
+                        retirement_pages += 1;
+                    }
+                })
+                .map_err(map_pool_error)?;
+            return Ok(retirement_pages);
         }
         Ok((0..self.pool().len())
             .filter(|&slot| {
@@ -6463,6 +6480,12 @@ mod tests {
         ScopedFreeBitmapCowLedger, SealedFreeBitmapCoordinatorScratch, SharedFreeBitmapCowLedger,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::bitmap_cow::{
+        FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationScratch,
+        FreeBitmapReclamationTicket, FreeBitmapReservationBuffers, FreeBitmapReservationPlanner,
+        FreeBitmapReservationSourceNode, FreeBitmapReservationStageBuffers, VerifiedBitmapPage,
+    };
+    #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::bootstrap::OpenMode;
     use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -6472,13 +6495,17 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
     use crate::page_source::SlicePageSource;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::private_page_pool::PrivatePageCompositeBind;
     use crate::private_page_pool::{
-        PrivatePageCoordinatorPriorReturn, PrivatePagePreparedScopeSlot,
+        PrivatePageCoordinatorPriorReturn, PrivatePagePoolSlot, PrivatePagePreparedScopeSlot,
         PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
         PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
-    use crate::retirement_reader::{RetirementIdentity, RetirementSelectionResult, RetirementTree};
+    use crate::retirement_reader::{
+        RetirementIdentity, RetirementReclamation, RetirementSelectionResult, RetirementTree,
+    };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::sidecar::{
         LocalIdentityKind, ProcessDomainKind, SidecarHeader, SidecarOrigin, SidecarState, SLOT_SIZE,
@@ -6493,6 +6520,8 @@ mod tests {
         PrivateWriterTransactionCore, PrivateWriterTransactionError, PrivateWriterTransactionState,
     };
     use core::cell::Cell;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use core::cell::RefCell;
     #[cfg(all(feature = "os", target_os = "linux"))]
     use std::fs::File;
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -6625,6 +6654,45 @@ mod tests {
         drop(parent);
 
         LiveTestDatabase { directory, main }
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    fn free_bitmap_leaf(txn: u64, bits: &[u32]) -> [u8; PAGE_SIZE] {
+        let mut page_bytes = [0u8; PAGE_SIZE];
+        for &bit in bits {
+            let word = usize::try_from(bit / 64).unwrap();
+            let offset = 32 + word * 8;
+            let current = u64::from_le_bytes(
+                page_bytes[offset..offset + 8]
+                    .try_into()
+                    .expect("bitmap leaf word fits"),
+            );
+            page_bytes[offset..offset + 8]
+                .copy_from_slice(&(current | (1u64 << (bit % 64))).to_le_bytes());
+        }
+        let item_count = (0..(4032 - 32) / 8)
+            .filter(|&word| {
+                let offset = 32 + word * 8;
+                u64::from_le_bytes(
+                    page_bytes[offset..offset + 8]
+                        .try_into()
+                        .expect("bitmap leaf word fits"),
+                ) != 0
+            })
+            .count();
+        PageHeader {
+            page_type: PageType::BitmapLeaf,
+            born_txn: txn,
+            item_count: u16::try_from(item_count).unwrap(),
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 1,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut page_bytes);
+        page::write_crc32c(&mut page_bytes);
+        page_bytes
     }
 
     fn drain_completed_fixed_point_private_output<'pages, B>(
@@ -8168,6 +8236,464 @@ mod tests {
         coordinator
             .abort_active_work(&live_pool, sealed.terminal.into_active())
             .unwrap();
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_selects_bitmap_pages_under_the_held_operation_lock() {
+        let selected = MetaV4 {
+            address_family: AddressFamily::Ipv4,
+            value_kind: ValueKind::Direct,
+            value_tag: ValueTag::RETENTION,
+            database_id: [1; 16],
+            txn_id: 1,
+            commit_nonce: [2; 16],
+            page_count: 100,
+            range_record_count: 0,
+            active_feed_count: 0,
+            feed_index_limit: 0,
+            membership_entry_count: 0,
+            membership_id_limit: 0,
+            metadata_uncompressed_len: 0,
+            metadata_compressed_len: 0,
+            retirement_batch_count: 0,
+            range_root: 0,
+            catalog_name_root: 0,
+            catalog_index_root: 0,
+            feed_used_root: 0,
+            membership_id_root: 0,
+            membership_hash_root: 0,
+            membership_used_root: 0,
+            metadata_root: 0,
+            free_bitmap_root: 11,
+            retirement_root: 0,
+        };
+        let database = live_test_database(selected, selected.page_count as usize);
+        let mut initial_bytes = std::fs::read(&database.main).unwrap();
+        let free_leaf = free_bitmap_leaf(selected.txn_id, &[20, 22, 24, 26]);
+        let leaf_offset = usize::try_from(selected.free_bitmap_root).unwrap() * PAGE_SIZE;
+        initial_bytes[leaf_offset..leaf_offset + PAGE_SIZE].copy_from_slice(&free_leaf);
+        std::fs::write(&database.main, initial_bytes).unwrap();
+
+        let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
+        let mut record_replacements = [];
+        let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
+        let record_returned = [const { Cell::new(false) }; 3];
+        let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 16];
+        let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 16];
+        let mut cleanup_targets = [usize::MAX; 3];
+        let workspace_records = [FixedPointWorkspaceRecordSlot::new(
+            SealedFreeBitmapCoordinatorScratch {
+                arena_bindings: &mut record_bindings,
+                replacements: &mut record_replacements,
+                index_nodes: &mut record_index_nodes,
+                returned: &record_returned,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            },
+        )];
+        let workspace_entries = [const { Cell::new(None) }; 3];
+        let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
+        let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
+        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
+        let source_journal = [
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+        ];
+        let map_journal_sink = Cell::new(usize::MAX);
+        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+        let map_journal = [
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+        ];
+        let tombstone_journal_sink = Cell::new(false);
+        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
+        let tombstone_journal = [
+            Cell::new(tombstone_journal_neutral),
+            Cell::new(tombstone_journal_neutral),
+            Cell::new(tombstone_journal_neutral),
+        ];
+        let journals = FixedPointCoordinatorJournals::new(
+            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
+            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
+            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
+        );
+        let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
+        let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
+        let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
+        let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
+        let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
+        let mut workspace = FixedPointCoordinatorWorkspace::new(
+            &workspace_records,
+            &workspace_entries,
+            &workspace_source_map,
+            &workspace_record_map,
+            journals,
+            &mut ordered_prior_locations,
+            &mut pool_returns,
+            &mut new_locations,
+            &mut replay_slots,
+            &mut replay_index,
+            3,
+        )
+        .unwrap();
+        let workspace_bytes = workspace.retained_bytes();
+        let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
+        let mut core = PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
+            selected,
+            PrivateWriterResourceBudget::new(workspace_bytes, 3, 3, 2),
+            &mut live_slots,
+            &mut [],
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        core.reserve_fixed_point_workspace(&handle, &workspace)
+            .unwrap();
+        let predecessor = core.fixed_point(&handle).unwrap().predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut preparation_scratch = [];
+        let reserved = core
+            .fixed_point(&handle)
+            .unwrap()
+            .prepare_reserved_work(
+                &predecessor,
+                core.draft(&handle).unwrap(),
+                1,
+                3,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut preparation_scratch,
+            )
+            .unwrap();
+        assert!(!core.fixed_point(&handle).unwrap().is_quiescent());
+        assert!(workspace.is_idle());
+
+        // Every buffer below exists before the Linux operation barrier is
+        // acquired. The finalizer can only use these bounded arrays.
+        let mut planner_arena = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut planner_pool_validation = [PrivatePageCompositeBind::empty(); 4];
+        let mut planner_bindings = [BitmapCowArenaBinding::empty(); 4];
+        let mut planner_candidates = [0u32; 4];
+        let mut planner_verified = [const { VerifiedBitmapPage::empty() }; 4];
+        let mut planner_replacements = [0u32; 4];
+        let mut planner_index = [BitmapCowIndexNode::empty(); 16];
+        let mut planner_available = [0usize; 4];
+        let mut planner_source_nodes = [const { FreeBitmapReservationSourceNode::empty() }; 8];
+        let reclamation_ticket = FreeBitmapReclamationTicket::new();
+        let mut stage_arena = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut stage_bindings = [BitmapCowArenaBinding::empty(); 4];
+        let mut stage_candidates = [0u32; 4];
+        let mut stage_verified = [const { VerifiedBitmapPage::empty() }; 4];
+        let mut stage_replacements = [0u32; 4];
+        let mut stage_index = [BitmapCowIndexNode::empty(); 16];
+        let mut stage_available = [0usize; 4];
+        let mut shadow_slots = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut blob_pages = [0u32; 1];
+        let mut retirement_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut retirement_replacements = [EMPTY_REPLACEMENT; 1];
+        let mut retirement_releases = [0u32; 1];
+        let mut retirement_roles = [PageRoleIndexSlot::new(); 8];
+        let mut final_release_pages = [0u32; 4];
+        let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
+        let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 8];
+        let mut final_index_stack = [usize::MAX; 16];
+        let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
+        let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
+        let mut final_cleanup_targets = [usize::MAX; 4];
+        let mut retirement_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        let mut bitmap_terminal_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        let mut produced_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        let expected_terminal_pages = RefCell::new([
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ]);
+        let final_bitmap_root = Cell::new(0u32);
+        let final_retirement_root = Cell::new(0u32);
+        let finalizer_ran = Cell::new(false);
+
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let (parent, main_component) = RetainedDirectory::open_parent(&database.main).unwrap();
+        let sidecar_component = parent.sidecar_component(&main_component).unwrap();
+        let mut contender = parent.open_regular(&sidecar_component, true).unwrap();
+        let mut reserved = Some(reserved);
+        let (publication, publication_allocations) = count_thread_allocations(|| {
+            writer.finalize_and_publish_fixed_point_private_output(
+                &mut core,
+                &handle,
+                &mut workspace,
+                |context, core, handle, workspace| {
+                    finalizer_ran.set(true);
+                    let (source_selected, pages, reclaim_fence) = context.into_parts();
+                    assert_eq!(source_selected.meta, selected);
+                    assert!(matches!(
+                        contender.acquire_lock(LockMode::Exclusive, true),
+                        Err(LinuxOsError::LockBusy)
+                    ));
+
+                    let meta = source_selected.meta;
+                    let retirement_tree = RetirementTree::from_source(
+                        &pages,
+                        RetirementIdentity {
+                            database_id: meta.database_id,
+                            txn_id: meta.txn_id,
+                            commit_nonce: meta.commit_nonce,
+                            page_count: meta.page_count,
+                            root: meta.retirement_root,
+                            batch_count: meta.retirement_batch_count,
+                        },
+                    )
+                    .unwrap();
+                    let reclamation = match retirement_tree
+                        .select_oldest_eligible(reclaim_fence, 1, 8)
+                        .unwrap()
+                    {
+                        RetirementSelectionResult::NoChange(no_change) => {
+                            RetirementReclamation::NoChange(no_change)
+                        }
+                        RetirementSelectionResult::Selected(_) => {
+                            panic!("empty retirement tree must not select a batch")
+                        }
+                    };
+
+                    let planner = FreeBitmapReservationPlanner::new(
+                        &pages,
+                        selected.txn_id,
+                        selected.page_count,
+                        selected.free_bitmap_root,
+                        2,
+                        FreeBitmapReservationBuffers {
+                            arena: &mut planner_arena,
+                            pool_validation: &mut planner_pool_validation,
+                            arena_bindings: &mut planner_bindings,
+                            candidates: &mut planner_candidates,
+                            verified_pages: &mut planner_verified,
+                            replacements: &mut planner_replacements,
+                            index_nodes: &mut planner_index,
+                            available_slots: &mut planner_available,
+                            source_nodes: &mut planner_source_nodes,
+                            reclamation: &reclamation_ticket,
+                            stage: FreeBitmapReservationStageBuffers {
+                                arena: &mut stage_arena,
+                                arena_bindings: &mut stage_bindings,
+                                candidates: &mut stage_candidates,
+                                verified_pages: &mut stage_verified,
+                                replacements: &mut stage_replacements,
+                                index_nodes: &mut stage_index,
+                                available_slots: &mut stage_available,
+                            },
+                        },
+                    )
+                    .unwrap();
+                    let locked_plan = planner.plan_under_reclamation(reclamation).unwrap();
+                    assert_eq!(locked_plan.required_private_pages(), 3);
+                    let shadow_pool = PrivatePagePool::new_vacant(
+                        &mut shadow_slots[..locked_plan.required_private_pages()],
+                        selected.page_count,
+                        selected.page_count,
+                        selected.txn_id + 1,
+                    )
+                    .unwrap();
+                    let shadow_scope = shadow_pool
+                        .reserve_scope(locked_plan.required_private_pages())
+                        .unwrap();
+                    let mut bound = locked_plan.bind(&shadow_pool, &shadow_scope).unwrap();
+                    bound.cow.apply_planned_reservation().unwrap();
+                    assert_eq!(bound.cow.available_private_pages(), 2);
+
+                    let mut arena = PrivatePageArena::from_scoped_pool(
+                        &shadow_pool,
+                        &shadow_scope,
+                        selected.txn_id + 1,
+                    )
+                    .unwrap();
+                    let blob = RetirementBlobBuilder::build(
+                        &[50],
+                        &mut arena,
+                        &mut BlobBuildScratch::new(&mut blob_pages),
+                    )
+                    .unwrap();
+                    let mut replacements =
+                        CommittedReplacementLedger::new(&mut retirement_replacements);
+                    let mut releases = PrivateReleaseBuffer::new(&mut retirement_releases);
+                    let mut roles = PageRoleIndex::new(&mut retirement_roles);
+                    let retirement = RetirementTreeEditor::upsert_newest(
+                        &pages,
+                        RetirementTreeState {
+                            selected_txn: selected.txn_id,
+                            page_count: selected.page_count,
+                            root: 0,
+                            batch_count: 0,
+                        },
+                        blob,
+                        &mut retirement_path,
+                        &mut replacements,
+                        &mut releases,
+                        &mut roles,
+                    )
+                    .unwrap();
+                    let retirement_export = match arena
+                        .prepare_terminal_export(retirement, &mut retirement_terminal_pages)
+                    {
+                        Ok(export) => export,
+                        Err(error) => panic!(
+                            "retirement terminal export failed: {error:?}; result={retirement:?}; in_use={:?}",
+                            arena.in_use_count()
+                        ),
+                    };
+                    bound.cow.synchronize_scoped_bindings(&shadow_scope).unwrap();
+                    let requirements = bound.finalization_scratch_requirements().unwrap();
+                    assert!(requirements.release_pages <= final_release_pages.len());
+                    assert!(requirements.insert_pages <= final_insert_pages.len());
+                    assert!(requirements.cached_pages <= final_cached_pages.len());
+                    assert!(requirements.index_stack <= final_index_stack.len());
+                    assert!(requirements.cleanup_nodes <= final_cleanup_nodes.len());
+                    assert!(requirements.cleanup_path <= final_cleanup_path.len());
+                    assert!(requirements.cleanup_targets <= final_cleanup_targets.len());
+                    let finalized = match bound.finalize(FreeBitmapFinalizationScratch {
+                        release_pages: &mut final_release_pages[..requirements.release_pages],
+                        insert_pages: &mut final_insert_pages[..requirements.insert_pages],
+                        cached_pages: &mut final_cached_pages[..requirements.cached_pages],
+                        index_stack: &mut final_index_stack[..requirements.index_stack],
+                        cleanup_nodes: &mut final_cleanup_nodes[..requirements.cleanup_nodes],
+                        cleanup_path: &mut final_cleanup_path[..requirements.cleanup_path],
+                        cleanup_targets: &mut final_cleanup_targets[..requirements.cleanup_targets],
+                    }) {
+                        Ok(finalized) => finalized,
+                        Err((_bound, error)) => {
+                            panic!("bitmap finalization failed: {error:?}")
+                        }
+                    };
+                    let bitmap_root = finalized.output.root();
+                    let pending_page_count = finalized.output.pending_page_count();
+                    let bitmap_export = match finalized
+                        .output
+                        .prepare_terminal_export(finalized.successor, &mut bitmap_terminal_pages)
+                    {
+                        Ok(export) => export,
+                        Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
+                    };
+                    let produced = match retirement_export
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_terminal_pages)
+                    {
+                        Ok(export) => export,
+                        Err((_retirement, _bitmap, _pages, error)) => panic!("{error:?}"),
+                    };
+                    assert_eq!(produced.pages.len(), 3);
+                    expected_terminal_pages
+                        .borrow_mut()
+                        .clone_from_slice(produced.pages);
+                    final_bitmap_root.set(bitmap_root);
+                    final_retirement_root.set(retirement.root);
+
+                    let live_pool = core.draft(handle)?;
+                    let produced = reserved
+                        .take()
+                        .expect("one reserved coordinator scope")
+                        .with_finalized_produced_terminal_export(
+                            live_pool,
+                            FixedPointPreparedOutput {
+                                root: bitmap_root,
+                                pending_page_count,
+                            },
+                            produced,
+                            77,
+                        )
+                        .map_err(|(_reserved, _produced, error)| {
+                            PrivateWriterTransactionError::FixedPoint(error)
+                        })?;
+                    let coordinator = core.fixed_point(handle)?;
+                    let aggregate = workspace
+                        .prepare_aggregate(
+                            produced,
+                            coordinator,
+                            &predecessor,
+                            live_pool,
+                            &pages,
+                            &[],
+                        )
+                        .map_err(|(_produced, error)| {
+                            PrivateWriterTransactionError::FixedPoint(error)
+                        })?;
+                    let sealed = core
+                        .execute_fixed_point_aggregate(handle, predecessor, aggregate)
+                        .map_err(|(_predecessor, _aggregate, error)| {
+                            PrivateWriterTransactionError::FixedPoint(error)
+                        })?;
+                    assert_eq!(sealed.retirement_result(), retirement);
+                    let successor = core.complete_fixed_point_aggregate(handle, workspace, sealed)?;
+                    assert_eq!(successor.root(), bitmap_root);
+                    assert_eq!(successor.pending_page_count(), pending_page_count);
+                    let target = core.target().expect("aggregate updates the target metadata");
+                    assert_eq!(target.free_bitmap_root, bitmap_root);
+                    assert_eq!(target.retirement_root, retirement.root);
+                    assert_eq!(target.retirement_batch_count, retirement.batch_count);
+                    core.finish_fixed_point_input(handle, workspace, successor)
+                        .map_err(|(_successor, error)| error)?;
+                    assert!(core.fixed_point(handle)?.is_quiescent());
+                    Ok(())
+                },
+            )
+        });
+        assert_eq!(publication_allocations, 0);
+        assert!(finalizer_ran.get());
+        let target = publication.unwrap().meta;
+        assert_eq!(target.free_bitmap_root, final_bitmap_root.get());
+        assert_eq!(target.retirement_root, final_retirement_root.get());
+        assert_eq!(target.page_count, selected.page_count);
+        assert!(workspace.is_idle());
+        assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
+        assert_eq!(core.selected(), target);
+        assert_eq!(core.target(), None);
+        writer.close().unwrap();
+        contender.acquire_lock(LockMode::Exclusive, true).unwrap();
+        contender.release_lock().unwrap();
+
+        let committed = std::fs::read(&database.main).unwrap();
+        assert_eq!(
+            crate::bootstrap::open(&committed, OpenMode::Writer)
+                .unwrap()
+                .meta,
+            target
+        );
+        let expected = expected_terminal_pages.borrow();
+        assert_eq!(
+            expected
+                .iter()
+                .map(|page| (page.pgno, page.owner, page.tag))
+                .collect::<Vec<_>>(),
+            [
+                (20, PrivatePageOwner::Bitmap, 11),
+                (22, PrivatePageOwner::Retirement, 2),
+                (24, PrivatePageOwner::Retirement, 1),
+            ]
+        );
+        for page in expected.iter() {
+            let offset = usize::try_from(page.pgno).unwrap() * PAGE_SIZE;
+            assert_eq!(
+                &committed[offset..offset + PAGE_SIZE],
+                &page.bytes,
+                "the lock-bound terminal page must be the byte sequence published"
+            );
+        }
     }
 
     #[test]

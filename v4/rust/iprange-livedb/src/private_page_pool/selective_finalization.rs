@@ -272,19 +272,24 @@ fn selective_work_limit(
         .map_err(|_| PrivatePageSelectiveError::Overflow)?;
     let targets = u64::try_from(targets).map_err(|_| PrivatePageSelectiveError::Overflow)?;
     let refresh = u64::try_from(refresh_pages).map_err(|_| PrivatePageSelectiveError::Overflow)?;
-    6u64.checked_add(
-        targets
-            .checked_mul(192)
-            .and_then(|value| value.checked_mul(height))
-            .ok_or(PrivatePageSelectiveError::Overflow)?,
-    )
-    .and_then(|value| {
-        refresh
-            .checked_mul(16)
-            .and_then(|refresh| refresh.checked_mul(height))
-            .and_then(|refresh| value.checked_add(refresh))
-    })
-    .ok_or(PrivatePageSelectiveError::Overflow)
+    // Each retained page refreshes both AVL trees. A refresh can materialize,
+    // validate, and rewrite one path per tree, then normalization revisits the
+    // resulting overlay nodes. Thirty-two charged steps per tree height is a
+    // conservative bound for that fixed work.
+    16u64
+        .checked_add(
+            targets
+                .checked_mul(192)
+                .and_then(|value| value.checked_mul(height))
+                .ok_or(PrivatePageSelectiveError::Overflow)?,
+        )
+        .and_then(|value| {
+            refresh
+                .checked_mul(32)
+                .and_then(|refresh| refresh.checked_mul(height))
+                .and_then(|refresh| value.checked_add(refresh))
+        })
+        .ok_or(PrivatePageSelectiveError::Overflow)
 }
 
 fn state_counts(

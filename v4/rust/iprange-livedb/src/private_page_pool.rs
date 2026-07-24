@@ -13966,6 +13966,63 @@ mod tests {
         );
     }
 
+    #[test]
+    fn selective_refresh_work_covers_a_fully_retained_scope() {
+        for total in [3usize, 512, 4096] {
+            let mut storage: std::vec::Vec<_> =
+                (0..total).map(|_| PrivatePagePoolSlot::empty()).collect();
+            let page_count = u64::try_from(total + 2).unwrap();
+            let pool = vacant_pool(&mut storage, page_count, page_count);
+            let scope = pool.reserve_scope(total).unwrap();
+            let checkpoint = pool.begin_checkpoint().unwrap();
+            let mut scope_slots = std::vec::Vec::with_capacity(total);
+            for ordinal in 0..total {
+                scope_slots.push(
+                    pool.bind_page(
+                        &checkpoint,
+                        &scope,
+                        u32::try_from(ordinal + 2).unwrap(),
+                        PrivatePageAuthorization::SafelyReclaimed,
+                    )
+                    .unwrap(),
+                );
+            }
+            pool.commit_checkpoint(checkpoint).unwrap();
+
+            let (node_count, path_count) =
+                private_page_selective_scratch_requirements(total, 0, total).unwrap();
+            let mut nodes = std::vec![PrivatePageSelectiveOverlayNode::empty(); node_count];
+            let mut path = std::vec![PrivatePageSelectivePathEntry::empty(); path_count];
+            let mut targets = [];
+            let scratch = PrivatePageSelectiveScratch::new(&mut nodes, &mut path, &mut targets);
+            let (prepared, allocations) = count_thread_allocations(|| {
+                pool.prepare_selective_deletes(&scope, scratch, 0, total)
+            });
+            assert_eq!(allocations, 0);
+            let mut prepared = prepared.unwrap();
+            for slot in scope_slots {
+                let desired = pool.finalized_slot(&scope, slot).unwrap();
+                let (result, allocations) = count_thread_allocations(|| {
+                    pool.prepare_retained_refreshes(
+                        &scope,
+                        &mut prepared,
+                        core::slice::from_ref(&slot),
+                        core::slice::from_ref(&desired),
+                    )
+                });
+                assert_eq!(allocations, 0);
+                result.unwrap();
+            }
+            let (normalized, allocations) = count_thread_allocations(|| {
+                pool.normalize_selective_deletes(&scope, &mut prepared)
+            });
+            assert_eq!(allocations, 0);
+            normalized.unwrap();
+            assert!(prepared.test_work() <= prepared.test_work_limit());
+            prepared.into_scratch().clear();
+        }
+    }
+
     fn transaction_pool(
         storage: &mut [PrivatePagePoolSlot],
         committed: u64,

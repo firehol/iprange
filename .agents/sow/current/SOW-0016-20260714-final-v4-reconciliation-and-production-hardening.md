@@ -6601,6 +6601,63 @@ requirements are normative in the Pre-Implementation Gate above.
   boundary; it does not yet claim that the real bitmap/retirement planners are
   called through the Linux finalizer.
 
+### 2026-07-24 - lock-bound physical planner plan
+
+- Evidence: `FreeBitmapReservationPlanner::plan_capacity` walks the committed
+  free bitmap and stores concrete candidates and their source kinds before it
+  can attach a private scope (`bitmap_cow.rs:2189-2208,2551-2693`). The strongest
+  Linux publication fixture likewise builds typed bitmap/retirement terminal
+  output before its finalizer callback (`retirement_writer.rs:7286-7658`). Both
+  conflict with the section 13/14.2 rule that physical page choice happens only
+  after the stable reader scan under the operation lock.
+- Keep capacity and caller scratch preallocated, but make the normal bitmap
+  entry point consume `RetirementReclamation`. That move-only value can arise
+  only from the held reader-table fence and keeps the barrier authority through
+  bitmap binding/finalization. Existing free-standing capacity-plan entry
+  points remain Rust-test fixtures only.
+- Rework the composed Linux fixture so its callback uses the exact pinned
+  selected source to select free pages, build a shadow pool, construct the
+  retirement batch and bitmap COW output, and bind the resulting unbound typed
+  terminal export to `FixedPointReservedWork`. Its arrays and finalization
+  scratch are allocated before the barrier; the callback performs no heap
+  allocation or temporary-file work.
+- Permanent coverage will prove that the core output slot remains empty before
+  the callback, that the actual free-bitmap reader and no-change retirement
+  fence are consumed while the sidecar lock is held, and that the emitted
+  terminal pages are then the exact pages durably published. A true reclaimed
+  retirement batch remains a separate next slice; this one establishes the
+  no-change allocator/retirement path without fabricating a reclamation proof.
+
+### 2026-07-24 - lock-bound physical planner implementation
+
+- `FreeBitmapReservationPlanner::plan_under_reclamation` now takes ownership
+  of `RetirementReclamation` and returns a move-only plan that retains the
+  live-operation authority through exact shadow-scope binding
+  (`bitmap_cow.rs:781-792,1163-1179,2260-2270`). The unguarded physical
+  capacity-plan entry point is test-only; normal builds cannot use it.
+- The Linux integration finalizer now starts with only reserved coordinator
+  work. While the sidecar operation lock is held, it reads the pinned selected
+  source, obtains the real no-change retirement fence, chooses free-bitmap
+  pages, builds the bitmap and retirement terminal pages in one shadow scope,
+  binds the late export, and durably publishes it
+  (`retirement_writer.rs:8243-8694`). It proves the callback allocates zero
+  heap objects, another writer cannot acquire the sidecar lock, and the exact
+  terminal page bytes are the bytes written to the database.
+- A shared shadow scope contains both bitmap and retirement pages. The
+  retirement exporter now counts only retirement-owned pages
+  (`retirement_writer.rs:615-638`), preventing a bitmap page from making its
+  terminal export appear stale.
+- The integration exposed an independent bounded-work defect: finalizing a
+  fully retained shared scope exhausted an undersized selective-finalization
+  quota. The quota now covers both AVL-tree refreshes and normalization, with
+  permanent no-allocation coverage at 3, 512, and 4096 retained pages
+  (`private_page_pool/selective_finalization.rs:263-291`,
+  `private_page_pool.rs:13970-14027`).
+- This slice deliberately proves the real no-change retirement path only. A
+  finalizer that selects and consumes an existing retired batch is still
+  pending; it must use the same lock-bound authority rather than a synthetic
+  reclamation proof.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6701,6 +6758,21 @@ requirements are normative in the Pre-Implementation Gate above.
   pre-finalized callback APIs excluded by `#[cfg(test)]`. No real planner has
   been wired to the late export yet, so this checkpoint proves the boundary,
   not the final lock-bound allocator implementation.
+
+### 2026-07-24 - lock-bound physical planner
+
+- Focused tests pass: the Linux finalizer selects physical free-bitmap pages
+  under the held operation lock and durably publishes the exact terminal bytes;
+  the fully retained selective-refresh regression passes at 3, 512, and 4096
+  pages; and the existing shared bitmap/retirement finalization test still
+  passes.
+- Final checkpoint validation: Rust no-default workspace matrix 430 tests;
+  Rust all-feature workspace matrix 544 tests; warnings-denied all-target
+  Clippy; all-feature benchmark compilation; Go `test` and `vet`; Rust
+  formatting; `git diff --check`; and the project SOW audit.
+- The test uses the production Linux writer and real pinned source/fence, but
+  it is still an internal integration path. No public writer API is claimed,
+  and no reclaimed retirement-batch path is claimed.
 
 ### Historical adversarial-audit evidence
 
