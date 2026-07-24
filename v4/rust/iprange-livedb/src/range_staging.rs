@@ -163,14 +163,9 @@ pub(crate) struct RangeTreeStaging<'storage, K: IpKey> {
 }
 
 impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
-    pub(crate) fn new(
-        pages: &'storage mut [RangeTreeStagingPage],
-        born_txn: u64,
-        value_kind: ValueKind,
-    ) -> Result<Self, RangeTreeStagingError> {
-        if born_txn == 0 {
-            return Err(RangeTreeStagingError::BornTransactionZero);
-        }
+    fn logical_page_limit_for(
+        pages: &[RangeTreeStagingPage],
+    ) -> Result<u64, RangeTreeStagingError> {
         let capacity =
             u64::try_from(pages.len()).map_err(|_| RangeTreeStagingError::LogicalPageCapacity {
                 capacity: pages.len(),
@@ -185,6 +180,18 @@ impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
                 capacity: pages.len(),
             });
         }
+        Ok(logical_page_limit)
+    }
+
+    pub(crate) fn new(
+        pages: &'storage mut [RangeTreeStagingPage],
+        born_txn: u64,
+        value_kind: ValueKind,
+    ) -> Result<Self, RangeTreeStagingError> {
+        if born_txn == 0 {
+            return Err(RangeTreeStagingError::BornTransactionZero);
+        }
+        let logical_page_limit = Self::logical_page_limit_for(pages)?;
         if pages.iter().any(|page| !page.is_empty()) {
             return Err(RangeTreeStagingError::WorkspaceDirty);
         }
@@ -197,6 +204,39 @@ impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
             finished: false,
             _key: core::marker::PhantomData,
         })
+    }
+
+    /// Reattaches an immutable view to logical pages sealed by this same
+    /// private staging protocol. This does not validate a file or rewrite any
+    /// bytes; materialization performs its existing output-geometry checks.
+    pub(crate) fn reopen_sealed(
+        pages: &'storage mut [RangeTreeStagingPage],
+        born_txn: u64,
+        value_kind: ValueKind,
+        result: RangeTreeStagedResult,
+    ) -> Result<Self, RangeTreeStagingError> {
+        if born_txn == 0 {
+            return Err(RangeTreeStagingError::BornTransactionZero);
+        }
+        let logical_page_limit = Self::logical_page_limit_for(pages)?;
+        if result.page_count > pages.len()
+            || pages[result.page_count..]
+                .iter()
+                .any(|page| !page.is_empty())
+        {
+            return Err(RangeTreeStagingError::StagedResultMismatch);
+        }
+        let staging = Self {
+            pages,
+            born_txn,
+            value_kind,
+            logical_page_limit,
+            len: result.page_count,
+            finished: true,
+            _key: core::marker::PhantomData,
+        };
+        staging.check_staged_result(result)?;
+        Ok(staging)
     }
 
     /// The temporary page-count bound supplied to the existing builder. No
@@ -727,6 +767,22 @@ mod tests {
         assert_eq!(terminal[0].owner_generation, 2);
         assert_eq!(terminal[0].tag, AddressFamily::Ipv4 as u64);
         assert!(page::verify_crc32c(&terminal[0].bytes));
+    }
+
+    #[test]
+    fn sealed_reopen_rejects_hidden_trailing_logical_output() {
+        let mut pages = [RangeTreeStagingPage::empty(); 2];
+        let staged = {
+            let mut staging =
+                RangeTreeStaging::<Ipv4Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+            let mut workspace = RangeTreeBuildWorkspace::new();
+            build_v4(&mut staging, &mut workspace, [record(1)])
+        };
+        pages[1].bytes[0] = 1;
+        assert!(matches!(
+            RangeTreeStaging::<Ipv4Key>::reopen_sealed(&mut pages, 2, ValueKind::Direct, staged,),
+            Err(RangeTreeStagingError::StagedResultMismatch)
+        ));
     }
 
     #[test]

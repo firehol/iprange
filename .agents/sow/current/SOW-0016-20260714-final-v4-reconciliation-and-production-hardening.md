@@ -9176,6 +9176,102 @@ requirements are normative in the Pre-Implementation Gate above.
   pass. No changed source has a user-visible API or format contract to add to
   the Go implementation at this private Rust live-writer boundary.
 
+### 2026-07-24 - opaque normal-range pre-lock workspace plan
+
+- Evidence: the real ordinary-range publication proof still constructs its
+  normalized logical tree from fixture-local arrays
+  (`v4/rust/iprange-livedb/src/retirement_writer.rs:10990-11019`). The
+  sequential engine itself correctly emits a sealed logical result without
+  physical page allocation (`v4/rust/iprange-livedb/src/sequential_assignment.rs:475-533`),
+  but `RangeTreeStaging` currently retains its finished state only in a
+  stack-local borrowing object (`v4/rust/iprange-livedb/src/range_staging.rs:155-251`).
+  A real operation workspace must own those fixed pages across the gap between
+  pre-lock normalization and lock-held physical materialization.
+- Add a crate-private, generic Rust workspace that owns fixed-capacity
+  normalizer pages, logical range staging pages, and the existing stack-free
+  range-tree build workspace. Construction is the only allocation point; its
+  limits are explicit assignment/work/mutation budgets. It supports an empty
+  replacement, so zero logical-page capacities remain valid when no input is
+  accepted.
+- Add a private sealed-staging reattachment constructor. It accepts only the
+  workspace's own previously sealed result, rebuilds the immutable staging
+  view without changing page bytes, and relies on the existing materializer to
+  perform its narrowly scoped output-geometry checks before any terminal page
+  is changed. It is not a reader validation path and does not inspect a file.
+- Preparation checks the selected family, carries its value kind, and derives
+  the next transaction generation before accepting input. On every input or emission
+  failure it scrubs both owned logical partitions and leaves no prepared
+  result. A caller may discard a prepared result only after its enclosing
+  transaction has been abandoned; the helper erases only unpublished logical
+  memory and does not make a failed live draft independently reusable.
+- This checkpoint deliberately stops before the full Linux allocator/core
+  operation. The subsequent slice will put its coordinator, bitmap, proof,
+  terminal, and abort handling behind the same opaque owner, using the
+  proven exact-prefix journal rule. No public SDK method, v4 byte, default
+  validation, temporary file, or Go surface changes in this isolated Rust
+  owner step.
+- Tests will prove arrival-order output survives the sealed reattachment,
+  zero allocations after workspace construction, deterministic capacity
+  rejection with complete scrubbing, and an empty replacement. The existing
+  normalizer, staging, and materializer tests remain the detailed semantic
+  coverage; this new coverage proves their real workspace lifecycle seam.
+
+### 2026-07-24 - opaque normal-range pre-lock workspace implementation
+
+- Added `live_normal_range.rs`, a crate-private generic Rust owner for fixed
+  normalizer pages, fixed logical range pages, the existing range-tree build
+  workspace, explicit assignment/work/mutation budgets, and retained-byte
+  accounting. Its two variable partitions allocate only during construction;
+  normal input, sealing, reopening, and reset allocate nothing.
+- The workspace accepts only an arrival-order callback over the existing
+  sequential engine. It checks the selected address family and next
+  generation, retains the sealed logical result, and exposes only a temporary
+  one-time borrow of the reattached staging view for later allocator
+  materialization. Reopening consumes that prepared marker, so one logical
+  result cannot be materialized twice through this owner. It never exposes a
+  page number, bit combination, physical pool, file handle, or public API
+  value.
+- `RangeTreeStaging::reopen_sealed` now recreates a finished immutable view of
+  workspace-owned logical output. It verifies the retained logical result fits
+  the owned partition and that no hidden trailing page exists; the existing
+  materializer remains responsible for narrow page-geometry and CRC checks
+  before terminal output changes.
+- Any normalizer or staging error clears both logical partitions and leaves no
+  prepared result. Success has separate after-publication and after-abort
+  reset methods so the future enclosing live operation retains responsibility
+  for transaction abort, lock release, and durable-outcome handling.
+- The production-shaped ordinary replacement proof now uses this workspace
+  instead of fixture-local ordered-builder storage. It feeds an arrival-order
+  direct range through the reattached staging view into the same held-lock
+  bitmap/range/retirement finalizer and atomic Linux publisher used before.
+  Its success and both late failure paths clear the logical owner at the
+  corresponding terminal state.
+- This is still an internal owner, not an SDK writer operation. The full
+  coordinator/bitmap/proof/terminal backing remains in the focused proof
+  fixture until the next slice moves all of it into one Linux operation owner.
+  No public API, v4 byte, default validation behavior, temporary file, or Go
+  contract changed.
+
+### 2026-07-24 - opaque normal-range pre-lock workspace validation
+
+- Three focused workspace tests prove an overlapping arrival-order direct
+  stream survives sealed reattachment and materializes as the expected
+  canonical ranges; a post-mutation invalid input scrubs all owned logical
+  pages; and an empty replacement succeeds with zero normalizer and staging
+  pages. The warmed preparation/reopen/materialization path reports zero heap
+  allocations. A separate staging test rejects a nonempty page beyond the
+  sealed logical result, so hidden logical output cannot enter a later
+  materialization attempt.
+- The existing Linux ordinary replacement success, late core-bind failure,
+  and undersized coordinator-journal cases now all consume that workspace and
+  pass. They continue to prove no allocation from finalization through
+  publication, no file mutation on failure, and explicit whole-draft abort
+  before failed-workspace reuse.
+- Validation passed: Rust default suite (556 tests), Rust all-features suite
+  (683 tests), Rust formatting, warnings-denied all-target/all-feature Clippy,
+  and all-feature benchmark compilation. The unchanged Go surface also passes
+  `go -C v4/go test ./... -count=1` and `go -C v4/go vet ./...`.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

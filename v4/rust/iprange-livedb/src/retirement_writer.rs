@@ -7303,9 +7303,11 @@ mod tests {
     use crate::os::linux::live_writer::LinuxLiveWriterBarrierCause;
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::live_writer::{
-        LinuxLiveWriter, LinuxLiveWriterPageSinkError, LinuxLiveWriterReclaimError,
-        LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits, LinuxLiveWriterReclaimOutcome,
-        LinuxLiveWriterReclaimWorkspace, LinuxLiveWriterReclaimWorkspaceCapacity,
+        LinuxLiveWriter, LinuxLiveWriterNormalRangeWorkspace,
+        LinuxLiveWriterNormalRangeWorkspaceCapacity, LinuxLiveWriterPageSinkError,
+        LinuxLiveWriterReclaimError, LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits,
+        LinuxLiveWriterReclaimOutcome, LinuxLiveWriterReclaimWorkspace,
+        LinuxLiveWriterReclaimWorkspaceCapacity,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
@@ -7321,8 +7323,6 @@ mod tests {
         PrivatePageSelectivePathEntry, PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
-    use crate::range_builder::RangeTreeBuildWorkspace;
-    #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::range_ownership_walk::RangeTreeOwnershipScratch;
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::range_page::{encode_leaf, RangeRecord};
@@ -7335,7 +7335,6 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::range_staging::{
         RangeTreePayloadReservationSlot, RangeTreePayloadScratch, RangeTreePhysicalAssignment,
-        RangeTreeStaging, RangeTreeStagingPage,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
@@ -10987,33 +10986,23 @@ mod tests {
         // Logical preparation happens before the writer takes its operation
         // barrier. The finalizer below only assigns real pages and publishes
         // this already-normalized replacement.
-        let mut logical_pages = [RangeTreeStagingPage::empty(); 1];
-        let mut staging = RangeTreeStaging::<Ipv4Key>::new(
-            &mut logical_pages,
-            selected.txn_id + 1,
-            ValueKind::Direct,
+        let mut normal_range = LinuxLiveWriterNormalRangeWorkspace::<Ipv4Key>::new(
+            LinuxLiveWriterNormalRangeWorkspaceCapacity {
+                normalizer_pages: 1,
+                staged_range_pages: 1,
+                max_assignments: 1,
+                max_work: 10_000,
+                max_mutations: 10_000,
+            },
         )
         .unwrap();
-        let mut tree_workspace = RangeTreeBuildWorkspace::new();
-        let mut builder = tree_workspace
-            .begin(
-                selected.txn_id + 1,
-                ValueKind::Direct,
-                staging.logical_page_limit(),
-            )
+        normal_range
+            .prepare(selected, |engine| {
+                engine.assign(Ipv4Key(30), Ipv4Key(40), 7)
+            })
             .unwrap();
-        builder
-            .push(
-                &mut staging,
-                RangeRecord {
-                    from: Ipv4Key(30),
-                    to: Ipv4Key(40),
-                    value: 7,
-                },
-            )
-            .unwrap();
-        let built = builder.finish(&mut staging).unwrap();
-        let staged = staging.finish(built).unwrap();
+        let (prepared_selected, staged, staging) = normal_range.reopen_prepared_staging().unwrap();
+        assert_eq!(prepared_selected, selected);
 
         let mut record_bindings = [BitmapCowArenaBinding::empty(); MAX_PRIVATE_PAGES];
         let mut record_replacements = [0_u32; RANGE_ROOT_LIVE_BITMAP_REPLACEMENT_CAPACITY];
@@ -11584,6 +11573,13 @@ mod tests {
                 assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
                 assert!(!core.draft(&fresh).unwrap().requires_abort());
                 assert!(core.abort().unwrap() > 0);
+            }
+        }
+        match case {
+            LinuxOrdinaryRangeReplacementCase::Publish => normal_range.finish_after_publication(),
+            LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding
+            | LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal => {
+                normal_range.discard_after_abort();
             }
         }
     }
