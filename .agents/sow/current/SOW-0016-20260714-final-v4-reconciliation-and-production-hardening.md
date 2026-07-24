@@ -8638,6 +8638,71 @@ requirements are normative in the Pre-Implementation Gate above.
   `Retirement` journals under one terminal authority before any later metadata
   handoff can be considered.
 
+### 2026-07-24 - three-owner terminal composition implementation plan
+
+- Extend each sealed-finalization result with an explicit retirement-owned page
+  count. The existing range/bitmap pair remains strict and continues to reject
+  a retirement-owned page; a new private triple path is the only path allowed
+  to consume one.
+- The triple path takes the already-sealed range-root retirement stage, not
+  caller-supplied retirement pages or a caller-supplied edit result. It checks
+  the proof-bound stage before finalization, then rechecks its exact scope,
+  pending generation, retirement root/result, and three owner counts against
+  the sealed output. It uses caller-owned typed buffers and the existing fixed
+  three-source merger in physical-page order; it neither sorts nor allocates.
+- The Go coordinator gains a strict triple producer/aggregate route. It mints
+  linked range, bitmap, and retirement capabilities from the same finalizer
+  authority, replays all three journals into the existing private coordinator
+  scope, and retains the materialized range result only privately. The older
+  bitmap-only route stays unchanged.
+- Rust uses the same typed boundary before its existing generic prepared-work
+  binder. The stage remains the sole authority for the retirement result, while
+  the sealed finalizer remains the sole authority for every exported page.
+- Tests must cover real nonempty and legal-empty selected roots, exact
+  three-owner ordering, forged/stale stage rejection, short or dirty caller
+  journals before terminal mutation, no warmed-path heap allocation, and the
+  fact that the existing two-owner path still rejects retirement ownership.
+  This slice does not update range metadata, target metadata, the file, or any
+  public API.
+
+### 2026-07-24 - three-owner terminal composition milestone
+
+- Go and Rust now expose an internal, proof-bound three-owner terminal path.
+  It accepts only the sealed range-root proof and its exact retirement stage,
+  then carries `Range`, `Bitmap`, and `Retirement` pages through fixed
+  caller-owned journals. The generic two-owner path remains separate and still
+  rejects retirement ownership.
+- A zero-page bitmap journal is legal only for an empty output root or for the
+  exact root sealed at reservation time. A nonzero terminal bitmap root still
+  requires an owned bitmap page. This preserves the legal case where a safely
+  reclaimed page funds the range result without rewriting the selected
+  free-page bitmap.
+- Cross-language review exposed a real selection mismatch: Rust retained every
+  proven reclaimed page before ordinary bitmap candidates, while Go could drop
+  a later reclaimed page when a lower ordinary candidate filled the fixed
+  scope. Go now matches the Rust contract: it rejects a reclaimed set larger
+  than the private scope before live-pool mutation, retains every proven
+  reclaimed page, and uses ordinary candidates or appended pages only for the
+  remaining capacity.
+- The Go coordinator keeps the range materialization and proof private through
+  the aggregate record. Rust carries the matching typed provenance through its
+  prepared terminal export. Neither engine writes file bytes, updates range or
+  target metadata, exposes a public API, or claims a durable commit in this
+  milestone.
+- Regression coverage includes: nonempty three-owner output, dirty retirement
+  scratch rejection before finalization, legal empty selected range roots,
+  unchanged selected bitmap roots, strict physical journal ordering, forged
+  proof rejection, oversized reclaimed sets, and deterministic 512/4096-page
+  reclaimed-source selection.
+- Validation passed: `go -C v4/go test ./... -count=1`; `go -C v4/go test
+  -race ./... -count=1`; `GOARCH=386 go -C v4/go test ./... -count=1`; `go -C
+  v4/go vet ./...`; `cargo test --manifest-path v4/rust/Cargo.toml
+  --no-fail-fast`; `cargo test --manifest-path v4/rust/Cargo.toml
+  --all-features --no-fail-fast`; `cargo fmt --manifest-path v4/rust/Cargo.toml
+  --all -- --check`; `cargo clippy --manifest-path v4/rust/Cargo.toml
+  --all-targets --all-features -- -D warnings`; `cargo check --manifest-path
+  v4/rust/Cargo.toml --all-features --benches`; and `git diff --check`.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

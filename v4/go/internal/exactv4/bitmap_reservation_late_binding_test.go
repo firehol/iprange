@@ -775,6 +775,26 @@ func TestFreeBitmapLateBindingRejectsInvalidReclaimedSetsAtomically(t *testing.T
 	}
 }
 
+func TestFreeBitmapLateBindingRejectsReclaimedPagesBeyondItsPrivateScope(t *testing.T) {
+	storage := newLateBitmapPlannerStorage(8, 8, 8, 20)
+	plan := newLateBitmapPlan(
+		t,
+		&cowSparsePages{pages: []cowSparsePage{cowLeaf(t, 2, 1, 5, 9)}},
+		2,
+		2,
+		&storage,
+	)
+	pages := []uint32{3, 4, 7, 8}
+	before := snapshotLateBitmapLive(t, &plan)
+	proof := completeLateBitmapProof(t, &plan, 20, pages)
+	if _, problem := plan.bind(&proof); problem.code != freeBitmapCOWErrInsufficientResourceBudget ||
+		problem.resource != freeBitmapResourceArenaPages || problem.required != len(pages) ||
+		problem.actual != plan.privatePages {
+		t.Fatalf("reclaimed pages beyond private scope = %#v", problem)
+	}
+	requireLateBitmapLiveSnapshot(t, &plan, before)
+}
+
 func TestFreeBitmapLateBindingProofCapabilityIsMoveOnlyAndRequestBound(t *testing.T) {
 	firstStorage := newLateBitmapPlannerStorage(4, 2, 2, 8)
 	secondStorage := newLateBitmapPlannerStorage(4, 2, 2, 8)
@@ -1550,7 +1570,7 @@ func TestFreeBitmapLateBindingRejectsEveryStageResourceMinusOneAtomically(t *tes
 	}
 }
 
-func TestFreeBitmapReservationMergedSourceSelectionScalesDeterministically(t *testing.T) {
+func TestFreeBitmapReservationPrioritizesEveryReclaimedPageDeterministically(t *testing.T) {
 	for _, count := range []int{512, 4096} {
 		committedCount := count
 		reclaimedCount := count
@@ -1580,12 +1600,12 @@ func TestFreeBitmapReservationMergedSourceSelectionScalesDeterministically(t *te
 			t.Fatal(problem)
 		}
 		selected, selectedCommitted, problem := plan.selectPhysicalPages(reclaimed, reclaimedRoot)
-		if problem.failed() || selected != count || selectedCommitted != count/2 {
-			t.Fatalf("merge %d = selected %d committed %d problem %#v", count, selected, selectedCommitted, problem)
+		if problem.failed() || selected != count || selectedCommitted != 0 {
+			t.Fatalf("reclaimed priority %d = selected %d committed %d problem %#v", count, selected, selectedCommitted, problem)
 		}
 		for index, page := range selection {
-			if page != uint32(index+3) {
-				t.Fatalf("merge %d source %d = %d", count, index, page)
+			if page != uint32(index*2+3) {
+				t.Fatalf("reclaimed priority %d source %d = %d", count, index, page)
 			}
 		}
 	}

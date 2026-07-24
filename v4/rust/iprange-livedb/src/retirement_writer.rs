@@ -5,7 +5,9 @@
 
 #[cfg(test)]
 use crate::bitmap_cow::FreeBitmapCowError;
-use crate::bitmap_cow::PreparedFreeBitmapTerminalExport;
+use crate::bitmap_cow::{
+    PreparedFreeBitmapRangeRetirementTerminalExport, PreparedFreeBitmapTerminalExport,
+};
 use crate::blob_page::{BlobBranch, BlobKind, BlobLeaf, BlobPageError, BLOB_LEAF_CAPACITY};
 #[cfg(test)]
 use crate::contract::MAX_PAGE_COUNT;
@@ -2871,6 +2873,37 @@ pub(crate) struct RetirementTreeEditResult {
     pub(crate) prior_private_replacements: usize,
 }
 
+/// Private evidence for the bitmap root carried through a produced terminal
+/// journal. A range-only update can legitimately leave the selected bitmap
+/// root unchanged, but no caller may substitute a different old root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProducedBitmapRootProvenance {
+    Empty,
+    Terminal(u32),
+    SelectedUnchanged(u32),
+}
+
+impl ProducedBitmapRootProvenance {
+    pub(crate) fn validates(self, root: u32, pages: &[PrivatePageCoordinatorTerminalPage]) -> bool {
+        let has_bitmap_page = pages
+            .iter()
+            .any(|page| page.owner == PrivatePageOwner::Bitmap);
+        match self {
+            Self::Empty => root == 0 && !has_bitmap_page,
+            Self::Terminal(expected) => {
+                root == expected
+                    && expected >= 2
+                    && pages
+                        .iter()
+                        .any(|page| page.pgno == expected && page.owner == PrivatePageOwner::Bitmap)
+            }
+            Self::SelectedUnchanged(expected) => {
+                root == expected && expected >= 2 && !has_bitmap_page
+            }
+        }
+    }
+}
+
 pub(crate) struct PreparedRetirementTerminalExport<'pages> {
     result: RetirementTreeEditResult,
     pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
@@ -2884,6 +2917,7 @@ pub(crate) struct PreparedCombinedRetirementTerminalExport<'pages> {
 pub(crate) struct PreparedProducedTerminalExport<'pages, B> {
     result: RetirementTreeEditResult,
     bitmap: B,
+    bitmap_root_provenance: ProducedBitmapRootProvenance,
     pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
 }
 
@@ -2948,6 +2982,17 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
             RetirementWriteError,
         ),
     > {
+        let bitmap_root_provenance = match bitmap.produced_bitmap_root_provenance() {
+            Some(provenance) => provenance,
+            None => {
+                return Err((
+                    self,
+                    bitmap,
+                    combined,
+                    RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+                ));
+            }
+        };
         let required = match bitmap.pages().len().checked_add(self.pages.len()) {
             Some(required) => required,
             None => {
@@ -2980,6 +3025,7 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
         Ok(PreparedProducedTerminalExport {
             result: self.result,
             bitmap,
+            bitmap_root_provenance,
             pages: combined,
         })
     }
@@ -3030,6 +3076,107 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
     }
 }
 
+impl<
+        'bitmap_pages,
+        'range_pages,
+        'retirement_pages,
+        'scratch,
+        'a,
+        'slots,
+        'scope,
+        S: CommittedPageSource + ?Sized,
+    >
+    PreparedFreeBitmapRangeRetirementTerminalExport<
+        'bitmap_pages,
+        'range_pages,
+        'retirement_pages,
+        'scratch,
+        'a,
+        'slots,
+        'scope,
+        S,
+    >
+{
+    /// Merges the only proof-bound three-owner terminal journals. The typed
+    /// exporter remains attached to the produced work so the generic binder
+    /// cannot replace its range or retirement authority.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn merge_terminal_journals<'combined>(
+        self,
+        combined: &'combined mut [PrivatePageCoordinatorTerminalPage],
+    ) -> Result<
+        PreparedProducedTerminalExport<'combined, Self>,
+        (
+            Self,
+            &'combined mut [PrivatePageCoordinatorTerminalPage],
+            RetirementWriteError,
+        ),
+    > {
+        let bitmap_root_provenance = match self.produced_bitmap_root_provenance() {
+            Some(provenance) => provenance,
+            None => {
+                return Err((
+                    self,
+                    combined,
+                    RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+                ));
+            }
+        };
+        let required = match self
+            .range_pages()
+            .len()
+            .checked_add(self.bitmap_pages().len())
+            .and_then(|count| count.checked_add(self.retirement_pages().len()))
+        {
+            Some(required) => required,
+            None => return Err((self, combined, RetirementWriteError::ArithmeticOverflow)),
+        };
+        if combined.len() != required
+            || self
+                .range_pages()
+                .iter()
+                .any(|page| page.owner != PrivatePageOwner::Range)
+            || self
+                .bitmap_pages()
+                .iter()
+                .any(|page| page.owner != PrivatePageOwner::Bitmap)
+            || self
+                .retirement_pages()
+                .iter()
+                .any(|page| page.owner != PrivatePageOwner::Retirement)
+        {
+            return Err((
+                self,
+                combined,
+                RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+            ));
+        }
+        if merge_unbound_terminal_page_journals(
+            [
+                self.range_pages(),
+                self.bitmap_pages(),
+                self.retirement_pages(),
+            ],
+            combined,
+        )
+        .is_err()
+        {
+            return Err((
+                self,
+                combined,
+                RetirementWriteError::StaleEditPlan(RetirementEditBinding::Arena),
+            ));
+        }
+        let result = self.retirement();
+        Ok(PreparedProducedTerminalExport {
+            result,
+            bitmap: self,
+            bitmap_root_provenance,
+            pages: combined,
+        })
+    }
+}
+
 impl<'pages> PreparedCombinedRetirementTerminalExport<'pages> {
     #[cfg(test)]
     #[allow(clippy::type_complexity, clippy::result_large_err)]
@@ -3066,15 +3213,21 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
         &self.bitmap
     }
 
+    pub(crate) const fn bitmap_root_provenance(&self) -> ProducedBitmapRootProvenance {
+        self.bitmap_root_provenance
+    }
+
     pub(crate) fn from_bind_parts(
         result: RetirementTreeEditResult,
         bitmap: B,
+        bitmap_root_provenance: ProducedBitmapRootProvenance,
         pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
         _rebind: PreparedProducedTerminalRebind,
     ) -> Self {
         Self {
             result,
             bitmap,
+            bitmap_root_provenance,
             pages,
         }
     }
@@ -3084,12 +3237,14 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
     ) -> (
         RetirementTreeEditResult,
         B,
+        ProducedBitmapRootProvenance,
         &'pages mut [PrivatePageCoordinatorTerminalPage],
         PreparedProducedTerminalRebind,
     ) {
         (
             self.result,
             self.bitmap,
+            self.bitmap_root_provenance,
             self.pages,
             PreparedProducedTerminalRebind { _private: () },
         )
@@ -7309,6 +7464,7 @@ mod tests {
                 prior_private_replacements: 0,
             },
             bitmap: (),
+            bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(5),
             pages: &mut pages,
         };
         let produced = match prepared.with_produced_terminal_export(&pool, export, 91) {
@@ -7322,6 +7478,146 @@ mod tests {
         assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
         assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
         assert_eq!(pool.coordinator_fence(), before);
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn produced_terminal_binder_accepts_only_the_exact_unchanged_bitmap_root() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::new(7, 0, 10).unwrap();
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || {
+                    Ok(FixedPointPreparedOutput {
+                        root: 5,
+                        pending_page_count: 10,
+                    })
+                },
+            )
+            .unwrap();
+        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        pages[0].pgno = 6;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Range;
+        pages[0].owner_generation = 8;
+        pages[0].tag = 4;
+        PageHeader {
+            page_type: PageType::RangeLeaf,
+            born_txn: 8,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 4,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+        let export = PreparedProducedTerminalExport {
+            result: RetirementTreeEditResult {
+                root: 0,
+                batch_count: 0,
+                private_pages: 0,
+                committed_replacements: 0,
+                prior_private_replacements: 0,
+            },
+            bitmap: (),
+            bitmap_root_provenance: ProducedBitmapRootProvenance::SelectedUnchanged(5),
+            pages: &mut pages,
+        };
+        let produced = match prepared.with_produced_terminal_export(&pool, export, 91) {
+            Ok(produced) => produced,
+            Err((_prepared, _export, error)) => {
+                panic!("exact unchanged bitmap root must bind: {error:?}")
+            }
+        };
+        produced.cancel(&pool).unwrap();
+        assert_eq!(pages, [PrivatePageCoordinatorTerminalPage::empty()]);
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn produced_terminal_binder_rejects_a_substituted_unchanged_bitmap_root() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::new(7, 0, 10).unwrap();
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || {
+                    Ok(FixedPointPreparedOutput {
+                        root: 5,
+                        pending_page_count: 10,
+                    })
+                },
+            )
+            .unwrap();
+        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        pages[0].pgno = 6;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Range;
+        pages[0].owner_generation = 8;
+        pages[0].tag = 4;
+        PageHeader {
+            page_type: PageType::RangeLeaf,
+            born_txn: 8,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 4,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+        let expected_page = pages[0].clone();
+        let export = PreparedProducedTerminalExport {
+            result: RetirementTreeEditResult {
+                root: 0,
+                batch_count: 0,
+                private_pages: 0,
+                committed_replacements: 0,
+                prior_private_replacements: 0,
+            },
+            bitmap: (),
+            bitmap_root_provenance: ProducedBitmapRootProvenance::SelectedUnchanged(6),
+            pages: &mut pages,
+        };
+        let (prepared, export, error) =
+            match prepared.with_produced_terminal_export(&pool, export, 91) {
+                Ok(_) => panic!("substituted bitmap root must fail"),
+                Err(parts) => parts,
+            };
+        assert_eq!(error, FixedPointError::StalePredecessor);
+        assert_eq!(export.pages[0], expected_page);
+        prepared.cancel(&pool).unwrap();
+        assert_eq!(pages, [expected_page]);
         coordinator.finish(predecessor).unwrap();
     }
 
@@ -7462,6 +7758,7 @@ mod tests {
                     prior_private_replacements: 0,
                 },
                 bitmap: (),
+                bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(5),
                 pages: &mut pages,
             },
             91,

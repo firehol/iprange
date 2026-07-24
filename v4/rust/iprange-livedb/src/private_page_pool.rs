@@ -2187,6 +2187,17 @@ impl PrivatePageReservationScope<'_> {
 }
 
 impl PrivatePageReservationScopeSeed {
+    /// Matches one reservation identity while deliberately ignoring its mutable
+    /// scope generation. Terminal sealing advances that generation without
+    /// changing the reservation the stage was built in.
+    pub(crate) const fn matches_reservation(self, scope: &PrivatePageReservationScope<'_>) -> bool {
+        self.pool_identity == scope.pool_identity
+            && self.pool_epoch == scope.pool_epoch
+            && self.id == scope.id
+            && self.pending_txn == scope.pending_txn
+            && self.anchor == scope.anchor
+    }
+
     pub(crate) fn materialize<'slots>(
         self,
         pool: &PrivatePagePool<'slots>,

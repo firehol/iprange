@@ -113,7 +113,7 @@ pub(crate) enum RangeRootRetirementStageStateError {
 /// to the selected retirement tree in the exact scope that owns the pending
 /// range/bitmap outputs. It has no metadata or publication authority.
 #[derive(Debug)]
-pub(crate) struct RangeRootRetirementStage<'pool> {
+pub(crate) struct RangeRootRetirementStage {
     proof_seal: u64,
     scope: PrivatePageReservationScopeSeed,
     scope_id: u64,
@@ -125,7 +125,7 @@ pub(crate) struct RangeRootRetirementStage<'pool> {
     blob_private_pages: usize,
     terminal_page_count: usize,
     protected_len: u64,
-    arena: Option<PrivatePageArena<'pool>>,
+    has_arena: bool,
     commitment: PrivatePagePoolCommitment,
     seal: u64,
 }
@@ -350,6 +350,14 @@ fn discard_range_root_transaction_proof_indexes(
 }
 
 impl<'proof, 'workspace, 'storage> RangeRootTransactionProof<'proof, 'workspace, 'storage> {
+    pub(crate) const fn materialized_result(&self) -> RangeTreeMaterializedResult {
+        self.materialized
+    }
+
+    pub(crate) fn range_pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
+        self.range_pages
+    }
+
     /// Rechecks that the proof's private scratch was not changed after it was
     /// produced. It does not publish or bind anything.
     pub(crate) fn verify(&mut self) -> Result<(), RangeRootTransactionProofStateError> {
@@ -435,7 +443,7 @@ impl<'proof, 'workspace, 'storage> RangeRootTransactionProof<'proof, 'workspace,
 const RANGE_ROOT_RETIREMENT_STAGE_HASH_SEED: u64 =
     RANGE_ROOT_PROOF_HASH_SEED ^ 0x7a2f_5db9_c190_4e63;
 
-fn seal_range_root_retirement_stage(stage: &RangeRootRetirementStage<'_>) -> u64 {
+fn seal_range_root_retirement_stage(stage: &RangeRootRetirementStage) -> u64 {
     let mut hash = RANGE_ROOT_RETIREMENT_STAGE_HASH_SEED;
     for value in [
         stage.proof_seal,
@@ -458,13 +466,91 @@ fn seal_range_root_retirement_stage(stage: &RangeRootRetirementStage<'_>) -> u64
     hash
 }
 
-impl<'pool> RangeRootRetirementStage<'pool> {
+impl RangeRootRetirementStage {
     pub(crate) const fn retirement_result(&self) -> RetirementTreeEditResult {
         self.retirement
     }
 
     pub(crate) const fn terminal_page_count(&self) -> usize {
         self.terminal_page_count
+    }
+
+    /// Rechecks the proof-bound stage after bitmap finalization has sealed the
+    /// same scope. Sealing changes only the scope generation, so this verifies
+    /// the stable reservation identity and the resulting retirement shape
+    /// instead of comparing the old mutable scope commitment.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn validate_sealed_terminal<'proof, 'workspace, 'storage, 'slots, 'scope>(
+        &self,
+        shadow_pool: &PrivatePagePool<'slots>,
+        shadow_scope: &PrivatePageReservationScope<'scope>,
+        nonce: u64,
+        proof: &mut RangeRootTransactionProof<'proof, 'workspace, 'storage>,
+    ) -> Result<(), RangeRootRetirementStageStateError> {
+        if !self.scope.matches_reservation(shadow_scope)
+            || self.scope_id != shadow_scope.coordinator_scope_id()
+            || shadow_pool.pending_txn() != self.pending_txn
+        {
+            return Err(RangeRootRetirementStageStateError::Stale);
+        }
+        if shadow_pool.requires_abort() {
+            return Err(RangeRootRetirementStageStateError::Bitmap(
+                FreeBitmapCowError::PrivatePool(PrivatePagePoolError::AbortRequired),
+            ));
+        }
+        shadow_pool
+            .validate_sealed_scope(shadow_scope, nonce)
+            .map_err(|_| RangeRootRetirementStageStateError::Stale)?;
+
+        let proof_seal = proof.seal;
+        let (state, protected) = proof
+            .retirement_inputs()
+            .map_err(RangeRootRetirementStageStateError::Proof)?;
+        if proof_seal != self.proof_seal
+            || state.selected_txn != self.selected_txn
+            || state.page_count != self.page_count
+            || protected.len() != self.protected_len
+            || self.seal != seal_range_root_retirement_stage(self)
+        {
+            return Err(RangeRootRetirementStageStateError::Stale);
+        }
+
+        if self.protected_len == 0 {
+            if self.has_arena
+                || self.retirement.root != state.root
+                || self.retirement.batch_count != state.batch_count
+                || self.retirement.private_pages != 0
+                || self.retirement.committed_replacements != 0
+                || self.retirement.prior_private_replacements != 0
+                || self.blob_private_pages != 0
+                || self.terminal_page_count != 0
+            {
+                return Err(RangeRootRetirementStageStateError::Stale);
+            }
+            return Ok(());
+        }
+
+        let expected_batch_count = state
+            .batch_count
+            .checked_add(1)
+            .ok_or(RangeRootRetirementStageStateError::Stale)?;
+        if !self.has_arena
+            || self.retirement.root < 2
+            || u64::from(self.retirement.root) >= self.pending_page_count
+            || self.retirement.batch_count != expected_batch_count
+            || self.retirement.private_pages == 0
+            || self.retirement.committed_replacements != 0
+            || self.retirement.prior_private_replacements != 0
+            || self.blob_private_pages == 0
+            || self
+                .blob_private_pages
+                .checked_add(self.retirement.private_pages)
+                != Some(self.terminal_page_count)
+            || self.terminal_page_count == 0
+        {
+            return Err(RangeRootRetirementStageStateError::Stale);
+        }
+        Ok(())
     }
 
     /// Rechecks the proof, exact reservation scope, and all private pages
@@ -475,14 +561,16 @@ impl<'pool> RangeRootRetirementStage<'pool> {
         'workspace,
         'storage,
         'bound,
+        'slots,
+        'scope,
         'barrier,
         'pages,
         S: CommittedPageSource + ?Sized,
     >(
         &self,
-        bound: &BoundFreeBitmapReservation<'bound, 'pool, 'pool, 'barrier, 'pages, S>,
-        shadow_pool: &'pool PrivatePagePool<'pool>,
-        shadow_scope: &PrivatePageReservationScope<'pool>,
+        bound: &BoundFreeBitmapReservation<'bound, 'slots, 'scope, 'barrier, 'pages, S>,
+        shadow_pool: &PrivatePagePool<'slots>,
+        shadow_scope: &PrivatePageReservationScope<'scope>,
         proof: &mut RangeRootTransactionProof<'proof, 'workspace, 'storage>,
     ) -> Result<(), RangeRootRetirementStageStateError> {
         if self.scope != shadow_scope.seed() || self.scope_id != shadow_scope.coordinator_scope_id()
@@ -517,7 +605,7 @@ impl<'pool> RangeRootRetirementStage<'pool> {
             return Err(RangeRootRetirementStageStateError::Stale);
         }
         if self.protected_len == 0 {
-            if self.arena.is_some()
+            if self.has_arena
                 || self.retirement.root != state.root
                 || self.retirement.batch_count != state.batch_count
                 || self.retirement.private_pages != 0
@@ -533,15 +621,28 @@ impl<'pool> RangeRootRetirementStage<'pool> {
                 .batch_count
                 .checked_add(1)
                 .ok_or(RangeRootRetirementStageStateError::Stale)?;
-            let Some(arena) = self.arena.as_ref() else {
-                return Err(RangeRootRetirementStageStateError::Stale);
-            };
-            let actual_terminal_pages = arena
-                .in_use_count()
-                .map_err(RangeRootRetirementStageStateError::Retirement)?;
+            let mut actual_terminal_pages = 0usize;
+            shadow_pool
+                .visit_exact_scope_layout(shadow_scope, |_, _, info| {
+                    if matches!(
+                        info.state,
+                        crate::private_page_pool::PrivatePagePoolState::InUse {
+                            owner: PrivatePageOwner::Retirement,
+                            ..
+                        }
+                    ) {
+                        actual_terminal_pages += 1;
+                    }
+                })
+                .map_err(|error| {
+                    RangeRootRetirementStageStateError::Bitmap(FreeBitmapCowError::PrivatePool(
+                        error,
+                    ))
+                })?;
             if self.retirement.root < 2
                 || u64::from(self.retirement.root) >= self.pending_page_count
                 || self.retirement.batch_count != expected_batch_count
+                || !self.has_arena
                 || self.blob_private_pages == 0
                 || self
                     .blob_private_pages
@@ -588,7 +689,7 @@ pub(crate) fn stage_range_root_retirement<
     shadow_scope: &PrivatePageReservationScope<'pool>,
     proof: &mut RangeRootTransactionProof<'proof, 'workspace, 'storage>,
     scratch: RangeRootRetirementStageScratch<'_>,
-) -> Result<RangeRootRetirementStage<'pool>, RangeRootRetirementStageError> {
+) -> Result<RangeRootRetirementStage, RangeRootRetirementStageError> {
     let RangeRootRetirementStageScratch {
         blob_pages,
         upsert_path,
@@ -652,7 +753,7 @@ pub(crate) fn stage_range_root_retirement<
             blob_private_pages: 0,
             terminal_page_count: 0,
             protected_len,
-            arena: None,
+            has_arena: false,
             commitment,
             seal: 0,
         };
@@ -735,7 +836,7 @@ pub(crate) fn stage_range_root_retirement<
         blob_private_pages,
         terminal_page_count,
         protected_len,
-        arena: Some(arena),
+        has_arena: true,
         commitment,
         seal: 0,
     };
@@ -866,6 +967,7 @@ mod tests {
     use super::*;
     use crate::bitmap_cow::{
         complete_free_bitmap_reclamation, BitmapCowArenaBinding, BitmapCowIndexNode,
+        FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
         FreeBitmapReclamationTicket, FreeBitmapReservationBuffers, FreeBitmapReservationPlanner,
         FreeBitmapReservationSourceNode, FreeBitmapReservationStageBuffers, ReservedBitmapPage,
         VerifiedBitmapPage,
@@ -1411,7 +1513,45 @@ mod tests {
         assert!(stage.retirement_result().root >= 2);
         assert_eq!(stage.terminal_page_count(), 2);
         stage.verify(&bound, &pool, &scope, &mut proof).unwrap();
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+
         proof.selected.retirement_root = 2;
+        let before_finalization = pool.test_mutation_snapshot();
+        let (retry_bound, error) = match bound.finalize_range_root_retirement(
+            &stage,
+            &mut proof,
+            FreeBitmapFinalizationScratch {
+                release_pages: &mut release,
+                insert_pages: &mut insert,
+                cached_pages: &mut cache,
+                index_stack: &mut stack,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            },
+        ) {
+            Ok(_) => panic!("forged proof must fail before finalization"),
+            Err(parts) => parts,
+        };
+        assert_eq!(error, FreeBitmapCowError::StaleReservationPredecessor);
+        assert_eq!(pool.test_mutation_snapshot(), before_finalization);
+        let bound = retry_bound;
         assert!(matches!(
             stage.verify(&bound, &pool, &scope, &mut proof),
             Err(RangeRootRetirementStageStateError::Proof(
@@ -1420,13 +1560,128 @@ mod tests {
         ));
         proof.selected.retirement_root = 0;
         stage.verify(&bound, &pool, &scope, &mut proof).unwrap();
+
+        let (finalized, allocations) = count_thread_allocations(|| {
+            bound.finalize_range_root_retirement(
+                &stage,
+                &mut proof,
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        let finalized = finalized.unwrap();
+        assert_eq!(finalized.output.range_terminal_page_count(), 1);
+        assert_eq!(
+            finalized.output.retirement_terminal_page_count(),
+            stage.terminal_page_count()
+        );
+
+        let mut bitmap_terminal = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            finalized.output.bitmap_terminal_page_count()
+        ];
+        let mut retained_range_terminal = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            finalized.output.range_terminal_page_count()
+        ];
+        let mut retirement_terminal = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            finalized.output.retirement_terminal_page_count()
+        ];
+        retained_range_terminal[0] = range_terminal[0].clone();
+        let before_export = finalized.output.test_pool_mutation_snapshot();
+        let (
+            output,
+            successor,
+            bitmap_terminal,
+            retained_range_terminal,
+            retirement_terminal,
+            error,
+        ) = match finalized
+            .output
+            .prepare_range_bitmap_retirement_terminal_export(
+                finalized.successor,
+                &stage,
+                &mut proof,
+                &mut bitmap_terminal,
+                &mut retained_range_terminal,
+                &mut retirement_terminal,
+            ) {
+            Ok(_) => panic!("dirty range journal must fail before terminal export"),
+            Err(parts) => parts,
+        };
+        assert_eq!(error, FreeBitmapCowError::StaleReservationPredecessor);
+        assert_eq!(output.test_pool_mutation_snapshot(), before_export);
+        retained_range_terminal.fill(PrivatePageCoordinatorTerminalPage::empty());
+        let (export, allocations) = count_thread_allocations(|| {
+            output.prepare_range_bitmap_retirement_terminal_export(
+                successor,
+                &stage,
+                &mut proof,
+                bitmap_terminal,
+                retained_range_terminal,
+                retirement_terminal,
+            )
+        });
+        assert_eq!(allocations, 0);
+        let export = match export {
+            Ok(export) => export,
+            Err((_output, _successor, _bitmap, _range, _retirement, error)) => {
+                panic!("triple terminal export failed: {error:?}")
+            }
+        };
+        assert_eq!(export.materialized(), materialized);
+        assert_eq!(export.range_pages(), range_terminal);
+        assert_eq!(export.retirement(), stage.retirement_result());
+        assert!(export
+            .retirement_pages()
+            .iter()
+            .all(|page| page.owner == PrivatePageOwner::Retirement));
+
+        let mut combined = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            export.range_pages().len()
+                + export.bitmap_pages().len()
+                + export.retirement_pages().len()
+        ];
+        let (produced, allocations) =
+            count_thread_allocations(|| export.merge_terminal_journals(&mut combined));
+        assert_eq!(allocations, 0);
+        let produced = match produced {
+            Ok(produced) => produced,
+            Err((_export, _combined, error)) => {
+                panic!("three-owner terminal merge failed: {error:?}")
+            }
+        };
+        assert!(produced
+            .pages()
+            .windows(2)
+            .all(|pages| pages[0].pgno < pages[1].pgno));
+        assert_eq!(
+            produced
+                .pages()
+                .iter()
+                .filter(|page| page.owner == PrivatePageOwner::Range)
+                .count(),
+            1
+        );
+        assert_eq!(
+            produced
+                .pages()
+                .iter()
+                .filter(|page| page.owner == PrivatePageOwner::Retirement)
+                .count(),
+            stage.terminal_page_count()
+        );
         pool.require_abort();
-        assert!(matches!(
-            stage.verify(&bound, &pool, &scope, &mut proof),
-            Err(RangeRootRetirementStageStateError::Bitmap(
-                FreeBitmapCowError::PrivatePool(PrivatePagePoolError::AbortRequired)
-            ))
-        ));
         stage.discard_after_abort(proof);
         assert!(seed.is_empty_and_clean());
         assert!(first.is_empty_and_clean());
@@ -1490,6 +1745,51 @@ mod tests {
                 .unwrap();
         let mut bound = attachment.bind(bitmap_proof).unwrap();
 
+        // An empty *selected* range root still permits a newly materialized
+        // range root.  That is the useful terminal case: range output exists,
+        // but there are no old range pages to retire.
+        let mut logical_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging = RangeTreeStaging::<Ipv4Key>::new(
+            &mut logical_pages,
+            selected.txn_id + 1,
+            ValueKind::Direct,
+        )
+        .unwrap();
+        let mut range_workspace = RangeTreeBuildWorkspace::new();
+        let mut builder = range_workspace
+            .begin(
+                selected.txn_id + 1,
+                ValueKind::Direct,
+                staging.logical_page_limit(),
+            )
+            .unwrap();
+        builder
+            .push(
+                &mut staging,
+                RangeRecord {
+                    from: Ipv4Key(30),
+                    to: Ipv4Key(40),
+                    value: 1,
+                },
+            )
+            .unwrap();
+        let built = builder.finish(&mut staging).unwrap();
+        let staged = staging.finish(built).unwrap();
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut payload_slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut range_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let materialized = bound
+            .stage_range_payload(
+                &scope,
+                &staging,
+                staged,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut payload_slots,
+                    terminal_pages: &mut range_terminal,
+                },
+            )
+            .unwrap();
         let mut seed_pages = [PageNumberIndexPage::empty(); 1];
         let mut first_pages = [PageNumberIndexPage::empty(); 1];
         let mut second_pages = [PageNumberIndexPage::empty(); 1];
@@ -1503,13 +1803,8 @@ mod tests {
         let mut proof = prepare_range_root_transaction_proof::<Ipv4Key, _, ()>(
             &source,
             selected,
-            RangeTreeMaterializedResult {
-                root_pgno: 0,
-                root_level: 0,
-                record_count: 0,
-                page_count: 0,
-            },
-            &[],
+            materialized,
+            &range_terminal,
             &mut seed,
             &mut first,
             &mut second,
@@ -1542,6 +1837,93 @@ mod tests {
         assert_eq!(stage.retirement_result().batch_count, 0);
         assert_eq!(stage.terminal_page_count(), 0);
         stage.verify(&bound, &pool, &scope, &mut proof).unwrap();
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let (finalized, allocations) = count_thread_allocations(|| {
+            bound.finalize_range_root_retirement(
+                &stage,
+                &mut proof,
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        let finalized = finalized.unwrap();
+        assert_eq!(finalized.output.range_terminal_page_count(), 1);
+        assert_eq!(finalized.output.retirement_terminal_page_count(), 0);
+        let mut bitmap_terminal = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            finalized.output.bitmap_terminal_page_count()
+        ];
+        let mut exported_range_terminal = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            finalized.output.range_terminal_page_count()
+        ];
+        let mut retirement_terminal: Vec<PrivatePageCoordinatorTerminalPage> = Vec::new();
+        let (export, allocations) = count_thread_allocations(|| {
+            finalized
+                .output
+                .prepare_range_bitmap_retirement_terminal_export(
+                    finalized.successor,
+                    &stage,
+                    &mut proof,
+                    &mut bitmap_terminal,
+                    &mut exported_range_terminal,
+                    &mut retirement_terminal,
+                )
+        });
+        assert_eq!(allocations, 0);
+        let export = match export {
+            Ok(export) => export,
+            Err((_output, _successor, _bitmap, _range, _retirement, error)) => {
+                panic!("legal empty triple terminal export failed: {error:?}")
+            }
+        };
+        assert_eq!(export.range_pages(), range_terminal);
+        assert!(export.retirement_pages().is_empty());
+        assert_eq!(export.retirement(), stage.retirement_result());
+        let mut combined = vec![
+            PrivatePageCoordinatorTerminalPage::empty();
+            export.bitmap_pages().len()
+                + export.range_pages().len()
+                + export.retirement_pages().len()
+        ];
+        let produced = match export.merge_terminal_journals(&mut combined) {
+            Ok(produced) => produced,
+            Err((_export, _combined, error)) => {
+                panic!("legal empty three-owner merge failed: {error:?}")
+            }
+        };
+        assert!(produced
+            .pages()
+            .iter()
+            .all(|page| page.owner == PrivatePageOwner::Range));
+        assert_eq!(
+            produced.bitmap_root_provenance(),
+            crate::retirement_writer::ProducedBitmapRootProvenance::SelectedUnchanged(2)
+        );
         pool.require_abort();
         stage.discard_after_abort(proof);
         assert!(seed.is_empty_and_clean());

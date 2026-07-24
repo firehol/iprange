@@ -14,7 +14,9 @@ use crate::private_page_pool::{
     PrivatePagePreparedSparseReplay, PrivatePageReservationScope, PrivatePageSealedProvenance,
     PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
 };
-use crate::retirement_writer::{PreparedProducedTerminalExport, RetirementTreeEditResult};
+use crate::retirement_writer::{
+    PreparedProducedTerminalExport, ProducedBitmapRootProvenance, RetirementTreeEditResult,
+};
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1905,6 +1907,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
         &self,
         pool: &PrivatePagePool<'_>,
         output: FixedPointPreparedOutput,
+        bitmap_root_provenance: ProducedBitmapRootProvenance,
         pages: &[PrivatePageCoordinatorTerminalPage],
     ) -> Result<(), FixedPointError> {
         self.validate_reservation(pool)?;
@@ -1931,11 +1934,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             .pending_page_count()
             .checked_add(u64::try_from(appended).unwrap_or(u64::MAX));
         if expected_pending_page_count != Some(output.pending_page_count)
-            || (output.root != 0
-                && !pages.iter().any(|page| {
-                    page.pgno == output.root
-                        && page.owner == crate::private_page_pool::PrivatePageOwner::Bitmap
-                }))
+            || !bitmap_root_provenance.validates(output.root, pages)
         {
             return Err(FixedPointError::StalePredecessor);
         }
@@ -2026,11 +2025,17 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             FixedPointError,
         ),
     > {
-        let (retirement, bitmap, pages, rebind) = export.into_bind_parts();
-        if let Err(error) = self.validate_output(pool, output, pages) {
+        let (retirement, bitmap, bitmap_root_provenance, pages, rebind) = export.into_bind_parts();
+        if let Err(error) = self.validate_output(pool, output, bitmap_root_provenance, pages) {
             return Err((
                 self,
-                PreparedProducedTerminalExport::from_bind_parts(retirement, bitmap, pages, rebind),
+                PreparedProducedTerminalExport::from_bind_parts(
+                    retirement,
+                    bitmap,
+                    bitmap_root_provenance,
+                    pages,
+                    rebind,
+                ),
                 error,
             ));
         }
@@ -2040,7 +2045,11 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
                 return Err((
                     self,
                     PreparedProducedTerminalExport::from_bind_parts(
-                        retirement, bitmap, pages, rebind,
+                        retirement,
+                        bitmap,
+                        bitmap_root_provenance,
+                        pages,
+                        rebind,
                     ),
                     FixedPointError::StalePredecessor,
                 ));
@@ -3385,7 +3394,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             FixedPointError,
         ),
     > {
-        let (retirement, bitmap, pages, rebind) = export.into_bind_parts();
+        let (retirement, bitmap, bitmap_root_provenance, pages, rebind) = export.into_bind_parts();
         let appended = pages
             .iter()
             .filter(|page| {
@@ -3396,15 +3405,17 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             .pending_page_count()
             .checked_add(u64::try_from(appended).unwrap_or(u64::MAX));
         if expected_pending_page_count != Some(self.slot.output.pending_page_count)
-            || (self.slot.output.root != 0
-                && !pages.iter().any(|page| {
-                    page.pgno == self.slot.output.root
-                        && page.owner == crate::private_page_pool::PrivatePageOwner::Bitmap
-                }))
+            || !bitmap_root_provenance.validates(self.slot.output.root, pages)
         {
             return Err((
                 self,
-                PreparedProducedTerminalExport::from_bind_parts(retirement, bitmap, pages, rebind),
+                PreparedProducedTerminalExport::from_bind_parts(
+                    retirement,
+                    bitmap,
+                    bitmap_root_provenance,
+                    pages,
+                    rebind,
+                ),
                 FixedPointError::StalePredecessor,
             ));
         }
@@ -3414,7 +3425,11 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
                 return Err((
                     self,
                     PreparedProducedTerminalExport::from_bind_parts(
-                        retirement, bitmap, pages, rebind,
+                        retirement,
+                        bitmap,
+                        bitmap_root_provenance,
+                        pages,
+                        rebind,
                     ),
                     FixedPointError::StalePredecessor,
                 ));

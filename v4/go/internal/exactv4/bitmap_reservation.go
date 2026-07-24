@@ -1931,12 +1931,19 @@ func (p *freeBitmapReservationAttachment) validateSelectedPages(
 	if selected != p.privatePages {
 		return freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan}
 	}
+	expectedCommitted, expectedAppended, problem := p.reservationSourceCounts(len(reclaimed))
+	if problem.failed() {
+		return problem
+	}
+	if selectedCommitted != expectedCommitted {
+		return freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan}
+	}
 	committedRank, reclaimedRank, appended := 0, 0, 0
 	pages := p.buffers.stage.poolValidation[:selected]
 	for _, pageNumber := range pages {
 		var expected uint32
 		switch {
-		case committedRank < p.committedSourceLen &&
+		case committedRank < expectedCommitted &&
 			(reclaimedRank == len(reclaimed) || p.cow.candidates[committedRank] < reclaimed[reclaimedRank]):
 			expected = p.cow.candidates[committedRank]
 			committedRank++
@@ -1955,7 +1962,7 @@ func (p *freeBitmapReservationAttachment) validateSelectedPages(
 			return freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan, previousPage: expected, page: pageNumber}
 		}
 	}
-	if committedRank != selectedCommitted {
+	if committedRank != expectedCommitted || reclaimedRank != len(reclaimed) || appended != expectedAppended {
 		return freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan}
 	}
 	return freeBitmapCOWError{}
@@ -1964,6 +1971,9 @@ func (p *freeBitmapReservationAttachment) validateSelectedPages(
 func (p *freeBitmapReservationAttachment) buildReclaimedSource(
 	reclaimed []uint32,
 ) (int, freeBitmapCOWError) {
+	if _, _, problem := p.reservationSourceCounts(len(reclaimed)); problem.failed() {
+		return 0, problem
+	}
 	needed, ok := checkedIntAdd(p.committedSourceLen, len(reclaimed))
 	if !ok {
 		return 0, freeBitmapCOWError{code: freeBitmapCOWErrIndexCapacityOverflow}
@@ -2004,22 +2014,59 @@ func (p *freeBitmapReservationAttachment) buildReclaimedSource(
 	return root, freeBitmapCOWError{}
 }
 
+// reservationSourceCounts reserves every proven reclaimed page in the exact
+// private scope before it considers ordinary bitmap candidates. Reclaimed
+// pages are already safe to reuse and must not be silently omitted from the
+// draft; ordinary candidates fill only the remaining capacity.
+func (p *freeBitmapReservationAttachment) reservationSourceCounts(
+	reclaimedCount int,
+) (selectedCommitted, selectedAppended int, problem freeBitmapCOWError) {
+	if p == nil || reclaimedCount < 0 || p.privatePages < 0 || p.committedSourceLen < 0 {
+		return 0, 0, freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan}
+	}
+	if reclaimedCount > p.privatePages {
+		return 0, 0, freeBitmapCOWError{
+			code:     freeBitmapCOWErrInsufficientResourceBudget,
+			resource: freeBitmapResourceArenaPages,
+			required: reclaimedCount,
+			actual:   p.privatePages,
+		}
+	}
+	remaining := p.privatePages - reclaimedCount
+	selectedCommitted = p.committedSourceLen
+	if selectedCommitted > remaining {
+		selectedCommitted = remaining
+	}
+	return selectedCommitted, remaining - selectedCommitted, freeBitmapCOWError{}
+}
+
 func (p *freeBitmapReservationAttachment) selectPhysicalPages(
 	reclaimed []uint32,
 	reclaimedRoot int,
 ) (int, int, freeBitmapCOWError) {
-	selected, committedRank, reclaimedRank := 0, 0, 0
+	selectedCommitted, selectedAppended, problem := p.reservationSourceCounts(len(reclaimed))
+	if problem.failed() {
+		return 0, 0, problem
+	}
+	selected, committedRank, reclaimedRank, appended := 0, 0, 0, 0
 	stagePages := p.buffers.stage.poolValidation[:p.privatePages]
 	clear(stagePages)
 	for {
 		if selected == p.privatePages {
+			if committedRank != selectedCommitted || reclaimedRank != len(reclaimed) ||
+				appended != selectedAppended {
+				return 0, 0, freeBitmapCOWError{code: freeBitmapCOWErrStaleInsertionPlan}
+			}
 			return selected, committedRank, freeBitmapCOWError{}
 		}
-		committedNode, haveCommitted := freeBitmapSourceAt(
-			p.buffers.sourceNodes[:p.committedSourceLen], p.committedSourceRoot, committedRank,
-		)
+		committedNode, haveCommitted := freeBitmapReservationSourceNode{}, false
+		if committedRank < selectedCommitted {
+			committedNode, haveCommitted = freeBitmapSourceAt(
+				p.buffers.sourceNodes[:p.committedSourceLen], p.committedSourceRoot, committedRank,
+			)
+		}
 		reclaimedNode, haveReclaimed := freeBitmapReservationSourceNode{}, false
-		if reclaimedRoot != bitmapCOWNoIndex {
+		if reclaimedRank < len(reclaimed) && reclaimedRoot != bitmapCOWNoIndex {
 			reclaimedNode, haveReclaimed = freeBitmapSourceAt(p.buffers.sourceNodes, reclaimedRoot, reclaimedRank)
 		}
 		if haveCommitted && (!haveReclaimed || committedNode.pageNumber < reclaimedNode.pageNumber) {
@@ -2034,19 +2081,17 @@ func (p *freeBitmapReservationAttachment) selectPhysicalPages(
 			selected++
 			continue
 		}
-		deficit := p.privatePages - selected
-		if uint64(deficit) > MaxPageCount-p.cow.pageCount {
+		if appended == selectedAppended || p.cow.pageCount > MaxPageCount ||
+			uint64(selectedAppended-appended) > MaxPageCount-p.cow.pageCount {
 			return 0, 0, freeBitmapCOWError{code: freeBitmapCOWErrPageSpaceExhausted}
 		}
-		for offset := 0; offset < deficit; offset++ {
-			page64 := p.cow.pageCount + uint64(offset)
-			if page64 > uint64(^uint32(0)) {
-				return 0, 0, freeBitmapCOWError{code: freeBitmapCOWErrPageSpaceExhausted}
-			}
-			stagePages[selected] = uint32(page64)
-			selected++
+		page64 := p.cow.pageCount + uint64(appended)
+		if page64 > uint64(^uint32(0)) {
+			return 0, 0, freeBitmapCOWError{code: freeBitmapCOWErrPageSpaceExhausted}
 		}
-		return selected, committedRank, freeBitmapCOWError{}
+		stagePages[selected] = uint32(page64)
+		appended++
+		selected++
 	}
 }
 

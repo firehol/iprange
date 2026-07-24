@@ -40,8 +40,9 @@ mod selective_finalization;
 pub(crate) use selective_finalization::{
     FreeBitmapCoordinatorOutputError, FreeBitmapFinalizationCachedPage,
     FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch,
-    PreparedFreeBitmapCoordinatorRecord, PreparedFreeBitmapTerminalExport,
-    SealedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorScratch,
+    PreparedFreeBitmapCoordinatorRecord, PreparedFreeBitmapRangeRetirementTerminalExport,
+    PreparedFreeBitmapTerminalExport, SealedFreeBitmapCoordinatorRecord,
+    SealedFreeBitmapCoordinatorScratch,
 };
 
 const FREE_PATH_CAPACITY: usize = 4;
@@ -837,6 +838,9 @@ pub(crate) struct BoundFreeBitmapReservation<
 > {
     pub(crate) cow: FreeBitmapCow<'a, 'slots, 'scope, S>,
     pub(crate) binding: FreeBitmapReservationBinding,
+    // The selected bitmap root is immutable input identity.  `cow.root` may
+    // legitimately change while binding candidates before terminal export.
+    selected_bitmap_root: u32,
     private_pages: usize,
     source_nodes: &'a mut [FreeBitmapReservationSourceNode],
     pool_validation: &'a mut [PrivatePageCompositeBind],
@@ -1701,6 +1705,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
         }
         self.source_nodes[candidate_len..needed_sources]
             .fill(FreeBitmapReservationSourceNode::empty());
+        let selected_bitmap_root = self.ticket.root.get();
         self.ticket.nonce.set(0);
         let reclaimed_selected = reclaimed_rank;
         Ok(BoundFreeBitmapReservation {
@@ -1710,6 +1715,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
                 reclaimed: reclaimed_selected,
                 appended,
             },
+            selected_bitmap_root,
             private_pages: self.private_pages,
             source_nodes: self.source_nodes,
             pool_validation: self.pool_validation,
