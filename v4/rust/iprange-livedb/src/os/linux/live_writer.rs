@@ -17,6 +17,17 @@ use crate::writer_transaction_core::{
 };
 use std::sync::{Mutex, MutexGuard};
 
+mod live_reclaim;
+
+// The clean-writer Reclaim owner is intentionally private to the crate. Unit
+// tests in other crate modules exercise its end-to-end file lifecycle through
+// these test-only names; no SDK surface is exposed.
+#[cfg(test)]
+pub(crate) use live_reclaim::{
+    LinuxLiveWriterReclaimError, LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits,
+    LinuxLiveWriterReclaimOutcome, LinuxLiveWriterReclaimScratch,
+};
+
 #[derive(Debug)]
 pub(crate) enum LinuxLiveWriterOpenCause {
     Pair(LinuxLivePairError),

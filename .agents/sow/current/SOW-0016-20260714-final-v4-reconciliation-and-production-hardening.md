@@ -7353,11 +7353,39 @@ requirements are normative in the Pre-Implementation Gate above.
   pre-Active authority is explicitly cancelled before the workspace is released
   and whole-draft abort runs. Any post-mutation failure takes the existing
   abort route; publication ambiguity keeps its factual result.
+- The first owner implementation keeps the already-existing
+  `FixedPointCoordinatorWorkspace` as a crate-private borrowed input so the
+  operation can prove the real lock/draft/publication order without exposing a
+  temporary SDK contract. It constructs the transaction core only after a
+  selected terminal is complete. This is an implementation staging boundary:
+  callers outside the crate cannot supply the workspace, and the next slice
+  replaces this private input with the decided opaque SDK-owned workspace before
+  any public Reclaim API exists.
 - The operation will replace the fixture's caller-owned backing with the
   already-decided opaque SDK-owned workspace before it becomes a production SDK
   entry point. That workspace remains one checked, transaction-budgeted logical
   partition created outside the operation path; no hot-path allocation or
   caller-writable scratch is acceptable.
+
+### 2026-07-24 - private clean-writer Reclaim owner
+
+- Rust now has a crate-private Linux Reclaim owner
+  (`os/linux/live_writer/live_reclaim.rs:274`). It acquires the cancellable
+  operation barrier first, performs selection and verification while that exact
+  barrier is held, returns `NoChange` without constructing a transaction core,
+  and otherwise binds the exact selected shadow capacity before building the
+  terminal output. Only then does it create the private transaction, replay the
+  terminal pages, and publish through the held barrier.
+- The owner maps every pre-publication cancellation to a factual cancellation
+  result after whole-draft abort. A failed barrier release after `NoChange` has
+  its own failure class; it is not misreported as cancellation
+  (`live_reclaim.rs:150-159,846-889`). Physical publication still preserves the
+  existing `NotCommitted`, `OutcomeUnknown`, and committed-after-phase-five
+  distinction (`live_reclaim.rs:901-1069`).
+- This remains a private staging owner, not an SDK entry point. Its raw scratch
+  is crate-private and single-use only; the next slice must replace it with the
+  resolved opaque SDK-owned workspace before exposing Reclaim outside the
+  crate. No v4 bytes, Go behavior, public API, or validation default changed.
 
 ## Validation
 
@@ -7408,6 +7436,23 @@ requirements are normative in the Pre-Implementation Gate above.
 - No normative specification update is needed. This is private Rust ownership
   plumbing: public API, on-disk bytes, validation defaults, and Go behavior are
   unchanged.
+
+### 2026-07-24 - private clean-writer Reclaim owner
+
+- New Linux end-to-end tests use real v4 metadata pages, a registered reader,
+  free bitmap, retirement tree, and sidecar: `NoChange` leaves the complete
+  main file byte-for-byte unchanged; one selected batch publishes exactly one
+  new generation; cancellation before locking creates no draft; and
+  cancellation after `core.begin` aborts the private draft, returns all slots,
+  clears prepared scope/workspace state, and leaves the main file unchanged
+  (`retirement_writer.rs:10452-10475`). Every path asserts zero heap allocation.
+- Full validation passes: Rust workspace tests 454 without optional features
+  and 573 with all features; warnings-denied all-target/all-feature Clippy;
+  all-feature benchmark compilation; Go `test ./...` and `vet ./...`; Rust
+  formatting; whitespace checking; and the SOW audit.
+- No normative specification update is needed. This is the internal lifecycle
+  order required by the existing Reclaim contract; it does not yet expose the
+  public SDK operation or its opaque owned workspace.
 
 ### 2026-07-24 - selected-reclaim retirement stage
 

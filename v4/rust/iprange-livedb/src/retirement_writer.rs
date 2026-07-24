@@ -6884,7 +6884,13 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::live_reader::LinuxLiveReader;
     #[cfg(all(feature = "os", target_os = "linux"))]
-    use crate::os::linux::live_writer::{LinuxLiveWriter, LinuxLiveWriterPageSinkError};
+    use crate::os::linux::live_writer::LinuxLiveWriterBarrierCause;
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::os::linux::live_writer::{
+        LinuxLiveWriter, LinuxLiveWriterPageSinkError, LinuxLiveWriterReclaimError,
+        LinuxLiveWriterReclaimFailure, LinuxLiveWriterReclaimLimits, LinuxLiveWriterReclaimOutcome,
+        LinuxLiveWriterReclaimScratch,
+    };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
     use crate::page_source::SlicePageSource;
@@ -10055,6 +10061,417 @@ mod tests {
     #[test]
     fn linux_finalizer_reclaims_selected_retirement_batch_under_the_held_operation_lock() {
         run_linux_finalizer_reclamation_case(LinuxFinalizerReclamationCase::SelectedBatch);
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    fn run_linux_live_reclaim_case(
+        case: LinuxFinalizerReclamationCase,
+        cancel_at_probe: Option<usize>,
+    ) {
+        let (selected_txn, retirement_root, retirement_batch_count) = match case {
+            LinuxFinalizerReclamationCase::NoChange => (1, 0, 0),
+            LinuxFinalizerReclamationCase::SelectedBatch => (2, 12, 1),
+        };
+        let selected = MetaV4 {
+            address_family: AddressFamily::Ipv4,
+            value_kind: ValueKind::Direct,
+            value_tag: ValueTag::RETENTION,
+            database_id: [1; 16],
+            txn_id: selected_txn,
+            commit_nonce: [2; 16],
+            page_count: 100,
+            range_record_count: 0,
+            active_feed_count: 0,
+            feed_index_limit: 0,
+            membership_entry_count: 0,
+            membership_id_limit: 0,
+            metadata_uncompressed_len: 0,
+            metadata_compressed_len: 0,
+            retirement_batch_count,
+            range_root: 0,
+            catalog_name_root: 0,
+            catalog_index_root: 0,
+            feed_used_root: 0,
+            membership_id_root: 0,
+            membership_hash_root: 0,
+            membership_used_root: 0,
+            metadata_root: 0,
+            free_bitmap_root: 11,
+            retirement_root,
+        };
+        let database = live_test_database(selected, selected.page_count as usize);
+        let mut initial_bytes = std::fs::read(&database.main).unwrap();
+        let free_bits = match case {
+            LinuxFinalizerReclamationCase::NoChange => &[20, 22, 24, 26][..],
+            LinuxFinalizerReclamationCase::SelectedBatch => &[20, 24][..],
+        };
+        let free_leaf = free_bitmap_leaf(selected.txn_id, free_bits);
+        let leaf_offset = usize::try_from(selected.free_bitmap_root).unwrap() * PAGE_SIZE;
+        initial_bytes[leaf_offset..leaf_offset + PAGE_SIZE].copy_from_slice(&free_leaf);
+        if case == LinuxFinalizerReclamationCase::SelectedBatch {
+            put_retirement_leaf(
+                page_mut(&mut initial_bytes, selected.retirement_root),
+                selected.txn_id,
+                &[batch(selected.txn_id, 13, 2)],
+            );
+            put_blob_leaf(page_mut(&mut initial_bytes, 13), selected.txn_id, &[21, 23]);
+        }
+        std::fs::write(&database.main, &initial_bytes).unwrap();
+        let mut protected_reader = match case {
+            LinuxFinalizerReclamationCase::NoChange => None,
+            LinuxFinalizerReclamationCase::SelectedBatch => {
+                Some(LinuxLiveReader::<Ipv4Key>::open(&database.main).unwrap())
+            }
+        };
+
+        let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
+        let mut record_replacements = [];
+        let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
+        let record_returned = [const { Cell::new(false) }; 3];
+        let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 16];
+        let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 16];
+        let mut cleanup_targets = [usize::MAX; 3];
+        let workspace_records = [FixedPointWorkspaceRecordSlot::new(
+            SealedFreeBitmapCoordinatorScratch {
+                arena_bindings: &mut record_bindings,
+                replacements: &mut record_replacements,
+                index_nodes: &mut record_index_nodes,
+                returned: &record_returned,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            },
+        )];
+        let workspace_entries = [const { Cell::new(None) }; 3];
+        let workspace_source_map = [const { Cell::new(usize::MAX) }; 3];
+        let workspace_record_map = [const { Cell::new(usize::MAX) }; 3];
+        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
+        let source_journal = [
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+            Cell::new(source_journal_neutral),
+        ];
+        let map_journal_sink = Cell::new(usize::MAX);
+        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+        let map_journal = [
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+        ];
+        let tombstone_journal_sink = Cell::new(false);
+        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
+        let tombstone_journal = [
+            Cell::new(tombstone_journal_neutral),
+            Cell::new(tombstone_journal_neutral),
+            Cell::new(tombstone_journal_neutral),
+        ];
+        let journals = FixedPointCoordinatorJournals::new(
+            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
+            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
+            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
+        );
+        let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; 1];
+        let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
+        let mut new_locations = [DraftPrivatePageLocation::EMPTY; 3];
+        let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 16];
+        let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; 3];
+        let mut workspace = FixedPointCoordinatorWorkspace::new(
+            &workspace_records,
+            &workspace_entries,
+            &workspace_source_map,
+            &workspace_record_map,
+            journals,
+            &mut ordered_prior_locations,
+            &mut pool_returns,
+            &mut new_locations,
+            &mut replay_slots,
+            &mut replay_index,
+            3,
+        )
+        .unwrap();
+
+        // All backing exists before the clean-writer operation begins. The
+        // Reclaim owner may only borrow these bounded partitions.
+        let mut live_slots = [const { PrivatePagePoolSlot::empty() }; 3];
+        let mut cleanup_entries = [];
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut preparation_scratch = [];
+        let mut planner_arena = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut planner_pool_validation = [PrivatePageCompositeBind::empty(); 4];
+        let mut planner_bindings = [BitmapCowArenaBinding::empty(); 4];
+        let mut planner_candidates = [0u32; 4];
+        let mut planner_verified = [const { VerifiedBitmapPage::empty() }; 4];
+        let mut planner_replacements = [0u32; 16];
+        let mut planner_index = [BitmapCowIndexNode::empty(); 32];
+        let mut planner_available = [0usize; 4];
+        let mut planner_source_nodes = [const { FreeBitmapReservationSourceNode::empty() }; 8];
+        let reclamation_ticket = FreeBitmapReclamationTicket::new();
+        let mut stage_arena = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut stage_bindings = [BitmapCowArenaBinding::empty(); 4];
+        let mut stage_candidates = [0u32; 4];
+        let mut stage_verified = [const { VerifiedBitmapPage::empty() }; 4];
+        let mut stage_replacements = [0u32; 16];
+        let mut stage_index = [BitmapCowIndexNode::empty(); 32];
+        let mut stage_available = [0usize; 4];
+        let mut verified_reclamation_batches = [RetirementBatch {
+            retired_by_txn: 0,
+            page_count: 0,
+            page_list_blob_root: 0,
+        }];
+        let mut verified_reclaimed_pages = [0u32; 2];
+        let mut shadow_slots = [const { PrivatePagePoolSlot::empty() }; 4];
+        let mut probe_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_replacement_entries = [EMPTY_REPLACEMENT; 4];
+        let mut probe_release_pages = [0u32; 4];
+        let mut probe_roles = [PageRoleIndexSlot::new(); 16];
+        let mut helper_protected_snapshot = [0u32; 4];
+        let mut next_protected_replacement_pages = [0u32; 4];
+        let mut preview_bitmap_replacements = [0u32; 16];
+        let mut preview_blob_pages = [0u32; 1];
+        let mut preview_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut preview_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut preview_replacement_entries = [EMPTY_REPLACEMENT; 4];
+        let mut preview_release_pages = [0u32; 4];
+        let mut preview_roles = [PageRoleIndexSlot::new(); 16];
+        let mut final_release_pages = [0u32; 4];
+        let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
+        let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 12];
+        let mut final_index_stack = [usize::MAX; 32];
+        let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
+        let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
+        let mut final_cleanup_targets = [usize::MAX; 4];
+        let mut terminal_blob_pages = [0u32; 1];
+        let mut terminal_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut terminal_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut terminal_replacements = [EMPTY_REPLACEMENT; 4];
+        let mut terminal_releases = [0u32; 4];
+        let mut terminal_roles = [PageRoleIndexSlot::new(); 16];
+        let mut retirement_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        let mut bitmap_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        let mut combined_terminal_pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+
+        let writer = LinuxLiveWriter::open(&database.main).unwrap();
+        let cancellation_checks = Cell::new(0usize);
+        let (result, allocations) = count_thread_allocations(|| {
+            writer.reclaim_with_private_scratch(
+                &mut workspace,
+                LinuxLiveWriterReclaimLimits {
+                    max_batches: 1,
+                    max_pages: 2,
+                    bitmap_payload_pages: 2,
+                },
+                LinuxLiveWriterReclaimScratch {
+                    live_slots: &mut live_slots,
+                    cleanup_entries: &mut cleanup_entries,
+                    work_slot: &mut work_slot,
+                    scope_slot: &mut scope_slot,
+                    preparation_scratch: &mut preparation_scratch,
+                    planner_arena: &mut planner_arena,
+                    planner_pool_validation: &mut planner_pool_validation,
+                    planner_bindings: &mut planner_bindings,
+                    planner_candidates: &mut planner_candidates,
+                    planner_verified: &mut planner_verified,
+                    planner_replacements: &mut planner_replacements,
+                    planner_index: &mut planner_index,
+                    planner_available: &mut planner_available,
+                    planner_source_nodes: &mut planner_source_nodes,
+                    reclamation_ticket: &reclamation_ticket,
+                    stage_arena: &mut stage_arena,
+                    stage_bindings: &mut stage_bindings,
+                    stage_candidates: &mut stage_candidates,
+                    stage_verified: &mut stage_verified,
+                    stage_replacements: &mut stage_replacements,
+                    stage_index: &mut stage_index,
+                    stage_available: &mut stage_available,
+                    verified_batches: &mut verified_reclamation_batches,
+                    verified_pages: &mut verified_reclaimed_pages,
+                    shadow_slots: &mut shadow_slots,
+                    probe_delete_path: &mut probe_delete_path,
+                    probe_upsert_path: &mut probe_upsert_path,
+                    probe_replacements: &mut probe_replacement_entries,
+                    probe_releases: &mut probe_release_pages,
+                    probe_roles: &mut probe_roles,
+                    protected_pages: &mut helper_protected_snapshot,
+                    next_protected_pages: &mut next_protected_replacement_pages,
+                    preview_bitmap_replacements: &mut preview_bitmap_replacements,
+                    preview_blob_pages: &mut preview_blob_pages,
+                    preview_delete_path: &mut preview_delete_path,
+                    preview_upsert_path: &mut preview_upsert_path,
+                    preview_replacements: &mut preview_replacement_entries,
+                    preview_releases: &mut preview_release_pages,
+                    preview_roles: &mut preview_roles,
+                    final_release_pages: &mut final_release_pages,
+                    final_insert_pages: &mut final_insert_pages,
+                    final_cached_pages: &mut final_cached_pages,
+                    final_index_stack: &mut final_index_stack,
+                    final_cleanup_nodes: &mut final_cleanup_nodes,
+                    final_cleanup_path: &mut final_cleanup_path,
+                    final_cleanup_targets: &mut final_cleanup_targets,
+                    terminal_blob_pages: &mut terminal_blob_pages,
+                    terminal_delete_path: &mut terminal_delete_path,
+                    terminal_upsert_path: &mut terminal_upsert_path,
+                    terminal_replacements: &mut terminal_replacements,
+                    terminal_releases: &mut terminal_releases,
+                    terminal_roles: &mut terminal_roles,
+                    retirement_terminal_pages: &mut retirement_terminal_pages,
+                    bitmap_terminal_pages: &mut bitmap_terminal_pages,
+                    combined_terminal_pages: &mut combined_terminal_pages,
+                },
+                || {
+                    let check = cancellation_checks
+                        .get()
+                        .checked_add(1)
+                        .expect("test cancellation probe count fits usize");
+                    cancellation_checks.set(check);
+                    cancel_at_probe.is_some_and(|target| check >= target)
+                },
+            )
+        });
+        assert_eq!(allocations, 0, "Reclaim must use only its supplied backing");
+        assert!(
+            workspace.is_idle(),
+            "Reclaim must leave its workspace reusable"
+        );
+
+        match (case, cancel_at_probe, result) {
+            (
+                _,
+                Some(1),
+                Err(LinuxLiveWriterReclaimError::Barrier(LinuxLiveWriterBarrierCause::Cancelled)),
+            ) => {
+                assert_eq!(
+                    std::fs::read(&database.main).unwrap(),
+                    initial_bytes,
+                    "cancellation before the operation barrier must leave no draft"
+                );
+            }
+            (
+                LinuxFinalizerReclamationCase::SelectedBatch,
+                Some(14),
+                Err(LinuxLiveWriterReclaimError::Failed {
+                    cause:
+                        LinuxLiveWriterReclaimFailure::Cancelled {
+                            cleanup_complete: true,
+                        },
+                    release: None,
+                }),
+            ) => {
+                assert_eq!(
+                    std::fs::read(&database.main).unwrap(),
+                    initial_bytes,
+                    "cancellation after the private draft begins must abort it completely"
+                );
+            }
+            (
+                LinuxFinalizerReclamationCase::NoChange,
+                None,
+                Ok(LinuxLiveWriterReclaimOutcome::NoChange),
+            ) => {
+                assert_eq!(
+                    std::fs::read(&database.main).unwrap(),
+                    initial_bytes,
+                    "NoChange must not start a draft or alter the committed main file"
+                );
+            }
+            (
+                LinuxFinalizerReclamationCase::SelectedBatch,
+                None,
+                Ok(LinuxLiveWriterReclaimOutcome::Reclaimed(target)),
+            ) => {
+                assert_eq!(target.meta.txn_id, selected.txn_id + 1);
+                assert_ne!(target.meta.commit_nonce, selected.commit_nonce);
+                assert_eq!(target.meta.page_count, selected.page_count);
+                assert_eq!(target.meta.free_bitmap_root, 20);
+                assert_eq!(target.meta.retirement_root, 23);
+                assert_eq!(target.meta.retirement_batch_count, 1);
+                let committed = std::fs::read(&database.main).unwrap();
+                assert_ne!(committed, initial_bytes);
+                assert_eq!(
+                    crate::bootstrap::open(&committed, OpenMode::Writer)
+                        .unwrap()
+                        .meta,
+                    target.meta
+                );
+            }
+            (expected, cancellation, actual) => {
+                panic!(
+                    "unexpected Reclaim result for {expected:?}, cancellation={cancellation:?}: {actual:?}"
+                )
+            }
+        }
+        if let Some(expected) = cancel_at_probe {
+            assert_eq!(
+                cancellation_checks.get(),
+                expected,
+                "this fixture's probe ordinal must continue to target the intended cancellation checkpoint"
+            );
+        }
+        if cancel_at_probe == Some(14) {
+            assert_eq!(
+                live_slots,
+                [const { PrivatePagePoolSlot::empty() }; 3],
+                "whole-draft abort must return every transaction slot"
+            );
+            assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+            assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        }
+
+        writer.close().unwrap();
+        if let Some(reader) = protected_reader.as_mut() {
+            reader.close().unwrap();
+        }
+        let (parent, main_component) = RetainedDirectory::open_parent(&database.main).unwrap();
+        let sidecar_component = parent.sidecar_component(&main_component).unwrap();
+        let mut contender = parent.open_regular(&sidecar_component, true).unwrap();
+        contender.acquire_lock(LockMode::Exclusive, true).unwrap();
+        contender.release_lock().unwrap();
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_live_reclaim_no_change_leaves_the_main_file_untouched() {
+        run_linux_live_reclaim_case(LinuxFinalizerReclamationCase::NoChange, None);
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_live_reclaim_selected_batch_publishes_one_new_generation() {
+        run_linux_live_reclaim_case(LinuxFinalizerReclamationCase::SelectedBatch, None);
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_live_reclaim_cancellation_before_lock_leaves_no_draft() {
+        run_linux_live_reclaim_case(LinuxFinalizerReclamationCase::SelectedBatch, Some(1));
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_live_reclaim_cancellation_after_draft_start_aborts_it() {
+        // With this fixed one-reader sidecar, the first 13 probes cover lock
+        // acquisition, the three reader-table passes, and selected terminal
+        // finalization. Probe 14 is immediately after `core.begin`.
+        run_linux_live_reclaim_case(LinuxFinalizerReclamationCase::SelectedBatch, Some(14));
     }
 
     #[test]
