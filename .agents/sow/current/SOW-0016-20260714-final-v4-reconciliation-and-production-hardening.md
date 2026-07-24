@@ -7281,6 +7281,37 @@ requirements are normative in the Pre-Implementation Gate above.
   pool mutation, no retained assigned slot in the caller journal, and a usable
   predecessor after cancellation.
 
+### 2026-07-24 - aggregate-scope lifecycle correction
+
+- Evidence: aggregate preparation simulated the private-pool transition with a
+  borrowed prepared scope, then `FixedPointPreparedWork::into_aggregate_base`
+  discarded the only move-only reservation (`writer_fixed_point.rs:3105`). The
+  sparse replay neither owned nor cleared that reservation
+  (`private_page_pool.rs:1249`). A successful aggregate therefore left its
+  caller scope slot occupied, while a pre-Active execution failure had no
+  aggregate-level cancellation route to release the scope, terminal journal,
+  and prepared workspace record together.
+- Retain the scope reservation in aggregate state. Preflight it against the
+  prepared sparse replay immediately before Active, then consume and clear it
+  in the replay's mechanically infallible suffix. Add one aggregate cancellation
+  path that discards the terminal journal, releases replay/workspace backing,
+  clears the prepared scope/work slot/scratch, and reports stale evidence only
+  after that cleanup.
+- This is a private Rust lifecycle repair. It adds no public `Reclaim` or SDK
+  API, no on-disk format byte, no validation-default change, and no Go behavior.
+
+### 2026-07-24 - aggregate-scope lifecycle validation
+
+- Permanent 4,096-slot sparse-replay coverage now proves normal replay consumes
+  the prepared scope slot (`writer_fixed_point.rs:4680`). A new aggregate-cancel
+  test proves zero allocation, an unchanged live pool, an empty terminal
+  journal/work slot/scope slot, an idle workspace, and a successful outer core
+  workspace release plus abort (`retirement_writer.rs:7171`).
+- Full validation passes: Rust workspace tests 452 without optional features
+  and 567 with all features; warnings-denied all-target/all-feature Clippy;
+  all-feature benchmark compilation; Go `test ./...` and `vet ./...`; Rust
+  formatting; whitespace checking; and the project SOW audit.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim coordinator bind

@@ -7167,6 +7167,190 @@ mod tests {
         coordinator.finish(predecessor).unwrap();
     }
 
+    #[test]
+    fn aggregate_cancel_releases_prepared_scope_terminal_and_workspace() {
+        let selected = MetaV4 {
+            address_family: AddressFamily::Ipv4,
+            value_kind: ValueKind::Direct,
+            value_tag: ValueTag::RETENTION,
+            database_id: [1; 16],
+            txn_id: 1,
+            commit_nonce: [2; 16],
+            page_count: 100,
+            range_record_count: 0,
+            active_feed_count: 0,
+            feed_index_limit: 0,
+            membership_entry_count: 0,
+            membership_id_limit: 0,
+            metadata_uncompressed_len: 0,
+            metadata_compressed_len: 0,
+            retirement_batch_count: 0,
+            range_root: 0,
+            catalog_name_root: 0,
+            catalog_index_root: 0,
+            feed_used_root: 0,
+            membership_id_root: 0,
+            membership_hash_root: 0,
+            membership_used_root: 0,
+            metadata_root: 0,
+            free_bitmap_root: 0,
+            retirement_root: 0,
+        };
+        let mut record_bindings = [BitmapCowArenaBinding::empty(); 1];
+        let mut record_replacements = [];
+        let mut record_index_nodes = [BitmapCowIndexNode::empty(); 1];
+        let record_returned = [const { Cell::new(false) }; 1];
+        let mut cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 8];
+        let mut cleanup_path = [PrivatePageSelectivePathEntry::empty(); 8];
+        let mut cleanup_targets = [usize::MAX; 1];
+        let workspace_records = [FixedPointWorkspaceRecordSlot::new(
+            SealedFreeBitmapCoordinatorScratch {
+                arena_bindings: &mut record_bindings,
+                replacements: &mut record_replacements,
+                index_nodes: &mut record_index_nodes,
+                returned: &record_returned,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            },
+        )];
+        let workspace_entries = [const { Cell::new(None) }; 1];
+        let workspace_source_map = [const { Cell::new(usize::MAX) }; 1];
+        let workspace_record_map = [const { Cell::new(usize::MAX) }; 1];
+        let source_journal_sink = Cell::<Option<DraftPrivatePageEntry>>::new(None);
+        let source_journal_neutral = FixedPointCellWrite::new(&source_journal_sink, None);
+        let source_journal = [Cell::new(source_journal_neutral)];
+        let map_journal_sink = Cell::new(usize::MAX);
+        let map_journal_neutral = FixedPointCellWrite::new(&map_journal_sink, usize::MAX);
+        let map_journal = [
+            Cell::new(map_journal_neutral),
+            Cell::new(map_journal_neutral),
+        ];
+        let tombstone_journal_sink = Cell::new(false);
+        let tombstone_journal_neutral = FixedPointCellWrite::new(&tombstone_journal_sink, false);
+        let tombstone_journal = [Cell::new(tombstone_journal_neutral)];
+        let journals = FixedPointCoordinatorJournals::new(
+            FixedPointCellJournalBacking::new(&source_journal, source_journal_neutral),
+            FixedPointCellJournalBacking::new(&map_journal, map_journal_neutral),
+            FixedPointCellJournalBacking::new(&tombstone_journal, tombstone_journal_neutral),
+        );
+        let mut ordered_prior_locations = [];
+        let mut pool_returns = [];
+        let mut new_locations = [DraftPrivatePageLocation::EMPTY; 1];
+        let mut replay_slots = [const { PrivatePageSparseReplaySlot::empty() }; 4];
+        let mut replay_index = [PrivatePageSparseReplayIndex::empty(); 1];
+        let mut workspace = FixedPointCoordinatorWorkspace::new(
+            &workspace_records,
+            &workspace_entries,
+            &workspace_source_map,
+            &workspace_record_map,
+            journals,
+            &mut ordered_prior_locations,
+            &mut pool_returns,
+            &mut new_locations,
+            &mut replay_slots,
+            &mut replay_index,
+            1,
+        )
+        .unwrap();
+        let mut live_slots = [PrivatePagePoolSlot::empty()];
+        let mut cleanup = [];
+        let mut core = PrivateWriterTransactionCore::<(), (), AggregateCleanupError>::new(
+            selected,
+            PrivateWriterResourceBudget::new(workspace.retained_bytes(), 1, 1, 2),
+            &mut live_slots,
+            &mut cleanup,
+        )
+        .unwrap();
+        let handle = core.begin([3; 16]).unwrap();
+        core.reserve_fixed_point_workspace(&handle, &workspace)
+            .unwrap();
+        let live_pool = core.draft(&handle).unwrap();
+        let coordinator = core.fixed_point(&handle).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut preparation_scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                live_pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut preparation_scratch,
+                || {
+                    Ok(FixedPointPreparedOutput {
+                        root: 5,
+                        pending_page_count: 100,
+                    })
+                },
+            )
+            .unwrap();
+        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        pages[0].pgno = 5;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Bitmap;
+        pages[0].owner_generation = 2;
+        PageHeader {
+            page_type: PageType::BitmapLeaf,
+            born_txn: 2,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 1,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+        let produced = match prepared.with_produced_terminal_export(
+            live_pool,
+            PreparedProducedTerminalExport {
+                result: RetirementTreeEditResult {
+                    root: 0,
+                    batch_count: 0,
+                    private_pages: 0,
+                    committed_replacements: 0,
+                    prior_private_replacements: 0,
+                },
+                bitmap: (),
+                pages: &mut pages,
+            },
+            91,
+        ) {
+            Ok(produced) => produced,
+            Err((_, _, error)) => panic!("produced terminal must bind: {error:?}"),
+        };
+        let committed_bytes = vec![0; 100 * PAGE_SIZE];
+        let committed = SlicePageSource::new(&committed_bytes, 100);
+        let before = live_pool.test_mutation_snapshot();
+        let aggregate = match workspace.prepare_aggregate(
+            produced,
+            coordinator,
+            &predecessor,
+            live_pool,
+            &committed,
+            &[],
+        ) {
+            Ok(aggregate) => aggregate,
+            Err(_) => panic!("aggregate preparation must succeed"),
+        };
+        let (cancelled, allocations) = count_thread_allocations(|| aggregate.cancel(live_pool));
+        assert_eq!(allocations, 0);
+        assert!(cancelled.is_ok());
+        assert_eq!(pages, [PrivatePageCoordinatorTerminalPage::empty()]);
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        assert_eq!(live_pool.test_mutation_snapshot(), before);
+        assert!(workspace.is_idle());
+        assert!(workspace.record_slot_ready(0, 1));
+        core.cancel_fixed_point_workspace(&handle, &mut workspace)
+            .unwrap();
+        assert_eq!(core.abort().unwrap(), 1);
+    }
+
     #[cfg(all(feature = "os", target_os = "linux"))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum LinuxFinalizerReclamationCase {

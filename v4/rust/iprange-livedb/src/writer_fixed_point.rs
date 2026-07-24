@@ -588,6 +588,7 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
     ) -> Result<
         FixedPointPreparedAggregateWork<
             'slot,
+            'scope_slot,
             'preparation_scratch,
             'carried,
             'pool,
@@ -1703,8 +1704,9 @@ pub(crate) struct FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>
     scratch_seal: u64,
 }
 
-struct FixedPointPreparedAggregateBase<'slot, 'scratch, 'carried> {
+struct FixedPointPreparedAggregateBase<'slot, 'scope_slot, 'scratch, 'carried> {
     slot: &'slot mut FixedPointPreparedWorkSlot,
+    scope: PrivatePagePreparedScopeReservation<'scope_slot>,
     scratch: &'scratch mut [u8],
     carried_pages: &'carried [u32],
     predecessor_generation: u64,
@@ -2099,6 +2101,7 @@ impl<S: CommittedPageSource + ?Sized> Drop
 
 pub(crate) struct FixedPointPreparedAggregateWork<
     'slot,
+    'scope_slot,
     'scratch,
     'carried,
     'pool,
@@ -2116,7 +2119,7 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     S: CommittedPageSource + ?Sized,
     B,
 > {
-    base: FixedPointPreparedAggregateBase<'slot, 'scratch, 'carried>,
+    base: FixedPointPreparedAggregateBase<'slot, 'scope_slot, 'scratch, 'carried>,
     terminal: PrivatePagePreparedCoordinatorTerminal<'plan>,
     retirement: RetirementTreeEditResult,
     bitmap: B,
@@ -2182,6 +2185,7 @@ pub(crate) trait FixedPointPreparedAggregateAuthority: Sized {
 
 impl<
         'slot,
+        'scope_slot,
         'scratch,
         'carried,
         'pool,
@@ -2201,6 +2205,7 @@ impl<
     >
     FixedPointPreparedAggregateWork<
         'slot,
+        'scope_slot,
         'scratch,
         'carried,
         'pool,
@@ -2232,10 +2237,63 @@ where
             || coordinator.global_epoch.get() != self.base.coordinator_epoch
             || coordinator.registered_work.get() != 0
             || self.pool_replay.live_fence() != self.base.pool_fence
+            || self
+                .pool_replay
+                .preflight_prepared_scope(&self.base.scope)
+                .is_err()
         {
             return Err(FixedPointError::StalePredecessor);
         }
         Ok(())
+    }
+
+    /// Cancels an aggregate that has not entered its Active suffix.
+    ///
+    /// Aggregate preparation has borrowed all workspace and pool replay
+    /// backing, but it has not changed live pool state. Release every one of
+    /// those private proofs before the outer transaction aborts.
+    pub(crate) fn cancel(self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        let Self {
+            base,
+            terminal,
+            retirement,
+            bitmap,
+            workspace_identity: _,
+            pool_replay,
+            workspace_replay,
+        } = self;
+        let FixedPointPreparedAggregateBase {
+            slot,
+            scope,
+            scratch,
+            carried_pages,
+            pool_fence,
+            ..
+        } = base;
+        let address = &*slot as *const FixedPointPreparedWorkSlot as usize;
+        let valid = slot.address == address
+            && pool_fence == pool.coordinator_fence()
+            && slot.carried_address == carried_pages.as_ptr() as usize
+            && slot.carried_len == carried_pages.len()
+            && slot.carried_seal == FixedPointCoordinator::carried_hash(carried_pages)
+            && slot.scratch_address == scratch.as_ptr() as usize
+            && slot.scratch_len == scratch.len()
+            && slot.scratch_seal == FixedPointCoordinator::scratch_hash(scratch)
+            && slot.seal != 0
+            && slot.seal == FixedPointCoordinator::prepared_seal(slot);
+        drop(bitmap);
+        let _ = retirement;
+        let _ = terminal.discard();
+        drop(workspace_replay);
+        pool_replay.cancel();
+        let released = pool.cancel_prepared_coordinator_scope(scope);
+        slot.clear();
+        scratch.fill(0);
+        if valid && released.is_ok() {
+            Ok(())
+        } else {
+            Err(FixedPointError::StalePredecessor)
+        }
     }
 
     pub(crate) fn execute(
@@ -2269,7 +2327,7 @@ where
         coordinator.global_epoch.set(base.next_global_epoch);
         base.slot.clear();
         base.scratch.fill(0);
-        let (pool_work, scope, _pool) = pool_replay.replay();
+        let (pool_work, scope, _pool) = pool_replay.replay_preflighted(base.scope);
         workspace_replay.replay();
         let active = FixedPointActiveWork {
             coordinator_identity: coordinator.identity,
@@ -2292,6 +2350,7 @@ where
 
 impl<
         'slot,
+        'scope_slot,
         'scratch,
         'carried,
         'pool,
@@ -2311,6 +2370,7 @@ impl<
     > FixedPointPreparedAggregateAuthority
     for FixedPointPreparedAggregateWork<
         'slot,
+        'scope_slot,
         'scratch,
         'carried,
         'pool,
@@ -2481,6 +2541,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
     ) -> Result<
         FixedPointPreparedAggregateWork<
             'slot,
+            'scope_slot,
             'scratch,
             'carried,
             'pool,
@@ -3044,15 +3105,16 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
     fn into_aggregate_base(
         self,
         facts: FixedPointPreparedAggregateFacts,
-    ) -> FixedPointPreparedAggregateBase<'slot, 'scratch, 'carried> {
+    ) -> FixedPointPreparedAggregateBase<'slot, 'scope_slot, 'scratch, 'carried> {
         let Self {
             slot,
-            scope: _scope,
+            scope,
             scratch,
             carried_pages,
         } = self;
         FixedPointPreparedAggregateBase {
             slot,
+            scope,
             scratch,
             carried_pages,
             predecessor_generation: facts.predecessor_generation,
@@ -4614,7 +4676,9 @@ mod tests {
             replay.index_visits() <= 128,
             "direct sparse indexing must remain bounded by simulated path visits"
         );
-        let (work, scope, _) = replay.replay();
+        replay.preflight_prepared_scope(&prepared.scope).unwrap();
+        let (work, scope, _) = replay.replay_preflighted(prepared.scope);
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
         assert!(replay_slots
             .iter()
             .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));

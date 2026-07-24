@@ -1097,6 +1097,24 @@ impl<'pool, 'slots, 'scratch> PrivatePagePreparedSparseReplay<'pool, 'slots, 'sc
         self.pool.coordinator_fence()
     }
 
+    /// Ensures the prepared scope still matches this replay before the
+    /// mechanically infallible replay suffix consumes it.
+    pub(crate) fn preflight_prepared_scope(
+        &self,
+        prepared_scope: &PrivatePagePreparedScopeReservation<'_>,
+    ) -> Result<(), PrivatePagePoolError> {
+        self.pool
+            .preflight_prepared_coordinator_scope(prepared_scope)?;
+        let slot = &*prepared_scope.slot;
+        if slot.session_identity != self.work.session_identity
+            || slot.session_generation != self.work.session_generation
+            || slot.work_identity != self.work.work_identity
+        {
+            return Err(PrivatePagePoolError::CoordinatorMismatch);
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(crate) const fn touched_slots(&self) -> usize {
         self.len
@@ -1225,10 +1243,23 @@ impl<'pool, 'slots, 'scratch> PrivatePagePreparedSparseReplay<'pool, 'slots, 'sc
         self.len = 0;
     }
 
-    /// Mechanically infallible post-consume suffix. Every target and after
-    /// image is fixed during preparation and the live backing borrow is already
-    /// owned by this token.
-    pub(crate) fn replay(
+    /// Consumes a preflighted reservation, then applies the prepared sparse
+    /// replay. Every target and after image is fixed during preparation and
+    /// the live backing borrow is already owned by this token.
+    pub(crate) fn replay_preflighted(
+        self,
+        prepared_scope: PrivatePagePreparedScopeReservation<'_>,
+    ) -> (
+        PrivatePageCoordinatorWork,
+        PrivatePageReservationScope<'slots>,
+        &'pool PrivatePagePool<'slots>,
+    ) {
+        prepared_scope.slot.clear();
+        self.replay()
+    }
+
+    /// Mechanically infallible post-consume suffix.
+    fn replay(
         mut self,
     ) -> (
         PrivatePageCoordinatorWork,
@@ -3834,6 +3865,44 @@ impl<'slots> PrivatePagePool<'slots> {
             return Err(PrivatePagePoolError::CoordinatorMismatch);
         }
         prepared.slot.clear();
+        Ok(())
+    }
+
+    /// Validates the reservation that a sparse replay is about to consume.
+    ///
+    /// Sparse replay keeps the live pool unchanged until its final infallible
+    /// suffix. The prepared-slot proof must therefore still describe that same
+    /// untouched pool immediately before that suffix starts.
+    pub(crate) fn preflight_prepared_coordinator_scope(
+        &self,
+        prepared: &PrivatePagePreparedScopeReservation<'_>,
+    ) -> Result<(), PrivatePagePoolError> {
+        let slot = &*prepared.slot;
+        let address = slot as *const PrivatePagePreparedScopeSlot as usize;
+        let expected_seal = self.coordinator_scope_seal(
+            address,
+            slot.session_identity,
+            slot.session_generation,
+            slot.work_identity,
+            slot.count,
+            slot.pool_epoch,
+            slot.vacant_head,
+            slot.vacant_count,
+        );
+        if slot.address != address
+            || slot.pool_identity != self.identity
+            || slot.seal == 0
+            || slot.seal != expected_seal
+            || slot.session_identity != self.coordinator_session_identity.get()
+            || slot.session_generation != self.coordinator_session_generation.get()
+            || slot.pool_epoch != self.epoch.get()
+            || slot.vacant_head != self.unscoped_vacant_head.get()
+            || slot.vacant_count != self.unscoped_vacant_count.get()
+            || self.coordinator_work_phase.get() != PrivatePageCoordinatorWorkPhase::None
+            || self.active_checkpoint.get() != 0
+        {
+            return Err(PrivatePagePoolError::CoordinatorMismatch);
+        }
         Ok(())
     }
 
