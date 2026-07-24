@@ -39,7 +39,8 @@ pub(crate) use selective_finalization::{
 };
 #[cfg(test)]
 pub(crate) use selective_finalization::{
-    FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationScratch,
+    FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationPreviewError,
+    FreeBitmapFinalizationScratch,
 };
 
 const FREE_PATH_CAPACITY: usize = 4;
@@ -8513,6 +8514,83 @@ pub(crate) mod tests {
         assert_eq!(bound.cow.available_private_pages(), available_before);
         bound.cow.validate_scoped_bindings().unwrap();
 
+        let stage_calls = Cell::new(0usize);
+        let mut staged_preview = vec![0; bound.cow.replacements.len()];
+        let (staged_len, allocations) = count_thread_allocations(|| {
+            bound.preview_terminal_replacements_with_stage(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut staged_preview,
+                |_, stage_pool, stage_scope| {
+                    stage_calls.set(stage_calls.get() + 1);
+                    let checkpoint = stage_pool.begin_checkpoint().unwrap();
+                    stage_pool
+                        .claim_page_in_scope(
+                            &checkpoint,
+                            stage_scope,
+                            reclaimed_pages[0],
+                            PrivatePageOwner::Retirement,
+                            2,
+                            1,
+                        )
+                        .unwrap();
+                    stage_pool.commit_checkpoint(checkpoint).unwrap();
+                    let info = stage_pool
+                        .find_in_scope(stage_scope, reclaimed_pages[0])
+                        .unwrap()
+                        .and_then(|slot| stage_pool.scoped_slot_info(stage_scope, slot).unwrap())
+                        .unwrap();
+                    Ok::<_, ()>((info.pgno, info.state, info.binding_epoch))
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        let staged_len = staged_len.unwrap();
+        assert_eq!(stage_calls.get(), 2);
+        assert!(!staged_preview[..staged_len].contains(&13));
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+        pool.validate_exact_commitment(&scope, &commitment).unwrap();
+
+        let witness_calls = Cell::new(0usize);
+        let (mismatch, allocations) = count_thread_allocations(|| {
+            bound.preview_terminal_replacements_with_stage(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut release,
+                    insert_pages: &mut insert,
+                    cached_pages: &mut cache,
+                    index_stack: &mut stack,
+                    cleanup_nodes: &mut cleanup_nodes,
+                    cleanup_path: &mut cleanup_path,
+                    cleanup_targets: &mut cleanup_targets,
+                },
+                &mut staged_preview,
+                |_, _, _| {
+                    let pass = witness_calls.get();
+                    witness_calls.set(pass + 1);
+                    Ok::<_, ()>(pass)
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(witness_calls.get(), 2);
+        assert_eq!(
+            mismatch.unwrap_err(),
+            FreeBitmapFinalizationPreviewError::Bitmap(FreeBitmapCowError::StaleInsertionPlan)
+        );
+        assert!(cache
+            .iter()
+            .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
+        pool.validate_exact_commitment(&scope, &commitment).unwrap();
+
         let finalized = bound
             .finalize(FreeBitmapFinalizationScratch {
                 release_pages: &mut release,
@@ -8697,6 +8775,216 @@ pub(crate) mod tests {
             .iter()
             .all(|page| *page == FreeBitmapFinalizationCachedPage::empty()));
         pool.validate_exact_commitment(&scope, &commitment).unwrap();
+    }
+
+    #[test]
+    fn locked_reclamation_fixed_point_includes_post_retirement_bitmap_leaf() {
+        use crate::page_source::SlicePageSource;
+        use crate::retirement_writer::{
+            BlobBuildScratch, CommittedPageOrigin, CommittedPageReplacement,
+            CommittedReplacementLedger, PageRoleIndex, PageRoleIndexSlot, PrivatePageArena,
+            PrivateReleaseBuffer, RetirementBlobBuilder, RetirementPathFrame,
+            RetirementTreeEditResult, RetirementTreeEditor, RetirementTreeState,
+            RetirementWriteError,
+        };
+
+        fn compose(
+            bitmap: &[u32],
+            retirement: &[CommittedPageReplacement],
+            output: &mut [u32],
+        ) -> usize {
+            let len = bitmap.len() + retirement.len();
+            assert!(len <= output.len());
+            output[..bitmap.len()].copy_from_slice(bitmap);
+            for (destination, replacement) in output[bitmap.len()..len].iter_mut().zip(retirement) {
+                *destination = replacement.pgno;
+            }
+            output[..len].sort_unstable();
+            let mut unique = 0usize;
+            for index in 0..len {
+                let pgno = output[index];
+                assert!(pgno >= 2);
+                if unique == 0 || output[unique - 1] != pgno {
+                    output[unique] = pgno;
+                    unique += 1;
+                }
+            }
+            unique
+        }
+
+        // The retirement blob/tree consumes two ordinary private pages. The
+        // verified reclaimed page remains unused, so only terminal bitmap
+        // finalization discovers that it COWs the second committed leaf.
+        let source = SparsePages::new([
+            branch_many(100, 1, 1, &[(0, 101), (1, 102)]),
+            leaf(101, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(102, 1, &[2]),
+        ]);
+        let retirement_source = SlicePageSource::new(&[], 40_000);
+        let retirement_state = RetirementTreeState {
+            selected_txn: 1,
+            page_count: 40_000,
+            root: 0,
+            batch_count: 0,
+        };
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 100, 5, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 40_000, 40_000, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+        bound.cow.apply_planned_reservation().unwrap();
+        assert!(!bound.cow.replacements().contains(&102));
+        let reclaimed_slot = pool
+            .find_in_scope(&scope, reclaimed_pages[0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pool.scoped_slot_info(&scope, reclaimed_slot)
+                .unwrap()
+                .unwrap()
+                .state,
+            PrivatePagePoolState::Available
+        );
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let mut protected = [0u32; 4];
+        let mut next_protected = [0u32; 4];
+        let mut bitmap_preview = vec![0u32; bound.cow.replacements.len()];
+        let mut preview_blob_pages = [0u32; 1];
+        let mut preview_path = [RetirementPathFrame::new(); 4];
+        let mut preview_replacements = [CommittedPageReplacement {
+            pgno: 0,
+            origin: CommittedPageOrigin::RetirementTree,
+        }; 4];
+        let mut preview_releases = [0u32; 4];
+        let mut preview_roles = [PageRoleIndexSlot::new(); 16];
+        let mut protected_len = compose(bound.cow.replacements(), &[], &mut protected);
+        let mut iterations = 0usize;
+
+        loop {
+            iterations += 1;
+            assert!(iterations <= protected.len());
+            let candidate = &protected[..protected_len];
+            let (preview_len, allocations) = count_thread_allocations(|| {
+                bound.preview_terminal_replacements_with_stage(
+                    FreeBitmapFinalizationScratch {
+                        release_pages: &mut release,
+                        insert_pages: &mut insert,
+                        cached_pages: &mut cache,
+                        index_stack: &mut stack,
+                        cleanup_nodes: &mut cleanup_nodes,
+                        cleanup_path: &mut cleanup_path,
+                        cleanup_targets: &mut cleanup_targets,
+                    },
+                    &mut bitmap_preview,
+                    |_, stage_pool, stage_scope| {
+                        let mut arena =
+                            PrivatePageArena::from_scoped_pool(stage_pool, stage_scope, 2)?;
+                        let blob = RetirementBlobBuilder::build(
+                            candidate,
+                            &mut arena,
+                            &mut BlobBuildScratch::new(&mut preview_blob_pages),
+                        )?;
+                        let mut replacements =
+                            CommittedReplacementLedger::new(&mut preview_replacements);
+                        let mut releases = PrivateReleaseBuffer::new(&mut preview_releases);
+                        let mut roles = PageRoleIndex::new(&mut preview_roles);
+                        let result = RetirementTreeEditor::upsert_newest(
+                            &retirement_source,
+                            retirement_state,
+                            blob,
+                            &mut preview_path,
+                            &mut replacements,
+                            &mut releases,
+                            &mut roles,
+                        )?;
+                        assert!(replacements.entries().is_empty());
+                        Ok::<_, RetirementWriteError>((result, arena.in_use_count()?))
+                    },
+                )
+            });
+            assert_eq!(allocations, 0);
+            let preview_len = preview_len.unwrap();
+            let next_len = compose(&bitmap_preview[..preview_len], &[], &mut next_protected);
+            if next_protected[..next_len] == candidate[..] {
+                break;
+            }
+            protected[..next_len].copy_from_slice(&next_protected[..next_len]);
+            protected_len = next_len;
+        }
+        assert_eq!(iterations, 2);
+        assert!(protected[..protected_len].contains(&102));
+
+        let mut actual_blob_pages = [0u32; 1];
+        let mut actual_path = [RetirementPathFrame::new(); 4];
+        let mut actual_replacements = [CommittedPageReplacement {
+            pgno: 0,
+            origin: CommittedPageOrigin::RetirementTree,
+        }; 4];
+        let mut actual_releases = [0u32; 4];
+        let mut actual_roles = [PageRoleIndexSlot::new(); 16];
+        let mut arena = PrivatePageArena::from_scoped_pool(&pool, &scope, 2).unwrap();
+        let blob = RetirementBlobBuilder::build(
+            &protected[..protected_len],
+            &mut arena,
+            &mut BlobBuildScratch::new(&mut actual_blob_pages),
+        )
+        .unwrap();
+        let mut replacements = CommittedReplacementLedger::new(&mut actual_replacements);
+        let mut releases = PrivateReleaseBuffer::new(&mut actual_releases);
+        let mut roles = PageRoleIndex::new(&mut actual_roles);
+        let result: RetirementTreeEditResult = RetirementTreeEditor::upsert_newest(
+            &retirement_source,
+            retirement_state,
+            blob,
+            &mut actual_path,
+            &mut replacements,
+            &mut releases,
+            &mut roles,
+        )
+        .unwrap();
+        assert_eq!(result.committed_replacements, 0);
+        bound.cow.synchronize_scoped_bindings(&scope).unwrap();
+        let finalized = bound
+            .finalize(FreeBitmapFinalizationScratch {
+                release_pages: &mut release,
+                insert_pages: &mut insert,
+                cached_pages: &mut cache,
+                index_stack: &mut stack,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            })
+            .unwrap();
+        let mut actual_protected = [0u32; 4];
+        let actual_len = compose(
+            finalized.output.replacements(),
+            replacements.entries(),
+            &mut actual_protected,
+        );
+        assert_eq!(&actual_protected[..actual_len], &protected[..protected_len]);
     }
 
     #[test]

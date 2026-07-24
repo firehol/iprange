@@ -159,6 +159,18 @@ pub(crate) struct FreeBitmapFinalizationScratchRequirements {
     pub(crate) cleanup_targets: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FreeBitmapFinalizationPreviewError<E> {
+    Bitmap(FreeBitmapCowError),
+    Stage(E),
+}
+
+impl<E> From<FreeBitmapCowError> for FreeBitmapFinalizationPreviewError<E> {
+    fn from(error: FreeBitmapCowError) -> Self {
+        Self::Bitmap(error)
+    }
+}
+
 pub(crate) struct FreeBitmapFinalizationResult<
     'scratch,
     'a,
@@ -2179,17 +2191,45 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         scratch: FreeBitmapFinalizationScratch<'_>,
         output: &mut [u32],
     ) -> Result<usize, FreeBitmapCowError> {
+        match self.preview_terminal_replacements_with_stage(scratch, output, |_, _, _| {
+            Ok::<_, core::convert::Infallible>(())
+        }) {
+            Ok(length) => Ok(length),
+            Err(FreeBitmapFinalizationPreviewError::Bitmap(error)) => Err(error),
+            Err(FreeBitmapFinalizationPreviewError::Stage(never)) => match never {},
+        }
+    }
+
+    /// Runs caller-owned prospective work in the detached finalization scope
+    /// before each bitmap discovery/replay pass. The callback's equality
+    /// witness prevents a one-pass or unstable stage from becoming a preview.
+    pub(crate) fn preview_terminal_replacements_with_stage<T, E, F>(
+        &mut self,
+        scratch: FreeBitmapFinalizationScratch<'_>,
+        output: &mut [u32],
+        mut stage: F,
+    ) -> Result<usize, FreeBitmapFinalizationPreviewError<E>>
+    where
+        T: PartialEq,
+        F: for<'stage> FnMut(
+            &RetirementReclamationAuthority<'pages>,
+            &'stage PrivatePagePool<'stage>,
+            &'stage PrivatePageReservationScope<'stage>,
+        ) -> Result<T, E>,
+    {
         self.validate_finalization_scratch(&scratch)?;
         let output_required = self.cow.replacements.len();
         if output.len() < output_required {
-            return Err(FreeBitmapCowError::InsufficientResourceBudget {
-                resource: ReservationResource::ReplacementPages,
-                required: output_required,
-                available: output.len(),
-            });
+            return Err(FreeBitmapFinalizationPreviewError::Bitmap(
+                FreeBitmapCowError::InsufficientResourceBudget {
+                    resource: ReservationResource::ReplacementPages,
+                    required: output_required,
+                    available: output.len(),
+                },
+            ));
         }
 
-        let result = (|| {
+        let result: Result<usize, FreeBitmapFinalizationPreviewError<E>> = (|| {
             let live_scope = self
                 .cow
                 .scoped()
@@ -2200,7 +2240,14 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 .pool()
                 .exact_commitment(&live_scope)
                 .map_err(FreeBitmapCowError::PrivatePool)?;
-            let (expected_release, expected_reclaimed, expected_root, expected_tail, cached_len) = {
+            let (
+                expected_release,
+                expected_reclaimed,
+                expected_root,
+                expected_tail,
+                cached_len,
+                expected_stage,
+            ) = {
                 let discovery_cache = FinalizationCachedSource {
                     base: self.cow.committed,
                     pages: RefCell::new(scratch.cached_pages),
@@ -2215,6 +2262,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                     stage_scope,
                     shadow
                 );
+                let expected_stage = stage(&self.reclamation, &stage_pool, &stage_scope)
+                    .map_err(FreeBitmapFinalizationPreviewError::Stage)?;
                 let (released, reclaimed) = run_fixed_point(
                     &mut shadow,
                     scratch.release_pages,
@@ -2227,6 +2276,7 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                     shadow.root,
                     shadow.pending_page_count,
                     discovery_cache.length.get(),
+                    expected_stage,
                 )
             };
             let cache_seal = cache_fingerprint(scratch.cached_pages, cached_len);
@@ -2237,10 +2287,10 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 .pool()
                 .validate_exact_commitment(&live_scope, &commitment);
             if live_commitment.is_err() {
-                return Err(FreeBitmapCowError::StaleInsertionPlan);
+                return Err(FreeBitmapCowError::StaleInsertionPlan.into());
             }
             if cache_fingerprint(scratch.cached_pages, cached_len) != cache_seal {
-                return Err(FreeBitmapCowError::StaleInsertionPlan);
+                return Err(FreeBitmapCowError::StaleInsertionPlan.into());
             }
             final_access.map_err(FreeBitmapCowError::Source)?;
 
@@ -2259,6 +2309,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                     stage_scope,
                     shadow
                 );
+                let replay_stage = stage(&self.reclamation, &stage_pool, &stage_scope)
+                    .map_err(FreeBitmapFinalizationPreviewError::Stage)?;
                 let (released, reclaimed) = run_fixed_point(
                     &mut shadow,
                     scratch.release_pages,
@@ -2271,8 +2323,9 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                     || shadow.pending_page_count != expected_tail
                     || replay_cache.length.get() != cached_len
                     || cache_fingerprint(&replay_cache.pages.borrow(), cached_len) != cache_seal
+                    || replay_stage != expected_stage
                 {
-                    return Err(FreeBitmapCowError::StaleInsertionPlan);
+                    return Err(FreeBitmapCowError::StaleInsertionPlan.into());
                 }
                 output[..shadow.replacement_len]
                     .copy_from_slice(&shadow.replacements[..shadow.replacement_len]);
@@ -2640,6 +2693,10 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
 impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
     SealedFreeBitmapOutput<'scratch, 'a, 'slots, 'scope, S>
 {
+    pub(crate) fn replacements(&self) -> &[u32] {
+        self.cow.replacements()
+    }
+
     pub(crate) const fn root(&self) -> u32 {
         self.cow.root
     }

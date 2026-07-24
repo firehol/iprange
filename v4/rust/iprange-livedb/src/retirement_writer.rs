@@ -8630,6 +8630,34 @@ mod tests {
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]
+    fn compose_reclamation_protected_pages(
+        bitmap: &[u32],
+        retirement: &[CommittedPageReplacement],
+        output: &mut [u32],
+    ) -> usize {
+        let raw_len = bitmap
+            .len()
+            .checked_add(retirement.len())
+            .expect("fixture protected-page count fits usize");
+        assert!(raw_len <= output.len());
+        output[..bitmap.len()].copy_from_slice(bitmap);
+        for (destination, replacement) in output[bitmap.len()..raw_len].iter_mut().zip(retirement) {
+            *destination = replacement.pgno;
+        }
+        output[..raw_len].sort_unstable();
+        let mut unique = 0usize;
+        for index in 0..raw_len {
+            let pgno = output[index];
+            assert!(pgno >= 2);
+            if unique == 0 || output[unique - 1] != pgno {
+                output[unique] = pgno;
+                unique += 1;
+            }
+        }
+        unique
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
     fn run_linux_finalizer_reclamation_case(case: LinuxFinalizerReclamationCase) {
         let (selected_txn, retirement_root, retirement_batch_count) = match case {
             LinuxFinalizerReclamationCase::NoChange => (1, 0, 0),
@@ -8826,20 +8854,29 @@ mod tests {
         }];
         let mut verified_reclaimed_pages = [0u32; 2];
         let mut blob_pages = [0u32; 1];
+        let mut preview_blob_pages = [0u32; 1];
         let mut delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
         let mut upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut preview_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut preview_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
         let mut probe_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
         let mut probe_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
         let mut probe_replacement_entries = [EMPTY_REPLACEMENT; 4];
         let mut probe_release_pages = [0u32; 4];
         let mut probe_roles = [PageRoleIndexSlot::new(); 16];
         let mut protected_replacement_pages = [0u32; 4];
+        let mut next_protected_replacement_pages = [0u32; 4];
+        let mut actual_protected_replacement_pages = [0u32; 4];
+        let mut preview_bitmap_replacements = [0u32; 16];
+        let mut preview_replacement_entries = [EMPTY_REPLACEMENT; 4];
+        let mut preview_release_pages = [0u32; 4];
+        let mut preview_roles = [PageRoleIndexSlot::new(); 16];
         let mut retirement_replacements = [EMPTY_REPLACEMENT; 4];
         let mut retirement_releases = [0u32; 4];
         let mut retirement_roles = [PageRoleIndexSlot::new(); 16];
         let mut final_release_pages = [0u32; 4];
         let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
-        let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 8];
+        let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 12];
         let mut final_index_stack = [usize::MAX; 32];
         let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
         let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
@@ -8972,6 +9009,12 @@ mod tests {
                     );
                     bound.cow.apply_planned_reservation().unwrap();
                     assert_eq!(bound.cow.available_private_pages(), 2);
+                    let retirement_state = RetirementTreeState {
+                        selected_txn: selected.txn_id,
+                        page_count: selected.page_count,
+                        root: selected.retirement_root,
+                        batch_count: selected.retirement_batch_count,
+                    };
 
                     let protected_replacements = match case {
                         LinuxFinalizerReclamationCase::NoChange => &[50][..],
@@ -9009,34 +9052,134 @@ mod tests {
                             assert!(probe_releases.entries_from(0).is_empty());
                             assert_eq!(probe_arena.in_use_count().unwrap(), 0);
 
-                            let bitmap_len = bound.cow.replacements().len();
-                            let replacement_len = bitmap_len + probe_replacements.entries().len();
-                            assert!(replacement_len <= protected_replacement_pages.len());
-                            protected_replacement_pages[..bitmap_len]
-                                .copy_from_slice(bound.cow.replacements());
-                            for (destination, replacement) in protected_replacement_pages[bitmap_len
-                                ..replacement_len]
-                                .iter_mut()
-                                .zip(probe_replacements.entries())
-                            {
-                                *destination = replacement.pgno;
-                            }
-                            protected_replacement_pages[..replacement_len].sort_unstable();
-                            assert!(protected_replacement_pages[..replacement_len]
-                                .windows(2)
-                                .all(|pair| pair[0] < pair[1]));
+                            let mut protected_len = compose_reclamation_protected_pages(
+                                bound.cow.replacements(),
+                                probe_replacements.entries(),
+                                &mut protected_replacement_pages,
+                            );
                             assert_eq!(
                                 RetirementBlobBuilder::required_private_pages(
-                                    u64::try_from(replacement_len).unwrap()
+                                    u64::try_from(protected_len).unwrap()
                                 )
                                 .unwrap(),
                                 blob_pages.len()
                             );
-                            assert_eq!(
-                                &protected_replacement_pages[..replacement_len],
-                                &[11, 12, 13]
+                            let preview_requirements =
+                                bound.finalization_scratch_requirements().unwrap();
+                            assert!(preview_requirements.release_pages <= final_release_pages.len());
+                            assert!(preview_requirements.insert_pages <= final_insert_pages.len());
+                            assert!(preview_requirements.cached_pages <= final_cached_pages.len());
+                            assert!(preview_requirements.index_stack <= final_index_stack.len());
+                            assert!(preview_requirements.cleanup_nodes <= final_cleanup_nodes.len());
+                            assert!(preview_requirements.cleanup_path <= final_cleanup_path.len());
+                            assert!(
+                                preview_requirements.cleanup_targets <= final_cleanup_targets.len()
                             );
-                            &protected_replacement_pages[..replacement_len]
+
+                            let mut converged = false;
+                            for _ in 0..=protected_replacement_pages.len() {
+                                let candidate = &protected_replacement_pages[..protected_len];
+                                let preview_replacement_len = Cell::new(0usize);
+                                let preview_len = bound
+                                    .preview_terminal_replacements_with_stage(
+                                        FreeBitmapFinalizationScratch {
+                                            release_pages: &mut final_release_pages
+                                                [..preview_requirements.release_pages],
+                                            insert_pages: &mut final_insert_pages
+                                                [..preview_requirements.insert_pages],
+                                            cached_pages: &mut final_cached_pages
+                                                [..preview_requirements.cached_pages],
+                                            index_stack: &mut final_index_stack
+                                                [..preview_requirements.index_stack],
+                                            cleanup_nodes: &mut final_cleanup_nodes
+                                                [..preview_requirements.cleanup_nodes],
+                                            cleanup_path: &mut final_cleanup_path
+                                                [..preview_requirements.cleanup_path],
+                                            cleanup_targets: &mut final_cleanup_targets
+                                                [..preview_requirements.cleanup_targets],
+                                        },
+                                        &mut preview_bitmap_replacements,
+                                        |reclamation, stage_pool, stage_scope| {
+                                            let mut arena = PrivatePageArena::from_scoped_pool(
+                                                stage_pool,
+                                                stage_scope,
+                                                selected.txn_id + 1,
+                                            )?;
+                                            assert_eq!(
+                                                RetirementBlobBuilder::required_private_pages(
+                                                    u64::try_from(candidate.len()).unwrap()
+                                                )?,
+                                                preview_blob_pages.len()
+                                            );
+                                            let blob = RetirementBlobBuilder::build(
+                                                candidate,
+                                                &mut arena,
+                                                &mut BlobBuildScratch::new(
+                                                    &mut preview_blob_pages,
+                                                ),
+                                            )?;
+                                            let mut replacements = CommittedReplacementLedger::new(
+                                                &mut preview_replacement_entries,
+                                            );
+                                            let mut releases = PrivateReleaseBuffer::new(
+                                                &mut preview_release_pages,
+                                            );
+                                            let mut roles = PageRoleIndex::new(&mut preview_roles);
+                                            let result = RetirementTreeEditor::delete_reclaimed_oldest_and_upsert_newest(
+                                                &pages,
+                                                retirement_state,
+                                                retirement_identity,
+                                                reclamation,
+                                                blob,
+                                                &mut preview_delete_path,
+                                                &mut preview_upsert_path,
+                                                &mut replacements,
+                                                &mut releases,
+                                                &mut roles,
+                                            )?;
+                                            preview_replacement_len
+                                                .set(replacements.entries().len());
+                                            let mut replacement_fingerprint = 0u64;
+                                            for replacement in replacements.entries() {
+                                                replacement_fingerprint = replacement_fingerprint
+                                                    .wrapping_mul(0x100_0000_01b3)
+                                                    ^ u64::from(replacement.pgno)
+                                                    ^ u64::from(matches!(
+                                                        replacement.origin,
+                                                        CommittedPageOrigin::RetirementBlob
+                                                    ));
+                                            }
+                                            Ok::<_, RetirementWriteError>((
+                                                result,
+                                                replacement_fingerprint,
+                                                arena.in_use_count()?,
+                                            ))
+                                        },
+                                    )
+                                    .unwrap();
+                                assert_eq!(
+                                    preview_replacement_len.get(),
+                                    probe_replacements.entries().len()
+                                );
+                                assert_eq!(
+                                    &preview_replacement_entries[..probe.replacement_count],
+                                    probe_replacements.entries()
+                                );
+                                let next_len = compose_reclamation_protected_pages(
+                                    &preview_bitmap_replacements[..preview_len],
+                                    probe_replacements.entries(),
+                                    &mut next_protected_replacement_pages,
+                                );
+                                if next_protected_replacement_pages[..next_len] == candidate[..] {
+                                    converged = true;
+                                    break;
+                                }
+                                protected_replacement_pages[..next_len]
+                                    .copy_from_slice(&next_protected_replacement_pages[..next_len]);
+                                protected_len = next_len;
+                            }
+                            assert!(converged, "reclamation protected-page fixed point diverged");
+                            &protected_replacement_pages[..protected_len]
                         }
                     };
                     let mut arena = PrivatePageArena::from_scoped_pool(
@@ -9055,12 +9198,6 @@ mod tests {
                         CommittedReplacementLedger::new(&mut retirement_replacements);
                     let mut releases = PrivateReleaseBuffer::new(&mut retirement_releases);
                     let mut roles = PageRoleIndex::new(&mut retirement_roles);
-                    let retirement_state = RetirementTreeState {
-                        selected_txn: selected.txn_id,
-                        page_count: selected.page_count,
-                        root: selected.retirement_root,
-                        batch_count: selected.retirement_batch_count,
-                    };
                     if case == LinuxFinalizerReclamationCase::SelectedBatch {
                         assert_eq!(
                             validate_reclamation_authority(
@@ -9136,6 +9273,18 @@ mod tests {
                             panic!("bitmap finalization failed: {error:?}")
                         }
                     };
+                    if case == LinuxFinalizerReclamationCase::SelectedBatch {
+                        let actual_len = compose_reclamation_protected_pages(
+                            finalized.output.replacements(),
+                            replacements.entries(),
+                            &mut actual_protected_replacement_pages,
+                        );
+                        assert_eq!(
+                            &actual_protected_replacement_pages[..actual_len],
+                            protected_replacements,
+                            "the staged fixed point must equal the actual terminal replacements"
+                        );
+                    }
                     let bitmap_root = finalized.output.root();
                     let pending_page_count = finalized.output.pending_page_count();
                     let bitmap_export = match finalized

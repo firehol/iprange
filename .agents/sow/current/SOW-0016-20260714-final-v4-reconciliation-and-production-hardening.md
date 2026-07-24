@@ -6868,7 +6868,62 @@ requirements are normative in the Pre-Implementation Gate above.
   API, Go parity, retirement-output preview, or generic clean-writer operation
   is claimed.
 
+### 2026-07-24 - stage-aware reclamation preview plan
+
+- Bitmap-only preview cannot model a future retirement blob/tree: before that
+  output exists, its reserved pages look unused and bitmap finalization would
+  incorrectly return them as free. Add one private stage-aware preview hook
+  that gives a caller the detached pool and exact copied scope before each
+  discovery/replay finalization pass.
+- The caller will construct the prospective blob/tree only in that detached
+  scope, using preallocated scratch, and return an equality witness. The helper
+  must run the callback twice and reject differing witnesses, so a future
+  generic fixed point cannot accept a one-pass or unstable retirement preview.
+- Use it first to replace the selected Linux fixture's hard-coded protected
+  list. The later production clean-writer implementation will reuse this exact
+  primitive; this step does not expose a public callback API or allow a stage
+  callback to touch live pages.
+
+### 2026-07-24 - stage-aware reclamation preview implementation
+
+- `preview_terminal_replacements_with_stage` is private Rust infrastructure.
+  It constructs the same detached bitmap state used by terminal finalization,
+  gives the callback only that detached pool/scope and the immutable verified
+  reclamation authority, then runs the callback before both bitmap
+  discovery/replay passes. The callback returns an equality witness; a
+  differing witness or bitmap replay becomes typed stale-plan failure. The
+  existing bitmap-only preview is now its no-op wrapper.
+- The selected Linux reclaim fixture now starts from the live bitmap and
+  retirement-probe replacement lists, repeatedly stages the actual retirement
+  blob/tree edit with fixed caller scratch, and stops only when the sorted,
+  deduplicated protected list is unchanged. It checks the staged retirement
+  replacement ledger against the prior exact probe and checks that the real
+  terminal bitmap plus retirement replacement union equals the converged list.
+  The fixture no longer supplies `[11, 12, 13]` as operation input.
+- A permanent two-leaf test forces the first staged pass to discover a later
+  bitmap leaf after the staged retirement blob/tree consumes two private pages.
+  It reserves the operation's full five-page payload budget before binding,
+  requires exactly two fixed-point iterations, proves zero allocation inside
+  each preview operation, and proves the converged list equals real terminal
+  output. This establishes the capacity boundary that a future clean writer
+  must preflight; it does not infer that budget automatically.
+- No public `Reclaim`, generic clean-writer operation, format change, or Go
+  parity is claimed. The prospective stage remains private until the complete
+  production lifecycle has one bounded capacity model and error contract.
+
 ## Validation
+
+### 2026-07-24 - stage-aware reclamation preview
+
+- Focused Rust tests pass: bitmap preview read-only/replay agreement,
+  forced two-leaf post-retirement fixed point, and both Linux finalizer
+  reclamation cases.
+- Full Rust matrices pass: 443 no-default-feature tests and 558 all-feature
+  tests. `cargo fmt --check`, all-target/all-feature Clippy with warnings
+  denied, and all-feature benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. The Go result validates no regression only; this Rust-private
+  implementation has not been mirrored into Go.
 
 ### 2026-07-24 - Linux source/attempt/target state
 
