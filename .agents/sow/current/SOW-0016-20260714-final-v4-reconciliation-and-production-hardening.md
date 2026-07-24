@@ -7607,7 +7607,94 @@ requirements are normative in the Pre-Implementation Gate above.
   write boundary. The work remains private and unpublished: no metadata root,
   feed API, normalizer, scratch file, or live writer behavior changed.
 
+### 2026-07-24 - page-backed sequential-assignment engine plan
+
+- The old experimental external-sort implementation is not reusable: it made
+  normal ingestion depend on spill files and still became quadratic for nested
+  overwrites. The current exact-v4 requirements instead demand arrival-order
+  semantics, no external sort, and bounded non-quadratic work
+  (`binary-format-v4.md:1841-1850,3011-3018`).
+- The private engine will use a sparse binary prefix tree over the fixed IPv4
+  or IPv6 address width. Each node covers one binary address prefix and holds
+  only its own checked arrival ordinal plus either an opaque `u32` assignment
+  or a clear marker. A later whole-prefix assignment writes that node directly;
+  older descendant tags remain harmless because the final walk selects the
+  highest ordinal on each path. A partially covered interval descends only its
+  two boundary paths and their bounded canonical cover, rather than scanning
+  every older final interval. This is a standard MSB-prefix-trie mechanism;
+  the checked reference was `cilium/cilium @ 4d55bb2db33c`,
+  `pkg/container/bitlpm/trie.go:1-115`, adapted here for range assignment and
+  fixed private storage rather than Cilium's heap-backed longest-prefix lookup.
+- Nodes are fixed 32-byte records packed into actual transaction-private 4 KiB
+  pool pages. A caller-owned private workspace retains only the page
+  identities/counts, a bounded 32/128-level traversal, a pending output record
+  for adjacent-value coalescing, and explicit assignment/page/work/mutation
+  limits. No node map, input list, output list, temporary file, or per-record
+  heap allocation exists. Pool pages have a distinct private `Normalization`
+  owner and must all be returned before terminal publication; a leaked working
+  page is therefore rejected instead of becoming an unvalidated live page.
+- Each accepted direct/membership assignment receives the next nonzero `u64`
+  ordinal after endpoint and value-kind checks. Clear is an internal absence
+  marker, so direct value zero remains valid while membership zero remains
+  rejected. Ordinal/work/page exhaustion or any pool write failure marks the
+  private engine failed and leaves its active checkpoint for the existing
+  one-path rollback. The later writer-transaction integration must consume that
+  failed state and perform the required whole-draft abort before publication.
+- Finalization walks the sparse tree in address order, resolves ancestor versus
+  node ordinals, coalesces equal adjacent effective values, and immediately
+  feeds the existing ordered range-tree builder and its real pool sink. Thus
+  the normalized result is written straight into its final v4 range pages; the
+  normalizer never materializes a separate result feed or sorted record array.
+  This first slice remains private and generic over direct/membership value
+  rules. Catalog interning, five membership operations, high-level workflows,
+  retention, metadata, and public SDK methods remain later work.
+- Tests will prove empty input, partial overwrite preservation, clear semantics,
+  nested alternating ranges, an IPv6 full-space boundary, zero direct values,
+  membership-zero rejection, deterministic per-address arrival-order output,
+  final-tree reopening, page/work exhaustion rollback, and linear/bounded work
+  counters under doubling nested input. They will also prove zero allocation
+  after private workspace construction in both languages.
+
+### 2026-07-24 - page-backed sequential-assignment implementation
+
+- Added private Rust and Go sparse-prefix normalizers. Each consumes arrival
+  order directly, stores only fixed 32-byte nodes in `Normalization` pool pages,
+  and emits the final canonical range stream directly to the existing range
+  page-pool sink. It creates no input-sized heap collection, sorted record
+  array, or temporary file.
+- `Value` and `Clear` are distinct internal tags. Direct value zero is retained;
+  membership zero fails before a page claim. Empty input emits root zero without
+  claiming a normalizer or range page. Equal adjacent final values coalesce.
+- A failed input/finalization makes the engine non-finalizable. This prevents a
+  caller from ignoring the error and asking this component to emit its partial
+  state. The component is not yet attached to the writer transaction core, so
+  that core still needs to convert its failed state into the required
+  whole-draft abort/poisoning behavior before any public API uses it.
+- Rust rejects any live `Normalization` page as a terminal page owner. Go now
+  recognizes the matching private owner/origin so normalizer pages can use the
+  common pool safely; terminal fixed-point integration remains later work.
+- No normative specification update is needed: this private implementation
+  realizes the existing ordered-normalization contract without adding a public
+  API, default validation, or new v4 bytes.
+
 ## Validation
+
+### 2026-07-24 - page-backed sequential-assignment validation
+
+- Focused Go and Rust tests pass. They prove empty input, arrival-order partial
+  overwrites, clear, direct zero, membership-zero failure, canonical coalescing,
+  full IPv6 maximum handling, bounded page/work failure followed by rollback,
+  deterministic 256-address oracle equivalence, linear doubling behavior, zero
+  warmed-path allocations, actual private-page output, and reopening that
+  output through each language's range reader.
+- Full Go `test ./...` and `vet ./...` pass. Rust passes 483 no-default-feature
+  tests and 604 all-feature tests; formatting, warnings-denied all-target/all-
+  feature Clippy, and all-feature benchmark compilation pass. Whitespace
+  checking and the project SOW audit pass.
+- The whole-writer abort bridge is intentionally not claimed by this validation:
+  no public normalizer or writer transaction currently invokes this internal
+  component. That bridge is the next implementation boundary in this active
+  SOW, followed by direct/membership workflow integration.
 
 ### 2026-07-24 - canonical range-page encoders
 

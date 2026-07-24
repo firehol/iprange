@@ -70,6 +70,7 @@ pub(crate) enum PrivatePageAuthorization {
 pub(crate) enum PrivatePageOwner {
     Bitmap,
     Range,
+    Normalization,
     Retirement,
 }
 
@@ -10275,6 +10276,9 @@ fn valid_terminal_owner_tag(owner: PrivatePageOwner, tag: u64) -> bool {
     match owner {
         PrivatePageOwner::Bitmap => true,
         PrivatePageOwner::Range => matches!(tag, 4 | 6),
+        // Normalization pages are transaction-private working storage. A
+        // terminal generation must return every one before publication.
+        PrivatePageOwner::Normalization => false,
         PrivatePageOwner::Retirement => matches!(tag, 1 | 2),
     }
 }
@@ -10295,6 +10299,7 @@ fn terminal_page_matches_owner(owner: PrivatePageOwner, tag: u64, header: PageHe
                     PageType::RangeBranch | PageType::RangeLeaf
                 )
         }
+        (PrivatePageOwner::Normalization, _) => false,
         (PrivatePageOwner::Retirement, 1) => matches!(
             header.page_type,
             PageType::RetirementBranch | PageType::RetirementLeaf
@@ -10347,6 +10352,10 @@ mod tests {
         assert!(valid_terminal_owner_tag(PrivatePageOwner::Range, 6));
         assert!(!valid_terminal_owner_tag(PrivatePageOwner::Range, 0));
         assert!(!valid_terminal_owner_tag(PrivatePageOwner::Range, 5));
+        assert!(!valid_terminal_owner_tag(
+            PrivatePageOwner::Normalization,
+            4
+        ));
         assert!(terminal_page_matches_owner(
             PrivatePageOwner::Range,
             4,
@@ -10360,6 +10369,11 @@ mod tests {
         assert!(!terminal_page_matches_owner(
             PrivatePageOwner::Bitmap,
             0,
+            v4_leaf
+        ));
+        assert!(!terminal_page_matches_owner(
+            PrivatePageOwner::Normalization,
+            4,
             v4_leaf
         ));
     }

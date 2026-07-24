@@ -61,6 +61,8 @@ mod retirement_reader;
 #[allow(dead_code)]
 mod retirement_writer;
 #[allow(dead_code)]
+mod sequential_assignment;
+#[allow(dead_code)]
 mod sidecar;
 #[allow(dead_code)]
 mod sidecar_transition;
