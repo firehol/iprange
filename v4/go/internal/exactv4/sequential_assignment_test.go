@@ -5,15 +5,6 @@ import (
 	"testing"
 )
 
-func assignmentTestPool(t *testing.T, count int) *privatePagePool {
-	t.Helper()
-	slots := make([]privatePagePoolSlot, count)
-	for index := range slots {
-		slots[index] = newPrivatePageSlot(uint32(index+3), privatePageCommittedFree)
-	}
-	return testPrivatePagePool(t, slots, 400, 400)
-}
-
 func requireSequentialAssignmentCode(t *testing.T, err error, want sequentialAssignmentErrorCode) *sequentialAssignmentError {
 	t.Helper()
 	if err == nil {
@@ -29,13 +20,17 @@ func requireSequentialAssignmentCode(t *testing.T, err error, want sequentialAss
 	return got
 }
 
-func singleLeafAssignmentRecords[K rangeKey[K]](t *testing.T, sink *rangeTreeBuildTestSink) []rangeRecord[K] {
+func singleLeafStagedAssignmentRecords[K rangeKey[K]](
+	t *testing.T,
+	staging *rangeTreeStaging[K],
+	valueKind ValueKind,
+) []rangeRecord[K] {
 	t.Helper()
-	if len(sink.pages) != 1 {
-		t.Fatalf("range pages = %d, want one leaf", len(sink.pages))
+	if staging.len() != 1 {
+		t.Fatalf("staged range pages = %d, want one leaf", staging.len())
 	}
 	var key K
-	leaf, err := openRangeLeaf[K](sink.pages[0].page[:], 2, key.family(), ValueKindDirect)
+	leaf, err := openRangeLeaf[K](staging.pages[0].bytes[:], 2, key.family(), valueKind)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,35 +44,10 @@ func singleLeafAssignmentRecords[K rangeKey[K]](t *testing.T, sink *rangeTreeBui
 	return records
 }
 
-func sequentialAssignmentTreeImage(t *testing.T, pool *privatePagePool, result rangeTreeBuildResult) []byte {
-	t.Helper()
-	index, found := pool.slotIndex(result.rootPage)
-	if !found {
-		t.Fatalf("range root %d was not claimed from the private pool", result.rootPage)
-	}
-	meta := emptyDirectMeta(2)
-	meta.AddressFamily = AddressFamilyIPv4
-	meta.ValueKind = ValueKindDirect
-	meta.PageCount = pool.pendingPageCount
-	meta.RangeRoot = result.rootPage
-	meta.RangeRecordCount = result.recordCount
-	data := make([]byte, int(meta.PageCount)*PageSize)
-	page := meta.EncodePage()
-	copy(data[:PageSize], page[:])
-	copy(data[PageSize:2*PageSize], page[:])
-	copy(data[int(result.rootPage)*PageSize:], pool.slots[index].bytes[:])
-	return data
-}
-
 func TestSequentialAssignmentPreservesUncoveredSidesInArrivalOrder(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [2]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 8, 10_000, 10_000)
+	var nodePages [2]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 8, 10_000, 10_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,15 +58,19 @@ func TestSequentialAssignmentPreservesUncoveredSidesInArrivalOrder(t *testing.T)
 		t.Fatal(err)
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink := newRangeTreeBuildTestSink()
-	result, err := engine.buildFinalTree(&treeWorkspace, sink)
+	var stagingPages [2]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.rootPage != 2 || result.recordCount != 3 || !workspace.clean() {
-		t.Fatalf("result/workspace = %+v/%+v", result, workspace)
+	staged, err := engine.buildStagedTree(&treeWorkspace, &staging)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := singleLeafAssignmentRecords[IPv4](t, sink)
+	if staged.logicalRoot != 2 || staged.recordCount != 3 || !workspace.clean() {
+		t.Fatalf("staged/workspace = %+v/%+v", staged, workspace)
+	}
+	got := singleLeafStagedAssignmentRecords[IPv4](t, &staging, ValueKindDirect)
 	want := []rangeRecord[IPv4]{
 		{from: 10, to: 14, value: 1},
 		{from: 15, to: 20, value: 2},
@@ -110,45 +84,12 @@ func TestSequentialAssignmentPreservesUncoveredSidesInArrivalOrder(t *testing.T)
 			t.Fatalf("record[%d] = %#v, want %#v", index, got[index], want[index])
 		}
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
 }
 
-func TestSequentialAssignmentAcceptsEmptyInputWithoutClaimingAPage(t *testing.T) {
-	pool := assignmentTestPool(t, 2)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	workspace := newSequentialAssignmentWorkspace(nil)
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 0, 1_000, 1_000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink := newRangeTreeBuildTestSink()
-	result, err := engine.buildFinalTree(&treeWorkspace, sink)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.rootPage != 0 || result.recordCount != 0 || len(sink.pages) != 0 || pool.available() != 2 || !workspace.clean() {
-		t.Fatalf("empty result = %+v, pages=%d available=%d workspace=%+v", result, len(sink.pages), pool.available(), workspace)
-	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
-}
-
-func TestSequentialAssignmentBuildsTheFinalTreeInActualPoolPages(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [2]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 4, 10_000, 10_000)
+func TestSequentialAssignmentStagesBeforePhysicalMaterialization(t *testing.T) {
+	var nodePages [1]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 2, 10_000, 10_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,30 +97,32 @@ func TestSequentialAssignmentBuildsTheFinalTreeInActualPoolPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink, err := newRangeTreePoolSink(pool, checkpoint, 2)
+	var stagingPages [1]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := engine.buildFinalTree(&treeWorkspace, &sink)
+	staged, err := engine.buildStagedTree(&treeWorkspace, &staging)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.rootPage == 0 || !workspace.clean() {
-		t.Fatalf("result/workspace = %+v/%+v", result, workspace)
+	if staged.logicalRoot != 2 || staging.pages[0].bytes == ([PageSize]byte{}) {
+		t.Fatalf("logical staging = %+v/%x", staged, staging.pages[0].bytes[:PageHeaderSize])
 	}
-	index, found := pool.slotIndex(result.rootPage)
-	if !found {
-		t.Fatalf("final root %d not claimed from pool", result.rootPage)
+	var terminal [1]privateWriterProducedTerminalPage
+	materialized, err := staging.materialize(
+		staged,
+		12,
+		[]rangeTreePhysicalAssignment{rangeTreeStagingAssignment(7)},
+		terminal[:],
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	slot := pool.slots[index]
-	if slot.owner != privatePageOwnerRange || slot.origin != privatePageRange || slot.state != privatePageInUse {
-		t.Fatalf("final root ownership = %+v", slot)
+	if materialized.rootPage != 7 || terminal[0].pageNumber != 7 {
+		t.Fatalf("materialized/terminal = %+v/%+v", materialized, terminal[0])
 	}
-	header, decodeErr := DecodePageHeader(slot.bytes[:], 2)
-	if decodeErr != nil || header.PageType != PageTypeRangeLeaf || header.Aux != uint32(AddressFamilyIPv4) {
-		t.Fatalf("final root header = %+v/%v", header, decodeErr)
-	}
-	tree, err := openImmutableRangeTree[IPv4](sequentialAssignmentTreeImage(t, pool, result))
+	tree, err := openImmutableRangeTree[IPv4](rangeTreeStagingImage[IPv4](t, materialized, terminal[:], 12))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,21 +130,34 @@ func TestSequentialAssignmentBuildsTheFinalTreeInActualPoolPages(t *testing.T) {
 	if err != nil || !found || record != (rangeRecord[IPv4]{from: 10, to: 20, value: 7}) {
 		t.Fatalf("reopened range = %#v/%t/%v", record, found, err)
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
+}
+
+func TestSequentialAssignmentAcceptsEmptyInputWithoutStagingAPage(t *testing.T) {
+	workspace := newSequentialAssignmentWorkspace(nil)
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 0, 1_000, 1_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
+	var stagingPages [1]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := engine.buildStagedTree(&treeWorkspace, &staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if staged.logicalRoot != 0 || staged.recordCount != 0 || staging.len() != 0 || !workspace.clean() {
+		t.Fatalf("empty staged/workspace = %+v/%+v", staged, workspace)
 	}
 }
 
-func TestSequentialAssignmentAllowsDirectZeroAndRejectsMembershipZeroBeforeClaim(t *testing.T) {
+func TestSequentialAssignmentAllowsDirectZeroAndRejectsMembershipZeroBeforeNodeWrite(t *testing.T) {
 	t.Run("direct zero", func(t *testing.T) {
-		pool := assignmentTestPool(t, 4)
-		checkpoint, problem := pool.begin()
-		if problem.failed() {
-			t.Fatal(problem)
-		}
-		var pageSlots [1]sequentialAssignmentPage
-		workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-		engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 2, 1_000, 1_000)
+		var nodePages [1]sequentialAssignmentPage
+		workspace := newSequentialAssignmentWorkspace(nodePages[:])
+		engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 2, 1_000, 1_000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,55 +165,48 @@ func TestSequentialAssignmentAllowsDirectZeroAndRejectsMembershipZeroBeforeClaim
 			t.Fatal(err)
 		}
 		var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-		sink := newRangeTreeBuildTestSink()
-		if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+		var stagingPages [1]rangeTreeStagingPage
+		staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+		if err != nil {
 			t.Fatal(err)
 		}
-		got := singleLeafAssignmentRecords[IPv4](t, sink)
-		if len(got) != 1 || got[0] != (rangeRecord[IPv4]{from: 4, to: 5, value: 0}) {
-			t.Fatalf("direct zero records = %#v", got)
+		if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+			t.Fatal(err)
 		}
-		if problem = pool.rollback(checkpoint); problem.failed() {
-			t.Fatal(problem)
+		got := singleLeafStagedAssignmentRecords[IPv4](t, &staging, ValueKindDirect)
+		if len(got) != 1 || got[0] != (rangeRecord[IPv4]{from: 4, to: 5, value: 0}) {
+			t.Fatalf("direct-zero records = %#v", got)
 		}
 	})
 
 	t.Run("membership zero", func(t *testing.T) {
-		pool := assignmentTestPool(t, 4)
-		checkpoint, problem := pool.begin()
-		if problem.failed() {
-			t.Fatal(problem)
-		}
-		var pageSlots [1]sequentialAssignmentPage
-		workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-		engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindMembership, 2, 1_000, 1_000)
+		var nodePages [1]sequentialAssignmentPage
+		workspace := newSequentialAssignmentWorkspace(nodePages[:])
+		engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindMembership, 2, 1_000, 1_000)
 		if err != nil {
 			t.Fatal(err)
 		}
 		requireSequentialAssignmentCode(t, engine.assign(4, 5, 0), sequentialAssignmentErrMembershipValueZero)
-		if pool.available() != 4 || !workspace.clean() {
-			t.Fatalf("membership-zero claimed private state: available=%d workspace=%+v", pool.available(), workspace)
+		if !workspace.clean() {
+			t.Fatalf("membership zero wrote node storage: %+v", workspace)
 		}
 		var treeWorkspace rangeTreeBuildWorkspace[IPv4]
+		var stagingPages [1]rangeTreeStagingPage
+		staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindMembership)
+		if err != nil {
+			t.Fatal(err)
+		}
 		requireSequentialAssignmentCode(t, func() error {
-			_, buildErr := engine.buildFinalTree(&treeWorkspace, newRangeTreeBuildTestSink())
+			_, buildErr := engine.buildStagedTree(&treeWorkspace, &staging)
 			return buildErr
 		}(), sequentialAssignmentErrFailed)
-		if problem = pool.rollback(checkpoint); problem.failed() {
-			t.Fatal(problem)
-		}
 	})
 }
 
 func TestSequentialAssignmentClearRemovesOnlyItsArrivalInterval(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [2]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 4, 10_000, 10_000)
+	var nodePages [2]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 4, 10_000, 10_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,15 +217,16 @@ func TestSequentialAssignmentClearRemovesOnlyItsArrivalInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink := newRangeTreeBuildTestSink()
-	if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+	var stagingPages [2]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := singleLeafAssignmentRecords[IPv4](t, sink)
-	want := []rangeRecord[IPv4]{
-		{from: 10, to: 14, value: 1},
-		{from: 21, to: 30, value: 1},
+	if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+		t.Fatal(err)
 	}
+	got := singleLeafStagedAssignmentRecords[IPv4](t, &staging, ValueKindDirect)
+	want := []rangeRecord[IPv4]{{from: 10, to: 14, value: 1}, {from: 21, to: 30, value: 1}}
 	if len(got) != len(want) {
 		t.Fatalf("records = %#v, want %#v", got, want)
 	}
@@ -285,20 +235,12 @@ func TestSequentialAssignmentClearRemovesOnlyItsArrivalInterval(t *testing.T) {
 			t.Fatalf("record[%d] = %#v, want %#v", index, got[index], want[index])
 		}
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
 }
 
 func TestSequentialAssignmentCoalescesAdjacentFinalValues(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [2]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 4, 10_000, 10_000)
+	var nodePages [2]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 4, 10_000, 10_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,17 +251,18 @@ func TestSequentialAssignmentCoalescesAdjacentFinalValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink := newRangeTreeBuildTestSink()
-	if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+	var stagingPages [1]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := singleLeafAssignmentRecords[IPv4](t, sink)
-	want := []rangeRecord[IPv4]{{from: 10, to: 30, value: 7}}
-	if len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("records = %#v, want %#v", got, want)
+	if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+		t.Fatal(err)
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
+	got := singleLeafStagedAssignmentRecords[IPv4](t, &staging, ValueKindDirect)
+	want := rangeRecord[IPv4]{from: 10, to: 30, value: 7}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("records = %#v, want %#v", got, want)
 	}
 }
 
@@ -329,13 +272,9 @@ func TestSequentialAssignmentMatchesSmallPerAddressArrivalOrderOracle(t *testing
 		value uint32
 	}
 
-	pool := assignmentTestPool(t, 64)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	workspace := newSequentialAssignmentWorkspace(make([]sequentialAssignmentPage, 32))
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 128, 1_000_000, 1_000_000)
+	var nodePages [32]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 128, 1_000_000, 1_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,12 +305,16 @@ func TestSequentialAssignmentMatchesSmallPerAddressArrivalOrderOracle(t *testing
 		}
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	sink := newRangeTreeBuildTestSink()
-	if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+	var stagingPages [4]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
 		t.Fatal(err)
 	}
 	got := [256]expectedValue{}
-	for _, record := range singleLeafAssignmentRecords[IPv4](t, sink) {
+	for _, record := range singleLeafStagedAssignmentRecords[IPv4](t, &staging, ValueKindDirect) {
 		if record.to > 255 {
 			t.Fatalf("unexpected range outside oracle domain: %#v", record)
 		}
@@ -384,20 +327,12 @@ func TestSequentialAssignmentMatchesSmallPerAddressArrivalOrderOracle(t *testing
 			t.Fatalf("address %d = %#v, want %#v", address, got[address], want[address])
 		}
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
 }
 
 func TestSequentialAssignmentHandlesFullIPv6SpaceWithoutWrap(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [3]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv6](pool, checkpoint, &workspace, 2, ValueKindDirect, 4, 100_000, 100_000)
+	var nodePages [3]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv6](&workspace, 2, ValueKindDirect, 4, 100_000, 100_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,11 +344,15 @@ func TestSequentialAssignmentHandlesFullIPv6SpaceWithoutWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv6]
-	sink := newRangeTreeBuildTestSink()
-	if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+	var stagingPages [1]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv6](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := singleLeafAssignmentRecords[IPv6](t, sink)
+	if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+		t.Fatal(err)
+	}
+	got := singleLeafStagedAssignmentRecords[IPv6](t, &staging, ValueKindDirect)
 	want := []rangeRecord[IPv6]{
 		{from: IPv6{}, to: IPv6{Hi: ^uint64(0), Lo: ^uint64(0) - 1}, value: 1},
 		{from: maximum, to: maximum, value: 2},
@@ -421,82 +360,120 @@ func TestSequentialAssignmentHandlesFullIPv6SpaceWithoutWrap(t *testing.T) {
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("full IPv6 records = %#v, want %#v", got, want)
 	}
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
 }
 
-func TestSequentialAssignmentPageExhaustionRollsBackWholeDraft(t *testing.T) {
-	pool := assignmentTestPool(t, 8)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [1]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv6](pool, checkpoint, &workspace, 2, ValueKindDirect, 2, 100_000, 100_000)
+func TestSequentialAssignmentStagesAndMaterializesMultilevelIPv4(t *testing.T) {
+	count := rangeLeafCapacity[IPv4]() + 1
+	var nodePages [80]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
+	engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, uint64(count), 1_000_000, 1_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireSequentialAssignmentCode(t, engine.assign(IPv6FromHalves(0, 1), IPv6FromHalves(0, 1), 1), sequentialAssignmentErrWorkspacePageLimit)
-	if pool.available() >= 8 {
-		t.Fatal("expected a partial private draft before whole-checkpoint rollback")
-	}
-	var treeWorkspace rangeTreeBuildWorkspace[IPv6]
-	requireSequentialAssignmentCode(t, func() error {
-		_, err := engine.buildFinalTree(&treeWorkspace, newRangeTreeBuildTestSink())
-		return err
-	}(), sequentialAssignmentErrFailed)
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
-	}
-	workspace.discardAfterRollback()
-	if pool.available() != 8 || !workspace.clean() {
-		t.Fatalf("rollback/workspace = %d/%+v", pool.available(), workspace)
-	}
-}
-
-func TestSequentialAssignmentWorkBudgetRollsBackWholeDraft(t *testing.T) {
-	pool := assignmentTestPool(t, 4)
-	checkpoint, problem := pool.begin()
-	if problem.failed() {
-		t.Fatal(problem)
-	}
-	var pageSlots [1]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-	engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 2, 1, 1_000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireSequentialAssignmentCode(t, engine.assign(10, 20, 1), sequentialAssignmentErrWorkBudget)
-	if pool.available() >= 4 {
-		t.Fatal("expected a private page claim before the bounded-work failure")
+	for index := 0; index < count; index++ {
+		address := IPv4(index * 2)
+		if err = engine.assign(address, address, 1); err != nil {
+			t.Fatalf("assignment %d: %v", index, err)
+		}
 	}
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	requireSequentialAssignmentCode(t, func() error {
-		_, buildErr := engine.buildFinalTree(&treeWorkspace, newRangeTreeBuildTestSink())
-		return buildErr
-	}(), sequentialAssignmentErrFailed)
-	if problem = pool.rollback(checkpoint); problem.failed() {
-		t.Fatal(problem)
+	var stagingPages [3]rangeTreeStagingPage
+	staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+	if err != nil {
+		t.Fatal(err)
 	}
-	workspace.discardAfterRollback()
-	if pool.available() != 4 || !workspace.clean() {
-		t.Fatalf("rollback/workspace = %d/%+v", pool.available(), workspace)
+	staged, err := engine.buildStagedTree(&treeWorkspace, &staging)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if staged.pageCount != 3 || !workspace.clean() {
+		t.Fatalf("staged/workspace = %+v/%t", staged, workspace.clean())
+	}
+	assignments := []rangeTreePhysicalAssignment{
+		rangeTreeStagingAssignment(3), rangeTreeStagingAssignment(9), rangeTreeStagingAssignment(17),
+	}
+	var terminal [3]privateWriterProducedTerminalPage
+	materialized, err := staging.materialize(staged, 20, assignments, terminal[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := openRangeBranch[IPv4](terminal[2].bytes[:], 2, AddressFamilyIPv4, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, leftErr := branch.entry(0)
+	right, rightErr := branch.entry(1)
+	if materialized.rootPage != 17 || leftErr != nil || rightErr != nil || left.childPage != 3 || right.childPage != 9 ||
+		!VerifyPageCRC32C(terminal[2].bytes[:]) {
+		t.Fatalf("materialized branch = %+v/%+v/%v/%+v/%v", materialized, left, leftErr, right, rightErr)
+	}
+}
+
+func TestSequentialAssignmentFailureRequiresAbortBeforeWorkspaceReuse(t *testing.T) {
+	t.Run("node workspace", func(t *testing.T) {
+		var nodePages [1]sequentialAssignmentPage
+		workspace := newSequentialAssignmentWorkspace(nodePages[:])
+		engine, err := newSequentialAssignmentEngine[IPv6](&workspace, 2, ValueKindDirect, 2, 100_000, 100_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireSequentialAssignmentCode(t, engine.assign(IPv6FromHalves(0, 1), IPv6FromHalves(0, 1), 1), sequentialAssignmentErrWorkspacePageLimit)
+		if workspace.clean() {
+			t.Fatal("expected failed draft to retain dirty node workspace until abort")
+		}
+		var treeWorkspace rangeTreeBuildWorkspace[IPv6]
+		var stagingPages [1]rangeTreeStagingPage
+		staging, err := newRangeTreeStaging[IPv6](stagingPages[:], 2, ValueKindDirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireSequentialAssignmentCode(t, func() error {
+			_, buildErr := engine.buildStagedTree(&treeWorkspace, &staging)
+			return buildErr
+		}(), sequentialAssignmentErrFailed)
+		workspace.discardAfterAbort()
+		staging.discardAfterAbort()
+		if !workspace.clean() || stagingPages[0] != (rangeTreeStagingPage{}) {
+			t.Fatalf("abort did not scrub workspace/staging: %+v/%+v", workspace, stagingPages[0])
+		}
+	})
+
+	t.Run("staging capacity", func(t *testing.T) {
+		var nodePages [1]sequentialAssignmentPage
+		workspace := newSequentialAssignmentWorkspace(nodePages[:])
+		engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 1, 10_000, 10_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = engine.assign(10, 20, 1); err != nil {
+			t.Fatal(err)
+		}
+		var treeWorkspace rangeTreeBuildWorkspace[IPv4]
+		staging, err := newRangeTreeStaging[IPv4](nil, 2, ValueKindDirect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireRangeTreeStagingCode(t, func() error {
+			_, buildErr := engine.buildStagedTree(&treeWorkspace, &staging)
+			return buildErr
+		}(), rangeTreeStagingErrCapacityExhausted)
+		if workspace.clean() {
+			t.Fatal("staging failure unexpectedly made the failed draft reusable")
+		}
+		workspace.discardAfterAbort()
+		staging.discardAfterAbort()
+		if !workspace.clean() {
+			t.Fatalf("abort did not scrub node workspace: %+v", workspace)
+		}
+	})
 }
 
 func TestSequentialAssignmentNestedWorkScalesLinearly(t *testing.T) {
 	run := func(t *testing.T, count int) uint64 {
 		t.Helper()
-		pool := assignmentTestPool(t, 128)
-		checkpoint, problem := pool.begin()
-		if problem.failed() {
-			t.Fatal(problem)
-		}
-		var pageSlots [64]sequentialAssignmentPage
-		workspace := newSequentialAssignmentWorkspace(pageSlots[:])
-		engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, uint64(count), 1_000_000, 1_000_000)
+		var nodePages [64]sequentialAssignmentPage
+		workspace := newSequentialAssignmentWorkspace(nodePages[:])
+		engine, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, uint64(count), 1_000_000, 1_000_000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -506,12 +483,13 @@ func TestSequentialAssignmentNestedWorkScalesLinearly(t *testing.T) {
 			}
 		}
 		var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-		sink := newRangeTreeBuildTestSink()
-		if _, err = engine.buildFinalTree(&treeWorkspace, sink); err != nil {
+		var stagingPages [4]rangeTreeStagingPage
+		staging, err := newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if problem = pool.rollback(checkpoint); problem.failed() {
-			t.Fatal(problem)
+		if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+			t.Fatal(err)
 		}
 		return engine.work
 	}
@@ -524,37 +502,66 @@ func TestSequentialAssignmentNestedWorkScalesLinearly(t *testing.T) {
 }
 
 func TestSequentialAssignmentHotPathAllocatesNothingAfterFixedSetup(t *testing.T) {
-	slots := []privatePagePoolSlot{
-		newPrivatePageSlot(3, privatePageCommittedFree),
-		newPrivatePageSlot(4, privatePageCommittedFree),
-		newPrivatePageSlot(5, privatePageCommittedFree),
-	}
-	pool := testPrivatePagePool(t, slots, 20, 20)
-	var pageSlots [2]sequentialAssignmentPage
-	workspace := newSequentialAssignmentWorkspace(pageSlots[:])
+	var nodePages [2]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(nodePages[:])
 	var treeWorkspace rangeTreeBuildWorkspace[IPv4]
-	var sink fixedRangeTreeBuildSink
+	var stagingPages [1]rangeTreeStagingPage
+	var engine sequentialAssignmentEngine[IPv4]
+	var staging rangeTreeStaging[IPv4]
 	allocations := testing.AllocsPerRun(100, func() {
-		checkpoint, problem := pool.begin()
-		if problem.failed() {
-			panic(problem)
-		}
-		engine, err := newSequentialAssignmentEngine[IPv4](pool, checkpoint, &workspace, 2, ValueKindDirect, 2, 10_000, 10_000)
+		clear(nodePages[:])
+		clear(stagingPages[:])
+		var err error
+		engine, err = newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 2, 10_000, 10_000)
 		if err != nil {
 			panic(err)
 		}
 		if err = engine.assign(10, 20, 1); err != nil {
 			panic(err)
 		}
-		sink.reset()
-		if _, err = engine.buildFinalTree(&treeWorkspace, &sink); err != nil {
+		staging, err = newRangeTreeStaging[IPv4](stagingPages[:], 2, ValueKindDirect)
+		if err != nil {
 			panic(err)
 		}
-		if problem = pool.rollback(checkpoint); problem.failed() {
-			panic(problem)
+		if _, err = engine.buildStagedTree(&treeWorkspace, &staging); err != nil {
+			panic(err)
 		}
+		staging.discardAfterAbort()
 	})
-	if allocations != 0 || pool.available() != 3 || !workspace.clean() {
-		t.Fatalf("allocations/available/workspace = %v/%d/%+v", allocations, pool.available(), workspace)
+	if allocations != 0 || !workspace.clean() || stagingPages[0] != (rangeTreeStagingPage{}) {
+		t.Fatalf("allocations/workspace/staging = %v/%t/%t", allocations, workspace.clean(), stagingPages[0] == (rangeTreeStagingPage{}))
+	}
+}
+
+func TestSequentialAssignmentRejectsZeroBirthGenerationBeforeInput(t *testing.T) {
+	var pages [1]sequentialAssignmentPage
+	workspace := newSequentialAssignmentWorkspace(pages[:])
+	requireSequentialAssignmentCode(
+		t,
+		func() error {
+			_, err := newSequentialAssignmentEngine[IPv4](&workspace, 0, ValueKindDirect, 1, 1, 1)
+			return err
+		}(),
+		sequentialAssignmentErrBornTransactionZero,
+	)
+	if !workspace.clean() {
+		t.Fatalf("zero birth generation changed workspace: %+v", workspace)
+	}
+}
+
+func TestSequentialAssignmentRejectsAnOccupiedWorkspaceBeforeInput(t *testing.T) {
+	var pages [1]sequentialAssignmentPage
+	pages[0].used = 1
+	workspace := newSequentialAssignmentWorkspace(pages[:])
+	requireSequentialAssignmentCode(
+		t,
+		func() error {
+			_, err := newSequentialAssignmentEngine[IPv4](&workspace, 2, ValueKindDirect, 1, 1, 1)
+			return err
+		}(),
+		sequentialAssignmentErrWorkspaceBusy,
+	)
+	if pages[0].used != 1 {
+		t.Fatalf("occupied workspace changed before rejection: %+v", pages[0])
 	}
 }

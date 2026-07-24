@@ -23,8 +23,6 @@ func validPrivatePageOwnerOrigin(owner privatePageOwner, origin privatePageOrigi
 		return origin == privatePageBitmap
 	case privatePageOwnerRange:
 		return origin == privatePageRange
-	case privatePageOwnerNormalization:
-		return origin == privatePageNormalization
 	case privatePageOwnerRetirement:
 		return origin == privatePageRetirementTree || origin == privatePageRetirementBlob
 	default:
@@ -34,8 +32,7 @@ func validPrivatePageOwnerOrigin(owner privatePageOwner, origin privatePageOrigi
 
 func validPrivatePageExistingOwner(owner privatePageOwner) bool {
 	return owner == privatePageOwnerNone || owner == privatePageOwnerBitmap ||
-		owner == privatePageOwnerRange || owner == privatePageOwnerNormalization ||
-		owner == privatePageOwnerRetirement
+		owner == privatePageOwnerRange || owner == privatePageOwnerRetirement
 }
 
 type privatePageState uint8
@@ -54,7 +51,6 @@ const (
 	privatePageOwnerNone privatePageOwner = iota
 	privatePageOwnerBitmap
 	privatePageOwnerRange
-	privatePageOwnerNormalization
 	privatePageOwnerRetirement
 )
 
@@ -66,7 +62,6 @@ const (
 	privatePageOriginNone privatePageOrigin = iota
 	privatePageBitmap
 	privatePageRange
-	privatePageNormalization
 	privatePageRetirementTree
 	privatePageRetirementBlob
 )

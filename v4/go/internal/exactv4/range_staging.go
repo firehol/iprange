@@ -132,6 +132,18 @@ func (s *rangeTreeStaging[K]) len() int {
 	return s.length
 }
 
+// discardAfterAbort erases unpublished logical output after the enclosing
+// draft has been abandoned. The stale staging object stays finished so it
+// cannot be reused with its old transaction generation.
+func (s *rangeTreeStaging[K]) discardAfterAbort() {
+	if s == nil {
+		return
+	}
+	clear(s.pages)
+	s.length = 0
+	s.finished = true
+}
+
 func (s *rangeTreeStaging[K]) finish(result rangeTreeBuildResult) (rangeTreeStagedResult, error) {
 	if s == nil || s.finished {
 		return rangeTreeStagedResult{}, &rangeTreeStagingError{code: rangeTreeStagingErrFinished}

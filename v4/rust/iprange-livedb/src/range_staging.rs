@@ -59,6 +59,18 @@ pub(crate) struct RangeTreeStagedResult {
     page_count: usize,
 }
 
+impl RangeTreeStagedResult {
+    /// The root is a staging-local identifier until materialization assigns a
+    /// physical file page.
+    pub(crate) const fn logical_root(self) -> u32 {
+        self.logical_root
+    }
+
+    pub(crate) const fn page_count(self) -> usize {
+        self.page_count
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RangeTreeMaterializedResult {
     pub(crate) root_pgno: u32,
@@ -145,6 +157,17 @@ impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
 
     pub(crate) const fn len(&self) -> usize {
         self.len
+    }
+
+    /// Erases unpublished logical output after the enclosing draft has been
+    /// abandoned. The stale staging value stays finished so it cannot stage
+    /// bytes under its old transaction generation.
+    pub(crate) fn discard_after_abort(&mut self) {
+        for page in &mut *self.pages {
+            *page = RangeTreeStagingPage::empty();
+        }
+        self.len = 0;
+        self.finished = true;
     }
 
     pub(crate) fn finish(

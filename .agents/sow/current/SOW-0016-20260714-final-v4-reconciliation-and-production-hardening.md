@@ -7775,6 +7775,68 @@ requirements are normative in the Pre-Implementation Gate above.
   metadata root, so no partial normalizer result can publish through this
   slice.
 
+### 2026-07-24 - normalizer logical-workspace and staging plan
+
+- Evidence: `SequentialAssignmentEngine` still claims `Normalization` pages
+  from the raw private pool for its temporary sparse-prefix nodes
+  (`v4/rust/iprange-livedb/src/sequential_assignment.rs:193-705` and
+  `v4/go/internal/exactv4/sequential_assignment.go:128-546`). That conflicts
+  with the deliberate post-coordinator boundary: raw checkpoint/allocator
+  operations are rejected after a draft attaches its coordinator, while final
+  range-page identities may be selected only in the later lock-bound
+  finalization (`binary-format-v4.md:978-1025,1206-1221`).
+- Replace each normalizer workspace slot with a caller-owned fixed page of
+  packed node bytes plus its initialized-node count. Node references remain
+  logical `(workspace page, node)` coordinates; no normalizer node has a file
+  page number, pool owner, checkpoint authority, or publication path. The
+  constructor will retain the fixed resource budgets and reject zero birth
+  generations, occupied workspaces, invalid value kinds, and oversized logical
+  workspace counts before input is accepted.
+- Finalization will write only through `RangeTreeStaging`, using its temporary
+  logical-page bound, and return its sealed logical result. It will clear the
+  normalizer workspace on successful staging but retain the sealed range
+  staging pages for the later coordinator materialization. A failed input or
+  staging build remains poisoned; the enclosing whole-draft abort path will
+  explicitly scrub both caller-owned workspaces before reuse.
+- Add private abort-discard helpers for staged pages and normalizer nodes. They
+  erase only caller-owned transient memory; they do not validate a file, touch
+  physical page allocation, publish a root, or make an error recoverable
+  without the required whole-draft abort.
+- Tests will preserve arrival-order/direct-zero/membership/IPv6/oracle/work
+  bounds and add proof that normalizer staging uses no private pool slots,
+  keeps logical output unpublished until materialization, rejects an occupied or
+  exhausted fixed workspace, scrubs on explicit abort, and allocates nothing
+  after fixed workspace construction. The direct pool sink remains separately
+  tested; it is removed from this live-normalizer boundary.
+
+### 2026-07-24 - normalizer logical-workspace and staging implementation
+
+- Reworked the private sequential-assignment engines in Rust and Go so their
+  sparse prefix nodes live in fixed caller-owned 4 KiB logical workspace pages.
+  They retain only logical node coordinates and initialized-node counts; they
+  no longer accept a pool/checkpoint, claim a physical page, borrow a physical
+  page, or perform an allocator/checkpoint validation during normal input.
+  Workspace setup checks only fixed-slot occupancy; every node slot is fully
+  encoded before its first read, so it does not scan caller memory as file
+  input.
+- Finalization now writes only to `RangeTreeStaging`, uses the staging logical
+  page limit, and returns a sealed `RangeTreeStagedResult`. Successful staging
+  clears the normalizer node workspace; the logical range pages remain retained
+  for later materialization. Failed input or output poisons the normalizer and
+  stays unusable until the enclosing draft aborts and calls the private discard
+  helpers.
+- Added matching staging abort-discard helpers and Rust staged-result accessors
+  needed by the later terminal handoff. The helpers erase only unpublished
+  caller-owned pages and deliberately leave the stale staging object finished.
+- Removed the obsolete `Normalization` physical-page owner/origin from both
+  private pools. The only former caller was the normalizer, so this closes the
+  raw physical-page route rather than leaving an unused bypass for a future
+  caller.
+- The direct range-pool sink remains independently tested as a low-level
+  adapter. This slice does not attach a normalizer to a transaction core,
+  reserve final physical assignments, bind a range root, or publish any file
+  state.
+
 ## Validation
 
 ### 2026-07-24 - logical range-page staging validation
@@ -7795,6 +7857,32 @@ requirements are normative in the Pre-Implementation Gate above.
   default-validation behavior, or portable v4 byte changed. The next pending
   step remains moving normalizer output and workspace ownership to this
   boundary, then connecting it to the live coordinator and range-root target.
+
+### 2026-07-24 - normalizer logical-workspace and staging validation
+
+- New Rust and Go normalizer cases prove arrival-order overwrite/clear
+  semantics, direct zero, membership-zero rejection before a node write, empty
+  input, full-space IPv6, a per-address arrival-order oracle, coalescing,
+  bounded nested work, occupied/exhausted workspace rejection, explicit abort
+  scrubbing, and zero allocation after fixed setup.
+- New end-to-end private cases build an oversized canonical IPv4 stream through
+  the normalizer into three logical range pages, materialize it with sparse
+  physical assignments, verify branch child rewrites and CRC resealing, and
+  prove that the normalizer's logical root is not a physical file page before
+  materialization.
+- Same-failure search finds no remaining normalizer use of raw private-pool
+  allocation, checkpoint authority, or `Normalization` page owner/origin in
+  either language. The direct range-pool sink remains separately covered.
+- `go -C v4/go test ./... -count=1`, `go -C v4/go vet ./...`, and
+  `go -C v4/go test -race ./internal/exactv4 -count=1` pass. Rust passes 494
+  tests without optional features and 615 with all features; formatting,
+  warnings-denied all-target/all-feature Clippy, and all-feature benchmark
+  compilation pass.
+- No public API, metadata root, default file validation, physical page
+  allocation before the lock, or portable v4 byte changed. The next required
+  slice is transaction-core integration: bind allocator-selected range terminal
+  pages through the existing coordinator and update the private range-root
+  target, with whole-draft abort on every post-mutation failure.
 
 ### 2026-07-24 - transaction abort-latch validation
 

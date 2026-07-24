@@ -52,13 +52,12 @@ func (r sequentialAssignmentNodeRef) parts() (page, node int, ok bool) {
 }
 
 type sequentialAssignmentPage struct {
-	pgno   uint32
-	used   uint16
-	active bool
+	bytes [PageSize]byte
+	used  uint16
 }
 
-// sequentialAssignmentWorkspace is caller-owned control storage. The actual
-// nodes live only in pages claimed from the transaction-private page pool.
+// sequentialAssignmentWorkspace is caller-owned fixed node storage. Its
+// logical pages are never private-pool or physical v4 pages.
 type sequentialAssignmentWorkspace struct {
 	pages []sequentialAssignmentPage
 }
@@ -71,8 +70,10 @@ func (w *sequentialAssignmentWorkspace) clean() bool {
 	if w == nil {
 		return false
 	}
+	// Every node slot is fully initialized before its first read, so setup
+	// checks only occupancy and does not scan caller memory as input data.
 	for _, page := range w.pages {
-		if page.active || page.used != 0 {
+		if page.used != 0 {
 			return false
 		}
 	}
@@ -86,14 +87,14 @@ func (w *sequentialAssignmentWorkspace) reset() {
 	clear(w.pages)
 }
 
-// discardAfterRollback clears stale page references only after the enclosing
-// checkpoint has rolled them back.
-func (w *sequentialAssignmentWorkspace) discardAfterRollback() { w.reset() }
+// discardAfterAbort clears unpublished node bytes only after the enclosing
+// draft has been abandoned.
+func (w *sequentialAssignmentWorkspace) discardAfterAbort() { w.reset() }
 
 type sequentialAssignmentErrorCode uint8
 
 const (
-	sequentialAssignmentErrPendingTransaction sequentialAssignmentErrorCode = iota + 1
+	sequentialAssignmentErrBornTransactionZero sequentialAssignmentErrorCode = iota + 1
 	sequentialAssignmentErrWorkspaceBusy
 	sequentialAssignmentErrWorkspacePageLimit
 	sequentialAssignmentErrAssignmentBudget
@@ -106,16 +107,12 @@ const (
 	sequentialAssignmentErrInvalidNodeEncoding
 	sequentialAssignmentErrInvalidValueKind
 	sequentialAssignmentErrFailed
-	sequentialAssignmentErrPool
 )
 
 type sequentialAssignmentError struct {
-	code        sequentialAssignmentErrorCode
-	requested   uint64
-	poolPending uint64
-	required    uint64
-	actual      uint64
-	poolProblem privatePagePoolError
+	code     sequentialAssignmentErrorCode
+	required uint64
+	actual   uint64
 }
 
 func (e *sequentialAssignmentError) Error() string {
@@ -130,8 +127,6 @@ func (e *sequentialAssignmentError) Error() string {
 // descendants stay in private storage until the final ordered walk resolves
 // their ordinal relationship.
 type sequentialAssignmentEngine[K rangeKey[K]] struct {
-	pool           *privatePagePool
-	checkpoint     privatePagePoolCheckpoint
 	workspace      *sequentialAssignmentWorkspace
 	bornTxn        uint64
 	valueKind      ValueKind
@@ -146,27 +141,16 @@ type sequentialAssignmentEngine[K rangeKey[K]] struct {
 	root           sequentialAssignmentNodeRef
 	finished       bool
 	failed         bool
-	page           [PageSize]byte
 }
 
 func newSequentialAssignmentEngine[K rangeKey[K]](
-	pool *privatePagePool,
-	checkpoint privatePagePoolCheckpoint,
 	workspace *sequentialAssignmentWorkspace,
 	bornTxn uint64,
 	valueKind ValueKind,
 	maxAssignments, maxWork, maxMutations uint64,
 ) (sequentialAssignmentEngine[K], error) {
-	if pool == nil || pool.self != pool {
-		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{
-			code:        sequentialAssignmentErrPool,
-			poolProblem: privatePagePoolError{code: privatePagePoolErrCrossPool},
-		}
-	}
-	if bornTxn != pool.pendingTxn {
-		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{
-			code: sequentialAssignmentErrPendingTransaction, requested: bornTxn, poolPending: pool.pendingTxn,
-		}
+	if bornTxn == 0 {
+		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{code: sequentialAssignmentErrBornTransactionZero}
 	}
 	if workspace == nil {
 		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{code: sequentialAssignmentErrWorkspaceBusy}
@@ -180,18 +164,15 @@ func newSequentialAssignmentEngine[K rangeKey[K]](
 	if !validValueKind(valueKind) {
 		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{code: sequentialAssignmentErrInvalidValueKind}
 	}
-	if problem := pool.validateCheckpoint(checkpoint); problem.failed() {
-		return sequentialAssignmentEngine[K]{}, &sequentialAssignmentError{code: sequentialAssignmentErrPool, poolProblem: problem}
-	}
 	return sequentialAssignmentEngine[K]{
-		pool: pool, checkpoint: checkpoint, workspace: workspace, bornTxn: bornTxn, valueKind: valueKind,
+		workspace: workspace, bornTxn: bornTxn, valueKind: valueKind,
 		maxAssignments: maxAssignments, maxWork: maxWork, maxMutations: maxMutations,
 		root: sequentialAssignmentNodeRef(sequentialAssignmentNodeNone),
 	}, nil
 }
 
 func (e *sequentialAssignmentEngine[K]) assign(from, to K, value uint32) error {
-	if e.finished || e.pool == nil {
+	if e.finished || e.workspace == nil {
 		return &sequentialAssignmentError{code: sequentialAssignmentErrWorkspaceBusy}
 	}
 	if e.failed {
@@ -208,7 +189,7 @@ func (e *sequentialAssignmentEngine[K]) clear(from, to K) error {
 }
 
 func (e *sequentialAssignmentEngine[K]) apply(from, to K, mode sequentialAssignmentMode, value uint32) error {
-	if e.finished || e.pool == nil {
+	if e.finished || e.workspace == nil {
 		return &sequentialAssignmentError{code: sequentialAssignmentErrWorkspaceBusy}
 	}
 	if e.failed {
@@ -316,16 +297,7 @@ func (e *sequentialAssignmentEngine[K]) allocateNode() (sequentialAssignmentNode
 		if e.pageCount == len(e.workspace.pages) {
 			return 0, &sequentialAssignmentError{code: sequentialAssignmentErrWorkspacePageLimit}
 		}
-		if problem := e.pool.validateCheckpoint(e.checkpoint); problem.failed() {
-			return 0, e.poolError(problem)
-		}
-		token, problem := e.pool.claimLowest(e.checkpoint, privatePageOwnerNormalization, privatePageNormalization)
-		if problem.failed() {
-			return 0, e.poolError(problem)
-		}
-		e.workspace.pages[e.pageCount] = sequentialAssignmentPage{
-			pgno: e.pool.slots[token.slot].pageNumber, active: true,
-		}
+		e.workspace.pages[e.pageCount] = sequentialAssignmentPage{}
 		e.pageCount++
 	}
 	page := e.pageCount - 1
@@ -364,37 +336,27 @@ func (e *sequentialAssignmentEngine[K]) reserveMutation() error {
 	return nil
 }
 
-func (e *sequentialAssignmentEngine[K]) nodePage(reference sequentialAssignmentNodeRef) (uint32, int, error) {
+func (e *sequentialAssignmentEngine[K]) nodePage(reference sequentialAssignmentNodeRef) (int, int, error) {
 	pageIndex, nodeIndex, ok := reference.parts()
-	if !ok || pageIndex >= len(e.workspace.pages) {
+	if !ok || pageIndex >= e.pageCount || pageIndex >= len(e.workspace.pages) {
 		return 0, 0, &sequentialAssignmentError{code: sequentialAssignmentErrInvalidNodeReference}
 	}
 	page := e.workspace.pages[pageIndex]
-	if !page.active || nodeIndex >= int(page.used) {
+	if nodeIndex >= int(page.used) {
 		return 0, 0, &sequentialAssignmentError{code: sequentialAssignmentErrInvalidNodeReference}
 	}
-	return page.pgno, nodeIndex * sequentialAssignmentNodeBytes, nil
+	return pageIndex, nodeIndex * sequentialAssignmentNodeBytes, nil
 }
 
 func (e *sequentialAssignmentEngine[K]) readNode(reference sequentialAssignmentNodeRef) (sequentialAssignmentNode, error) {
 	if err := e.chargeWork(); err != nil {
 		return sequentialAssignmentNode{}, err
 	}
-	pgno, offset, err := e.nodePage(reference)
+	pageIndex, offset, err := e.nodePage(reference)
 	if err != nil {
 		return sequentialAssignmentNode{}, err
 	}
-	if problem := e.pool.validateCheckpoint(e.checkpoint); problem.failed() {
-		return sequentialAssignmentNode{}, e.poolError(problem)
-	}
-	token, problem := e.pool.borrow(pgno, privatePageOwnerNormalization)
-	if problem.failed() {
-		return sequentialAssignmentNode{}, e.poolError(problem)
-	}
-	if problem = e.pool.readPage(token, &e.page); problem.failed() {
-		return sequentialAssignmentNode{}, e.poolError(problem)
-	}
-	return decodeSequentialAssignmentNode(e.page[offset : offset+sequentialAssignmentNodeBytes])
+	return decodeSequentialAssignmentNode(e.workspace.pages[pageIndex].bytes[offset : offset+sequentialAssignmentNodeBytes])
 }
 
 func (e *sequentialAssignmentEngine[K]) writeNode(reference sequentialAssignmentNodeRef, node sequentialAssignmentNode) error {
@@ -405,59 +367,51 @@ func (e *sequentialAssignmentEngine[K]) writeNode(reference sequentialAssignment
 }
 
 func (e *sequentialAssignmentEngine[K]) writeNodeReserved(reference sequentialAssignmentNodeRef, node sequentialAssignmentNode) error {
-	pgno, offset, err := e.nodePage(reference)
+	pageIndex, offset, err := e.nodePage(reference)
 	if err != nil {
 		return err
 	}
-	if problem := e.pool.validateCheckpoint(e.checkpoint); problem.failed() {
-		return e.poolError(problem)
-	}
-	token, problem := e.pool.borrow(pgno, privatePageOwnerNormalization)
-	if problem.failed() {
-		return e.poolError(problem)
-	}
-	if problem = e.pool.readPage(token, &e.page); problem.failed() {
-		return e.poolError(problem)
-	}
-	encodeSequentialAssignmentNode(e.page[offset:offset+sequentialAssignmentNodeBytes], node)
-	if problem = e.pool.writePage(token, &e.page); problem.failed() {
-		return e.poolError(problem)
-	}
+	encodeSequentialAssignmentNode(e.workspace.pages[pageIndex].bytes[offset:offset+sequentialAssignmentNodeBytes], node)
 	return nil
 }
 
-func (e *sequentialAssignmentEngine[K]) buildFinalTree(
-	treeWorkspace *rangeTreeBuildWorkspace[K], sink rangeTreePageSink,
-) (rangeTreeBuildResult, error) {
+func (e *sequentialAssignmentEngine[K]) buildStagedTree(
+	treeWorkspace *rangeTreeBuildWorkspace[K], staging *rangeTreeStaging[K],
+) (rangeTreeStagedResult, error) {
 	if e.finished {
-		return rangeTreeBuildResult{}, &sequentialAssignmentError{code: sequentialAssignmentErrWorkspaceBusy}
+		return rangeTreeStagedResult{}, &sequentialAssignmentError{code: sequentialAssignmentErrWorkspaceBusy}
 	}
 	if e.failed {
-		return rangeTreeBuildResult{}, &sequentialAssignmentError{code: sequentialAssignmentErrFailed}
+		return rangeTreeStagedResult{}, &sequentialAssignmentError{code: sequentialAssignmentErrFailed}
 	}
-	builder, err := treeWorkspace.begin(e.bornTxn, e.valueKind, e.pool.pendingPageCount)
+	if staging == nil {
+		return rangeTreeStagedResult{}, e.fail(&rangeTreeStagingError{code: rangeTreeStagingErrFinished})
+	}
+	builder, err := treeWorkspace.begin(e.bornTxn, e.valueKind, staging.logicalPageCount())
 	if err != nil {
-		return rangeTreeBuildResult{}, e.fail(err)
+		return rangeTreeStagedResult{}, e.fail(err)
 	}
 	var pending rangeRecord[K]
 	havePending := false
-	if err = e.emitNode(e.root, 0, assignmentAddress{}, sequentialAssignmentTag{}, &builder, sink, &pending, &havePending); err != nil {
-		return rangeTreeBuildResult{}, e.fail(err)
+	if err = e.emitNode(e.root, 0, assignmentAddress{}, sequentialAssignmentTag{}, &builder, staging, &pending, &havePending); err != nil {
+		return rangeTreeStagedResult{}, e.fail(err)
 	}
 	if havePending {
-		if err = builder.push(sink, pending); err != nil {
-			return rangeTreeBuildResult{}, e.fail(err)
+		if err = builder.push(staging, pending); err != nil {
+			return rangeTreeStagedResult{}, e.fail(err)
 		}
 	}
-	result, err := builder.finish(sink)
+	result, err := builder.finish(staging)
 	if err != nil {
-		return rangeTreeBuildResult{}, e.fail(err)
+		return rangeTreeStagedResult{}, e.fail(err)
 	}
-	if err = e.returnWorkspacePages(); err != nil {
-		return rangeTreeBuildResult{}, e.fail(err)
+	staged, err := staging.finish(result)
+	if err != nil {
+		return rangeTreeStagedResult{}, e.fail(err)
 	}
+	e.clearWorkspaceNodes()
 	e.finished = true
-	return result, nil
+	return staged, nil
 }
 
 func (e *sequentialAssignmentEngine[K]) emitNode(
@@ -522,30 +476,9 @@ func (e *sequentialAssignmentEngine[K]) emitRegion(
 	return nil
 }
 
-func (e *sequentialAssignmentEngine[K]) returnWorkspacePages() error {
-	for index := 0; index < e.pageCount; index++ {
-		page := &e.workspace.pages[index]
-		if !page.active {
-			return &sequentialAssignmentError{code: sequentialAssignmentErrInvalidNodeReference}
-		}
-		if problem := e.pool.validateCheckpoint(e.checkpoint); problem.failed() {
-			return e.poolError(problem)
-		}
-		token, problem := e.pool.borrow(page.pgno, privatePageOwnerNormalization)
-		if problem.failed() {
-			return e.poolError(problem)
-		}
-		if problem = e.pool.release(token, privatePageAvailable); problem.failed() {
-			return e.poolError(problem)
-		}
-		*page = sequentialAssignmentPage{}
-	}
+func (e *sequentialAssignmentEngine[K]) clearWorkspaceNodes() {
+	e.workspace.reset()
 	e.pageCount = 0
-	return nil
-}
-
-func (e *sequentialAssignmentEngine[K]) poolError(problem privatePagePoolError) error {
-	return &sequentialAssignmentError{code: sequentialAssignmentErrPool, poolProblem: problem}
 }
 
 func nextSequentialAssignmentCount(value uint64) uint64 {

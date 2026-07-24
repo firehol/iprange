@@ -1,21 +1,18 @@
 //! Bounded, page-backed arrival-order range assignment.
 //!
-//! This is private transaction machinery.  It stores only sparse binary-prefix
-//! nodes in the transaction page pool, then emits one canonical range stream
-//! directly into the normal range-tree builder.  It never sorts input or
-//! retains an input/output-sized heap collection.
+//! This is private transaction machinery. It stores sparse binary-prefix nodes
+//! in fixed caller-owned logical pages, then emits one canonical range stream
+//! into logical range-page staging. It never sorts input, touches physical file
+//! allocation, or retains an input/output-sized heap collection.
 
 use crate::contract::{ValueKind, PAGE_SIZE};
 use crate::key::IpKey;
-use crate::private_page_pool::{
-    PrivatePageOwner, PrivatePagePool, PrivatePagePoolCheckpoint, PrivatePagePoolError,
-    PrivatePageReturn,
-};
 use crate::range_builder::{
-    RangeTreeBuildError, RangeTreeBuildResult, RangeTreeBuildStartError, RangeTreeBuildWorkspace,
-    RangeTreeBuilder, RangeTreePageSink,
+    RangeTreeBuildError, RangeTreeBuildStartError, RangeTreeBuildWorkspace, RangeTreeBuilder,
+    RangeTreePageSink,
 };
 use crate::range_page::RangeRecord;
+use crate::range_staging::{RangeTreeStagedResult, RangeTreeStaging, RangeTreeStagingError};
 
 const NODE_BYTES: usize = 32;
 const NODES_PER_PAGE: usize = PAGE_SIZE / NODE_BYTES;
@@ -104,28 +101,24 @@ impl NodeRef {
     }
 }
 
-/// One caller-owned normalizer page slot. The page bytes themselves are owned
-/// by the transaction-private pool; this remembers only its physical page and
-/// how many fixed node records were initialized in it.
+/// One caller-owned normalizer logical page. It has no physical v4 page
+/// identity and is never handed to the transaction-private allocator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SequentialAssignmentPage {
-    pgno: Option<u32>,
+    bytes: [u8; PAGE_SIZE],
     used: u16,
 }
 
 impl SequentialAssignmentPage {
     pub(crate) const fn empty() -> Self {
         Self {
-            pgno: None,
+            bytes: [0; PAGE_SIZE],
             used: 0,
         }
     }
 }
 
-/// Fixed caller-owned control storage for one private assignment engine.
-///
-/// It deliberately contains no node bytes: each node is packed into a page
-/// claimed from the associated transaction pool.
+/// Fixed caller-owned logical node storage for one private assignment engine.
 #[derive(Debug)]
 pub(crate) struct SequentialAssignmentWorkspace<'storage> {
     pages: &'storage mut [SequentialAssignmentPage],
@@ -137,9 +130,9 @@ impl<'storage> SequentialAssignmentWorkspace<'storage> {
     }
 
     fn is_clean(&self) -> bool {
-        self.pages
-            .iter()
-            .all(|page| page.pgno.is_none() && page.used == 0)
+        // Every node slot is fully initialized before its first read, so setup
+        // checks only occupancy and does not scan caller memory as input data.
+        self.pages.iter().all(|page| page.used == 0)
     }
 
     fn reset(&mut self) {
@@ -148,10 +141,9 @@ impl<'storage> SequentialAssignmentWorkspace<'storage> {
         }
     }
 
-    /// Clears stale private page references after the enclosing checkpoint was
-    /// successfully rolled back. Calling this before rollback would lose the
-    /// caller's only page inventory, so it remains crate-private.
-    pub(crate) fn discard_after_rollback(&mut self) {
+    /// Clears unpublished node bytes after the enclosing draft has been
+    /// abandoned. The operation must not make a failed draft reusable.
+    pub(crate) fn discard_after_abort(&mut self) {
         self.reset();
     }
 
@@ -162,7 +154,7 @@ impl<'storage> SequentialAssignmentWorkspace<'storage> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SequentialAssignmentError {
-    PendingTransactionMismatch { requested: u64, pool_pending: u64 },
+    BornTransactionZero,
     WorkspaceBusy,
     WorkspacePageLimit,
     AssignmentBudget { required: u64, actual: u64 },
@@ -174,25 +166,23 @@ pub(crate) enum SequentialAssignmentError {
     InvalidNodeReference,
     InvalidNodeEncoding,
     Failed,
-    Pool(PrivatePagePoolError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SequentialAssignmentFinalizeError<E> {
+pub(crate) enum SequentialAssignmentFinalizeError {
     Engine(SequentialAssignmentError),
     BuildStart(RangeTreeBuildStartError),
-    Build(RangeTreeBuildError<E>),
+    Build(RangeTreeBuildError<RangeTreeStagingError>),
+    Staging(RangeTreeStagingError),
 }
 
-/// An active sparse prefix assignment map for one pool checkpoint.
+/// An active sparse prefix assignment map for one draft generation.
 ///
 /// `max_assignments`, `max_work`, and `max_mutations` are supplied by the
 /// owning transaction resource ledger. They make every input-dependent cost
 /// explicit before a public workflow exists.
 #[derive(Debug)]
-pub(crate) struct SequentialAssignmentEngine<'pool, 'slots, 'workspace, 'storage, K: IpKey> {
-    pool: &'pool PrivatePagePool<'slots>,
-    checkpoint: &'pool PrivatePagePoolCheckpoint<'slots>,
+pub(crate) struct SequentialAssignmentEngine<'workspace, 'storage, K: IpKey> {
     workspace: &'workspace mut SequentialAssignmentWorkspace<'storage>,
     born_txn: u64,
     value_kind: ValueKind,
@@ -210,36 +200,9 @@ pub(crate) struct SequentialAssignmentEngine<'pool, 'slots, 'workspace, 'storage
     _key: core::marker::PhantomData<K>,
 }
 
-impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
-    SequentialAssignmentEngine<'pool, 'slots, 'workspace, 'storage, K>
-{
-    /// Reserves checkpoint epoch headroom for this bounded private engine.
-    ///
-    /// A node read reissues one private authority; a node write reissues an
-    /// authority and performs one mutable borrow. The formula deliberately
-    /// over-reserves every pool slot for output and rollback, then adds the
-    /// caller's bounded node-work allowance. It reserves only a counter, never
-    /// memory or a file.
-    pub(crate) fn preflight_checkpoint(
-        pool: &PrivatePagePool<'slots>,
-        workspace_pages: usize,
-        max_work: u64,
-    ) -> Result<PrivatePagePoolCheckpoint<'slots>, PrivatePagePoolError> {
-        let pool_slots = pool.len();
-        let work = usize::try_from(max_work).map_err(|_| PrivatePagePoolError::EpochExhausted)?;
-        let steps = pool_slots
-            .checked_mul(3)
-            .and_then(|value| value.checked_add(work.checked_mul(2)?))
-            .and_then(|value| value.checked_add(workspace_pages.checked_mul(3)?))
-            .and_then(|value| value.checked_add(2))
-            .ok_or(PrivatePagePoolError::EpochExhausted)?;
-        pool.preflight_checkpoint_steps(steps)
-    }
-
+impl<'workspace, 'storage, K: IpKey> SequentialAssignmentEngine<'workspace, 'storage, K> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        pool: &'pool PrivatePagePool<'slots>,
-        checkpoint: &'pool PrivatePagePoolCheckpoint<'slots>,
         workspace: &'workspace mut SequentialAssignmentWorkspace<'storage>,
         born_txn: u64,
         value_kind: ValueKind,
@@ -247,12 +210,8 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         max_work: u64,
         max_mutations: usize,
     ) -> Result<Self, SequentialAssignmentError> {
-        let pool_pending = pool.pending_txn();
-        if born_txn != pool_pending {
-            return Err(SequentialAssignmentError::PendingTransactionMismatch {
-                requested: born_txn,
-                pool_pending,
-            });
+        if born_txn == 0 {
+            return Err(SequentialAssignmentError::BornTransactionZero);
         }
         if workspace.pages.len() > u32::MAX as usize {
             return Err(SequentialAssignmentError::WorkspacePageLimit);
@@ -260,11 +219,7 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         if !workspace.is_clean() {
             return Err(SequentialAssignmentError::WorkspaceBusy);
         }
-        pool.validate_checkpoint_handle(checkpoint)
-            .map_err(SequentialAssignmentError::Pool)?;
         Ok(Self {
-            pool,
-            checkpoint,
             workspace,
             born_txn,
             value_kind,
@@ -429,21 +384,7 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
             if self.page_count == self.workspace.pages.len() {
                 return Err(SequentialAssignmentError::WorkspacePageLimit);
             }
-            self.pool
-                .validate_checkpoint_handle(self.checkpoint)
-                .map_err(SequentialAssignmentError::Pool)?;
-            let authority = self
-                .pool
-                .claim_lowest(
-                    PrivatePageOwner::Normalization,
-                    self.born_txn,
-                    K::FAMILY as u64,
-                )
-                .map_err(SequentialAssignmentError::Pool)?;
-            self.workspace.pages[self.page_count] = SequentialAssignmentPage {
-                pgno: Some(authority.page_number()),
-                used: 0,
-            };
+            self.workspace.pages[self.page_count] = SequentialAssignmentPage::empty();
             self.page_count += 1;
         }
         let page = self.page_count - 1;
@@ -480,10 +421,13 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         Ok(())
     }
 
-    fn node_page(&self, reference: NodeRef) -> Result<(u32, usize), SequentialAssignmentError> {
+    fn node_page(&self, reference: NodeRef) -> Result<(usize, usize), SequentialAssignmentError> {
         let (page_index, node_index) = reference
             .parts()
             .ok_or(SequentialAssignmentError::InvalidNodeReference)?;
+        if page_index >= self.page_count {
+            return Err(SequentialAssignmentError::InvalidNodeReference);
+        }
         let page = self
             .workspace
             .pages
@@ -492,10 +436,7 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         if node_index >= usize::from(page.used) {
             return Err(SequentialAssignmentError::InvalidNodeReference);
         }
-        let pgno = page
-            .pgno
-            .ok_or(SequentialAssignmentError::InvalidNodeReference)?;
-        Ok((pgno, node_index * NODE_BYTES))
+        Ok((page_index, node_index * NODE_BYTES))
     }
 
     fn read_node(
@@ -503,19 +444,8 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         reference: NodeRef,
     ) -> Result<AssignmentNode, SequentialAssignmentError> {
         self.charge_work()?;
-        let (pgno, offset) = self.node_page(reference)?;
-        self.pool
-            .validate_checkpoint_handle(self.checkpoint)
-            .map_err(SequentialAssignmentError::Pool)?;
-        let authority = self
-            .pool
-            .authority(pgno, PrivatePageOwner::Normalization, self.born_txn)
-            .map_err(SequentialAssignmentError::Pool)?;
-        let bytes = self
-            .pool
-            .borrow_page(&authority)
-            .map_err(SequentialAssignmentError::Pool)?;
-        decode_node(&bytes[offset..offset + NODE_BYTES])
+        let (page_index, offset) = self.node_page(reference)?;
+        decode_node(&self.workspace.pages[page_index].bytes[offset..offset + NODE_BYTES])
     }
 
     fn write_node(
@@ -532,27 +462,19 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         reference: NodeRef,
         node: AssignmentNode,
     ) -> Result<(), SequentialAssignmentError> {
-        let (pgno, offset) = self.node_page(reference)?;
-        self.pool
-            .validate_checkpoint_handle(self.checkpoint)
-            .map_err(SequentialAssignmentError::Pool)?;
-        let authority = self
-            .pool
-            .authority(pgno, PrivatePageOwner::Normalization, self.born_txn)
-            .map_err(SequentialAssignmentError::Pool)?;
-        let mut bytes = self
-            .pool
-            .borrow_page_mut(&authority)
-            .map_err(SequentialAssignmentError::Pool)?;
-        encode_node(&mut bytes[offset..offset + NODE_BYTES], node);
+        let (page_index, offset) = self.node_page(reference)?;
+        encode_node(
+            &mut self.workspace.pages[page_index].bytes[offset..offset + NODE_BYTES],
+            node,
+        );
         Ok(())
     }
 
-    pub(crate) fn build_final_tree<S: RangeTreePageSink>(
+    pub(crate) fn build_staged_tree(
         &mut self,
         tree_workspace: &mut RangeTreeBuildWorkspace<K>,
-        sink: &mut S,
-    ) -> Result<RangeTreeBuildResult, SequentialAssignmentFinalizeError<S::Error>> {
+        staging: &mut RangeTreeStaging<'_, K>,
+    ) -> Result<RangeTreeStagedResult, SequentialAssignmentFinalizeError> {
         if self.finished {
             return Err(SequentialAssignmentFinalizeError::Engine(
                 SequentialAssignmentError::WorkspaceBusy,
@@ -566,7 +488,7 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         let mut builder = match tree_workspace.begin(
             self.born_txn,
             self.value_kind,
-            self.pool.pending_page_count(),
+            staging.logical_page_limit(),
         ) {
             Ok(builder) => builder,
             Err(error) => {
@@ -581,31 +503,35 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
             0,
             AssignmentTag::NONE,
             &mut builder,
-            sink,
+            staging,
             &mut pending,
         ) {
             self.failed = true;
             return Err(error.into());
         }
         if let Some(record) = pending {
-            if let Err(error) = builder.push(sink, record) {
+            if let Err(error) = builder.push(staging, record) {
                 self.failed = true;
                 return Err(SequentialAssignmentFinalizeError::Build(error));
             }
         }
-        let result = match builder.finish(sink) {
+        let result = match builder.finish(staging) {
             Ok(result) => result,
             Err(error) => {
                 self.failed = true;
                 return Err(SequentialAssignmentFinalizeError::Build(error));
             }
         };
-        if let Err(error) = self.return_workspace_pages() {
-            self.failed = true;
-            return Err(SequentialAssignmentFinalizeError::Engine(error));
-        }
+        let staged = match staging.finish(result) {
+            Ok(result) => result,
+            Err(error) => {
+                self.failed = true;
+                return Err(SequentialAssignmentFinalizeError::Staging(error));
+            }
+        };
+        self.clear_workspace_nodes();
         self.finished = true;
-        Ok(result)
+        Ok(staged)
     }
 
     // The recursive state is fixed-depth and deliberately passed explicitly.
@@ -687,25 +613,9 @@ impl<'pool, 'slots, 'workspace, 'storage, K: IpKey>
         Ok(())
     }
 
-    fn return_workspace_pages(&mut self) -> Result<(), SequentialAssignmentError> {
-        for page in self.workspace.pages.iter_mut().take(self.page_count) {
-            let pgno = page
-                .pgno
-                .ok_or(SequentialAssignmentError::InvalidNodeReference)?;
-            self.pool
-                .validate_checkpoint_handle(self.checkpoint)
-                .map_err(SequentialAssignmentError::Pool)?;
-            let authority = self
-                .pool
-                .authority(pgno, PrivatePageOwner::Normalization, self.born_txn)
-                .map_err(SequentialAssignmentError::Pool)?;
-            self.pool
-                .return_page(authority, PrivatePageReturn::Available)
-                .map_err(|(_, error)| SequentialAssignmentError::Pool(error))?;
-            *page = SequentialAssignmentPage::empty();
-        }
+    fn clear_workspace_nodes(&mut self) {
+        self.workspace.reset();
         self.page_count = 0;
-        Ok(())
     }
 }
 
@@ -715,8 +625,8 @@ enum EmitError<E> {
     Build(RangeTreeBuildError<E>),
 }
 
-impl<E> From<EmitError<E>> for SequentialAssignmentFinalizeError<E> {
-    fn from(value: EmitError<E>) -> Self {
+impl From<EmitError<RangeTreeStagingError>> for SequentialAssignmentFinalizeError {
+    fn from(value: EmitError<RangeTreeStagingError>) -> Self {
         match value {
             EmitError::Engine(error) => Self::Engine(error),
             EmitError::Build(error) => Self::Build(error),
@@ -783,92 +693,65 @@ fn region_bounds(bits: u8, depth: u8, prefix: u128) -> (u128, u128) {
 }
 
 #[cfg(test)]
-// Explicit drops end workspace/checkpoint borrows before terminal assertions.
+// Explicit drops end mutable workspace borrows before terminal assertions.
 #[allow(clippy::drop_non_drop)]
 mod tests {
     use super::*;
-    use crate::bootstrap::tests::empty_direct_meta;
     use crate::contract::AddressFamily;
     use crate::key::{Ipv4Key, Ipv6Key};
-    use crate::page::{PageHeader, PageType};
-    use crate::private_page_pool::{
-        PrivatePageAuthorization, PrivatePagePoolSlot, PrivatePagePoolState,
+    use crate::private_page_pool::{PrivatePageAuthorization, PrivatePageCoordinatorTerminalPage};
+    use crate::range_page::{RangeBranch, RangeLeaf};
+    use crate::range_staging::{
+        RangeTreePhysicalAssignment, RangeTreeStaging, RangeTreeStagingPage,
     };
-    use crate::range_page::RangeLeaf;
-    use crate::range_pool_sink::RangeTreePoolSink;
-    use crate::range_reader::RangeTree;
     use crate::test_alloc::count_thread_allocations;
     use std::vec;
     use std::vec::Vec;
 
-    #[derive(Debug)]
-    struct TestSink {
-        next_pgno: u32,
-        pages: Vec<(u32, [u8; PAGE_SIZE])>,
-    }
-
-    impl TestSink {
-        fn new() -> Self {
-            Self {
-                next_pgno: 2,
-                pages: Vec::new(),
-            }
+    fn assignment(pgno: u32) -> RangeTreePhysicalAssignment {
+        RangeTreePhysicalAssignment {
+            pgno,
+            authorization: PrivatePageAuthorization::CommittedFree,
         }
     }
 
-    impl RangeTreePageSink for TestSink {
-        type Error = ();
-
-        fn write_range_page(&mut self, page: &[u8; PAGE_SIZE]) -> Result<u32, Self::Error> {
-            let pgno = self.next_pgno;
-            self.next_pgno += 1;
-            self.pages.push((pgno, *page));
-            Ok(pgno)
-        }
+    fn staged_v4_records(
+        staging: &RangeTreeStaging<'_, Ipv4Key>,
+        staged: RangeTreeStagedResult,
+    ) -> Vec<RangeRecord<Ipv4Key>> {
+        assert_eq!(staged.page_count(), 1);
+        let mut terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        staging
+            .materialize(staged, 8, &[assignment(3)], &mut terminal)
+            .unwrap();
+        let leaf = RangeLeaf::<Ipv4Key>::open(
+            &terminal[0].bytes,
+            2,
+            AddressFamily::Ipv4,
+            ValueKind::Direct,
+        )
+        .unwrap();
+        (0..leaf.len())
+            .map(|index| leaf.record(index).unwrap())
+            .collect()
     }
 
-    #[derive(Debug)]
-    struct FixedSink {
-        next_pgno: u32,
-        page: [u8; PAGE_SIZE],
-        writes: usize,
-    }
-
-    impl FixedSink {
-        fn new() -> Self {
-            Self {
-                next_pgno: 2,
-                page: [0; PAGE_SIZE],
-                writes: 0,
-            }
-        }
-
-        fn reset(&mut self) {
-            self.next_pgno = 2;
-            self.writes = 0;
-        }
-    }
-
-    impl RangeTreePageSink for FixedSink {
-        type Error = ();
-
-        fn write_range_page(&mut self, page: &[u8; PAGE_SIZE]) -> Result<u32, Self::Error> {
-            if self.writes != 0 {
-                return Err(());
-            }
-            self.page = *page;
-            self.writes = 1;
-            let pgno = self.next_pgno;
-            self.next_pgno += 1;
-            Ok(pgno)
-        }
-    }
-
-    fn direct_v4_records(sink: &TestSink) -> Vec<RangeRecord<Ipv4Key>> {
-        assert_eq!(sink.pages.len(), 1);
-        let leaf =
-            RangeLeaf::<Ipv4Key>::open(&sink.pages[0].1, 2, AddressFamily::Ipv4, ValueKind::Direct)
-                .unwrap();
+    fn staged_v6_records(
+        staging: &RangeTreeStaging<'_, Ipv6Key>,
+        staged: RangeTreeStagedResult,
+    ) -> Vec<RangeRecord<Ipv6Key>> {
+        assert_eq!(staged.page_count(), 1);
+        let mut terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        staging
+            .materialize(staged, 8, &[assignment(3)], &mut terminal)
+            .unwrap();
+        let leaf = RangeLeaf::<Ipv6Key>::open(
+            &terminal[0].bytes,
+            2,
+            AddressFamily::Ipv6,
+            ValueKind::Direct,
+        )
+        .unwrap();
         (0..leaf.len())
             .map(|index| leaf.record(index).unwrap())
             .collect()
@@ -876,25 +759,9 @@ mod tests {
 
     #[test]
     fn arrival_order_preserves_the_uncovered_sides_of_an_older_assignment() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 2];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            10_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -907,14 +774,18 @@ mod tests {
         engine.assign(Ipv4Key(15), Ipv4Key(20), 2).unwrap();
 
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
-        let result = engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 2];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
             .unwrap();
-        assert_eq!(result.root_pgno, 2);
-        assert_eq!(result.record_count, 3);
+        assert_eq!(staged.logical_root(), 2);
+        assert_eq!(staged.record_count, 3);
+        drop(engine);
+        assert!(normalizer.is_clean());
         assert_eq!(
-            direct_v4_records(&sink),
+            staged_v4_records(&staging, staged),
             vec![
                 RangeRecord {
                     from: Ipv4Key(10),
@@ -933,78 +804,17 @@ mod tests {
                 },
             ]
         );
-
-        drop(engine);
-        assert!(normalizer.is_clean());
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
-    fn empty_input_needs_no_normalizer_or_output_page() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
-        let mut normalizer_pages: [SequentialAssignmentPage; 0] = [];
-        let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            1_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
-        let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
-            &mut normalizer,
-            2,
-            ValueKind::Direct,
-            0,
-            1_000,
-            1_000,
-        )
-        .unwrap();
-        let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
-        let result = engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
-            .unwrap();
-        assert_eq!(result.root_pgno, 0);
-        assert_eq!(result.record_count, 0);
-        assert!(sink.pages.is_empty());
-        assert_eq!(pool.available().unwrap(), 2);
-
-        drop(engine);
-        assert!(normalizer.is_clean());
-        pool.rollback_checkpoint(checkpoint).unwrap();
-    }
-
-    #[test]
-    fn final_tree_pages_are_claimed_from_the_actual_private_pool() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
+    fn stages_logical_output_before_physical_materialization() {
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 1];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            10_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
-            4,
+            2,
             10_000,
             10_000,
         )
@@ -1012,84 +822,65 @@ mod tests {
         engine.assign(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
 
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let result = {
-            let mut sink =
-                RangeTreePoolSink::new(&pool, &checkpoint, 2, AddressFamily::Ipv4).unwrap();
-            engine
-                .build_final_tree(&mut tree_workspace, &mut sink)
-                .unwrap()
-        };
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
+            .unwrap();
+        assert_eq!(staged.logical_root(), 2);
         drop(engine);
         assert!(normalizer.is_clean());
-        let range_slot = (0..3)
-            .find(|&slot| {
-                matches!(
-                    pool.state(slot),
-                    Ok(PrivatePagePoolState::InUse {
-                        owner: PrivatePageOwner::Range,
-                        ..
-                    })
-                )
-            })
+
+        let mut terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let materialized = staging
+            .materialize(staged, 12, &[assignment(7)], &mut terminal)
             .unwrap();
+        assert_eq!(materialized.root_pgno, 7);
+        assert_eq!(terminal[0].pgno, 7);
+        let leaf = RangeLeaf::<Ipv4Key>::open(
+            &terminal[0].bytes,
+            2,
+            AddressFamily::Ipv4,
+            ValueKind::Direct,
+        )
+        .unwrap();
         assert_eq!(
-            pool.state(range_slot).unwrap(),
-            PrivatePagePoolState::InUse {
-                owner: PrivatePageOwner::Range,
-                owner_generation: 2,
-                tag: 4,
-            }
-        );
-        let page = pool.test_bytes(range_slot).unwrap();
-        let header = PageHeader::decode(&page, 2).unwrap();
-        assert_eq!(header.page_type, PageType::RangeLeaf);
-        assert_eq!(header.aux, 4);
-        assert_ne!(result.root_pgno, 0);
-        let mut meta = empty_direct_meta(2);
-        meta.address_family = AddressFamily::Ipv4;
-        meta.value_kind = ValueKind::Direct;
-        meta.page_count = 20;
-        meta.range_root = result.root_pgno;
-        meta.range_record_count = result.record_count;
-        let mut image = vec![0; 20 * PAGE_SIZE];
-        meta.encode_into((&mut image[..PAGE_SIZE]).try_into().unwrap());
-        meta.encode_into((&mut image[PAGE_SIZE..2 * PAGE_SIZE]).try_into().unwrap());
-        let start = result.root_pgno as usize * PAGE_SIZE;
-        image[start..start + PAGE_SIZE].copy_from_slice(&page);
-        let tree = RangeTree::<Ipv4Key>::open_immutable(&image).unwrap();
-        assert_eq!(
-            tree.lookup(Ipv4Key(15)).unwrap(),
-            Some(RangeRecord {
+            leaf.record(0).unwrap(),
+            RangeRecord {
                 from: Ipv4Key(10),
                 to: Ipv4Key(20),
                 value: 7,
-            })
+            }
         );
-
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
-    fn direct_zero_is_valid_but_membership_zero_fails_before_claiming_a_page() {
-        let mut direct_slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-        ];
-        let direct_pool = PrivatePagePool::new(&mut direct_slots, 20, 20, 2).unwrap();
+    fn empty_input_needs_no_normalizer_or_staged_output_page() {
+        let mut normalizer_pages: [SequentialAssignmentPage; 0] = [];
+        let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
+        let mut engine =
+            SequentialAssignmentEngine::new(&mut normalizer, 2, ValueKind::Direct, 0, 1_000, 1_000)
+                .unwrap();
+        let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
+            .unwrap();
+        assert_eq!(staged.logical_root(), 0);
+        assert_eq!(staged.record_count, 0);
+        assert_eq!(staged.page_count(), 0);
+        drop(engine);
+        assert!(normalizer.is_clean());
+    }
+
+    #[test]
+    fn direct_zero_is_valid_but_membership_zero_fails_before_a_node_write() {
         let mut direct_pages = [SequentialAssignmentPage::empty(); 1];
         let mut direct_normalizer = SequentialAssignmentWorkspace::new(&mut direct_pages);
-        let direct_checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &direct_pool,
-            direct_normalizer.page_capacity(),
-            1_000,
-        )
-        .unwrap();
-        direct_pool
-            .begin_checkpoint_prepared(&direct_checkpoint)
-            .unwrap();
         let mut direct = SequentialAssignmentEngine::new(
-            &direct_pool,
-            &direct_checkpoint,
             &mut direct_normalizer,
             2,
             ValueKind::Direct,
@@ -1100,12 +891,15 @@ mod tests {
         .unwrap();
         direct.assign(Ipv4Key(4), Ipv4Key(5), 0).unwrap();
         let mut direct_tree = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut direct_sink = TestSink::new();
-        direct
-            .build_final_tree(&mut direct_tree, &mut direct_sink)
+        let mut direct_staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut direct_staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut direct_staging_pages, 2, ValueKind::Direct)
+                .unwrap();
+        let direct_staged = direct
+            .build_staged_tree(&mut direct_tree, &mut direct_staging)
             .unwrap();
         assert_eq!(
-            direct_v4_records(&direct_sink),
+            staged_v4_records(&direct_staging, direct_staged),
             vec![RangeRecord {
                 from: Ipv4Key(4),
                 to: Ipv4Key(5),
@@ -1113,27 +907,11 @@ mod tests {
             }]
         );
         drop(direct);
-        direct_pool.rollback_checkpoint(direct_checkpoint).unwrap();
+        assert!(direct_normalizer.is_clean());
 
-        let mut membership_slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-        ];
-        let membership_pool = PrivatePagePool::new(&mut membership_slots, 20, 20, 2).unwrap();
         let mut membership_pages = [SequentialAssignmentPage::empty(); 1];
         let mut membership_normalizer = SequentialAssignmentWorkspace::new(&mut membership_pages);
-        let membership_checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &membership_pool,
-            membership_normalizer.page_capacity(),
-            1_000,
-        )
-        .unwrap();
-        membership_pool
-            .begin_checkpoint_prepared(&membership_checkpoint)
-            .unwrap();
         let mut membership = SequentialAssignmentEngine::new(
-            &membership_pool,
-            &membership_checkpoint,
             &mut membership_normalizer,
             2,
             ValueKind::Membership,
@@ -1146,43 +924,15 @@ mod tests {
             membership.assign(Ipv4Key(4), Ipv4Key(5), 0),
             Err(SequentialAssignmentError::MembershipValueZero)
         );
-        assert_eq!(membership_pool.available().unwrap(), 2);
-        let mut membership_tree = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut membership_sink = TestSink::new();
-        assert_eq!(
-            membership.build_final_tree(&mut membership_tree, &mut membership_sink),
-            Err(SequentialAssignmentFinalizeError::Engine(
-                SequentialAssignmentError::Failed
-            ))
-        );
         drop(membership);
         assert!(membership_normalizer.is_clean());
-        membership_pool
-            .rollback_checkpoint(membership_checkpoint)
-            .unwrap();
     }
 
     #[test]
     fn clear_removes_only_its_arrival_interval() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 2];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            10_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -1194,12 +944,14 @@ mod tests {
         engine.assign(Ipv4Key(10), Ipv4Key(30), 1).unwrap();
         engine.clear(Ipv4Key(15), Ipv4Key(20)).unwrap();
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
-        engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 2];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
             .unwrap();
         assert_eq!(
-            direct_v4_records(&sink),
+            staged_v4_records(&staging, staged),
             vec![
                 RangeRecord {
                     from: Ipv4Key(10),
@@ -1213,32 +965,13 @@ mod tests {
                 },
             ]
         );
-
-        drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
     fn adjacent_equal_final_values_are_coalesced() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 2];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            10_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -1250,44 +983,27 @@ mod tests {
         engine.assign(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
         engine.assign(Ipv4Key(21), Ipv4Key(30), 7).unwrap();
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
-        engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
             .unwrap();
         assert_eq!(
-            direct_v4_records(&sink),
+            staged_v4_records(&staging, staged),
             vec![RangeRecord {
                 from: Ipv4Key(10),
                 to: Ipv4Key(30),
                 value: 7,
             }]
         );
-
-        drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
     fn small_per_address_oracle_matches_arrival_order_assignments_and_clears() {
-        let mut slots: [PrivatePagePoolSlot; 64] = core::array::from_fn(|index| {
-            PrivatePagePoolSlot::authorized(
-                index as u32 * 2 + 3,
-                PrivatePageAuthorization::CommittedFree,
-            )
-        });
-        let pool = PrivatePagePool::new(&mut slots, 400, 400, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 32];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            1_000_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -1325,12 +1041,14 @@ mod tests {
             }
         }
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
-        engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 2];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
             .unwrap();
         let mut got = [None; 256];
-        for record in direct_v4_records(&sink) {
+        for record in staged_v4_records(&staging, staged) {
             assert!(
                 record.to.0 <= 255,
                 "unexpected range outside oracle: {record:?}"
@@ -1340,32 +1058,13 @@ mod tests {
             }
         }
         assert_eq!(got, want);
-
-        drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
     fn full_ipv6_space_does_not_wrap_at_the_upper_boundary() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 3];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv6Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            100_000,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -1377,59 +1076,82 @@ mod tests {
         engine.assign(Ipv6Key::MIN, Ipv6Key::MAX, 1).unwrap();
         engine.assign(Ipv6Key::MAX, Ipv6Key::MAX, 2).unwrap();
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv6Key>::new();
-        let mut sink = TestSink::new();
-        engine
-            .build_final_tree(&mut tree_workspace, &mut sink)
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv6Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
             .unwrap();
-        assert_eq!(sink.pages.len(), 1);
-        let leaf =
-            RangeLeaf::<Ipv6Key>::open(&sink.pages[0].1, 2, AddressFamily::Ipv6, ValueKind::Direct)
-                .unwrap();
-        assert_eq!(leaf.len(), 2);
         assert_eq!(
-            leaf.record(0).unwrap(),
-            RangeRecord {
-                from: Ipv6Key::MIN,
-                to: Ipv6Key {
-                    hi: u64::MAX,
-                    lo: u64::MAX - 1,
+            staged_v6_records(&staging, staged),
+            vec![
+                RangeRecord {
+                    from: Ipv6Key::MIN,
+                    to: Ipv6Key {
+                        hi: u64::MAX,
+                        lo: u64::MAX - 1,
+                    },
+                    value: 1,
                 },
-                value: 1,
-            }
+                RangeRecord {
+                    from: Ipv6Key::MAX,
+                    to: Ipv6Key::MAX,
+                    value: 2,
+                },
+            ]
         );
-        assert_eq!(
-            leaf.record(1).unwrap(),
-            RangeRecord {
-                from: Ipv6Key::MAX,
-                to: Ipv6Key::MAX,
-                value: 2,
-            }
-        );
-
-        drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
     }
 
     #[test]
-    fn workspace_exhaustion_blocks_finalization_until_the_draft_is_rolled_back() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
-        let mut normalizer_pages = [SequentialAssignmentPage::empty(); 1];
+    fn stages_and_materializes_a_multilevel_ipv4_tree() {
+        let count = crate::range_page::leaf_capacity::<Ipv4Key>() + 1;
+        let mut normalizer_pages = [SequentialAssignmentPage::empty(); 80];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv6Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            100_000,
+        let mut engine = SequentialAssignmentEngine::new(
+            &mut normalizer,
+            2,
+            ValueKind::Direct,
+            count as u64,
+            1_000_000,
+            1_000_000,
         )
         .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
+        for index in 0..count {
+            let address = (index as u32) * 2;
+            engine
+                .assign(Ipv4Key(address), Ipv4Key(address), 1)
+                .unwrap();
+        }
+        let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 3];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        let staged = engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
+            .unwrap();
+        assert_eq!(staged.page_count(), 3);
+        drop(engine);
+        assert!(normalizer.is_clean());
+
+        let assignments = [assignment(3), assignment(9), assignment(17)];
+        let mut terminal: [PrivatePageCoordinatorTerminalPage; 3] =
+            core::array::from_fn(|_| PrivatePageCoordinatorTerminalPage::empty());
+        let materialized = staging
+            .materialize(staged, 20, &assignments, &mut terminal)
+            .unwrap();
+        assert_eq!(materialized.root_pgno, 17);
+        let branch =
+            RangeBranch::<Ipv4Key>::open(&terminal[2].bytes, 2, AddressFamily::Ipv4, 20).unwrap();
+        assert_eq!(branch.entry(0).unwrap().child_pgno, 3);
+        assert_eq!(branch.entry(1).unwrap().child_pgno, 9);
+        assert!(crate::page::verify_crc32c(&terminal[2].bytes));
+    }
+
+    #[test]
+    fn failure_requires_explicit_abort_before_workspace_reuse() {
+        let mut normalizer_pages = [SequentialAssignmentPage::empty(); 1];
+        let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
@@ -1442,102 +1164,64 @@ mod tests {
             engine.assign(Ipv6Key { hi: 0, lo: 1 }, Ipv6Key { hi: 0, lo: 1 }, 1,),
             Err(SequentialAssignmentError::WorkspacePageLimit)
         );
-        assert!(pool.available().unwrap() < 3);
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv6Key>::new();
-        let mut sink = TestSink::new();
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv6Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
         assert_eq!(
-            engine.build_final_tree(&mut tree_workspace, &mut sink),
+            engine.build_staged_tree(&mut tree_workspace, &mut staging),
             Err(SequentialAssignmentFinalizeError::Engine(
                 SequentialAssignmentError::Failed
             ))
         );
-
         drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
-        normalizer.discard_after_rollback();
+        assert!(!normalizer.is_clean());
+        normalizer.discard_after_abort();
+        staging.discard_after_abort();
         assert!(normalizer.is_clean());
-        assert_eq!(pool.available().unwrap(), 3);
+        assert_eq!(staging_pages, [RangeTreeStagingPage::empty(); 1]);
     }
 
     #[test]
-    fn work_budget_exhaustion_blocks_finalization_until_the_draft_is_rolled_back() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
+    fn staging_failure_poison_the_draft_until_abort() {
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 1];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-        let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-            &pool,
-            normalizer.page_capacity(),
-            1,
-        )
-        .unwrap();
-        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
         let mut engine = SequentialAssignmentEngine::new(
-            &pool,
-            &checkpoint,
             &mut normalizer,
             2,
             ValueKind::Direct,
-            2,
             1,
-            1_000,
+            10_000,
+            10_000,
         )
         .unwrap();
-        assert_eq!(
-            engine.assign(Ipv4Key(10), Ipv4Key(20), 1),
-            Err(SequentialAssignmentError::WorkBudget {
-                required: 2,
-                actual: 1,
-            })
-        );
-        assert!(pool.available().unwrap() < 4);
+        engine.assign(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = TestSink::new();
+        let mut staging_pages: [RangeTreeStagingPage; 0] = [];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
+        assert!(engine
+            .build_staged_tree(&mut tree_workspace, &mut staging)
+            .is_err());
         assert_eq!(
-            engine.build_final_tree(&mut tree_workspace, &mut sink),
+            engine.build_staged_tree(&mut tree_workspace, &mut staging),
             Err(SequentialAssignmentFinalizeError::Engine(
                 SequentialAssignmentError::Failed
             ))
         );
-
         drop(engine);
-        pool.rollback_checkpoint(checkpoint).unwrap();
-        normalizer.discard_after_rollback();
-        assert_eq!(pool.available().unwrap(), 4);
+        assert!(!normalizer.is_clean());
+        normalizer.discard_after_abort();
+        staging.discard_after_abort();
         assert!(normalizer.is_clean());
     }
 
     #[test]
     fn nested_arrival_order_work_grows_linearly() {
         fn run(count: u32) -> u64 {
-            let mut slots = [
-                PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(9, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(11, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(13, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(15, PrivatePageAuthorization::CommittedFree),
-                PrivatePagePoolSlot::authorized(17, PrivatePageAuthorization::CommittedFree),
-            ];
-            let pool = PrivatePagePool::new(&mut slots, 40, 40, 2).unwrap();
-            let mut normalizer_pages = [SequentialAssignmentPage::empty(); 8];
+            let mut normalizer_pages = [SequentialAssignmentPage::empty(); 64];
             let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
-            let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-                &pool,
-                normalizer.page_capacity(),
-                1_000_000,
-            )
-            .unwrap();
-            pool.begin_checkpoint_prepared(&checkpoint).unwrap();
             let mut engine = SequentialAssignmentEngine::new(
-                &pool,
-                &checkpoint,
                 &mut normalizer,
                 2,
                 ValueKind::Direct,
@@ -1552,14 +1236,13 @@ mod tests {
                     .unwrap();
             }
             let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-            let mut sink = TestSink::new();
+            let mut staging_pages = [RangeTreeStagingPage::empty(); 4];
+            let mut staging =
+                RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
             engine
-                .build_final_tree(&mut tree_workspace, &mut sink)
+                .build_staged_tree(&mut tree_workspace, &mut staging)
                 .unwrap();
-            let work = engine.work();
-            drop(engine);
-            pool.rollback_checkpoint(checkpoint).unwrap();
-            work
+            engine.work()
         }
 
         let small = run(32);
@@ -1572,28 +1255,14 @@ mod tests {
 
     #[test]
     fn hot_path_allocates_nothing_after_fixed_setup() {
-        let mut slots = [
-            PrivatePagePoolSlot::authorized(3, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(5, PrivatePageAuthorization::CommittedFree),
-            PrivatePagePoolSlot::authorized(7, PrivatePageAuthorization::CommittedFree),
-        ];
-        let pool = PrivatePagePool::new(&mut slots, 20, 20, 2).unwrap();
         let mut normalizer_pages = [SequentialAssignmentPage::empty(); 2];
         let mut normalizer = SequentialAssignmentWorkspace::new(&mut normalizer_pages);
         let mut tree_workspace = RangeTreeBuildWorkspace::<Ipv4Key>::new();
-        let mut sink = FixedSink::new();
-
+        let mut staging_pages = [RangeTreeStagingPage::empty(); 1];
         let (_, allocations) = count_thread_allocations(|| {
-            let checkpoint = SequentialAssignmentEngine::<Ipv4Key>::preflight_checkpoint(
-                &pool,
-                normalizer.page_capacity(),
-                10_000,
-            )
-            .unwrap();
-            pool.begin_checkpoint_prepared(&checkpoint).unwrap();
+            let mut staging =
+                RangeTreeStaging::<Ipv4Key>::new(&mut staging_pages, 2, ValueKind::Direct).unwrap();
             let mut engine = SequentialAssignmentEngine::new(
-                &pool,
-                &checkpoint,
                 &mut normalizer,
                 2,
                 ValueKind::Direct,
@@ -1603,15 +1272,52 @@ mod tests {
             )
             .unwrap();
             engine.assign(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
-            sink.reset();
             engine
-                .build_final_tree(&mut tree_workspace, &mut sink)
+                .build_staged_tree(&mut tree_workspace, &mut staging)
                 .unwrap();
             drop(engine);
-            pool.rollback_checkpoint(checkpoint).unwrap();
+            staging.discard_after_abort();
         });
         assert_eq!(allocations, 0);
-        assert_eq!(pool.available().unwrap(), 3);
         assert!(normalizer.is_clean());
+        assert_eq!(staging_pages, [RangeTreeStagingPage::empty(); 1]);
+    }
+
+    #[test]
+    fn zero_birth_generation_is_rejected_before_input() {
+        let mut pages = [SequentialAssignmentPage::empty(); 1];
+        let mut workspace = SequentialAssignmentWorkspace::new(&mut pages);
+        assert!(matches!(
+            SequentialAssignmentEngine::<Ipv4Key>::new(
+                &mut workspace,
+                0,
+                ValueKind::Direct,
+                1,
+                1,
+                1,
+            ),
+            Err(SequentialAssignmentError::BornTransactionZero)
+        ));
+    }
+
+    #[test]
+    fn occupied_workspace_is_rejected_before_input() {
+        let mut pages = [SequentialAssignmentPage::empty(); 1];
+        pages[0].used = 1;
+        {
+            let mut workspace = SequentialAssignmentWorkspace::new(&mut pages);
+            assert!(matches!(
+                SequentialAssignmentEngine::<Ipv4Key>::new(
+                    &mut workspace,
+                    2,
+                    ValueKind::Direct,
+                    1,
+                    1,
+                    1,
+                ),
+                Err(SequentialAssignmentError::WorkspaceBusy)
+            ));
+        }
+        assert_eq!(pages[0].used, 1);
     }
 }
