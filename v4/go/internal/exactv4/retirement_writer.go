@@ -1095,6 +1095,8 @@ const (
 	retirementWriteErrPrivateBindingDrift
 	retirementWriteErrStaleEditPlan
 	retirementWriteErrEditPlanConsumed
+	retirementWriteErrRetirementStreamCountMismatch
+	retirementWriteErrPageNumberIndex
 )
 
 type retirementWriteError struct {
@@ -1190,6 +1192,12 @@ type blobGeometry struct {
 	rootLevel             uint16
 }
 
+// retirementIndexStreamStop stops the index visitor after the local blob
+// writer has captured its typed failure. It has no allocation path.
+type retirementIndexStreamStop struct{}
+
+func (retirementIndexStreamStop) Error() string { return "retirement index stream stopped" }
+
 func buildRetirementBlob(pages []uint32, arena *privatePageArena, scratch *blobBuildScratch) (retirementBlobToken, retirementWriteError) {
 	geometry, problem := preflightRetirementBlob(pages, arena, len(scratch.pageNumbers))
 	if problem.failed() {
@@ -1221,6 +1229,62 @@ func buildRetirementBlob(pages []uint32, arena *privatePageArena, scratch *blobB
 			return retirementBlobToken{}, retirementWithCleanup(problem, arena.rollback(checkpoint))
 		}
 		valueIndex += values
+	}
+	inputStart, inputCount, outputStart, level := 0, geometry.leafCount, geometry.leafCount, uint16(1)
+	for inputCount > 1 {
+		outputCount := (inputCount + retirementBlobBranchCapacity - 1) / retirementBlobBranchCapacity
+		for outputIndex := 0; outputIndex < outputCount; outputIndex++ {
+			childStart := inputStart + outputIndex*retirementBlobBranchCapacity
+			childCount := inputCount - outputIndex*retirementBlobBranchCapacity
+			if childCount > retirementBlobBranchCapacity {
+				childCount = retirementBlobBranchCapacity
+			}
+			var page [PageSize]byte
+			if problem = encodeRetirementBlobBranch(&page, arena.bornTxn, level, scratch.pageNumbers[childStart:childStart+childCount], arena); problem.failed() {
+				return retirementBlobToken{}, retirementWithCleanup(problem, arena.rollback(checkpoint))
+			}
+			if problem = arena.writePage(scratch.pageNumbers[outputStart+outputIndex], &page); problem.failed() {
+				return retirementBlobToken{}, retirementWithCleanup(problem, arena.rollback(checkpoint))
+			}
+		}
+		inputStart, inputCount, outputStart, level = outputStart, outputCount, outputStart+outputCount, level+1
+	}
+	if problem = arena.commit(checkpoint, nil); problem.failed() {
+		return retirementBlobToken{}, retirementWithCleanup(problem, arena.rollback(checkpoint))
+	}
+	arena.tokenEpoch = nextTokenEpoch
+	arena.activeTokenEpoch, arena.activeTokenGen = arena.tokenEpoch, checkpoint.generation
+	return retirementBlobToken{
+		arena: arena, root: scratch.pageNumbers[inputStart], pageCount: geometry.valueCount,
+		byteLength: geometry.valueCount * 4, privatePages: geometry.totalPages,
+		generation: checkpoint.generation, bornTxn: arena.bornTxn, epoch: arena.tokenEpoch,
+		cleanupGeneration: checkpoint.generation, cleanupTokenEpoch: arena.tokenEpoch,
+	}, retirementWriteError{}
+}
+
+// buildRetirementBlobFromIndex streams the already-sorted private index into
+// immutable blob leaves. It never materializes its input as a page-number slice.
+func buildRetirementBlobFromIndex(index *pageNumberIndex, arena *privatePageArena, scratch *blobBuildScratch) (retirementBlobToken, retirementWriteError) {
+	geometry, problem := preflightRetirementBlobFromIndex(index, arena, len(scratch.pageNumbers))
+	if problem.failed() {
+		return retirementBlobToken{}, problem
+	}
+	if arena.activeTokenEpoch != 0 {
+		return retirementBlobToken{}, retirementWriteError{code: retirementWriteErrBlobTokenStale}
+	}
+	nextTokenEpoch := arena.tokenEpoch + 1
+	if nextTokenEpoch == 0 {
+		return retirementBlobToken{}, retirementWriteError{code: retirementWriteErrArithmeticOverflow}
+	}
+	checkpoint, problem := arena.beginWithAllocationBatch(geometry.totalPages)
+	if problem.failed() {
+		return retirementBlobToken{}, problem
+	}
+	for pageIndex := 0; pageIndex < geometry.totalPages; pageIndex++ {
+		scratch.pageNumbers[pageIndex] = arena.allocatePrepared(checkpoint, privatePageRetirementBlob)
+	}
+	if problem = writeRetirementBlobIndexLeaves(index, arena, scratch, geometry); problem.failed() {
+		return retirementBlobToken{}, retirementWithCleanup(problem, arena.rollback(checkpoint))
 	}
 	inputStart, inputCount, outputStart, level := 0, geometry.leafCount, geometry.leafCount, uint16(1)
 	for inputCount > 1 {
@@ -1306,6 +1370,134 @@ func preflightRetirementBlob(pages []uint32, arena *privatePageArena, scratchLen
 	return blobGeometry{valueCount: valueCount, leafCount: leaves, totalPages: total, rootLevel: level}, retirementWriteError{}
 }
 
+func preflightRetirementBlobFromIndex(index *pageNumberIndex, arena *privatePageArena, scratchLength int) (blobGeometry, retirementWriteError) {
+	if index == nil {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrPageNumberIndex}
+	}
+	if arena == nil {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrPrivateBindingDrift}
+	}
+	valueCount := index.len()
+	if valueCount == 0 {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrEmptyRetirementStream}
+	}
+	if valueCount > uint64(^uint32(0))+1 {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrRetirementStreamTooLong, first64: valueCount}
+	}
+	leafCount64, ok := checkedAdd(valueCount, retirementValuesPerBlobLeaf-1)
+	if !ok {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrArithmeticOverflow}
+	}
+	leafCount64 /= retirementValuesPerBlobLeaf
+	if leafCount64 > uint64(^uint(0)>>1) {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrArithmeticOverflow}
+	}
+	leaves := int(leafCount64)
+	nodes, total, level := leaves, leaves, uint16(0)
+	for nodes > 1 {
+		next, ok := checkedIntAdd(nodes, retirementBlobBranchCapacity-1)
+		if !ok {
+			return blobGeometry{}, retirementWriteError{code: retirementWriteErrArithmeticOverflow}
+		}
+		nodes = next / retirementBlobBranchCapacity
+		total, ok = checkedIntAdd(total, nodes)
+		if !ok {
+			return blobGeometry{}, retirementWriteError{code: retirementWriteErrArithmeticOverflow}
+		}
+		if level == MaxTreeLevel {
+			return blobGeometry{}, retirementWriteError{code: retirementWriteErrTreeDepthExceeded}
+		}
+		level++
+	}
+	geometry := blobGeometry{valueCount: valueCount, leafCount: leaves, totalPages: total, rootLevel: level}
+	var previous uint32
+	var visited uint64
+	var streamProblem retirementWriteError
+	err := index.visitAscending(func(current uint32) error {
+		if visited == geometry.valueCount {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamCountMismatch, first64: geometry.valueCount, second64: visited + 1}
+			return retirementIndexStreamStop{}
+		}
+		if current < 2 || uint64(current) >= arena.committedPageCount {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamPageOutOfBounds, page: current}
+			return retirementIndexStreamStop{}
+		}
+		if visited != 0 && current <= previous {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamOrder, page: previous, secondPage: current}
+			return retirementIndexStreamStop{}
+		}
+		previous = current
+		visited++
+		return nil
+	})
+	if err != nil {
+		if _, stopped := err.(retirementIndexStreamStop); stopped {
+			return blobGeometry{}, streamProblem
+		}
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrPageNumberIndex}
+	}
+	if visited != geometry.valueCount {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrRetirementStreamCountMismatch, first64: geometry.valueCount, second64: visited}
+	}
+	if problem := arena.requirePages(geometry.totalPages); problem.failed() {
+		return blobGeometry{}, problem
+	}
+	if scratchLength < geometry.totalPages {
+		return blobGeometry{}, retirementWriteError{code: retirementWriteErrBlobBuildScratchTooSmall, required: geometry.totalPages, actual: scratchLength}
+	}
+	return geometry, retirementWriteError{}
+}
+
+func writeRetirementBlobIndexLeaves(index *pageNumberIndex, arena *privatePageArena, scratch *blobBuildScratch, geometry blobGeometry) retirementWriteError {
+	var leaf [PageSize]byte
+	var previous uint32
+	var visited uint64
+	var streamProblem retirementWriteError
+	err := index.visitAscending(func(current uint32) error {
+		if visited == geometry.valueCount {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamCountMismatch, first64: geometry.valueCount, second64: visited + 1}
+			return retirementIndexStreamStop{}
+		}
+		if current < 2 || uint64(current) >= arena.committedPageCount {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamPageOutOfBounds, page: current}
+			return retirementIndexStreamStop{}
+		}
+		if visited != 0 && current <= previous {
+			streamProblem = retirementWriteError{code: retirementWriteErrRetirementStreamOrder, page: previous, secondPage: current}
+			return retirementIndexStreamStop{}
+		}
+		leafIndex := int(visited / uint64(retirementValuesPerBlobLeaf))
+		valueIndex := int(visited % uint64(retirementValuesPerBlobLeaf))
+		leafValues := geometry.valueCount - uint64(leafIndex)*uint64(retirementValuesPerBlobLeaf)
+		if leafValues > uint64(retirementValuesPerBlobLeaf) {
+			leafValues = uint64(retirementValuesPerBlobLeaf)
+		}
+		if valueIndex == 0 {
+			beginRetirementBlobLeaf(&leaf, arena.bornTxn, visited*4, leafValues)
+		}
+		binary.LittleEndian.PutUint32(leaf[blobLeafDataOffset+valueIndex*4:], current)
+		previous = current
+		visited++
+		if uint64(valueIndex+1) == leafValues {
+			sealPageNoFail(&leaf)
+			if streamProblem = arena.writePage(scratch.pageNumbers[leafIndex], &leaf); streamProblem.failed() {
+				return retirementIndexStreamStop{}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if _, stopped := err.(retirementIndexStreamStop); stopped {
+			return streamProblem
+		}
+		return retirementWriteError{code: retirementWriteErrPageNumberIndex}
+	}
+	if visited != geometry.valueCount {
+		return retirementWriteError{code: retirementWriteErrRetirementStreamCountMismatch, first64: geometry.valueCount, second64: visited}
+	}
+	return retirementWriteError{}
+}
+
 func encodePageHeaderNoFail(page *[PageSize]byte, pageType PageType, bornTxn uint64, count, level, lower uint16, aux uint32) {
 	copy(page[0:4], PageMagic)
 	page[4] = byte(pageType)
@@ -1330,12 +1522,16 @@ func sealPageNoFail(page *[PageSize]byte) {
 	binary.LittleEndian.PutUint32(page[PageCRCOffset:PageCRCOffset+4], ^crc)
 }
 
-func encodeRetirementBlobLeaf(page *[PageSize]byte, bornTxn, logicalOffset uint64, values []uint32) {
+func beginRetirementBlobLeaf(page *[PageSize]byte, bornTxn, logicalOffset, valueCount uint64) {
 	*page = [PageSize]byte{}
-	dataLength := len(values) * 4
+	dataLength := int(valueCount) * 4
 	encodePageHeaderNoFail(page, PageTypeBlobLeaf, bornTxn, 1, 0, uint16(blobLeafDataOffset+dataLength), uint32(blobKindRetirementPageList))
 	binary.LittleEndian.PutUint64(page[32:40], logicalOffset)
 	binary.LittleEndian.PutUint16(page[40:42], uint16(dataLength))
+}
+
+func encodeRetirementBlobLeaf(page *[PageSize]byte, bornTxn, logicalOffset uint64, values []uint32) {
+	beginRetirementBlobLeaf(page, bornTxn, logicalOffset, uint64(len(values)))
 	for index, value := range values {
 		binary.LittleEndian.PutUint32(page[blobLeafDataOffset+index*4:], value)
 	}

@@ -12,6 +12,7 @@ use crate::contract::MAX_PAGE_COUNT;
 use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::crc32c::crc32c_with_zeroed;
 use crate::page::{self, PageHeader, PageHeaderError, PageType, PAGE_HEADER_SIZE};
+use crate::page_number_index::{PageNumberIndex, PageNumberIndexError, PageNumberIndexVisitError};
 use crate::page_source::{CommittedPageSource, PageSourceError};
 #[cfg(test)]
 use crate::private_page_pool::PrivatePageRef;
@@ -2215,6 +2216,10 @@ pub(crate) enum RetirementWriteError {
     },
     EmptyRetirementStream,
     RetirementStreamTooLong(u64),
+    RetirementStreamCountMismatch {
+        expected: u64,
+        actual: u64,
+    },
     RetirementStreamOrder {
         previous: u32,
         current: u32,
@@ -2224,6 +2229,7 @@ pub(crate) enum RetirementWriteError {
         current: u64,
     },
     RetirementStreamPageOutOfBounds(u32),
+    PageNumberIndex(PageNumberIndexError),
     ArithmeticOverflow,
     TreeDepthExceeded,
     RootType(PageType),
@@ -2409,6 +2415,55 @@ impl RetirementBlobBuilder {
         }
     }
 
+    /// Stream a private ordered page-number index into a retirement blob.
+    ///
+    /// The index is walked once before reservation and once while encoding;
+    /// neither pass materializes an input-sized page-number slice.
+    #[allow(dead_code)] // Wired into the range-root fixed point in the next slice.
+    pub(crate) fn build_from_index<'arena, 'slots>(
+        index: &mut PageNumberIndex<'_, '_>,
+        arena: &'arena mut PrivatePageArena<'slots>,
+        scratch: &mut BlobBuildScratch<'_>,
+    ) -> Result<RetirementBlobToken<'arena, 'slots>, RetirementWriteError> {
+        let geometry = Self::preflight_index(index, arena, scratch.pgnos.len())?;
+        let epoch_steps = if arena.scope().is_some() {
+            geometry
+                .total_pages
+                .checked_mul(3)
+                .and_then(|steps| steps.checked_add(2))
+        } else {
+            geometry
+                .total_pages
+                .checked_mul(4)
+                .and_then(|steps| steps.checked_add(1))
+        }
+        .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+        let checkpoint = arena.begin_reserved(epoch_steps)?;
+        match Self::apply_index(index, arena, scratch, geometry, &checkpoint) {
+            Ok((root, private_pages)) => {
+                let generation = checkpoint.generation;
+                arena.commit(checkpoint, &[]);
+                let born_txn = arena.born_txn;
+                Ok(RetirementBlobToken {
+                    arena,
+                    root,
+                    page_count: geometry.value_count,
+                    byte_length: geometry.value_count * 4,
+                    private_pages,
+                    generation,
+                    cleanup_generation: generation,
+                    born_txn,
+                    stabilized: false,
+                    epoch: 1,
+                })
+            }
+            Err(error) => {
+                arena.rollback(checkpoint);
+                Err(error)
+            }
+        }
+    }
+
     fn preflight(
         pages: &[u32],
         arena: &PrivatePageArena<'_>,
@@ -2433,6 +2488,60 @@ impl RetirementBlobBuilder {
         }
 
         let geometry = Self::geometry_for_value_count(value_count)?;
+        arena.require_pages(geometry.total_pages)?;
+        if scratch_len < geometry.total_pages {
+            return Err(RetirementWriteError::BlobBuildScratchTooSmall {
+                required: geometry.total_pages,
+                actual: scratch_len,
+            });
+        }
+        Ok(geometry)
+    }
+
+    fn preflight_index(
+        index: &mut PageNumberIndex<'_, '_>,
+        arena: &PrivatePageArena<'_>,
+        scratch_len: usize,
+    ) -> Result<BlobGeometry, RetirementWriteError> {
+        let geometry = Self::geometry_for_value_count(index.len())?;
+        let mut previous = None;
+        let mut visited = 0u64;
+        match index.visit_ascending(|current| -> Result<(), RetirementWriteError> {
+            if visited == geometry.value_count {
+                return Err(RetirementWriteError::RetirementStreamCountMismatch {
+                    expected: geometry.value_count,
+                    actual: visited.saturating_add(1),
+                });
+            }
+            if current < 2 || u64::from(current) >= arena.committed_page_count {
+                return Err(RetirementWriteError::RetirementStreamPageOutOfBounds(
+                    current,
+                ));
+            }
+            if previous.map(|prior| current <= prior).unwrap_or(false) {
+                return Err(RetirementWriteError::RetirementStreamOrder {
+                    previous: previous.unwrap(),
+                    current,
+                });
+            }
+            previous = Some(current);
+            visited = visited
+                .checked_add(1)
+                .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+            Ok(())
+        }) {
+            Ok(()) => {}
+            Err(PageNumberIndexVisitError::Index(error)) => {
+                return Err(RetirementWriteError::PageNumberIndex(error));
+            }
+            Err(PageNumberIndexVisitError::Visitor(error)) => return Err(error),
+        }
+        if visited != geometry.value_count {
+            return Err(RetirementWriteError::RetirementStreamCountMismatch {
+                expected: geometry.value_count,
+                actual: visited,
+            });
+        }
         arena.require_pages(geometry.total_pages)?;
         if scratch_len < geometry.total_pages {
             return Err(RetirementWriteError::BlobBuildScratchTooSmall {
@@ -2539,15 +2648,112 @@ impl RetirementBlobBuilder {
         debug_assert_eq!(level - 1, geometry.root_level);
         Ok((scratch.pgnos[input_start], geometry.total_pages))
     }
+
+    fn apply_index(
+        index: &mut PageNumberIndex<'_, '_>,
+        arena: &mut PrivatePageArena<'_>,
+        scratch: &mut BlobBuildScratch<'_>,
+        geometry: BlobGeometry,
+        checkpoint: &ArenaCheckpoint<'_>,
+    ) -> Result<(u32, usize), RetirementWriteError> {
+        for output_index in 0..geometry.total_pages {
+            scratch.pgnos[output_index] =
+                arena.allocate(checkpoint, PrivatePageOrigin::RetirementBlob)?;
+        }
+
+        let mut leaf = [0u8; PAGE_SIZE];
+        let mut previous = None;
+        let mut visited = 0u64;
+        match index.visit_ascending(|current| -> Result<(), RetirementWriteError> {
+            if visited == geometry.value_count {
+                return Err(RetirementWriteError::RetirementStreamCountMismatch {
+                    expected: geometry.value_count,
+                    actual: visited.saturating_add(1),
+                });
+            }
+            if current < 2 || u64::from(current) >= arena.committed_page_count {
+                return Err(RetirementWriteError::RetirementStreamPageOutOfBounds(
+                    current,
+                ));
+            }
+            if previous.map(|prior| current <= prior).unwrap_or(false) {
+                return Err(RetirementWriteError::RetirementStreamOrder {
+                    previous: previous.unwrap(),
+                    current,
+                });
+            }
+            let leaf_index = usize::try_from(visited / RETIREMENT_VALUES_PER_BLOB_LEAF)
+                .map_err(|_| RetirementWriteError::ArithmeticOverflow)?;
+            let value_index = usize::try_from(visited % RETIREMENT_VALUES_PER_BLOB_LEAF)
+                .map_err(|_| RetirementWriteError::ArithmeticOverflow)?;
+            let leaf_start = u64::try_from(leaf_index)
+                .map_err(|_| RetirementWriteError::ArithmeticOverflow)?
+                * RETIREMENT_VALUES_PER_BLOB_LEAF;
+            let leaf_values =
+                (geometry.value_count - leaf_start).min(RETIREMENT_VALUES_PER_BLOB_LEAF);
+            if value_index == 0 {
+                init_blob_leaf(&mut leaf, arena.born_txn, visited * 4, leaf_values);
+            }
+            let at = 48 + value_index * 4;
+            leaf[at..at + 4].copy_from_slice(&current.to_le_bytes());
+            previous = Some(current);
+            visited = visited
+                .checked_add(1)
+                .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+            if u64::try_from(value_index + 1)
+                .map_err(|_| RetirementWriteError::ArithmeticOverflow)?
+                == leaf_values
+            {
+                page::write_crc32c(&mut leaf);
+                arena.write_page(checkpoint, scratch.pgnos[leaf_index], &leaf);
+            }
+            Ok(())
+        }) {
+            Ok(()) => {}
+            Err(PageNumberIndexVisitError::Index(error)) => {
+                return Err(RetirementWriteError::PageNumberIndex(error));
+            }
+            Err(PageNumberIndexVisitError::Visitor(error)) => return Err(error),
+        }
+        if visited != geometry.value_count {
+            return Err(RetirementWriteError::RetirementStreamCountMismatch {
+                expected: geometry.value_count,
+                actual: visited,
+            });
+        }
+
+        let mut input_start = 0usize;
+        let mut input_count = geometry.leaf_count;
+        let mut output_start = geometry.leaf_count;
+        let mut level = 1u16;
+        while input_count > 1 {
+            let output_count = input_count.div_ceil(BLOB_BRANCH_CAPACITY);
+            for output_index in 0..output_count {
+                let child_start = input_start + output_index * BLOB_BRANCH_CAPACITY;
+                let child_count =
+                    (input_count - output_index * BLOB_BRANCH_CAPACITY).min(BLOB_BRANCH_CAPACITY);
+                let destination_index = output_start + output_index;
+                let mut page = [0u8; PAGE_SIZE];
+                encode_blob_branch_refs(
+                    &mut page,
+                    arena.born_txn,
+                    level,
+                    &scratch.pgnos[child_start..child_start + child_count],
+                    arena,
+                );
+                arena.write_page(checkpoint, scratch.pgnos[destination_index], &page);
+            }
+            input_start = output_start;
+            input_count = output_count;
+            output_start += output_count;
+            level += 1;
+        }
+        debug_assert_eq!(level - 1, geometry.root_level);
+        Ok((scratch.pgnos[input_start], geometry.total_pages))
+    }
 }
 
-fn encode_blob_leaf(
-    page: &mut [u8; PAGE_SIZE],
-    born_txn: u64,
-    logical_offset: u64,
-    values: u64,
-    mut value_at: impl FnMut(u64) -> u32,
-) {
+fn init_blob_leaf(page: &mut [u8; PAGE_SIZE], born_txn: u64, logical_offset: u64, values: u64) {
     page.fill(0);
     let data_len = u16::try_from(values * 4).unwrap();
     PageHeader {
@@ -2563,6 +2769,16 @@ fn encode_blob_leaf(
     .encode_into(page);
     page[32..40].copy_from_slice(&logical_offset.to_le_bytes());
     page[40..42].copy_from_slice(&data_len.to_le_bytes());
+}
+
+fn encode_blob_leaf(
+    page: &mut [u8; PAGE_SIZE],
+    born_txn: u64,
+    logical_offset: u64,
+    values: u64,
+    mut value_at: impl FnMut(u64) -> u32,
+) {
+    init_blob_leaf(page, born_txn, logical_offset, values);
     for index in 0..values {
         let at = 48 + index as usize * 4;
         page[at..at + 4].copy_from_slice(&value_at(index).to_le_bytes());
@@ -6828,6 +7044,7 @@ mod tests {
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
+    use crate::page_number_index::{PageNumberIndexPage, PageNumberIndexWorkspace};
     use crate::page_source::SlicePageSource;
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::private_page_pool::PrivatePageCompositeBind;
@@ -11180,6 +11397,121 @@ mod tests {
                 token.discard();
             });
             assert_eq!(allocations, 0);
+            assert_eq!(arena.in_use_count().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn retirement_blob_builder_streams_page_number_index() {
+        let count = usize::try_from(RETIREMENT_VALUES_PER_BLOB_LEAF).unwrap() + 1;
+        let values: Vec<u32> = (2..2 + u32::try_from(count).unwrap()).collect();
+        let mut index_pages = [PageNumberIndexPage::empty(); 1];
+        let mut workspace = PageNumberIndexWorkspace::new(&mut index_pages);
+        let mut index = PageNumberIndex::new(&mut workspace).unwrap();
+        for &value in values.iter().rev() {
+            assert!(index.insert(value).unwrap());
+        }
+
+        let committed = 5_000u64;
+        let mut slots = appended_slots(committed as u32, 3);
+        let mut arena = PrivatePageArena::new(&mut slots, committed, committed + 3, 9).unwrap();
+        let mut order = [0u32; 3];
+        let ((), allocations) = count_thread_allocations(|| {
+            let token = RetirementBlobBuilder::build_from_index(
+                &mut index,
+                &mut arena,
+                &mut BlobBuildScratch::new(&mut order),
+            )
+            .unwrap();
+            assert_eq!(token.page_count(), count as u64);
+            assert_eq!(token.byte_length(), count as u64 * 4);
+            assert_eq!(token.private_pages(), 3);
+
+            let root = token.arena.test_page(token.root()).unwrap();
+            let branch =
+                BlobBranch::open(&root, 9, BlobKind::RetirementPageList, committed + 3).unwrap();
+            assert_eq!(branch.level(), 1);
+            assert_eq!(branch.len(), 2);
+            branch.verify_local().unwrap();
+            let first = branch.entry(0).unwrap();
+            let second = branch.entry(1).unwrap();
+            assert_eq!(first.logical_offset, 0);
+            assert_eq!(second.logical_offset, RETIREMENT_VALUES_PER_BLOB_LEAF * 4);
+            drop(root);
+
+            let first_page = token.arena.test_page(first.child_pgno).unwrap();
+            let first_leaf = BlobLeaf::open(&first_page, 9, BlobKind::RetirementPageList).unwrap();
+            first_leaf.verify_local().unwrap();
+            assert_eq!(first_leaf.logical_offset(), 0);
+            assert_eq!(
+                first_leaf.data_len(),
+                u16::try_from(RETIREMENT_VALUES_PER_BLOB_LEAF * 4).unwrap()
+            );
+            for (position, expected) in values[..count - 1].iter().enumerate() {
+                let at = position * 4;
+                assert_eq!(
+                    u32::from_le_bytes(first_leaf.data()[at..at + 4].try_into().unwrap()),
+                    *expected
+                );
+            }
+            drop(first_page);
+
+            let second_page = token.arena.test_page(second.child_pgno).unwrap();
+            let second_leaf =
+                BlobLeaf::open(&second_page, 9, BlobKind::RetirementPageList).unwrap();
+            second_leaf.verify_local().unwrap();
+            assert_eq!(
+                second_leaf.logical_offset(),
+                RETIREMENT_VALUES_PER_BLOB_LEAF * 4
+            );
+            assert_eq!(second_leaf.data_len(), 4);
+            assert_eq!(
+                u32::from_le_bytes(second_leaf.data()[..4].try_into().unwrap()),
+                values[count - 1]
+            );
+            drop(second_page);
+            token.discard();
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(arena.in_use_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn retirement_blob_index_preflight_is_atomic() {
+        for (values, scratch_len, expected) in [
+            (
+                vec![1],
+                1,
+                RetirementWriteError::RetirementStreamPageOutOfBounds(1),
+            ),
+            (
+                (2..2 + u32::try_from(RETIREMENT_VALUES_PER_BLOB_LEAF + 1).unwrap()).collect(),
+                2,
+                RetirementWriteError::BlobBuildScratchTooSmall {
+                    required: 3,
+                    actual: 2,
+                },
+            ),
+        ] {
+            let mut index_pages = [PageNumberIndexPage::empty(); 1];
+            let mut workspace = PageNumberIndexWorkspace::new(&mut index_pages);
+            let mut index = PageNumberIndex::new(&mut workspace).unwrap();
+            for value in values.iter().rev().copied() {
+                assert!(index.insert(value).unwrap());
+            }
+            let committed = 5_000u64;
+            let mut slots = appended_slots(committed as u32, 3);
+            let mut arena = PrivatePageArena::new(&mut slots, committed, committed + 3, 9).unwrap();
+            let mut order = [99u32; 3];
+            let before = order;
+            let error = RetirementBlobBuilder::build_from_index(
+                &mut index,
+                &mut arena,
+                &mut BlobBuildScratch::new(&mut order[..scratch_len]),
+            )
+            .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(order, before);
             assert_eq!(arena.in_use_count().unwrap(), 0);
         }
     }

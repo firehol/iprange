@@ -8140,6 +8140,66 @@ requirements are normative in the Pre-Implementation Gate above.
   ordered index can be consumed directly by the existing bounded retirement
   writer.
 
+### 2026-07-24 - ordered-index retirement-blob plan
+
+- Add matching private `build from ordered index` paths to the Rust and Go
+  retirement-blob writers. The existing slice-based helper remains intact for
+  its current callers; the new path accepts the private page-number index
+  directly and never creates a page-number slice or temporary file.
+- The new path has two index passes. Before any arena checkpoint or draft
+  mutation, it derives geometry from the index's declared count, verifies
+  every visited page is in the selected committed range and strictly increasing,
+  proves the visited count exactly matches that declaration, and checks output
+  scratch and private-page capacity. Only then does it reserve private output
+  pages. A second pass streams each value straight into one fixed 4 KiB blob
+  leaf buffer, seals the leaf at its known boundary, and rechecks the exact
+  count before branch construction.
+- An invalid/private-index traversal must remain distinguishable from a bad
+  retirement value stream. A count mismatch is a typed internal failure. Any
+  error after reservation rolls the arena checkpoint back; later root-handoff
+  integration will use the existing whole-draft-abort path. The index itself
+  remains caller-owned unpublished scratch and is not reset on a retryable
+  retirement-builder failure.
+- Tests will cover sorted output from reverse index insertion, bounds rejection
+  before arena mutation, too-small output scratch, exact metadata/root geometry,
+  successful discard, and zero post-setup heap allocations. The slice path,
+  v4 bytes, public SDK, default validation behavior, and publication path are
+  deliberately unchanged in this slice.
+
+### 2026-07-24 - ordered-index retirement-blob implementation and validation
+
+- Added matching private Rust and Go retirement-blob builders that accept the
+  `PageNumberIndex` directly. The established slice builder remains unchanged
+  for its existing callers. The new path never creates a second input-sized
+  page-number list and uses no temporary file.
+- Each build first visits the index without an arena checkpoint, checks the
+  exact declared count, strict order, selected-committed-page bounds, output
+  scratch, and private-page capacity. It then reserves output pages and makes
+  a second index visit that writes and seals one 4 KiB blob leaf at a time.
+  It rechecks every streamed value and the final count before constructing
+  branch pages. A later error rolls the private arena checkpoint back.
+- Added typed internal distinction for a declared-count mismatch and an index
+  traversal failure. These are not reader/writer default validation; they are
+  checks on the transaction-private input used to create a required retirement
+  object. A caller-owned index remains intact after a retryable builder error.
+- Focused matching tests insert the input in reverse order, prove a two-leaf
+  branch/blob with valid CRCs and exact values, prove invalid bounds and short
+  output scratch leave the arena and caller output scratch unchanged, and prove
+  successful build/discard performs zero heap allocations after setup. Go also
+  exercises declared-count and failed-index rejection directly.
+- Validation passed: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`, `cargo test
+  --manifest-path v4/rust/Cargo.toml` (518 tests), `cargo test
+  --manifest-path v4/rust/Cargo.toml --all-features` (639 tests), Rust format,
+  warnings-denied all-target Clippy, all-feature benchmark compilation, and
+  `git diff --check`. The project SOW audit is rerun with the final checkpoint
+  commit preparation.
+- This remains an internal prerequisite. It has not changed range metadata,
+  retirement-tree editing, allocator ownership, publication, v4 bytes, or any
+  public API. The next slice must combine the old range-tree list with the
+  existing fixed-point retirement/direct-free result before a new range root
+  can be handed to target metadata.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
