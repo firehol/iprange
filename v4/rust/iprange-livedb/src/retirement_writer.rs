@@ -24,6 +24,7 @@ use crate::private_page_pool::{
 use crate::retirement_page::{
     RetirementBatch, RetirementBranch, RetirementLeaf, RetirementPageError,
 };
+use crate::retirement_reader::{RetirementIdentity, RetirementReclamationAuthority};
 #[cfg(test)]
 use crate::writer_fixed_point::FixedPointPreparedRetirementTerminalWork;
 #[cfg(test)]
@@ -1476,6 +1477,7 @@ const ROLE_OLD_REQUIRED: u16 = 1 << 8;
 const ROLE_PREFIX_REPLACEMENT: u16 = 1 << 9;
 const ROLE_PRIVATE_RETIRED: u16 = 1 << 10;
 const ROLE_PRIOR_PRIVATE_RETIRED: u16 = 1 << 11;
+const ROLE_SAFE_RECLAIMED: u16 = 1 << 12;
 
 impl<'a> PageRoleIndex<'a> {
     pub(crate) fn new(slots: &'a mut [PageRoleIndexSlot]) -> Self {
@@ -1577,7 +1579,11 @@ impl<'a> PageRoleIndex<'a> {
                 PageRole::SelectedRetirementBlob => ROLE_REFERENCE_BLOB,
                 _ => unreachable!("select accepts metadata roles only"),
             };
-            let base = if private { ROLE_PRIVATE } else { 0 };
+            let base = if private {
+                ROLE_PRIVATE | (existing & ROLE_SAFE_RECLAIMED)
+            } else {
+                0
+            };
             let allowed = existing == base || existing == base | reference;
             let same_selection = existing == base | bit || existing == base | reference | bit;
             if same_selection && self.slots[index].selected_epoch < self.reference_epoch {
@@ -1623,12 +1629,16 @@ impl<'a> PageRoleIndex<'a> {
         let (index, found) = self.locate(pgno)?;
         if found {
             let existing = self.slots[index].roles;
-            if private && existing == ROLE_PRIVATE {
+            let base = if private {
+                ROLE_PRIVATE | (existing & ROLE_SAFE_RECLAIMED)
+            } else {
+                0
+            };
+            if private && existing == base {
                 self.slots[index].roles |= bit;
                 self.slots[index].reference_epoch = self.reference_epoch;
                 return Ok(());
             }
-            let base = if private { ROLE_PRIVATE } else { 0 };
             let same_reference = existing == base | bit
                 || existing
                     == base
@@ -1697,6 +1707,12 @@ impl<'a> PageRoleIndex<'a> {
         let (index, found) = self.locate(pgno)?;
         if found {
             let existing = self.slots[index].roles;
+            if !satisfy_required
+                && (existing == ROLE_SAFE_RECLAIMED
+                    || existing == (ROLE_PRIVATE | ROLE_SAFE_RECLAIMED))
+            {
+                return Ok(());
+            }
             if satisfy_required && existing & ROLE_OLD_REQUIRED != 0 {
                 self.slots[index].roles = (existing & !ROLE_OLD_REQUIRED) | ROLE_LISTED;
                 return Ok(());
@@ -1708,6 +1724,45 @@ impl<'a> PageRoleIndex<'a> {
             });
         }
         self.insert_at(index, pgno, ROLE_LISTED);
+        Ok(())
+    }
+
+    fn authorize_reclaimed_pages(
+        &mut self,
+        arena: &PrivatePageArena<'_>,
+        reclamation: &RetirementReclamationAuthority<'_>,
+    ) -> Result<(), RetirementWriteError> {
+        let scope = arena.scope().ok_or(RetirementWriteError::StaleEditPlan(
+            RetirementEditBinding::Arena,
+        ))?;
+        for &pgno in reclamation.pages() {
+            let pool_slot = arena
+                .pool()
+                .find_in_scope(scope, pgno)
+                .map_err(map_pool_error)?
+                .ok_or(RetirementWriteError::ReclaimedPageNotConsumed(pgno))?;
+            let info = arena
+                .pool()
+                .scoped_slot_info(scope, pool_slot)
+                .map_err(map_pool_error)?
+                .ok_or(RetirementWriteError::ReclaimedPageNotConsumed(pgno))?;
+            if !info.bound {
+                return Err(RetirementWriteError::ReclaimedPageNotConsumed(pgno));
+            }
+            let (index, found) = self.locate(pgno)?;
+            if found {
+                if self.slots[index].roles == ROLE_PRIVATE {
+                    self.slots[index].roles |= ROLE_SAFE_RECLAIMED;
+                    continue;
+                }
+                return Err(RetirementWriteError::PageRoleConflict {
+                    pgno,
+                    existing: role_from_bits(self.slots[index].roles),
+                    requested: PageRole::ListedReclaimed,
+                });
+            }
+            self.insert_at(index, pgno, ROLE_SAFE_RECLAIMED);
+        }
         Ok(())
     }
 
@@ -2030,7 +2085,7 @@ fn role_from_bits(bits: u16) -> PageRole {
         PageRole::SelectedRetirementTree
     } else if bits & ROLE_BLOB != 0 {
         PageRole::SelectedRetirementBlob
-    } else if bits & ROLE_LISTED != 0 {
+    } else if bits & (ROLE_LISTED | ROLE_SAFE_RECLAIMED) != 0 {
         PageRole::ListedReclaimed
     } else if bits & ROLE_OLD_REQUIRED != 0 {
         PageRole::RequiredRetirementList
@@ -2157,6 +2212,14 @@ pub(crate) enum RetirementWriteError {
         requested: u64,
         available: u64,
     },
+    ReclamationStateMismatch,
+    ReclamationPrefixMismatch {
+        expected_batches: u64,
+        actual_batches: u64,
+        expected_last_retired_by_txn: u64,
+        actual_last_retired_by_txn: u64,
+    },
+    ReclaimedPageNotConsumed(u32),
     BlobOffsetMismatch {
         expected: u64,
         actual: u64,
@@ -4686,6 +4749,7 @@ impl RetirementTreeEditor {
                 remaining: delete_count,
                 deleted: 0,
                 previous_retired_txn: None,
+                last_deleted_txn: None,
             };
             let outcome = guarded.resolve(scanner.scan_node(state.root, None, None, 0))?;
             if scanner.remaining != 0 || scanner.deleted != delete_count {
@@ -4785,6 +4849,44 @@ impl RetirementTreeEditor {
         RetirementEditPlan<'plan, 'arena, 'slots, 'entries, 'release_entries, 'role_entries, S>,
         RetirementWriteError,
     > {
+        Self::plan_delete_oldest_and_upsert_newest_with_reclamation(
+            source,
+            state,
+            delete_count,
+            blob,
+            delete_path,
+            upsert_path,
+            replacements,
+            releases,
+            roles,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn plan_delete_oldest_and_upsert_newest_with_reclamation<
+        'plan,
+        'arena,
+        'slots,
+        'entries,
+        'release_entries,
+        'role_entries,
+        S: RetirementMetadataSource + ?Sized,
+    >(
+        source: &'plan S,
+        state: RetirementTreeState,
+        delete_count: u64,
+        blob: &'plan mut RetirementBlobToken<'arena, 'slots>,
+        delete_path: &'plan mut [RetirementPathFrame],
+        upsert_path: &'plan mut [RetirementPathFrame],
+        replacements: &'plan mut CommittedReplacementLedger<'entries>,
+        releases: &'plan mut PrivateReleaseBuffer<'release_entries>,
+        roles: &'plan mut PageRoleIndex<'role_entries>,
+        reclamation: Option<(&RetirementReclamationAuthority<'_>, RetirementIdentity)>,
+    ) -> Result<
+        RetirementEditPlan<'plan, 'arena, 'slots, 'entries, 'release_entries, 'role_entries, S>,
+        RetirementWriteError,
+    > {
         let batch = RetirementBatch {
             retired_by_txn: blob.born_txn,
             page_count: blob.page_count,
@@ -4821,7 +4923,13 @@ impl RetirementTreeEditor {
                 available: state.batch_count,
             });
         }
+        if let Some((reclamation, selected_identity)) = reclamation {
+            validate_reclamation_authority(state, selected_identity, delete_count, reclamation)?;
+        }
         roles.prepare(arena, replacements)?;
+        if let Some((reclamation, _)) = reclamation {
+            roles.authorize_reclaimed_pages(arena, reclamation)?;
+        }
         roles.require_new_replacements();
         let pool_snapshot = arena.capture_fence()?;
         let arena_generation = arena.generation.get();
@@ -4853,6 +4961,7 @@ impl RetirementTreeEditor {
                 remaining: delete_count,
                 deleted: 0,
                 previous_retired_txn: None,
+                last_deleted_txn: None,
             };
             let outcome = guarded.resolve(scanner.scan_node(state.root, None, None, 0))?;
             if scanner.remaining != 0 || scanner.deleted != delete_count {
@@ -4860,6 +4969,9 @@ impl RetirementTreeEditor {
                     declared: delete_count,
                     actual: scanner.deleted,
                 });
+            }
+            if let Some((reclamation, _)) = reclamation {
+                scanner.validate_reclaimed_prefix(reclamation)?;
             }
             let delete = scanner.finish_plan(outcome, delete_count)?;
             let (mut result, binding) = prepare_delete_pages(
@@ -5077,6 +5189,37 @@ impl RetirementTreeEditor {
             replacements,
             releases,
             roles,
+        )?
+        .apply()
+    }
+
+    /// Reuses only pages proved safe by the exact selected source and prefix.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn delete_reclaimed_oldest_and_upsert_newest<
+        S: RetirementMetadataSource + ?Sized,
+    >(
+        source: &S,
+        state: RetirementTreeState,
+        selected_identity: RetirementIdentity,
+        reclamation: &RetirementReclamationAuthority<'_>,
+        mut blob: RetirementBlobToken<'_, '_>,
+        delete_path: &mut [RetirementPathFrame],
+        upsert_path: &mut [RetirementPathFrame],
+        replacements: &mut CommittedReplacementLedger<'_>,
+        releases: &mut PrivateReleaseBuffer<'_>,
+        roles: &mut PageRoleIndex<'_>,
+    ) -> Result<RetirementTreeEditResult, RetirementWriteError> {
+        Self::plan_delete_oldest_and_upsert_newest_with_reclamation(
+            source,
+            state,
+            reclamation.batch_count(),
+            &mut blob,
+            delete_path,
+            upsert_path,
+            replacements,
+            releases,
+            roles,
+            Some((reclamation, selected_identity)),
         )?
         .apply()
     }
@@ -5346,6 +5489,7 @@ struct DeleteScanner<
     remaining: u64,
     deleted: u64,
     previous_retired_txn: Option<u64>,
+    last_deleted_txn: Option<u64>,
 }
 
 impl<S: RetirementMetadataSource + ?Sized>
@@ -5419,6 +5563,9 @@ impl<S: RetirementMetadataSource + ?Sized>
                         });
                     }
                     self.previous_retired_txn = Some(current);
+                    if index < delete_here as usize {
+                        self.last_deleted_txn = Some(current);
+                    }
                 }
                 for index in 0..delete_here as usize {
                     scan_batch_blob(
@@ -5516,6 +5663,24 @@ impl<S: RetirementMetadataSource + ?Sized>
                 RetirementWriteError::ChildType(other)
             }),
         }
+    }
+
+    fn validate_reclaimed_prefix(
+        &self,
+        reclamation: &RetirementReclamationAuthority<'_>,
+    ) -> Result<(), RetirementWriteError> {
+        let actual_last_retired_by_txn = self.last_deleted_txn.unwrap_or(0);
+        if self.deleted != reclamation.batch_count()
+            || actual_last_retired_by_txn != reclamation.last_retired_by_txn()
+        {
+            return Err(RetirementWriteError::ReclamationPrefixMismatch {
+                expected_batches: reclamation.batch_count(),
+                actual_batches: self.deleted,
+                expected_last_retired_by_txn: reclamation.last_retired_by_txn(),
+                actual_last_retired_by_txn,
+            });
+        }
+        Ok(())
     }
 
     fn finish_plan(
@@ -5695,6 +5860,30 @@ fn validate_edit_inputs(
                 replacement.pgno,
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_reclamation_authority(
+    state: RetirementTreeState,
+    selected_identity: RetirementIdentity,
+    delete_count: u64,
+    reclamation: &RetirementReclamationAuthority<'_>,
+) -> Result<(), RetirementWriteError> {
+    if selected_identity.txn_id != state.selected_txn
+        || selected_identity.page_count != state.page_count
+        || selected_identity.root != state.root
+        || selected_identity.batch_count != state.batch_count
+        || reclamation.identity() != Some(selected_identity)
+    {
+        return Err(RetirementWriteError::ReclamationStateMismatch);
+    }
+    if delete_count == 0
+        || delete_count != reclamation.batch_count()
+        || reclamation.last_retired_by_txn() == 0
+        || reclamation.pages().is_empty()
+    {
+        return Err(RetirementWriteError::ReclamationStateMismatch);
     }
     Ok(())
 }
@@ -6489,7 +6678,11 @@ mod tests {
     use crate::bootstrap::OpenMode;
     use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag};
     #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::key::Ipv4Key;
+    #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::name_binding::{basename_commitment, BasenameEncoding};
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::os::linux::live_reader::LinuxLiveReader;
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::live_writer::{LinuxLiveWriter, LinuxLiveWriterPageSinkError};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -6693,6 +6886,13 @@ mod tests {
         .encode_into(&mut page_bytes);
         page::write_crc32c(&mut page_bytes);
         page_bytes
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum LinuxFinalizerReclamationCase {
+        NoChange,
+        SelectedBatch,
     }
 
     fn drain_completed_fixed_point_private_output<'pages, B>(
@@ -8239,14 +8439,17 @@ mod tests {
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]
-    #[test]
-    fn linux_finalizer_selects_bitmap_pages_under_the_held_operation_lock() {
+    fn run_linux_finalizer_reclamation_case(case: LinuxFinalizerReclamationCase) {
+        let (selected_txn, retirement_root, retirement_batch_count) = match case {
+            LinuxFinalizerReclamationCase::NoChange => (1, 0, 0),
+            LinuxFinalizerReclamationCase::SelectedBatch => (2, 12, 1),
+        };
         let selected = MetaV4 {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
             value_tag: ValueTag::RETENTION,
             database_id: [1; 16],
-            txn_id: 1,
+            txn_id: selected_txn,
             commit_nonce: [2; 16],
             page_count: 100,
             range_record_count: 0,
@@ -8256,7 +8459,7 @@ mod tests {
             membership_id_limit: 0,
             metadata_uncompressed_len: 0,
             metadata_compressed_len: 0,
-            retirement_batch_count: 0,
+            retirement_batch_count,
             range_root: 0,
             catalog_name_root: 0,
             catalog_index_root: 0,
@@ -8266,14 +8469,32 @@ mod tests {
             membership_used_root: 0,
             metadata_root: 0,
             free_bitmap_root: 11,
-            retirement_root: 0,
+            retirement_root,
         };
         let database = live_test_database(selected, selected.page_count as usize);
         let mut initial_bytes = std::fs::read(&database.main).unwrap();
-        let free_leaf = free_bitmap_leaf(selected.txn_id, &[20, 22, 24, 26]);
+        let free_bits = match case {
+            LinuxFinalizerReclamationCase::NoChange => &[20, 22, 24, 26][..],
+            LinuxFinalizerReclamationCase::SelectedBatch => &[20, 24][..],
+        };
+        let free_leaf = free_bitmap_leaf(selected.txn_id, free_bits);
         let leaf_offset = usize::try_from(selected.free_bitmap_root).unwrap() * PAGE_SIZE;
         initial_bytes[leaf_offset..leaf_offset + PAGE_SIZE].copy_from_slice(&free_leaf);
+        if case == LinuxFinalizerReclamationCase::SelectedBatch {
+            put_retirement_leaf(
+                page_mut(&mut initial_bytes, selected.retirement_root),
+                selected.txn_id,
+                &[batch(selected.txn_id, 13, 2)],
+            );
+            put_blob_leaf(page_mut(&mut initial_bytes, 13), selected.txn_id, &[21, 23]);
+        }
         std::fs::write(&database.main, initial_bytes).unwrap();
+        let mut protected_reader = match case {
+            LinuxFinalizerReclamationCase::NoChange => None,
+            LinuxFinalizerReclamationCase::SelectedBatch => {
+                Some(LinuxLiveReader::<Ipv4Key>::open(&database.main).unwrap())
+            }
+        };
 
         let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
         let mut record_replacements = [];
@@ -8399,11 +8620,26 @@ mod tests {
         let mut stage_index = [BitmapCowIndexNode::empty(); 16];
         let mut stage_available = [0usize; 4];
         let mut shadow_slots = [const { PrivatePagePoolSlot::empty() }; 4];
+        let shadow_pool = PrivatePagePool::new_vacant(
+            &mut shadow_slots[..3],
+            selected.page_count,
+            selected.page_count,
+            selected.txn_id + 1,
+        )
+        .unwrap();
+        let shadow_scope = shadow_pool.reserve_scope(3).unwrap();
+        let mut verified_reclamation_batches = [RetirementBatch {
+            retired_by_txn: 0,
+            page_count: 0,
+            page_list_blob_root: 0,
+        }];
+        let mut verified_reclaimed_pages = [0u32; 2];
         let mut blob_pages = [0u32; 1];
-        let mut retirement_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
-        let mut retirement_replacements = [EMPTY_REPLACEMENT; 1];
-        let mut retirement_releases = [0u32; 1];
-        let mut retirement_roles = [PageRoleIndexSlot::new(); 8];
+        let mut delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut retirement_replacements = [EMPTY_REPLACEMENT; 4];
+        let mut retirement_releases = [0u32; 4];
+        let mut retirement_roles = [PageRoleIndexSlot::new(); 16];
         let mut final_release_pages = [0u32; 4];
         let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
         let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 8];
@@ -8450,72 +8686,99 @@ mod tests {
                     ));
 
                     let meta = source_selected.meta;
-                    let retirement_tree = RetirementTree::from_source(
-                        &pages,
-                        RetirementIdentity {
-                            database_id: meta.database_id,
-                            txn_id: meta.txn_id,
-                            commit_nonce: meta.commit_nonce,
-                            page_count: meta.page_count,
-                            root: meta.retirement_root,
-                            batch_count: meta.retirement_batch_count,
-                        },
-                    )
-                    .unwrap();
-                    let reclamation = match retirement_tree
-                        .select_oldest_eligible(reclaim_fence, 1, 8)
-                        .unwrap()
-                    {
-                        RetirementSelectionResult::NoChange(no_change) => {
-                            RetirementReclamation::NoChange(no_change)
+                    let retirement_identity = RetirementIdentity {
+                        database_id: meta.database_id,
+                        txn_id: meta.txn_id,
+                        commit_nonce: meta.commit_nonce,
+                        page_count: meta.page_count,
+                        root: meta.retirement_root,
+                        batch_count: meta.retirement_batch_count,
+                    };
+                    let retirement_tree =
+                        RetirementTree::from_source(&pages, retirement_identity).unwrap();
+                    macro_rules! bind_locked_plan {
+                        ($reclamation:expr) => {{
+                            let planner = FreeBitmapReservationPlanner::new(
+                                &pages,
+                                selected.txn_id,
+                                selected.page_count,
+                                selected.free_bitmap_root,
+                                2,
+                                FreeBitmapReservationBuffers {
+                                    arena: &mut planner_arena,
+                                    pool_validation: &mut planner_pool_validation,
+                                    arena_bindings: &mut planner_bindings,
+                                    candidates: &mut planner_candidates,
+                                    verified_pages: &mut planner_verified,
+                                    replacements: &mut planner_replacements,
+                                    index_nodes: &mut planner_index,
+                                    available_slots: &mut planner_available,
+                                    source_nodes: &mut planner_source_nodes,
+                                    reclamation: &reclamation_ticket,
+                                    stage: FreeBitmapReservationStageBuffers {
+                                        arena: &mut stage_arena,
+                                        arena_bindings: &mut stage_bindings,
+                                        candidates: &mut stage_candidates,
+                                        verified_pages: &mut stage_verified,
+                                        replacements: &mut stage_replacements,
+                                        index_nodes: &mut stage_index,
+                                        available_slots: &mut stage_available,
+                                    },
+                                },
+                            )
+                            .unwrap();
+                            let locked_plan = planner.plan_under_reclamation($reclamation).unwrap();
+                            assert_eq!(locked_plan.required_private_pages(), 3);
+                            locked_plan.bind(&shadow_pool, &shadow_scope).unwrap()
+                        }};
+                    }
+
+                    let mut bound = match case {
+                        LinuxFinalizerReclamationCase::NoChange => {
+                            assert_eq!(reclaim_fence.registering_readers(), 0);
+                            assert_eq!(reclaim_fence.oldest_reader_txn(), None);
+                            let reclamation = match retirement_tree
+                                .select_oldest_eligible(reclaim_fence, 1, 8)
+                                .unwrap()
+                            {
+                                RetirementSelectionResult::NoChange(no_change) => {
+                                    RetirementReclamation::NoChange(no_change)
+                                }
+                                RetirementSelectionResult::Selected(_) => {
+                                    panic!("empty retirement tree must not select a batch")
+                                }
+                            };
+                            bind_locked_plan!(reclamation)
                         }
-                        RetirementSelectionResult::Selected(_) => {
-                            panic!("empty retirement tree must not select a batch")
+                        LinuxFinalizerReclamationCase::SelectedBatch => {
+                            assert_eq!(reclaim_fence.registering_readers(), 0);
+                            assert_eq!(reclaim_fence.oldest_reader_txn(), Some(selected.txn_id));
+                            let selection = match retirement_tree
+                                .select_oldest_eligible(reclaim_fence, 1, 2)
+                                .unwrap()
+                            {
+                                RetirementSelectionResult::Selected(selection) => selection,
+                                RetirementSelectionResult::NoChange(_) => {
+                                    panic!("the pinned transaction makes the oldest batch reclaimable")
+                                }
+                            };
+                            assert_eq!(selection.batch_count, 1);
+                            assert_eq!(selection.page_count, 2);
+                            assert_eq!(selection.last_retired_by_txn, selected.txn_id);
+                            let verified = retirement_tree
+                                .verify_selection(&selection, &mut verified_reclamation_batches)
+                                .unwrap();
+                            let reclaimed = verified
+                                .second_pass_into(&retirement_tree, &mut verified_reclaimed_pages)
+                                .unwrap();
+                            assert_eq!(reclaimed.pages(), &[21, 23]);
+                            bind_locked_plan!(RetirementReclamation::Reclaimed(reclaimed))
                         }
                     };
-
-                    let planner = FreeBitmapReservationPlanner::new(
-                        &pages,
-                        selected.txn_id,
-                        selected.page_count,
-                        selected.free_bitmap_root,
-                        2,
-                        FreeBitmapReservationBuffers {
-                            arena: &mut planner_arena,
-                            pool_validation: &mut planner_pool_validation,
-                            arena_bindings: &mut planner_bindings,
-                            candidates: &mut planner_candidates,
-                            verified_pages: &mut planner_verified,
-                            replacements: &mut planner_replacements,
-                            index_nodes: &mut planner_index,
-                            available_slots: &mut planner_available,
-                            source_nodes: &mut planner_source_nodes,
-                            reclamation: &reclamation_ticket,
-                            stage: FreeBitmapReservationStageBuffers {
-                                arena: &mut stage_arena,
-                                arena_bindings: &mut stage_bindings,
-                                candidates: &mut stage_candidates,
-                                verified_pages: &mut stage_verified,
-                                replacements: &mut stage_replacements,
-                                index_nodes: &mut stage_index,
-                                available_slots: &mut stage_available,
-                            },
-                        },
-                    )
-                    .unwrap();
-                    let locked_plan = planner.plan_under_reclamation(reclamation).unwrap();
-                    assert_eq!(locked_plan.required_private_pages(), 3);
-                    let shadow_pool = PrivatePagePool::new_vacant(
-                        &mut shadow_slots[..locked_plan.required_private_pages()],
-                        selected.page_count,
-                        selected.page_count,
-                        selected.txn_id + 1,
-                    )
-                    .unwrap();
-                    let shadow_scope = shadow_pool
-                        .reserve_scope(locked_plan.required_private_pages())
-                        .unwrap();
-                    let mut bound = locked_plan.bind(&shadow_pool, &shadow_scope).unwrap();
+                    assert_eq!(
+                        bound.binding.reclaimed,
+                        usize::from(case == LinuxFinalizerReclamationCase::SelectedBatch) * 2
+                    );
                     bound.cow.apply_planned_reservation().unwrap();
                     assert_eq!(bound.cow.available_private_pages(), 2);
 
@@ -8525,8 +8788,12 @@ mod tests {
                         selected.txn_id + 1,
                     )
                     .unwrap();
+                    let protected_replacements = match case {
+                        LinuxFinalizerReclamationCase::NoChange => &[50][..],
+                        LinuxFinalizerReclamationCase::SelectedBatch => &[11, 12, 13][..],
+                    };
                     let blob = RetirementBlobBuilder::build(
-                        &[50],
+                        protected_replacements,
                         &mut arena,
                         &mut BlobBuildScratch::new(&mut blob_pages),
                     )
@@ -8535,21 +8802,55 @@ mod tests {
                         CommittedReplacementLedger::new(&mut retirement_replacements);
                     let mut releases = PrivateReleaseBuffer::new(&mut retirement_releases);
                     let mut roles = PageRoleIndex::new(&mut retirement_roles);
-                    let retirement = RetirementTreeEditor::upsert_newest(
-                        &pages,
-                        RetirementTreeState {
-                            selected_txn: selected.txn_id,
-                            page_count: selected.page_count,
-                            root: 0,
-                            batch_count: 0,
-                        },
-                        blob,
-                        &mut retirement_path,
-                        &mut replacements,
-                        &mut releases,
-                        &mut roles,
-                    )
-                    .unwrap();
+                    let retirement_state = RetirementTreeState {
+                        selected_txn: selected.txn_id,
+                        page_count: selected.page_count,
+                        root: selected.retirement_root,
+                        batch_count: selected.retirement_batch_count,
+                    };
+                    if case == LinuxFinalizerReclamationCase::SelectedBatch {
+                        assert_eq!(
+                            validate_reclamation_authority(
+                                retirement_state,
+                                RetirementIdentity {
+                                    commit_nonce: [9; 16],
+                                    ..retirement_identity
+                                },
+                                bound.reclamation_authority().batch_count(),
+                                bound.reclamation_authority(),
+                            ),
+                            Err(RetirementWriteError::ReclamationStateMismatch)
+                        );
+                    }
+                    let retirement = match case {
+                        LinuxFinalizerReclamationCase::NoChange => {
+                            RetirementTreeEditor::upsert_newest(
+                                &pages,
+                                retirement_state,
+                                blob,
+                                &mut upsert_path,
+                                &mut replacements,
+                                &mut releases,
+                                &mut roles,
+                            )
+                            .unwrap()
+                        }
+                        LinuxFinalizerReclamationCase::SelectedBatch => {
+                            RetirementTreeEditor::delete_reclaimed_oldest_and_upsert_newest(
+                                &pages,
+                                retirement_state,
+                                retirement_identity,
+                                bound.reclamation_authority(),
+                                blob,
+                                &mut delete_path,
+                                &mut upsert_path,
+                                &mut replacements,
+                                &mut releases,
+                                &mut roles,
+                            )
+                            .unwrap()
+                        }
+                    };
                     let retirement_export = match arena
                         .prepare_terminal_export(retirement, &mut retirement_terminal_pages)
                     {
@@ -8664,6 +8965,9 @@ mod tests {
         assert_eq!(core.selected(), target);
         assert_eq!(core.target(), None);
         writer.close().unwrap();
+        if let Some(reader) = protected_reader.as_mut() {
+            reader.close().unwrap();
+        }
         contender.acquire_lock(LockMode::Exclusive, true).unwrap();
         contender.release_lock().unwrap();
 
@@ -8680,11 +8984,18 @@ mod tests {
                 .iter()
                 .map(|page| (page.pgno, page.owner, page.tag))
                 .collect::<Vec<_>>(),
-            [
-                (20, PrivatePageOwner::Bitmap, 11),
-                (22, PrivatePageOwner::Retirement, 2),
-                (24, PrivatePageOwner::Retirement, 1),
-            ]
+            match case {
+                LinuxFinalizerReclamationCase::NoChange => [
+                    (20, PrivatePageOwner::Bitmap, 11),
+                    (22, PrivatePageOwner::Retirement, 2),
+                    (24, PrivatePageOwner::Retirement, 1),
+                ],
+                LinuxFinalizerReclamationCase::SelectedBatch => [
+                    (20, PrivatePageOwner::Bitmap, 11),
+                    (21, PrivatePageOwner::Retirement, 2),
+                    (23, PrivatePageOwner::Retirement, 1),
+                ],
+            }
         );
         for page in expected.iter() {
             let offset = usize::try_from(page.pgno).unwrap() * PAGE_SIZE;
@@ -8694,6 +9005,18 @@ mod tests {
                 "the lock-bound terminal page must be the byte sequence published"
             );
         }
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_selects_bitmap_pages_under_the_held_operation_lock() {
+        run_linux_finalizer_reclamation_case(LinuxFinalizerReclamationCase::NoChange);
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_reclaims_selected_retirement_batch_under_the_held_operation_lock() {
+        run_linux_finalizer_reclamation_case(LinuxFinalizerReclamationCase::SelectedBatch);
     }
 
     #[test]

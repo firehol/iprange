@@ -1914,8 +1914,8 @@ fn apply_shadow_insert<S: CommittedPageSource + ?Sized>(
     })
 }
 
-impl<'a, 'slots, 'scope, 'barrier, S: CommittedPageSource + ?Sized>
-    BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, S>
+impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
+    BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>
 {
     fn projected_tail(&self) -> Result<u64, FreeBitmapCowError> {
         let mut tail = self.cow.pool().pending_page_count();

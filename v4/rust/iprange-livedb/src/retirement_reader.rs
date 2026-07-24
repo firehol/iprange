@@ -192,8 +192,46 @@ impl<'selection, 'barrier, 'pages> RetirementReclaimedPages<'selection, 'barrier
         self.pages
     }
 
+    pub(crate) const fn identity(&self) -> RetirementIdentity {
+        self.selection.identity
+    }
+
+    pub(crate) const fn batch_count(&self) -> u64 {
+        self.selection.batch_count
+    }
+
     pub(crate) const fn selection_id(&self) -> u64 {
         self.selection.last_retired_by_txn
+    }
+}
+
+/// Exact selected-prefix facts retained with the operation-lock guard.
+///
+/// Bitmap allocation and retirement-tree deletion may both consume this proof,
+/// but neither can substitute a caller-provided page list for it.
+#[derive(Debug)]
+pub(crate) struct RetirementReclamationAuthority<'pages> {
+    identity: Option<RetirementIdentity>,
+    batch_count: u64,
+    last_retired_by_txn: u64,
+    pages: &'pages [u32],
+}
+
+impl<'pages> RetirementReclamationAuthority<'pages> {
+    pub(crate) const fn identity(&self) -> Option<RetirementIdentity> {
+        self.identity
+    }
+
+    pub(crate) const fn batch_count(&self) -> u64 {
+        self.batch_count
+    }
+
+    pub(crate) const fn last_retired_by_txn(&self) -> u64 {
+        self.last_retired_by_txn
+    }
+
+    pub(crate) fn pages(&self) -> &'pages [u32] {
+        self.pages
     }
 }
 
@@ -209,12 +247,29 @@ pub(crate) enum RetirementReclamation<'selection, 'barrier, 'pages> {
 }
 
 impl<'selection, 'barrier, 'pages> RetirementReclamation<'selection, 'barrier, 'pages> {
-    pub(crate) fn into_parts(self) -> (u64, &'pages [u32], RetirementReclaimGuard<'barrier>) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        RetirementReclamationAuthority<'pages>,
+        RetirementReclaimGuard<'barrier>,
+    ) {
         match self {
-            Self::NoChange(no_change) => (0, &[], no_change.guard),
+            Self::NoChange(no_change) => (
+                RetirementReclamationAuthority {
+                    identity: None,
+                    batch_count: 0,
+                    last_retired_by_txn: 0,
+                    pages: &[],
+                },
+                no_change.guard,
+            ),
             Self::Reclaimed(reclaimed) => (
-                reclaimed.selection_id(),
-                reclaimed.pages(),
+                RetirementReclamationAuthority {
+                    identity: Some(reclaimed.identity()),
+                    batch_count: reclaimed.batch_count(),
+                    last_retired_by_txn: reclaimed.selection_id(),
+                    pages: reclaimed.pages(),
+                },
                 reclaimed.selection.fence.guard(),
             ),
         }
@@ -235,6 +290,19 @@ static TEST_ONLY_RECLAIM_BARRIER: TestOnlyReclaimBarrier = TestOnlyReclaimBarrie
 pub(crate) fn test_reclaim_guard() -> RetirementReclaimGuard<'static> {
     RetirementReclaimFence::from_stable_reader_table(&TEST_ONLY_RECLAIM_BARRIER, 0, None)
         .into_guard()
+}
+
+#[cfg(test)]
+pub(crate) fn test_reclamation_authority<'pages>(
+    selection_id: u64,
+    pages: &'pages [u32],
+) -> RetirementReclamationAuthority<'pages> {
+    RetirementReclamationAuthority {
+        identity: None,
+        batch_count: u64::from(selection_id != 0),
+        last_retired_by_txn: selection_id,
+        pages,
+    }
 }
 
 #[cfg(test)]
@@ -1189,9 +1257,11 @@ mod tests {
             RetirementSelectionResult::NoChange(no_change) => no_change,
             RetirementSelectionResult::Selected(_) => panic!("expected no reclaimable batches"),
         };
-        let (selection_id, pages, _guard) = RetirementReclamation::NoChange(no_change).into_parts();
-        assert_eq!(selection_id, 0);
-        assert!(pages.is_empty());
+        let (authority, _guard) = RetirementReclamation::NoChange(no_change).into_parts();
+        assert_eq!(authority.batch_count(), 0);
+        assert_eq!(authority.last_retired_by_txn(), 0);
+        assert!(authority.identity().is_none());
+        assert!(authority.pages().is_empty());
     }
 
     #[test]

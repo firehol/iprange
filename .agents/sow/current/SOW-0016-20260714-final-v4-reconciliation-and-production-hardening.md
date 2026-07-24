@@ -6658,6 +6658,51 @@ requirements are normative in the Pre-Implementation Gate above.
   pending; it must use the same lock-bound authority rather than a synthetic
   reclamation proof.
 
+### 2026-07-24 - selected retirement reclamation composition plan
+
+- The first real selected-batch finalizer fixture reached the shared shadow
+  pool with verifier-proven retired pages, then failed while deleting the old
+  retirement batch: `RetirementTreeEditor` registered those same page numbers
+  as unavailable historical entries and rejected their new private ownership.
+  This is a composition gap, not a valid safety rejection: section 13 permits
+  exactly those verified pages to be reused under the held operation lock.
+- Preserve a typed reclamation authority through bitmap binding. It will retain
+  the selected retirement identity, complete-prefix count, last transaction,
+  and exact verified page sequence; the bound reservation will retain the
+  operation-lock guard beside it. The retirement editor will accept it only for
+  the matching selected oldest prefix, verify that relationship while deleting,
+  and treat only its exact pages as safely reclaimed rather than historical
+  list entries. No public API will expose an arbitrary reclaimable page slice.
+- The permanent Linux test will retain a real reader pinned at the selected
+  transaction, reclaim the eligible oldest batch, reuse its exact pages in the
+  bitmap/retirement output, replace the old retirement metadata, and publish
+  the resulting terminal pages without allocation while the operation lock is
+  held.
+
+### 2026-07-24 - selected retirement reclamation implementation
+
+- `RetirementReclamationAuthority` now stays attached to the bound bitmap
+  reservation with its selected retirement identity, verified oldest-prefix
+  count, final retirement transaction, and exact sorted page sequence. That
+  same reservation retains the live-operation guard alongside the authority.
+  The retirement editor receives only a borrow of the authority; normal builds
+  have no raw-page-list entry point.
+- The new internal reclaimed-prefix editor verifies the caller's complete
+  selected-metadata identity (database ID, transaction, nonce, page count,
+  root, and batch count) against both the selected state and authority,
+  verifies that it deletes exactly the selected prefix, and permits only those
+  already-bound verified pages to transition from the deleted batch into new
+  private retirement metadata. Every other historical list page keeps its
+  normal conflict behavior.
+- The permanent Linux integration test now keeps a real reader pinned at
+  transaction 2, verifies and reclaims the oldest batch, reuses exactly pages
+  21 and 23, replaces the retirement batch, publishes the resulting pages, and
+  proves the wrong commit nonce is rejected before editing. It also retains the
+  prior assertions that the operation lock is held, finalization allocates no
+  heap memory, and the durable file contains the exact terminal bytes.
+- This is an internal lifecycle repair consistent with the existing section
+  13/14.2 contract. It changes neither the v4 byte format nor the public SDK.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6770,9 +6815,25 @@ requirements are normative in the Pre-Implementation Gate above.
   Rust all-feature workspace matrix 544 tests; warnings-denied all-target
   Clippy; all-feature benchmark compilation; Go `test` and `vet`; Rust
   formatting; `git diff --check`; and the project SOW audit.
-- The test uses the production Linux writer and real pinned source/fence, but
-  it is still an internal integration path. No public writer API is claimed,
-  and no reclaimed retirement-batch path is claimed.
+- This no-change checkpoint uses the production Linux writer and real pinned
+  source/fence, but remains an internal integration path. No public writer API
+  is claimed; selected retirement-batch reclamation is covered separately
+  below.
+
+### 2026-07-24 - selected retirement reclamation
+
+- Focused Linux coverage passes: the no-change and real selected-batch
+  finalizers both run under the held operation lock. The selected case pins a
+  real transaction-2 reader, verifies its eligible oldest batch, reuses pages
+  21 and 23, rejects a mismatched commit nonce, and publishes exact terminal
+  bytes with zero finalizer allocations.
+- Full checkpoint validation passes: Rust no-default workspace matrix 430
+  tests; Rust all-feature workspace matrix 545 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
+- This closes the specific selected-batch composition gap. It remains an
+  internal Linux lifecycle path; broader writer/SDK work is still pending and
+  is not claimed by this checkpoint.
 
 ### Historical adversarial-audit evidence
 

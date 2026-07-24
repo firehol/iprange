@@ -24,8 +24,10 @@ use crate::private_page_pool::{
     PrivatePageScopedOperation, PrivatePageScopedOperationSlot, PrivatePageScopedSlotInfo,
 };
 #[cfg(test)]
-use crate::retirement_reader::test_reclaim_guard;
-use crate::retirement_reader::{RetirementReclaimGuard, RetirementReclamation};
+use crate::retirement_reader::{test_reclaim_guard, test_reclamation_authority};
+use crate::retirement_reader::{
+    RetirementReclaimGuard, RetirementReclamation, RetirementReclamationAuthority,
+};
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -708,8 +710,7 @@ pub(crate) struct FreeBitmapReclamationRequest<'a> {
 #[derive(Debug)]
 pub(crate) struct FreeBitmapReclamationProof<'ticket, 'pages, 'barrier> {
     nonce: u64,
-    selection_id: u64,
-    pages: &'pages [u32],
+    reclamation: RetirementReclamationAuthority<'pages>,
     fingerprint: u64,
     ticket: &'ticket FreeBitmapReclamationTicket,
     reclaim_guard: RetirementReclaimGuard<'barrier>,
@@ -816,6 +817,7 @@ pub(crate) struct BoundFreeBitmapReservation<
     'slots,
     'scope,
     'barrier,
+    'pages,
     S: CommittedPageSource + ?Sized,
 > {
     pub(crate) cow: FreeBitmapCow<'a, 'slots, 'scope, S>,
@@ -824,6 +826,7 @@ pub(crate) struct BoundFreeBitmapReservation<
     source_nodes: &'a mut [FreeBitmapReservationSourceNode],
     pool_validation: &'a mut [PrivatePageCompositeBind],
     stage: FreeBitmapReservationStageBuffers<'a>,
+    reclamation: RetirementReclamationAuthority<'pages>,
     reclaim_guard: RetirementReclaimGuard<'barrier>,
 }
 
@@ -1171,8 +1174,10 @@ impl<'a, 'selection, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         self,
         pool: &'a PrivatePagePool<'slots>,
         scope: &'a PrivatePageReservationScope<'scope>,
-    ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, S>, FreeBitmapCowError>
-    {
+    ) -> Result<
+        BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>,
+        FreeBitmapCowError,
+    > {
         let Self { plan, reclamation } = self;
         let (attachment, request) = plan.attach(pool, scope)?;
         let proof = complete_free_bitmap_reclamation(request, reclamation)?;
@@ -1187,19 +1192,21 @@ pub(crate) fn complete_free_bitmap_reclamation<'ticket, 'selection, 'barrier, 'p
     request: FreeBitmapReclamationRequest<'ticket>,
     reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
 ) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>, FreeBitmapCowError> {
-    let (selection_id, pages, reclaim_guard) = reclamation.into_parts();
-    complete_free_bitmap_reclamation_pages(request, selection_id, pages, reclaim_guard)
+    let (reclamation, reclaim_guard) = reclamation.into_parts();
+    complete_free_bitmap_reclamation_pages(request, reclamation, reclaim_guard)
 }
 
 fn complete_free_bitmap_reclamation_pages<'ticket, 'pages, 'barrier>(
     request: FreeBitmapReclamationRequest<'ticket>,
-    selection_id: u64,
-    pages: &'pages [u32],
+    reclamation: RetirementReclamationAuthority<'pages>,
     reclaim_guard: RetirementReclaimGuard<'barrier>,
 ) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>, FreeBitmapCowError> {
     let ticket = request.ticket;
+    let selection_id = reclamation.last_retired_by_txn();
+    let pages = reclamation.pages();
     if request.nonce == 0
         || (pages.is_empty() != (selection_id == 0))
+        || (pages.is_empty() != (reclamation.batch_count() == 0))
         || ticket.nonce.get() != request.nonce
         || ticket.selected_txn.get() != request.selected_txn
         || ticket.committed_page_count.get() != request.committed_page_count
@@ -1218,8 +1225,7 @@ fn complete_free_bitmap_reclamation_pages<'ticket, 'pages, 'barrier>(
     ticket.pages_fingerprint.set(fingerprint);
     Ok(FreeBitmapReclamationProof {
         nonce: request.nonce,
-        selection_id,
-        pages,
+        reclamation,
         fingerprint,
         ticket,
         reclaim_guard,
@@ -1232,7 +1238,11 @@ fn complete_free_bitmap_reclamation_for_test<'ticket, 'pages>(
     selection_id: u64,
     pages: &'pages [u32],
 ) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'static>, FreeBitmapCowError> {
-    complete_free_bitmap_reclamation_pages(request, selection_id, pages, test_reclaim_guard())
+    complete_free_bitmap_reclamation_pages(
+        request,
+        test_reclamation_authority(selection_id, pages),
+        test_reclaim_guard(),
+    )
 }
 
 struct CallbackFreeCommittedSource;
@@ -1251,19 +1261,24 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
     pub(crate) fn bind<'ticket, 'pages, 'barrier>(
         mut self,
         proof: FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>,
-    ) -> Result<BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, S>, FreeBitmapCowError>
-    {
+    ) -> Result<
+        BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>,
+        FreeBitmapCowError,
+    > {
+        let selection_id = proof.reclamation.last_retired_by_txn();
+        let pages = proof.reclamation.pages();
         if !core::ptr::eq(proof.ticket, self.ticket)
             || proof.nonce != self.nonce
             || proof.nonce == 0
-            || (proof.pages.is_empty() != (proof.selection_id == 0))
-            || reservation_pages_fingerprint(proof.pages) != proof.fingerprint
+            || (pages.is_empty() != (selection_id == 0))
+            || (pages.is_empty() != (proof.reclamation.batch_count() == 0))
+            || reservation_pages_fingerprint(pages) != proof.fingerprint
             || self.ticket.nonce.get() != self.nonce
             || self.ticket.selected_txn.get() != self.cow.selected_txn
             || self.ticket.committed_page_count.get() != self.cow.committed_page_count
             || self.ticket.root.get() != self.cow.root
-            || self.ticket.selection_id.get() != proof.selection_id
-            || self.ticket.page_count.get() != proof.pages.len()
+            || self.ticket.selection_id.get() != selection_id
+            || self.ticket.page_count.get() != pages.len()
             || self.ticket.pages_fingerprint.get() != proof.fingerprint
             || self.ticket.fingerprint.get()
                 != reservation_hash_u64(
@@ -1297,8 +1312,8 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             .map_err(|_| FreeBitmapCowError::StaleInsertionPlan)?;
         if self.ticket.state.load(Ordering::Acquire) != 3
             || self.ticket.nonce.get() != self.nonce
-            || self.ticket.selection_id.get() != proof.selection_id
-            || self.ticket.page_count.get() != proof.pages.len()
+            || self.ticket.selection_id.get() != selection_id
+            || self.ticket.page_count.get() != pages.len()
             || self.ticket.pages_fingerprint.get() != proof.fingerprint
         {
             return Err(FreeBitmapCowError::StaleInsertionPlan);
@@ -1322,26 +1337,26 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             &self.stage.candidates[..] as &[u32],
             &self.stage.replacements[..] as &[u32],
         ] {
-            if reservation_slices_overlap(scratch, proof.pages) {
+            if reservation_slices_overlap(scratch, pages) {
                 return Err(FreeBitmapCowError::ArenaPageConflict(0));
             }
         }
-        if reservation_slices_overlap(&self.pool_validation[..], proof.pages)
-            || reservation_slices_overlap(&self.source_nodes[..], proof.pages)
-            || reservation_slices_overlap(&self.cow.arena_bindings[..], proof.pages)
-            || reservation_slices_overlap(&self.cow.index_nodes[..], proof.pages)
-            || reservation_slices_overlap(&self.cow.available_slots[..], proof.pages)
-            || reservation_slices_overlap(&self.cow.verified_pages[..], proof.pages)
-            || reservation_slices_overlap(&self.stage.arena[..], proof.pages)
-            || reservation_slices_overlap(&self.stage.arena_bindings[..], proof.pages)
-            || reservation_slices_overlap(&self.stage.verified_pages[..], proof.pages)
-            || reservation_slices_overlap(&self.stage.index_nodes[..], proof.pages)
-            || reservation_slices_overlap(&self.stage.available_slots[..], proof.pages)
+        if reservation_slices_overlap(&self.pool_validation[..], pages)
+            || reservation_slices_overlap(&self.source_nodes[..], pages)
+            || reservation_slices_overlap(&self.cow.arena_bindings[..], pages)
+            || reservation_slices_overlap(&self.cow.index_nodes[..], pages)
+            || reservation_slices_overlap(&self.cow.available_slots[..], pages)
+            || reservation_slices_overlap(&self.cow.verified_pages[..], pages)
+            || reservation_slices_overlap(&self.stage.arena[..], pages)
+            || reservation_slices_overlap(&self.stage.arena_bindings[..], pages)
+            || reservation_slices_overlap(&self.stage.verified_pages[..], pages)
+            || reservation_slices_overlap(&self.stage.index_nodes[..], pages)
+            || reservation_slices_overlap(&self.stage.available_slots[..], pages)
         {
             return Err(FreeBitmapCowError::ArenaPageConflict(0));
         }
         let needed_sources = candidate_len
-            .checked_add(proof.pages.len())
+            .checked_add(pages.len())
             .ok_or(FreeBitmapCowError::IndexCapacityOverflow)?;
         if needed_sources > self.source_nodes.len() {
             return Err(FreeBitmapCowError::InsufficientResourceBudget {
@@ -1351,7 +1366,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             });
         }
         let mut previous = None;
-        for (index, &pgno) in proof.pages.iter().enumerate() {
+        for (index, &pgno) in pages.iter().enumerate() {
             if pgno < 2 || u64::from(pgno) >= self.cow.committed_page_count {
                 return Err(FreeBitmapCowError::LedgerPageOutOfBounds(pgno));
             }
@@ -1398,7 +1413,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             let candidate = self.source_nodes[..candidate_len]
                 .get(candidate_rank)
                 .copied();
-            let reclaimed = proof.pages.get(reclaimed_rank).copied();
+            let reclaimed = pages.get(reclaimed_rank).copied();
             let (pgno, authorization) = match (candidate, reclaimed) {
                 (Some(left), Some(right)) if left.pgno < right => {
                     candidate_rank += 1;
@@ -1637,8 +1652,19 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             source_nodes: self.source_nodes,
             pool_validation: self.pool_validation,
             stage: self.stage,
+            reclamation: proof.reclamation,
             reclaim_guard: proof.reclaim_guard,
         })
+    }
+}
+
+impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
+    BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>
+{
+    /// This borrow keeps the exact reclamation proof attached to the bound
+    /// bitmap reservation while retirement metadata consumes the same batch.
+    pub(crate) fn reclamation_authority(&self) -> &RetirementReclamationAuthority<'pages> {
+        &self.reclamation
     }
 }
 
