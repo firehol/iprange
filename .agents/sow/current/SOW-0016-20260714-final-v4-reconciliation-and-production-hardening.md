@@ -8254,6 +8254,52 @@ requirements are normative in the Pre-Implementation Gate above.
   all-feature Clippy, all-feature benchmark compilation, `git diff --check`,
   and `.agents/sow/audit.sh`.
 
+### 2026-07-24 - bounded protected-set convergence plan
+
+- Add one private, caller-scratch-only convergence helper in both engines. It
+  starts from the validated old-range index, alternates between two distinct
+  clean index workspaces, clones the current candidate into the alternate
+  workspace, and permits the preview to add only selected committed page
+  numbers. Previous candidate pages therefore cannot disappear between
+  iterations.
+- The helper will validate the seed and every newly added page against
+  `[2, selected page_count)`, use an explicit nonzero iteration limit, and
+  compare complete ordered streams before accepting stability. A preview
+  failure, malformed index, capacity failure, or convergence-limit failure
+  scrubs both candidate workspaces while preserving the old-range seed.
+- This is deliberately not the live bitmap/retirement preview yet. It changes
+  no pool, arena, terminal journal, target metadata, or file bytes. The next
+  integration slice will run existing detached bitmap/retirement previews
+  through this helper and then materialize only the converged candidate.
+- Tests will cover monotonic multi-step convergence, complete comparison after
+  an early mismatch, invalid committed-page additions, callback failure and
+  limit cleanup, seed preservation, and zero allocations after setup.
+
+### 2026-07-24 - bounded protected-set convergence implementation
+
+- Added matching private Go and Rust convergence helpers. They seed one
+  candidate from the old range-page index, densely clone it into the alternate
+  caller-owned workspace for each preview, and return only the workspace whose
+  complete ordered page stream is stable. The protected set can therefore only
+  grow across iterations.
+- The preview receives an add-only capability, not a replacement index. It
+  rejects both reserved pages and pages at or beyond the selected committed
+  `page_count`; the seed is checked by the same bound before the first preview.
+  Preview, index, capacity, and iteration-limit failures scrub both candidate
+  workspaces. A malformed seed is marked failed by the existing private-index
+  safety rule and is never used as a successful input.
+- Added matched tests for three-step convergence, lower and upper bound
+  rejection, arbitrary preview failure, limit cleanup, invalid-seed rejection
+  before callback execution, seed preservation, and zero warmed-path heap
+  allocation. Existing equality tests prove a later malformed page is still
+  reported after an earlier mismatch.
+- Removed one no-op Rust cursor `drop` from the preceding dense-clone helper;
+  current Clippy rejects it and non-lexical lifetimes already end the borrow.
+  This does not change byte, allocation, or transaction behavior.
+- This remains private transaction scratch only. It does not yet connect live
+  bitmap/retirement previews, range metadata, allocator ownership,
+  publication, a public SDK API, or v4 bytes.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
@@ -8678,6 +8724,20 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
   audit pass. This checkpoint remains a private prerequisite for the later
   retirement/blob/tree fixed point, not its completion.
+
+### 2026-07-24 - bounded protected-set convergence
+
+- Focused matched Go/Rust page-index tests pass for monotonic convergence,
+  exact lower/upper committed-page bounds, callback and limit cleanup,
+  invalid seed rejection, and zero heap allocations after workspace setup.
+  The existing matched equality tests cover full-stream corruption detection
+  after an earlier mismatch.
+- Full validation passes: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`; Rust 529
+  no-default and 650 all-feature tests; Rust format, warnings-denied
+  all-target/all-feature Clippy, and all-feature benchmark compilation.
+  `git diff --check` and `.agents/sow/audit.sh` pass before the final SOW
+  checkpoint update and are rerun with it.
 
 ### Historical adversarial-audit evidence
 

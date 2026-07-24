@@ -72,12 +72,14 @@ const (
 	pageNumberIndexErrInvalidPageEncoding
 	pageNumberIndexErrTreeTooDeep
 	pageNumberIndexErrFailed
+	pageNumberIndexErrValueOutOfBounds
 )
 
 type pageNumberIndexError struct {
 	code     pageNumberIndexErrorCode
 	required uint64
 	actual   uint64
+	page     uint32
 }
 
 func (e *pageNumberIndexError) Error() string {
@@ -852,4 +854,181 @@ func clonePageNumberIndexInto(destination, source *pageNumberIndex) error {
 	destination.root = uint32(childStart)
 	destination.values = valueCount
 	return nil
+}
+
+// pageNumberIndexFixedPointCandidate identifies the caller-owned workspace
+// holding a converged protected-page set.
+type pageNumberIndexFixedPointCandidate uint8
+
+const (
+	pageNumberIndexFixedPointFirst pageNumberIndexFixedPointCandidate = iota + 1
+	pageNumberIndexFixedPointSecond
+)
+
+type pageNumberIndexFixedPointErrorCode uint8
+
+const (
+	pageNumberIndexFixedPointErrInvalidArgument pageNumberIndexFixedPointErrorCode = iota + 1
+	pageNumberIndexFixedPointErrIndex
+	pageNumberIndexFixedPointErrPreview
+	pageNumberIndexFixedPointErrDidNotConverge
+)
+
+type pageNumberIndexFixedPointError struct {
+	code  pageNumberIndexFixedPointErrorCode
+	limit int
+	cause error
+}
+
+func (e *pageNumberIndexFixedPointError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("exact v4 page-number index fixed point: error %d", e.code)
+}
+
+func (e *pageNumberIndexFixedPointError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// pageNumberIndexFixedPointAdder is the only output capability given to a
+// preview. It preserves all pages already present in the cloned candidate and
+// accepts only pages from the selected committed generation.
+type pageNumberIndexFixedPointAdder struct {
+	index              *pageNumberIndex
+	committedPageCount uint64
+}
+
+func (a pageNumberIndexFixedPointAdder) add(page uint32) (bool, error) {
+	if a.index == nil || a.committedPageCount < 2 {
+		return false, &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if page < 2 || uint64(page) >= a.committedPageCount {
+		return false, &pageNumberIndexError{
+			code: pageNumberIndexErrValueOutOfBounds,
+			page: page, actual: a.committedPageCount,
+		}
+	}
+	return a.index.insert(page)
+}
+
+// pageNumberIndexFixedPointPreview observes the current candidate and may add
+// selected committed replacement pages to the already-cloned next candidate.
+// It must not mutate the current candidate or any live writer state.
+type pageNumberIndexFixedPointPreview func(
+	current *pageNumberIndex,
+	additions pageNumberIndexFixedPointAdder,
+) error
+
+func validatePageNumberIndexCommittedRange(
+	index *pageNumberIndex,
+	committedPageCount uint64,
+) error {
+	if index == nil || committedPageCount < 2 {
+		return &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	cursor, err := newPageNumberIndexCursor(index)
+	if err != nil {
+		return err
+	}
+	for {
+		page, available, nextErr := cursor.next()
+		if nextErr != nil {
+			return nextErr
+		}
+		if !available {
+			return nil
+		}
+		if page < 2 || uint64(page) >= committedPageCount {
+			return index.fail(&pageNumberIndexError{
+				code: pageNumberIndexErrValueOutOfBounds,
+				page: page, actual: committedPageCount,
+			})
+		}
+	}
+}
+
+func discardPageNumberIndexFixedPointCandidates(
+	first, second *pageNumberIndex,
+) {
+	if first != nil {
+		first.discardAfterAbort()
+	}
+	if second != nil {
+		second.discardAfterAbort()
+	}
+}
+
+// convergePageNumberIndex forms a monotonic protected-page fixed point using
+// two caller-owned index workspaces. It never touches a pool, arena, terminal
+// journal, target metadata, or file bytes. Every failure leaves both candidate
+// workspaces clean while preserving the old committed-range seed.
+func convergePageNumberIndex(
+	seed, first, second *pageNumberIndex,
+	committedPageCount uint64,
+	maxIterations int,
+	preview pageNumberIndexFixedPointPreview,
+) (pageNumberIndexFixedPointCandidate, error) {
+	if seed == nil || first == nil || second == nil || seed == first || seed == second || first == second ||
+		seed.workspace == nil || first.workspace == nil || second.workspace == nil ||
+		seed.workspace == first.workspace || seed.workspace == second.workspace || first.workspace == second.workspace ||
+		committedPageCount < 2 || maxIterations <= 0 || preview == nil {
+		return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrInvalidArgument}
+	}
+	if !first.isEmptyAndClean() || !second.isEmptyAndClean() {
+		return 0, &pageNumberIndexFixedPointError{
+			code:  pageNumberIndexFixedPointErrIndex,
+			cause: &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy},
+		}
+	}
+	if err := validatePageNumberIndexCommittedRange(seed, committedPageCount); err != nil {
+		return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrIndex, cause: err}
+	}
+	if err := clonePageNumberIndexInto(first, seed); err != nil {
+		discardPageNumberIndexFixedPointCandidates(first, second)
+		return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrIndex, cause: err}
+	}
+
+	current := first
+	next := second
+	currentCandidate := pageNumberIndexFixedPointFirst
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		next.discardAfterAbort()
+		if err := clonePageNumberIndexInto(next, current); err != nil {
+			discardPageNumberIndexFixedPointCandidates(first, second)
+			return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrIndex, cause: err}
+		}
+		additions := pageNumberIndexFixedPointAdder{
+			index: next, committedPageCount: committedPageCount,
+		}
+		if err := preview(current, additions); err != nil {
+			discardPageNumberIndexFixedPointCandidates(first, second)
+			return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrPreview, cause: err}
+		}
+		equal, err := pageNumberIndexesEqual(current, next)
+		if err != nil {
+			discardPageNumberIndexFixedPointCandidates(first, second)
+			return 0, &pageNumberIndexFixedPointError{code: pageNumberIndexFixedPointErrIndex, cause: err}
+		}
+		if equal {
+			current.discardAfterAbort()
+			if currentCandidate == pageNumberIndexFixedPointFirst {
+				return pageNumberIndexFixedPointSecond, nil
+			}
+			return pageNumberIndexFixedPointFirst, nil
+		}
+		current, next = next, current
+		if currentCandidate == pageNumberIndexFixedPointFirst {
+			currentCandidate = pageNumberIndexFixedPointSecond
+		} else {
+			currentCandidate = pageNumberIndexFixedPointFirst
+		}
+	}
+	discardPageNumberIndexFixedPointCandidates(first, second)
+	return 0, &pageNumberIndexFixedPointError{
+		code: pageNumberIndexFixedPointErrDidNotConverge, limit: maxIterations,
+	}
 }

@@ -69,6 +69,7 @@ pub(crate) enum PageNumberIndexError {
     InvalidPageEncoding,
     TreeTooDeep,
     Failed,
+    ValueOutOfBounds { value: u32, page_count: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -947,8 +948,6 @@ pub(crate) fn clone_page_number_index_into(
         }
         Err(error) => return clone_abort(destination, error),
     }
-    drop(cursor);
-
     let mut child_start = 0usize;
     let mut child_count = leaf_pages;
     while child_count > 1 {
@@ -980,6 +979,171 @@ pub(crate) fn clone_page_number_index_into(
     destination.root = u32::try_from(child_start).unwrap();
     destination.values = value_count;
     Ok(())
+}
+
+/// Identifies the caller-owned workspace holding a converged protected set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageNumberIndexFixedPointCandidate {
+    First,
+    Second,
+}
+
+/// Failure before a protected-page candidate can be handed to a live stage.
+#[derive(Debug)]
+pub(crate) enum PageNumberIndexFixedPointError<E> {
+    InvalidArgument,
+    Index(PageNumberIndexError),
+    Preview(E),
+    DidNotConverge { limit: usize },
+}
+
+/// The only output capability given to a protected-set preview.
+///
+/// It preserves the cloned candidate and admits only pages from the selected
+/// committed generation. The private field deliberately prevents other
+/// modules from resetting or replacing the next candidate.
+pub(crate) struct PageNumberIndexFixedPointAdder<'a, 'workspace, 'storage> {
+    index: &'a mut PageNumberIndex<'workspace, 'storage>,
+    committed_page_count: u64,
+}
+
+impl PageNumberIndexFixedPointAdder<'_, '_, '_> {
+    pub(crate) fn add(&mut self, page: u32) -> Result<bool, PageNumberIndexError> {
+        if self.committed_page_count < 2 {
+            return Err(PageNumberIndexError::InvalidPageEncoding);
+        }
+        if page < 2 || u64::from(page) >= self.committed_page_count {
+            return Err(PageNumberIndexError::ValueOutOfBounds {
+                value: page,
+                page_count: self.committed_page_count,
+            });
+        }
+        self.index.insert(page)
+    }
+}
+
+fn validate_committed_page_range(
+    index: &mut PageNumberIndex<'_, '_>,
+    committed_page_count: u64,
+) -> Result<(), PageNumberIndexError> {
+    if committed_page_count < 2 {
+        return Err(PageNumberIndexError::InvalidPageEncoding);
+    }
+    let mut cursor = PageNumberIndexCursor::new(index)?;
+    while let Some(page) = cursor.next()? {
+        if page < 2 || u64::from(page) >= committed_page_count {
+            return Err(cursor.fail(PageNumberIndexError::ValueOutOfBounds {
+                value: page,
+                page_count: committed_page_count,
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn discard_fixed_point_candidates(
+    first: &mut PageNumberIndex<'_, '_>,
+    second: &mut PageNumberIndex<'_, '_>,
+) {
+    first.discard_after_abort();
+    second.discard_after_abort();
+}
+
+/// Builds a monotonic protected-page fixed point in two caller-owned index
+/// workspaces. This is preparation only: it never changes a pool, arena,
+/// terminal journal, target metadata, or file bytes.
+#[allow(clippy::result_large_err)]
+pub(crate) fn converge_page_number_index<E>(
+    seed: &mut PageNumberIndex<'_, '_>,
+    first: &mut PageNumberIndex<'_, '_>,
+    second: &mut PageNumberIndex<'_, '_>,
+    committed_page_count: u64,
+    max_iterations: usize,
+    mut preview: impl FnMut(
+        &mut PageNumberIndex<'_, '_>,
+        &mut PageNumberIndexFixedPointAdder<'_, '_, '_>,
+    ) -> Result<(), E>,
+) -> Result<PageNumberIndexFixedPointCandidate, PageNumberIndexFixedPointError<E>> {
+    if committed_page_count < 2 || max_iterations == 0 {
+        return Err(PageNumberIndexFixedPointError::InvalidArgument);
+    }
+    if !first.is_empty_and_clean() || !second.is_empty_and_clean() {
+        return Err(PageNumberIndexFixedPointError::Index(
+            PageNumberIndexError::WorkspaceBusy,
+        ));
+    }
+    validate_committed_page_range(seed, committed_page_count)
+        .map_err(PageNumberIndexFixedPointError::Index)?;
+    if let Err(error) = clone_page_number_index_into(first, seed) {
+        discard_fixed_point_candidates(first, second);
+        return Err(PageNumberIndexFixedPointError::Index(error));
+    }
+
+    let mut current_is_first = true;
+    for _ in 0..max_iterations {
+        if current_is_first {
+            second.discard_after_abort();
+            if let Err(error) = clone_page_number_index_into(second, first) {
+                discard_fixed_point_candidates(first, second);
+                return Err(PageNumberIndexFixedPointError::Index(error));
+            }
+            let preview_result = {
+                let mut additions = PageNumberIndexFixedPointAdder {
+                    index: second,
+                    committed_page_count,
+                };
+                preview(first, &mut additions)
+            };
+            if let Err(error) = preview_result {
+                discard_fixed_point_candidates(first, second);
+                return Err(PageNumberIndexFixedPointError::Preview(error));
+            }
+            let equal = match page_number_indexes_equal(first, second) {
+                Ok(equal) => equal,
+                Err(error) => {
+                    discard_fixed_point_candidates(first, second);
+                    return Err(PageNumberIndexFixedPointError::Index(error));
+                }
+            };
+            if equal {
+                first.discard_after_abort();
+                return Ok(PageNumberIndexFixedPointCandidate::Second);
+            }
+        } else {
+            first.discard_after_abort();
+            if let Err(error) = clone_page_number_index_into(first, second) {
+                discard_fixed_point_candidates(first, second);
+                return Err(PageNumberIndexFixedPointError::Index(error));
+            }
+            let preview_result = {
+                let mut additions = PageNumberIndexFixedPointAdder {
+                    index: first,
+                    committed_page_count,
+                };
+                preview(second, &mut additions)
+            };
+            if let Err(error) = preview_result {
+                discard_fixed_point_candidates(first, second);
+                return Err(PageNumberIndexFixedPointError::Preview(error));
+            }
+            let equal = match page_number_indexes_equal(second, first) {
+                Ok(equal) => equal,
+                Err(error) => {
+                    discard_fixed_point_candidates(first, second);
+                    return Err(PageNumberIndexFixedPointError::Index(error));
+                }
+            };
+            if equal {
+                second.discard_after_abort();
+                return Ok(PageNumberIndexFixedPointCandidate::First);
+            }
+        }
+        current_is_first = !current_is_first;
+    }
+    discard_fixed_point_candidates(first, second);
+    Err(PageNumberIndexFixedPointError::DidNotConverge {
+        limit: max_iterations,
+    })
 }
 
 #[cfg(test)]
@@ -1215,6 +1379,191 @@ mod tests {
         assert_eq!(destination.logical_page_count(), 0);
     }
 
+    #[test]
+    fn protected_set_converges_monotonically() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 8];
+        let mut first_pages = [PageNumberIndexPage::empty(); 8];
+        let mut second_pages = [PageNumberIndexPage::empty(); 8];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        assert_eq!(seed.insert(9), Ok(true));
+
+        let mut calls = 0usize;
+        let candidate = converge_page_number_index(
+            &mut seed,
+            &mut first,
+            &mut second,
+            100,
+            3,
+            |current, additions| {
+                calls += 1;
+                match current.len() {
+                    1 => assert_eq!(additions.add(10), Ok(true)),
+                    2 => assert_eq!(additions.add(11), Ok(true)),
+                    _ => {}
+                }
+                Ok::<(), PageNumberIndexError>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 3);
+        match candidate {
+            PageNumberIndexFixedPointCandidate::First => {
+                assert_eq!(collect(&mut first), vec![9, 10, 11]);
+                assert!(second.is_empty_and_clean());
+                first.discard_after_abort();
+            }
+            PageNumberIndexFixedPointCandidate::Second => {
+                assert_eq!(collect(&mut second), vec![9, 10, 11]);
+                assert!(first.is_empty_and_clean());
+                second.discard_after_abort();
+            }
+        }
+        assert_eq!(collect(&mut seed), vec![9]);
+    }
+
+    #[test]
+    fn protected_set_rejects_invalid_addition_and_scrubs() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        assert_eq!(seed.insert(9), Ok(true));
+
+        for invalid in [1, 100] {
+            let result = converge_page_number_index(
+                &mut seed,
+                &mut first,
+                &mut second,
+                100,
+                1,
+                |_, additions| -> Result<(), PageNumberIndexError> {
+                    additions.add(invalid)?;
+                    Ok(())
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(PageNumberIndexFixedPointError::Preview(
+                    PageNumberIndexError::ValueOutOfBounds {
+                        value,
+                        page_count: 100,
+                    }
+                )) if value == invalid
+            ));
+            assert!(first.is_empty_and_clean());
+            assert!(second.is_empty_and_clean());
+        }
+        assert_eq!(collect(&mut seed), vec![9]);
+    }
+
+    #[test]
+    fn protected_set_preview_failure_scrubs() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        assert_eq!(seed.insert(9), Ok(true));
+
+        let result =
+            converge_page_number_index(&mut seed, &mut first, &mut second, 100, 1, |_, _| {
+                Err::<(), _>("preview stopped")
+            });
+        assert!(matches!(
+            result,
+            Err(PageNumberIndexFixedPointError::Preview("preview stopped"))
+        ));
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+        assert_eq!(collect(&mut seed), vec![9]);
+    }
+
+    #[test]
+    fn protected_set_limit_scrubs_candidates() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        assert_eq!(seed.insert(9), Ok(true));
+
+        let result = converge_page_number_index(
+            &mut seed,
+            &mut first,
+            &mut second,
+            100,
+            1,
+            |current, additions| -> Result<(), PageNumberIndexError> {
+                additions.add(10 + current.len() as u32)?;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(PageNumberIndexFixedPointError::DidNotConverge { limit: 1 })
+        ));
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+        assert_eq!(collect(&mut seed), vec![9]);
+    }
+
+    #[test]
+    fn protected_set_rejects_invalid_seed_before_preview() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        assert_eq!(seed.insert(1), Ok(true));
+
+        let mut called = false;
+        let result = converge_page_number_index(
+            &mut seed,
+            &mut first,
+            &mut second,
+            100,
+            1,
+            |_, _| -> Result<(), PageNumberIndexError> {
+                called = true;
+                Ok(())
+            },
+        );
+        assert!(!called);
+        assert!(matches!(
+            result,
+            Err(PageNumberIndexFixedPointError::Index(
+                PageNumberIndexError::ValueOutOfBounds {
+                    value: 1,
+                    page_count: 100,
+                }
+            ))
+        ));
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+    }
+
     fn fill_no_alloc(index: &mut PageNumberIndex<'_, '_>) -> bool {
         index.discard_after_abort();
         for value in 0..2_048u32 {
@@ -1261,6 +1610,47 @@ mod tests {
         assert!(clone_and_compare_no_alloc(&mut source, &mut destination));
         let (ok, allocations) =
             count_thread_allocations(|| clone_and_compare_no_alloc(&mut source, &mut destination));
+        assert!(ok);
+        assert_eq!(allocations, 0);
+    }
+
+    fn no_op_fixed_point_preview(
+        _: &mut PageNumberIndex<'_, '_>,
+        _: &mut PageNumberIndexFixedPointAdder<'_, '_, '_>,
+    ) -> Result<(), PageNumberIndexError> {
+        Ok(())
+    }
+
+    fn converge_no_alloc(
+        seed: &mut PageNumberIndex<'_, '_>,
+        first: &mut PageNumberIndex<'_, '_>,
+        second: &mut PageNumberIndex<'_, '_>,
+    ) -> bool {
+        let result =
+            converge_page_number_index(seed, first, second, 4_096, 1, no_op_fixed_point_preview);
+        first.discard_after_abort();
+        second.discard_after_abort();
+        result.is_ok()
+    }
+
+    #[test]
+    fn protected_set_convergence_uses_no_heap_after_workspace_setup() {
+        let mut seed_pages = [PageNumberIndexPage::empty(); 8];
+        let mut first_pages = [PageNumberIndexPage::empty(); 8];
+        let mut second_pages = [PageNumberIndexPage::empty(); 8];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        for value in 2..2_050u32 {
+            assert_eq!(seed.insert(value), Ok(true));
+        }
+        assert_eq!(seed.len(), 2_048);
+        assert!(converge_no_alloc(&mut seed, &mut first, &mut second));
+        let (ok, allocations) =
+            count_thread_allocations(|| converge_no_alloc(&mut seed, &mut first, &mut second));
         assert!(ok);
         assert_eq!(allocations, 0);
     }

@@ -1,6 +1,7 @@
 package exactv4
 
 import (
+	"errors"
 	"slices"
 	"testing"
 )
@@ -324,6 +325,211 @@ func TestPageNumberIndexCloneScrubsDestinationOnSourceFailure(t *testing.T) {
 	}
 }
 
+func TestPageNumberIndexProtectedSetConvergesMonotonically(t *testing.T) {
+	seedPages := make([]pageNumberIndexPage, 8)
+	firstPages := make([]pageNumberIndexPage, 8)
+	secondPages := make([]pageNumberIndexPage, 8)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, err := newPageNumberIndex(&seedWorkspace)
+	if err != nil {
+		t.Fatalf("new seed index: %v", err)
+	}
+	first, err := newPageNumberIndex(&firstWorkspace)
+	if err != nil {
+		t.Fatalf("new first candidate: %v", err)
+	}
+	second, err := newPageNumberIndex(&secondWorkspace)
+	if err != nil {
+		t.Fatalf("new second candidate: %v", err)
+	}
+	if inserted, insertErr := seed.insert(9); insertErr != nil || !inserted {
+		t.Fatalf("seed insert: inserted=%v error=%v", inserted, insertErr)
+	}
+	calls := 0
+	candidate, convergenceErr := convergePageNumberIndex(
+		&seed, &first, &second, 100, 3,
+		func(current *pageNumberIndex, additions pageNumberIndexFixedPointAdder) error {
+			calls++
+			switch current.len() {
+			case 1:
+				_, addErr := additions.add(10)
+				return addErr
+			case 2:
+				_, addErr := additions.add(11)
+				return addErr
+			default:
+				return nil
+			}
+		},
+	)
+	if convergenceErr != nil {
+		t.Fatalf("converge protected set: %v", convergenceErr)
+	}
+	if calls != 3 {
+		t.Fatalf("preview calls = %d, want 3", calls)
+	}
+	var result, cleared *pageNumberIndex
+	if candidate == pageNumberIndexFixedPointFirst {
+		result, cleared = &first, &second
+	} else if candidate == pageNumberIndexFixedPointSecond {
+		result, cleared = &second, &first
+	} else {
+		t.Fatalf("unknown candidate %d", candidate)
+	}
+	if got, want := collectPageNumberIndex(t, result), []uint32{9, 10, 11}; !slices.Equal(got, want) {
+		t.Fatalf("converged protected pages = %v, want %v", got, want)
+	}
+	if !cleared.isEmptyAndClean() {
+		t.Fatal("losing candidate was not scrubbed")
+	}
+	if got, want := collectPageNumberIndex(t, &seed), []uint32{9}; !slices.Equal(got, want) {
+		t.Fatalf("seed changed to %v, want %v", got, want)
+	}
+	result.discardAfterAbort()
+}
+
+func TestPageNumberIndexProtectedSetRejectsInvalidAdditionAndScrubs(t *testing.T) {
+	seedPages := make([]pageNumberIndexPage, 4)
+	firstPages := make([]pageNumberIndexPage, 4)
+	secondPages := make([]pageNumberIndexPage, 4)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, _ := newPageNumberIndex(&seedWorkspace)
+	first, _ := newPageNumberIndex(&firstWorkspace)
+	second, _ := newPageNumberIndex(&secondWorkspace)
+	if inserted, insertErr := seed.insert(9); insertErr != nil || !inserted {
+		t.Fatalf("seed insert: inserted=%v error=%v", inserted, insertErr)
+	}
+	for _, invalid := range []uint32{1, 100} {
+		candidate, convergenceErr := convergePageNumberIndex(
+			&seed, &first, &second, 100, 1,
+			func(_ *pageNumberIndex, additions pageNumberIndexFixedPointAdder) error {
+				_, addErr := additions.add(invalid)
+				return addErr
+			},
+		)
+		if candidate != 0 {
+			t.Fatalf("invalid addition %d returned candidate %d", invalid, candidate)
+		}
+		var fixedProblem *pageNumberIndexFixedPointError
+		var indexProblem *pageNumberIndexError
+		if !errors.As(convergenceErr, &fixedProblem) || fixedProblem.code != pageNumberIndexFixedPointErrPreview ||
+			!errors.As(convergenceErr, &indexProblem) || indexProblem.code != pageNumberIndexErrValueOutOfBounds ||
+			indexProblem.page != invalid || indexProblem.actual != 100 {
+			t.Fatalf("invalid addition %d error = %#v", invalid, convergenceErr)
+		}
+		if !first.isEmptyAndClean() || !second.isEmptyAndClean() {
+			t.Fatalf("invalid addition %d retained candidate scratch", invalid)
+		}
+	}
+	if got, want := collectPageNumberIndex(t, &seed), []uint32{9}; !slices.Equal(got, want) {
+		t.Fatalf("seed changed to %v, want %v", got, want)
+	}
+}
+
+func TestPageNumberIndexProtectedSetPreviewFailureScrubs(t *testing.T) {
+	seedPages := make([]pageNumberIndexPage, 4)
+	firstPages := make([]pageNumberIndexPage, 4)
+	secondPages := make([]pageNumberIndexPage, 4)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, _ := newPageNumberIndex(&seedWorkspace)
+	first, _ := newPageNumberIndex(&firstWorkspace)
+	second, _ := newPageNumberIndex(&secondWorkspace)
+	if inserted, insertErr := seed.insert(9); insertErr != nil || !inserted {
+		t.Fatalf("seed insert: inserted=%v error=%v", inserted, insertErr)
+	}
+	stop := errors.New("preview stopped")
+	candidate, convergenceErr := convergePageNumberIndex(
+		&seed, &first, &second, 100, 1,
+		func(_ *pageNumberIndex, _ pageNumberIndexFixedPointAdder) error {
+			return stop
+		},
+	)
+	if candidate != 0 {
+		t.Fatalf("failed convergence returned candidate %d", candidate)
+	}
+	var fixedProblem *pageNumberIndexFixedPointError
+	if !errors.As(convergenceErr, &fixedProblem) || fixedProblem.code != pageNumberIndexFixedPointErrPreview ||
+		!errors.Is(convergenceErr, stop) {
+		t.Fatalf("preview failure = %#v", convergenceErr)
+	}
+	if !first.isEmptyAndClean() || !second.isEmptyAndClean() {
+		t.Fatal("preview failure retained candidate scratch")
+	}
+	if got, want := collectPageNumberIndex(t, &seed), []uint32{9}; !slices.Equal(got, want) {
+		t.Fatalf("seed changed to %v, want %v", got, want)
+	}
+}
+
+func TestPageNumberIndexProtectedSetLimitScrubsCandidates(t *testing.T) {
+	seedPages := make([]pageNumberIndexPage, 4)
+	firstPages := make([]pageNumberIndexPage, 4)
+	secondPages := make([]pageNumberIndexPage, 4)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, _ := newPageNumberIndex(&seedWorkspace)
+	first, _ := newPageNumberIndex(&firstWorkspace)
+	second, _ := newPageNumberIndex(&secondWorkspace)
+	if inserted, insertErr := seed.insert(9); insertErr != nil || !inserted {
+		t.Fatalf("seed insert: inserted=%v error=%v", inserted, insertErr)
+	}
+	candidate, convergenceErr := convergePageNumberIndex(
+		&seed, &first, &second, 100, 1,
+		func(current *pageNumberIndex, additions pageNumberIndexFixedPointAdder) error {
+			_, addErr := additions.add(uint32(10 + current.len()))
+			return addErr
+		},
+	)
+	if candidate != 0 {
+		t.Fatalf("limited convergence returned candidate %d", candidate)
+	}
+	var fixedProblem *pageNumberIndexFixedPointError
+	if !errors.As(convergenceErr, &fixedProblem) || fixedProblem.code != pageNumberIndexFixedPointErrDidNotConverge || fixedProblem.limit != 1 {
+		t.Fatalf("limit error = %#v", convergenceErr)
+	}
+	if !first.isEmptyAndClean() || !second.isEmptyAndClean() {
+		t.Fatal("limit failure retained candidate scratch")
+	}
+}
+
+func TestPageNumberIndexProtectedSetRejectsInvalidSeedBeforePreview(t *testing.T) {
+	seedPages := make([]pageNumberIndexPage, 4)
+	firstPages := make([]pageNumberIndexPage, 4)
+	secondPages := make([]pageNumberIndexPage, 4)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, _ := newPageNumberIndex(&seedWorkspace)
+	first, _ := newPageNumberIndex(&firstWorkspace)
+	second, _ := newPageNumberIndex(&secondWorkspace)
+	if inserted, insertErr := seed.insert(1); insertErr != nil || !inserted {
+		t.Fatalf("seed insert: inserted=%v error=%v", inserted, insertErr)
+	}
+	called := false
+	_, convergenceErr := convergePageNumberIndex(
+		&seed, &first, &second, 100, 1,
+		func(_ *pageNumberIndex, _ pageNumberIndexFixedPointAdder) error {
+			called = true
+			return nil
+		},
+	)
+	var fixedProblem *pageNumberIndexFixedPointError
+	var indexProblem *pageNumberIndexError
+	if called || !errors.As(convergenceErr, &fixedProblem) || fixedProblem.code != pageNumberIndexFixedPointErrIndex ||
+		!errors.As(convergenceErr, &indexProblem) || indexProblem.code != pageNumberIndexErrValueOutOfBounds {
+		t.Fatalf("invalid seed result called=%v error=%#v", called, convergenceErr)
+	}
+	if !first.isEmptyAndClean() || !second.isEmptyAndClean() {
+		t.Fatal("invalid seed changed candidate scratch")
+	}
+}
+
 func fillPageNumberIndexNoAlloc(index *pageNumberIndex) bool {
 	index.discardAfterAbort()
 	for value := 0; value < 2_048; value++ {
@@ -396,5 +602,69 @@ func TestPageNumberIndexCloneAndEqualityUseNoHeapAfterWorkspaceSetup(t *testing.
 	})
 	if allocations != 0 {
 		t.Fatalf("clone and equality allocations = %v, want 0", allocations)
+	}
+}
+
+func pageNumberIndexNoOpFixedPointPreview(
+	_ *pageNumberIndex,
+	_ pageNumberIndexFixedPointAdder,
+) error {
+	return nil
+}
+
+func TestPageNumberIndexProtectedSetConvergenceUsesNoHeapAfterWorkspaceSetup(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	seedPages := make([]pageNumberIndexPage, 8)
+	firstPages := make([]pageNumberIndexPage, 8)
+	secondPages := make([]pageNumberIndexPage, 8)
+	seedWorkspace := newPageNumberIndexWorkspace(seedPages)
+	firstWorkspace := newPageNumberIndexWorkspace(firstPages)
+	secondWorkspace := newPageNumberIndexWorkspace(secondPages)
+	seed, err := newPageNumberIndex(&seedWorkspace)
+	if err != nil {
+		t.Fatalf("new seed index: %v", err)
+	}
+	first, err := newPageNumberIndex(&firstWorkspace)
+	if err != nil {
+		t.Fatalf("new first candidate: %v", err)
+	}
+	second, err := newPageNumberIndex(&secondWorkspace)
+	if err != nil {
+		t.Fatalf("new second candidate: %v", err)
+	}
+	seed.discardAfterAbort()
+	for value := uint32(2); value < 2_050; value++ {
+		inserted, insertErr := seed.insert(value)
+		if insertErr != nil || !inserted {
+			t.Fatalf("seed warmup insert %d: inserted=%v error=%v", value, inserted, insertErr)
+		}
+	}
+	if seed.len() != 2_048 {
+		t.Fatal("seed warmup failed")
+	}
+	converge := func() bool {
+		candidate, convergenceErr := convergePageNumberIndex(
+			&seed, &first, &second, 4_096, 1,
+			pageNumberIndexNoOpFixedPointPreview,
+		)
+		if convergenceErr != nil || candidate == 0 {
+			return false
+		}
+		first.discardAfterAbort()
+		second.discardAfterAbort()
+		return true
+	}
+	if !converge() {
+		t.Fatal("convergence warmup failed")
+	}
+	allocations := testing.AllocsPerRun(20, func() {
+		if !converge() {
+			t.Fatal("convergence failed")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("protected-set convergence allocations = %v, want 0", allocations)
 	}
 }
