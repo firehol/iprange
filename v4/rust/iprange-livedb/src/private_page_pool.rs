@@ -1770,7 +1770,7 @@ pub(crate) enum PrivatePageTerminalJournalError {
     DuplicatePage(u32),
 }
 
-fn validate_unbound_terminal_journal_source(
+pub(crate) fn validate_unbound_terminal_journal_source(
     source_index: usize,
     source: &[PrivatePageCoordinatorTerminalPage],
 ) -> Result<(), PrivatePageTerminalJournalError> {

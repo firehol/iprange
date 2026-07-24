@@ -183,7 +183,7 @@ impl<'workspace, 'storage> PageNumberIndex<'workspace, 'storage> {
         Ok(())
     }
 
-    fn is_empty_and_clean(&self) -> bool {
+    pub(crate) fn is_empty_and_clean(&self) -> bool {
         !self.failed
             && self.root == NO_PAGE
             && self.pages == 0
@@ -1022,7 +1022,7 @@ impl PageNumberIndexFixedPointAdder<'_, '_, '_> {
     }
 }
 
-fn validate_committed_page_range(
+pub(crate) fn validate_committed_page_range(
     index: &mut PageNumberIndex<'_, '_>,
     committed_page_count: u64,
 ) -> Result<(), PageNumberIndexError> {

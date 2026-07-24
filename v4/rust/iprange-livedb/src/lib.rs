@@ -55,6 +55,8 @@ mod range_pool_sink;
 #[allow(dead_code)]
 mod range_reader;
 #[allow(dead_code)]
+mod range_root_proof;
+#[allow(dead_code)]
 mod range_staging;
 #[allow(dead_code)]
 mod reclamation_finalizer;

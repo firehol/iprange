@@ -8393,6 +8393,75 @@ requirements are normative in the Pre-Implementation Gate above.
   The next slice connects this producer with selected-old-root collection and
   prospective retirement replacements to form the protected-page proof.
 
+### 2026-07-24 - range-root proof construction plan
+
+- The coordinator currently accepts only bitmap and retirement terminal
+  producers; its three-way merger receives `nil` for the range source. This is
+  intentional until one private proof binds three facts together: the selected
+  old range-root identity, the materialized replacement range journal/root, and
+  the converged protected-page index. Passing a materialized root alone would
+  still permit an unsafe metadata handoff.
+- The next bounded slice adds that proof in both engines. It will consume the
+  existing old-range seed and alternating `PageNumberIndex` workspaces through
+  the convergence helper, retain which candidate workspace converged, and
+  verify that the strict unbound range journal exactly describes its materialized
+  root/count and has no page in the selected committed protected set. The proof
+  is private scratch, not target metadata authority.
+- The preview remains a caller-supplied private producer at this boundary. The
+  later composition slice will run actual detached bitmap/range/retirement work
+  through it, stage one final retirement output from the proven index, and only
+  then extend the coordinator's three-source merge. Separating proof formation
+  prevents a synthetic or partial terminal journal from becoming publishable.
+- Tests will cover a multi-step protected-set convergence, old nonempty and
+  legal-empty selected roots, range-journal/root/count mismatch, overlap with a
+  protected committed page, failed preview cleanup, stale candidate rejection,
+  and zero warmed-path allocation. It changes no range metadata, terminal
+  ownership, allocator state, file byte, public API, validation default, or
+  temporary-file behavior.
+
+### 2026-07-24 - range-root protected-page proof implementation
+
+- Added matching private Go and Rust proof constructors. Each first walks the
+  selected old range tree into caller-owned bounded index scratch, then runs
+  the existing monotonic convergence helper. The returned proof retains the
+  selected root identity, replacement materialized root/count, strict unbound
+  `Range` journal, converged candidate identity, and a deterministic seal over
+  all of that private state.
+- The proof rejects a malformed replacement journal, a root not present in its
+  journal, non-`Range` journal pages, and any new range page that would collide
+  with a protected selected-generation page. Failed ownership walking or
+  preview convergence scrubs all three caller-owned indexes; successful abort
+  cleanup does the same. Rust keeps exclusive borrows of those indexes while
+  the proof exists, and Go checks the same scratch identity and seal before a
+  later consumer can use it.
+- Added narrow visibility only where the Rust proof needs existing private
+  index-range and unbound-journal checks; it introduces no new public API.
+  Tests cover multi-step convergence from a nonempty tree containing a legal
+  empty leaf, a legal empty selected root, malformed journal/root, protected
+  overlap, preview failure/retry cleanup, post-creation scratch mutation, and
+  zero warmed-path heap allocation in both engines.
+- The proof remains intentionally incomplete transaction plumbing: it does
+  not yet run actual bitmap/retirement preview producers through the fixed
+  point, stage a retirement list, bind terminal ownership, modify target
+  metadata, or publish a range root. Those are the next composition boundary.
+
+### 2026-07-24 - range-root protected-page proof validation
+
+- Focused Go and Rust tests pass for a selected nonempty tree containing an
+  empty child leaf, a legal empty selected root, multi-step fixed-point growth,
+  missing journal root, journal page-count mismatch, non-`Range` terminal
+  owner, selected-page overlap, truncated old-tree source cleanup, preview
+  failure/retry cleanup, stale-scratch rejection, and zero warmed-path heap
+  allocation.
+- Full gates pass: `go -C v4/go test ./... -count=1`, `go -C v4/go vet ./...`,
+  `go -C v4/go test -race ./internal/exactv4 -count=1`, Rust's 534 default and
+  655 all-feature tests, `cargo fmt --check`, warnings-denied all-target
+  all-feature Clippy, `git diff --check`, and `./.agents/sow/audit.sh`.
+- Same-failure search confirms the only active aggregate handoff still has no
+  range terminal source and no target `range_root` update. This proof therefore
+  cannot accidentally be mistaken for publication; the next slice must extend
+  that one coordinator boundary rather than add a parallel route.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
