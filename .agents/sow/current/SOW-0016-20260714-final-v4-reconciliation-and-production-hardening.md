@@ -82,6 +82,13 @@ makes the draft abort-required and preserves the normal explicit
 cancel-and-abort route. This is still not durable file output or a public SDK;
 the OS writer and target-meta publication remain pending.
 
+2026-07-24 commit-preparation milestone: Rust now freezes the final private
+transaction state before its page-drain callback can run. The callback requires
+an exact preparation capability, and a successful drain can return only an
+internal target-metadata authorization after workspace release and a final
+preflight. No file bytes, metadata page, sync, writer-lease transition, or
+durable transaction result exists yet; those remain the next Linux writer work.
+
 ## Requirements
 
 ### Purpose
@@ -6196,6 +6203,55 @@ requirements are normative in the Pre-Implementation Gate above.
   --all-features` (511 tests); Rust formatting; Clippy with warnings denied;
   Rust benchmark compilation; `go -C v4/go test ./...`; `go -C v4/go vet
   ./...`; `git diff --check`; and `./.agents/sow/audit.sh`.
+
+### 2026-07-24 - Rust commit-preparation ordering plan
+
+- The output-drain milestone deliberately stops before durable publication, but
+  inspection found one ordering gap to close before an OS sink can use it:
+  the existing `preflight_commit` succeeds only after retained records are
+  drained. A future file sink could therefore write a private page before the
+  transaction core has frozen its pre-publication state. That would violate
+  section 14.2 phase 1 even if later meta publication were correct.
+- The next internal change is a move-only commit-preparation capability. It
+  preflights the pending target, quiescent coordinator, workspace identity, and
+  no-active-operation/checkpoint state before any page callback is permitted.
+  The callback drain requires that capability; after successful scope cleanup,
+  one final preflight consumes it, releases the workspace resource, and returns
+  a distinct meta-publication authorization containing the exact prepared
+  target.
+- This introduces no file write, metadata write, synchronization, durable
+  outcome, public API, or validation-on-open behavior. It makes the later OS
+  writer unable to use the current coordinator sink before the core's required
+  phase-1 checks. A callback failure remains whole-draft abort-required.
+- Permanent tests will prove the phase boundary blocks normal page/coordinator
+  access before callback invocation, a prepared success path returns the exact
+  target authorization with zero allocation, stale/substituted authority fails
+  closed, and every failed completion remains non-publishable and abortable.
+
+### 2026-07-24 - Rust commit-preparation implementation
+
+- Implemented the exact pre-output phase-1 fence in
+  `writer_transaction_core.rs`. It checks the pending target, coordinator
+  quiescence, registered-work mirrors, workspace identity, active
+  operation/checkpoint state, transaction sequence, target metadata, and the
+  coordinator commit fence before a callback is permitted.
+- Preparation closes the ordinary draft-pool and coordinator accessors because
+  those internals can mutate through shared references. It also blocks every
+  core work/aggregate/input entry point until the transaction is aborted. The
+  drain requires the preparation capability; successful drain changes the
+  phase, and finalization consumes the capability only after releasing the
+  exact workspace reservation and rerunning commit preflight.
+- Finalization yields a private target-metadata authorization, not a published
+  metadata page. There is deliberately no file write, file sync, metadata-page
+  write, lease update, cleanup, public API, or durable outcome claim in this
+  change. A sink failure remains abort-required and cannot yield authorization.
+- Extended both production-shaped mixed-owner paths. They prove the access
+  fence, byte-exact zero-allocation drain, exact target authorization, and that
+  a failed drain remains non-publishable and abortable.
+- Validation passed: targeted mixed-owner lifecycle test; Rust no-default
+  matrix (419 tests); Rust all-feature matrix (511 tests); Rust formatting; and
+  Clippy with warnings denied. The pre-commit repository validation below will
+  also run benchmark compilation, Go tests/vet, diff check, and the SOW audit.
 
 ## Validation
 

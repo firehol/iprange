@@ -63,6 +63,14 @@ pub(crate) enum PrivateWriterTransactionState {
     AbortIncomplete,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivateWriterCommitPhase {
+    Idle,
+    PrivateOutputPrepared,
+    PrivateOutputDrained,
+    MetaPublicationAuthorized,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PrivateWriterTransactionError<E> {
     InvalidArgument,
@@ -114,6 +122,38 @@ pub(crate) struct PrivateWriterTransactionHandle {
     identity: usize,
 }
 
+/// Exact internal authority produced only after phase-1 transaction checks.
+///
+/// It is deliberately non-copy: while it exists, the core closes its normal
+/// private-page and coordinator access paths.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PrivateWriterCommitPreparation {
+    handle_identity: usize,
+    target: MetaV4,
+}
+
+impl PrivateWriterCommitPreparation {
+    pub(crate) const fn target(&self) -> MetaV4 {
+        self.target
+    }
+}
+
+/// Exact target meta that may enter the physical publication boundary.
+///
+/// The OS writer will consume this only after all retained private pages have
+/// been written and synchronized. It does not itself claim durability.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PrivateWriterMetaPublication {
+    handle_identity: usize,
+    target: MetaV4,
+}
+
+impl PrivateWriterMetaPublication {
+    pub(crate) const fn target(&self) -> MetaV4 {
+        self.target
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E> {
     selected: MetaV4,
@@ -132,6 +172,7 @@ pub(crate) struct PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E> {
     fixed_point_registered_phase: Cell<PrivatePageCoordinatorWorkPhase>,
     fixed_point_workspace_identity: Cell<usize>,
     fixed_point_workspace_bytes: Cell<u64>,
+    commit_phase: Cell<PrivateWriterCommitPhase>,
     abort_visits: usize,
 }
 
@@ -180,6 +221,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             fixed_point_registered_phase: Cell::new(PrivatePageCoordinatorWorkPhase::None),
             fixed_point_workspace_identity: Cell::new(0),
             fixed_point_workspace_bytes: Cell::new(0),
+            commit_phase: Cell::new(PrivateWriterCommitPhase::Idle),
             abort_visits: 0,
         })
     }
@@ -229,6 +271,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
             || self.fixed_point_workspace_identity.get() != 0
             || self.fixed_point_workspace_bytes.get() != 0
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
         {
             return Err(PrivateWriterTransactionError::AbortIncompleteCoordination);
         }
@@ -285,6 +328,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             .set(PrivatePageCoordinatorWorkPhase::None);
         self.fixed_point_workspace_identity.set(0);
         self.fixed_point_workspace_bytes.set(0);
+        self.commit_phase.set(PrivateWriterCommitPhase::Idle);
         self.abort_visits = 0;
         Ok(PrivateWriterTransactionHandle {
             identity: handle_identity,
@@ -301,6 +345,115 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         Ok(())
     }
 
+    fn validate_private_output_preparation(
+        &self,
+        handle: &PrivateWriterTransactionHandle,
+        preparation: &PrivateWriterCommitPreparation,
+        expected_phase: PrivateWriterCommitPhase,
+    ) -> Result<MetaV4, PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        if self.commit_phase.get() != expected_phase
+            || preparation.handle_identity != self.handle_identity
+            || self.target != Some(preparation.target)
+        {
+            return Err(PrivateWriterTransactionError::StaleHandle);
+        }
+        Ok(preparation.target)
+    }
+
+    fn preflight_fixed_point_private_output<'backing, 'arena, 'record_cleanup>(
+        &self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+    ) -> Result<MetaV4, PrivateWriterTransactionError<E>> {
+        self.validate_handle(handle)?;
+        if self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+            || self.fixed_point_workspace_identity.get() == 0
+            || self.fixed_point_workspace_identity.get() != workspace.identity()
+            || self.fixed_point_workspace_bytes.get() == 0
+            || workspace.is_idle()
+        {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let Some(coordinator) = self.fixed_point.as_ref() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let (pool_work, _pool_generation, pool_phase) = draft.coordinator_registered_work();
+        let registration_finished = self.fixed_point_registered_work.get() == 0
+            && self.fixed_point_registered_generation.get() == 0
+            && self.fixed_point_registered_phase.get() == PrivatePageCoordinatorWorkPhase::None
+            && pool_work == 0
+            && pool_phase == PrivatePageCoordinatorWorkPhase::None
+            && coordinator.registered_work() == 0
+            && coordinator.is_quiescent();
+        if !registration_finished {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::StalePredecessor,
+            ));
+        }
+        if draft.requires_abort() || coordinator.requires_abort() {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if draft.has_active_operation() {
+            return Err(PrivateWriterTransactionError::Pool(
+                PrivatePagePoolError::OperationActive,
+            ));
+        }
+        if draft.has_active_checkpoint() {
+            return Err(PrivateWriterTransactionError::Pool(
+                PrivatePagePoolError::CheckpointActive,
+            ));
+        }
+        let Some(target) = self.target else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        let expected_txn = self
+            .selected
+            .txn_id
+            .checked_add(1)
+            .ok_or(PrivateWriterTransactionError::TransactionExhausted)?;
+        if !self.selected.static_identity_eq(&target)
+            || target.txn_id != expected_txn
+            || target.commit_nonce == [0; 16]
+            || target.page_count != draft.pending_page_count()
+            || target.page_count < self.selected.page_count
+            || coordinator
+                .commit_fence(draft, target.free_bitmap_root, target.page_count)
+                .is_err()
+        {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        Ok(target)
+    }
+
+    /// Freezes the transaction-side phase-1 state before any private page can
+    /// reach a file sink. The returned authority is required for the drain and
+    /// consumed only by the final publication authorization step.
+    pub(crate) fn prepare_fixed_point_private_output<'backing, 'arena, 'record_cleanup>(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+    ) -> Result<PrivateWriterCommitPreparation, PrivateWriterTransactionError<E>> {
+        let target = self.preflight_fixed_point_private_output(handle, workspace)?;
+        self.commit_phase
+            .set(PrivateWriterCommitPhase::PrivateOutputPrepared);
+        Ok(PrivateWriterCommitPreparation {
+            handle_identity: self.handle_identity,
+            target,
+        })
+    }
+
     pub(crate) fn draft(
         &self,
         handle: &PrivateWriterTransactionHandle,
@@ -308,6 +461,11 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         self.validate_handle(handle)?;
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if self.commit_phase.get() != PrivateWriterCommitPhase::Idle {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
         }
         self.draft
             .as_ref()
@@ -321,6 +479,11 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         self.validate_handle(handle)?;
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        if self.commit_phase.get() != PrivateWriterCommitPhase::Idle {
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
         }
         let coordinator = self
             .fixed_point
@@ -342,7 +505,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
-        if self.fixed_point_workspace_identity.get() != 0
+        if self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+            || self.fixed_point_workspace_identity.get() != 0
             || self.fixed_point_workspace_bytes.get() != 0
             || !workspace.is_idle()
         {
@@ -422,6 +586,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     > {
         if self.validate_handle(handle).is_err()
             || self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
             || self.fixed_point_registered_work.get() != 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
         {
@@ -469,6 +634,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     ) -> Result<A::Sealed, (A, FixedPointPredecessor, FixedPointError)> {
         if self.validate_handle(handle).is_err()
             || self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
             || self.fixed_point_registered_work.get() != 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
             || self.fixed_point_workspace_identity.get() == 0
@@ -507,6 +673,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     ) -> Result<FixedPointPredecessor, PrivateWriterTransactionError<E>> {
         let invalid = self.validate_handle(handle).is_err()
             || self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
             || self.fixed_point_registered_work.get() == 0
             || self.fixed_point_registered_generation.get() == 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::Sealed
@@ -577,7 +744,8 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
                 PrivateWriterTransactionError::AbortRequired(None),
             ));
         }
-        if self.fixed_point_workspace_identity.get() == 0
+        if self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+            || self.fixed_point_workspace_identity.get() == 0
             || self.fixed_point_workspace_identity.get() != workspace.identity()
             || self.fixed_point_workspace_bytes.get() == 0
             || workspace.is_idle()
@@ -647,13 +815,18 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     pub(crate) fn drain_fixed_point_private_pages<'backing, 'arena, 'record_cleanup, F>(
         &mut self,
         handle: &PrivateWriterTransactionHandle,
+        preparation: &PrivateWriterCommitPreparation,
         workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
         write: &mut F,
     ) -> Result<usize, PrivateWriterTransactionError<E>>
     where
         F: FnMut(u32, &[u8]) -> Result<(), E>,
     {
-        self.validate_handle(handle)?;
+        self.validate_private_output_preparation(
+            handle,
+            preparation,
+            PrivateWriterCommitPhase::PrivateOutputPrepared,
+        )?;
         if self.state.get() != PrivateWriterTransactionState::Pending {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
@@ -692,12 +865,52 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
         match workspace.drain_private_pages(draft, write) {
-            Ok(written) => Ok(written),
+            Ok(written) => {
+                self.commit_phase
+                    .set(PrivateWriterCommitPhase::PrivateOutputDrained);
+                Ok(written)
+            }
             Err(error) => {
                 self.state.set(PrivateWriterTransactionState::AbortRequired);
                 Err(PrivateWriterTransactionError::FixedPointOutput(error))
             }
         }
+    }
+
+    /// Releases drained workspace storage and produces the exact target meta
+    /// authorization for the later physical publication phase.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn finish_fixed_point_private_output<'backing, 'arena, 'record_cleanup>(
+        &mut self,
+        handle: &PrivateWriterTransactionHandle,
+        preparation: PrivateWriterCommitPreparation,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+    ) -> Result<PrivateWriterMetaPublication, PrivateWriterTransactionError<E>> {
+        let target = self.validate_private_output_preparation(
+            handle,
+            &preparation,
+            PrivateWriterCommitPhase::PrivateOutputDrained,
+        )?;
+        if !workspace.is_idle() {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit,
+            ));
+        }
+        if let Err(error) = self.cancel_fixed_point_workspace(handle, workspace) {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(error);
+        }
+        if let Err(error) = self.preflight_commit(handle) {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(error);
+        }
+        self.commit_phase
+            .set(PrivateWriterCommitPhase::MetaPublicationAuthorized);
+        Ok(PrivateWriterMetaPublication {
+            handle_identity: preparation.handle_identity,
+            target,
+        })
     }
 
     #[cfg(test)]
@@ -708,6 +921,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
     ) -> Result<FixedPointPredecessor, FixedPointError> {
         if self.validate_handle(handle).is_err()
             || self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
             || self.fixed_point_registered_work.get() == 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::Active
         {
@@ -738,7 +952,9 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         handle: &PrivateWriterTransactionHandle,
     ) -> Result<(), PrivateWriterTransactionError<E>> {
         self.validate_handle(handle)?;
-        if self.state.get() != PrivateWriterTransactionState::Pending {
+        if self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+        {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
         let coordinator = self
@@ -764,7 +980,9 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         operation: PrivatePageScopedOperation<'_>,
     ) -> Result<(), PrivateWriterTransactionError<E>> {
         self.validate_handle(handle)?;
-        if self.state.get() != PrivateWriterTransactionState::Pending {
+        if self.state.get() != PrivateWriterTransactionState::Pending
+            || self.commit_phase.get() != PrivateWriterCommitPhase::Idle
+        {
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
         let Some(draft) = self.draft.as_ref() else {
@@ -967,6 +1185,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         {
             return Err(PrivateWriterTransactionError::AbortIncompleteCoordination);
         }
+        self.commit_phase.set(PrivateWriterCommitPhase::Idle);
         self.state.set(PrivateWriterTransactionState::Clean);
         Ok(self.abort_visits)
     }

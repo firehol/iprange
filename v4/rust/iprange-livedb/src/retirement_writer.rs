@@ -6770,6 +6770,24 @@ mod tests {
                 crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
             ))
         ));
+        let (preparation, preparation_allocations) = count_thread_allocations(|| {
+            core.prepare_fixed_point_private_output(&handle, &workspace)
+        });
+        assert_eq!(preparation_allocations, 0);
+        let preparation = preparation.unwrap();
+        assert_eq!(preparation.target(), target);
+        assert!(matches!(
+            core.draft(&handle),
+            Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit
+            ))
+        ));
+        assert!(matches!(
+            core.fixed_point(&handle),
+            Err(PrivateWriterTransactionError::FixedPoint(
+                FixedPointError::InvalidWorkUnit
+            ))
+        ));
 
         let mut output_pages = [0u32; 3];
         let mut output_len = 0usize;
@@ -6787,7 +6805,7 @@ mod tests {
                     Ok(())
                 }
             };
-            core.drain_fixed_point_private_pages(&handle, &mut workspace, &mut sink)
+            core.drain_fixed_point_private_pages(&handle, &preparation, &mut workspace, &mut sink)
         });
         assert_eq!(drain_allocations, 0);
         match fail_on_sink_call {
@@ -6810,6 +6828,14 @@ mod tests {
                     core.preflight_commit(&handle),
                     Err(PrivateWriterTransactionError::AbortRequired(None))
                 ));
+                core.cancel_fixed_point_workspace(&handle, &mut workspace)
+                    .unwrap();
+                assert!(workspace.is_idle());
+                assert!(matches!(
+                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace,),
+                    Err(PrivateWriterTransactionError::StaleHandle)
+                ));
+                assert_eq!(core.abort().unwrap(), 3);
             }
             None => {
                 assert_eq!(drained.unwrap(), expected_pages.len());
@@ -6817,16 +6843,16 @@ mod tests {
                 for expected in expected_pages.iter() {
                     assert!(output_pages[..output_len].contains(&expected.pgno));
                 }
-                let live_pool = core.draft(&handle).unwrap();
-                assert!(!live_pool.has_active_scopes());
-                assert_eq!(live_pool.coordinator_commit_fence(), Ok(()));
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace)
+                });
+                assert_eq!(publication_allocations, 0);
+                assert_eq!(publication.unwrap().target(), target);
+                assert!(workspace.is_idle());
                 core.preflight_commit(&handle).unwrap();
+                assert_eq!(core.abort().unwrap(), 3);
             }
         }
-        core.cancel_fixed_point_workspace(&handle, &mut workspace)
-            .unwrap();
-        assert!(workspace.is_idle());
-        assert_eq!(core.abort().unwrap(), 3);
     }
 
     #[test]
@@ -7272,6 +7298,28 @@ mod tests {
                         )
                     )
                 ));
+                let (preparation, preparation_allocations) = count_thread_allocations(|| {
+                    core.prepare_fixed_point_private_output(&handle, &workspace)
+                });
+                assert_eq!(preparation_allocations, 0);
+                let preparation = preparation.unwrap();
+                assert_eq!(preparation.target(), target);
+                assert!(matches!(
+                    core.draft(&handle),
+                    Err(
+                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
+                            FixedPointError::InvalidWorkUnit
+                        )
+                    )
+                ));
+                assert!(matches!(
+                    core.fixed_point(&handle),
+                    Err(
+                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
+                            FixedPointError::InvalidWorkUnit
+                        )
+                    )
+                ));
                 let mut output_pages = [0u32; 3];
                 let mut output_len = 0usize;
                 let (drained, drain_allocations) = count_thread_allocations(|| {
@@ -7285,7 +7333,12 @@ mod tests {
                         output_len += 1;
                         Ok::<(), AggregateCleanupError>(())
                     };
-                    core.drain_fixed_point_private_pages(&handle, &mut workspace, &mut sink)
+                    core.drain_fixed_point_private_pages(
+                        &handle,
+                        &preparation,
+                        &mut workspace,
+                        &mut sink,
+                    )
                 });
                 assert_eq!(drain_allocations, 0);
                 assert_eq!(drained.unwrap(), produced_pages.len());
@@ -7293,13 +7346,13 @@ mod tests {
                 for expected in produced_pages.iter() {
                     assert!(output_pages[..output_len].contains(&expected.pgno));
                 }
-                let live_pool = core.draft(&handle).unwrap();
-                assert!(!live_pool.has_active_scopes());
-                assert_eq!(live_pool.coordinator_commit_fence(), Ok(()));
-                core.preflight_commit(&handle).unwrap();
-                core.cancel_fixed_point_workspace(&handle, &mut workspace)
-                    .unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    core.finish_fixed_point_private_output(&handle, preparation, &mut workspace)
+                });
+                assert_eq!(publication_allocations, 0);
+                assert_eq!(publication.unwrap().target(), target);
                 assert!(workspace.is_idle());
+                core.preflight_commit(&handle).unwrap();
                 assert_eq!(core.abort().unwrap(), 3);
             },
         );
