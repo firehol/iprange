@@ -6480,6 +6480,48 @@ requirements are normative in the Pre-Implementation Gate above.
   already invoked by the transaction core. The next slice must require that
   finalizer before the existing page-drain/publication path begins.
 
+### 2026-07-24 - finalizer-to-publication bridge plan
+
+- The current composed publisher takes pre-finalized private output. Although
+  it happens to acquire the operation barrier before its drain, a future normal
+  caller could finish allocator/retirement work before acquiring that barrier.
+  This violates section 14.2 phase 1.
+- Replace the normal private publisher with a callback that receives the
+  lock-scoped finalization context, transaction core, handle, and prepared
+  workspace, and can return only a typed transaction error. It must finish
+  before the publisher can prepare, drain, sync, write metadata, or release the
+  barrier. A context/source setup failure gets its own typed pre-publication
+  result and releases the barrier normally.
+- Keep a no-op pre-finalized adapter only under Rust test builds for the
+  existing physical-failure fixtures. The normal library build will have no
+  route that skips the required finalizer callback. A new composed test will
+  prove the callback reads the exact retained source, consumes the reclaim
+  fence, observes the held sidecar lock, and then publishes successfully.
+
+### 2026-07-24 - finalizer-to-publication bridge implementation
+
+- Replaced the normal composed publisher with
+  `finalize_and_publish_fixed_point_private_output`. It acquires the Linux
+  operation barrier, verifies the selected generation, gives its callback the
+  exact lock-scoped context, and calls `prepare_fixed_point_private_output`
+  only after that callback succeeds. Therefore physical drain, data sync, meta
+  write, and lock release cannot happen first.
+- The old pre-finalized publisher and fault-injection variant are now compiled
+  only for Rust tests. The non-test benchmark/library compilation has no
+  pre-finalized public-to-the-crate publication route. The lower raw page
+  publisher is private to the Linux barrier implementation.
+- A callback failure releases the barrier before returning the exact core
+  error; a context-construction failure has a separate typed error. Neither
+  case starts physical publication. The caller retains the pending core and
+  must explicitly cancel/abort its fixed-point workspace as required by the
+  existing transaction contract.
+- The composed Linux test now proves both outcomes: a successful callback reads
+  the exact retained page source, consumes the reader fence through the
+  retirement tree, observes the sidecar exclusive lock, and publishes the
+  target; a failing callback leaves the selected file and pending transaction
+  unchanged until explicit cancellation. This is the mandatory lock-bound
+  bridge, not yet the concrete allocator/retirement finalizer itself.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6542,6 +6584,20 @@ requirements are normative in the Pre-Implementation Gate above.
 - This validates the lifetime boundary and source/fence pairing. It does not
   yet prove a production allocator or retirement finalizer is invoked through
   that context before the existing core page-drain path.
+
+### 2026-07-24 - finalizer-to-publication bridge
+
+- `cargo test --manifest-path v4/rust/Cargo.toml -p iprange-livedb
+  --all-features`: pass, 540 tests. The composed Linux transaction test covers
+  the successful lock-bound callback, its retained-source/fence/sidecar-lock
+  assertions, and a callback failure that performs no publication.
+- `cargo check --manifest-path v4/rust/Cargo.toml --workspace --all-features
+  --benches`: pass. This is the important non-test build check: the old no-op
+  pre-finalized adapters are absent outside test compilation.
+- Final checkpoint validation passes: Rust no-default workspace matrix 427
+  tests; Rust all-feature workspace matrix 540 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
 
 ### Historical adversarial-audit evidence
 

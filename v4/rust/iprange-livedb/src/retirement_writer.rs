@@ -6470,13 +6470,15 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::os::linux::live_writer::{LinuxLiveWriter, LinuxLiveWriterPageSinkError};
     #[cfg(all(feature = "os", target_os = "linux"))]
-    use crate::os::linux::{linux_process_domain_token, RetainedDirectory};
+    use crate::os::linux::{linux_process_domain_token, LinuxOsError, LockMode, RetainedDirectory};
     use crate::page_source::SlicePageSource;
     use crate::private_page_pool::{
         PrivatePageCoordinatorPriorReturn, PrivatePagePreparedScopeSlot,
         PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
         PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::retirement_reader::{RetirementIdentity, RetirementSelectionResult, RetirementTree};
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::sidecar::{
         LocalIdentityKind, ProcessDomainKind, SidecarHeader, SidecarOrigin, SidecarState, SLOT_SIZE,
@@ -6533,6 +6535,8 @@ mod tests {
         },
         #[cfg(all(feature = "os", target_os = "linux"))]
         LinuxSuccess,
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        LinuxFinalizerFailure,
         #[cfg(all(feature = "os", target_os = "linux"))]
         LinuxSelectedMismatch,
         #[cfg(all(feature = "os", target_os = "linux"))]
@@ -7000,8 +7004,45 @@ mod tests {
             CompletedPrivateOutputPath::LinuxSuccess => {
                 let database = live_test_database(selected, selected.page_count as usize);
                 let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (parent, main_component) =
+                    RetainedDirectory::open_parent(&database.main).unwrap();
+                let sidecar_component = parent.sidecar_component(&main_component).unwrap();
+                let mut contender = parent.open_regular(&sidecar_component, true).unwrap();
                 let (publication, publication_allocations) = count_thread_allocations(|| {
-                    writer.publish_fixed_point_private_output(&mut core, &handle, &mut workspace)
+                    writer.finalize_and_publish_fixed_point_private_output(
+                        &mut core,
+                        &handle,
+                        &mut workspace,
+                        |context, _, _, _| {
+                            let (source_selected, pages, fence) = context.into_parts();
+                            assert_eq!(source_selected.meta, selected);
+                            let mut page = [0u8; PAGE_SIZE];
+                            pages.read_page(2, &mut page).unwrap();
+                            assert_eq!(page, [0; PAGE_SIZE]);
+                            assert!(matches!(
+                                contender.acquire_lock(LockMode::Exclusive, true),
+                                Err(LinuxOsError::LockBusy)
+                            ));
+                            let meta = source_selected.meta;
+                            let tree = RetirementTree::from_source(
+                                pages,
+                                RetirementIdentity {
+                                    database_id: meta.database_id,
+                                    txn_id: meta.txn_id,
+                                    commit_nonce: meta.commit_nonce,
+                                    page_count: meta.page_count,
+                                    root: meta.retirement_root,
+                                    batch_count: meta.retirement_batch_count,
+                                },
+                            )
+                            .unwrap();
+                            assert!(matches!(
+                                tree.select_oldest_eligible(fence, 1, 1).unwrap(),
+                                RetirementSelectionResult::NoChange(_)
+                            ));
+                            Ok(())
+                        },
+                    )
                 });
                 assert_eq!(publication_allocations, 0);
                 assert_eq!(publication.unwrap().meta, target);
@@ -7014,6 +7055,8 @@ mod tests {
                     Err(PrivateWriterTransactionError::StaleHandle)
                 ));
                 writer.close().unwrap();
+                contender.acquire_lock(LockMode::Exclusive, true).unwrap();
+                contender.release_lock().unwrap();
 
                 let committed = std::fs::read(&database.main).unwrap();
                 assert_eq!(
@@ -7030,6 +7073,46 @@ mod tests {
                         "bridge must publish each exact fixed-point terminal page"
                     );
                 }
+            }
+            #[cfg(all(feature = "os", target_os = "linux"))]
+            CompletedPrivateOutputPath::LinuxFinalizerFailure => {
+                let database = live_test_database(selected, selected.page_count as usize);
+                let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                let (publication, publication_allocations) = count_thread_allocations(|| {
+                    writer.finalize_and_publish_fixed_point_private_output(
+                        &mut core,
+                        &handle,
+                        &mut workspace,
+                        |_, _, _, _| Err(PrivateWriterTransactionError::SelectedGenerationMismatch),
+                    )
+                });
+                assert_eq!(publication_allocations, 0);
+                assert!(matches!(
+                    publication,
+                    Err(
+                        crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
+                            PrivateWriterTransactionError::SelectedGenerationMismatch
+                        )
+                    )
+                ));
+                assert!(!workspace.is_idle());
+                assert_eq!(core.state(), PrivateWriterTransactionState::Pending);
+                assert_eq!(core.selected(), selected);
+                assert_eq!(core.target(), Some(target));
+                writer.close().unwrap();
+                assert_eq!(
+                    crate::bootstrap::open(
+                        &std::fs::read(&database.main).unwrap(),
+                        OpenMode::Writer
+                    )
+                    .unwrap()
+                    .meta,
+                    selected
+                );
+                core.cancel_fixed_point_workspace(&handle, &mut workspace)
+                    .unwrap();
+                assert!(workspace.is_idle());
+                assert_eq!(core.abort().unwrap(), 3);
             }
             #[cfg(all(feature = "os", target_os = "linux"))]
             CompletedPrivateOutputPath::LinuxPhaseTwoNotCommitted => {
@@ -7895,6 +7978,88 @@ mod tests {
                         appended,
                         combined,
                         CompletedPrivateOutputPath::LinuxSelectedMismatch,
+                    );
+                },
+            );
+        }
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut success_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let success_retirement = arena
+                .prepare_terminal_export(combined, &mut success_retirement_pages)
+                .unwrap();
+            let mut success_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut success_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match success_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxSuccess,
+                    );
+                },
+            );
+        }
+
+        #[cfg(all(feature = "os", target_os = "linux"))]
+        {
+            let mut finalizer_failure_retirement_pages = [
+                PrivatePageCoordinatorTerminalPage::empty(),
+                PrivatePageCoordinatorTerminalPage::empty(),
+            ];
+            let finalizer_failure_retirement = arena
+                .prepare_terminal_export(combined, &mut finalizer_failure_retirement_pages)
+                .unwrap();
+            let mut finalizer_failure_bitmap_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+            crate::bitmap_cow::tests::with_finalized_bitmap_export(
+                &mut finalizer_failure_bitmap_pages,
+                |bitmap_export| {
+                    let bitmap_root = bitmap_export.root();
+                    let mut produced_pages = [
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                        PrivatePageCoordinatorTerminalPage::empty(),
+                    ];
+                    let produced = match finalizer_failure_retirement
+                        .merge_with_bitmap_export(bitmap_export, &mut produced_pages)
+                    {
+                        Ok(produced) => produced,
+                        Err(_) => panic!("typed producer exports must merge"),
+                    };
+                    let appended = produced
+                        .pages
+                        .iter()
+                        .filter(|page| page.authorization == PrivatePageAuthorization::Appended)
+                        .count() as u64;
+                    drain_completed_fixed_point_private_output(
+                        produced,
+                        bitmap_root,
+                        appended,
+                        combined,
+                        CompletedPrivateOutputPath::LinuxFinalizerFailure,
                     );
                 },
             );

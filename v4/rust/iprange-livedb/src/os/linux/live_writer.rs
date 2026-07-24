@@ -113,6 +113,11 @@ pub(crate) enum LinuxLiveWriterPublicationError<E> {
 #[derive(Debug)]
 pub(crate) enum LinuxLiveWriterCoreCommitError<E> {
     Barrier(LinuxLiveWriterBarrierCause),
+    FinalizationContext(LinuxLiveWriterFinalizationContextError),
+    FinalizationContextRelease {
+        context: LinuxLiveWriterFinalizationContextError,
+        release: LinuxLiveWriterBarrierReleaseError,
+    },
     Core(PrivateWriterTransactionError<E>),
     CoreRelease {
         core: PrivateWriterTransactionError<E>,
@@ -563,13 +568,55 @@ impl LinuxLiveWriter {
         }
     }
 
-    /// Holds one Linux operation barrier from core preparation through durable
-    /// metadata publication, phase-five lease handling, and core completion.
+    /// Holds one Linux operation barrier from live allocator finalization
+    /// through durable metadata publication, phase-five lease handling, and
+    /// core completion.
     ///
     /// The caller retains the transaction core after every error so it can run
     /// the appropriate explicit abort or committed-cleanup route. This method
     /// never leaves an undisposed barrier behind: a failed unlock becomes
     /// close-only and is recovered by `close`.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn finalize_and_publish_fixed_point_private_output<
+        'slots,
+        'cleanup,
+        'backing,
+        'arena,
+        'record_cleanup,
+        I,
+        O,
+        E,
+        F,
+    >(
+        &self,
+        core: &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        finalizer: F,
+    ) -> Result<Bootstrap, LinuxLiveWriterCoreCommitError<E>>
+    where
+        E: From<LinuxLiveWriterPageSinkError>,
+        F: for<'context> FnOnce(
+            LinuxLiveWriterFinalizationContext<'context>,
+            &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+            &PrivateWriterTransactionHandle,
+            &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        ) -> Result<(), PrivateWriterTransactionError<E>>,
+    {
+        self.finalize_and_publish_fixed_point_private_output_with(
+            core,
+            handle,
+            workspace,
+            finalizer,
+            |file| file.sync_all(),
+            write_target_meta_page,
+            |files, owned| files.update_writer_lease_after_meta(owned),
+        )
+    }
+
+    /// Test-only adapter for fixtures that have already finalized their private
+    /// output before entering the Linux publisher.
+    #[cfg(test)]
     #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub(crate) fn publish_fixed_point_private_output<
         'slots,
@@ -589,16 +636,16 @@ impl LinuxLiveWriter {
     where
         E: From<LinuxLiveWriterPageSinkError>,
     {
-        self.publish_fixed_point_private_output_with(
+        self.finalize_and_publish_fixed_point_private_output(
             core,
             handle,
             workspace,
-            |file| file.sync_all(),
-            write_target_meta_page,
-            |files, owned| files.update_writer_lease_after_meta(owned),
+            |_, _, _, _| Ok(()),
         )
     }
 
+    /// Test-only fault-injection adapter for pre-finalized private output.
+    #[cfg(test)]
     #[allow(clippy::result_large_err, clippy::type_complexity)]
     pub(crate) fn publish_fixed_point_private_output_with<
         'slots,
@@ -630,6 +677,60 @@ impl LinuxLiveWriter {
             &mut OwnedWriterLease,
         ) -> Result<(), LinuxWriterLeaseError>,
     {
+        self.finalize_and_publish_fixed_point_private_output_with(
+            core,
+            handle,
+            workspace,
+            |_, _, _, _| Ok(()),
+            synchronize,
+            write_meta,
+            update_lease,
+        )
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        clippy::too_many_arguments,
+        clippy::type_complexity
+    )]
+    pub(crate) fn finalize_and_publish_fixed_point_private_output_with<
+        'slots,
+        'cleanup,
+        'backing,
+        'arena,
+        'record_cleanup,
+        I,
+        O,
+        E,
+        F,
+        S,
+        M,
+        U,
+    >(
+        &self,
+        core: &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+        handle: &PrivateWriterTransactionHandle,
+        workspace: &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        finalizer: F,
+        synchronize: S,
+        write_meta: M,
+        update_lease: U,
+    ) -> Result<Bootstrap, LinuxLiveWriterCoreCommitError<E>>
+    where
+        E: From<LinuxLiveWriterPageSinkError>,
+        F: for<'context> FnOnce(
+            LinuxLiveWriterFinalizationContext<'context>,
+            &mut PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E>,
+            &PrivateWriterTransactionHandle,
+            &mut FixedPointCoordinatorWorkspace<'backing, 'arena, 'record_cleanup>,
+        ) -> Result<(), PrivateWriterTransactionError<E>>,
+        S: FnMut(&File) -> io::Result<()>,
+        M: FnOnce(&RetainedRegular, MetaV4) -> Result<(), LinuxOsError>,
+        U: FnOnce(
+            &mut RetainedLiveFiles,
+            &mut OwnedWriterLease,
+        ) -> Result<(), LinuxWriterLeaseError>,
+    {
         let barrier = match self.acquire_operation_barrier_with_cancel(|| false) {
             Ok(barrier) => barrier,
             Err(LinuxLiveWriterBarrierError::Failed(cause)) => {
@@ -651,6 +752,32 @@ impl LinuxLiveWriter {
                     release,
                 }),
             };
+        }
+
+        match barrier
+            .with_finalization_context(|context| finalizer(context, core, handle, workspace))
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(core_error)) => {
+                return match barrier.release_after_nonpublication() {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::Core(core_error)),
+                    Err(release) => Err(LinuxLiveWriterCoreCommitError::CoreRelease {
+                        core: core_error,
+                        release,
+                    }),
+                };
+            }
+            Err(context) => {
+                return match barrier.release_after_nonpublication() {
+                    Ok(()) => Err(LinuxLiveWriterCoreCommitError::FinalizationContext(context)),
+                    Err(release) => {
+                        Err(LinuxLiveWriterCoreCommitError::FinalizationContextRelease {
+                            context,
+                            release,
+                        })
+                    }
+                };
+            }
         }
 
         let preparation = match core.prepare_fixed_point_private_output(handle, workspace) {
@@ -911,7 +1038,7 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
     /// caller drops that barrier, then uses `LinuxLiveWriter::close` for
     /// recovery.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn publish_private_pages<E>(
+    fn publish_private_pages<E>(
         self,
         target: MetaV4,
         write: impl FnOnce(&mut LinuxLiveWriterPageSink<'_>) -> Result<(), E>,
