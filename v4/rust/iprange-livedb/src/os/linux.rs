@@ -1,7 +1,7 @@
 //! Linux retained-directory, identity, lock, and process primitives.
 
-use crate::bootstrap::{open_meta_pages, Bootstrap, BootstrapError, OpenMode};
-use crate::contract::PAGE_SIZE;
+use crate::bootstrap::{open_meta_pages, Bootstrap, BootstrapError, MetaSelection, OpenMode};
+use crate::contract::{MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::name_binding::{basename_commitment, BasenameBindingError, BasenameEncoding};
 use crate::page_source::{PageIoEvidence, PageSourceError, PinnedPageSource, PositionalRead};
 use crate::process_identity::{
@@ -421,6 +421,7 @@ pub(crate) struct RetainedLiveFiles {
     last_scan: Option<(Bootstrap, ReadySidecarInspection)>,
     writer_bootstrap: Option<Bootstrap>,
     writer_tail: Option<UnpublishedMainTail>,
+    writer_publication: Option<WriterCommitPublication>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -435,6 +436,43 @@ pub(crate) struct OwnedWriterLease {
     header: SidecarHeader,
     active: ActiveSlot,
     claimed_bootstrap: Bootstrap,
+}
+
+/// One exact source-to-target publication attempt retained by a live writer.
+///
+/// This remains in memory until the writer has either proved pre-publication
+/// cleanup, transferred its lease to the target generation, or explicitly
+/// closed an indeterminate attempt. It prevents a target-selected Close from
+/// treating the source generation's growth as disposable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WriterCommitPublication {
+    source: Bootstrap,
+    source_active: ActiveSlot,
+    target: MetaV4,
+    phase: WriterCommitPublicationPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriterCommitPublicationPhase {
+    PreMeta,
+    MetaWriteStarted,
+    MetaSynchronized { target: Bootstrap },
+}
+
+impl WriterCommitPublication {
+    fn target_active(self) -> ActiveSlot {
+        ActiveSlot {
+            txn_id: self.target.txn_id,
+            ..self.source_active
+        }
+    }
+
+    fn target_committed_bytes(self) -> Result<u64, LinuxWriterLeaseError> {
+        self.target
+            .page_count
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(LinuxWriterLeaseError::CommitAttemptMismatch)
+    }
 }
 
 #[derive(Debug)]
@@ -1193,6 +1231,7 @@ impl RetainedLiveFiles {
             last_scan: None,
             writer_bootstrap: None,
             writer_tail: None,
+            writer_publication: None,
         })
     }
 
@@ -1657,6 +1696,213 @@ impl RetainedLiveFiles {
         Ok(final_bootstrap)
     }
 
+    /// Records one target generation before any target metadata byte is
+    /// written. The caller must retain the operation lock through the later
+    /// metadata and lease phases.
+    pub(crate) fn begin_writer_commit_attempt(
+        &mut self,
+        owned: &OwnedWriterLease,
+        target: MetaV4,
+    ) -> Result<(), LinuxWriterLeaseError> {
+        self.sidecar
+            .require_exclusive_lock()
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if !matches!(
+            &self.sidecar.cleanup_authority,
+            SidecarCleanupAuthority::None
+        ) {
+            return Err(LinuxWriterLeaseError::OutstandingWriterCleanup);
+        }
+        if self.writer_publication.is_some() || self.writer_tail.is_some() {
+            return Err(LinuxWriterLeaseError::CommitPublicationState);
+        }
+        let source = self.verify_owned_writer(owned)?;
+        let expected_txn = source
+            .meta
+            .txn_id
+            .checked_add(1)
+            .ok_or(LinuxWriterLeaseError::CommitAttemptMismatch)?;
+        let target_bytes = target
+            .page_count
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(LinuxWriterLeaseError::CommitAttemptMismatch)?;
+        if source.physical_bytes != source.committed_bytes
+            || !source.meta.static_identity_eq(&target)
+            || target.txn_id != expected_txn
+            || target.commit_nonce == [0; 16]
+            || !(2..=MAX_PAGE_COUNT).contains(&target.page_count)
+            || target.page_count < source.meta.page_count
+            || target_bytes < source.committed_bytes
+        {
+            return Err(LinuxWriterLeaseError::CommitAttemptMismatch);
+        }
+        self.writer_publication = Some(WriterCommitPublication {
+            source,
+            source_active: owned.active,
+            target,
+            phase: WriterCommitPublicationPhase::PreMeta,
+        });
+        Ok(())
+    }
+
+    /// Crosses the phase-3 boundary immediately before the first target-meta
+    /// write. It freezes the exact source tail that remains disposable only
+    /// while the source generation stays selected.
+    pub(crate) fn begin_writer_meta_write(
+        &mut self,
+        owned: &OwnedWriterLease,
+        target: MetaV4,
+    ) -> Result<(), LinuxWriterLeaseError> {
+        let publication = self.require_writer_publication(owned, target)?;
+        if publication.phase != WriterCommitPublicationPhase::PreMeta {
+            return Err(LinuxWriterLeaseError::CommitPublicationState);
+        }
+        let current = self
+            .main
+            .read_main_bootstrap(OpenMode::Writer)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        require_exact_writer_bootstrap(publication.source, current)?;
+        self.verify_live_pair_binding(current, owned.header)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        let target_bytes = publication.target_committed_bytes()?;
+        if current.physical_bytes != target_bytes {
+            return Err(LinuxWriterLeaseError::TailLengthConflict {
+                target: target_bytes,
+                observed_end: target_bytes,
+                actual: current.physical_bytes,
+            });
+        }
+        if current.physical_bytes > publication.source.committed_bytes {
+            self.writer_tail = Some(UnpublishedMainTail {
+                main_identity: self.main.identity,
+                database_id: publication.source.meta.database_id,
+                transaction_id: publication.source.meta.txn_id,
+                commit_nonce: publication.source.meta.commit_nonce,
+                committed_length: publication.source.committed_bytes,
+                observed_end_exclusive: current.physical_bytes,
+            });
+        }
+        let publication = self.writer_publication.as_mut().unwrap();
+        publication.phase = WriterCommitPublicationPhase::MetaWriteStarted;
+        Ok(())
+    }
+
+    /// Confirms the exact target meta only after the caller has completed its
+    /// phase-4 main-file synchronization.
+    pub(crate) fn confirm_writer_meta_sync(
+        &mut self,
+        owned: &OwnedWriterLease,
+        target: MetaV4,
+    ) -> Result<Bootstrap, LinuxWriterLeaseError> {
+        let publication = self.require_writer_publication(owned, target)?;
+        if publication.phase != WriterCommitPublicationPhase::MetaWriteStarted {
+            return Err(LinuxWriterLeaseError::CommitPublicationState);
+        }
+        let current = self
+            .main
+            .read_main_bootstrap(OpenMode::Writer)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if !is_exact_writer_target(publication.target, current)
+            || current.physical_bytes != publication.target_committed_bytes()?
+        {
+            return Err(LinuxWriterLeaseError::CommitOutcomeUnresolved);
+        }
+        self.verify_live_pair_binding(current, owned.header)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        let publication = self.writer_publication.as_mut().unwrap();
+        publication.phase = WriterCommitPublicationPhase::MetaSynchronized { target: current };
+        Ok(current)
+    }
+
+    /// Performs phase 5's source-to-target writer-lease transition. A failed
+    /// transition deliberately leaves the publication state and any armed
+    /// provenance intact for Close.
+    pub(crate) fn update_writer_lease_after_meta(
+        &mut self,
+        owned: &mut OwnedWriterLease,
+    ) -> Result<(), LinuxWriterLeaseError> {
+        let target = self.writer_publication_target()?;
+        let publication = self.require_writer_publication(owned, target)?;
+        let WriterCommitPublicationPhase::MetaSynchronized { target } = publication.phase else {
+            return Err(LinuxWriterLeaseError::CommitPublicationState);
+        };
+        let current = self
+            .main
+            .read_main_bootstrap(OpenMode::Writer)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if current != target || !is_exact_writer_target(publication.target, current) {
+            return Err(LinuxWriterLeaseError::CommitOutcomeUnresolved);
+        }
+        self.verify_live_pair_binding(current, owned.header)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        let source = self
+            .sidecar
+            .read_sidecar_slot(owned.header, 0)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        let target_active = publication.target_active();
+        let prepared = PreparedSlotTransition::update(
+            owned.header,
+            SlotRole::Writer,
+            0,
+            &source,
+            publication.source_active,
+            target_active,
+            linux_slot_host_limits(),
+        )
+        .map_err(LinuxWriterLeaseError::TransitionBeforeArm)?;
+        self.sidecar
+            .execute_sidecar_slot_transition(prepared, linux_slot_host_limits())
+            .map_err(LinuxWriterLeaseError::Transition)?;
+        owned.active = target_active;
+        owned.claimed_bootstrap = target;
+        self.writer_bootstrap = Some(target);
+        self.writer_tail = None;
+        self.writer_publication = None;
+        Ok(())
+    }
+
+    fn writer_publication_target(&self) -> Result<MetaV4, LinuxWriterLeaseError> {
+        self.writer_publication
+            .map(|publication| publication.target)
+            .ok_or(LinuxWriterLeaseError::CommitPublicationState)
+    }
+
+    fn require_writer_publication(
+        &self,
+        owned: &OwnedWriterLease,
+        target: MetaV4,
+    ) -> Result<WriterCommitPublication, LinuxWriterLeaseError> {
+        self.sidecar
+            .require_exclusive_lock()
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if !matches!(
+            &self.sidecar.cleanup_authority,
+            SidecarCleanupAuthority::None
+        ) {
+            return Err(LinuxWriterLeaseError::OutstandingWriterCleanup);
+        }
+        let publication = self
+            .writer_publication
+            .ok_or(LinuxWriterLeaseError::CommitPublicationState)?;
+        if publication.target != target
+            || owned.header != self.header
+            || owned.active != publication.source_active
+            || owned.claimed_bootstrap != publication.source
+        {
+            return Err(LinuxWriterLeaseError::CommitAttemptMismatch);
+        }
+        let source = self
+            .sidecar
+            .read_sidecar_slot_after_header(owned.header, 0)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if decode_stable_slot(&source, SlotRole::Writer, linux_slot_host_limits())
+            != Ok(StableSlot::Active(publication.source_active))
+        {
+            return Err(LinuxWriterLeaseError::OwnerMismatch);
+        }
+        Ok(publication)
+    }
+
     fn verify_owned_writer(
         &self,
         owned: &OwnedWriterLease,
@@ -1953,6 +2199,10 @@ impl RetainedLiveFiles {
                 .map_err(LinuxWriterLeaseError::Os)?;
         }
 
+        if self.writer_publication.is_some() {
+            return self.retry_writer_publication_cleanup_with(owned, truncate, synchronize);
+        }
+
         match (&self.sidecar.cleanup_authority, owned) {
             (
                 SidecarCleanupAuthority::Armed {
@@ -2015,6 +2265,150 @@ impl RetainedLiveFiles {
         }
         self.writer_bootstrap = None;
         Ok(self.live_cleanup_paths())
+    }
+
+    fn retry_writer_publication_cleanup_with(
+        &mut self,
+        owned: Option<&OwnedWriterLease>,
+        truncate: impl FnMut(&File, u64) -> io::Result<()>,
+        synchronize: impl FnMut(&File) -> io::Result<()>,
+    ) -> Result<LiveClaimCleanupOutcome, LinuxWriterLeaseError> {
+        let publication = self
+            .writer_publication
+            .ok_or(LinuxWriterLeaseError::CommitPublicationState)?;
+        let owned = owned.ok_or(LinuxWriterLeaseError::NoCleanupAuthority)?;
+        if owned.header != self.header
+            || owned.active != publication.source_active
+            || owned.claimed_bootstrap != publication.source
+        {
+            return Err(LinuxWriterLeaseError::OwnerMismatch);
+        }
+        let current = self
+            .main
+            .read_main_bootstrap(OpenMode::Writer)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        self.verify_live_pair_binding(current, owned.header)
+            .map_err(LinuxWriterLeaseError::Os)?;
+        if is_same_writer_bootstrap(publication.source, current) {
+            if matches!(
+                publication.phase,
+                WriterCommitPublicationPhase::MetaSynchronized { .. }
+            ) {
+                return Err(LinuxWriterLeaseError::CommitOutcomeUnresolved);
+            }
+            return self.retry_writer_publication_source_cleanup(
+                publication,
+                owned,
+                truncate,
+                synchronize,
+            );
+        }
+        let target_or_later = matches!(
+            publication.phase,
+            WriterCommitPublicationPhase::MetaWriteStarted
+                | WriterCommitPublicationPhase::MetaSynchronized { .. }
+        ) && (is_exact_writer_target(publication.target, current)
+            || is_later_writer_target(publication.source, publication.target, current));
+        if !target_or_later {
+            return Err(LinuxWriterLeaseError::CommitOutcomeUnresolved);
+        }
+        if is_exact_writer_target(publication.target, current)
+            && current.physical_bytes != current.committed_bytes
+        {
+            return Err(LinuxWriterLeaseError::TailCleanupRequired);
+        }
+        if let Some(tail) = self.writer_tail {
+            if !is_writer_tail_for_publication(tail, self.main.identity, publication)? {
+                return Err(LinuxWriterLeaseError::GenerationChanged);
+            }
+        }
+        self.clear_published_writer_lease(publication, owned)?;
+        self.writer_tail = None;
+        self.writer_bootstrap = None;
+        self.writer_publication = None;
+        Ok(self.live_cleanup_paths())
+    }
+
+    fn retry_writer_publication_source_cleanup(
+        &mut self,
+        publication: WriterCommitPublication,
+        owned: &OwnedWriterLease,
+        truncate: impl FnMut(&File, u64) -> io::Result<()>,
+        synchronize: impl FnMut(&File) -> io::Result<()>,
+    ) -> Result<LiveClaimCleanupOutcome, LinuxWriterLeaseError> {
+        self.writer_publication = None;
+        let result = self.retry_writer_lease_cleanup_with(Some(owned), truncate, synchronize);
+        if result.is_err() {
+            self.writer_publication = Some(publication);
+        }
+        result
+    }
+
+    fn clear_published_writer_lease(
+        &mut self,
+        publication: WriterCommitPublication,
+        owned: &OwnedWriterLease,
+    ) -> Result<(), LinuxWriterLeaseError> {
+        let target_active = publication.target_active();
+        match &self.sidecar.cleanup_authority {
+            SidecarCleanupAuthority::Armed {
+                transition,
+                dead_writer: None,
+            } => {
+                if transition.header() != self.header
+                    || transition.role() != SlotRole::Writer
+                    || transition.slot_index() != 0
+                    || transition.kind() != SlotTransitionKind::Update
+                    || transition.source()
+                        != SlotTransitionSource::OwnedActive(publication.source_active)
+                    || transition.target() != Some(target_active)
+                {
+                    return Err(LinuxWriterLeaseError::OwnerMismatch);
+                }
+                self.sidecar
+                    .retry_sidecar_slot_cleanup(linux_slot_host_limits())
+                    .map_err(LinuxWriterLeaseError::ArmedCleanup)?;
+                Ok(())
+            }
+            SidecarCleanupAuthority::Armed { .. } | SidecarCleanupAuthority::DeadWriter(_) => {
+                Err(LinuxWriterLeaseError::OutstandingWriterCleanup)
+            }
+            SidecarCleanupAuthority::None => {
+                let current = self
+                    .sidecar
+                    .read_sidecar_slot(owned.header, 0)
+                    .map_err(LinuxWriterLeaseError::Os)?;
+                if current == [0; SLOT_SIZE as usize] {
+                    return Ok(());
+                }
+                let active = match decode_stable_slot(
+                    &current,
+                    SlotRole::Writer,
+                    linux_slot_host_limits(),
+                ) {
+                    Ok(StableSlot::Active(active))
+                        if active == publication.source_active || active == target_active =>
+                    {
+                        active
+                    }
+                    Ok(StableSlot::Free) | Ok(StableSlot::Active(_)) | Err(_) => {
+                        return Err(LinuxWriterLeaseError::OwnerMismatch);
+                    }
+                };
+                let prepared = PreparedSlotTransition::clear_owned(
+                    owned.header,
+                    SlotRole::Writer,
+                    0,
+                    &current,
+                    active,
+                    linux_slot_host_limits(),
+                )
+                .map_err(LinuxWriterLeaseError::TransitionBeforeArm)?;
+                self.sidecar
+                    .execute_sidecar_slot_transition_after_tail(prepared, linux_slot_host_limits())
+                    .map_err(LinuxWriterLeaseError::Transition)
+            }
+        }
     }
 
     fn require_exact_zero_main_length(&self) -> Result<(), LinuxWriterLeaseError> {
@@ -2433,6 +2827,49 @@ fn require_exact_writer_bootstrap(
     Ok(())
 }
 
+fn is_exact_writer_target(target: MetaV4, actual: Bootstrap) -> bool {
+    target
+        .page_count
+        .checked_mul(PAGE_SIZE as u64)
+        .is_some_and(|bytes| {
+            actual.selection == MetaSelection::ProvenCurrent
+                && actual.selected_meta_page == (target.txn_id & 1) as u8
+                && actual.meta == target
+                && actual.committed_bytes == bytes
+        })
+}
+
+fn is_same_writer_bootstrap(expected: Bootstrap, actual: Bootstrap) -> bool {
+    actual.meta == expected.meta
+        && actual.selection == expected.selection
+        && actual.selected_meta_page == expected.selected_meta_page
+        && actual.committed_bytes == expected.committed_bytes
+}
+
+/// A later selected generation proves only that the old source tail must not be
+/// truncated. It is not evidence that this writer's attempted generation was
+/// durable; commit resolution classifies that separately.
+fn is_later_writer_target(source: Bootstrap, target: MetaV4, actual: Bootstrap) -> bool {
+    actual.selection == MetaSelection::ProvenCurrent
+        && actual.meta.static_identity_eq(&source.meta)
+        && actual.meta.txn_id > target.txn_id
+        && actual.physical_bytes == actual.committed_bytes
+}
+
+fn is_writer_tail_for_publication(
+    tail: UnpublishedMainTail,
+    identity: PosixIdentity,
+    publication: WriterCommitPublication,
+) -> Result<bool, LinuxWriterLeaseError> {
+    Ok(tail.main_identity == identity
+        && tail.database_id == publication.source.meta.database_id
+        && tail.transaction_id == publication.source.meta.txn_id
+        && tail.commit_nonce == publication.source.meta.commit_nonce
+        && tail.committed_length == publication.source.committed_bytes
+        && tail.observed_end_exclusive == publication.target_committed_bytes()?
+        && tail.observed_end_exclusive > tail.committed_length)
+}
+
 #[derive(Debug)]
 pub(crate) enum LockedSlotExecutionError {
     BeforeArm(LinuxOsError),
@@ -2480,6 +2917,9 @@ pub(crate) enum LinuxWriterLeaseError {
     WriterBusy,
     OwnerMismatch,
     GenerationChanged,
+    CommitAttemptMismatch,
+    CommitPublicationState,
+    CommitOutcomeUnresolved,
     TailCleanupRequired,
     TailLengthConflict {
         target: u64,
@@ -3043,6 +3483,68 @@ mod tests {
             )
             .unwrap();
         (directory, pair)
+    }
+
+    fn claimed_writer_ready_for_commit(
+        pair: &mut RetainedLiveFiles,
+        nonce: [u8; 16],
+    ) -> (OwnedWriterLease, Bootstrap) {
+        pair.scan_and_reap().unwrap();
+        let owned = pair.claim_writer_lease_with(|| Ok(nonce)).unwrap();
+        let source = pair.prepare_writer_for_exposure(&owned).unwrap();
+        pair.sidecar
+            .acquire_lock(LockMode::Exclusive, false)
+            .unwrap();
+        (owned, source)
+    }
+
+    fn next_writer_target(source: Bootstrap, page_count: u64, nonce: u8) -> MetaV4 {
+        let mut target = source.meta;
+        target.txn_id += 1;
+        target.commit_nonce = [nonce; 16];
+        target.page_count = page_count;
+        target
+    }
+
+    fn write_writer_meta(pair: &RetainedLiveFiles, target: MetaV4) {
+        let mut page = [0u8; PAGE_SIZE];
+        target.encode_into(&mut page);
+        pair.main
+            .write_all_at(&page, (target.txn_id & 1) * PAGE_SIZE as u64)
+            .unwrap();
+    }
+
+    fn arm_writer_update_for_test(
+        pair: &mut RetainedLiveFiles,
+        owned: &OwnedWriterLease,
+        target: MetaV4,
+    ) {
+        let source = pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap();
+        let target_active = ActiveSlot {
+            txn_id: target.txn_id,
+            ..owned.active
+        };
+        let armed = PreparedSlotTransition::update(
+            pair.header,
+            SlotRole::Writer,
+            0,
+            &source,
+            owned.active,
+            target_active,
+            linux_slot_host_limits(),
+        )
+        .unwrap()
+        .arm();
+        pair.sidecar
+            .write_all_at(
+                &armed.state2_bytes().unwrap(),
+                sidecar_slot_offset(pair.header, 0).unwrap(),
+            )
+            .unwrap();
+        pair.sidecar.cleanup_authority = SidecarCleanupAuthority::Armed {
+            transition: armed,
+            dead_writer: None,
+        };
     }
 
     #[test]
@@ -3735,6 +4237,336 @@ mod tests {
             restore_header(&pair.sidecar, pair.header);
             pair.retry_writer_lease_cleanup(Some(&owned)).unwrap();
         }
+    }
+
+    #[test]
+    fn writer_pre_meta_target_selection_keeps_the_source_lease() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x81; 16]);
+        let target = next_writer_target(source, 3, 0x82);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        write_writer_meta(&pair, target);
+
+        assert!(matches!(
+            pair.retry_writer_lease_cleanup_with(
+                Some(&owned),
+                |_, _| panic!("pre-meta close must not truncate"),
+                |_| panic!("pre-meta close must not synchronize")
+            ),
+            Err(LinuxWriterLeaseError::CommitOutcomeUnresolved)
+        ));
+        assert_eq!(
+            pair.main.file.metadata().unwrap().len(),
+            target.page_count * PAGE_SIZE as u64
+        );
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            encode_active_slot(owned.active)
+        );
+        assert!(pair.writer_publication.is_some());
+    }
+
+    #[test]
+    fn writer_commit_attempt_requires_clean_sidecar_provenance() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x83; 16]);
+        let current = pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap();
+        let armed = PreparedSlotTransition::clear_owned(
+            pair.header,
+            SlotRole::Writer,
+            0,
+            &current,
+            owned.active,
+            linux_slot_host_limits(),
+        )
+        .unwrap()
+        .arm();
+        pair.sidecar
+            .write_all_at(
+                &armed.state2_bytes().unwrap(),
+                sidecar_slot_offset(pair.header, 0).unwrap(),
+            )
+            .unwrap();
+        pair.sidecar.cleanup_authority = SidecarCleanupAuthority::Armed {
+            transition: armed,
+            dead_writer: None,
+        };
+
+        assert!(matches!(
+            pair.begin_writer_commit_attempt(&owned, next_writer_target(source, 3, 0x84)),
+            Err(LinuxWriterLeaseError::OutstandingWriterCleanup)
+        ));
+        assert!(pair.sidecar.has_armed_transition());
+        assert!(pair.writer_publication.is_none());
+    }
+
+    #[test]
+    fn writer_close_truncates_only_a_still_selected_source_tail() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x85; 16]);
+        let target = next_writer_target(source, 3, 0x86);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        assert_eq!(
+            pair.writer_tail(),
+            Some(UnpublishedMainTail {
+                main_identity: pair.main.identity,
+                database_id: source.meta.database_id,
+                transaction_id: source.meta.txn_id,
+                commit_nonce: source.meta.commit_nonce,
+                committed_length: source.committed_bytes,
+                observed_end_exclusive: target.page_count * PAGE_SIZE as u64,
+            })
+        );
+
+        pair.retry_writer_lease_cleanup(Some(&owned)).unwrap();
+        let current = pair.main.read_main_bootstrap(OpenMode::Writer).unwrap();
+        assert_eq!(current, source);
+        assert_eq!(current.physical_bytes, source.committed_bytes);
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            [0; SLOT_SIZE as usize]
+        );
+        assert!(pair.writer_publication.is_none());
+    }
+
+    #[test]
+    fn writer_close_never_truncates_a_selected_target_after_meta_write_begins() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x87; 16]);
+        let target = next_writer_target(source, 3, 0x88);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+
+        pair.retry_writer_lease_cleanup_with(
+            Some(&owned),
+            |_, _| panic!("target-selected close must not truncate"),
+            |_| panic!("target-selected close must not synchronize"),
+        )
+        .unwrap();
+        let current = pair.main.read_main_bootstrap(OpenMode::Writer).unwrap();
+        assert_eq!(current.meta, target);
+        assert_eq!(current.physical_bytes, target.page_count * PAGE_SIZE as u64);
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            [0; SLOT_SIZE as usize]
+        );
+        assert!(pair.writer_publication.is_none());
+        assert!(pair.writer_tail().is_none());
+    }
+
+    #[test]
+    fn writer_close_clears_only_the_exact_interrupted_post_meta_update() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x89; 16]);
+        let target = next_writer_target(source, 3, 0x8a);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+        assert_eq!(
+            pair.confirm_writer_meta_sync(&owned, target).unwrap().meta,
+            target
+        );
+        arm_writer_update_for_test(&mut pair, &owned, target);
+
+        pair.retry_writer_lease_cleanup_with(
+            Some(&owned),
+            |_, _| panic!("post-meta cleanup must not truncate"),
+            |_| panic!("post-meta cleanup must not synchronize"),
+        )
+        .unwrap();
+        let current = pair.main.read_main_bootstrap(OpenMode::Writer).unwrap();
+        assert_eq!(current.meta, target);
+        assert_eq!(current.physical_bytes, target.page_count * PAGE_SIZE as u64);
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            [0; SLOT_SIZE as usize]
+        );
+        assert!(!pair.sidecar.has_armed_transition());
+        assert!(pair.writer_publication.is_none());
+    }
+
+    #[test]
+    fn writer_close_refuses_a_different_armed_update_after_meta_publication() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x8b; 16]);
+        let target = next_writer_target(source, 3, 0x8c);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+        pair.confirm_writer_meta_sync(&owned, target).unwrap();
+
+        let source_image = pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap();
+        let wrong_target = ActiveSlot {
+            txn_id: target.txn_id + 1,
+            ..owned.active
+        };
+        let armed = PreparedSlotTransition::update(
+            pair.header,
+            SlotRole::Writer,
+            0,
+            &source_image,
+            owned.active,
+            wrong_target,
+            linux_slot_host_limits(),
+        )
+        .unwrap()
+        .arm();
+        pair.sidecar
+            .write_all_at(
+                &armed.state2_bytes().unwrap(),
+                sidecar_slot_offset(pair.header, 0).unwrap(),
+            )
+            .unwrap();
+        pair.sidecar.cleanup_authority = SidecarCleanupAuthority::Armed {
+            transition: armed,
+            dead_writer: None,
+        };
+
+        assert!(matches!(
+            pair.retry_writer_lease_cleanup_with(
+                Some(&owned),
+                |_, _| panic!("mismatched update must not truncate"),
+                |_| panic!("mismatched update must not synchronize")
+            ),
+            Err(LinuxWriterLeaseError::OwnerMismatch)
+        ));
+        assert!(pair.sidecar.has_armed_transition());
+        assert!(pair.writer_publication.is_some());
+    }
+
+    #[test]
+    fn writer_close_never_truncates_source_after_meta_sync_confirmation() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x8d; 16]);
+        let target = next_writer_target(source, 3, 0x8e);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+        pair.confirm_writer_meta_sync(&owned, target).unwrap();
+        let mut source_page = [0u8; PAGE_SIZE];
+        source.meta.encode_into(&mut source_page);
+        pair.main
+            .write_all_at(&source_page, (target.txn_id & 1) * PAGE_SIZE as u64)
+            .unwrap();
+
+        assert!(matches!(
+            pair.retry_writer_lease_cleanup_with(
+                Some(&owned),
+                |_, _| panic!("confirmed publication must not truncate source"),
+                |_| panic!("confirmed publication must not synchronize source")
+            ),
+            Err(LinuxWriterLeaseError::CommitOutcomeUnresolved)
+        ));
+        assert_eq!(
+            pair.main.file.metadata().unwrap().len(),
+            target.page_count * PAGE_SIZE as u64
+        );
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            encode_active_slot(owned.active)
+        );
+        assert!(pair.writer_publication.is_some());
+    }
+
+    #[test]
+    fn writer_phase_five_transfers_the_lease_before_later_close() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (mut owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x8f; 16]);
+        let target = next_writer_target(source, 3, 0x90);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+        let confirmed = pair.confirm_writer_meta_sync(&owned, target).unwrap();
+
+        pair.update_writer_lease_after_meta(&mut owned).unwrap();
+        assert_eq!(owned.active.txn_id, target.txn_id);
+        assert_eq!(owned.claimed_bootstrap, confirmed);
+        assert_eq!(pair.writer_bootstrap(), Some(confirmed));
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            encode_active_slot(owned.active)
+        );
+        assert!(pair.writer_publication.is_none());
+
+        pair.retry_writer_lease_cleanup_with(
+            Some(&owned),
+            |_, _| panic!("post-update close must not truncate"),
+            |_| panic!("post-update close must not synchronize"),
+        )
+        .unwrap();
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            [0; SLOT_SIZE as usize]
+        );
+    }
+
+    #[test]
+    fn writer_close_treats_a_valid_later_generation_as_tail_supersession() {
+        let (_directory, mut pair) = live_pair_without_writer();
+        let (owned, source) = claimed_writer_ready_for_commit(&mut pair, [0x91; 16]);
+        let target = next_writer_target(source, 3, 0x92);
+        pair.begin_writer_commit_attempt(&owned, target).unwrap();
+        pair.main
+            .file
+            .set_len(target.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        pair.begin_writer_meta_write(&owned, target).unwrap();
+        write_writer_meta(&pair, target);
+
+        let mut later = target;
+        later.txn_id += 1;
+        later.commit_nonce = [0x93; 16];
+        later.page_count = 4;
+        pair.main
+            .file
+            .set_len(later.page_count * PAGE_SIZE as u64)
+            .unwrap();
+        write_writer_meta(&pair, later);
+
+        pair.retry_writer_lease_cleanup_with(
+            Some(&owned),
+            |_, _| panic!("later-generation close must not truncate"),
+            |_| panic!("later-generation close must not synchronize"),
+        )
+        .unwrap();
+        let current = pair.main.read_main_bootstrap(OpenMode::Writer).unwrap();
+        assert_eq!(current.meta, later);
+        assert_eq!(current.physical_bytes, later.page_count * PAGE_SIZE as u64);
+        assert_eq!(
+            pair.sidecar.read_sidecar_slot(pair.header, 0).unwrap(),
+            [0; SLOT_SIZE as usize]
+        );
+        assert!(pair.writer_publication.is_none());
     }
 
     #[test]

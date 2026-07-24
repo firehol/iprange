@@ -6253,7 +6253,72 @@ requirements are normative in the Pre-Implementation Gate above.
   Clippy with warnings denied. The pre-commit repository validation below will
   also run benchmark compilation, Go tests/vet, diff check, and the SOW audit.
 
+### 2026-07-24 - Linux durable-commit integration plan
+
+- The next physical-commit work has two proven prerequisites. First, the Linux
+  operation barrier currently records reader protection but no allocator or
+  retirement finalizer consumes it (`os/linux/live_writer.rs:70-80,437-439`),
+  while the current fixed-point integration completes before any live barrier
+  exists (`retirement_writer.rs:6756-6776`). Publishing from that path would
+  violate section 14.2 phase 1, which requires the final fixed point under the
+  operation lock after the stable reader scan.
+- Second, current writer cleanup proves one exact pre-publication bootstrap and
+  requires the owned slot transaction to match it
+  (`os/linux.rs:1691-1704,2047-2113`). Once a target meta is durable, that
+  proof is intentionally no longer true. A simple target-meta write would make
+  `Close` reject the new generation or, worse, tempt a future implementation to
+  truncate it as an old unpublished tail. No physical target-meta writer is
+  permitted until source/attempt/target cleanup authority is explicit.
+- The implementation order is therefore: (1) add a bounded Linux
+  source/attempt/target state model and exact Close proof for pre-meta,
+  outcome-unknown, and committed states; (2) bind the final allocator/retirement
+  work to the held operation barrier and its stable reader facts; (3) compose
+  the already-fenced private-page drain with phase-2 sync, target-meta
+  write/sync, and writer-lease update; and (4) complete the transaction core
+  only after the durable outcome and retain close-only authority for every
+  interrupted post-publication path.
+- Each stage will use in-process fault injection for write, sync, meta-byte,
+  lease-transition, truncate, and unlock failures. Required proof is factual:
+  old meta plus exact tail cleanup before phase 3 is `NotCommitted`; every
+  phase-3/4 interruption is close-only `OutcomeUnknown`; phase-4 success is
+  `Committed` even if phase-5 cleanup fails. No public SDK surface is added
+  until this private path is complete and mirrored where required.
+
+### 2026-07-24 - Linux source/attempt/target cleanup state
+
+- Implemented only the first prerequisite in
+  `v4/rust/iprange-livedb/src/os/linux.rs`: an in-memory bounded source,
+  target, and phase record. It is created before any target-meta byte, records
+  the old tail at the phase-3 boundary, confirms the exact target only after
+  the caller's phase-4 sync, and transfers the writer lease only through the
+  exact source-to-target sidecar transition.
+- `Close` now truncates only when the exact source remains selected. When the
+  attempted target or a bootstrap-valid later generation is selected, it
+  preserves those bytes and clears only the exact retained writer authority.
+  A target selected before the phase-3 record, a source observed after phase-4
+  confirmation, a malformed/different transition, or any unproved selection
+  remains close-only and fails without truncation or lease removal.
+- Eleven Linux unit tests cover those cases, including a phase-5 state-2
+  interruption, a mismatched armed update, valid later-generation supersession,
+  and refusal to begin a new commit while old transition provenance is armed.
+  This is not a physical commit implementation: no page write, metadata write,
+  synchronization, result classification, or public API is connected yet.
+
 ## Validation
+
+### 2026-07-24 - Linux source/attempt/target state
+
+- Targeted Linux writer lifecycle tests: 11/11 pass. They inject source,
+  attempted-target, later-target, phase-5 state-2, and mismatched-transition
+  states without calling a physical commit API.
+- Rust: `cargo fmt`, no-default workspace tests (419), all-feature workspace
+  tests (520), all-feature benchmark compilation, and all-target Clippy with
+  warnings denied pass.
+- Go: `go test ./...` and `go vet ./...` pass. `git diff --check` and the
+  project SOW audit pass.
+- This validates the in-memory ownership proof only. It does not claim phase-2
+  or phase-4 durability, a physical metadata writer, commit-result mapping, or
+  a public writer API.
 
 ### Historical adversarial-audit evidence
 

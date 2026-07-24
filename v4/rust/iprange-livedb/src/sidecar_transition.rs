@@ -387,6 +387,10 @@ impl ArmedSlotTransition {
         self.source
     }
 
+    pub(crate) const fn target(&self) -> Option<ActiveSlot> {
+        self.target
+    }
+
     pub(crate) const fn is_armed(&self) -> bool {
         self.armed
     }
