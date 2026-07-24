@@ -89,6 +89,26 @@ internal target-metadata authorization after workspace release and a final
 preflight. No file bytes, metadata page, sync, writer-lease transition, or
 durable transaction result exists yet; those remain the next Linux writer work.
 
+2026-07-24 live-reclamation boundary plan: the next Rust slice replaces the
+retirement reader's loose caller-supplied reader threshold with a
+borrow-bound reclaim fence made from the Linux live operation barrier's stable
+reader-table scan. Selection, verification, and the second pass retain that
+fence, so they cannot run after the operation barrier is released. The same
+fence also supplies the future normal-commit decision between direct free pages
+and a reader-protected retirement batch. This slice adds no file write,
+metadata publication, or public SDK behavior.
+
+2026-07-24 live-reclamation fence milestone: implemented that boundary in Rust.
+The retirement selection API no longer accepts a loose threshold. A
+registration blocks all reclamation; otherwise a batch is eligible only when
+the oldest pinned reader is at or after its `retired_by_txn`. The Linux barrier
+returns the borrow-bound fence rather than raw reader facts, and verification
+and both second-pass checks retain it. Focused no-default retirement and
+all-feature Linux lifecycle tests pass. The full Rust matrices pass with 420
+no-default and 521 all-feature tests; formatting, benchmark compilation,
+warnings-denied Clippy, Go test/vet, SOW audit, and whitespace checks also pass.
+Real allocation/finalization and file publication remain separate pending work.
+
 ## Requirements
 
 ### Purpose

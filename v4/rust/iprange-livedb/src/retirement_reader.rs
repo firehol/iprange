@@ -11,6 +11,56 @@ use crate::retirement_page::{
 
 const PATH_CAPACITY: usize = MAX_TREE_LEVEL as usize + 1;
 
+/// Marker for the held operation barrier that produced a stable reader scan.
+///
+/// A reclaim fence retains this borrow through both retirement passes. The
+/// concrete Linux implementation therefore prevents the operation lock from
+/// being released between deciding a batch is safe and using its pages.
+pub(crate) trait RetirementReclaimBarrier: core::fmt::Debug {}
+
+/// Reader-table facts that authorize a bounded reclamation attempt.
+///
+/// This deliberately retains the operation-barrier borrow instead of a loose
+/// numeric threshold. A registration at transaction zero blocks every batch;
+/// otherwise a batch is safe exactly when the oldest pinned reader is at or
+/// after the batch's retirement transaction.
+#[derive(Debug)]
+pub(crate) struct RetirementReclaimFence<'barrier> {
+    _barrier: &'barrier dyn RetirementReclaimBarrier,
+    registering_readers: u32,
+    oldest_reader_txn: Option<u64>,
+}
+
+impl<'barrier> RetirementReclaimFence<'barrier> {
+    pub(crate) const fn from_stable_reader_table(
+        barrier: &'barrier dyn RetirementReclaimBarrier,
+        registering_readers: u32,
+        oldest_reader_txn: Option<u64>,
+    ) -> Self {
+        Self {
+            _barrier: barrier,
+            registering_readers,
+            oldest_reader_txn,
+        }
+    }
+
+    pub(crate) const fn registering_readers(&self) -> u32 {
+        self.registering_readers
+    }
+
+    pub(crate) const fn oldest_reader_txn(&self) -> Option<u64> {
+        self.oldest_reader_txn
+    }
+
+    pub(crate) const fn allows_reclaim(&self, retired_by_txn: u64) -> bool {
+        self.registering_readers == 0
+            && match self.oldest_reader_txn {
+                Some(oldest) => oldest >= retired_by_txn,
+                None => true,
+            }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RetirementIdentity {
     pub(crate) database_id: [u8; 16],
@@ -42,6 +92,7 @@ pub(crate) enum RetirementReadError {
     WorkLimitTooSmall { required_pages: u64 },
     ArithmeticOverflow,
     VerificationBufferTooSmall { required_batches: u64 },
+    ReaderProtectionLost { retired_by_txn: u64 },
     SelectionChanged,
     ListedPageOutOfBounds(u32),
     BlobPageCountMismatch { declared: u64, actual: u64 },
@@ -73,18 +124,19 @@ enum RetirementPageCheck {
     VerifyCrc,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RetirementSelection {
+#[derive(Debug)]
+pub(crate) struct RetirementSelection<'barrier> {
     identity: RetirementIdentity,
     pub(crate) batch_count: u64,
     pub(crate) page_count: u64,
     pub(crate) last_retired_by_txn: u64,
+    fence: RetirementReclaimFence<'barrier>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RetirementSelectionResult {
+#[derive(Debug)]
+pub(crate) enum RetirementSelectionResult<'barrier> {
     NoChange,
-    Selected(RetirementSelection),
+    Selected(RetirementSelection<'barrier>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,12 +211,12 @@ impl<S: CommittedPageSource> RetirementTree<S> {
         self.identity
     }
 
-    pub(crate) fn select_oldest_eligible(
+    pub(crate) fn select_oldest_eligible<'barrier>(
         &self,
-        reader_threshold: u64,
+        fence: RetirementReclaimFence<'barrier>,
         max_batches: u64,
         max_pages: u64,
-    ) -> Result<RetirementSelectionResult, RetirementReadError> {
+    ) -> Result<RetirementSelectionResult<'barrier>, RetirementReadError> {
         if max_batches == 0 || max_pages == 0 {
             return Err(RetirementReadError::WorkLimitZero);
         }
@@ -183,7 +235,7 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             let Some(batch) = cursor.next_batch()? else {
                 break;
             };
-            if batch.retired_by_txn > reader_threshold {
+            if !fence.allows_reclaim(batch.retired_by_txn) {
                 break;
             }
             let remaining = max_pages - selected_pages;
@@ -211,16 +263,26 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             batch_count: selected_batches,
             page_count: selected_pages,
             last_retired_by_txn,
+            fence,
         }))
     }
 
-    pub(crate) fn verify_selection<'scratch>(
+    pub(crate) fn verify_selection<'selection, 'barrier, 'scratch>(
         &self,
-        selection: RetirementSelection,
+        selection: &'selection RetirementSelection<'barrier>,
         scratch: &'scratch mut [RetirementBatch],
-    ) -> Result<VerifiedRetirementSelection<'scratch>, RetirementReadError> {
+    ) -> Result<VerifiedRetirementSelection<'selection, 'barrier, 'scratch>, RetirementReadError>
+    {
         if selection.identity != self.identity {
             return Err(RetirementReadError::SelectionChanged);
+        }
+        if !selection
+            .fence
+            .allows_reclaim(selection.last_retired_by_txn)
+        {
+            return Err(RetirementReadError::ReaderProtectionLost {
+                retired_by_txn: selection.last_retired_by_txn,
+            });
         }
         let required = usize::try_from(selection.batch_count).map_err(|_| {
             RetirementReadError::VerificationBufferTooSmall {
@@ -240,6 +302,11 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             let batch = cursor
                 .next_batch()?
                 .ok_or(RetirementReadError::SelectionChanged)?;
+            if !selection.fence.allows_reclaim(batch.retired_by_txn) {
+                return Err(RetirementReadError::ReaderProtectionLost {
+                    retired_by_txn: batch.retired_by_txn,
+                });
+            }
             self.verify_batch_blob(batch)?;
             *slot = batch;
             actual_pages = actual_pages
@@ -251,7 +318,6 @@ impl<S: CommittedPageSource> RetirementTree<S> {
             return Err(RetirementReadError::SelectionChanged);
         }
         Ok(VerifiedRetirementSelection {
-            identity: self.identity,
             selection,
             batches: &scratch[..required],
         })
@@ -541,10 +607,9 @@ impl<S: CommittedPageSource> RetirementCursor<'_, S> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct VerifiedRetirementSelection<'scratch> {
-    identity: RetirementIdentity,
-    selection: RetirementSelection,
+#[derive(Debug)]
+pub(crate) struct VerifiedRetirementSelection<'selection, 'barrier, 'scratch> {
+    selection: &'selection RetirementSelection<'barrier>,
     batches: &'scratch [RetirementBatch],
 }
 
@@ -554,7 +619,7 @@ pub(crate) enum RetirementSecondPassError<E> {
     Sink(E),
 }
 
-impl<'scratch> VerifiedRetirementSelection<'scratch> {
+impl VerifiedRetirementSelection<'_, '_, '_> {
     pub(crate) fn second_pass<E, F, S>(
         &self,
         tree: &RetirementTree<S>,
@@ -564,7 +629,7 @@ impl<'scratch> VerifiedRetirementSelection<'scratch> {
         F: FnMut(RetirementBatch, u32) -> Result<(), E>,
         S: CommittedPageSource,
     {
-        if tree.identity != self.identity || self.selection.identity != self.identity {
+        if tree.identity != self.selection.identity {
             return Err(RetirementSecondPassError::Read(
                 RetirementReadError::SelectionChanged,
             ));
@@ -572,6 +637,13 @@ impl<'scratch> VerifiedRetirementSelection<'scratch> {
 
         let mut preflight = tree.cursor(RetirementPageCheck::Ordinary);
         for expected in self.batches {
+            if !self.selection.fence.allows_reclaim(expected.retired_by_txn) {
+                return Err(RetirementSecondPassError::Read(
+                    RetirementReadError::ReaderProtectionLost {
+                        retired_by_txn: expected.retired_by_txn,
+                    },
+                ));
+            }
             let actual = preflight
                 .next_batch()
                 .map_err(RetirementSecondPassError::Read)?
@@ -588,6 +660,13 @@ impl<'scratch> VerifiedRetirementSelection<'scratch> {
         let mut cursor = tree.cursor(RetirementPageCheck::Ordinary);
         let mut pages = 0u64;
         for expected in self.batches {
+            if !self.selection.fence.allows_reclaim(expected.retired_by_txn) {
+                return Err(RetirementSecondPassError::Read(
+                    RetirementReadError::ReaderProtectionLost {
+                        retired_by_txn: expected.retired_by_txn,
+                    },
+                ));
+            }
             let batch = cursor
                 .next_batch()
                 .map_err(RetirementSecondPassError::Read)?
@@ -822,11 +901,48 @@ mod tests {
         bytes
     }
 
-    fn selected(result: RetirementSelectionResult) -> RetirementSelection {
+    #[derive(Debug)]
+    struct TestReclaimBarrier;
+
+    impl RetirementReclaimBarrier for TestReclaimBarrier {}
+
+    static TEST_RECLAIM_BARRIER: TestReclaimBarrier = TestReclaimBarrier;
+
+    fn reclaim_fence(reader_threshold: u64) -> RetirementReclaimFence<'static> {
+        if reader_threshold == 0 {
+            RetirementReclaimFence::from_stable_reader_table(&TEST_RECLAIM_BARRIER, 1, None)
+        } else {
+            RetirementReclaimFence::from_stable_reader_table(
+                &TEST_RECLAIM_BARRIER,
+                0,
+                Some(reader_threshold),
+            )
+        }
+    }
+
+    fn selected<'barrier>(
+        result: RetirementSelectionResult<'barrier>,
+    ) -> RetirementSelection<'barrier> {
         match result {
             RetirementSelectionResult::Selected(selection) => selection,
             RetirementSelectionResult::NoChange => panic!("expected a selection"),
         }
+    }
+
+    #[test]
+    fn reclaim_fence_blocks_registration_and_follows_the_oldest_pinned_reader() {
+        let registering =
+            RetirementReclaimFence::from_stable_reader_table(&TEST_RECLAIM_BARRIER, 1, Some(8));
+        assert!(!registering.allows_reclaim(2));
+
+        let pinned =
+            RetirementReclaimFence::from_stable_reader_table(&TEST_RECLAIM_BARRIER, 0, Some(4));
+        assert!(pinned.allows_reclaim(4));
+        assert!(!pinned.allows_reclaim(5));
+
+        let no_readers =
+            RetirementReclaimFence::from_stable_reader_table(&TEST_RECLAIM_BARRIER, 0, None);
+        assert!(no_readers.allows_reclaim(u64::MAX));
     }
 
     #[test]
@@ -860,10 +976,12 @@ mod tests {
         ));
 
         let empty = RetirementTree::new(&bytes[..2 * PAGE_SIZE], identity(2, 0, 0)).unwrap();
-        assert_eq!(
-            empty.select_oldest_eligible(8, 1, 1).unwrap(),
+        assert!(matches!(
+            empty
+                .select_oldest_eligible(reclaim_fence(8), 1, 1)
+                .unwrap(),
             RetirementSelectionResult::NoChange
-        );
+        ));
     }
 
     #[test]
@@ -871,41 +989,56 @@ mod tests {
         let bytes = sample_image();
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
 
-        assert_eq!(
-            selected(tree.select_oldest_eligible(4, 10, 10).unwrap()),
-            RetirementSelection {
-                identity: identity(20, 2, 3),
-                batch_count: 2,
-                page_count: 3,
-                last_retired_by_txn: 4,
-            }
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
         );
+        assert_eq!(selection.identity, identity(20, 2, 3));
+        assert_eq!(selection.batch_count, 2);
+        assert_eq!(selection.page_count, 3);
+        assert_eq!(selection.last_retired_by_txn, 4);
         assert_eq!(
-            selected(tree.select_oldest_eligible(3, 10, 10).unwrap()).batch_count,
+            selected(
+                tree.select_oldest_eligible(reclaim_fence(3), 10, 10)
+                    .unwrap()
+            )
+            .batch_count,
             1
         );
-        assert_eq!(
-            tree.select_oldest_eligible(1, 10, 10).unwrap(),
+        assert!(matches!(
+            tree.select_oldest_eligible(reclaim_fence(1), 10, 10)
+                .unwrap(),
             RetirementSelectionResult::NoChange
-        );
-        assert_eq!(
-            tree.select_oldest_eligible(0, 10, 10).unwrap(),
+        ));
+        assert!(matches!(
+            tree.select_oldest_eligible(reclaim_fence(0), 10, 10)
+                .unwrap(),
             RetirementSelectionResult::NoChange
-        );
+        ));
         assert_eq!(
-            selected(tree.select_oldest_eligible(8, 1, 10).unwrap()).page_count,
+            selected(
+                tree.select_oldest_eligible(reclaim_fence(8), 1, 10)
+                    .unwrap()
+            )
+            .page_count,
             2
         );
         assert_eq!(
-            selected(tree.select_oldest_eligible(8, 10, 2).unwrap()).batch_count,
+            selected(
+                tree.select_oldest_eligible(reclaim_fence(8), 10, 2)
+                    .unwrap()
+            )
+            .batch_count,
             1
         );
         assert_eq!(
-            tree.select_oldest_eligible(8, 10, 1).unwrap_err(),
+            tree.select_oldest_eligible(reclaim_fence(8), 10, 1)
+                .unwrap_err(),
             RetirementReadError::WorkLimitTooSmall { required_pages: 2 }
         );
         assert_eq!(
-            tree.select_oldest_eligible(8, 0, 1).unwrap_err(),
+            tree.select_oldest_eligible(reclaim_fence(8), 0, 1)
+                .unwrap_err(),
             RetirementReadError::WorkLimitZero
         );
 
@@ -913,7 +1046,11 @@ mod tests {
         page_mut(&mut bad_crc, 2)[PAGE_CRC_OFFSET] ^= 1;
         let tree = RetirementTree::new(&bad_crc, identity(20, 2, 3)).unwrap();
         assert_eq!(
-            selected(tree.select_oldest_eligible(3, 10, 10).unwrap()).batch_count,
+            selected(
+                tree.select_oldest_eligible(reclaim_fence(3), 10, 10)
+                    .unwrap()
+            )
+            .batch_count,
             1
         );
     }
@@ -922,9 +1059,12 @@ mod tests {
     fn verified_first_pass_and_ordinary_second_pass_yield_exact_pages() {
         let bytes = sample_image();
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
-        let selection = selected(tree.select_oldest_eligible(4, 10, 10).unwrap());
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
+        );
         let mut scratch = [EMPTY_BATCH; 2];
-        let verified = tree.verify_selection(selection, &mut scratch).unwrap();
+        let verified = tree.verify_selection(&selection, &mut scratch).unwrap();
         let mut yielded = Vec::new();
         let result = verified
             .second_pass(&tree, |batch, page| {
@@ -947,9 +1087,12 @@ mod tests {
     fn verification_checks_crc_blob_length_order_range_and_scratch() {
         let bytes = sample_image();
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
-        let selection = selected(tree.select_oldest_eligible(4, 10, 10).unwrap());
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
+        );
         assert_eq!(
-            tree.verify_selection(selection, &mut [EMPTY_BATCH; 1])
+            tree.verify_selection(&selection, &mut [EMPTY_BATCH; 1])
                 .unwrap_err(),
             RetirementReadError::VerificationBufferTooSmall {
                 required_batches: 2,
@@ -960,7 +1103,7 @@ mod tests {
         page_mut(&mut bad, 2)[PAGE_CRC_OFFSET] ^= 1;
         let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
         assert!(matches!(
-            bad_tree.verify_selection(selection, &mut [EMPTY_BATCH; 2]),
+            bad_tree.verify_selection(&selection, &mut [EMPTY_BATCH; 2]),
             Err(RetirementReadError::Page(RetirementPageError::Checksum))
         ));
 
@@ -968,7 +1111,7 @@ mod tests {
         page_mut(&mut bad, 3)[PAGE_CRC_OFFSET] ^= 1;
         let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
         assert!(matches!(
-            bad_tree.verify_selection(selection, &mut [EMPTY_BATCH; 2]),
+            bad_tree.verify_selection(&selection, &mut [EMPTY_BATCH; 2]),
             Err(RetirementReadError::Blob(BlobReadError::Page(
                 BlobPageError::Checksum
             )))
@@ -978,7 +1121,7 @@ mod tests {
         retirement_blob(page_mut(&mut bad, 3), &[10, 10]);
         let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
         assert!(matches!(
-            bad_tree.verify_selection(selection, &mut [EMPTY_BATCH; 2]),
+            bad_tree.verify_selection(&selection, &mut [EMPTY_BATCH; 2]),
             Err(RetirementReadError::Blob(
                 BlobReadError::RetirementPageOrder {
                     previous: 10,
@@ -991,7 +1134,7 @@ mod tests {
         retirement_blob(page_mut(&mut bad, 3), &[1, 10]);
         let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
         assert!(matches!(
-            bad_tree.verify_selection(selection, &mut [EMPTY_BATCH; 2]),
+            bad_tree.verify_selection(&selection, &mut [EMPTY_BATCH; 2]),
             Err(RetirementReadError::Blob(
                 BlobReadError::RetirementPageOutOfBounds(1)
             ))
@@ -1001,7 +1144,7 @@ mod tests {
         retirement_blob(page_mut(&mut bad, 3), &[10]);
         let bad_tree = RetirementTree::new(&bad, identity(20, 2, 3)).unwrap();
         assert!(matches!(
-            bad_tree.verify_selection(selection, &mut [EMPTY_BATCH; 2]),
+            bad_tree.verify_selection(&selection, &mut [EMPTY_BATCH; 2]),
             Err(RetirementReadError::Blob(
                 BlobReadError::NonfinalLeafLength(4)
             ))
@@ -1012,9 +1155,12 @@ mod tests {
     fn second_pass_rechecks_full_identity_and_all_batch_roots_before_yielding() {
         let bytes = sample_image();
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
-        let selection = selected(tree.select_oldest_eligible(4, 10, 10).unwrap());
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
+        );
         let mut scratch = [EMPTY_BATCH; 2];
-        let verified = tree.verify_selection(selection, &mut scratch).unwrap();
+        let verified = tree.verify_selection(&selection, &mut scratch).unwrap();
 
         let mut changed_identity = identity(20, 2, 3);
         changed_identity.commit_nonce = [3; 16];
@@ -1089,14 +1235,19 @@ mod tests {
         retirement_blob(page_mut(&mut bytes, 6), &[11]);
         retirement_blob(page_mut(&mut bytes, 7), &[12]);
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
-        let selection = selected(tree.select_oldest_eligible(8, 10, 10).unwrap());
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(8), 10, 10)
+                .unwrap(),
+        );
         let mut scratch = [EMPTY_BATCH; 3];
-        tree.verify_selection(selection, &mut scratch).unwrap();
+        tree.verify_selection(&selection, &mut scratch).unwrap();
 
         retirement_branch(page_mut(&mut bytes, 2), 1, &[(3, 3), (6, 4)]);
         let bad_tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
         assert_eq!(
-            bad_tree.select_oldest_eligible(8, 10, 10).unwrap_err(),
+            bad_tree
+                .select_oldest_eligible(reclaim_fence(8), 10, 10)
+                .unwrap_err(),
             RetirementReadError::ChildMaximumMismatch {
                 expected: 3,
                 actual: 4,
@@ -1106,7 +1257,9 @@ mod tests {
         retirement_branch(page_mut(&mut bytes, 2), MAX_TREE_LEVEL + 1, &[(6, 3)]);
         let bad_tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
         assert_eq!(
-            bad_tree.select_oldest_eligible(8, 10, 10).unwrap_err(),
+            bad_tree
+                .select_oldest_eligible(reclaim_fence(8), 10, 10)
+                .unwrap_err(),
             RetirementReadError::Page(RetirementPageError::Header(PageHeaderError::LevelTooHigh(
                 MAX_TREE_LEVEL + 1
             ),))
@@ -1129,9 +1282,13 @@ mod tests {
         let mut deep_identity = identity(36, 2, 1);
         deep_identity.txn_id = 3;
         let deep_tree = RetirementTree::new(&deep, deep_identity).unwrap();
-        let selection = selected(deep_tree.select_oldest_eligible(3, 1, 1).unwrap());
+        let selection = selected(
+            deep_tree
+                .select_oldest_eligible(reclaim_fence(3), 1, 1)
+                .unwrap(),
+        );
         deep_tree
-            .verify_selection(selection, &mut [EMPTY_BATCH; 1])
+            .verify_selection(&selection, &mut [EMPTY_BATCH; 1])
             .unwrap();
     }
 
@@ -1149,7 +1306,8 @@ mod tests {
         retirement_blob(page_mut(&mut bytes, 3), &[4]);
         let tree = RetirementTree::new(&bytes, identity(6, 2, 2)).unwrap();
         assert_eq!(
-            tree.select_oldest_eligible(8, 10, 10).unwrap_err(),
+            tree.select_oldest_eligible(reclaim_fence(8), 10, 10)
+                .unwrap_err(),
             RetirementReadError::BatchCountMismatch {
                 declared: 2,
                 actual: 1,
@@ -1169,8 +1327,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            tree.select_oldest_eligible(8, 1, 2),
-            Err(RetirementReadError::Source(PageSourceError::ForkedHandle))
+            tree.select_oldest_eligible(reclaim_fence(8), 1, 2)
+                .unwrap_err(),
+            RetirementReadError::Source(PageSourceError::ForkedHandle)
         );
 
         let io = PageSourceError::Io(crate::page_source::PageIoEvidence {
@@ -1186,8 +1345,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            tree.select_oldest_eligible(8, 1, 2),
-            Err(RetirementReadError::Source(io))
+            tree.select_oldest_eligible(reclaim_fence(8), 1, 2)
+                .unwrap_err(),
+            RetirementReadError::Source(io)
         );
 
         let tree = RetirementTree::from_source(
@@ -1196,12 +1356,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            tree.select_oldest_eligible(8, 1, 2),
-            Err(RetirementReadError::Source(PageSourceError::ShortRead {
+            tree.select_oldest_eligible(reclaim_fence(8), 1, 2)
+                .unwrap_err(),
+            RetirementReadError::Source(PageSourceError::ShortRead {
                 offset: (2 * PAGE_SIZE) as u64,
                 expected: PAGE_SIZE,
                 actual: 17,
-            }))
+            })
         );
 
         let tree = RetirementTree::from_source(
@@ -1213,10 +1374,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            tree.select_oldest_eligible(8, 1, 2),
-            Err(RetirementReadError::Page(
-                RetirementPageError::BlobRootOutOfBounds(u32::MAX)
-            ))
+            tree.select_oldest_eligible(reclaim_fence(8), 1, 2)
+                .unwrap_err(),
+            RetirementReadError::Page(RetirementPageError::BlobRootOutOfBounds(u32::MAX))
         );
     }
 
@@ -1227,9 +1387,12 @@ mod tests {
             page_count: 20,
         };
         let tree = RetirementTree::from_source(&source, identity(20, 2, 3)).unwrap();
-        let selection = selected(tree.select_oldest_eligible(4, 10, 10).unwrap());
+        let selection = selected(
+            tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                .unwrap(),
+        );
         let mut scratch = [EMPTY_BATCH; 2];
-        let verified = tree.verify_selection(selection, &mut scratch).unwrap();
+        let verified = tree.verify_selection(&selection, &mut scratch).unwrap();
 
         let second_root_at = usize::from(PAGE_HEADER_SIZE) + 32 + 24;
         source.bytes.borrow_mut()
@@ -1251,9 +1414,12 @@ mod tests {
         let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
         let ((), allocations) = count_thread_allocations(|| {
             for _ in 0..64 {
-                let selection = selected(tree.select_oldest_eligible(4, 10, 10).unwrap());
+                let selection = selected(
+                    tree.select_oldest_eligible(reclaim_fence(4), 10, 10)
+                        .unwrap(),
+                );
                 let mut scratch = [EMPTY_BATCH; 2];
-                let verified = tree.verify_selection(selection, &mut scratch).unwrap();
+                let verified = tree.verify_selection(&selection, &mut scratch).unwrap();
                 let mut count = 0u64;
                 verified
                     .second_pass(&tree, |_, _| {

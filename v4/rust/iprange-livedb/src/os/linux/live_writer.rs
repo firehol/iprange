@@ -9,6 +9,7 @@ use super::live_cleanup::{
     OwnedLiveClaim,
 };
 use super::*;
+use crate::retirement_reader::{RetirementReclaimBarrier, RetirementReclaimFence};
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
@@ -67,17 +68,19 @@ pub(crate) enum LinuxLiveWriterBarrierReleaseError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LinuxLiveWriterReaderProtection {
-    pub(crate) registering_readers: u32,
-    pub(crate) oldest_reader_txn: Option<u64>,
+struct LinuxLiveWriterReaderFacts {
+    registering_readers: u32,
+    oldest_reader_txn: Option<u64>,
 }
 
 #[derive(Debug)]
 pub(crate) struct LinuxLiveWriterOperationBarrier<'a> {
     inner: MutexGuard<'a, LinuxLiveWriterInner>,
     creator_pid: u32,
-    protection: Option<LinuxLiveWriterReaderProtection>,
+    protection: Option<LinuxLiveWriterReaderFacts>,
 }
+
+impl RetirementReclaimBarrier for LinuxLiveWriterOperationBarrier<'_> {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriterState {
@@ -357,7 +360,7 @@ impl LinuxLiveWriter {
                     LinuxWriterLeaseError::OwnerMismatch,
                 ));
             }
-            Ok(LinuxLiveWriterReaderProtection {
+            Ok(LinuxLiveWriterReaderFacts {
                 registering_readers: inspection.registering_readers,
                 oldest_reader_txn: inspection.oldest_reader_txn,
             })
@@ -425,7 +428,7 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
     fn new(
         inner: MutexGuard<'a, LinuxLiveWriterInner>,
         creator_pid: u32,
-        protection: Option<LinuxLiveWriterReaderProtection>,
+        protection: Option<LinuxLiveWriterReaderFacts>,
     ) -> Self {
         LinuxLiveWriterOperationBarrier {
             inner,
@@ -434,8 +437,16 @@ impl<'a> LinuxLiveWriterOperationBarrier<'a> {
         }
     }
 
-    pub(crate) const fn reader_protection(&self) -> Option<LinuxLiveWriterReaderProtection> {
-        self.protection
+    /// Returns the stable reader-table facts as a borrow-bound reclamation
+    /// authority. Reclamation retains this borrow until its second pass ends,
+    /// which also keeps the operation lock held.
+    pub(crate) fn retirement_reclaim_fence(&self) -> Option<RetirementReclaimFence<'_>> {
+        let protection = self.protection?;
+        Some(RetirementReclaimFence::from_stable_reader_table(
+            self,
+            protection.registering_readers,
+            protection.oldest_reader_txn,
+        ))
     }
 
     pub(crate) fn release(&mut self) -> Result<(), LinuxLiveWriterBarrierReleaseError> {
@@ -744,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_barrier_returns_exact_registration_and_oldest_reader_facts() {
+    fn operation_barrier_returns_reclaim_fence_with_exact_reader_facts() {
         let database = TestDatabase::new(7, 2, 2, 4);
         let writer = LinuxLiveWriter::open(&database.main).unwrap();
         database.put_active(1, current_active_slot(0, [0x81; 16]));
@@ -754,13 +765,12 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        assert_eq!(
-            barrier.reader_protection(),
-            Some(LinuxLiveWriterReaderProtection {
-                registering_readers: 1,
-                oldest_reader_txn: Some(2),
-            })
-        );
+        {
+            let protection = barrier.retirement_reclaim_fence().unwrap();
+            assert_eq!(protection.registering_readers(), 1);
+            assert_eq!(protection.oldest_reader_txn(), Some(2));
+            assert!(!protection.allows_reclaim(1));
+        }
         assert_eq!(barrier.inner.state, WriterState::OperationLocked);
         assert!(barrier.inner.files.as_ref().unwrap().sidecar.lock_held());
         barrier.release().unwrap();
@@ -786,13 +796,12 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        assert_eq!(
-            barrier.reader_protection(),
-            Some(LinuxLiveWriterReaderProtection {
-                registering_readers: 0,
-                oldest_reader_txn: None,
-            })
-        );
+        {
+            let protection = barrier.retirement_reclaim_fence().unwrap();
+            assert_eq!(protection.registering_readers(), 0);
+            assert_eq!(protection.oldest_reader_txn(), None);
+            assert!(protection.allows_reclaim(3));
+        }
         assert_eq!(database.slot(1), [0; SLOT_SIZE as usize]);
         barrier.abort().unwrap();
         drop(barrier);
@@ -1050,25 +1059,24 @@ mod tests {
         let mut barrier = writer
             .acquire_operation_barrier_with_cancel(|| false)
             .unwrap();
-        let protection = barrier.reader_protection();
-        assert!(protection.is_some());
+        assert!(barrier.retirement_reclaim_fence().is_some());
         assert!(matches!(
             barrier.release_with(|_| Err(LinuxOsError::RandomFailure)),
             Err(LinuxLiveWriterBarrierReleaseError::Os(
                 LinuxOsError::RandomFailure
             ))
         ));
-        assert_eq!(barrier.reader_protection(), protection);
+        assert!(barrier.retirement_reclaim_fence().is_some());
         assert_eq!(barrier.inner.state, WriterState::OperationLocked);
         assert!(barrier.inner.files.as_ref().unwrap().sidecar.lock_held());
         barrier.abort().unwrap();
-        assert_eq!(barrier.reader_protection(), None);
+        assert!(barrier.retirement_reclaim_fence().is_none());
         assert_eq!(barrier.inner.state, WriterState::Open);
         assert!(matches!(
             barrier.release(),
             Err(LinuxLiveWriterBarrierReleaseError::NotHeld)
         ));
-        assert_eq!(barrier.reader_protection(), None);
+        assert!(barrier.retirement_reclaim_fence().is_none());
         drop(barrier);
         writer.close().unwrap();
     }
@@ -1117,13 +1125,11 @@ mod tests {
             let mut barrier = writer
                 .acquire_operation_barrier_with_cancel(|| false)
                 .unwrap();
-            assert_eq!(
-                barrier.reader_protection(),
-                Some(LinuxLiveWriterReaderProtection {
-                    registering_readers: 0,
-                    oldest_reader_txn: None,
-                })
-            );
+            {
+                let protection = barrier.retirement_reclaim_fence().unwrap();
+                assert_eq!(protection.registering_readers(), 0);
+                assert_eq!(protection.oldest_reader_txn(), None);
+            }
             barrier.release().unwrap();
             drop(barrier);
             assert_eq!(writer.lock_inner().owned.as_ref().unwrap().active, lease);
