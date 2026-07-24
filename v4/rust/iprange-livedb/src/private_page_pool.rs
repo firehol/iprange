@@ -1620,8 +1620,8 @@ pub(crate) struct PrivatePageCompositeBind {
 }
 
 /// One terminal private page proved before a coordinator work unit becomes
-/// active. The immutable slice containing these entries is the complete live
-/// apply journal for bitmap and retirement pages.
+/// active. The immutable view of these entries is the complete live apply
+/// journal for bitmap and retirement pages.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PrivatePageCoordinatorTerminalPage {
     pub(crate) pool_slot: usize,
@@ -1725,7 +1725,7 @@ pub(crate) struct PrivatePagePreparedCoordinatorTerminal<'plan> {
     pages_address: usize,
     pages_len: usize,
     pages_fingerprint: u64,
-    pages: &'plan [PrivatePageCoordinatorTerminalPage],
+    pages: &'plan mut [PrivatePageCoordinatorTerminalPage],
 }
 
 impl<'plan> PrivatePagePreparedCoordinatorTerminal<'plan> {
@@ -1737,8 +1737,23 @@ impl<'plan> PrivatePagePreparedCoordinatorTerminal<'plan> {
         self.nonce
     }
 
-    pub(crate) const fn pages(&self) -> &'plan [PrivatePageCoordinatorTerminalPage] {
+    pub(crate) fn pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
         self.pages
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_pages(self) -> &'plan [PrivatePageCoordinatorTerminalPage] {
+        self.pages
+    }
+
+    /// Cancels a terminal journal before its prepared scope becomes active.
+    /// No live pool slot has been changed at this point, so resetting the
+    /// caller backing makes it safe for the enclosing whole-draft abort path
+    /// to reuse or release it without retaining stale assigned slot numbers.
+    pub(crate) fn discard(self) -> &'plan mut [PrivatePageCoordinatorTerminalPage] {
+        let Self { pages, .. } = self;
+        pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        pages
     }
 }
 
@@ -3870,7 +3885,7 @@ impl<'slots> PrivatePagePool<'slots> {
     pub(crate) fn prepare_coordinator_terminal<'plan>(
         &self,
         prepared_scope: &PrivatePagePreparedScopeReservation<'_>,
-        pages: &'plan [PrivatePageCoordinatorTerminalPage],
+        pages: &'plan mut [PrivatePageCoordinatorTerminalPage],
         nonce: u64,
     ) -> Result<PrivatePagePreparedCoordinatorTerminal<'plan>, PrivatePagePoolError> {
         let (address, final_epoch, pending) =
@@ -4236,10 +4251,10 @@ impl<'slots> PrivatePagePool<'slots> {
             || terminal.pool_identity_epoch != self.identity_epoch
             || terminal.prepared_scope_address != scope_address
             || terminal.prepared_scope_seal != scope_slot.seal
-            || terminal.pages_address != terminal.pages.as_ptr() as usize
-            || terminal.pages_len != terminal.pages.len()
+            || terminal.pages_address != terminal.pages().as_ptr() as usize
+            || terminal.pages_len != terminal.pages().len()
             || terminal.pages_fingerprint
-                != Self::coordinator_terminal_pages_fingerprint(terminal.pages)
+                != Self::coordinator_terminal_pages_fingerprint(terminal.pages())
             || prior.pool_identity != self.identity
             || prior.pool_identity_epoch != self.identity_epoch
             || prior.session_identity != scope_slot.session_identity
@@ -4344,7 +4359,7 @@ impl<'slots> PrivatePagePool<'slots> {
         let mut pending_page_count = self.pending_page_count.get();
         let mut authorized_len = self.authorized_len.get();
         let mut vacant = head;
-        for page in terminal.pages {
+        for page in terminal.pages() {
             if vacant != page.pool_slot {
                 return Err(PrivatePagePoolError::StaleScope);
             }
@@ -4548,7 +4563,10 @@ impl<'slots> PrivatePagePool<'slots> {
         mut scope: PrivatePageReservationScope<'slots>,
         prepared: PrivatePagePreparedCoordinatorTerminal<'plan>,
     ) -> Result<
-        PrivatePageReservationScope<'slots>,
+        (
+            PrivatePageReservationScope<'slots>,
+            &'plan [PrivatePageCoordinatorTerminalPage],
+        ),
         (
             PrivatePageReservationScope<'slots>,
             PrivatePagePreparedCoordinatorTerminal<'plan>,
@@ -4562,10 +4580,10 @@ impl<'slots> PrivatePagePool<'slots> {
             || prepared.session_identity != work.session_identity
             || prepared.session_generation != work.session_generation
             || prepared.work_identity != work.work_identity
-            || prepared.pages_address != prepared.pages.as_ptr() as usize
-            || prepared.pages_len != prepared.pages.len()
+            || prepared.pages_address != prepared.pages().as_ptr() as usize
+            || prepared.pages_len != prepared.pages().len()
             || prepared.pages_fingerprint
-                != Self::coordinator_terminal_pages_fingerprint(prepared.pages)
+                != Self::coordinator_terminal_pages_fingerprint(prepared.pages())
             || self.coordinator_scope_id.get() != scope.id
             || self.coordinator_unaccepted_scopes.get() != 1
         {
@@ -4590,15 +4608,15 @@ impl<'slots> PrivatePagePool<'slots> {
             None => return Err((scope, prepared, PrivatePagePoolError::EpochExhausted)),
         };
         if self.epoch.get() != expected_epoch
-            || prepared.pages.is_empty()
+            || prepared.pages().is_empty()
             || slots[anchor].scope_bound != 0
-            || slots[anchor].scope_capacity < prepared.pages.len()
-            || slots[anchor].scope_vacant_head != prepared.pages[0].pool_slot
+            || slots[anchor].scope_capacity < prepared.pages().len()
+            || slots[anchor].scope_vacant_head != prepared.pages()[0].pool_slot
         {
             return Err((scope, prepared, PrivatePagePoolError::StaleScope));
         }
         let mut vacant = slots[anchor].scope_vacant_head;
-        for page in prepared.pages {
+        for page in prepared.pages() {
             if vacant != page.pool_slot
                 || slots[vacant].authorization.is_some()
                 || slots[vacant].state != PrivatePageState::Vacant
@@ -4607,7 +4625,7 @@ impl<'slots> PrivatePagePool<'slots> {
             }
             vacant = slots[vacant].scope_vacant_next;
         }
-        let suffix_count = slots[anchor].scope_capacity - prepared.pages.len();
+        let suffix_count = slots[anchor].scope_capacity - prepared.pages().len();
         let mut suffix_revision = 0u64;
         let mut suffix_digest = 0u64;
         for _ in 0..suffix_count {
@@ -4629,7 +4647,7 @@ impl<'slots> PrivatePagePool<'slots> {
 
         // All fallible checks end above. The exact reservation proof and page
         // journal make the suffix deterministic.
-        for page in prepared.pages {
+        for page in prepared.pages() {
             let index = page.pool_slot;
             let next_vacant = slots[index].scope_vacant_next;
             slots[anchor].scope_vacant_head = next_vacant;
@@ -4692,7 +4710,8 @@ impl<'slots> PrivatePagePool<'slots> {
         );
         self.coordinator_work_phase
             .set(PrivatePageCoordinatorWorkPhase::Sealed);
-        Ok(scope)
+        drop(slots);
+        Ok((scope, prepared.into_pages()))
     }
 
     #[cfg(test)]

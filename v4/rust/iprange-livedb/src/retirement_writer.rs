@@ -6891,9 +6891,9 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::private_page_pool::PrivatePageCompositeBind;
     use crate::private_page_pool::{
-        PrivatePageCoordinatorPriorReturn, PrivatePagePoolSlot, PrivatePagePreparedScopeSlot,
-        PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
-        PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
+        PrivatePageAuthorization, PrivatePageCoordinatorPriorReturn, PrivatePageOwner,
+        PrivatePagePoolSlot, PrivatePagePreparedScopeSlot, PrivatePageSelectiveOverlayNode,
+        PrivatePageSelectivePathEntry, PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
@@ -7095,6 +7095,76 @@ mod tests {
         .encode_into(&mut page_bytes);
         page::write_crc32c(&mut page_bytes);
         page_bytes
+    }
+
+    #[test]
+    fn produced_terminal_cancel_releases_its_unactivated_scope() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::new(7, 0, 10).unwrap();
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let before = pool.coordinator_fence();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || {
+                    Ok(FixedPointPreparedOutput {
+                        root: 5,
+                        pending_page_count: 10,
+                    })
+                },
+            )
+            .unwrap();
+        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        pages[0].pgno = 5;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Bitmap;
+        pages[0].owner_generation = 8;
+        PageHeader {
+            page_type: PageType::BitmapLeaf,
+            born_txn: 8,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 1,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+        let export = PreparedProducedTerminalExport {
+            result: RetirementTreeEditResult {
+                root: 0,
+                batch_count: 0,
+                private_pages: 0,
+                committed_replacements: 0,
+                prior_private_replacements: 0,
+            },
+            bitmap: (),
+            pages: &mut pages,
+        };
+        let produced = match prepared.with_produced_terminal_export(&pool, export, 91) {
+            Ok(produced) => produced,
+            Err(_) => panic!("produced terminal must bind"),
+        };
+        let (cancelled, allocations) = count_thread_allocations(|| produced.cancel(&pool));
+        assert_eq!(allocations, 0);
+        assert!(cancelled.is_ok());
+        assert_eq!(pages, [PrivatePageCoordinatorTerminalPage::empty()]);
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        assert_eq!(pool.coordinator_fence(), before);
+        coordinator.finish(predecessor).unwrap();
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]

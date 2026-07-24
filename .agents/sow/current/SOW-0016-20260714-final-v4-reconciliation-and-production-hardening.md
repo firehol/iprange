@@ -7245,6 +7245,42 @@ requirements are normative in the Pre-Implementation Gate above.
   with the normal nonce before its existing aggregate/publication assertions.
   The no-change fixture keeps its separate ordinary-finalization path.
 
+### 2026-07-24 - bound-terminal cancellation plan
+
+- Evidence: a successful late bind converts the reserved scope into a prepared
+  terminal work unit (`writer_fixed_point.rs:1900-1938`). Before aggregate
+  execution, that work has not changed the live private pool, but it owns both
+  the prepared scope slot and a terminal-page journal whose assigned pool slots
+  make the caller backing non-reusable. Neither normal type had a cancellation
+  path; dropping it would leave stale preparation backing and make a later
+  whole-draft abort/retry depend on incidental scratch replacement.
+- Add one crate-private cancellation path for prepared terminal work. It will
+  reset the temporary terminal journal, release the unactivated prepared scope,
+  clear the prepared work slot and scratch, and report stale evidence without
+  withholding that cleanup. The produced-terminal wrapper will consume its
+  bitmap proof and use the same path.
+- This is only the pre-Active cancellation boundary. Once aggregate execution
+  starts, existing core/pool abort semantics remain authoritative. No public
+  `Reclaim`, SDK API, format byte, validation default, Go behavior, or durable
+  publication behavior changes in this slice.
+
+### 2026-07-24 - bound-terminal cancellation implementation
+
+- `PrivatePagePreparedCoordinatorTerminal` now retains its caller journal as a
+  mutable borrow but exposes only immutable views during normal execution. Its
+  consume-only discard path resets every entry before the prepared scope can
+  become active. Successful test-only terminal application returns the immutable
+  journal only after consuming that mutable authority.
+- Added crate-private cancellation to prepared work, prepared terminal work,
+  and produced terminal work. It attempts to release the unactivated scope and
+  clears the work slot/scratch even when its evidence is stale, while still
+  returning the stale result. A produced-terminal cancel also consumes its
+  bitmap proof, so it cannot be confused with a retryable late-bind failure.
+- Added permanent no-allocation tests for direct bound-terminal cancellation,
+  stale-evidence cleanup, and the produced-terminal wrapper. They prove no live
+  pool mutation, no retained assigned slot in the caller journal, and a usable
+  predecessor after cancellation.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim coordinator bind
@@ -7259,6 +7295,23 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go `test ./...` and `vet ./...`, Rust formatting, whitespace checking, and
   the project SOW audit pass. No specification update is needed: this remains
   private Rust lifecycle plumbing with no public API or on-disk change.
+
+### 2026-07-24 - bound-terminal cancellation
+
+- Focused cancellation tests pass in no-default and all-feature Rust builds.
+  They prove the direct and produced terminal paths allocate zero heap memory,
+  clear all caller terminal entries, release the prepared scope, and preserve a
+  usable predecessor. The stale-evidence case returns `StalePredecessor` only
+  after the same cleanup.
+- The all-feature fixed-point test module and both held-lock Linux reclaim
+  integration cases pass, confirming normal terminal execution/publication
+  retains its immutable journal behavior. Formatting and whitespace checks
+  pass. No normative specification update is needed: this remains private Rust
+  transaction lifecycle repair with no public API or on-disk change.
+- Full Rust workspace matrices pass: 451 tests without optional features and
+  566 with all features. Warnings-denied all-target/all-feature Clippy,
+  all-feature benchmark compilation, Go `test ./...` and `vet ./...`, Rust
+  formatting, whitespace checking, and the SOW audit pass.
 
 ### 2026-07-24 - selected-reclaim retirement stage
 

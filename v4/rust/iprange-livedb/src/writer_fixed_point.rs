@@ -1764,6 +1764,20 @@ pub(crate) struct FixedPointPreparedProducedTerminalWork<
     bitmap: B,
 }
 
+impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan>
+    FixedPointPreparedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan>
+{
+    /// Cancels a bound terminal before it has activated its prepared scope.
+    /// The terminal journal has assigned only caller-backing slot numbers; no
+    /// live pool mutation has happened. Clear that backing before releasing the
+    /// scope so a whole-draft abort cannot retain a reusable partial journal.
+    pub(crate) fn cancel(self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        let Self { prepared, terminal } = self;
+        let _ = terminal.discard();
+        prepared.cancel(pool)
+    }
+}
+
 impl<'slot, 'scope_slot, 'scratch, 'carried>
     FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>
 {
@@ -2412,6 +2426,17 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         }
     }
 
+    /// Cancels a produced terminal before aggregate preparation starts. The
+    /// bitmap proof is intentionally consumed: cancellation is the outer
+    /// whole-draft path, not a retry that may reuse a shadow finalization.
+    pub(crate) fn cancel(self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        let Self {
+            terminal, bitmap, ..
+        } = self;
+        drop(bitmap);
+        terminal.cancel(pool)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         clippy::type_complexity,
@@ -2924,6 +2949,37 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan>
 impl<'slot, 'scope_slot, 'scratch, 'carried>
     FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried>
 {
+    /// Releases a prepared, but not active, coordinator scope. This method is
+    /// deliberately recovery-oriented: stale evidence is reported after it
+    /// clears all caller backing that can still be safely cleared.
+    pub(crate) fn cancel(self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        let Self {
+            slot,
+            scope,
+            scratch,
+            carried_pages,
+        } = self;
+        let address = &*slot as *const FixedPointPreparedWorkSlot as usize;
+        let valid = slot.address == address
+            && slot.pool_fence == Some(pool.coordinator_fence())
+            && slot.carried_address == carried_pages.as_ptr() as usize
+            && slot.carried_len == carried_pages.len()
+            && slot.carried_seal == FixedPointCoordinator::carried_hash(carried_pages)
+            && slot.scratch_address == scratch.as_ptr() as usize
+            && slot.scratch_len == scratch.len()
+            && slot.scratch_seal == FixedPointCoordinator::scratch_hash(scratch)
+            && slot.seal != 0
+            && slot.seal == FixedPointCoordinator::prepared_seal(slot);
+        let released = pool.cancel_prepared_coordinator_scope(scope);
+        slot.clear();
+        scratch.fill(0);
+        if valid && released.is_ok() {
+            Ok(())
+        } else {
+            Err(FixedPointError::StalePredecessor)
+        }
+    }
+
     pub(crate) fn work_identity(&self) -> u64 {
         self.slot.work_identity
     }
@@ -3076,17 +3132,22 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
     pub(crate) fn with_terminal_pages<'plan>(
         self,
         pool: &PrivatePagePool<'_>,
-        pages: &'plan [PrivatePageCoordinatorTerminalPage],
+        pages: &'plan mut [PrivatePageCoordinatorTerminalPage],
         nonce: u64,
     ) -> Result<
         FixedPointPreparedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan>,
         (Self, FixedPointError),
     > {
-        let terminal = match pool.prepare_coordinator_terminal(&self.scope, pages, nonce) {
-            Ok(terminal) => terminal,
-            Err(_) => return Err((self, FixedPointError::StalePredecessor)),
-        };
-        if terminal.pending_page_count() != self.slot.output.pending_page_count
+        let appended = pages
+            .iter()
+            .filter(|page| {
+                page.authorization == crate::private_page_pool::PrivatePageAuthorization::Appended
+            })
+            .count();
+        let expected_pending_page_count = pool
+            .pending_page_count()
+            .checked_add(u64::try_from(appended).unwrap_or(u64::MAX));
+        if expected_pending_page_count != Some(self.slot.output.pending_page_count)
             || (self.slot.output.root != 0
                 && !pages.iter().any(|page| {
                     page.pgno == self.slot.output.root
@@ -3095,6 +3156,14 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
         {
             return Err((self, FixedPointError::StalePredecessor));
         }
+        let terminal = match pool.prepare_coordinator_terminal(&self.scope, pages, nonce) {
+            Ok(terminal) => terminal,
+            Err(_) => return Err((self, FixedPointError::StalePredecessor)),
+        };
+        debug_assert_eq!(
+            terminal.pending_page_count(),
+            self.slot.output.pending_page_count
+        );
         Ok(FixedPointPreparedTerminalWork {
             prepared: self,
             terminal,
@@ -4016,7 +4085,6 @@ impl FixedPointCoordinator {
         active: FixedPointActiveTerminalWork<'slots, 'plan>,
     ) -> Result<FixedPointSealedActiveWork<'slots, 'plan>, FixedPointError> {
         let nonce = active.terminal.nonce();
-        let pages = active.terminal.pages();
         let FixedPointActiveWork {
             coordinator_identity,
             predecessor_generation,
@@ -4026,9 +4094,9 @@ impl FixedPointCoordinator {
             pool_work,
             scope,
         } = active.active;
-        let scope =
+        let (scope, pages) =
             match pool.apply_coordinator_terminal_prepared(&pool_work, scope, active.terminal) {
-                Ok(scope) => scope,
+                Ok(result) => result,
                 Err((_scope, _terminal, _error)) => {
                     return Err(FixedPointError::AbortRequired);
                 }
@@ -4819,7 +4887,7 @@ mod tests {
             .encode_into(&mut terminal.bytes);
             page::write_crc32c(&mut terminal.bytes);
         }
-        let terminal = prepared.with_terminal_pages(&pool, &pages, 91).unwrap();
+        let terminal = prepared.with_terminal_pages(&pool, &mut pages, 91).unwrap();
         let mut bindings = [BitmapCowArenaBinding::empty(); 2];
         let mut replacements = [];
         let mut index = [BitmapCowIndexNode::empty(); 2];
@@ -4900,7 +4968,7 @@ mod tests {
         }
         .encode_into(&mut pages[0].bytes);
         page::write_crc32c(&mut pages[0].bytes);
-        let prepared = prepared.with_terminal_pages(&pool, &pages, 91).unwrap();
+        let prepared = prepared.with_terminal_pages(&pool, &mut pages, 91).unwrap();
         let active = coordinator
             .activate_terminal_prepared(predecessor, &pool, prepared)
             .unwrap();
@@ -4966,9 +5034,9 @@ mod tests {
                 || Ok(prepared_output(5, 10)),
             )
             .unwrap();
-        let first_pages = [bitmap_terminal_page(0, 5)];
+        let mut first_pages = [bitmap_terminal_page(0, 5)];
         let first_terminal = first_prepared
-            .with_terminal_pages(&pool, &first_pages, 91)
+            .with_terminal_pages(&pool, &mut first_pages, 91)
             .unwrap();
         let mut first_bindings = [BitmapCowArenaBinding::empty(); 1];
         let mut first_replacements = [];
@@ -5051,9 +5119,9 @@ mod tests {
                 || Ok(prepared_output(6, 10)),
             )
             .unwrap();
-        let second_pages = [bitmap_terminal_page(1, 6)];
+        let mut second_pages = [bitmap_terminal_page(1, 6)];
         let second_terminal = second_prepared
-            .with_terminal_pages(&pool, &second_pages, 92)
+            .with_terminal_pages(&pool, &mut second_pages, 92)
             .unwrap();
         let mut ordered_locations = [DraftPrivatePageLocation::EMPTY; 1];
         let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); 1];
@@ -5605,6 +5673,76 @@ mod tests {
             reserved.cancel(&pool),
             Err(FixedPointError::StalePredecessor)
         );
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        pool.test_set_epoch(epoch);
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn bound_terminal_cancel_clears_the_journal_and_prepared_scope() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::test_new(7, 0, 10);
+        coordinator.attach_pool(&pool).unwrap();
+        let before = pool.coordinator_fence();
+
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || Ok(prepared_output(5, 10)),
+            )
+            .unwrap();
+        let mut pages = [bitmap_terminal_page(usize::MAX, 5)];
+        let terminal = prepared
+            .with_unbound_terminal_pages(&pool, &mut pages, 91)
+            .unwrap();
+        let (cancelled, allocations) = count_thread_allocations(|| terminal.cancel(&pool));
+        assert_eq!(allocations, 0);
+        assert!(cancelled.is_ok());
+        assert_eq!(pages, [PrivatePageCoordinatorTerminalPage::empty()]);
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        assert_eq!(pool.coordinator_fence(), before);
+        coordinator.finish(predecessor).unwrap();
+
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                2,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || Ok(prepared_output(5, 10)),
+            )
+            .unwrap();
+        let mut pages = [bitmap_terminal_page(usize::MAX, 5)];
+        let terminal = prepared
+            .with_unbound_terminal_pages(&pool, &mut pages, 92)
+            .unwrap();
+        let epoch = pool.mutation_epoch();
+        pool.test_set_epoch(epoch + 1);
+        assert_eq!(
+            terminal.cancel(&pool),
+            Err(FixedPointError::StalePredecessor)
+        );
+        assert_eq!(pages, [PrivatePageCoordinatorTerminalPage::empty()]);
         assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
         assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
         pool.test_set_epoch(epoch);
