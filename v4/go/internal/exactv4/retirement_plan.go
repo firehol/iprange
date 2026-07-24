@@ -1123,11 +1123,33 @@ func planScopedRetirementUpsert(
 	releases *privateReleaseBuffer,
 	roles *pageRoleIndex,
 ) (retirementEditPlan, retirementWriteError) {
+	var guard guardedRetirementSource
+	return planScopedRetirementUpsertWithGuard(
+		&guard, source, state, token, path, blobScratch, replacements, releases, roles,
+	)
+}
+
+// planScopedRetirementUpsertWithGuard is the allocation-free form used by
+// composed writers whose caller owns the mutable guard scratch.
+func planScopedRetirementUpsertWithGuard(
+	guard *guardedRetirementSource,
+	source committedPageSource,
+	state retirementTreeState,
+	token *retirementBlobToken,
+	path []retirementPathFrame,
+	blobScratch *retirementBlobScanScratch,
+	replacements *committedReplacementLedger,
+	releases *privateReleaseBuffer,
+	roles *pageRoleIndex,
+) (retirementEditPlan, retirementWriteError) {
+	if guard == nil {
+		return retirementEditPlan{}, retirementWriteError{code: retirementWriteErrPrivateScopeMismatch}
+	}
 	if token == nil || token.arena == nil || !token.arena.scoped {
 		return retirementEditPlan{}, retirementWriteError{code: retirementWriteErrPrivateScopeMismatch}
 	}
 	arena := token.arena
-	guard := newGuardedRetirementSource(source, arena, nil, path, blobScratch, replacements, releases, roles, token)
+	*guard = newGuardedRetirementSource(source, arena, nil, path, blobScratch, replacements, releases, roles, token)
 	fail := func(problem retirementWriteError) (retirementEditPlan, retirementWriteError) {
 		return retirementEditPlan{}, guard.checkedProblem(problem)
 	}
@@ -1161,16 +1183,16 @@ func planScopedRetirementUpsert(
 	localReplacements, localReleases := *replacements, *releases
 	replacementBase, releaseBase := replacements.length, releases.length
 	batch := retirementBatch{retiredByTxn: token.bornTxn, pageCount: token.pageCount, pageListBlobRoot: token.root}
-	append, problem := preflightRetirementUpsert(&guard, state, batch, arena, path, &localReplacements, &localReleases, roles)
+	append, problem := preflightRetirementUpsert(guard, state, batch, arena, path, &localReplacements, &localReleases, roles)
 	if problem.failed() {
 		return fail(problem)
 	}
 	if append.mode == upsertReplace {
-		if problem = scanRetirementBatchBlob(&guard, state, arena, append.oldBatch, 0, false, listedPageMarkRequired, true, &localReplacements, &localReleases, roles, blobScratch); problem.failed() {
+		if problem = scanRetirementBatchBlob(guard, state, arena, append.oldBatch, 0, false, listedPageMarkRequired, true, &localReplacements, &localReleases, roles, blobScratch); problem.failed() {
 			return fail(problem)
 		}
 	}
-	if problem = scanRetirementBatchBlob(&guard, state, arena, batch, token.generation, true, listedPageSatisfyRequired, false, &localReplacements, &localReleases, roles, blobScratch); problem.failed() {
+	if problem = scanRetirementBatchBlob(guard, state, arena, batch, token.generation, true, listedPageSatisfyRequired, false, &localReplacements, &localReleases, roles, blobScratch); problem.failed() {
 		return fail(problem)
 	}
 	if pageNumber, found := roles.firstUnsatisfiedRequired(); found {
@@ -1186,12 +1208,12 @@ func planScopedRetirementUpsert(
 	}
 	stagedReplacements := localReplacements.length - replacementBase
 	stagedReleases := localReleases.length - releaseBase
-	if problem = prepareRetirementReleaseDescriptors(&guard, arena, &localReleases, releaseBase, stagedReleases, roles); problem.failed() {
+	if problem = prepareRetirementReleaseDescriptors(guard, arena, &localReleases, releaseBase, stagedReleases, roles); problem.failed() {
 		return fail(problem)
 	}
 	result.committedReplacements = stagedReplacements
 	plan := retirementEditPlan{
-		guard: guard, arena: arena, token: token, upsertPath: path,
+		guard: *guard, arena: arena, token: token, upsertPath: path,
 		replacements: replacements, releases: releases, roles: roles, scope: arena.scope,
 		upsertScratch: upsertScratch, replacementBase: replacementBase, releaseBase: releaseBase,
 		stagedReplacements: stagedReplacements, stagedReleases: stagedReleases, result: result,
@@ -1447,7 +1469,26 @@ func upsertNewestRetirementInScope(
 	releases *privateReleaseBuffer,
 	roles *pageRoleIndex,
 ) (retirementTreeEditResult, retirementWriteError) {
-	plan, problem := planScopedRetirementUpsert(source, state, token, path, blobScratch, replacements, releases, roles)
+	var guard guardedRetirementSource
+	return upsertNewestRetirementInScopeWithGuard(
+		&guard, source, state, token, path, blobScratch, replacements, releases, roles,
+	)
+}
+
+func upsertNewestRetirementInScopeWithGuard(
+	guard *guardedRetirementSource,
+	source committedPageSource,
+	state retirementTreeState,
+	token *retirementBlobToken,
+	path []retirementPathFrame,
+	blobScratch *retirementBlobScanScratch,
+	replacements *committedReplacementLedger,
+	releases *privateReleaseBuffer,
+	roles *pageRoleIndex,
+) (retirementTreeEditResult, retirementWriteError) {
+	plan, problem := planScopedRetirementUpsertWithGuard(
+		guard, source, state, token, path, blobScratch, replacements, releases, roles,
+	)
 	if problem.failed() {
 		return retirementTreeEditResult{}, retirementWithCleanup(problem, token.discard())
 	}

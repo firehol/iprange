@@ -8605,6 +8605,39 @@ requirements are normative in the Pre-Implementation Gate above.
   v4/rust/Cargo.toml`. `git diff --check` also passes. The next checkpoint
   remains the actual same-scope retirement stage and three-owner export.
 
+### 2026-07-24 - proof-bound private range-root retirement staging
+
+- Both engines now consume a sealed range-root proof only through the exact
+  bound bitmap reservation. The selected old range pages remain in their
+  page-backed protected index and are streamed directly into one retirement
+  blob, then appended as the pending transaction's newest retirement batch in
+  that same private scope. No input-sized page-number slice, alternate source,
+  metadata change, range-root handoff, or file write is involved.
+- The returned private stage seals the proof identity, selected and pending
+  generations, reservation scope, retirement result, terminal-page count, and
+  live pool state. Rust retains its private arena until the future terminal
+  composition consumes it; Go keeps the equivalent caller-owned arena scratch
+  sealed through the shared scope. A legal empty selected range root produces a
+  valid zero-page stage.
+- The mutation boundary is explicit in both engines. Short input scratch fails
+  before mutation and can be retried. Once the retirement blob has entered the
+  shared scope, any later failure poisons the whole draft; all later staging or
+  verification attempts reject that poisoned scope. This prevents an error from
+  being followed by a partial later commit.
+- Permanent tests cover a real selected range tree, exact scope ownership,
+  selected-retirement identity substitution, legal empty roots, zero warmed-path
+  heap allocation, retryable short scratch, and a deliberately too-small scope
+  that fails after blob creation and requires whole-draft abort in both engines.
+- Validation passes: focused Go/Rust proof tests; `go -C v4/go test ./... -count=1`;
+  `go -C v4/go vet ./...`; `go -C v4/go test -race ./internal/exactv4 -count=1`;
+  `GOARCH=386 go -C v4/go test ./internal/exactv4 -count=1`; Rust default and
+  all-feature tests; Rust formatting; warnings-denied all-target/all-feature
+  Clippy; all-feature benchmark compilation; and `git diff --check`.
+- This is still private transaction plumbing. The next slice must export the
+  staged retirement pages and combine the sealed `Range`, `Bitmap`, and
+  `Retirement` journals under one terminal authority before any later metadata
+  handoff can be considered.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

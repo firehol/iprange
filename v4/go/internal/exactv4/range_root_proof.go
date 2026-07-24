@@ -48,6 +48,87 @@ type rangeRootTransactionProofError struct {
 	cause error
 }
 
+// rangeRootRetirementStage is private evidence that the proof's protected
+// pages were appended to the selected retirement tree in the reservation that
+// will later finalize the replacement range root. It has no metadata or
+// publication authority on its own.
+type rangeRootRetirementStage struct {
+	attachment    *freeBitmapReservationAttachment
+	proof         *rangeRootTransactionProof
+	scope         privatePageReservationScope
+	selectedTxn   uint64
+	pendingTxn    uint64
+	pageCount     uint64
+	retirement    retirementTreeEditResult
+	blobPages     int
+	terminalPages int
+	protectedLen  uint64
+	seal          uint64
+}
+
+type rangeRootRetirementStageScratch struct {
+	blobPages     []uint32
+	path          []retirementPathFrame
+	blobScanPages []retirementBlobScanPage
+	replacements  []committedPageReplacement
+	releases      []uint32
+	roles         []pageRoleIndexSlot
+
+	arena             privatePageArena
+	token             retirementBlobToken
+	blobScan          retirementBlobScanScratch
+	replacementLedger committedReplacementLedger
+	releaseBuffer     privateReleaseBuffer
+	roleIndex         pageRoleIndex
+	guard             guardedRetirementSource
+}
+
+type rangeRootRetirementStageErrorCode uint8
+
+const (
+	rangeRootRetirementStageErrInvalidArgument rangeRootRetirementStageErrorCode = iota + 1
+	rangeRootRetirementStageErrPreMutationProof
+	rangeRootRetirementStageErrPreMutationBitmap
+	rangeRootRetirementStageErrPreMutationRetirement
+	rangeRootRetirementStageErrPostMutationRetirement
+	rangeRootRetirementStageErrPostMutationBitmap
+	rangeRootRetirementStageErrPostMutationCapacity
+)
+
+type rangeRootRetirementStageError struct {
+	code       rangeRootRetirementStageErrorCode
+	proof      error
+	bitmap     freeBitmapCOWError
+	retirement retirementWriteError
+	required   int
+	actual     int
+}
+
+func (e rangeRootRetirementStageError) failed() bool { return e.code != 0 }
+
+func (e rangeRootRetirementStageError) Error() string {
+	return fmt.Sprintf("exact v4 range-root retirement stage: error %d", e.code)
+}
+
+func (e rangeRootRetirementStageError) Unwrap() error {
+	if e.proof != nil {
+		return e.proof
+	}
+	if e.bitmap.failed() {
+		return e.bitmap
+	}
+	if e.retirement.failed() {
+		return e.retirement
+	}
+	return nil
+}
+
+func (e rangeRootRetirementStageError) discardRequired() bool {
+	return e.code == rangeRootRetirementStageErrPostMutationRetirement ||
+		e.code == rangeRootRetirementStageErrPostMutationBitmap ||
+		e.code == rangeRootRetirementStageErrPostMutationCapacity
+}
+
 func (e *rangeRootTransactionProofError) Error() string {
 	if e == nil {
 		return "<nil>"
@@ -292,6 +373,234 @@ func (proof *rangeRootTransactionProof) retirementInputs() (
 		root:        proof.selected.retirementRoot,
 		batchCount:  proof.selected.retirementBatchCount,
 	}, protected, nil
+}
+
+func sealRangeRootRetirementStage(stage rangeRootRetirementStage) uint64 {
+	if stage.attachment == nil || stage.proof == nil || stage.attachment.cow.pool == nil {
+		return 0
+	}
+	hash := privateWriterAggregateHashSeed ^ 0x7a2f_5db9_c190_4e63
+	for _, value := range [...]uint64{
+		stage.proof.seal,
+		stage.selectedTxn,
+		stage.pendingTxn,
+		stage.pageCount,
+		stage.scope.id,
+		uint64(stage.scope.anchor + 1),
+		stage.scope.generation,
+		uint64(stage.retirement.root),
+		stage.retirement.batchCount,
+		uint64(stage.retirement.privatePages),
+		uint64(stage.retirement.committedReplacements),
+		uint64(stage.blobPages),
+		uint64(stage.terminalPages),
+		stage.protectedLen,
+		freeBitmapReservationCOWFingerprint(&stage.attachment.cow),
+		freeBitmapReservationScopeFingerprint(stage.attachment.cow.pool, stage.scope),
+	} {
+		hash = privateWriterAggregateHashWord(hash, value)
+	}
+	return hash
+}
+
+func rangeRootRetirementStageProofStateError() rangeRootRetirementStageError {
+	return rangeRootRetirementStageError{
+		code:  rangeRootRetirementStageErrPreMutationProof,
+		proof: &rangeRootTransactionProofError{code: rangeRootTransactionProofErrStale},
+	}
+}
+
+// verify rechecks the private capability before the later terminal boundary
+// consumes it. It intentionally does not touch target metadata or file bytes.
+func (stage *rangeRootRetirementStage) verify() rangeRootRetirementStageError {
+	if stage == nil || stage.attachment == nil || stage.proof == nil ||
+		stage.attachment.cow.pool == nil || stage.scope.pool != stage.attachment.cow.pool ||
+		!stage.attachment.cow.scoped || stage.attachment.cow.scope != stage.scope {
+		return rangeRootRetirementStageError{code: rangeRootRetirementStageErrInvalidArgument}
+	}
+	if stage.attachment.cow.pool.abortRequired {
+		return rangeRootRetirementStageError{
+			code:   rangeRootRetirementStageErrPostMutationBitmap,
+			bitmap: bitmapPoolError(privatePagePoolError{code: privatePagePoolErrAbortRequired}),
+		}
+	}
+	state, protected, err := stage.proof.retirementInputs()
+	if err != nil || state.selectedTxn != stage.selectedTxn || state.pageCount != stage.pageCount ||
+		protected.len() != stage.protectedLen {
+		problem := rangeRootRetirementStageProofStateError()
+		if err != nil {
+			problem.proof = err
+		}
+		return problem
+	}
+	p := stage.attachment
+	expectedPending := state.selectedTxn + 1
+	if expectedPending == 0 || p.selectedTxn != state.selectedTxn ||
+		p.committedPageCount != state.pageCount || p.cow.selectedTxn != state.selectedTxn ||
+		p.cow.committedPageCount != state.pageCount || p.cow.pendingTxn != expectedPending ||
+		stage.pendingTxn != expectedPending || stage.scope.pendingTxn != expectedPending {
+		return rangeRootRetirementStageProofStateError()
+	}
+	if problem := p.cow.validateScopedBindings(); problem.failed() {
+		return rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPreMutationBitmap, bitmap: problem,
+		}
+	}
+	if stage.protectedLen == 0 {
+		if stage.retirement.root != state.root || stage.retirement.batchCount != state.batchCount ||
+			stage.retirement.privatePages != 0 || stage.retirement.committedReplacements != 0 ||
+			stage.blobPages != 0 || stage.terminalPages != 0 {
+			return rangeRootRetirementStageProofStateError()
+		}
+	} else {
+		if state.batchCount == ^uint64(0) || stage.retirement.root < 2 ||
+			uint64(stage.retirement.root) >= p.cow.pageCount ||
+			stage.retirement.batchCount != state.batchCount+1 || stage.retirement.privatePages < 0 ||
+			stage.retirement.committedReplacements < 0 || stage.blobPages <= 0 ||
+			stage.terminalPages < stage.blobPages ||
+			stage.terminalPages != stage.blobPages+stage.retirement.privatePages {
+			return rangeRootRetirementStageProofStateError()
+		}
+	}
+	if stage.seal == 0 || stage.seal != sealRangeRootRetirementStage(*stage) {
+		return rangeRootRetirementStageProofStateError()
+	}
+	return rangeRootRetirementStageError{}
+}
+
+// discardAfterAbort returns proof scratch only after the whole private draft is
+// being discarded. A successful stage remains live until terminal composition
+// consumes it.
+func (stage *rangeRootRetirementStage) discardAfterAbort() {
+	if stage == nil {
+		return
+	}
+	if stage.proof != nil {
+		stage.proof.discardAfterAbort()
+	}
+	*stage = rangeRootRetirementStage{}
+}
+
+// stageRangeRootRetirement appends the proof's already-converged protected
+// pages to the selected retirement tree inside the exact reservation that will
+// finalize the replacement bitmap/range scope. The source is deliberately
+// taken only from that reservation, never from the proof caller.
+func stageRangeRootRetirement(
+	p *freeBitmapReservationAttachment,
+	proof *rangeRootTransactionProof,
+	scratch *rangeRootRetirementStageScratch,
+) (rangeRootRetirementStage, rangeRootRetirementStageError) {
+	if p == nil || proof == nil || scratch == nil || p.cow.pool == nil ||
+		p.scope.pool != p.cow.pool || !p.cow.scoped || p.cow.scope != p.scope ||
+		p.cow.committed == nil {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrInvalidArgument,
+		}
+	}
+	if p.cow.pool.abortRequired {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code:   rangeRootRetirementStageErrPostMutationBitmap,
+			bitmap: bitmapPoolError(privatePagePoolError{code: privatePagePoolErrAbortRequired}),
+		}
+	}
+	state, protected, err := proof.retirementInputs()
+	if err != nil {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPreMutationProof, proof: err,
+		}
+	}
+	expectedPending := state.selectedTxn + 1
+	if expectedPending == 0 || p.selectedTxn != state.selectedTxn ||
+		p.committedPageCount != state.pageCount || p.cow.selectedTxn != state.selectedTxn ||
+		p.cow.committedPageCount != state.pageCount || p.cow.pendingTxn != expectedPending ||
+		p.scope.pendingTxn != expectedPending {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageProofStateError()
+	}
+	if problem := p.cow.validateScopedBindings(); problem.failed() {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPreMutationBitmap, bitmap: problem,
+		}
+	}
+	if protected.len() == 0 {
+		stage := rangeRootRetirementStage{
+			attachment: p, proof: proof, scope: p.scope,
+			selectedTxn: state.selectedTxn, pendingTxn: expectedPending, pageCount: state.pageCount,
+			retirement: retirementTreeEditResult{
+				root: state.root, batchCount: state.batchCount,
+			},
+		}
+		stage.seal = sealRangeRootRetirementStage(stage)
+		if stage.seal == 0 {
+			return rangeRootRetirementStage{}, rangeRootRetirementStageProofStateError()
+		}
+		return stage, rangeRootRetirementStageError{}
+	}
+
+	arena, problem := newPrivatePageArenaInScope(p.cow.pool, p.scope, expectedPending)
+	if problem.failed() {
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPreMutationRetirement, retirement: problem,
+		}
+	}
+	scratch.arena = arena
+	scratch.token, problem = buildRetirementBlobFromIndex(
+		protected, &scratch.arena, &blobBuildScratch{pageNumbers: scratch.blobPages},
+	)
+	if problem.failed() {
+		code := rangeRootRetirementStageErrPreMutationRetirement
+		if p.cow.pool.abortRequired {
+			code = rangeRootRetirementStageErrPostMutationRetirement
+		}
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: code, retirement: problem,
+		}
+	}
+	scratch.blobScan = retirementBlobScanScratch{pages: scratch.blobScanPages}
+	scratch.replacementLedger = newCommittedReplacementLedger(scratch.replacements)
+	scratch.releaseBuffer = newPrivateReleaseBuffer(scratch.releases)
+	scratch.roleIndex = newPageRoleIndex(scratch.roles)
+	result, problem := upsertNewestRetirementInScopeWithGuard(
+		&scratch.guard, p.cow.committed, state, &scratch.token, scratch.path,
+		&scratch.blobScan,
+		&scratch.replacementLedger, &scratch.releaseBuffer, &scratch.roleIndex,
+	)
+	if problem.failed() {
+		// The blob is already committed to the shared scoped arena. Even when
+		// the editor cleans its local token, retrying this draft would reuse a
+		// mutated allocator generation, so only whole-draft abort is safe.
+		p.cow.pool.abortRequired = true
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPostMutationRetirement, retirement: problem,
+		}
+	}
+	terminalPages, ok := checkedIntAdd(scratch.token.privatePages, result.privatePages)
+	if !ok || terminalPages <= 0 || terminalPages > p.privatePages {
+		p.cow.pool.abortRequired = true
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code:     rangeRootRetirementStageErrPostMutationCapacity,
+			required: terminalPages, actual: p.privatePages,
+		}
+	}
+	if bitmapProblem := p.cow.synchronizeScopedBindings(p.scope); bitmapProblem.failed() {
+		p.cow.pool.abortRequired = true
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPostMutationBitmap, bitmap: bitmapProblem,
+		}
+	}
+	stage := rangeRootRetirementStage{
+		attachment: p, proof: proof, scope: p.scope,
+		selectedTxn: state.selectedTxn, pendingTxn: expectedPending, pageCount: state.pageCount,
+		retirement: result, blobPages: scratch.token.privatePages, terminalPages: terminalPages,
+		protectedLen: protected.len(),
+	}
+	stage.seal = sealRangeRootRetirementStage(stage)
+	if stage.seal == 0 {
+		p.cow.pool.abortRequired = true
+		return rangeRootRetirementStage{}, rangeRootRetirementStageError{
+			code: rangeRootRetirementStageErrPostMutationRetirement,
+		}
+	}
+	return stage, rangeRootRetirementStageError{}
 }
 
 func (proof *rangeRootTransactionProof) discardAfterAbort() {

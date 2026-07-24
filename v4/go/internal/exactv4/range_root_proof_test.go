@@ -363,3 +363,268 @@ func TestRangeRootTransactionProofUsesNoHeapAfterSetup(t *testing.T) {
 	}
 	indexes.requireClean(t)
 }
+
+func newRangeRootRetirementStageScratch() rangeRootRetirementStageScratch {
+	return rangeRootRetirementStageScratch{
+		blobPages:     make([]uint32, 1),
+		path:          make([]retirementPathFrame, retirementWriterPathCapacity),
+		blobScanPages: make([]retirementBlobScanPage, 4),
+		replacements:  make([]committedPageReplacement, 8),
+		releases:      make([]uint32, 8),
+		roles:         make([]pageRoleIndexSlot, 16),
+	}
+}
+
+func prepareRangeRootRetirementStageFixture(t *testing.T) (
+	*freeBitmapReservationAttachment,
+	*rangeRootTransactionProof,
+	*rangeRootProofIndexes,
+) {
+	return prepareRangeRootRetirementStageFixtureWithPayload(t, 3)
+}
+
+func prepareRangeRootRetirementStageFixtureWithPayload(t *testing.T, payload int) (
+	*freeBitmapReservationAttachment,
+	*rangeRootTransactionProof,
+	*rangeRootProofIndexes,
+) {
+	t.Helper()
+	data, selected := ownershipWalkImage(t)
+	selected.TxnID = 1
+	source := newImmutableSlicePageSource(data, selected.PageCount)
+	storage := newLateBitmapPlannerStorage(16, 16, 16, 32)
+	attachment := newLateBitmapPlanAt(t, source, selected.PageCount, 0, payload, &storage)
+	bitmapProof := completeLateBitmapProof(t, &attachment, 0, nil)
+	if _, problem := attachment.bind(&bitmapProof); problem.failed() {
+		t.Fatal(problem)
+	}
+	staging, staged := buildRangePayloadV4(t, attachment.cow.pendingTxn)
+	rangePages := make([]privateWriterProducedTerminalPage, staged.pageCount)
+	materialized, stageProblem := stageRangePayload(
+		&attachment, &staging, staged,
+		&rangeTreePayloadScratch{
+			assignments:   make([]rangeTreePhysicalAssignment, staged.pageCount),
+			slots:         make([]rangeTreePayloadReservationSlot, staged.pageCount),
+			terminalPages: rangePages,
+		},
+	)
+	if stageProblem.failed() {
+		t.Fatal(stageProblem)
+	}
+	indexes := newRangeRootProofIndexes(t, 4)
+	var ownershipScratch rangeTreeOwnershipScratch
+	proof, err := prepareRangeRootTransactionProof[IPv4](
+		source, selected, materialized, rangePages,
+		&indexes.seed, &indexes.first, &indexes.second,
+		&ownershipScratch, 4, 1, pageNumberIndexNoOpFixedPointPreview,
+	)
+	if err != nil {
+		t.Fatalf("prepare range-root retirement proof: %v", err)
+	}
+	return &attachment, &proof, indexes
+}
+
+func TestRangeRootRetirementStageConsumesProofInsideBoundScope(t *testing.T) {
+	attachment, proof, indexes := prepareRangeRootRetirementStageFixture(t)
+	scratch := newRangeRootRetirementStageScratch()
+	stage, problem := stageRangeRootRetirement(attachment, proof, &scratch)
+	if problem.failed() {
+		t.Fatalf("stage range-root retirement: %#v", problem)
+	}
+	if stage.retirement.root < 2 || stage.retirement.batchCount != 1 ||
+		stage.blobPages != 1 || stage.retirement.privatePages != 1 || stage.terminalPages != 2 ||
+		stage.protectedLen != 4 {
+		t.Fatalf("retirement stage = %#v", stage)
+	}
+	if problem = stage.verify(); problem.failed() {
+		t.Fatalf("verify staged retirement: %#v", problem)
+	}
+	member, capacity, poolProblem := attachment.cow.pool.scopeMemberStart(attachment.scope)
+	if poolProblem.failed() || capacity != attachment.privatePages {
+		t.Fatalf("scope members = member:%d capacity:%d problem:%#v", member, capacity, poolProblem)
+	}
+	rangePages, retirementPages := 0, 0
+	foundRoot := false
+	for visited := 0; member != privatePagePoolNoIndex; visited++ {
+		if visited >= capacity {
+			t.Fatal("scope member walk did not terminate")
+		}
+		slot := &attachment.cow.pool.slots[member]
+		switch slot.owner {
+		case privatePageOwnerRange:
+			rangePages++
+		case privatePageOwnerRetirement:
+			retirementPages++
+			foundRoot = foundRoot || slot.pageNumber == stage.retirement.root &&
+				slot.origin == privatePageRetirementTree
+		}
+		member = slot.scopeMemberNext
+	}
+	if rangePages != 1 || retirementPages != stage.terminalPages || !foundRoot {
+		t.Fatalf("scope ownership = range:%d retirement:%d root:%v", rangePages, retirementPages, foundRoot)
+	}
+	attachment.cow.pool.abortRequired = true
+	if verify := stage.verify(); verify.code != rangeRootRetirementStageErrPostMutationBitmap ||
+		!verify.discardRequired() {
+		t.Fatalf("poisoned stage verify = %#v", verify)
+	}
+	stage.discardAfterAbort()
+	indexes.requireClean(t)
+}
+func TestRangeRootRetirementStageRejectsShortScratchBeforeMutationAndRetries(t *testing.T) {
+	attachment, proof, indexes := prepareRangeRootRetirementStageFixture(t)
+	short := newRangeRootRetirementStageScratch()
+	short.blobPages = short.blobPages[:0]
+	before := snapshotLateBitmapLive(t, attachment)
+	_, problem := stageRangeRootRetirement(attachment, proof, &short)
+	if problem.code != rangeRootRetirementStageErrPreMutationRetirement ||
+		problem.retirement.code != retirementWriteErrBlobBuildScratchTooSmall || problem.discardRequired() {
+		t.Fatalf("short blob scratch = %#v", problem)
+	}
+	requireLateBitmapLiveSnapshot(t, attachment, before)
+
+	retry := newRangeRootRetirementStageScratch()
+	stage, problem := stageRangeRootRetirement(attachment, proof, &retry)
+	if problem.failed() {
+		t.Fatalf("retry stage = %#v", problem)
+	}
+	stage.discardAfterAbort()
+	indexes.requireClean(t)
+}
+
+func TestRangeRootRetirementStagePoisonsDraftAfterBlobMutation(t *testing.T) {
+	// One range payload page and one blob page fit, but the retirement-tree
+	// page does not. The blob has already entered the shared scope, so this
+	// is a whole-draft abort rather than a retryable capacity error.
+	attachment, proof, indexes := prepareRangeRootRetirementStageFixtureWithPayload(t, 2)
+	scratch := newRangeRootRetirementStageScratch()
+	_, problem := stageRangeRootRetirement(attachment, proof, &scratch)
+	if problem.code != rangeRootRetirementStageErrPostMutationRetirement ||
+		problem.retirement.code != retirementWriteErrPrivatePageBudgetTooSmall || !problem.discardRequired() ||
+		!attachment.cow.pool.abortRequired {
+		t.Fatalf("post-blob capacity failure = %#v abort=%v", problem, attachment.cow.pool.abortRequired)
+	}
+	_, retry := stageRangeRootRetirement(attachment, proof, &scratch)
+	if retry.code != rangeRootRetirementStageErrPostMutationBitmap || !retry.discardRequired() ||
+		retry.bitmap.code != freeBitmapCOWErrArenaPageConflict {
+		t.Fatalf("poisoned draft retry = %#v", retry)
+	}
+	proof.discardAfterAbort()
+	indexes.requireClean(t)
+}
+
+func TestRangeRootRetirementStageRejectsProofSubstitutionBeforeMutation(t *testing.T) {
+	attachment, proof, indexes := prepareRangeRootRetirementStageFixture(t)
+	before := snapshotLateBitmapLive(t, attachment)
+	proof.selected.retirementRoot = 2
+	scratch := newRangeRootRetirementStageScratch()
+	_, problem := stageRangeRootRetirement(attachment, proof, &scratch)
+	if problem.code != rangeRootRetirementStageErrPreMutationProof || problem.discardRequired() {
+		t.Fatalf("proof substitution = %#v", problem)
+	}
+	requireLateBitmapLiveSnapshot(t, attachment, before)
+	proof.discardAfterAbort()
+	indexes.requireClean(t)
+}
+
+func TestRangeRootRetirementStageSupportsLegalEmptySelectedRoot(t *testing.T) {
+	selected := rangeOwnershipMeta(12, 0, 0)
+	selected.TxnID = 1
+	source := newImmutableSlicePageSource(nil, selected.PageCount)
+	storage := newLateBitmapPlannerStorage(16, 16, 16, 32)
+	attachment := newLateBitmapPlanAt(t, source, selected.PageCount, 0, 1, &storage)
+	bitmapProof := completeLateBitmapProof(t, &attachment, 0, nil)
+	if _, problem := attachment.bind(&bitmapProof); problem.failed() {
+		t.Fatal(problem)
+	}
+	staging, staged := buildRangePayloadV4(t, attachment.cow.pendingTxn)
+	rangePages := make([]privateWriterProducedTerminalPage, staged.pageCount)
+	materialized, stageProblem := stageRangePayload(
+		&attachment, &staging, staged,
+		&rangeTreePayloadScratch{
+			assignments:   make([]rangeTreePhysicalAssignment, staged.pageCount),
+			slots:         make([]rangeTreePayloadReservationSlot, staged.pageCount),
+			terminalPages: rangePages,
+		},
+	)
+	if stageProblem.failed() {
+		t.Fatal(stageProblem)
+	}
+	indexes := newRangeRootProofIndexes(t, 1)
+	var ownershipScratch rangeTreeOwnershipScratch
+	proof, err := prepareRangeRootTransactionProof[IPv4](
+		source, selected, materialized, rangePages,
+		&indexes.seed, &indexes.first, &indexes.second,
+		&ownershipScratch, 1, 1, pageNumberIndexNoOpFixedPointPreview,
+	)
+	if err != nil {
+		t.Fatalf("prepare empty range-root proof: %v", err)
+	}
+	before := snapshotLateBitmapLive(t, &attachment)
+	scratch := newRangeRootRetirementStageScratch()
+	stage, problem := stageRangeRootRetirement(&attachment, &proof, &scratch)
+	if problem.failed() || stage.terminalPages != 0 || stage.retirement.root != 0 ||
+		stage.retirement.batchCount != 0 || stage.protectedLen != 0 {
+		t.Fatalf("empty stage = %#v/%#v", stage, problem)
+	}
+	requireLateBitmapLiveSnapshot(t, &attachment, before)
+	if problem = stage.verify(); problem.failed() {
+		t.Fatalf("verify empty stage = %#v", problem)
+	}
+	stage.discardAfterAbort()
+	indexes.requireClean(t)
+}
+
+func TestRangeRootRetirementStageUsesNoHeapAfterSetup(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	attachment, proof, indexes := prepareRangeRootRetirementStageFixture(t)
+	scratch := newRangeRootRetirementStageScratch()
+	pool := attachment.cow.pool
+	baselinePool := *pool
+	baselineSlots := append([]privatePagePoolSlot(nil), pool.slots...)
+	baselineCOW := attachment.cow
+	baselineBindings := append([]bitmapCOWArenaBinding(nil), attachment.cow.arenaBindings...)
+	baselineIndexNodes := append([]bitmapCOWIndexNode(nil), attachment.cow.indexNodes...)
+	baselineAvailable := append([]int(nil), attachment.cow.availableSlots...)
+	restore := func() {
+		copy(pool.slots, baselineSlots)
+		*pool = baselinePool
+		copy(attachment.cow.arenaBindings, baselineBindings)
+		copy(attachment.cow.indexNodes, baselineIndexNodes)
+		copy(attachment.cow.availableSlots, baselineAvailable)
+		attachment.cow = baselineCOW
+		clear(scratch.blobPages)
+		clear(scratch.path)
+		clear(scratch.blobScanPages)
+		clear(scratch.replacements)
+		clear(scratch.releases)
+		clear(scratch.roles)
+		scratch.arena = privatePageArena{}
+		scratch.token = retirementBlobToken{}
+		scratch.blobScan = retirementBlobScanScratch{}
+		scratch.replacementLedger = committedReplacementLedger{}
+		scratch.releaseBuffer = privateReleaseBuffer{}
+		scratch.roleIndex = pageRoleIndex{}
+		scratch.guard = guardedRetirementSource{}
+	}
+	run := func() {
+		stage, problem := stageRangeRootRetirement(attachment, proof, &scratch)
+		if problem.failed() {
+			panic(problem)
+		}
+		if problem = stage.verify(); problem.failed() {
+			panic(problem)
+		}
+		restore()
+	}
+	run()
+	allocations := testing.AllocsPerRun(20, run)
+	restore()
+	if allocations != 0 {
+		t.Fatalf("range-root retirement stage allocations = %v, want zero", allocations)
+	}
+	proof.discardAfterAbort()
+	indexes.requireClean(t)
+}

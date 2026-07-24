@@ -1738,6 +1738,18 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         &self.reclamation
     }
 
+    /// Returns the exact selected generation held by this reservation.
+    ///
+    /// A composed producer must compare these facts with its private proof
+    /// before it mutates the shared shadow scope.
+    pub(crate) const fn selected_generation(&self) -> (u64, u64, u64) {
+        (
+            self.cow.selected_txn,
+            self.cow.committed_page_count,
+            self.cow.pending_txn,
+        )
+    }
+
     /// Verifies that one payload producer uses this reservation's exact shadow
     /// scope without changing the bitmap draft.
     fn validate_payload_scope(
