@@ -33,14 +33,10 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod selective_finalization;
 pub(crate) use selective_finalization::{
-    FreeBitmapCoordinatorOutputError, PreparedFreeBitmapCoordinatorRecord,
-    PreparedFreeBitmapTerminalExport, SealedFreeBitmapCoordinatorRecord,
-    SealedFreeBitmapCoordinatorScratch,
-};
-#[cfg(test)]
-pub(crate) use selective_finalization::{
-    FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationPreviewError,
-    FreeBitmapFinalizationScratch,
+    FreeBitmapCoordinatorOutputError, FreeBitmapFinalizationCachedPage,
+    FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch,
+    PreparedFreeBitmapCoordinatorRecord, PreparedFreeBitmapTerminalExport,
+    SealedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorScratch,
 };
 
 const FREE_PATH_CAPACITY: usize = 4;
@@ -1710,6 +1706,15 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
 impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
     BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>
 {
+    /// Returns the exact selected source that produced this reservation.
+    ///
+    /// Reclamation metadata must be read from this source rather than from a
+    /// second caller-provided handle, otherwise a valid bitmap reservation
+    /// could be combined with unrelated retirement pages.
+    pub(crate) fn reclamation_source(&self) -> &'a S {
+        self.cow.committed
+    }
+
     /// This borrow keeps the exact reclamation proof attached to the bound
     /// bitmap reservation while retirement metadata consumes the same batch.
     pub(crate) fn reclamation_authority(&self) -> &RetirementReclamationAuthority<'pages> {

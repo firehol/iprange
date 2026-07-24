@@ -2184,6 +2184,71 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         Ok(())
     }
 
+    /// Gives one caller-owned probe a detached copy of the exact bound scope.
+    ///
+    /// This is intentionally separate from the two-pass terminal preview: a
+    /// selected-reclaim probe needs the same reader-safe bitmap state before it
+    /// knows the retirement blob it will stage into those later passes. The
+    /// detached pool and its scope cannot escape the higher-ranked callback.
+    pub(crate) fn with_detached_reclamation_stage<T, E, F>(
+        &mut self,
+        scratch: FreeBitmapFinalizationScratch<'_>,
+        stage: F,
+    ) -> Result<T, FreeBitmapFinalizationPreviewError<E>>
+    where
+        F: for<'stage> FnOnce(
+            &RetirementReclamationAuthority<'pages>,
+            &'stage PrivatePagePool<'stage>,
+            &'stage PrivatePageReservationScope<'stage>,
+        ) -> Result<T, E>,
+    {
+        self.validate_finalization_scratch(&scratch)?;
+        let result: Result<T, FreeBitmapFinalizationPreviewError<E>> = (|| {
+            let live_scope = self
+                .cow
+                .scoped()
+                .ok_or(FreeBitmapCowError::ArenaPageConflict(0))?
+                .share();
+            let commitment = self
+                .cow
+                .pool()
+                .exact_commitment(&live_scope)
+                .map_err(FreeBitmapCowError::PrivatePool)?;
+            let cache = FinalizationCachedSource {
+                base: self.cow.committed,
+                pages: RefCell::new(scratch.cached_pages),
+                length: Cell::new(0),
+                replay: false,
+            };
+            build_finalization_shadow!(self, live_scope, &cache, stage_pool, stage_scope, shadow);
+            let result = stage(&self.reclamation, &stage_pool, &stage_scope)
+                .map_err(FreeBitmapFinalizationPreviewError::Stage)?;
+            let cached_len = cache.length.get();
+            let cache_seal = cache_fingerprint(&cache.pages.borrow(), cached_len);
+            self.cow.committed.check_access().map_err(|error| {
+                FreeBitmapFinalizationPreviewError::Bitmap(FreeBitmapCowError::Source(error))
+            })?;
+            self.cow
+                .pool()
+                .validate_exact_commitment(&live_scope, &commitment)
+                .map_err(|_| {
+                    FreeBitmapFinalizationPreviewError::Bitmap(
+                        FreeBitmapCowError::StaleInsertionPlan,
+                    )
+                })?;
+            if cache_fingerprint(&cache.pages.borrow(), cached_len) != cache_seal {
+                return Err(FreeBitmapFinalizationPreviewError::Bitmap(
+                    FreeBitmapCowError::StaleInsertionPlan,
+                ));
+            }
+            Ok(result)
+        })();
+        scratch
+            .cached_pages
+            .fill(FreeBitmapFinalizationCachedPage::empty());
+        result
+    }
+
     /// Predicts the complete committed bitmap replacement list after terminal
     /// finalization without changing the live scope or bitmap COW.
     pub(crate) fn preview_terminal_replacements(

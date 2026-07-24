@@ -7,17 +7,27 @@
 //! apply the planned bitmap reservation before later finalization consumes it.
 
 use crate::bitmap_cow::{
-    BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapReservationBuffers,
-    FreeBitmapReservationPlanner,
+    BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapFinalizationCachedPage,
+    FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
+    FreeBitmapReservationBuffers, FreeBitmapReservationPlanner, ReservationResource,
 };
 use crate::contract::MetaV4;
 use crate::page_source::CommittedPageSource;
-use crate::private_page_pool::{PrivatePagePool, PrivatePageReservationScope};
+use crate::private_page_pool::{
+    PrivatePagePool, PrivatePageReservationScope, PrivatePageSelectiveOverlayNode,
+    PrivatePageSelectivePathEntry,
+};
 use crate::retirement_page::RetirementBatch;
 use crate::retirement_reader::{
     RetirementIdentity, RetirementReadError, RetirementReclaimFence,
     RetirementReclamationExecutionError, RetirementTree,
 };
+use crate::retirement_writer::{
+    BlobBuildScratch, CommittedPageReplacement, CommittedReplacementLedger, PageRoleIndex,
+    PageRoleIndexSlot, PrivatePageArena, PrivateReleaseBuffer, RetirementBlobBuilder,
+    RetirementPathFrame, RetirementTreeEditor, RetirementTreeState, RetirementWriteError,
+};
+use core::cell::Cell;
 
 /// Bounded work limits and bitmap payload capacity for one lock-held attempt.
 ///
@@ -42,39 +52,82 @@ pub(crate) struct LockedReclamationFinalizerScratch<'a> {
 
 /// Typed failure before a finalizer can construct terminal output or publish.
 #[derive(Debug)]
-pub(crate) enum LockedReclamationFinalizerError<E> {
+pub(crate) enum LockedReclamationFinalizerError {
     InvalidLimits,
     Retirement(RetirementReadError),
     Bitmap(FreeBitmapCowError),
-    Consumer(E),
 }
 
+/// A verified and physically bound bitmap reservation that retains the
+/// operation-barrier guard through later finalization.
 #[derive(Debug)]
-enum LockedReclamationConsumerError<E> {
-    Bitmap(FreeBitmapCowError),
-    Consumer(E),
-}
-
-/// Runs the mandatory lock-held prefix of a bitmap/retirement finalizer.
-///
-/// The returned/consumed bitmap reservation retains the live reader-barrier
-/// authority. Consequently, no caller can bind pages from an arbitrary slice,
-/// skip verification, or continue finalization after the operation barrier
-/// has been released.
-#[allow(
-    clippy::result_large_err,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
-pub(crate) fn with_locked_reclamation_bitmap_reservation<
+pub(crate) struct LockedReclamationBitmapReservation<
     'a,
     'slots,
     'scope,
     'barrier,
     S: CommittedPageSource + ?Sized,
-    R,
-    E,
-    F,
+> {
+    pub(crate) pass: crate::retirement_reader::RetirementPassResult,
+    pub(crate) bound: BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'a, S>,
+}
+
+/// Caller-owned buffers for the selected-reclaim protected-page fixed point.
+///
+/// The probe and each detached preview use independent path/ledger storage;
+/// sharing either would make a replay appear stable only because it overwrote
+/// the first pass's evidence.
+#[derive(Debug)]
+pub(crate) struct ReclamationProtectedPagesScratch<'a> {
+    pub(crate) probe_delete_path: &'a mut [RetirementPathFrame],
+    pub(crate) probe_upsert_path: &'a mut [RetirementPathFrame],
+    pub(crate) probe_replacements: &'a mut [CommittedPageReplacement],
+    pub(crate) probe_releases: &'a mut [u32],
+    pub(crate) probe_roles: &'a mut [PageRoleIndexSlot],
+    pub(crate) protected_pages: &'a mut [u32],
+    pub(crate) next_protected_pages: &'a mut [u32],
+    pub(crate) preview_bitmap_replacements: &'a mut [u32],
+    pub(crate) preview_blob_pages: &'a mut [u32],
+    pub(crate) preview_delete_path: &'a mut [RetirementPathFrame],
+    pub(crate) preview_upsert_path: &'a mut [RetirementPathFrame],
+    pub(crate) preview_replacements: &'a mut [CommittedPageReplacement],
+    pub(crate) preview_releases: &'a mut [u32],
+    pub(crate) preview_roles: &'a mut [PageRoleIndexSlot],
+    pub(crate) final_release_pages: &'a mut [u32],
+    pub(crate) final_insert_pages: &'a mut [FreeBitmapInsertPage],
+    pub(crate) final_cached_pages: &'a mut [FreeBitmapFinalizationCachedPage],
+    pub(crate) final_index_stack: &'a mut [usize],
+    pub(crate) final_cleanup_nodes: &'a mut [PrivatePageSelectiveOverlayNode],
+    pub(crate) final_cleanup_path: &'a mut [PrivatePageSelectivePathEntry],
+    pub(crate) final_cleanup_targets: &'a mut [usize],
+}
+
+/// Typed read-only fixed-point failure before terminal finalization begins.
+#[derive(Debug)]
+pub(crate) enum ReclamationProtectedPagesError {
+    NoSelectedBatches,
+    SelectedIdentityUnavailable,
+    Bitmap(FreeBitmapCowError),
+    Retirement(RetirementWriteError),
+    ProbeChanged,
+    ReplacementPageOutOfBounds(u32),
+    FixedPointDidNotConverge { limit: usize },
+}
+
+/// Runs the mandatory lock-held prefix of a bitmap/retirement finalizer.
+///
+/// The returned reservation retains the live reader-barrier authority.
+/// Consequently, no caller can bind pages from an arbitrary slice, skip
+/// verification, or continue finalization after the operation barrier has
+/// been released. Later finalizers consume that move-only reservation directly
+/// and return it to their caller on a pre-terminal error.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) fn prepare_locked_reclamation_bitmap_reservation<
+    'a,
+    'slots,
+    'scope,
+    'barrier,
+    S: CommittedPageSource + ?Sized,
 >(
     selected: MetaV4,
     pages: &'a S,
@@ -83,14 +136,10 @@ pub(crate) fn with_locked_reclamation_bitmap_reservation<
     scratch: LockedReclamationFinalizerScratch<'a>,
     shadow_pool: &'a PrivatePagePool<'slots>,
     shadow_scope: &'a PrivatePageReservationScope<'scope>,
-    consume: F,
-) -> Result<R, LockedReclamationFinalizerError<E>>
-where
-    F: FnOnce(
-        crate::retirement_reader::RetirementPassResult,
-        BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'a, S>,
-    ) -> Result<R, E>,
-{
+) -> Result<
+    LockedReclamationBitmapReservation<'a, 'slots, 'scope, 'barrier, S>,
+    LockedReclamationFinalizerError,
+> {
     if limits.max_batches == 0 || limits.max_pages == 0 || limits.bitmap_payload_pages == 0 {
         return Err(LockedReclamationFinalizerError::InvalidLimits);
     }
@@ -125,32 +174,335 @@ where
                 selected.free_bitmap_root,
                 limits.bitmap_payload_pages,
                 bitmap,
-            )
-            .map_err(LockedReclamationConsumerError::Bitmap)?;
-            let locked = planner
-                .plan_under_reclamation(reclamation)
-                .map_err(LockedReclamationConsumerError::Bitmap)?;
-            let mut bound = locked
-                .bind(shadow_pool, shadow_scope)
-                .map_err(LockedReclamationConsumerError::Bitmap)?;
-            bound
-                .cow
-                .apply_planned_reservation()
-                .map_err(LockedReclamationConsumerError::Bitmap)?;
-            consume(pass, bound).map_err(LockedReclamationConsumerError::Consumer)
+            )?;
+            let locked = planner.plan_under_reclamation(reclamation)?;
+            let mut bound = locked.bind(shadow_pool, shadow_scope)?;
+            bound.cow.apply_planned_reservation()?;
+            Ok::<_, FreeBitmapCowError>(LockedReclamationBitmapReservation { pass, bound })
         },
     ) {
         Ok(result) => Ok(result),
         Err(RetirementReclamationExecutionError::Read(error)) => {
             Err(LockedReclamationFinalizerError::Retirement(error))
         }
-        Err(RetirementReclamationExecutionError::Consumer(
-            LockedReclamationConsumerError::Bitmap(error),
-        )) => Err(LockedReclamationFinalizerError::Bitmap(error)),
-        Err(RetirementReclamationExecutionError::Consumer(
-            LockedReclamationConsumerError::Consumer(error),
-        )) => Err(LockedReclamationFinalizerError::Consumer(error)),
+        Err(RetirementReclamationExecutionError::Consumer(error)) => {
+            Err(LockedReclamationFinalizerError::Bitmap(error))
+        }
     }
+}
+
+fn merge_reclamation_protected_pages(
+    bitmap: &[u32],
+    retirement: &[CommittedPageReplacement],
+    page_count: u64,
+    output: &mut [u32],
+) -> Result<usize, ReclamationProtectedPagesError> {
+    let raw_len = bitmap.len().checked_add(retirement.len()).ok_or(
+        ReclamationProtectedPagesError::Retirement(RetirementWriteError::ArithmeticOverflow),
+    )?;
+    if raw_len > output.len() {
+        return Err(ReclamationProtectedPagesError::Retirement(
+            RetirementWriteError::ReplacementLedgerTooSmall {
+                required: raw_len,
+                actual: output.len(),
+            },
+        ));
+    }
+    output[..bitmap.len()].copy_from_slice(bitmap);
+    for (destination, replacement) in output[bitmap.len()..raw_len].iter_mut().zip(retirement) {
+        *destination = replacement.pgno;
+    }
+    output[..raw_len].sort_unstable();
+    let mut unique = 0usize;
+    for index in 0..raw_len {
+        let pgno = output[index];
+        if pgno < 2 || u64::from(pgno) >= page_count {
+            return Err(ReclamationProtectedPagesError::ReplacementPageOutOfBounds(
+                pgno,
+            ));
+        }
+        if unique == 0 || output[unique - 1] != pgno {
+            output[unique] = pgno;
+            unique += 1;
+        }
+    }
+    Ok(unique)
+}
+
+fn require_finalization_capacity(
+    resource: ReservationResource,
+    required: usize,
+    actual: usize,
+) -> Result<(), ReclamationProtectedPagesError> {
+    if actual < required {
+        return Err(ReclamationProtectedPagesError::Bitmap(
+            FreeBitmapCowError::InsufficientResourceBudget {
+                resource,
+                required,
+                available: actual,
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn replacement_fingerprint(entries: &[CommittedPageReplacement]) -> u64 {
+    let mut fingerprint = 0u64;
+    for replacement in entries {
+        fingerprint = fingerprint.wrapping_mul(0x100_0000_01b3)
+            ^ u64::from(replacement.pgno)
+            ^ u64::from(matches!(
+                replacement.origin,
+                crate::retirement_writer::CommittedPageOrigin::RetirementBlob
+            ));
+    }
+    fingerprint
+}
+
+/// Computes the stable page list that the next selected-reclaim retirement
+/// batch must protect, without terminally finalizing the live bitmap scope.
+///
+/// It first probes the old retirement prefix, then runs the prospective
+/// retirement blob/tree edit inside both detached bitmap preview passes. The
+/// protected list is accepted only when the replacement union stops changing.
+/// Both the source and retirement identity come from the bound reservation, so
+/// callers cannot combine proof from one selected generation with pages from
+/// another.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) fn preview_selected_reclamation_protected_pages<
+    'scratch,
+    'a,
+    'slots,
+    'scope,
+    'barrier,
+    'pages,
+    S: CommittedPageSource + ?Sized,
+>(
+    bound: &mut BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>,
+    scratch: ReclamationProtectedPagesScratch<'scratch>,
+) -> Result<&'scratch [u32], ReclamationProtectedPagesError> {
+    if bound.reclamation_authority().batch_count() == 0 {
+        return Err(ReclamationProtectedPagesError::NoSelectedBatches);
+    }
+    let identity = bound
+        .reclamation_authority()
+        .identity()
+        .ok_or(ReclamationProtectedPagesError::SelectedIdentityUnavailable)?;
+    let pages = bound.reclamation_source();
+    let pending_txn =
+        identity
+            .txn_id
+            .checked_add(1)
+            .ok_or(ReclamationProtectedPagesError::Retirement(
+                RetirementWriteError::SelectedTransactionOverflow(identity.txn_id),
+            ))?;
+    let state = RetirementTreeState {
+        selected_txn: identity.txn_id,
+        page_count: identity.page_count,
+        root: identity.root,
+        batch_count: identity.batch_count,
+    };
+    let requirements = bound
+        .finalization_scratch_requirements()
+        .map_err(ReclamationProtectedPagesError::Bitmap)?;
+    let ReclamationProtectedPagesScratch {
+        probe_delete_path,
+        probe_upsert_path,
+        probe_replacements,
+        probe_releases,
+        probe_roles,
+        protected_pages,
+        next_protected_pages,
+        preview_bitmap_replacements,
+        preview_blob_pages,
+        preview_delete_path,
+        preview_upsert_path,
+        preview_replacements,
+        preview_releases,
+        preview_roles,
+        final_release_pages,
+        final_insert_pages,
+        final_cached_pages,
+        final_index_stack,
+        final_cleanup_nodes,
+        final_cleanup_path,
+        final_cleanup_targets,
+    } = scratch;
+    require_finalization_capacity(
+        ReservationResource::CandidatePages,
+        requirements.release_pages,
+        final_release_pages.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::ArenaPages,
+        requirements.insert_pages,
+        final_insert_pages.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::VerifiedPages,
+        requirements.cached_pages,
+        final_cached_pages.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::IndexNodes,
+        requirements.index_stack,
+        final_index_stack.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::IndexNodes,
+        requirements.cleanup_nodes,
+        final_cleanup_nodes.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::AvailableSlots,
+        requirements.cleanup_path,
+        final_cleanup_path.len(),
+    )?;
+    require_finalization_capacity(
+        ReservationResource::AvailableSlots,
+        requirements.cleanup_targets,
+        final_cleanup_targets.len(),
+    )?;
+
+    let probe_replacement_len = bound
+        .with_detached_reclamation_stage(
+            FreeBitmapFinalizationScratch {
+                release_pages: &mut final_release_pages[..requirements.release_pages],
+                insert_pages: &mut final_insert_pages[..requirements.insert_pages],
+                cached_pages: &mut final_cached_pages[..requirements.cached_pages],
+                index_stack: &mut final_index_stack[..requirements.index_stack],
+                cleanup_nodes: &mut final_cleanup_nodes[..requirements.cleanup_nodes],
+                cleanup_path: &mut final_cleanup_path[..requirements.cleanup_path],
+                cleanup_targets: &mut final_cleanup_targets[..requirements.cleanup_targets],
+            },
+            |reclamation, shadow_pool, shadow_scope| {
+                let mut arena =
+                    PrivatePageArena::from_scoped_pool(shadow_pool, shadow_scope, pending_txn)
+                        .map_err(ReclamationProtectedPagesError::Retirement)?;
+                let mut replacements = CommittedReplacementLedger::new(probe_replacements);
+                let mut releases = PrivateReleaseBuffer::new(probe_releases);
+                let mut roles = PageRoleIndex::new(probe_roles);
+                let probe = RetirementTreeEditor::probe_reclaimed_oldest_and_append_newest(
+                    pages,
+                    state,
+                    identity,
+                    reclamation,
+                    &mut arena,
+                    probe_delete_path,
+                    probe_upsert_path,
+                    &mut replacements,
+                    &mut releases,
+                    &mut roles,
+                )
+                .map_err(ReclamationProtectedPagesError::Retirement)?;
+                if probe.replacement_count != replacements.entries().len()
+                    || !releases.entries_from(0).is_empty()
+                    || arena
+                        .in_use_count()
+                        .map_err(ReclamationProtectedPagesError::Retirement)?
+                        != 0
+                {
+                    return Err(ReclamationProtectedPagesError::ProbeChanged);
+                }
+                Ok::<_, ReclamationProtectedPagesError>(probe.replacement_count)
+            },
+        )
+        .map_err(|error| match error {
+            FreeBitmapFinalizationPreviewError::Bitmap(error) => {
+                ReclamationProtectedPagesError::Bitmap(error)
+            }
+            FreeBitmapFinalizationPreviewError::Stage(error) => error,
+        })?;
+    let probe_entries = &probe_replacements[..probe_replacement_len];
+    let mut protected_len = merge_reclamation_protected_pages(
+        bound.cow.replacements(),
+        probe_entries,
+        identity.page_count,
+        protected_pages,
+    )?;
+
+    for _ in 0..=protected_pages.len() {
+        let candidate = &protected_pages[..protected_len];
+        let preview_replacement_len = Cell::new(0usize);
+        let preview_len = bound
+            .preview_terminal_replacements_with_stage(
+                FreeBitmapFinalizationScratch {
+                    release_pages: &mut final_release_pages[..requirements.release_pages],
+                    insert_pages: &mut final_insert_pages[..requirements.insert_pages],
+                    cached_pages: &mut final_cached_pages[..requirements.cached_pages],
+                    index_stack: &mut final_index_stack[..requirements.index_stack],
+                    cleanup_nodes: &mut final_cleanup_nodes[..requirements.cleanup_nodes],
+                    cleanup_path: &mut final_cleanup_path[..requirements.cleanup_path],
+                    cleanup_targets: &mut final_cleanup_targets[..requirements.cleanup_targets],
+                },
+                preview_bitmap_replacements,
+                |reclamation, stage_pool, stage_scope| {
+                    let mut arena =
+                        PrivatePageArena::from_scoped_pool(stage_pool, stage_scope, pending_txn)?;
+                    let blob = RetirementBlobBuilder::build(
+                        candidate,
+                        &mut arena,
+                        &mut BlobBuildScratch::new(preview_blob_pages),
+                    )?;
+                    let mut replacements = CommittedReplacementLedger::new(preview_replacements);
+                    let mut releases = PrivateReleaseBuffer::new(preview_releases);
+                    let mut roles = PageRoleIndex::new(preview_roles);
+                    let result = RetirementTreeEditor::delete_reclaimed_oldest_and_upsert_newest(
+                        pages,
+                        state,
+                        identity,
+                        reclamation,
+                        blob,
+                        preview_delete_path,
+                        preview_upsert_path,
+                        &mut replacements,
+                        &mut releases,
+                        &mut roles,
+                    )?;
+                    preview_replacement_len.set(replacements.entries().len());
+                    Ok::<_, RetirementWriteError>((
+                        result,
+                        replacement_fingerprint(replacements.entries()),
+                        arena.in_use_count()?,
+                    ))
+                },
+            )
+            .map_err(|error| match error {
+                FreeBitmapFinalizationPreviewError::Bitmap(error) => {
+                    ReclamationProtectedPagesError::Bitmap(error)
+                }
+                FreeBitmapFinalizationPreviewError::Stage(error) => {
+                    ReclamationProtectedPagesError::Retirement(error)
+                }
+            })?;
+        if preview_replacement_len.get() != probe_replacement_len
+            || preview_replacements[..probe_replacement_len] != *probe_entries
+        {
+            return Err(ReclamationProtectedPagesError::ProbeChanged);
+        }
+        let next_len = merge_reclamation_protected_pages(
+            &preview_bitmap_replacements[..preview_len],
+            probe_entries,
+            identity.page_count,
+            next_protected_pages,
+        )?;
+        if next_protected_pages[..next_len] == candidate[..] {
+            return Ok(&protected_pages[..protected_len]);
+        }
+        if next_len > protected_pages.len() {
+            return Err(ReclamationProtectedPagesError::Retirement(
+                RetirementWriteError::ReplacementLedgerTooSmall {
+                    required: next_len,
+                    actual: protected_pages.len(),
+                },
+            ));
+        }
+        protected_pages[..next_len].copy_from_slice(&next_protected_pages[..next_len]);
+        protected_len = next_len;
+    }
+    Err(ReclamationProtectedPagesError::FixedPointDidNotConverge {
+        limit: protected_pages.len().saturating_add(1),
+    })
 }
 
 #[cfg(test)]
@@ -247,7 +599,7 @@ mod tests {
         let mut verified_batches = [];
         let mut verified_pages = [];
 
-        let result = with_locked_reclamation_bitmap_reservation(
+        let result = prepare_locked_reclamation_bitmap_reservation(
             selected_meta(),
             &source,
             RetirementReclaimFence::from_stable_reader_table(&TEST_BARRIER, 0, None),
@@ -283,7 +635,6 @@ mod tests {
             },
             &pool,
             &scope,
-            |_, _| -> Result<(), ()> { unreachable!("invalid limits skip the consumer") },
         );
 
         assert!(matches!(
@@ -296,5 +647,54 @@ mod tests {
             pool.scoped_slot_info(&scope, 0).unwrap().unwrap().state,
             PrivatePagePoolState::Vacant
         );
+    }
+
+    fn replacement(pgno: u32) -> CommittedPageReplacement {
+        CommittedPageReplacement {
+            pgno,
+            origin: crate::retirement_writer::CommittedPageOrigin::RetirementTree,
+        }
+    }
+
+    #[test]
+    fn protected_page_merge_is_sorted_unique_and_bounded() {
+        let mut output = [0u32; 4];
+        let length = merge_reclamation_protected_pages(
+            &[9, 4],
+            &[replacement(4), replacement(8)],
+            10,
+            &mut output,
+        )
+        .unwrap();
+
+        assert_eq!(&output[..length], &[4, 8, 9]);
+    }
+
+    #[test]
+    fn protected_page_merge_rejects_short_or_invalid_input_without_panicking() {
+        let mut short = [0u32; 1];
+        assert!(matches!(
+            merge_reclamation_protected_pages(&[4], &[replacement(8)], 10, &mut short),
+            Err(ReclamationProtectedPagesError::Retirement(
+                RetirementWriteError::ReplacementLedgerTooSmall {
+                    required: 2,
+                    actual: 1,
+                }
+            ))
+        ));
+
+        let mut output = [0u32; 2];
+        assert!(matches!(
+            merge_reclamation_protected_pages(&[1], &[replacement(8)], 10, &mut output),
+            Err(ReclamationProtectedPagesError::ReplacementPageOutOfBounds(
+                1
+            ))
+        ));
+        assert!(matches!(
+            merge_reclamation_protected_pages(&[4], &[replacement(10)], 10, &mut output),
+            Err(ReclamationProtectedPagesError::ReplacementPageOutOfBounds(
+                10
+            ))
+        ));
     }
 }

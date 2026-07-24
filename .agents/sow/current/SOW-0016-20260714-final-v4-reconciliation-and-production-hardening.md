@@ -6987,6 +6987,58 @@ requirements are normative in the Pre-Implementation Gate above.
   held sidecar operation lock; the later test-only blob/tree/fixed-point body
   is intentionally unchanged for the next extraction.
 
+### 2026-07-24 - private lock-bound reclamation reservation ownership correction
+
+- The first extraction passed the bound reservation through a generic consumer
+  callback. Although the current fixture returned it successfully, a future
+  consumer error would drop the only retry authority while leaving its
+  caller-owned shadow scope mutated. That is incompatible with the existing
+  move-only finalizer failure contract.
+- The helper now returns one `LockedReclamationBitmapReservation` directly:
+  exact pass counters plus the move-only bound bitmap reservation. Later
+  finalization receives that value and must retain or explicitly return it on
+  a pre-terminal error. There is no callback-owned reservation to discard.
+
+### 2026-07-24 - selected-reclaim protected-list extraction plan
+
+- Evidence: after the shared lock-bound reservation is created, the selected
+  Linux fixture still contains the whole read-only fixed-point calculation
+  inline in `retirement_writer.rs:9011-9154`: probe the retirement replacement
+  pages, union them with bitmap replacements, stage the prospective retirement
+  blob/tree before each bitmap preview pass, and iterate until the protected
+  list is stable. This is the exact input needed by a future clean `Reclaim`,
+  but it is still test-only logic.
+- Extract only that read-only selected-reclaim protected-list calculation into
+  non-test private machinery. It will accept an already-bound selected
+  reservation and caller-owned probe, stage, list, and finalization scratch;
+  it returns the converged sorted page list without mutating the live bitmap
+  scope. Capacity shortages, unexpected probe releases, malformed replacements,
+  or non-convergence remain typed failures before terminal finalization.
+- Keep no-change out of this helper. Decision 51 says public clean `Reclaim`
+  returns `NoChange` and starts no commit when no retired batch is eligible;
+  the fixture's no-change path represents a different ordinary finalization
+  scenario. Mixing them would hide that semantic distinction and falsely imply
+  that a no-change reclaim should write a retirement batch.
+
+### 2026-07-24 - selected-reclaim protected-list implementation
+
+- Added `preview_selected_reclamation_protected_pages` as normal private Rust
+  machinery. It probes the selected retirement edit, unions its replacement
+  pages with the bound bitmap replacements, stages the prospective
+  blob/tree edit in both bitmap preview passes, and returns only a converged,
+  sorted protected list.
+- The helper deliberately takes no independent source or retirement metadata.
+  It derives both from the already-bound reservation and its verified
+  reclamation authority. This prevents an internal caller from accidentally
+  combining proof from one selected generation with pages from another.
+- All input and work storage remains caller-owned. Short lists, malformed page
+  numbers, missing selected identity, changed probe evidence, and a failed
+  fixed point return typed errors before terminal finalization. The Linux
+  fixture keeps its prior inline calculation as an independent oracle and
+  proves the private helper returns the same list without allocation.
+- No public `Reclaim`, generic lifecycle behavior, format change, or Go parity
+  is claimed by this extraction.
+
 ## Validation
 
 ### 2026-07-24 - bounded terminal capacity
@@ -7014,6 +7066,20 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
   audit pass. This is a Rust-private lifecycle consolidation only: no public
   SDK, byte-format, validation-default, specification, or Go behavior changed.
+
+### 2026-07-24 - selected-reclaim protected-list extraction
+
+- Focused Rust tests pass for sorted/deduplicated protected-page merging,
+  short and out-of-bounds inputs, invalid reclaim limits before source access,
+  and both Linux lock-held finalizer cases. The selected case compares the new
+  private helper against the established independent fixed-point calculation
+  and remains allocation-free across finalization and publication.
+- Full Rust workspace matrices pass: 447 no-default-feature tests and 562
+  all-feature tests. Formatting, all-target/all-feature Clippy with warnings
+  denied, and all-feature benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. No normative specification update is needed: this is private
+  Rust lifecycle machinery with no new public API or on-disk behavior.
 
 ### 2026-07-24 - stage-aware reclamation preview
 

@@ -1304,7 +1304,7 @@ impl<'a> PrivateReleaseBuffer<'a> {
         Ok(())
     }
 
-    fn entries_from(&self, checkpoint: usize) -> &[u32] {
+    pub(crate) fn entries_from(&self, checkpoint: usize) -> &[u32] {
         &self.pgnos[checkpoint..self.len]
     }
 }
@@ -6889,8 +6889,9 @@ mod tests {
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
-        with_locked_reclamation_bitmap_reservation, LockedReclamationFinalizerLimits,
-        LockedReclamationFinalizerScratch,
+        prepare_locked_reclamation_bitmap_reservation,
+        preview_selected_reclamation_protected_pages, LockedReclamationFinalizerLimits,
+        LockedReclamationFinalizerScratch, ReclamationProtectedPagesScratch,
     };
     use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -8886,6 +8887,8 @@ mod tests {
         let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
         let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
         let mut final_cleanup_targets = [usize::MAX; 4];
+        let mut helper_protected_snapshot = [0u32; 4];
+        let helper_protected_len = Cell::new(0usize);
         let mut retirement_terminal_pages = [
             PrivatePageCoordinatorTerminalPage::empty(),
             PrivatePageCoordinatorTerminalPage::empty(),
@@ -8937,7 +8940,7 @@ mod tests {
                         LinuxFinalizerReclamationCase::NoChange => (1, 8),
                         LinuxFinalizerReclamationCase::SelectedBatch => (1, 2),
                     };
-                    let mut bound = with_locked_reclamation_bitmap_reservation(
+                    let reservation = prepare_locked_reclamation_bitmap_reservation(
                         selected,
                         &pages,
                         reclaim_fence,
@@ -8973,31 +8976,29 @@ mod tests {
                         },
                         &shadow_pool,
                         &shadow_scope,
-                        |result, bound| {
-                            match case {
-                                LinuxFinalizerReclamationCase::NoChange => {
-                                    assert_eq!(
-                                        result,
-                                        crate::retirement_reader::RetirementPassResult {
-                                            batch_count: 0,
-                                            page_count: 0,
-                                        }
-                                    );
-                                }
-                                LinuxFinalizerReclamationCase::SelectedBatch => {
-                                    assert_eq!(
-                                        result,
-                                        crate::retirement_reader::RetirementPassResult {
-                                            batch_count: 1,
-                                            page_count: 2,
-                                        }
-                                    );
-                                }
-                            }
-                            Ok::<_, core::convert::Infallible>(bound)
-                        },
                     )
                     .unwrap();
+                    match case {
+                        LinuxFinalizerReclamationCase::NoChange => {
+                            assert_eq!(
+                                reservation.pass,
+                                crate::retirement_reader::RetirementPassResult {
+                                    batch_count: 0,
+                                    page_count: 0,
+                                }
+                            );
+                        }
+                        LinuxFinalizerReclamationCase::SelectedBatch => {
+                            assert_eq!(
+                                reservation.pass,
+                                crate::retirement_reader::RetirementPassResult {
+                                    batch_count: 1,
+                                    page_count: 2,
+                                }
+                            );
+                        }
+                    }
+                    let mut bound = reservation.bound;
                     assert_eq!(
                         bound.binding.reclaimed,
                         usize::from(case == LinuxFinalizerReclamationCase::SelectedBatch) * 2
@@ -9013,6 +9014,38 @@ mod tests {
                     let protected_replacements = match case {
                         LinuxFinalizerReclamationCase::NoChange => &[50][..],
                         LinuxFinalizerReclamationCase::SelectedBatch => {
+                            let helper_protected =
+                                preview_selected_reclamation_protected_pages(
+                                    &mut bound,
+                                    ReclamationProtectedPagesScratch {
+                                        probe_delete_path: &mut probe_delete_path,
+                                        probe_upsert_path: &mut probe_upsert_path,
+                                        probe_replacements: &mut probe_replacement_entries,
+                                        probe_releases: &mut probe_release_pages,
+                                        probe_roles: &mut probe_roles,
+                                        protected_pages: &mut protected_replacement_pages,
+                                        next_protected_pages: &mut next_protected_replacement_pages,
+                                        preview_bitmap_replacements: &mut preview_bitmap_replacements,
+                                        preview_blob_pages: &mut preview_blob_pages,
+                                        preview_delete_path: &mut preview_delete_path,
+                                        preview_upsert_path: &mut preview_upsert_path,
+                                        preview_replacements: &mut preview_replacement_entries,
+                                        preview_releases: &mut preview_release_pages,
+                                        preview_roles: &mut preview_roles,
+                                        final_release_pages: &mut final_release_pages,
+                                        final_insert_pages: &mut final_insert_pages,
+                                        final_cached_pages: &mut final_cached_pages,
+                                        final_index_stack: &mut final_index_stack,
+                                        final_cleanup_nodes: &mut final_cleanup_nodes,
+                                        final_cleanup_path: &mut final_cleanup_path,
+                                        final_cleanup_targets: &mut final_cleanup_targets,
+                                    },
+                                )
+                                .unwrap();
+                            assert!(helper_protected.len() <= helper_protected_snapshot.len());
+                            helper_protected_snapshot[..helper_protected.len()]
+                                .copy_from_slice(helper_protected);
+                            helper_protected_len.set(helper_protected.len());
                             let mut probe_arena = PrivatePageArena::from_scoped_pool(
                                 &shadow_pool,
                                 &shadow_scope,
@@ -9176,6 +9209,13 @@ mod tests {
                             &protected_replacement_pages[..protected_len]
                         }
                     };
+                    if case == LinuxFinalizerReclamationCase::SelectedBatch {
+                        assert_eq!(
+                            &helper_protected_snapshot[..helper_protected_len.get()],
+                            protected_replacements,
+                            "private protected-list finalization must match the established staged fixed point"
+                        );
+                    }
                     let mut arena = PrivatePageArena::from_scoped_pool(
                         &shadow_pool,
                         &shadow_scope,
