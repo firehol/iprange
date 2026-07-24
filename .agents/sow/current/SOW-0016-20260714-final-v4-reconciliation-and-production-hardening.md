@@ -9025,6 +9025,66 @@ requirements are normative in the Pre-Implementation Gate above.
   default-validation behavior, v4 byte layout, or durable file-publication
   path changed.
 
+### 2026-07-24 - ordinary range-replacement core/publication integration plan
+
+- The terminal helper now produces the exact three-owner authority that the
+  coordinator accepts, but no real range-root terminal has crossed the whole
+  remaining boundary. The Linux publisher has substantial fault coverage, yet
+  its existing end-to-end producers are synthetic or retirement-reclaim-only
+  (`os/linux/live_writer.rs:584-974`,
+  `os/linux/live_writer/live_reclaim.rs:1280-2086`). The range path has only
+  stopped after `finalize_range_root_replacement_terminal`
+  (`range_root_proof.rs:955-1105`). Treating those independent tests as an
+  end-to-end normal replacement would be a false completion claim.
+- First add one production-shaped Linux test that builds a real nonempty direct
+  range replacement from logical staging, obtains the no-reclamation allocator
+  authority under the held operation barrier, creates the protected range and
+  retirement terminal, binds it to the transaction core, drains it through the
+  existing durable publisher, and reopens the selected target. It must prove
+  the committed meta contains the new range root/count, bitmap root, retirement
+  root/count, exact terminal page bytes, and a release of the same operation
+  barrier only after core completion.
+- The test will also exercise the existing whole-draft path after a late
+  terminal/core failure: no selected metadata or file bytes may publish, all
+  caller-owned journals and indexes must be scrubbed, and the core must return
+  to a clean reusable state only through its explicit abort. It uses fixed
+  caller-owned arrays established before the barrier and deliberately adds no
+  public writer, `AddRanges`, normalizer API, temporary file, or default
+  validation.
+- This is a narrow integration proof, not the final SDK workspace. Once it
+  establishes the exact core/publisher seam, the following slice will move the
+  same bounded backing into an opaque normal-range workspace and expose it only
+  through the already-resolved high-level/advanced transaction layers.
+
+### 2026-07-24 - ordinary range-replacement core/publication success path
+
+- Added a Linux-only, production-shaped test in
+  `v4/rust/iprange-livedb/src/retirement_writer.rs` that starts with a real
+  direct range leaf, a real free bitmap, and a nonempty retirement tree. It
+  prepares a replacement logical range before the operation barrier, then
+  under that same barrier takes no-reclamation authority, proves the protected
+  replacement, materializes the range, produces the three-owner terminal,
+  binds the transaction core, publishes, and reopens the result.
+- The test proves the new range root/count, bitmap root, retirement root/count,
+  transaction generation, byte-for-byte terminal-page publication, and barrier
+  exclusion while finalization is active. Allocation counting reports zero
+  allocations from finalization through publication; all mutable storage exists
+  before the barrier.
+- The integration exposes one real workspace constraint: the coordinator's
+  `new_locations` journal must have the exact final terminal length, not merely
+  a larger maximum. This fixture has a proven four-page terminal and therefore
+  supplies four entries. The future opaque normal-range workspace must obtain
+  that exact length from the bounded finalization plan before it hands the
+  journal to the coordinator; it must not rely on an oversized loose buffer.
+- Validation: the focused Linux test, the Rust default suite (555 tests), and
+  the all-feature suite (677 tests) pass. Formatting, warnings-denied
+  all-target/all-feature Clippy, whitespace checks, and the SOW audit also
+  pass.
+- The required late-failure/whole-draft-abort companion is still pending. This
+  checkpoint intentionally claims only the successful end-to-end seam; no
+  public API, format byte, default validation behavior, temporary file, or
+  production writer surface changed.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
