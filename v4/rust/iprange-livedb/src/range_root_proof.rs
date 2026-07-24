@@ -6,7 +6,10 @@
 //! one protected-page set. This module binds that preparation state without
 //! touching allocator ownership, target metadata, or file bytes.
 
-use crate::bitmap_cow::{BoundFreeBitmapReservation, FreeBitmapCowError};
+use crate::bitmap_cow::{
+    BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapFinalizationCachedPage,
+    FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
+};
 use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
 use crate::key::IpKey;
 use crate::page_number_index::{
@@ -19,7 +22,8 @@ use crate::private_page_pool::{
     validate_unbound_terminal_journal_source, PrivatePageAuthorization,
     PrivatePageCoordinatorTerminalPage, PrivatePageOwner, PrivatePagePool,
     PrivatePagePoolCommitment, PrivatePagePoolError, PrivatePageReservationScope,
-    PrivatePageReservationScopeSeed, PrivatePageTerminalJournalError,
+    PrivatePageReservationScopeSeed, PrivatePageSelectiveOverlayNode,
+    PrivatePageSelectivePathEntry, PrivatePageTerminalJournalError,
 };
 use crate::range_ownership_walk::{
     collect_range_tree_ownership, RangeOwnershipWalkError, RangeTreeOwnershipScratch,
@@ -28,8 +32,9 @@ use crate::range_staging::RangeTreeMaterializedResult;
 use crate::retirement_writer::RetirementTreeState;
 use crate::retirement_writer::{
     BlobBuildScratch, CommittedPageReplacement, CommittedReplacementLedger, PageRoleIndex,
-    PageRoleIndexSlot, PrivatePageArena, PrivateReleaseBuffer, RetirementBlobBuilder,
-    RetirementPathFrame, RetirementTreeEditResult, RetirementTreeEditor, RetirementWriteError,
+    PageRoleIndexSlot, PrivatePageArena, PrivateReleaseBuffer, RetirementAppendReplacementProbe,
+    RetirementBlobBuilder, RetirementPathFrame, RetirementTreeEditResult, RetirementTreeEditor,
+    RetirementWriteError,
 };
 
 const RANGE_ROOT_PROOF_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325 ^ 0x98f0_4adf_c3e2_719b;
@@ -75,6 +80,51 @@ pub(crate) struct RangeRootRetirementStageScratch<'a> {
     pub(crate) replacements: &'a mut [CommittedPageReplacement],
     pub(crate) releases: &'a mut [u32],
     pub(crate) roles: &'a mut [PageRoleIndexSlot],
+}
+
+/// Dedicated caller-owned scratch for building the complete protected-page
+/// proof of one ordinary range replacement. The two append paths never share
+/// backing: the first is immutable evidence, while every preview must start
+/// from clean detached scratch.
+#[derive(Debug)]
+pub(crate) struct RangeRootReplacementProofScratch<'a> {
+    pub(crate) initial_upsert_path: &'a mut [RetirementPathFrame],
+    pub(crate) initial_replacements: &'a mut [CommittedPageReplacement],
+    pub(crate) initial_releases: &'a mut [u32],
+    pub(crate) initial_roles: &'a mut [PageRoleIndexSlot],
+    pub(crate) preview_bitmap_replacements: &'a mut [u32],
+    pub(crate) preview_blob_pages: &'a mut [u32],
+    pub(crate) preview_upsert_path: &'a mut [RetirementPathFrame],
+    pub(crate) preview_replacements: &'a mut [CommittedPageReplacement],
+    pub(crate) preview_releases: &'a mut [u32],
+    pub(crate) preview_roles: &'a mut [PageRoleIndexSlot],
+    pub(crate) final_release_pages: &'a mut [u32],
+    pub(crate) final_insert_pages: &'a mut [FreeBitmapInsertPage],
+    pub(crate) final_cached_pages: &'a mut [FreeBitmapFinalizationCachedPage],
+    pub(crate) final_index_stack: &'a mut [usize],
+    pub(crate) final_cleanup_nodes: &'a mut [PrivatePageSelectiveOverlayNode],
+    pub(crate) final_cleanup_path: &'a mut [PrivatePageSelectivePathEntry],
+    pub(crate) final_cleanup_targets: &'a mut [usize],
+}
+
+/// Failure before an ordinary range replacement has a complete protected-page
+/// proof. No variant here authorizes publication or changes target metadata.
+#[derive(Debug)]
+pub(crate) enum RangeRootReplacementProofError {
+    SelectedGeneration,
+    Bitmap(FreeBitmapCowError),
+    Retirement(RetirementWriteError),
+    InitialProbeChanged,
+    Proof(RangeRootTransactionProofError<RangeRootReplacementPreviewError>),
+}
+
+/// A fixed-point preview failure for an ordinary range replacement.
+#[derive(Debug)]
+pub(crate) enum RangeRootReplacementPreviewError {
+    Bitmap(FreeBitmapCowError),
+    Retirement(RetirementWriteError),
+    Index(PageNumberIndexError),
+    AppendWitnessChanged,
 }
 
 /// Failure while privately staging the required retirement batch. A
@@ -874,6 +924,62 @@ where
     K: IpKey,
     S: CommittedPageSource + ?Sized,
 {
+    prepare_range_root_transaction_proof_with_initial_replacements::<K, S, E>(
+        source,
+        selected,
+        materialized,
+        range_pages,
+        seed,
+        first,
+        second,
+        ownership_scratch,
+        &[],
+        max_range_work,
+        max_iterations,
+        preview,
+    )
+}
+
+/// As [`prepare_range_root_transaction_proof`], but seeds the protected-page
+/// fixed point with already-proven committed replacements before its first
+/// candidate clone.
+///
+/// An ordinary retirement append uses this for the selected retirement-tree
+/// pages the append will replace. Those pages must be in the first prospective
+/// blob; waiting for the first append preview would make the writer reject its
+/// own unlisted replacements.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) fn prepare_range_root_transaction_proof_with_initial_replacements<
+    'proof,
+    'workspace,
+    'storage,
+    K,
+    S,
+    E,
+>(
+    source: &S,
+    selected: MetaV4,
+    materialized: RangeTreeMaterializedResult,
+    range_pages: &'proof [PrivatePageCoordinatorTerminalPage],
+    seed: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    first: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    second: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    ownership_scratch: &mut RangeTreeOwnershipScratch,
+    initial_replacements: &[CommittedPageReplacement],
+    max_range_work: u64,
+    max_iterations: usize,
+    preview: impl FnMut(
+        &mut PageNumberIndex<'_, '_>,
+        &mut PageNumberIndexFixedPointAdder<'_, '_, '_>,
+    ) -> Result<(), E>,
+) -> Result<
+    RangeRootTransactionProof<'proof, 'workspace, 'storage>,
+    RangeRootTransactionProofError<E>,
+>
+where
+    K: IpKey,
+    S: CommittedPageSource + ?Sized,
+{
     let identity = range_root_transaction_identity_from_meta(selected)?;
     if !seed.is_empty_and_clean()
         || !first.is_empty_and_clean()
@@ -893,6 +999,14 @@ where
     ) {
         discard_range_root_transaction_proof_indexes(seed, first, second);
         return Err(RangeRootTransactionProofError::Ownership(error));
+    }
+    for replacement in initial_replacements {
+        if let Err(error) = seed.insert(replacement.pgno) {
+            discard_range_root_transaction_proof_indexes(seed, first, second);
+            return Err(RangeRootTransactionProofError::FixedPoint(
+                PageNumberIndexFixedPointError::Index(error),
+            ));
+        }
     }
     let candidate = match converge_page_number_index(
         seed,
@@ -962,6 +1076,203 @@ where
     })
 }
 
+/// Builds the complete protected-page proof for an ordinary replacement range
+/// root while the exact bitmap reservation and operation-barrier authority are
+/// still held.
+///
+/// The real append is intentionally not performed here. This first proves its
+/// old retirement-tree replacements, seeds them before the fixed point, and
+/// then replays a matching append in each detached bitmap-finalization pass.
+/// Therefore a later real append cannot discover an unlisted committed page
+/// after it has started claiming the live shadow scope.
+#[allow(
+    clippy::result_large_err,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+pub(crate) fn prepare_range_root_replacement_proof<
+    'proof,
+    'workspace,
+    'storage,
+    'bound,
+    'pool,
+    'barrier,
+    'pages,
+    K,
+    S,
+>(
+    bound: &mut BoundFreeBitmapReservation<'bound, 'pool, 'pool, 'barrier, 'pages, S>,
+    shadow_pool: &'pool PrivatePagePool<'pool>,
+    shadow_scope: &PrivatePageReservationScope<'pool>,
+    selected: MetaV4,
+    materialized: RangeTreeMaterializedResult,
+    range_pages: &'proof [PrivatePageCoordinatorTerminalPage],
+    seed: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    first: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    second: &'proof mut PageNumberIndex<'workspace, 'storage>,
+    ownership_scratch: &mut RangeTreeOwnershipScratch,
+    max_range_work: u64,
+    max_iterations: usize,
+    scratch: RangeRootReplacementProofScratch<'_>,
+) -> Result<RangeRootTransactionProof<'proof, 'workspace, 'storage>, RangeRootReplacementProofError>
+where
+    K: IpKey,
+    S: CommittedPageSource + ?Sized,
+{
+    let (selected_txn, page_count, pending_txn) = bound.selected_generation();
+    if selected.txn_id != selected_txn
+        || selected.page_count != page_count
+        || selected.txn_id.checked_add(1) != Some(pending_txn)
+        || shadow_pool.pending_txn() != pending_txn
+    {
+        return Err(RangeRootReplacementProofError::SelectedGeneration);
+    }
+    if shadow_pool.requires_abort() {
+        return Err(RangeRootReplacementProofError::Bitmap(
+            FreeBitmapCowError::PrivatePool(PrivatePagePoolError::AbortRequired),
+        ));
+    }
+    bound
+        .validate_reclamation_scope(shadow_scope)
+        .map_err(RangeRootReplacementProofError::Bitmap)?;
+
+    let RangeRootReplacementProofScratch {
+        initial_upsert_path,
+        initial_replacements,
+        initial_releases,
+        initial_roles,
+        preview_bitmap_replacements,
+        preview_blob_pages,
+        preview_upsert_path,
+        preview_replacements,
+        preview_releases,
+        preview_roles,
+        final_release_pages,
+        final_insert_pages,
+        final_cached_pages,
+        final_index_stack,
+        final_cleanup_nodes,
+        final_cleanup_path,
+        final_cleanup_targets,
+    } = scratch;
+    let state = RetirementTreeState {
+        selected_txn,
+        page_count,
+        root: selected.retirement_root,
+        batch_count: selected.retirement_batch_count,
+    };
+    let source = bound.reclamation_source();
+    let (initial_probe, initial_len) = {
+        let mut arena = PrivatePageArena::from_scoped_pool(shadow_pool, shadow_scope, pending_txn)
+            .map_err(RangeRootReplacementProofError::Retirement)?;
+        let mut replacements = CommittedReplacementLedger::new(initial_replacements);
+        let mut releases = PrivateReleaseBuffer::new(initial_releases);
+        let mut roles = PageRoleIndex::new(initial_roles);
+        let probe = RetirementTreeEditor::probe_append_newest(
+            source,
+            state,
+            &mut arena,
+            initial_upsert_path,
+            &mut replacements,
+            &mut releases,
+            &mut roles,
+        )
+        .map_err(RangeRootReplacementProofError::Retirement)?;
+        if probe.replacement_count != replacements.entries().len()
+            || !releases.entries_from(0).is_empty()
+            || arena
+                .in_use_count()
+                .map_err(RangeRootReplacementProofError::Retirement)?
+                != 0
+        {
+            return Err(RangeRootReplacementProofError::InitialProbeChanged);
+        }
+        (probe, replacements.entries().len())
+    };
+    let initial_entries = &initial_replacements[..initial_len];
+
+    prepare_range_root_transaction_proof_with_initial_replacements::<K, S, _>(
+        source,
+        selected,
+        materialized,
+        range_pages,
+        seed,
+        first,
+        second,
+        ownership_scratch,
+        initial_entries,
+        max_range_work,
+        max_iterations,
+        |candidate, additions| {
+            let bitmap_len = bound
+                .preview_terminal_replacements_with_stage(
+                    FreeBitmapFinalizationScratch {
+                        release_pages: &mut *final_release_pages,
+                        insert_pages: &mut *final_insert_pages,
+                        cached_pages: &mut *final_cached_pages,
+                        index_stack: &mut *final_index_stack,
+                        cleanup_nodes: &mut *final_cleanup_nodes,
+                        cleanup_path: &mut *final_cleanup_path,
+                        cleanup_targets: &mut *final_cleanup_targets,
+                    },
+                    &mut *preview_bitmap_replacements,
+                    |_, stage_pool, stage_scope| {
+                        let mut arena = PrivatePageArena::from_scoped_pool(
+                            stage_pool,
+                            stage_scope,
+                            pending_txn,
+                        )
+                        .map_err(RangeRootReplacementPreviewError::Retirement)?;
+                        let blob = RetirementBlobBuilder::build_from_index(
+                            candidate,
+                            &mut arena,
+                            &mut BlobBuildScratch::new(&mut *preview_blob_pages),
+                        )
+                        .map_err(RangeRootReplacementPreviewError::Retirement)?;
+                        let mut replacements =
+                            CommittedReplacementLedger::new(&mut *preview_replacements);
+                        let mut releases = PrivateReleaseBuffer::new(&mut *preview_releases);
+                        let mut roles = PageRoleIndex::new(&mut *preview_roles);
+                        let result = RetirementTreeEditor::upsert_newest(
+                            source,
+                            state,
+                            blob,
+                            &mut *preview_upsert_path,
+                            &mut replacements,
+                            &mut releases,
+                            &mut roles,
+                        )
+                        .map_err(RangeRootReplacementPreviewError::Retirement)?;
+                        let witness = RetirementAppendReplacementProbe {
+                            replacement_count: replacements.entries().len(),
+                            tree_private_page_budget: result.private_pages,
+                        };
+                        if witness != initial_probe
+                            || replacements.entries() != initial_entries
+                            || !releases.entries_from(0).is_empty()
+                        {
+                            return Err(RangeRootReplacementPreviewError::AppendWitnessChanged);
+                        }
+                        Ok::<_, RangeRootReplacementPreviewError>(witness)
+                    },
+                )
+                .map_err(|error| match error {
+                    FreeBitmapFinalizationPreviewError::Bitmap(error) => {
+                        RangeRootReplacementPreviewError::Bitmap(error)
+                    }
+                    FreeBitmapFinalizationPreviewError::Stage(error) => error,
+                })?;
+            for &pgno in &preview_bitmap_replacements[..bitmap_len] {
+                additions
+                    .add(pgno)
+                    .map_err(RangeRootReplacementPreviewError::Index)?;
+            }
+            Ok(())
+        },
+    )
+    .map_err(RangeRootReplacementProofError::Proof)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -972,9 +1283,10 @@ mod tests {
         FreeBitmapReservationSourceNode, FreeBitmapReservationStageBuffers, ReservedBitmapPage,
         VerifiedBitmapPage,
     };
+    use crate::blob_page::BlobKind;
     use crate::bootstrap::tests::empty_direct_meta;
     use crate::key::Ipv4Key;
-    use crate::page::{write_crc32c, PageHeader, PageType};
+    use crate::page::{write_crc32c, PageHeader, PageType, PAGE_HEADER_SIZE};
     use crate::page_number_index::{PageNumberIndexPage, PageNumberIndexWorkspace};
     use crate::page_source::SlicePageSource;
     use crate::private_page_pool::{
@@ -986,7 +1298,11 @@ mod tests {
         RangeTreePayloadReservationSlot, RangeTreePayloadScratch, RangeTreePhysicalAssignment,
         RangeTreeStaging, RangeTreeStagingPage,
     };
-    use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
+    use crate::retirement_page::RetirementBatch;
+    use crate::retirement_reader::{
+        test_reclaimed_pages, RetirementReclaimBarrier, RetirementReclaimFence,
+        RetirementReclamation,
+    };
     use crate::retirement_writer::{CommittedPageOrigin, RetirementWriteError};
     use crate::test_alloc::count_thread_allocations;
     use std::vec;
@@ -1005,14 +1321,25 @@ mod tests {
         selected
     }
 
+    #[derive(Debug)]
+    struct RangeReplacementBarrier;
+
+    impl RetirementReclaimBarrier for RangeReplacementBarrier {}
+
+    static RANGE_REPLACEMENT_BARRIER: RangeReplacementBarrier = RangeReplacementBarrier;
+
     fn ownership_image() -> (Vec<u8>, MetaV4) {
-        const PAGE_COUNT: u64 = 12;
-        let mut bytes = vec![0; PAGE_COUNT as usize * PAGE_SIZE];
+        ownership_image_with_page_count(12)
+    }
+
+    fn ownership_image_with_page_count(page_count: u64) -> (Vec<u8>, MetaV4) {
+        assert!(page_count >= 12);
+        let mut bytes = vec![0; page_count as usize * PAGE_SIZE];
         encode_branch::<Ipv4Key>(
             page_mut(&mut bytes, 8),
             3,
             1,
-            PAGE_COUNT,
+            page_count,
             Ipv4Key::MIN,
             None,
             &[
@@ -1066,7 +1393,7 @@ mod tests {
             }],
         )
         .unwrap();
-        (bytes, selected_meta(PAGE_COUNT, 8, 2))
+        (bytes, selected_meta(page_count, 8, 2))
     }
 
     fn free_bitmap_leaf(page: &mut [u8; PAGE_SIZE], txn: u64, bits: &[u32]) {
@@ -1094,6 +1421,50 @@ mod tests {
             page_crc32c: 0,
         }
         .encode_into(page);
+        write_crc32c(page);
+    }
+
+    fn retirement_leaf(page: &mut [u8; PAGE_SIZE], txn: u64, batches: &[RetirementBatch]) {
+        *page = [0; PAGE_SIZE];
+        PageHeader {
+            page_type: PageType::RetirementLeaf,
+            born_txn: txn,
+            item_count: batches.len() as u16,
+            level: 0,
+            lower: (usize::from(PAGE_HEADER_SIZE) + batches.len() * 32) as u16,
+            upper: PAGE_SIZE as u16,
+            aux: 0,
+            page_crc32c: 0,
+        }
+        .encode_into(page);
+        for (index, batch) in batches.iter().enumerate() {
+            let at = usize::from(PAGE_HEADER_SIZE) + index * 32;
+            page[at + 8..at + 16].copy_from_slice(&batch.retired_by_txn.to_le_bytes());
+            page[at + 16..at + 24].copy_from_slice(&batch.page_count.to_le_bytes());
+            page[at + 24..at + 28].copy_from_slice(&batch.page_list_blob_root.to_le_bytes());
+        }
+        write_crc32c(page);
+    }
+
+    fn retirement_blob(page: &mut [u8; PAGE_SIZE], txn: u64, pages: &[u32]) {
+        *page = [0; PAGE_SIZE];
+        let length = core::mem::size_of_val(pages);
+        PageHeader {
+            page_type: PageType::BlobLeaf,
+            born_txn: txn,
+            item_count: 1,
+            level: 0,
+            lower: (48 + length) as u16,
+            upper: PAGE_SIZE as u16,
+            aux: BlobKind::RetirementPageList as u32,
+            page_crc32c: 0,
+        }
+        .encode_into(page);
+        page[40..42].copy_from_slice(&(length as u16).to_le_bytes());
+        for (index, value) in pages.iter().enumerate() {
+            let at = 48 + index * size_of::<u32>();
+            page[at..at + size_of::<u32>()].copy_from_slice(&value.to_le_bytes());
+        }
         write_crc32c(page);
     }
 
@@ -1131,45 +1502,45 @@ mod tests {
     }
 
     struct RangeRootStageBitmapStorage {
-        arena: [ReservedBitmapPage; 8],
-        pool_validation: [PrivatePageCompositeBind; 8],
-        arena_bindings: [BitmapCowArenaBinding; 8],
-        candidates: [u32; 8],
-        verified: [VerifiedBitmapPage; 8],
-        replacements: [u32; 8],
-        index: [BitmapCowIndexNode; 24],
-        available: [usize; 8],
-        source_nodes: [FreeBitmapReservationSourceNode; 16],
+        arena: [ReservedBitmapPage; 24],
+        pool_validation: [PrivatePageCompositeBind; 24],
+        arena_bindings: [BitmapCowArenaBinding; 24],
+        candidates: [u32; 24],
+        verified: [VerifiedBitmapPage; 24],
+        replacements: [u32; 24],
+        index: [BitmapCowIndexNode; 72],
+        available: [usize; 24],
+        source_nodes: [FreeBitmapReservationSourceNode; 48],
         ticket: FreeBitmapReclamationTicket,
-        stage_arena: [ReservedBitmapPage; 8],
-        stage_bindings: [BitmapCowArenaBinding; 8],
-        stage_candidates: [u32; 8],
-        stage_verified: [VerifiedBitmapPage; 8],
-        stage_replacements: [u32; 8],
-        stage_index: [BitmapCowIndexNode; 24],
-        stage_available: [usize; 8],
+        stage_arena: [ReservedBitmapPage; 24],
+        stage_bindings: [BitmapCowArenaBinding; 24],
+        stage_candidates: [u32; 24],
+        stage_verified: [VerifiedBitmapPage; 24],
+        stage_replacements: [u32; 24],
+        stage_index: [BitmapCowIndexNode; 72],
+        stage_available: [usize; 24],
     }
 
     impl RangeRootStageBitmapStorage {
         fn new() -> Self {
             Self {
-                arena: [const { ReservedBitmapPage::empty() }; 8],
-                pool_validation: [PrivatePageCompositeBind::empty(); 8],
-                arena_bindings: [BitmapCowArenaBinding::empty(); 8],
-                candidates: [0; 8],
-                verified: [const { VerifiedBitmapPage::empty() }; 8],
-                replacements: [0; 8],
-                index: [BitmapCowIndexNode::empty(); 24],
-                available: [0; 8],
-                source_nodes: [FreeBitmapReservationSourceNode::empty(); 16],
+                arena: [const { ReservedBitmapPage::empty() }; 24],
+                pool_validation: [PrivatePageCompositeBind::empty(); 24],
+                arena_bindings: [BitmapCowArenaBinding::empty(); 24],
+                candidates: [0; 24],
+                verified: [const { VerifiedBitmapPage::empty() }; 24],
+                replacements: [0; 24],
+                index: [BitmapCowIndexNode::empty(); 72],
+                available: [0; 24],
+                source_nodes: [FreeBitmapReservationSourceNode::empty(); 48],
                 ticket: FreeBitmapReclamationTicket::new(),
-                stage_arena: [const { ReservedBitmapPage::empty() }; 8],
-                stage_bindings: [BitmapCowArenaBinding::empty(); 8],
-                stage_candidates: [0; 8],
-                stage_verified: [const { VerifiedBitmapPage::empty() }; 8],
-                stage_replacements: [0; 8],
-                stage_index: [BitmapCowIndexNode::empty(); 24],
-                stage_available: [0; 8],
+                stage_arena: [const { ReservedBitmapPage::empty() }; 24],
+                stage_bindings: [BitmapCowArenaBinding::empty(); 24],
+                stage_candidates: [0; 24],
+                stage_verified: [const { VerifiedBitmapPage::empty() }; 24],
+                stage_replacements: [0; 24],
+                stage_index: [BitmapCowIndexNode::empty(); 72],
+                stage_available: [0; 24],
             }
         }
 
@@ -1982,6 +2353,275 @@ mod tests {
         assert!(seed.is_empty_and_clean());
         assert!(first.is_empty_and_clean());
         assert!(second.is_empty_and_clean());
+    }
+
+    #[test]
+    fn seeds_proven_retirement_replacements_before_first_preview() {
+        let (bytes, selected) = ownership_image();
+        let source = SlicePageSource::new(&bytes, selected.page_count);
+        let (materialized, range_pages) = materialized_range_page(5);
+        let initial = [CommittedPageReplacement {
+            pgno: 2,
+            origin: CommittedPageOrigin::RetirementTree,
+        }];
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        let mut ownership_scratch = RangeTreeOwnershipScratch::new();
+        let mut calls = 0;
+
+        let proof =
+            prepare_range_root_transaction_proof_with_initial_replacements::<Ipv4Key, _, ()>(
+                &source,
+                selected,
+                materialized,
+                &range_pages,
+                &mut seed,
+                &mut first,
+                &mut second,
+                &mut ownership_scratch,
+                &initial,
+                4,
+                2,
+                |current, additions| {
+                    calls += 1;
+                    assert!(matches!(current.len(), 5 | 6));
+                    additions.add(6).map(|_| ()).map_err(|_| ())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(calls, 2);
+        assert_eq!(collect(&mut *proof.seed), vec![2, 3, 4, 8, 11]);
+        let protected = match proof.candidate {
+            PageNumberIndexFixedPointCandidate::First => &mut *proof.first,
+            PageNumberIndexFixedPointCandidate::Second => &mut *proof.second,
+        };
+        assert_eq!(collect(protected), vec![2, 3, 4, 6, 8, 11]);
+        proof.discard_after_abort();
+        assert!(seed.is_empty_and_clean());
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+    }
+
+    fn assert_ordinary_replacement_proof_converges(
+        mut bytes: Vec<u8>,
+        mut selected: MetaV4,
+        free_pages: &[u32],
+        expected_seed: &[u32],
+        expected_protected: &[u32],
+    ) {
+        selected.free_bitmap_root = 2;
+        free_bitmap_leaf(page_mut(&mut bytes, 2), selected.txn_id, free_pages);
+        let source = SlicePageSource::new(&bytes, selected.page_count);
+        let mut storage = RangeRootStageBitmapStorage::new();
+        let fence = RetirementReclaimFence::from_stable_reader_table(
+            &RANGE_REPLACEMENT_BARRIER,
+            1,
+            Some(selected.txn_id),
+        );
+        let plan = FreeBitmapReservationPlanner::new(
+            &source,
+            selected.txn_id,
+            selected.page_count,
+            selected.free_bitmap_root,
+            3,
+            storage.buffers(),
+        )
+        .unwrap()
+        .plan_under_reclamation(fence.into_no_reclamation())
+        .unwrap();
+        let required = plan.required_private_pages();
+        assert!(required <= 24);
+        let mut pool_slots = [const { PrivatePagePoolSlot::empty() }; 24];
+        let pool = PrivatePagePool::new_vacant(
+            &mut pool_slots[..required],
+            selected.page_count,
+            selected.page_count,
+            selected.txn_id + 1,
+        )
+        .unwrap();
+        let scope = pool.reserve_scope(required).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+
+        let mut logical_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging = RangeTreeStaging::<Ipv4Key>::new(
+            &mut logical_pages,
+            selected.txn_id + 1,
+            ValueKind::Direct,
+        )
+        .unwrap();
+        let mut range_workspace = RangeTreeBuildWorkspace::new();
+        let mut builder = range_workspace
+            .begin(
+                selected.txn_id + 1,
+                ValueKind::Direct,
+                staging.logical_page_limit(),
+            )
+            .unwrap();
+        builder
+            .push(
+                &mut staging,
+                RangeRecord {
+                    from: Ipv4Key(30),
+                    to: Ipv4Key(40),
+                    value: 1,
+                },
+            )
+            .unwrap();
+        let built = builder.finish(&mut staging).unwrap();
+        let staged = staging.finish(built).unwrap();
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut payload_slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut range_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let materialized = bound
+            .stage_range_payload(
+                &scope,
+                &staging,
+                staged,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut payload_slots,
+                    terminal_pages: &mut range_terminal,
+                },
+            )
+            .unwrap();
+        let mut seed_pages = [PageNumberIndexPage::empty(); 4];
+        let mut first_pages = [PageNumberIndexPage::empty(); 4];
+        let mut second_pages = [PageNumberIndexPage::empty(); 4];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        let mut ownership_scratch = RangeTreeOwnershipScratch::new();
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut initial_path = [RetirementPathFrame::new(); 8];
+        let mut initial_replacements = [CommittedPageReplacement {
+            pgno: 0,
+            origin: CommittedPageOrigin::RetirementTree,
+        }; 8];
+        let mut initial_releases = [0_u32; 8];
+        let mut initial_roles = [PageRoleIndexSlot::new(); 16];
+        let mut preview_bitmap_replacements = [0_u32; 24];
+        let mut preview_blob_pages = [0_u32; 1];
+        let mut preview_path = [RetirementPathFrame::new(); 8];
+        let mut preview_replacements = [CommittedPageReplacement {
+            pgno: 0,
+            origin: CommittedPageOrigin::RetirementTree,
+        }; 8];
+        let mut preview_releases = [0_u32; 8];
+        let mut preview_roles = [PageRoleIndexSlot::new(); 16];
+        let mut final_release = vec![0; requirements.release_pages];
+        let mut final_insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut final_cache =
+            vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut final_stack = vec![usize::MAX; requirements.index_stack];
+        let mut final_cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut final_cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut final_cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let before = pool.test_mutation_snapshot();
+
+        let (proof, allocations) = count_thread_allocations(|| {
+            prepare_range_root_replacement_proof::<Ipv4Key, _>(
+                &mut bound,
+                &pool,
+                &scope,
+                selected,
+                materialized,
+                &range_terminal,
+                &mut seed,
+                &mut first,
+                &mut second,
+                &mut ownership_scratch,
+                4,
+                3,
+                RangeRootReplacementProofScratch {
+                    initial_upsert_path: &mut initial_path,
+                    initial_replacements: &mut initial_replacements,
+                    initial_releases: &mut initial_releases,
+                    initial_roles: &mut initial_roles,
+                    preview_bitmap_replacements: &mut preview_bitmap_replacements,
+                    preview_blob_pages: &mut preview_blob_pages,
+                    preview_upsert_path: &mut preview_path,
+                    preview_replacements: &mut preview_replacements,
+                    preview_releases: &mut preview_releases,
+                    preview_roles: &mut preview_roles,
+                    final_release_pages: &mut final_release,
+                    final_insert_pages: &mut final_insert,
+                    final_cached_pages: &mut final_cache,
+                    final_index_stack: &mut final_stack,
+                    final_cleanup_nodes: &mut final_cleanup_nodes,
+                    final_cleanup_path: &mut final_cleanup_path,
+                    final_cleanup_targets: &mut final_cleanup_targets,
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        let mut proof = proof.unwrap();
+        assert_eq!(pool.test_mutation_snapshot(), before);
+        proof.verify().unwrap();
+        assert_eq!(collect(&mut *proof.seed), expected_seed);
+        let protected = match proof.candidate {
+            PageNumberIndexFixedPointCandidate::First => &mut *proof.first,
+            PageNumberIndexFixedPointCandidate::Second => &mut *proof.second,
+        };
+        assert_eq!(collect(protected), expected_protected);
+        proof.discard_after_abort();
+        assert!(seed.is_empty_and_clean());
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+    }
+
+    #[test]
+    fn ordinary_replacement_proof_converges_empty_retirement_tree() {
+        let (bytes, selected) = ownership_image();
+        assert_ordinary_replacement_proof_converges(
+            bytes,
+            selected,
+            &[5, 6, 7, 9, 10],
+            &[3, 4, 8, 11],
+            &[2, 3, 4, 8, 11],
+        );
+    }
+
+    #[test]
+    fn ordinary_replacement_proof_converges_existing_retirement_tree() {
+        let (mut bytes, mut selected) = ownership_image_with_page_count(16);
+        selected.retirement_root = 5;
+        selected.retirement_batch_count = 1;
+        retirement_leaf(
+            page_mut(&mut bytes, 5),
+            selected.txn_id,
+            &[RetirementBatch {
+                retired_by_txn: 2,
+                page_count: 1,
+                page_list_blob_root: 6,
+            }],
+        );
+        retirement_blob(page_mut(&mut bytes, 6), selected.txn_id, &[10]);
+        assert_ordinary_replacement_proof_converges(
+            bytes,
+            selected,
+            &[7, 9, 12, 13, 14, 15],
+            &[3, 4, 5, 8, 11],
+            &[2, 3, 4, 5, 8, 11],
+        );
     }
 
     #[test]

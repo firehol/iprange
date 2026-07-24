@@ -8862,6 +8862,81 @@ requirements are normative in the Pre-Implementation Gate above.
   `git diff --check`; and the SOW audit. No normative spec, public API,
   default-validation behavior, format byte, or file publication path changed.
 
+### 2026-07-24 - ordinary range-replacement protected-set plan
+
+- Evidence: a real retirement append rejects any committed tree page it
+  replaces unless that page is already listed in the new retirement blob
+  (`retirement_writer.rs:12944-12984`). The range-root proof currently seeds
+  only old range-tree ownership before it enters its monotonic fixed point
+  (`range_root_proof.rs:854-929`). A normal range replacement with a nonempty
+  retirement tree therefore needs the new append-only probe's replacement
+  entries in that seed before its first prospective append.
+- Extend the private proof constructor with an explicit caller-owned initial
+  replacement stream. It will add those selected committed page numbers after
+  range-ownership collection and before the first candidate clone; the old
+  entry point remains a strict empty-stream wrapper.
+- Add one Rust-private ordinary-range proof preparer. It will derive its source,
+  transaction facts, and held scope only from the already-bound no-reclamation
+  bitmap reservation; probe the selected retirement append; seed those exact
+  replacement pages; then, during every fixed-point preview, build a temporary
+  blob from the candidate index, append it in the detached bitmap-finalization
+  scope, and add the resulting bitmap replacements. The append witness must
+  match the initial probe on every preview pass.
+- This is preparation only. It will not change target metadata, materialize a
+  new range page, reclaim an existing retirement batch, mutate the live shadow
+  scope during preview, bind a coordinator terminal, publish a file, add a
+  public API, or introduce a temporary file. A later bridge will call it after
+  staging the logical normalizer output and before the one real range/retirement
+  finalization sequence.
+- Tests must cover legal empty and nonempty selected range/retirement roots,
+  fixed-point inclusion of old range, bitmap, and retirement replacements,
+  mismatched bound generation/scope rejection before mutation, malformed
+  retirement input, insufficient preview scratch, replay-witness mismatch, and
+  zero allocations after fixed workspace setup.
+
+### 2026-07-24 - ordinary range-replacement protected-set implementation
+
+- Rust now has a private initial-replacement extension of the existing
+  range-root proof. Its original entry point remains an empty-stream wrapper,
+  so pre-existing callers retain their exact behavior. The extension adds only
+  already-proven committed retirement-tree replacements before fixed-point
+  convergence starts.
+- `prepare_range_root_replacement_proof` derives the selected source,
+  generation, and scope from the held bound reservation. It first runs the
+  append-only retirement probe without allocating a page, then replays the
+  actual append in each detached bitmap-finalization preview. A changed
+  replacement list, tree-page budget, or private release rejects the proof.
+- The successful proof includes every old range page, every selected
+  retirement-tree page that the new append replaces, and every prospective
+  bitmap replacement. The helper uses only caller-provided scratch and leaves
+  the live pool unchanged; it creates neither a temporary file nor a durable
+  output.
+- This does not yet invoke the real retirement stage/finalizer or publish a
+  normalizer result. The next bridge must consume this proof once, stage the
+  real retirement/blob/tree output, finalize the bitmap, and bind the existing
+  target/terminal coordinator record under the same held lock.
+
+### 2026-07-24 - ordinary range-replacement protected-set focused validation
+
+- Focused Rust tests prove both an empty selected retirement tree and a
+  nonempty selected retirement leaf converge correctly. The latter proves the
+  old retirement leaf enters the initial seed and the final protected set
+  alongside old range pages and the bitmap replacement. Both paths make zero
+  heap allocations after caller scratch setup and leave the private pool's
+  mutation snapshot unchanged.
+- The append-probe checkpoint already covers malformed selected retirement
+  input and zero-allocation probe behavior. Generation/scope rejection,
+  short-preview scratch, and replay-witness failure remain explicit tests for
+  the following real staging/finalizer bridge, where those errors can be
+  checked against one abort-latched shared draft rather than an isolated proof.
+- Full checkpoint validation passes: Rust default (554 tests) and all-feature
+  (675 tests) suites; Rust formatting; warnings-denied all-target/all-feature
+  Clippy; and all-feature benchmark compilation. Go `test ./...`, `vet
+  ./...`, race tests, and 32-bit tests also pass. `git diff --check` and the
+  SOW audit are rerun immediately before commit. No normative specification,
+  public API, default-validation behavior, v4 byte layout, or file-publication
+  path changed.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
