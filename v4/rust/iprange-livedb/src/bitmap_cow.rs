@@ -1365,6 +1365,13 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
                 available: self.source_nodes.len(),
             });
         }
+        if pages.len() > self.private_pages {
+            return Err(FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::ArenaPages,
+                required: pages.len(),
+                available: self.private_pages,
+            });
+        }
         let mut previous = None;
         for (index, &pgno) in pages.iter().enumerate() {
             if pgno < 2 || u64::from(pgno) >= self.cow.committed_page_count {
@@ -1409,28 +1416,19 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
         let mut committed_selected = 0usize;
         let mut reclaimed_rank = 0usize;
         let mut appended = 0usize;
+        let selected_candidate_count = self.private_pages - pages.len();
+        let selected_committed_candidate_count = selected_candidate_count.min(candidate_len);
+        let selected_appended_count = selected_candidate_count - selected_committed_candidate_count;
         for index in 0..self.private_pages {
-            let candidate = self.source_nodes[..candidate_len]
+            let candidate = self.cow.candidates[..selected_committed_candidate_count]
                 .get(candidate_rank)
                 .copied();
             let reclaimed = pages.get(reclaimed_rank).copied();
             let (pgno, authorization) = match (candidate, reclaimed) {
-                (Some(left), Some(right)) if left.pgno < right => {
+                (Some(left), Some(right)) if left < right => {
                     candidate_rank += 1;
-                    let authorization = match left.kind {
-                        FreeBitmapReservationSourceKind::Committed => {
-                            committed_selected += 1;
-                            PrivatePageAuthorization::CommittedFree
-                        }
-                        FreeBitmapReservationSourceKind::Appended => {
-                            appended += 1;
-                            PrivatePageAuthorization::Appended
-                        }
-                        FreeBitmapReservationSourceKind::Reclaimed => {
-                            return Err(FreeBitmapCowError::StaleInsertionPlan);
-                        }
-                    };
-                    (left.pgno, authorization)
+                    committed_selected += 1;
+                    (left, PrivatePageAuthorization::CommittedFree)
                 }
                 (_, Some(right)) => {
                     reclaimed_rank += 1;
@@ -1438,22 +1436,13 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
                 }
                 (Some(left), None) => {
                     candidate_rank += 1;
-                    let authorization = match left.kind {
-                        FreeBitmapReservationSourceKind::Committed => {
-                            committed_selected += 1;
-                            PrivatePageAuthorization::CommittedFree
-                        }
-                        FreeBitmapReservationSourceKind::Appended => {
-                            appended += 1;
-                            PrivatePageAuthorization::Appended
-                        }
-                        FreeBitmapReservationSourceKind::Reclaimed => {
-                            return Err(FreeBitmapCowError::StaleInsertionPlan);
-                        }
-                    };
-                    (left.pgno, authorization)
+                    committed_selected += 1;
+                    (left, PrivatePageAuthorization::CommittedFree)
                 }
                 (None, None) => {
+                    if appended == selected_appended_count {
+                        return Err(FreeBitmapCowError::StaleInsertionPlan);
+                    }
                     let page = self
                         .cow
                         .pending_page_count
@@ -1473,6 +1462,12 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
                 authorization,
                 state: PrivatePageCompositeBindState::Available,
             };
+        }
+        if candidate_rank != selected_committed_candidate_count
+            || reclaimed_rank != pages.len()
+            || appended != selected_appended_count
+        {
+            return Err(FreeBitmapCowError::StaleInsertionPlan);
         }
 
         self.stage.candidates[..candidate_len]
@@ -10450,6 +10445,68 @@ pub(crate) mod tests {
                 vec![20, 21, 22],
             )
         );
+    }
+
+    #[test]
+    fn late_binding_keeps_every_verified_reclaimed_page_when_candidates_sort_first() {
+        let source = SparsePages::new([leaf(11, 1, &[3, 4, 5])]);
+        let mut storage = PlannerStorage::new(3, 4, 4, 10);
+        storage.arena.clear();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_capacity()
+            .unwrap();
+        assert_eq!(plan.required_private_pages(), 3);
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let (attachment, request) = plan.attach(&pool, &scope).unwrap();
+        let reclaimed = [7u32, 8];
+        let proof = complete_free_bitmap_reclamation_for_test(request, 91, &reclaimed).unwrap();
+        let bound = attachment.bind(proof).unwrap();
+        assert_eq!(
+            bound.binding,
+            FreeBitmapReservationBinding {
+                committed: 1,
+                reclaimed: 2,
+                appended: 0,
+            }
+        );
+        let bound_pages = core::array::from_fn::<_, 3, _>(|index| {
+            pool.scoped_slot_info(&scope, bound.cow.arena_bindings[index].pool_slot)
+                .unwrap()
+                .unwrap()
+                .pgno
+        });
+        assert_eq!(bound_pages, [3, 7, 8]);
+    }
+
+    #[test]
+    fn late_binding_rejects_reclaimed_pages_that_exceed_the_reserved_scope() {
+        let source = SparsePages::new([]);
+        let mut storage = PlannerStorage::new(2, 2, 1, 4);
+        storage.arena.clear();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 0, 2, storage.buffers())
+            .unwrap()
+            .plan_capacity()
+            .unwrap();
+        assert_eq!(plan.required_private_pages(), 2);
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 2];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(2).unwrap();
+        let (attachment, request) = plan.attach(&pool, &scope).unwrap();
+        let reclaimed = [3u32, 7, 9];
+        let proof = complete_free_bitmap_reclamation_for_test(request, 92, &reclaimed).unwrap();
+        assert!(matches!(
+            attachment.bind(proof),
+            Err(FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::ArenaPages,
+                required: 3,
+                available: 2,
+            })
+        ));
+        assert_eq!(pool.scope_status(&scope).unwrap().bound, 0);
+        assert_eq!(pool.pending_page_count(), 20);
     }
 
     #[test]

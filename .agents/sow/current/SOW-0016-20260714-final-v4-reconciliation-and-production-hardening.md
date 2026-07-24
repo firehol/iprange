@@ -6738,6 +6738,42 @@ requirements are normative in the Pre-Implementation Gate above.
   lock-bound finalization caller yet, so this checkpoint does not claim a Go
   reclamation-operation implementation or public cross-language SDK parity.
 
+### 2026-07-24 - reclamation fixed-point preflight plan
+
+- The selected-batch fixture still used hard-coded replacement page numbers.
+  A generic `Reclaim` cannot do that: it must discover every currently
+  committed retirement-tree/blob page that the selected-prefix delete and
+  next-batch append will replace, combine that list with free-bitmap COW
+  replacements, then build the new protected list before the real edit.
+- The bitmap binder also selected a sorted union of ordinary free candidates
+  and reclaimed pages without requiring every reclaimed page to fit. Lower
+  ordinary candidates could therefore displace a verified reclaimed page from
+  the bound scope. That is a page-loss/corruption risk, not an allocation
+  preference.
+- Add one private, bounded probe that performs the actual delete-plus-append
+  structural traversal without building the new blob or mutating its page
+  arena. Make all verified reclaimed pages mandatory during bitmap binding;
+  insufficient scope capacity must fail before live-pool mutation. The next
+  slice still must derive and charge complete blob/tree/bitmap fixed-point
+  capacity, then wire this into the real clean-writer operation.
+
+### 2026-07-24 - reclamation fixed-point preflight implementation
+
+- `RetirementTreeEditor::probe_reclaimed_oldest_and_append_newest` now checks
+  the exact selected identity/verified prefix and records every committed
+  retirement-tree/blob replacement for the real edit. It performs no heap
+  allocation and does not mutate its supplied page arena. The caller must use
+  fresh edit scratch after combining this dedicated probe ledger with bitmap
+  replacements into the new blob list.
+- `FreeBitmapReservationAttachment::bind` now binds every verified reclaimed
+  page. It chooses only the remaining number of lowest ordinary candidates,
+  preserving the required ascending physical binding order. A reclaimed set
+  larger than the pre-reserved scope returns typed `ArenaPages` budget failure
+  before any live binding instead of silently omitting pages.
+- This remains an internal Rust foundation. It does not claim a public
+  `Reclaim`, generic Linux lifecycle wiring, a new v4 format rule, or Go
+  parity.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6879,6 +6915,22 @@ requirements are normative in the Pre-Implementation Gate above.
   tests; Rust all-feature workspace matrix 547 tests; warnings-denied
   all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
   Rust formatting; `git diff --check`; and the project SOW audit.
+
+### 2026-07-24 - reclamation fixed-point preflight
+
+- Focused permanent Rust coverage proves that the replacement probe is
+  allocation-free, leaves its arena unchanged, discovers the exact tree/blob
+  pages needed by the real edit, and makes that edit succeed without a late
+  replacement-list omission. Separate coverage proves lower ordinary bitmap
+  candidates cannot displace verified reclaimed pages and oversize reclaimed
+  input fails before scope binding.
+- Rust workspace matrices pass: 435 no-default tests and 550 all-feature
+  tests. The complete existing late-binding regression group also passes,
+  including its 512- and 4,096-source bounded-memory cases. Warnings-denied
+  no-default test Clippy passes.
+- Go is unchanged because no Go lock-bound finalization caller exists yet.
+  Full cross-language validation remains required for the next integrated
+  lifecycle checkpoint.
 
 ### Historical adversarial-audit evidence
 
