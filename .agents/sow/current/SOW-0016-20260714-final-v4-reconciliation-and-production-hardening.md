@@ -6522,6 +6522,42 @@ requirements are normative in the Pre-Implementation Gate above.
   unchanged until explicit cancellation. This is the mandatory lock-bound
   bridge, not yet the concrete allocator/retirement finalizer itself.
 
+### 2026-07-24 - lock-bound aggregate execution plan
+
+- Evidence: the strongest mixed bitmap/retirement Linux path constructs a
+  `FixedPointPreparedAggregateWork`, executes it, updates the target, and
+  finishes fixed-point input before calling the Linux publisher
+  (`retirement_writer.rs:7644-7734`). Its later publisher call therefore tests
+  only page drain and durable publication, not the aggregate transition that
+  creates the final pending coordinator record.
+- Move that aggregate construction and execution into the required finalizer
+  callback. The callback will take the exact `PinnedPageSource` from the held
+  context, build the aggregate against it, execute the aggregate, complete its
+  canonical record, update the transaction target, and finish fixed-point
+  input before the publisher may prepare/drain pages. The existing pre-lock
+  terminal-export construction remains unchanged in this narrow slice.
+- The permanent test will prove that the aggregate cannot have run before the
+  callback, that it reads through the held retained source, and that no physical
+  output begins until the callback has completed. This closes the core
+  aggregate-to-publication ordering gap without falsely claiming that the
+  remaining physical-page selection planners are fully deferred.
+
+### 2026-07-24 - lock-bound aggregate execution implementation
+
+- Moved the successful aggregate preparation, execution, canonical-record
+  completion, target update, and fixed-point-input completion into the normal
+  Linux publisher callback in
+  `retirement_writer.rs:7659-7736`. Before that callback starts, the test
+  proves the coordinator remains non-quiescent and the workspace remains idle.
+- The aggregate now receives the exact `PinnedPageSource` supplied by the held
+  Linux context. It must quiesce the coordinator and retain the expected scope
+  fence before `finalize_and_publish_fixed_point_private_output` may prepare or
+  drain private pages.
+- This is deliberately not a claim that all bitmap or retirement physical-page
+  planning is lock-bound yet: the fixture's typed terminal exports are still
+  prepared before the barrier. The next repair must split those physical
+  planner/finalizer paths without changing the bounded-scratch contract.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6594,6 +6630,17 @@ requirements are normative in the Pre-Implementation Gate above.
 - `cargo check --manifest-path v4/rust/Cargo.toml --workspace --all-features
   --benches`: pass. This is the important non-test build check: the old no-op
   pre-finalized adapters are absent outside test compilation.
+- Final checkpoint validation passes: Rust no-default workspace matrix 427
+  tests; Rust all-feature workspace matrix 540 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
+
+### 2026-07-24 - lock-bound aggregate execution
+
+- `cargo test --manifest-path v4/rust/Cargo.toml -p iprange-livedb
+  --all-features retirement_writer::tests::scoped_arena_preserves_scope_isolation_through_linux_publication`:
+  pass. This exercises the normal publisher callback and the exact retained
+  page source while the aggregate changes the pending transaction state.
 - Final checkpoint validation passes: Rust no-default workspace matrix 427
   tests; Rust all-feature workspace matrix 540 tests; warnings-denied
   all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;

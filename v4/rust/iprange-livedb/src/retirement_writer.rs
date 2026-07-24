@@ -7656,88 +7656,85 @@ mod tests {
                     assert!(workspace.is_idle());
                     assert!(workspace.record_slot_ready(0, 3));
 
-                    let aggregate = match workspace.prepare_aggregate(
-                        produced,
-                        coordinator,
-                        &predecessor,
-                        live_pool,
-                        &committed,
-                        &[],
-                    ) {
-                        Ok(aggregate) => aggregate,
-                        Err(_) => panic!("restored aggregate preparation must succeed"),
-                    };
-                    let (sealed, allocations) = count_thread_allocations(|| {
-                        match core.execute_fixed_point_aggregate(&handle, predecessor, aggregate) {
-                            Ok(sealed) => sealed,
-                            Err(_) => panic!("production core must execute the prepared aggregate"),
-                        }
-                    });
-                    assert_eq!(allocations, 0);
-                    assert_eq!(sealed.retirement_result(), combined);
-                    assert_eq!(sealed.record_index(), 0);
-                    assert_eq!(
-                        workspace.record_state(0),
-                        Some(crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1))
-                    );
-                    assert!(live_pool.find_bound_page(bitmap_root).unwrap().is_some());
-                    for page in produced_pages.iter() {
-                        assert!(live_pool.find_bound_page(page.pgno).unwrap().is_some());
-                    }
-                    let (completion, completion_allocations) = count_thread_allocations(|| {
-                        core.complete_fixed_point_aggregate(&handle, &workspace, sealed)
-                    });
-                    let successor = match completion {
-                        Ok(successor) => successor,
-                        Err(error) => panic!("sealed aggregate handoff must complete: {error:?}"),
-                    };
-                    assert_eq!(completion_allocations, 0);
-                    assert_eq!(successor.root(), bitmap_root);
-                    assert_eq!(successor.pending_page_count(), 100 + appended);
-                    let target = core.target().unwrap();
-                    assert_eq!(target.free_bitmap_root, bitmap_root);
-                    assert_eq!(target.page_count, 100 + appended);
-                    assert_eq!(target.retirement_root, combined.root);
-                    assert_eq!(target.retirement_batch_count, combined.batch_count);
-                    assert!(matches!(
-                    core.preflight_commit(&handle),
-                    Err(
-                        crate::writer_transaction_core::PrivateWriterTransactionError::FixedPoint(
-                            FixedPointError::StalePredecessor
-                        )
-                    )
-                ));
-                    let (_, finish_allocations) = count_thread_allocations(|| {
-                        core.finish_fixed_point_input(&handle, &workspace, successor)
-                            .unwrap();
-                    });
-                    assert_eq!(finish_allocations, 0);
-                    assert!(core.fixed_point(&handle).unwrap().is_quiescent());
-                    let live_pool = core.draft(&handle).unwrap();
-                    assert!(live_pool.has_active_scopes());
-                    assert_eq!(
-                        live_pool.coordinator_commit_fence(),
-                        Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
-                    );
-                    assert!(matches!(
-                        core.preflight_commit(&handle),
-                        Err(
-                            crate::writer_transaction_core::PrivateWriterTransactionError::Pool(
-                                crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
-                            )
-                        )
-                    ));
+                    assert!(!core.fixed_point(&handle).unwrap().is_quiescent());
+                    assert!(workspace.is_idle());
                     let database = live_test_database(selected, selected.page_count as usize);
                     let writer = LinuxLiveWriter::open(&database.main).unwrap();
+                    let finalizer_ran = Cell::new(false);
                     let (publication, publication_allocations) = count_thread_allocations(|| {
-                        writer.publish_fixed_point_private_output(
+                        writer.finalize_and_publish_fixed_point_private_output(
                             &mut core,
                             &handle,
                             &mut workspace,
+                            |context, core, handle, workspace| {
+                                finalizer_ran.set(true);
+                                let (source_selected, pages, _fence) = context.into_parts();
+                                assert_eq!(source_selected.meta, selected);
+                                let live_pool = core.draft(handle)?;
+                                let coordinator = core.fixed_point(handle)?;
+                                let aggregate = workspace
+                                    .prepare_aggregate(
+                                        produced,
+                                        coordinator,
+                                        &predecessor,
+                                        live_pool,
+                                        &pages,
+                                        &[],
+                                    )
+                                    .map_err(|(_, error)| {
+                                        PrivateWriterTransactionError::FixedPoint(error)
+                                    })?;
+                                let sealed = core
+                                    .execute_fixed_point_aggregate(handle, predecessor, aggregate)
+                                    .map_err(|(_, _, error)| {
+                                        PrivateWriterTransactionError::FixedPoint(error)
+                                    })?;
+                                assert_eq!(sealed.retirement_result(), combined);
+                                assert_eq!(sealed.record_index(), 0);
+                                assert_eq!(
+                                    workspace.record_state(0),
+                                    Some(
+                                        crate::writer_fixed_point::FixedPointWorkspaceRecordState::Live(1)
+                                    )
+                                );
+                                assert!(live_pool.find_bound_page(bitmap_root).unwrap().is_some());
+                                let successor = core
+                                    .complete_fixed_point_aggregate(handle, workspace, sealed)?;
+                                assert_eq!(successor.root(), bitmap_root);
+                                assert_eq!(successor.pending_page_count(), 100 + appended);
+                                let target = core.target().unwrap();
+                                assert_eq!(target.free_bitmap_root, bitmap_root);
+                                assert_eq!(target.page_count, 100 + appended);
+                                assert_eq!(target.retirement_root, combined.root);
+                                assert_eq!(target.retirement_batch_count, combined.batch_count);
+                                assert!(matches!(
+                                    core.preflight_commit(handle),
+                                    Err(PrivateWriterTransactionError::FixedPoint(
+                                        FixedPointError::StalePredecessor
+                                    ))
+                                ));
+                                core.finish_fixed_point_input(handle, workspace, successor)
+                                    .map_err(|(_, error)| error)?;
+                                assert!(core.fixed_point(handle).unwrap().is_quiescent());
+                                let live_pool = core.draft(handle).unwrap();
+                                assert!(live_pool.has_active_scopes());
+                                assert_eq!(
+                                    live_pool.coordinator_commit_fence(),
+                                    Err(crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1))
+                                );
+                                assert!(matches!(
+                                    core.preflight_commit(handle),
+                                    Err(PrivateWriterTransactionError::Pool(
+                                        crate::private_page_pool::PrivatePagePoolError::ScopeNotEmpty(1)
+                                    ))
+                                ));
+                                Ok(())
+                            },
                         )
                     });
                     assert_eq!(publication_allocations, 0);
-                    assert_eq!(publication.unwrap().meta, target);
+                    assert!(finalizer_ran.get());
+                    let target = publication.unwrap().meta;
                     assert!(workspace.is_idle());
                     assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
                     assert_eq!(core.selected(), target);
