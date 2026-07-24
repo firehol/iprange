@@ -8200,6 +8200,60 @@ requirements are normative in the Pre-Implementation Gate above.
   existing fixed-point retirement/direct-free result before a new range root
   can be handed to target metadata.
 
+### 2026-07-24 - bounded protected-set fixed-point preparation plan
+
+- A range-root replacement starts with an old-tree page-number index, but the
+  fixed point must repeatedly compare that seed plus newly discovered bitmap
+  and retirement replacements. Turning the seed into a `u32` slice would
+  reintroduce input-sized memory exactly where the ordered index was added to
+  remove it.
+- Add matching private index primitives in Rust and Go: an allocation-free
+  in-order cursor, exact value-by-value equality, and an O(n) clone from one
+  validated index into a clean caller-owned index workspace. Clone preflights
+  the complete dense leaf/branch geometry from the source count before writing
+  destination pages. A source/index failure scrubs the destination workspace;
+  no transaction pool, terminal journal, target metadata, or file byte changes.
+- The clone output will let the next slice retain a stable old-range seed while
+  alternating two caller-owned candidate workspaces. Each preview can build a
+  retirement blob directly from its current index, add newly discovered
+  replacement pages to the alternate index, and test convergence exactly
+  without a sort file, a full page-number slice, or probabilistic hashes.
+- The cursor performs only private-index shape checks. It does not add reader
+  or writer validation and does not inspect v4 data pages. Tests will cover
+  differently shaped but equal indexes, mismatch detection, dense multi-level
+  traversal, exact capacity rejection before destination mutation, source
+  corruption cleanup, and zero allocations after workspace setup.
+
+### 2026-07-24 - bounded protected-set fixed-point preparation implementation
+
+- Added matching private Rust and Go index cursors, exact equality, and dense
+  clone operations. The cursor has only the fixed maximum tree-depth stack;
+  clone preflights its complete leaf/branch geometry and destination capacity
+  before it writes a destination logical page.
+- Equality drains both indexes even after it has found unequal values. This
+  preserves a useful distinction: an unequal candidate is an ordinary `false`
+  result, while a malformed private source anywhere in either stream remains a
+  typed error rather than being hidden by an earlier mismatch.
+- Clone requires a distinct clean caller workspace. It streams the source
+  exactly once, writes dense leaf and branch pages directly, and scrubs the
+  destination on any source failure after streaming starts. It does not
+  allocate a page-number list, sort file, or heap traversal stack.
+- Matching tests prove a split multi-level source clones into a differently
+  shaped dense tree with identical values, unequal values are detected,
+  delayed source corruption is not masked, exact capacity rejection changes
+  nothing, a source failure scrubs a partially written destination, and the
+  warmed clone/equality paths allocate no heap memory.
+- This is private writer scratch only. It does not change public APIs, v4
+  bytes, publication, reader/writer default validation, allocator ownership,
+  target metadata, or transaction state. The next slice can use alternating
+  index workspaces to form and compare bounded protected-set candidates.
+- Validation passed: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`, `cargo test
+  --manifest-path v4/rust/Cargo.toml`, `cargo test --manifest-path
+  v4/rust/Cargo.toml --all-features`, Rust format, warnings-denied all-target
+  all-feature Clippy, all-feature benchmark compilation, `git diff --check`,
+  and `.agents/sow/audit.sh`.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

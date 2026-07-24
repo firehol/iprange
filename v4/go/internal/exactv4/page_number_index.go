@@ -92,6 +92,14 @@ type pageNumberIndexPathFrame struct {
 	childIndex int
 }
 
+// pageNumberIndexCursorFrame records the next child of one branch to visit.
+// The cursor is deliberately iterative: it has the same fixed depth bound as
+// the private tree and never creates a per-page traversal stack.
+type pageNumberIndexCursorFrame struct {
+	page      uint32
+	nextChild int
+}
+
 type pageNumberIndexBranchEntry struct {
 	maximum uint32
 	child   uint32
@@ -150,6 +158,33 @@ func (e *pageNumberIndex) discardAfterAbort() {
 func (e *pageNumberIndex) fail(err error) error {
 	e.failed = true
 	return err
+}
+
+func (e *pageNumberIndex) validateState() error {
+	if e == nil || e.workspace == nil {
+		return &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if e.failed {
+		return &pageNumberIndexError{code: pageNumberIndexErrFailed}
+	}
+	if e.pages < 0 || e.pages > len(e.workspace.pages) {
+		return &pageNumberIndexError{code: pageNumberIndexErrInvalidPageReference}
+	}
+	if e.root == pageNumberIndexNoPage {
+		if e.pages != 0 || e.values != 0 {
+			return &pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding}
+		}
+		return nil
+	}
+	if e.pages == 0 || e.values == 0 || uint64(e.root) >= uint64(e.pages) {
+		return &pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding}
+	}
+	return nil
+}
+
+func (e *pageNumberIndex) isEmptyAndClean() bool {
+	return e != nil && e.workspace != nil && !e.failed && e.root == pageNumberIndexNoPage &&
+		e.pages == 0 && e.values == 0 && e.workspace.clean()
 }
 
 func (e *pageNumberIndex) page(reference uint32) (*pageNumberIndexPage, error) {
@@ -514,4 +549,307 @@ func (e *pageNumberIndex) visitNode(reference uint32, depth int, visit func(uint
 	default:
 		return e.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding})
 	}
+}
+
+// pageNumberIndexCursor streams the private index in ascending order without
+// allocating a traversal stack. It additionally verifies the ordering and
+// declared value count required by clone and equality operations.
+type pageNumberIndexCursor struct {
+	index *pageNumberIndex
+
+	frames   [pageNumberIndexMaxBranchDepth]pageNumberIndexCursorFrame
+	frameLen int
+
+	leaf      uint32
+	leafNext  int
+	leafCount int
+
+	initialized bool
+	done        bool
+	emitted     uint64
+	previous    uint32
+	hasPrevious bool
+}
+
+func newPageNumberIndexCursor(index *pageNumberIndex) (pageNumberIndexCursor, error) {
+	cursor := pageNumberIndexCursor{index: index}
+	if index == nil {
+		return cursor, &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if err := index.validateState(); err != nil {
+		return cursor, index.fail(err)
+	}
+	return cursor, nil
+}
+
+func (c *pageNumberIndexCursor) fail(err error) error {
+	if c != nil {
+		c.done = true
+		if c.index != nil {
+			return c.index.fail(err)
+		}
+	}
+	return err
+}
+
+func (c *pageNumberIndexCursor) descendLeftmost(reference uint32, depth int) error {
+	for {
+		page, err := c.index.page(reference)
+		if err != nil {
+			return c.fail(err)
+		}
+		switch page.kind {
+		case pageNumberIndexPageLeaf:
+			if err = c.index.validateLeaf(page); err != nil {
+				return c.fail(err)
+			}
+			c.leaf = reference
+			c.leafNext = 0
+			c.leafCount = int(page.count)
+			return nil
+		case pageNumberIndexPageBranch:
+			if depth == pageNumberIndexMaxBranchDepth || c.frameLen == len(c.frames) {
+				return c.fail(&pageNumberIndexError{code: pageNumberIndexErrTreeTooDeep})
+			}
+			if err = c.index.validateBranch(page); err != nil {
+				return c.fail(err)
+			}
+			c.frames[c.frameLen] = pageNumberIndexCursorFrame{page: reference, nextChild: 1}
+			c.frameLen++
+			reference = pageNumberIndexBranchEntryAt(page, 0).child
+			depth++
+		default:
+			return c.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding})
+		}
+	}
+}
+
+// next returns one ordered value. When ok is false, the index was exhausted.
+func (c *pageNumberIndexCursor) next() (value uint32, ok bool, err error) {
+	if c == nil || c.index == nil {
+		return 0, false, &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if c.done {
+		return 0, false, nil
+	}
+	if !c.initialized {
+		c.initialized = true
+		if c.index.root == pageNumberIndexNoPage {
+			c.done = true
+			return 0, false, nil
+		}
+		if err = c.descendLeftmost(c.index.root, 0); err != nil {
+			return 0, false, err
+		}
+	}
+
+	for {
+		if c.leafNext < c.leafCount {
+			if c.emitted >= c.index.values {
+				return 0, false, c.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding})
+			}
+			page, pageErr := c.index.page(c.leaf)
+			if pageErr != nil {
+				return 0, false, c.fail(pageErr)
+			}
+			value = pageNumberIndexLeafValue(page, c.leafNext)
+			c.leafNext++
+			if c.hasPrevious && value <= c.previous {
+				return 0, false, c.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding})
+			}
+			c.previous = value
+			c.hasPrevious = true
+			c.emitted++
+			return value, true, nil
+		}
+
+		advanced := false
+		for c.frameLen > 0 {
+			frameIndex := c.frameLen - 1
+			frame := &c.frames[frameIndex]
+			page, pageErr := c.index.page(frame.page)
+			if pageErr != nil {
+				return 0, false, c.fail(pageErr)
+			}
+			if pageErr = c.index.validateBranch(page); pageErr != nil {
+				return 0, false, c.fail(pageErr)
+			}
+			if frame.nextChild < int(page.count) {
+				child := pageNumberIndexBranchEntryAt(page, frame.nextChild).child
+				frame.nextChild++
+				if pageErr = c.descendLeftmost(child, c.frameLen); pageErr != nil {
+					return 0, false, pageErr
+				}
+				advanced = true
+				break
+			}
+			c.frameLen--
+		}
+		if advanced {
+			continue
+		}
+		c.done = true
+		if c.emitted != c.index.values {
+			return 0, false, c.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding})
+		}
+		return 0, false, nil
+	}
+}
+
+func pageNumberIndexCeilDiv(value, divisor uint64) uint64 {
+	quotient := value / divisor
+	if value%divisor != 0 {
+		quotient++
+	}
+	return quotient
+}
+
+func pageNumberIndexDenseClonePageCount(valueCount uint64) (uint64, error) {
+	if valueCount == 0 {
+		return 0, nil
+	}
+	children := pageNumberIndexCeilDiv(valueCount, pageNumberIndexLeafCapacity)
+	total := children
+	branchDepth := 0
+	for children > 1 {
+		if branchDepth == pageNumberIndexMaxBranchDepth {
+			return 0, &pageNumberIndexError{code: pageNumberIndexErrTreeTooDeep}
+		}
+		children = pageNumberIndexCeilDiv(children, pageNumberIndexBranchCapacity)
+		if ^uint64(0)-total < children {
+			return 0, &pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding}
+		}
+		total += children
+		branchDepth++
+	}
+	return total, nil
+}
+
+// pageNumberIndexesEqual compares ordered values, not private tree shape.
+// The indexes may have different page layouts after a dense clone.
+func pageNumberIndexesEqual(left, right *pageNumberIndex) (bool, error) {
+	leftCursor, err := newPageNumberIndexCursor(left)
+	if err != nil {
+		return false, err
+	}
+	rightCursor, err := newPageNumberIndexCursor(right)
+	if err != nil {
+		return false, err
+	}
+	equal := true
+	for {
+		leftValue, leftOK, leftErr := leftCursor.next()
+		if leftErr != nil {
+			return false, leftErr
+		}
+		rightValue, rightOK, rightErr := rightCursor.next()
+		if rightErr != nil {
+			return false, rightErr
+		}
+		if leftOK != rightOK || leftOK && leftValue != rightValue {
+			equal = false
+		}
+		if !leftOK && !rightOK {
+			return equal, nil
+		}
+	}
+}
+
+func pageNumberIndexCloneAbort(destination *pageNumberIndex, err error) error {
+	destination.discardAfterAbort()
+	return err
+}
+
+// clonePageNumberIndexInto makes a dense private copy in caller-owned
+// workspace. It preflights all output pages before the first write, then
+// scrubs the destination if malformed source state is discovered while
+// streaming it.
+func clonePageNumberIndexInto(destination, source *pageNumberIndex) error {
+	if destination == nil || source == nil || destination.workspace == nil || source.workspace == nil ||
+		destination == source || destination.workspace == source.workspace {
+		return &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if !destination.isEmptyAndClean() {
+		return &pageNumberIndexError{code: pageNumberIndexErrWorkspaceBusy}
+	}
+	if err := source.validateState(); err != nil {
+		return source.fail(err)
+	}
+
+	valueCount := source.values
+	required, err := pageNumberIndexDenseClonePageCount(valueCount)
+	if err != nil {
+		return source.fail(err)
+	}
+	if required > uint64(len(destination.workspace.pages)) {
+		return &pageNumberIndexError{
+			code:     pageNumberIndexErrPageBudget,
+			required: required,
+			actual:   uint64(len(destination.workspace.pages)),
+		}
+	}
+	if valueCount == 0 {
+		return nil
+	}
+
+	cursor, err := newPageNumberIndexCursor(source)
+	if err != nil {
+		return err
+	}
+	leafPages := pageNumberIndexCeilDiv(valueCount, pageNumberIndexLeafCapacity)
+	remaining := valueCount
+	for leafIndex := uint64(0); leafIndex < leafPages; leafIndex++ {
+		entryCount := pageNumberIndexLeafCapacity
+		if remaining < uint64(entryCount) {
+			entryCount = int(remaining)
+		}
+		leafRef := destination.allocatePage(pageNumberIndexPageLeaf)
+		leaf := &destination.workspace.pages[int(leafRef)]
+		leaf.count = uint16(entryCount)
+		for entryIndex := 0; entryIndex < entryCount; entryIndex++ {
+			value, available, nextErr := cursor.next()
+			if nextErr != nil {
+				return pageNumberIndexCloneAbort(destination, nextErr)
+			}
+			if !available {
+				return pageNumberIndexCloneAbort(destination, source.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding}))
+			}
+			pageNumberIndexSetLeafValue(leaf, entryIndex, value)
+		}
+		remaining -= uint64(entryCount)
+	}
+	if _, available, nextErr := cursor.next(); nextErr != nil {
+		return pageNumberIndexCloneAbort(destination, nextErr)
+	} else if available {
+		return pageNumberIndexCloneAbort(destination, source.fail(&pageNumberIndexError{code: pageNumberIndexErrInvalidPageEncoding}))
+	}
+
+	childStart := 0
+	childCount := int(leafPages)
+	for childCount > 1 {
+		parentStart := destination.pages
+		parentCount := (childCount + pageNumberIndexBranchCapacity - 1) / pageNumberIndexBranchCapacity
+		for parentIndex := 0; parentIndex < parentCount; parentIndex++ {
+			firstChild := parentIndex * pageNumberIndexBranchCapacity
+			entryCount := childCount - firstChild
+			if entryCount > pageNumberIndexBranchCapacity {
+				entryCount = pageNumberIndexBranchCapacity
+			}
+			for entryIndex := 0; entryIndex < entryCount; entryIndex++ {
+				childRef := uint32(childStart + firstChild + entryIndex)
+				child := &destination.workspace.pages[int(childRef)]
+				destination.branchScratch[entryIndex] = pageNumberIndexBranchEntry{
+					maximum: pageNumberIndexNodeMaximum(child),
+					child:   childRef,
+				}
+			}
+			branchRef := destination.allocatePage(pageNumberIndexPageBranch)
+			pageNumberIndexWriteBranch(&destination.workspace.pages[int(branchRef)], destination.branchScratch[:entryCount])
+		}
+		childStart = parentStart
+		childCount = parentCount
+	}
+	destination.root = uint32(childStart)
+	destination.values = valueCount
+	return nil
 }

@@ -91,6 +91,12 @@ impl PathFrame {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct CursorFrame {
+    page: u32,
+    next_child: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct BranchEntry {
     maximum: u32,
     child: u32,
@@ -153,6 +159,35 @@ impl<'workspace, 'storage> PageNumberIndex<'workspace, 'storage> {
     fn fail(&mut self, error: PageNumberIndexError) -> PageNumberIndexError {
         self.failed = true;
         error
+    }
+
+    fn validate_state(&self) -> Result<(), PageNumberIndexError> {
+        if self.failed {
+            return Err(PageNumberIndexError::Failed);
+        }
+        if self.pages > self.workspace.pages.len() {
+            return Err(PageNumberIndexError::InvalidPageReference);
+        }
+        if self.root == NO_PAGE {
+            if self.pages != 0 || self.values != 0 {
+                return Err(PageNumberIndexError::InvalidPageEncoding);
+            }
+            return Ok(());
+        }
+        let root =
+            usize::try_from(self.root).map_err(|_| PageNumberIndexError::InvalidPageReference)?;
+        if self.pages == 0 || self.values == 0 || root >= self.pages {
+            return Err(PageNumberIndexError::InvalidPageEncoding);
+        }
+        Ok(())
+    }
+
+    fn is_empty_and_clean(&self) -> bool {
+        !self.failed
+            && self.root == NO_PAGE
+            && self.pages == 0
+            && self.values == 0
+            && self.workspace.is_clean()
     }
 
     fn page(&self, reference: u32) -> Result<&PageNumberIndexPage, PageNumberIndexError> {
@@ -628,6 +663,325 @@ impl<'workspace, 'storage> PageNumberIndex<'workspace, 'storage> {
     }
 }
 
+/// Iterative ordered traversal of private index pages. The fixed frame array
+/// is bounded by the tree depth, so cloning and equality never allocate a
+/// traversal stack proportional to the listed page count.
+struct PageNumberIndexCursor<'index, 'workspace, 'storage> {
+    index: &'index mut PageNumberIndex<'workspace, 'storage>,
+    frames: [CursorFrame; MAX_BRANCH_DEPTH],
+    frame_len: usize,
+    leaf: u32,
+    leaf_next: usize,
+    leaf_count: usize,
+    initialized: bool,
+    done: bool,
+    emitted: u64,
+    previous: u32,
+    has_previous: bool,
+}
+
+impl<'index, 'workspace, 'storage> PageNumberIndexCursor<'index, 'workspace, 'storage> {
+    fn new(
+        index: &'index mut PageNumberIndex<'workspace, 'storage>,
+    ) -> Result<Self, PageNumberIndexError> {
+        if let Err(error) = index.validate_state() {
+            return Err(index.fail(error));
+        }
+        Ok(Self {
+            index,
+            frames: [CursorFrame {
+                page: NO_PAGE,
+                next_child: 0,
+            }; MAX_BRANCH_DEPTH],
+            frame_len: 0,
+            leaf: NO_PAGE,
+            leaf_next: 0,
+            leaf_count: 0,
+            initialized: false,
+            done: false,
+            emitted: 0,
+            previous: 0,
+            has_previous: false,
+        })
+    }
+
+    fn fail(&mut self, error: PageNumberIndexError) -> PageNumberIndexError {
+        self.done = true;
+        self.index.fail(error)
+    }
+
+    fn descend_leftmost(
+        &mut self,
+        mut reference: u32,
+        mut depth: usize,
+    ) -> Result<(), PageNumberIndexError> {
+        loop {
+            let kind = match self.index.page(reference) {
+                Ok(page) => page.kind,
+                Err(error) => return Err(self.fail(error)),
+            };
+            match kind {
+                PageNumberIndexPageKind::Leaf => {
+                    if let Err(error) = self.index.validate_leaf(reference) {
+                        return Err(self.fail(error));
+                    }
+                    let count = match self.index.page(reference) {
+                        Ok(page) => usize::from(page.count),
+                        Err(error) => return Err(self.fail(error)),
+                    };
+                    self.leaf = reference;
+                    self.leaf_next = 0;
+                    self.leaf_count = count;
+                    return Ok(());
+                }
+                PageNumberIndexPageKind::Branch => {
+                    if depth == MAX_BRANCH_DEPTH || self.frame_len == self.frames.len() {
+                        return Err(self.fail(PageNumberIndexError::TreeTooDeep));
+                    }
+                    if let Err(error) = self.index.validate_branch(reference) {
+                        return Err(self.fail(error));
+                    }
+                    let child = match self.index.page(reference) {
+                        Ok(page) => PageNumberIndex::branch_entry(page, 0).child,
+                        Err(error) => return Err(self.fail(error)),
+                    };
+                    self.frames[self.frame_len] = CursorFrame {
+                        page: reference,
+                        next_child: 1,
+                    };
+                    self.frame_len += 1;
+                    reference = child;
+                    depth += 1;
+                }
+                PageNumberIndexPageKind::Empty => {
+                    return Err(self.fail(PageNumberIndexError::InvalidPageEncoding));
+                }
+            }
+        }
+    }
+
+    /// Returns one ordered value, or `None` once the declared stream ends.
+    fn next(&mut self) -> Result<Option<u32>, PageNumberIndexError> {
+        if self.done {
+            return Ok(None);
+        }
+        if !self.initialized {
+            self.initialized = true;
+            if self.index.root == NO_PAGE {
+                self.done = true;
+                return Ok(None);
+            }
+            self.descend_leftmost(self.index.root, 0)?;
+        }
+
+        loop {
+            if self.leaf_next < self.leaf_count {
+                if self.emitted >= self.index.values {
+                    return Err(self.fail(PageNumberIndexError::InvalidPageEncoding));
+                }
+                let value = match self.index.page(self.leaf) {
+                    Ok(page) => PageNumberIndex::leaf_value(page, self.leaf_next),
+                    Err(error) => return Err(self.fail(error)),
+                };
+                self.leaf_next += 1;
+                if self.has_previous && value <= self.previous {
+                    return Err(self.fail(PageNumberIndexError::InvalidPageEncoding));
+                }
+                self.previous = value;
+                self.has_previous = true;
+                self.emitted += 1;
+                return Ok(Some(value));
+            }
+
+            let mut advanced = false;
+            while self.frame_len > 0 {
+                let frame_index = self.frame_len - 1;
+                let page_ref = self.frames[frame_index].page;
+                let page = match self.index.page(page_ref) {
+                    Ok(page) => page,
+                    Err(error) => return Err(self.fail(error)),
+                };
+                if let Err(error) = self.index.validate_branch(page_ref) {
+                    return Err(self.fail(error));
+                }
+                if self.frames[frame_index].next_child < usize::from(page.count) {
+                    let child =
+                        PageNumberIndex::branch_entry(page, self.frames[frame_index].next_child)
+                            .child;
+                    self.frames[frame_index].next_child += 1;
+                    self.descend_leftmost(child, self.frame_len)?;
+                    advanced = true;
+                    break;
+                }
+                self.frame_len -= 1;
+            }
+            if advanced {
+                continue;
+            }
+            self.done = true;
+            if self.emitted != self.index.values {
+                return Err(self.fail(PageNumberIndexError::InvalidPageEncoding));
+            }
+            return Ok(None);
+        }
+    }
+}
+
+fn page_number_index_ceil_div(value: u64, divisor: u64) -> u64 {
+    let quotient = value / divisor;
+    if value % divisor == 0 {
+        quotient
+    } else {
+        quotient + 1
+    }
+}
+
+fn dense_clone_page_count(value_count: u64) -> Result<usize, PageNumberIndexError> {
+    if value_count == 0 {
+        return Ok(0);
+    }
+    let mut children = page_number_index_ceil_div(value_count, LEAF_CAPACITY as u64);
+    let mut total = children;
+    let mut branch_depth = 0usize;
+    while children > 1 {
+        if branch_depth == MAX_BRANCH_DEPTH {
+            return Err(PageNumberIndexError::TreeTooDeep);
+        }
+        children = page_number_index_ceil_div(children, BRANCH_CAPACITY as u64);
+        total = total
+            .checked_add(children)
+            .ok_or(PageNumberIndexError::InvalidPageEncoding)?;
+        branch_depth += 1;
+    }
+    usize::try_from(total).map_err(|_| PageNumberIndexError::TreeTooDeep)
+}
+
+/// Compares ordered values, rather than logical private-page layout.
+pub(crate) fn page_number_indexes_equal(
+    left: &mut PageNumberIndex<'_, '_>,
+    right: &mut PageNumberIndex<'_, '_>,
+) -> Result<bool, PageNumberIndexError> {
+    let mut left_cursor = PageNumberIndexCursor::new(left)?;
+    let mut right_cursor = PageNumberIndexCursor::new(right)?;
+    let mut equal = true;
+    loop {
+        let left_value = left_cursor.next()?;
+        let right_value = right_cursor.next()?;
+        if left_value != right_value {
+            equal = false;
+        }
+        if left_value.is_none() && right_value.is_none() {
+            return Ok(equal);
+        }
+    }
+}
+
+fn clone_abort(
+    destination: &mut PageNumberIndex<'_, '_>,
+    error: PageNumberIndexError,
+) -> Result<(), PageNumberIndexError> {
+    destination.discard_after_abort();
+    Err(error)
+}
+
+/// Makes a dense copy in distinct caller-owned private workspace.
+///
+/// The source is streamed exactly once after output capacity is preflighted.
+/// A malformed source discovered during that stream scrubs every destination
+/// page before the error is returned.
+pub(crate) fn clone_page_number_index_into(
+    destination: &mut PageNumberIndex<'_, '_>,
+    source: &mut PageNumberIndex<'_, '_>,
+) -> Result<(), PageNumberIndexError> {
+    if !destination.is_empty_and_clean() {
+        return Err(PageNumberIndexError::WorkspaceBusy);
+    }
+    if let Err(error) = source.validate_state() {
+        return Err(source.fail(error));
+    }
+
+    let value_count = source.values;
+    let required = match dense_clone_page_count(value_count) {
+        Ok(required) => required,
+        Err(error) => return Err(source.fail(error)),
+    };
+    if required > destination.workspace.pages.len() {
+        return Err(PageNumberIndexError::PageBudget {
+            required,
+            actual: destination.workspace.pages.len(),
+        });
+    }
+    if value_count == 0 {
+        return Ok(());
+    }
+
+    let leaf_pages = page_number_index_ceil_div(value_count, LEAF_CAPACITY as u64) as usize;
+    let mut remaining = value_count;
+    let mut cursor = PageNumberIndexCursor::new(source)?;
+    for _ in 0..leaf_pages {
+        let entry_count = usize::try_from(remaining.min(LEAF_CAPACITY as u64)).unwrap();
+        let leaf_ref = destination.allocate_page(PageNumberIndexPageKind::Leaf);
+        destination.workspace.pages[leaf_ref as usize].count = u16::try_from(entry_count).unwrap();
+        for entry_index in 0..entry_count {
+            let value = match cursor.next() {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    let error = cursor.fail(PageNumberIndexError::InvalidPageEncoding);
+                    return clone_abort(destination, error);
+                }
+                Err(error) => return clone_abort(destination, error),
+            };
+            PageNumberIndex::set_leaf_value(
+                &mut destination.workspace.pages[leaf_ref as usize],
+                entry_index,
+                value,
+            );
+        }
+        remaining -= entry_count as u64;
+    }
+    match cursor.next() {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            let error = cursor.fail(PageNumberIndexError::InvalidPageEncoding);
+            return clone_abort(destination, error);
+        }
+        Err(error) => return clone_abort(destination, error),
+    }
+    drop(cursor);
+
+    let mut child_start = 0usize;
+    let mut child_count = leaf_pages;
+    while child_count > 1 {
+        let parent_start = destination.pages;
+        let parent_count = child_count.div_ceil(BRANCH_CAPACITY);
+        for parent_index in 0..parent_count {
+            let first_child = parent_index * BRANCH_CAPACITY;
+            let entry_count = (child_count - first_child).min(BRANCH_CAPACITY);
+            for entry_index in 0..entry_count {
+                let child = child_start + first_child + entry_index;
+                let child_ref = u32::try_from(child).unwrap();
+                destination.branch_scratch[entry_index] = BranchEntry {
+                    maximum: PageNumberIndex::page_maximum(
+                        &destination.workspace.pages[child_ref as usize],
+                    ),
+                    child: child_ref,
+                };
+            }
+            let entries = destination.branch_scratch;
+            let branch_ref = destination.allocate_page(PageNumberIndexPageKind::Branch);
+            PageNumberIndex::write_branch(
+                &mut destination.workspace.pages[branch_ref as usize],
+                &entries[..entry_count],
+            );
+        }
+        child_start = parent_start;
+        child_count = parent_count;
+    }
+    destination.root = u32::try_from(child_start).unwrap();
+    destination.values = value_count;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +1064,22 @@ mod tests {
             .unwrap();
         assert_eq!(expected, COUNT);
         assert_eq!(index.len(), u64::from(COUNT));
+
+        // Insertion splits leave the source with a second branch level. A
+        // dense clone has one branch level, so equality must compare values
+        // rather than private page layout.
+        let mut dense_pages = vec![PageNumberIndexPage::empty(); 265];
+        let mut dense_workspace = PageNumberIndexWorkspace::new(&mut dense_pages);
+        let mut dense = PageNumberIndex::new(&mut dense_workspace).unwrap();
+        clone_page_number_index_into(&mut dense, &mut index).unwrap();
+        assert_eq!(dense.logical_page_count(), 265);
+        let dense_root = &dense.workspace.pages[dense.root as usize];
+        assert_eq!(dense_root.kind, PageNumberIndexPageKind::Branch);
+        assert_eq!(
+            dense.workspace.pages[PageNumberIndex::branch_entry(dense_root, 0).child as usize].kind,
+            PageNumberIndexPageKind::Leaf
+        );
+        assert_eq!(page_number_indexes_equal(&mut index, &mut dense), Ok(true));
     }
 
     #[test]
@@ -754,6 +1124,97 @@ mod tests {
         assert_eq!(index.logical_page_count(), 0);
     }
 
+    #[test]
+    fn equality_detects_mismatched_values() {
+        let mut left_pages = [PageNumberIndexPage::empty(); 8];
+        let mut right_pages = [PageNumberIndexPage::empty(); 8];
+        let mut left_workspace = PageNumberIndexWorkspace::new(&mut left_pages);
+        let mut right_workspace = PageNumberIndexWorkspace::new(&mut right_pages);
+        let mut left = PageNumberIndex::new(&mut left_workspace).unwrap();
+        let mut right = PageNumberIndex::new(&mut right_workspace).unwrap();
+        for value in 0..2_048u32 {
+            assert_eq!(left.insert(value), Ok(true));
+            let other = if value == 1_337 { u32::MAX - 1 } else { value };
+            assert_eq!(right.insert(other), Ok(true));
+        }
+        assert_eq!(page_number_indexes_equal(&mut left, &mut right), Ok(false));
+    }
+
+    #[test]
+    fn equality_does_not_mask_later_source_failure() {
+        let mut left_pages = [PageNumberIndexPage::empty(); 8];
+        let mut right_pages = [PageNumberIndexPage::empty(); 8];
+        let mut left_workspace = PageNumberIndexWorkspace::new(&mut left_pages);
+        let mut right_workspace = PageNumberIndexWorkspace::new(&mut right_pages);
+        let mut left = PageNumberIndex::new(&mut left_workspace).unwrap();
+        let mut right = PageNumberIndex::new(&mut right_workspace).unwrap();
+        for value in 0..2_048u32 {
+            assert_eq!(left.insert(value), Ok(true));
+            let other = if value == 1 { u32::MAX - 1 } else { value };
+            assert_eq!(right.insert(other), Ok(true));
+        }
+        let second_leaf = {
+            let root = &right.workspace.pages[right.root as usize];
+            assert_eq!(root.kind, PageNumberIndexPageKind::Branch);
+            assert!(root.count >= 2);
+            PageNumberIndex::branch_entry(root, 1).child
+        };
+        right.workspace.pages[second_leaf as usize].kind = PageNumberIndexPageKind::Empty;
+
+        assert!(page_number_indexes_equal(&mut left, &mut right).is_err());
+    }
+
+    #[test]
+    fn clone_capacity_rejection_is_pre_mutation() {
+        let mut source_pages = [PageNumberIndexPage::empty(); 16];
+        let mut source_workspace = PageNumberIndexWorkspace::new(&mut source_pages);
+        let mut source = PageNumberIndex::new(&mut source_workspace).unwrap();
+        for value in 0..4_096u32 {
+            assert_eq!(source.insert(value), Ok(true));
+        }
+
+        let mut destination_pages = [PageNumberIndexPage::empty(); 4];
+        let mut destination_workspace = PageNumberIndexWorkspace::new(&mut destination_pages);
+        let mut destination = PageNumberIndex::new(&mut destination_workspace).unwrap();
+        let before = destination.workspace.pages.to_vec();
+        assert_eq!(
+            clone_page_number_index_into(&mut destination, &mut source),
+            Err(PageNumberIndexError::PageBudget {
+                required: 5,
+                actual: 4,
+            })
+        );
+        assert_eq!(destination.workspace.pages, before.as_slice());
+        assert!(destination.workspace.is_clean());
+        assert_eq!(destination.len(), 0);
+        assert_eq!(destination.logical_page_count(), 0);
+    }
+
+    #[test]
+    fn clone_scrubs_destination_on_source_failure() {
+        let mut source_pages = [PageNumberIndexPage::empty(); 8];
+        let mut source_workspace = PageNumberIndexWorkspace::new(&mut source_pages);
+        let mut source = PageNumberIndex::new(&mut source_workspace).unwrap();
+        for value in 0..2_048u32 {
+            assert_eq!(source.insert(value), Ok(true));
+        }
+        let second_leaf = {
+            let root = &source.workspace.pages[source.root as usize];
+            assert_eq!(root.kind, PageNumberIndexPageKind::Branch);
+            assert!(root.count >= 2);
+            PageNumberIndex::branch_entry(root, 1).child
+        };
+        source.workspace.pages[second_leaf as usize].kind = PageNumberIndexPageKind::Empty;
+
+        let mut destination_pages = [PageNumberIndexPage::empty(); 4];
+        let mut destination_workspace = PageNumberIndexWorkspace::new(&mut destination_pages);
+        let mut destination = PageNumberIndex::new(&mut destination_workspace).unwrap();
+        assert!(clone_page_number_index_into(&mut destination, &mut source).is_err());
+        assert!(destination.workspace.is_clean());
+        assert_eq!(destination.len(), 0);
+        assert_eq!(destination.logical_page_count(), 0);
+    }
+
     fn fill_no_alloc(index: &mut PageNumberIndex<'_, '_>) -> bool {
         index.discard_after_abort();
         for value in 0..2_048u32 {
@@ -771,6 +1232,35 @@ mod tests {
         let mut index = PageNumberIndex::new(&mut workspace).unwrap();
         assert!(fill_no_alloc(&mut index));
         let (ok, allocations) = count_thread_allocations(|| fill_no_alloc(&mut index));
+        assert!(ok);
+        assert_eq!(allocations, 0);
+    }
+
+    fn clone_and_compare_no_alloc(
+        source: &mut PageNumberIndex<'_, '_>,
+        destination: &mut PageNumberIndex<'_, '_>,
+    ) -> bool {
+        destination.discard_after_abort();
+        if clone_page_number_index_into(destination, source).is_err() {
+            return false;
+        }
+        let equal = page_number_indexes_equal(source, destination) == Ok(true);
+        destination.discard_after_abort();
+        equal
+    }
+
+    #[test]
+    fn clone_and_equality_use_no_heap_after_workspace_setup() {
+        let mut source_pages = [PageNumberIndexPage::empty(); 8];
+        let mut destination_pages = [PageNumberIndexPage::empty(); 8];
+        let mut source_workspace = PageNumberIndexWorkspace::new(&mut source_pages);
+        let mut destination_workspace = PageNumberIndexWorkspace::new(&mut destination_pages);
+        let mut source = PageNumberIndex::new(&mut source_workspace).unwrap();
+        let mut destination = PageNumberIndex::new(&mut destination_workspace).unwrap();
+        assert!(fill_no_alloc(&mut source));
+        assert!(clone_and_compare_no_alloc(&mut source, &mut destination));
+        let (ok, allocations) =
+            count_thread_allocations(|| clone_and_compare_no_alloc(&mut source, &mut destination));
         assert!(ok);
         assert_eq!(allocations, 0);
     }

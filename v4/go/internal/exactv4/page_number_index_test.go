@@ -115,6 +115,30 @@ func TestPageNumberIndexSplitsFullBranchRoot(t *testing.T) {
 	if position != count || index.len() != count {
 		t.Fatalf("counts = visited:%d stored:%d want:%d", position, index.len(), count)
 	}
+
+	// Insertion splits leave this source with a second branch level. A dense
+	// clone has one branch level, so equality must compare values rather than
+	// private page layout.
+	densePages := make([]pageNumberIndexPage, 265)
+	denseWorkspace := newPageNumberIndexWorkspace(densePages)
+	dense, err := newPageNumberIndex(&denseWorkspace)
+	if err != nil {
+		t.Fatalf("new dense clone index: %v", err)
+	}
+	if err = clonePageNumberIndexInto(&dense, &index); err != nil {
+		t.Fatalf("clone multi-level index: %v", err)
+	}
+	if dense.logicalPageCount() != len(densePages) {
+		t.Fatalf("dense clone pages = %d, want %d", dense.logicalPageCount(), len(densePages))
+	}
+	if denseRoot := &densePages[int(dense.root)]; denseRoot.kind != pageNumberIndexPageBranch ||
+		densePages[int(pageNumberIndexBranchEntryAt(denseRoot, 0).child)].kind != pageNumberIndexPageLeaf {
+		t.Fatal("dense clone did not collapse to one branch level")
+	}
+	equal, equalErr := pageNumberIndexesEqual(&index, &dense)
+	if equalErr != nil || !equal {
+		t.Fatalf("multi-level source and dense clone equal=%v error=%v", equal, equalErr)
+	}
 }
 
 func TestPageNumberIndexCapacityFailureIsPreMutation(t *testing.T) {
@@ -169,6 +193,137 @@ func TestPageNumberIndexRejectsStaleWorkspaceAndScrubsOnAbort(t *testing.T) {
 	}
 }
 
+func TestPageNumberIndexEqualityDetectsMismatchedValues(t *testing.T) {
+	leftPages := make([]pageNumberIndexPage, 8)
+	rightPages := make([]pageNumberIndexPage, 8)
+	leftWorkspace := newPageNumberIndexWorkspace(leftPages)
+	rightWorkspace := newPageNumberIndexWorkspace(rightPages)
+	left, err := newPageNumberIndex(&leftWorkspace)
+	if err != nil {
+		t.Fatalf("new left index: %v", err)
+	}
+	right, err := newPageNumberIndex(&rightWorkspace)
+	if err != nil {
+		t.Fatalf("new right index: %v", err)
+	}
+	for value := 0; value < 2_048; value++ {
+		if inserted, insertErr := left.insert(uint32(value)); insertErr != nil || !inserted {
+			t.Fatalf("left insert %d: inserted=%v error=%v", value, inserted, insertErr)
+		}
+		other := uint32(value)
+		if value == 1_337 {
+			other = ^uint32(0) - 1
+		}
+		if inserted, insertErr := right.insert(other); insertErr != nil || !inserted {
+			t.Fatalf("right insert %d: inserted=%v error=%v", other, inserted, insertErr)
+		}
+	}
+	equal, equalErr := pageNumberIndexesEqual(&left, &right)
+	if equalErr != nil || equal {
+		t.Fatalf("mismatched indexes equal=%v error=%v", equal, equalErr)
+	}
+}
+
+func TestPageNumberIndexEqualityDoesNotMaskLaterSourceFailure(t *testing.T) {
+	leftPages := make([]pageNumberIndexPage, 8)
+	rightPages := make([]pageNumberIndexPage, 8)
+	leftWorkspace := newPageNumberIndexWorkspace(leftPages)
+	rightWorkspace := newPageNumberIndexWorkspace(rightPages)
+	left, err := newPageNumberIndex(&leftWorkspace)
+	if err != nil {
+		t.Fatalf("new left index: %v", err)
+	}
+	right, err := newPageNumberIndex(&rightWorkspace)
+	if err != nil {
+		t.Fatalf("new right index: %v", err)
+	}
+	for value := 0; value < 2_048; value++ {
+		if inserted, insertErr := left.insert(uint32(value)); insertErr != nil || !inserted {
+			t.Fatalf("left insert %d: inserted=%v error=%v", value, inserted, insertErr)
+		}
+		other := uint32(value)
+		if value == 1 {
+			other = ^uint32(0) - 1
+		}
+		if inserted, insertErr := right.insert(other); insertErr != nil || !inserted {
+			t.Fatalf("right insert %d: inserted=%v error=%v", other, inserted, insertErr)
+		}
+	}
+	root := &rightPages[int(right.root)]
+	if root.kind != pageNumberIndexPageBranch || root.count < 2 {
+		t.Fatal("right source setup did not create multiple leaves")
+	}
+	rightPages[int(pageNumberIndexBranchEntryAt(root, 1).child)].kind = pageNumberIndexPageEmpty
+
+	equal, equalErr := pageNumberIndexesEqual(&left, &right)
+	if equal || equalErr == nil {
+		t.Fatalf("equality masked later source failure: equal=%v error=%v", equal, equalErr)
+	}
+}
+
+func TestPageNumberIndexCloneCapacityFailureIsPreMutation(t *testing.T) {
+	sourcePages := make([]pageNumberIndexPage, 16)
+	sourceWorkspace := newPageNumberIndexWorkspace(sourcePages)
+	source, err := newPageNumberIndex(&sourceWorkspace)
+	if err != nil {
+		t.Fatalf("new source index: %v", err)
+	}
+	for value := 0; value < 4_096; value++ {
+		if inserted, insertErr := source.insert(uint32(value)); insertErr != nil || !inserted {
+			t.Fatalf("source insert %d: inserted=%v error=%v", value, inserted, insertErr)
+		}
+	}
+
+	destinationPages := make([]pageNumberIndexPage, 4) // 4 leaves + 1 branch are required.
+	destinationWorkspace := newPageNumberIndexWorkspace(destinationPages)
+	destination, err := newPageNumberIndex(&destinationWorkspace)
+	if err != nil {
+		t.Fatalf("new destination index: %v", err)
+	}
+	before := slices.Clone(destinationPages)
+	cloneErr := clonePageNumberIndexInto(&destination, &source)
+	problem, ok := cloneErr.(*pageNumberIndexError)
+	if !ok || problem.code != pageNumberIndexErrPageBudget || problem.required != 5 || problem.actual != 4 {
+		t.Fatalf("clone capacity error = %#v", cloneErr)
+	}
+	if !slices.Equal(destinationPages, before) || !destinationWorkspace.clean() || destination.len() != 0 || destination.logicalPageCount() != 0 {
+		t.Fatal("clone capacity rejection changed the destination")
+	}
+}
+
+func TestPageNumberIndexCloneScrubsDestinationOnSourceFailure(t *testing.T) {
+	sourcePages := make([]pageNumberIndexPage, 8)
+	sourceWorkspace := newPageNumberIndexWorkspace(sourcePages)
+	source, err := newPageNumberIndex(&sourceWorkspace)
+	if err != nil {
+		t.Fatalf("new source index: %v", err)
+	}
+	for value := 0; value < 2_048; value++ {
+		if inserted, insertErr := source.insert(uint32(value)); insertErr != nil || !inserted {
+			t.Fatalf("source insert %d: inserted=%v error=%v", value, inserted, insertErr)
+		}
+	}
+	root := &sourcePages[int(source.root)]
+	if root.kind != pageNumberIndexPageBranch || root.count < 2 {
+		t.Fatal("source setup did not create multiple leaves")
+	}
+	secondLeaf := pageNumberIndexBranchEntryAt(root, 1).child
+	sourcePages[int(secondLeaf)].kind = pageNumberIndexPageEmpty
+
+	destinationPages := make([]pageNumberIndexPage, 4)
+	destinationWorkspace := newPageNumberIndexWorkspace(destinationPages)
+	destination, err := newPageNumberIndex(&destinationWorkspace)
+	if err != nil {
+		t.Fatalf("new destination index: %v", err)
+	}
+	if cloneErr := clonePageNumberIndexInto(&destination, &source); cloneErr == nil {
+		t.Fatal("clone accepted a malformed source")
+	}
+	if !destinationWorkspace.clean() || destination.len() != 0 || destination.logicalPageCount() != 0 {
+		t.Fatal("source failure did not scrub the clone destination")
+	}
+}
+
 func fillPageNumberIndexNoAlloc(index *pageNumberIndex) bool {
 	index.discardAfterAbort()
 	for value := 0; value < 2_048; value++ {
@@ -200,5 +355,46 @@ func TestPageNumberIndexUsesNoHeapAfterWorkspaceSetup(t *testing.T) {
 	})
 	if allocations != 0 {
 		t.Fatalf("page-number index allocations = %v, want 0", allocations)
+	}
+}
+
+func TestPageNumberIndexCloneAndEqualityUseNoHeapAfterWorkspaceSetup(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation changes allocation accounting")
+	}
+	sourcePages := make([]pageNumberIndexPage, 8)
+	destinationPages := make([]pageNumberIndexPage, 8)
+	sourceWorkspace := newPageNumberIndexWorkspace(sourcePages)
+	destinationWorkspace := newPageNumberIndexWorkspace(destinationPages)
+	source, err := newPageNumberIndex(&sourceWorkspace)
+	if err != nil {
+		t.Fatalf("new source index: %v", err)
+	}
+	destination, err := newPageNumberIndex(&destinationWorkspace)
+	if err != nil {
+		t.Fatalf("new destination index: %v", err)
+	}
+	if !fillPageNumberIndexNoAlloc(&source) {
+		t.Fatal("source warmup failed")
+	}
+	cloneAndCompare := func() bool {
+		destination.discardAfterAbort()
+		if cloneErr := clonePageNumberIndexInto(&destination, &source); cloneErr != nil {
+			return false
+		}
+		equal, equalErr := pageNumberIndexesEqual(&source, &destination)
+		destination.discardAfterAbort()
+		return equalErr == nil && equal
+	}
+	if !cloneAndCompare() {
+		t.Fatal("clone warmup failed")
+	}
+	allocations := testing.AllocsPerRun(20, func() {
+		if !cloneAndCompare() {
+			t.Fatal("clone or equality failed")
+		}
+	})
+	if allocations != 0 {
+		t.Fatalf("clone and equality allocations = %v, want 0", allocations)
 	}
 }
