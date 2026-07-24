@@ -9042,10 +9042,25 @@ mod tests {
                                     },
                                 )
                                 .unwrap();
-                            assert!(helper_protected.len() <= helper_protected_snapshot.len());
-                            helper_protected_snapshot[..helper_protected.len()]
-                                .copy_from_slice(helper_protected);
-                            helper_protected_len.set(helper_protected.len());
+                            assert_eq!(helper_protected.blob_private_pages(), blob_pages.len());
+                            assert_eq!(
+                                helper_protected.retirement_private_page_budget(),
+                                bound.cow.available_private_pages()
+                            );
+                            assert_eq!(
+                                helper_protected.retirement_private_page_budget(),
+                                helper_protected
+                                    .blob_private_pages()
+                                    .checked_add(helper_protected.tree_private_page_budget())
+                                    .unwrap()
+                            );
+                            assert!(
+                                helper_protected.pages().len()
+                                    <= helper_protected_snapshot.len()
+                            );
+                            helper_protected_snapshot[..helper_protected.pages().len()]
+                                .copy_from_slice(helper_protected.pages());
+                            helper_protected_len.set(helper_protected.pages().len());
                             let mut probe_arena = PrivatePageArena::from_scoped_pool(
                                 &shadow_pool,
                                 &shadow_scope,

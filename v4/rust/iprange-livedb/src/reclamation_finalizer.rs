@@ -102,6 +102,34 @@ pub(crate) struct ReclamationProtectedPagesScratch<'a> {
     pub(crate) final_cleanup_targets: &'a mut [usize],
 }
 
+/// A converged selected-reclaim page list and the exact bounded retirement
+/// capacity facts needed to materialize its next batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SelectedReclamationProtectedPages<'a> {
+    pages: &'a [u32],
+    blob_private_pages: usize,
+    tree_private_page_budget: usize,
+    retirement_private_page_budget: usize,
+}
+
+impl SelectedReclamationProtectedPages<'_> {
+    pub(crate) fn pages(&self) -> &[u32] {
+        self.pages
+    }
+
+    pub(crate) const fn blob_private_pages(&self) -> usize {
+        self.blob_private_pages
+    }
+
+    pub(crate) const fn tree_private_page_budget(&self) -> usize {
+        self.tree_private_page_budget
+    }
+
+    pub(crate) const fn retirement_private_page_budget(&self) -> usize {
+        self.retirement_private_page_budget
+    }
+}
+
 /// Typed read-only fixed-point failure before terminal finalization begins.
 #[derive(Debug)]
 pub(crate) enum ReclamationProtectedPagesError {
@@ -259,6 +287,38 @@ fn replacement_fingerprint(entries: &[CommittedPageReplacement]) -> u64 {
     fingerprint
 }
 
+fn selected_reclamation_retirement_private_page_budget(
+    protected_page_count: usize,
+    tree_private_page_budget: usize,
+) -> Result<(usize, usize), ReclamationProtectedPagesError> {
+    let protected_page_count = u64::try_from(protected_page_count).map_err(|_| {
+        ReclamationProtectedPagesError::Retirement(RetirementWriteError::ArithmeticOverflow)
+    })?;
+    let blob_private_pages = RetirementBlobBuilder::required_private_pages(protected_page_count)
+        .map_err(ReclamationProtectedPagesError::Retirement)?;
+    let retirement_private_page_budget = blob_private_pages
+        .checked_add(tree_private_page_budget)
+        .ok_or_else(|| {
+        ReclamationProtectedPagesError::Retirement(RetirementWriteError::ArithmeticOverflow)
+    })?;
+    Ok((blob_private_pages, retirement_private_page_budget))
+}
+
+fn require_selected_reclamation_retirement_capacity(
+    required: usize,
+    available: usize,
+) -> Result<(), ReclamationProtectedPagesError> {
+    if required > available {
+        return Err(ReclamationProtectedPagesError::Retirement(
+            RetirementWriteError::PrivatePageBudgetTooSmall {
+                required,
+                actual: available,
+            },
+        ));
+    }
+    Ok(())
+}
+
 /// Computes the stable page list that the next selected-reclaim retirement
 /// batch must protect, without terminally finalizing the live bitmap scope.
 ///
@@ -280,7 +340,7 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
 >(
     bound: &mut BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>,
     scratch: ReclamationProtectedPagesScratch<'scratch>,
-) -> Result<&'scratch [u32], ReclamationProtectedPagesError> {
+) -> Result<SelectedReclamationProtectedPages<'scratch>, ReclamationProtectedPagesError> {
     if bound.reclamation_authority().batch_count() == 0 {
         return Err(ReclamationProtectedPagesError::NoSelectedBatches);
     }
@@ -364,7 +424,7 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
         final_cleanup_targets.len(),
     )?;
 
-    let probe_replacement_len = bound
+    let (probe_replacement_len, tree_private_page_budget) = bound
         .with_detached_reclamation_stage(
             FreeBitmapFinalizationScratch {
                 release_pages: &mut final_release_pages[..requirements.release_pages],
@@ -404,7 +464,10 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
                 {
                     return Err(ReclamationProtectedPagesError::ProbeChanged);
                 }
-                Ok::<_, ReclamationProtectedPagesError>(probe.replacement_count)
+                Ok::<_, ReclamationProtectedPagesError>((
+                    probe.replacement_count,
+                    probe.tree_private_page_budget,
+                ))
             },
         )
         .map_err(|error| match error {
@@ -487,7 +550,22 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
             next_protected_pages,
         )?;
         if next_protected_pages[..next_len] == candidate[..] {
-            return Ok(&protected_pages[..protected_len]);
+            let (blob_private_pages, retirement_private_page_budget) =
+                selected_reclamation_retirement_private_page_budget(
+                    protected_len,
+                    tree_private_page_budget,
+                )?;
+            let available_private_pages = bound.cow.available_private_pages();
+            require_selected_reclamation_retirement_capacity(
+                retirement_private_page_budget,
+                available_private_pages,
+            )?;
+            return Ok(SelectedReclamationProtectedPages {
+                pages: &protected_pages[..protected_len],
+                blob_private_pages,
+                tree_private_page_budget,
+                retirement_private_page_budget,
+            });
         }
         if next_len > protected_pages.len() {
             return Err(ReclamationProtectedPagesError::Retirement(
@@ -694,6 +772,27 @@ mod tests {
             merge_reclamation_protected_pages(&[4], &[replacement(10)], 10, &mut output),
             Err(ReclamationProtectedPagesError::ReplacementPageOutOfBounds(
                 10
+            ))
+        ));
+    }
+
+    #[test]
+    fn selected_reclamation_budget_combines_exact_blob_and_tree_capacity() {
+        assert_eq!(
+            selected_reclamation_retirement_private_page_budget(3, 1).unwrap(),
+            (1, 2)
+        );
+    }
+
+    #[test]
+    fn selected_reclamation_budget_rejects_a_short_bound_scope_before_mutation() {
+        assert!(matches!(
+            require_selected_reclamation_retirement_capacity(3, 2),
+            Err(ReclamationProtectedPagesError::Retirement(
+                RetirementWriteError::PrivatePageBudgetTooSmall {
+                    required: 3,
+                    actual: 2,
+                }
             ))
         ));
     }

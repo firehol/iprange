@@ -7039,6 +7039,38 @@ requirements are normative in the Pre-Implementation Gate above.
 - No public `Reclaim`, generic lifecycle behavior, format change, or Go parity
   is claimed by this extraction.
 
+### 2026-07-24 - selected-reclaim retirement-capacity plan
+
+- Evidence: the protected-list helper obtains the exact retirement-tree
+  private-page upper bound from
+  `RetirementTreeEditor::probe_reclaimed_oldest_and_append_newest`, but
+  currently drops it. The later test-only finalizer discovers its blob/tree
+  capacity only while constructing output. A normal lock-bound finalizer must
+  know its bounded scope requirement before it starts that real mutation.
+- Preserve the probe's tree-page bound with the converged protected list. Once
+  the list is stable, calculate its exact blob-page geometry and require their
+  checked sum to fit the already-bound shadow scope's remaining private pages.
+  Return that immutable capacity fact with the list for the later terminal
+  stage; do not select more pages, resize storage, or change public behavior.
+- A short scope must return the existing typed retirement budget error before
+  real blob/tree construction. This is a private Rust preflight boundary, not
+  the public `Reclaim` operation or a new file-format rule.
+
+### 2026-07-24 - selected-reclaim retirement-capacity implementation
+
+- The protected-list helper now returns a small immutable result containing
+  the converged pages, exact blob-page count, exact safe tree-page bound, and
+  their checked total. It compares that total with the remaining pages in the
+  bound bitmap shadow scope before any caller can build real retirement output.
+- A short scope reports `PrivatePageBudgetTooSmall`; arithmetic remains
+  checked. The existing selected Linux case proves the exact two-page
+  retirement budget equals both its blob-plus-tree parts and the available
+  bound scope. Focused tests cover the pure exact geometry and short-scope
+  error path.
+- This only preserves and proves capacity already discovered by the selected
+  probe. It does not mutate a terminal scope, expose `Reclaim`, or alter v4
+  bytes or Go behavior.
+
 ## Validation
 
 ### 2026-07-24 - bounded terminal capacity
@@ -7080,6 +7112,18 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
   audit pass. No normative specification update is needed: this is private
   Rust lifecycle machinery with no new public API or on-disk behavior.
+
+### 2026-07-24 - selected-reclaim retirement capacity
+
+- Focused Rust coverage passes for exact blob-plus-tree capacity accounting,
+  short-scope rejection before mutation, and the selected Linux finalizer's
+  exact capacity relationship. The selected path remains allocation-free.
+- Full Rust workspace matrices pass: 449 no-default-feature tests and 564
+  all-feature tests. Formatting, all-target/all-feature Clippy with warnings
+  denied, and all-feature benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. This is private capacity accounting only; no specification,
+  public API, byte-format, or Go behavior changed.
 
 ### 2026-07-24 - stage-aware reclamation preview
 
