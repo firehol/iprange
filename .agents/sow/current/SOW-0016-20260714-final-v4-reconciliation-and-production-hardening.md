@@ -6774,6 +6774,27 @@ requirements are normative in the Pre-Implementation Gate above.
   `Reclaim`, generic Linux lifecycle wiring, a new v4 format rule, or Go
   parity.
 
+### 2026-07-24 - dynamic selected-reclaim composition
+
+- The selected Linux lifecycle now proves the protected list from live state:
+  it combines the bitmap COW's actual committed replacements with a separate
+  read-only retirement probe ledger, sorts that bounded list, and only then
+  builds the next retirement blob. The old `[11, 12, 13]` list is an assertion
+  about the fixture, not an input to the operation.
+- A count-only `RetirementBlobBuilder::required_private_pages` exposes exact
+  blob geometry without an input list or page allocation. It shares the same
+  checked limits and branch math as `build`.
+- A probe may run both before bitmap binding and against a fully bound shadow
+  scope. When any selected reclaimed page is present in that scope, every
+  selected page must be present; a partial set returns
+  `ReclaimedPageNotConsumed` before the scan can use it. This prevents the
+  probe from treating a partially attached authority as a valid reclaim input.
+- The remaining generic operation still needs a bounded fixed-point preview:
+  inserting unused safe pages into the bitmap can replace additional bitmap
+  pages, and those exact pages must join the protected list before the final
+  retirement blob/tree edit. No public `Reclaim` or generic lifecycle is
+  claimed by this checkpoint.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6931,6 +6952,13 @@ requirements are normative in the Pre-Implementation Gate above.
 - Go is unchanged because no Go lock-bound finalization caller exists yet.
   Full cross-language validation remains required for the next integrated
   lifecycle checkpoint.
+
+### 2026-07-24 - dynamic selected-reclaim composition
+
+- Focused Rust coverage proves the count-only blob boundaries, rejects a
+  partially bound reclaimed authority, preserves the unbound allocation-free
+  probe, and publishes the selected Linux fixture using the dynamically
+  derived protected list under the held operation lock.
 
 ### Historical adversarial-audit evidence
 

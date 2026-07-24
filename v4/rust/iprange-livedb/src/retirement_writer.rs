@@ -1766,6 +1766,38 @@ impl<'a> PageRoleIndex<'a> {
         Ok(())
     }
 
+    /// A structural reclaim probe can run before bitmap binding, or after the
+    /// exact reclaimed pages have been bound into its shadow scope. In the
+    /// latter case, mark the bound pages as safe for the probe's role checks
+    /// without consuming the reclamation authority or changing pool state.
+    fn authorize_reclaimed_pages_when_bound(
+        &mut self,
+        arena: &PrivatePageArena<'_>,
+        reclamation: &RetirementReclamationAuthority<'_>,
+    ) -> Result<(), RetirementWriteError> {
+        if arena.scope().is_none() {
+            return Ok(());
+        }
+        let mut first_missing = None;
+        let mut bound = 0usize;
+        for &pgno in reclamation.pages() {
+            if arena.contains(pgno)? {
+                bound = bound
+                    .checked_add(1)
+                    .ok_or(RetirementWriteError::ArithmeticOverflow)?;
+            } else {
+                first_missing.get_or_insert(pgno);
+            }
+        }
+        if bound == 0 {
+            return Ok(());
+        }
+        if let Some(pgno) = first_missing {
+            return Err(RetirementWriteError::ReclaimedPageNotConsumed(pgno));
+        }
+        self.authorize_reclaimed_pages(arena, reclamation)
+    }
+
     fn first_unsatisfied_required(&self) -> Option<u32> {
         self.slots
             .iter()
@@ -2326,6 +2358,12 @@ struct BlobGeometry {
 pub(crate) struct RetirementBlobBuilder;
 
 impl RetirementBlobBuilder {
+    /// Return the exact private-page count needed to encode a retirement list
+    /// of `value_count` page numbers, without inspecting or allocating pages.
+    pub(crate) fn required_private_pages(value_count: u64) -> Result<usize, RetirementWriteError> {
+        Ok(Self::geometry_for_value_count(value_count)?.total_pages)
+    }
+
     pub(crate) fn build<'arena, 'slots>(
         pages: &[u32],
         arena: &'arena mut PrivatePageArena<'slots>,
@@ -2375,13 +2413,8 @@ impl RetirementBlobBuilder {
         arena: &PrivatePageArena<'_>,
         scratch_len: usize,
     ) -> Result<BlobGeometry, RetirementWriteError> {
-        let value_count = pages.len() as u64;
-        if value_count == 0 {
-            return Err(RetirementWriteError::EmptyRetirementStream);
-        }
-        if value_count > MAX_BATCH_PAGE_COUNT {
-            return Err(RetirementWriteError::RetirementStreamTooLong(value_count));
-        }
+        let value_count =
+            u64::try_from(pages.len()).map_err(|_| RetirementWriteError::ArithmeticOverflow)?;
         let mut previous = None;
         for &current in pages {
             if current < 2 || u64::from(current) >= arena.committed_page_count {
@@ -2396,6 +2429,25 @@ impl RetirementBlobBuilder {
                 });
             }
             previous = Some(current);
+        }
+
+        let geometry = Self::geometry_for_value_count(value_count)?;
+        arena.require_pages(geometry.total_pages)?;
+        if scratch_len < geometry.total_pages {
+            return Err(RetirementWriteError::BlobBuildScratchTooSmall {
+                required: geometry.total_pages,
+                actual: scratch_len,
+            });
+        }
+        Ok(geometry)
+    }
+
+    fn geometry_for_value_count(value_count: u64) -> Result<BlobGeometry, RetirementWriteError> {
+        if value_count == 0 {
+            return Err(RetirementWriteError::EmptyRetirementStream);
+        }
+        if value_count > MAX_BATCH_PAGE_COUNT {
+            return Err(RetirementWriteError::RetirementStreamTooLong(value_count));
         }
 
         let leaf_count_u64 = value_count
@@ -2421,13 +2473,6 @@ impl RetirementBlobBuilder {
             if root_level > MAX_TREE_LEVEL {
                 return Err(RetirementWriteError::TreeDepthExceeded);
             }
-        }
-        arena.require_pages(total_pages)?;
-        if scratch_len < total_pages {
-            return Err(RetirementWriteError::BlobBuildScratchTooSmall {
-                required: total_pages,
-                actual: scratch_len,
-            });
         }
         Ok(BlobGeometry {
             value_count,
@@ -5277,6 +5322,7 @@ impl RetirementTreeEditor {
         let delete_count = reclamation.batch_count();
         validate_reclamation_authority(state, selected_identity, delete_count, reclamation)?;
         roles.prepare(arena, replacements)?;
+        roles.authorize_reclaimed_pages_when_bound(arena, reclamation)?;
         roles.require_new_replacements();
         let pool_snapshot = arena.capture_fence()?;
         let planned_generation = arena
@@ -8782,6 +8828,12 @@ mod tests {
         let mut blob_pages = [0u32; 1];
         let mut delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
         let mut upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_delete_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_upsert_path = [RetirementPathFrame::new(); RETIREMENT_PATH_CAPACITY];
+        let mut probe_replacement_entries = [EMPTY_REPLACEMENT; 4];
+        let mut probe_release_pages = [0u32; 4];
+        let mut probe_roles = [PageRoleIndexSlot::new(); 16];
+        let mut protected_replacement_pages = [0u32; 4];
         let mut retirement_replacements = [EMPTY_REPLACEMENT; 4];
         let mut retirement_releases = [0u32; 4];
         let mut retirement_roles = [PageRoleIndexSlot::new(); 16];
@@ -8921,16 +8973,78 @@ mod tests {
                     bound.cow.apply_planned_reservation().unwrap();
                     assert_eq!(bound.cow.available_private_pages(), 2);
 
+                    let protected_replacements = match case {
+                        LinuxFinalizerReclamationCase::NoChange => &[50][..],
+                        LinuxFinalizerReclamationCase::SelectedBatch => {
+                            let mut probe_arena = PrivatePageArena::from_scoped_pool(
+                                &shadow_pool,
+                                &shadow_scope,
+                                selected.txn_id + 1,
+                            )
+                            .unwrap();
+                            let mut probe_replacements =
+                                CommittedReplacementLedger::new(&mut probe_replacement_entries);
+                            let mut probe_releases =
+                                PrivateReleaseBuffer::new(&mut probe_release_pages);
+                            let mut probe_roles = PageRoleIndex::new(&mut probe_roles);
+                            let probe = RetirementTreeEditor::probe_reclaimed_oldest_and_append_newest(
+                                &pages,
+                                RetirementTreeState {
+                                    selected_txn: selected.txn_id,
+                                    page_count: selected.page_count,
+                                    root: selected.retirement_root,
+                                    batch_count: selected.retirement_batch_count,
+                                },
+                                retirement_identity,
+                                bound.reclamation_authority(),
+                                &mut probe_arena,
+                                &mut probe_delete_path,
+                                &mut probe_upsert_path,
+                                &mut probe_replacements,
+                                &mut probe_releases,
+                                &mut probe_roles,
+                            )
+                            .unwrap();
+                            assert_eq!(probe.replacement_count, probe_replacements.entries().len());
+                            assert!(probe_releases.entries_from(0).is_empty());
+                            assert_eq!(probe_arena.in_use_count().unwrap(), 0);
+
+                            let bitmap_len = bound.cow.replacements().len();
+                            let replacement_len = bitmap_len + probe_replacements.entries().len();
+                            assert!(replacement_len <= protected_replacement_pages.len());
+                            protected_replacement_pages[..bitmap_len]
+                                .copy_from_slice(bound.cow.replacements());
+                            for (destination, replacement) in protected_replacement_pages[bitmap_len
+                                ..replacement_len]
+                                .iter_mut()
+                                .zip(probe_replacements.entries())
+                            {
+                                *destination = replacement.pgno;
+                            }
+                            protected_replacement_pages[..replacement_len].sort_unstable();
+                            assert!(protected_replacement_pages[..replacement_len]
+                                .windows(2)
+                                .all(|pair| pair[0] < pair[1]));
+                            assert_eq!(
+                                RetirementBlobBuilder::required_private_pages(
+                                    u64::try_from(replacement_len).unwrap()
+                                )
+                                .unwrap(),
+                                blob_pages.len()
+                            );
+                            assert_eq!(
+                                &protected_replacement_pages[..replacement_len],
+                                &[11, 12, 13]
+                            );
+                            &protected_replacement_pages[..replacement_len]
+                        }
+                    };
                     let mut arena = PrivatePageArena::from_scoped_pool(
                         &shadow_pool,
                         &shadow_scope,
                         selected.txn_id + 1,
                     )
                     .unwrap();
-                    let protected_replacements = match case {
-                        LinuxFinalizerReclamationCase::NoChange => &[50][..],
-                        LinuxFinalizerReclamationCase::SelectedBatch => &[11, 12, 13][..],
-                    };
                     let blob = RetirementBlobBuilder::build(
                         protected_replacements,
                         &mut arena,
@@ -10209,6 +10323,41 @@ mod tests {
     }
 
     #[test]
+    fn retirement_blob_geometry_is_available_without_a_page_list() {
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(0),
+            Err(RetirementWriteError::EmptyRetirementStream)
+        );
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(MAX_BATCH_PAGE_COUNT + 1),
+            Err(RetirementWriteError::RetirementStreamTooLong(
+                MAX_BATCH_PAGE_COUNT + 1
+            ))
+        );
+
+        let leaf_values = RETIREMENT_VALUES_PER_BLOB_LEAF;
+        assert_eq!(RetirementBlobBuilder::required_private_pages(1).unwrap(), 1);
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(leaf_values).unwrap(),
+            1
+        );
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(leaf_values + 1).unwrap(),
+            3
+        );
+
+        let branch_values = leaf_values * BLOB_BRANCH_CAPACITY as u64;
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(branch_values).unwrap(),
+            BLOB_BRANCH_CAPACITY + 1
+        );
+        assert_eq!(
+            RetirementBlobBuilder::required_private_pages(branch_values + 1).unwrap(),
+            BLOB_BRANCH_CAPACITY + 4
+        );
+    }
+
+    #[test]
     fn blob_preflight_budgets_order_and_bounds_are_atomic() {
         let committed = 2_000u64;
         let input: Vec<u32> = (2..1_015).collect();
@@ -11086,6 +11235,38 @@ mod tests {
         .unwrap();
         assert_eq!(result.private_pages, probe.tree_private_page_budget);
         assert_eq!(actual_replacements.entries(), replacements.entries());
+    }
+
+    #[test]
+    fn reclamation_probe_rejects_a_partially_bound_reclaimed_set() {
+        let mut slots = [PrivatePageSlot::empty()];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 10, 10, 3).unwrap();
+        let scope = pool.reserve_scope(1).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        pool.bind_page(
+            &checkpoint,
+            &scope,
+            5,
+            PrivatePageAuthorization::SafelyReclaimed,
+        )
+        .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+        let arena = PrivatePageArena::from_scoped_pool(&pool, &scope, 3).unwrap();
+        let reclaimed_pages = [5u32, 6];
+        let reclaimed = test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let (reclamation, _guard) = RetirementReclamation::Reclaimed(reclaimed).into_parts();
+        let mut replacement_entries = [];
+        let replacements = CommittedReplacementLedger::new(&mut replacement_entries);
+        let mut role_entries = [PageRoleIndexSlot::new(); 4];
+        let mut roles = PageRoleIndex::new(&mut role_entries);
+
+        roles.prepare(&arena, &replacements).unwrap();
+        assert_eq!(
+            roles
+                .authorize_reclaimed_pages_when_bound(&arena, &reclamation)
+                .unwrap_err(),
+            RetirementWriteError::ReclaimedPageNotConsumed(6)
+        );
     }
 
     #[test]
