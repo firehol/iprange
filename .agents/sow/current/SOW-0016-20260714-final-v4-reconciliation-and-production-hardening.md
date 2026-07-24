@@ -8082,6 +8082,64 @@ requirements are normative in the Pre-Implementation Gate above.
   retirement blob, update target metadata, or publish a file. It is the
   bounded sorted primitive required before any of those steps can be correct.
 
+### 2026-07-24 - selected range-tree ownership-walk plan
+
+- Add matching private walkers that receive one selected committed range root,
+  its selected transaction/family/value mode/page limit, a committed-page
+  source, a caller-owned fixed-height traversal scratch, a bounded work limit,
+  and the ordered index above. The walker will add every reachable range branch
+  and leaf page to the index, including children described as empty by a branch
+  summary: those pages remain reachable and must retire with their root.
+- The walk uses the ordinary-path checks already defined for v4: source
+  access, page bounds, common header, range page type/family/geometry, branch
+  child bounds, and exactly decreasing child level. Its stack is bounded by
+  `MAX_TREE_LEVEL + 1`; work is explicitly capped so a malformed aliasing graph
+  cannot turn a normal commit into unbounded traversal. It deliberately does
+  not verify page CRCs, scan range records, prove fence/cross-page ordering, or
+  prove global alias freedom. Those are explicit `Validate` responsibilities.
+- A root-zero map contributes no pages only when its record count is zero. A
+  nonzero root can legally contain all-empty subtrees and is still walked. Any
+  source, local-structure, work-budget, or ordered-index failure returns a
+  typed private error; later workflow integration will apply the existing
+  whole-draft abort rule rather than publish a partial walk.
+- This slice has no allocator mutation, range-root replacement, retirement
+  blob change, target-meta update, or public API. Tests will cover empty roots,
+  physical page numbers deliberately unrelated to key order, multilevel and
+  empty children, wrong child type/level, bounded work failure, source failure,
+  and zero post-setup allocations in both engines.
+
+### 2026-07-24 - selected range-tree ownership-walk implementation and validation
+
+- Added matching private Rust and Go walkers. They visit every selected
+  reachable range branch and leaf, including legal empty children, and insert
+  physical page numbers into the private ordered index. The resulting index is
+  independent of range-key traversal order and is ready for later retirement
+  blob streaming.
+- Both use exactly `MAX_TREE_LEVEL + 1` caller-owned page buffers and frames.
+  Each visited page consumes one explicit work-budget unit, so a malformed
+  aliasing graph cannot cause an unbounded normal commit. Source failures,
+  wrong page kind, family, geometry, level, root/count shape, or index capacity
+  return typed internal errors before this slice changes allocator, metadata,
+  or publication state.
+- The walkers intentionally retain ordinary-path semantics: they do not check
+  CRCs, scan range records, prove fences, or prove global alias freedom. Those
+  checks remain the explicit `Validate` operation rather than a hidden
+  per-commit cost.
+- Focused matching tests cover arbitrary physical IDs and empty children,
+  multilevel IPv4, IPv6, exact maximum depth, invalid child kind/level, work
+  and source failures, empty-root/count rules, ordered-index output, and zero
+  post-setup heap allocations.
+- Validation passed: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`, `cargo test
+  --manifest-path v4/rust/Cargo.toml` (516 tests), `cargo test
+  --manifest-path v4/rust/Cargo.toml --all-features` (637 tests), Rust format,
+  warnings-denied all-target Clippy, all-feature benchmark compilation,
+  `git diff --check`, and `.agents/sow/audit.sh`.
+- This checkpoint deliberately does not build a retirement blob, update target
+  range metadata, or publish a root. Those changes remain unsafe until the
+  ordered index can be consumed directly by the existing bounded retirement
+  writer.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and
