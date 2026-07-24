@@ -5764,6 +5764,104 @@ impl<'slots> PrivatePagePool<'slots> {
         Ok(())
     }
 
+    /// Copy the complete range-owned state of one standalone shadow scope
+    /// into an unbound terminal journal. It is deliberately separate from the
+    /// bitmap exporter: a later range-root handoff must prove its exact
+    /// materialized root against this journal before composition.
+    pub(crate) fn export_range_scope_terminal_pages(
+        &self,
+        scope: &PrivatePageReservationScope<'_>,
+        destination: &mut [PrivatePageCoordinatorTerminalPage],
+    ) -> Result<(), PrivatePagePoolError> {
+        if self.coordinator_session_identity.get() != 0
+            || self.active_checkpoint.get() != 0
+            || self.active_operation_id.get() != 0
+            || destination
+                .iter()
+                .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+        {
+            return Err(PrivatePagePoolError::CoordinatorMismatch);
+        }
+        let slots = self
+            .slots
+            .try_borrow()
+            .map_err(|_| PrivatePagePoolError::BorrowConflict)?;
+        let anchor = self.validate_scope(&slots, scope)?;
+        let capacity = slots[anchor].scope_capacity;
+        let mut member = slots[anchor].scope_member_head;
+        let mut written = 0usize;
+        for ordinal in 0..capacity {
+            if member == NO_SLOT || member >= slots.len() {
+                return Err(PrivatePagePoolError::StaleScope);
+            }
+            let slot = &slots[member];
+            if slot.scope_id != scope.id
+                || slot.scope_anchor_index != anchor
+                || slot.scope_member_ordinal != ordinal
+            {
+                return Err(PrivatePagePoolError::StaleScope);
+            }
+            if let PrivatePageState::InUse {
+                owner: PrivatePageOwner::Range,
+                owner_generation,
+                tag,
+                ..
+            } = slot.state
+            {
+                let destination_len = destination.len();
+                let output = destination.get_mut(written).ok_or(
+                    PrivatePagePoolError::ReservationBudget {
+                        required: written.saturating_add(1),
+                        actual: destination_len,
+                    },
+                )?;
+                let authorization = slot
+                    .authorization
+                    .ok_or(PrivatePagePoolError::InvalidState(member))?;
+                let header = PageHeader::decode(&slot.bytes, self.pending_txn)
+                    .map_err(|_| PrivatePagePoolError::InvalidState(member))?;
+                if owner_generation != self.pending_txn
+                    || !matches!(tag, 4 | 6)
+                    || header.aux != tag as u32
+                    || !matches!(
+                        header.page_type,
+                        PageType::RangeBranch | PageType::RangeLeaf
+                    )
+                    || !page::verify_crc32c(&slot.bytes)
+                {
+                    return Err(PrivatePagePoolError::InvalidState(member));
+                }
+                *output = PrivatePageCoordinatorTerminalPage {
+                    pool_slot: NO_SLOT,
+                    pgno: slot.pgno,
+                    authorization,
+                    owner: PrivatePageOwner::Range,
+                    owner_generation: self.pending_txn,
+                    tag,
+                    bytes: slot.bytes,
+                };
+                written += 1;
+            }
+            member = slot.scope_member_next;
+        }
+        if member != NO_SLOT || written != destination.len() {
+            return Err(PrivatePagePoolError::ReservationBudget {
+                required: written,
+                actual: destination.len(),
+            });
+        }
+        destination.sort_unstable_by_key(|page| page.pgno);
+        for pair in destination.windows(2) {
+            if pair[0].pgno >= pair[1].pgno {
+                return Err(PrivatePagePoolError::PagesNotStrict {
+                    previous: pair[0].pgno,
+                    current: pair[1].pgno,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Copy the complete bitmap-owned state of one standalone shadow scope
     /// into an unbound terminal journal. This is deliberately separate from
     /// the retirement exporter so a typed bitmap-finalizer result is the only

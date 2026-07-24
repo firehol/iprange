@@ -26,6 +26,45 @@ func producePreparedAggregateBitmap(
 	return produced
 }
 
+func producePreparedAggregateBitmapRange(
+	t *testing.T,
+	source committedPageSource,
+	workspace *privateWriterFixedPointAggregateWorkspace,
+) (
+	privateWriterProducedBitmapTerminal,
+	privateWriterProducedRangeTerminal,
+	rangeTreeMaterializedResult,
+	[]privateWriterProducedTerminalPage,
+) {
+	t.Helper()
+	storage := newLateBitmapPlannerStorage(16, 16, 16, 32)
+	attachment := newLateBitmapPlan(t, source, 2, 1, &storage)
+	proof := completeLateBitmapProof(t, &attachment, 0, nil)
+	if _, problem := attachment.bind(&proof); problem.failed() {
+		t.Fatal(problem)
+	}
+	staging, staged := buildRangePayloadV4(t, attachment.cow.pendingTxn)
+	rangeTerminal := make([]privateWriterProducedTerminalPage, staged.pageCount)
+	materialized, stageProblem := stageRangePayload(
+		&attachment, &staging, staged,
+		&rangeTreePayloadScratch{
+			assignments:   make([]rangeTreePhysicalAssignment, staged.pageCount),
+			slots:         make([]rangeTreePayloadReservationSlot, staged.pageCount),
+			terminalPages: rangeTerminal,
+		},
+	)
+	if stageProblem.failed() {
+		t.Fatal(stageProblem)
+	}
+	bitmap, ranges, finalizationProblem := attachment.finalizeFixedPointBitmapRangeProducers(
+		finalizationScratchForAttachment(&attachment), materialized, workspace,
+	)
+	if finalizationProblem.failed() {
+		t.Fatal(finalizationProblem)
+	}
+	return bitmap, ranges, materialized, rangeTerminal
+}
+
 func aggregateBitmapContent(
 	t *testing.T,
 	produced privateWriterProducedBitmapTerminal,
@@ -35,6 +74,19 @@ func aggregateBitmapContent(
 	content, ok := produced.authority(&workspace.bitmapProducer)
 	if !ok {
 		t.Fatal("bitmap producer authority is not valid")
+	}
+	return *content
+}
+
+func aggregateRangeContent(
+	t *testing.T,
+	produced privateWriterProducedRangeTerminal,
+	workspace *privateWriterFixedPointAggregateWorkspace,
+) privateWriterProducedRangeTerminalContent {
+	t.Helper()
+	content, ok := produced.authority(&workspace.rangeProducer)
+	if !ok {
+		t.Fatal("range producer authority is not valid")
 	}
 	return *content
 }
@@ -136,6 +188,80 @@ func TestFixedPointAggregateActualBitmapProducerExecutesInseparably(t *testing.T
 	}
 	if _, abortProblem := fixture.core.abort(); abortProblem.failed() {
 		t.Fatal(abortProblem)
+	}
+}
+
+func TestFixedPointAggregateActualRangeAndBitmapProducersSplitOneSealedScope(t *testing.T) {
+	fixture := newPreparedFixedPointFixture(t)
+	workspace := newAggregateWorkspaceForTest(t, len(fixture.core.pool.slots))
+	bitmap, ranges, materialized, stagedRange := producePreparedAggregateBitmapRange(
+		t, fixture.source, workspace,
+	)
+	bitmapContent := aggregateBitmapContent(t, bitmap, workspace)
+	rangeContent := aggregateRangeContent(t, ranges, workspace)
+	if bitmap.nonce == 0 || bitmap.nonce != ranges.nonce ||
+		bitmapContent.pageLen == 0 || rangeContent.pageLen == 0 ||
+		rangeContent.materialized != materialized ||
+		rangeContent.pageLen != len(stagedRange) {
+		t.Fatalf("split terminal producers = %#v/%#v", bitmapContent, rangeContent)
+	}
+	for index, page := range rangeContent.pages[:rangeContent.pageLen] {
+		if page.owner != privatePageOwnerRange || page.origin != privatePageRange ||
+			page != stagedRange[index] ||
+			(index > 0 && rangeContent.pages[index-1].pageNumber >= page.pageNumber) {
+			t.Fatalf("range page %d = %#v", index, page)
+		}
+	}
+	for index, page := range bitmapContent.pages[:bitmapContent.pageLen] {
+		if page.owner != privatePageOwnerBitmap || page.origin != privatePageBitmap ||
+			(index > 0 && bitmapContent.pages[index-1].pageNumber >= page.pageNumber) {
+			t.Fatalf("bitmap page %d = %#v", index, page)
+		}
+	}
+	combined := make([]privateWriterProducedTerminalPage, rangeContent.pageLen+bitmapContent.pageLen)
+	if problem := mergePrivateWriterTerminalJournals(
+		[3][]privateWriterProducedTerminalPage{
+			rangeContent.pages[:rangeContent.pageLen],
+			bitmapContent.pages[:bitmapContent.pageLen],
+			nil,
+		},
+		combined,
+	); problem.failed() {
+		t.Fatalf("split terminal journals did not merge: %#v", problem)
+	}
+}
+
+func TestFixedPointAggregateRangeProducerRejectsMismatchedMaterializationAndLeavesNoAuthority(t *testing.T) {
+	fixture := newPreparedFixedPointFixture(t)
+	workspace := newAggregateWorkspaceForTest(t, len(fixture.core.pool.slots))
+	storage := newLateBitmapPlannerStorage(16, 16, 16, 32)
+	attachment := newLateBitmapPlan(t, fixture.source, 2, 1, &storage)
+	proof := completeLateBitmapProof(t, &attachment, 0, nil)
+	if _, problem := attachment.bind(&proof); problem.failed() {
+		t.Fatal(problem)
+	}
+	staging, staged := buildRangePayloadV4(t, attachment.cow.pendingTxn)
+	materialized, stageProblem := stageRangePayload(
+		&attachment, &staging, staged,
+		&rangeTreePayloadScratch{
+			assignments:   make([]rangeTreePhysicalAssignment, staged.pageCount),
+			slots:         make([]rangeTreePayloadReservationSlot, staged.pageCount),
+			terminalPages: make([]privateWriterProducedTerminalPage, staged.pageCount),
+		},
+	)
+	if stageProblem.failed() {
+		t.Fatal(stageProblem)
+	}
+	materialized.rootPage = 0
+	bitmap, ranges, finalizationProblem := attachment.finalizeFixedPointBitmapRangeProducers(
+		finalizationScratchForAttachment(&attachment), materialized, workspace,
+	)
+	if !finalizationProblem.failed() || bitmap != (privateWriterProducedBitmapTerminal{}) ||
+		ranges != (privateWriterProducedRangeTerminal{}) ||
+		workspace.bitmapProducer.ready || workspace.rangeProducer.ready ||
+		!privateWriterProducedScratchCanonical(workspace.bitmapPages) ||
+		!privateWriterProducedScratchCanonical(workspace.bitmapPrior) {
+		t.Fatalf("mismatched materialization result = %#v/%#v/%#v", bitmap, ranges, finalizationProblem)
 	}
 }
 

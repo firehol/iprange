@@ -160,6 +160,34 @@ type privateWriterProducedBitmapTerminal struct {
 	nonce      uint64
 }
 
+// privateWriterProducedRangeTerminal is the range counterpart of the bitmap
+// terminal producer. Both tokens are minted by one finalization of one sealed
+// scope; neither can be constructed from caller supplied terminal pages.
+type privateWriterProducedRangeTerminalContent struct {
+	pages        []privateWriterProducedTerminalPage
+	materialized rangeTreeMaterializedResult
+
+	selectedTxn        uint64
+	pendingTxn         uint64
+	committedPageCount uint64
+	pageLen            int
+	producerSeal       uint64
+}
+
+type privateWriterProducedRangeTerminalSlot struct {
+	self       *privateWriterProducedRangeTerminalSlot
+	generation uint64
+	nonce      uint64
+	ready      bool
+	content    privateWriterProducedRangeTerminalContent
+}
+
+type privateWriterProducedRangeTerminal struct {
+	slot       *privateWriterProducedRangeTerminalSlot
+	generation uint64
+	nonce      uint64
+}
+
 type privateWriterProducedRetirementTerminalContent struct {
 	pages     []privateWriterProducedTerminalPage
 	prior     []privateWriterDraftPageProvenance
@@ -252,6 +280,28 @@ func sealPrivateWriterProducedBitmap(
 	return hash
 }
 
+func sealPrivateWriterProducedRange(
+	produced *privateWriterProducedRangeTerminalContent,
+) uint64 {
+	hash := privateWriterAggregateHashSeed ^ 0x4cf5_ad43_2745_937b
+	for _, value := range [...]uint64{
+		uint64(produced.materialized.rootPage),
+		uint64(produced.materialized.rootLevel),
+		produced.materialized.recordCount,
+		uint64(produced.materialized.pageCount),
+		produced.selectedTxn,
+		produced.pendingTxn,
+		produced.committedPageCount,
+		uint64(produced.pageLen),
+	} {
+		hash = privateWriterAggregateHashWord(hash, value)
+	}
+	for index := 0; index < produced.pageLen; index++ {
+		hash = privateWriterProducedPageHash(hash, produced.pages[index])
+	}
+	return hash
+}
+
 func sealPrivateWriterProducedPrior(
 	prior []privateWriterDraftPageProvenance,
 ) uint64 {
@@ -273,19 +323,24 @@ func privateWriterProducedScratchCanonical[T comparable](values []T) bool {
 	return true
 }
 
-func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
+// finalizeFixedPointBitmapRangeProducers consumes one real sealed scope and
+// splits its terminal ownership by role. Range payload pages cannot bypass
+// this boundary as arbitrary caller-owned journal entries.
+func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapRangeProducers(
 	scratch freeBitmapFinalizationScratch,
+	materialized rangeTreeMaterializedResult,
 	workspace *privateWriterFixedPointAggregateWorkspace,
 ) (
-	producedToken privateWriterProducedBitmapTerminal,
+	bitmapToken privateWriterProducedBitmapTerminal,
+	rangeToken privateWriterProducedRangeTerminal,
 	fixedProblem privateWriterFixedPointError,
 ) {
 	if p == nil || workspace == nil || workspace.self != workspace ||
-		workspace.bitmapProducer.ready ||
+		workspace.bitmapProducer.ready || workspace.rangeProducer.ready ||
 		len(workspace.bitmapPages) < p.privatePages ||
 		!privateWriterProducedScratchCanonical(workspace.bitmapPages) ||
 		!privateWriterProducedScratchCanonical(workspace.bitmapPrior) {
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrScratchTooSmall,
 		}
 	}
@@ -293,13 +348,13 @@ func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
 	priorScratch := workspace.bitmapPrior
 	result, bitmapProblem := p.finalize(scratch)
 	if bitmapProblem.failed() {
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrStaleProvenance, bitmap: bitmapProblem,
 		}
 	}
 	predecessor, bitmapProblem := result.successor.consume()
 	if bitmapProblem.failed() {
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrStaleProvenance, bitmap: bitmapProblem,
 		}
 	}
@@ -310,7 +365,8 @@ func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
 		}
 		cleanupProblem := predecessor.cleanup()
 		if cleanupProblem.failed() && !fixedProblem.failed() {
-			producedToken = privateWriterProducedBitmapTerminal{}
+			bitmapToken = privateWriterProducedBitmapTerminal{}
+			rangeToken = privateWriterProducedRangeTerminal{}
 			fixedProblem = privateWriterFixedPointError{
 				code:   privateWriterFixedPointErrStaleProvenance,
 				bitmap: cleanupProblem,
@@ -328,15 +384,16 @@ func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
 		output.boundLen > len(output.bindings) ||
 		output.boundLen > len(pageScratch) {
 		clearProduced()
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrStaleProvenance,
 		}
 	}
+	rangeLen, bitmapLen := 0, 0
 	for index := 0; index < output.boundLen; index++ {
 		binding := output.bindings[index]
 		if binding.poolSlot < 0 || binding.poolSlot >= len(output.pool.slots) {
 			clearProduced()
-			return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+			return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 				code: privateWriterFixedPointErrStaleProvenance,
 			}
 		}
@@ -344,20 +401,70 @@ func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
 		if !slot.bound || slot.pageNumber != binding.pageNumber ||
 			slot.epoch != binding.poolEpoch ||
 			slot.state != privatePageInUse || !slot.inUse ||
-			slot.owner != privatePageOwnerBitmap ||
-			slot.origin != privatePageBitmap {
+			slot.pendingTxn != output.pendingTxn {
 			clearProduced()
-			return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+			return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 				code: privateWriterFixedPointErrStaleProvenance,
 				page: binding.pageNumber,
 			}
 		}
-		pageScratch[index] = privateWriterProducedTerminalPage{
+		switch {
+		case slot.owner == privatePageOwnerBitmap && slot.origin == privatePageBitmap:
+			bitmapLen++
+		case slot.owner == privatePageOwnerRange && slot.origin == privatePageRange:
+			rangeLen++
+		default:
+			clearProduced()
+			return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
+				code: privateWriterFixedPointErrStaleProvenance,
+				page: binding.pageNumber,
+			}
+		}
+	}
+	if rangeLen+bitmapLen != output.boundLen || bitmapLen == 0 {
+		clearProduced()
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
+			code: privateWriterFixedPointErrStaleProvenance,
+		}
+	}
+	pageLen = output.boundLen
+	rangePages := pageScratch[:rangeLen:rangeLen]
+	bitmapPages := pageScratch[rangeLen : rangeLen+bitmapLen : rangeLen+bitmapLen]
+	rangeWrite, bitmapWrite := 0, 0
+	bitmapRootFound := output.root == 0
+	for index := 0; index < output.boundLen; index++ {
+		binding := output.bindings[index]
+		slot := &output.pool.slots[binding.poolSlot]
+		page := privateWriterProducedTerminalPage{
 			pageNumber: binding.pageNumber, authorization: slot.authorization,
 			owner: slot.owner, origin: slot.origin,
 			committedOrigin: slot.committedOrigin, bytes: slot.bytes,
 		}
-		pageLen++
+		if slot.owner == privatePageOwnerRange {
+			rangePages[rangeWrite] = page
+			rangeWrite++
+			continue
+		}
+		bitmapPages[bitmapWrite] = page
+		bitmapWrite++
+		if page.pageNumber == output.root {
+			bitmapRootFound = true
+		}
+	}
+	rangePagesInBounds := materialized.rootPage == 0 ||
+		uint64(materialized.rootPage) < output.pageCount
+	for _, page := range rangePages {
+		rangePagesInBounds = rangePagesInBounds && uint64(page.pageNumber) < output.pageCount
+	}
+	if rangeWrite != len(rangePages) || bitmapWrite != len(bitmapPages) ||
+		!bitmapRootFound ||
+		!rangePagesInBounds ||
+		validateRangeRootTransactionJournal(materialized, rangePages) != nil ||
+		validatePrivateWriterTerminalJournalSource(1, bitmapPages).failed() {
+		clearProduced()
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
+			code: privateWriterFixedPointErrStaleProvenance,
+		}
 	}
 	draft := privateWriterDraftSourceFrom(p.cow.committed)
 	for _, pageNumber := range p.cow.replacementPages() {
@@ -367,62 +474,107 @@ func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
 		residence, problem := draft.residence(pageNumber)
 		if problem.failed() {
 			clearProduced()
-			return privateWriterProducedBitmapTerminal{}, problem
+			return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, problem
 		}
 		if residence.kind != privateWriterPagePriorScopePrivate {
 			continue
 		}
 		if priorLen == len(priorScratch) {
 			clearProduced()
-			return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+			return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 				code: privateWriterFixedPointErrScratchTooSmall,
 			}
 		}
 		priorScratch[priorLen] = residence.provenance
 		priorLen++
 	}
-	produced := privateWriterProducedBitmapTerminalContent{
-		pages: pageScratch, prior: priorScratch,
+	bitmapProduced := privateWriterProducedBitmapTerminalContent{
+		pages: bitmapPages, prior: priorScratch,
 		root: output.root, pageCount: output.pageCount,
 		selectedTxn: output.selectedTxn, pendingTxn: output.pendingTxn,
 		committedPageCount: output.committedPageCount,
-		pageLen:            output.boundLen, priorLen: priorLen,
+		pageLen:            bitmapLen, priorLen: priorLen,
 		released: result.released, reinserted: result.reinsertedReclaimed,
 	}
-	produced.priorSealed = sealPrivateWriterProducedPrior(
-		produced.prior[:produced.priorLen],
+	bitmapProduced.priorSealed = sealPrivateWriterProducedPrior(
+		bitmapProduced.prior[:bitmapProduced.priorLen],
 	)
-	produced.producerSeal = sealPrivateWriterProducedBitmap(&produced)
+	bitmapProduced.producerSeal = sealPrivateWriterProducedBitmap(&bitmapProduced)
+	rangeProduced := privateWriterProducedRangeTerminalContent{
+		pages: rangePages, materialized: materialized,
+		selectedTxn: output.selectedTxn, pendingTxn: output.pendingTxn,
+		committedPageCount: output.committedPageCount, pageLen: rangeLen,
+	}
+	rangeProduced.producerSeal = sealPrivateWriterProducedRange(&rangeProduced)
 	bitmapProblem = predecessor.cleanup()
 	cleanupPending = false
 	if bitmapProblem.failed() {
 		clearProduced()
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrStaleProvenance, bitmap: bitmapProblem,
 		}
 	}
-	if workspace.bitmapProducer.generation == ^uint64(0) {
+	if workspace.bitmapProducer.generation == ^uint64(0) ||
+		workspace.rangeProducer.generation == ^uint64(0) {
 		clearProduced()
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrExhausted,
 		}
 	}
 	nonce, ok := mintFreeBitmapFinalizationNonce()
 	if !ok {
 		clearProduced()
-		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+		return privateWriterProducedBitmapTerminal{}, privateWriterProducedRangeTerminal{}, privateWriterFixedPointError{
 			code: privateWriterFixedPointErrExhausted,
 		}
 	}
-	slot := &workspace.bitmapProducer
-	generation := slot.generation + 1
-	*slot = privateWriterProducedBitmapTerminalSlot{
-		self: slot, generation: generation, nonce: nonce, ready: true,
-		content: produced,
+	bitmapSlot := &workspace.bitmapProducer
+	bitmapGeneration := bitmapSlot.generation + 1
+	*bitmapSlot = privateWriterProducedBitmapTerminalSlot{
+		self: bitmapSlot, generation: bitmapGeneration, nonce: nonce, ready: true,
+		content: bitmapProduced,
+	}
+	rangeSlot := &workspace.rangeProducer
+	rangeGeneration := rangeSlot.generation + 1
+	*rangeSlot = privateWriterProducedRangeTerminalSlot{
+		self: rangeSlot, generation: rangeGeneration, nonce: nonce, ready: true,
+		content: rangeProduced,
 	}
 	return privateWriterProducedBitmapTerminal{
-		slot: slot, generation: generation, nonce: nonce,
-	}, privateWriterFixedPointError{}
+			slot: bitmapSlot, generation: bitmapGeneration, nonce: nonce,
+		}, privateWriterProducedRangeTerminal{
+			slot: rangeSlot, generation: rangeGeneration, nonce: nonce,
+		}, privateWriterFixedPointError{}
+}
+
+// finalizeFixedPointBitmapProducer preserves the pre-range aggregate path.
+// It accepts only an empty range result and discards its private empty token,
+// so an older caller cannot accidentally leave a second producer live.
+func (p *freeBitmapReservationAttachment) finalizeFixedPointBitmapProducer(
+	scratch freeBitmapFinalizationScratch,
+	workspace *privateWriterFixedPointAggregateWorkspace,
+) (privateWriterProducedBitmapTerminal, privateWriterFixedPointError) {
+	bitmap, rangeProducer, problem := p.finalizeFixedPointBitmapRangeProducers(
+		scratch, rangeTreeMaterializedResult{}, workspace,
+	)
+	if problem.failed() {
+		return privateWriterProducedBitmapTerminal{}, problem
+	}
+	rangeContent, valid := rangeProducer.authority(&workspace.rangeProducer)
+	if !valid || rangeContent.pageLen != 0 {
+		clear(workspace.bitmapPages)
+		clear(workspace.bitmapPrior)
+		workspace.bitmapProducer.ready = false
+		workspace.bitmapProducer.content = privateWriterProducedBitmapTerminalContent{}
+		workspace.rangeProducer.ready = false
+		workspace.rangeProducer.content = privateWriterProducedRangeTerminalContent{}
+		return privateWriterProducedBitmapTerminal{}, privateWriterFixedPointError{
+			code: privateWriterFixedPointErrStaleProvenance,
+		}
+	}
+	workspace.rangeProducer.ready = false
+	workspace.rangeProducer.content = privateWriterProducedRangeTerminalContent{}
+	return bitmap, privateWriterFixedPointError{}
 }
 
 func (p privateWriterProducedBitmapTerminal) authority(
@@ -441,6 +593,27 @@ func (p privateWriterProducedBitmapTerminal) authority(
 		content.producerSeal == sealPrivateWriterProducedBitmap(content) &&
 		content.priorSealed ==
 			sealPrivateWriterProducedPrior(content.prior[:content.priorLen])
+}
+
+func (p privateWriterProducedRangeTerminal) authority(
+	canonical *privateWriterProducedRangeTerminalSlot,
+) (*privateWriterProducedRangeTerminalContent, bool) {
+	if canonical == nil || p.slot != canonical || canonical.self != canonical ||
+		!canonical.ready || p.generation == 0 ||
+		p.generation != canonical.generation || p.nonce == 0 ||
+		p.nonce != canonical.nonce {
+		return nil, false
+	}
+	content := &canonical.content
+	if content.producerSeal == 0 || content.pageLen < 0 ||
+		content.pageLen > len(content.pages) ||
+		content.producerSeal != sealPrivateWriterProducedRange(content) {
+		return nil, false
+	}
+	return content,
+		validateRangeRootTransactionJournal(
+			content.materialized, content.pages[:content.pageLen],
+		) == nil
 }
 
 func sealPrivateWriterProducedRetirement(
@@ -593,6 +766,7 @@ type privateWriterFixedPointAggregateWorkspace struct {
 
 	slot               privateWriterFixedPointPreparedAggregate
 	bitmapProducer     privateWriterProducedBitmapTerminalSlot
+	rangeProducer      privateWriterProducedRangeTerminalSlot
 	retirementProducer privateWriterProducedRetirementTerminalSlot
 	bitmapPages        []privateWriterProducedTerminalPage
 	bitmapPrior        []privateWriterDraftPageProvenance

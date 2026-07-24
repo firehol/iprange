@@ -8462,6 +8462,81 @@ requirements are normative in the Pre-Implementation Gate above.
   cannot accidentally be mistaken for publication; the next slice must extend
   that one coordinator boundary rather than add a parallel route.
 
+### 2026-07-24 - sealed range/bitmap terminal-journal split plan
+
+- Concrete gap: a real range payload can already be staged into the exact
+  bitmap-finalization scope (`range_payload.go` / `range_staging.rs`) and is
+  deliberately retained by finalization. The live handoff, however, exports
+  only bitmap-owned pages. Go rejects every non-bitmap owner while extracting
+  its producer; Rust has only a bitmap exporter. A later range-root handoff
+  would otherwise need to reconstruct or invent a second terminal journal.
+- The next slice will consume that one sealed scope once and expose two
+  private, typed, strictly ordered journals: `Range` and `Bitmap`. Both are
+  derived from the same finalization nonce/authority. The range result is
+  checked against the materialized root, record count, and page count before
+  either journal becomes usable. A staged retirement-owned page remains a
+  rejection at this boundary: its actual producer must be added with the
+  retirement fixed-point stage, rather than silently omitted.
+- Go will partition the existing bounded producer-page scratch after first
+  validating/counting every sealed binding. It will not allocate or sort.
+  Rust will add the matching typed range-scope exporter and use the existing
+  bounded in-place journal ordering rule. Both paths must clear caller output
+  on rejection and retain the existing whole-draft cleanup behavior.
+- This is deliberately still not the root transaction. It does not consume
+  the range-root proof, construct retirement pages, merge three journals,
+  modify `range_root` / `range_record_count`, bind coordinator output, change
+  file bytes, add a public API, enable implicit validation, or create a
+  temporary file. Its only purpose is to make real range payload ownership
+  available to that later indivisible composition boundary.
+- Tests will stage a real one-page range tree into a real bitmap reservation,
+  finalize it, prove that the two output journals are disjoint/ordered and
+  retain exact owner bytes, reject mismatched materialization and unexpected
+  owners without leaving a usable terminal authority, and preserve zero
+  warmed-path allocation. Full Go/Rust format, lint, race, and SOW gates run
+  before this checkpoint is committed.
+
+### 2026-07-24 - sealed range/bitmap terminal-journal split implementation
+
+- Go now finalizes one exact scope into a nonce-linked `Bitmap` producer and
+  `Range` producer. The two journals share one existing caller-owned page
+  buffer, partitioned only after a complete owner/count pass; no new producer
+  allocation or sorting path was added. The range producer seals the
+  materialized root/count/page-count and exact terminal bytes, and rejects a
+  root or page outside the final pending-page range.
+- The old bitmap-only caller remains explicit: it requests the canonical empty
+  range result and discards the empty private range token. A live `Range` page
+  on that older path is rejected rather than silently omitted.
+- Rust now counts retained `Range` pages during the same finalization pass,
+  exports them through a typed range-scope journal, and returns a paired
+  range/bitmap terminal authority. The pair rejects a sealed scope containing
+  a retirement page because its third journal is not yet present; it cannot
+  silently publish only two of three owners. The range exporter reuses the
+  existing in-place strict-order check and does not allocate.
+- Tests use a real staged range page through actual finalization, verify exact
+  bytes, ownership, shared finalizer authority, ordered merge, materialization
+  mismatch cleanup/retry, and rejection of a scope containing retirement
+  ownership. No target metadata, range-root proof consumption, retirement
+  construction, three-source coordinator merge, public API, v4 byte, default
+  validation, or temporary-file behavior changed.
+
+### 2026-07-24 - sealed range/bitmap terminal-journal split validation
+
+- Focused tests pass in both engines. They exercise one real range payload,
+  exact range/bitmap owner separation, strict three-source journal merge,
+  range-materialization mismatch with clean caller output and retry, and a
+  retirement-owned page that the two-source pair rejects rather than omits.
+- Full gates pass: `go -C v4/go test ./... -count=1`, `go -C v4/go vet ./...`,
+  `go -C v4/go test -race ./internal/exactv4 -count=1`, Rust's 534 default and
+  655 all-feature tests, `cargo fmt --check`, warnings-denied all-target
+  all-feature Clippy, all-feature benchmark compilation, `git diff --check`,
+  and `./.agents/sow/audit.sh`.
+- Self-review confirms this change does not update target range-root metadata
+  and that the only aggregate coordinator still consumes bitmap plus retirement
+  journals; no accidental publication route was added. No normative spec,
+  project skill, or end-user/operator documentation update is required because
+  this is private, pre-publication transaction plumbing. The active SOW remains
+  open for the actual retirement output and three-source composition.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

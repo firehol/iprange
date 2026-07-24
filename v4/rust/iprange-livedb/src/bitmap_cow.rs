@@ -8563,10 +8563,55 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(finalized.output.bitmap_terminal_page_count(), 1);
+        assert_eq!(finalized.output.range_terminal_page_count(), 1);
         assert!(pool
             .find_bound_page(staged_payload.root_pgno)
             .unwrap()
             .is_some());
+        let mut bitmap_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let mut retained_range_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let mut mismatched = staged_payload;
+        mismatched.root_pgno = 0;
+        let (output, successor, bitmap_terminal, retained_range_terminal, error) =
+            match finalized.output.prepare_range_and_bitmap_terminal_export(
+                finalized.successor,
+                mismatched,
+                &mut bitmap_terminal,
+                &mut retained_range_terminal,
+            ) {
+                Ok(_) => panic!("mismatched range materialization must fail"),
+                Err(parts) => parts,
+            };
+        assert_eq!(error, FreeBitmapCowError::StaleReservationPredecessor);
+        assert!(bitmap_terminal
+            .iter()
+            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+        assert!(retained_range_terminal
+            .iter()
+            .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+        let exported = match output.prepare_range_and_bitmap_terminal_export(
+            successor,
+            staged_payload,
+            bitmap_terminal,
+            retained_range_terminal,
+        ) {
+            Ok(exported) => exported,
+            Err((_output, _successor, _bitmap, _range, error)) => {
+                panic!("paired terminal export retry failed: {error:?}")
+            }
+        };
+        assert_eq!(exported.materialized(), staged_payload);
+        assert_eq!(exported.range_pages(), range_terminal);
+        assert!(exported
+            .bitmap_pages()
+            .iter()
+            .all(|page| page.owner == PrivatePageOwner::Bitmap));
+        let mut combined = [const { PrivatePageCoordinatorTerminalPage::empty() }; 2];
+        crate::private_page_pool::merge_unbound_terminal_page_journals(
+            [exported.range_pages(), exported.bitmap_pages(), &[]],
+            &mut combined,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -9993,10 +10038,31 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(result.output.bitmap_terminal_page_count(), 1);
-        let record = match result
-            .output
-            .into_coordinator_record(result.successor, 101, 0)
-        {
+        assert_eq!(result.output.range_terminal_page_count(), 0);
+        let mut bitmap_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let mut range_terminal: [PrivatePageCoordinatorTerminalPage; 0] = [];
+        let (output, successor, bitmap_terminal, range_terminal, error) =
+            match result.output.prepare_range_and_bitmap_terminal_export(
+                result.successor,
+                RangeTreeMaterializedResult {
+                    root_pgno: 0,
+                    root_level: 0,
+                    record_count: 0,
+                    page_count: 0,
+                },
+                &mut bitmap_terminal,
+                &mut range_terminal,
+            ) {
+                Ok(_) => panic!("range/bitmap export must reject an unaccounted retirement page"),
+                Err(parts) => parts,
+            };
+        assert_eq!(error, FreeBitmapCowError::StaleReservationPredecessor);
+        assert_eq!(
+            bitmap_terminal,
+            [PrivatePageCoordinatorTerminalPage::empty()]
+        );
+        assert!(range_terminal.is_empty());
+        let record = match output.into_coordinator_record(successor, 101, 0) {
             Ok(record) => record,
             Err((_output, _successor, error)) => panic!("{error:?}"),
         };

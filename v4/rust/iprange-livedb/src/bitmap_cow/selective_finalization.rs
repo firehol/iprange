@@ -5,6 +5,7 @@ use crate::private_page_pool::{
     private_page_selective_scratch_requirements, PrivatePageSelectiveError,
     PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry, PrivatePageSelectiveScratch,
 };
+use crate::range_staging::RangeTreeMaterializedResult;
 use core::cell::{Cell, RefCell};
 
 static FINALIZATION_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -195,6 +196,8 @@ pub(crate) struct SealedFreeBitmapOutput<
     scope: PrivatePageReservationScope<'slots>,
     nonce: u64,
     bitmap_terminal_page_count: usize,
+    range_terminal_page_count: usize,
+    terminal_page_count: usize,
     cleanup_nodes: &'scratch mut [PrivatePageSelectiveOverlayNode],
     cleanup_path: &'scratch mut [PrivatePageSelectivePathEntry],
     cleanup_targets: &'scratch mut [usize],
@@ -214,6 +217,25 @@ pub(crate) struct PreparedFreeBitmapTerminalExport<
     output: SealedFreeBitmapOutput<'scratch, 'a, 'slots, 'scope, S>,
     successor: FreeBitmapFinalizationSuccessorSeed<'a, 'slots>,
     pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
+}
+
+/// Paired terminal journals taken from one sealed bitmap-finalization scope.
+/// The range journal cannot be supplied independently of the exact scope that
+/// retained its pages through finalization.
+pub(crate) struct PreparedFreeBitmapRangeTerminalExport<
+    'bitmap_pages,
+    'range_pages,
+    'scratch,
+    'a,
+    'slots,
+    'scope,
+    S: CommittedPageSource + ?Sized,
+> {
+    output: SealedFreeBitmapOutput<'scratch, 'a, 'slots, 'scope, S>,
+    successor: FreeBitmapFinalizationSuccessorSeed<'a, 'slots>,
+    materialized: RangeTreeMaterializedResult,
+    bitmap_pages: &'bitmap_pages mut [PrivatePageCoordinatorTerminalPage],
+    range_pages: &'range_pages mut [PrivatePageCoordinatorTerminalPage],
 }
 
 pub(crate) struct FreeBitmapFinalizationSuccessorSeed<'a, 'slots> {
@@ -1385,6 +1407,8 @@ struct PreparedFreeBitmapFinalization<'scratch, 'slots> {
     scope: PrivatePageReservationScope<'slots>,
     nonce: u64,
     bitmap_terminal_page_count: usize,
+    range_terminal_page_count: usize,
+    terminal_page_count: usize,
     cleanup: PrivatePageSelectiveScratch<'scratch>,
     released: UnusedReservationRelease,
     reclaimed: usize,
@@ -2478,7 +2502,16 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         }
         final_access.map_err(FreeBitmapCowError::Source)?;
 
-        let (sealed_scope, nonce, bitmap_terminal_page_count, released, reclaimed, mut cleanup) = {
+        let (
+            sealed_scope,
+            nonce,
+            bitmap_terminal_page_count,
+            range_terminal_page_count,
+            terminal_page_count,
+            released,
+            reclaimed,
+            mut cleanup,
+        ) = {
             let replay_cache = FinalizationCachedSource {
                 base: self.cow.committed,
                 pages: RefCell::new(scratch.cached_pages),
@@ -2510,9 +2543,10 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             }
 
             let mut bitmap_terminal_page_count = 0usize;
+            let mut range_terminal_page_count = 0usize;
             for (index, binding) in shadow.arena_bindings[..private_pages].iter().enumerate() {
-                let (release, bitmap_owned) = if !binding.bound {
-                    (1, false)
+                let (release, bitmap_owned, range_owned) = if !binding.bound {
+                    (1, false, false)
                 } else {
                     let info = stage_pool
                         .scoped_slot_info(&stage_scope, binding.pool_slot)
@@ -2523,18 +2557,18 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                             owner: PrivatePageOwner::Bitmap,
                             owner_generation,
                             ..
-                        } if owner_generation == self.cow.pending_txn => (0, true),
+                        } if owner_generation == self.cow.pending_txn => (0, true, false),
                         PrivatePagePoolState::InUse {
                             owner: PrivatePageOwner::Range,
                             owner_generation,
                             tag: 4 | 6,
-                        } if owner_generation == self.cow.pending_txn => (0, false),
+                        } if owner_generation == self.cow.pending_txn => (0, false, true),
                         PrivatePagePoolState::InUse {
                             owner: PrivatePageOwner::Retirement,
                             owner_generation,
                             tag: 1 | 2,
-                        } if owner_generation != 0 => (0, false),
-                        PrivatePagePoolState::ReturnedFree => (1, false),
+                        } if owner_generation != 0 => (0, false, false),
+                        PrivatePagePoolState::ReturnedFree => (1, false, false),
                         _ => {
                             return Err(FreeBitmapCowError::ArenaPageConflict(binding.page_number));
                         }
@@ -2543,6 +2577,9 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 scratch.release_pages[index] = release;
                 bitmap_terminal_page_count = bitmap_terminal_page_count
                     .checked_add(usize::from(bitmap_owned))
+                    .ok_or(FreeBitmapCowError::CoverageOverflow)?;
+                range_terminal_page_count = range_terminal_page_count
+                    .checked_add(usize::from(range_owned))
                     .ok_or(FreeBitmapCowError::CoverageOverflow)?;
             }
             let partition = stable_partition_finalized_bindings(
@@ -2732,6 +2769,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 sealed_scope,
                 nonce,
                 bitmap_terminal_page_count,
+                range_terminal_page_count,
+                partition.retained,
                 released,
                 reclaimed,
                 cleanup,
@@ -2742,6 +2781,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             scope: sealed_scope,
             nonce,
             bitmap_terminal_page_count,
+            range_terminal_page_count,
+            terminal_page_count,
             released,
             reclaimed,
             cleanup,
@@ -2772,6 +2813,8 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             scope: prepared.scope,
             nonce: prepared.nonce,
             bitmap_terminal_page_count: prepared.bitmap_terminal_page_count,
+            range_terminal_page_count: prepared.range_terminal_page_count,
+            terminal_page_count: prepared.terminal_page_count,
             cleanup_nodes: prepared.cleanup.nodes,
             cleanup_path: prepared.cleanup.path,
             cleanup_targets: prepared.cleanup.targets,
@@ -2806,6 +2849,134 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
     /// total in-use count cannot size the bitmap export journal.
     pub(crate) const fn bitmap_terminal_page_count(&self) -> usize {
         self.bitmap_terminal_page_count
+    }
+
+    /// Exact number of range-owned terminal pages retained by this sealed
+    /// scope. This stays separate from the bitmap count so later composition
+    /// cannot infer range ownership from capacity or total bound pages.
+    pub(crate) const fn range_terminal_page_count(&self) -> usize {
+        self.range_terminal_page_count
+    }
+
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn prepare_range_and_bitmap_terminal_export<'bitmap_pages, 'range_pages>(
+        self,
+        successor: FreeBitmapFinalizationSuccessorSeed<'a, 'slots>,
+        materialized: RangeTreeMaterializedResult,
+        bitmap_pages: &'bitmap_pages mut [PrivatePageCoordinatorTerminalPage],
+        range_pages: &'range_pages mut [PrivatePageCoordinatorTerminalPage],
+    ) -> Result<
+        PreparedFreeBitmapRangeTerminalExport<
+            'bitmap_pages,
+            'range_pages,
+            'scratch,
+            'a,
+            'slots,
+            'scope,
+            S,
+        >,
+        (
+            Self,
+            FreeBitmapFinalizationSuccessorSeed<'a, 'slots>,
+            &'bitmap_pages mut [PrivatePageCoordinatorTerminalPage],
+            &'range_pages mut [PrivatePageCoordinatorTerminalPage],
+            FreeBitmapCowError,
+        ),
+    > {
+        let all_terminal_pages_accounted = self
+            .bitmap_terminal_page_count
+            .checked_add(self.range_terminal_page_count)
+            == Some(self.terminal_page_count);
+        if !core::ptr::eq(successor.pool, self.cow.pool())
+            || successor.nonce != self.nonce
+            || self
+                .cow
+                .pool()
+                .validate_sealed_scope(&self.scope, self.nonce)
+                .is_err()
+            || bitmap_pages.len() != self.bitmap_terminal_page_count
+            || range_pages.len() != self.range_terminal_page_count
+            || !all_terminal_pages_accounted
+            || bitmap_pages
+                .iter()
+                .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+            || range_pages
+                .iter()
+                .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+        {
+            return Err((
+                self,
+                successor,
+                bitmap_pages,
+                range_pages,
+                FreeBitmapCowError::StaleReservationPredecessor,
+            ));
+        }
+        if let Err(error) = self
+            .cow
+            .pool()
+            .export_bitmap_scope_terminal_pages(&self.scope, bitmap_pages)
+        {
+            bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            return Err((
+                self,
+                successor,
+                bitmap_pages,
+                range_pages,
+                FreeBitmapCowError::PrivatePool(error),
+            ));
+        }
+        if let Err(error) = self
+            .cow
+            .pool()
+            .export_range_scope_terminal_pages(&self.scope, range_pages)
+        {
+            bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            return Err((
+                self,
+                successor,
+                bitmap_pages,
+                range_pages,
+                FreeBitmapCowError::PrivatePool(error),
+            ));
+        }
+        let range_matches = materialized.page_count == range_pages.len()
+            && range_pages
+                .iter()
+                .all(|page| u64::from(page.pgno) < self.pending_page_count())
+            && ((materialized.root_pgno == 0
+                && materialized.page_count == 0
+                && materialized.record_count == 0)
+                || (materialized.root_pgno >= 2
+                    && range_pages.iter().any(|page| {
+                        page.pgno == materialized.root_pgno && page.owner == PrivatePageOwner::Range
+                    })));
+        if !range_matches
+            || (self.root() == 0) != bitmap_pages.is_empty()
+            || (self.root() != 0
+                && !bitmap_pages
+                    .iter()
+                    .any(|page| page.pgno == self.root() && page.owner == PrivatePageOwner::Bitmap))
+        {
+            bitmap_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            range_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+            return Err((
+                self,
+                successor,
+                bitmap_pages,
+                range_pages,
+                FreeBitmapCowError::StaleReservationPredecessor,
+            ));
+        }
+        Ok(PreparedFreeBitmapRangeTerminalExport {
+            output: self,
+            successor,
+            materialized,
+            bitmap_pages,
+            range_pages,
+        })
     }
 
     #[allow(clippy::result_large_err, clippy::type_complexity)]
@@ -2911,6 +3082,8 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             scope,
             nonce,
             bitmap_terminal_page_count: _,
+            range_terminal_page_count: _,
+            terminal_page_count: _,
             cleanup_nodes,
             cleanup_path,
             cleanup_targets,
@@ -3197,6 +3370,46 @@ impl<'pages, 'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
         &'pages mut [PrivatePageCoordinatorTerminalPage],
     ) {
         (self.output, self.successor, self.pages)
+    }
+}
+
+impl<
+        'bitmap_pages,
+        'range_pages,
+        'scratch,
+        'a,
+        'slots,
+        'scope,
+        S: CommittedPageSource + ?Sized,
+    >
+    PreparedFreeBitmapRangeTerminalExport<
+        'bitmap_pages,
+        'range_pages,
+        'scratch,
+        'a,
+        'slots,
+        'scope,
+        S,
+    >
+{
+    pub(crate) const fn root(&self) -> u32 {
+        self.output.root()
+    }
+
+    pub(crate) const fn pending_page_count(&self) -> u64 {
+        self.output.pending_page_count()
+    }
+
+    pub(crate) const fn materialized(&self) -> RangeTreeMaterializedResult {
+        self.materialized
+    }
+
+    pub(crate) fn bitmap_pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
+        self.bitmap_pages
+    }
+
+    pub(crate) fn range_pages(&self) -> &[PrivatePageCoordinatorTerminalPage] {
+        self.range_pages
     }
 }
 
