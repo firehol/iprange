@@ -6897,13 +6897,13 @@ mod tests {
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
-        finalize_selected_reclamation_terminal_export,
+        finalize_selected_reclamation_terminal_export, plan_locked_reclamation_bitmap_reservation,
         prepare_locked_reclamation_bitmap_reservation,
         preview_selected_reclamation_protected_pages, stage_selected_reclamation_retirement,
-        LockedReclamationFinalizerLimits, LockedReclamationFinalizerScratch,
-        ReclamationProtectedPagesScratch, SelectedReclamationRetirementScratch,
-        SelectedReclamationTerminalCompositionError, SelectedReclamationTerminalCompositionFailure,
-        SelectedReclamationTerminalScratch,
+        LockedReclamationBitmapPlanOutcome, LockedReclamationFinalizerLimits,
+        LockedReclamationFinalizerScratch, ReclamationProtectedPagesScratch,
+        SelectedReclamationRetirementScratch, SelectedReclamationTerminalCompositionError,
+        SelectedReclamationTerminalCompositionFailure, SelectedReclamationTerminalScratch,
     };
     use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -9209,44 +9209,72 @@ mod tests {
                         LinuxFinalizerReclamationCase::NoChange => (1, 8),
                         LinuxFinalizerReclamationCase::SelectedBatch => (1, 2),
                     };
-                    let mut reservation = prepare_locked_reclamation_bitmap_reservation(
-                        selected,
-                        &pages,
-                        reclaim_fence,
-                        LockedReclamationFinalizerLimits {
-                            max_batches,
-                            max_pages,
-                            bitmap_payload_pages: 2,
-                        },
-                        LockedReclamationFinalizerScratch {
-                            bitmap: FreeBitmapReservationBuffers {
-                                arena: &mut planner_arena,
-                                pool_validation: &mut planner_pool_validation,
-                                arena_bindings: &mut planner_bindings,
-                                candidates: &mut planner_candidates,
-                                verified_pages: &mut planner_verified,
-                                replacements: &mut planner_replacements,
-                                index_nodes: &mut planner_index,
-                                available_slots: &mut planner_available,
-                                source_nodes: &mut planner_source_nodes,
-                                reclamation: &reclamation_ticket,
-                                stage: FreeBitmapReservationStageBuffers {
-                                    arena: &mut stage_arena,
-                                    arena_bindings: &mut stage_bindings,
-                                    candidates: &mut stage_candidates,
-                                    verified_pages: &mut stage_verified,
-                                    replacements: &mut stage_replacements,
-                                    index_nodes: &mut stage_index,
-                                    available_slots: &mut stage_available,
-                                },
+                    let scratch = LockedReclamationFinalizerScratch {
+                        bitmap: FreeBitmapReservationBuffers {
+                            arena: &mut planner_arena,
+                            pool_validation: &mut planner_pool_validation,
+                            arena_bindings: &mut planner_bindings,
+                            candidates: &mut planner_candidates,
+                            verified_pages: &mut planner_verified,
+                            replacements: &mut planner_replacements,
+                            index_nodes: &mut planner_index,
+                            available_slots: &mut planner_available,
+                            source_nodes: &mut planner_source_nodes,
+                            reclamation: &reclamation_ticket,
+                            stage: FreeBitmapReservationStageBuffers {
+                                arena: &mut stage_arena,
+                                arena_bindings: &mut stage_bindings,
+                                candidates: &mut stage_candidates,
+                                verified_pages: &mut stage_verified,
+                                replacements: &mut stage_replacements,
+                                index_nodes: &mut stage_index,
+                                available_slots: &mut stage_available,
                             },
-                            verified_batches: &mut verified_reclamation_batches,
-                            verified_pages: &mut verified_reclaimed_pages,
                         },
-                        &shadow_pool,
-                        &shadow_scope,
-                    )
-                    .unwrap();
+                        verified_batches: &mut verified_reclamation_batches,
+                        verified_pages: &mut verified_reclaimed_pages,
+                    };
+                    let limits = LockedReclamationFinalizerLimits {
+                        max_batches,
+                        max_pages,
+                        bitmap_payload_pages: 2,
+                    };
+                    let mut reservation = match case {
+                        LinuxFinalizerReclamationCase::NoChange => {
+                            prepare_locked_reclamation_bitmap_reservation(
+                                selected,
+                                &pages,
+                                reclaim_fence,
+                                limits,
+                                scratch,
+                                &shadow_pool,
+                                &shadow_scope,
+                            )
+                            .unwrap()
+                        }
+                        LinuxFinalizerReclamationCase::SelectedBatch => {
+                            let plan = match plan_locked_reclamation_bitmap_reservation(
+                                selected,
+                                &pages,
+                                reclaim_fence,
+                                limits,
+                                scratch,
+                            )
+                            .unwrap()
+                            {
+                                LockedReclamationBitmapPlanOutcome::Selected(plan) => plan,
+                                LockedReclamationBitmapPlanOutcome::NoChange => {
+                                    panic!("selected retirement batch must produce a bitmap plan")
+                                }
+                            };
+                            assert_eq!(
+                                plan.required_private_pages(),
+                                shadow_pool.scope_status(&shadow_scope).unwrap().capacity,
+                                "the selected plan must size the shadow scope exactly before binding"
+                            );
+                            plan.bind(&shadow_pool, &shadow_scope).unwrap()
+                        }
+                    };
                     match case {
                         LinuxFinalizerReclamationCase::NoChange => {
                             assert_eq!(

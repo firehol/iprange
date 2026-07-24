@@ -779,13 +779,12 @@ pub(crate) struct FreeBitmapReservationCapacityPlan<'a, S: CommittedPageSource +
 #[derive(Debug)]
 pub(crate) struct LockedFreeBitmapReservationPlan<
     'a,
-    'selection,
     'barrier,
     'pages,
     S: CommittedPageSource + ?Sized,
 > {
     plan: FreeBitmapReservationCapacityPlan<'a, S>,
-    reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
+    reclamation: RetirementReclamation<'barrier, 'pages>,
 }
 
 #[derive(Debug)]
@@ -1211,8 +1210,8 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
     }
 }
 
-impl<'a, 'selection, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
-    LockedFreeBitmapReservationPlan<'a, 'selection, 'barrier, 'pages, S>
+impl<'a, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
+    LockedFreeBitmapReservationPlan<'a, 'barrier, 'pages, S>
 {
     pub(crate) const fn required_private_pages(&self) -> usize {
         self.plan.required_private_pages()
@@ -1237,9 +1236,9 @@ impl<'a, 'selection, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
 /// Completes bitmap late binding from a verified retirement result. Normal
 /// allocator code cannot supply an arbitrary page slice or detach the result
 /// from the operation barrier that made it safe.
-pub(crate) fn complete_free_bitmap_reclamation<'ticket, 'selection, 'barrier, 'pages>(
+pub(crate) fn complete_free_bitmap_reclamation<'ticket, 'barrier, 'pages>(
     request: FreeBitmapReclamationRequest<'ticket>,
-    reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
+    reclamation: RetirementReclamation<'barrier, 'pages>,
 ) -> Result<FreeBitmapReclamationProof<'ticket, 'pages, 'barrier>, FreeBitmapCowError> {
     let (reclamation, reclaim_guard) = reclamation.into_parts();
     complete_free_bitmap_reclamation_pages(request, reclamation, reclaim_guard)
@@ -2363,13 +2362,10 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
     /// retains the live operation-barrier authority. The returned plan keeps
     /// that authority until it binds the exact shadow scope.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn plan_under_reclamation<'selection, 'barrier, 'pages>(
+    pub(crate) fn plan_under_reclamation<'barrier, 'pages>(
         self,
-        reclamation: RetirementReclamation<'selection, 'barrier, 'pages>,
-    ) -> Result<
-        LockedFreeBitmapReservationPlan<'a, 'selection, 'barrier, 'pages, S>,
-        FreeBitmapCowError,
-    > {
+        reclamation: RetirementReclamation<'barrier, 'pages>,
+    ) -> Result<LockedFreeBitmapReservationPlan<'a, 'barrier, 'pages, S>, FreeBitmapCowError> {
         Ok(LockedFreeBitmapReservationPlan {
             plan: self
                 .plan_capacity_impl()?

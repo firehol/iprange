@@ -9,8 +9,8 @@
 use crate::bitmap_cow::{
     BoundFreeBitmapReservation, FreeBitmapCowError, FreeBitmapFinalizationCachedPage,
     FreeBitmapFinalizationPreviewError, FreeBitmapFinalizationScratch, FreeBitmapInsertPage,
-    FreeBitmapReservationBuffers, FreeBitmapReservationPlanner, PreparedFreeBitmapTerminalExport,
-    ReservationResource,
+    FreeBitmapReservationBuffers, FreeBitmapReservationPlanner, LockedFreeBitmapReservationPlan,
+    PreparedFreeBitmapTerminalExport, ReservationResource,
 };
 use crate::contract::MetaV4;
 use crate::page_source::CommittedPageSource;
@@ -20,7 +20,7 @@ use crate::private_page_pool::{
 };
 use crate::retirement_page::RetirementBatch;
 use crate::retirement_reader::{
-    RetirementIdentity, RetirementReadError, RetirementReclaimFence,
+    RetirementIdentity, RetirementReadError, RetirementReclaimFence, RetirementReclamation,
     RetirementReclamationExecutionError, RetirementTree,
 };
 use crate::retirement_writer::{
@@ -76,6 +76,53 @@ pub(crate) struct LockedReclamationBitmapReservation<
 > {
     pub(crate) pass: crate::retirement_reader::RetirementPassResult,
     pub(crate) bound: BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'a, S>,
+}
+
+/// A selected bitmap plan that has exact physical-page capacity but has not
+/// bound a shadow scope or mutated it yet.
+#[derive(Debug)]
+pub(crate) struct LockedReclamationBitmapPlan<'a, 'barrier, S: CommittedPageSource + ?Sized> {
+    pass: crate::retirement_reader::RetirementPassResult,
+    plan: LockedFreeBitmapReservationPlan<'a, 'barrier, 'a, S>,
+}
+
+impl<'a, 'barrier, S: CommittedPageSource + ?Sized> LockedReclamationBitmapPlan<'a, 'barrier, S> {
+    pub(crate) const fn pass(&self) -> crate::retirement_reader::RetirementPassResult {
+        self.pass
+    }
+
+    pub(crate) const fn required_private_pages(&self) -> usize {
+        self.plan.required_private_pages()
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn bind<'slots, 'scope>(
+        self,
+        shadow_pool: &'a PrivatePagePool<'slots>,
+        shadow_scope: &'a PrivatePageReservationScope<'scope>,
+    ) -> Result<
+        LockedReclamationBitmapReservation<'a, 'slots, 'scope, 'barrier, S>,
+        LockedReclamationFinalizerError,
+    > {
+        let Self { pass, plan } = self;
+        let mut bound = plan
+            .bind(shadow_pool, shadow_scope)
+            .map_err(LockedReclamationFinalizerError::Bitmap)?;
+        bound
+            .cow
+            .apply_planned_reservation()
+            .map_err(LockedReclamationFinalizerError::Bitmap)?;
+        Ok(LockedReclamationBitmapReservation { pass, bound })
+    }
+}
+
+/// Selection and capacity planning outcome before any private shadow scope is
+/// bound. `NoChange` deliberately owns no allocator state.
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // The selected plan is move-only and must not allocate.
+pub(crate) enum LockedReclamationBitmapPlanOutcome<'a, 'barrier, S: CommittedPageSource + ?Sized> {
+    NoChange,
+    Selected(LockedReclamationBitmapPlan<'a, 'barrier, S>),
 }
 
 /// Caller-owned buffers for the selected-reclaim protected-page fixed point.
@@ -375,6 +422,77 @@ pub(crate) enum ReclamationProtectedPagesError {
     ProbeChanged,
     ReplacementPageOutOfBounds(u32),
     FixedPointDidNotConverge { limit: usize },
+}
+
+/// Runs lock-held selection, verification, and bitmap capacity planning before
+/// any shadow scope is bound.
+///
+/// This is the Reclaim owner boundary: a no-change result does not invoke the
+/// bitmap planner or create private allocator state, while a selected result
+/// retains the reader fence until the caller binds its exact required scope.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) fn plan_locked_reclamation_bitmap_reservation<
+    'a,
+    'barrier,
+    S: CommittedPageSource + ?Sized,
+>(
+    selected: MetaV4,
+    pages: &'a S,
+    reclaim_fence: RetirementReclaimFence<'barrier>,
+    limits: LockedReclamationFinalizerLimits,
+    scratch: LockedReclamationFinalizerScratch<'a>,
+) -> Result<LockedReclamationBitmapPlanOutcome<'a, 'barrier, S>, LockedReclamationFinalizerError> {
+    if limits.max_batches == 0 || limits.max_pages == 0 || limits.bitmap_payload_pages == 0 {
+        return Err(LockedReclamationFinalizerError::InvalidLimits);
+    }
+
+    let identity = RetirementIdentity {
+        database_id: selected.database_id,
+        txn_id: selected.txn_id,
+        commit_nonce: selected.commit_nonce,
+        page_count: selected.page_count,
+        root: selected.retirement_root,
+        batch_count: selected.retirement_batch_count,
+    };
+    let tree = RetirementTree::from_source(pages, identity)
+        .map_err(LockedReclamationFinalizerError::Retirement)?;
+    let LockedReclamationFinalizerScratch {
+        bitmap,
+        verified_batches,
+        verified_pages,
+    } = scratch;
+    let reclamation = tree
+        .prepare_reclamation(
+            reclaim_fence,
+            limits.max_batches,
+            limits.max_pages,
+            verified_batches,
+            verified_pages,
+        )
+        .map_err(LockedReclamationFinalizerError::Retirement)?;
+    let pass = reclamation.pass_result();
+    let reclamation = match reclamation {
+        RetirementReclamation::NoChange(_) => {
+            return Ok(LockedReclamationBitmapPlanOutcome::NoChange)
+        }
+        reclamation @ RetirementReclamation::Reclaimed(_) => reclamation,
+    };
+
+    let planner = FreeBitmapReservationPlanner::new(
+        pages,
+        selected.txn_id,
+        selected.page_count,
+        selected.free_bitmap_root,
+        limits.bitmap_payload_pages,
+        bitmap,
+    )
+    .map_err(LockedReclamationFinalizerError::Bitmap)?;
+    let plan = planner
+        .plan_under_reclamation(reclamation)
+        .map_err(LockedReclamationFinalizerError::Bitmap)?;
+    Ok(LockedReclamationBitmapPlanOutcome::Selected(
+        LockedReclamationBitmapPlan { pass, plan },
+    ))
 }
 
 /// Runs the mandatory lock-held prefix of a bitmap/retirement finalizer.
@@ -1151,6 +1269,7 @@ mod tests {
     use crate::page_source::PageSourceError;
     use crate::private_page_pool::{PrivatePagePoolSlot, PrivatePagePoolState};
     use crate::retirement_reader::RetirementReclaimBarrier;
+    use crate::test_alloc::count_thread_allocations;
     use core::cell::Cell;
 
     #[derive(Debug)]
@@ -1285,6 +1404,77 @@ mod tests {
             pool.scoped_slot_info(&scope, 0).unwrap().unwrap().state,
             PrivatePagePoolState::Vacant
         );
+    }
+
+    #[test]
+    fn no_change_stops_before_bitmap_planning_or_shadow_binding() {
+        let source = RejectingSource {
+            calls: Cell::new(0),
+        };
+        let mut arena = [];
+        let mut pool_validation = [];
+        let mut arena_bindings = [];
+        let mut candidates = [];
+        let mut verified_bitmap_pages = [];
+        let mut replacements = [];
+        let mut index_nodes = [];
+        let mut available_slots = [];
+        let mut source_nodes = [];
+        let reclamation = FreeBitmapReclamationTicket::new();
+        let mut stage_arena = [];
+        let mut stage_bindings = [];
+        let mut stage_candidates = [];
+        let mut stage_verified = [];
+        let mut stage_replacements = [];
+        let mut stage_index = [];
+        let mut stage_available = [];
+        let mut verified_batches = [];
+        let mut verified_pages = [];
+
+        let (result, allocations) = count_thread_allocations(|| {
+            plan_locked_reclamation_bitmap_reservation(
+                selected_meta(),
+                &source,
+                RetirementReclaimFence::from_stable_reader_table(&TEST_BARRIER, 0, None),
+                LockedReclamationFinalizerLimits {
+                    max_batches: 1,
+                    max_pages: 1,
+                    bitmap_payload_pages: 1,
+                },
+                LockedReclamationFinalizerScratch {
+                    bitmap: FreeBitmapReservationBuffers {
+                        arena: &mut arena,
+                        pool_validation: &mut pool_validation,
+                        arena_bindings: &mut arena_bindings,
+                        candidates: &mut candidates,
+                        verified_pages: &mut verified_bitmap_pages,
+                        replacements: &mut replacements,
+                        index_nodes: &mut index_nodes,
+                        available_slots: &mut available_slots,
+                        source_nodes: &mut source_nodes,
+                        reclamation: &reclamation,
+                        stage: FreeBitmapReservationStageBuffers {
+                            arena: &mut stage_arena,
+                            arena_bindings: &mut stage_bindings,
+                            candidates: &mut stage_candidates,
+                            verified_pages: &mut stage_verified,
+                            replacements: &mut stage_replacements,
+                            index_nodes: &mut stage_index,
+                            available_slots: &mut stage_available,
+                        },
+                    },
+                    verified_batches: &mut verified_batches,
+                    verified_pages: &mut verified_pages,
+                },
+            )
+        });
+
+        assert!(matches!(
+            result.unwrap(),
+            LockedReclamationBitmapPlanOutcome::NoChange
+        ));
+        assert_eq!(allocations, 0);
+        assert_eq!(source.calls.get(), 0);
     }
 
     fn replacement(pgno: u32) -> CommittedPageReplacement {

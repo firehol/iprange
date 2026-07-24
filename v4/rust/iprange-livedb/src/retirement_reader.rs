@@ -181,27 +181,33 @@ pub(crate) struct RetirementPassResult {
 ///
 /// Its fields remain private so normal allocator code cannot substitute an
 /// arbitrary page slice for pages proved safe under the held reclaim fence.
+/// The selected facts and guard are owned here, allowing a later bounded
+/// owner to size its private workspace before it binds physical pages.
 #[derive(Debug)]
-pub(crate) struct RetirementReclaimedPages<'selection, 'barrier, 'pages> {
-    selection: &'selection RetirementSelection<'barrier>,
+pub(crate) struct RetirementReclaimedPages<'barrier, 'pages> {
+    identity: RetirementIdentity,
+    batch_count: u64,
+    page_count: u64,
+    last_retired_by_txn: u64,
     pages: &'pages [u32],
+    guard: RetirementReclaimGuard<'barrier>,
 }
 
-impl<'selection, 'barrier, 'pages> RetirementReclaimedPages<'selection, 'barrier, 'pages> {
+impl<'barrier, 'pages> RetirementReclaimedPages<'barrier, 'pages> {
     pub(crate) fn pages(&self) -> &'pages [u32] {
         self.pages
     }
 
     pub(crate) const fn identity(&self) -> RetirementIdentity {
-        self.selection.identity
+        self.identity
     }
 
     pub(crate) const fn batch_count(&self) -> u64 {
-        self.selection.batch_count
+        self.batch_count
     }
 
     pub(crate) const fn selection_id(&self) -> u64 {
-        self.selection.last_retired_by_txn
+        self.last_retired_by_txn
     }
 }
 
@@ -241,12 +247,25 @@ impl<'pages> RetirementReclamationAuthority<'pages> {
 /// carry a no-change or reclaimed-page result into finalization without
 /// reducing live-reader safety to an unbound page slice.
 #[derive(Debug)]
-pub(crate) enum RetirementReclamation<'selection, 'barrier, 'pages> {
+pub(crate) enum RetirementReclamation<'barrier, 'pages> {
     NoChange(RetirementNoReclamation<'barrier>),
-    Reclaimed(RetirementReclaimedPages<'selection, 'barrier, 'pages>),
+    Reclaimed(RetirementReclaimedPages<'barrier, 'pages>),
 }
 
-impl<'selection, 'barrier, 'pages> RetirementReclamation<'selection, 'barrier, 'pages> {
+impl<'barrier, 'pages> RetirementReclamation<'barrier, 'pages> {
+    pub(crate) const fn pass_result(&self) -> RetirementPassResult {
+        match self {
+            Self::NoChange(_) => RetirementPassResult {
+                batch_count: 0,
+                page_count: 0,
+            },
+            Self::Reclaimed(reclaimed) => RetirementPassResult {
+                batch_count: reclaimed.batch_count,
+                page_count: reclaimed.page_count,
+            },
+        }
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -265,12 +284,12 @@ impl<'selection, 'barrier, 'pages> RetirementReclamation<'selection, 'barrier, '
             ),
             Self::Reclaimed(reclaimed) => (
                 RetirementReclamationAuthority {
-                    identity: Some(reclaimed.identity()),
-                    batch_count: reclaimed.batch_count(),
-                    last_retired_by_txn: reclaimed.selection_id(),
-                    pages: reclaimed.pages(),
+                    identity: Some(reclaimed.identity),
+                    batch_count: reclaimed.batch_count,
+                    last_retired_by_txn: reclaimed.last_retired_by_txn,
+                    pages: reclaimed.pages,
                 },
-                reclaimed.selection.fence.guard(),
+                reclaimed.guard,
             ),
         }
     }
@@ -305,34 +324,29 @@ pub(crate) fn test_reclamation_authority<'pages>(
     }
 }
 
-#[cfg(test)]
-static TEST_ONLY_RECLAIM_SELECTION: RetirementSelection<'static> = RetirementSelection {
-    identity: RetirementIdentity {
-        database_id: [1; 16],
-        txn_id: 2,
-        commit_nonce: [2; 16],
-        page_count: 10,
-        root: 2,
-        batch_count: 1,
-    },
-    batch_count: 1,
-    page_count: 2,
-    last_retired_by_txn: 2,
-    fence: RetirementReclaimFence::from_stable_reader_table(&TEST_ONLY_RECLAIM_BARRIER, 0, None),
-};
-
 /// Test-only adapter for allocator fixtures that are not retirement-reader
 /// fixtures. Production code cannot construct reclaimed-page authority this way.
 #[cfg(test)]
 pub(crate) fn test_reclaimed_pages<'pages>(
     pages: &'pages [u32],
-) -> Option<RetirementReclaimedPages<'static, 'static, 'pages>> {
+) -> Option<RetirementReclaimedPages<'static, 'pages>> {
     if pages.is_empty() {
         None
     } else {
         Some(RetirementReclaimedPages {
-            selection: &TEST_ONLY_RECLAIM_SELECTION,
+            identity: RetirementIdentity {
+                database_id: [1; 16],
+                txn_id: 2,
+                commit_nonce: [2; 16],
+                page_count: 10,
+                root: 2,
+                batch_count: 1,
+            },
+            batch_count: 1,
+            page_count: pages.len() as u64,
+            last_retired_by_txn: 2,
             pages,
+            guard: test_reclaim_guard(),
         })
     }
 }
@@ -851,7 +865,7 @@ impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'ba
         &self,
         tree: &RetirementTree<S>,
         pages: &'pages mut [u32],
-    ) -> Result<RetirementReclaimedPages<'selection, 'barrier, 'pages>, RetirementReadError>
+    ) -> Result<RetirementReclaimedPages<'barrier, 'pages>, RetirementReadError>
     where
         S: CommittedPageSource,
     {
@@ -874,8 +888,12 @@ impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'ba
         }) {
             Ok(result) if result.page_count == self.selection.page_count && written == required => {
                 Ok(RetirementReclaimedPages {
-                    selection: self.selection,
+                    identity: self.selection.identity,
+                    batch_count: self.selection.batch_count,
+                    page_count: self.selection.page_count,
+                    last_retired_by_txn: self.selection.last_retired_by_txn,
                     pages: &pages[..required],
+                    guard: self.selection.fence.guard(),
                 })
             }
             Ok(_) => Err(RetirementReadError::SelectionChanged),
@@ -998,52 +1016,54 @@ impl<'selection, 'barrier, 'batches> VerifiedRetirementSelection<'selection, 'ba
 }
 
 impl<S: CommittedPageSource> RetirementTree<S> {
-    /// Runs selection, full verification, and the second pass while the
-    /// supplied live-operation fence remains owned by this attempt.
+    /// Runs selection, full verification, and the bounded second pass while
+    /// retaining the supplied live-operation fence in the returned authority.
     ///
-    /// The synchronous higher-ranked consumer cannot return selection-bound
-    /// state. It may transfer the derived opaque authority only through a
-    /// later bounded owner such as the bitmap reservation. A failed read or
-    /// verification never invokes the consumer.
-    pub(crate) fn with_reclamation<'barrier, 'batches, 'pages, R, E>(
+    /// A selected result owns its verified facts and guard, so a later bounded
+    /// owner can derive exact private capacity before it binds physical pages.
+    pub(crate) fn prepare_reclamation<'barrier, 'pages>(
         &self,
         fence: RetirementReclaimFence<'barrier>,
         max_batches: u64,
         max_pages: u64,
-        batch_scratch: &'batches mut [RetirementBatch],
+        batch_scratch: &mut [RetirementBatch],
         page_scratch: &'pages mut [u32],
-        consume: impl for<'selection> FnOnce(
-            RetirementPassResult,
-            RetirementReclamation<'selection, 'barrier, 'pages>,
-        ) -> Result<R, E>,
-    ) -> Result<R, RetirementReclamationExecutionError<E>> {
-        match self
-            .select_oldest_eligible(fence, max_batches, max_pages)
-            .map_err(RetirementReclamationExecutionError::Read)?
-        {
-            RetirementSelectionResult::NoChange(no_change) => consume(
-                RetirementPassResult {
-                    batch_count: 0,
-                    page_count: 0,
-                },
-                RetirementReclamation::NoChange(no_change),
-            )
-            .map_err(RetirementReclamationExecutionError::Consumer),
+    ) -> Result<RetirementReclamation<'barrier, 'pages>, RetirementReadError> {
+        match self.select_oldest_eligible(fence, max_batches, max_pages)? {
+            RetirementSelectionResult::NoChange(no_change) => {
+                Ok(RetirementReclamation::NoChange(no_change))
+            }
             RetirementSelectionResult::Selected(selection) => {
-                let result = RetirementPassResult {
-                    batch_count: selection.batch_count,
-                    page_count: selection.page_count,
-                };
-                let verified = self
-                    .verify_selection(&selection, batch_scratch)
-                    .map_err(RetirementReclamationExecutionError::Read)?;
-                let reclaimed = verified
-                    .second_pass_into(self, page_scratch)
-                    .map_err(RetirementReclamationExecutionError::Read)?;
-                consume(result, RetirementReclamation::Reclaimed(reclaimed))
-                    .map_err(RetirementReclamationExecutionError::Consumer)
+                let verified = self.verify_selection(&selection, batch_scratch)?;
+                let reclaimed = verified.second_pass_into(self, page_scratch)?;
+                Ok(RetirementReclamation::Reclaimed(reclaimed))
             }
         }
+    }
+
+    /// Runs selection, full verification, and the second pass while the
+    /// supplied live-operation fence remains owned by this attempt.
+    ///
+    /// A failed read or verification never invokes the consumer. New bounded
+    /// owners that must inspect exact capacity before binding should call
+    /// [`Self::prepare_reclamation`] directly.
+    pub(crate) fn with_reclamation<'barrier, 'pages, R, E>(
+        &self,
+        fence: RetirementReclaimFence<'barrier>,
+        max_batches: u64,
+        max_pages: u64,
+        batch_scratch: &mut [RetirementBatch],
+        page_scratch: &'pages mut [u32],
+        consume: impl FnOnce(
+            RetirementPassResult,
+            RetirementReclamation<'barrier, 'pages>,
+        ) -> Result<R, E>,
+    ) -> Result<R, RetirementReclamationExecutionError<E>> {
+        let reclamation = self
+            .prepare_reclamation(fence, max_batches, max_pages, batch_scratch, page_scratch)
+            .map_err(RetirementReclamationExecutionError::Read)?;
+        let result = reclamation.pass_result();
+        consume(result, reclamation).map_err(RetirementReclamationExecutionError::Consumer)
     }
 }
 
@@ -1505,6 +1525,30 @@ mod tests {
                 },
             )
             .unwrap();
+    }
+
+    #[test]
+    fn prepared_reclamation_keeps_verified_authority_after_selection_returns() {
+        let bytes = sample_image();
+        let tree = RetirementTree::new(&bytes, identity(20, 2, 3)).unwrap();
+        let mut batches = [EMPTY_BATCH; 2];
+        let mut pages = [0; 3];
+
+        let reclamation = tree
+            .prepare_reclamation(reclaim_fence(4), 10, 10, &mut batches, &mut pages)
+            .unwrap();
+        assert_eq!(
+            reclamation.pass_result(),
+            RetirementPassResult {
+                batch_count: 2,
+                page_count: 3,
+            }
+        );
+        let (authority, _guard) = reclamation.into_parts();
+        assert_eq!(authority.identity(), Some(identity(20, 2, 3)));
+        assert_eq!(authority.batch_count(), 2);
+        assert_eq!(authority.last_retired_by_txn(), 4);
+        assert_eq!(authority.pages(), &[10, 11, 12]);
     }
 
     #[test]

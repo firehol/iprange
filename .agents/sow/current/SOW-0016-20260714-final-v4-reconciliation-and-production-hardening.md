@@ -7312,6 +7312,53 @@ requirements are normative in the Pre-Implementation Gate above.
   all-feature benchmark compilation; Go `test ./...` and `vet ./...`; Rust
   formatting; whitespace checking; and the project SOW audit.
 
+### 2026-07-24 - Reclaim owner construction plan
+
+- Evidence: the only complete selected-reclamation path is the Linux test
+  fixture at `retirement_writer.rs:9186-9955`. It begins a private core draft
+  and reserves coordinator workspace before it enters the operation barrier.
+  That cannot become `Reclaim`: the normative contract requires an eligible
+  batch decision under the same barrier as publication, and `NoChange` must
+  start no draft or generation (`binary-format-v4.md:1089-1104`). The generic
+  Linux publisher also acquires the barrier with `|| false`
+  (`os/linux/live_writer.rs:734`) and therefore cannot carry the caller's
+  cancellation probe.
+- The exact shadow scope cannot be reserved at a guessed size. Bitmap binding
+  requires `scope.capacity == private_pages`
+  (`bitmap_cow.rs:1100-1105`), while its lock-bound plan already knows that
+  exact count before binding (`bitmap_cow.rs:1217-1234`). The current helper
+  hides that point by immediately binding a caller-chosen shadow scope
+  (`reclamation_finalizer.rs:388-452`).
+- First implementation slice: split lock-held Reclaim selection/planning from
+  shadow binding. Its typed result is either `NoChange`, with no bitmap plan or
+  private transaction, or one move-only selected bitmap plan that retains the
+  reader fence and exposes its exact required shadow capacity. Binding and all
+  existing finalization behavior remain unchanged. This is private Rust
+  plumbing; it changes no on-disk bytes, public API, validation default, or Go
+  behavior.
+- The existing reader helper deliberately makes a selected result
+  non-escapable: `RetirementReclaimedPages` borrows a stack-local selection and
+  `with_reclamation` therefore uses a higher-ranked callback
+  (`retirement_reader.rs:185-276,1000-1047`). The first slice will preserve the
+  same full verification and second-pass order, but make the returned result
+  own copied selected facts plus the move-only barrier guard. It can then carry
+  the verified page-scratch borrow into the bitmap capacity plan without
+  extending a stack-local borrow or weakening reader protection. The old
+  callback remains a wrapper over that private prepared result.
+- The following owner slice will use that result in one private operation:
+  acquire the cancellable barrier; select; release immediately on `NoChange`;
+  allocate/bind only the checked workspace partitions; build the shadow terminal;
+  begin the clean core and reserve the live scope only after final output is
+  known; execute, drain, and publish while retaining the same barrier. Every
+  pre-Active authority is explicitly cancelled before the workspace is released
+  and whole-draft abort runs. Any post-mutation failure takes the existing
+  abort route; publication ambiguity keeps its factual result.
+- The operation will replace the fixture's caller-owned backing with the
+  already-decided opaque SDK-owned workspace before it becomes a production SDK
+  entry point. That workspace remains one checked, transaction-budgeted logical
+  partition created outside the operation path; no hot-path allocation or
+  caller-writable scratch is acceptable.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim coordinator bind
@@ -7343,6 +7390,24 @@ requirements are normative in the Pre-Implementation Gate above.
   566 with all features. Warnings-denied all-target/all-feature Clippy,
   all-feature benchmark compilation, Go `test ./...` and `vet ./...`, Rust
   formatting, whitespace checking, and the SOW audit pass.
+
+### 2026-07-24 - Reclaim selection/planning boundary
+
+- Verified reclamation now owns its copied selected facts and lock guard rather
+  than borrowing a stack-local selection. This preserves selection, full
+  verification, and the second pass, while allowing a selected bitmap plan to
+  expose its exact shadow capacity before physical binding.
+- Permanent tests prove `NoChange` performs zero allocations and does not touch
+  the bitmap planner or a shadow scope. The held-lock Linux selected-batch test
+  now plans first, proves the reserved shadow scope is exactly the reported
+  size, then binds and completes the existing end-to-end finalizer path.
+- Validation passes: Rust tests 454 without optional features and 569 with all
+  features; warnings-denied all-target/all-feature Clippy; all-feature benchmark
+  compilation; Go `test ./...` and `vet ./...`; Rust formatting; whitespace
+  checking; and the project SOW audit.
+- No normative specification update is needed. This is private Rust ownership
+  plumbing: public API, on-disk bytes, validation defaults, and Go behavior are
+  unchanged.
 
 ### 2026-07-24 - selected-reclaim retirement stage
 
