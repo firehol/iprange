@@ -8537,6 +8537,74 @@ requirements are normative in the Pre-Implementation Gate above.
   this is private, pre-publication transaction plumbing. The active SOW remains
   open for the actual retirement output and three-source composition.
 
+### 2026-07-24 - range-root retirement and three-source composition plan
+
+- The sealed range/bitmap pair is necessary but insufficient. A replacement
+  range root removes the selected old range-tree pages from the generation. If
+  an older reader can still observe that generation, those exact pages must be
+  encoded in one new retirement batch before any root handoff. The current
+  proof already owns the sorted protected-page index, but it does not retain
+  the selected retirement root/count needed to safely edit that tree, and no
+  production-shaped path consumes its index.
+- Extend the private proof identity in both engines with the selected
+  retirement root and batch count, including the existing zero-root/count and
+  selected-page-bound checks. The proof seal will cover those fields, so a
+  retirement edit cannot be paired with a proof from another selected meta
+  state. This is transaction-local input checking, not default reader or
+  writer validation.
+- Add one private reader-protected staging helper. It will verify the proof,
+  stream its converged index directly into the existing retirement blob builder,
+  append that blob as the pending transaction's retirement batch inside the
+  exact bitmap reservation scope, and resynchronize that scope before bitmap
+  finalization. It will use only caller-owned blob/path/ledger/role/journal
+  scratch and never materialize the protected set as a `u32` slice. Errors
+  before scope mutation retain retry authority; an error after a private
+  mutation is an explicit whole-draft-discard condition.
+- Replace the current two-owner terminal boundary with a private three-owner
+  boundary: one sealed scope yields strictly ordered `Range`, `Bitmap`, and
+  `Retirement` journals, all tied to the same finalizer authority. It validates
+  the range materialization and the retirement result/root before returning a
+  combined journal. It does not accept caller-supplied terminal pages, sort,
+  allocate, or omit an unexpected owner.
+- The aggregate coordinator will be extended only far enough to retain and
+  merge all three typed journals. It will keep the range proof/materialization
+  private and will not update `range_root`, `range_record_count`, target meta,
+  or file bytes in this slice. Direct-free disposition remains an explicit
+  later composition path; it must not be silently treated as a retirement
+  batch or vice versa.
+- Matching tests will construct a nonempty selected range tree and a legal
+  empty selected root, stage a real range payload plus retirement blob/tree in
+  one scope, prove exact three-way ordering/ownership and zero post-setup heap
+  allocation, reject selected-retirement identity substitution and short/dirty
+  output scratch before mutation, and prove post-mutation failure requires the
+  existing discard path. Full cross-language test, lint, race, format, and SOW
+  gates run before the next checkpoint commit.
+
+### 2026-07-24 - selected retirement identity checkpoint
+
+- The private range-root proof now seals the selected retirement root and
+  batch count in both engines. It rejects the same retirement invariants used
+  by bootstrap: zero root/count disagreement, root outside the selected page
+  extent, and more batches than the selected transaction permits. A later
+  retirement-tree edit therefore cannot be paired with a proof made for a
+  different selected meta state.
+- Each proof now exposes only a checked private retirement state plus its
+  converged protected-page index. It still has no allocator, metadata, file,
+  or publication authority. The later composition must obtain its reader from
+  the already-bound bitmap reservation, so no caller can substitute an
+  arbitrary source at that boundary.
+- Go briefly retained the generic source inside the proof, but that caused a
+  heap allocation for value-backed sources and violated the existing warmed
+  path allocation test. The implementation deliberately does not retain it:
+  the bound bitmap reservation remains the sole live source authority in the
+  later composition, while the proof seals the selected meta identity and
+  protected pages.
+- Focused proof tests and both default language suites pass: `go -C v4/go
+  test ./internal/exactv4 -run TestRangeRootTransactionProof -count=1`,
+  `go -C v4/go test ./... -count=1`, and `cargo test --manifest-path
+  v4/rust/Cargo.toml`. `git diff --check` also passes. The next checkpoint
+  remains the actual same-scope retirement stage and three-owner export.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

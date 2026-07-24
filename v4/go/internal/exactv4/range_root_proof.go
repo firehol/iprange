@@ -19,12 +19,14 @@ type rangeRootTransactionProof struct {
 }
 
 type rangeRootTransactionIdentity struct {
-	txnID            uint64
-	pageCount        uint64
-	rangeRoot        uint32
-	rangeRecordCount uint64
-	addressFamily    AddressFamily
-	valueKind        ValueKind
+	txnID                uint64
+	pageCount            uint64
+	rangeRoot            uint32
+	rangeRecordCount     uint64
+	retirementRoot       uint32
+	retirementBatchCount uint64
+	addressFamily        AddressFamily
+	valueKind            ValueKind
 }
 
 type rangeRootTransactionProofErrorCode uint8
@@ -66,18 +68,25 @@ func rangeRootTransactionIdentityFromMeta(
 	if selected.TxnID == 0 || selected.PageCount < 2 ||
 		(selected.RangeRoot == 0 && selected.RangeRecordCount != 0) ||
 		(selected.RangeRoot != 0 &&
-			(selected.RangeRoot < 2 || uint64(selected.RangeRoot) >= selected.PageCount)) {
+			(selected.RangeRoot < 2 || uint64(selected.RangeRoot) >= selected.PageCount)) ||
+		selected.RetirementBatchCount > selected.TxnID-1 ||
+		(selected.RetirementRoot == 0 && selected.RetirementBatchCount != 0) ||
+		(selected.RetirementRoot != 0 &&
+			(selected.RetirementBatchCount == 0 || selected.RetirementRoot < 2 ||
+				uint64(selected.RetirementRoot) >= selected.PageCount)) {
 		return rangeRootTransactionIdentity{}, &rangeRootTransactionProofError{
 			code: rangeRootTransactionProofErrSelectedIdentity,
 		}
 	}
 	return rangeRootTransactionIdentity{
-		txnID:            selected.TxnID,
-		pageCount:        selected.PageCount,
-		rangeRoot:        selected.RangeRoot,
-		rangeRecordCount: selected.RangeRecordCount,
-		addressFamily:    selected.AddressFamily,
-		valueKind:        selected.ValueKind,
+		txnID:                selected.TxnID,
+		pageCount:            selected.PageCount,
+		rangeRoot:            selected.RangeRoot,
+		rangeRecordCount:     selected.RangeRecordCount,
+		retirementRoot:       selected.RetirementRoot,
+		retirementBatchCount: selected.RetirementBatchCount,
+		addressFamily:        selected.AddressFamily,
+		valueKind:            selected.ValueKind,
 	}, nil
 }
 
@@ -218,6 +227,8 @@ func sealRangeRootTransactionProof(
 		selected.pageCount,
 		uint64(selected.rangeRoot),
 		selected.rangeRecordCount,
+		uint64(selected.retirementRoot),
+		selected.retirementBatchCount,
 		uint64(selected.addressFamily),
 		uint64(selected.valueKind),
 		uint64(materialized.rootPage),
@@ -261,6 +272,26 @@ func (proof *rangeRootTransactionProof) protectedIndex() (*pageNumberIndex, erro
 		return nil, &rangeRootTransactionProofError{code: rangeRootTransactionProofErrStale, cause: err}
 	}
 	return protected, nil
+}
+
+// retirementInputs returns the selected retirement state and protected index
+// after rechecking the proof. The later composition obtains its reader only
+// from its bound bitmap reservation, never from this proof's caller.
+func (proof *rangeRootTransactionProof) retirementInputs() (
+	retirementTreeState,
+	*pageNumberIndex,
+	error,
+) {
+	protected, err := proof.protectedIndex()
+	if err != nil {
+		return retirementTreeState{}, nil, err
+	}
+	return retirementTreeState{
+		selectedTxn: proof.selected.txnID,
+		pageCount:   proof.selected.pageCount,
+		root:        proof.selected.retirementRoot,
+		batchCount:  proof.selected.retirementBatchCount,
+	}, protected, nil
 }
 
 func (proof *rangeRootTransactionProof) discardAfterAbort() {

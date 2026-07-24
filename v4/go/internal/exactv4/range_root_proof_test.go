@@ -143,6 +143,84 @@ func TestRangeRootTransactionProofSupportsLegalEmptySelectedRoot(t *testing.T) {
 	indexes.requireClean(t)
 }
 
+func TestRangeRootTransactionProofBindsSelectedRetirementIdentity(t *testing.T) {
+	selected := rangeOwnershipMeta(12, 0, 0)
+	selected.RetirementRoot = 6
+	selected.RetirementBatchCount = 1
+	source := newImmutableSlicePageSource(nil, selected.PageCount)
+	materialized, rangePages := rangeRootProofMaterialized(5)
+	indexes := newRangeRootProofIndexes(t, 1)
+	var ownershipScratch rangeTreeOwnershipScratch
+	proof, err := prepareRangeRootTransactionProof[IPv4](
+		source, selected, materialized, rangePages,
+		&indexes.seed, &indexes.first, &indexes.second,
+		&ownershipScratch, 1, 1, pageNumberIndexNoOpFixedPointPreview,
+	)
+	if err != nil {
+		t.Fatalf("prepare range-root proof: %v", err)
+	}
+	state, protected, err := proof.retirementInputs()
+	if err != nil || state.selectedTxn != selected.TxnID || state.pageCount != selected.PageCount ||
+		state.root != selected.RetirementRoot || state.batchCount != selected.RetirementBatchCount ||
+		protected.len() != 0 {
+		t.Fatalf("retirement inputs = state:%+v protected:%v error:%v", state, protected, err)
+	}
+
+	proof.selected.retirementRoot = 7
+	if _, err = proof.protectedIndex(); err == nil {
+		t.Fatal("accepted proof after selected retirement identity substitution")
+	} else {
+		requireRangeRootProofCode(t, err, rangeRootTransactionProofErrStale)
+	}
+	proof.discardAfterAbort()
+	indexes.requireClean(t)
+}
+
+func TestRangeRootTransactionProofRejectsInvalidSelectedRetirementIdentity(t *testing.T) {
+	base := rangeOwnershipMeta(12, 0, 0)
+	for _, test := range []struct {
+		name   string
+		mutate func(*Meta)
+	}{
+		{
+			name: "zero root with batches",
+			mutate: func(meta *Meta) {
+				meta.RetirementBatchCount = 1
+			},
+		},
+		{
+			name: "root without batches",
+			mutate: func(meta *Meta) {
+				meta.RetirementRoot = 2
+			},
+		},
+		{
+			name: "root outside selected extent",
+			mutate: func(meta *Meta) {
+				meta.RetirementRoot = uint32(meta.PageCount)
+				meta.RetirementBatchCount = 1
+			},
+		},
+		{
+			name: "more batches than selected transaction allows",
+			mutate: func(meta *Meta) {
+				meta.RetirementRoot = 2
+				meta.RetirementBatchCount = meta.TxnID
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			selected := base
+			test.mutate(&selected)
+			if _, err := rangeRootTransactionIdentityFromMeta(selected); err == nil {
+				t.Fatal("accepted invalid selected retirement identity")
+			} else {
+				requireRangeRootProofCode(t, err, rangeRootTransactionProofErrSelectedIdentity)
+			}
+		})
+	}
+}
+
 func TestRangeRootTransactionProofRejectsJournalAndProtectedOverlap(t *testing.T) {
 	t.Run("journal", func(t *testing.T) {
 		selected := rangeOwnershipMeta(12, 0, 0)

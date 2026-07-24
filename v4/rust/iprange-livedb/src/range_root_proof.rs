@@ -22,6 +22,7 @@ use crate::range_ownership_walk::{
     collect_range_tree_ownership, RangeOwnershipWalkError, RangeTreeOwnershipScratch,
 };
 use crate::range_staging::RangeTreeMaterializedResult;
+use crate::retirement_writer::RetirementTreeState;
 
 const RANGE_ROOT_PROOF_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325 ^ 0x98f0_4adf_c3e2_719b;
 
@@ -31,6 +32,8 @@ struct RangeRootTransactionIdentity {
     page_count: u64,
     range_root: u32,
     range_record_count: u64,
+    retirement_root: u32,
+    retirement_batch_count: u64,
     address_family: AddressFamily,
     value_kind: ValueKind,
 }
@@ -80,6 +83,12 @@ fn range_root_transaction_identity_from_meta<E>(
         || (selected.range_root == 0 && selected.range_record_count != 0)
         || (selected.range_root != 0
             && (selected.range_root < 2 || u64::from(selected.range_root) >= selected.page_count))
+        || selected.retirement_batch_count > selected.txn_id - 1
+        || (selected.retirement_root == 0 && selected.retirement_batch_count != 0)
+        || (selected.retirement_root != 0
+            && (selected.retirement_batch_count == 0
+                || selected.retirement_root < 2
+                || u64::from(selected.retirement_root) >= selected.page_count))
     {
         return Err(RangeRootTransactionProofError::SelectedIdentity);
     }
@@ -88,6 +97,8 @@ fn range_root_transaction_identity_from_meta<E>(
         page_count: selected.page_count,
         range_root: selected.range_root,
         range_record_count: selected.range_record_count,
+        retirement_root: selected.retirement_root,
+        retirement_batch_count: selected.retirement_batch_count,
         address_family: selected.address_family,
         value_kind: selected.value_kind,
     })
@@ -233,6 +244,8 @@ fn seal_range_root_transaction_proof(
         selected.page_count,
         u64::from(selected.range_root),
         selected.range_record_count,
+        u64::from(selected.retirement_root),
+        selected.retirement_batch_count,
         selected.address_family as u64,
         selected.value_kind as u64,
         u64::from(materialized.root_pgno),
@@ -264,7 +277,7 @@ fn discard_range_root_transaction_proof_indexes(
     second.discard_after_abort();
 }
 
-impl RangeRootTransactionProof<'_, '_, '_> {
+impl<'proof, 'workspace, 'storage> RangeRootTransactionProof<'proof, 'workspace, 'storage> {
     /// Rechecks that the proof's private scratch was not changed after it was
     /// produced. It does not publish or bind anything.
     pub(crate) fn verify(&mut self) -> Result<(), RangeRootTransactionProofStateError> {
@@ -311,6 +324,33 @@ impl RangeRootTransactionProof<'_, '_, '_> {
             return Err(RangeRootTransactionProofStateError::Stale);
         }
         Ok(())
+    }
+
+    /// Returns the selected retirement-tree state and the converged protected
+    /// index after rechecking the proof. The later composition obtains its
+    /// reader only from its bound bitmap reservation, never from this proof's
+    /// caller.
+    pub(crate) fn retirement_inputs(
+        &mut self,
+    ) -> Result<
+        (
+            RetirementTreeState,
+            &mut PageNumberIndex<'workspace, 'storage>,
+        ),
+        RangeRootTransactionProofStateError,
+    > {
+        self.verify()?;
+        let state = RetirementTreeState {
+            selected_txn: self.selected.txn_id,
+            page_count: self.selected.page_count,
+            root: self.selected.retirement_root,
+            batch_count: self.selected.retirement_batch_count,
+        };
+        let protected = match self.candidate {
+            PageNumberIndexFixedPointCandidate::First => &mut *self.first,
+            PageNumberIndexFixedPointCandidate::Second => &mut *self.second,
+        };
+        Ok((state, protected))
     }
 
     /// Scrubs all retained caller-owned index workspaces after a whole-draft
@@ -651,6 +691,89 @@ mod tests {
         assert!(seed.is_empty_and_clean());
         assert!(first.is_empty_and_clean());
         assert!(second.is_empty_and_clean());
+    }
+
+    #[test]
+    fn binds_selected_retirement_identity() {
+        let mut selected = selected_meta(12, 0, 0);
+        selected.retirement_root = 6;
+        selected.retirement_batch_count = 1;
+        let source = SlicePageSource::new(&[], selected.page_count);
+        let (materialized, range_pages) = materialized_range_page(5);
+        let mut seed_pages = [PageNumberIndexPage::empty(); 1];
+        let mut first_pages = [PageNumberIndexPage::empty(); 1];
+        let mut second_pages = [PageNumberIndexPage::empty(); 1];
+        let mut seed_workspace = PageNumberIndexWorkspace::new(&mut seed_pages);
+        let mut first_workspace = PageNumberIndexWorkspace::new(&mut first_pages);
+        let mut second_workspace = PageNumberIndexWorkspace::new(&mut second_pages);
+        let mut seed = PageNumberIndex::new(&mut seed_workspace).unwrap();
+        let mut first = PageNumberIndex::new(&mut first_workspace).unwrap();
+        let mut second = PageNumberIndex::new(&mut second_workspace).unwrap();
+        let mut ownership_scratch = RangeTreeOwnershipScratch::new();
+        let mut proof = prepare_range_root_transaction_proof::<Ipv4Key, _, ()>(
+            &source,
+            selected,
+            materialized,
+            &range_pages,
+            &mut seed,
+            &mut first,
+            &mut second,
+            &mut ownership_scratch,
+            1,
+            1,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        let (state, protected) = proof.retirement_inputs().unwrap();
+        assert_eq!(state.selected_txn, selected.txn_id);
+        assert_eq!(state.page_count, selected.page_count);
+        assert_eq!(state.root, selected.retirement_root);
+        assert_eq!(state.batch_count, selected.retirement_batch_count);
+        assert_eq!(protected.len(), 0);
+
+        proof.selected.retirement_root = 7;
+        assert_eq!(
+            proof.verify(),
+            Err(RangeRootTransactionProofStateError::Stale)
+        );
+        proof.discard_after_abort();
+        assert!(seed.is_empty_and_clean());
+        assert!(first.is_empty_and_clean());
+        assert!(second.is_empty_and_clean());
+    }
+
+    #[test]
+    fn rejects_invalid_selected_retirement_identity() {
+        let selected = selected_meta(12, 0, 0);
+        for invalid in [
+            {
+                let mut value = selected;
+                value.retirement_batch_count = 1;
+                value
+            },
+            {
+                let mut value = selected;
+                value.retirement_root = 2;
+                value
+            },
+            {
+                let mut value = selected;
+                value.retirement_root = value.page_count as u32;
+                value.retirement_batch_count = 1;
+                value
+            },
+            {
+                let mut value = selected;
+                value.retirement_root = 2;
+                value.retirement_batch_count = value.txn_id;
+                value
+            },
+        ] {
+            assert!(matches!(
+                range_root_transaction_identity_from_meta::<()>(invalid),
+                Err(RangeRootTransactionProofError::SelectedIdentity)
+            ));
+        }
     }
 
     #[test]
