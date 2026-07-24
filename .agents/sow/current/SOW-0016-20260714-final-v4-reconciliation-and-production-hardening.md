@@ -7949,6 +7949,75 @@ requirements are normative in the Pre-Implementation Gate above.
   does not reserve or retain range payload pages, update a range root, or
   publish a file; those remain the next bounded implementation slice.
 
+### 2026-07-24 - range payload reservation and retention implementation plan
+
+- The current bitmap reservation already holds a fixed payload budget under
+  the finalization lock. Its available-slot order is deliberately the reverse
+  of physical page order: consuming from its tail yields ascending physical
+  page numbers, exactly the order required by the staged range-tree terminal
+  journal. The staged range builder already verifies only its own pages and
+  can patch those selected numbers without opening or validating the file.
+- The next checkpoint is private only. In both engines, a helper attached to
+  the lock-bound bitmap reservation will: validate an exact caller-owned
+  range-payload scratch set; select exactly the staged page count from the
+  payload budget; prove slot identity, authorization, epoch, availability,
+  and ascending physical order; materialize the range tree into a clean
+  unbound terminal journal; and claim the same shadow slots as `Range` using
+  the pool's prepared checkpoint suffix. It will then reconcile the bitmap
+  scope so those slots cannot be selected as free again.
+- The helper must return a retryable error until the first prepared shadow
+  mutation. A failure after that point is explicitly classified as discard:
+  the caller must abandon the whole shadow attempt and use the existing outer
+  draft-abort/retry path. It must never create a temporary file, sort page
+  numbers, allocate heap memory after workspace setup, or add default reader
+  or writer validation.
+- Rust bitmap terminal finalization will recognize only a current-transaction
+  `Range` page with the valid IPv4/IPv6 tag (`4`/`6`) as retained payload. Go
+  carries the equivalent private owner/origin pair, installed only after its
+  range materializer has verified the page geometry. Neither treats a range
+  page as bitmap output. This preserves the free-page bitmap invariant while
+  keeping the range journal separate for the already-committed three-source
+  merger.
+- This checkpoint stops before the coordinator/root handoff. It neither
+  updates target metadata nor publishes a root; the following checkpoint will
+  combine the retained range journal with bitmap/retirement output and extend
+  the private target-meta handoff.
+- Tests will prove exact lowest-page selection and strict journal ordering,
+  IPv4 and IPv6 materialization, zero-page input, insufficient/dirty scratch
+  rejection without pool/output mutation, post-setup zero allocations, range
+  retention through bitmap finalization, and the explicit post-mutation
+  discard classification. Rust changes are expected in `range_staging.rs`,
+  `bitmap_cow.rs`, and `bitmap_cow/selective_finalization.rs`; Go changes are
+  expected in `range_payload.go`, `range_staging.go`, and
+  `private_page_pool.go`, with focused internal tests in each engine.
+
+### 2026-07-24 - range payload reservation and retention implementation
+
+- Implemented the private bridge in both engines. A completed logical range
+  tree now claims exactly its lowest reserved shadow-pool slots under the held
+  scope, patches those page numbers into its caller-owned terminal journal,
+  and consumes the matching payload budget. No public SDK API, file format,
+  default validation behavior, temporary file, or sorting path changed.
+- The claim is protected by exact scope, page, vacancy, and slot-epoch proof.
+  All normal errors finish before the first pool mutation. The only later
+  reconciliation failure is marked as a discard path and latches the Rust or
+  Go shadow draft so it cannot be reused or committed.
+- Empty staged trees are a true no-op: no checkpoint generation, scope state,
+  page budget, or terminal output changes. Range pages survive bitmap
+  finalization but remain separate from bitmap terminal output and the later
+  three-source terminal-journal merger.
+- Added focused Rust and Go tests for lowest-page selection, nonascending
+  allocator order, dirty terminal scratch, stale slot epoch, wrong transaction,
+  empty-tree no-op, finalization retention, and zero allocations after caller
+  workspace setup. Existing range-staging tests continue to cover IPv4 and
+  IPv6 page materialization and multilevel child remapping.
+- Validation passed: `go -C v4/go test ./... -count=1`, `go -C v4/go vet
+  ./...`, `go -C v4/go test -race ./internal/exactv4 -count=1`, `cargo test
+  --manifest-path v4/rust/Cargo.toml` (503 tests), `cargo test
+  --manifest-path v4/rust/Cargo.toml --all-features` (624 tests), Rust format,
+  Clippy with warnings denied, benchmark compilation, `git diff --check`, and
+  `.agents/sow/audit.sh`.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

@@ -125,6 +125,13 @@ func (s *rangeTreeStaging[K]) logicalPageCount() uint64 {
 	return s.logicalPageLimit
 }
 
+func (s *rangeTreeStaging[K]) bornTransaction() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.bornTxn
+}
+
 func (s *rangeTreeStaging[K]) len() int {
 	if s == nil {
 		return 0

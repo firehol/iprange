@@ -2285,6 +2285,56 @@ func (p *privatePagePool) claimSlotForCheckpointPrepared(
 	return privatePagePoolError{}
 }
 
+// claimSlotWithOwnerAndBytesInScopeForCheckpointPrepared is the prepared
+// terminal apply primitive for non-bitmap payload pages. It repeats the exact
+// scope, epoch, page, and vacancy proof at the mutation boundary so a stale
+// selection cannot become a different payload page.
+func (p *privatePagePool) claimSlotWithOwnerAndBytesInScopeForCheckpointPrepared(
+	checkpoint privatePagePoolCheckpoint,
+	scope privatePageReservationScope,
+	index int,
+	expectedEpoch uint64,
+	expectedPage uint32,
+	owner privatePageOwner,
+	origin privatePageOrigin,
+	source *[PageSize]byte,
+	fences ...*privateWriterWorkFence,
+) privatePagePoolError {
+	if source == nil || !validPrivatePageOwnerOrigin(owner, origin) {
+		return privatePagePoolError{code: privatePagePoolErrInvalidState}
+	}
+	if _, problem := p.authorizeCoordinatorTerminalCheckpoint(
+		checkpoint, &scope,
+		privateWriterPreparedTerminalCheckpointActive, fences...,
+	); problem.failed() {
+		return problem
+	}
+	if problem := p.authorizeCoordinatorTerminalSlotMutation(
+		index, privateWriterPreparedTerminalCheckpointActive, fences...,
+	); problem.failed() {
+		return problem
+	}
+	slot := &p.slots[index]
+	if !slot.bound || slot.scopeID != scope.id || slot.scopeAnchorIndex != scope.anchor ||
+		slot.epoch != expectedEpoch || slot.pageNumber != expectedPage ||
+		slot.state != privatePageAvailable || slot.inUse ||
+		slot.owner != privatePageOwnerNone || slot.origin != privatePageOriginNone ||
+		slot.pendingTxn != 0 || slot.generation != 0 {
+		return privatePagePoolError{code: privatePagePoolErrInvalidState, page: slot.pageNumber}
+	}
+	p.remember(index, checkpoint)
+	slot.state, slot.inUse = privatePageInUse, true
+	slot.owner, slot.origin = owner, origin
+	slot.pendingTxn = p.pendingTxn
+	slot.generation = checkpoint.generation
+	slot.committedOrigin = 0
+	slot.bytes = *source
+	slot.epoch++
+	p.refreshSlotIndexes(slot)
+	p.advanceMutationPrepared()
+	return privatePagePoolError{}
+}
+
 func (p *privatePagePool) writeSlotForCheckpointPrepared(
 	index int,
 	source *[PageSize]byte,

@@ -2525,6 +2525,11 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                             ..
                         } if owner_generation == self.cow.pending_txn => (0, true),
                         PrivatePagePoolState::InUse {
+                            owner: PrivatePageOwner::Range,
+                            owner_generation,
+                            tag: 4 | 6,
+                        } if owner_generation == self.cow.pending_txn => (0, false),
+                        PrivatePagePoolState::InUse {
                             owner: PrivatePageOwner::Retirement,
                             owner_generation,
                             tag: 1 | 2,

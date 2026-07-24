@@ -12,6 +12,7 @@ use crate::bitmap_page::{BitmapBranch, BitmapKind, BitmapLeaf, BitmapPageError};
 use crate::contract::{
     BITMAP_FANOUT, BITMAP_LEAF_BITS, BITMAP_LEAF_WORDS, MAX_PAGE_COUNT, PAGE_SIZE,
 };
+use crate::key::IpKey;
 use crate::page::{self, PageHeader, PageType};
 use crate::page_source::{CommittedPageSource, PageSourceError};
 use crate::private_page_pool::{
@@ -22,6 +23,10 @@ use crate::private_page_pool::{
     PrivatePagePoolState, PrivatePagePreparedSparseReplay, PrivatePageRef,
     PrivatePageReservationScope, PrivatePageReservationScopeSeed, PrivatePageReturn,
     PrivatePageScopedOperation, PrivatePageScopedOperationSlot, PrivatePageScopedSlotInfo,
+};
+use crate::range_staging::{
+    RangeTreeMaterializedResult, RangeTreePayloadReservationError, RangeTreePayloadScratch,
+    RangeTreeStagedResult, RangeTreeStaging,
 };
 #[cfg(test)]
 use crate::retirement_reader::{test_reclaim_guard, test_reclamation_authority};
@@ -45,6 +50,19 @@ const BRANCH_LOWER: u16 = 1088;
 const SUMMARY_OFFSET: usize = 32;
 const CHILDREN_OFFSET: usize = 64;
 const BITMAP_SLOT_CANDIDATE: u64 = 1;
+
+/// Outcome of staging a normalized range tree into a lock-bound payload
+/// reservation. Callers may retry only `PreMutation`; once the shadow pool has
+/// accepted a range page, the enclosing draft must use its existing discard
+/// path on any later failure.
+#[derive(Debug)]
+pub(crate) enum RangeTreePayloadStageError {
+    TransactionMismatch { expected: u64, actual: u64 },
+    PayloadBudget { required: usize, actual: usize },
+    PreMutationBitmap(FreeBitmapCowError),
+    PreMutation(RangeTreePayloadReservationError),
+    Discard(FreeBitmapCowError),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BitmapPrivatePageState {
@@ -1720,9 +1738,9 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         &self.reclamation
     }
 
-    /// Verifies that a retirement stage uses this reservation's exact shadow
+    /// Verifies that one payload producer uses this reservation's exact shadow
     /// scope without changing the bitmap draft.
-    pub(crate) fn validate_reclamation_scope(
+    fn validate_payload_scope(
         &self,
         scope: &PrivatePageReservationScope<'scope>,
     ) -> Result<(), FreeBitmapCowError> {
@@ -1736,14 +1754,67 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         self.cow.validate_scoped_bindings()
     }
 
+    /// Verifies that a retirement stage uses this reservation's exact shadow
+    /// scope without changing the bitmap draft.
+    pub(crate) fn validate_reclamation_scope(
+        &self,
+        scope: &PrivatePageReservationScope<'scope>,
+    ) -> Result<(), FreeBitmapCowError> {
+        self.validate_payload_scope(scope)
+    }
+
     /// Reconciles bitmap binding metadata after retirement has consumed pages
     /// from this exact shared shadow scope.
     pub(crate) fn synchronize_reclamation_scope(
         &mut self,
         scope: &PrivatePageReservationScope<'scope>,
     ) -> Result<(), FreeBitmapCowError> {
-        self.validate_reclamation_scope(scope)?;
+        self.validate_payload_scope(scope)?;
         self.cow.synchronize_scoped_bindings(scope)
+    }
+
+    /// Converts one sealed logical range tree into exact payload slots held by
+    /// this reservation. The allocator determines physical page numbers here,
+    /// under the held scope, not during normalizer preparation.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn stage_range_payload<K: IpKey>(
+        &mut self,
+        scope: &PrivatePageReservationScope<'scope>,
+        staging: &RangeTreeStaging<'_, K>,
+        staged: RangeTreeStagedResult,
+        scratch: &mut RangeTreePayloadScratch<'_>,
+    ) -> Result<RangeTreeMaterializedResult, RangeTreePayloadStageError> {
+        self.validate_payload_scope(scope)
+            .map_err(RangeTreePayloadStageError::PreMutationBitmap)?;
+        if staging.born_txn() != self.cow.pending_txn {
+            return Err(RangeTreePayloadStageError::TransactionMismatch {
+                expected: self.cow.pending_txn,
+                actual: staging.born_txn(),
+            });
+        }
+        let required = staged.page_count();
+        if required > self.cow.payload_page_budget {
+            return Err(RangeTreePayloadStageError::PayloadBudget {
+                required,
+                actual: self.cow.payload_page_budget,
+            });
+        }
+        let materialized = staging
+            .reserve_payload_in_scope(
+                staged,
+                self.cow.pool(),
+                scope,
+                &self.cow.available_slots[..],
+                self.cow.available_len,
+                scratch,
+            )
+            .map_err(RangeTreePayloadStageError::PreMutation)?;
+        if let Err(error) = self.cow.synchronize_scoped_bindings(scope) {
+            self.cow.pool().require_abort();
+            return Err(RangeTreePayloadStageError::Discard(error));
+        }
+        self.cow.payload_page_budget -= required;
+        Ok(materialized)
     }
 }
 
@@ -6879,6 +6950,14 @@ fn write_bitmap_header(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::contract::ValueKind;
+    use crate::key::Ipv4Key;
+    use crate::range_builder::RangeTreeBuildWorkspace;
+    use crate::range_page::RangeRecord;
+    use crate::range_staging::{
+        RangeTreePayloadReservationSlot, RangeTreePayloadScratch, RangeTreePhysicalAssignment,
+        RangeTreeStaging, RangeTreeStagingPage,
+    };
     use crate::test_alloc::count_thread_allocations;
     use core::cell::Cell;
     use std::vec;
@@ -8390,6 +8469,169 @@ pub(crate) mod tests {
         assert_eq!(
             pool.scoped_slot_info(&foreign, foreign_slot).unwrap(),
             foreign_before
+        );
+    }
+
+    #[test]
+    fn range_payload_is_retained_through_bitmap_finalization() {
+        let source = AccessControlledPages::new([leaf(11, 1, &[5, 9])]);
+        let mut storage = PlannerStorage::new(3, 4, 4, 8);
+        storage.arena.clear();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_capacity()
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let (attachment, request) = plan.attach(&pool, &scope).unwrap();
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&[3, 7]).unwrap();
+        let proof =
+            complete_free_bitmap_reclamation(request, RetirementReclamation::Reclaimed(reclaimed))
+                .unwrap();
+        let mut bound = attachment.bind(proof).unwrap();
+
+        let mut logical_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut logical_pages, 2, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::new();
+        let mut builder = workspace
+            .begin(2, ValueKind::Direct, staging.logical_page_limit())
+            .unwrap();
+        builder
+            .push(
+                &mut staging,
+                RangeRecord {
+                    from: Ipv4Key(2),
+                    to: Ipv4Key(2),
+                    value: 1,
+                },
+            )
+            .unwrap();
+        let built = builder.finish(&mut staging).unwrap();
+        let staged = staging.finish(built).unwrap();
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut payload_slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut range_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let (staged_payload, allocations) = count_thread_allocations(|| {
+            bound.stage_range_payload(
+                &scope,
+                &staging,
+                staged,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut payload_slots,
+                    terminal_pages: &mut range_terminal,
+                },
+            )
+        });
+        assert_eq!(allocations, 0);
+        let staged_payload = staged_payload.unwrap();
+        assert_eq!(staged_payload.root_pgno, range_terminal[0].pgno);
+        assert_eq!(range_terminal[0].owner, PrivatePageOwner::Range);
+        assert_eq!(bound.cow.payload_page_budget, 1);
+        assert!(pool
+            .find_bound_page(staged_payload.root_pgno)
+            .unwrap()
+            .is_some());
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let finalized = bound
+            .finalize(FreeBitmapFinalizationScratch {
+                release_pages: &mut release,
+                insert_pages: &mut insert,
+                cached_pages: &mut cache,
+                index_stack: &mut stack,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            })
+            .unwrap();
+        assert_eq!(finalized.output.bitmap_terminal_page_count(), 1);
+        assert!(pool
+            .find_bound_page(staged_payload.root_pgno)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn range_payload_rejects_foreign_transaction_before_pool_mutation() {
+        let source = AccessControlledPages::new([leaf(11, 1, &[5, 9])]);
+        let mut storage = PlannerStorage::new(3, 4, 4, 8);
+        storage.arena.clear();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_capacity()
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let (attachment, request) = plan.attach(&pool, &scope).unwrap();
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&[3, 7]).unwrap();
+        let proof =
+            complete_free_bitmap_reclamation(request, RetirementReclamation::Reclaimed(reclaimed))
+                .unwrap();
+        let mut bound = attachment.bind(proof).unwrap();
+
+        let mut logical_pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut logical_pages, 3, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::new();
+        let mut builder = workspace
+            .begin(3, ValueKind::Direct, staging.logical_page_limit())
+            .unwrap();
+        builder
+            .push(
+                &mut staging,
+                RangeRecord {
+                    from: Ipv4Key(2),
+                    to: Ipv4Key(2),
+                    value: 1,
+                },
+            )
+            .unwrap();
+        let built = builder.finish(&mut staging).unwrap();
+        let staged = staging.finish(built).unwrap();
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut payload_slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut range_terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let before = pool.test_mutation_snapshot();
+        assert!(matches!(
+            bound.stage_range_payload(
+                &scope,
+                &staging,
+                staged,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut payload_slots,
+                    terminal_pages: &mut range_terminal,
+                },
+            ),
+            Err(RangeTreePayloadStageError::TransactionMismatch {
+                expected: 2,
+                actual: 3,
+            })
+        ));
+        assert_eq!(pool.test_mutation_snapshot(), before);
+        assert_eq!(bound.cow.payload_page_budget, 2);
+        assert_eq!(
+            range_terminal[0],
+            PrivatePageCoordinatorTerminalPage::empty()
         );
     }
 

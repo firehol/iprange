@@ -11,6 +11,7 @@ use crate::key::IpKey;
 use crate::page::{self, write_crc32c, PageHeader, PageType, PAGE_HEADER_SIZE};
 use crate::private_page_pool::{
     PrivatePageAuthorization, PrivatePageCoordinatorTerminalPage, PrivatePageOwner,
+    PrivatePagePool, PrivatePagePoolError, PrivatePagePoolState, PrivatePageReservationScope,
 };
 use crate::range_builder::{RangeTreeBuildResult, RangeTreePageSink};
 use crate::range_page::{branch_entry_size, RangeBranch, RangeLeaf};
@@ -49,6 +50,55 @@ impl RangeTreeStagingPage {
 pub(crate) struct RangeTreePhysicalAssignment {
     pub(crate) pgno: u32,
     pub(crate) authorization: PrivatePageAuthorization,
+}
+
+impl RangeTreePhysicalAssignment {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            pgno: 0,
+            authorization: PrivatePageAuthorization::CommittedFree,
+        }
+    }
+}
+
+/// One exact private-pool slot selected for a staged range page. It remains
+/// separate from the physical assignment because the terminal coordinator
+/// binds its own pool slot later; this is only shadow-scope provenance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RangeTreePayloadReservationSlot {
+    pub(crate) slot: usize,
+    pub(crate) binding_epoch: u64,
+}
+
+impl RangeTreePayloadReservationSlot {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            slot: usize::MAX,
+            binding_epoch: 0,
+        }
+    }
+}
+
+/// Caller-owned scratch for one exact range-payload reservation. No backing
+/// storage is allocated by this path, and the terminal prefix remains the
+/// range input to the later coordinator journal merge.
+pub(crate) struct RangeTreePayloadScratch<'a> {
+    pub(crate) assignments: &'a mut [RangeTreePhysicalAssignment],
+    pub(crate) slots: &'a mut [RangeTreePayloadReservationSlot],
+    pub(crate) terminal_pages: &'a mut [PrivatePageCoordinatorTerminalPage],
+}
+
+#[derive(Debug)]
+pub(crate) enum RangeTreePayloadReservationError {
+    AssignmentScratchTooSmall { required: usize, actual: usize },
+    SlotScratchTooSmall { required: usize, actual: usize },
+    TerminalScratchTooSmall { required: usize, actual: usize },
+    AvailableSlots { required: usize, actual: usize },
+    SlotUnavailable { slot: usize, pgno: u32 },
+    PhysicalOrder { previous: u32, current: u32 },
+    CheckpointSteps,
+    Pool(PrivatePagePoolError),
+    Staging(RangeTreeStagingError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +203,10 @@ impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
     /// value in this range is a final file page number.
     pub(crate) const fn logical_page_limit(&self) -> u64 {
         self.logical_page_limit
+    }
+
+    pub(crate) const fn born_txn(&self) -> u64 {
+        self.born_txn
     }
 
     pub(crate) const fn len(&self) -> usize {
@@ -383,6 +437,172 @@ impl<'storage, K: IpKey> RangeTreeStaging<'storage, K> {
             page_count: self.len,
         })
     }
+
+    /// Claims allocator-selected slots and installs a staged range tree in the
+    /// exact shadow scope. All fallible checks complete before the checkpoint
+    /// starts; its prepared suffix cannot fail and therefore cannot publish a
+    /// partially claimed payload.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn reserve_payload_in_scope(
+        &self,
+        result: RangeTreeStagedResult,
+        pool: &PrivatePagePool<'_>,
+        scope: &PrivatePageReservationScope<'_>,
+        available_slots: &[usize],
+        available_len: usize,
+        scratch: &mut RangeTreePayloadScratch<'_>,
+    ) -> Result<RangeTreeMaterializedResult, RangeTreePayloadReservationError> {
+        let required = result.page_count();
+        if scratch.assignments.len() < required {
+            return Err(
+                RangeTreePayloadReservationError::AssignmentScratchTooSmall {
+                    required,
+                    actual: scratch.assignments.len(),
+                },
+            );
+        }
+        if scratch.slots.len() < required {
+            return Err(RangeTreePayloadReservationError::SlotScratchTooSmall {
+                required,
+                actual: scratch.slots.len(),
+            });
+        }
+        if scratch.terminal_pages.len() < required {
+            return Err(RangeTreePayloadReservationError::TerminalScratchTooSmall {
+                required,
+                actual: scratch.terminal_pages.len(),
+            });
+        }
+        if available_len > available_slots.len() || required > available_len {
+            return Err(RangeTreePayloadReservationError::AvailableSlots {
+                required,
+                actual: available_len.min(available_slots.len()),
+            });
+        }
+
+        let assignments = &mut scratch.assignments[..required];
+        let slots = &mut scratch.slots[..required];
+        let terminal_pages = &mut scratch.terminal_pages[..required];
+        let clear_selection =
+            |assignments: &mut [RangeTreePhysicalAssignment],
+             slots: &mut [RangeTreePayloadReservationSlot]| {
+                assignments.fill(RangeTreePhysicalAssignment::empty());
+                slots.fill(RangeTreePayloadReservationSlot::empty());
+            };
+        let clear_terminal = |terminal_pages: &mut [PrivatePageCoordinatorTerminalPage]| {
+            terminal_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+        };
+
+        let mut previous = None;
+        for index in 0..required {
+            let slot = available_slots[available_len - 1 - index];
+            let info = match pool.scoped_slot_info(scope, slot) {
+                Ok(Some(info)) => info,
+                Ok(None) => {
+                    clear_selection(assignments, slots);
+                    return Err(RangeTreePayloadReservationError::SlotUnavailable {
+                        slot,
+                        pgno: 0,
+                    });
+                }
+                Err(error) => {
+                    clear_selection(assignments, slots);
+                    return Err(RangeTreePayloadReservationError::Pool(error));
+                }
+            };
+            let Some(authorization) = info.authorization else {
+                clear_selection(assignments, slots);
+                return Err(RangeTreePayloadReservationError::SlotUnavailable {
+                    slot,
+                    pgno: info.pgno,
+                });
+            };
+            if info.state != PrivatePagePoolState::Available {
+                clear_selection(assignments, slots);
+                return Err(RangeTreePayloadReservationError::SlotUnavailable {
+                    slot,
+                    pgno: info.pgno,
+                });
+            }
+            if let Some(last) = previous {
+                if info.pgno <= last {
+                    clear_selection(assignments, slots);
+                    return Err(RangeTreePayloadReservationError::PhysicalOrder {
+                        previous: last,
+                        current: info.pgno,
+                    });
+                }
+            }
+            previous = Some(info.pgno);
+            assignments[index] = RangeTreePhysicalAssignment {
+                pgno: info.pgno,
+                authorization,
+            };
+            slots[index] = RangeTreePayloadReservationSlot {
+                slot,
+                binding_epoch: info.binding_epoch,
+            };
+        }
+
+        // An empty logical tree must not consume a checkpoint generation or
+        // touch the shadow scope. It has no payload to reserve, and callers
+        // use the zero root as the complete result.
+        if required == 0 {
+            return self
+                .materialize(
+                    result,
+                    pool.pending_page_count(),
+                    assignments,
+                    terminal_pages,
+                )
+                .map_err(RangeTreePayloadReservationError::Staging);
+        }
+
+        let checkpoint_steps = required
+            .checked_add(2)
+            .map(|steps| steps.max(2))
+            .ok_or(RangeTreePayloadReservationError::CheckpointSteps)?;
+        let checkpoint = match pool.preflight_checkpoint_steps(checkpoint_steps) {
+            Ok(checkpoint) => checkpoint,
+            Err(error) => {
+                clear_selection(assignments, slots);
+                return Err(RangeTreePayloadReservationError::Pool(error));
+            }
+        };
+        let materialized = match self.materialize(
+            result,
+            pool.pending_page_count(),
+            assignments,
+            terminal_pages,
+        ) {
+            Ok(materialized) => materialized,
+            Err(error) => {
+                clear_selection(assignments, slots);
+                return Err(RangeTreePayloadReservationError::Staging(error));
+            }
+        };
+        if let Err(error) = pool.begin_checkpoint_prepared(&checkpoint) {
+            clear_selection(assignments, slots);
+            clear_terminal(terminal_pages);
+            return Err(RangeTreePayloadReservationError::Pool(error));
+        }
+        for index in 0..required {
+            let terminal = &terminal_pages[index];
+            let selected = slots[index];
+            pool.claim_slot_in_scope_for_checkpoint_prepared(
+                &checkpoint,
+                scope,
+                selected.slot,
+                selected.binding_epoch,
+                PrivatePageOwner::Range,
+                self.born_txn,
+                terminal.tag,
+                &terminal.bytes,
+            );
+        }
+        pool.commit_checkpoint_in_scope_prepared(checkpoint, scope);
+        Ok(materialized)
+    }
 }
 
 impl<K: IpKey> RangeTreePageSink for RangeTreeStaging<'_, K> {
@@ -427,6 +647,7 @@ mod tests {
     use crate::bootstrap::tests::empty_direct_meta;
     use crate::contract::{AddressFamily, ValueTag};
     use crate::key::{Ipv4Key, Ipv6Key};
+    use crate::private_page_pool::{PrivatePagePool, PrivatePagePoolSlot};
     use crate::range_builder::RangeTreeBuildWorkspace;
     use crate::range_page::RangeRecord;
     use crate::range_reader::RangeTree;
@@ -733,6 +954,320 @@ mod tests {
         let materialized = staging.materialize(staged, 2, &[], &mut terminal).unwrap();
         assert_eq!(materialized.root_pgno, 0);
         assert_eq!(materialized.page_count, 0);
+    }
+
+    #[test]
+    fn payload_reservation_claims_lowest_slots_in_terminal_order() {
+        let mut pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::new();
+        let staged = build_v4(&mut staging, &mut workspace, [record(1)]);
+
+        let mut storage = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut storage, 12, 12, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        let low = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                3,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let middle = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                6,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let high = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                9,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+
+        let available = [high, middle, low];
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut terminal = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let materialized = staging
+            .reserve_payload_in_scope(
+                staged,
+                &pool,
+                &scope,
+                &available,
+                available.len(),
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut slots,
+                    terminal_pages: &mut terminal,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(materialized.root_pgno, 3);
+        assert_eq!(terminal[0].pgno, 3);
+        assert_eq!(terminal[0].owner, PrivatePageOwner::Range);
+        assert_eq!(slots[0].slot, low);
+        assert!(matches!(
+            pool.scoped_slot_info(&scope, low).unwrap().unwrap().state,
+            PrivatePagePoolState::InUse {
+                owner: PrivatePageOwner::Range,
+                owner_generation: 2,
+                tag: 4,
+                ..
+            }
+        ));
+        assert_eq!(
+            pool.scoped_slot_info(&scope, middle)
+                .unwrap()
+                .unwrap()
+                .state,
+            PrivatePagePoolState::Available
+        );
+    }
+
+    #[test]
+    fn payload_reservation_rejects_short_available_list_without_claiming_a_slot() {
+        let mut pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::new();
+        let staged = build_v4(&mut staging, &mut workspace, [record(1)]);
+
+        let mut storage = [const { PrivatePagePoolSlot::empty() }; 2];
+        let pool = PrivatePagePool::new_vacant(&mut storage, 12, 12, 2).unwrap();
+        let scope = pool.reserve_scope(2).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        let low = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                3,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let high = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                9,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+
+        let available = [low, high];
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let before = [PrivatePageCoordinatorTerminalPage::empty(); 1];
+        let mut terminal = before.clone();
+        assert!(matches!(
+            staging.reserve_payload_in_scope(
+                staged,
+                &pool,
+                &scope,
+                &available,
+                0,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut slots,
+                    terminal_pages: &mut terminal,
+                },
+            ),
+            Err(RangeTreePayloadReservationError::AvailableSlots {
+                required: 1,
+                actual: 0,
+            })
+        ));
+        assert_eq!(terminal, before);
+        assert_eq!(
+            pool.scoped_slot_info(&scope, low).unwrap().unwrap().state,
+            PrivatePagePoolState::Available
+        );
+        assert_eq!(
+            pool.scoped_slot_info(&scope, high).unwrap().unwrap().state,
+            PrivatePagePoolState::Available
+        );
+    }
+
+    #[test]
+    fn payload_reservation_rejects_nonascending_allocator_order_without_mutation() {
+        let mut pages = [RangeTreeStagingPage::empty(); 1];
+        let staging = RangeTreeStaging::<Ipv4Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+        let staged = RangeTreeStagedResult {
+            logical_root: 2,
+            root_level: 0,
+            record_count: 0,
+            page_count: 2,
+        };
+        let mut storage = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut storage, 12, 12, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        let low = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                3,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let middle = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                6,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let high = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                9,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+
+        let available = [high, low, middle];
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 2];
+        let mut slots = [RangeTreePayloadReservationSlot::empty(); 2];
+        let before_terminal = [const { PrivatePageCoordinatorTerminalPage::empty() }; 2];
+        let mut terminal = before_terminal.clone();
+        let before_pool = pool.test_mutation_snapshot();
+        assert!(matches!(
+            staging.reserve_payload_in_scope(
+                staged,
+                &pool,
+                &scope,
+                &available,
+                available.len(),
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut slots,
+                    terminal_pages: &mut terminal,
+                },
+            ),
+            Err(RangeTreePayloadReservationError::PhysicalOrder {
+                previous: 6,
+                current: 3,
+            })
+        ));
+        assert_eq!(terminal, before_terminal);
+        assert_eq!(pool.test_mutation_snapshot(), before_pool);
+    }
+
+    #[test]
+    fn payload_reservation_rejects_dirty_terminal_scratch_without_mutation() {
+        let mut pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv4Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::new();
+        let staged = build_v4(&mut staging, &mut workspace, [record(1)]);
+        let mut storage = [const { PrivatePagePoolSlot::empty() }; 3];
+        let pool = PrivatePagePool::new_vacant(&mut storage, 12, 12, 2).unwrap();
+        let scope = pool.reserve_scope(3).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        let low = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                3,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let middle = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                6,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        let high = pool
+            .bind_page(
+                &checkpoint,
+                &scope,
+                9,
+                PrivatePageAuthorization::SafelyReclaimed,
+            )
+            .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+
+        let available = [high, middle, low];
+        let mut assignments = [RangeTreePhysicalAssignment::empty(); 1];
+        let mut slots = [RangeTreePayloadReservationSlot::empty(); 1];
+        let mut terminal = [PrivatePageCoordinatorTerminalPage::empty()];
+        terminal[0].pgno = 99;
+        let before_terminal = terminal.clone();
+        let before_pool = pool.test_mutation_snapshot();
+        assert!(matches!(
+            staging.reserve_payload_in_scope(
+                staged,
+                &pool,
+                &scope,
+                &available,
+                available.len(),
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut slots,
+                    terminal_pages: &mut terminal,
+                },
+            ),
+            Err(RangeTreePayloadReservationError::Staging(
+                RangeTreeStagingError::TerminalOutputDirty
+            ))
+        ));
+        assert_eq!(terminal, before_terminal);
+        assert_eq!(pool.test_mutation_snapshot(), before_pool);
+    }
+
+    #[test]
+    fn empty_payload_reservation_is_a_no_op() {
+        let mut pages = [RangeTreeStagingPage::empty(); 1];
+        let mut staging =
+            RangeTreeStaging::<Ipv6Key>::new(&mut pages, 2, ValueKind::Direct).unwrap();
+        let mut workspace = RangeTreeBuildWorkspace::<Ipv6Key>::new();
+        let mut builder = workspace
+            .begin(2, ValueKind::Direct, staging.logical_page_limit())
+            .unwrap();
+        let result = builder.finish(&mut staging).unwrap();
+        let staged = staging.finish(result).unwrap();
+        let mut storage = [const { PrivatePagePoolSlot::empty() }; 1];
+        let pool = PrivatePagePool::new_vacant(&mut storage, 2, 2, 2).unwrap();
+        let scope = pool.reserve_scope(1).unwrap();
+        let before = pool.test_mutation_snapshot();
+        let mut assignments = [];
+        let mut slots = [];
+        let mut terminal = [];
+        let materialized = staging
+            .reserve_payload_in_scope(
+                staged,
+                &pool,
+                &scope,
+                &[],
+                0,
+                &mut RangeTreePayloadScratch {
+                    assignments: &mut assignments,
+                    slots: &mut slots,
+                    terminal_pages: &mut terminal,
+                },
+            )
+            .unwrap();
+        assert_eq!(materialized.root_pgno, 0);
+        assert_eq!(materialized.page_count, 0);
+        assert_eq!(pool.scope_status(&scope).unwrap().bound, 0);
+        assert_eq!(pool.test_mutation_snapshot(), before);
     }
 
     #[test]
