@@ -669,6 +669,18 @@ impl<'backing, 'arena, 'cleanup> FixedPointCoordinatorWorkspace<'backing, 'arena
         self.backing.len() == 0 && self.backing.last_work_unit.get() == 0
     }
 
+    #[cfg(test)]
+    pub(crate) const fn new_location_capacity(&self) -> usize {
+        self.new_locations.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_locations_are_clean(&self) -> bool {
+        self.new_locations
+            .iter()
+            .all(|location| *location == DraftPrivatePageLocation::EMPTY)
+    }
+
     #[allow(clippy::type_complexity, clippy::result_large_err)]
     pub(crate) fn prepare_aggregate<
         'workspace,
@@ -2979,7 +2991,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         }
         let terminal = &self.terminal.terminal;
         let terminal_page_count = terminal.pages().len();
-        if new_locations.len() != terminal_page_count
+        if new_locations.len() < terminal_page_count
             || new_locations
                 .iter()
                 .any(|location| *location != DraftPrivatePageLocation::EMPTY)
@@ -2992,6 +3004,10 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
                 },
             ));
         }
+        // The owning workspace may reserve bounded capacity before the
+        // lock-bound finalizer knows the terminal size. Only this exact prefix
+        // becomes coordinator state; the checked clean tail remains capacity.
+        let new_locations = &mut new_locations[..terminal_page_count];
         if ordered_prior_locations.len() < requested_prior_returns.len()
             || pool_returns.len() < requested_prior_returns.len()
             || ordered_prior_locations

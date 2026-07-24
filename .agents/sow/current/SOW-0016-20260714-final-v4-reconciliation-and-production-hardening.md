@@ -9106,6 +9106,76 @@ requirements are normative in the Pre-Implementation Gate above.
   Clippy, all-feature benchmark compilation, whitespace checks, and the SOW
   audit pass for this companion.
 
+### 2026-07-24 - bounded dynamic terminal-journal capacity plan
+
+- Evidence: the coordinator currently requires `new_locations.len()` to equal
+  the final terminal-page count (`v4/rust/iprange-livedb/src/writer_fixed_point.rs:2980-2993`).
+  The real ordinary-replacement proof therefore uses a hard-coded four-entry
+  array solely because that fixture happens to produce four pages
+  (`v4/rust/iprange-livedb/src/retirement_writer.rs:11044-11064`). In a real
+  normalizer operation, the terminal count is known only after the held-lock
+  range/bitmap/retirement finalization has completed
+  (`v4/rust/iprange-livedb/src/range_root_proof.rs:1012-1048`).
+- The bounded-memory contract requires all backing to exist before the
+  operation lock, but it does not require unused capacity to become a commit
+  journal. Keep one caller-owned, transaction-budgeted capacity backing. Once
+  terminal composition supplies its exact page count, the coordinator will
+  prove the complete backing is clean, borrow only the exact leading prefix,
+  and use that prefix exclusively for provenance, record digest, replay, and
+  cleanup. The tail remains neutral and inaccessible to the aggregate.
+- A terminal larger than capacity remains a pre-aggregate typed failure with
+  no coordinator/pool mutation. This does not weaken exact terminal binding:
+  the active journal is still exactly one entry per produced terminal page; it
+  only removes the accidental requirement that its preallocated backing have
+  the same length before that count can be known.
+- Update the real Linux ordinary-range integration proof to retain maximum
+  bounded backing instead of a fixture-specific four-entry array. It must
+  prove a four-page terminal uses only the exact prefix and that the unused
+  tail remains empty after both durable publication and the injected
+  late-failure/whole-draft-abort path. Add focused coordinator coverage for
+  oversized clean backing and undersized backing, with zero warmed-path heap
+  allocation.
+- This is a private Rust workspace correction only. It does not change a v4
+  byte, normalizer semantics, public SDK/API, default validation, temporary
+  file behavior, or the bounded resource contract.
+
+### 2026-07-24 - bounded dynamic terminal-journal capacity implementation
+
+- `FixedPointPreparedProducedTerminalWork::prepare_aggregate` now accepts a
+  clean `new_locations` backing whose capacity is at least the produced
+  terminal-page count. It validates the whole backing first, then reborrows
+  only `[..terminal_page_count]`; every later provenance write, digest input,
+  replay handoff, error cleanup, and retained aggregate record sees that exact
+  prefix only.
+- The Linux ordinary-range proof now reserves its full fixed eight-entry
+  backing before the barrier even though this fixture produces four terminal
+  pages. It proves the unused capacity is clean after success and after the
+  injected late core-binding failure.
+- A new Linux failure case gives the coordinator only three entries for the
+  same four-page terminal. It receives the typed
+  `SourceScratchTooSmall { required: 4, actual: 3 }` result before aggregate
+  replay, clears every caller-owned terminal journal, latches whole-draft
+  abort, leaves the main file and selected metadata unchanged, and permits a
+  clean later transaction only after explicit cancellation and abort.
+- The change remains an internal capacity/prefix distinction. The actual
+  terminal journal, terminal page order, target metadata, and durable output
+  remain exact; no maximum-capacity tail can enter the commit record.
+
+### 2026-07-24 - bounded dynamic terminal-journal capacity validation
+
+- Focused Linux tests pass for durable ordinary replacement, injected late
+  core-bind failure, and the new undersized three-entry coordinator backing.
+  The normal four-page terminal succeeds with eight retained entries; the
+  undersized case fails before aggregate replay and leaves the main file
+  unchanged.
+- Rust passes 555 default and 679 all-feature tests. Rust formatting,
+  warnings-denied all-target/all-feature Clippy, and all-feature benchmark
+  compilation pass.
+- Cross-language regression checks remain green: `go -C v4/go test ./... -count=1`
+  and `go -C v4/go vet ./...`. `git diff --check` and the project SOW audit
+  pass. No changed source has a user-visible API or format contract to add to
+  the Go implementation at this private Rust live-writer boundary.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

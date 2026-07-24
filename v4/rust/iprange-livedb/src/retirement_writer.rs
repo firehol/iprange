@@ -10912,12 +10912,18 @@ mod tests {
     enum LinuxOrdinaryRangeReplacementCase {
         Publish,
         RejectLateCoreBinding,
+        RejectShortCoordinatorJournal,
     }
 
     #[cfg(all(feature = "os", target_os = "linux"))]
     fn run_linux_ordinary_range_replacement_case(case: LinuxOrdinaryRangeReplacementCase) {
         const PAGE_COUNT: u64 = 64;
         const MAX_PRIVATE_PAGES: usize = RANGE_ROOT_LIVE_PRIVATE_PAGE_CAPACITY;
+        let coordinator_new_location_capacity = match case {
+            LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal => 3,
+            LinuxOrdinaryRangeReplacementCase::Publish
+            | LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding => MAX_PRIVATE_PAGES,
+        };
 
         let selected = MetaV4 {
             address_family: AddressFamily::Ipv4,
@@ -11043,10 +11049,10 @@ mod tests {
             FixedPointCoordinatorJournals::new(&source_journal, &map_journal, &tombstone_journal);
         let mut ordered_prior_locations = [DraftPrivatePageLocation::EMPTY; MAX_PRIVATE_PAGES];
         let mut pool_returns = [PrivatePageCoordinatorPriorReturn::empty(); MAX_PRIVATE_PAGES];
-        // This known one-leaf replacement emits four terminal pages. The
-        // coordinator deliberately requires this journal to match that exact
-        // terminal length, rather than accepting unused trailing entries.
-        let mut new_locations = [DraftPrivatePageLocation::EMPTY; 4];
+        // The workspace reserves its bounded maximum before the lock, while
+        // the coordinator binds only the exact terminal prefix after the
+        // finalizer knows the produced page count.
+        let mut new_locations = [DraftPrivatePageLocation::EMPTY; MAX_PRIVATE_PAGES];
         let mut replay_slots =
             [const { PrivatePageSparseReplaySlot::empty() }; MAX_PRIVATE_PAGES * 4];
         let mut replay_index = [const { PrivatePageSparseReplayIndex::empty() }; MAX_PRIVATE_PAGES];
@@ -11058,7 +11064,7 @@ mod tests {
             journals,
             &mut ordered_prior_locations,
             &mut pool_returns,
-            &mut new_locations,
+            &mut new_locations[..coordinator_new_location_capacity],
             &mut replay_slots,
             &mut replay_index,
             MAX_PRIVATE_PAGES,
@@ -11351,9 +11357,11 @@ mod tests {
                     let retirement = produced.retirement_result();
                     let terminal_pages = produced.pages();
                     assert!(terminal_pages.len() <= MAX_PRIVATE_PAGES);
-                    expected_terminal_pages.borrow_mut()[..terminal_pages.len()]
-                        .clone_from_slice(terminal_pages);
-                    expected_terminal_len.set(terminal_pages.len());
+                    if case == LinuxOrdinaryRangeReplacementCase::Publish {
+                        expected_terminal_pages.borrow_mut()[..terminal_pages.len()]
+                            .clone_from_slice(terminal_pages);
+                        expected_terminal_len.set(terminal_pages.len());
+                    }
                     assert!(terminal_pages
                         .iter()
                         .any(|page| page.owner == PrivatePageOwner::Range));
@@ -11386,18 +11394,57 @@ mod tests {
                             PrivateWriterTransactionError::FixedPoint(error)
                         })?;
                     let coordinator = core.fixed_point(handle)?;
-                    let aggregate = workspace
-                        .prepare_aggregate(
-                            produced,
-                            coordinator,
-                            &predecessor,
-                            live_pool,
-                            &pages,
-                            &[],
-                        )
-                        .map_err(|(_produced, error)| {
-                            PrivateWriterTransactionError::FixedPoint(error)
-                        })?;
+                    let aggregate = match workspace.prepare_aggregate(
+                        produced,
+                        coordinator,
+                        &predecessor,
+                        live_pool,
+                        &pages,
+                        &[],
+                    ) {
+                        Ok(aggregate) => aggregate,
+                        Err((produced, error)) => {
+                            if case
+                                != LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal
+                            {
+                                return Err(PrivateWriterTransactionError::FixedPoint(error));
+                            }
+                            assert_eq!(
+                                error,
+                                FixedPointError::SourceScratchTooSmall {
+                                    required: 4,
+                                    actual: coordinator_new_location_capacity,
+                                }
+                            );
+                            shadow_pool.require_abort();
+                            produced
+                                .cancel(live_pool)
+                                .map_err(PrivateWriterTransactionError::FixedPoint)?;
+                            bitmap_terminal_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                            range_terminal_pages.fill(PrivatePageCoordinatorTerminalPage::empty());
+                            retirement_terminal_pages
+                                .fill(PrivatePageCoordinatorTerminalPage::empty());
+                            combined_terminal_pages
+                                .fill(PrivatePageCoordinatorTerminalPage::empty());
+                            assert!(bitmap_terminal_pages
+                                .iter()
+                                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                            assert!(range_terminal_pages
+                                .iter()
+                                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                            assert!(retirement_terminal_pages
+                                .iter()
+                                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                            assert!(combined_terminal_pages
+                                .iter()
+                                .all(|page| *page == PrivatePageCoordinatorTerminalPage::empty()));
+                            assert!(seed.is_empty_and_clean());
+                            assert!(first.is_empty_and_clean());
+                            assert!(second.is_empty_and_clean());
+                            core.require_abort(handle)?;
+                            return Err(PrivateWriterTransactionError::FixedPoint(error));
+                        }
+                    };
                     let sealed = core
                         .execute_fixed_point_aggregate(handle, predecessor, aggregate)
                         .map_err(|(_predecessor, _aggregate, error)| {
@@ -11439,6 +11486,8 @@ mod tests {
                 assert_eq!(target.txn_id, selected.txn_id + 1);
                 assert!(target.retirement_batch_count > selected.retirement_batch_count);
                 assert!(workspace.is_idle());
+                assert_eq!(workspace.new_location_capacity(), MAX_PRIVATE_PAGES);
+                assert!(workspace.new_locations_are_clean());
                 assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
                 assert_eq!(core.selected(), target);
                 assert_eq!(core.target(), None);
@@ -11463,17 +11512,36 @@ mod tests {
                     );
                 }
             }
-            LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding => {
-                assert!(matches!(
-                    publication,
-                    Err(
-                        crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
-                            PrivateWriterTransactionError::FixedPoint(
-                                FixedPointError::StalePredecessor
+            LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding
+            | LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal => {
+                match case {
+                    LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding => assert!(matches!(
+                        publication,
+                        Err(
+                            crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
+                                PrivateWriterTransactionError::FixedPoint(
+                                    FixedPointError::StalePredecessor
+                                )
                             )
                         )
-                    )
-                ));
+                    )),
+                    LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal => {
+                        assert!(matches!(
+                            publication,
+                            Err(
+                                crate::os::linux::live_writer::LinuxLiveWriterCoreCommitError::Core(
+                                    PrivateWriterTransactionError::FixedPoint(
+                                        FixedPointError::SourceScratchTooSmall {
+                                            required: 4,
+                                            actual: 3,
+                                        }
+                                    )
+                                )
+                            )
+                        ));
+                    }
+                    LinuxOrdinaryRangeReplacementCase::Publish => unreachable!(),
+                }
                 assert_eq!(expected_terminal_len.get(), 0);
                 assert_eq!(core.state(), PrivateWriterTransactionState::AbortRequired);
                 assert_eq!(core.selected(), selected);
@@ -11503,6 +11571,11 @@ mod tests {
                 core.cancel_fixed_point_workspace(&handle, &mut workspace)
                     .unwrap();
                 assert!(workspace.is_idle());
+                assert_eq!(
+                    workspace.new_location_capacity(),
+                    coordinator_new_location_capacity
+                );
+                assert!(workspace.new_locations_are_clean());
                 let abort_visits = core.abort().unwrap();
                 assert!(abort_visits > 0);
                 assert_eq!(core.state(), PrivateWriterTransactionState::Clean);
@@ -11526,6 +11599,14 @@ mod tests {
     fn linux_finalizer_late_ordinary_range_failure_requires_whole_draft_abort() {
         run_linux_ordinary_range_replacement_case(
             LinuxOrdinaryRangeReplacementCase::RejectLateCoreBinding,
+        );
+    }
+
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    #[test]
+    fn linux_finalizer_rejects_undersized_ordinary_range_coordinator_journal() {
+        run_linux_ordinary_range_replacement_case(
+            LinuxOrdinaryRangeReplacementCase::RejectShortCoordinatorJournal,
         );
     }
 
