@@ -6890,8 +6890,9 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::reclamation_finalizer::{
         prepare_locked_reclamation_bitmap_reservation,
-        preview_selected_reclamation_protected_pages, LockedReclamationFinalizerLimits,
-        LockedReclamationFinalizerScratch, ReclamationProtectedPagesScratch,
+        preview_selected_reclamation_protected_pages, stage_selected_reclamation_retirement,
+        LockedReclamationFinalizerLimits, LockedReclamationFinalizerScratch,
+        ReclamationProtectedPagesScratch, SelectedReclamationRetirementScratch,
     };
     use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -8888,7 +8889,6 @@ mod tests {
         let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
         let mut final_cleanup_targets = [usize::MAX; 4];
         let mut helper_protected_snapshot = [0u32; 4];
-        let helper_protected_len = Cell::new(0usize);
         let mut retirement_terminal_pages = [
             PrivatePageCoordinatorTerminalPage::empty(),
             PrivatePageCoordinatorTerminalPage::empty(),
@@ -9011,6 +9011,7 @@ mod tests {
                         batch_count: selected.retirement_batch_count,
                     };
 
+                    let mut selected_protected = None;
                     let protected_replacements = match case {
                         LinuxFinalizerReclamationCase::NoChange => &[50][..],
                         LinuxFinalizerReclamationCase::SelectedBatch => {
@@ -9023,7 +9024,7 @@ mod tests {
                                         probe_replacements: &mut probe_replacement_entries,
                                         probe_releases: &mut probe_release_pages,
                                         probe_roles: &mut probe_roles,
-                                        protected_pages: &mut protected_replacement_pages,
+                                        protected_pages: &mut helper_protected_snapshot,
                                         next_protected_pages: &mut next_protected_replacement_pages,
                                         preview_bitmap_replacements: &mut preview_bitmap_replacements,
                                         preview_blob_pages: &mut preview_blob_pages,
@@ -9054,13 +9055,7 @@ mod tests {
                                     .checked_add(helper_protected.tree_private_page_budget())
                                     .unwrap()
                             );
-                            assert!(
-                                helper_protected.pages().len()
-                                    <= helper_protected_snapshot.len()
-                            );
-                            helper_protected_snapshot[..helper_protected.pages().len()]
-                                .copy_from_slice(helper_protected.pages());
-                            helper_protected_len.set(helper_protected.pages().len());
+                            selected_protected = Some(helper_protected);
                             let mut probe_arena = PrivatePageArena::from_scoped_pool(
                                 &shadow_pool,
                                 &shadow_scope,
@@ -9226,27 +9221,13 @@ mod tests {
                     };
                     if case == LinuxFinalizerReclamationCase::SelectedBatch {
                         assert_eq!(
-                            &helper_protected_snapshot[..helper_protected_len.get()],
+                            selected_protected
+                                .expect("selected reclamation must produce protected pages")
+                                .pages(),
                             protected_replacements,
                             "private protected-list finalization must match the established staged fixed point"
                         );
                     }
-                    let mut arena = PrivatePageArena::from_scoped_pool(
-                        &shadow_pool,
-                        &shadow_scope,
-                        selected.txn_id + 1,
-                    )
-                    .unwrap();
-                    let blob = RetirementBlobBuilder::build(
-                        protected_replacements,
-                        &mut arena,
-                        &mut BlobBuildScratch::new(&mut blob_pages),
-                    )
-                    .unwrap();
-                    let mut replacements =
-                        CommittedReplacementLedger::new(&mut retirement_replacements);
-                    let mut releases = PrivateReleaseBuffer::new(&mut retirement_releases);
-                    let mut roles = PageRoleIndex::new(&mut retirement_roles);
                     if case == LinuxFinalizerReclamationCase::SelectedBatch {
                         assert_eq!(
                             validate_reclamation_authority(
@@ -9260,10 +9241,112 @@ mod tests {
                             ),
                             Err(RetirementWriteError::ReclamationStateMismatch)
                         );
+                        let scope_before = shadow_pool.scope_status(&shadow_scope).unwrap();
+                        let mut short_blob_pages = [];
+                        let error = match stage_selected_reclamation_retirement(
+                            &mut bound,
+                            &shadow_pool,
+                            &shadow_scope,
+                            selected_protected
+                                .expect("selected reclamation must produce protected pages"),
+                            SelectedReclamationRetirementScratch {
+                                blob_pages: &mut short_blob_pages,
+                                delete_path: &mut delete_path,
+                                upsert_path: &mut upsert_path,
+                                replacements: &mut retirement_replacements,
+                                releases: &mut retirement_releases,
+                                roles: &mut retirement_roles,
+                                terminal_pages: &mut retirement_terminal_pages,
+                            },
+                        ) {
+                            Ok(_) => panic!("short blob scratch must fail before mutation"),
+                            Err(error) => error,
+                        };
+                        assert!(matches!(
+                            error,
+                            crate::reclamation_finalizer::SelectedReclamationRetirementStageError::BlobScratchTooSmall {
+                                required: 1,
+                                actual: 0,
+                            }
+                        ));
+                        assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
+
+                        let mut short_terminal_pages = [PrivatePageCoordinatorTerminalPage::empty()];
+                        let error = match stage_selected_reclamation_retirement(
+                            &mut bound,
+                            &shadow_pool,
+                            &shadow_scope,
+                            selected_protected
+                                .expect("selected reclamation must produce protected pages"),
+                            SelectedReclamationRetirementScratch {
+                                blob_pages: &mut blob_pages,
+                                delete_path: &mut delete_path,
+                                upsert_path: &mut upsert_path,
+                                replacements: &mut retirement_replacements,
+                                releases: &mut retirement_releases,
+                                roles: &mut retirement_roles,
+                                terminal_pages: &mut short_terminal_pages,
+                            },
+                        ) {
+                            Ok(_) => panic!("short terminal journal must fail before mutation"),
+                            Err(error) => error,
+                        };
+                        assert!(matches!(
+                            error,
+                            crate::reclamation_finalizer::SelectedReclamationRetirementStageError::TerminalPagesTooSmall {
+                                required: 2,
+                                actual: 1,
+                            }
+                        ));
+                        assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
+
+                        let replacement_scope = shadow_scope.seed().materialize(&shadow_pool);
+                        let error = match stage_selected_reclamation_retirement(
+                            &mut bound,
+                            &shadow_pool,
+                            &replacement_scope,
+                            selected_protected
+                                .expect("selected reclamation must produce protected pages"),
+                            SelectedReclamationRetirementScratch {
+                                blob_pages: &mut blob_pages,
+                                delete_path: &mut delete_path,
+                                upsert_path: &mut upsert_path,
+                                replacements: &mut retirement_replacements,
+                                releases: &mut retirement_releases,
+                                roles: &mut retirement_roles,
+                                terminal_pages: &mut retirement_terminal_pages,
+                            },
+                        ) {
+                            Ok(_) => panic!("replacement scope must fail before mutation"),
+                            Err(error) => error,
+                        };
+                        assert!(matches!(
+                            error,
+                            crate::reclamation_finalizer::SelectedReclamationRetirementStageError::PreMutationBitmap(
+                                crate::bitmap_cow::FreeBitmapCowError::ArenaPageConflict(0)
+                            )
+                        ));
+                        assert_eq!(shadow_pool.scope_status(&shadow_scope).unwrap(), scope_before);
                     }
-                    let retirement = match case {
+                    let (retirement, retirement_export) = match case {
                         LinuxFinalizerReclamationCase::NoChange => {
-                            RetirementTreeEditor::upsert_newest(
+                            let mut arena = PrivatePageArena::from_scoped_pool(
+                                &shadow_pool,
+                                &shadow_scope,
+                                selected.txn_id + 1,
+                            )
+                            .unwrap();
+                            let blob = RetirementBlobBuilder::build(
+                                protected_replacements,
+                                &mut arena,
+                                &mut BlobBuildScratch::new(&mut blob_pages),
+                            )
+                            .unwrap();
+                            let mut replacements =
+                                CommittedReplacementLedger::new(&mut retirement_replacements);
+                            let mut releases = PrivateReleaseBuffer::new(&mut retirement_releases);
+                            let mut roles = PageRoleIndex::new(&mut retirement_roles);
+                            let retirement = RetirementTreeEditor::upsert_newest(
                                 &pages,
                                 retirement_state,
                                 blob,
@@ -9272,34 +9355,40 @@ mod tests {
                                 &mut releases,
                                 &mut roles,
                             )
-                            .unwrap()
+                            .unwrap();
+                            let retirement_export = match arena
+                                .prepare_terminal_export(retirement, &mut retirement_terminal_pages)
+                            {
+                                Ok(export) => export,
+                                Err(error) => panic!(
+                                    "retirement terminal export failed: {error:?}; result={retirement:?}; in_use={:?}",
+                                    arena.in_use_count()
+                                ),
+                            };
+                            bound.synchronize_reclamation_scope(&shadow_scope).unwrap();
+                            (retirement, retirement_export)
                         }
                         LinuxFinalizerReclamationCase::SelectedBatch => {
-                            RetirementTreeEditor::delete_reclaimed_oldest_and_upsert_newest(
-                                &pages,
-                                retirement_state,
-                                retirement_identity,
-                                bound.reclamation_authority(),
-                                blob,
-                                &mut delete_path,
-                                &mut upsert_path,
-                                &mut replacements,
-                                &mut releases,
-                                &mut roles,
+                            let retirement_export = stage_selected_reclamation_retirement(
+                                &mut bound,
+                                &shadow_pool,
+                                &shadow_scope,
+                                selected_protected
+                                    .expect("selected reclamation must produce protected pages"),
+                                SelectedReclamationRetirementScratch {
+                                    blob_pages: &mut blob_pages,
+                                    delete_path: &mut delete_path,
+                                    upsert_path: &mut upsert_path,
+                                    replacements: &mut retirement_replacements,
+                                    releases: &mut retirement_releases,
+                                    roles: &mut retirement_roles,
+                                    terminal_pages: &mut retirement_terminal_pages,
+                                },
                             )
-                            .unwrap()
+                            .unwrap();
+                            (retirement_export.result(), retirement_export)
                         }
                     };
-                    let retirement_export = match arena
-                        .prepare_terminal_export(retirement, &mut retirement_terminal_pages)
-                    {
-                        Ok(export) => export,
-                        Err(error) => panic!(
-                            "retirement terminal export failed: {error:?}; result={retirement:?}; in_use={:?}",
-                            arena.in_use_count()
-                        ),
-                    };
-                    bound.cow.synchronize_scoped_bindings(&shadow_scope).unwrap();
                     let requirements = bound.finalization_scratch_requirements().unwrap();
                     assert!(requirements.release_pages <= final_release_pages.len());
                     assert!(requirements.insert_pages <= final_insert_pages.len());
@@ -9325,7 +9414,7 @@ mod tests {
                     if case == LinuxFinalizerReclamationCase::SelectedBatch {
                         let actual_len = compose_reclamation_protected_pages(
                             finalized.output.replacements(),
-                            replacements.entries(),
+                            &retirement_replacements[..retirement.committed_replacements],
                             &mut actual_protected_replacement_pages,
                         );
                         assert_eq!(

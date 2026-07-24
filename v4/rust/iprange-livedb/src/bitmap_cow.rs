@@ -1720,6 +1720,32 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
     pub(crate) fn reclamation_authority(&self) -> &RetirementReclamationAuthority<'pages> {
         &self.reclamation
     }
+
+    /// Verifies that a retirement stage uses this reservation's exact shadow
+    /// scope without changing the bitmap draft.
+    pub(crate) fn validate_reclamation_scope(
+        &self,
+        scope: &PrivatePageReservationScope<'scope>,
+    ) -> Result<(), FreeBitmapCowError> {
+        let stored_scope = self
+            .cow
+            .scoped()
+            .ok_or(FreeBitmapCowError::ArenaPageConflict(0))?;
+        if !core::ptr::eq(scope, stored_scope) {
+            return Err(FreeBitmapCowError::ArenaPageConflict(0));
+        }
+        self.cow.validate_scoped_bindings()
+    }
+
+    /// Reconciles bitmap binding metadata after retirement has consumed pages
+    /// from this exact shared shadow scope.
+    pub(crate) fn synchronize_reclamation_scope(
+        &mut self,
+        scope: &PrivatePageReservationScope<'scope>,
+    ) -> Result<(), FreeBitmapCowError> {
+        self.validate_reclamation_scope(scope)?;
+        self.cow.synchronize_scoped_bindings(scope)
+    }
 }
 
 impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized> FreeBitmapCow<'a, 'slots, 'scope, S> {

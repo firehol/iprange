@@ -7071,7 +7071,68 @@ requirements are normative in the Pre-Implementation Gate above.
   probe. It does not mutate a terminal scope, expose `Reclaim`, or alter v4
   bytes or Go behavior.
 
+### 2026-07-24 - selected-reclaim retirement-stage plan
+
+- Evidence at planning time: after capacity was known, the Linux fixture still
+  directly created the retirement blob, applied the verified delete-and-append
+  edit, exported its terminal pages, and synchronized the bitmap view
+  (`retirement_writer.rs:9220-9300`). This is the first real mutation of the
+  isolated shadow attempt and must not be reimplemented independently by a
+  future writer.
+- Add one normal private helper that accepts an already-bound selected
+  reservation, the exact shadow pool/scope that created it, the protected-list
+  result, and caller-owned edit/export scratch. It must derive source and
+  identity from the reservation, verify the exact scope before and after the
+  edit, build the blob, apply the verified reclamation edit, and return a typed
+  retirement terminal export.
+- Validate blob and terminal-buffer capacity before mutation. A stage failure
+  is reported distinctly; the caller still owns the outer pending transaction
+  and discards this isolated shadow attempt, so it can retry from a fresh
+  finalizer attempt or abort through the existing transaction contract. Do not
+  create a public `Reclaim` operation or change format/API semantics here.
+
+### 2026-07-24 - selected-reclaim retirement-stage implementation
+
+- Added one private selected-reclaim retirement stage. It accepts only the
+  already-bound bitmap reservation and its exact shadow pool/scope, derives
+  the source and retirement identity from that reservation, preflights all
+  caller-owned buffers, creates the blob, applies the verified delete/append,
+  exports the exact terminal page prefix, then synchronizes the bound bitmap
+  view.
+- The terminal export count is the checked sum of blob pages and tree pages;
+  the tree edit result alone intentionally excludes the blob. The Linux
+  end-to-end fixture exposed this distinction before publication and now proves
+  both output pages are exported.
+- Scratch now separates the one returned output slice from temporary work
+  slices. This permits the caller to reuse probe/finalization/replacement
+  buffers immediately after preview or staging without allocation or an
+  unsafe lifetime extension.
+- The selected Linux fixture keeps the prior independent fixed-point replay,
+  compares its protected list with the normal helper, then uses the normal
+  stage for the real mutation. It also proves short blob/terminal buffers and
+  a same-valued but different scope fail before mutating the shadow scope.
+- This remains Rust-private lifecycle work. It adds no public `Reclaim`, SDK
+  API, format byte, default validation, or Go behavior.
+
 ## Validation
+
+### 2026-07-24 - selected-reclaim retirement stage
+
+- The Linux selected-reclaim finalizer now executes the normal retirement
+  stage under the held operation lock. Its prior independent fixed-point replay
+  still agrees with the protected list, and the published terminal journal
+  contains the blob and tree pages exactly once.
+- The same fixture proves a short blob buffer, short terminal journal, and
+  same-valued replacement scope all fail before shadow-scope mutation. The
+  successful path remains allocation-free under the existing finalizer-wide
+  allocation assertion.
+- Rust workspace tests pass: 449 without optional features and 564 with all
+  features. Formatting, warnings-denied all-target/all-feature Clippy, and
+  all-feature benchmark compilation pass. Go `test ./...` and `vet ./...`,
+  `git diff --check`, and the project SOW audit pass.
+- No normative specification change is required: this is internal Rust
+  finalizer composition, with no public API, on-disk format, validation
+  default, or Go behavior change.
 
 ### 2026-07-24 - bounded terminal capacity
 

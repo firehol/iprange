@@ -14,8 +14,8 @@ use crate::bitmap_cow::{
 use crate::contract::MetaV4;
 use crate::page_source::CommittedPageSource;
 use crate::private_page_pool::{
-    PrivatePagePool, PrivatePageReservationScope, PrivatePageSelectiveOverlayNode,
-    PrivatePageSelectivePathEntry,
+    PrivatePageCoordinatorTerminalPage, PrivatePagePool, PrivatePageReservationScope,
+    PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
 };
 use crate::retirement_page::RetirementBatch;
 use crate::retirement_reader::{
@@ -24,8 +24,9 @@ use crate::retirement_reader::{
 };
 use crate::retirement_writer::{
     BlobBuildScratch, CommittedPageReplacement, CommittedReplacementLedger, PageRoleIndex,
-    PageRoleIndexSlot, PrivatePageArena, PrivateReleaseBuffer, RetirementBlobBuilder,
-    RetirementPathFrame, RetirementTreeEditor, RetirementTreeState, RetirementWriteError,
+    PageRoleIndexSlot, PreparedRetirementTerminalExport, PrivatePageArena, PrivateReleaseBuffer,
+    RetirementBlobBuilder, RetirementPathFrame, RetirementTreeEditor, RetirementTreeState,
+    RetirementWriteError,
 };
 use core::cell::Cell;
 
@@ -78,28 +79,28 @@ pub(crate) struct LockedReclamationBitmapReservation<
 /// sharing either would make a replay appear stable only because it overwrote
 /// the first pass's evidence.
 #[derive(Debug)]
-pub(crate) struct ReclamationProtectedPagesScratch<'a> {
-    pub(crate) probe_delete_path: &'a mut [RetirementPathFrame],
-    pub(crate) probe_upsert_path: &'a mut [RetirementPathFrame],
-    pub(crate) probe_replacements: &'a mut [CommittedPageReplacement],
-    pub(crate) probe_releases: &'a mut [u32],
-    pub(crate) probe_roles: &'a mut [PageRoleIndexSlot],
-    pub(crate) protected_pages: &'a mut [u32],
-    pub(crate) next_protected_pages: &'a mut [u32],
-    pub(crate) preview_bitmap_replacements: &'a mut [u32],
-    pub(crate) preview_blob_pages: &'a mut [u32],
-    pub(crate) preview_delete_path: &'a mut [RetirementPathFrame],
-    pub(crate) preview_upsert_path: &'a mut [RetirementPathFrame],
-    pub(crate) preview_replacements: &'a mut [CommittedPageReplacement],
-    pub(crate) preview_releases: &'a mut [u32],
-    pub(crate) preview_roles: &'a mut [PageRoleIndexSlot],
-    pub(crate) final_release_pages: &'a mut [u32],
-    pub(crate) final_insert_pages: &'a mut [FreeBitmapInsertPage],
-    pub(crate) final_cached_pages: &'a mut [FreeBitmapFinalizationCachedPage],
-    pub(crate) final_index_stack: &'a mut [usize],
-    pub(crate) final_cleanup_nodes: &'a mut [PrivatePageSelectiveOverlayNode],
-    pub(crate) final_cleanup_path: &'a mut [PrivatePageSelectivePathEntry],
-    pub(crate) final_cleanup_targets: &'a mut [usize],
+pub(crate) struct ReclamationProtectedPagesScratch<'protected, 'scratch> {
+    pub(crate) probe_delete_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) probe_upsert_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) probe_replacements: &'scratch mut [CommittedPageReplacement],
+    pub(crate) probe_releases: &'scratch mut [u32],
+    pub(crate) probe_roles: &'scratch mut [PageRoleIndexSlot],
+    pub(crate) protected_pages: &'protected mut [u32],
+    pub(crate) next_protected_pages: &'scratch mut [u32],
+    pub(crate) preview_bitmap_replacements: &'scratch mut [u32],
+    pub(crate) preview_blob_pages: &'scratch mut [u32],
+    pub(crate) preview_delete_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) preview_upsert_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) preview_replacements: &'scratch mut [CommittedPageReplacement],
+    pub(crate) preview_releases: &'scratch mut [u32],
+    pub(crate) preview_roles: &'scratch mut [PageRoleIndexSlot],
+    pub(crate) final_release_pages: &'scratch mut [u32],
+    pub(crate) final_insert_pages: &'scratch mut [FreeBitmapInsertPage],
+    pub(crate) final_cached_pages: &'scratch mut [FreeBitmapFinalizationCachedPage],
+    pub(crate) final_index_stack: &'scratch mut [usize],
+    pub(crate) final_cleanup_nodes: &'scratch mut [PrivatePageSelectiveOverlayNode],
+    pub(crate) final_cleanup_path: &'scratch mut [PrivatePageSelectivePathEntry],
+    pub(crate) final_cleanup_targets: &'scratch mut [usize],
 }
 
 /// A converged selected-reclaim page list and the exact bounded retirement
@@ -128,6 +129,35 @@ impl SelectedReclamationProtectedPages<'_> {
     pub(crate) const fn retirement_private_page_budget(&self) -> usize {
         self.retirement_private_page_budget
     }
+}
+
+/// Caller-owned scratch for one actual selected-reclaim retirement stage.
+#[derive(Debug)]
+pub(crate) struct SelectedReclamationRetirementScratch<'terminal, 'scratch> {
+    pub(crate) blob_pages: &'scratch mut [u32],
+    pub(crate) delete_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) upsert_path: &'scratch mut [RetirementPathFrame],
+    pub(crate) replacements: &'scratch mut [CommittedPageReplacement],
+    pub(crate) releases: &'scratch mut [u32],
+    pub(crate) roles: &'scratch mut [PageRoleIndexSlot],
+    pub(crate) terminal_pages: &'terminal mut [PrivatePageCoordinatorTerminalPage],
+}
+
+/// Failure while staging selected-reclaim retirement output in an isolated
+/// shadow attempt. Post-mutation failures require the caller to discard that
+/// attempt before retrying or aborting its still-pending transaction.
+#[derive(Debug)]
+pub(crate) enum SelectedReclamationRetirementStageError {
+    MissingSelectedIdentity,
+    BlobScratchTooSmall { required: usize, actual: usize },
+    TerminalPagesTooSmall { required: usize, actual: usize },
+    TerminalPagesNotEmpty,
+    PreMutationBitmap(FreeBitmapCowError),
+    PreMutationRetirement(RetirementWriteError),
+    PostMutationRetirement(RetirementWriteError),
+    PostMutationBitmap(FreeBitmapCowError),
+    PostMutationTerminalPageCountOverflow,
+    PostMutationCapacityMismatch { actual: usize, budget: usize },
 }
 
 /// Typed read-only fixed-point failure before terminal finalization begins.
@@ -298,9 +328,9 @@ fn selected_reclamation_retirement_private_page_budget(
         .map_err(ReclamationProtectedPagesError::Retirement)?;
     let retirement_private_page_budget = blob_private_pages
         .checked_add(tree_private_page_budget)
-        .ok_or_else(|| {
-        ReclamationProtectedPagesError::Retirement(RetirementWriteError::ArithmeticOverflow)
-    })?;
+        .ok_or(ReclamationProtectedPagesError::Retirement(
+        RetirementWriteError::ArithmeticOverflow,
+    ))?;
     Ok((blob_private_pages, retirement_private_page_budget))
 }
 
@@ -330,6 +360,7 @@ fn require_selected_reclamation_retirement_capacity(
 /// another.
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(crate) fn preview_selected_reclamation_protected_pages<
+    'protected,
     'scratch,
     'a,
     'slots,
@@ -339,8 +370,8 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
     S: CommittedPageSource + ?Sized,
 >(
     bound: &mut BoundFreeBitmapReservation<'a, 'slots, 'scope, 'barrier, 'pages, S>,
-    scratch: ReclamationProtectedPagesScratch<'scratch>,
-) -> Result<SelectedReclamationProtectedPages<'scratch>, ReclamationProtectedPagesError> {
+    scratch: ReclamationProtectedPagesScratch<'protected, 'scratch>,
+) -> Result<SelectedReclamationProtectedPages<'protected>, ReclamationProtectedPagesError> {
     if bound.reclamation_authority().batch_count() == 0 {
         return Err(ReclamationProtectedPagesError::NoSelectedBatches);
     }
@@ -581,6 +612,125 @@ pub(crate) fn preview_selected_reclamation_protected_pages<
     Err(ReclamationProtectedPagesError::FixedPointDidNotConverge {
         limit: protected_pages.len().saturating_add(1),
     })
+}
+
+/// Materializes the selected reclaim's retirement blob/tree output inside the
+/// exact shadow scope already bound to `bound`.
+///
+/// The scope and source are not caller-selectable: the scope is checked against
+/// the bound bitmap reservation and the source/identity come from its verified
+/// reclamation authority. Errors before the edit is applied leave the shadow
+/// attempt reusable; later errors explicitly report that the caller must
+/// discard this isolated attempt before retrying the outer transaction.
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) fn stage_selected_reclamation_retirement<
+    'terminal,
+    'scratch,
+    'bound,
+    'pool,
+    'barrier,
+    'pages,
+    S: CommittedPageSource + ?Sized,
+>(
+    bound: &mut BoundFreeBitmapReservation<'bound, 'pool, 'pool, 'barrier, 'pages, S>,
+    shadow_pool: &'pool PrivatePagePool<'pool>,
+    shadow_scope: &PrivatePageReservationScope<'pool>,
+    protected: SelectedReclamationProtectedPages<'_>,
+    scratch: SelectedReclamationRetirementScratch<'terminal, 'scratch>,
+) -> Result<PreparedRetirementTerminalExport<'terminal>, SelectedReclamationRetirementStageError> {
+    let SelectedReclamationRetirementScratch {
+        blob_pages,
+        delete_path,
+        upsert_path,
+        replacements,
+        releases,
+        roles,
+        terminal_pages,
+    } = scratch;
+    if blob_pages.len() < protected.blob_private_pages() {
+        return Err(
+            SelectedReclamationRetirementStageError::BlobScratchTooSmall {
+                required: protected.blob_private_pages(),
+                actual: blob_pages.len(),
+            },
+        );
+    }
+    if terminal_pages.len() < protected.retirement_private_page_budget() {
+        return Err(
+            SelectedReclamationRetirementStageError::TerminalPagesTooSmall {
+                required: protected.retirement_private_page_budget(),
+                actual: terminal_pages.len(),
+            },
+        );
+    }
+    if terminal_pages[..protected.retirement_private_page_budget()]
+        .iter()
+        .any(|page| *page != PrivatePageCoordinatorTerminalPage::empty())
+    {
+        return Err(SelectedReclamationRetirementStageError::TerminalPagesNotEmpty);
+    }
+    bound
+        .validate_reclamation_scope(shadow_scope)
+        .map_err(SelectedReclamationRetirementStageError::PreMutationBitmap)?;
+    let identity = bound
+        .reclamation_authority()
+        .identity()
+        .ok_or(SelectedReclamationRetirementStageError::MissingSelectedIdentity)?;
+    let pending_txn = identity.txn_id.checked_add(1).ok_or(
+        SelectedReclamationRetirementStageError::PreMutationRetirement(
+            RetirementWriteError::SelectedTransactionOverflow(identity.txn_id),
+        ),
+    )?;
+    let state = RetirementTreeState {
+        selected_txn: identity.txn_id,
+        page_count: identity.page_count,
+        root: identity.root,
+        batch_count: identity.batch_count,
+    };
+    let source = bound.reclamation_source();
+    let mut arena = PrivatePageArena::from_scoped_pool(shadow_pool, shadow_scope, pending_txn)
+        .map_err(SelectedReclamationRetirementStageError::PreMutationRetirement)?;
+    let blob = RetirementBlobBuilder::build(
+        protected.pages(),
+        &mut arena,
+        &mut BlobBuildScratch::new(blob_pages),
+    )
+    .map_err(SelectedReclamationRetirementStageError::PreMutationRetirement)?;
+    let mut replacements = CommittedReplacementLedger::new(replacements);
+    let mut releases = PrivateReleaseBuffer::new(releases);
+    let mut roles = PageRoleIndex::new(roles);
+    let result = RetirementTreeEditor::delete_reclaimed_oldest_and_upsert_newest(
+        source,
+        state,
+        identity,
+        bound.reclamation_authority(),
+        blob,
+        delete_path,
+        upsert_path,
+        &mut replacements,
+        &mut releases,
+        &mut roles,
+    )
+    .map_err(SelectedReclamationRetirementStageError::PreMutationRetirement)?;
+    let terminal_page_count = protected
+        .blob_private_pages()
+        .checked_add(result.private_pages)
+        .ok_or(SelectedReclamationRetirementStageError::PostMutationTerminalPageCountOverflow)?;
+    if terminal_page_count > protected.retirement_private_page_budget() {
+        return Err(
+            SelectedReclamationRetirementStageError::PostMutationCapacityMismatch {
+                actual: terminal_page_count,
+                budget: protected.retirement_private_page_budget(),
+            },
+        );
+    }
+    let export = arena
+        .prepare_terminal_export(result, &mut terminal_pages[..terminal_page_count])
+        .map_err(SelectedReclamationRetirementStageError::PostMutationRetirement)?;
+    bound
+        .synchronize_reclamation_scope(shadow_scope)
+        .map_err(SelectedReclamationRetirementStageError::PostMutationBitmap)?;
+    Ok(export)
 }
 
 #[cfg(test)]
