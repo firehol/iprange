@@ -7114,6 +7114,49 @@ requirements are normative in the Pre-Implementation Gate above.
 - This remains Rust-private lifecycle work. It adds no public `Reclaim`, SDK
   API, format byte, default validation, or Go behavior.
 
+### 2026-07-24 - exact bitmap-terminal-count plan
+
+- Evidence: `SealedFreeBitmapOutput::prepare_terminal_export` requires a
+  destination slice whose length is exactly the number of bitmap-owned pages
+  (`bitmap_cow/selective_finalization.rs:2774-2810` and
+  `private_page_pool.rs:5434-5522`). The selected Linux fixture currently
+  hard-codes a one-page bitmap journal. A normal bounded finalizer cannot
+  safely select that length before finalization or allocate a second buffer.
+- The existing finalization pass already classifies every retained scope member
+  as bitmap or retirement while it computes the stable retained partition.
+  Preserve the exact bitmap-owned count in the sealed output there. This adds
+  one checked counter increment in existing work, not an additional scope scan
+  or a format/API field.
+- The later composite finalizer will use this count to slice its caller-owned
+  maximum bitmap journal. Add permanent coverage that a retained retirement
+  page is excluded from the bitmap count and that an exact prefix exports only
+  bitmap pages. No public `Reclaim`, new allocation, or Go behavior is part of
+  this narrow step.
+
+### 2026-07-24 - exact bitmap-terminal-count implementation
+
+- The existing retained-scope partition now records the exact number of pages
+  still owned by the current bitmap transaction. The count travels only through
+  private finalization state into `SealedFreeBitmapOutput`; it does not change
+  the on-disk format, a public API, or the full scope record used by the
+  coordinator.
+- The normal selected Linux fixture slices a caller-owned maximum journal to
+  that exact count. Permanent tests prove a retained retirement page in the
+  same scope is excluded and that an unused caller-owned suffix remains empty.
+- The change adds one checked increment during work already required to build
+  the retained partition. It adds neither allocation nor a second scope scan.
+
+### 2026-07-24 - exact bitmap-terminal-count validation
+
+- Focused coverage passes for exact bitmap terminal export, retained retirement
+  ownership in the same scope, and both selected/no-change Linux finalizers.
+- Rust workspace matrices pass: 449 no-default tests and 564 all-feature
+  tests. Warnings-denied all-target Clippy and all-feature benchmark
+  compilation pass.
+- Go `test ./...` and `vet ./...` pass. Formatting, diff checking, and the
+  project SOW audit are run for the checkpoint. Go behavior is unchanged: this
+  is private Rust output sizing for a later composition step.
+
 ## Validation
 
 ### 2026-07-24 - selected-reclaim retirement stage

@@ -9666,23 +9666,32 @@ pub(crate) mod tests {
                 cleanup_targets: &mut cleanup_targets,
             })
             .unwrap();
-        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        let bitmap_terminal_page_count = finalized.output.bitmap_terminal_page_count();
+        assert_eq!(bitmap_terminal_page_count, 1);
+        let mut pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
         let (export, allocations) = count_thread_allocations(|| {
-            finalized
-                .output
-                .prepare_terminal_export(finalized.successor, &mut pages)
+            finalized.output.prepare_terminal_export(
+                finalized.successor,
+                &mut pages[..bitmap_terminal_page_count],
+            )
         });
         assert_eq!(allocations, 0);
-        let export = match export {
-            Ok(export) => export,
-            Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
-        };
-        assert_eq!(export.root(), 5);
-        assert_eq!(export.pages().len(), 1);
-        assert_eq!(export.pages()[0].pool_slot, usize::MAX);
-        assert_eq!(export.pages()[0].owner, PrivatePageOwner::Bitmap);
-        assert_eq!(export.pages()[0].pgno, 5);
-        assert!(page::verify_crc32c(&export.pages()[0].bytes));
+        {
+            let export = match export {
+                Ok(export) => export,
+                Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
+            };
+            assert_eq!(export.root(), 5);
+            assert_eq!(export.pages().len(), 1);
+            assert_eq!(export.pages()[0].pool_slot, usize::MAX);
+            assert_eq!(export.pages()[0].owner, PrivatePageOwner::Bitmap);
+            assert_eq!(export.pages()[0].pgno, 5);
+            assert!(page::verify_crc32c(&export.pages()[0].bytes));
+        }
+        assert_eq!(pages[1], PrivatePageCoordinatorTerminalPage::empty());
     }
 
     #[test]
@@ -9745,6 +9754,7 @@ pub(crate) mod tests {
                 cleanup_targets: &mut cleanup_targets,
             })
             .unwrap();
+        assert_eq!(result.output.bitmap_terminal_page_count(), 1);
         let record = match result
             .output
             .into_coordinator_record(result.successor, 101, 0)

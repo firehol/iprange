@@ -194,6 +194,7 @@ pub(crate) struct SealedFreeBitmapOutput<
     cow: FreeBitmapCow<'a, 'slots, 'scope, S>,
     scope: PrivatePageReservationScope<'slots>,
     nonce: u64,
+    bitmap_terminal_page_count: usize,
     cleanup_nodes: &'scratch mut [PrivatePageSelectiveOverlayNode],
     cleanup_path: &'scratch mut [PrivatePageSelectivePathEntry],
     cleanup_targets: &'scratch mut [usize],
@@ -1383,6 +1384,7 @@ impl<'arena, 'cleanup> PreparedFreeBitmapCoordinatorRecord<'arena, 'cleanup> {
 struct PreparedFreeBitmapFinalization<'scratch, 'slots> {
     scope: PrivatePageReservationScope<'slots>,
     nonce: u64,
+    bitmap_terminal_page_count: usize,
     cleanup: PrivatePageSelectiveScratch<'scratch>,
     released: UnusedReservationRelease,
     reclaimed: usize,
@@ -2467,7 +2469,7 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
         }
         final_access.map_err(FreeBitmapCowError::Source)?;
 
-        let (sealed_scope, nonce, released, reclaimed, mut cleanup) = {
+        let (sealed_scope, nonce, bitmap_terminal_page_count, released, reclaimed, mut cleanup) = {
             let replay_cache = FinalizationCachedSource {
                 base: self.cow.committed,
                 pages: RefCell::new(scratch.cached_pages),
@@ -2498,9 +2500,10 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                 return Err(FreeBitmapCowError::StaleInsertionPlan);
             }
 
+            let mut bitmap_terminal_page_count = 0usize;
             for (index, binding) in shadow.arena_bindings[..private_pages].iter().enumerate() {
-                scratch.release_pages[index] = if !binding.bound {
-                    1
+                let (release, bitmap_owned) = if !binding.bound {
+                    (1, false)
                 } else {
                     let info = stage_pool
                         .scoped_slot_info(&stage_scope, binding.pool_slot)
@@ -2511,18 +2514,22 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
                             owner: PrivatePageOwner::Bitmap,
                             owner_generation,
                             ..
-                        } if owner_generation == self.cow.pending_txn => 0,
+                        } if owner_generation == self.cow.pending_txn => (0, true),
                         PrivatePagePoolState::InUse {
                             owner: PrivatePageOwner::Retirement,
                             owner_generation,
                             tag: 1 | 2,
-                        } if owner_generation != 0 => 0,
-                        PrivatePagePoolState::ReturnedFree => 1,
+                        } if owner_generation != 0 => (0, false),
+                        PrivatePagePoolState::ReturnedFree => (1, false),
                         _ => {
                             return Err(FreeBitmapCowError::ArenaPageConflict(binding.page_number));
                         }
                     }
                 };
+                scratch.release_pages[index] = release;
+                bitmap_terminal_page_count = bitmap_terminal_page_count
+                    .checked_add(usize::from(bitmap_owned))
+                    .ok_or(FreeBitmapCowError::CoverageOverflow)?;
             }
             let partition = stable_partition_finalized_bindings(
                 private_pages,
@@ -2707,12 +2714,20 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             self.cow.root = shadow.root;
 
             let cleanup = deletes.into_scratch();
-            (sealed_scope, nonce, released, reclaimed, cleanup)
+            (
+                sealed_scope,
+                nonce,
+                bitmap_terminal_page_count,
+                released,
+                reclaimed,
+                cleanup,
+            )
         };
         cleanup.clear();
         Ok(PreparedFreeBitmapFinalization {
             scope: sealed_scope,
             nonce,
+            bitmap_terminal_page_count,
             released,
             reclaimed,
             cleanup,
@@ -2742,6 +2757,7 @@ impl<'a, 'slots, 'scope, 'barrier, 'pages, S: CommittedPageSource + ?Sized>
             cow: self.cow,
             scope: prepared.scope,
             nonce: prepared.nonce,
+            bitmap_terminal_page_count: prepared.bitmap_terminal_page_count,
             cleanup_nodes: prepared.cleanup.nodes,
             cleanup_path: prepared.cleanup.path,
             cleanup_targets: prepared.cleanup.targets,
@@ -2768,6 +2784,14 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
 
     pub(crate) const fn pending_page_count(&self) -> u64 {
         self.cow.pending_page_count
+    }
+
+    /// Exact number of bitmap-owned terminal pages in this sealed scope.
+    ///
+    /// Retirement pages may share the scope, so the reservation capacity and
+    /// total in-use count cannot size the bitmap export journal.
+    pub(crate) const fn bitmap_terminal_page_count(&self) -> usize {
+        self.bitmap_terminal_page_count
     }
 
     #[allow(clippy::result_large_err, clippy::type_complexity)]
@@ -2872,6 +2896,7 @@ impl<'scratch, 'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             cow,
             scope,
             nonce,
+            bitmap_terminal_page_count: _,
             cleanup_nodes,
             cleanup_path,
             cleanup_targets,

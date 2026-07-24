@@ -9425,9 +9425,14 @@ mod tests {
                     }
                     let bitmap_root = finalized.output.root();
                     let pending_page_count = finalized.output.pending_page_count();
+                    let bitmap_terminal_page_count = finalized.output.bitmap_terminal_page_count();
+                    assert_eq!(bitmap_terminal_page_count, 1);
                     let bitmap_export = match finalized
                         .output
-                        .prepare_terminal_export(finalized.successor, &mut bitmap_terminal_pages)
+                        .prepare_terminal_export(
+                            finalized.successor,
+                            &mut bitmap_terminal_pages[..bitmap_terminal_page_count],
+                        )
                     {
                         Ok(export) => export,
                         Err((_output, _successor, _pages, error)) => panic!("{error:?}"),
