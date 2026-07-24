@@ -770,6 +770,7 @@ pub(crate) struct FreeBitmapReservationCapacityPlan<'a, S: CommittedPageSource +
     private_pages: usize,
     candidate_len: usize,
     verified_len: usize,
+    replacement_capacity: usize,
     index_required: usize,
     capacity_fingerprint: u64,
     source_fingerprint: u64,
@@ -886,10 +887,11 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
             || self.candidate_len > self.buffers.candidates.len()
             || self.candidate_len > self.buffers.source_nodes.len()
             || self.verified_len > self.buffers.verified_pages.len()
+            || self.replacement_capacity < self.verified_len
             || self.private_pages > self.buffers.pool_validation.len()
             || self.private_pages > self.buffers.arena_bindings.len()
             || self.private_pages > self.buffers.available_slots.len()
-            || self.verified_len > self.buffers.replacements.len()
+            || self.replacement_capacity > self.buffers.replacements.len()
             || self.index_required > self.buffers.index_nodes.len()
         {
             return Err(FreeBitmapCowError::StaleInsertionPlan);
@@ -925,7 +927,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
             || stage.arena_bindings.len() < self.private_pages
             || stage.candidates.len() < self.candidate_len
             || stage.verified_pages.len() < self.verified_len
-            || stage.replacements.len() < self.verified_len
+            || stage.replacements.len() < self.replacement_capacity
             || stage.index_nodes.len() < self.index_required
             || stage.available_slots.len() < self.private_pages
             || reservation_slices_overlap(
@@ -949,8 +951,8 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
                 &stage.verified_pages[..self.verified_len],
             )
             || reservation_slices_overlap(
-                &self.buffers.replacements[..self.verified_len],
-                &stage.replacements[..self.verified_len],
+                &self.buffers.replacements[..self.replacement_capacity],
+                &stage.replacements[..self.replacement_capacity],
             )
         {
             return Err(FreeBitmapCowError::InsufficientResourceBudget {
@@ -964,6 +966,55 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
 
     pub(crate) const fn required_private_pages(&self) -> usize {
         self.private_pages
+    }
+
+    /// A reclaim finalization can return each reserved private page to the
+    /// bitmap through one fixed-height COW path. Reserve the resulting
+    /// replacement/index capacity before binding any physical page.
+    fn with_reclamation_finalization_capacity(mut self) -> Result<Self, FreeBitmapCowError> {
+        let extra_replacements = self
+            .private_pages
+            .checked_mul(FREE_PATH_CAPACITY)
+            .ok_or(FreeBitmapCowError::CoverageOverflow)?;
+        let replacement_capacity = self
+            .verified_len
+            .checked_add(extra_replacements)
+            .ok_or(FreeBitmapCowError::CoverageOverflow)?;
+        let extra_index_nodes = replacement_capacity
+            .checked_sub(self.replacement_capacity)
+            .ok_or(FreeBitmapCowError::IndexCapacityOverflow)?;
+        let index_required = self
+            .index_required
+            .checked_add(extra_index_nodes)
+            .ok_or(FreeBitmapCowError::IndexCapacityOverflow)?;
+        let replacement_available = self
+            .buffers
+            .replacements
+            .len()
+            .min(self.buffers.stage.replacements.len());
+        if replacement_capacity > replacement_available {
+            return Err(FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::ReplacementPages,
+                required: replacement_capacity,
+                available: replacement_available,
+            });
+        }
+        let index_available = self
+            .buffers
+            .index_nodes
+            .len()
+            .min(self.buffers.stage.index_nodes.len());
+        if index_required > index_available {
+            return Err(FreeBitmapCowError::InsufficientResourceBudget {
+                resource: ReservationResource::IndexNodes,
+                required: index_required,
+                available: index_available,
+            });
+        }
+        self.replacement_capacity = replacement_capacity;
+        self.index_required = index_required;
+        self.validate()?;
+        Ok(self)
     }
 
     pub(crate) fn candidates(&self) -> &[u32] {
@@ -1073,6 +1124,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
             private_pages,
             candidate_len,
             verified_len,
+            replacement_capacity,
             index_required,
             capacity_fingerprint,
             source_fingerprint,
@@ -1092,7 +1144,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationCapacityPlan<'a, 
         } = buffers;
         let ledger = ScopedFreeBitmapCowLedger::new(
             &mut arena_bindings[..private_pages],
-            &mut replacements[..verified_len],
+            &mut replacements[..replacement_capacity],
             0,
             &mut candidates[..candidate_len],
             0,
@@ -1473,7 +1525,8 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
         self.stage.candidates[..candidate_len]
             .copy_from_slice(&self.cow.candidates[..candidate_len]);
         self.stage.verified_pages[..verified_len].clone_from_slice(self.cow.verified_pages);
-        self.stage.replacements[..verified_len].fill(0);
+        let replacement_capacity = self.cow.replacements.len();
+        self.stage.replacements[..replacement_capacity].fill(0);
         let stage_pool = PrivatePagePool::new_vacant(
             &mut self.stage.arena[..self.private_pages],
             self.cow.committed_page_count,
@@ -1486,7 +1539,7 @@ impl<'a, 'slots, 'scope, S: CommittedPageSource + ?Sized>
             .map_err(FreeBitmapCowError::PrivatePool)?;
         let stage_ledger = ScopedFreeBitmapCowLedger::new(
             &mut self.stage.arena_bindings[..self.private_pages],
-            &mut self.stage.replacements[..verified_len],
+            &mut self.stage.replacements[..replacement_capacity],
             0,
             &mut self.stage.candidates[..candidate_len],
             0,
@@ -2286,7 +2339,9 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
         FreeBitmapCowError,
     > {
         Ok(LockedFreeBitmapReservationPlan {
-            plan: self.plan_capacity_impl()?,
+            plan: self
+                .plan_capacity_impl()?
+                .with_reclamation_finalization_capacity()?,
             reclamation,
         })
     }
@@ -2646,6 +2701,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
                 available: private_pages,
             });
         }
+        let replacement_capacity = self.verified_len;
         let index_required = private_pages
             .checked_add(self.verified_len)
             .and_then(|value| value.checked_add(self.candidate_len))
@@ -2669,7 +2725,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
             ),
             (
                 ReservationResource::ReplacementPages,
-                self.verified_len,
+                replacement_capacity,
                 self.buffers.replacements.len(),
             ),
             (
@@ -2704,7 +2760,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
             ),
             (
                 ReservationResource::ReplacementPages,
-                self.verified_len,
+                replacement_capacity,
                 self.buffers.stage.replacements.len(),
             ),
             (
@@ -2757,6 +2813,7 @@ impl<'a, S: CommittedPageSource + ?Sized> FreeBitmapReservationPlanner<'a, S> {
             private_pages,
             candidate_len: self.candidate_len,
             verified_len: self.verified_len,
+            replacement_capacity,
             index_required,
             capacity_fingerprint,
             source_fingerprint,
@@ -7919,13 +7976,23 @@ pub(crate) mod tests {
 
     impl PlannerStorage {
         fn new(arena: usize, candidates: usize, verified: usize, index: usize) -> Self {
+            Self::with_replacement_capacity(arena, candidates, verified, verified, index)
+        }
+
+        fn with_replacement_capacity(
+            arena: usize,
+            candidates: usize,
+            verified: usize,
+            replacements: usize,
+            index: usize,
+        ) -> Self {
             Self {
                 arena: (0..arena).map(|_| ReservedBitmapPage::empty()).collect(),
                 pool_validation: vec![PrivatePageCompositeBind::empty(); arena],
                 arena_bindings: vec![BitmapCowArenaBinding::empty(); arena],
                 candidates: vec![0; candidates],
                 verified: (0..verified).map(|_| VerifiedBitmapPage::empty()).collect(),
-                replacements: vec![0; verified],
+                replacements: vec![0; replacements],
                 index: vec![BitmapCowIndexNode::empty(); index],
                 available: vec![0; arena],
                 source_nodes: vec![FreeBitmapReservationSourceNode::empty(); candidates + arena],
@@ -7934,7 +8001,7 @@ pub(crate) mod tests {
                 stage_bindings: vec![BitmapCowArenaBinding::empty(); arena],
                 stage_candidates: vec![0; candidates],
                 stage_verified: (0..verified).map(|_| VerifiedBitmapPage::empty()).collect(),
-                stage_replacements: vec![0; verified],
+                stage_replacements: vec![0; replacements],
                 stage_index: vec![BitmapCowIndexNode::empty(); index],
                 stage_available: vec![0; arena],
             }
@@ -8295,6 +8362,106 @@ pub(crate) mod tests {
         assert_eq!(
             pool.scoped_slot_info(&foreign, foreign_slot).unwrap(),
             foreign_before
+        );
+    }
+
+    #[test]
+    fn locked_reclamation_reserves_finalization_paths_outside_initial_bitmap_path() {
+        // The initial reservation consumes free bits only from the first leaf.
+        // The verified reclaimed page belongs to the second leaf, so returning
+        // it during finalization must COW that previously untouched committed
+        // leaf and record it in the protected replacement stream.
+        let source = SparsePages::new([
+            branch_many(11, 1, 1, &[(0, 12), (1, 13)]),
+            leaf(12, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(13, 1, &[2]),
+        ]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap();
+        assert!(plan.required_private_pages() <= 16);
+
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 40_000, 40_000, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+        assert_eq!(bound.binding.reclaimed, 1);
+        bound.cow.apply_planned_reservation().unwrap();
+        assert!(!bound.cow.replacements().contains(&13));
+
+        let requirements = bound.finalization_scratch_requirements().unwrap();
+        let mut release = vec![0; requirements.release_pages];
+        let mut insert: Vec<_> = (0..requirements.insert_pages)
+            .map(|_| FreeBitmapInsertPage::empty())
+            .collect();
+        let mut cache = vec![FreeBitmapFinalizationCachedPage::empty(); requirements.cached_pages];
+        let mut stack = vec![usize::MAX; requirements.index_stack];
+        let mut cleanup_nodes = vec![
+            crate::private_page_pool::PrivatePageSelectiveOverlayNode::empty();
+            requirements.cleanup_nodes
+        ];
+        let mut cleanup_path = vec![
+            crate::private_page_pool::PrivatePageSelectivePathEntry::empty();
+            requirements.cleanup_path
+        ];
+        let mut cleanup_targets = vec![usize::MAX; requirements.cleanup_targets];
+        let (finalized, allocations) = count_thread_allocations(|| {
+            bound.finalize(FreeBitmapFinalizationScratch {
+                release_pages: &mut release,
+                insert_pages: &mut insert,
+                cached_pages: &mut cache,
+                index_stack: &mut stack,
+                cleanup_nodes: &mut cleanup_nodes,
+                cleanup_path: &mut cleanup_path,
+                cleanup_targets: &mut cleanup_targets,
+            })
+        });
+        assert_eq!(allocations, 0);
+        let finalized = match finalized {
+            Ok(finalized) => finalized,
+            Err((_bound, error)) => panic!("{error:?}"),
+        };
+        let record = match finalized
+            .output
+            .into_coordinator_record(finalized.successor, 1, 0)
+        {
+            Ok(record) => record,
+            Err((_output, _successor, error)) => panic!("{error:?}"),
+        };
+        assert!(record.replacements().contains(&13));
+        record.cleanup().unwrap();
+    }
+
+    #[test]
+    fn locked_reclamation_rejects_finalization_replacement_shortage_before_binding() {
+        let source = SparsePages::new([
+            branch_many(11, 1, 1, &[(0, 12), (1, 13)]),
+            leaf(12, 1, &[5, 6, 7, 8, 9, 10, 11, 12]),
+            leaf(13, 1, &[2]),
+        ]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 2, 64);
+        storage.arena.clear();
+        let reclaimed_pages = [32_003];
+        let reclaimed = crate::retirement_reader::test_reclaimed_pages(&reclaimed_pages).unwrap();
+        let error = FreeBitmapReservationPlanner::new(&source, 1, 40_000, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(RetirementReclamation::Reclaimed(reclaimed))
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                FreeBitmapCowError::InsufficientResourceBudget {
+                    resource: ReservationResource::ReplacementPages,
+                    required,
+                    available: 2,
+                } if required > 2
+            ),
+            "{error:?}"
         );
     }
 

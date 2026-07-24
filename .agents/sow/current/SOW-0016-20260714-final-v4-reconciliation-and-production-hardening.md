@@ -6795,6 +6795,45 @@ requirements are normative in the Pre-Implementation Gate above.
   retirement blob/tree edit. No public `Reclaim` or generic lifecycle is
   claimed by this checkpoint.
 
+### 2026-07-24 - reclamation bitmap-finalization capacity plan
+
+- A normal bitmap reservation needs space only for the committed bitmap path
+  verified while it selects its initial private pages. A locked reclamation
+  reservation has one further bounded phase: finalization can return any
+  unused private page to the free bitmap, and each such page can touch at most
+  one `FREE_PATH_CAPACITY`-bounded bitmap path. Its later COW replacements are
+  still committed pages that must enter the same protected batch.
+- Keep ordinary/test-only capacity planning unchanged. Only
+  `plan_under_reclamation` will reserve replacement-ledger and page-index
+  capacity for `verified_path_pages + private_scope_pages *
+  FREE_PATH_CAPACITY`. The same capacity is reserved in its detached stage
+  shadow. This is bounded by the operation's pre-reserved private scope, not
+  file size, free-page count, or retirement history.
+- Add a permanent two-leaf regression: initial allocation rewrites the first
+  leaf, then finalization returns a verified reclaimed page in the second leaf.
+  The locked plan must reserve enough capacity before binding, and finalization
+  must record the second committed leaf as a replacement without heap
+  allocation. A shortage in either live or stage capacity must be a typed
+  pre-binding resource failure. The later read-only fixed-point preview will
+  consume this capacity; this slice does not claim to have completed that
+  preview or the generic clean-writer operation.
+
+### 2026-07-24 - reclamation bitmap-finalization capacity implementation
+
+- `plan_under_reclamation` now expands only its replacement ledger and
+  page-index budget by the bounded finalization allowance. Normal reservation
+  planning retains its exact initial-path capacity.
+- The live and detached-stage ledgers use the same expanded capacity. The
+  planner checks both buffers before it binds a private scope, reporting typed
+  `ReplacementPages` or `IndexNodes` budget exhaustion rather than incorrectly
+  classifying the caller's undersized storage as stale state.
+- Permanent two-leaf coverage proves that finalization can record a second
+  bitmap leaf that initial allocation did not replace. Separate coverage proves
+  an undersized replacement ledger fails before binding. This is capacity
+  preparation only: it does not yet preview that later leaf before constructing
+  the retirement record, and it does not claim a generic clean-writer
+  operation.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6959,6 +6998,18 @@ requirements are normative in the Pre-Implementation Gate above.
   partially bound reclaimed authority, preserves the unbound allocation-free
   probe, and publishes the selected Linux fixture using the dynamically
   derived protected list under the held operation lock.
+
+### 2026-07-24 - reclamation bitmap-finalization capacity
+
+- Focused Rust tests pass for the two-leaf finalization path and its typed
+  pre-binding storage failure, together with the existing locked-reclamation
+  and Linux-finalizer groups.
+- Rust workspace matrices pass: 439 no-default tests and 554 all-feature
+  tests. Rust formatting, warnings-denied all-target Clippy, and all-feature
+  benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. Go behavior is unchanged; this remains Rust-only internal
+  capacity preparation.
 
 ### Historical adversarial-audit evidence
 

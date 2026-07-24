@@ -8798,8 +8798,8 @@ mod tests {
         let mut planner_bindings = [BitmapCowArenaBinding::empty(); 4];
         let mut planner_candidates = [0u32; 4];
         let mut planner_verified = [const { VerifiedBitmapPage::empty() }; 4];
-        let mut planner_replacements = [0u32; 4];
-        let mut planner_index = [BitmapCowIndexNode::empty(); 16];
+        let mut planner_replacements = [0u32; 16];
+        let mut planner_index = [BitmapCowIndexNode::empty(); 32];
         let mut planner_available = [0usize; 4];
         let mut planner_source_nodes = [const { FreeBitmapReservationSourceNode::empty() }; 8];
         let reclamation_ticket = FreeBitmapReclamationTicket::new();
@@ -8807,8 +8807,8 @@ mod tests {
         let mut stage_bindings = [BitmapCowArenaBinding::empty(); 4];
         let mut stage_candidates = [0u32; 4];
         let mut stage_verified = [const { VerifiedBitmapPage::empty() }; 4];
-        let mut stage_replacements = [0u32; 4];
-        let mut stage_index = [BitmapCowIndexNode::empty(); 16];
+        let mut stage_replacements = [0u32; 16];
+        let mut stage_index = [BitmapCowIndexNode::empty(); 32];
         let mut stage_available = [0usize; 4];
         let mut shadow_slots = [const { PrivatePagePoolSlot::empty() }; 4];
         let shadow_pool = PrivatePagePool::new_vacant(
@@ -8840,7 +8840,7 @@ mod tests {
         let mut final_release_pages = [0u32; 4];
         let mut final_insert_pages = [const { FreeBitmapInsertPage::empty() }; 32];
         let mut final_cached_pages = [const { FreeBitmapFinalizationCachedPage::empty() }; 8];
-        let mut final_index_stack = [usize::MAX; 16];
+        let mut final_index_stack = [usize::MAX; 32];
         let mut final_cleanup_nodes = [PrivatePageSelectiveOverlayNode::empty(); 32];
         let mut final_cleanup_path = [PrivatePageSelectivePathEntry::empty(); 32];
         let mut final_cleanup_targets = [usize::MAX; 4];
