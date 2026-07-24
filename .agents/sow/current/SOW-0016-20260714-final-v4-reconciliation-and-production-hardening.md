@@ -8703,6 +8703,70 @@ requirements are normative in the Pre-Implementation Gate above.
   --all-targets --all-features -- -D warnings`; `cargo check --manifest-path
   v4/rust/Cargo.toml --all-features --benches`; and `git diff --check`.
 
+### 2026-07-24 - private target-metadata handoff plan
+
+- The completed three-owner aggregate already proves one exact pending page
+  count, free-bitmap root, replacement range root/count, and retirement
+  root/count. Leaving any of those fields at the selected generation would
+  make a future meta-page publication describe a mixed generation. The Go
+  aggregate currently changes only `PageCount`; Rust changes allocator and
+  retirement fields but carries no range result through its sealed aggregate.
+- Before the first live aggregate mutation, each engine will derive and seal
+  one private target-meta replacement from the exact terminal authority. The
+  normal bitmap/retirement path preserves the selected range fields. The
+  proof-bound three-owner path additionally replaces `RangeRoot` and
+  `RangeRecordCount`; it may not supply either field independently.
+- Terminal execution will install that prevalidated complete replacement only
+  after the canonical coordinator record has accepted the same sealed pages.
+  A substituted target base, invalid range result, forged proof/export, or
+  target-preflight failure must reject before Active state and leave the live
+  target unchanged. Commit preflight will retain the exact final private target
+  state rather than checking only page count.
+- Rust will carry an internal optional range-target contribution alongside the
+  typed produced terminal export. It is populated only by the existing
+  proof-bound three-owner exporter and is rechecked against the exact terminal
+  range pages before the coordinator can bind them. Go will store the matching
+  before/after target pair in its sealed aggregate slot.
+- Tests will prove a nonempty replacement updates all five affected target
+  fields together, a legal empty selected range root remains valid, normal
+  non-range aggregation retains selected range metadata, and malformed or
+  substituted range facts fail before target/live-pool mutation. This remains
+  private transaction plumbing: no file byte, metadata page, sync, public API,
+  implicit validation, or durability outcome is introduced here.
+
+### 2026-07-24 - private target-metadata handoff implementation and validation
+
+- Go now seals the exact target metadata before and after an aggregate with
+  its producer authority. The normal bitmap/retirement path retains the
+  selected range root and record count; the proof-bound three-owner path
+  replaces range root/count together with page count, free-bitmap root, and
+  retirement root/count. Execution rejects a substituted target before it
+  consumes the prepared aggregate, and final fixed-point/commit fences retain
+  that exact complete target.
+- Rust carries an optional range contribution only from the proof-bound
+  three-owner terminal exporter. It checks that contribution against the exact
+  terminal range pages before binding. The core derives and stores one exact
+  base-to-target handoff before its coordinator enters `Active`, then installs
+  it only after canonical record acceptance. Completion, output preparation,
+  and commit preflight all require the same target. A target update also
+  enforces the retirement-count-versus-target-transaction metadata invariant
+  already enforced by the Go implementation and bootstrap readers.
+- Permanent tests cover nonempty and legal-empty range roots, malformed range
+  facts before pool mutation, ordinary aggregates preserving a nonzero selected
+  range target, all five changed target fields in one proof-bound aggregate,
+  and substituted Go target metadata before consumption. The private Rust and
+  Go paths remain bounded and allocation-free after their fixed workspaces are
+  established.
+- Validation: focused target/range tests; `go -C v4/go test ./...`; `go -C
+  v4/go vet ./...`; `go -C v4/go test -race ./...`; `GOARCH=386 go -C v4/go
+  test ./...`; `cargo test --manifest-path v4/rust/Cargo.toml --no-fail-fast`
+  (545 tests); `cargo test --manifest-path v4/rust/Cargo.toml --all-features
+  --no-fail-fast` (666 tests); Rust formatting; all-target all-feature Clippy
+  with warnings denied; all-feature benchmark compilation; `git diff --check`;
+  and the SOW audit all pass. No normative-spec update is needed because no
+  file format, public API, default validation behavior, or durable publication
+  behavior changed.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

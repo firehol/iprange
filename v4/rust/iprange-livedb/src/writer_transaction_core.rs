@@ -16,7 +16,7 @@ use crate::writer_fixed_point::{FixedPointActiveWork, FixedPointPreparedWork};
 use crate::writer_fixed_point::{
     FixedPointCoordinator, FixedPointCoordinatorWorkspace, FixedPointError, FixedPointPredecessor,
     FixedPointPreparedAggregateAuthority, FixedPointPrivateOutputDrainError,
-    FixedPointSealedAggregateWork,
+    FixedPointSealedAggregateWork, FixedPointTargetUpdate,
 };
 #[cfg(test)]
 use crate::writer_fixed_point::{FixedPointPreparedOutput, FixedPointPreparedWorkSlot};
@@ -168,6 +168,13 @@ pub(crate) struct PrivateWriterMetaPublication {
     target: MetaV4,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FixedPointTargetHandoff {
+    base: MetaV4,
+    target: MetaV4,
+    update: FixedPointTargetUpdate,
+}
+
 impl PrivateWriterMetaPublication {
     pub(crate) const fn target(&self) -> MetaV4 {
         self.target
@@ -187,6 +194,7 @@ pub(crate) struct PrivateWriterTransactionCore<'slots, 'cleanup, I, O, E> {
     clean_slots: Option<&'slots mut [PrivatePagePoolSlot]>,
     draft: Option<PrivatePagePool<'slots>>,
     fixed_point: Option<FixedPointCoordinator>,
+    fixed_point_target: Cell<Option<FixedPointTargetHandoff>>,
     fixed_point_registered_work: Cell<u64>,
     fixed_point_registered_generation: Cell<u64>,
     fixed_point_registered_phase: Cell<PrivatePageCoordinatorWorkPhase>,
@@ -236,6 +244,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             clean_slots: Some(slots),
             draft: None,
             fixed_point: None,
+            fixed_point_target: Cell::new(None),
             fixed_point_registered_work: Cell::new(0),
             fixed_point_registered_generation: Cell::new(0),
             fixed_point_registered_phase: Cell::new(PrivatePageCoordinatorWorkPhase::None),
@@ -292,6 +301,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if !self.cleanup.is_empty()
             || self.resources.current() != PrivateWriterResourceDelta::default()
             || !self.coordination.is_none()
+            || self.fixed_point_target.get().is_some()
             || self.fixed_point_registered_work.get() != 0
             || self.fixed_point_registered_generation.get() != 0
             || self.fixed_point_registered_phase.get() != PrivatePageCoordinatorWorkPhase::None
@@ -348,6 +358,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         self.abort_identity = abort_identity;
         self.draft = Some(draft);
         self.fixed_point = Some(fixed_point);
+        self.fixed_point_target.set(None);
         self.fixed_point_registered_work.set(0);
         self.fixed_point_registered_generation.set(0);
         self.fixed_point_registered_phase
@@ -484,6 +495,10 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         if !self.selected.static_identity_eq(&target)
             || target.txn_id != expected_txn
             || target.commit_nonce == [0; 16]
+            || self
+                .fixed_point_target
+                .get()
+                .is_some_and(|handoff| handoff.target != target)
             || target.page_count != draft.pending_page_count()
             || target.page_count < self.selected.page_count
             || coordinator
@@ -708,19 +723,50 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         {
             return Err((prepared, predecessor, FixedPointError::StalePredecessor));
         }
+        let Some(target_base) = self.target else {
+            return Err((prepared, predecessor, FixedPointError::AbortRequired));
+        };
+        let target_base_valid = match self.fixed_point_target.get() {
+            Some(handoff) => handoff.target == target_base,
+            None => {
+                let Some(txn_id) = self.selected.txn_id.checked_add(1) else {
+                    return Err((prepared, predecessor, FixedPointError::StalePredecessor));
+                };
+                let mut expected = self.selected;
+                expected.txn_id = txn_id;
+                expected.commit_nonce = target_base.commit_nonce;
+                target_base.commit_nonce != [0; 16] && target_base == expected
+            }
+        };
+        if !target_base_valid {
+            return Err((prepared, predecessor, FixedPointError::StalePredecessor));
+        }
         let Some(coordinator) = self.fixed_point.as_ref() else {
             return Err((prepared, predecessor, FixedPointError::AbortRequired));
         };
         if let Err(error) = prepared.preflight_authority(coordinator, &predecessor) {
             return Err((prepared, predecessor, error));
         }
+        let target_update = match prepared.target_update(target_base.txn_id) {
+            Ok(target_update) => target_update,
+            Err(error) => return Err((prepared, predecessor, error)),
+        };
+        let mut target_after = target_base;
+        if let Err(error) = target_update.apply_to(&mut target_after) {
+            return Err((prepared, predecessor, error));
+        }
+        self.fixed_point_target.set(Some(FixedPointTargetHandoff {
+            base: target_base,
+            target: target_after,
+            update: target_update,
+        }));
         let work_identity = prepared.work_identity();
         let work_generation = prepared.work_generation();
         self.fixed_point_registered_work.set(work_identity);
         self.fixed_point_registered_generation.set(work_generation);
         self.fixed_point_registered_phase
             .set(PrivatePageCoordinatorWorkPhase::Active);
-        let sealed = prepared.execute_authority(coordinator, predecessor);
+        let sealed = prepared.execute_authority(coordinator, predecessor, target_update);
         self.fixed_point_registered_phase
             .set(PrivatePageCoordinatorWorkPhase::Sealed);
         Ok(sealed)
@@ -771,20 +817,30 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             self.state.set(PrivateWriterTransactionState::AbortRequired);
             return Err(PrivateWriterTransactionError::AbortRequired(None));
         }
-        let completion = match sealed.finish(coordinator, draft, workspace) {
+        let Some(handoff) = self.fixed_point_target.get() else {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        };
+        if target != handoff.base {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        let completion = match sealed.finish(coordinator, draft, workspace, handoff.update) {
             Ok(completion) => completion,
             Err(error) => {
                 self.state.set(PrivateWriterTransactionState::AbortRequired);
                 return Err(PrivateWriterTransactionError::FixedPoint(error));
             }
         };
-        let (successor, retirement) = completion.into_parts();
-        let mut target = target;
-        target.page_count = successor.pending_page_count();
-        target.free_bitmap_root = successor.root();
-        target.retirement_root = retirement.root;
-        target.retirement_batch_count = retirement.batch_count;
-        self.target = Some(target);
+        let (successor, completed_target) = completion.into_parts();
+        if completed_target != handoff.update
+            || successor.pending_page_count() != handoff.target.page_count
+            || successor.root() != handoff.target.free_bitmap_root
+        {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err(PrivateWriterTransactionError::AbortRequired(None));
+        }
+        self.target = Some(handoff.target);
         self.fixed_point_registered_work.set(0);
         self.fixed_point_registered_generation.set(0);
         self.fixed_point_registered_phase
@@ -859,6 +915,17 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             ));
         }
         if draft.requires_abort() || coordinator.requires_abort() {
+            self.state.set(PrivateWriterTransactionState::AbortRequired);
+            return Err((
+                predecessor,
+                PrivateWriterTransactionError::AbortRequired(None),
+            ));
+        }
+        if self
+            .fixed_point_target
+            .get()
+            .is_some_and(|handoff| self.target != Some(handoff.target))
+        {
             self.state.set(PrivateWriterTransactionState::AbortRequired);
             return Err((
                 predecessor,
@@ -1007,6 +1074,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
         // Preserve that fact before doing any fallible in-memory cleanup.
         self.selected = publication.target;
         self.target = None;
+        self.fixed_point_target.set(None);
         self.state
             .set(PrivateWriterTransactionState::CommittedCleanupRequired);
         self.retry_committed_cleanup(handle)
@@ -1075,6 +1143,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
                 Ok((slots, _visits)) => {
                     self.clean_slots = Some(slots);
                     self.fixed_point = None;
+                    self.fixed_point_target.set(None);
                     self.fixed_point_registered_work.set(0);
                     self.fixed_point_registered_generation.set(0);
                     self.fixed_point_registered_phase
@@ -1282,6 +1351,10 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
             .coordinator_commit_fence()
             .map_err(PrivateWriterTransactionError::Pool)?;
         if target.page_count != draft.pending_page_count()
+            || self
+                .fixed_point_target
+                .get()
+                .is_some_and(|handoff| handoff.target != target)
             || coordinator
                 .commit_fence(draft, target.free_bitmap_root, draft.pending_page_count())
                 .is_err()
@@ -1345,6 +1418,7 @@ impl<'slots, 'cleanup, I, O, E> PrivateWriterTransactionCore<'slots, 'cleanup, I
                 Ok((slots, visits)) => {
                     self.clean_slots = Some(slots);
                     self.fixed_point = None;
+                    self.fixed_point_target.set(None);
                     self.fixed_point_registered_work.set(0);
                     self.fixed_point_registered_generation.set(0);
                     self.fixed_point_registered_phase

@@ -25,6 +25,7 @@ use crate::private_page_pool::{
     PrivatePagePoolSlot, PrivatePagePoolSnapshot, PrivatePagePoolState,
     PrivatePageReservationScope, PrivatePageReturn,
 };
+use crate::range_staging::RangeTreeMaterializedResult;
 use crate::retirement_page::{
     RetirementBatch, RetirementBranch, RetirementLeaf, RetirementPageError,
 };
@@ -2916,6 +2917,7 @@ pub(crate) struct PreparedCombinedRetirementTerminalExport<'pages> {
 
 pub(crate) struct PreparedProducedTerminalExport<'pages, B> {
     result: RetirementTreeEditResult,
+    range: Option<RangeTreeMaterializedResult>,
     bitmap: B,
     bitmap_root_provenance: ProducedBitmapRootProvenance,
     pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
@@ -3024,6 +3026,7 @@ impl<'pages> PreparedRetirementTerminalExport<'pages> {
         }
         Ok(PreparedProducedTerminalExport {
             result: self.result,
+            range: None,
             bitmap,
             bitmap_root_provenance,
             pages: combined,
@@ -3168,8 +3171,10 @@ impl<
             ));
         }
         let result = self.retirement();
+        let range = self.materialized();
         Ok(PreparedProducedTerminalExport {
             result,
+            range: Some(range),
             bitmap: self,
             bitmap_root_provenance,
             pages: combined,
@@ -3217,8 +3222,14 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
         self.bitmap_root_provenance
     }
 
+    #[cfg(test)]
+    pub(crate) const fn range_target(&self) -> Option<RangeTreeMaterializedResult> {
+        self.range
+    }
+
     pub(crate) fn from_bind_parts(
         result: RetirementTreeEditResult,
+        range: Option<RangeTreeMaterializedResult>,
         bitmap: B,
         bitmap_root_provenance: ProducedBitmapRootProvenance,
         pages: &'pages mut [PrivatePageCoordinatorTerminalPage],
@@ -3226,6 +3237,7 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
     ) -> Self {
         Self {
             result,
+            range,
             bitmap,
             bitmap_root_provenance,
             pages,
@@ -3236,6 +3248,7 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
         self,
     ) -> (
         RetirementTreeEditResult,
+        Option<RangeTreeMaterializedResult>,
         B,
         ProducedBitmapRootProvenance,
         &'pages mut [PrivatePageCoordinatorTerminalPage],
@@ -3243,6 +3256,7 @@ impl<'pages, B> PreparedProducedTerminalExport<'pages, B> {
     ) {
         (
             self.result,
+            self.range,
             self.bitmap,
             self.bitmap_root_provenance,
             self.pages,
@@ -7463,6 +7477,7 @@ mod tests {
                 committed_replacements: 0,
                 prior_private_replacements: 0,
             },
+            range: None,
             bitmap: (),
             bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(5),
             pages: &mut pages,
@@ -7534,6 +7549,7 @@ mod tests {
                 committed_replacements: 0,
                 prior_private_replacements: 0,
             },
+            range: None,
             bitmap: (),
             bitmap_root_provenance: ProducedBitmapRootProvenance::SelectedUnchanged(5),
             pages: &mut pages,
@@ -7605,6 +7621,7 @@ mod tests {
                 committed_replacements: 0,
                 prior_private_replacements: 0,
             },
+            range: None,
             bitmap: (),
             bitmap_root_provenance: ProducedBitmapRootProvenance::SelectedUnchanged(6),
             pages: &mut pages,
@@ -7615,6 +7632,84 @@ mod tests {
                 Err(parts) => parts,
             };
         assert_eq!(error, FixedPointError::StalePredecessor);
+        assert_eq!(export.pages[0], expected_page);
+        prepared.cancel(&pool).unwrap();
+        assert_eq!(pages, [expected_page]);
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn produced_terminal_binder_rejects_malformed_range_target_before_scope_bind() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::new(7, 5, 10).unwrap();
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || {
+                    Ok(FixedPointPreparedOutput {
+                        root: 5,
+                        pending_page_count: 10,
+                    })
+                },
+            )
+            .unwrap();
+        let mut pages = [PrivatePageCoordinatorTerminalPage::empty()];
+        pages[0].pgno = 6;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Range;
+        pages[0].owner_generation = 8;
+        pages[0].tag = 4;
+        PageHeader {
+            page_type: PageType::RangeLeaf,
+            born_txn: 8,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 4,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+        let expected_page = pages[0].clone();
+        let before_bind = pool.test_mutation_snapshot();
+        let export = PreparedProducedTerminalExport {
+            result: RetirementTreeEditResult {
+                root: 0,
+                batch_count: 0,
+                private_pages: 0,
+                committed_replacements: 0,
+                prior_private_replacements: 0,
+            },
+            range: Some(RangeTreeMaterializedResult {
+                root_pgno: 6,
+                root_level: 0,
+                record_count: 0,
+                page_count: 2,
+            }),
+            bitmap: (),
+            bitmap_root_provenance: ProducedBitmapRootProvenance::SelectedUnchanged(5),
+            pages: &mut pages,
+        };
+        let (prepared, export, error) =
+            match prepared.with_produced_terminal_export(&pool, export, 91) {
+                Ok(_) => panic!("malformed range target must fail"),
+                Err(parts) => parts,
+            };
+        assert_eq!(error, FixedPointError::StalePredecessor);
+        assert_eq!(pool.test_mutation_snapshot(), before_bind);
         assert_eq!(export.pages[0], expected_page);
         prepared.cancel(&pool).unwrap();
         assert_eq!(pages, [expected_page]);
@@ -7757,6 +7852,7 @@ mod tests {
                     committed_replacements: 0,
                     prior_private_replacements: 0,
                 },
+                range: None,
                 bitmap: (),
                 bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(5),
                 pages: &mut pages,
@@ -7808,7 +7904,26 @@ mod tests {
         expected_retirement: RetirementTreeEditResult,
         path: CompletedPrivateOutputPath,
     ) {
+        drain_completed_fixed_point_private_output_with_selected_range(
+            produced,
+            bitmap_root,
+            appended,
+            expected_retirement,
+            None,
+            path,
+        );
+    }
+
+    fn drain_completed_fixed_point_private_output_with_selected_range<'pages, B>(
+        produced: PreparedProducedTerminalExport<'pages, B>,
+        bitmap_root: u32,
+        appended: u64,
+        expected_retirement: RetirementTreeEditResult,
+        selected_range: Option<RangeTreeMaterializedResult>,
+        path: CompletedPrivateOutputPath,
+    ) {
         assert_eq!(produced.pages.len(), 3);
+        let expected_range = produced.range;
         let mut expected_pages = [
             PrivatePageCoordinatorTerminalPage::empty(),
             PrivatePageCoordinatorTerminalPage::empty(),
@@ -7823,7 +7938,7 @@ mod tests {
             .count() as u64;
         assert_eq!(appended_pages, appended);
 
-        let selected = MetaV4 {
+        let mut selected = MetaV4 {
             address_family: AddressFamily::Ipv4,
             value_kind: ValueKind::Direct,
             value_tag: ValueTag::RETENTION,
@@ -7850,6 +7965,10 @@ mod tests {
             free_bitmap_root: 0,
             retirement_root: 0,
         };
+        if let Some(range) = selected_range {
+            selected.range_root = range.root_pgno;
+            selected.range_record_count = range.record_count;
+        }
         let mut record_bindings = [BitmapCowArenaBinding::empty(); 3];
         let mut record_replacements = [];
         let mut record_index_nodes = [BitmapCowIndexNode::empty(); 3];
@@ -7956,7 +8075,7 @@ mod tests {
             .unwrap();
         let produced = match produced.bind_to_prepared_work(prepared, live_pool, 77) {
             Ok(produced) => produced,
-            Err(_) => panic!("typed producer export must bind"),
+            Err((_, _, error)) => panic!("typed producer export must bind: {error:?}"),
         };
         let committed_bytes = vec![0; 100 * PAGE_SIZE];
         let committed = SlicePageSource::new(&committed_bytes, 100);
@@ -8020,6 +8139,16 @@ mod tests {
             target.retirement_batch_count,
             expected_retirement.batch_count
         );
+        match expected_range {
+            Some(range) => {
+                assert_eq!(target.range_root, range.root_pgno);
+                assert_eq!(target.range_record_count, range.record_count);
+            }
+            None => {
+                assert_eq!(target.range_root, selected.range_root);
+                assert_eq!(target.range_record_count, selected.range_record_count);
+            }
+        }
         assert!(matches!(
             core.preflight_commit(&handle),
             Err(PrivateWriterTransactionError::FixedPoint(
@@ -8427,6 +8556,163 @@ mod tests {
                 assert_eq!(core.abort().unwrap(), 3);
             }
         }
+    }
+
+    #[test]
+    fn produced_range_target_updates_one_private_meta_replacement() {
+        let mut pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        pages[0].pgno = 5;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Range;
+        pages[0].owner_generation = 2;
+        pages[0].tag = 4;
+        PageHeader {
+            page_type: PageType::RangeLeaf,
+            born_txn: 2,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 4,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+
+        pages[1].pgno = 6;
+        pages[1].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[1].owner = PrivatePageOwner::Bitmap;
+        pages[1].owner_generation = 2;
+        PageHeader {
+            page_type: PageType::BitmapLeaf,
+            born_txn: 2,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 1,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[1].bytes);
+        page::write_crc32c(&mut pages[1].bytes);
+
+        pages[2].pgno = 7;
+        pages[2].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[2].owner = PrivatePageOwner::Retirement;
+        pages[2].owner_generation = 2;
+        pages[2].tag = 1;
+        encode_retirement_leaf_single(
+            &mut pages[2].bytes,
+            2,
+            RetirementBatch {
+                retired_by_txn: 1,
+                page_count: 0,
+                page_list_blob_root: 0,
+            },
+        );
+
+        let retirement = RetirementTreeEditResult {
+            root: 7,
+            batch_count: 1,
+            private_pages: 1,
+            committed_replacements: 0,
+            prior_private_replacements: 0,
+        };
+        drain_completed_fixed_point_private_output(
+            PreparedProducedTerminalExport {
+                result: retirement,
+                range: Some(RangeTreeMaterializedResult {
+                    root_pgno: 5,
+                    root_level: 0,
+                    record_count: 0,
+                    page_count: 1,
+                }),
+                bitmap: (),
+                bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(6),
+                pages: &mut pages,
+            },
+            6,
+            0,
+            retirement,
+            CompletedPrivateOutputPath::Sink {
+                fail_on_sink_call: None,
+            },
+        );
+    }
+
+    #[test]
+    fn produced_terminal_without_range_preserves_selected_range_target() {
+        let mut pages = [
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+            PrivatePageCoordinatorTerminalPage::empty(),
+        ];
+        pages[0].pgno = 5;
+        pages[0].authorization = PrivatePageAuthorization::SafelyReclaimed;
+        pages[0].owner = PrivatePageOwner::Bitmap;
+        pages[0].owner_generation = 2;
+        PageHeader {
+            page_type: PageType::BitmapLeaf,
+            born_txn: 2,
+            item_count: 0,
+            level: 0,
+            lower: 4032,
+            upper: PAGE_SIZE as u16,
+            aux: 1,
+            page_crc32c: 0,
+        }
+        .encode_into(&mut pages[0].bytes);
+        page::write_crc32c(&mut pages[0].bytes);
+
+        for (page, (pgno, tag)) in pages[1..].iter_mut().zip([(6, 1), (7, 1)]) {
+            page.pgno = pgno;
+            page.authorization = PrivatePageAuthorization::SafelyReclaimed;
+            page.owner = PrivatePageOwner::Retirement;
+            page.owner_generation = 2;
+            page.tag = tag;
+            encode_retirement_leaf_single(
+                &mut page.bytes,
+                2,
+                RetirementBatch {
+                    retired_by_txn: 1,
+                    page_count: 0,
+                    page_list_blob_root: 0,
+                },
+            );
+        }
+
+        let retirement = RetirementTreeEditResult {
+            root: 6,
+            batch_count: 1,
+            private_pages: 2,
+            committed_replacements: 0,
+            prior_private_replacements: 0,
+        };
+        drain_completed_fixed_point_private_output_with_selected_range(
+            PreparedProducedTerminalExport {
+                result: retirement,
+                range: None,
+                bitmap: (),
+                bitmap_root_provenance: ProducedBitmapRootProvenance::Terminal(5),
+                pages: &mut pages,
+            },
+            5,
+            0,
+            retirement,
+            Some(RangeTreeMaterializedResult {
+                root_pgno: 8,
+                root_level: 0,
+                record_count: 3,
+                page_count: 1,
+            }),
+            CompletedPrivateOutputPath::Sink {
+                fail_on_sink_call: None,
+            },
+        );
     }
 
     #[test]

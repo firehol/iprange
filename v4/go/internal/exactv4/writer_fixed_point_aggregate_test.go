@@ -10,9 +10,20 @@ func producePreparedAggregateBitmap(
 	source committedPageSource,
 	workspace *privateWriterFixedPointAggregateWorkspace,
 ) privateWriterProducedBitmapTerminal {
+	return producePreparedAggregateBitmapAt(t, source, 20, workspace)
+}
+
+func producePreparedAggregateBitmapAt(
+	t *testing.T,
+	source committedPageSource,
+	committedPageCount uint64,
+	workspace *privateWriterFixedPointAggregateWorkspace,
+) privateWriterProducedBitmapTerminal {
 	t.Helper()
 	storage := newLateBitmapPlannerStorage(16, 16, 16, 32)
-	attachment := newLateBitmapPlan(t, source, 2, 1, &storage)
+	attachment := newLateBitmapPlanAt(
+		t, source, committedPageCount, 2, 1, &storage,
+	)
 	proof := completeLateBitmapProof(t, &attachment, 0, nil)
 	if _, problem := attachment.bind(&proof); problem.failed() {
 		t.Fatal(problem)
@@ -233,9 +244,10 @@ func aggregateRangeContent(
 func produceEmptyAggregateRetirement(
 	t *testing.T,
 	workspace *privateWriterFixedPointAggregateWorkspace,
+	selected Meta,
 ) privateWriterProducedRetirementTerminal {
 	t.Helper()
-	produced, problem := workspace.prepareEmptyRetirementProducer()
+	produced, problem := workspace.prepareEmptyRetirementProducer(selected)
 	if problem.failed() {
 		t.Fatal(problem)
 	}
@@ -340,7 +352,7 @@ func TestFixedPointAggregateActualBitmapProducerExecutesInseparably(t *testing.T
 		fixture.handle,
 		token,
 		produced,
-		produceEmptyAggregateRetirement(t, aggregateWorkspace),
+		produceEmptyAggregateRetirement(t, aggregateWorkspace, fixture.core.selected),
 		aggregateWorkspace,
 	)
 	if problem.failed() {
@@ -374,6 +386,45 @@ func TestFixedPointAggregateActualBitmapProducerExecutesInseparably(t *testing.T
 			!slot.inUse {
 			t.Fatalf("binding %d = %+v slot = %+v", index, binding, slot)
 		}
+	}
+	if _, abortProblem := fixture.core.abort(); abortProblem.failed() {
+		t.Fatal(abortProblem)
+	}
+}
+
+func TestFixedPointAggregateNormalPathRetainsSelectedRangeTarget(t *testing.T) {
+	fixture := newPreparedRangeAggregateFixture(t)
+	aggregateWorkspace := newAggregateWorkspaceForTest(t, len(fixture.core.pool.slots))
+	produced := producePreparedAggregateBitmapAt(
+		t, fixture.source, fixture.core.selected.PageCount, aggregateWorkspace,
+	)
+	content := aggregateBitmapContent(t, produced, aggregateWorkspace)
+	request := privateWriterFixedPointPrepareRequest{
+		workUnit: 1, expectedRoot: 2, expectedPageCount: 12, scopePages: content.pageLen,
+	}
+	token, problem := fixture.core.prepareFixedPointWork(fixture.handle, request)
+	if problem.failed() {
+		t.Fatal(problem)
+	}
+	selectedRangeRoot, selectedRangeRecords := fixture.core.target.RangeRoot, fixture.core.target.RangeRecordCount
+	aggregate, problem := fixture.core.prepareFixedPointAggregate(
+		fixture.handle,
+		token,
+		produced,
+		produceEmptyAggregateRetirement(t, aggregateWorkspace, fixture.core.selected),
+		aggregateWorkspace,
+	)
+	if problem.failed() {
+		t.Fatal(problem)
+	}
+	if _, problem = fixture.core.executeFixedPointAggregate(fixture.handle, aggregate); problem.failed() {
+		t.Fatal(problem)
+	}
+	if fixture.core.target.RangeRoot != selectedRangeRoot ||
+		fixture.core.target.RangeRecordCount != selectedRangeRecords ||
+		fixture.core.target.FreeBitmapRoot != content.root ||
+		fixture.core.target.PageCount != content.pageCount {
+		t.Fatalf("normal aggregate target = %#v", fixture.core.target)
 	}
 	if _, abortProblem := fixture.core.abort(); abortProblem.failed() {
 		t.Fatal(abortProblem)
@@ -616,8 +667,13 @@ func TestFixedPointAggregateProofBoundTripleCoordinatorRetainsPrivateRange(t *te
 		t.Fatalf("execute proof-bound aggregate: %#v", problem)
 	}
 	if sealed.rangeResult != proof.materialized || sealed.rangeProof != proof ||
-		sealed.retirement != stage.retirement || fixture.core.target.RangeRoot != 8 ||
-		fixture.core.target.RangeRecordCount != 2 {
+		sealed.retirement != stage.retirement ||
+		fixture.core.target.PageCount != bitmapContent.pageCount ||
+		fixture.core.target.FreeBitmapRoot != bitmapContent.root ||
+		fixture.core.target.RangeRoot != rangeContent.materialized.rootPage ||
+		fixture.core.target.RangeRecordCount != rangeContent.materialized.recordCount ||
+		fixture.core.target.RetirementRoot != retirementContent.result.root ||
+		fixture.core.target.RetirementBatchCount != retirementContent.result.batchCount {
 		t.Fatalf("private triple aggregate result = %#v target = %#v", sealed, fixture.core.target)
 	}
 	owners := map[privatePageOwner]int{}
@@ -708,7 +764,7 @@ func TestFixedPointAggregateSubstitutionRejectsBeforeConsumeAndRestoresState(t *
 		fixture.workspace.records...,
 	)
 	slotRecordsBefore := append([]int(nil), fixture.workspace.slotRecords...)
-	retirement := produceEmptyAggregateRetirement(t, aggregateWorkspace)
+	retirement := produceEmptyAggregateRetirement(t, aggregateWorkspace, fixture.core.selected)
 
 	forged := produced
 	forged.nonce++
@@ -753,6 +809,42 @@ func TestFixedPointAggregateSubstitutionRejectsBeforeConsumeAndRestoresState(t *
 	}
 }
 
+func TestFixedPointAggregateRejectsSubstitutedTargetBeforeConsume(t *testing.T) {
+	fixture := newPreparedFixedPointFixture(t)
+	aggregateWorkspace := newAggregateWorkspaceForTest(t, len(fixture.core.pool.slots))
+	produced := producePreparedAggregateBitmap(t, fixture.source, aggregateWorkspace)
+	content := aggregateBitmapContent(t, produced, aggregateWorkspace)
+	request := fixture.request()
+	request.scopePages = content.pageLen
+	token, problem := fixture.core.prepareFixedPointWork(fixture.handle, request)
+	if problem.failed() {
+		t.Fatal(problem)
+	}
+	aggregate, problem := fixture.core.prepareFixedPointAggregate(
+		fixture.handle,
+		token,
+		produced,
+		produceEmptyAggregateRetirement(t, aggregateWorkspace, fixture.core.selected),
+		aggregateWorkspace,
+	)
+	if problem.failed() {
+		t.Fatal(problem)
+	}
+	poolBefore := fixture.core.pool
+	slotsBefore := append([]privatePagePoolSlot(nil), fixture.core.pool.slots...)
+	fixture.core.target.MetadataRoot = 1
+	if _, problem = fixture.core.executeFixedPointAggregate(fixture.handle, aggregate); problem.code != privateWriterTransactionErrFixedPoint ||
+		problem.fixedPoint.code != privateWriterFixedPointErrStaleProvenance ||
+		fixture.core.fixedPointWorkActive || fixture.core.pool.registeredWorkID != 0 ||
+		fixture.core.pool.mutationEpoch != poolBefore.mutationEpoch ||
+		!reflect.DeepEqual(fixture.core.pool.slots, slotsBefore) {
+		t.Fatalf("substituted target execute = %#v", problem)
+	}
+	if _, abortProblem := fixture.core.abort(); abortProblem.failed() {
+		t.Fatal(abortProblem)
+	}
+}
+
 func TestFixedPointAggregateMandatoryPriorReturnJournalIsExplicit(t *testing.T) {
 	fixture := newPreparedFixedPointFixture(t)
 	aggregateWorkspace := newAggregateWorkspaceForTest(
@@ -768,7 +860,7 @@ func TestFixedPointAggregateMandatoryPriorReturnJournalIsExplicit(t *testing.T) 
 	if content.priorLen != 0 {
 		t.Fatalf("fresh producer prior returns = %d", content.priorLen)
 	}
-	empty := produceEmptyAggregateRetirement(t, aggregateWorkspace)
+	empty := produceEmptyAggregateRetirement(t, aggregateWorkspace, fixture.core.selected)
 	emptyContent, ok := empty.authority(&aggregateWorkspace.retirementProducer)
 	if !ok || emptyContent.seal == 0 ||
 		emptyContent.pageLen != 0 || emptyContent.priorLen != 0 {

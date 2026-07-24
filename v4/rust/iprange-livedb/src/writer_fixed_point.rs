@@ -4,7 +4,7 @@ use crate::bitmap_cow::{
     FreeBitmapCoordinatorOutputError, FreeBitmapCowError, PreparedFreeBitmapCoordinatorRecord,
     SealedFreeBitmapCoordinatorRecord, SealedFreeBitmapCoordinatorScratch,
 };
-use crate::contract::{MAX_PAGE_COUNT, PAGE_SIZE};
+use crate::contract::{MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::page_source::{CommittedPageSource, PageSourceError};
 use crate::private_page_pool::{
     PrivatePageCoordinatorFence, PrivatePageCoordinatorPriorReturn,
@@ -14,6 +14,7 @@ use crate::private_page_pool::{
     PrivatePagePreparedSparseReplay, PrivatePageReservationScope, PrivatePageSealedProvenance,
     PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
 };
+use crate::range_staging::RangeTreeMaterializedResult;
 use crate::retirement_writer::{
     PreparedProducedTerminalExport, ProducedBitmapRootProvenance, RetirementTreeEditResult,
 };
@@ -1864,7 +1865,44 @@ pub(crate) struct FixedPointPreparedProducedTerminalWork<
 > {
     terminal: FixedPointPreparedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan>,
     retirement: RetirementTreeEditResult,
+    range: Option<RangeTreeMaterializedResult>,
     bitmap: B,
+}
+
+fn range_target_facts_valid(
+    range: Option<RangeTreeMaterializedResult>,
+    pending_page_count: u64,
+) -> bool {
+    let Some(range) = range else {
+        return true;
+    };
+    if range.root_pgno == 0 {
+        return range.page_count == 0 && range.record_count == 0;
+    }
+    range.root_pgno >= 2 && u64::from(range.root_pgno) < pending_page_count && range.page_count != 0
+}
+
+fn range_target_validates_terminal_pages(
+    range: Option<RangeTreeMaterializedResult>,
+    pending_page_count: u64,
+    pages: &[PrivatePageCoordinatorTerminalPage],
+) -> bool {
+    if !range_target_facts_valid(range, pending_page_count) {
+        return false;
+    }
+    let Some(range) = range else {
+        return true;
+    };
+    let range_pages = pages
+        .iter()
+        .filter(|page| page.owner == crate::private_page_pool::PrivatePageOwner::Range)
+        .count();
+    range_pages == range.page_count
+        && (range.root_pgno == 0
+            || pages.iter().any(|page| {
+                page.owner == crate::private_page_pool::PrivatePageOwner::Range
+                    && page.pgno == range.root_pgno
+            }))
 }
 
 impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan>
@@ -2025,18 +2063,34 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             FixedPointError,
         ),
     > {
-        let (retirement, bitmap, bitmap_root_provenance, pages, rebind) = export.into_bind_parts();
+        let (retirement, range, bitmap, bitmap_root_provenance, pages, rebind) =
+            export.into_bind_parts();
         if let Err(error) = self.validate_output(pool, output, bitmap_root_provenance, pages) {
             return Err((
                 self,
                 PreparedProducedTerminalExport::from_bind_parts(
                     retirement,
+                    range,
                     bitmap,
                     bitmap_root_provenance,
                     pages,
                     rebind,
                 ),
                 error,
+            ));
+        }
+        if !range_target_validates_terminal_pages(range, output.pending_page_count, pages) {
+            return Err((
+                self,
+                PreparedProducedTerminalExport::from_bind_parts(
+                    retirement,
+                    range,
+                    bitmap,
+                    bitmap_root_provenance,
+                    pages,
+                    rebind,
+                ),
+                FixedPointError::StalePredecessor,
             ));
         }
         let terminal = match pool.prepare_unbound_coordinator_terminal(&self.scope, pages, nonce) {
@@ -2046,6 +2100,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
                     self,
                     PreparedProducedTerminalExport::from_bind_parts(
                         retirement,
+                        range,
                         bitmap,
                         bitmap_root_provenance,
                         pages,
@@ -2060,6 +2115,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
         Ok(FixedPointPreparedProducedTerminalWork::new(
             FixedPointPreparedTerminalWork { prepared, terminal },
             retirement,
+            range,
             bitmap,
         ))
     }
@@ -2361,6 +2417,7 @@ pub(crate) struct FixedPointPreparedAggregateWork<
     base: FixedPointPreparedAggregateBase<'slot, 'scope_slot, 'scratch, 'carried>,
     terminal: PrivatePagePreparedCoordinatorTerminal<'plan>,
     retirement: RetirementTreeEditResult,
+    range: Option<RangeTreeMaterializedResult>,
     bitmap: B,
     workspace_identity: usize,
     pool_replay: PrivatePagePreparedSparseReplay<'pool, 'slots, 'pool_replay>,
@@ -2382,6 +2439,8 @@ pub(crate) struct FixedPointPreparedAggregateWork<
 pub(crate) struct FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots> {
     active: FixedPointActiveWork<'slots>,
     retirement: RetirementTreeEditResult,
+    range: Option<RangeTreeMaterializedResult>,
+    target: FixedPointTargetUpdate,
     record_index: usize,
     nonce: u64,
     _record: core::marker::PhantomData<
@@ -2389,18 +2448,74 @@ pub(crate) struct FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 
     >,
 }
 
+/// Exact private metadata fields derived from one sealed aggregate before its
+/// coordinator record can enter the Active suffix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FixedPointTargetUpdate {
+    target_txn_id: u64,
+    page_count: u64,
+    free_bitmap_root: u32,
+    retirement_root: u32,
+    retirement_batch_count: u64,
+    range: Option<RangeTreeMaterializedResult>,
+}
+
+impl FixedPointTargetUpdate {
+    pub(crate) fn apply_to(self, target: &mut MetaV4) -> Result<(), FixedPointError> {
+        if target.txn_id != self.target_txn_id {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        target.page_count = self.page_count;
+        target.free_bitmap_root = self.free_bitmap_root;
+        target.retirement_root = self.retirement_root;
+        target.retirement_batch_count = self.retirement_batch_count;
+        if let Some(range) = self.range {
+            target.range_root = range.root_pgno;
+            target.range_record_count = range.record_count;
+        }
+        Ok(())
+    }
+}
+
+fn fixed_point_target_update(
+    target_txn_id: u64,
+    output: FixedPointPreparedOutput,
+    retirement: RetirementTreeEditResult,
+    range: Option<RangeTreeMaterializedResult>,
+) -> Result<FixedPointTargetUpdate, FixedPointError> {
+    if target_txn_id == 0
+        || output.pending_page_count > MAX_PAGE_COUNT
+        || (output.root != 0
+            && (output.root < 2 || u64::from(output.root) >= output.pending_page_count))
+        || (retirement.root == 0) != (retirement.batch_count == 0)
+        || (retirement.root != 0
+            && (retirement.root < 2 || u64::from(retirement.root) >= output.pending_page_count))
+        || retirement.batch_count > target_txn_id - 1
+        || !range_target_facts_valid(range, output.pending_page_count)
+    {
+        return Err(FixedPointError::StalePredecessor);
+    }
+    Ok(FixedPointTargetUpdate {
+        target_txn_id,
+        page_count: output.pending_page_count,
+        free_bitmap_root: output.root,
+        retirement_root: retirement.root,
+        retirement_batch_count: retirement.batch_count,
+        range,
+    })
+}
+
 /// The only successor emitted after a sealed aggregate has been accepted into
 /// its transaction-owned canonical record. Terminal page bytes remain private
 /// to that record and the pool; no producer output escapes this handoff.
-#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FixedPointAggregateCompletion {
     predecessor: FixedPointPredecessor,
-    retirement: RetirementTreeEditResult,
+    target: FixedPointTargetUpdate,
 }
 
 impl FixedPointAggregateCompletion {
-    pub(crate) fn into_parts(self) -> (FixedPointPredecessor, RetirementTreeEditResult) {
-        (self.predecessor, self.retirement)
+    pub(crate) fn into_parts(self) -> (FixedPointPredecessor, FixedPointTargetUpdate) {
+        (self.predecessor, self.target)
     }
 }
 
@@ -2415,10 +2530,12 @@ pub(crate) trait FixedPointPreparedAggregateAuthority: Sized {
         coordinator: &FixedPointCoordinator,
         predecessor: &FixedPointPredecessor,
     ) -> Result<(), FixedPointError>;
+    fn target_update(&self, target_txn_id: u64) -> Result<FixedPointTargetUpdate, FixedPointError>;
     fn execute_authority(
         self,
         coordinator: &FixedPointCoordinator,
         predecessor: FixedPointPredecessor,
+        target: FixedPointTargetUpdate,
     ) -> Self::Sealed;
 }
 
@@ -2486,6 +2603,13 @@ where
         self.workspace_replay.preflight_apply()
     }
 
+    pub(crate) fn target_update(
+        &self,
+        target_txn_id: u64,
+    ) -> Result<FixedPointTargetUpdate, FixedPointError> {
+        fixed_point_target_update(target_txn_id, self.base.output, self.retirement, self.range)
+    }
+
     /// Cancels an aggregate that has not entered its Active suffix.
     ///
     /// Aggregate preparation has borrowed all workspace and pool replay
@@ -2496,6 +2620,7 @@ where
             base,
             terminal,
             retirement,
+            range: _,
             bitmap,
             workspace_identity: _,
             pool_replay,
@@ -2539,11 +2664,13 @@ where
         self,
         coordinator: &FixedPointCoordinator,
         predecessor: FixedPointPredecessor,
+        target: FixedPointTargetUpdate,
     ) -> FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots> {
         let Self {
             base,
             terminal,
             retirement,
+            range,
             bitmap,
             workspace_identity: _,
             pool_replay,
@@ -2580,6 +2707,8 @@ where
         FixedPointSealedAggregateWork {
             active,
             retirement,
+            range,
+            target,
             record_index,
             nonce,
             _record: core::marker::PhantomData,
@@ -2652,38 +2781,52 @@ where
         self.preflight_execute(coordinator, predecessor)
     }
 
+    fn target_update(&self, target_txn_id: u64) -> Result<FixedPointTargetUpdate, FixedPointError> {
+        self.target_update(target_txn_id)
+    }
+
     fn execute_authority(
         self,
         coordinator: &FixedPointCoordinator,
         predecessor: FixedPointPredecessor,
+        target: FixedPointTargetUpdate,
     ) -> Self::Sealed {
-        self.execute(coordinator, predecessor)
+        self.execute(coordinator, predecessor, target)
     }
 }
 
 impl<'record_arena, 'record_cleanup, 'slots>
     FixedPointSealedAggregateWork<'record_arena, 'record_cleanup, 'slots>
 {
+    pub(crate) fn target_update(&self) -> Result<FixedPointTargetUpdate, FixedPointError> {
+        let target = fixed_point_target_update(
+            self.target.target_txn_id,
+            self.active.output,
+            self.retirement,
+            self.range,
+        )?;
+        if target != self.target {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        Ok(target)
+    }
+
     pub(crate) fn finish(
         self,
         coordinator: &FixedPointCoordinator,
         pool: &PrivatePagePool<'slots>,
         workspace: &FixedPointCoordinatorWorkspace<'_, 'record_arena, 'record_cleanup>,
+        target: FixedPointTargetUpdate,
     ) -> Result<FixedPointAggregateCompletion, FixedPointError> {
-        let Self {
-            active,
-            retirement,
-            record_index,
-            nonce,
-            _record: _,
-        } = self;
-        if (retirement.root == 0) != (retirement.batch_count == 0)
-            || (retirement.root != 0
-                && (retirement.root < 2
-                    || u64::from(retirement.root) >= active.output.pending_page_count))
-        {
+        if self.target_update()? != target {
             return Err(FixedPointError::StalePredecessor);
         }
+        let Self {
+            active,
+            record_index,
+            nonce,
+            ..
+        } = self;
         workspace.validate_live_record_handoff(
             pool,
             record_index,
@@ -2695,7 +2838,7 @@ impl<'record_arena, 'record_cleanup, 'slots>
         let predecessor = coordinator.complete_sealed_work(pool, active, nonce)?;
         Ok(FixedPointAggregateCompletion {
             predecessor,
-            retirement,
+            target,
         })
     }
 
@@ -2716,11 +2859,13 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
     pub(crate) const fn new(
         terminal: FixedPointPreparedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan>,
         retirement: RetirementTreeEditResult,
+        range: Option<RangeTreeMaterializedResult>,
         bitmap: B,
     ) -> Self {
         Self {
             terminal,
             retirement,
+            range,
             bitmap,
         }
     }
@@ -3158,6 +3303,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
         let Self {
             terminal: FixedPointPreparedTerminalWork { prepared, terminal },
             retirement,
+            range,
             bitmap,
         } = self;
         let base = prepared.into_aggregate_base(facts);
@@ -3165,6 +3311,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>
             base,
             terminal,
             retirement,
+            range,
             bitmap,
             workspace_identity,
             pool_replay,
@@ -3394,7 +3541,8 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             FixedPointError,
         ),
     > {
-        let (retirement, bitmap, bitmap_root_provenance, pages, rebind) = export.into_bind_parts();
+        let (retirement, range, bitmap, bitmap_root_provenance, pages, rebind) =
+            export.into_bind_parts();
         let appended = pages
             .iter()
             .filter(|page| {
@@ -3406,11 +3554,17 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
             .checked_add(u64::try_from(appended).unwrap_or(u64::MAX));
         if expected_pending_page_count != Some(self.slot.output.pending_page_count)
             || !bitmap_root_provenance.validates(self.slot.output.root, pages)
+            || !range_target_validates_terminal_pages(
+                range,
+                self.slot.output.pending_page_count,
+                pages,
+            )
         {
             return Err((
                 self,
                 PreparedProducedTerminalExport::from_bind_parts(
                     retirement,
+                    range,
                     bitmap,
                     bitmap_root_provenance,
                     pages,
@@ -3426,6 +3580,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
                     self,
                     PreparedProducedTerminalExport::from_bind_parts(
                         retirement,
+                        range,
                         bitmap,
                         bitmap_root_provenance,
                         pages,
@@ -3441,6 +3596,7 @@ impl<'slot, 'scope_slot, 'scratch, 'carried>
                 terminal,
             },
             retirement,
+            range,
             bitmap,
         ))
     }
@@ -4700,6 +4856,23 @@ mod tests {
             root,
             pending_page_count,
         }
+    }
+
+    #[test]
+    fn target_update_rejects_retirement_batches_beyond_the_target_transaction() {
+        let result = fixed_point_target_update(
+            1,
+            prepared_output(0, 3),
+            RetirementTreeEditResult {
+                root: 2,
+                batch_count: 1,
+                private_pages: 1,
+                committed_replacements: 0,
+                prior_private_replacements: 0,
+            },
+            None,
+        );
+        assert_eq!(result, Err(FixedPointError::StalePredecessor));
     }
 
     fn bitmap_terminal_page(pool_slot: usize, pgno: u32) -> PrivatePageCoordinatorTerminalPage {

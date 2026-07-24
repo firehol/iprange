@@ -94,6 +94,8 @@ type privateWriterTransactionCore struct {
 	fixedPointRoot                     uint32
 	fixedPointPageCount                uint64
 	fixedPointPoolEpoch                uint64
+	fixedPointTarget                   Meta
+	fixedPointTargetSet                bool
 }
 
 func initPrivateWriterTransactionCoreWithWorkspace(
@@ -259,6 +261,8 @@ func (c *privateWriterTransactionCore) begin(
 	c.fixedPointRoot = 0
 	c.fixedPointPageCount = 0
 	c.fixedPointPoolEpoch = 0
+	c.fixedPointTarget = Meta{}
+	c.fixedPointTargetSet = false
 	return privateWriterTransactionHandle{core: c, epoch: c.handleEpoch}, privateWriterTransactionError{}
 }
 
@@ -365,6 +369,8 @@ func (c *privateWriterTransactionCore) startFixedPoint(
 	}
 	c.fixedPointPredecessor = predecessor
 	c.fixedPointActive = true
+	c.fixedPointTarget = Meta{}
+	c.fixedPointTargetSet = false
 	return privateWriterTransactionError{}
 }
 
@@ -679,6 +685,16 @@ func (c *privateWriterTransactionCore) finishFixedPoint(
 			code: privateWriterTransactionErrAbortRequired,
 		}
 	}
+	if c.fixedPointTargetSet && c.target != c.fixedPointTarget {
+		c.pool.abortRequired = true
+		c.state = privateWriterTransactionAbortRequired
+		return 0, 0, privateWriterTransactionError{
+			code: privateWriterTransactionErrAbortRequired,
+			fixedPoint: privateWriterFixedPointError{
+				code: privateWriterFixedPointErrStalePredecessor,
+			},
+		}
+	}
 	root, pageCount, fixedProblem := c.fixedPointCoordinator.consumeFinal(
 		c.fixedPointPredecessor,
 	)
@@ -773,6 +789,7 @@ func (c *privateWriterTransactionCore) preflightCommit(
 		if c.fixedPointCoordinator.root != c.fixedPointRoot ||
 			c.fixedPointCoordinator.pageCount != c.fixedPointPageCount ||
 			c.target.PageCount != c.fixedPointPageCount ||
+			(c.fixedPointTargetSet && c.target != c.fixedPointTarget) ||
 			c.pool.mutationEpoch != c.fixedPointPoolEpoch ||
 			poolStatus.pendingTxn != c.target.TxnID ||
 			poolStatus.committedPageCount != c.selected.PageCount ||
@@ -847,6 +864,8 @@ func (c *privateWriterTransactionCore) abortWithCleanup(
 		c.fixedPointRoot = 0
 		c.fixedPointPageCount = 0
 		c.fixedPointPoolEpoch = 0
+		c.fixedPointTarget = Meta{}
+		c.fixedPointTargetSet = false
 		c.abortScrubbed = true
 		c.state = privateWriterTransactionAbortIncomplete
 		c.target = Meta{}

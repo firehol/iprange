@@ -1665,6 +1665,7 @@ mod tests {
             .pages()
             .windows(2)
             .all(|pages| pages[0].pgno < pages[1].pgno));
+        assert_eq!(produced.range_target(), Some(materialized));
         assert_eq!(
             produced
                 .pages()
@@ -1924,6 +1925,7 @@ mod tests {
             produced.bitmap_root_provenance(),
             crate::retirement_writer::ProducedBitmapRootProvenance::SelectedUnchanged(2)
         );
+        assert_eq!(produced.range_target(), Some(materialized));
         pool.require_abort();
         stage.discard_after_abort(proof);
         assert!(seed.is_empty_and_clean());

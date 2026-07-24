@@ -228,6 +228,50 @@ func privateWriterAggregateHashWord(hash, value uint64) uint64 {
 	return hash
 }
 
+func privateWriterAggregateHashBytes(hash uint64, values []byte) uint64 {
+	for _, value := range values {
+		hash = privateWriterAggregateHashWord(hash, uint64(value))
+	}
+	return hash
+}
+
+func privateWriterAggregateMetaHash(hash uint64, meta Meta) uint64 {
+	hash = privateWriterAggregateHashWord(hash, uint64(meta.AddressFamily))
+	hash = privateWriterAggregateHashWord(hash, uint64(meta.ValueKind))
+	hash = privateWriterAggregateHashBytes(hash, meta.ValueTag.wire[:])
+	hash = privateWriterAggregateHashBytes(hash, meta.DatabaseID[:])
+	hash = privateWriterAggregateHashWord(hash, meta.TxnID)
+	hash = privateWriterAggregateHashBytes(hash, meta.CommitNonce[:])
+	for _, value := range [...]uint64{
+		meta.PageCount,
+		meta.RangeRecordCount,
+		meta.ActiveFeedCount,
+		meta.FeedIndexLimit,
+		meta.MembershipEntryCount,
+		meta.MembershipIDLimit,
+		meta.MetadataUncompressedLen,
+		meta.MetadataCompressedLen,
+		meta.RetirementBatchCount,
+	} {
+		hash = privateWriterAggregateHashWord(hash, value)
+	}
+	for _, value := range [...]uint32{
+		meta.RangeRoot,
+		meta.CatalogNameRoot,
+		meta.CatalogIndexRoot,
+		meta.FeedUsedRoot,
+		meta.MembershipIDRoot,
+		meta.MembershipHashRoot,
+		meta.MembershipUsedRoot,
+		meta.MetadataRoot,
+		meta.FreeBitmapRoot,
+		meta.RetirementRoot,
+	} {
+		hash = privateWriterAggregateHashWord(hash, uint64(value))
+	}
+	return hash
+}
+
 func privateWriterProducedPageHash(
 	hash uint64,
 	page privateWriterProducedTerminalPage,
@@ -311,6 +355,47 @@ func privateWriterProducedBitmapRootValid(
 		}
 	}
 	return false
+}
+
+// privateWriterAggregateTarget is the one private meta replacement derived
+// before a terminal aggregate mutates the live draft. The range contribution
+// exists only on the proof-bound three-owner path; the normal path keeps the
+// selected range metadata intact.
+func privateWriterAggregateTarget(
+	base Meta,
+	bitmap *privateWriterProducedBitmapTerminalContent,
+	ranges *privateWriterProducedRangeTerminalContent,
+	proof *rangeRootTransactionProof,
+	retirement retirementTreeEditResult,
+) (Meta, bool) {
+	if bitmap == nil || base.TxnID == 0 || bitmap.pageCount < 2 ||
+		(bitmap.root != 0 &&
+			(bitmap.root < 2 || uint64(bitmap.root) >= bitmap.pageCount)) ||
+		(retirement.root == 0) != (retirement.batchCount == 0) ||
+		(retirement.root != 0 &&
+			(retirement.root < 2 || uint64(retirement.root) >= bitmap.pageCount)) ||
+		retirement.batchCount > base.TxnID-1 {
+		return Meta{}, false
+	}
+	target := base
+	target.PageCount = bitmap.pageCount
+	target.FreeBitmapRoot = bitmap.root
+	target.RetirementRoot = retirement.root
+	target.RetirementBatchCount = retirement.batchCount
+	if proof == nil {
+		return target, true
+	}
+	if ranges == nil || ranges.materialized.rootPage == 0 &&
+		(ranges.materialized.pageCount != 0 || ranges.materialized.recordCount != 0) ||
+		ranges.materialized.rootPage != 0 &&
+			(ranges.materialized.rootPage < 2 ||
+				uint64(ranges.materialized.rootPage) >= bitmap.pageCount ||
+				ranges.materialized.pageCount == 0) {
+		return Meta{}, false
+	}
+	target.RangeRoot = ranges.materialized.rootPage
+	target.RangeRecordCount = ranges.materialized.recordCount
+	return target, true
 }
 
 func sealPrivateWriterProducedRange(
@@ -988,13 +1073,19 @@ func sealPrivateWriterProducedRetirement(
 	return hash
 }
 
-func (w *privateWriterFixedPointAggregateWorkspace) prepareEmptyRetirementProducer() (
+func (w *privateWriterFixedPointAggregateWorkspace) prepareEmptyRetirementProducer(
+	selected Meta,
+) (
 	privateWriterProducedRetirementTerminal,
 	privateWriterFixedPointError,
 ) {
 	if w == nil || w.self != w || w.retirementProducer.ready ||
 		!privateWriterProducedScratchCanonical(w.retirementPages) ||
-		!privateWriterProducedScratchCanonical(w.retirementPrior) {
+		!privateWriterProducedScratchCanonical(w.retirementPrior) || selected.TxnID == 0 ||
+		(selected.RetirementRoot == 0) != (selected.RetirementBatchCount == 0) ||
+		(selected.RetirementRoot != 0 &&
+			(selected.RetirementRoot < 2 || uint64(selected.RetirementRoot) >= selected.PageCount)) ||
+		selected.RetirementBatchCount > selected.TxnID-1 {
 		return privateWriterProducedRetirementTerminal{},
 			privateWriterFixedPointError{
 				code: privateWriterFixedPointErrStaleProvenance,
@@ -1013,6 +1104,9 @@ func (w *privateWriterFixedPointAggregateWorkspace) prepareEmptyRetirementProduc
 	content := privateWriterProducedRetirementTerminalContent{
 		pages: w.retirementPages[:0:0],
 		prior: w.retirementPrior[:0:0],
+		result: retirementTreeEditResult{
+			root: selected.RetirementRoot, batchCount: selected.RetirementBatchCount,
+		},
 	}
 	content.seal = sealPrivateWriterProducedRetirement(&content)
 	content.priorSeal = sealPrivateWriterProducedPrior(content.prior)
@@ -1084,18 +1178,20 @@ type privateWriterFixedPointPreparedAggregate struct {
 	generation uint64
 	nonce      uint64
 
-	pagesLen    int
-	priorLen    int
-	replayLen   int
-	recordIndex int
-	scope       privatePageReservationScope
-	bitmap      privateWriterProducedBitmapTerminalContent
-	rangeResult rangeTreeMaterializedResult
-	rangeProof  *rangeRootTransactionProof
-	retirement  retirementTreeEditResult
-	output      sealedFreeBitmapOutput
-	poolAfter   privateWriterAggregatePoolAfter
-	seal        uint64
+	pagesLen     int
+	priorLen     int
+	replayLen    int
+	recordIndex  int
+	scope        privatePageReservationScope
+	bitmap       privateWriterProducedBitmapTerminalContent
+	rangeResult  rangeTreeMaterializedResult
+	rangeProof   *rangeRootTransactionProof
+	retirement   retirementTreeEditResult
+	targetBefore Meta
+	targetAfter  Meta
+	output       sealedFreeBitmapOutput
+	poolAfter    privateWriterAggregatePoolAfter
+	seal         uint64
 }
 
 type privateWriterFixedPointAggregateToken struct {
@@ -1904,6 +2000,8 @@ func sealPrivateWriterFixedPointPreparedAggregate(
 	} {
 		hash = privateWriterAggregateHashWord(hash, value)
 	}
+	hash = privateWriterAggregateMetaHash(hash, slot.targetBefore)
+	hash = privateWriterAggregateMetaHash(hash, slot.targetAfter)
 	if slot.rangeProof == nil {
 		return privateWriterAggregateHashWord(hash, 0)
 	}
@@ -2086,6 +2184,13 @@ func (c *privateWriterTransactionCore) prepareFixedPointAggregateInternal(
 		totalPrior > len(workspace.priorBindings) {
 		return fail(privateWriterFixedPointErrScratchTooSmall)
 	}
+	targetBefore := c.target
+	targetAfter, targetValid := privateWriterAggregateTarget(
+		targetBefore, bitmapProduced, rangeProduced, proof, retirementProduced.result,
+	)
+	if !targetValid {
+		return fail(privateWriterFixedPointErrStaleProvenance)
+	}
 	workspace.clearPrepared()
 	if !workspace.beginMap() || workspace.slotGeneration == ^uint64(0) {
 		return fail(privateWriterFixedPointErrExhausted)
@@ -2220,9 +2325,11 @@ func (c *privateWriterTransactionCore) prepareFixedPointAggregateInternal(
 		pagesLen: totalPages, priorLen: priorLen, replayLen: replayLen,
 		recordIndex: c.fixedPointCoordinator.recordLen,
 		scope:       liveScope, bitmap: *bitmapProduced,
-		rangeProof: proof,
-		retirement: retirementProduced.result,
-		output:     output, poolAfter: poolAfter,
+		rangeProof:   proof,
+		retirement:   retirementProduced.result,
+		targetBefore: targetBefore,
+		targetAfter:  targetAfter,
+		output:       output, poolAfter: poolAfter,
 	}
 	if rangeProduced != nil {
 		slot.rangeResult = rangeProduced.materialized
@@ -2253,6 +2360,7 @@ func (c *privateWriterTransactionCore) executeFixedPointAggregate(
 		token.generation == 0 || token.generation != slot.generation ||
 		token.nonce == 0 || token.nonce != slot.nonce ||
 		slot.seal != sealPrivateWriterFixedPointPreparedAggregate(slot) ||
+		c.target != slot.targetBefore ||
 		slot.recordIndex != c.fixedPointCoordinator.recordLen ||
 		slot.recordIndex < 0 || slot.recordIndex >= len(c.workspace.records) ||
 		c.workspace.records[slot.recordIndex].active {
@@ -2316,7 +2424,9 @@ func (c *privateWriterTransactionCore) executeFixedPointAggregate(
 	c.fixedPointCoordinator.lastWorkUnit = record.workUnit
 	c.fixedPointCoordinator.root = slot.output.root
 	c.fixedPointCoordinator.pageCount = slot.output.pageCount
-	c.target.PageCount = slot.output.pageCount
+	c.target = slot.targetAfter
+	c.fixedPointTarget = slot.targetAfter
+	c.fixedPointTargetSet = true
 	resultBitmap := slot.bitmap
 	resultBitmap.pages = nil
 	resultBitmap.prior = nil
