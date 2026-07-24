@@ -6863,8 +6863,8 @@ mod tests {
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::bitmap_cow::{
         FreeBitmapFinalizationCachedPage, FreeBitmapFinalizationScratch,
-        FreeBitmapReclamationTicket, FreeBitmapReservationBuffers, FreeBitmapReservationPlanner,
-        FreeBitmapReservationSourceNode, FreeBitmapReservationStageBuffers, VerifiedBitmapPage,
+        FreeBitmapReclamationTicket, FreeBitmapReservationBuffers, FreeBitmapReservationSourceNode,
+        FreeBitmapReservationStageBuffers, VerifiedBitmapPage,
     };
     #[cfg(all(feature = "os", target_os = "linux"))]
     use crate::bootstrap::OpenMode;
@@ -6886,6 +6886,11 @@ mod tests {
         PrivatePageCoordinatorPriorReturn, PrivatePagePoolSlot, PrivatePagePreparedScopeSlot,
         PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
         PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
+    };
+    #[cfg(all(feature = "os", target_os = "linux"))]
+    use crate::reclamation_finalizer::{
+        with_locked_reclamation_bitmap_reservation, LockedReclamationFinalizerLimits,
+        LockedReclamationFinalizerScratch,
     };
     use crate::retirement_reader::{test_reclaimed_pages, RetirementReclamation};
     #[cfg(all(feature = "os", target_os = "linux"))]
@@ -8928,86 +8933,75 @@ mod tests {
                         root: meta.retirement_root,
                         batch_count: meta.retirement_batch_count,
                     };
-                    let retirement_tree =
-                        RetirementTree::from_source(&pages, retirement_identity).unwrap();
-                    macro_rules! bind_locked_plan {
-                        ($reclamation:expr) => {{
-                            let planner = FreeBitmapReservationPlanner::new(
-                                &pages,
-                                selected.txn_id,
-                                selected.page_count,
-                                selected.free_bitmap_root,
-                                2,
-                                FreeBitmapReservationBuffers {
-                                    arena: &mut planner_arena,
-                                    pool_validation: &mut planner_pool_validation,
-                                    arena_bindings: &mut planner_bindings,
-                                    candidates: &mut planner_candidates,
-                                    verified_pages: &mut planner_verified,
-                                    replacements: &mut planner_replacements,
-                                    index_nodes: &mut planner_index,
-                                    available_slots: &mut planner_available,
-                                    source_nodes: &mut planner_source_nodes,
-                                    reclamation: &reclamation_ticket,
-                                    stage: FreeBitmapReservationStageBuffers {
-                                        arena: &mut stage_arena,
-                                        arena_bindings: &mut stage_bindings,
-                                        candidates: &mut stage_candidates,
-                                        verified_pages: &mut stage_verified,
-                                        replacements: &mut stage_replacements,
-                                        index_nodes: &mut stage_index,
-                                        available_slots: &mut stage_available,
-                                    },
-                                },
-                            )
-                            .unwrap();
-                            let locked_plan = planner.plan_under_reclamation($reclamation).unwrap();
-                            assert_eq!(locked_plan.required_private_pages(), 3);
-                            locked_plan.bind(&shadow_pool, &shadow_scope).unwrap()
-                        }};
-                    }
-
                     let (max_batches, max_pages) = match case {
                         LinuxFinalizerReclamationCase::NoChange => (1, 8),
                         LinuxFinalizerReclamationCase::SelectedBatch => (1, 2),
                     };
-                    let mut bound = retirement_tree
-                        .with_reclamation(
-                            reclaim_fence,
+                    let mut bound = with_locked_reclamation_bitmap_reservation(
+                        selected,
+                        &pages,
+                        reclaim_fence,
+                        LockedReclamationFinalizerLimits {
                             max_batches,
                             max_pages,
-                            &mut verified_reclamation_batches,
-                            &mut verified_reclaimed_pages,
-                            |result, reclamation| {
-                                match case {
-                                    LinuxFinalizerReclamationCase::NoChange => {
-                                        assert_eq!(
-                                            result,
-                                            crate::retirement_reader::RetirementPassResult {
-                                                batch_count: 0,
-                                                page_count: 0,
-                                            }
-                                        );
-                                    }
-                                    LinuxFinalizerReclamationCase::SelectedBatch => {
-                                        assert_eq!(
-                                            result,
-                                            crate::retirement_reader::RetirementPassResult {
-                                                batch_count: 1,
-                                                page_count: 2,
-                                            }
-                                        );
-                                    }
-                                }
-                                Ok::<_, ()>(bind_locked_plan!(reclamation))
+                            bitmap_payload_pages: 2,
+                        },
+                        LockedReclamationFinalizerScratch {
+                            bitmap: FreeBitmapReservationBuffers {
+                                arena: &mut planner_arena,
+                                pool_validation: &mut planner_pool_validation,
+                                arena_bindings: &mut planner_bindings,
+                                candidates: &mut planner_candidates,
+                                verified_pages: &mut planner_verified,
+                                replacements: &mut planner_replacements,
+                                index_nodes: &mut planner_index,
+                                available_slots: &mut planner_available,
+                                source_nodes: &mut planner_source_nodes,
+                                reclamation: &reclamation_ticket,
+                                stage: FreeBitmapReservationStageBuffers {
+                                    arena: &mut stage_arena,
+                                    arena_bindings: &mut stage_bindings,
+                                    candidates: &mut stage_candidates,
+                                    verified_pages: &mut stage_verified,
+                                    replacements: &mut stage_replacements,
+                                    index_nodes: &mut stage_index,
+                                    available_slots: &mut stage_available,
+                                },
                             },
-                        )
-                        .unwrap();
+                            verified_batches: &mut verified_reclamation_batches,
+                            verified_pages: &mut verified_reclaimed_pages,
+                        },
+                        &shadow_pool,
+                        &shadow_scope,
+                        |result, bound| {
+                            match case {
+                                LinuxFinalizerReclamationCase::NoChange => {
+                                    assert_eq!(
+                                        result,
+                                        crate::retirement_reader::RetirementPassResult {
+                                            batch_count: 0,
+                                            page_count: 0,
+                                        }
+                                    );
+                                }
+                                LinuxFinalizerReclamationCase::SelectedBatch => {
+                                    assert_eq!(
+                                        result,
+                                        crate::retirement_reader::RetirementPassResult {
+                                            batch_count: 1,
+                                            page_count: 2,
+                                        }
+                                    );
+                                }
+                            }
+                            Ok::<_, core::convert::Infallible>(bound)
+                        },
+                    )
+                    .unwrap();
                     assert_eq!(
                         bound.binding.reclaimed,
                         usize::from(case == LinuxFinalizerReclamationCase::SelectedBatch) * 2
                     );
-                    bound.cow.apply_planned_reservation().unwrap();
                     assert_eq!(bound.cow.available_private_pages(), 2);
                     let retirement_state = RetirementTreeState {
                         selected_txn: selected.txn_id,

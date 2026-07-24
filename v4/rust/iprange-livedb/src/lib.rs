@@ -47,6 +47,8 @@ mod range_page;
 #[allow(dead_code)]
 mod range_reader;
 #[allow(dead_code)]
+mod reclamation_finalizer;
+#[allow(dead_code)]
 mod reservation;
 #[allow(dead_code)]
 mod retirement_page;

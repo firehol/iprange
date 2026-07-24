@@ -6950,6 +6950,43 @@ requirements are normative in the Pre-Implementation Gate above.
   no-mutation rejection of empty and oversized journals. No public API, file
   format, generic reclaim operation, or Go parity is claimed.
 
+### 2026-07-24 - private lock-bound reclamation reservation plan
+
+- Evidence: the Linux selected-reclamation fixture performs the correct
+  selected-source identity construction, fence-held selection/verification,
+  bitmap capacity planning, exact shadow-scope binding, and planned-reservation
+  application inline in `retirement_writer.rs:8915-8998`. It is production-like
+  behavior trapped in test code, so a later normal writer could duplicate or
+  omit part of that required sequence.
+- Extract that common prefix into one non-test, crate-private helper. It accepts
+  only the selected metadata, pinned committed source, held reclaim fence,
+  bounded limits, caller-owned verification/planner scratch, and a pre-reserved
+  shadow scope. It returns a bound bitmap reservation only after the full
+  retirement select/verify/second-pass protocol and planned bitmap reservation
+  have succeeded. The returned reservation retains the operation-barrier guard.
+- This narrow extraction deliberately does not invent a public `Reclaim` API,
+  an error mapping for the eventual public writer SDK, or generic fixed-point
+  geometry. The remaining test-only retirement/blob/fixed-point body will be
+  moved in later bounded chunks after this shared lock-bound input boundary is
+  proven.
+
+### 2026-07-24 - private lock-bound reclamation reservation implementation
+
+- Added non-test private module `reclamation_finalizer.rs`. Its only entry
+  point builds the selected retirement identity from the supplied metadata,
+  runs `RetirementTree::with_reclamation`, creates the locked bitmap plan,
+  binds it to the supplied shadow scope, and applies its planned reservation
+  before its consumer can run. The consumer receives the move-only bound
+  reservation, which retains the operation-barrier guard.
+- All backing storage remains caller-owned: bitmap planner/stage buffers,
+  verified retirement batches/pages, and the shadow pool/scope. Zero batch,
+  page, or bitmap-payload limits fail before source access or shadow mutation;
+  read, planner, and consumer failures remain distinct typed internal errors.
+- The two Linux end-to-end cases now call that helper. They continue to prove
+  no-change and selected-prefix behavior over the retained source under the
+  held sidecar operation lock; the later test-only blob/tree/fixed-point body
+  is intentionally unchanged for the next extraction.
+
 ## Validation
 
 ### 2026-07-24 - bounded terminal capacity
@@ -6965,6 +7002,18 @@ requirements are normative in the Pre-Implementation Gate above.
   pre-reservation with physical selection under the lock, so no specification
   change was needed. This remains Rust-private infrastructure; Go has no
   corresponding lifecycle implementation yet.
+
+### 2026-07-24 - private lock-bound reclamation reservation
+
+- Focused Rust coverage passes for invalid-limit rejection before source access
+  or shadow-scope mutation, plus both real Linux finalizer cases (no-change and
+  selected retired batch) through the extracted private helper.
+- Full Rust workspace matrices pass: 445 no-default-feature tests and 560
+  all-feature tests. Formatting, all-target/all-feature Clippy with warnings
+  denied, and all-feature benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. This is a Rust-private lifecycle consolidation only: no public
+  SDK, byte-format, validation-default, specification, or Go behavior changed.
 
 ### 2026-07-24 - stage-aware reclamation preview
 
