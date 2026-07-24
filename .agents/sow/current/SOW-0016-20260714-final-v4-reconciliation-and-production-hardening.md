@@ -7717,7 +7717,84 @@ requirements are normative in the Pre-Implementation Gate above.
   range-root authority, so no public workflow is claimed and no partial
   normalizer result can yet reach publication.
 
+### 2026-07-24 - logical range-page staging plan
+
+- The first sequential-assignment implementation writes its final range pages
+  directly through `RangeTreePoolSink`, which returns final physical page
+  numbers. That is valid for its isolated pool tests but cannot be the live
+  transaction path: the core attaches a coordinator before exposing its draft,
+  raw allocation/checkpoint access is then deliberately rejected, and the
+  format requires physical page identities to be selected only during the
+  lock-bound allocator/retirement finalization
+  (`binary-format-v4.md:978-1025,1206-1221`).
+- Add a private, fixed-capacity logical range-page staging sink in Rust and Go.
+  The existing ordered builder receives temporary IDs `2..N+1`, stores its
+  already CRC-sealed pages in caller-owned fixed slots, and returns a logical
+  root. These IDs are never v4 file page numbers, reader results, or public
+  API values.
+- Add a one-pass materializer that accepts allocator-chosen, strictly
+  increasing physical page assignments in that same logical-page order. It
+  replaces every branch child temporary ID with its assigned physical page,
+  reseals the CRC, fills `Range` terminal-page ownership, and returns the
+  physical root/count for the later coordinator terminal bind. It rejects a
+  missing/duplicate/out-of-order assignment, invalid staging header/CRC,
+  unknown child ID, or final-page-count overflow before any terminal page is
+  handed to the coordinator.
+- This stage uses no external file, no heap allocation after caller workspace
+  construction, and no physical pool mutation. The existing direct pool sink
+  remains a low-level test adapter; it is not the live normalizer path. The
+  following slice will move normalizer node storage and final emission onto
+  this staging boundary, then bind the materialized result through the existing
+  transaction coordinator and range-root target.
+- Tests must cover empty/single/multilevel IPv4 and IPv6 trees, non-contiguous
+  physical assignments, every remapped child reference, CRC resealing,
+  rejection atomicity, zero post-setup allocations, and reader reopening only
+  after physical materialization. No public SDK, metadata root, default
+  validation, or portable v4 byte is changed by this internal bridge.
+
+### 2026-07-24 - logical range-page staging implementation
+
+- Added matching private logical staging sinks in Rust
+  (`v4/rust/iprange-livedb/src/range_staging.rs`) and Go
+  (`v4/go/internal/exactv4/range_staging.go`). The ordered builder receives
+  only temporary IDs and stores each sealed 4 KiB page in fixed caller-owned
+  slots.
+- The materializers accept strictly increasing allocator-selected physical
+  assignments, rewrite every branch child ID, reseal branch CRCs, and produce
+  the existing `Range` terminal-page representation. Rust produces the
+  coordinator journal type directly; Go produces the equivalent fixed-point
+  terminal page. Neither path binds a live pool slot or publishes a root.
+- Preflight rejects invalid capacity/result/assignment/output state, physical
+  bounds or ordering, bad staging headers or CRCs, bad page geometry, and
+  unknown or forward logical child references before changing terminal output.
+  It deliberately checks only the internal staged-page facts needed for safe
+  translation; it does not perform default file validation or rescan every
+  range record.
+- The direct pool sink remains untouched as isolated test infrastructure. The
+  normalizer is still not integrated with this staging sink, coordinator, or
+  metadata root, so no partial normalizer result can publish through this
+  slice.
+
 ## Validation
+
+### 2026-07-24 - logical range-page staging validation
+
+- New Rust and Go tests cover empty, single-leaf, and multilevel IPv4/IPv6
+  trees; non-contiguous physical mappings; all branch child rewrites; CRC
+  resealing; reader reopening only after translation; and zero allocation after
+  fixed workspace setup.
+- Both suites prove failure atomicity for duplicate and missing assignments,
+  invalid final page counts, invalid logical children, and a corrupted staging
+  page: the terminal output remains untouched on every rejected input.
+- `go -C v4/go test ./... -count=1`, `go -C v4/go vet ./...`, and
+  `go -C v4/go test -race ./internal/exactv4 -count=1` pass. Rust passes 491
+  tests without optional features and 612 with all features; formatting,
+  warnings-denied all-target/all-feature Clippy, and all-feature benchmark
+  compilation pass.
+- This is private staging only. No normative specification, public SDK,
+  default-validation behavior, or portable v4 byte changed. The next pending
+  step remains moving normalizer output and workspace ownership to this
+  boundary, then connecting it to the live coordinator and range-root target.
 
 ### 2026-07-24 - transaction abort-latch validation
 
