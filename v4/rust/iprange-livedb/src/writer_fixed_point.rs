@@ -1676,6 +1676,33 @@ pub(crate) struct FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried>
     carried_pages: &'carried [u32],
 }
 
+/// A prepared coordinator scope that deliberately has no physical output yet.
+///
+/// Normal commit preparation may reserve bounded capacity before the live
+/// operation lock, but it cannot choose a bitmap root or target page count
+/// until the live allocator finalizer has selected physical pages. Only a
+/// finalized terminal export can turn this into executable work.
+#[derive(Debug)]
+pub(crate) struct FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried> {
+    slot: &'slot mut FixedPointPreparedWorkSlot,
+    scope: PrivatePagePreparedScopeReservation<'scope_slot>,
+    scratch: &'scratch mut [u8],
+    carried_pages: &'carried [u32],
+    coordinator_identity: usize,
+    predecessor_generation: u64,
+    predecessor_nonce: u64,
+    predecessor_pending_page_count: u64,
+    work_identity: u64,
+    pool_fence: PrivatePageCoordinatorFence,
+    carried: FixedPointCarriedSource,
+    carried_address: usize,
+    carried_len: usize,
+    carried_seal: u64,
+    scratch_address: usize,
+    scratch_len: usize,
+    scratch_seal: u64,
+}
+
 struct FixedPointPreparedAggregateBase<'slot, 'scratch, 'carried> {
     slot: &'slot mut FixedPointPreparedWorkSlot,
     scratch: &'scratch mut [u8],
@@ -1735,6 +1762,226 @@ pub(crate) struct FixedPointPreparedProducedTerminalWork<
     terminal: FixedPointPreparedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan>,
     retirement: RetirementTreeEditResult,
     bitmap: B,
+}
+
+impl<'slot, 'scope_slot, 'scratch, 'carried>
+    FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>
+{
+    fn validate_reservation(&self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        if *self.slot != FixedPointPreparedWorkSlot::empty()
+            || self.coordinator_identity == 0
+            || self.predecessor_generation == 0
+            || self.predecessor_nonce == 0
+            || self.work_identity == 0
+            || self.pool_fence != pool.coordinator_fence()
+            || self.carried_address != self.carried_pages.as_ptr() as usize
+            || self.carried_len != self.carried_pages.len()
+            || self.carried_seal != FixedPointCoordinator::carried_hash(self.carried_pages)
+            || self.scratch_address != self.scratch.as_ptr() as usize
+            || self.scratch_len != self.scratch.len()
+            || self.scratch_seal != FixedPointCoordinator::scratch_hash(self.scratch)
+        {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        Ok(())
+    }
+
+    fn validate_output(
+        &self,
+        pool: &PrivatePagePool<'_>,
+        output: FixedPointPreparedOutput,
+        pages: &[PrivatePageCoordinatorTerminalPage],
+    ) -> Result<(), FixedPointError> {
+        self.validate_reservation(pool)?;
+        if output.pending_page_count < self.predecessor_pending_page_count
+            || output.pending_page_count > MAX_PAGE_COUNT
+        {
+            return Err(FixedPointError::PageCountRegression {
+                previous: self.predecessor_pending_page_count,
+                current: output.pending_page_count,
+            });
+        }
+        if output.root != 0
+            && (output.root < 2 || u64::from(output.root) >= output.pending_page_count)
+        {
+            return Err(FixedPointError::RootOutOfBounds(output.root));
+        }
+        let appended = pages
+            .iter()
+            .filter(|page| {
+                page.authorization == crate::private_page_pool::PrivatePageAuthorization::Appended
+            })
+            .count();
+        let expected_pending_page_count = pool
+            .pending_page_count()
+            .checked_add(u64::try_from(appended).unwrap_or(u64::MAX));
+        if expected_pending_page_count != Some(output.pending_page_count)
+            || (output.root != 0
+                && !pages.iter().any(|page| {
+                    page.pgno == output.root
+                        && page.owner == crate::private_page_pool::PrivatePageOwner::Bitmap
+                }))
+        {
+            return Err(FixedPointError::StalePredecessor);
+        }
+        Ok(())
+    }
+
+    fn into_prepared(
+        self,
+        output: FixedPointPreparedOutput,
+    ) -> FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried> {
+        let Self {
+            slot,
+            scope,
+            scratch,
+            carried_pages,
+            coordinator_identity,
+            predecessor_generation,
+            predecessor_nonce,
+            work_identity,
+            pool_fence,
+            carried,
+            carried_address,
+            carried_len,
+            carried_seal,
+            scratch_address,
+            scratch_len,
+            scratch_seal,
+            ..
+        } = self;
+        let address = slot as *const FixedPointPreparedWorkSlot as usize;
+        *slot = FixedPointPreparedWorkSlot {
+            address,
+            coordinator_identity,
+            predecessor_generation,
+            predecessor_nonce,
+            work_identity,
+            pool_fence: Some(pool_fence),
+            output,
+            carried,
+            carried_address,
+            carried_len,
+            carried_seal,
+            scratch_address,
+            scratch_len,
+            scratch_seal,
+            seal: 0,
+        };
+        slot.seal = FixedPointCoordinator::prepared_seal(slot);
+        FixedPointPreparedWork {
+            slot,
+            scope,
+            scratch,
+            carried_pages,
+        }
+    }
+
+    /// Explicitly releases a reservation whose lock-bound finalizer failed.
+    ///
+    /// This mirrors the transaction's existing explicit cancellation rule: a
+    /// failed finalizer must not leave a hidden prepared scope behind.
+    pub(crate) fn cancel(self, pool: &PrivatePagePool<'_>) -> Result<(), FixedPointError> {
+        let valid = self.validate_reservation(pool).is_ok();
+        let Self { scope, .. } = self;
+        pool.cancel_prepared_coordinator_scope(scope)
+            .map_err(|_| FixedPointError::StalePredecessor)?;
+        if valid {
+            Ok(())
+        } else {
+            Err(FixedPointError::StalePredecessor)
+        }
+    }
+
+    /// Binds the only executable output after the live finalizer has chosen
+    /// physical pages in its private shadow state. The core pool remains
+    /// untouched until its normal terminal execution path consumes this result.
+    #[allow(clippy::result_large_err, clippy::type_complexity)]
+    pub(crate) fn with_finalized_produced_terminal_export<'plan, B>(
+        self,
+        pool: &PrivatePagePool<'_>,
+        output: FixedPointPreparedOutput,
+        export: PreparedProducedTerminalExport<'plan, B>,
+        nonce: u64,
+    ) -> Result<
+        FixedPointPreparedProducedTerminalWork<'slot, 'scope_slot, 'scratch, 'carried, 'plan, B>,
+        (
+            Self,
+            PreparedProducedTerminalExport<'plan, B>,
+            FixedPointError,
+        ),
+    > {
+        let (retirement, bitmap, pages, rebind) = export.into_bind_parts();
+        if let Err(error) = self.validate_output(pool, output, pages) {
+            return Err((
+                self,
+                PreparedProducedTerminalExport::from_bind_parts(retirement, bitmap, pages, rebind),
+                error,
+            ));
+        }
+        let terminal = match pool.prepare_unbound_coordinator_terminal(&self.scope, pages, nonce) {
+            Ok(terminal) => terminal,
+            Err((pages, _)) => {
+                return Err((
+                    self,
+                    PreparedProducedTerminalExport::from_bind_parts(
+                        retirement, bitmap, pages, rebind,
+                    ),
+                    FixedPointError::StalePredecessor,
+                ));
+            }
+        };
+        debug_assert_eq!(terminal.pending_page_count(), output.pending_page_count);
+        let prepared = self.into_prepared(output);
+        Ok(FixedPointPreparedProducedTerminalWork::new(
+            FixedPointPreparedTerminalWork { prepared, terminal },
+            retirement,
+            bitmap,
+        ))
+    }
+
+    #[cfg(test)]
+    fn with_test_output<F>(
+        self,
+        pool: &PrivatePagePool<'_>,
+        final_callback: F,
+    ) -> Result<FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried>, FixedPointError>
+    where
+        F: FnOnce() -> Result<FixedPointPreparedOutput, FixedPointError>,
+    {
+        let isolation = pool
+            .isolate_callback_backing()
+            .map_err(|_| FixedPointError::StalePredecessor)?;
+        let output = final_callback();
+        drop(isolation);
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = pool.cancel_prepared_coordinator_scope(self.scope);
+                return Err(error);
+            }
+        };
+        if output.pending_page_count < self.predecessor_pending_page_count
+            || output.pending_page_count > MAX_PAGE_COUNT
+        {
+            let _ = pool.cancel_prepared_coordinator_scope(self.scope);
+            return Err(FixedPointError::PageCountRegression {
+                previous: self.predecessor_pending_page_count,
+                current: output.pending_page_count,
+            });
+        }
+        if output.root != 0
+            && (output.root < 2 || u64::from(output.root) >= output.pending_page_count)
+        {
+            let _ = pool.cancel_prepared_coordinator_scope(self.scope);
+            return Err(FixedPointError::RootOutOfBounds(output.root));
+        }
+        if self.validate_reservation(pool).is_err() {
+            let _ = pool.cancel_prepared_coordinator_scope(self.scope);
+            return Err(FixedPointError::StalePredecessor);
+        }
+        Ok(self.into_prepared(output))
+    }
 }
 
 struct FixedPointPreparedWorkspaceRecord<'backing, 'arena, 'cleanup> {
@@ -3358,7 +3605,7 @@ impl FixedPointCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prepare_work<'slot, 'scope_slot, 'scratch, F>(
+    pub(crate) fn prepare_reserved_work<'slot, 'scope_slot, 'scratch>(
         &self,
         predecessor: &FixedPointPredecessor,
         pool: &PrivatePagePool<'_>,
@@ -3367,12 +3614,9 @@ impl FixedPointCoordinator {
         slot: &'slot mut FixedPointPreparedWorkSlot,
         scope_slot: &'scope_slot mut PrivatePagePreparedScopeSlot,
         scratch: &'scratch mut [u8],
-        final_callback: F,
-    ) -> Result<FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'static>, FixedPointError>
-    where
-        F: FnOnce() -> Result<FixedPointPreparedOutput, FixedPointError>,
+    ) -> Result<FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'static>, FixedPointError>
     {
-        self.prepare_work_with_carried(
+        self.prepare_reserved_work_with_carried(
             predecessor,
             pool,
             work_identity,
@@ -3383,12 +3627,11 @@ impl FixedPointCoordinator {
             0,
             0,
             &[],
-            final_callback,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prepare_work_with_carried<'slot, 'scope_slot, 'scratch, 'carried, F>(
+    pub(crate) fn prepare_reserved_work_with_carried<'slot, 'scope_slot, 'scratch, 'carried>(
         &self,
         predecessor: &FixedPointPredecessor,
         pool: &PrivatePagePool<'_>,
@@ -3400,10 +3643,7 @@ impl FixedPointCoordinator {
         carried_identity: u64,
         carried_epoch: u64,
         carried_pages: &'carried [u32],
-        final_callback: F,
-    ) -> Result<FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried>, FixedPointError>
-    where
-        F: FnOnce() -> Result<FixedPointPreparedOutput, FixedPointError>,
+    ) -> Result<FixedPointReservedWork<'slot, 'scope_slot, 'scratch, 'carried>, FixedPointError>
     {
         self.validate_predecessor(predecessor)?;
         if self.session_generation.get() == 0
@@ -3445,6 +3685,9 @@ impl FixedPointCoordinator {
             carried_epoch,
             carried_pages,
         )?;
+        let scratch_address = scratch.as_ptr() as usize;
+        let scratch_len = scratch.len();
+        let scratch_seal = Self::scratch_hash(scratch);
         let pool_fence = pool.coordinator_fence();
         let session_identity =
             u64::try_from(self.identity).map_err(|_| FixedPointError::IdentityExhausted)?;
@@ -3457,72 +3700,90 @@ impl FixedPointCoordinator {
                 scope_slot,
             )
             .map_err(|_| FixedPointError::StalePredecessor)?;
-        let callback_isolation = match pool.isolate_callback_backing() {
-            Ok(isolation) => isolation,
-            Err(_) => {
-                let _ = pool.cancel_prepared_coordinator_scope(scope);
-                return Err(FixedPointError::StalePredecessor);
-            }
-        };
-        let callback_result = final_callback();
-        drop(callback_isolation);
-        if pool.coordinator_fence() != pool_fence
-            || self.validate_predecessor(predecessor).is_err()
-            || scratch.iter().any(|&byte| byte != 0)
-            || carried_pages.as_ptr() as usize != carried_address
-            || carried_pages.len() != carried_len
-            || Self::carried_hash(carried_pages) != carried_seal
-        {
-            let _ = pool.cancel_prepared_coordinator_scope(scope);
-            return Err(FixedPointError::StalePredecessor);
-        }
-        let output = match callback_result {
-            Ok(output) => output,
-            Err(error) => {
-                let _ = pool.cancel_prepared_coordinator_scope(scope);
-                return Err(error);
-            }
-        };
-        if output.pending_page_count < predecessor.pending_page_count
-            || output.pending_page_count > MAX_PAGE_COUNT
-        {
-            let _ = pool.cancel_prepared_coordinator_scope(scope);
-            return Err(FixedPointError::PageCountRegression {
-                previous: predecessor.pending_page_count,
-                current: output.pending_page_count,
-            });
-        }
-        if output.root != 0
-            && (output.root < 2 || u64::from(output.root) >= output.pending_page_count)
-        {
-            let _ = pool.cancel_prepared_coordinator_scope(scope);
-            return Err(FixedPointError::RootOutOfBounds(output.root));
-        }
-        let address = slot as *const FixedPointPreparedWorkSlot as usize;
-        *slot = FixedPointPreparedWorkSlot {
-            address,
-            coordinator_identity: self.identity,
-            predecessor_generation: predecessor.generation,
-            predecessor_nonce: predecessor.nonce,
-            work_identity,
-            pool_fence: Some(pool_fence),
-            output,
-            carried,
-            carried_address,
-            carried_len,
-            carried_seal,
-            scratch_address: scratch.as_ptr() as usize,
-            scratch_len: scratch.len(),
-            scratch_seal: Self::scratch_hash(scratch),
-            seal: 0,
-        };
-        slot.seal = Self::prepared_seal(slot);
-        Ok(FixedPointPreparedWork {
+        Ok(FixedPointReservedWork {
             slot,
             scope,
             scratch,
             carried_pages,
+            coordinator_identity: self.identity,
+            predecessor_generation: predecessor.generation,
+            predecessor_nonce: predecessor.nonce,
+            predecessor_pending_page_count: predecessor.pending_page_count,
+            work_identity,
+            pool_fence,
+            carried,
+            carried_address,
+            carried_len,
+            carried_seal,
+            scratch_address,
+            scratch_len,
+            scratch_seal,
         })
+    }
+
+    /// Test-only compatibility adapter for fixtures that deliberately provide a
+    /// pre-finalized target. Normal builds expose only `prepare_reserved_work`.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_work<'slot, 'scope_slot, 'scratch, F>(
+        &self,
+        predecessor: &FixedPointPredecessor,
+        pool: &PrivatePagePool<'_>,
+        work_identity: u64,
+        scope_count: usize,
+        slot: &'slot mut FixedPointPreparedWorkSlot,
+        scope_slot: &'scope_slot mut PrivatePagePreparedScopeSlot,
+        scratch: &'scratch mut [u8],
+        final_callback: F,
+    ) -> Result<FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'static>, FixedPointError>
+    where
+        F: FnOnce() -> Result<FixedPointPreparedOutput, FixedPointError>,
+    {
+        self.prepare_reserved_work(
+            predecessor,
+            pool,
+            work_identity,
+            scope_count,
+            slot,
+            scope_slot,
+            scratch,
+        )?
+        .with_test_output(pool, final_callback)
+    }
+
+    /// Test-only compatibility adapter for carried-source fault fixtures.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_work_with_carried<'slot, 'scope_slot, 'scratch, 'carried, F>(
+        &self,
+        predecessor: &FixedPointPredecessor,
+        pool: &PrivatePagePool<'_>,
+        work_identity: u64,
+        scope_count: usize,
+        slot: &'slot mut FixedPointPreparedWorkSlot,
+        scope_slot: &'scope_slot mut PrivatePagePreparedScopeSlot,
+        scratch: &'scratch mut [u8],
+        carried_identity: u64,
+        carried_epoch: u64,
+        carried_pages: &'carried [u32],
+        final_callback: F,
+    ) -> Result<FixedPointPreparedWork<'slot, 'scope_slot, 'scratch, 'carried>, FixedPointError>
+    where
+        F: FnOnce() -> Result<FixedPointPreparedOutput, FixedPointError>,
+    {
+        self.prepare_reserved_work_with_carried(
+            predecessor,
+            pool,
+            work_identity,
+            scope_count,
+            slot,
+            scope_slot,
+            scratch,
+            carried_identity,
+            carried_epoch,
+            carried_pages,
+        )?
+        .with_test_output(pool, final_callback)
     }
 
     #[cfg(test)]
@@ -5136,6 +5397,72 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, FixedPointError::StalePredecessor);
         assert!(coordinator.validate_predecessor(&predecessor).is_ok());
+    }
+
+    #[test]
+    fn reserved_work_keeps_output_and_pool_state_unset_until_finalization() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 2, 2, 8).unwrap();
+        let coordinator = FixedPointCoordinator::test_new(7, 0, 2);
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let before = pool.coordinator_fence();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+
+        let reserved = coordinator
+            .prepare_reserved_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+            )
+            .unwrap();
+        reserved.cancel(&pool).unwrap();
+
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        assert_eq!(pool.coordinator_fence(), before);
+        assert!(coordinator.validate_predecessor(&predecessor).is_ok());
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn stale_reserved_work_still_releases_its_prepared_scope() {
+        let mut slots = [PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 2, 2, 8).unwrap();
+        let coordinator = FixedPointCoordinator::test_new(7, 0, 2);
+        coordinator.attach_pool(&pool).unwrap();
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let reserved = coordinator
+            .prepare_reserved_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+            )
+            .unwrap();
+
+        let epoch = pool.mutation_epoch();
+        pool.test_set_epoch(epoch + 1);
+        assert_eq!(
+            reserved.cancel(&pool),
+            Err(FixedPointError::StalePredecessor)
+        );
+        assert_eq!(work_slot, FixedPointPreparedWorkSlot::empty());
+        assert_eq!(scope_slot, PrivatePagePreparedScopeSlot::empty());
+        pool.test_set_epoch(epoch);
+        coordinator.finish(predecessor).unwrap();
     }
 
     #[test]

@@ -6558,6 +6558,49 @@ requirements are normative in the Pre-Implementation Gate above.
   prepared before the barrier. The next repair must split those physical
   planner/finalizer paths without changing the bounded-scratch contract.
 
+### 2026-07-24 - deferred physical-output preparation plan
+
+- Evidence: the non-test coordinator API executes `final_callback` while it
+  prepares a scope and stores the concrete bitmap root and target page count in
+  `FixedPointPreparedWorkSlot` before a Linux barrier exists
+  (`writer_fixed_point.rs:3361-3525`). Later terminal binding can only compare
+  its pages with that pre-stored output (`writer_fixed_point.rs:2769-2824`).
+  This makes a correct lock-bound allocator impossible: it must know concrete
+  page identities before it is allowed to select them.
+- The bitmap capacity planner has the same shape: it walks free-page candidates
+  and retains their numbers in its capacity plan
+  (`bitmap_cow.rs:2189-2208,2551-2693`). The final implementation must retain
+  bounded capacity and scratch before the barrier, but choose those page
+  numbers only after the stable reader scan.
+- First split the coordinator state, without changing its bounded workspace:
+  a normal-build reservation API will prepare only the exact scope,
+  predecessor, and caller scratch. A typed terminal export, made by the real
+  bitmap finalizer, will install and seal the root/page-count output only when
+  it is bound under the live finalizer callback. Existing pre-final-output
+  helpers remain test-only fault-fixture adapters.
+- The permanent coverage will prove an unfinalized reservation cannot execute
+  or publish, the late terminal export supplies the only accepted target, and
+  the normal non-test build has no callback route that determines physical
+  output before lock-bound finalization. The following slice will then use this
+  boundary to run the bitmap/retirement planners on the retained page source.
+
+### 2026-07-24 - deferred physical-output preparation implementation
+
+- Split normal coordinator preparation into `FixedPointReservedWork` and the
+  existing executable prepared-work state. The normal reservation records only
+  the predecessor facts, exact coordinator scope, caller-owned scratch, and
+  bounded carried input; its output slot remains empty.
+- Only `with_finalized_produced_terminal_export` can install the bitmap root
+  and target page count. It verifies the late typed terminal pages against the
+  unchanged core pool, binds those unbound pages to the reserved scope, and
+  then seals executable work. The old callback that selects an output before
+  finalization is now Rust-test-only fixture support.
+- Focused permanent tests prove a normal reserve/cancel leaves the output slot,
+  prepared-scope slot, pool fence, and predecessor unchanged, while a stale
+  reservation still releases its scope. This is the required coordinator
+  boundary; it does not yet claim that the real bitmap/retirement planners are
+  called through the Linux finalizer.
+
 ## Validation
 
 ### 2026-07-24 - Linux source/attempt/target state
@@ -6645,6 +6688,19 @@ requirements are normative in the Pre-Implementation Gate above.
   tests; Rust all-feature workspace matrix 540 tests; warnings-denied
   all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
   Rust formatting; `git diff --check`; and the project SOW audit.
+
+### 2026-07-24 - deferred physical-output preparation
+
+- `writer_fixed_point::tests`: 27/27 pass, including the new reservation
+  boundary test.
+- Full checkpoint validation passes: Rust no-default workspace matrix 429
+  tests; Rust all-feature workspace matrix 542 tests; warnings-denied
+  all-target Clippy; all-feature benchmark compilation; Go `test` and `vet`;
+  Rust formatting; `git diff --check`; and the project SOW audit.
+- The normal all-feature benchmark/library build compiles with the old
+  pre-finalized callback APIs excluded by `#[cfg(test)]`. No real planner has
+  been wired to the late export yet, so this checkpoint proves the boundary,
+  not the final lock-bound allocator implementation.
 
 ### Historical adversarial-audit evidence
 
