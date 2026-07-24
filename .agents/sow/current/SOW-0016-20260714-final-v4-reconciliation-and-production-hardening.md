@@ -8767,6 +8767,57 @@ requirements are normative in the Pre-Implementation Gate above.
   file format, public API, default validation behavior, or durable publication
   behavior changed.
 
+### 2026-07-24 - normalizer lock-bound no-reclamation plan
+
+- Evidence: the arrival-order normalizer already emits only logical staged
+  range pages (`sequential_assignment.rs`, `range_staging.rs`), and the
+  allocator already assigns their physical pages only through a bound bitmap
+  reservation (`bitmap_cow.rs:1798-1832`). The normal production planner,
+  however, accepts only a `RetirementReclamation` that retains the Linux
+  operation-barrier guard (`bitmap_cow.rs:2451-2463`). A range replacement
+  deliberately must not select and consume an unrelated eligible retirement
+  batch merely to obtain allocator authority.
+- Rust already has a valid `NoChange` reclamation shape which retains that
+  guard, but it can currently be produced only as a result of reading a
+  retirement tree (`retirement_reader.rs:426-472`). The held fence itself is
+  therefore unable to authorize an ordinary non-reclaiming mutation. This
+  blocks the first normalizer-to-live finalizer bridge even when all required
+  range payload pages are available.
+- The next narrow implementation adds a crate-private consuming conversion
+  from an already-held `RetirementReclaimFence` to the existing typed
+  no-reclamation result. It will be usable only by the normal lock-bound
+  planner and will preserve the same operation-barrier borrow until the bound
+  reservation is finalized or discarded. It will not read, alter, or reclaim
+  the retirement tree.
+- Tests will run the normal production planner through this exact authority,
+  prove the empty reclaim facts and held guard survive binding, and prove a
+  stale attachment still fails before pool mutation. This is Rust-only for
+  this checkpoint: Go has a reader barrier but no equivalent live
+  range-finalizer path yet, so adding a zero-valued Go token here would not
+  establish any real lock lifetime. No public API, v4 byte, default
+  validation, file publication, or normalizer result publication is added.
+
+### 2026-07-24 - normalizer lock-bound no-reclamation implementation
+
+- `RetirementReclaimFence::into_no_reclamation` now consumes the held Rust
+  fence into the existing `RetirementReclamation::NoChange` authority. The
+  authority still owns the operation-barrier guard; it carries no page slice,
+  selected batch, or retirement-tree mutation authority.
+- The normal production bitmap planner now has a tested no-reclamation input
+  path. It binds a normal payload reservation under a barrier with registering
+  readers, reports zero reclaimed pages and zero retirement facts, and can
+  apply the planned bitmap reservation. A separately dirtied shadow scope is
+  rejected as stale without any additional pool mutation.
+- Focused Rust coverage passes for explicit no-reclamation authority and both
+  normal/stale bitmap binding cases. Full validation passes: Rust default
+  (548 tests) and all-feature (669 tests) suites, formatting, warnings-denied
+  all-target Clippy, and all-feature benchmark compilation; Go tests, vet,
+  race, and 32-bit tests; whitespace checking; and the SOW audit. The
+  normalizer is still not connected to this path: the next slice must calculate
+  its full range-replacement and retirement capacity under the held barrier
+  before it assigns any physical range page. No Go source changed for the
+  reason stated in the plan.
+
 ### 2026-07-24 - transaction abort-latch validation
 
 - New Go and Rust tests prove the explicit latch blocks commit preflight and

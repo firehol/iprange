@@ -6976,10 +6976,18 @@ pub(crate) mod tests {
         RangeTreePayloadReservationSlot, RangeTreePayloadScratch, RangeTreePhysicalAssignment,
         RangeTreeStaging, RangeTreeStagingPage,
     };
+    use crate::retirement_reader::{RetirementReclaimBarrier, RetirementReclaimFence};
     use crate::test_alloc::count_thread_allocations;
     use core::cell::Cell;
     use std::vec;
     use std::vec::Vec;
+
+    #[derive(Debug)]
+    struct NoReclaimBarrier;
+
+    impl RetirementReclaimBarrier for NoReclaimBarrier {}
+
+    static NO_RECLAIM_BARRIER: NoReclaimBarrier = NoReclaimBarrier;
 
     #[derive(Debug)]
     struct SparsePage {
@@ -8696,6 +8704,63 @@ pub(crate) mod tests {
             range_terminal[0],
             PrivatePageCoordinatorTerminalPage::empty()
         );
+    }
+
+    #[test]
+    fn held_no_reclamation_authority_binds_a_normal_payload_reservation() {
+        let source = SparsePages::new([leaf(11, 1, &[5, 9])]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let fence =
+            RetirementReclaimFence::from_stable_reader_table(&NO_RECLAIM_BARRIER, 1, Some(1));
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(fence.into_no_reclamation())
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let mut bound = plan.bind(&pool, &scope).unwrap();
+
+        assert_eq!(bound.binding.reclaimed, 0);
+        assert_eq!(bound.reclamation_authority().batch_count(), 0);
+        assert_eq!(bound.reclamation_authority().last_retired_by_txn(), 0);
+        assert!(bound.reclamation_authority().identity().is_none());
+        assert!(bound.reclamation_authority().pages().is_empty());
+        bound.cow.apply_planned_reservation().unwrap();
+        assert_eq!(bound.binding.reclaimed, 0);
+    }
+
+    #[test]
+    fn held_no_reclamation_authority_rejects_a_stale_scope_without_mutation() {
+        let source = SparsePages::new([leaf(11, 1, &[5, 9])]);
+        let mut storage = PlannerStorage::with_replacement_capacity(16, 16, 4, 32, 64);
+        storage.arena.clear();
+        let fence =
+            RetirementReclaimFence::from_stable_reader_table(&NO_RECLAIM_BARRIER, 1, Some(1));
+        let plan = FreeBitmapReservationPlanner::new(&source, 1, 20, 11, 2, storage.buffers())
+            .unwrap()
+            .plan_under_reclamation(fence.into_no_reclamation())
+            .unwrap();
+        let mut slots = [const { PrivatePagePoolSlot::empty() }; 16];
+        let pool = PrivatePagePool::new_vacant(&mut slots, 20, 20, 2).unwrap();
+        let scope = pool.reserve_scope(plan.required_private_pages()).unwrap();
+        let checkpoint = pool.begin_checkpoint().unwrap();
+        pool.bind_page(
+            &checkpoint,
+            &scope,
+            5,
+            PrivatePageAuthorization::CommittedFree,
+        )
+        .unwrap();
+        pool.commit_checkpoint(checkpoint).unwrap();
+        let before = pool.test_mutation_snapshot();
+
+        assert!(matches!(
+            plan.bind(&pool, &scope),
+            Err(FreeBitmapCowError::StaleReservationPredecessor)
+        ));
+        assert_eq!(pool.test_mutation_snapshot(), before);
     }
 
     #[test]

@@ -71,6 +71,18 @@ impl<'barrier> RetirementReclaimFence<'barrier> {
             }
     }
 
+    /// Transfers the held operation-barrier authority to an ordinary mutation
+    /// that intentionally reclaims no existing retirement batch.
+    ///
+    /// This is distinct from a failed or skipped retirement scan: the caller
+    /// already owns the exact live barrier and may use it to bind new pages,
+    /// while the returned proof makes the zero-reclaim choice explicit.
+    pub(crate) fn into_no_reclamation<'pages>(self) -> RetirementReclamation<'barrier, 'pages> {
+        RetirementReclamation::NoChange(RetirementNoReclamation {
+            guard: self.into_guard(),
+        })
+    }
+
     fn into_guard(self) -> RetirementReclaimGuard<'barrier> {
         RetirementReclaimGuard {
             _barrier: self._barrier,
@@ -1339,6 +1351,17 @@ mod tests {
             RetirementSelectionResult::Selected(_) => panic!("expected no reclaimable batches"),
         };
         let (authority, _guard) = RetirementReclamation::NoChange(no_change).into_parts();
+        assert_eq!(authority.batch_count(), 0);
+        assert_eq!(authority.last_retired_by_txn(), 0);
+        assert!(authority.identity().is_none());
+        assert!(authority.pages().is_empty());
+    }
+
+    #[test]
+    fn held_fence_can_authorize_explicit_no_reclamation_without_a_tree_scan() {
+        // A registering reader prevents reclamation, but not a mutation that
+        // allocates only independently free pages under the same held barrier.
+        let (authority, _guard) = reclaim_fence(0).into_no_reclamation().into_parts();
         assert_eq!(authority.batch_count(), 0);
         assert_eq!(authority.last_retired_by_txn(), 0);
         assert!(authority.identity().is_none());
