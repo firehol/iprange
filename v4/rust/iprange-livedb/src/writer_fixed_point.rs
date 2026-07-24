@@ -4301,9 +4301,10 @@ mod tests {
     use crate::bitmap_cow::{BitmapCowArenaBinding, BitmapCowIndexNode};
     use crate::page::{self, PageHeader, PageType};
     use crate::private_page_pool::{
-        PrivatePageAuthorization, PrivatePageOwner, PrivatePagePoolError, PrivatePagePoolSlot,
-        PrivatePageSelectiveOverlayNode, PrivatePageSelectivePathEntry,
-        PrivatePageSparseReplayIndex, PrivatePageSparseReplaySlot,
+        private_page_selective_scratch_requirements, PrivatePageAuthorization, PrivatePageOwner,
+        PrivatePagePoolError, PrivatePagePoolSlot, PrivatePageSelectiveOverlayNode,
+        PrivatePageSelectivePathEntry, PrivatePageSelectiveScratch, PrivatePageSparseReplayIndex,
+        PrivatePageSparseReplaySlot,
     };
     use crate::test_alloc::count_thread_allocations;
     use std::vec;
@@ -4339,7 +4340,12 @@ mod tests {
 
     #[test]
     fn terminal_page_journal_applies_only_after_work_registration() {
-        let mut slots = [PrivatePagePoolSlot::empty(), PrivatePagePoolSlot::empty()];
+        let mut slots = [
+            PrivatePagePoolSlot::empty(),
+            PrivatePagePoolSlot::empty(),
+            PrivatePagePoolSlot::empty(),
+            PrivatePagePoolSlot::empty(),
+        ];
         let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
         let coordinator = FixedPointCoordinator::test_new(7, 0, 10);
         coordinator.attach_pool(&pool).unwrap();
@@ -4352,7 +4358,7 @@ mod tests {
                 &predecessor,
                 &pool,
                 1,
-                2,
+                4,
                 &mut work_slot,
                 &mut scope_slot,
                 &mut scratch,
@@ -4395,6 +4401,18 @@ mod tests {
         assert_eq!(sealed.nonce, 91);
         assert_eq!(sealed.pages[0].pool_slot, 0);
         assert_eq!(sealed.pages[1].pool_slot, 1);
+        let status = pool.scope_status(&sealed.active.scope).unwrap();
+        assert_eq!(status.capacity, 4);
+        assert_eq!(status.bound, 2);
+        let mut bound = [false; 4];
+        pool.visit_exact_scope_layout(&sealed.active.scope, |ordinal, _, info| {
+            bound[ordinal] = info.bound;
+        })
+        .unwrap();
+        assert_eq!(bound, [true, true, false, false]);
+        let commitment = pool.exact_commitment(&sealed.active.scope).unwrap();
+        pool.validate_exact_commitment(&sealed.active.scope, &commitment)
+            .unwrap();
         for page in sealed.pages {
             let slot = pool.find_bound_page(page.pgno).unwrap().unwrap();
             assert_eq!(pool.test_bytes(slot).unwrap(), page.bytes);
@@ -4405,6 +4423,7 @@ mod tests {
     #[test]
     fn sparse_terminal_replay_is_preborrowed_bounded_and_allocation_free_at_4096_slots() {
         let mut slots = vec![PrivatePagePoolSlot::empty(); 4096];
+        let slot_count = slots.len();
         let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
         let coordinator = FixedPointCoordinator::test_new(7, 0, 10);
         coordinator.attach_pool(&pool).unwrap();
@@ -4417,11 +4436,11 @@ mod tests {
                 &predecessor,
                 &pool,
                 1,
-                2,
+                4,
                 &mut work_slot,
                 &mut scope_slot,
                 &mut scratch,
-                || Ok(prepared_output(5, 10)),
+                || Ok(prepared_output(5, 11)),
             )
             .unwrap();
         let mut pages = [
@@ -4429,7 +4448,8 @@ mod tests {
             PrivatePageCoordinatorTerminalPage::empty(),
         ];
         pages[0] = bitmap_terminal_page(usize::MAX, 5);
-        pages[1] = bitmap_terminal_page(usize::MAX, 6);
+        pages[1] = bitmap_terminal_page(usize::MAX, 10);
+        pages[1].authorization = PrivatePageAuthorization::Appended;
         let terminal = prepared
             .with_unbound_terminal_pages(&pool, &mut pages, 91)
             .unwrap();
@@ -4487,7 +4507,7 @@ mod tests {
             });
             assert_eq!(allocations, 0);
             let replay = replay.unwrap();
-            assert!(replay.touched_slots() <= 8);
+            assert!(replay.touched_slots() <= 10);
             assert!(replay.index_visits() <= 128);
             drop(replay);
             assert!(replay_slots
@@ -4519,25 +4539,83 @@ mod tests {
         assert_eq!(allocations, 0);
         let replay = replay.unwrap();
         assert!(
-            replay.touched_slots() <= 8,
-            "two terminal pages must not copy or scan the 4096-slot pool"
+            replay.touched_slots() <= 10,
+            "a four-page reservation must not copy or scan the 4096-slot pool"
         );
         assert!(
             replay.index_visits() <= 128,
             "direct sparse indexing must remain bounded by simulated path visits"
         );
-        let (_, scope, _) = replay.replay();
+        let (work, scope, _) = replay.replay();
         assert!(replay_slots
             .iter()
             .all(|slot| *slot == PrivatePageSparseReplaySlot::empty()));
         assert!(replay_index
             .iter()
             .all(|entry| *entry == PrivatePageSparseReplayIndex::empty()));
+        let status = pool.scope_status(&scope).unwrap();
+        assert_eq!(status.capacity, 4);
+        assert_eq!(status.bound, 2);
+        let mut bound = [false; 4];
+        pool.visit_exact_scope_layout(&scope, |ordinal, _, info| {
+            bound[ordinal] = info.bound;
+        })
+        .unwrap();
+        assert_eq!(bound, [true, true, false, false]);
         assert_eq!(pool.scoped_in_use(&scope).unwrap(), 2);
+        assert_eq!(pool.pending_page_count(), 11);
         assert_eq!(
             pool.coordinator_work_phase(),
             crate::private_page_pool::PrivatePageCoordinatorWorkPhase::Sealed
         );
+
+        let targets = [terminal.pages()[0].pool_slot, terminal.pages()[1].pool_slot];
+        pool.accept_sealed_coordinator_scope(&work, &scope, 91)
+            .unwrap();
+        pool.finish_coordinator_work(work).unwrap();
+        let cleanup = pool
+            .begin_sealed_coordinator_cleanup(&scope, 91)
+            .unwrap()
+            .expect("registered coordinator scope requires cleanup");
+        let (nodes_required, path_required) =
+            private_page_selective_scratch_requirements(slot_count, targets.len(), 0).unwrap();
+        let mut cleanup_nodes = vec![PrivatePageSelectiveOverlayNode::empty(); nodes_required];
+        let mut cleanup_path = vec![PrivatePageSelectivePathEntry::empty(); path_required];
+        let mut cleanup_targets = targets;
+        let scratch = PrivatePageSelectiveScratch::new(
+            &mut cleanup_nodes,
+            &mut cleanup_path,
+            &mut cleanup_targets,
+        );
+        let mut deletes = pool
+            .prepare_selective_deletes(&scope, scratch, targets.len(), 0)
+            .unwrap();
+        pool.normalize_selective_deletes(&scope, &mut deletes)
+            .unwrap();
+        pool.validate_selective_checkpoint_touches(&scope, &deletes)
+            .unwrap();
+        pool.preflight_selective_cleanup_epochs(&scope, &deletes)
+            .unwrap();
+        let checkpoint_steps = status.capacity + targets.len() + 2;
+        let checkpoint = pool.preflight_checkpoint_steps(checkpoint_steps).unwrap();
+        pool.begin_checkpoint_prepared(&checkpoint).unwrap();
+        pool.apply_selective_delete_trees_terminal_prepared(&checkpoint, &scope, &deletes);
+        for index in 0..deletes.target_len() {
+            pool.unbind_selective_target_terminal_prepared(
+                &checkpoint,
+                &scope,
+                deletes.target(index),
+                false,
+            );
+        }
+        pool.commit_selective_checkpoint_in_scope_terminal_prepared(checkpoint, &scope);
+        pool.close_sealed_scope_terminal_prepared(&scope, 91);
+        let mut scratch = deletes.into_scratch();
+        scratch.clear();
+        assert!(scratch.is_canonical());
+        cleanup.finish().unwrap();
+        assert!(!pool.has_active_scopes());
+        pool.coordinator_commit_fence().unwrap();
     }
 
     #[test]
@@ -4623,6 +4701,74 @@ mod tests {
             .expect_err("corrupt terminal page must fail before journal binding");
         assert_eq!(error, FixedPointError::StalePredecessor);
         assert_eq!(returned_pages, before);
+        pool.cancel_prepared_coordinator_scope(prepared.scope)
+            .unwrap();
+        coordinator.finish(predecessor).unwrap();
+    }
+
+    #[test]
+    fn terminal_journal_rejects_empty_or_oversized_output_before_mutation() {
+        let mut slots = [PrivatePagePoolSlot::empty(), PrivatePagePoolSlot::empty()];
+        let pool = PrivatePagePool::new_vacant_transaction(&mut slots, 10, 10, 8).unwrap();
+        let coordinator = FixedPointCoordinator::test_new(7, 0, 10);
+        coordinator.attach_pool(&pool).unwrap();
+
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                1,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || Ok(prepared_output(0, 10)),
+            )
+            .unwrap();
+        let before = pool.test_mutation_snapshot();
+        let mut empty: [PrivatePageCoordinatorTerminalPage; 0] = [];
+        let (prepared, returned, error) = prepared
+            .with_unbound_terminal_pages(&pool, &mut empty, 91)
+            .expect_err("empty terminal output must be rejected");
+        assert_eq!(error, FixedPointError::StalePredecessor);
+        assert!(returned.is_empty());
+        assert_eq!(pool.test_mutation_snapshot(), before);
+        pool.cancel_prepared_coordinator_scope(prepared.scope)
+            .unwrap();
+        coordinator.finish(predecessor).unwrap();
+
+        let predecessor = coordinator.predecessor().unwrap();
+        let mut work_slot = FixedPointPreparedWorkSlot::empty();
+        let mut scope_slot = PrivatePagePreparedScopeSlot::empty();
+        let mut scratch = [];
+        let prepared = coordinator
+            .prepare_work(
+                &predecessor,
+                &pool,
+                2,
+                1,
+                &mut work_slot,
+                &mut scope_slot,
+                &mut scratch,
+                || Ok(prepared_output(5, 10)),
+            )
+            .unwrap();
+        let mut pages = [
+            bitmap_terminal_page(usize::MAX, 5),
+            bitmap_terminal_page(usize::MAX, 6),
+        ];
+        let before_pages = pages.clone();
+        let before = pool.test_mutation_snapshot();
+        let (prepared, returned, error) = prepared
+            .with_unbound_terminal_pages(&pool, &mut pages, 92)
+            .expect_err("terminal output beyond the reserved capacity must be rejected");
+        assert_eq!(error, FixedPointError::StalePredecessor);
+        assert_eq!(returned, before_pages);
+        assert_eq!(pool.test_mutation_snapshot(), before);
         pool.cancel_prepared_coordinator_scope(prepared.scope)
             .unwrap();
         coordinator.finish(predecessor).unwrap();

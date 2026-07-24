@@ -6911,7 +6911,60 @@ requirements are normative in the Pre-Implementation Gate above.
   parity is claimed. The prospective stage remains private until the complete
   production lifecycle has one bounded capacity model and error contract.
 
+### 2026-07-24 - bounded terminal-capacity plan
+
+- `PrivatePagePool::preflight_coordinator_terminal` currently requires the
+  exact final terminal-page count to equal the scope count reserved before the
+  Linux operation lock. That makes a generic finalizer impossible without
+  choosing physical output before the stable reader scan; the current Linux
+  fixture hides the issue by hard-coding a three-page scope and three-page
+  output.
+- Section 13 instead requires a checked bounded reservation before the lock
+  and exact physical page selection/fixed-point output under the lock. The
+  internal coordinator must therefore treat its reserved scope count as a
+  maximum, not an exact output count. It must accept a nonempty terminal prefix
+  no larger than that capacity, retain the unused suffix as vacant scope state,
+  and still close the entire scope during normal cleanup.
+- Keep all capacity bounded and caller-owned. Terminal-page buffers are sliced
+  to the actual output count; a larger-than-reserved output fails before live
+  mutation. Update the prepared epoch proof to charge movement of the full
+  reserved scope plus binding of only the actual output prefix. Add permanent
+  tests for a smaller output, appended-tail accounting, exact cleanup of unused
+  slots, and unchanged rejection of empty/oversized output. This is an internal
+  transaction representation repair, not a public API or format change.
+
+### 2026-07-24 - bounded terminal-capacity implementation
+
+- A prepared coordinator scope is now a checked maximum. A terminal journal
+  must be nonempty and may bind only its actual prefix when that prefix fits
+  inside the pre-reserved scope. Its epoch proof charges movement of the entire
+  scope, three binding steps per output page, and sealing.
+- Sparse replay retains the unused suffix as canonical scoped vacancy and
+  closes every reserved slot during selective cleanup. The test-only direct
+  adapter now maintains the same tree and vacant-suffix aggregates, including
+  later prior-return accounting, so its exact commitment remains valid for a
+  shorter terminal output.
+- Permanent tests use a four-page reservation with two output pages, including
+  one appended tail page. They prove prefix binding, bounded/allocation-free
+  sparse replay, exact scope cleanup, valid direct-path commitment, and
+  no-mutation rejection of empty and oversized journals. No public API, file
+  format, generic reclaim operation, or Go parity is claimed.
+
 ## Validation
+
+### 2026-07-24 - bounded terminal capacity
+
+- Focused Rust tests pass for direct terminal binding, sparse replay with a
+  four-page reservation/two-page result, selective cleanup of all four slots,
+  and empty/oversized journal rejection before mutation.
+- Full Rust workspace matrices pass: 444 no-default-feature tests and 559
+  all-feature tests. Formatting, all-target/all-feature Clippy with warnings
+  denied, and all-feature benchmark compilation pass.
+- Go `test ./...` and `vet ./...`, `git diff --check`, and the project SOW
+  audit pass. The binary-format specification already required bounded
+  pre-reservation with physical selection under the lock, so no specification
+  change was needed. This remains Rust-private infrastructure; Go has no
+  corresponding lifecycle implementation yet.
 
 ### 2026-07-24 - stage-aware reclamation preview
 

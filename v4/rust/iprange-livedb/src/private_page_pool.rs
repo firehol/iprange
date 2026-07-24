@@ -3916,7 +3916,7 @@ impl<'slots> PrivatePagePool<'slots> {
         );
         if nonce == 0
             || pages.is_empty()
-            || pages.len() != scope_slot.count
+            || pages.len() > scope_slot.count
             || scope_slot.address != address
             || scope_slot.pool_identity != self.identity
             || scope_slot.seal == 0
@@ -4017,9 +4017,14 @@ impl<'slots> PrivatePagePool<'slots> {
             vacant = slots[vacant].unscoped_vacant_next;
             previous = Some(page.pgno);
         }
+        // The prepared scope is a bounded capacity reservation.  Activating it
+        // moves every reserved slot, while terminal binding consumes only the
+        // actual nonempty prefix selected under the live lock.
         let reserve_steps =
+            u64::try_from(scope_slot.count).map_err(|_| PrivatePagePoolError::EpochExhausted)?;
+        let bind_steps =
             u64::try_from(pages.len()).map_err(|_| PrivatePagePoolError::EpochExhausted)?;
-        let apply_steps = reserve_steps
+        let apply_steps = bind_steps
             .checked_mul(3)
             .and_then(|steps| steps.checked_add(1))
             .ok_or(PrivatePagePoolError::EpochExhausted)?;
@@ -4563,11 +4568,6 @@ impl<'slots> PrivatePagePool<'slots> {
                 != Self::coordinator_terminal_pages_fingerprint(prepared.pages)
             || self.coordinator_scope_id.get() != scope.id
             || self.coordinator_unaccepted_scopes.get() != 1
-            || self.epoch.get()
-                != prepared
-                    .start_epoch
-                    .checked_add(prepared.pages_len as u64)
-                    .unwrap_or(0)
         {
             return Err((scope, prepared, PrivatePagePoolError::CoordinatorMismatch));
         }
@@ -4581,8 +4581,18 @@ impl<'slots> PrivatePagePool<'slots> {
             Ok(anchor) => anchor,
             Err(error) => return Err((scope, prepared, error)),
         };
-        if slots[anchor].scope_bound != 0
-            || slots[anchor].scope_capacity != prepared.pages.len()
+        let scope_steps = match u64::try_from(slots[anchor].scope_capacity) {
+            Ok(steps) => steps,
+            Err(_) => return Err((scope, prepared, PrivatePagePoolError::EpochExhausted)),
+        };
+        let expected_epoch = match prepared.start_epoch.checked_add(scope_steps) {
+            Some(epoch) => epoch,
+            None => return Err((scope, prepared, PrivatePagePoolError::EpochExhausted)),
+        };
+        if self.epoch.get() != expected_epoch
+            || prepared.pages.is_empty()
+            || slots[anchor].scope_bound != 0
+            || slots[anchor].scope_capacity < prepared.pages.len()
             || slots[anchor].scope_vacant_head != prepared.pages[0].pool_slot
         {
             return Err((scope, prepared, PrivatePagePoolError::StaleScope));
@@ -4596,6 +4606,25 @@ impl<'slots> PrivatePagePool<'slots> {
                 return Err((scope, prepared, PrivatePagePoolError::StaleScope));
             }
             vacant = slots[vacant].scope_vacant_next;
+        }
+        let suffix_count = slots[anchor].scope_capacity - prepared.pages.len();
+        let mut suffix_revision = 0u64;
+        let mut suffix_digest = 0u64;
+        for _ in 0..suffix_count {
+            if vacant == NO_SLOT
+                || vacant >= slots.len()
+                || slots[vacant].authorization.is_some()
+                || slots[vacant].state != PrivatePageState::Vacant
+            {
+                return Err((scope, prepared, PrivatePagePoolError::StaleScope));
+            }
+            suffix_revision =
+                suffix_revision.wrapping_add(private_page_scope_payload_revision(&slots[vacant]));
+            suffix_digest ^= private_page_scope_payload_digest(vacant, &slots[vacant]);
+            vacant = slots[vacant].scope_vacant_next;
+        }
+        if vacant != NO_SLOT {
+            return Err((scope, prepared, PrivatePagePoolError::StaleScope));
         }
 
         // All fallible checks end above. The exact reservation proof and page
@@ -4631,6 +4660,9 @@ impl<'slots> PrivatePagePool<'slots> {
             slot.scope_available = 0;
             slot.scope_in_use = 1;
             slot.binding_epoch += 2;
+            slot.scope_count = 1;
+            slot.scope_revision = private_page_scope_payload_revision(slot);
+            slot.scope_digest = private_page_scope_payload_digest(index, slot);
             let root = Self::index_insert_plain(&mut slots, self.index_root.get(), index);
             self.index_root.set(root);
             let old_scope_root = slots[anchor].scope_root;
@@ -4643,6 +4675,9 @@ impl<'slots> PrivatePagePool<'slots> {
             self.authorized_len.set(self.authorized_len.get() + 1);
             self.epoch.set(self.epoch.get() + 3);
         }
+        slots[anchor].scope_vacant_count = suffix_count;
+        slots[anchor].scope_vacant_revision = suffix_revision;
+        slots[anchor].scope_vacant_digest = suffix_digest;
         slots[anchor].scope_generation += 1;
         slots[anchor].scope_sealed = true;
         slots[anchor].scope_successor = prepared.nonce;
@@ -4754,8 +4789,18 @@ impl<'slots> PrivatePagePool<'slots> {
             slot.scope_height = 0;
             slot.scope_available = 0;
             slot.scope_in_use = 0;
+            slot.scope_count = 0;
+            slot.scope_revision = 0;
+            slot.scope_digest = 0;
             slot.binding_epoch += 1;
-            slots[page.scope_anchor].scope_vacant_head = page.slot;
+            let returned_revision = private_page_scope_payload_revision(slot);
+            let returned_digest = private_page_scope_payload_digest(page.slot, slot);
+            let owning = &mut slots[page.scope_anchor];
+            owning.scope_vacant_head = page.slot;
+            owning.scope_vacant_count += 1;
+            owning.scope_vacant_revision =
+                owning.scope_vacant_revision.wrapping_add(returned_revision);
+            owning.scope_vacant_digest ^= returned_digest;
             self.authorized_len.set(self.authorized_len.get() - 1);
             self.epoch.set(self.epoch.get() + 1);
         }
