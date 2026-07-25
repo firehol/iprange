@@ -45,6 +45,7 @@ mod report;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod scratch;
+mod scratch_maintenance;
 #[allow(dead_code)]
 mod tables;
 #[allow(dead_code)]
@@ -63,6 +64,11 @@ pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};
 pub use report::{
     RecoveryLogicalCounts, RecoveryPageCounts, RecoveryReport, RecoverySink, RecoverySinkControl,
     RecoveryUnknownEnvelope,
+};
+pub use scratch_maintenance::{
+    list_abandoned_scratch, remove_abandoned_scratch, AbandonedScratchAuthentication,
+    AbandonedScratchEntry, AbandonedScratchList, AbandonedScratchSink, AbandonedScratchSinkControl,
+    ScratchOwnerKind,
 };
 
 pub(crate) mod inspection;

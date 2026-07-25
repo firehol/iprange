@@ -95,6 +95,8 @@ pub enum Error {
     LiveRecoveryCurrentGenerationUnprovable,
     LiveRecoveryCurrentGenerationUnreadable,
     RecoveryCandidateChanged,
+    DirectoryIdentityMismatch,
+    CleanupConflict(&'static str),
     ForkedHandle,
 }
 
@@ -139,6 +141,8 @@ impl Error {
                 ErrorCode::LiveRecoveryCurrentGenerationUnreadable
             }
             Self::RecoveryCandidateChanged => ErrorCode::RecoveryCandidateChanged,
+            Self::DirectoryIdentityMismatch => ErrorCode::DirectoryIdentityMismatch,
+            Self::CleanupConflict(_) => ErrorCode::CleanupConflict,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
         }
     }
@@ -209,6 +213,10 @@ impl fmt::Display for Error {
             Self::RecoveryCandidateChanged => {
                 output.write_str("the selected recovery candidate changed")
             }
+            Self::DirectoryIdentityMismatch => {
+                output.write_str("the retained directory identity changed")
+            }
+            Self::CleanupConflict(detail) => write!(output, "cleanup conflict: {detail}"),
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
         }
     }
@@ -249,6 +257,8 @@ impl std::error::Error for Error {
             | Self::LiveRecoveryCurrentGenerationUnprovable
             | Self::LiveRecoveryCurrentGenerationUnreadable
             | Self::RecoveryCandidateChanged
+            | Self::DirectoryIdentityMismatch
+            | Self::CleanupConflict(_)
             | Self::ForkedHandle => None,
         }
     }

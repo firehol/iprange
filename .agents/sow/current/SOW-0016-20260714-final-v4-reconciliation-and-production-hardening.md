@@ -11743,6 +11743,63 @@ requirements are normative in the Pre-Implementation Gate above.
   physical lines; Lizard reports no changed function above cyclomatic
   complexity 9 or 100 lines.
 
+### 2026-07-25 - abandoned recovery-scratch maintenance plan
+
+- The public listing operation will scan one retained no-follow directory
+  descriptor with constant memory. It will ignore every noncanonical basename
+  and stream each exact scratch-pattern entry with the retained directory
+  identity, no-follow artifact identity, attempt ID, ordinal, and either a
+  CRC/header-proved owner kind or an explicit unauthenticated classification.
+- Authentication requires the complete 128-byte header, all fixed and reserved
+  fields, CRC, nonzero attempt ID, supported owner/security kinds, and exact
+  basename/attempt/ordinal agreement. A symlink, hard link, short file,
+  malformed header, or mismatched header is reported but never removal
+  authority.
+- Removal is the caller's explicit certification that no operation with that
+  attempt ID remains active. It requires exact caller-supplied directory and
+  artifact identities, reauthenticates the retained regular inode, unlinks only
+  that inode through the retained directory, synchronizes the directory, and
+  rechecks identity and absence. An already absent canonical name follows the
+  same synchronization/recheck path and succeeds idempotently. Age is unused.
+- Cancellation is checked before enumeration callbacks and before an unlink.
+  Once unlink starts, cancellation cannot interrupt the required durability
+  proof. Sink stop/error and every namespace race remain typed failures.
+- Permanent Linux tests will cover canonical discovery, malformed and
+  no-follow lookalikes, sink/cancellation behavior, identity mismatch,
+  replacement conflict, exact removal, and idempotent retry. The portable API
+  remains compilable elsewhere; platform-specific scratch cleanup stays
+  unsupported until that platform's required correctness-cleanup primitive is
+  implemented in the later Rust platform-completion slice.
+
+### 2026-07-25 - abandoned recovery-scratch maintenance milestone
+
+- The Rust SDK now exposes constant-memory abandoned-scratch listing and exact
+  idempotent removal. Listing reports the retained directory identity, exact
+  no-follow artifact identity, attempt/ordinal, and authenticated owner kind or
+  an explicit unauthenticated state.
+- The shared decoder accepts only the fixed lowercase basename grammar and the
+  complete version-1 header with supported owner/security kinds, zero reserved
+  bytes, nonzero attempt ID, matching basename fields, and valid CRC. Exact-name
+  short files, mismatched headers, symlinks, and hard links are visible but
+  never become removal authority.
+- Removal requires the caller-supplied directory and artifact identities,
+  reopens and reauthenticates the exact regular inode, checks cancellation
+  immediately before unlink, removes only that inode, proves link count zero,
+  synchronizes the directory, and rechecks identity/name absence. Retry after
+  proven absence succeeds without using age.
+- Four permanent tests cover authenticated and unauthenticated enumeration,
+  strict-name filtering, no-follow behavior, pre-call and callback-time
+  cancellation, sink stop/error, exact durable removal, idempotent retry,
+  directory/artifact mismatch, header damage, and name replacement.
+- All-feature and no-default suites each pass 304 tests, with two subprocess
+  entry points ignored. Rust 1.74.1 passes the all-feature suite; current
+  Windows GNU cross-compilation, strict Clippy in both feature modes,
+  formatting, and diff checks pass.
+- Every changed production file remains below 500 physical lines. Lizard
+  reports no changed function above cyclomatic complexity 9 or 100 lines.
+  Runtime maintenance is currently Linux-only; other targets return the
+  explicit unsupported result until their approved cleanup primitive exists.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

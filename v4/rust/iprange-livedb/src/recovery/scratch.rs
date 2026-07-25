@@ -21,7 +21,7 @@ use cleanup::{remove, residue, scratch_problem, set_removed_problems};
 mod fixed;
 pub(crate) use fixed::ScratchFile;
 #[path = "scratch/format.rs"]
-mod format;
+pub(super) mod format;
 #[cfg(test)]
 use format::hex;
 pub(crate) use format::HEADER_SIZE;
@@ -360,7 +360,7 @@ impl Scratch {
     }
 }
 
-fn local(identity: Identity) -> LocalFileIdentity {
+pub(super) fn local(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
         kind: POSIX_IDENTITY,
         bytes: identity.encode(),

@@ -330,7 +330,7 @@ impl Directory {
         require_local_filesystem(&self.file)
     }
 
-    fn entry(&self, name: &Name) -> Result<Option<Entry>, NamespaceError> {
+    pub(crate) fn entry(&self, name: &Name) -> Result<Option<Entry>, NamespaceError> {
         self.check_creator()?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         let result = unsafe {
@@ -390,10 +390,10 @@ impl Regular {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Entry {
-    identity: Identity,
-    links: u64,
-    regular: bool,
+pub(crate) struct Entry {
+    pub(crate) identity: Identity,
+    pub(crate) links: u64,
+    pub(crate) regular: bool,
 }
 
 #[derive(Debug)]
