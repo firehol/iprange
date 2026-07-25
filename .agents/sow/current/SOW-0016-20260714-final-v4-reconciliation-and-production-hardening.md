@@ -1697,6 +1697,12 @@ Open decisions:
     would contradict decisions 14-15 by hiding the first and most important class
     of corruption and its bounded extent; it is therefore not a genuine
     unresolved product choice.
+    **Superseded coordination detail (2026-07-25):** decision 21's later
+    open-description-lock simplification removes transaction-zero slot state.
+    `LiveCurrent` holds the gate exclusively while it scans slots, selects the
+    proven current meta, and directly claims that exact nonzero transaction. A
+    bootstrap-only invalid report keeps the gate through inspection and
+    publishes no slot. The reporting behavior above is unchanged.
 
 54. User decision (2026-07-21): the Windows contract can durably rename an
     exact owned artifact away from a correctness-authoritative name on local NTFS,
@@ -10739,6 +10745,89 @@ requirements are normative in the Pre-Implementation Gate above.
   physical lines; its largest file has 476 lines and Lizard reports zero
   functions above cyclomatic complexity 9. The implementation remains above
   the directional line-count goal; this checkpoint does not weaken that goal.
+
+### 2026-07-25 - explicit validation implementation plan
+
+- Implement section 18 as a separate, caller-invoked Rust operation. Normal
+  open, lookup, cursor, workflow, mutation, commit, and reclamation paths remain
+  non-validating. Invalid content is a completed factual report; source pin,
+  budget, cancellation, sink, and cleanup failures remain operation errors.
+- Expose one path-based `validate` entry point with explicit
+  `ImmutableCurrent`, `LiveCurrent`, and exact offline-candidate modes, a
+  caller-bounded validation budget, synchronous finding sink, cancellation,
+  stable reason/object enums, and a complete result. Recovery-readable meta
+  classification and candidate tokens are shared with the following recovery
+  slice rather than duplicated.
+- Correct the immutable-source lifetime boundary first. An immutable reader or
+  immutable validation holds the main file's shared lifetime lock and rechecks
+  the exact no-follow path identity and sidecar absence around bootstrap and
+  graph access. Live validation holds the operation gate while it scans the
+  table, selects the proven current transaction, and directly claims a slot for
+  that transaction before releasing the gate for the scan.
+- Use one checked packed claim bitmap to prove global page ownership and the
+  reachable/free/retired/reserve partition. Use fixed-depth traversal stacks,
+  one reusable page buffer, streamed tree records, and a preallocated flat
+  membership-refcount table. No page, range, feed, or membership creates one
+  heap allocation. Heap use is calculated and rejected before allocation.
+- Validate page CRCs and complete zero/reserved/layout rules before trusting
+  pointers. Traverse roots in fixed meta order, stop only the affected
+  untrustworthy subtree, continue independent roots/siblings, emit every
+  independently established defect once, and never invent logical bounds from
+  damaged bytes.
+- Prove range ordering/non-overlap/coalescing and exact counts; catalog
+  ordering/bijection/used bits; membership canonical bytes, hashes, reverse
+  index, unique interning, active feed bits, used IDs, and recomputed refcounts;
+  metadata chain/zlib/length; bitmap summaries/limits; retirement
+  ordering/coalescing; and the complete page partition.
+- Add authenticated external scratch only for the same ownership/refcount
+  work when the heap budget cannot hold it. Scratch is caller-authorized,
+  bounded, exclusively created, identity-bound, and removed on every terminal
+  path; normal operations and snapshots retain zero scratch authority.
+- Validate clean direct and membership files, full IPv4/IPv6 spaces, every
+  graph kind, bootstrap-only damage, isolated corrupt subtrees, alias/cycle,
+  count/index/refcount/partition defects, deterministic finding order, sink
+  stop/failure, cancellation, insufficient budgets, scratch cleanup, live pin
+  concurrency, offline candidate binding, zero default validation, Rust 1.74,
+  allocation/resource bounds, static/build gates, and exact compiled graph
+  size/complexity.
+
+### 2026-07-25 - current-generation explicit validation implementation
+
+- Added the caller-invoked `validation::validate` surface and stable finding,
+  object, progress, generation, budget, and failure types. Invalid bytes produce
+  a completed factual report; cancellation, resource, sink, source, and cleanup
+  failures remain separate operation failures with partial progress.
+- Implemented immutable-current coordination with a lifetime lock, no-follow
+  identity checks, and repeated sidecar-absence checks. Implemented live-current
+  coordination with an exclusive gate, exact selected-transaction reader claim,
+  bootstrap-only reporting without a transaction-zero slot, and exact slot/gate
+  cleanup. Ordinary reader and writer paths still perform no graph validation.
+- Implemented deterministic selected-generation checks for page identity, CRC,
+  bounds, reserved bytes, ownership/aliasing, range semantics, both catalog
+  indexes, feed and membership bitmaps, membership hashes/reverse mappings/
+  refcounts, blobs, compressed metadata, retirement extents, and the complete
+  reachable/free/retired/reserve allocation partition. Damaged pointers or
+  lengths stop only the untrustworthy subtree.
+- The ownership claims use two bits per declared page and the membership
+  cross-check uses one preallocated open-addressed table. Both are charged
+  against the caller's heap budget before allocation. This checkpoint is
+  heap-only: recovery-candidate inspection/binding, external scratch, recovery
+  output, and the full corruption/resource matrix remain in the next
+  implementation slice of this same SOW.
+- Permanent tests cover clean empty and populated direct/membership databases,
+  factual CRC corruption, immutable and live bootstrap-only reports, exact live
+  slot release, and sink-stop partial progress. Current and Rust 1.74
+  all-feature suites each pass 170 tests with one intentionally ignored
+  subprocess entry point. Warnings-denied all-target Clippy, benchmark
+  compilation, formatting, diff checks, and the SOW audit pass.
+- The validation files have zero Lizard functions above cyclomatic complexity
+  9. Their largest two files are 527 physical lines (479 and 490 non-comment
+  code lines) and have separate query/record submodules at real responsibility
+  boundaries. The exact compiled production graph is now 88 files and 21,688
+  physical lines, with zero functions above complexity 9. This is far above the
+  directional whole-engine size goal and is not acceptable as a final
+  simplicity result; each remaining slice must remove duplication or justify
+  its retained mechanisms with a concrete contract failure.
 
 ### Historical adversarial-audit evidence
 

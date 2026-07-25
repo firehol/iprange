@@ -35,6 +35,8 @@ pub enum ErrorCode {
     NoPendingTransaction,
     TransactionAborted,
     CleanupIncomplete,
+    SinkFailed,
+    StoppedBySink,
     ForkedHandle,
 }
 
@@ -75,6 +77,8 @@ pub enum Error {
         cause: Box<Error>,
         cleanup: Box<Error>,
     },
+    SinkFailed(Box<Error>),
+    StoppedBySink,
     ForkedHandle,
 }
 
@@ -107,6 +111,8 @@ impl Error {
             Self::NoPendingTransaction => ErrorCode::NoPendingTransaction,
             Self::TransactionAborted(_) => ErrorCode::TransactionAborted,
             Self::CleanupIncomplete { .. } => ErrorCode::CleanupIncomplete,
+            Self::SinkFailed(_) => ErrorCode::SinkFailed,
+            Self::StoppedBySink => ErrorCode::StoppedBySink,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
         }
     }
@@ -163,6 +169,8 @@ impl fmt::Display for Error {
             Self::CleanupIncomplete { cause, cleanup } => {
                 write!(output, "{cause}; cleanup also failed: {cleanup}")
             }
+            Self::SinkFailed(cause) => write!(output, "validation sink failed: {cause}"),
+            Self::StoppedBySink => output.write_str("validation was stopped by its sink"),
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
         }
     }
@@ -175,6 +183,7 @@ impl std::error::Error for Error {
             Self::Random(error) => Some(error),
             Self::TransactionAborted(cause) => Some(cause.as_ref()),
             Self::CleanupIncomplete { cause, .. } => Some(cause.as_ref()),
+            Self::SinkFailed(cause) => Some(cause.as_ref()),
             Self::InvalidArgument(_)
             | Self::NameInvalid
             | Self::NameExists
@@ -197,6 +206,7 @@ impl std::error::Error for Error {
             | Self::WriterBusy
             | Self::ReaderCapacityExhausted
             | Self::NoPendingTransaction
+            | Self::StoppedBySink
             | Self::ForkedHandle => None,
         }
     }

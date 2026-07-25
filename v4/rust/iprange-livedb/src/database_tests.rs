@@ -176,6 +176,33 @@ fn open_rejects_a_present_sidecar() {
     ));
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+#[test]
+fn immutable_reader_holds_the_shared_lifetime_lock() {
+    let path = TestPath::new("immutable-lifetime");
+    write_image(
+        &path.0,
+        empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION),
+        2,
+    );
+    let reader = ImmutableReader::open(&path.0).unwrap();
+    let competing = crate::live_sidecar::open_rw(&path.0).unwrap();
+
+    assert!(!crate::live_lock::try_lock(
+        &competing,
+        crate::live_sidecar::MAIN_LIFETIME_LOCK,
+        crate::live_lock::Mode::Exclusive,
+    )
+    .unwrap());
+    drop(reader);
+    assert!(crate::live_lock::try_lock(
+        &competing,
+        crate::live_sidecar::MAIN_LIFETIME_LOCK,
+        crate::live_lock::Mode::Exclusive,
+    )
+    .unwrap());
+}
+
 #[cfg(unix)]
 #[test]
 fn open_rejects_symlinks() {

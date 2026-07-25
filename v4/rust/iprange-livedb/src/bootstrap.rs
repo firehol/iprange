@@ -103,6 +103,18 @@ pub(crate) fn open_meta_pages(
     finish_open(meta, selection, selected_meta_page, physical_bytes, mode)
 }
 
+pub(crate) fn database_id_from_meta_pages(
+    page0: &[u8; PAGE_SIZE],
+    page1: &[u8; PAGE_SIZE],
+) -> Result<[u8; 16], BootstrapError> {
+    let identities = [identity_readable(page0), identity_readable(page1)];
+    require_same_identity(identities)?;
+    match identities {
+        [Ok(identity), _] | [_, Ok(identity)] => Ok(identity.meta.database_id),
+        [Err(meta0), Err(meta1)] => Err(BootstrapError::NoBootstrapMeta { meta0, meta1 }),
+    }
+}
+
 fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {
     if physical_bytes < (2 * PAGE_SIZE) as u64 {
         return Err(BootstrapError::FileTooShort);

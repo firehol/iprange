@@ -305,9 +305,8 @@ Every reader exposes `meta_selection: ProvenCurrent | SoleMeta0 | SoleMeta1`.
 identifies only the physical candidate actually exposed and never claims it is
 newest. Ordinary live-reader open, live `SnapshotTo`, `LiveCurrent` validation,
 and any other API promising the current live generation require
-`ProvenCurrent`; after any transaction-zero registration they clean it and
-return `CurrentGenerationUnprovable` rather than publishing a reader slot for a
-possibly older generation. Immutable readers and immutable snapshots may expose
+`ProvenCurrent`; they return `CurrentGenerationUnprovable` before publishing a
+reader slot for a possibly older generation. Immutable readers and immutable snapshots may expose
 a sole candidate, and the snapshot result carries the same source-selection
 status. No API silently upgrades a sole candidate to current.
 
@@ -2354,9 +2353,10 @@ byte zero, as frozen by [`c-abi-v4.md`](c-abi-v4.md).
 
 `Validate` is intentional, non-mutating, and has three explicit modes:
 
-- `LiveCurrent` takes the live operation lock, opens the exact bound sidecar,
-  claims a transaction-zero reader slot before bootstrap selection, and updates
-  it to the proven selected current transaction before a full graph scan.
+- `LiveCurrent` opens the exact bound sidecar and takes the live operation lock
+  exclusively. While that gate excludes publication, it scans the table,
+  selects the proven current generation, and directly claims a reader slot for
+  that exact nonzero transaction before the full graph scan.
 - `ImmutableCurrent` holds the shared main-file lifetime lock, requires sidecar
   absence, and rechecks canonical path identity and sidecar absence before and
   after scanning.
@@ -2376,8 +2376,8 @@ completed bootstrap-only invalid report: generation and roots are absent, the
 graph is explicitly untraversable, and unknown coverage is explicit.
 `LiveCurrent` may return that report only while trustworthy static main/sidecar
 OS identities bind the sidecar and it holds the operation lock continuously
-through inspection and cleanup of the transaction-zero claim. It never claims
-that an unselectable generation was pinned. Ambiguous live identity/current-
+through inspection. It publishes no reader slot and never claims that an
+unselectable generation was pinned. Ambiguous live identity/current-
 generation binding or inability to acquire the required coordination is an
 operational error, not a corruption finding.
 
@@ -2575,10 +2575,9 @@ explicit `RecoverLive` path first obtains the proven-current recovery-readable
 identity through
 checked windowed I/O, takes the shared main-file lifetime lock, strictly opens
 the existing sidecar bound to that database and local inode, and takes the
-operation lock. It scans the complete table, claims a transaction-zero slot,
-reproves the current generation and reselects that exact meta from the retained
-main descriptor, updates
-the slot to that exact nonzero transaction, and releases the operation lock.
+operation lock. It scans the complete table, reproves the current generation,
+reselects that exact meta from the retained main descriptor, and directly
+claims a slot for that exact nonzero transaction before releasing the operation lock.
 The retained slot protects the recovery scan. At that point recovery caches the
 complete selected tuple and every root/count used by the scan. Later commits may
 legally overwrite the physical meta page after a second publication, so a live

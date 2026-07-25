@@ -19,6 +19,10 @@ use crate::metadata;
 use crate::path;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::range_tree;
+use crate::{
+    live_lock::{self, Mode},
+    live_sidecar::{self, MAIN_LIFETIME_LOCK},
+};
 
 /// Public logical identity and selected generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,9 +76,8 @@ impl ImmutableReader {
         let sidecar = path::canonical_sidecar(path)?;
         require_sidecar_absent(&sidecar)?;
 
-        let file = open_read_only(path)?;
-        let bootstrap = bootstrap_file(&file, OpenMode::ImmutableReader)?;
-        require_sidecar_absent(&sidecar)?;
+        let (file, identity) = open_immutable_source(path, &sidecar)?;
+        let bootstrap = select_immutable_generation(path, &sidecar, &file, identity)?;
         Ok(Self {
             core: ReaderCore { file, bootstrap },
         })
@@ -161,6 +164,27 @@ impl ImmutableReader {
     pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
         self.core.import_parts()
     }
+}
+
+fn open_immutable_source(path: &Path, sidecar: &Path) -> Result<(File, live_sidecar::Identity)> {
+    let file = open_read_only(path)?;
+    let identity = live_sidecar::identity_any_link(&file)?;
+    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_sidecar::verify_path_any_link(path, identity)?;
+    require_sidecar_absent(sidecar)?;
+    Ok((file, identity))
+}
+
+fn select_immutable_generation(
+    path: &Path,
+    sidecar: &Path,
+    file: &File,
+    identity: live_sidecar::Identity,
+) -> Result<Bootstrap> {
+    let bootstrap = bootstrap_file(file, OpenMode::ImmutableReader)?;
+    live_sidecar::verify_path_any_link(path, identity)?;
+    require_sidecar_absent(sidecar)?;
+    Ok(bootstrap)
 }
 
 impl ReaderCore {
@@ -373,7 +397,7 @@ pub(crate) fn require_regular_file(file: &File) -> Result<()> {
     Ok(())
 }
 
-fn require_sidecar_absent(sidecar: &Path) -> Result<()> {
+pub(crate) fn require_sidecar_absent(sidecar: &Path) -> Result<()> {
     match fs::symlink_metadata(sidecar) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),

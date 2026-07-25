@@ -30,6 +30,15 @@ pub(crate) struct Identity {
     inode: u64,
 }
 
+impl Identity {
+    pub(crate) fn encode(self) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&self.device.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.inode.to_le_bytes());
+        bytes
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Header {
     pub(crate) capacity: u32,
@@ -234,15 +243,21 @@ impl Sidecar {
 }
 
 pub(crate) fn identity(file: &File) -> Result<Identity> {
+    let identity = identity_any_link(file)?;
+    #[cfg(unix)]
+    if file.metadata()?.nlink() != 1 {
+        return Err(Error::WrongMode("live files must have exactly one link"));
+    }
+    Ok(identity)
+}
+
+pub(crate) fn identity_any_link(file: &File) -> Result<Identity> {
     let metadata = file.metadata()?;
     if !metadata.file_type().is_file() {
         return Err(Error::InvalidArgument("live path is not a regular file"));
     }
     #[cfg(unix)]
     {
-        if metadata.nlink() != 1 {
-            return Err(Error::WrongMode("live files must have exactly one link"));
-        }
         Ok(Identity {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -255,13 +270,21 @@ pub(crate) fn identity(file: &File) -> Result<Identity> {
 }
 
 pub(crate) fn verify_path(path: &Path, expected: Identity) -> Result<()> {
+    verify_path_inner(path, expected, true)
+}
+
+pub(crate) fn verify_path_any_link(path: &Path, expected: Identity) -> Result<()> {
+    verify_path_inner(path, expected, false)
+}
+
+fn verify_path_inner(path: &Path, expected: Identity, require_single_link: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
         return Err(Error::WrongMode("live path no longer names a regular file"));
     }
     #[cfg(unix)]
     {
-        if metadata.nlink() != 1
+        if (require_single_link && metadata.nlink() != 1)
             || metadata.dev() != expected.device
             || metadata.ino() != expected.inode
         {

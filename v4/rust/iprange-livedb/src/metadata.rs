@@ -361,7 +361,7 @@ fn encode_page(
     put_u32(page, 28, checksum);
 }
 
-struct Inflater<'a> {
+pub(crate) struct Inflater<'a> {
     decoder: Decompress,
     output: &'a mut [u8],
     written: usize,
@@ -375,7 +375,7 @@ struct InflateStep {
 }
 
 impl<'a> Inflater<'a> {
-    fn new(output: &'a mut [u8]) -> Self {
+    pub(crate) fn new(output: &'a mut [u8]) -> Self {
         Self {
             decoder: Decompress::new(true),
             output,
@@ -384,7 +384,7 @@ impl<'a> Inflater<'a> {
         }
     }
 
-    fn feed(&mut self, mut input: &[u8]) -> Result<()> {
+    pub(crate) fn feed(&mut self, mut input: &[u8]) -> Result<()> {
         if self.ended {
             return Err(Error::Corrupt("metadata zlib stream has trailing bytes"));
         }
@@ -405,7 +405,7 @@ impl<'a> Inflater<'a> {
         Ok(())
     }
 
-    fn finish(mut self, compressed_len: u64) -> Result<()> {
+    pub(crate) fn finish(mut self, compressed_len: u64) -> Result<()> {
         while !self.ended {
             let step = self.step(&[], FlushDecompress::Finish)?;
             self.ended = step.status == Status::StreamEnd;

@@ -40,10 +40,12 @@ mod random;
 mod range_cursor;
 mod range_mutation;
 mod range_tree;
+pub mod recovery;
 mod retirement;
 mod slotted_page;
 mod source;
 mod used_bitmap;
+pub mod validation;
 mod workflow;
 
 pub use bootstrap::MetaSelection;
