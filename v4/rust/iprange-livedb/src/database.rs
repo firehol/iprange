@@ -7,7 +7,7 @@ use std::path::Path;
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
-use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::{self, FeedCursor};
@@ -157,6 +157,10 @@ impl ImmutableReader {
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.core.metadata_json()
     }
+
+    pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
+        self.core.import_parts()
+    }
 }
 
 impl ReaderCore {
@@ -166,6 +170,10 @@ impl ReaderCore {
 
     pub(crate) fn info(&self) -> DatabaseInfo {
         DatabaseInfo::from_bootstrap(self.bootstrap)
+    }
+
+    pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
+        (&self.file, self.bootstrap.meta)
     }
 
     pub(crate) fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {

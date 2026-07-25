@@ -90,14 +90,17 @@ pub(crate) fn intern_added_bit<S: RetiringStore>(
         if record.word_count != base_words {
             return Err(Error::Corrupt("membership reference length changed"));
         }
-        let mut word = [0u64; 1];
-        read_record_words(store, base.as_slice(), &record, bit / 64, &mut word)?;
-        if word[0] & (1u64 << (bit % 64)) != 0 {
-            return Ok(Interned {
-                id: base_id,
-                word_count: base_words,
-                created: false,
-            });
+        let word_index = bit / 64;
+        if word_index < base_words {
+            let mut word = [0u64; 1];
+            read_record_words(store, base.as_slice(), &record, word_index, &mut word)?;
+            if word[0] & (1u64 << (bit % 64)) != 0 {
+                return Ok(Interned {
+                    id: base_id,
+                    word_count: base_words,
+                    created: false,
+                });
+            }
         }
     }
     let source = AddedBit {

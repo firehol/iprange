@@ -16,7 +16,7 @@ pub(crate) use delete::delete;
 pub(crate) use insert::insert;
 use page::{branch_child, build_edit, copy_page, key_at, lower_bound, parse, CellBuf, Edit};
 pub(crate) use read::{at_or_after, predecessor, LeafBuf};
-pub(crate) use walk::retire_tree;
+pub(crate) use walk::{discard_private_tree, retire_tree};
 
 const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
 

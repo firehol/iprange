@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::OpenMode;
+use crate::contract::MetaV4;
 use crate::database::{self, DatabaseInfo, ReaderCore};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
@@ -148,6 +149,11 @@ impl LiveReader {
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.require_owner()?;
         self.core.metadata_json()
+    }
+
+    pub(crate) fn import_parts(&self) -> Result<(&std::fs::File, MetaV4)> {
+        self.require_owner()?;
+        Ok(self.core.import_parts())
     }
 
     /// Clear this registration. Dropping without close remains crash-safe.

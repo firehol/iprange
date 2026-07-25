@@ -24,11 +24,18 @@ impl DraftStore<'_> {
         let interned = membership_dictionary::intern_added_bit(
             self, &mut state, base_id, base_words, feed.index,
         )?;
-        if interned.created {
-            let mut root = self.draft.membership_delta_root;
-            membership_delta::track(self, &mut root, interned.id, 0)?;
-            self.draft.membership_delta_root = root;
-        }
+        self.track_new_membership(&interned)?;
+        self.store_membership_state(state);
+        Ok(interned)
+    }
+
+    pub(crate) fn intern_membership<W>(&mut self, words: &W) -> Result<Interned>
+    where
+        W: membership_dictionary::Words<Self>,
+    {
+        let mut state = self.membership_state();
+        let interned = membership_dictionary::intern(self, &mut state, words)?;
+        self.track_new_membership(&interned)?;
         self.store_membership_state(state);
         Ok(interned)
     }
@@ -178,6 +185,16 @@ impl DraftStore<'_> {
         self.draft.meta.membership_id_limit = state.id_limit;
     }
 
+    fn track_new_membership(&mut self, interned: &Interned) -> Result<()> {
+        if !interned.created {
+            return Ok(());
+        }
+        let mut root = self.draft.membership_delta_root;
+        membership_delta::track(self, &mut root, interned.id, 0)?;
+        self.draft.membership_delta_root = root;
+        Ok(())
+    }
+
     fn apply_membership<K: IpKey, F>(
         &mut self,
         from: K,
@@ -224,11 +241,7 @@ impl DraftStore<'_> {
             supplied_words,
             operation,
         )?;
-        if interned.created {
-            let mut root = self.draft.membership_delta_root;
-            membership_delta::track(self, &mut root, interned.id, 0)?;
-            self.draft.membership_delta_root = root;
-        }
+        self.track_new_membership(&interned)?;
         self.store_membership_state(state);
         Ok((interned.id != 0).then_some(interned.id))
     }

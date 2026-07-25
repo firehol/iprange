@@ -61,9 +61,10 @@ pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
     create_live, CommitDurability, CommitResult, CreateFeed, CreateResult, CreationState,
-    DirectReplacement, FeedRef, FinishedWorkflow, LiveWriter, MembershipRef, MembershipTransaction,
-    PreparedFeedChange, PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh,
-    TransactionBudget, TransactionFeedCursor,
+    DirectReplacement, FeedRef, FinishedWorkflow, LiveWriter, MembershipImport,
+    MembershipImportSource, MembershipRef, MembershipTransaction, PreparedFeedChange,
+    PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh, TransactionBudget,
+    TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};

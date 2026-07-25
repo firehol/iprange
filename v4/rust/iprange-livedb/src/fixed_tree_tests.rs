@@ -367,6 +367,26 @@ fn next_transaction_copies_only_its_selected_path() {
 }
 
 #[test]
+fn private_tree_release_visits_every_page_once() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in 0..1_000 {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    let page_count = store.pages.len() as u32;
+
+    discard_private_tree::<U32Codec, _, _>(&mut store, root, || Ok(())).unwrap();
+    store.discarded.sort_unstable();
+    assert_eq!(store.discarded, (2..page_count).collect::<Vec<_>>());
+}
+
+#[test]
 fn deletion_removes_empty_children_and_collapses_the_root() {
     let mut store = MemoryStore::new();
     let mut root = 0;

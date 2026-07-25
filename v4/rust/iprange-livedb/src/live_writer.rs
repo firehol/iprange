@@ -6,6 +6,7 @@ mod direct_workflow;
 mod feed_lifecycle;
 mod feed_workflow;
 mod membership;
+mod membership_import;
 mod reclaim;
 mod workflow;
 
@@ -27,6 +28,7 @@ pub use create::{create_live, CreateResult, CreationState};
 pub use direct_workflow::{DirectReplacement, RetentionRefresh};
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
+pub use membership_import::{MembershipImport, MembershipImportSource};
 pub use reclaim::ReclaimResult;
 pub use workflow::{FinishedWorkflow, PreparedFeedChange, PreparedWorkflow};
 
@@ -326,12 +328,20 @@ impl LiveWriter {
 
     fn abort_after(&mut self, cause: Error) -> Error {
         let fatal = matches!(cause, Error::Io(_) | Error::Format(_) | Error::Corrupt(_));
-        if let Err(cleanup) = self.discard_draft() {
-            self.state = State::Unusable;
-            return Error::TransactionAborted(Box::new(cleanup));
-        }
+        let result = self.abort_after_source(cause);
         if fatal {
             self.state = State::Unusable;
+        }
+        result
+    }
+
+    fn abort_after_source(&mut self, cause: Error) -> Error {
+        if let Err(cleanup) = self.discard_draft() {
+            self.state = State::Unusable;
+            return Error::TransactionAborted(Box::new(Error::CleanupIncomplete {
+                cause: Box::new(cause),
+                cleanup: Box::new(cleanup),
+            }));
         }
         Error::TransactionAborted(Box::new(cause))
     }

@@ -1,11 +1,11 @@
-//! Fixed-depth postorder retirement of one detached tree.
+//! Fixed-depth postorder release of one detached tree.
 
 use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::slotted_page::Header;
 
 use super::page::{branch_child, parse};
-use super::{Codec, RetiringStore};
+use super::{Codec, RetiringStore, Store};
 
 const MAX_DEPTH: usize = MAX_TREE_LEVEL as usize;
 
@@ -37,35 +37,66 @@ where
     S: RetiringStore,
     F: FnMut() -> Result<()>,
 {
+    walk::<C, S, F, _>(store, root, &mut checkpoint, &mut |store, page| {
+        store.retire_pages(&[page])
+    })
+}
+
+pub(crate) fn discard_private_tree<C, S, F>(
+    store: &mut S,
+    root: u32,
+    mut checkpoint: F,
+) -> Result<()>
+where
+    C: Codec,
+    S: Store,
+    F: FnMut() -> Result<()>,
+{
+    walk::<C, S, F, _>(store, root, &mut checkpoint, &mut |store, page| {
+        store.discard_private(page)
+    })
+}
+
+fn walk<C, S, F, A>(store: &mut S, root: u32, checkpoint: &mut F, release: &mut A) -> Result<()>
+where
+    C: Codec,
+    S: Store,
+    F: FnMut() -> Result<()>,
+    A: FnMut(&mut S, u32) -> Result<()>,
+{
     if root == 0 {
         return Ok(());
     }
-    Walker::new(root).run::<C, S, F>(store, &mut checkpoint)
+    Walker::new(root).run::<C, S, F, A>(store, checkpoint, release)
 }
 
 impl Walker {
-    fn run<C, S, F>(&mut self, store: &mut S, checkpoint: &mut F) -> Result<()>
+    fn run<C, S, F, A>(&mut self, store: &mut S, checkpoint: &mut F, release: &mut A) -> Result<()>
     where
         C: Codec,
-        S: RetiringStore,
+        S: Store,
         F: FnMut() -> Result<()>,
+        A: FnMut(&mut S, u32) -> Result<()>,
     {
         loop {
             checkpoint()?;
-            if self.visit::<C, S>(store)? {
+            if self.visit::<C, S, A>(store, release)? {
                 return Ok(());
             }
         }
     }
 
-    fn visit<C: Codec, S: RetiringStore>(&mut self, store: &mut S) -> Result<bool> {
+    fn visit<C: Codec, S: Store, A>(&mut self, store: &mut S, release: &mut A) -> Result<bool>
+    where
+        A: FnMut(&mut S, u32) -> Result<()>,
+    {
         let (page, header) = read_current::<C, S>(store, self)?;
         if header.level > 0 {
             self.descend::<C, S>(store, &page, header)?;
             return Ok(false);
         }
-        store.retire_pages(&[self.current])?;
-        Ok(!self.advance::<C, S>(store)?)
+        release(store, self.current)?;
+        Ok(!self.advance::<C, S, A>(store, release)?)
     }
 
     fn new(root: u32) -> Self {
@@ -77,7 +108,7 @@ impl Walker {
         }
     }
 
-    fn descend<C: Codec, S: RetiringStore>(
+    fn descend<C: Codec, S: Store>(
         &mut self,
         store: &S,
         page: &[u8; PAGE_SIZE],
@@ -99,7 +130,10 @@ impl Walker {
         Ok(())
     }
 
-    fn advance<C: Codec, S: RetiringStore>(&mut self, store: &mut S) -> Result<bool> {
+    fn advance<C: Codec, S: Store, A>(&mut self, store: &mut S, release: &mut A) -> Result<bool>
+    where
+        A: FnMut(&mut S, u32) -> Result<()>,
+    {
         loop {
             let Some(slot) = self.depth.checked_sub(1) else {
                 return Ok(false);
@@ -110,11 +144,11 @@ impl Walker {
                 return Ok(true);
             }
             self.depth = slot;
-            store.retire_pages(&[frame.page_number])?;
+            release(store, frame.page_number)?;
         }
     }
 
-    fn select_next_child<C: Codec, S: RetiringStore>(
+    fn select_next_child<C: Codec, S: Store>(
         &mut self,
         store: &S,
         slot: usize,
@@ -124,7 +158,7 @@ impl Walker {
         store.read(frame.page_number, &mut parent)?;
         let header = parse::<C>(&parent, store.target_txn(), Some(frame.level))?;
         if header.item_count != frame.child_count {
-            return Err(Error::Corrupt("B+tree changed during retirement"));
+            return Err(Error::Corrupt("B+tree changed during postorder release"));
         }
         self.current = branch_child::<C>(&parent, &header, frame.next_child, store.page_limit())?;
         frame.next_child += 1;
@@ -134,7 +168,7 @@ impl Walker {
     }
 }
 
-fn read_current<C: Codec, S: RetiringStore>(
+fn read_current<C: Codec, S: Store>(
     store: &S,
     walker: &Walker,
 ) -> Result<([u8; PAGE_SIZE], Header)> {

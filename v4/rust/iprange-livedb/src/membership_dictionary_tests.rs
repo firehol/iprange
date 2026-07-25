@@ -194,6 +194,24 @@ fn inline_and_blob_values_deduplicate_reuse_ids_and_release_pages() {
 }
 
 #[test]
+fn added_bit_extends_across_a_word_boundary() {
+    let mut store = MemoryStore::new();
+    let mut state = empty_state();
+    let first = intern_added_bit(&mut store, &mut state, 0, 0, 63).unwrap();
+    let second = intern_added_bit(&mut store, &mut state, first.id, first.word_count, 64).unwrap();
+    assert_eq!(first.word_count, 1);
+    assert_eq!(second.word_count, 2);
+
+    let mut words = [0; 2];
+    read_words(&store, state.id_root, second.id, 0, &mut words).unwrap();
+    assert_eq!(words, [1 << 63, 1]);
+    let duplicate =
+        intern_added_bit(&mut store, &mut state, second.id, second.word_count, 64).unwrap();
+    assert_eq!(duplicate.id, second.id);
+    assert!(!duplicate.created);
+}
+
+#[test]
 fn reverse_lookup_full_compares_equal_hash_candidates() {
     let mut store = MemoryStore::new();
     let mut state = empty_state();

@@ -10670,6 +10670,76 @@ requirements are normative in the Pre-Implementation Gate above.
   complexity 9. The implementation remains above the directional line-count
   goal; this checkpoint records that fact rather than weakening the goal.
 
+### 2026-07-25 - membership import implementation plan
+
+- Implement the remaining Phase-1 membership import exactly as section 16.5:
+  one clean destination writer, one explicitly selected immutable or live pinned
+  source reader, compatible family/tag, different local inode, no `AddRanges`,
+  one `FinishInput`, then the common optional metadata plus commit/abort path.
+- Rust exposes one source-mode enum borrowing either reader. The Rust lifetime
+  prevents source close while the import handle exists; finishing consumes that
+  borrow before returning a prepared destination handle. Source indexes and
+  membership IDs remain private and are translated only by exact feed names.
+- Enumerate the source catalog once, create only missing destination feeds, and
+  preserve destination-only feeds. Stream the source range tree once and union
+  translated source memberships directly into destination COW state. Empty
+  source feeds still create catalog entries.
+- Keep source-index, source-membership, translated-membership-deduplication, and
+  sparse translated-word state in operation-private B+trees allocated through
+  the existing destination page budget. Return those unpublished pages directly
+  to the draft's private/free pool before preparation; they never enter the
+  durable old-generation retirement list. This keeps heap use fixed, avoids
+  per-feed expansion and quadratic bit stacking, and creates no external file.
+- Source read/corruption failures abort the complete destination draft without
+  poisoning an otherwise healthy destination writer. Destination corruption or
+  I/O failures retain the existing unusable-writer rule. Cancellation is checked
+  between feeds, source ranges, membership word batches, set bits, and private
+  cache pages.
+- Validate with exact IPv4 report fields and name-union semantics, empty-feed
+  catalog-only change, no-change import, metadata isolation/staging, live and
+  immutable source modes, source/destination and compatibility preconditions,
+  source failure rollback, budget failure rollback, full-space IPv6, randomized
+  reference-model coverage, Rust 1.74, static/build gates, and exact compiled
+  graph size/complexity.
+
+### 2026-07-25 - membership import implementation
+
+- Implemented the public borrowed-source import workflow in
+  `v4/rust/iprange-livedb/src/live_writer/membership_import.rs`. It accepts only
+  an explicit immutable or live pinned source, rejects incompatible
+  family/kind/tag and the same local inode before mutation, enumerates the
+  source catalog once, translates by exact names, creates missing feeds, and
+  unions source coverage while preserving destination-only feeds and metadata.
+  A copied source with the same database ID on a different inode is accepted.
+- Source-feed, membership, translated-membership, and sparse-word maps live in
+  operation-private destination B+trees. Their postorder release returns every
+  unpublished page directly to the draft private/free pool; scratch pages never
+  enter the durable old-reader retirement list. Import creates no external file
+  and open-handle processing performs zero measured heap allocations.
+- Source read/corruption and cancellation failures discard the complete draft
+  while leaving a successfully cleaned destination writer reusable. Destination
+  storage/corruption retains the existing unusable-writer rule. A physically
+  truncated source page is correctly reported as source corruption, not as an
+  operating-system I/O error.
+- The feed-scale test exposed and fixed a shared membership-builder defect:
+  adding bit 64 to a one-word membership attempted an out-of-range read instead
+  of extending the bitmap. Focused dictionary coverage now proves the
+  63-to-64 boundary, and a public 140-feed import proves sparse remapping across
+  multiple bitmap words without caller-managed indexes.
+- Permanent integration coverage proves exact report counters and named-set
+  union, live/immutable modes, old-reader isolation, metadata staging, clean
+  no-change, empty feeds, same-database copies, every compatibility gate,
+  cancellation, budget and source-read rollback, destination reuse,
+  full-address-space IPv6, a deterministic 256-address reference model, and
+  sparse high feed indexes.
+- Current Rust and Rust 1.74 all-feature suites each pass 161 tests with one
+  intentionally ignored subprocess entry point. Formatting, warnings-denied
+  all-target Clippy, all-feature benchmark compilation, and diff whitespace
+  checks pass. The exact compiled production graph has 70 files and 16,536
+  physical lines; its largest file has 476 lines and Lizard reports zero
+  functions above cyclomatic complexity 9. The implementation remains above
+  the directional line-count goal; this checkpoint does not weaken that goal.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -152,6 +152,19 @@ pub(crate) fn id_contains_index(
     view.contains_index(feed_index)
 }
 
+pub(crate) fn by_id<'a>(
+    file: &'a File,
+    meta: &MetaV4,
+    id: u32,
+    owner_pid: Option<u32>,
+) -> Result<MembershipView<'a>> {
+    if id == 0 {
+        return Err(Error::Corrupt("range names the empty membership ID"));
+    }
+    lookup(file, meta, Some(id), owner_pid)?
+        .ok_or(Error::Corrupt("range names an absent membership ID"))
+}
+
 fn lookup<'a>(
     file: &'a File,
     meta: &MetaV4,
