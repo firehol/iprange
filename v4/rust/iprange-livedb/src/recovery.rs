@@ -1,6 +1,12 @@
 //! Recovery candidate identity shared by inspection, validation, and recovery.
 
-use crate::validation::LocalFileIdentity;
+mod classify;
+
+use crate::validation::{LocalFileIdentity, ValidationProgress};
+
+pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};
+
+pub(crate) mod inspection;
 
 /// Exact classification of one recovery-readable retained metadata page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -12,7 +18,7 @@ pub enum RecoveryCandidateLabel {
 }
 
 /// Opaque exact recovery-candidate token returned by candidate inspection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecoveryCandidate {
     pub(crate) label: RecoveryCandidateLabel,
     pub(crate) meta_page: u8,
@@ -41,5 +47,39 @@ impl RecoveryCandidate {
 
     pub fn commit_nonce(&self) -> [u8; 16] {
         self.commit_nonce
+    }
+}
+
+/// Bounded recovery-candidate inspection result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryCandidateInspection {
+    pub source_identity: LocalFileIdentity,
+    pub progress: ValidationProgress,
+    candidates: [Option<RecoveryCandidate>; 2],
+}
+
+impl RecoveryCandidateInspection {
+    pub fn candidate_count(&self) -> usize {
+        self.candidates.iter().flatten().count()
+    }
+
+    pub fn candidate(&self, index: usize) -> Option<&RecoveryCandidate> {
+        self.candidates.iter().flatten().nth(index)
+    }
+
+    pub fn candidates(&self) -> impl Iterator<Item = &RecoveryCandidate> {
+        self.candidates.iter().flatten()
+    }
+
+    pub(crate) fn new(
+        source_identity: LocalFileIdentity,
+        progress: ValidationProgress,
+        candidates: [Option<RecoveryCandidate>; 2],
+    ) -> Self {
+        Self {
+            source_identity,
+            progress,
+            candidates,
+        }
     }
 }

@@ -10829,6 +10829,50 @@ requirements are normative in the Pre-Implementation Gate above.
   simplicity result; each remaining slice must remove duplication or justify
   its retained mechanisms with a concrete contract failure.
 
+### 2026-07-25 - recovery-candidate inspection and validation
+
+- This slice implements only the already-approved section-18/19 candidate
+  inspection and exact offline-candidate validation contract. It introduces no
+  recovery-output behavior and does not change normal open, lookup, mutation, or
+  commit paths.
+- Candidate classification reads the two physical metadata pages independently.
+  Generation-order readability is deliberately narrower than recovery
+  readability. Equal identical creation metas and adjacent parity-correct metas
+  prove order; swapped, gapped, disagreeing, damaged, or identity-mismatched
+  pairs do not. A damaged proven current meta never promotes the previous meta.
+- Inspection returns a fixed array of at most two opaque tokens, not a
+  file-sized allocation. Immutable mode holds the shared lifetime lock and
+  requires sidecar absence. Caller-certified offline mode holds the exclusive
+  lifetime lock and may inspect a live/copy source without inferring safety from
+  its sidecar. On POSIX, that exclusive byte-range lock requires opening the
+  source read-write even though inspection performs no writes.
+- Live inspection holds the shared main lifetime lock, strictly binds the
+  existing sidecar, takes the operation gate exclusively, reclassifies the
+  metas, and checks every active reader slot. Its reader-table scan does not
+  clear stale bytes, so the operation is byte-for-byte non-mutating. It returns
+  only a proven recovery-readable `Newest` token and has exact typed errors for
+  unprovable order, unreadable current metadata, and unavailable coordination.
+- `OfflineCandidate(token)` validation now reopens under exclusive lifetime
+  coordination, checks the complete local identity and token classification
+  before graph access, validates exactly the selected retained generation, and
+  rereads/rechecks the token before returning. A stale token fails as
+  `RecoveryCandidateChanged`; ordinary paths still perform no implicit
+  validation.
+- Permanent tests cover deterministic labels/order, unordered swapped metas,
+  non-promotion of a damaged current meta, zero-candidate diagnostics, exact
+  previous-generation validation, stale-token rejection before graph access,
+  live sidecar byte preservation, resource/cancellation failures, and both
+  required live current-generation errors.
+- Current and Rust 1.74 all-feature suites each pass 185 tests with one
+  intentionally ignored subprocess entry point. Warnings-denied all-target
+  Clippy, benchmark compilation, formatting, diff checks, and changed-module
+  complexity checks pass. The exact compiled production graph is 91 files and
+  22,327 physical lines with zero functions above cyclomatic complexity 9; the
+  three new production modules are 35, 199, and 227 physical lines. The whole
+  implementation remains far above the directional size goal. Recovery output,
+  bounded recovery scratch, snapshot publication, update-ipsets-shaped
+  benchmarks, and the final simplification pass remain pending.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

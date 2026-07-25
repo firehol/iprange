@@ -336,6 +336,37 @@ fn dynamic_bootstrap_field_matrix_fails_closed() {
 }
 
 #[test]
+fn recovery_meta_ignores_physical_availability_but_not_declared_structure() {
+    let mut truncated = empty_direct_meta(1);
+    truncated.page_count = 3;
+    let mut page = [0; PAGE_SIZE];
+    truncated.encode_into(&mut page);
+
+    let state = classify_recovery_meta(&page);
+    assert_eq!(state.order.unwrap(), truncated);
+    assert_eq!(state.recovery.unwrap(), truncated);
+
+    truncated.range_root = 3;
+    truncated.range_record_count = 1;
+    truncated.encode_into(&mut page);
+    let state = classify_recovery_meta(&page);
+    assert_eq!(state.order.unwrap(), truncated);
+    assert_eq!(state.recovery, Err(MetaProblem::RootBounds));
+}
+
+#[test]
+fn generation_order_readability_is_narrower_than_recovery_readability() {
+    let mut inconsistent = empty_direct_meta(1);
+    inconsistent.range_record_count = 1;
+    let mut page = [0; PAGE_SIZE];
+    inconsistent.encode_into(&mut page);
+
+    let state = classify_recovery_meta(&page);
+    assert_eq!(state.order.unwrap(), inconsistent);
+    assert_eq!(state.recovery, Err(MetaProblem::CountInvariant));
+}
+
+#[test]
 fn allocator_reserve_is_bounded_unique_and_not_a_root() {
     let mut valid = empty_direct_meta(1);
     valid.page_count = 3;

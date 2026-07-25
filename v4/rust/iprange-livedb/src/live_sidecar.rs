@@ -198,6 +198,19 @@ impl Sidecar {
         self.oldest_reader(committed_txn).map(|_| ())
     }
 
+    pub(crate) fn inspect_at_most(&self, committed_txn: u64) -> Result<()> {
+        for slot in 0..self.header.capacity {
+            if let Some(txn) = self.inspect_slot(slot)? {
+                if txn > committed_txn {
+                    return Err(Error::Corrupt(
+                        "reader slot names an uncommitted transaction",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn oldest_reader(&self, committed_txn: u64) -> Result<Option<u64>> {
         let mut oldest = None;
         self.scan_readers(|txn| {
@@ -218,6 +231,19 @@ impl Sidecar {
             self.clear_stale(offset)?;
             return Ok(None);
         }
+        self.read_active_slot(offset)
+    }
+
+    fn inspect_slot(&self, slot: u32) -> Result<Option<u64>> {
+        let offset = slot_offset(slot)?;
+        if live_lock::try_lock(&self.file, offset, Mode::Exclusive)? {
+            live_lock::unlock(&self.file, offset)?;
+            return Ok(None);
+        }
+        self.read_active_slot(offset)
+    }
+
+    fn read_active_slot(&self, offset: u64) -> Result<Option<u64>> {
         let mut bytes = [0; SLOT_SIZE as usize];
         file_io::read_exact_at(&self.file, &mut bytes, offset)?;
         let txn = u64_le(&bytes, 0);

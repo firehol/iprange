@@ -10,7 +10,7 @@ mod metadata;
 mod page;
 mod range;
 mod retirement;
-mod source;
+pub(crate) mod source;
 mod tree;
 mod types;
 
@@ -60,10 +60,74 @@ pub fn validate<S: ValidationSink>(
             }
             validate_live(path.as_ref(), budget, cancellation, sink)
         }
-        ValidationMode::OfflineCandidate(_) => Err(failure(
-            Error::Unsupported("offline-candidate validation requires recovery inspection"),
+        ValidationMode::OfflineCandidate(candidate) => {
+            validate_offline(path.as_ref(), &candidate, budget, cancellation, sink)
+        }
+    }
+}
+
+fn validate_offline<S: ValidationSink>(
+    path: &Path,
+    candidate: &crate::recovery::RecoveryCandidate,
+    budget: &ValidationBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+) -> std::result::Result<ValidationResult, ValidationFailure> {
+    let source = crate::recovery::inspection::OfflineSource::open(path)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let identity = source.public_identity();
+    let classified = crate::recovery::inspection::read_classified(&source.file, cancellation)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    if identity != candidate.source_identity {
+        return Err(failure(
+            Error::RecoveryCandidateChanged,
             ValidationProgress::new(),
-        )),
+        ));
+    }
+    let meta = classified
+        .selected_meta(candidate)
+        .ok_or_else(|| failure(Error::RecoveryCandidateChanged, ValidationProgress::new()))?;
+    let mut context = context::Context::new(&source.file, meta, budget, cancellation, sink)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let scan = context
+        .reserve_allocator_pages()
+        .and_then(|()| validate_selected(&mut context));
+    let verification = verify_offline_candidate(&source, candidate, cancellation);
+    let progress = context.finish();
+    if let Err(cause) = scan {
+        return Err(failure(cause, progress));
+    }
+    if let Err(cause) = verification {
+        return Err(failure(cause, progress));
+    }
+    Ok(ValidationResult {
+        valid: progress.finding_count == 0,
+        file_identity: identity,
+        generation: Some(generation(meta)),
+        progress,
+    })
+}
+
+fn verify_offline_candidate(
+    source: &crate::recovery::inspection::OfflineSource,
+    candidate: &crate::recovery::RecoveryCandidate,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    source.verify().map_err(candidate_identity_error)?;
+    let classified = crate::recovery::inspection::read_classified(&source.file, cancellation)?;
+    if classified.selected_meta(candidate).is_none() {
+        return Err(Error::RecoveryCandidateChanged);
+    }
+    source.verify().map_err(candidate_identity_error)
+}
+
+fn candidate_identity_error(cause: Error) -> Error {
+    match cause {
+        Error::WrongMode(_) => Error::RecoveryCandidateChanged,
+        Error::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Error::RecoveryCandidateChanged
+        }
+        cause => cause,
     }
 }
 

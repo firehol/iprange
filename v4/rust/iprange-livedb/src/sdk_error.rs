@@ -37,6 +37,10 @@ pub enum ErrorCode {
     CleanupIncomplete,
     SinkFailed,
     StoppedBySink,
+    LiveRecoveryCoordinationUnavailable,
+    LiveRecoveryCurrentGenerationUnprovable,
+    LiveRecoveryCurrentGenerationUnreadable,
+    RecoveryCandidateChanged,
     ForkedHandle,
 }
 
@@ -79,6 +83,10 @@ pub enum Error {
     },
     SinkFailed(Box<Error>),
     StoppedBySink,
+    LiveRecoveryCoordinationUnavailable(Box<Error>),
+    LiveRecoveryCurrentGenerationUnprovable,
+    LiveRecoveryCurrentGenerationUnreadable,
+    RecoveryCandidateChanged,
     ForkedHandle,
 }
 
@@ -113,6 +121,16 @@ impl Error {
             Self::CleanupIncomplete { .. } => ErrorCode::CleanupIncomplete,
             Self::SinkFailed(_) => ErrorCode::SinkFailed,
             Self::StoppedBySink => ErrorCode::StoppedBySink,
+            Self::LiveRecoveryCoordinationUnavailable(_) => {
+                ErrorCode::LiveRecoveryCoordinationUnavailable
+            }
+            Self::LiveRecoveryCurrentGenerationUnprovable => {
+                ErrorCode::LiveRecoveryCurrentGenerationUnprovable
+            }
+            Self::LiveRecoveryCurrentGenerationUnreadable => {
+                ErrorCode::LiveRecoveryCurrentGenerationUnreadable
+            }
+            Self::RecoveryCandidateChanged => ErrorCode::RecoveryCandidateChanged,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
         }
     }
@@ -171,6 +189,18 @@ impl fmt::Display for Error {
             }
             Self::SinkFailed(cause) => write!(output, "validation sink failed: {cause}"),
             Self::StoppedBySink => output.write_str("validation was stopped by its sink"),
+            Self::LiveRecoveryCoordinationUnavailable(cause) => {
+                write!(output, "live recovery coordination is unavailable: {cause}")
+            }
+            Self::LiveRecoveryCurrentGenerationUnprovable => {
+                output.write_str("the current live recovery generation cannot be proved")
+            }
+            Self::LiveRecoveryCurrentGenerationUnreadable => {
+                output.write_str("the current live recovery generation is unreadable")
+            }
+            Self::RecoveryCandidateChanged => {
+                output.write_str("the selected recovery candidate changed")
+            }
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
         }
     }
@@ -184,6 +214,7 @@ impl std::error::Error for Error {
             Self::TransactionAborted(cause) => Some(cause.as_ref()),
             Self::CleanupIncomplete { cause, .. } => Some(cause.as_ref()),
             Self::SinkFailed(cause) => Some(cause.as_ref()),
+            Self::LiveRecoveryCoordinationUnavailable(cause) => Some(cause.as_ref()),
             Self::InvalidArgument(_)
             | Self::NameInvalid
             | Self::NameExists
@@ -207,6 +238,9 @@ impl std::error::Error for Error {
             | Self::ReaderCapacityExhausted
             | Self::NoPendingTransaction
             | Self::StoppedBySink
+            | Self::LiveRecoveryCurrentGenerationUnprovable
+            | Self::LiveRecoveryCurrentGenerationUnreadable
+            | Self::RecoveryCandidateChanged
             | Self::ForkedHandle => None,
         }
     }

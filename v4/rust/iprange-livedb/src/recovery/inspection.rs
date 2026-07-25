@@ -1,0 +1,227 @@
+use std::fs::File;
+use std::path::{Path, PathBuf};
+
+use crate::cancellation::CancellationToken;
+use crate::contract::{MetaV4, PAGE_SIZE};
+use crate::database;
+use crate::error::{Error, Result};
+use crate::file_io;
+use crate::live_lock::{self, Mode};
+use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
+use crate::validation::source::{combine_cleanup, public_identity, ImmutableSource};
+use crate::validation::ValidationBudget;
+
+use super::classify::{ClassifiedMetas, GenerationOrder};
+use super::{RecoveryCandidateInspection, RecoveryCandidateLabel};
+
+/// Coordination contract used while inspecting retained recovery candidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecoveryInspectionMode {
+    Immutable,
+    Live,
+    /// The caller certifies exclusive quiescence for the complete operation.
+    Offline,
+}
+
+/// Inspect exact retained metadata candidates without scanning their page graphs.
+pub fn inspect_recovery_candidates(
+    path: impl AsRef<Path>,
+    mode: RecoveryInspectionMode,
+    budget: &ValidationBudget,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    require_budget(budget, mode)?;
+    cancellation.check()?;
+    match mode {
+        RecoveryInspectionMode::Immutable => inspect_immutable(path.as_ref(), cancellation),
+        RecoveryInspectionMode::Live => inspect_live(path.as_ref(), cancellation),
+        RecoveryInspectionMode::Offline => inspect_offline(path.as_ref(), cancellation),
+    }
+}
+
+fn require_budget(budget: &ValidationBudget, mode: RecoveryInspectionMode) -> Result<()> {
+    budget.validate()?;
+    let required = match mode {
+        RecoveryInspectionMode::Live => 2,
+        RecoveryInspectionMode::Immutable | RecoveryInspectionMode::Offline => 1,
+    };
+    if budget.max_open_files < required {
+        return Err(Error::BudgetExceeded(
+            "recovery inspection open-file budget",
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_immutable(
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    let source = ImmutableSource::open(path)?;
+    let classified = read_classified(&source.file, cancellation)?;
+    source.verify()?;
+    inspection(source.public_identity(), &classified)
+}
+
+fn inspect_offline(
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    let source = OfflineSource::open(path)?;
+    let classified = read_classified(&source.file, cancellation)?;
+    source.verify()?;
+    inspection(source.public_identity(), &classified)
+}
+
+fn inspect_live(
+    path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    let file = database::open_read_only(path)?;
+    let identity = live_sidecar::identity(&file)?;
+    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_sidecar::verify_path(path, identity)?;
+    let initial = read_classified(&file, cancellation)?;
+    let current = require_live_current(&initial)?;
+    let sidecar =
+        live_sidecar::Sidecar::open(path, current.database_id).map_err(live_coordination_error)?;
+    sidecar
+        .lock_gate(Mode::Exclusive)
+        .map_err(live_coordination_error)?;
+    let result = inspect_live_locked(path, &file, identity, &sidecar, cancellation);
+    release_live_gate(&sidecar, result)
+}
+
+fn release_live_gate(
+    sidecar: &live_sidecar::Sidecar,
+    result: Result<RecoveryCandidateInspection>,
+) -> Result<RecoveryCandidateInspection> {
+    let unlocked = sidecar.unlock_gate().map_err(live_coordination_error);
+    match result {
+        Ok(result) => {
+            unlocked?;
+            Ok(result)
+        }
+        Err(cause) => Err(combine_cleanup(cause, unlocked)),
+    }
+}
+
+fn inspect_live_locked(
+    path: &Path,
+    file: &File,
+    identity: Identity,
+    sidecar: &live_sidecar::Sidecar,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    verify_live(path, identity, sidecar)?;
+    cancellation.check()?;
+    let classified = read_classified(file, cancellation)?;
+    let current = require_live_current(&classified)?;
+    if current.database_id != sidecar.header.database_id {
+        return Err(live_coordination_error(Error::WrongMode(
+            "reader table belongs to a different database",
+        )));
+    }
+    sidecar
+        .inspect_at_most(current.txn_id)
+        .map_err(live_coordination_error)?;
+    verify_live(path, identity, sidecar)?;
+    live_inspection(public_identity(identity), &classified)
+}
+
+fn verify_live(path: &Path, identity: Identity, sidecar: &live_sidecar::Sidecar) -> Result<()> {
+    live_sidecar::verify_path(path, identity)
+        .and_then(|()| sidecar.verify_path())
+        .and_then(|()| sidecar.verify_header())
+        .map_err(live_coordination_error)
+}
+
+fn require_live_current(classified: &ClassifiedMetas) -> Result<MetaV4> {
+    if classified.order == GenerationOrder::Unproven {
+        return Err(Error::LiveRecoveryCurrentGenerationUnprovable);
+    }
+    classified
+        .current_recovery_meta()
+        .ok_or(Error::LiveRecoveryCurrentGenerationUnreadable)
+}
+
+fn live_coordination_error(cause: Error) -> Error {
+    Error::LiveRecoveryCoordinationUnavailable(Box::new(cause))
+}
+
+fn inspection(
+    identity: crate::validation::LocalFileIdentity,
+    classified: &ClassifiedMetas,
+) -> Result<RecoveryCandidateInspection> {
+    Ok(RecoveryCandidateInspection::new(
+        identity,
+        classified.progress()?,
+        classified.candidates(identity),
+    ))
+}
+
+fn live_inspection(
+    identity: crate::validation::LocalFileIdentity,
+    classified: &ClassifiedMetas,
+) -> Result<RecoveryCandidateInspection> {
+    let newest = classified
+        .candidates(identity)
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.label == RecoveryCandidateLabel::Newest)
+        .ok_or(Error::LiveRecoveryCurrentGenerationUnreadable)?;
+    Ok(RecoveryCandidateInspection::new(
+        identity,
+        classified.progress()?,
+        [Some(newest), None],
+    ))
+}
+
+pub(crate) fn read_classified(
+    file: &File,
+    cancellation: &CancellationToken,
+) -> Result<ClassifiedMetas> {
+    let mut pages = [None, None];
+    for (index, slot) in pages.iter_mut().enumerate() {
+        cancellation.check()?;
+        let mut page = [0; PAGE_SIZE];
+        let offset = (index * PAGE_SIZE) as u64;
+        if file_io::read_exact_at(file, &mut page, offset).is_ok() {
+            *slot = Some(page);
+        }
+    }
+    Ok(ClassifiedMetas::new(pages))
+}
+
+pub(crate) struct OfflineSource {
+    pub(crate) file: File,
+    path: PathBuf,
+    identity: Identity,
+}
+
+impl OfflineSource {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        let file = live_sidecar::open_rw(path)?;
+        let identity = live_sidecar::identity_any_link(&file)?;
+        live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive)?;
+        live_sidecar::verify_path_any_link(path, identity)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            identity,
+        })
+    }
+
+    pub(crate) fn verify(&self) -> Result<()> {
+        live_sidecar::verify_path_any_link(&self.path, self.identity)
+    }
+
+    pub(crate) fn public_identity(&self) -> crate::validation::LocalFileIdentity {
+        public_identity(self.identity)
+    }
+}
+
+#[cfg(test)]
+#[path = "inspection_tests.rs"]
+mod tests;

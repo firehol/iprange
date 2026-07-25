@@ -9,8 +9,8 @@ use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
 
 use super::LocalFileIdentity;
 
-pub(super) struct ImmutableSource {
-    pub(super) file: std::fs::File,
+pub(crate) struct ImmutableSource {
+    pub(crate) file: std::fs::File,
     path: PathBuf,
     sidecar: PathBuf,
     identity: Identity,
@@ -38,7 +38,7 @@ pub(super) struct LiveBootstrapSource {
 }
 
 impl ImmutableSource {
-    pub(super) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         let sidecar = crate::path::canonical_sidecar(path)?;
         database::require_sidecar_absent(&sidecar)?;
         let file = database::open_read_only(path)?;
@@ -56,12 +56,12 @@ impl ImmutableSource {
         Ok(source)
     }
 
-    pub(super) fn verify(&self) -> Result<()> {
+    pub(crate) fn verify(&self) -> Result<()> {
         live_sidecar::verify_path_any_link(&self.path, self.identity)?;
         database::require_sidecar_absent(&self.sidecar)
     }
 
-    pub(super) fn public_identity(&self) -> LocalFileIdentity {
+    pub(crate) fn public_identity(&self) -> LocalFileIdentity {
         public_identity(self.identity)
     }
 }
@@ -229,14 +229,14 @@ fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8; 16]> {
     }
 }
 
-fn public_identity(identity: Identity) -> LocalFileIdentity {
+pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
         kind: 1,
         bytes: identity.encode(),
     }
 }
 
-pub(super) fn combine_cleanup(cause: Error, cleanup: Result<()>) -> Error {
+pub(crate) fn combine_cleanup(cause: Error, cleanup: Result<()>) -> Error {
     match cleanup {
         Ok(()) => cause,
         Err(cleanup) => Error::CleanupIncomplete {

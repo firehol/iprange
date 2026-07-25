@@ -6,6 +6,10 @@ use crate::contract::{
 };
 use crate::crc32c;
 
+mod recovery_meta;
+
+pub(crate) use recovery_meta::{classify_recovery_meta, RecoveryMetaState};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenMode {
     ImmutableReader,
@@ -230,21 +234,31 @@ fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<Me
 }
 
 fn validate_generation(meta: &MetaV4, physical_bytes: u64) -> Result<(), MetaProblem> {
-    if meta.txn_id == 0 {
-        return Err(MetaProblem::Transaction);
-    }
-    if meta.commit_nonce == [0; 16] {
-        return Err(MetaProblem::CommitNonce);
-    }
-    if !(2..=MAX_PAGE_COUNT).contains(&meta.page_count) {
-        return Err(MetaProblem::PageCount);
-    }
+    validate_commit_identity(meta)?;
+    validate_declared_page_count(meta)?;
     let committed_bytes = meta
         .page_count
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(MetaProblem::PageCount)?;
     if physical_bytes < committed_bytes {
         return Err(MetaProblem::PhysicalLength);
+    }
+    Ok(())
+}
+
+fn validate_commit_identity(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if meta.txn_id == 0 {
+        return Err(MetaProblem::Transaction);
+    }
+    if meta.commit_nonce == [0; 16] {
+        return Err(MetaProblem::CommitNonce);
+    }
+    Ok(())
+}
+
+fn validate_declared_page_count(meta: &MetaV4) -> Result<(), MetaProblem> {
+    if !(2..=MAX_PAGE_COUNT).contains(&meta.page_count) {
+        return Err(MetaProblem::PageCount);
     }
     Ok(())
 }
