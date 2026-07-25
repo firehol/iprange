@@ -1,12 +1,9 @@
 //! Fixed live-reader table bound to one database identity.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 mod header;
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{u64_le, PAGE_SIZE};
@@ -14,6 +11,10 @@ use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::path;
+use crate::publication::namespace::{
+    retained_regular_identity, Directory, Name, NamespaceError, IDENTITY_KIND,
+};
+use crate::publication::security::{self, Profile};
 use crate::slotted_page::put_u64;
 use crate::validation::LocalFileIdentity;
 
@@ -22,27 +23,15 @@ const GATE_LOCK: u64 = 0;
 const WRITER_LOCK: u64 = 1;
 pub(crate) const MAIN_LIFETIME_LOCK: u64 = 1u64 << 44;
 
-pub(crate) use header::{has_selectable_header, read_header, Header, State};
+pub(crate) use crate::publication::namespace::Identity;
+#[cfg(unix)]
+pub(crate) use header::has_selectable_header;
+pub(crate) use header::{read_header, Header, State};
 use header::{sidecar_length, write_header};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Identity {
-    device: u64,
-    inode: u64,
-}
-
-impl Identity {
-    pub(crate) fn encode(self) -> [u8; 32] {
-        let mut bytes = [0; 32];
-        bytes[..8].copy_from_slice(&self.device.to_le_bytes());
-        bytes[8..16].copy_from_slice(&self.inode.to_le_bytes());
-        bytes
-    }
-}
 
 pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: 1,
+        kind: IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }
@@ -51,22 +40,14 @@ pub(crate) fn parent_identity(path: &Path) -> Result<LocalFileIdentity> {
     let parent = path.parent().ok_or(Error::InvalidArgument(
         "database path has no parent directory",
     ))?;
-    let file = File::open(parent)?;
-    let metadata = file.metadata()?;
-    if !metadata.file_type().is_dir() {
-        return Err(Error::InvalidArgument("database parent is not a directory"));
-    }
-    #[cfg(unix)]
-    {
-        let mut bytes = [0; 32];
-        bytes[..8].copy_from_slice(&metadata.dev().to_le_bytes());
-        bytes[8..16].copy_from_slice(&metadata.ino().to_le_bytes());
-        Ok(LocalFileIdentity { kind: 1, bytes })
-    }
-    #[cfg(not(unix))]
-    Err(Error::Unsupported(
-        "directory identity is not implemented on this platform",
-    ))
+    let directory = Directory::open(parent).map_err(|error| match error {
+        NamespaceError::Missing => Error::Io(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        other => namespace_error(other),
+    })?;
+    Ok(LocalFileIdentity {
+        kind: IDENTITY_KIND,
+        bytes: directory.identity().encode(),
+    })
 }
 
 #[derive(Debug)]
@@ -436,30 +417,11 @@ fn combine_cleanup(cause: Error, cleanup: Result<()>) -> Error {
 }
 
 pub(crate) fn identity(file: &File) -> Result<Identity> {
-    let identity = identity_any_link(file)?;
-    #[cfg(unix)]
-    if file.metadata()?.nlink() != 1 {
-        return Err(Error::WrongMode("live files must have exactly one link"));
-    }
-    Ok(identity)
+    retained_regular_identity(file, true).map_err(namespace_error)
 }
 
 pub(crate) fn identity_any_link(file: &File) -> Result<Identity> {
-    let metadata = file.metadata()?;
-    if !metadata.file_type().is_file() {
-        return Err(Error::InvalidArgument("live path is not a regular file"));
-    }
-    #[cfg(unix)]
-    {
-        Ok(Identity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })
-    }
-    #[cfg(not(unix))]
-    Err(Error::Unsupported(
-        "live file identity is not implemented on this platform",
-    ))
+    retained_regular_identity(file, false).map_err(namespace_error)
 }
 
 pub(crate) fn verify_path(path: &Path, expected: Identity) -> Result<()> {
@@ -470,52 +432,49 @@ pub(crate) fn verify_path_any_link(path: &Path, expected: Identity) -> Result<()
     verify_path_inner(path, expected, false)
 }
 
+pub(crate) fn path_identity(path: &Path) -> Result<Option<Identity>> {
+    let (directory, name) = match bind_path(path) {
+        Ok(bound) => bound,
+        Err(Error::NameNotFound) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match directory.entry(&name).map_err(namespace_error)? {
+        None => Ok(None),
+        Some(entry) if entry.regular && entry.links == 1 => Ok(Some(entry.identity)),
+        Some(_) => Err(Error::WrongMode("live path is not one regular file")),
+    }
+}
+
 fn verify_path_inner(path: &Path, expected: Identity, require_single_link: bool) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+    let (directory, name) = bind_path(path)?;
+    let entry = directory
+        .entry(&name)
+        .map_err(namespace_error)?
+        .ok_or(Error::NameNotFound)?;
+    if !entry.regular {
         return Err(Error::WrongMode("live path no longer names a regular file"));
     }
-    #[cfg(unix)]
-    {
-        if (require_single_link && metadata.nlink() != 1)
-            || metadata.dev() != expected.device
-            || metadata.ino() != expected.inode
-        {
-            return Err(Error::WrongMode("live path identity changed"));
-        }
-        Ok(())
+    if (require_single_link && entry.links != 1) || entry.identity != expected {
+        return Err(Error::WrongMode("live path identity changed"));
     }
-    #[cfg(not(unix))]
-    Err(Error::Unsupported(
-        "live path identity is not implemented on this platform",
-    ))
+    Ok(())
 }
 
 pub(crate) fn open_rw(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    Ok(options.open(path)?)
+    let (directory, name) = bind_path(path)?;
+    let regular = directory
+        .open_regular(&name, true)
+        .map_err(namespace_error)?
+        .ok_or(Error::NameNotFound)?;
+    Ok(regular.file)
 }
 
 pub(crate) fn create_private(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
-    let file = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
-            let cause = std::io::Error::last_os_error().into();
-            return Err(created_failure(path, &file, cause));
-        }
+    let (directory, name) = bind_path(path)?;
+    let profile = Profile::capture().map_err(namespace_error)?;
+    let file = directory.create(&name, &profile).map_err(namespace_error)?;
+    if let Err(error) = security::secure_creator_only(&file, &profile) {
+        return Err(created_failure(path, &file, namespace_error(error)));
     }
     Ok(file)
 }
@@ -532,17 +491,136 @@ fn created_failure(path: &Path, file: &File, cause: Error) -> Error {
 
 fn remove_created(path: &Path, file: &File) -> Result<()> {
     let expected = identity(file)?;
-    verify_path(path, expected)?;
-    fs::remove_file(path)?;
-    sync_parent(path)
+    remove_exact(path, expected)
+}
+
+pub(crate) fn remove_exact(path: &Path, expected: Identity) -> Result<()> {
+    let (directory, name) = bind_path(path)?;
+    directory
+        .verify_name(&name, expected)
+        .map_err(namespace_error)?;
+    if !directory
+        .unlink_exact(&name, expected)
+        .map_err(namespace_error)?
+    {
+        return Err(Error::NameNotFound);
+    }
+    directory.sync().map_err(namespace_error)?;
+    directory.require_absent(&name).map_err(namespace_error)
+}
+
+pub(crate) fn install_noreplace(
+    private: &Path,
+    private_file: &File,
+    canonical: &Path,
+    expected: Identity,
+) -> Result<()> {
+    let (directory, private_name, canonical_name) = bind_pair(private, canonical)?;
+    directory
+        .verify_name(&private_name, expected)
+        .map_err(namespace_error)?;
+    directory
+        .rename_noreplace(&private_name, private_file, &canonical_name)
+        .map_err(namespace_error)?;
+    directory.sync().map_err(namespace_error)?;
+    directory
+        .require_absent(&private_name)
+        .and_then(|()| directory.verify_name(&canonical_name, expected))
+        .map_err(namespace_error)
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+pub(crate) fn install_exchange(
+    private: &Path,
+    private_file: &File,
+    canonical: &Path,
+    expected_private: Identity,
+    expected_canonical: Identity,
+) -> Result<()> {
+    let (directory, private_name, canonical_name) = bind_pair(private, canonical)?;
+    if directory
+        .verify_name(&private_name, expected_private)
+        .and_then(|()| directory.verify_name(&canonical_name, expected_canonical))
+        .is_err()
+    {
+        return Err(Error::CleanupConflict(
+            "canonical coordination changed during reset",
+        ));
+    }
+    directory
+        .replace(&private_name, private_file, &canonical_name)
+        .map_err(namespace_error)?;
+    if directory
+        .verify_name(&canonical_name, expected_private)
+        .is_ok()
+        && directory
+            .verify_name(&private_name, expected_canonical)
+            .is_ok()
+    {
+        return Ok(());
+    }
+
+    let cause = Error::CleanupConflict("canonical coordination changed during reset");
+    match directory.replace(&canonical_name, private_file, &private_name) {
+        Ok(()) => Err(cause),
+        Err(cleanup) => Err(Error::CleanupIncomplete {
+            cause: Box::new(cause),
+            cleanup: Box::new(namespace_error(cleanup)),
+        }),
+    }
 }
 
 pub(crate) fn sync_parent(path: &Path) -> Result<()> {
     let parent = path.parent().ok_or(Error::InvalidArgument(
         "database path has no parent directory",
     ))?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
+    Directory::open(parent)
+        .and_then(|directory| directory.sync())
+        .map_err(namespace_error)
+}
+
+fn bind_path(path: &Path) -> Result<(Directory, Name)> {
+    let parent = path.parent().ok_or(Error::InvalidArgument(
+        "database path has no parent directory",
+    ))?;
+    let component = path
+        .file_name()
+        .ok_or(Error::InvalidArgument("database path has no file name"))?;
+    let directory = Directory::open(parent).map_err(namespace_error)?;
+    let name = Name::from_component(component).map_err(namespace_error)?;
+    Ok((directory, name))
+}
+
+fn bind_pair(private: &Path, canonical: &Path) -> Result<(Directory, Name, Name)> {
+    if private.parent() != canonical.parent() {
+        return Err(Error::InvalidArgument(
+            "live transition names must share one directory",
+        ));
+    }
+    let (directory, private_name) = bind_path(private)?;
+    let canonical_name = canonical
+        .file_name()
+        .ok_or(Error::InvalidArgument("database path has no file name"))
+        .and_then(|component| Name::from_component(component).map_err(namespace_error))?;
+    Ok((directory, private_name, canonical_name))
+}
+
+fn namespace_error(error: NamespaceError) -> Error {
+    match error {
+        NamespaceError::InvalidName => Error::NameInvalid,
+        NamespaceError::Exists => Error::NameExists,
+        NamespaceError::Missing => Error::NameNotFound,
+        NamespaceError::ForkedHandle => Error::ForkedHandle,
+        NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => Error::Io(source),
+        NamespaceError::Unsupported | NamespaceError::CrossFilesystem => {
+            Error::Unsupported("live file namespace lacks required local operations")
+        }
+        NamespaceError::NotDirectory
+        | NamespaceError::NotRegular
+        | NamespaceError::IdentityChanged
+        | NamespaceError::LinkCount(_)
+        | NamespaceError::AccessPolicy => Error::WrongMode("live file ownership changed"),
+    }
 }
 
 fn slot_offset(slot: u32) -> Result<u64> {

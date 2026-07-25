@@ -73,8 +73,7 @@ pub(super) fn synchronize(
     cancellation: &CancellationToken,
 ) -> Result<(), Problem> {
     check_cancellation(cancellation)?;
-    main.file
-        .sync_all()
+    super::super::namespace::sync_file(&main.file)
         .map_err(crate::error::Error::from)
         .map_err(|error| Problem::sdk(&error))?;
     main.verify(destination)

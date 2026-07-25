@@ -12216,6 +12216,89 @@ Checkpoint validation:
   bounded-resource and performance proof, C ABI completion, documentation, and
   final update-ipsets suitability remain open.
 
+### 2026-07-25 - Rust platform-portability gate
+
+Problem and evidence:
+
+- The crate cross-checks for Windows, but every live lock and every durable
+  publication, snapshot, and recovery operation returns `Unsupported`.
+  Compilation alone is therefore not evidence of the Phase-1 Windows SDK.
+- Publication and recovery logic are semantically platform-neutral but are
+  hidden behind Linux-only module gates. The retained-directory adapter embeds
+  Linux `statfs`, `renameat2`, and ACL details in the same module as portable
+  publication state transitions.
+- Apple XNU's current public `fcntl.h` defines `F_OFD_SETLK=90` and
+  `F_OFD_SETLKW=91`; `libc 0.2.186` exposes those constants. macOS can therefore
+  implement the approved open-description lock contract without falling back
+  to process-associated POSIX locks.
+- Microsoft documents that `LockFileEx` locks are attached to the supplied
+  handle and are released when that handle closes or its process terminates.
+  This is the approved Windows live-coordination primitive.
+- FreeBSD 14 remains supported for portable immutable reading and durable
+  immutable publication through the already-approved `linkat` no-replace
+  sequence. Live coordination remains explicitly unsupported because no
+  equivalent tested open-description byte-range lock is available.
+- Reference implementation checked:
+  `sria91/filelocks-rs @ 9b2e5690e640`,
+  `src/sys/unix.rs:107` and `src/sys/windows.rs:1`. It independently uses Apple
+  and Linux OFD locks, returns unsupported rather than substituting POSIX
+  process locks, and uses `LockFileEx` on Windows.
+
+Lean implementation:
+
+1. Keep one publication/recovery state machine. Move only path encoding,
+   retained identity, no-follow open, creator-only security, atomic namespace
+   mutation, file synchronization, and directory synchronization behind small
+   OS adapters.
+2. Implement live byte-range locks for Linux/macOS and Windows. FreeBSD and
+   unproved filesystems fail before mutation.
+3. Implement macOS publication with `renameatx_np` exclusive/swap operations
+   and `F_FULLFSYNC`; implement FreeBSD no-replace publication with the
+   approved `linkat` alias sequence. Preserve the exact identity and link-count
+   checks around every namespace boundary.
+4. Implement Windows paths as exact UTF-16, retained file identities,
+   no-reparse-point opens, `LockFileEx`, `FlushFileBuffers`, and handle-relative
+   rename/delete transitions on local NTFS. Non-NTFS filesystems fail before
+   publication or live mutation.
+5. Cross-check every target with warnings denied. Native process/crash tests
+   remain a close gate and require the user's explicit authorization before
+   using the remote Windows and macOS systems.
+
+Derived Windows encoding details:
+
+- Local-identity kind 2 is the 32-byte value returned from one retained handle
+  as `volume_serial_number:u64le || file_id:[16]byte || zero:[8]byte`, using
+  `GetFileInformationByHandleEx(FileIdInfo)`. Microsoft documents that the
+  volume serial number plus 128-bit file ID identifies one file on one
+  computer. Link count and file/reparse attributes are checked separately and
+  are not identity bytes.
+- Creation-security kind 2 is one protected, non-inheriting DACL owned by and
+  granting exactly `FILE_ALL_ACCESS` to the effective token's user SID, with no
+  other ACE. The effective token is the thread impersonation token when one
+  exists, otherwise the process token. Its commitment is
+  `SHA-256("IPR4PSEC" || sid_len:u32le || sid_bytes ||
+  FILE_ALL_ACCESS:u32le || SE_DACL_PROTECTED:u16le)`. The exact SID bytes are
+  copied at attempt start; later resolution verifies the retained file against
+  that commitment without changing its security.
+- These are deterministic encodings of already-selected decision 64A, not new
+  access-policy options. They close two missing exact-format details required
+  for cross-language Windows results and resolvers.
+
+Adapter checkpoint:
+
+- The publication, snapshot, recovery, and live-sidecar state machines now use
+  one retained-namespace interface on Unix and Windows. Platform adapters own
+  only basename encoding, identity, no-follow open, creator-only creation,
+  locking, namespace mutation, synchronization, and directory enumeration.
+- Linux tests remain green: 384 pass and the two subprocess entry points remain
+  intentionally ignored. Current-toolchain cross-checks pass without warnings
+  for `aarch64-apple-darwin`, `x86_64-unknown-freebsd`, and
+  `x86_64-pc-windows-gnu`.
+- This is adapter groundwork, not portability closure. FreeBSD still needs
+  crash resolution for its temporary hard-link alias. Windows still needs the
+  specified authenticated inert-GC cleanup, housekeeping APIs, and native
+  process/crash proof. Publication-residue handling also remains Unix-only.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

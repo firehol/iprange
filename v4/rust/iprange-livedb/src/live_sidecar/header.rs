@@ -86,6 +86,7 @@ pub(crate) fn read_header(file: &File) -> Result<(State, Header)> {
     ))
 }
 
+#[cfg(unix)]
 pub(crate) fn has_selectable_header(file: &File) -> Result<bool> {
     if file.metadata()?.len() < PAGE_SIZE as u64 {
         return Ok(false);

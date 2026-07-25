@@ -16,7 +16,7 @@ mod direct;
 mod direct_build;
 #[allow(dead_code)]
 mod direct_output;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[allow(dead_code)]
 mod external_sort;
 #[allow(dead_code)]
@@ -43,7 +43,7 @@ mod range_build;
 mod range_scan;
 #[allow(dead_code)]
 mod report;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[allow(dead_code)]
 mod scratch;
 mod scratch_maintenance;
@@ -56,9 +56,9 @@ mod tree_scan;
 
 use crate::validation::{LocalFileIdentity, ValidationProgress};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 pub(crate) use scratch::ScratchCleanup;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 #[derive(Clone, Debug)]
 pub(crate) struct ScratchCleanup;
 

@@ -1,11 +1,10 @@
 use crate::contract::{u16_le, u32_le, MetaV4};
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::publication::namespace::Name;
+use crate::publication::namespace::{Name, CREATION_SECURITY_KIND};
 use crate::publication::security::Profile;
 
 pub(crate) const HEADER_SIZE: u64 = 128;
-pub(crate) const POSIX_IDENTITY: u16 = 1;
 const OWNER_RECOVERY: u16 = 2;
 
 #[derive(Clone, Copy)]
@@ -19,7 +18,7 @@ pub(super) fn header(
     source: MetaV4,
     attempt: [u8; 16],
     ordinal: u32,
-    profile: Profile,
+    profile: &Profile,
 ) -> [u8; 128] {
     let mut bytes = [0; 128];
     bytes[0..8].copy_from_slice(b"IPR4SCR1");
@@ -31,7 +30,7 @@ pub(super) fn header(
     bytes[40..56].copy_from_slice(&source.commit_nonce);
     bytes[56..72].copy_from_slice(&attempt);
     bytes[72..76].copy_from_slice(&ordinal.to_le_bytes());
-    bytes[76..78].copy_from_slice(&POSIX_IDENTITY.to_le_bytes());
+    bytes[76..78].copy_from_slice(&CREATION_SECURITY_KIND.to_le_bytes());
     bytes[80..112].copy_from_slice(&profile.commitment());
     let checksum = crc32c::crc32c_with_zeroed(&bytes, 124, 4).expect("fixed scratch header");
     bytes[124..128].copy_from_slice(&checksum.to_le_bytes());
@@ -110,7 +109,7 @@ fn fixed_header_valid(bytes: &[u8; 128], owner_kind: u16) -> bool {
         && u16_le(bytes, 8) == 1
         && u16_le(bytes, 10) == HEADER_SIZE as u16
         && matches!(owner_kind, 1 | 2)
-        && u16_le(bytes, 76) == POSIX_IDENTITY
+        && u16_le(bytes, 76) == CREATION_SECURITY_KIND
 }
 
 fn reserved_header_valid(bytes: &[u8; 128]) -> bool {

@@ -89,13 +89,23 @@ impl Drop for Stream {
 }
 
 fn get_errno() -> i32 {
-    unsafe { *libc::__errno_location() }
+    unsafe { *errno_location() }
 }
 
 fn set_errno(value: i32) {
     unsafe {
-        *libc::__errno_location() = value;
+        *errno_location() = value;
     }
+}
+
+#[cfg(target_os = "linux")]
+fn errno_location() -> *mut libc::c_int {
+    unsafe { libc::__errno_location() }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+fn errno_location() -> *mut libc::c_int {
+    unsafe { libc::__error() }
 }
 
 fn last_error(operation: &'static str) -> NamespaceError {

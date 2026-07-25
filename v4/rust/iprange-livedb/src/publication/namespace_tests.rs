@@ -32,9 +32,9 @@ fn private_creation_is_exclusive_nofollow_and_creator_only() {
     let directory = TempDirectory::new();
     let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
     let name = destination.output_name([1; 16]).unwrap();
-    let file = destination.directory().create(&name).unwrap();
+    let file = destination.create(&name).unwrap();
     let regular = Regular {
-        identity: regular_identity(&file, destination.directory().identity().device).unwrap(),
+        identity: regular_identity(&file, destination.directory().identity()).unwrap(),
         file,
     };
     regular
@@ -54,7 +54,7 @@ fn private_creation_is_exclusive_nofollow_and_creator_only() {
     assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
     assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
     assert!(matches!(
-        destination.directory().create(&name),
+        destination.create(&name),
         Err(NamespaceError::Exists)
     ));
 }
@@ -64,12 +64,12 @@ fn inherited_extended_access_acl_is_removed() {
     let directory = TempDirectory::new();
     let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
     let name = destination.output_name([9; 16]).unwrap();
-    let file = destination.directory().create(&name).unwrap();
+    let file = destination.create(&name).unwrap();
     if !install_extended_acl(&file) {
         return;
     }
     let regular = Regular {
-        identity: regular_identity(&file, destination.directory().identity().device).unwrap(),
+        identity: regular_identity(&file, destination.directory().identity()).unwrap(),
         file,
     };
     assert!(matches!(
@@ -89,17 +89,15 @@ fn no_replace_never_overwrites_and_exact_unlink_checks_identity() {
     let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
     let first_name = destination.output_name([2; 16]).unwrap();
     let second_name = destination.output_name([3; 16]).unwrap();
-    let first = destination.directory().create(&first_name).unwrap();
-    let first_identity =
-        regular_identity(&first, destination.directory().identity().device).unwrap();
-    let second = destination.directory().create(&second_name).unwrap();
-    let second_identity =
-        regular_identity(&second, destination.directory().identity().device).unwrap();
+    let first = destination.create(&first_name).unwrap();
+    let first_identity = regular_identity(&first, destination.directory().identity()).unwrap();
+    let second = destination.create(&second_name).unwrap();
+    let second_identity = regular_identity(&second, destination.directory().identity()).unwrap();
 
     assert!(matches!(
         destination
             .directory()
-            .rename_noreplace(&first_name, &second_name),
+            .rename_noreplace(&first_name, &first, &second_name),
         Err(NamespaceError::Exists)
     ));
     destination

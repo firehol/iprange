@@ -27,7 +27,7 @@ pub fn snapshot_to(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 mod platform {
     use crate::error::Error;
     use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
@@ -277,7 +277,7 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 mod platform {
     use crate::error::Error;
 

@@ -226,7 +226,7 @@ fn damaged_blob_rejects_its_membership_and_known_range() {
     validate_clean(&paths.output);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[test]
 fn ordered_recovery_spills_all_tables_to_one_file() {
     let paths = Paths::new("table-scratch");
@@ -284,7 +284,7 @@ fn ordered_recovery_spills_all_tables_to_one_file() {
     validate_clean(&paths.output);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[test]
 fn table_scratch_budget_failure_removes_its_partial_file() {
     let paths = Paths::new("table-budget");

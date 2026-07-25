@@ -4,36 +4,22 @@ use std::path::Path;
 
 use crate::cancellation::CancellationToken;
 
-#[cfg(target_os = "linux")]
 pub(crate) mod attempt;
-#[cfg(target_os = "linux")]
 pub(crate) mod cleanup;
-#[cfg(target_os = "linux")]
 mod file_inspection;
-#[cfg(target_os = "linux")]
 mod main_file;
 mod maintenance;
-#[cfg(target_os = "linux")]
 pub(crate) mod namespace;
-#[cfg(target_os = "linux")]
 pub(crate) mod output;
-#[cfg(target_os = "linux")]
 pub(crate) mod problem;
-#[cfg(target_os = "linux")]
 pub(crate) mod replacement;
-#[cfg(target_os = "linux")]
 mod replacement_inspection;
 mod reservation;
-#[cfg(target_os = "linux")]
 mod reservation_file;
-#[cfg(target_os = "linux")]
 mod reservation_inspection;
 mod residue;
-#[cfg(target_os = "linux")]
 mod resolver;
-#[cfg(target_os = "linux")]
 pub(crate) mod result;
-#[cfg(target_os = "linux")]
 pub(crate) mod security;
 mod types;
 
@@ -74,23 +60,11 @@ pub fn resolve_publication(
     mode: PublicationResolutionMode,
     cancellation: &CancellationToken,
 ) -> std::result::Result<PublicationResult, PublicationProblem> {
-    #[cfg(target_os = "linux")]
-    {
-        let mode = match mode {
-            PublicationResolutionMode::Complete => resolver::Mode::Complete,
-            PublicationResolutionMode::Remove => resolver::Mode::Remove,
-        };
-        resolver::resolve(path.as_ref(), supplied, mode, cancellation)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (path, supplied, mode, cancellation);
-        Err(PublicationProblem::new(
-            crate::error::ErrorCode::PublicationUnsupported,
-            None,
-            "publication resolution is not implemented on this platform",
-        ))
-    }
+    let mode = match mode {
+        PublicationResolutionMode::Complete => resolver::Mode::Complete,
+        PublicationResolutionMode::Remove => resolver::Mode::Remove,
+    };
+    resolver::resolve(path.as_ref(), supplied, mode, cancellation)
 }
 
 #[cfg(all(test, target_os = "linux"))]

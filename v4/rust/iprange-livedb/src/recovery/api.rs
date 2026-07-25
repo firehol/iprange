@@ -74,7 +74,7 @@ pub fn recover_live<S: RecoverySink>(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 mod platform {
     use crate::contract::{MetaV4, ValueKind};
     use crate::error::Error;
@@ -405,7 +405,7 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 mod platform {
     use crate::error::Error;
 

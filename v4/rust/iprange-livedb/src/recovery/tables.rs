@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 
 use super::page_set::PageSet;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use super::scratch::{ScratchFile, ScratchSlot, HEADER_SIZE};
 use super::RecoveryBudget;
 
@@ -43,7 +43,7 @@ pub(crate) struct Tables {
 
 enum Storage {
     Heap(Vec<u8>),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     Scratch(ScratchFile),
 }
 
@@ -66,7 +66,7 @@ impl Tables {
                 layout,
             });
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(unix, windows))]
         {
             let length = layout
                 .bytes
@@ -78,7 +78,7 @@ impl Tables {
                 layout,
             })
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = pages;
             Err(Error::BudgetExceeded("recovery tables"))
@@ -92,12 +92,12 @@ impl Tables {
     pub(crate) fn retained_bytes(&self) -> u64 {
         match &self.storage {
             Storage::Heap(bytes) => bytes.capacity() as u64,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Storage::Scratch(_) => 0,
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn scratch_region(&self) -> Option<(ScratchSlot, u64)> {
         match &self.storage {
             Storage::Heap(_) => None,
@@ -114,7 +114,7 @@ impl Tables {
                 output.copy_from_slice(&bytes[start..start + output.len()]);
                 Ok(())
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Storage::Scratch(file) => file.read(offset + HEADER_SIZE, output),
         }
     }
@@ -128,7 +128,7 @@ impl Tables {
                 bytes[start..start + input.len()].copy_from_slice(input);
                 Ok(())
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Storage::Scratch(file) => file.write(offset + HEADER_SIZE, input),
         }
     }

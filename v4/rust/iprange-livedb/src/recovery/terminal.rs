@@ -1,7 +1,7 @@
 //! Public terminal recovery facts and bounded cleanup composition.
 
 use crate::error::Error;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::publication::{
     CleanupArtifact, CleanupArtifacts, CleanupState, CoordinationCleanup, CreationSecurity,
@@ -13,7 +13,7 @@ use crate::validation::LocalFileIdentity;
 use super::source_guard::{problem, RecoverySourceCleanupGuard};
 use super::{RecoveryReport, ScratchCleanup};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 const POSIX_KIND: u16 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,7 +155,7 @@ pub(crate) fn completed(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn absorb_scratch(
     cleanup: Option<ScratchCleanup>,
     artifacts: &mut CleanupArtifacts,
@@ -191,7 +191,7 @@ fn absorb_scratch(
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 fn absorb_scratch(
     cleanup: Option<ScratchCleanup>,
     _artifacts: &mut CleanupArtifacts,

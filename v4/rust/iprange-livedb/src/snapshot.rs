@@ -1,7 +1,7 @@
 //! Compact unsigned snapshots of one pinned v4 generation.
 
 mod api;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 mod build;
 mod terminal;
 

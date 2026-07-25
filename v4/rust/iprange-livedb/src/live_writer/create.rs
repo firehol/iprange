@@ -1,6 +1,5 @@
 //! Canonical empty live-pair creation.
 
-use std::fs;
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
@@ -321,19 +320,14 @@ pub(crate) fn write_empty_main(main: &std::fs::File, meta: MetaV4) -> Result<()>
 
 fn cleanup(path: &Path, sidecar: &Sidecar, main_identity: Option<Identity>) -> Result<()> {
     if let Some(identity) = main_identity {
-        live_sidecar::verify_path(path, identity)?;
-        fs::remove_file(path)?;
-        live_sidecar::sync_parent(path)?;
+        live_sidecar::remove_exact(path, identity)?;
     }
-    sidecar.verify_path()?;
-    fs::remove_file(&sidecar.path)?;
-    live_sidecar::sync_parent(&sidecar.path)
+    live_sidecar::remove_exact(&sidecar.path, sidecar.local_identity())
 }
 
 fn require_absent(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-        Ok(_) => Err(Error::InvalidArgument("destination already exists")),
+    match live_sidecar::path_identity(path)? {
+        None => Ok(()),
+        Some(_) => Err(Error::InvalidArgument("destination already exists")),
     }
 }

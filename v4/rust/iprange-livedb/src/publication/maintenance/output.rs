@@ -1,7 +1,6 @@
 //! Linux private publication-output discovery and removal.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::bootstrap::OpenMode;
@@ -9,7 +8,9 @@ use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
-use crate::publication::namespace::{Directory, Identity, Name, NamespaceError, ScanError};
+use crate::publication::namespace::{
+    regular_link_count, Directory, Identity, Name, NamespaceError, ScanError,
+};
 use crate::publication::output;
 use crate::validation::LocalFileIdentity;
 
@@ -112,7 +113,7 @@ pub(super) fn remove(
             "publication temp lost its exact name",
         ));
     }
-    if regular.file.metadata()?.nlink() != 0 {
+    if regular_link_count(&regular.file).map_err(namespace_error)? != 0 {
         return Err(Error::CleanupConflict(
             "publication temp remained linked after removal",
         ));

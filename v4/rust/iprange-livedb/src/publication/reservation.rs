@@ -4,12 +4,13 @@ use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::crc32c;
 use crate::slotted_page::{put_u16, put_u32, put_u64};
 
+use super::namespace::{BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND};
+
 const MAGIC: [u8; 8] = *b"IPR4RSV1";
 const RECORD_SIZE: u16 = 512;
 const VERSION: u16 = 1;
 const FILE_SIZE: usize = 2 * PAGE_SIZE;
 const CRC_OFFSET: usize = 508;
-const POSIX_KIND: u16 = 1;
 const PREVIOUS_PRESENT: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,10 +84,10 @@ impl Header {
         put_u64(block, 32, self.transaction_id);
         block[40..56].copy_from_slice(&self.commit_nonce);
         block[56..72].copy_from_slice(&self.attempt_id);
-        put_u16(block, 72, POSIX_KIND);
+        put_u16(block, 72, IDENTITY_KIND);
         block[80..112].copy_from_slice(&self.reservation_identity);
         put_u16(block, 112, self.policy as u16);
-        put_u16(block, 114, POSIX_KIND);
+        put_u16(block, 114, IDENTITY_KIND);
         put_u64(block, 120, self.output_byte_length);
         block[128..160].copy_from_slice(&self.output_identity);
         block[160..224].copy_from_slice(&self.output_sha512);
@@ -96,10 +97,10 @@ impl Header {
             block[256..320].copy_from_slice(&previous.sha512);
             put_u64(block, 452, previous.byte_length);
         }
-        put_u16(block, 412, POSIX_KIND);
+        put_u16(block, 412, BASENAME_ENCODING_KIND);
         put_u32(block, 416, self.basename_len);
         block[420..452].copy_from_slice(&self.basename_commitment);
-        put_u16(block, 460, POSIX_KIND);
+        put_u16(block, 460, CREATION_SECURITY_KIND);
         block[464..496].copy_from_slice(&self.security_commitment);
         put_u64(block, 496, self.sequence);
         let checksum =
@@ -378,10 +379,10 @@ fn require_fixed(block: &[u8; PAGE_SIZE]) -> Result<(), Problem> {
     }
     if u16_le(block, 8) != RECORD_SIZE
         || u16_le(block, 10) != VERSION
-        || u16_le(block, 72) != POSIX_KIND
-        || u16_le(block, 114) != POSIX_KIND
-        || u16_le(block, 412) != POSIX_KIND
-        || u16_le(block, 460) != POSIX_KIND
+        || u16_le(block, 72) != IDENTITY_KIND
+        || u16_le(block, 114) != IDENTITY_KIND
+        || u16_le(block, 412) != BASENAME_ENCODING_KIND
+        || u16_le(block, 460) != CREATION_SECURITY_KIND
     {
         return Err(Problem::Fixed);
     }

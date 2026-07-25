@@ -51,9 +51,9 @@ pub struct PublicationResidueInspection {
 /// Same-process authority for one exact canonical coordination inode.
 #[derive(Debug)]
 pub struct PublicationResidueHandle {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     inner: platform::Handle,
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     _unsupported: (),
 }
 
@@ -91,11 +91,11 @@ pub fn inspect_publication_residue(
     path: impl AsRef<Path>,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResidueInspection, PublicationProblem> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         platform::inspect(path.as_ref(), cancellation)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (path, cancellation);
         Err(PublicationProblem::new(
@@ -111,11 +111,11 @@ pub fn remove_publication_residue(
     handle: PublicationResidueHandle,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResidueRemoval, PublicationProblem> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         platform::remove(handle.inner, cancellation)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (handle, cancellation);
         Err(PublicationProblem::new(
@@ -126,7 +126,7 @@ pub fn remove_publication_residue(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[path = "residue/linux.rs"]
 mod platform;
 

@@ -65,11 +65,11 @@ pub fn list_abandoned_scratch<S: AbandonedScratchSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> Result<AbandonedScratchList> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     {
-        linux::list(directory.as_ref(), cancellation, sink)
+        platform::list(directory.as_ref(), cancellation, sink)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (directory, cancellation, sink);
         Err(crate::error::Error::Unsupported(
@@ -90,9 +90,9 @@ pub fn remove_abandoned_scratch(
     expected_artifact_identity: LocalFileIdentity,
     cancellation: &CancellationToken,
 ) -> Result<bool> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     {
-        linux::remove(
+        platform::remove(
             directory.as_ref(),
             expected_directory_identity,
             attempt_id,
@@ -101,7 +101,7 @@ pub fn remove_abandoned_scratch(
             cancellation,
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             directory,
@@ -117,16 +117,17 @@ pub fn remove_abandoned_scratch(
     }
 }
 
-#[cfg(target_os = "linux")]
-mod linux {
+#[cfg(any(unix, windows))]
+mod platform {
     use std::fs::File;
-    use std::os::unix::fs::MetadataExt;
     use std::path::Path;
 
     use crate::cancellation::CancellationToken;
     use crate::error::{Error, Result};
     use crate::file_io;
-    use crate::publication::namespace::{Directory, Identity, Name, NamespaceError, ScanError};
+    use crate::publication::namespace::{
+        regular_link_count, Directory, Identity, Name, NamespaceError, ScanError, IDENTITY_KIND,
+    };
     use crate::validation::LocalFileIdentity;
 
     use super::{
@@ -134,7 +135,7 @@ mod linux {
         AbandonedScratchSink, AbandonedScratchSinkControl, ScratchOwnerKind,
     };
     use crate::recovery::scratch::format::{
-        decode_header, decode_name, scratch_name, DecodedHeader, HEADER_SIZE, POSIX_IDENTITY,
+        decode_header, decode_name, scratch_name, DecodedHeader, HEADER_SIZE,
     };
     use crate::recovery::scratch::local;
 
@@ -411,7 +412,7 @@ mod linux {
     }
 
     fn require_unlinked(file: &File) -> Result<()> {
-        if file.metadata()?.nlink() != 0 {
+        if regular_link_count(file).map_err(namespace_error)? != 0 {
             return Err(Error::CleanupConflict(
                 "abandoned scratch remained linked after removal",
             ));
@@ -429,7 +430,7 @@ mod linux {
     }
 
     fn identity(identity: LocalFileIdentity) -> Result<Identity> {
-        if identity.kind != POSIX_IDENTITY {
+        if identity.kind != IDENTITY_KIND {
             return Err(Error::InvalidArgument(
                 "unsupported abandoned scratch identity kind",
             ));

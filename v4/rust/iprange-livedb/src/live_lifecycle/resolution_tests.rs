@@ -169,6 +169,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
     );
     crate::live_lifecycle::namespace::install(
         &files.private(),
+        &sidecar.file,
         &files.sidecar(),
         sidecar.local_identity(),
         Some(previous),

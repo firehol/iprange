@@ -1,10 +1,8 @@
 //! Atomic main-name publication and exact reservation retirement.
 
-use std::os::unix::fs::MetadataExt;
-
 use crate::error;
 
-use super::namespace::NamespaceError;
+use super::namespace::{regular_link_count, sync_file, NamespaceError};
 use super::output::{self, PreparedOutput};
 use super::reservation::Header;
 use super::reservation_file::{self, ArmedReservation};
@@ -134,13 +132,17 @@ fn rename_main(owner: &mut MainAttempt) -> Result<(), Error> {
     let destination = owner.output.attempt.destination();
     owner.main_call_started = true;
     if owner.output.previous.is_some() {
-        destination
-            .directory()
-            .rename_exchange(owner.output.attempt.name(), destination.main())?;
+        destination.directory().replace(
+            owner.output.attempt.name(),
+            &owner.output.file,
+            destination.main(),
+        )?;
     } else {
-        destination
-            .directory()
-            .rename_noreplace(owner.output.attempt.name(), destination.main())?;
+        destination.directory().rename_noreplace(
+            owner.output.attempt.name(),
+            &owner.output.file,
+            destination.main(),
+        )?;
     }
     owner.rename_succeeded = true;
     crate::fault::crash("publication.after_main_rename");
@@ -151,7 +153,7 @@ fn synchronize_main(
     owner: &MainAttempt,
     checkpoint: &mut impl FnMut(Point) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    owner.output.file.sync_all().map_err(error::Error::from)?;
+    sync_file(&owner.output.file).map_err(error::Error::from)?;
     crate::fault::crash("publication.after_main_sync");
     checkpoint(Point::MainSynced)?;
     owner.output.attempt.destination().directory().sync()?;
@@ -231,13 +233,7 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
     };
     let destination = published.output.attempt.destination();
     previous.verify_private_or_retired(destination, published.output.attempt.name())?;
-    if previous
-        .file
-        .metadata()
-        .map_err(error::Error::from)?
-        .nlink()
-        == 0
-    {
+    if regular_link_count(&previous.file)? == 0 {
         owner.previous_unlinked = true;
         return Ok(false);
     }
@@ -248,11 +244,7 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
         return Err(NamespaceError::Missing.into());
     }
     owner.previous_unlinked = true;
-    let links = previous
-        .file
-        .metadata()
-        .map_err(error::Error::from)?
-        .nlink();
+    let links = regular_link_count(&previous.file)?;
     if links != 0 {
         return Err(Error::PreviousLinkCount(links));
     }
@@ -278,12 +270,7 @@ fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
         return Err(NamespaceError::Missing.into());
     }
     owner.reservation_unlinked = true;
-    let links = published
-        .reservation
-        .file
-        .metadata()
-        .map_err(error::Error::from)?
-        .nlink();
+    let links = regular_link_count(&published.reservation.file)?;
     if links != 0 {
         return Err(Error::ReservationLinkCount(links));
     }

@@ -8,7 +8,10 @@ use std::sync::Arc;
 use crate::contract::MetaV4;
 use crate::error::{Error, ErrorCode, Result};
 use crate::file_io;
-use crate::publication::namespace::{regular_identity, Directory, Identity, Name, NamespaceError};
+use crate::publication::namespace::{
+    regular_identity, Directory, Identity, Name, NamespaceError, CREATION_SECURITY_KIND,
+    IDENTITY_KIND,
+};
 use crate::publication::security::{self, Profile};
 use crate::random;
 use crate::validation::LocalFileIdentity;
@@ -25,7 +28,7 @@ pub(super) mod format;
 #[cfg(test)]
 use format::hex;
 pub(crate) use format::HEADER_SIZE;
-use format::{header, scratch_name, POSIX_IDENTITY};
+use format::{header, scratch_name};
 
 const MAX_OWNED: usize = 2;
 
@@ -112,7 +115,7 @@ impl Scratch {
             return Err(Error::BudgetExceeded("recovery scratch bytes"));
         }
         let directory = Directory::open(directory).map_err(namespace_error)?;
-        let profile = Profile::capture();
+        let profile = Profile::capture().map_err(namespace_error)?;
         let attempt_id = random::nonzero_128()?;
         Ok(Self {
             directory,
@@ -138,10 +141,10 @@ impl Scratch {
         let slot = self.free_slot()?;
         let ordinal = self.take_ordinal()?;
         self.install(slot, ordinal)?;
-        let header = header(self.source, self.attempt_id, ordinal, self.profile);
+        let header = header(self.source, self.attempt_id, ordinal, &self.profile);
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
         let file = &owned.shared.file;
-        security::secure_creator_only(file, self.profile).map_err(namespace_error)?;
+        security::secure_creator_only(file, &self.profile).map_err(namespace_error)?;
         file_io::write_exact_at(file, &header, 0)?;
         Ok(ScratchSlot(slot))
     }
@@ -182,9 +185,12 @@ impl Scratch {
     fn install(&mut self, slot: usize, ordinal: u32) -> Result<()> {
         self.require_growth(0, HEADER_SIZE)?;
         let name = scratch_name(self.attempt_id, ordinal)?;
-        let file = self.directory.create(&name).map_err(namespace_error)?;
+        let file = self
+            .directory
+            .create(&name, &self.profile)
+            .map_err(namespace_error)?;
         let identity =
-            regular_identity(&file, self.directory.identity().device).map_err(namespace_error)?;
+            regular_identity(&file, self.directory.identity()).map_err(namespace_error)?;
         self.owned[slot] = Some(Owned {
             shared: Arc::new(SharedFile {
                 file,
@@ -275,7 +281,7 @@ impl Scratch {
         ScratchCleanup {
             attempt_id: self.attempt_id,
             directory_identity,
-            creation_security_kind: POSIX_IDENTITY,
+            creation_security_kind: CREATION_SECURITY_KIND,
             creation_security_commitment: self.profile.commitment(),
             residues,
         }
@@ -331,7 +337,7 @@ impl Scratch {
                 continue;
             };
             let owner = self.owned[index].take().expect("problem has an owner");
-            residues.push(residue(directory_identity, self.profile, owner, problem));
+            residues.push(residue(directory_identity, &self.profile, owner, problem));
         }
         residues
     }
@@ -362,7 +368,7 @@ impl Scratch {
 
 pub(super) fn local(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: POSIX_IDENTITY,
+        kind: IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }

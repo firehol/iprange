@@ -1,13 +1,13 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use std::mem;
 use std::mem::size_of;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use std::path::PathBuf;
 
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use super::scratch::{residue_error, Scratch, ScratchFile, ScratchSlot, HEADER_SIZE};
 use super::{RecoveryBudget, ScratchCleanup};
 
@@ -18,17 +18,17 @@ const MAX_LOAD_DENOMINATOR: usize = 4;
 
 enum Slots {
     Heap(Vec<u64>),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     File(FileSlots),
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 struct FileSlots {
     file: ScratchFile,
     slots: usize,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[derive(Clone)]
 struct Fallback {
     directory: PathBuf,
@@ -43,9 +43,9 @@ struct Fallback {
 pub(crate) struct PageSet {
     slots: Slots,
     len: usize,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fallback: Option<Fallback>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     scratch: Option<Scratch>,
 }
 
@@ -65,7 +65,7 @@ impl PageSet {
         source: MetaV4,
         budget: &RecoveryBudget,
     ) -> Result<Self> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(unix, windows))]
         let fallback = budget.scratch_directory.as_ref().map(|directory| Fallback {
             directory: directory.clone(),
             source,
@@ -74,7 +74,7 @@ impl PageSet {
             max_open_files: budget.max_open_files,
             wanted_slots: wanted_slots(expected_pages),
         });
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(unix, windows)))]
         let fallback = {
             let _ = (source, budget);
             None
@@ -82,7 +82,7 @@ impl PageSet {
         Self::allocate(max_heap_bytes, expected_pages, fallback)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn allocate(
         max_heap_bytes: u64,
         expected_pages: u64,
@@ -108,7 +108,7 @@ impl PageSet {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(unix, windows)))]
     fn allocate(max_heap_bytes: u64, expected_pages: u64, _fallback: Option<()>) -> Result<Self> {
         let affordable =
             usize::try_from(max_heap_bytes / size_of::<u64>() as u64).unwrap_or(usize::MAX);
@@ -125,7 +125,7 @@ impl PageSet {
     /// Returns `true` for a new page and `false` for a prior claim.
     pub(crate) fn insert(&mut self, page: u32) -> Result<bool> {
         if exceeds_load(self.len + 1, self.slot_count()) {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             self.migrate()?;
             if exceeds_load(self.len + 1, self.slot_count()) {
                 return Err(Error::BudgetExceeded("recovery page-ownership table"));
@@ -150,7 +150,7 @@ impl PageSet {
     pub(crate) fn retained_bytes(&self) -> u64 {
         match &self.slots {
             Slots::Heap(slots) => slots.len() as u64 * size_of::<u64>() as u64,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Slots::File(_) => 0,
         }
     }
@@ -159,7 +159,7 @@ impl PageSet {
         self.len = 0;
         match &mut self.slots {
             Slots::Heap(slots) => slots.fill(EMPTY),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Slots::File(_) => self.reset_file()?,
         }
         Ok(())
@@ -170,11 +170,11 @@ impl PageSet {
         self,
         result: Result<()>,
     ) -> std::result::Result<Option<ScratchCleanup>, PageSetFailure> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(unix, windows))]
         {
             finish_cleanup(self.cleanup(), result)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(unix, windows)))]
         {
             drop(self);
             result.map(|()| None).map_err(|cause| PageSetFailure {
@@ -184,13 +184,13 @@ impl PageSet {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn take_scratch(&mut self) -> Option<Scratch> {
         self.fallback = None;
         self.scratch.take()
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn release(mut self, scratch: &mut Scratch) -> Option<ScratchSlot> {
         match mem::replace(&mut self.slots, Slots::Heap(Vec::new())) {
             Slots::Heap(_) => None,
@@ -201,7 +201,7 @@ impl PageSet {
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn create_scratch_file(&mut self, length: u64) -> Result<ScratchFile> {
         let scratch = self.ensure_scratch()?;
         let slot = scratch.create()?;
@@ -209,7 +209,7 @@ impl PageSet {
         scratch.detach(slot)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     pub(crate) fn cleanup(mut self) -> Option<ScratchCleanup> {
         if let Some(mut scratch) = self.scratch.take() {
             let _ = self.release(&mut scratch);
@@ -222,7 +222,7 @@ impl PageSet {
     fn slot_count(&self) -> usize {
         match &self.slots {
             Slots::Heap(slots) => slots.len(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Slots::File(slots) => slots.slots,
         }
     }
@@ -230,7 +230,7 @@ impl PageSet {
     fn read(&self, index: usize) -> Result<u64> {
         match &self.slots {
             Slots::Heap(slots) => Ok(slots[index]),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Slots::File(slots) => slots.read(index),
         }
     }
@@ -241,12 +241,12 @@ impl PageSet {
                 slots[index] = value;
                 Ok(())
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(unix, windows))]
             Slots::File(slots) => slots.write(index, value),
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn migrate(&mut self) -> Result<()> {
         if matches!(self.slots, Slots::File(_)) {
             return Ok(());
@@ -264,7 +264,7 @@ impl PageSet {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn create_file_slots(&mut self, slots: usize) -> Result<FileSlots> {
         let length = table_length(slots)?;
         let scratch = self.ensure_scratch()?;
@@ -276,7 +276,7 @@ impl PageSet {
         Ok(output)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn ensure_scratch(&mut self) -> Result<&mut Scratch> {
         if self.scratch.is_none() {
             let fallback = self
@@ -288,7 +288,7 @@ impl PageSet {
         Ok(self.scratch.as_mut().expect("scratch was initialized"))
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn file_slots(&self, fallback: &Fallback) -> Result<usize> {
         let available = match &self.scratch {
             Some(scratch) => scratch.remaining_bytes(),
@@ -307,7 +307,7 @@ impl PageSet {
         fallback.file_slots(available)
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn copy_claims(&self, output: &mut FileSlots) -> Result<()> {
         let Slots::Heap(values) = &self.slots else {
             return Ok(());
@@ -318,7 +318,7 @@ impl PageSet {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(unix, windows))]
     fn reset_file(&mut self) -> Result<()> {
         let Slots::File(slots) = &self.slots else {
             unreachable!("file reset requires file slots")
@@ -334,7 +334,7 @@ impl PageSet {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[allow(clippy::result_large_err)]
 fn finish_cleanup(
     cleanup: Option<ScratchCleanup>,
@@ -368,7 +368,7 @@ fn finish_cleanup(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 impl FileSlots {
     fn read(&self, index: usize) -> Result<u64> {
         let mut bytes = [0; 8];
@@ -394,7 +394,7 @@ impl FileSlots {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 impl Fallback {
     fn file_slots(&self, available: u64) -> Result<usize> {
         let table_bytes = available
@@ -410,7 +410,7 @@ impl Fallback {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn start_scratch(fallback: &Fallback) -> Result<Scratch> {
     Scratch::start(
         &fallback.directory,
@@ -449,7 +449,7 @@ fn exceeds_load(len: usize, slots: usize) -> bool {
         || len.saturating_mul(MAX_LOAD_DENOMINATOR) > slots.saturating_mul(MAX_LOAD_NUMERATOR)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn table_length(slots: usize) -> Result<u64> {
     (slots as u64)
         .checked_mul(size_of::<u64>() as u64)
@@ -459,7 +459,7 @@ fn table_length(slots: usize) -> Result<u64> {
         ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn slot_offset(index: usize) -> Result<u64> {
     (index as u64)
         .checked_mul(size_of::<u64>() as u64)

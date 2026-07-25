@@ -1,6 +1,5 @@
 //! Exact completion or rollback of an interrupted `CreateLive`.
 
-use std::fs;
 use std::path::Path;
 
 use crate::bootstrap::OpenMode;
@@ -225,10 +224,8 @@ fn observe_main(
     supplied: &CreateResult,
     cancellation: &CancellationToken,
 ) -> Result<Main> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Main::Absent),
-        Err(error) => return Err(error.into()),
-        Ok(_) => {}
+    if live_sidecar::path_identity(path)?.is_none() {
+        return Ok(Main::Absent);
     }
     let file = live_sidecar::open_rw(path)?;
     let identity = live_sidecar::identity(&file)?;
@@ -342,9 +339,7 @@ fn expected_meta(supplied: &CreateResult) -> crate::contract::MetaV4 {
 }
 
 fn remove_exact(path: &Path, identity: Identity) -> Result<()> {
-    live_sidecar::verify_path(path, identity)?;
-    fs::remove_file(path)?;
-    live_sidecar::sync_parent(path)
+    live_sidecar::remove_exact(path, identity)
 }
 
 fn raw_main_identity(main: &Main) -> Option<Identity> {

@@ -1,5 +1,6 @@
 //! Atomic mutation of names in one retained publication directory.
 
+use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 
@@ -9,59 +10,140 @@ impl Directory {
     pub(crate) fn rename_noreplace(
         &self,
         source: &Name,
+        _source_file: &File,
         destination: &Name,
     ) -> Result<(), NamespaceError> {
         self.check_creator()?;
+        #[cfg(target_os = "freebsd")]
+        {
+            return self.link_noreplace(source, destination);
+        }
+        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+        {
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::renameat2(
+                    self.file.as_raw_fd(),
+                    source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    destination.c_str().as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            };
+            #[cfg(target_vendor = "apple")]
+            let result = unsafe {
+                libc::renameatx_np(
+                    self.file.as_raw_fd(),
+                    source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    destination.c_str().as_ptr(),
+                    libc::RENAME_EXCL,
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            let source = io::Error::last_os_error();
+            match source.raw_os_error() {
+                Some(libc::EEXIST) => Err(NamespaceError::Exists),
+                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
+                    Err(NamespaceError::Unsupported)
+                }
+                _ => Err(NamespaceError::IoAt {
+                    operation: "publish name without replacement",
+                    source,
+                }),
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
+        Err(NamespaceError::Unsupported)
+    }
+
+    pub(crate) fn replace(
+        &self,
+        source: &Name,
+        _source_file: &File,
+        destination: &Name,
+    ) -> Result<(), NamespaceError> {
+        self.check_creator()?;
+        #[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd"))]
+        {
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::renameat2(
+                    self.file.as_raw_fd(),
+                    source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    destination.c_str().as_ptr(),
+                    libc::RENAME_EXCHANGE,
+                )
+            };
+            #[cfg(target_vendor = "apple")]
+            let result = unsafe {
+                libc::renameatx_np(
+                    self.file.as_raw_fd(),
+                    source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    destination.c_str().as_ptr(),
+                    libc::RENAME_SWAP,
+                )
+            };
+            #[cfg(target_os = "freebsd")]
+            let result = unsafe {
+                libc::renameat(
+                    self.file.as_raw_fd(),
+                    source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    destination.c_str().as_ptr(),
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            let source = io::Error::last_os_error();
+            match source.raw_os_error() {
+                Some(libc::ENOENT) => Err(NamespaceError::Missing),
+                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
+                    Err(NamespaceError::Unsupported)
+                }
+                _ => Err(NamespaceError::IoAt {
+                    operation: "atomically replace publication name",
+                    source,
+                }),
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
+        Err(NamespaceError::Unsupported)
+    }
+
+    #[cfg(target_os = "freebsd")]
+    fn link_noreplace(&self, source: &Name, destination: &Name) -> Result<(), NamespaceError> {
         let result = unsafe {
-            libc::renameat2(
+            libc::linkat(
                 self.file.as_raw_fd(),
                 source.c_str().as_ptr(),
                 self.file.as_raw_fd(),
                 destination.c_str().as_ptr(),
-                libc::RENAME_NOREPLACE,
+                0,
             )
         };
-        if result == 0 {
-            return Ok(());
+        if result != 0 {
+            let source = io::Error::last_os_error();
+            return match source.raw_os_error() {
+                Some(libc::EEXIST) => Err(NamespaceError::Exists),
+                _ => Err(NamespaceError::IoAt {
+                    operation: "link publication name without replacement",
+                    source,
+                }),
+            };
         }
-        let source = io::Error::last_os_error();
-        match source.raw_os_error() {
-            Some(libc::EEXIST) => Err(NamespaceError::Exists),
-            Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
-                Err(NamespaceError::Unsupported)
-            }
-            _ => Err(NamespaceError::IoAt {
-                operation: "publish name without replacement",
-                source,
-            }),
+        self.sync()?;
+        let result = unsafe { libc::unlinkat(self.file.as_raw_fd(), source.c_str().as_ptr(), 0) };
+        if result != 0 {
+            return Err(errno("unlink private publication alias"));
         }
-    }
-
-    pub(crate) fn rename_exchange(&self, left: &Name, right: &Name) -> Result<(), NamespaceError> {
-        self.check_creator()?;
-        let result = unsafe {
-            libc::renameat2(
-                self.file.as_raw_fd(),
-                left.c_str().as_ptr(),
-                self.file.as_raw_fd(),
-                right.c_str().as_ptr(),
-                libc::RENAME_EXCHANGE,
-            )
-        };
-        if result == 0 {
-            return Ok(());
-        }
-        let source = io::Error::last_os_error();
-        match source.raw_os_error() {
-            Some(libc::ENOENT) => Err(NamespaceError::Missing),
-            Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
-                Err(NamespaceError::Unsupported)
-            }
-            _ => Err(NamespaceError::IoAt {
-                operation: "atomically exchange publication names",
-                source,
-            }),
-        }
+        self.sync()?;
+        Ok(())
     }
 
     pub(crate) fn unlink_exact(

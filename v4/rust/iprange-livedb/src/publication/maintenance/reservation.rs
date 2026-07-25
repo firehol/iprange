@@ -1,7 +1,6 @@
 //! Linux private reservation discovery and exact offline removal.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
@@ -9,7 +8,9 @@ use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
-use crate::publication::namespace::{Directory, Identity, Name, NamespaceError, ScanError};
+use crate::publication::namespace::{
+    regular_link_count, Directory, Identity, Name, NamespaceError, ScanError,
+};
 use crate::publication::reservation::{self as codec, Header, Policy, State};
 use crate::validation::LocalFileIdentity;
 
@@ -103,7 +104,7 @@ pub(super) fn remove(
             "reservation artifact lost its exact name",
         ));
     }
-    if regular.file.metadata()?.nlink() != 0 {
+    if regular_link_count(&regular.file).map_err(namespace_error)? != 0 {
         return Err(Error::CleanupConflict(
             "reservation artifact remained linked after removal",
         ));

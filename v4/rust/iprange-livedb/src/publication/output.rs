@@ -12,12 +12,11 @@ use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::{file_io, random};
 
 use super::namespace::{
-    regular_identity, regular_identity_any_link, Destination, Identity, Name, NamespaceError,
+    regular_identity, regular_identity_any_link, sync_file, Destination, Identity, Name,
+    NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND,
 };
 use super::replacement::PreviousMain;
 use super::{CreationSecurity, PrivateOutputAttempt};
-
-const POSIX_KIND: u16 = 1;
 
 #[path = "output_digest.rs"]
 mod output_digest;
@@ -71,10 +70,7 @@ impl CreatedOutput {
         let name = destination
             .output_name(attempt_id)
             .map_err(Error::Namespace)?;
-        let file = destination
-            .directory()
-            .create(&name)
-            .map_err(Error::Namespace)?;
+        let file = destination.create(&name).map_err(Error::Namespace)?;
         Ok(Self {
             destination,
             attempt_id,
@@ -85,7 +81,7 @@ impl CreatedOutput {
 
     pub(crate) fn facts(&self) -> PrivateOutputAttempt {
         let identity =
-            regular_identity_any_link(&self.file, self.destination.directory().identity().device)
+            regular_identity_any_link(&self.file, self.destination.directory().identity())
                 .ok()
                 .map(local);
         facts(&self.destination, self.attempt_id, &self.name, identity)
@@ -288,10 +284,10 @@ impl PreparedOutput {
 
 fn secure_created(created: &CreatedOutput) -> Result<Identity, Error> {
     let directory = created.destination.directory();
-    let identity = regular_identity(&created.file, directory.identity().device)?;
+    let identity = regular_identity(&created.file, directory.identity())?;
     directory.verify_name(&created.name, identity)?;
     created.destination.secure_created(&created.file)?;
-    let secured = regular_identity(&created.file, directory.identity().device)?;
+    let secured = regular_identity(&created.file, directory.identity())?;
     if secured != identity {
         return Err(NamespaceError::IdentityChanged.into());
     }
@@ -306,11 +302,7 @@ fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
         .map_err(Error::Sdk)?;
     let byte_length = inspect_finished(owner)?;
     let sha512 = digest(&owner.finished.file, byte_length)?;
-    owner
-        .finished
-        .file
-        .sync_all()
-        .map_err(crate::error::Error::from)?;
+    sync_file(&owner.finished.file).map_err(crate::error::Error::from)?;
     let final_length = inspect_finished(owner)?;
     if final_length != byte_length {
         return Err(Error::FinishedLengthChanged);
@@ -342,11 +334,7 @@ fn finish_cancellable(
     byte_length: u64,
     cancellation: &CancellationToken,
 ) -> Result<(), Error> {
-    owner
-        .finished
-        .file
-        .sync_all()
-        .map_err(crate::error::Error::from)?;
+    sync_file(&owner.finished.file).map_err(crate::error::Error::from)?;
     cancellation.check().map_err(Error::Sdk)?;
     let final_length = inspect_finished(owner)?;
     if final_length != byte_length {
@@ -386,7 +374,7 @@ fn inspect_exact(
 
 fn verify_custody(attempt: &OutputAttempt, file: &File, location: Location) -> Result<(), Error> {
     let directory = attempt.destination.directory();
-    let identity = regular_identity(file, directory.identity().device)?;
+    let identity = regular_identity(file, directory.identity())?;
     if identity != attempt.identity {
         return Err(NamespaceError::IdentityChanged.into());
     }
@@ -409,11 +397,11 @@ fn facts(
     PrivateOutputAttempt {
         publication_attempt_id: attempt_id,
         directory_identity: local(destination.directory().identity()),
-        basename_encoding: POSIX_KIND,
+        basename_encoding: BASENAME_ENCODING_KIND,
         basename: name.bytes().into(),
         identity,
         creation_security: CreationSecurity {
-            kind: POSIX_KIND,
+            kind: CREATION_SECURITY_KIND,
             commitment: destination.security_commitment(),
         },
     }
@@ -421,7 +409,7 @@ fn facts(
 
 fn local(identity: Identity) -> crate::validation::LocalFileIdentity {
     crate::validation::LocalFileIdentity {
-        kind: POSIX_KIND,
+        kind: IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }

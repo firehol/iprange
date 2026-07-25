@@ -5,6 +5,8 @@ use std::path::Path;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
 use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
@@ -419,10 +421,29 @@ pub(crate) fn open_read_only(path: &Path) -> Result<File> {
     Ok(options.open(path)?)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn open_read_only(path: &Path) -> Result<File> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(Error::WrongMode("database path is a Windows reparse point"));
+    }
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn open_read_only(_path: &Path) -> Result<File> {
     Err(Error::Unsupported(
-        "safe no-follow file open is not implemented on this platform",
+        "safe no-follow file open is unavailable",
     ))
 }
 

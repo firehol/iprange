@@ -11,7 +11,7 @@ use crate::range_tree::Record;
 
 use super::direct::{analyze, DirectAnalysis};
 use super::direct_output::{Components, DirectKey};
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use super::external_sort::{self, ExternalSortFailure};
 use super::page_set::PageSet;
 use super::range_build::{buffer_fits, events, require_count, reserve};
@@ -287,7 +287,7 @@ fn collect_ranges<K: DirectKey>(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[allow(clippy::result_large_err)]
 fn build_external<K: DirectKey, S: RecoverySink>(
     context: BuildContext<'_>,
@@ -330,7 +330,7 @@ fn build_external<K: DirectKey, S: RecoverySink>(
     Ok(Some(cleanup))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 fn build_external<K: DirectKey, S: RecoverySink>(
     _context: BuildContext<'_>,
     _builder: &mut Builder,
@@ -348,7 +348,7 @@ fn build_external<K: DirectKey, S: RecoverySink>(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn external_failure(error: ExternalSortFailure) -> BuildFailure {
     BuildFailure {
         cause: error.cause,

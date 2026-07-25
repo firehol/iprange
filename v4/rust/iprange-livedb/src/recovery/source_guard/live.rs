@@ -255,6 +255,7 @@ fn prepare_claim(
     Ok(meta)
 }
 
+#[allow(clippy::result_large_err)]
 fn claim_prepared(
     file: File,
     path: &Path,

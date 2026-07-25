@@ -7,6 +7,8 @@ use crate::error::{Error, Result};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 
 pub(crate) fn read_page(
     file: &File,
@@ -23,10 +25,9 @@ pub(crate) fn read_page(
     read_exact_at(file, page, offset)
 }
 
-#[cfg(unix)]
 pub(crate) fn read_exact_at(file: &File, mut output: &mut [u8], mut offset: u64) -> Result<()> {
     while !output.is_empty() {
-        match file.read_at(output, offset) {
+        match read_at(file, output, offset) {
             Ok(0) => return Err(Error::Corrupt("page is physically truncated")),
             Ok(read) => {
                 output = &mut output[read..];
@@ -41,17 +42,27 @@ pub(crate) fn read_exact_at(file: &File, mut output: &mut [u8], mut offset: u64)
     Ok(())
 }
 
-#[cfg(not(unix))]
-pub(crate) fn read_exact_at(_file: &File, _output: &mut [u8], _offset: u64) -> Result<()> {
-    Err(Error::Unsupported(
+#[cfg(unix)]
+fn read_at(file: &File, output: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    file.read_at(output, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &File, output: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    file.seek_read(output, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_at(_file: &File, _output: &mut [u8], _offset: u64) -> std::io::Result<usize> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
         "safe positional file reads are not implemented on this platform",
     ))
 }
 
-#[cfg(unix)]
 pub(crate) fn write_exact_at(file: &File, mut input: &[u8], mut offset: u64) -> Result<()> {
     while !input.is_empty() {
-        match file.write_at(input, offset) {
+        match write_at(file, input, offset) {
             Ok(0) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::WriteZero,
@@ -72,14 +83,25 @@ pub(crate) fn write_exact_at(file: &File, mut input: &[u8], mut offset: u64) -> 
     Ok(())
 }
 
-#[cfg(not(unix))]
-pub(crate) fn write_exact_at(_file: &File, _input: &[u8], _offset: u64) -> Result<()> {
-    Err(Error::Unsupported(
+#[cfg(unix)]
+fn write_at(file: &File, input: &[u8], offset: u64) -> std::io::Result<usize> {
+    file.write_at(input, offset)
+}
+
+#[cfg(windows)]
+fn write_at(file: &File, input: &[u8], offset: u64) -> std::io::Result<usize> {
+    file.seek_write(input, offset)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_at(_file: &File, _input: &[u8], _offset: u64) -> std::io::Result<usize> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
         "safe positional file writes are not implemented on this platform",
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};

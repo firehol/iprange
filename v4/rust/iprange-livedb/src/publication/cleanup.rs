@@ -1,9 +1,10 @@
 //! Exact discard of direct-publication artifacts before main publication.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 
-use super::namespace::{regular_identity, Directory, Identity, Name, NamespaceError};
+use super::namespace::{
+    regular_identity, regular_link_count, Directory, Identity, Name, NamespaceError,
+};
 use super::output::{CreatedOutput, OutputAttempt, PreparedOutput};
 use super::problem::Problem;
 use super::result::{ArtifactKind, CleanupArtifacts, NameSlot, Seed};
@@ -255,7 +256,7 @@ fn remove_reservation<'a>(
 ) -> Result<Removal<'a>, Problem> {
     let identity = match owner.identity {
         Some(identity) => identity,
-        None => regular_identity(owner.file, directory.identity().device)
+        None => regular_identity(owner.file, directory.identity())
             .map_err(|error| Problem::namespace(&error))?,
     };
     let names = match owner.location {
@@ -347,13 +348,7 @@ fn require_unlinked<'a>(
 }
 
 fn links(file: &File) -> Result<u64, Problem> {
-    file.metadata()
-        .map(|metadata| metadata.nlink())
-        .map_err(|error| Problem {
-            code: crate::error::ErrorCode::Io,
-            os_code: error.raw_os_error(),
-            detail: "inspect publication artifact during cleanup",
-        })
+    regular_link_count(file).map_err(|error| Problem::namespace(&error))
 }
 
 fn finish_removal(

@@ -3,7 +3,9 @@
 use std::fs::File;
 
 use crate::cancellation::CancellationToken;
-use crate::error::{Error, Result};
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+use crate::error::Error;
+use crate::error::Result;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Mode {
@@ -15,6 +17,8 @@ pub(crate) enum Mode {
 mod platform {
     use std::io;
     use std::os::fd::AsRawFd;
+
+    use crate::error::Error;
 
     use super::*;
 
@@ -80,7 +84,88 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+#[cfg(windows)]
+mod platform {
+    use std::io;
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0};
+
+    use super::*;
+
+    pub(crate) fn lock(file: &File, offset: u64, mode: Mode) -> Result<()> {
+        set(file, offset, mode, true).map(|_| ())
+    }
+
+    pub(crate) fn try_lock(file: &File, offset: u64, mode: Mode) -> Result<bool> {
+        set(file, offset, mode, false)
+    }
+
+    pub(crate) fn unlock(file: &File, offset: u64) -> Result<()> {
+        let mut overlapped = overlapped(offset);
+        let result =
+            unsafe { UnlockFileEx(handle(file), 0, 1, 0, &mut overlapped as *mut OVERLAPPED) };
+        if result == 0 {
+            Err(io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn set(file: &File, offset: u64, mode: Mode, wait: bool) -> Result<bool> {
+        let mut flags = match mode {
+            Mode::Shared => 0,
+            Mode::Exclusive => LOCKFILE_EXCLUSIVE_LOCK,
+        };
+        if !wait {
+            flags |= LOCKFILE_FAIL_IMMEDIATELY;
+        }
+        let mut overlapped = overlapped(offset);
+        let result = unsafe {
+            LockFileEx(
+                handle(file),
+                flags,
+                0,
+                1,
+                0,
+                &mut overlapped as *mut OVERLAPPED,
+            )
+        };
+        if result != 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        if !wait && error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            Ok(false)
+        } else {
+            Err(error.into())
+        }
+    }
+
+    fn handle(file: &File) -> HANDLE {
+        file.as_raw_handle() as HANDLE
+    }
+
+    fn overlapped(offset: u64) -> OVERLAPPED {
+        OVERLAPPED {
+            Internal: 0,
+            InternalHigh: 0,
+            Anonymous: OVERLAPPED_0 {
+                Anonymous: OVERLAPPED_0_0 {
+                    Offset: offset as u32,
+                    OffsetHigh: (offset >> 32) as u32,
+                },
+            },
+            hEvent: std::ptr::null_mut(),
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 mod platform {
     use super::*;
 

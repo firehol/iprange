@@ -2031,6 +2031,29 @@ is:
 SHA-256("IPR4PSEC" || effective_uid:u32le || 0600:u32le)
 ```
 
+For Windows creation-security kind 2, the engine captures the effective token
+at attempt start: the thread impersonation token when present, otherwise the
+process token. It creates each artifact with a protected, non-inheriting DACL
+owned by and containing exactly one allow ACE for that token's user SID. The
+ACE grants exactly `FILE_ALL_ACCESS`; no other ACE is present. Its commitment
+is:
+
+```text
+SHA-256(
+    "IPR4PSEC" ||
+    sid_len:u32le ||
+    exact_sid_bytes ||
+    FILE_ALL_ACCESS:u32le ||
+    SE_DACL_PROTECTED:u16le
+)
+```
+
+Windows local-identity kind 2 is the exact 32-byte value
+`volume_serial_number:u64le || file_id:[16]byte || zero:[8]byte` returned from
+one retained handle by `GetFileInformationByHandleEx(FileIdInfo)`. Link count,
+regular-file type, and reparse-point state are checked separately and are not
+identity bytes.
+
 The same attempt-start commitment is recorded for every separately created
 inode in that attempt. A resolver recomputes it from each retained inode's
 current owner, mode, and absent extended access ACL. A mismatch reports

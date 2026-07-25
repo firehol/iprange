@@ -20,7 +20,7 @@ fn full_heap_table_fails_before_allocation_or_looping() {
     ));
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 mod linux {
     use std::fs;
     use std::path::PathBuf;

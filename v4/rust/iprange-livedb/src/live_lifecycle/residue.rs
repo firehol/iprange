@@ -1,6 +1,5 @@
 //! Restart recovery for live transitions whose in-memory result was lost.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cancellation::CancellationToken;
@@ -252,7 +251,13 @@ fn complete_private_reset(
         main.verify()?;
         require_absent(canonical_path)?;
         require_state(&sidecar, State::Ready)?;
-        super::namespace::install(private_path, canonical_path, sidecar.local_identity(), None)?;
+        super::namespace::install(
+            private_path,
+            &sidecar.file,
+            canonical_path,
+            sidecar.local_identity(),
+            None,
+        )?;
         live_sidecar::sync_parent(canonical_path)?;
         main.verify()?;
         live_sidecar::verify_path(canonical_path, sidecar.local_identity())?;
@@ -327,27 +332,25 @@ fn remove_private_residue(
 }
 
 fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<Option<LockedMain>> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-        Ok(_) => LockedMain::open(path, cancellation).map(Some),
+    if live_sidecar::path_identity(path)?.is_none() {
+        return Ok(None);
     }
+    LockedMain::open(path, cancellation).map(Some)
 }
 
 fn observe(path: &Path) -> Result<Observed> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Observed::Absent),
-        Err(error) => Err(error.into()),
-        Ok(_) => match Sidecar::open_any(path.to_path_buf()) {
-            Ok((sidecar, state)) => Ok(Observed::Valid(sidecar, state)),
-            Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => {
-                let file = live_sidecar::open_rw(path)?;
-                Ok(Observed::Malformed {
-                    identity: live_sidecar::identity(&file)?,
-                })
-            }
-            Err(cause) => Err(cause),
-        },
+    if live_sidecar::path_identity(path)?.is_none() {
+        return Ok(Observed::Absent);
+    }
+    match Sidecar::open_any(path.to_path_buf()) {
+        Ok((sidecar, state)) => Ok(Observed::Valid(sidecar, state)),
+        Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => {
+            let file = live_sidecar::open_rw(path)?;
+            Ok(Observed::Malformed {
+                identity: live_sidecar::identity(&file)?,
+            })
+        }
+        Err(cause) => Err(cause),
     }
 }
 
@@ -377,10 +380,9 @@ fn require_state(sidecar: &Sidecar, state: State) -> Result<()> {
 }
 
 fn require_absent(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-        Ok(_) => Err(Error::Conflict(
+    match live_sidecar::path_identity(path)? {
+        None => Ok(()),
+        Some(_) => Err(Error::Conflict(
             "canonical coordination appeared during resolution",
         )),
     }

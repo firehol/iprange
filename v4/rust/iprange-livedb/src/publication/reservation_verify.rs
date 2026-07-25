@@ -53,7 +53,7 @@ fn verify_inode(
     let destination = output.attempt.destination();
     let directory = destination.directory();
     directory.verify()?;
-    if regular_identity(file, directory.identity().device)? != expected.identity {
+    if regular_identity(file, directory.identity())? != expected.identity {
         return Err(NamespaceError::IdentityChanged.into());
     }
     Ok(destination.verify_created(file)?)

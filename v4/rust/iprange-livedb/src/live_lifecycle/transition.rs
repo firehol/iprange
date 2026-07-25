@@ -1,6 +1,5 @@
 //! Linux/POSIX offline live-coordination transitions.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
@@ -148,7 +147,9 @@ pub fn reset_live_coordination(
     }
 
     crate::fault::crash("live_reset.before_replace");
-    if let Err(cause) = super::namespace::install(&sidecar.path, &canonical, identity, previous) {
+    if let Err(cause) =
+        super::namespace::install(&sidecar.path, &sidecar.file, &canonical, identity, previous)
+    {
         if cause.residue_possible() {
             return Ok(attempt.unknown(
                 new_identity,
@@ -406,23 +407,15 @@ fn finish_reset(
 }
 
 pub(super) fn existing_identity(path: &Path) -> Result<Option<Identity>> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-        Ok(_) => {
-            let file = live_sidecar::open_rw(path)?;
-            Ok(Some(live_sidecar::identity(&file)?))
-        }
-    }
+    live_sidecar::path_identity(path)
 }
 
 pub(super) fn verify_previous(path: &Path, previous: Option<Identity>) -> Result<()> {
     match previous {
         Some(identity) => live_sidecar::verify_path(path, identity),
-        None => match fs::symlink_metadata(path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-            Ok(_) => Err(Error::CleanupConflict(
+        None => match live_sidecar::path_identity(path)? {
+            None => Ok(()),
+            Some(_) => Err(Error::CleanupConflict(
                 "canonical sidecar appeared during reset",
             )),
         },
@@ -430,9 +423,7 @@ pub(super) fn verify_previous(path: &Path, previous: Option<Identity>) -> Result
 }
 
 pub(super) fn remove_exact(path: &Path, identity: Identity) -> Result<()> {
-    live_sidecar::verify_path(path, identity)?;
-    fs::remove_file(path)?;
-    live_sidecar::sync_parent(path)
+    live_sidecar::remove_exact(path, identity)
 }
 
 fn require_capacity(capacity: u32) -> Result<()> {

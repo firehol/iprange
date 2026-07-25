@@ -1,14 +1,14 @@
 //! Stable ownership of the destination replaced by one publication.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 
 use crate::cancellation::CancellationToken;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 
 use super::namespace::{
-    regular_identity, regular_identity_any_link, Destination, Identity, Name, NamespaceError,
+    regular_identity, regular_identity_any_link, regular_link_count, Destination, Identity, Name,
+    NamespaceError,
 };
 use super::output::{self, PreparedOutput};
 
@@ -69,7 +69,7 @@ fn open(output: &PreparedOutput, cancellation: &CancellationToken) -> Result<Pre
     )
     .map_err(Error::Sdk)?;
     verify_canonical(destination, &regular.file, regular.identity, None)?;
-    regular.file.sync_all().map_err(crate::error::Error::from)?;
+    super::namespace::sync_file(&regular.file).map_err(crate::error::Error::from)?;
     cancellation.check().map_err(Error::Sdk)?;
     let byte_length = regular
         .file
@@ -111,14 +111,13 @@ impl PreviousMain {
         private_name: &Name,
     ) -> Result<(), NamespaceError> {
         destination.directory().verify()?;
-        let identity =
-            regular_identity_any_link(&self.file, destination.directory().identity().device)?;
+        let identity = regular_identity_any_link(&self.file, destination.directory().identity())?;
         if identity != self.identity
             || self.file.metadata().map_err(NamespaceError::Io)?.len() != self.byte_length
         {
             return Err(NamespaceError::IdentityChanged);
         }
-        match self.file.metadata().map_err(NamespaceError::Io)?.nlink() {
+        match regular_link_count(&self.file)? {
             1 => destination
                 .directory()
                 .verify_name(private_name, self.identity),
@@ -134,8 +133,7 @@ impl PreviousMain {
     ) -> Result<(), NamespaceError> {
         destination.directory().verify()?;
         destination.directory().require_absent(private_name)?;
-        let identity =
-            regular_identity_any_link(&self.file, destination.directory().identity().device)?;
+        let identity = regular_identity_any_link(&self.file, destination.directory().identity())?;
         if identity != self.identity {
             return Err(NamespaceError::IdentityChanged);
         }
@@ -143,8 +141,9 @@ impl PreviousMain {
         if metadata.len() != self.byte_length {
             return Err(NamespaceError::IdentityChanged);
         }
-        if metadata.nlink() != 0 {
-            return Err(NamespaceError::LinkCount(metadata.nlink()));
+        let links = regular_link_count(&self.file)?;
+        if links != 0 {
+            return Err(NamespaceError::LinkCount(links));
         }
         Ok(())
     }
@@ -180,7 +179,7 @@ fn verify_canonical(
     destination
         .directory()
         .verify_name(destination.main(), expected)?;
-    let identity = regular_identity(file, destination.directory().identity().device)?;
+    let identity = regular_identity(file, destination.directory().identity())?;
     if identity != expected {
         return Err(NamespaceError::IdentityChanged);
     }

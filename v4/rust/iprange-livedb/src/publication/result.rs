@@ -4,7 +4,10 @@ use crate::contract::PAGE_SIZE;
 use crate::error::ErrorCode;
 use crate::validation::LocalFileIdentity;
 
-use super::namespace::{Destination, Identity, NamespaceError};
+use super::namespace::{
+    Destination, Identity, NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND,
+    IDENTITY_KIND,
+};
 use super::output::PreparedOutput;
 use super::problem::Problem;
 use super::reservation::{self, Header, Policy, State};
@@ -16,8 +19,6 @@ pub(crate) use super::types::{
     PreviousDestination, PublicationAttempt as AttemptFacts,
     PublicationPreparationFailure as PreparationFailure, PublicationResult, PublicationStatus,
 };
-
-const POSIX_KIND: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NameSlot {
@@ -133,7 +134,7 @@ impl Seed {
                     sha512: previous.sha512,
                 }),
             creation_security: CreationSecurity {
-                kind: POSIX_KIND,
+                kind: CREATION_SECURITY_KIND,
                 commitment: destination.security_commitment(),
             },
             private_output_basename: output.attempt.name().bytes().into(),
@@ -167,7 +168,7 @@ impl Seed {
                 sha512: previous.sha512,
             }),
             creation_security: CreationSecurity {
-                kind: POSIX_KIND,
+                kind: CREATION_SECURITY_KIND,
                 commitment: header.security_commitment,
             },
             private_output_basename: private_output.bytes().into(),
@@ -192,7 +193,7 @@ impl Seed {
                 commit_nonce: self.commit_nonce,
                 publication_attempt_id: self.attempt_id,
                 directory_identity: self.directory_identity,
-                destination_basename_encoding: POSIX_KIND,
+                destination_basename_encoding: BASENAME_ENCODING_KIND,
                 destination_basename: self.destination_basename,
                 output_identity: self.output_identity,
                 output_byte_length: self.output_byte_length,
@@ -227,7 +228,7 @@ impl Seed {
         PreparationFailure {
             publication_attempt_id: self.attempt_id,
             directory_identity: self.directory_identity,
-            private_output_basename_encoding: POSIX_KIND,
+            private_output_basename_encoding: BASENAME_ENCODING_KIND,
             private_output_basename: self.private_output_basename,
             output_identity: self.output_identity,
             creation_security: self.creation_security,
@@ -250,7 +251,7 @@ impl Seed {
             kind,
             directory_role: DirectoryRole::Destination,
             directory_identity: self.directory_identity,
-            basename_encoding: POSIX_KIND,
+            basename_encoding: BASENAME_ENCODING_KIND,
             basename: self.take_name(name),
             identity: identity.map(local),
             creation_security: Some(self.creation_security.clone()),
@@ -275,7 +276,7 @@ fn local(identity: Identity) -> LocalFileIdentity {
 
 fn local_raw(bytes: [u8; 32]) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: POSIX_KIND,
+        kind: IDENTITY_KIND,
         bytes,
     }
 }
@@ -292,19 +293,19 @@ fn require_result_binding(
             "caller publication result belongs to another directory",
         ));
     }
-    if result.attempt.destination_basename_encoding != POSIX_KIND
+    if result.attempt.destination_basename_encoding != BASENAME_ENCODING_KIND
         || result.attempt.destination_basename.as_ref() != destination.main().bytes()
     {
         return Err(destination_name_mismatch());
     }
-    if result.attempt.output_identity.kind != POSIX_KIND
-        || result.attempt.reservation_identity.kind != POSIX_KIND
-        || result.attempt.creation_security.kind != POSIX_KIND
+    if result.attempt.output_identity.kind != IDENTITY_KIND
+        || result.attempt.reservation_identity.kind != IDENTITY_KIND
+        || result.attempt.creation_security.kind != CREATION_SECURITY_KIND
         || result
             .attempt
             .previous_destination
             .as_ref()
-            .is_some_and(|previous| previous.identity.kind != POSIX_KIND)
+            .is_some_and(|previous| previous.identity.kind != IDENTITY_KIND)
     {
         return Err(conflict(
             "caller publication result has another identity kind",

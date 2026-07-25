@@ -98,7 +98,7 @@ fn duplicate_membership_ids_are_not_selected_as_a_winner() {
     validate_clean(&paths.output);
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[test]
 fn disordered_membership_ranges_use_the_bounded_shared_external_sort() {
     let paths = Paths::new("external");

@@ -7,6 +7,7 @@ const NAME_DOMAIN: &[u8; 8] = b"IPR4NAME";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub(crate) enum BasenameEncoding {
+    #[cfg(any(test, unix))]
     PosixBytes = 1,
     #[cfg(any(test, target_os = "windows"))]
     WindowsUtf16Le = 2,
@@ -16,6 +17,7 @@ pub(crate) enum BasenameEncoding {
 pub(crate) enum BasenameBindingError {
     Empty,
     TooLong,
+    #[cfg(any(test, unix))]
     InvalidPosixComponent,
     #[cfg(any(test, target_os = "windows"))]
     InvalidWindowsComponent,
@@ -32,6 +34,7 @@ pub(crate) fn basename_commitment(
     }
     let length = u32::try_from(bytes.len()).map_err(|_| BasenameBindingError::TooLong)?;
     match encoding {
+        #[cfg(any(test, unix))]
         BasenameEncoding::PosixBytes => validate_posix(bytes)?,
         #[cfg(any(test, target_os = "windows"))]
         BasenameEncoding::WindowsUtf16Le => validate_windows_utf16le(bytes)?,
@@ -45,6 +48,7 @@ pub(crate) fn basename_commitment(
     Ok(hasher.finalize().into())
 }
 
+#[cfg(any(test, unix))]
 fn validate_posix(bytes: &[u8]) -> Result<(), BasenameBindingError> {
     if bytes == b"." || bytes == b".." || bytes.contains(&0) || bytes.contains(&b'/') {
         return Err(BasenameBindingError::InvalidPosixComponent);

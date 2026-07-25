@@ -1,6 +1,5 @@
 //! Exact completion or rollback of one interrupted live transition.
 
-use std::fs;
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
@@ -202,6 +201,7 @@ fn resolve_reset(
             main.verify()?;
             super::namespace::install(
                 &private_path,
+                &private.sidecar.file,
                 &canonical_path,
                 private.sidecar.local_identity(),
                 previous,
@@ -224,19 +224,16 @@ fn resolve_reset(
 }
 
 fn observe(path: &Path, database_id: [u8; 16]) -> Result<Option<Observed>> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-        Ok(_) => {
-            let (sidecar, state) = Sidecar::open_at(path.to_path_buf(), database_id)?;
-            let identity = live_sidecar::public_identity(sidecar.local_identity());
-            Ok(Some(Observed {
-                sidecar,
-                state,
-                identity,
-            }))
-        }
+    if live_sidecar::path_identity(path)?.is_none() {
+        return Ok(None);
     }
+    let (sidecar, state) = Sidecar::open_at(path.to_path_buf(), database_id)?;
+    let identity = live_sidecar::public_identity(sidecar.local_identity());
+    Ok(Some(Observed {
+        sidecar,
+        state,
+        identity,
+    }))
 }
 
 fn observe_reset_canonical(

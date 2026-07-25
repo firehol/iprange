@@ -6,7 +6,7 @@ use crate::contract::PAGE_SIZE;
 use crate::live_lock::{self, Mode};
 use crate::{error, file_io};
 
-use super::namespace::{regular_identity, Identity, Name, NamespaceError};
+use super::namespace::{regular_identity, sync_file, Identity, Name, NamespaceError};
 use super::output::{self, PreparedOutput};
 use super::reservation::{Header, Policy, SelectError, State};
 
@@ -50,10 +50,7 @@ impl ReservationDraft {
         let name = destination
             .reservation_name(output.attempt.attempt_id())
             .map_err(Error::Namespace)?;
-        let file = destination
-            .directory()
-            .create(&name)
-            .map_err(Error::Namespace)?;
+        let file = destination.create(&name).map_err(Error::Namespace)?;
         Ok(Self {
             name,
             file,
@@ -238,7 +235,7 @@ fn prepare_header(draft: &mut ReservationDraft, output: &PreparedOutput) -> Resu
     }
     let destination = output.attempt.destination();
     let directory = destination.directory();
-    let identity = regular_identity(&draft.file, directory.identity().device)?;
+    let identity = regular_identity(&draft.file, directory.identity())?;
     draft.identity = Some(identity);
     directory.verify_name(&draft.name, identity)?;
     destination.secure_created(&draft.file)?;
@@ -255,7 +252,7 @@ fn write_state1(draft: &ReservationDraft) -> Result<(), Error> {
     let mut block = [0; PAGE_SIZE];
     header.encode(&mut block);
     file_io::write_exact_at(&draft.file, &block, 0)?;
-    draft.file.sync_all().map_err(error::Error::from)?;
+    sync_file(&draft.file).map_err(error::Error::from)?;
     crate::fault::crash("publication.after_reservation_state1_sync");
     Ok(())
 }
@@ -282,9 +279,11 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
     let destination = output.attempt.destination();
     destination.directory().verify()?;
     owner.namespace_call_started = true;
-    destination
-        .directory()
-        .rename_noreplace(&owner.reservation.name, destination.coordination())?;
+    destination.directory().rename_noreplace(
+        &owner.reservation.name,
+        &owner.reservation.file,
+        destination.coordination(),
+    )?;
     crate::fault::crash("publication.after_reservation_rename");
     destination.directory().sync()?;
     crate::fault::crash("publication.after_reservation_directory_sync");
@@ -322,11 +321,7 @@ fn arm_with(
     target.encode(&mut block);
     file_io::write_exact_at(&owner.reservation.file, &block, PAGE_SIZE as u64)?;
     crate::fault::crash("publication.after_reservation_state2_write");
-    owner
-        .reservation
-        .file
-        .sync_all()
-        .map_err(error::Error::from)?;
+    sync_file(&owner.reservation.file).map_err(error::Error::from)?;
     crate::fault::crash("publication.after_reservation_state2_sync");
     select_exact(&owner.reservation.file, target, 1)?;
     owner.state2_selected = true;

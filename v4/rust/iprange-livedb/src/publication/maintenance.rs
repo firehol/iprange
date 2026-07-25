@@ -145,11 +145,11 @@ pub fn list_abandoned_publication_temps<S: AbandonedPublicationTempSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> Result<AbandonedPublicationTempList> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         output::list(directory.as_ref(), cancellation, sink)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (directory, cancellation, sink);
         Err(crate::error::Error::Unsupported(
@@ -172,7 +172,7 @@ pub fn remove_abandoned_publication_temp(
     expected_digest: Option<PublicationDigest>,
     cancellation: &CancellationToken,
 ) -> Result<bool> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         output::remove(
             directory.as_ref(),
@@ -184,7 +184,7 @@ pub fn remove_abandoned_publication_temp(
             cancellation,
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (
             directory,
@@ -207,11 +207,11 @@ pub fn list_abandoned_reservation_artifacts<S: AbandonedReservationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> Result<AbandonedReservationList> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         reservation::list(directory.as_ref(), cancellation, sink)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (directory, cancellation, sink);
         Err(crate::error::Error::Unsupported(
@@ -228,7 +228,7 @@ pub fn remove_abandoned_reservation_artifact(
     expected_artifact_identity: LocalFileIdentity,
     cancellation: &CancellationToken,
 ) -> Result<bool> {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         reservation::remove(
             directory.as_ref(),
@@ -238,7 +238,7 @@ pub fn remove_abandoned_reservation_artifact(
             cancellation,
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = (
             directory,
@@ -253,10 +253,10 @@ pub fn remove_abandoned_reservation_artifact(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[path = "maintenance/output.rs"]
 mod output;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[path = "maintenance/reservation.rs"]
 mod reservation;
 

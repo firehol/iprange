@@ -236,7 +236,7 @@ fn disordered_recovery_refuses_insufficient_heap_before_output_mutation() {
     drop(failure.builder.into_file());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[test]
 fn disordered_direct_recovery_uses_bounded_multi_pass_scratch() {
     let paths = Paths::new("external");

@@ -1,14 +1,13 @@
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 
 use crate::error::{Error, ErrorCode};
-use crate::publication::namespace::{Directory, NamespaceError};
+use crate::publication::namespace::{
+    regular_link_count, Directory, NamespaceError, CREATION_SECURITY_KIND,
+};
 use crate::publication::security::Profile;
 use crate::validation::LocalFileIdentity;
 
-use super::{
-    local, Owned, ScratchCleanup, ScratchProblem, ScratchResidue, MAX_OWNED, POSIX_IDENTITY,
-};
+use super::{local, Owned, ScratchCleanup, ScratchProblem, ScratchResidue, MAX_OWNED};
 
 pub(super) fn set_removed_problems(
     removed: &[bool; MAX_OWNED],
@@ -44,13 +43,11 @@ fn require_named_link(
     owner: &Owned,
     file: &File,
 ) -> std::result::Result<bool, ScratchProblem> {
-    let metadata = file
-        .metadata()
-        .map_err(|error| io_problem(&error, "inspect owned recovery scratch"))?;
-    if metadata.nlink() > 1 {
+    let links = regular_link_count(file).map_err(|error| scratch_problem(&error))?;
+    if links > 1 {
         return Err(conflict("owned recovery scratch has unexpected links"));
     }
-    if metadata.nlink() == 0 {
+    if links == 0 {
         directory
             .require_absent(&owner.name)
             .map_err(|error| scratch_problem(&error))?;
@@ -60,10 +57,7 @@ fn require_named_link(
 }
 
 fn require_unlinked(file: &File) -> std::result::Result<(), ScratchProblem> {
-    let links = file
-        .metadata()
-        .map_err(|error| io_problem(&error, "recheck owned recovery scratch"))?
-        .nlink();
+    let links = regular_link_count(file).map_err(|error| scratch_problem(&error))?;
     if links != 0 {
         return Err(conflict(
             "owned recovery scratch remained linked after removal",
@@ -82,7 +76,7 @@ fn conflict(detail: &'static str) -> ScratchProblem {
 
 pub(super) fn residue(
     directory_identity: LocalFileIdentity,
-    profile: Profile,
+    profile: &Profile,
     owner: Owned,
     problem: ScratchProblem,
 ) -> ScratchResidue {
@@ -91,7 +85,7 @@ pub(super) fn residue(
         directory_identity,
         basename: owner.name.bytes().into(),
         identity: local(owner.identity),
-        creation_security_kind: POSIX_IDENTITY,
+        creation_security_kind: CREATION_SECURITY_KIND,
         creation_security_commitment: profile.commitment(),
         problem,
     }

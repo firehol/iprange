@@ -9,7 +9,7 @@ use crate::immutable_output::{Builder, Finished};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_tree::Record;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 use super::external_sort::{self, ExternalSortFailure};
 use super::membership::{analyze, MembershipAnalysis};
 use super::membership_output::{Components, MembershipKey};
@@ -318,7 +318,7 @@ fn emit_sorted<K: MembershipKey, S: RecoverySink>(
     components.finish()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 #[allow(clippy::result_large_err)]
 fn build_external<K: MembershipKey, S: RecoverySink>(
     context: BuildContext<'_>,
@@ -361,7 +361,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     Ok(Some(cleanup))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(unix, windows)))]
 #[allow(clippy::result_large_err)]
 fn build_external<K: MembershipKey, S: RecoverySink>(
     _context: BuildContext<'_>,
@@ -379,7 +379,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     )
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, windows))]
 fn external_failure(error: ExternalSortFailure) -> BuildFailure {
     BuildFailure {
         cause: error.cause,
