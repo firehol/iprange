@@ -13,16 +13,32 @@ use crate::validation::ValidationReason;
 
 use super::direct::{analyze, DirectAnalysis};
 use super::direct_output::{Components, DirectKey};
+#[cfg(target_os = "linux")]
+use super::external_sort::{self, ExternalSortFailure};
 use super::page_set::PageSet;
 use super::range_scan::{self, RangeEvents};
 use super::report::{RecoveryReport, RecoverySink, Reporter};
+#[cfg(target_os = "linux")]
+use super::scratch::ScratchCleanup;
 use super::RecoveryBudget;
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug)]
+pub(crate) struct ScratchCleanup;
+
+#[derive(Debug)]
+pub(crate) struct DirectConstruction {
+    pub(crate) finished: Finished,
+    pub(crate) report: RecoveryReport,
+    pub(crate) scratch: Option<ScratchCleanup>,
+}
 
 #[derive(Debug)]
 pub(crate) struct DirectConstructionFailure {
     pub(crate) builder: Builder,
     pub(crate) cause: Error,
     pub(crate) report: RecoveryReport,
+    pub(crate) scratch: Option<ScratchCleanup>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -33,13 +49,13 @@ pub(crate) fn construct<S: RecoverySink>(
     budget: &RecoveryBudget,
     cancellation: &CancellationToken,
     sink: &mut S,
-) -> std::result::Result<(Finished, RecoveryReport), DirectConstructionFailure> {
+) -> std::result::Result<DirectConstruction, DirectConstructionFailure> {
     if let Err(cause) = require_builder(&builder, source_meta) {
-        return Err(failure(builder, cause, RecoveryReport::default()));
+        return Err(failure(builder, cause, RecoveryReport::default(), None));
     }
     let analysis = match analyze(file, source_meta, budget, cancellation, sink) {
         Ok(analysis) => analysis,
-        Err(error) => return Err(failure(builder, error.cause, error.report)),
+        Err(error) => return Err(failure(builder, error.cause, error.report, None)),
     };
     match source_meta.address_family {
         AddressFamily::Ipv4 => build::<Ipv4Key, S>(
@@ -72,7 +88,7 @@ fn build<K: DirectKey, S: RecoverySink>(
     cancellation: &CancellationToken,
     sink: &mut S,
     analysis: DirectAnalysis,
-) -> std::result::Result<(Finished, RecoveryReport), DirectConstructionFailure> {
+) -> std::result::Result<DirectConstruction, DirectConstructionFailure> {
     let DirectAnalysis {
         report,
         readable_records,
@@ -86,7 +102,7 @@ fn build<K: DirectKey, S: RecoverySink>(
         cancellation,
     };
     let mut reporter = Reporter::resume(report, sink);
-    let result = if ordered {
+    let result: BuildResult = if ordered {
         build_ordered::<K, S>(
             context,
             &mut builder,
@@ -94,6 +110,8 @@ fn build<K: DirectKey, S: RecoverySink>(
             readable_records,
             &metadata,
         )
+        .map(|()| None)
+        .map_err(BuildFailure::plain)
     } else {
         build_sorted::<K, S>(
             context,
@@ -104,12 +122,33 @@ fn build<K: DirectKey, S: RecoverySink>(
         )
     };
     let report = reporter.finish();
-    if let Err(cause) = result {
-        return Err(failure(builder, cause, report));
-    }
+    let scratch = match result {
+        Ok(scratch) => scratch,
+        Err(error) => return Err(failure(builder, error.cause, report, error.scratch)),
+    };
     match builder.finish_owned() {
-        Ok(finished) => Ok((finished, report)),
-        Err(error) => Err(failure(error.builder, error.cause, report)),
+        Ok(finished) => Ok(DirectConstruction {
+            finished,
+            report,
+            scratch,
+        }),
+        Err(error) => Err(failure(error.builder, error.cause, report, scratch)),
+    }
+}
+
+type BuildResult = std::result::Result<Option<ScratchCleanup>, BuildFailure>;
+
+struct BuildFailure {
+    cause: Error,
+    scratch: Option<ScratchCleanup>,
+}
+
+impl BuildFailure {
+    fn plain(cause: Error) -> Self {
+        Self {
+            cause,
+            scratch: None,
+        }
     }
 }
 
@@ -157,22 +196,100 @@ fn build_ordered<K: DirectKey, S: RecoverySink>(
     )
 }
 
+#[allow(clippy::result_large_err)]
 fn build_sorted<K: DirectKey, S: RecoverySink>(
     context: BuildContext<'_>,
     builder: &mut Builder,
     reporter: &mut Reporter<'_, S>,
     readable_records: u64,
     metadata: &Option<Vec<u8>>,
-) -> Result<()> {
+) -> BuildResult {
     let metadata_bytes = retained_bytes(metadata);
-    let records = collect_sorted::<K>(context, readable_records, metadata_bytes)?;
-    emit_sorted(context.cancellation, builder, reporter, records)?;
+    match range_buffer_bytes::<K>(readable_records, metadata_bytes, context.budget) {
+        Ok(_) => {
+            let records = collect_sorted::<K>(context, readable_records, metadata_bytes)
+                .map_err(BuildFailure::plain)?;
+            emit_sorted(context.cancellation, builder, reporter, records)
+                .map_err(BuildFailure::plain)?;
+            write_metadata(
+                builder,
+                metadata.as_deref(),
+                context.budget.max_heap_bytes,
+                metadata_bytes,
+            )
+            .map_err(BuildFailure::plain)?;
+            Ok(None)
+        }
+        Err(Error::BudgetExceeded(_)) => build_external::<K, S>(
+            context,
+            builder,
+            reporter,
+            readable_records,
+            metadata,
+            metadata_bytes,
+        ),
+        Err(cause) => Err(BuildFailure::plain(cause)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::result_large_err)]
+fn build_external<K: DirectKey, S: RecoverySink>(
+    context: BuildContext<'_>,
+    builder: &mut Builder,
+    reporter: &mut Reporter<'_, S>,
+    readable_records: u64,
+    metadata: &Option<Vec<u8>>,
+    metadata_bytes: u64,
+) -> BuildResult {
+    let mut components = Components::<S, K>::new(builder, reporter, context.cancellation);
+    let cleanup = external_sort::sort_and_emit::<K>(
+        context.file,
+        context.meta,
+        context.budget,
+        metadata_bytes,
+        readable_records,
+        context.cancellation,
+        |record| components.push(record),
+    )
+    .map_err(external_failure)?;
+    components.finish().map_err(|cause| BuildFailure {
+        cause,
+        scratch: Some(cleanup.clone()),
+    })?;
     write_metadata(
         builder,
         metadata.as_deref(),
         context.budget.max_heap_bytes,
         metadata_bytes,
     )
+    .map_err(|cause| BuildFailure {
+        cause,
+        scratch: Some(cleanup.clone()),
+    })?;
+    Ok(Some(cleanup))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn build_external<K: DirectKey, S: RecoverySink>(
+    _context: BuildContext<'_>,
+    _builder: &mut Builder,
+    _reporter: &mut Reporter<'_, S>,
+    _readable_records: u64,
+    _metadata: &Option<Vec<u8>>,
+    _metadata_bytes: u64,
+) -> BuildResult {
+    Err(BuildFailure::plain(Error::Unsupported(
+        "external recovery sorting is not implemented on this platform",
+    )))
+}
+
+#[cfg(target_os = "linux")]
+fn external_failure(error: ExternalSortFailure) -> BuildFailure {
+    BuildFailure {
+        cause: error.cause,
+        scratch: error.cleanup,
+    }
 }
 
 fn collect_sorted<K: DirectKey>(
@@ -290,11 +407,17 @@ fn require_builder(builder: &Builder, source: MetaV4) -> Result<()> {
     Ok(())
 }
 
-fn failure(builder: Builder, cause: Error, report: RecoveryReport) -> DirectConstructionFailure {
+fn failure(
+    builder: Builder,
+    cause: Error,
+    report: RecoveryReport,
+    scratch: Option<ScratchCleanup>,
+) -> DirectConstructionFailure {
     DirectConstructionFailure {
         builder,
         cause,
         report,
+        scratch,
     }
 }
 

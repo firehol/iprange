@@ -119,8 +119,31 @@ impl<K: Copy> Component<K> {
 }
 
 pub(super) trait DirectKey: IpKey {
+    const SCRATCH_RECORD_SIZE: usize = Self::WIDTH * 2 + 4;
+
     fn push(builder: &mut Builder, record: Record<Self>) -> Result<()>;
     fn fence(from: Self, to: Self) -> ValidationAddressFence;
+
+    fn encode_scratch(record: Record<Self>, output: &mut [u8]) {
+        record.from.write_le(output);
+        record
+            .to
+            .write_le(&mut output[Self::WIDTH..Self::WIDTH * 2]);
+        output[Self::WIDTH * 2..Self::SCRATCH_RECORD_SIZE]
+            .copy_from_slice(&record.value.to_le_bytes());
+    }
+
+    fn decode_scratch(bytes: &[u8]) -> Record<Self> {
+        Record {
+            from: Self::read_le(bytes),
+            to: Self::read_le(&bytes[Self::WIDTH..]),
+            value: u32::from_le_bytes(
+                bytes[Self::WIDTH * 2..Self::SCRATCH_RECORD_SIZE]
+                    .try_into()
+                    .expect("fixed scratch value"),
+            ),
+        }
+    }
 }
 
 impl DirectKey for Ipv4Key {

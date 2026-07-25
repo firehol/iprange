@@ -11,16 +11,16 @@ use super::namespace::NamespaceError;
 
 const DOMAIN: &[u8; 8] = b"IPR4PSEC";
 const ACCESS_ACL: &[u8] = b"system.posix_acl_access\0";
-pub(super) const CREATOR_MODE: u32 = 0o600;
+pub(crate) const CREATOR_MODE: u32 = 0o600;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Profile {
+pub(crate) struct Profile {
     uid: u32,
     commitment: [u8; 32],
 }
 
 impl Profile {
-    pub(super) fn capture() -> Self {
+    pub(crate) fn capture() -> Self {
         let uid = unsafe { libc::geteuid() };
         Self {
             uid,
@@ -28,12 +28,12 @@ impl Profile {
         }
     }
 
-    pub(super) fn commitment(self) -> [u8; 32] {
+    pub(crate) fn commitment(self) -> [u8; 32] {
         self.commitment
     }
 }
 
-pub(super) fn secure_creator_only(file: &File, profile: Profile) -> Result<(), NamespaceError> {
+pub(crate) fn secure_creator_only(file: &File, profile: Profile) -> Result<(), NamespaceError> {
     if unsafe { libc::fchmod(file.as_raw_fd(), CREATOR_MODE) } != 0 {
         return Err(last_error("apply creator-only mode"));
     }
@@ -45,7 +45,7 @@ pub(super) fn secure_creator_only(file: &File, profile: Profile) -> Result<(), N
     Ok(())
 }
 
-pub(super) fn creator_only_commitment(file: &File) -> Result<[u8; 32], NamespaceError> {
+pub(crate) fn creator_only_commitment(file: &File) -> Result<[u8; 32], NamespaceError> {
     let metadata = creator_only_metadata(file)?;
     Ok(commitment(metadata.uid()))
 }

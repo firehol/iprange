@@ -11526,6 +11526,57 @@ requirements are normative in the Pre-Implementation Gate above.
   exact cleanup/result composition, and fail-if-exists publication remain in the
   current recovery milestone.
 
+### 2026-07-25 - authorized recovery scratch implementation plan
+
+- Recovery will own one lazily created scratch attempt. It retains the exact
+  caller-selected directory, generates one nonzero random attempt ID, creates
+  canonical ordinal names exclusively, applies the creator-only access proof,
+  and writes the exact 128-byte CRC-protected ownership header before records.
+- A fixed two-slot owner table is sufficient for the chosen algorithm. Initial
+  sorted runs use one file; merge passes use two files and alternate their
+  roles. Graph ownership scratch is released before the second merge file is
+  created. Ordinals remain monotonic and are never reused.
+- Every growth checks the aggregate simultaneously retained scratch-byte limit.
+  Source and prospective output descriptors count against `max_open_files`;
+  recovery refuses a path needing two scratch descriptors unless at least four
+  total descriptors and two scratch files were authorized.
+- Cleanup attempts every owned artifact, verifies exact identity and link
+  count, unlinks through the retained directory, synchronizes that directory,
+  and returns every unresolved residue. No destructor is correctness authority.
+- Direct external sorting writes fixed-width encoded range records in bounded
+  sorted runs. One retained record buffer is reused; merge rounds use positional
+  reads from one input descriptor and sequential writes to the other, so there
+  is no per-record allocation and no descriptor growth with run count.
+- Permanent tests will cover exact names and headers, exclusive creation,
+  aggregate byte/file/descriptor budgets, stable ordering, multi-pass merge,
+  cancellation/write failure cleanup, and authenticated abandoned-scratch
+  listing/removal before this layer is considered complete.
+
+### 2026-07-25 - bounded external recovery-sort milestone
+
+- Disordered direct recovery now keeps the all-heap path when it fits and
+  otherwise uses exactly two authorized scratch files. Sorted runs and merge
+  passes use fixed-width records plus reused 4 KiB buffers; neither run count
+  nor record count grows descriptors or creates per-record heap objects.
+- Scratch creation uses the exact canonical name, exclusive no-follow creation,
+  creator-only access proof, and 128-byte CRC-protected ownership header.
+  Aggregate live scratch bytes, scratch files, and total open descriptors are
+  checked before growth.
+- Cleanup owns exact directory, basename, inode, ordinal, attempt, and security
+  facts. It checks link counts, unlinks only the exact inode, synchronizes and
+  rechecks the retained directory, and returns every unresolved residue. A sink
+  stop during sorted output aborts the private build and proves the scratch
+  directory empty.
+- Permanent coverage includes exact headers/names, byte/file/descriptor limits,
+  exclusive collision handling, hard-link residue reporting, a forced
+  eight-run multi-pass sort under 256 heap bytes, and sink-stop cleanup.
+- All-feature and no-default-feature suites pass with 233 unit tests passed and
+  two ignored plus every integration target. The recovery slice passes Rust
+  1.74, strict all-target Clippy, formatting, and the agreed complexity limits.
+- File-backed graph ownership and authenticated abandoned-scratch list/removal
+  remain required before scratch support is complete. Membership reconstruction
+  and the public recovery/publication layer remain later steps in this SOW.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

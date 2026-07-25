@@ -9,6 +9,9 @@ mod direct;
 mod direct_build;
 #[allow(dead_code)]
 mod direct_output;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod external_sort;
 #[allow(dead_code)]
 mod metadata;
 #[allow(dead_code)]
@@ -17,6 +20,9 @@ mod page_set;
 mod range_scan;
 #[allow(dead_code)]
 mod report;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod scratch;
 
 use crate::validation::{LocalFileIdentity, ValidationProgress};
 

@@ -177,3 +177,7 @@ fn page_interval(page: u32) -> PhysicalByteInterval {
 #[cfg(test)]
 #[path = "direct_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "direct_scratch_tests.rs"]
+mod scratch_tests;

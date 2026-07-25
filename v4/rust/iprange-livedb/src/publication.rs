@@ -9,7 +9,7 @@ mod file_inspection;
 #[cfg(target_os = "linux")]
 mod main_file;
 #[cfg(target_os = "linux")]
-mod namespace;
+pub(crate) mod namespace;
 #[cfg(target_os = "linux")]
 mod output;
 #[cfg(target_os = "linux")]
@@ -24,7 +24,7 @@ mod resolver;
 #[cfg(target_os = "linux")]
 mod result;
 #[cfg(target_os = "linux")]
-mod security;
+pub(crate) mod security;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "publication/crash_tests.rs"]

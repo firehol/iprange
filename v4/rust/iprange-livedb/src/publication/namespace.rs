@@ -137,7 +137,7 @@ pub(crate) struct Directory {
 }
 
 impl Directory {
-    fn open(path: &Path) -> Result<Self, NamespaceError> {
+    pub(crate) fn open(path: &Path) -> Result<Self, NamespaceError> {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -423,7 +423,7 @@ fn parent(path: &Path) -> &Path {
     }
 }
 
-pub(super) fn regular_identity(
+pub(crate) fn regular_identity(
     file: &File,
     directory_device: u64,
 ) -> Result<Identity, NamespaceError> {

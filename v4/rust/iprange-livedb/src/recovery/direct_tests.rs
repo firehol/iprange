@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::super::direct_build::construct;
+use super::super::direct_build::{construct, DirectConstruction};
 use super::*;
 use crate::cardinality::Cardinality129;
 use crate::contract::{ValueTag, PAGE_SIZE};
@@ -15,13 +15,14 @@ use crate::slotted_page::{self, Header};
 use crate::validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl};
 use crate::{crc32c, file_io};
 
-struct Paths {
-    source: PathBuf,
-    output: PathBuf,
+pub(super) struct Paths {
+    pub(super) source: PathBuf,
+    pub(super) output: PathBuf,
+    pub(super) scratch: PathBuf,
 }
 
 impl Paths {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -30,9 +31,12 @@ impl Paths {
             "iprange-v4-direct-recovery-{label}-{}-{unique}",
             std::process::id()
         ));
+        let scratch = base.with_extension("scratch");
+        fs::create_dir(&scratch).unwrap();
         Self {
             source: base.with_extension("source"),
             output: base.with_extension("output"),
+            scratch,
         }
     }
 }
@@ -41,6 +45,7 @@ impl Drop for Paths {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.source);
         let _ = fs::remove_file(&self.output);
+        let _ = fs::remove_dir_all(&self.scratch);
     }
 }
 
@@ -56,7 +61,9 @@ fn ordered_direct_recovery_streams_a_canonical_output() {
     let output = output_builder(&paths.output);
     let mut unknown = Vec::new();
 
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &source,
         meta,
         output,
@@ -100,7 +107,9 @@ fn crc_damaged_leaf_is_skipped_and_reported_as_unbounded() {
 
     let source = File::open(&paths.source).unwrap();
     let mut unknown = Vec::new();
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &source,
         meta,
         output_builder(&paths.output),
@@ -135,7 +144,9 @@ fn an_overlap_component_is_rejected_whole() {
     rewrite_second_start(&paths.source, meta, 5);
     let source = File::open(&paths.source).unwrap();
     let mut unknown = Vec::new();
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &source,
         meta,
         output_builder(&paths.output),
@@ -170,7 +181,9 @@ fn disordered_readable_records_are_sorted_with_bounded_heap() {
     swap_first_two_records(&paths.source, meta);
     let source = File::open(&paths.source).unwrap();
     let mut unknown = Vec::new();
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &source,
         meta,
         output_builder(&paths.output),
@@ -223,6 +236,47 @@ fn disordered_recovery_refuses_insufficient_heap_before_output_mutation() {
     drop(failure.builder.into_file());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn disordered_direct_recovery_uses_bounded_multi_pass_scratch() {
+    let paths = Paths::new("external");
+    let ranges: Vec<_> = (0..120u32)
+        .map(|index| {
+            let from = index * 3;
+            (from, from + 1, index % 7)
+        })
+        .collect();
+    let meta = finish_ranges(source_builder(&paths.source), &ranges);
+    swap_first_two_records(&paths.source, meta);
+    let budget = RecoveryBudget {
+        max_heap_bytes: 256,
+        max_output_pages: 20_000,
+        max_open_files: 4,
+        max_scratch_bytes: 4096,
+        max_scratch_files: 2,
+        scratch_directory: Some(paths.scratch.clone()),
+    };
+
+    let result = construct(
+        &File::open(&paths.source).unwrap(),
+        meta,
+        output_builder(&paths.output),
+        &budget,
+        &CancellationToken::new(),
+        &mut |_: &RecoveryUnknownEnvelope| Ok(RecoverySinkControl::Continue),
+    )
+    .unwrap();
+    drop(result.finished.file);
+
+    let cleanup = result.scratch.expect("external sort records its attempt");
+    assert!(cleanup.clean());
+    assert_ne!(cleanup.attempt_id, [0; 16]);
+    assert_eq!(result.report.ranges.accepted, ranges.len() as u64);
+    assert_eq!(output_ranges(&paths.output), ranges);
+    assert_eq!(fs::read_dir(&paths.scratch).unwrap().count(), 0);
+    validate_clean(&paths.output);
+}
+
 #[test]
 fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     let clean = Paths::new("metadata-clean");
@@ -234,7 +288,9 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     let meta = finished.meta;
     drop(finished.file);
 
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &File::open(&clean.source).unwrap(),
         meta,
         output_builder(&clean.output),
@@ -265,7 +321,9 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
         meta.metadata_root,
     );
     let mut unknown = Vec::new();
-    let (finished, report) = construct(
+    let DirectConstruction {
+        finished, report, ..
+    } = construct(
         &File::open(&damaged.source).unwrap(),
         meta,
         output_builder(&damaged.output),
@@ -292,7 +350,7 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     validate_clean(&damaged.output);
 }
 
-fn source_builder(path: &Path) -> Builder {
+pub(super) fn source_builder(path: &Path) -> Builder {
     Builder::new(
         create(path),
         OutputSpec {
@@ -309,7 +367,7 @@ fn source_builder(path: &Path) -> Builder {
     .unwrap()
 }
 
-fn output_builder(path: &Path) -> Builder {
+pub(super) fn output_builder(path: &Path) -> Builder {
     Builder::new(
         create(path),
         OutputSpec {
@@ -326,7 +384,7 @@ fn output_builder(path: &Path) -> Builder {
     .unwrap()
 }
 
-fn finish_ranges(mut builder: Builder, ranges: &[(u32, u32, u32)]) -> MetaV4 {
+pub(super) fn finish_ranges(mut builder: Builder, ranges: &[(u32, u32, u32)]) -> MetaV4 {
     for &(from, to, value) in ranges {
         builder
             .push_direct_v4(Ipv4Key(from), Ipv4Key(to), value)
@@ -353,17 +411,17 @@ fn corrupt_crc(file: &File, page_number: u32) {
     file_io::write_exact_at(file, &page, u64::from(page_number) * PAGE_SIZE as u64).unwrap();
 }
 
-fn rewrite_second_start(path: &Path, meta: MetaV4, from: u32) {
+pub(super) fn rewrite_second_start(path: &Path, meta: MetaV4, from: u32) {
     edit_root_leaf(path, meta, |page, header| {
         let start = usize::from(u16::from_le_bytes(page[34..36].try_into().unwrap()));
         page[start..start + 4].copy_from_slice(&from.to_le_bytes());
-        assert_eq!(header.item_count, 3);
+        assert!(header.item_count >= 2);
     });
 }
 
-fn swap_first_two_records(path: &Path, meta: MetaV4) {
+pub(super) fn swap_first_two_records(path: &Path, meta: MetaV4) {
     edit_root_leaf(path, meta, |page, header| {
-        assert_eq!(header.item_count, 3);
+        assert!(header.item_count >= 2);
         let first = usize::from(u16::from_le_bytes(page[32..34].try_into().unwrap()));
         let second = usize::from(u16::from_le_bytes(page[34..36].try_into().unwrap()));
         let mut saved = [0; 12];
