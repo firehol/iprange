@@ -59,6 +59,7 @@ fn creation_failure_before_artifacts_is_reported_without_residue() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     assert_eq!(result.state, CreationState::NotCreated);
@@ -76,47 +77,44 @@ fn live_generations_are_atomic_and_old_readers_stay_pinned() {
         ValueKind::Direct,
         ValueTag::new(b"asn").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
     assert!(!created.residue_possible);
     assert!(ImmutableReader::open(&files.main).is_err());
 
-    let old = LiveReader::open(&files.main).unwrap();
+    let mut old = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(old.info().unwrap().transaction_id, 1);
 
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     assert!(matches!(
-        LiveWriter::open(&files.main, budget()),
+        LiveWriter::open(&files.main, budget(), &CancellationToken::new()),
         Err(Error::WriterBusy)
     ));
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(30), 1)
-        .unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(20), Ipv4Key(25), 2)
-        .unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(22), Ipv4Key(23), 3)
-        .unwrap();
-    let committed = writer.commit().unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(30), 1).unwrap();
+    transaction.assign_v4(Ipv4Key(20), Ipv4Key(25), 2).unwrap();
+    transaction.assign_v4(Ipv4Key(22), Ipv4Key(23), 3).unwrap();
+    let committed = transaction.commit().unwrap();
     assert_eq!(committed.durability, CommitDurability::Committed);
     assert_eq!(committed.attempted_transaction_id, 2);
     assert!(committed.cause.is_none());
 
     assert_eq!(old.lookup_direct_v4(Ipv4Key(22)).unwrap(), None);
-    let current = LiveReader::open(&files.main).unwrap();
+    let mut current = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(current.info().unwrap().transaction_id, 2);
     assert_eq!(current.lookup_direct_v4(Ipv4Key(19)).unwrap(), Some(1));
     assert_eq!(current.lookup_direct_v4(Ipv4Key(21)).unwrap(), Some(2));
     assert_eq!(current.lookup_direct_v4(Ipv4Key(22)).unwrap(), Some(3));
     assert!(matches!(
-        LiveReader::open(&files.main),
+        LiveReader::open(&files.main, &CancellationToken::new()),
         Err(Error::ReaderCapacityExhausted)
     ));
 
     old.close().unwrap();
-    let reused = LiveReader::open(&files.main).unwrap();
+    let mut reused = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     reused.close().unwrap();
     current.close().unwrap();
     writer.close().unwrap();
@@ -131,20 +129,27 @@ fn abort_and_noop_never_publish_a_generation() {
         ValueKind::Direct,
         ValueTag::new(b"").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
-    assert!(!writer.clear_direct_v4(Ipv4Key(1), Ipv4Key(2)).unwrap());
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
-    writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 7).unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    assert!(!transaction.clear_v4(Ipv4Key(1), Ipv4Key(2)).unwrap());
+    assert!(matches!(
+        transaction.commit(),
+        Err(Error::NoPendingTransaction)
+    ));
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(1), Ipv4Key(2), 7).unwrap();
     assert_eq!(
-        writer.abort().unwrap().outcome,
+        transaction.abort().unwrap().outcome,
         iprange_livedb::AbortOutcome::Aborted
     );
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(1)).unwrap(), None);
     reader.close().unwrap();
@@ -159,19 +164,22 @@ fn full_ipv6_space_round_trips_without_endpoint_overflow() {
         ValueKind::Direct,
         ValueTag::new(b"geo").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer
-        .assign_direct_v6(Ipv6Key::from_u128(0), Ipv6Key::from_u128(u128::MAX), 9)
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction
+        .assign_v6(Ipv6Key::from_u128(0), Ipv6Key::from_u128(u128::MAX), 9)
         .unwrap();
     assert_eq!(
-        writer.commit().unwrap().durability,
+        transaction.commit().unwrap().durability,
         CommitDurability::Committed
     );
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         reader
             .lookup_direct_v6(Ipv6Key::from_u128(u128::MAX))
@@ -190,28 +198,32 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 1)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    transaction.commit().unwrap();
 
-    let pinned = LiveReader::open(&files.main).unwrap();
+    let mut pinned = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(pinned.info().unwrap().transaction_id, 2);
-    writer
-        .assign_direct_v4(Ipv4Key(12), Ipv4Key(18), 2)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(12), Ipv4Key(18), 2).unwrap();
+    transaction.commit().unwrap();
 
     assert!(matches!(
-        writer.reclaim(10, 10_000).unwrap(),
+        writer
+            .reclaim(10, 10_000, &CancellationToken::new())
+            .unwrap(),
         ReclaimResult::NoChange
     ));
     pinned.close().unwrap();
 
-    let reclaimed = writer.reclaim(10, 10_000).unwrap();
+    let reclaimed = writer
+        .reclaim(10, 10_000, &CancellationToken::new())
+        .unwrap();
     match reclaimed {
         ReclaimResult::NoChange => panic!("released reader left reclamation blocked"),
         ReclaimResult::Commit {
@@ -227,7 +239,7 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
     }
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(11)).unwrap(), Some(1));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(2));
     reader.close().unwrap();
@@ -242,40 +254,78 @@ fn failed_reclamation_discards_its_complete_private_draft() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 1)
-        .unwrap();
-    writer.commit().unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(12), Ipv4Key(18), 2)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    transaction.commit().unwrap();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(12), Ipv4Key(18), 2).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
 
     let mut tiny = budget();
     tiny.max_private_pages = 1;
-    let mut writer = LiveWriter::open(&files.main, tiny).unwrap();
+    let mut writer = LiveWriter::open(&files.main, tiny, &CancellationToken::new()).unwrap();
     assert!(matches!(
-        writer.reclaim(10, 10_000),
+        writer.reclaim(10, 10_000, &CancellationToken::new()),
         Err(Error::TransactionAborted(_))
     ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 3);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(11)).unwrap(), Some(1));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(2));
     reader.close().unwrap();
 
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     assert!(matches!(
-        writer.reclaim(10, 10_000).unwrap(),
+        writer
+            .reclaim(10, 10_000, &CancellationToken::new())
+            .unwrap(),
         ReclaimResult::Commit { .. }
     ));
     writer.close().unwrap();
+}
+
+#[test]
+fn cancelled_reclamation_leaves_the_committed_generation_unchanged() {
+    let files = TestPair::new("reclaim-cancel");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let token = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &token).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    transaction.commit().unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(12), Ipv4Key(18), 2).unwrap();
+    transaction.commit().unwrap();
+
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        writer.reclaim(10, 10_000, &cancelled),
+        Err(Error::Cancelled)
+    ));
+    writer.close().unwrap();
+
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 3);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(11)).unwrap(), Some(1));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(2));
+    reader.close().unwrap();
 }
 
 #[test]
@@ -287,13 +337,14 @@ fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let old = LiveReader::open(&files.main).unwrap();
+    let mut old = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(old.metadata_json_len().unwrap(), None);
 
     let payload = b"{ definitely not required to be valid JSON }\n";
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let token = CancellationToken::new();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
@@ -326,7 +377,7 @@ fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
     assert_eq!(commit.durability, CommitDurability::Committed);
     assert_eq!(old.metadata_json_len().unwrap(), None);
 
-    let current = LiveReader::open(&files.main).unwrap();
+    let mut current = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         current.metadata_json().unwrap().as_deref(),
         Some(&payload[..])
@@ -346,34 +397,60 @@ fn equal_replacement_and_clear_have_the_exact_generation_semantics() {
         ValueKind::Direct,
         ValueTag::new(b"asn").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
 
     assert!(!writer.clear_metadata_json(&cancellation).unwrap());
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     assert!(writer.set_metadata_json(b"", &cancellation).unwrap());
     assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
-    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 2);
-
-    writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
-    assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
     assert_eq!(
-        writer.abort().unwrap().outcome,
+        writer
+            .commit(&CancellationToken::new())
+            .unwrap()
+            .attempted_transaction_id,
+        2
+    );
+
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
+    assert_eq!(transaction.metadata_json().unwrap(), Some(Vec::new()));
+    assert_eq!(
+        transaction.abort().unwrap().outcome,
         iprange_livedb::AbortOutcome::Aborted
     );
 
     assert!(writer.set_metadata_json(b"", &cancellation).unwrap());
-    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 3);
+    assert_eq!(
+        writer
+            .commit(&CancellationToken::new())
+            .unwrap()
+            .attempted_transaction_id,
+        3
+    );
     assert!(writer.clear_metadata_json(&cancellation).unwrap());
     assert_eq!(writer.metadata_json_len().unwrap(), None);
-    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 4);
+    assert_eq!(
+        writer
+            .commit(&CancellationToken::new())
+            .unwrap()
+            .attempted_transaction_id,
+        4
+    );
     assert!(!writer.clear_metadata_json(&cancellation).unwrap());
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 4);
     assert_eq!(reader.metadata_json().unwrap(), None);
     reader.close().unwrap();
@@ -388,11 +465,12 @@ fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let mut tiny = budget();
     tiny.max_heap_bytes = 1;
-    let mut writer = LiveWriter::open(&files.main, tiny).unwrap();
+    let mut writer = LiveWriter::open(&files.main, tiny, &CancellationToken::new()).unwrap();
     let token = CancellationToken::new();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
@@ -402,10 +480,13 @@ fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
             if matches!(*cause, Error::BudgetExceeded(_))
     ));
     drop(transaction);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
     assert_eq!(reader.metadata_json().unwrap(), None);

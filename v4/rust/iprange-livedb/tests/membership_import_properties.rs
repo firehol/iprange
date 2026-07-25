@@ -114,6 +114,7 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
             ValueKind::Membership,
             ValueTag::new(b"membership").unwrap(),
             4,
+            &CancellationToken::new(),
         )
         .unwrap();
     }
@@ -121,7 +122,8 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
     let cancellation = CancellationToken::new();
     let mut seed = 0x1297_3a4b_55aa_f00d;
     let mut source_model = [0u8; 256];
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     for (feed_name, bit) in [("alpha", 1), ("beta", 2), ("gamma", 4), ("delta", 8)] {
         add_feed(
             &mut source_writer,
@@ -135,7 +137,8 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
     source_writer.close().unwrap();
 
     let mut destination_model = [0u8; 256];
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     for (feed_name, bit) in [("beta", 2), ("delta", 8), ("epsilon", 16)] {
         add_feed(
             &mut writer,
@@ -147,7 +150,7 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
         );
     }
 
-    let source = LiveReader::open(&source_files.main).unwrap();
+    let mut source = LiveReader::open(&source_files.main, &CancellationToken::new()).unwrap();
     let source_records = source.info().unwrap().range_record_count;
     assert_eq!(source_records, interval_count(&source_model));
     let before_records = interval_count(&destination_model);
@@ -223,7 +226,7 @@ fn randomized_import_matches_named_feed_union_and_exact_report() {
     source.close().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&destination_files.main).unwrap();
+    let mut reader = LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     let feeds = ["alpha", "beta", "gamma", "delta", "epsilon"]
         .map(|feed_name| reader.lookup_feed(feed_name).unwrap().unwrap().index);
     for (address, expected) in after_model.into_iter().enumerate() {
@@ -252,11 +255,13 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
             ValueKind::Membership,
             ValueTag::new(b"membership").unwrap(),
             4,
+            &CancellationToken::new(),
         )
         .unwrap();
     }
 
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     let mut source_transaction = source_writer
         .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap();
@@ -282,7 +287,8 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
     source_transaction.commit().unwrap();
     source_writer.close().unwrap();
 
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     let mut destination_transaction = writer
         .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap();
@@ -312,7 +318,7 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
         .unwrap();
     destination_transaction.commit().unwrap();
 
-    let source = LiveReader::open(&source_files.main).unwrap();
+    let mut source = LiveReader::open(&source_files.main, &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
     let prepared = match writer
         .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
@@ -332,7 +338,7 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
     source.close().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&destination_files.main).unwrap();
+    let mut reader = LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     let imported = reader.lookup_membership_v4(Ipv4Key(7)).unwrap().unwrap();
     for index in 0..70 {
         let feed = reader

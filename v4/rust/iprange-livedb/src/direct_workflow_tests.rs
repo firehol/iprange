@@ -49,6 +49,7 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
         ValueKind::Direct,
         ValueTag::new(b"direct").unwrap(),
         1,
+        &crate::CancellationToken::new(),
     )
     .unwrap();
     let budget = TransactionBudget {
@@ -57,7 +58,8 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
         max_file_growth_pages: 10_000,
         max_open_files: 2,
     };
-    let mut writer = LiveWriter::open(&files.main, budget).unwrap();
+    let mut writer =
+        LiveWriter::open(&files.main, budget, &crate::CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
     let ranges: Vec<_> = (0..1_000)
         .map(|index| DirectRange {

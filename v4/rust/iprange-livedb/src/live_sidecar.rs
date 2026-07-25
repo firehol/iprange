@@ -3,27 +3,27 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+mod header;
+
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
-use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
-use crate::crc32c;
+use crate::cancellation::CancellationToken;
+use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::path;
-use crate::slotted_page::{put_u16, put_u32, put_u64};
+use crate::slotted_page::put_u64;
 use crate::validation::LocalFileIdentity;
 
-const MAGIC: [u8; 8] = *b"IPRDRS4\0";
-const HEADER_SIZE: u16 = 68;
 const SLOT_SIZE: u16 = 16;
-const HEADER_CRC: usize = 64;
-const STATE_CREATING: u32 = 0;
-const STATE_READY: u32 = 1;
 const GATE_LOCK: u64 = 0;
 const WRITER_LOCK: u64 = 1;
 pub(crate) const MAIN_LIFETIME_LOCK: u64 = 1u64 << 44;
+
+pub(crate) use header::{has_selectable_header, read_header, Header, State};
+use header::{sidecar_length, write_header};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
@@ -69,13 +69,6 @@ pub(crate) fn parent_identity(path: &Path) -> Result<LocalFileIdentity> {
     ))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Header {
-    pub(crate) capacity: u32,
-    pub(crate) database_id: [u8; 16],
-    pub(crate) sidecar_id: [u8; 16],
-}
-
 #[derive(Debug)]
 pub(crate) struct Sidecar {
     pub(crate) file: File,
@@ -97,6 +90,20 @@ impl Sidecar {
             ));
         }
         let path = path::canonical_sidecar(main)?;
+        Self::reserve_at(path, database_id, sidecar_id, capacity)
+    }
+
+    pub(crate) fn reserve_at(
+        path: PathBuf,
+        database_id: [u8; 16],
+        sidecar_id: [u8; 16],
+        capacity: u32,
+    ) -> Result<Self> {
+        if capacity == 0 {
+            return Err(Error::InvalidArgument(
+                "reader capacity must be greater than zero",
+            ));
+        }
         let file = create_private(&path)?;
         let identity = match identity(&file) {
             Ok(identity) => identity,
@@ -128,45 +135,65 @@ impl Sidecar {
 
     pub(crate) fn initialize_creating(&self) -> Result<()> {
         self.file.set_len(sidecar_length(self.header.capacity)?)?;
-        write_header(&self.file, self.header, STATE_CREATING)?;
+        write_header(&self.file, self.header, State::Creating)?;
         self.file.sync_all()?;
         crate::fault::crash("create.after_sidecar_sync");
         Ok(())
     }
 
     pub(crate) fn publish_ready(&self) -> Result<()> {
-        write_header(&self.file, self.header, STATE_READY)?;
+        write_header(&self.file, self.header, State::Ready)?;
         crate::fault::crash("create.after_ready_write");
         Ok(self.file.sync_all()?)
     }
 
     pub(crate) fn open(main: &Path, database_id: [u8; 16]) -> Result<Self> {
         let path = path::canonical_sidecar(main)?;
-        let file = open_rw(&path)?;
-        let identity = identity(&file)?;
-        let header = read_header(&file)?;
-        if header.database_id != database_id {
+        let (sidecar, state) = Self::open_at(path, database_id)?;
+        if state != State::Ready {
+            return Err(Error::WrongState("reader table is not ready"));
+        }
+        Ok(sidecar)
+    }
+
+    pub(crate) fn open_at(path: PathBuf, database_id: [u8; 16]) -> Result<(Self, State)> {
+        let (sidecar, state) = Self::open_any(path)?;
+        if sidecar.header.database_id != database_id {
             return Err(Error::WrongMode(
                 "reader table belongs to a different database",
             ));
         }
+        Ok((sidecar, state))
+    }
+
+    pub(crate) fn open_any(path: PathBuf) -> Result<(Self, State)> {
+        let file = open_rw(&path)?;
+        let identity = identity(&file)?;
+        let (state, header) = read_header(&file)?;
         if file.metadata()?.len() != sidecar_length(header.capacity)? {
             return Err(Error::Corrupt("reader table length is invalid"));
         }
-        Ok(Self {
-            file,
-            path,
-            header,
-            identity,
-        })
+        Ok((
+            Self {
+                file,
+                path,
+                header,
+                identity,
+            },
+            state,
+        ))
     }
 
     pub(crate) fn verify_path(&self) -> Result<()> {
         verify_path(&self.path, self.identity)
     }
 
+    pub(crate) const fn local_identity(&self) -> Identity {
+        self.identity
+    }
+
     pub(crate) fn verify_header(&self) -> Result<()> {
-        if read_header(&self.file)? != self.header {
+        if read_header(&self.file)? != (State::Ready, self.header) {
             return Err(Error::Corrupt("reader table header changed"));
         }
         Ok(())
@@ -174,6 +201,14 @@ impl Sidecar {
 
     pub(crate) fn lock_gate(&self, mode: Mode) -> Result<()> {
         live_lock::lock(&self.file, GATE_LOCK, mode)
+    }
+
+    pub(crate) fn lock_gate_cancellable(
+        &self,
+        mode: Mode,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        live_lock::lock_cancellable(&self.file, GATE_LOCK, mode, cancellation)
     }
 
     pub(crate) fn unlock_gate(&self) -> Result<()> {
@@ -193,13 +228,36 @@ impl Sidecar {
     }
 
     pub(crate) fn claim_reader(&self, txn: u64) -> Result<u32> {
+        self.claim_reader_inner(txn, None)
+    }
+
+    pub(crate) fn claim_reader_cancellable(
+        &self,
+        txn: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<u32> {
+        self.claim_reader_inner(txn, Some(cancellation))
+    }
+
+    fn claim_reader_inner(
+        &self,
+        txn: u64,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<u32> {
         if txn == 0 {
             return Err(Error::Corrupt("reader transaction cannot be zero"));
         }
         for slot in 0..self.header.capacity {
+            check(cancellation)?;
             let offset = slot_offset(slot)?;
             if !live_lock::try_lock(&self.file, offset, Mode::Exclusive)? {
                 continue;
+            }
+            if let Err(cause) = check(cancellation) {
+                return Err(combine_cleanup(
+                    cause,
+                    live_lock::unlock(&self.file, offset),
+                ));
             }
             let mut active = [0; SLOT_SIZE as usize];
             put_u64(&mut active, 0, txn);
@@ -214,9 +272,17 @@ impl Sidecar {
     }
 
     pub(crate) fn release_reader(&self, slot: u32) -> Result<()> {
+        self.clear_reader(slot)?;
+        self.unlock_reader(slot)
+    }
+
+    pub(crate) fn clear_reader(&self, slot: u32) -> Result<()> {
         let offset = slot_offset_checked(slot, self.header.capacity)?;
-        file_io::write_exact_at(&self.file, &[0; SLOT_SIZE as usize], offset)?;
-        live_lock::unlock(&self.file, offset)
+        file_io::write_exact_at(&self.file, &[0; SLOT_SIZE as usize], offset)
+    }
+
+    pub(crate) fn unlock_reader(&self, slot: u32) -> Result<()> {
+        live_lock::unlock(&self.file, slot_offset_checked(slot, self.header.capacity)?)
     }
 
     pub(crate) fn verify_reader(&self, slot: u32, transaction: u64) -> Result<()> {
@@ -228,16 +294,28 @@ impl Sidecar {
     }
 
     pub(crate) fn scan_readers(&self, mut observe: impl FnMut(u64) -> Result<()>) -> Result<()> {
-        for slot in 0..self.header.capacity {
-            if let Some(txn) = self.scan_slot(slot)? {
-                observe(txn)?;
-            }
-        }
-        Ok(())
+        self.scan_readers_inner(None, &mut observe)
     }
 
     pub(crate) fn scan_at_most(&self, committed_txn: u64) -> Result<()> {
         self.oldest_reader(committed_txn).map(|_| ())
+    }
+
+    pub(crate) fn scan_at_most_cancellable(
+        &self,
+        committed_txn: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        let mut oldest = None;
+        self.scan_readers_inner(Some(cancellation), |txn| {
+            if txn > committed_txn {
+                return Err(Error::Corrupt(
+                    "reader slot names an uncommitted transaction",
+                ));
+            }
+            oldest = Some(oldest.map_or(txn, |current: u64| current.min(txn)));
+            Ok(())
+        })
     }
 
     pub(crate) fn inspect_at_most(&self, committed_txn: u64) -> Result<()> {
@@ -254,8 +332,24 @@ impl Sidecar {
     }
 
     pub(crate) fn oldest_reader(&self, committed_txn: u64) -> Result<Option<u64>> {
+        self.oldest_reader_inner(committed_txn, None)
+    }
+
+    pub(crate) fn oldest_reader_cancellable(
+        &self,
+        committed_txn: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<u64>> {
+        self.oldest_reader_inner(committed_txn, Some(cancellation))
+    }
+
+    fn oldest_reader_inner(
+        &self,
+        committed_txn: u64,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Option<u64>> {
         let mut oldest = None;
-        self.scan_readers(|txn| {
+        self.scan_readers_inner(cancellation, |txn| {
             if txn > committed_txn {
                 return Err(Error::Corrupt(
                     "reader slot names an uncommitted transaction",
@@ -265,6 +359,20 @@ impl Sidecar {
             Ok(())
         })?;
         Ok(oldest)
+    }
+
+    fn scan_readers_inner(
+        &self,
+        cancellation: Option<&CancellationToken>,
+        mut observe: impl FnMut(u64) -> Result<()>,
+    ) -> Result<()> {
+        for slot in 0..self.header.capacity {
+            check(cancellation)?;
+            if let Some(txn) = self.scan_slot(slot)? {
+                observe(txn)?;
+            }
+        }
+        Ok(())
     }
 
     fn scan_slot(&self, slot: u32) -> Result<Option<u64>> {
@@ -307,6 +415,23 @@ impl Sidecar {
         let unlocked = live_lock::unlock(&self.file, offset);
         cleared?;
         unlocked
+    }
+}
+
+fn check(cancellation: Option<&CancellationToken>) -> Result<()> {
+    match cancellation {
+        Some(cancellation) => cancellation.check(),
+        None => Ok(()),
+    }
+}
+
+fn combine_cleanup(cause: Error, cleanup: Result<()>) -> Error {
+    match cleanup {
+        Ok(()) => cause,
+        Err(cleanup) => Error::CleanupIncomplete {
+            cause: Box::new(cause),
+            cleanup: Box::new(cleanup),
+        },
     }
 }
 
@@ -418,74 +543,6 @@ pub(crate) fn sync_parent(path: &Path) -> Result<()> {
     ))?;
     File::open(parent)?.sync_all()?;
     Ok(())
-}
-
-fn write_header(file: &File, header: Header, state: u32) -> Result<()> {
-    let mut page = [0; PAGE_SIZE];
-    page[..8].copy_from_slice(&MAGIC);
-    put_u16(&mut page, 8, HEADER_SIZE);
-    put_u16(&mut page, 10, SLOT_SIZE);
-    put_u32(&mut page, 12, state);
-    put_u32(&mut page, 16, header.capacity);
-    page[32..48].copy_from_slice(&header.database_id);
-    page[48..64].copy_from_slice(&header.sidecar_id);
-    let checksum = crc32c::crc32c_with_zeroed(&page, HEADER_CRC, 4)
-        .ok_or(Error::Corrupt("reader table checksum field is invalid"))?;
-    put_u32(&mut page, HEADER_CRC, checksum);
-    file_io::write_exact_at(file, &page, 0)
-}
-
-fn read_header(file: &File) -> Result<Header> {
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_exact_at(file, &mut page, 0)?;
-    if !header_shape_valid(&page) || !header_checksum_valid(&page) {
-        return Err(Error::Corrupt("reader table header is invalid"));
-    }
-    let mut database_id = [0; 16];
-    database_id.copy_from_slice(&page[32..48]);
-    let mut sidecar_id = [0; 16];
-    sidecar_id.copy_from_slice(&page[48..64]);
-    if database_id == [0; 16] || sidecar_id == [0; 16] {
-        return Err(Error::Corrupt("reader table identity is invalid"));
-    }
-    Ok(Header {
-        capacity: u32_le(&page, 16),
-        database_id,
-        sidecar_id,
-    })
-}
-
-pub(crate) fn has_selectable_header(file: &File) -> Result<bool> {
-    if file.metadata()?.len() < PAGE_SIZE as u64 {
-        return Ok(false);
-    }
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_exact_at(file, &mut page, 0)?;
-    Ok(header_shape_valid(&page) && header_checksum_valid(&page))
-}
-
-fn header_shape_valid(page: &[u8; PAGE_SIZE]) -> bool {
-    let fixed = (
-        &page[..8],
-        u16_le(page, 8),
-        u16_le(page, 10),
-        u32_le(page, 12),
-    );
-    fixed == (&MAGIC, HEADER_SIZE, SLOT_SIZE, STATE_READY)
-        && u32_le(page, 16) != 0
-        && page[20..32].iter().all(|&byte| byte == 0)
-        && page[68..].iter().all(|&byte| byte == 0)
-}
-
-fn header_checksum_valid(page: &[u8; PAGE_SIZE]) -> bool {
-    crc32c::crc32c_with_zeroed(page, HEADER_CRC, 4) == Some(u32_le(page, HEADER_CRC))
-}
-
-fn sidecar_length(capacity: u32) -> Result<u64> {
-    u64::from(capacity)
-        .checked_mul(u64::from(SLOT_SIZE))
-        .and_then(|bytes| bytes.checked_add(PAGE_SIZE as u64))
-        .ok_or(Error::InvalidArgument("reader table length overflows"))
 }
 
 fn slot_offset(slot: u32) -> Result<u64> {

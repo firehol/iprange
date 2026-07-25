@@ -78,7 +78,7 @@ fn creating_and_malformed_sidecars_are_rejected() {
     let sidecar = Sidecar::create(&files.main, [1; 16], [2; 16], 2).unwrap();
     assert!(matches!(
         Sidecar::open(&files.main, [1; 16]),
-        Err(Error::Corrupt(_))
+        Err(Error::WrongState(_))
     ));
 
     sidecar.publish_ready().unwrap();

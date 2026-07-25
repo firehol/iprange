@@ -10,7 +10,9 @@ use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
-use crate::live_writer::{CommitCleanupArtifacts, CommitResult};
+use crate::live_writer::{
+    CommitCleanupArtifact, CommitCleanupArtifacts, CommitResult, LocalBasename,
+};
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::validation::LocalFileIdentity;
 
@@ -68,6 +70,7 @@ struct Opened {
     identity: live_sidecar::Identity,
     directory_identity: LocalFileIdentity,
     main_identity: LocalFileIdentity,
+    main_basename: LocalBasename,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +78,9 @@ struct Classification {
     resolution: CommitResolution,
     selected_transaction_id: u64,
     selected_commit_nonce: [u8; 16],
+    selected_database_id: [u8; 16],
+    committed_bytes: u64,
+    physical_bytes: u64,
 }
 
 /// Resolve one exact commit attempt without validating either page graph.
@@ -87,41 +93,44 @@ pub fn resolve_commit(
     validate_attempt(attempt)?;
     cancellation.check()?;
     let path = path.as_ref();
-    let opened = open(path, mode)?;
+    let opened = open(path, mode, cancellation)?;
     let relation = relation(attempt, &opened);
 
     match mode {
         CommitResolutionMode::Immutable => {
             let sidecar = crate::path::canonical_sidecar(path)?;
             database::require_sidecar_absent(&sidecar)?;
-            let result = resolve_locked(path, attempt, &opened, None, cancellation, relation);
-            let unlocked = live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK);
-            result.and_then(|result| unlocked.map(|()| result))
+            let mut result = resolve_locked(path, attempt, &opened, None, cancellation, relation)?;
+            if let Err(cause) = live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK) {
+                record_postcondition_failure(&mut result, cause);
+            }
+            Ok(result)
         }
         CommitResolutionMode::Live => {
             let sidecar = live_sidecar::Sidecar::open(path, attempt.attempted_database_id)?;
-            sidecar.lock_gate(Mode::Exclusive)?;
+            sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
             if let Err(cause) = sidecar.claim_writer() {
                 let _ = sidecar.unlock_gate();
                 return Err(cause);
             }
-            let result = resolve_locked(
+            let mut result = resolve_locked(
                 path,
                 attempt,
                 &opened,
                 Some(&sidecar),
                 cancellation,
                 relation,
-            );
-            let released = sidecar.release_writer();
-            let gate = sidecar.unlock_gate();
-            let lifetime = live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK);
-            result.and_then(|result| {
-                released?;
-                gate?;
-                lifetime?;
-                Ok(result)
-            })
+            )?;
+            for release in [
+                sidecar.release_writer(),
+                sidecar.unlock_gate(),
+                live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK),
+            ] {
+                if let Err(cause) = release {
+                    record_postcondition_failure(&mut result, cause);
+                }
+            }
+            Ok(result)
         }
     }
 }
@@ -136,20 +145,25 @@ fn validate_attempt(attempt: &CommitResult) -> Result<()> {
     Ok(())
 }
 
-fn open(path: &Path, mode: CommitResolutionMode) -> Result<Opened> {
+fn open(
+    path: &Path,
+    mode: CommitResolutionMode,
+    cancellation: &CancellationToken,
+) -> Result<Opened> {
     let file = match mode {
         CommitResolutionMode::Live => live_sidecar::open_rw(path)?,
-        CommitResolutionMode::Immutable => database::open_read_only(path)?,
+        CommitResolutionMode::Immutable => live_sidecar::open_rw(path)?,
     };
     let identity = match mode {
         CommitResolutionMode::Live => live_sidecar::identity(&file)?,
         CommitResolutionMode::Immutable => live_sidecar::identity_any_link(&file)?,
     };
-    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     verify_main(path, identity, mode)?;
     Ok(Opened {
         directory_identity: live_sidecar::parent_identity(path)?,
         main_identity: live_sidecar::public_identity(identity),
+        main_basename: LocalBasename::from_path(path)?,
         file,
         identity,
     })
@@ -169,7 +183,7 @@ fn resolve_locked(
         Err(cause) => return Ok(unresolvable(attempt, opened, relation, cause)),
     };
     if let Some(sidecar) = sidecar {
-        sidecar.scan_at_most(first.selected_transaction_id)?;
+        sidecar.scan_at_most_cancellable(first.selected_transaction_id, cancellation)?;
     }
     cancellation.check()?;
     if let Err(cause) = opened.file.sync_all() {
@@ -205,7 +219,9 @@ fn resolve_locked(
         }
         None => database::require_sidecar_absent(&crate::path::canonical_sidecar(path)?)?,
     }
-    Ok(resolved(attempt, opened, relation, first.resolution))
+    Ok(resolve_tail(
+        path, attempt, opened, sidecar, relation, first,
+    ))
 }
 
 fn classify(file: &std::fs::File, attempt: &CommitResult) -> Result<Classification> {
@@ -235,7 +251,101 @@ fn classification(resolution: CommitResolution, selected: Bootstrap) -> Classifi
         resolution,
         selected_transaction_id: selected.meta.txn_id,
         selected_commit_nonce: selected.meta.commit_nonce,
+        selected_database_id: selected.meta.database_id,
+        committed_bytes: selected.committed_bytes,
+        physical_bytes: selected.physical_bytes,
     }
+}
+
+fn resolve_tail(
+    path: &Path,
+    attempt: &CommitResult,
+    opened: &Opened,
+    sidecar: Option<&live_sidecar::Sidecar>,
+    relation: LocalFileRelation,
+    selected: Classification,
+) -> CommitResolutionResult {
+    let mut result = resolved(attempt, opened, relation, selected.resolution);
+    if selected.physical_bytes == selected.committed_bytes {
+        return result;
+    }
+
+    let cleanup = trim_tail(path, opened, sidecar, selected);
+    if let Err(cause) = cleanup {
+        result.cleanup =
+            CommitCleanupArtifacts::tail(tail_artifact(opened, selected, cause.code()));
+        result.cause = Some(cause);
+    }
+    result
+}
+
+fn trim_tail(
+    path: &Path,
+    opened: &Opened,
+    sidecar: Option<&live_sidecar::Sidecar>,
+    selected: Classification,
+) -> Result<()> {
+    opened.file.set_len(selected.committed_bytes)?;
+    opened.file.sync_all()?;
+    let current = classify_selected(&opened.file, selected.resolution)?;
+    let expected = Classification {
+        physical_bytes: selected.committed_bytes,
+        ..selected
+    };
+    if current != expected {
+        return Err(Error::Unresolvable(
+            "selected generation changed during tail cleanup",
+        ));
+    }
+    verify_main(path, opened.identity, sidecar_mode(sidecar))?;
+    if live_sidecar::parent_identity(path)? != opened.directory_identity {
+        return Err(Error::DirectoryIdentityMismatch);
+    }
+    match sidecar {
+        Some(sidecar) => {
+            sidecar.verify_path()?;
+            sidecar.verify_header()
+        }
+        None => database::require_sidecar_absent(&crate::path::canonical_sidecar(path)?),
+    }
+}
+
+fn classify_selected(file: &std::fs::File, resolution: CommitResolution) -> Result<Classification> {
+    let physical_bytes = file.metadata()?.len();
+    let mut pages = [0; 2 * PAGE_SIZE];
+    file_io::read_exact_at(file, &mut pages, 0)?;
+    let page0 = (&pages[..PAGE_SIZE]).try_into().unwrap();
+    let page1 = (&pages[PAGE_SIZE..]).try_into().unwrap();
+    let selected = bootstrap::open_meta_pages(page0, page1, physical_bytes, OpenMode::Writer)?;
+    Ok(classification(resolution, selected))
+}
+
+fn tail_artifact(
+    opened: &Opened,
+    selected: Classification,
+    cleanup_error: crate::error::ErrorCode,
+) -> CommitCleanupArtifact {
+    CommitCleanupArtifact {
+        directory_identity: opened.directory_identity,
+        main_basename: opened.main_basename,
+        main_identity: opened.main_identity,
+        expected_database_id: selected.selected_database_id,
+        target_transaction_id: selected.selected_transaction_id,
+        target_commit_nonce: selected.selected_commit_nonce,
+        committed_target_length: selected.committed_bytes,
+        observed_tail_end_exclusive: Some(selected.physical_bytes),
+        cleanup_error,
+    }
+}
+
+fn record_postcondition_failure(result: &mut CommitResolutionResult, cleanup: Error) {
+    result.cause = Some(match result.cause.take() {
+        Some(cause) => Error::CleanupIncomplete {
+            cause: Box::new(cause),
+            cleanup: Box::new(cleanup),
+        },
+        None => cleanup,
+    });
 }
 
 fn relation(attempt: &CommitResult, opened: &Opened) -> LocalFileRelation {

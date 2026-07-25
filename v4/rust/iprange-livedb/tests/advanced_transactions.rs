@@ -55,6 +55,7 @@ fn create(files: &TestPair) {
         ValueKind::Direct,
         ValueTag::new(b"asn").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
 }
@@ -64,7 +65,7 @@ fn direct_transaction_applies_every_interval_in_arrival_order() {
     let files = TestPair::new("arrival");
     create(&files);
     let token = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
 
     transaction.assign_v4(Ipv4Key(0), Ipv4Key(100), 1).unwrap();
@@ -74,7 +75,7 @@ fn direct_transaction_applies_every_interval_in_arrival_order() {
     let result = transaction.commit().unwrap();
     assert_eq!(result.durability, CommitDurability::Committed);
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(19)).unwrap(), Some(1));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(24)).unwrap(), Some(2));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(26)).unwrap(), None);
@@ -90,7 +91,7 @@ fn stored_cancellation_aborts_the_complete_direct_draft() {
     let files = TestPair::new("cancel");
     create(&files);
     let token = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
 
@@ -100,9 +101,12 @@ fn stored_cancellation_aborts_the_complete_direct_draft() {
         Err(Error::TransactionAborted(_))
     ));
     drop(transaction);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
     reader.close().unwrap();
@@ -118,10 +122,11 @@ fn stored_cancellation_aborts_the_complete_membership_draft() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let token = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer.begin_membership_transaction(&token).unwrap();
     transaction
         .ensure_feed(FeedName::new("one").unwrap())
@@ -133,10 +138,44 @@ fn stored_cancellation_aborts_the_complete_membership_draft() {
         Err(Error::TransactionAborted(_))
     ));
     drop(transaction);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().active_feed_count, 0);
+    reader.close().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn cancellation_at_commit_returns_factual_noncommit_and_cleans_the_draft() {
+    let files = TestPair::new("commit-cancel");
+    create(&files);
+    let token = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &token).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    token.cancel();
+
+    let result = transaction.commit().unwrap();
+    assert_eq!(
+        result.durability,
+        iprange_livedb::CommitDurability::NotCommitted
+    );
+    assert!(matches!(
+        result.cause,
+        Some(Error::TransactionAborted(cause)) if matches!(*cause, Error::Cancelled)
+    ));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
+
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 1);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
     reader.close().unwrap();
     writer.close().unwrap();
 }

@@ -1176,10 +1176,10 @@ In `Live` mode the resolver takes the shared main lifetime lock, opens and
 validates the sidecar bound to the actual retained main, then takes its operation
 lock. Under that lock it strictly scans the complete table, reaping only through
 the transition-provenance rule, and requires the writer lease to be free. A
-live/uncertain writer is `WriterBusy`. An unresolved state-2 transition is
-`LiveCoordinationCleanupRequired`: the caller must finish the retained
-writer/guard cleanup, or after its owning process has gone perform
-caller-certified offline coordination reset, before resolution can continue.
+live/uncertain writer is `WriterBusy`. A state-0 sidecar is
+`LiveCoordinationCleanupRequired`: the caller must use the exact attempt
+resolver or `ResolveInterruptedLiveTransition`. A malformed sidecar requires
+caller-certified offline coordination reset before resolution can continue.
 In `Immutable` mode the canonical sidecar must be absent; the resolver holds the
 shared main lifetime lock and rechecks path identity plus sidecar absence before
 and after the proof.
@@ -1215,6 +1215,14 @@ retroactively proves what happened on the original inode or authorizes retry or
 mutation against the original path. A caller resolving an intentionally revived
 copy may continue only from that copy under its reported classification and
 identities.
+
+After the stable classification and identity rechecks, aligned physical bytes
+beyond the selected generation's committed length are proved unpublished. The
+resolver truncates only that tail, synchronizes the main, reselects the same
+generation, and repeats the path/sidecar checks before reporting `Clean`.
+Failure or inability to prove that cleanup preserves the factual commit
+classification but returns one exact `UnpublishedMainTail` cleanup artifact and
+the typed cause. It never reports an observed unpublished tail as clean.
 
 Merely rereading an exact meta from the operating-system page cache does not
 prove crash durability; the resolution synchronization is mandatory. Failure
@@ -1948,9 +1956,42 @@ and publishes state 1 only after all checks and synchronization succeed.
 
 `ResetLiveCoordination` is an explicit offline repair for a missing or corrupt
 sidecar. The caller must certify quiescence. It takes the exclusive main
-lifetime lock and must prove that no conforming live handle remains before
-publishing a newly identified empty sidecar. Ordinary open never performs this
-transition.
+lifetime lock and must prove that no conforming live handle remains. It
+exclusively creates the deterministic private name
+`<main-basename>.readers.reset`, prepares and synchronizes one complete ready
+sidecar there, then installs it atomically:
+
+- when canonical `.readers` is absent, no-replace rename is required;
+- when canonical `.readers` exists, an atomic exchange is required. The inode
+  moved to the private name MUST equal the previously retained canonical
+  identity. A mismatch is atomically exchanged back before conflict is
+  returned; a failed rollback is `OutcomeUnknown`.
+
+After successful exchange, the canonical identity/header and unchanged main
+are synchronized and rechecked before the exact old inode is removed from the
+private name. Failure to remove that old inode leaves the reset factually
+`Initialized` with cleanup residue. The deterministic private name is
+SDK-reserved and makes an interrupted reset discoverable without guessing
+random directory entries.
+
+`ResolveInterruptedLiveTransition(path, Complete | Rollback, cancellation)` is
+the restart entry point when the original in-memory result was lost. It performs
+only main bootstrap and sidecar checks, never full validation:
+
+- a canonical state-0 sidecar plus an exact-length, two-meta-proven main with
+  the same database ID may be synchronized and advanced to ready. This is safe
+  for either interrupted create or initialize;
+- a canonical sidecar without a main may be removed in `Rollback`; a present
+  valid main is never removed without the original attempt result;
+- a ready deterministic reset sidecar may be installed only when canonical
+  coordination is absent; it never overwrites an unproved later canonical
+  inode; and
+- a private reset residue beside an already ready, matching canonical sidecar
+  may be removed exactly.
+
+Malformed or foreign state fails closed. The result-specific create and
+transition resolvers remain the stronger authority when their exact result was
+retained. Ordinary open never performs any transition or recovery.
 
 Direct live rename/relink is unsupported in Phase 1. Relocation uses a compact
 immutable snapshot, explicit initialization at the destination, and an
@@ -2910,25 +2951,18 @@ private reservation inspection/removal uses the section 20.1 APIs.
 
 ### 20.1 Namespace publication reservation
 
-Every cooperating namespace publisher owns the canonical destination
-`.readers` name for its complete critical section. `CreateLive` acquires the
-reservation before preparing its private main and converts that exact inode
-into the final sidecar. `FailIfExists`, `ReplaceExisting`, immutable snapshot,
-and recovery output creation retain a transient reservation until main
-publication and namespace durability are resolved, then retire it. An existing
-immutable main is not an exception: `ReplaceExisting` first locks that main and
-then acquires the same reservation. `InitializeLive` first locks the existing
-main and acquires the name by the same no-replace publication primitive before
-converting it to a sidecar. `ResetLiveCoordination` keeps the old sidecar at the
-canonical name while it prepares the kind-5 reservation, then atomically
-replaces the old sidecar with that reservation. No cooperating operation relies
-on a check followed later by acquisition, and canonical coordination is never
-absent during reset.
+Immutable output publication owns the canonical destination `.readers` name
+for its complete critical section. `FailIfExists`, `ReplaceExisting`, compact
+snapshot, and recovery output creation retain one transient reservation until
+main publication and namespace durability are resolved, then retire it. An
+existing immutable main is not an exception: `ReplaceExisting` first locks that
+main and then acquires the same reservation. Live create, initialize, and reset
+use only the simple section-15 sidecar protocol and never use this reservation
+format.
 
-The reservation is exactly 8,192 bytes and uses the same two block positions,
-per-block zero padding, and global sequence/selection/transition rules as the
-sidecar header. Table offsets are relative to the start of either 512-byte
-header record:
+The immutable-publication reservation is exactly 8,192 bytes: two 4,096-byte
+blocks with identical field positions. Table offsets are relative to the start
+of either block:
 
 | Offset | Size | Field |
 |---:|---:|---|
@@ -2943,21 +2977,15 @@ header record:
 | 72 | 2 | `identity_kind` from section 15.2 |
 | 74 | 6 | zero |
 | 80 | 32 | this reservation file's local identity |
-| 112 | 2 | `operation_kind` (`1=FailIfExists`, `2=ReplaceExisting`, `3=CreateLive`, `4=InitializeLive`, `5=ResetLiveCoordination`) |
-| 114 | 2 | attempted-output `identity_kind`, or zero for kind 3 before main preparation |
-| 116 | 4 | `record_flags` (bit 0 = previous destination present; bit 1 = readable prior sidecar record; all other bits zero) |
-| 120 | 8 | attempted output byte length, or zero for kind 3 before main preparation |
-| 128 | 32 | attempted output local identity, or zero for kind 3 before main preparation |
-| 160 | 64 | SHA-512 of exact attempted output bytes, or zero for kind 3 before main preparation |
+| 112 | 2 | publication policy (`1=FailIfExists`, `2=ReplaceExisting`) |
+| 114 | 2 | attempted-output `identity_kind` |
+| 116 | 4 | `record_flags` (bit 0 = previous destination present; all other bits zero) |
+| 120 | 8 | attempted output byte length |
+| 128 | 32 | attempted output local identity |
+| 160 | 64 | SHA-512 of exact attempted output bytes |
 | 224 | 32 | previous destination local identity when flag bit 0 is set; otherwise zero |
 | 256 | 64 | SHA-512 of exact previous destination bytes when flag bit 0 is set; otherwise zero |
-| 320 | 4 | reader capacity for kinds 3-5; otherwise zero |
-| 324 | 32 | prior coordination local identity for kind 5; otherwise zero |
-| 356 | 16 | prior sidecar ID when flag bit 1 is set; otherwise zero |
-| 372 | 4 | prior reader capacity when flag bit 1 is set; otherwise zero |
-| 376 | 2 | process-domain kind for kinds 3-5; otherwise zero |
-| 378 | 2 | zero |
-| 380 | 32 | process-domain token for kinds 3-5; otherwise zero |
+| 320 | 92 | reserved |
 | 412 | 2 | destination-basename encoding kind |
 | 414 | 2 | zero |
 | 416 | 4 | destination-basename encoded byte length |
@@ -2970,75 +2998,36 @@ header record:
 | 504 | 4 | zero |
 | 508 | 4 | block CRC-32C |
 
-CRC covers the complete 4,096-byte block with `[508,512)` zero. Reservation ID
-is the operation's random nonzero publication-attempt ID; for `CreateLive` it is
-also the eventual sidecar ID. The creation-security kind/commitment is fixed at
-attempt start and must match every engine-created inode before publication or
-sidecar conversion. For kinds 1-4, creation first exclusively creates
-and sizes a private reservation inode at exact name
+CRC covers the complete 4,096-byte block with `[508,512)` zero. Every reserved
+byte is zero. Reservation ID is the operation's random nonzero
+publication-attempt ID. The creation-security kind/commitment is fixed at
+attempt start and matches every engine-created inode in that attempt.
+
+The publisher exclusively creates and sizes
 `.iprange-reservation-<id>.tmp`, obtains its local identity, writes and
 synchronizes a complete state-1 sequence-1 block, takes its operation lock, and
 publishes that same inode at canonical `.readers` with an atomic no-replace
-namespace operation. It retains that descriptor and lock until the final sidecar
-is ready, the reservation is durably retired, or abort cleanup is complete. It
-then performs the required namespace synchronization and verifies
-canonical-path/descriptor identity. Kind 5 instead keeps that complete private
-reservation locked and synchronized while the old sidecar remains canonical,
-then atomically replaces the old sidecar under both operation locks exactly as
-defined by `ResetLiveCoordination`. A missing, partial, malformed, replaced, or
-foreign reservation is never removed by ordinary open or another publication.
-Its mere presence makes immutable open fail and blocks every competing
-reservation/sidecar publisher, so every crash state is closed rather than
-split-brain.
+namespace operation. It retains that descriptor and lock until publication
+durability is resolved and the reservation is durably retired or cleanup is
+reported. A missing, partial, malformed, replaced, or foreign reservation is
+never removed by ordinary open or another publication. Its presence blocks
+immutable open and competing publication.
 
-Every canonical or private reservation accepted as ready authority MUST
-be a regular non-symlink inode with link count one, a matching recorded local
-identity, and a selectable self-identity-bound header. Wherever an attempted
-output identity is present it MUST differ from the reservation identity; a
-kind-5 reservation MUST also differ from the prior coordination identity.
-Creation and every
-resolver recheck this invariant before a namespace action. The only exception
-is a same-process retained POSIX descriptor after its exact unlink, whose zero
-link count is removal evidence rather than reusable authority. Hard-linked
-reservations are conflicts except for the exact temporary FreeBSD-14
-no-replace transition described below.
+Every accepted canonical or private reservation is a regular non-symlink inode
+with link count one, a matching self-recorded local identity, a selectable
+header, and an attempted output identity distinct from the reservation
+identity. The only exception is a same-process retained POSIX descriptor after
+its exact unlink, whose zero link count is removal evidence. Hard-linked
+reservations are conflicts except for the exact temporary FreeBSD no-replace
+transition below.
 
-Every reservation kind requires the nonzero, valid section-3 destination-
-basename encoding kind, exact encoded byte length, and matching SHA-256
-commitment from its first synchronized image. Conversion copies the same fields
-unchanged into the sidecar attempt record. Result-based and reconstructed
-resolution require the caller path, result basename bytes when present,
-reservation, and sidecar to agree before deriving an attempt-private name or
-performing any namespace action.
-
-For operation kinds 1-2, the complete output identity, length, and digest are
-mandatory before reservation publication and reader capacity is zero. Kind 2
-also requires flag bit 0 and all three previous-destination fields; every other kind
-forbids bit 0 and those fields. Kind 3 requires nonzero reader capacity; its output fields may initially
-be zero, but after the private main is complete it MUST synchronize a new
-CRC-valid state-1 reservation image containing those exact fields before
-sidecar conversion. Kinds 4-5 require nonzero reader capacity and complete
-existing-main fields from their first private reservation image. Kind 5 also
-requires the exact nonzero prior coordination identity before its atomic
-replacement attempt. If the old sidecar header is selectable, flag bit 1 and
-the prior sidecar ID/capacity are mandatory; if not, the flag and both fields
-are zero and caller-certified offline reset relies on the exact old local
-identity. Bit 1 and every prior-coordination field are forbidden for kinds 1-4.
-Kinds 3-5 MUST publish the complete sidecar attempt record through the
-alternate 4,096-byte block before any main namespace operation. Unknown
-kinds/flags, inconsistent optional fields, or zero mandatory values are
-malformed.
-
-Kinds 3-5 derive and bind the exact section-15.2 process domain before their
-first reservation publication. Same-domain conversion and ordinary resolution
-must match it. After a domain change, only the operation-specific incomplete-
-attempt resolver may replace that field under the exact offline/locking rules
-in section 15.1; it treats old slots as opaque, zero-initializes them, and
-synchronizes the current-domain record before state 1. A ready state-1 sidecar
-paired with its valid final main never changes domain through an ordinary
-resolver and requires `ResetLiveCoordination`. The origin-1 state-1/absent-main
-creation crash state remains an incomplete attempt under section 15.1. Kinds
-1-2 have no live coordination and require both process-domain fields zero.
+The destination-basename encoding, exact encoded length, and SHA-256 commitment
+are mandatory from the first synchronized image. The complete output identity,
+page-aligned length, and SHA-512 digest are also mandatory. `ReplaceExisting`
+requires flag bit 0 plus all three previous-destination fields;
+`FailIfExists` requires the flag and those fields to be zero. Unknown policies,
+flags, inconsistent optional fields, zero mandatory values, or nonzero reserved
+bytes are malformed.
 
 On Linux and macOS, the proved no-replace publication plus retained-directory
 `fsync` and later exact unlink plus retained-directory `fsync` establish
@@ -3058,7 +3047,7 @@ same-attempt/same-identity pair and may finish alias removal; any other hard lin
 is conflict. No direct or resolved result reports ready/`Published` until step 5
 succeeds. An interruption at either directory-sync or alias-removal boundary
 remains `OutcomeUnknown` with both exact names and identity available for
-resolution. Every finished main, reservation, and sidecar has link count one.
+resolution. Every finished main and reservation has link count one.
 On Windows, the synchronized write-through private reservation is renamed to
 canonical `.readers` without replacement using the handle-relative
 `FileRenameInfoEx` operation defined in section 14.2, then flushed and rechecked.
@@ -3100,15 +3089,15 @@ synchronized state-2 write-ahead record only through the successful main/
 namespace synchronization and exact desired-content recheck, an indeterminate
 failure is `OutcomeUnknown`.
 
-For operation kinds 1-2, immediately before the first main-name namespace call,
+Immediately before the first main-name namespace call,
 the publisher writes and synchronizes state 2 through the alternate reservation
 block and re-reads it as selected. The namespace call MUST NOT begin unless that
 transition succeeds. State 2 is therefore the durable ambiguity record used by
 a resolver: it proves the namespace operation was authorized and may have been
 attempted, not that the OS call was observed. State 1 proves the main namespace
 call had not begun. Both states block ordinary open and competing publication.
-CreateLive instead uses the equivalent sidecar state-3 transition in section
-15.1; kinds 4-5 do not rename the main.
+Live lifecycle transitions use only section 15's `creating`/`ready` sidecar
+states.
 
 `ListAbandonedReservationArtifacts(directory, cancellation, sink)` is an explicit read-only offline
 aid for exact `.iprange-reservation-<32 lowercase hex>.tmp` names. Inert Windows
@@ -3182,8 +3171,7 @@ destination_content: Desired | Previous | Absent | Other | Unclassified
 later_canonical: None | ReservationOrTransition | ReadyLiveSidecar
 live_lineage: optional SameGenerationExactBytes |
                        SameGenerationPhysicalBytesChanged |
-                       AdvancedGeneration |
-                       UnavailableDomainMismatch
+                       AdvancedGeneration
 later_attempt_or_sidecar_id: optional [16]byte
 later_selected_txn_id: optional u64
 later_selected_commit_nonce: optional [16]byte
@@ -3266,8 +3254,9 @@ derive output names. Directory-wide list APIs may group other private artifacts
 for operator cleanup, but random names alone never prove their intended
 destination.
 
-Its residue handle uses the inspect/Close/remove ownership contract defined by
-`InspectCreateResidue`; inspection alone never transfers a cleanup obligation.
+Its residue handle retains the exact same-process directory and coordination
+descriptors until explicit Close or removal; inspection alone never transfers a
+cleanup obligation.
 When canonical coordination is absent, normal result-based resolution and exact
 private-artifact cleanup apply; neither Remove API may be called without a
 present residue handle.
@@ -3278,11 +3267,12 @@ selected. The caller MUST certify that no publisher, resolver, live handle, or
 immutable reader is active and that the destination namespace is quiescent. The
 operation uses the exact retained parent and coordination descriptors from the
 same-process inspection, requires that the canonical path still resolves to that
-regular link-count-one inode, and takes its operation lock. If either header
-selects any kind-1 through kind-5 reservation or origin-1 through origin-3
-sidecar record, the operation returns `Conflict`; the caller must use that
-record's operation-specific resolver. Only a coordination inode with neither
-header selectable is eligible. The retained descriptor is then the only SDK
+regular link-count-one inode, and takes its operation lock. If either block
+selects a valid immutable-publication reservation, or the inode is a selectable
+section-15 live sidecar, the operation returns `Conflict`; the caller must use
+that record's operation-specific resolver. Only a coordination inode with no
+selectable reservation or sidecar header is eligible. The retained descriptor
+is then the only SDK
 mutation authority; a serialized local identity, raw untrusted attempt ID, or
 operator record is insufficient because POSIX inode identities can be reused.
 A process restart requires a fresh inspection of the current canonical inode.
@@ -3348,10 +3338,8 @@ rechecks, and its writer lease must be free after provenance-safe reaping. An
 active/uncertain writer returns `WriterBusy`. Exact desired content with that
 sidecar reports `Published`, `Desired`, `ReadyLiveSidecar`, and the safely
 determined live lineage so the caller does not mistake the path for an immutable
-output. A ready later sidecar from another process domain reports
-`OutcomeUnknown`, `Unclassified`, and `UnavailableDomainMismatch` without slot
-inspection, hashing, or mutation. For every other destination classification a
-later reservation/sidecar is `Conflict`. The
+output. For every other destination classification a later
+reservation/sidecar is `Conflict`. The
 resolver rechecks length plus canonical path and descriptor identity after the
 full hash pass. It classifies only exact content:
 
@@ -3472,11 +3460,11 @@ compare:
 Conformance MUST also exercise both implementations as cooperating subprocesses
 on the same live database. In both Go-to-Rust and Rust-to-Go directions it covers
 reader registration and release, writer exclusion, oldest-reader reclamation,
-stale-slot process-token comparison, sidecar conversion/replacement detection,
-and every resolvable reservation/sidecar write-ahead phase. One implementation
-MUST prepare each SHA-512-bound publication or live-transition record and the
-other MUST inspect and resolve it, including the state-2/state-3 ambiguity
-boundary. Per-language tests alone do not satisfy this requirement.
+stale-slot cleanup, sidecar replacement detection, and every resolvable
+reservation or live-transition phase. One implementation MUST prepare each
+SHA-512-bound publication reservation and each live `creating`/`ready`
+intermediate; the other MUST inspect and resolve it. Per-language tests alone
+do not satisfy this requirement.
 
 Byte-identical writer output is not required. Golden files from any obsolete
 experimental v4 layout are not v4 fixtures and MUST be deleted.

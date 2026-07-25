@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, AddressFamily, CommitDurability, Error, FeedName, Ipv4Key, LiveReader, LiveWriter,
-    MembershipOperation, TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, CommitDurability, Error, FeedName, Ipv4Key,
+    LiveReader, LiveWriter, MembershipOperation, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -61,9 +61,10 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
     {
         let mut transaction = writer
@@ -116,7 +117,7 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
         assert_eq!(committed.durability, CommitDurability::Committed);
     }
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     let index_a = reader.lookup_feed("a").unwrap().unwrap().index;
     let index_b = reader.lookup_feed("b").unwrap().unwrap().index;
     for (address, expected) in [
@@ -168,7 +169,7 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
             CommitDurability::Committed
         );
     }
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("b").unwrap().is_none());
     assert_eq!(reader.info().unwrap().range_record_count, 2);
     assert!(reader.lookup_membership_v4(Ipv4Key(20)).unwrap().is_none());
@@ -186,7 +187,7 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
             CommitDurability::Committed
         );
     }
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_feed("d").unwrap().unwrap().index, index_b);
     reader.close().unwrap();
 
@@ -203,7 +204,7 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
             CommitDurability::Committed
         );
     }
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().range_record_count, 0);
     assert!(reader.lookup_membership_v4(Ipv4Key(20)).unwrap().is_none());
     reader.close().unwrap();

@@ -22,11 +22,11 @@ enum Phase {
 
 impl LiveWriter {
     /// Publish all pending changes through the alternate metadata page.
-    pub fn commit(&mut self) -> Result<CommitResult> {
-        self.commit_with(None)
+    pub fn commit(&mut self, cancellation: &CancellationToken) -> Result<CommitResult> {
+        self.commit_with(Some(cancellation))
     }
 
-    pub(super) fn commit_cancellable(
+    pub(super) fn commit_operation(
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<CommitResult> {
@@ -75,7 +75,12 @@ impl LiveWriter {
         checkpoint(cancellation)?;
         self.prepare_with(cancellation)?;
         checkpoint(cancellation)?;
-        self.sidecar.lock_gate(Mode::Exclusive)
+        match cancellation {
+            Some(cancellation) => self
+                .sidecar
+                .lock_gate_cancellable(Mode::Exclusive, cancellation),
+            None => self.sidecar.lock_gate(Mode::Exclusive),
+        }
     }
 
     pub(super) fn finish_commit_locked(
@@ -128,8 +133,11 @@ impl LiveWriter {
         }
     }
 
-    pub(super) fn prepare(&mut self) -> Result<()> {
-        self.prepare_with(None)
+    pub(super) fn prepare_with_cancellation(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        self.prepare_with(Some(cancellation))
     }
 
     fn prepare_with(&mut self, cancellation: Option<&CancellationToken>) -> Result<()> {

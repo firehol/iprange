@@ -33,7 +33,6 @@ pub enum LiveLineage {
     SameGenerationExactBytes,
     SameGenerationPhysicalBytesChanged,
     AdvancedGeneration,
-    UnavailableDomainMismatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

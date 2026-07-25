@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::contract::MetaV4;
 use crate::{
-    create_live, AddressFamily, ErrorCode, Ipv4Key, LiveWriter, TransactionBudget, ValueKind,
-    ValueTag,
+    create_live, AddressFamily, CancellationToken, ErrorCode, Ipv4Key, LiveWriter,
+    TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestFile(PathBuf);
@@ -55,11 +55,16 @@ fn live_inspection_reports_unprovable_current_order() {
 #[test]
 fn live_inspection_reports_unreadable_proven_current() {
     let source = create_source("unreadable");
-    let mut writer = LiveWriter::open(&source.0, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer = LiveWriter::open(
+        &source.0,
+        transaction_budget(),
+        &crate::CancellationToken::new(),
+    )
+    .unwrap();
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     rewrite_meta(&source.0, 0, |meta| meta.range_record_count = 0);
 
@@ -85,6 +90,7 @@ fn create_source(label: &str) -> TestFile {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &crate::CancellationToken::new(),
     )
     .unwrap();
     source

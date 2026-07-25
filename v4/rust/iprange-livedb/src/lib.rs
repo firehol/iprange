@@ -30,6 +30,7 @@ pub mod key;
 // Recovery and compact snapshots wire this tested private builder in later slices.
 #[allow(dead_code)]
 mod immutable_output;
+mod live_lifecycle;
 mod live_lock;
 mod live_reader;
 mod live_sidecar;
@@ -73,7 +74,13 @@ pub use feed::{FeedEntry, FeedName};
 pub use feed_catalog::FeedCursor;
 pub use feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 pub use key::{Ipv4Key, Ipv6Key};
-pub use live_reader::LiveReader;
+pub use live_lifecycle::{
+    initialize_live, reset_live_coordination, resolve_create_live,
+    resolve_interrupted_live_transition, resolve_live_transition, LiveCoordinationLocation,
+    LiveResidueKind, LiveResidueResult, LiveResidueStatus, LiveTransitionOperation,
+    LiveTransitionResolutionMode, LiveTransitionResult, LiveTransitionStatus,
+};
+pub use live_reader::{LiveReader, ReaderCloseResult};
 pub use live_writer::{
     create_live, AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
     CommitCleanupArtifacts, CommitDurability, CommitResult, CreateFeed, CreateResult,

@@ -130,11 +130,12 @@ fn stale_offline_candidate_is_rejected_before_graph_access() {
     .unwrap();
     let previous = *inspection.candidate(1).unwrap();
 
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(30), Ipv4Key(40), 8)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(30), Ipv4Key(40), 8).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
 
     let failure = validate(
@@ -246,13 +247,15 @@ fn populated(paths: Paths) -> Paths {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     paths
 }

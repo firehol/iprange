@@ -49,6 +49,7 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &crate::CancellationToken::new(),
     )
     .unwrap();
     let budget = TransactionBudget {
@@ -57,7 +58,8 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
         max_file_growth_pages: 20_000,
         max_open_files: 2,
     };
-    let mut writer = LiveWriter::open(&files.main, budget).unwrap();
+    let mut writer =
+        LiveWriter::open(&files.main, budget, &crate::CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
     let ranges: Vec<_> = (0..1_000)
         .map(|index| AddressRange {

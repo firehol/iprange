@@ -47,6 +47,7 @@ fn empty_immutable_database_validates_explicitly() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
     assert_eq!(created.state, CreationState::Created);
@@ -80,9 +81,11 @@ fn populated_direct_database_validates_explicitly() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
     let cancellation = iprange_livedb::CancellationToken::new();
     let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(30), 7).unwrap();
@@ -107,9 +110,11 @@ fn populated_membership_database_validates_all_indexes() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer
         .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap();
@@ -154,13 +159,15 @@ fn page_crc_damage_is_a_factual_invalid_report() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 3)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 3).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     fs::copy(&paths.live, &paths.snapshot).unwrap();
 
@@ -206,13 +213,17 @@ fn live_current_validation_pins_and_releases_its_reader_slot() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(100), Ipv4Key(200), 9)
+    let mut writer =
+        LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction
+        .assign_v4(Ipv4Key(100), Ipv4Key(200), 9)
         .unwrap();
-    writer.commit().unwrap();
+    transaction.commit().unwrap();
 
     let mut findings = Vec::new();
     let result = validate(
@@ -229,7 +240,7 @@ fn live_current_validation_pins_and_releases_its_reader_slot() {
     assert!(result.valid);
     assert!(findings.is_empty());
 
-    let reader = LiveReader::open(&paths.live).unwrap();
+    let mut reader = LiveReader::open(&paths.live, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(150)).unwrap(), Some(9));
     reader.close().unwrap();
     writer.close().unwrap();
@@ -306,6 +317,7 @@ fn bound_live_database_can_report_an_unselectable_bootstrap() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let mut file = OpenOptions::new()

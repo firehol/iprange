@@ -86,7 +86,8 @@ fn immutable_direct_snapshot_preserves_identity_generation_ranges_and_metadata()
 #[test]
 fn live_membership_snapshot_preserves_names_indexes_bitmaps_and_metadata() {
     let files = populated_membership(TestFiles::new("live-membership"));
-    let source = iprange_livedb::LiveReader::open(&files.live).unwrap();
+    let mut source =
+        iprange_livedb::LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     let source_info = source.info().unwrap();
     let alpha_index = source.lookup_feed("alpha").unwrap().unwrap().index;
     let beta_index = source.lookup_feed("beta").unwrap().unwrap().index;
@@ -506,7 +507,8 @@ fn immutable_source_replacement_during_copy_blocks_publication() {
 #[test]
 fn live_snapshot_pins_its_generation_while_a_writer_advances() {
     let files = populated_large_direct(TestFiles::new("live-pinned-generation"), 5_000);
-    let before = iprange_livedb::LiveReader::open(&files.live).unwrap();
+    let mut before =
+        iprange_livedb::LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     let before_info = before.info().unwrap();
     before.close().unwrap();
 
@@ -531,18 +533,22 @@ fn live_snapshot_pins_its_generation_while_a_writer_advances() {
         "snapshot did not expose its reader claim"
     );
 
-    let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(1_000_000), Ipv4Key(1_000_000), 999)
+    let mut writer =
+        LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction
+        .assign_v4(Ipv4Key(1_000_000), Ipv4Key(1_000_000), 999)
         .unwrap();
-    writer.commit().unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     snapshot.join().unwrap().unwrap();
 
     let output = ImmutableReader::open(&files.output).unwrap();
     assert_eq!(output.info().transaction_id, before_info.transaction_id);
     assert_eq!(output.lookup_direct_v4(Ipv4Key(1_000_000)).unwrap(), None);
-    let live = iprange_livedb::LiveReader::open(&files.live).unwrap();
+    let mut live =
+        iprange_livedb::LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     assert!(live.info().unwrap().transaction_id > before_info.transaction_id);
     assert_eq!(
         live.lookup_direct_v4(Ipv4Key(1_000_000)).unwrap(),
@@ -558,9 +564,11 @@ fn populated_direct(files: TestFiles) -> TestFiles {
         ValueKind::Direct,
         ValueTag::new(b"timestamp").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
     let cancellation = iprange_livedb::CancellationToken::new();
     let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
@@ -580,9 +588,11 @@ fn populated_membership(files: TestFiles) -> TestFiles {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer
         .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap();
@@ -612,6 +622,7 @@ fn populated_large_direct(files: TestFiles, count: u32) -> TestFiles {
         ValueKind::Direct,
         ValueTag::new(b"timestamp").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
     let ranges: Vec<_> = (0..count)
@@ -629,6 +640,7 @@ fn populated_large_direct(files: TestFiles, count: u32) -> TestFiles {
             max_file_growth_pages: 100_000,
             max_open_files: 2,
         },
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();

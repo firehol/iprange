@@ -55,7 +55,7 @@ pub enum ErrorCode {
     CoordinationSequenceExhausted = 43,
     LiveCoordinationUnsupported = 44,
     LiveCoordinationCleanupRequired = 45,
-    LiveCoordinationDomainMismatchRequiresReset = 46,
+    LiveCoordinationMalformedRequiresReset = 46,
     LiveOpenCleanupRequired = 47,
     LiveRecoveryCoordinationUnavailable = 48,
     LiveRecoveryCurrentGenerationUnprovable = 49,
@@ -120,6 +120,8 @@ pub enum Error {
     LiveRecoveryCurrentGenerationUnreadable,
     RecoveryCandidateChanged,
     DirectoryIdentityMismatch,
+    Conflict(&'static str),
+    Unresolvable(&'static str),
     CleanupConflict(&'static str),
     ForkedHandle,
 }
@@ -166,6 +168,8 @@ impl Error {
             }
             Self::RecoveryCandidateChanged => ErrorCode::RecoveryCandidateChanged,
             Self::DirectoryIdentityMismatch => ErrorCode::DirectoryIdentityMismatch,
+            Self::Conflict(_) => ErrorCode::Conflict,
+            Self::Unresolvable(_) => ErrorCode::Unresolvable,
             Self::CleanupConflict(_) => ErrorCode::CleanupConflict,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
         }
@@ -240,6 +244,8 @@ impl fmt::Display for Error {
             Self::DirectoryIdentityMismatch => {
                 output.write_str("the retained directory identity changed")
             }
+            Self::Conflict(detail) => write!(output, "conflict: {detail}"),
+            Self::Unresolvable(detail) => write!(output, "unresolvable state: {detail}"),
             Self::CleanupConflict(detail) => write!(output, "cleanup conflict: {detail}"),
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
         }
@@ -282,6 +288,8 @@ impl std::error::Error for Error {
             | Self::LiveRecoveryCurrentGenerationUnreadable
             | Self::RecoveryCandidateChanged
             | Self::DirectoryIdentityMismatch
+            | Self::Conflict(_)
+            | Self::Unresolvable(_)
             | Self::CleanupConflict(_)
             | Self::ForkedHandle => None,
         }
@@ -360,7 +368,7 @@ mod tests {
             ErrorCode::CoordinationSequenceExhausted,
             ErrorCode::LiveCoordinationUnsupported,
             ErrorCode::LiveCoordinationCleanupRequired,
-            ErrorCode::LiveCoordinationDomainMismatchRequiresReset,
+            ErrorCode::LiveCoordinationMalformedRequiresReset,
             ErrorCode::LiveOpenCleanupRequired,
             ErrorCode::LiveRecoveryCoordinationUnavailable,
             ErrorCode::LiveRecoveryCurrentGenerationUnprovable,

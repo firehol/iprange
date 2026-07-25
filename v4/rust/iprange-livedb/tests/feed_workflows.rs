@@ -78,10 +78,11 @@ fn create_feed_normalizes_reports_and_exposes_ordered_projection() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
     let mut workflow = writer
         .begin_create_feed(name("alpha"), &cancellation)
@@ -107,7 +108,7 @@ fn create_feed_normalizes_reports_and_exposes_ordered_projection() {
     prepared.set_metadata_json(b"{\"feed\":\"alpha\"}").unwrap();
     prepared.commit().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     let alpha = reader.lookup_feed("alpha").unwrap().unwrap();
     let membership = reader.lookup_membership_v4(Ipv4Key(20)).unwrap().unwrap();
     assert!(membership.contains_index(alpha.index).unwrap());
@@ -131,7 +132,10 @@ fn create_feed_normalizes_reports_and_exposes_ordered_projection() {
         writer.begin_create_feed(name("alpha"), &cancellation),
         Err(Error::NameExists)
     ));
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let empty = writer
         .begin_create_feed(name("empty"), &cancellation)
@@ -142,7 +146,7 @@ fn create_feed_normalizes_reports_and_exposes_ordered_projection() {
     prepared.commit().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("empty").unwrap().is_some());
     assert_eq!(
         reader
@@ -164,9 +168,10 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -202,7 +207,7 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
             .unwrap();
         transaction.commit().unwrap();
     }
-    let before = LiveReader::open(&files.main).unwrap();
+    let mut before = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     let alpha_index = before.lookup_feed("alpha").unwrap().unwrap().index;
     let beta_index = before.lookup_feed("beta").unwrap().unwrap().index;
     before.close().unwrap();
@@ -233,7 +238,7 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
     assert_eq!(report.removed_addresses, Cardinality129::from_u64(10));
     prepared.commit().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         reader.lookup_feed("alpha").unwrap().unwrap().index,
         alpha_index
@@ -268,7 +273,10 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
         }
         FinishedWorkflow::Changed(_) => panic!("equal feed replacement changed"),
     }
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let empty = writer
         .begin_replace_feed(name("alpha"), &cancellation)
@@ -276,7 +284,7 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
     changed(empty.finish_input().unwrap()).commit().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         reader.lookup_feed("alpha").unwrap().unwrap().index,
         alpha_index
@@ -309,9 +317,10 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
 
     let mut workflow = writer
@@ -323,7 +332,10 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
         Err(Error::TransactionAborted(_))
     ));
     drop(workflow);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let mut wrong_family = writer
         .begin_create_feed(name("wrong-family"), &cancellation)
@@ -354,7 +366,10 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
             .unwrap();
         unfinished.add_ranges_v4_slice(&[range(1, 2)]).unwrap();
     }
-    assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::WrongState(_))
+    ));
     assert_eq!(
         writer.abort().unwrap().outcome,
         iprange_livedb::AbortOutcome::Aborted
@@ -366,7 +381,7 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
     ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     for feed in ["failed", "wrong-family", "cancelled", "unfinished"] {
         assert!(reader.lookup_feed(feed).unwrap().is_none());
     }
@@ -382,10 +397,11 @@ fn full_ipv6_feed_cardinality_is_exact() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut workflow = writer
         .begin_create_feed(name("all"), &cancellation)
         .unwrap();
@@ -403,7 +419,7 @@ fn full_ipv6_feed_cardinality_is_exact() {
     prepared.commit().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         reader
             .feed_range_cursor_v6("all", RangeDirection::Forward)

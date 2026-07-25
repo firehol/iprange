@@ -200,6 +200,10 @@ impl ReaderCore {
         (&self.file, self.bootstrap.meta)
     }
 
+    pub(crate) const fn file(&self) -> &File {
+        &self.file
+    }
+
     pub(crate) fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
         self.require_direct(AddressFamily::Ipv4)?;
         range_tree::lookup(&self.file, &self.bootstrap.meta, address)

@@ -1,5 +1,6 @@
 //! Bounded reader-safe page reclamation.
 
+use crate::cancellation::CancellationToken;
 use crate::draft_store::{Draft, DraftStore};
 use crate::error::{Error, Result};
 use crate::live_lock::Mode;
@@ -24,11 +25,18 @@ pub enum ReclaimResult {
 
 impl LiveWriter {
     /// Reclaim complete oldest safe retirement transactions and auto-publish.
-    pub fn reclaim(&mut self, max_transactions: u64, max_pages: u64) -> Result<ReclaimResult> {
+    pub fn reclaim(
+        &mut self,
+        max_transactions: u64,
+        max_pages: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<ReclaimResult> {
+        cancellation.check()?;
         self.require_reclaim(max_transactions, max_pages)?;
         let draft = Draft::new(self.base.meta, crate::random::nonzero_128()?)?;
-        self.sidecar.lock_gate(Mode::Exclusive)?;
-        let operation = self.reclaim_locked(draft, max_transactions, max_pages);
+        self.sidecar
+            .lock_gate_cancellable(Mode::Exclusive, cancellation)?;
+        let operation = self.reclaim_locked(draft, max_transactions, max_pages, cancellation);
         self.finish_reclaim(operation)
     }
 
@@ -84,19 +92,24 @@ impl LiveWriter {
         mut draft: Draft,
         max_transactions: u64,
         max_pages: u64,
+        cancellation: &CancellationToken,
     ) -> Result<Option<(Reclamation, CommitResult)>> {
+        cancellation.check()?;
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
         self.require_unchanged_base()?;
-        let oldest_reader = self.sidecar.oldest_reader(self.base.meta.txn_id)?;
+        let oldest_reader = self
+            .sidecar
+            .oldest_reader_cancellable(self.base.meta.txn_id, cancellation)?;
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
 
+        let mut checkpoint = || cancellation.check();
         let selection = DraftStore::new(
             &self.file,
             self.base.meta.page_count,
             self.budget.pages(),
             &mut draft,
         )
-        .select_reclamation(oldest_reader, max_transactions, max_pages)?;
+        .select_reclamation(oldest_reader, max_transactions, max_pages, &mut checkpoint)?;
         let Some(selection) = selection else {
             return Ok(None);
         };
@@ -113,8 +126,9 @@ impl LiveWriter {
             self.budget.pages(),
             self.draft.as_mut().unwrap(),
         )
-        .apply_reclamation(selection)?;
-        self.prepare()?;
+        .apply_reclamation(selection, &mut checkpoint)?;
+        self.prepare_with_cancellation(cancellation)?;
+        cancellation.check()?;
         Ok(Some((selection, self.finish_commit_locked(attempt))))
     }
 }

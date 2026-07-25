@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, AddressFamily, CommitDurability, FeedName, LiveReader, LiveWriter,
-    TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, CommitDurability, FeedName, LiveReader,
+    LiveWriter, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -68,10 +68,11 @@ fn transaction_builds_splits_renames_and_reopens_catalog() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
 
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -89,7 +90,7 @@ fn transaction_builds_splits_renames_and_reopens_catalog() {
         assert_eq!(committed.durability, CommitDurability::Committed);
     }
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader
         .lookup_feed(generated(500).as_str())
         .unwrap()
@@ -117,10 +118,11 @@ fn dropped_transaction_requires_explicit_writer_abort() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
 
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -128,14 +130,14 @@ fn dropped_transaction_requires_explicit_writer_abort() {
         transaction.ensure_feed(name("temporary")).unwrap();
     }
     assert!(matches!(
-        writer.commit(),
+        writer.commit(&CancellationToken::new()),
         Err(iprange_livedb::Error::WrongState(_))
     ));
     assert_eq!(
         writer.abort().unwrap().outcome,
         iprange_livedb::AbortOutcome::Aborted
     );
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("temporary").unwrap().is_none());
     reader.close().unwrap();
     writer.close().unwrap();
@@ -150,10 +152,11 @@ fn unused_membership_builder_commit_cleans_the_draft() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
 
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())

@@ -19,6 +19,16 @@ pub(crate) fn canonical_sidecar(main: &Path) -> Result<PathBuf> {
     Ok(main.with_file_name(sidecar_name))
 }
 
+pub(crate) fn live_transition_temp(main: &Path) -> Result<PathBuf> {
+    let main_name = main
+        .file_name()
+        .ok_or(Error::InvalidArgument("database path has no file name"))?;
+    validate_main_name(main_name)?;
+    let mut name = main_name.to_os_string();
+    name.push(".readers.reset");
+    Ok(main.with_file_name(name))
+}
+
 pub(crate) fn validate_main_name(name: &OsStr) -> Result<()> {
     #[cfg(unix)]
     let bytes = name.as_bytes();
@@ -78,5 +88,13 @@ mod tests {
         ] {
             assert!(canonical_sidecar(Path::new(name)).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn live_transition_temp_is_path_bound() {
+        assert_eq!(
+            live_transition_temp(Path::new("/tmp/feed.v4")).unwrap(),
+            Path::new("/tmp/feed.v4.readers.reset")
+        );
     }
 }

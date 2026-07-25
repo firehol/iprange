@@ -30,6 +30,7 @@ use crate::random;
 use crate::validation::LocalFileIdentity;
 
 pub use create::{create_live, CreateResult, CreationState};
+pub(crate) use create::{empty_meta, write_empty_main};
 pub use direct::DirectTransaction;
 pub use direct_workflow::{DirectReplacement, RetentionRefresh};
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
@@ -109,12 +110,23 @@ struct OpenedMain {
 
 impl LiveWriter {
     /// Open the only writer lease without validating either page graph.
-    pub fn open(path: impl AsRef<Path>, budget: TransactionBudget) -> Result<Self> {
+    pub fn open(
+        path: impl AsRef<Path>,
+        budget: TransactionBudget,
+        cancellation: &CancellationToken,
+    ) -> Result<Self> {
+        cancellation.check()?;
         let budget = budget.validate()?;
-        let main = open_main(path.as_ref())?;
+        let main = open_main(path.as_ref(), cancellation)?;
         let sidecar = Sidecar::open(&main.path, main.initial.meta.database_id)?;
-        sidecar.lock_gate(Mode::Exclusive)?;
-        let opened = open_locked(&main.file, &main.path, main.identity, &sidecar);
+        sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
+        let opened = open_locked(
+            &main.file,
+            &main.path,
+            main.identity,
+            &sidecar,
+            cancellation,
+        );
         let unlocked = sidecar.unlock_gate();
         let base = gate_result(opened, unlocked)?;
 
@@ -135,25 +147,25 @@ impl LiveWriter {
     }
 
     /// Assign one inclusive IPv4 interval in exact call order.
-    pub fn assign_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
+    fn assign_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
         self.require_direct(AddressFamily::Ipv4, from <= to)?;
         self.mutate(|store| store.assign_v4(from, to, value))
     }
 
     /// Assign one inclusive IPv6 interval in exact call order.
-    pub fn assign_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
+    fn assign_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
         self.require_direct(AddressFamily::Ipv6, from <= to)?;
         self.mutate(|store| store.assign_v6(from, to, value))
     }
 
     /// Remove values from one inclusive IPv4 interval.
-    pub fn clear_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
+    fn clear_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
         self.require_direct(AddressFamily::Ipv4, from <= to)?;
         self.mutate(|store| store.clear_v4(from, to))
     }
 
     /// Remove values from one inclusive IPv6 interval.
-    pub fn clear_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
+    fn clear_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
         self.require_direct(AddressFamily::Ipv6, from <= to)?;
         self.mutate(|store| store.clear_v6(from, to))
     }
@@ -414,11 +426,15 @@ fn open_locked(
     main_path: &Path,
     main_identity: Identity,
     sidecar: &Sidecar,
+    cancellation: &CancellationToken,
 ) -> Result<Bootstrap> {
     verify_pair(main_path, main_identity, sidecar)?;
-    let base = select_base(file, sidecar)?;
+    let base = select_base(file, sidecar, cancellation)?;
+    cancellation.check()?;
     sidecar.claim_writer()?;
+    cancellation.check()?;
     trim_tail(file, base)?;
+    cancellation.check()?;
     verify_pair(main_path, main_identity, sidecar)?;
     Ok(Bootstrap {
         physical_bytes: base.committed_bytes,
@@ -426,14 +442,14 @@ fn open_locked(
     })
 }
 
-fn open_main(path: &Path) -> Result<OpenedMain> {
+fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain> {
     let path = path.to_path_buf();
     let file = live_sidecar::open_rw(&path)?;
     let identity = live_sidecar::identity(&file)?;
     let directory_identity = live_sidecar::parent_identity(&path)?;
     let public_identity = live_sidecar::public_identity(identity);
     let basename = LocalBasename::from_path(&path)?;
-    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(&path, identity)?;
     let initial = database::bootstrap_file(&file, OpenMode::Writer)?;
     Ok(OpenedMain {
@@ -447,14 +463,18 @@ fn open_main(path: &Path) -> Result<OpenedMain> {
     })
 }
 
-fn select_base(file: &File, sidecar: &Sidecar) -> Result<Bootstrap> {
+fn select_base(
+    file: &File,
+    sidecar: &Sidecar,
+    cancellation: &CancellationToken,
+) -> Result<Bootstrap> {
     let base = database::bootstrap_file(file, OpenMode::Writer)?;
     if base.meta.database_id != sidecar.header.database_id {
         return Err(Error::WrongMode(
             "reader table belongs to a different database",
         ));
     }
-    sidecar.scan_at_most(base.meta.txn_id)?;
+    sidecar.scan_at_most_cancellable(base.meta.txn_id, cancellation)?;
     Ok(base)
 }
 

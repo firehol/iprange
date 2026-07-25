@@ -234,13 +234,12 @@ impl MembershipTransaction<'_> {
 
     /// Publish this transaction through the alternate metadata page.
     pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_cancellable(&self.cancellation)
+        self.writer.commit_operation(&self.cancellation)
     }
 
     /// Discard this transaction and invalidate all of its references.
-    pub fn abort(self) -> Result<()> {
-        self.writer.abort()?;
-        Ok(())
+    pub fn abort(self) -> Result<super::AbortResult> {
+        self.writer.abort()
     }
 
     fn reference(&self, entry: FeedEntry) -> FeedRef {

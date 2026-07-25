@@ -309,8 +309,7 @@ listed.
 - later canonical owner: `NONE=1`, `RESERVATION_OR_TRANSITION=2`,
   `READY_LIVE_SIDECAR=3`;
 - live lineage: `SAME_GENERATION_EXACT_BYTES=1`,
-  `SAME_GENERATION_PHYSICAL_BYTES_CHANGED=2`, `ADVANCED_GENERATION=3`,
-  `UNAVAILABLE_DOMAIN_MISMATCH=4`;
+  `SAME_GENERATION_PHYSICAL_BYTES_CHANGED=2`, `ADVANCED_GENERATION=3`;
 - local file relation: `SAME_LOCAL_FILE=1`, `DIFFERENT_LOCAL_FILE=2`;
 - commit resolution: `COMMITTED=1`, `NOT_COMMITTED=2`,
   `SUPERSEDED_UNKNOWN=3`, `UNRESOLVABLE=4`;
@@ -322,8 +321,6 @@ listed.
 - directory role: `DESTINATION=1`, `SCRATCH_DIRECTORY=2`, `MAIN_FILE=3`;
 - local identity kind: `POSIX=1`, `WINDOWS=2`;
 - creation-security kind: `POSIX=1`, `WINDOWS=2`;
-- process-domain kind: `LINUX_PID_NAMESPACE=1`, `FREEBSD_JAIL=2`,
-  `HOST_GLOBAL=3`;
 - graph/object kind: `FILE_GEOMETRY=1`, `META=2`, `RANGE_TREE=3`,
   `CATALOG_NAME_TREE=4`, `CATALOG_INDEX_TREE=5`,
   `MEMBERSHIP_DICTIONARY=6`, `MEMBERSHIP_REVERSE_INDEX=7`,
@@ -337,7 +334,8 @@ listed.
   `COMMIT_RESOLUTION=4`, `ABORT=5`, `CLOSE=6`, `RECLAIM=7`, `CREATE=8`,
   `LIVE_TRANSITION=9`, `CREATE_RESOLUTION=10`,
   `LIVE_TRANSITION_RESOLUTION=11`, `PUBLICATION=12`, `VALIDATION=13`,
-  `RECOVERY_CANDIDATES=14`, `RECOVERY=15`, `RESIDUE=16`.
+  `RECOVERY_CANDIDATES=14`, `RECOVERY=15`, `RESIDUE=16`,
+  `LIVE_RESIDUE=17`.
 
 Validation and recovery share one stable reason-code namespace:
 
@@ -436,7 +434,7 @@ The typed-error code registry is:
 | 43 | `COORDINATION_SEQUENCE_EXHAUSTED` |
 | 44 | `LIVE_COORDINATION_UNSUPPORTED` |
 | 45 | `LIVE_COORDINATION_CLEANUP_REQUIRED` |
-| 46 | `LIVE_COORDINATION_DOMAIN_MISMATCH_REQUIRES_RESET` |
+| 46 | `LIVE_COORDINATION_MALFORMED_REQUIRES_RESET` |
 | 47 | `LIVE_OPEN_CLEANUP_REQUIRED` |
 | 48 | `LIVE_RECOVERY_COORDINATION_UNAVAILABLE` |
 | 49 | `LIVE_RECOVERY_CURRENT_GENERATION_UNPROVABLE` |
@@ -536,6 +534,7 @@ iprange_v4_abi1_report_get_create
 iprange_v4_abi1_report_get_live_transition
 iprange_v4_abi1_report_get_create_resolution
 iprange_v4_abi1_report_get_live_transition_resolution
+iprange_v4_abi1_report_get_live_residue
 iprange_v4_abi1_report_get_publication
 iprange_v4_abi1_report_get_validation
 iprange_v4_abi1_report_get_recovery_candidates
@@ -561,8 +560,7 @@ iprange_v4_abi1_initialize_live
 iprange_v4_abi1_reset_live_coordination
 iprange_v4_abi1_resolve_create_live
 iprange_v4_abi1_resolve_live_transition
-iprange_v4_abi1_inspect_create_residue
-iprange_v4_abi1_remove_create_residue
+iprange_v4_abi1_resolve_interrupted_live_transition
 iprange_v4_abi1_open_immutable_reader
 iprange_v4_abi1_open_live_reader
 iprange_v4_abi1_open_live_writer

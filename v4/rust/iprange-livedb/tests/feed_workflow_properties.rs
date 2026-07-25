@@ -64,10 +64,11 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
     let target = writer
         .begin_create_feed(name("target"), &cancellation)
@@ -176,7 +177,7 @@ fn paired_count(before: &[bool], after: &[bool], old: bool, new: bool) -> u64 {
 }
 
 fn assert_database(path: &PathBuf, target: &[bool; DOMAIN], other: &[bool; DOMAIN]) {
-    let reader = LiveReader::open(path).unwrap();
+    let mut reader = LiveReader::open(path, &CancellationToken::new()).unwrap();
     let target_index = reader.lookup_feed("target").unwrap().unwrap().index;
     let other_index = reader.lookup_feed("other").unwrap().unwrap().index;
     for address in 0..DOMAIN {

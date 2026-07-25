@@ -83,9 +83,10 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         4,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -115,7 +116,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         transaction.commit().unwrap();
     }
 
-    let old_reader = LiveReader::open(&files.main).unwrap();
+    let mut old_reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     let alpha_index = old_reader.lookup_feed("alpha").unwrap().unwrap().index;
     let beta_index = old_reader.lookup_feed("beta").unwrap().unwrap().index;
 
@@ -129,7 +130,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         CommitDurability::Committed
     );
 
-    let renamed_reader = LiveReader::open(&files.main).unwrap();
+    let mut renamed_reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(renamed_reader.lookup_feed("alpha").unwrap().is_none());
     assert_eq!(
         renamed_reader
@@ -174,7 +175,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         CommitDurability::Committed
     );
 
-    let deleted_reader = LiveReader::open(&files.main).unwrap();
+    let mut deleted_reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(deleted_reader.lookup_feed("renamed").unwrap().is_none());
     assert!(deleted_reader
         .lookup_membership_v4(Ipv4Key(0))
@@ -195,7 +196,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
     deleted_reader.close().unwrap();
 
     commit_created_feed(&mut writer, "reused");
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         reader.lookup_feed("reused").unwrap().unwrap().index,
         alpha_index
@@ -212,7 +213,7 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
         CommitDurability::Committed
     );
     writer.close().unwrap();
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("empty").unwrap().is_none());
     assert!(reader.lookup_feed("beta").unwrap().is_some());
     reader.close().unwrap();
@@ -227,9 +228,10 @@ fn lifecycle_preconditions_and_precancellation_leave_the_writer_clean() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     commit_created_feed(&mut writer, "alpha");
     commit_created_feed(&mut writer, "beta");
     let cancellation = CancellationToken::new();
@@ -261,7 +263,10 @@ fn lifecycle_preconditions_and_precancellation_leave_the_writer_clean() {
         writer.rename_feed(name("alpha"), name("unused"), &cancelled),
         Err(Error::Cancelled)
     ));
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     writer.close().unwrap();
 }
 
@@ -274,9 +279,10 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     commit_created_feed(&mut writer, "alpha");
 
     let cancellation = CancellationToken::new();
@@ -285,7 +291,10 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
             .rename_feed(name("alpha"), name("dropped"), &cancellation)
             .unwrap(),
     );
-    assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::WrongState(_))
+    ));
     assert!(matches!(
         writer.set_metadata_json(b"{}", &CancellationToken::new()),
         Err(Error::WrongState(_))
@@ -305,7 +314,10 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
             if matches!(*cause, Error::InvalidArgument("metadata exceeds 1 MiB"))
     ));
     drop(oversized);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let cancelled = CancellationToken::new();
     let delete = writer.delete_feed(name("alpha"), &cancelled).unwrap();
@@ -316,10 +328,13 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
         result.cause,
         Some(Error::TransactionAborted(cause)) if matches!(*cause, Error::Cancelled)
     ));
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     writer.close().unwrap();
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("alpha").unwrap().is_some());
     for absent in ["dropped", "oversized"] {
         assert!(reader.lookup_feed(absent).unwrap().is_none());
@@ -336,10 +351,11 @@ fn deleting_a_full_ipv6_feed_handles_the_complete_address_space() {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut create = writer
         .begin_create_feed(name("all"), &cancellation)
         .unwrap();
@@ -367,7 +383,7 @@ fn deleting_a_full_ipv6_feed_handles_the_complete_address_space() {
     );
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("all").unwrap().is_none());
     assert_eq!(reader.info().unwrap().range_record_count, 0);
     assert!(reader.lookup_membership_v6(Ipv6Key::MIN).unwrap().is_none());
@@ -384,10 +400,11 @@ fn direct_database_rejects_named_feed_lifecycle_operations() {
         ValueKind::Direct,
         ValueTag::new(b"timestamp").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     assert!(matches!(
         writer.delete_feed(name("alpha"), &cancellation),
         Err(Error::WrongMode(_))

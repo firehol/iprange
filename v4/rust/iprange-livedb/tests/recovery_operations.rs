@@ -121,7 +121,7 @@ fn live_recovery_pins_and_releases_the_exact_current_generation() {
     assert_eq!(result.publication.publication, PublicationStatus::Published);
     assert_eq!(result.cleanup_state(), CleanupState::Clean);
     assert!(!sidecar(&files.output).exists());
-    let reader = LiveReader::open(&files.live).unwrap();
+    let mut reader = LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(7));
     reader.close().unwrap();
 }
@@ -224,7 +224,7 @@ fn live_recovery_rejects_a_previous_candidate_without_claiming_capacity() {
     )
     .unwrap_err();
     assert_eq!(failure.cause.code, ErrorCode::InvalidArgument);
-    let reader = LiveReader::open(&files.live).unwrap();
+    let mut reader = LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     reader.close().unwrap();
     assert!(!files.output.exists());
 }
@@ -236,13 +236,15 @@ fn populated_direct(files: TestFiles, reader_capacity: u32) -> TestFiles {
         ValueKind::Direct,
         ValueTag::RETENTION,
         reader_capacity,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
-    writer.commit().unwrap();
+    let mut writer =
+        LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     files
 }
@@ -254,9 +256,11 @@ fn populated_membership(files: TestFiles) -> TestFiles {
         ValueKind::Membership,
         ValueTag::new(b"membership").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&files.live, transaction_budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer
         .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap();

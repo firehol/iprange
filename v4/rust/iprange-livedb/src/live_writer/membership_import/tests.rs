@@ -81,18 +81,30 @@ fn open_import_processing_allocates_no_heap() {
             ValueKind::Membership,
             ValueTag::new(b"membership").unwrap(),
             4,
+            &crate::CancellationToken::new(),
         )
         .unwrap();
     }
 
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer = LiveWriter::open(
+        &source_files.main,
+        budget(),
+        &crate::CancellationToken::new(),
+    )
+    .unwrap();
     create_feed(&mut source_writer, "alpha", 0, 199);
     create_feed(&mut source_writer, "beta", 100, 299);
     source_writer.close().unwrap();
 
-    let source = LiveReader::open(&source_files.main).unwrap();
+    let mut source =
+        LiveReader::open(&source_files.main, &crate::CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(
+        &destination_files.main,
+        budget(),
+        &crate::CancellationToken::new(),
+    )
+    .unwrap();
     let (import, begin_allocations) = count_thread_allocations(|| {
         writer.begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
     });

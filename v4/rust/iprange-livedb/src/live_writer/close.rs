@@ -72,7 +72,11 @@ impl LiveWriter {
             CommitCleanupArtifacts::clean()
         };
         CloseResult::incomplete(
-            had_pending.then_some(AbortOutcome::AbortIncomplete),
+            had_pending.then_some(if self.draft.is_some() {
+                AbortOutcome::AbortIncomplete
+            } else {
+                AbortOutcome::Aborted
+            }),
             cleanup,
             cause,
         )

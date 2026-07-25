@@ -61,6 +61,7 @@ fn create_membership(files: &TestPair, family: AddressFamily, tag: &[u8]) {
         ValueKind::Membership,
         ValueTag::new(tag).unwrap(),
         4,
+        &CancellationToken::new(),
     )
     .unwrap();
     assert_eq!(result.state, iprange_livedb::CreationState::Created);
@@ -80,7 +81,8 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
     create_membership(&source_files, AddressFamily::Ipv4, b"membership");
     create_membership(&destination_files, AddressFamily::Ipv4, b"membership");
 
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = source_writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -111,7 +113,8 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
     }
     source_writer.close().unwrap();
 
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     {
         let mut transaction = writer
             .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
@@ -141,8 +144,9 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
         transaction.commit().unwrap();
     }
 
-    let source = LiveReader::open(&source_files.main).unwrap();
-    let old_destination = LiveReader::open(&destination_files.main).unwrap();
+    let mut source = LiveReader::open(&source_files.main, &CancellationToken::new()).unwrap();
+    let mut old_destination =
+        LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
     let import = writer
         .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
@@ -184,7 +188,7 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
     old_destination.close().unwrap();
     source.close().unwrap();
 
-    let reader = LiveReader::open(&destination_files.main).unwrap();
+    let mut reader = LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     let alpha = reader.lookup_feed("alpha").unwrap().unwrap().index;
     let beta = reader.lookup_feed("beta").unwrap().unwrap().index;
     let charlie = reader.lookup_feed("charlie").unwrap().unwrap().index;
@@ -220,7 +224,8 @@ fn immutable_equal_import_is_a_clean_no_change() {
     let destination_files = TestPair::new("copy-origin");
     create_membership(&destination_files, AddressFamily::Ipv4, b"membership");
 
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
     let mut create = writer
         .begin_create_feed(name("alpha"), &cancellation)
@@ -236,13 +241,15 @@ fn immutable_equal_import_is_a_clean_no_change() {
     fs::copy(&destination_files.main, &source_files.main).unwrap();
 
     let source = ImmutableReader::open(&source_files.main).unwrap();
-    let destination = LiveReader::open(&destination_files.main).unwrap();
+    let mut destination =
+        LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     assert_eq!(
         source.info().database_id,
         destination.info().unwrap().database_id
     );
     destination.close().unwrap();
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     let import = writer
         .begin_membership_import(MembershipImportSource::Immutable(&source), &cancellation)
         .unwrap();
@@ -261,7 +268,10 @@ fn immutable_equal_import_is_a_clean_no_change() {
         }
         FinishedWorkflow::Changed(_) => panic!("equal import changed the destination"),
     }
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     writer.close().unwrap();
 }
 
@@ -272,7 +282,12 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     create_membership(&empty_source_files, AddressFamily::Ipv4, b"membership");
     create_membership(&empty_destination_files, AddressFamily::Ipv4, b"membership");
     let cancellation = CancellationToken::new();
-    let mut source_writer = LiveWriter::open(&empty_source_files.main, budget()).unwrap();
+    let mut source_writer = LiveWriter::open(
+        &empty_source_files.main,
+        budget(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
     changed(
         source_writer
             .begin_create_feed(name("empty"), &cancellation)
@@ -283,8 +298,13 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     .commit()
     .unwrap();
     source_writer.close().unwrap();
-    let source = LiveReader::open(&empty_source_files.main).unwrap();
-    let mut writer = LiveWriter::open(&empty_destination_files.main, budget()).unwrap();
+    let mut source = LiveReader::open(&empty_source_files.main, &CancellationToken::new()).unwrap();
+    let mut writer = LiveWriter::open(
+        &empty_destination_files.main,
+        budget(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
     let prepared = changed(
         writer
             .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
@@ -298,7 +318,8 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     prepared.commit().unwrap();
     source.close().unwrap();
     writer.close().unwrap();
-    let reader = LiveReader::open(&empty_destination_files.main).unwrap();
+    let mut reader =
+        LiveReader::open(&empty_destination_files.main, &CancellationToken::new()).unwrap();
     assert!(reader.lookup_feed("empty").unwrap().is_some());
     reader.close().unwrap();
 
@@ -306,7 +327,8 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     let destination_files = TestPair::new("ipv6-destination");
     create_membership(&source_files, AddressFamily::Ipv6, b"membership");
     create_membership(&destination_files, AddressFamily::Ipv6, b"membership");
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     let mut create = source_writer
         .begin_create_feed(name("all"), &cancellation)
         .unwrap();
@@ -319,8 +341,9 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     changed(create.finish_input().unwrap()).commit().unwrap();
     source_writer.close().unwrap();
 
-    let source = LiveReader::open(&source_files.main).unwrap();
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut source = LiveReader::open(&source_files.main, &CancellationToken::new()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     let prepared = changed(
         writer
             .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
@@ -339,7 +362,7 @@ fn empty_feed_import_is_a_catalog_change_and_full_ipv6_is_exact() {
     prepared.commit().unwrap();
     source.close().unwrap();
     writer.close().unwrap();
-    let reader = LiveReader::open(&destination_files.main).unwrap();
+    let mut reader = LiveReader::open(&destination_files.main, &CancellationToken::new()).unwrap();
     let mut ranges = reader
         .feed_range_cursor_v6("all", RangeDirection::Forward)
         .unwrap();
@@ -361,7 +384,8 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
     create_membership(&source_files, AddressFamily::Ipv4, b"membership");
     create_membership(&destination_files, AddressFamily::Ipv4, b"membership");
     let cancellation = CancellationToken::new();
-    let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut source_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     let mut create = source_writer
         .begin_create_feed(name("alpha"), &cancellation)
         .unwrap();
@@ -373,9 +397,10 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
         .unwrap();
     changed(create.finish_input().unwrap()).commit().unwrap();
     source_writer.close().unwrap();
-    let source = LiveReader::open(&source_files.main).unwrap();
+    let mut source = LiveReader::open(&source_files.main, &CancellationToken::new()).unwrap();
 
-    let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
+    let mut writer =
+        LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(matches!(
@@ -391,10 +416,14 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
         import.finish_input(),
         Err(Error::TransactionAborted(cause)) if matches!(*cause, Error::Cancelled)
     ));
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
     writer.close().unwrap();
 
-    let mut same_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
+    let mut same_writer =
+        LiveWriter::open(&source_files.main, budget(), &CancellationToken::new()).unwrap();
     assert!(matches!(
         same_writer.begin_membership_import(MembershipImportSource::Live(&source), &cancellation),
         Err(Error::InvalidArgument(_))
@@ -428,10 +457,13 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
             kind,
             ValueTag::new(tag).unwrap(),
             4,
+            &CancellationToken::new(),
         )
         .unwrap();
-        let incompatible = LiveReader::open(&incompatible_files.main).unwrap();
-        let mut candidate = LiveWriter::open(&destination_files.main, budget()).unwrap();
+        let mut incompatible =
+            LiveReader::open(&incompatible_files.main, &CancellationToken::new()).unwrap();
+        let mut candidate =
+            LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
         assert!(matches!(
             candidate.begin_membership_import(
                 MembershipImportSource::Live(&incompatible),
@@ -440,7 +472,7 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
             Err(Error::WrongMode(_))
         ));
         assert!(matches!(
-            candidate.commit(),
+            candidate.commit(&CancellationToken::new()),
             Err(Error::NoPendingTransaction)
         ));
         candidate.close().unwrap();
@@ -453,7 +485,8 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
         max_file_growth_pages: 0,
         max_open_files: 2,
     };
-    let mut tiny_writer = LiveWriter::open(&destination_files.main, tiny).unwrap();
+    let mut tiny_writer =
+        LiveWriter::open(&destination_files.main, tiny, &CancellationToken::new()).unwrap();
     assert!(matches!(
         tiny_writer
             .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
@@ -462,7 +495,7 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
         Err(Error::TransactionAborted(cause)) if matches!(*cause, Error::BudgetExceeded(_))
     ));
     assert!(matches!(
-        tiny_writer.commit(),
+        tiny_writer.commit(&CancellationToken::new()),
         Err(Error::NoPendingTransaction)
     ));
     tiny_writer.close().unwrap();
@@ -473,7 +506,12 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
         AddressFamily::Ipv4,
         b"membership",
     );
-    let mut reusable = LiveWriter::open(&broken_destination_files.main, budget()).unwrap();
+    let mut reusable = LiveWriter::open(
+        &broken_destination_files.main,
+        budget(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
     let import = reusable
         .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
         .unwrap();

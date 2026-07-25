@@ -82,16 +82,16 @@ fn direct_replacement_preserves_order_reports_exactly_and_retires_old_tree() {
         ValueKind::Direct,
         ValueTag::new(b"asn").unwrap(),
         2,
+        &CancellationToken::new(),
     )
     .unwrap();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer.assign_direct_v4(Ipv4Key(0), Ipv4Key(15), 9).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(60), Ipv4Key(69), 7)
-        .unwrap();
-    writer.commit().unwrap();
-
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let cancellation = CancellationToken::new();
+    let mut seed = writer.begin_direct_transaction(&cancellation).unwrap();
+    seed.assign_v4(Ipv4Key(0), Ipv4Key(15), 9).unwrap();
+    seed.assign_v4(Ipv4Key(60), Ipv4Key(69), 7).unwrap();
+    seed.commit().unwrap();
+
     let mut workflow = writer.begin_direct_replacement(&cancellation).unwrap();
     workflow
         .add_ranges_v4_slice(&[direct(10, 30, 1), direct(40, 50, 2)])
@@ -123,7 +123,7 @@ fn direct_replacement_preserves_order_reports_exactly_and_retires_old_tree() {
         CommitDurability::Committed
     );
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     for (at, value) in [
         (9, None),
         (10, Some(1)),
@@ -165,7 +165,9 @@ fn direct_replacement_preserves_order_reports_exactly_and_retires_old_tree() {
     }
 
     assert!(matches!(
-        writer.reclaim(10, 20_000).unwrap(),
+        writer
+            .reclaim(10, 20_000, &CancellationToken::new())
+            .unwrap(),
         ReclaimResult::Commit { .. }
     ));
     writer.close().unwrap();
@@ -180,10 +182,11 @@ fn retention_refresh_keeps_old_values_removes_missing_and_marks_reappearance_new
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
 
     let mut first = writer.begin_retention_refresh(100, &cancellation).unwrap();
     first
@@ -226,7 +229,10 @@ fn retention_refresh_keeps_old_values_removes_missing_and_marks_reappearance_new
         }
         FinishedWorkflow::Changed(_) => panic!("equal refresh created a transaction"),
     }
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let mut removed = writer.begin_retention_refresh(400, &cancellation).unwrap();
     removed
@@ -239,7 +245,7 @@ fn retention_refresh_keeps_old_values_removes_missing_and_marks_reappearance_new
     changed(returned.finish_input().unwrap()).commit().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     for (at, value) in [
         (14, None),
         (15, Some(100)),
@@ -266,12 +272,14 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
         ValueKind::Direct,
         ValueTag::new(b"direct").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
-    writer.commit().unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let mut seed = writer.begin_direct_transaction(&cancellation).unwrap();
+    seed.assign_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
+    seed.commit().unwrap();
 
     {
         let mut unfinished = writer.begin_direct_replacement(&cancellation).unwrap();
@@ -279,9 +287,12 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
             .add_ranges_v4_slice(&[direct(10, 20, 1)])
             .unwrap();
     }
-    assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
     assert!(matches!(
-        writer.assign_direct_v4(Ipv4Key(30), Ipv4Key(40), 2),
+        writer.commit(&CancellationToken::new()),
+        Err(Error::WrongState(_))
+    ));
+    assert!(matches!(
+        writer.begin_direct_transaction(&cancellation),
         Err(Error::WrongState(_))
     ));
     assert_eq!(
@@ -295,7 +306,10 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
         workflow.add_ranges_v4_slice(&[direct(30, 40, 2)]).unwrap();
         let _prepared = changed(workflow.finish_input().unwrap());
     }
-    assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::WrongState(_))
+    ));
     assert!(matches!(
         writer.set_metadata_json(b"{}", &CancellationToken::new()),
         Err(Error::WrongState(_))
@@ -316,7 +330,10 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
         Err(Error::TransactionAborted(_))
     ));
     drop(workflow);
-    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
 
     let cancel = CancellationToken::new();
     let mut workflow = writer.begin_direct_replacement(&cancel).unwrap();
@@ -343,7 +360,7 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
     ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 2);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(1)).unwrap(), Some(9));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(55)).unwrap(), None);
@@ -360,10 +377,11 @@ fn full_ipv6_retention_report_is_exact() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut workflow = writer.begin_retention_refresh(42, &cancellation).unwrap();
     workflow
         .add_ranges_v6_slice(&[AddressRange {
@@ -383,7 +401,7 @@ fn full_ipv6_retention_report_is_exact() {
     prepared.commit().unwrap();
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v6(Ipv6Key::MAX).unwrap(), Some(42));
     reader.close().unwrap();
 }
@@ -397,10 +415,11 @@ fn empty_input_retires_and_reclaims_a_multilevel_range_tree() {
         ValueKind::Direct,
         ValueTag::new(b"direct").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let ranges: Vec<_> = (0..2_000)
         .map(|index| direct(index * 2, index * 2, index & 1))
         .collect();
@@ -419,12 +438,14 @@ fn empty_input_retires_and_reclaims_a_multilevel_range_tree() {
     );
     prepared.commit().unwrap();
     assert!(matches!(
-        writer.reclaim(10, 20_000).unwrap(),
+        writer
+            .reclaim(10, 20_000, &CancellationToken::new())
+            .unwrap(),
         ReclaimResult::Commit { .. }
     ));
     writer.close().unwrap();
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().range_record_count, 0);
     reader.close().unwrap();
 }

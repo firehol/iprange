@@ -237,6 +237,7 @@ fn grow(count: u32, by: u32) -> Result<u32> {
         .ok_or(Error::ArithmeticOverflow("retirement extent length"))
 }
 
+#[cfg(test)]
 pub(crate) fn select_reclamation<S: Store>(
     store: &S,
     root: u32,
@@ -245,6 +246,30 @@ pub(crate) fn select_reclamation<S: Store>(
     max_transactions: u64,
     max_pages: u64,
 ) -> Result<Option<Reclamation>> {
+    select_reclamation_with_checkpoint(
+        store,
+        root,
+        selected_txn,
+        oldest_reader,
+        max_transactions,
+        max_pages,
+        &mut || Ok(()),
+    )
+}
+
+pub(crate) fn select_reclamation_with_checkpoint<S, F>(
+    store: &S,
+    root: u32,
+    selected_txn: u64,
+    oldest_reader: Option<u64>,
+    max_transactions: u64,
+    max_pages: u64,
+    checkpoint: &mut F,
+) -> Result<Option<Reclamation>>
+where
+    S: Store,
+    F: FnMut() -> Result<()>,
+{
     require_work_limits(max_transactions, max_pages)?;
     let mut next = first(store, root)?;
     let mut selected = Reclamation {
@@ -254,10 +279,12 @@ pub(crate) fn select_reclamation<S: Store>(
     };
 
     while selected.transactions < max_transactions {
+        checkpoint()?;
         let Some(extent) = next else {
             break;
         };
-        let Some(group) = safe_group(store, root, extent, selected_txn, oldest_reader)? else {
+        let Some(group) = safe_group(store, root, extent, selected_txn, oldest_reader, checkpoint)?
+        else {
             break;
         };
         require_first_group_fit(selected, group.pages, max_pages)?;
@@ -270,18 +297,23 @@ pub(crate) fn select_reclamation<S: Store>(
     Ok((selected.transactions != 0).then_some(selected))
 }
 
-fn safe_group<S: Store>(
+fn safe_group<S, F>(
     store: &S,
     root: u32,
     extent: Extent,
     selected_txn: u64,
     oldest_reader: Option<u64>,
-) -> Result<Option<Group>> {
+    checkpoint: &mut F,
+) -> Result<Option<Group>>
+where
+    S: Store,
+    F: FnMut() -> Result<()>,
+{
     validate_selected(store, extent, selected_txn)?;
     if !reader_safe(oldest_reader, extent.key.txn) {
         return Ok(None);
     }
-    let (pages, next) = scan_group(store, root, extent, selected_txn)?;
+    let (pages, next) = scan_group(store, root, extent, selected_txn, checkpoint)?;
     Ok(Some(Group {
         txn: extent.key.txn,
         pages,
@@ -348,16 +380,22 @@ pub(crate) fn remove_extent<S: Store>(
     Ok(retired)
 }
 
-fn scan_group<S: Store>(
+fn scan_group<S, F>(
     store: &S,
     root: u32,
     first_extent: Extent,
     selected_txn: u64,
-) -> Result<(u64, Option<Extent>)> {
+    checkpoint: &mut F,
+) -> Result<(u64, Option<Extent>)>
+where
+    S: Store,
+    F: FnMut() -> Result<()>,
+{
     let txn = first_extent.key.txn;
     let mut extent = first_extent;
     let mut pages = 0u64;
     loop {
+        checkpoint()?;
         validate_selected(store, extent, selected_txn)?;
         pages = pages
             .checked_add(u64::from(extent.count))

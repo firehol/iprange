@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::random;
 
-use super::{CommitResult, LiveWriter};
+use super::{AbortResult, CommitResult, LiveWriter};
 
 /// One ordered advanced direct transaction and its cancellation token.
 #[derive(Debug)]
@@ -100,13 +100,12 @@ impl DirectTransaction<'_> {
 
     /// Publish this transaction.
     pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_cancellable(&self.cancellation)
+        self.writer.commit_operation(&self.cancellation)
     }
 
     /// Discard this transaction.
-    pub fn abort(self) -> Result<()> {
-        self.writer.abort()?;
-        Ok(())
+    pub fn abort(self) -> Result<AbortResult> {
+        self.writer.abort()
     }
 
     fn run<T>(&mut self, operation: impl FnOnce(&mut LiveWriter) -> Result<T>) -> Result<T> {

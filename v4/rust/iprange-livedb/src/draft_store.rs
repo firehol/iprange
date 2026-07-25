@@ -216,28 +216,41 @@ impl<'a> DraftStore<'a> {
         self.finish_bitmap_shape(checkpoint)
     }
 
-    pub(crate) fn select_reclamation(
+    pub(crate) fn select_reclamation<F>(
         &self,
         oldest_reader: Option<u64>,
         max_transactions: u64,
         max_pages: u64,
-    ) -> Result<Option<retirement::Reclamation>> {
-        retirement::select_reclamation(
+        checkpoint: &mut F,
+    ) -> Result<Option<retirement::Reclamation>>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        retirement::select_reclamation_with_checkpoint(
             self,
             self.draft.meta.retirement_root,
             self.draft.meta.txn_id - 1,
             oldest_reader,
             max_transactions,
             max_pages,
+            checkpoint,
         )
     }
 
-    pub(crate) fn apply_reclamation(&mut self, selection: retirement::Reclamation) -> Result<()> {
+    pub(crate) fn apply_reclamation<F>(
+        &mut self,
+        selection: retirement::Reclamation,
+        checkpoint: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         let mut transactions = 0u64;
         let mut pages = 0u64;
         let mut previous_txn = 0u64;
 
         loop {
+            checkpoint()?;
             let Some(extent) = retirement::first(self, self.draft.meta.retirement_root)? else {
                 break;
             };
@@ -251,7 +264,7 @@ impl<'a> DraftStore<'a> {
             pages = pages
                 .checked_add(extent.page_count())
                 .ok_or(Error::ArithmeticOverflow("reclaimed page count"))?;
-            self.reclaim_extent(extent)?;
+            self.reclaim_extent(extent, checkpoint)?;
         }
         if transactions != selection.transactions || pages != selection.pages {
             return Err(Error::Corrupt("reclamation selection changed"));
@@ -348,8 +361,12 @@ impl<'a> DraftStore<'a> {
         Ok(())
     }
 
-    fn reclaim_extent(&mut self, extent: retirement::Extent) -> Result<()> {
+    fn reclaim_extent<F>(&mut self, extent: retirement::Extent, checkpoint: &mut F) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         for page in extent.pages() {
+            checkpoint()?;
             let page = u32::try_from(page)
                 .map_err(|_| Error::Corrupt("reclaimed page exceeds page-number space"))?;
             self.free_one(page)?;

@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::source::RangeSource;
 use crate::workflow::{Comparison, WorkflowReport};
 
-use super::{CommitResult, LiveWriter};
+use super::{AbortResult, CommitResult, LiveWriter};
 
 /// Result of `FinishInput`.
 #[derive(Debug)]
@@ -43,9 +43,9 @@ impl FinishedWorkflow<'_> {
     }
 
     /// Abort a changed prepared result; a no-change result is already clean.
-    pub fn abort(self) -> Result<()> {
+    pub fn abort(self) -> Result<AbortResult> {
         match self {
-            Self::NoChange(_) => Ok(()),
+            Self::NoChange(_) => Err(Error::NoPendingTransaction),
             Self::Changed(prepared) => prepared.abort(),
         }
     }
@@ -79,7 +79,7 @@ impl<'a> PreparedWorkflow<'a> {
         self.operation.commit()
     }
 
-    pub fn abort(self) -> Result<()> {
+    pub fn abort(self) -> Result<AbortResult> {
         self.operation.abort()
     }
 }
@@ -103,7 +103,7 @@ impl<'a> PreparedFeedChange<'a> {
         self.operation.commit()
     }
 
-    pub fn abort(self) -> Result<()> {
+    pub fn abort(self) -> Result<AbortResult> {
         self.operation.abort()
     }
 }
@@ -131,12 +131,11 @@ impl<'a> PreparedOperation<'a> {
     }
 
     fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_cancellable(&self.cancellation)
+        self.writer.commit_operation(&self.cancellation)
     }
 
-    fn abort(self) -> Result<()> {
-        self.writer.abort()?;
-        Ok(())
+    fn abort(self) -> Result<AbortResult> {
+        self.writer.abort()
     }
 
     fn check_or_abort(&mut self) -> Result<()> {

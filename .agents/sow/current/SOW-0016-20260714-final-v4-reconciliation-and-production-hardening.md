@@ -12097,6 +12097,125 @@ Validation plan:
   required portability, resource and update-ipsets benchmark evidence, reader
   close hardening, active error specificity, and the C ABI remain open.
 
+### 2026-07-25 - lean live-lifecycle correction
+
+Problem and authority:
+
+- Section 15 specifies the current approved external reader table: one 4 KiB
+  header, 16-byte transaction/complement slots, open-description locks, and only
+  `creating`/`ready` states. Section 20.1 still describes an older incompatible
+  8 KiB dual-header protocol with PIDs, process domains, origins, and states 2/3.
+- The two protocols cannot coexist. The architecture reset and the current
+  simple sidecar implementation supersede the older live-transition text.
+  Section 20.1's durable reservation remains applicable only to immutable
+  output publication; its obsolete live-operation kinds 3-5 will be removed
+  from the normative contract.
+
+Exact lifecycle design:
+
+1. `CreateLive` exclusively creates canonical `.readers` in `creating` state.
+   That atomic creation is the namespace reservation. It then creates and
+   synchronizes the empty main file and finally synchronizes `ready`. No private
+   reservation, process identity, main-file digest, or second sidecar header is
+   needed.
+2. `InitializeLive` takes the existing immutable main's exclusive lifetime
+   lock, proves stable identity and exact committed length, then exclusively
+   creates canonical `.readers` as `creating` and publishes `ready`. A crash-left
+   creating sidecar blocks both immutable and live open and is resolved
+   explicitly; normal open never repairs it.
+3. `ResetLiveCoordination` requires caller-certified quiescence and the exclusive
+   main lifetime lock. It prepares and synchronizes one private ready sidecar,
+   then atomically replaces the missing/corrupt/old canonical sidecar and
+   synchronizes the directory. This is the only lifecycle operation that needs
+   a temporary file: it prevents a gap where the main could be mistaken for an
+   immutable database.
+4. Creation and transition results retain the exact database, sidecar attempt,
+   parent, main, and applicable old/new coordination identities. Resolution
+   classifies only those exact identities. A matching creating sidecar plus the
+   exact valid main may be completed; exact owned incomplete artifacts may be
+   rolled back; a foreign replacement is a conflict.
+5. Ordinary readers and writers remain fast: they perform only constant-time
+   main bootstrap, exact sidecar-header checks, and the required
+   caller-capacity slot scan. They never run full validation, hash the main, or
+   inspect process liveness.
+
+Implementation and validation plan:
+
+- First add state-aware sidecar inspection, exact lifecycle result types, and
+  Linux create/initialize/reset/resolve operations without reusing the obsolete
+  disconnected reservation/sidecar codecs.
+- Add subprocess crash points before and after every synchronization and
+  namespace boundary. Prove clean success, exclusive races, safe blocked
+  intermediates, exact resolution, foreign-identity refusal, and no implicit
+  graph validation.
+- Then harden reader close as a retryable non-consuming operation and remove
+  the legacy public direct-mutation bypass so every advanced mutation begins
+  with one stored cancellation token.
+- Reconcile the normative format and C-ABI registry in the same checkpoint;
+  do not retain dead live process-domain or state-2/state-3 vocabulary.
+
+### 2026-07-25 - lifecycle recovery and resolver cleanup closure
+
+Evidence and root cause:
+
+- The result-specific create/initialize/reset resolvers are sufficient after a
+  call returns, but not after process death: their attempt result exists only in
+  memory. A crash can therefore leave a canonical state-0 sidecar that blocks
+  every normal open with no restart entry point able to classify it.
+- The simple state-0 header intentionally does not record whether the operation
+  was create or initialize. That distinction is unnecessary for safe
+  completion: a current-generation-proven main bound to the same database can
+  be synchronized and the sidecar advanced to ready in either case. It is
+  necessary for rollback: removing a valid main without the original result
+  could destroy an initialized pre-existing database.
+- `ResolveCommit` currently proves a selected generation while silently
+  returning an empty cleanup ledger when aligned physical bytes remain beyond
+  that generation's committed length. Those bytes are an unpublished main tail
+  under sections 4, 14.2, and 14.4 and cannot be reported as clean.
+
+Lean repair:
+
+1. Add resultless inspection/recovery for one canonical state-0 sidecar. Under
+   the existing stable main/sidecar lock boundary, `Complete` may publish ready
+   only when the main has the same database ID and a two-meta-proven current
+   generation. `Rollback` may remove the state-0 sidecar only when the main is
+   absent. A present malformed, foreign, or valid main without attempt evidence
+   is never removed.
+2. Keep result-specific rollback for callers that retained the exact create or
+   transition result. No operation kind, PID, process domain, history, second
+   header, or main digest is added to the sidecar.
+3. Make reset residue discoverable without directory-wide guessing and retain
+   exact sidecar-ID/identity checks before removal or completion. A stale
+   private reset sidecar never authorizes replacement of a later canonical
+   sidecar.
+4. `ResolveCommit` trims only bytes beyond the twice-selected committed length
+   while holding the existing stable resolver boundary. It synchronizes and
+   rechecks the file before reporting clean. A failed or unproved trim returns
+   the factual meta classification plus one exact unpublished-tail cleanup
+   artifact; it never reports a false clean result.
+5. Permanent subprocess tests cover every create/initialize/reset crash
+   boundary and restart without an in-memory result. Focused tests cover commit
+   resolution with an aligned unpublished tail and cleanup failure reporting.
+
+Checkpoint validation:
+
+- The current-toolchain all-feature suite passes 384 tests; the two
+  crash-subprocess entry points are intentionally ignored.
+- The no-default-features suite passes the same 384 tests with the same two
+  intentional ignores.
+- Rust 1.74.1 passes the complete all-feature suite with the same result.
+- `cargo fmt --all -- --check`, warnings-denied Clippy across all targets and
+  all features, `git diff --check`, and `./.agents/sow/audit.sh` pass.
+- Subprocess tests cover every create, initialize, and reset crash point.
+  Restart resolution either completes the exact valid transition, rolls back
+  only exact owned residue, or reports a conflict without changing foreign
+  paths.
+- Commit-resolution tests prove that only the unpublished aligned tail beyond
+  the selected committed generation is removed.
+- This closes the Rust lifecycle checkpoint, not SOW-0016. Portability,
+  bounded-resource and performance proof, C ABI completion, documentation, and
+  final update-ipsets suitability remain open.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -57,6 +57,7 @@ fn create(files: &TestPair) {
         ValueKind::Direct,
         ValueTag::new(b"asn").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
 }
@@ -89,7 +90,7 @@ fn commit_result_and_live_resolution_report_exact_facts() {
     let files = TestPair::new("resolve");
     create(&files);
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let committed = commit_one(&mut writer, 7);
 
     assert_eq!(committed.durability, CommitDurability::Committed);
@@ -140,7 +141,7 @@ fn later_generations_do_not_invent_an_old_commit_outcome() {
     let files = TestPair::new("superseded");
     create(&files);
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let first = commit_one(&mut writer, 7);
     let _second = commit_one(&mut writer, 8);
     writer.close().unwrap();
@@ -162,7 +163,7 @@ fn resolution_reports_a_deliberate_logical_copy_as_a_different_local_file() {
     let copy = TestPair::new("copy-destination");
     create(&source);
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&source.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&source.main, budget(), &CancellationToken::new()).unwrap();
     let committed = commit_one(&mut writer, 7);
     writer.close().unwrap();
     fs::copy(&source.main, &copy.main).unwrap();
@@ -186,7 +187,7 @@ fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     let files = TestPair::new("close");
     create(&files);
     let token = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
     drop(transaction);
@@ -196,12 +197,46 @@ fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     assert_eq!(closed.abort_outcome, Some(AbortOutcome::Aborted));
     assert!(closed.cleanup.is_empty());
 
-    let mut replacement = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut replacement =
+        LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     replacement.close().unwrap();
     assert_eq!(writer.close().unwrap().outcome, CloseOutcome::Closed);
 
-    let reader = LiveReader::open(&files.main).unwrap();
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
+    reader.close().unwrap();
+}
+
+#[test]
+fn commit_resolution_removes_only_the_unpublished_tail() {
+    let files = TestPair::new("resolve-tail");
+    create(&files);
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let committed = commit_one(&mut writer, 7);
+    writer.close().unwrap();
+
+    let committed_length = fs::metadata(&files.main).unwrap().len();
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(&files.main)
+        .unwrap();
+    file.set_len(committed_length + 4096).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+
+    let resolved = resolve_commit(
+        &files.main,
+        &committed,
+        CommitResolutionMode::Live,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(resolved.resolution, CommitResolution::Committed);
+    assert!(resolved.cleanup.is_empty());
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), committed_length);
+
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(7)).unwrap(), Some(7));
     reader.close().unwrap();
 }

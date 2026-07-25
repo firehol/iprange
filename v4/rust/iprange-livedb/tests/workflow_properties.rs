@@ -60,10 +60,11 @@ fn randomized_direct_replacement_matches_scalar_state_and_report() {
         ValueKind::Direct,
         ValueTag::new(b"direct").unwrap(),
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut random = Random(0x8bcf_28d1_930e_44a7);
     let mut before = [None; DOMAIN];
 
@@ -111,10 +112,11 @@ fn randomized_retention_refresh_matches_full_delta_semantics() {
         ValueKind::Direct,
         ValueTag::RETENTION,
         1,
+        &CancellationToken::new(),
     )
     .unwrap();
     let cancellation = CancellationToken::new();
-    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut random = Random(0x57de_8a11_c442_793b);
     let mut before = [None; DOMAIN];
 
@@ -213,7 +215,7 @@ fn assert_report(
 }
 
 fn assert_database(path: &PathBuf, expected: &[Option<u32>; DOMAIN]) {
-    let reader = LiveReader::open(path).unwrap();
+    let mut reader = LiveReader::open(path, &CancellationToken::new()).unwrap();
     for (address, value) in expected.iter().enumerate() {
         assert_eq!(
             reader.lookup_direct_v4(Ipv4Key(address as u32)).unwrap(),
