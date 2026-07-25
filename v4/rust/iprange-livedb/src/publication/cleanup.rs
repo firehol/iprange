@@ -23,6 +23,13 @@ pub(super) struct ReservationOwner<'a> {
     pub(super) location: ReservationLocation,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct OutputOwner<'a> {
+    pub(super) file: &'a File,
+    pub(super) identity: Identity,
+    pub(super) name: &'a Name,
+}
+
 pub(super) struct Summary {
     pub(super) artifacts: CleanupArtifacts,
     pub(super) main_absent: bool,
@@ -48,20 +55,51 @@ pub(super) fn discard_with(
     seed: &mut Seed,
     output: &PreparedOutput,
     reservation: Option<ReservationOwner<'_>>,
-    mut checkpoint: impl FnMut(Point) -> Result<(), Problem>,
+    checkpoint: impl FnMut(Point) -> Result<(), Problem>,
 ) -> Summary {
     let destination = output.attempt.destination();
+    discard_owners_with(
+        seed,
+        destination,
+        Some(OutputOwner {
+            file: &output.file,
+            identity: output.attempt.identity(),
+            name: output.attempt.name(),
+        }),
+        reservation,
+        checkpoint,
+    )
+}
+
+pub(super) fn discard_recovered(
+    seed: &mut Seed,
+    destination: &super::namespace::Destination,
+    output: Option<OutputOwner<'_>>,
+    reservation: Option<ReservationOwner<'_>>,
+) -> Summary {
+    discard_owners_with(seed, destination, output, reservation, |_| Ok(()))
+}
+
+fn discard_owners_with(
+    seed: &mut Seed,
+    destination: &super::namespace::Destination,
+    output: Option<OutputOwner<'_>>,
+    reservation: Option<ReservationOwner<'_>>,
+    mut checkpoint: impl FnMut(Point) -> Result<(), Problem>,
+) -> Summary {
     let directory = destination.directory();
-    let output_removal = checkpoint(Point::OutputRemoval)
-        .and_then(|()| remove_output(directory, output))
-        .unwrap_or_else(|problem| {
-            Removal::failed(
-                ArtifactKind::PrivateOutput,
-                NameSlot::PrivateOutput,
-                Some(output.attempt.identity()),
-                problem,
-            )
-        });
+    let output_removal = output.map(|owner| {
+        checkpoint(Point::OutputRemoval)
+            .and_then(|()| remove_output(directory, owner))
+            .unwrap_or_else(|problem| {
+                Removal::failed(
+                    ArtifactKind::PrivateOutput,
+                    NameSlot::PrivateOutput,
+                    Some(owner.identity),
+                    problem,
+                )
+            })
+    });
     let reservation_removal = reservation.map(|owner| {
         checkpoint(Point::ReservationRemoval)
             .and_then(|()| remove_reservation(directory, destination.coordination(), owner))
@@ -74,7 +112,7 @@ pub(super) fn discard_with(
                 )
             })
     });
-    let needs_sync = output_removal.needs_sync()
+    let needs_sync = output_removal.as_ref().is_some_and(Removal::needs_sync)
         || reservation_removal
             .as_ref()
             .is_some_and(Removal::needs_sync);
@@ -92,7 +130,9 @@ pub(super) fn discard_with(
     };
 
     let mut artifacts = CleanupArtifacts::new();
-    finish_removal(seed, output_removal, sync, &mut artifacts);
+    if let Some(removal) = output_removal {
+        finish_removal(seed, removal, sync, &mut artifacts);
+    }
     if let Some(removal) = reservation_removal {
         finish_removal(seed, removal, sync, &mut artifacts);
     }
@@ -105,14 +145,14 @@ pub(super) fn discard_with(
 
 fn remove_output<'a>(
     directory: &Directory,
-    output: &'a PreparedOutput,
+    output: OutputOwner<'a>,
 ) -> Result<Removal<'a>, Problem> {
     remove(
         directory,
-        &output.file,
-        output.attempt.identity(),
+        output.file,
+        output.identity,
         ArtifactKind::PrivateOutput,
-        [Some((output.attempt.name(), NameSlot::PrivateOutput)), None],
+        [Some((output.name, NameSlot::PrivateOutput)), None],
     )
 }
 

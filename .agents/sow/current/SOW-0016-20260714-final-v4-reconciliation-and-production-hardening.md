@@ -11388,6 +11388,60 @@ requirements are normative in the Pre-Implementation Gate above.
   no function above CCN 9. Resolver mutation and result reconstruction remain
   the next slice; no Go or public API code was added.
 
+### 2026-07-25 - direct-publication restart mutation milestone
+
+- Implemented internal `Complete` and `Remove` resolution for the exact Linux
+  fail-if-exists publication states. `Complete` restores a private reservation
+  to canonical form when needed, resumes either durable reservation phase, and
+  publishes only the exact retained output inode. `Remove` cleans only exact
+  attempt-owned output/reservation artifacts and never removes a main file.
+- Every pre-main crash state now completes or removes cleanly. Every post-main
+  crash state proves the exact desired main, finishes old-attempt cleanup, and
+  remains `Published` even in `Remove` mode because that mode cannot erase an
+  already-published main. A caller result remains usable after reservation
+  retirement and is rejected before mutation when its retained directory or
+  raw destination basename differs.
+- Resolution synchronizes and rechecks every present main before cleanup,
+  reports final recheck failures as factual `OutcomeUnknown` results rather
+  than losing cleanup evidence, and reclassifies canonical coordination reuse
+  after cleanup. A valid different canonical reservation is retained and
+  reported only for exact desired content; a different private attempt is
+  `Conflict`, not a later canonical owner.
+- Exact private-output absence and changed access are removable in `Remove`
+  mode. A mismatched inode/content, symlink, malformed reservation/main, or
+  unselectable canonical record is never removed online. Changed main access is
+  reported but not restored. Cancellation is checked immediately before every
+  resolver mutation, contended resolver lock acquisition polls cancellation at
+  one-millisecond intervals, and cancellation after mutation is only an
+  orthogonal result cause.
+- Resolver inspection and mutation perform no implicit graph validation. The
+  permanent proof corrupts a non-meta output page, updates the exact reservation
+  digest, completes publication successfully, and then shows that only an
+  explicit `Validate` call reports the structural damage.
+- Twenty-one permanent resolver tests cover both modes across every crash
+  boundary, private state-2 restoration, missing/changed/mismatched artifacts,
+  result binding, malformed and symlink state, another private attempt, valid
+  canonical reuse before and during cleanup, equivalent desired bytes on
+  another inode, cancellation under lock contention, and the no-implicit-
+  validation rule.
+- Validation passed on the current toolchain, with no default features, and on
+  Rust 1.74.1: 273 tests passed and two subprocess entry points were
+  intentionally ignored in each matrix. Warnings-denied all-target Clippy,
+  benchmark compilation, formatting, diff checks, the focused resolver suite,
+  and the project SOW audit pass.
+- The complete publication production slice is 5,064 physical lines and 4,625
+  non-comment lines across 260 measured functions. Its largest file is 497
+  lines; average cyclomatic complexity is 3.0 and the maximum is 9. Result
+  construction and final verification are separate small modules rather than
+  enlarging the dispatcher.
+- This remains an internal direct kind-1 building block. Recovery construction,
+  the public snapshot/recovery surface, replacement publication, live
+  transitions, signing, C ABI work, Go work, update-ipsets-shaped benchmarks,
+  and the final whole-Rust simplification pass remain under the already-recorded
+  SOW sequence. No specification, end-user documentation, or project-skill
+  change was needed for this slice because it implements the current section-20
+  contract without changing it.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

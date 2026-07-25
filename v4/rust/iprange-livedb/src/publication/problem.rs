@@ -65,6 +65,9 @@ impl Problem {
             NamespaceError::Io(source) => {
                 Self::io(source, "publication filesystem operation failed")
             }
+            NamespaceError::IoAt { source, .. } if source.raw_os_error() == Some(libc::ELOOP) => {
+                Self::plain(ErrorCode::Conflict, "publication name is a symlink")
+            }
             NamespaceError::IoAt { source, .. } => {
                 Self::io(source, "publication filesystem operation failed")
             }

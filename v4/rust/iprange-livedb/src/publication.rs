@@ -20,6 +20,8 @@ mod reservation_file;
 #[cfg(target_os = "linux")]
 mod reservation_inspection;
 #[cfg(target_os = "linux")]
+mod resolver;
+#[cfg(target_os = "linux")]
 mod result;
 #[cfg(target_os = "linux")]
 mod security;

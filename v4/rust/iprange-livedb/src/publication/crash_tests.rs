@@ -245,7 +245,7 @@ fn crash_child() {
     panic!("configured publication crash point was not reached");
 }
 
-fn run_child(main: &Path, point: &str) {
+pub(super) fn run_child(main: &Path, point: &str) {
     let status = Command::new(std::env::current_exe().unwrap())
         .arg("--ignored")
         .arg("--exact")
@@ -324,14 +324,14 @@ impl PartialEq<ReservationPlace> for Location {
     }
 }
 
-struct Artifacts {
-    private_outputs: Vec<PathBuf>,
-    private_reservations: Vec<PathBuf>,
-    coordination: PathBuf,
+pub(super) struct Artifacts {
+    pub(super) private_outputs: Vec<PathBuf>,
+    pub(super) private_reservations: Vec<PathBuf>,
+    pub(super) coordination: PathBuf,
 }
 
 impl Artifacts {
-    fn inspect(directory: &Path, main: &Path) -> Self {
+    pub(super) fn inspect(directory: &Path, main: &Path) -> Self {
         let mut private_outputs = Vec::new();
         let mut private_reservations = Vec::new();
         for entry in fs::read_dir(directory).unwrap() {
@@ -353,12 +353,12 @@ impl Artifacts {
     }
 }
 
-struct TempDirectory {
-    path: PathBuf,
+pub(super) struct TempDirectory {
+    pub(super) path: PathBuf,
 }
 
 impl TempDirectory {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

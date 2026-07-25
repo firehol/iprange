@@ -2,6 +2,7 @@
 
 use std::fs::File;
 
+use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Copy)]
@@ -103,3 +104,18 @@ mod platform {
 }
 
 pub(crate) use platform::{lock, try_lock, unlock};
+
+pub(crate) fn lock_cancellable(
+    file: &File,
+    offset: u64,
+    mode: Mode,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    loop {
+        cancellation.check()?;
+        if try_lock(file, offset, mode)? {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}

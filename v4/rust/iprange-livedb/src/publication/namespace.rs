@@ -19,15 +19,6 @@ pub(crate) struct Identity {
     pub(crate) inode: u64,
 }
 
-impl Identity {
-    pub(crate) fn encode(self) -> [u8; 32] {
-        let mut bytes = [0; 32];
-        bytes[..8].copy_from_slice(&self.device.to_le_bytes());
-        bytes[8..16].copy_from_slice(&self.inode.to_le_bytes());
-        bytes
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Name(CString);
 
@@ -496,3 +487,6 @@ mod tests;
 #[path = "namespace_scan.rs"]
 mod scan;
 pub(crate) use scan::ScanError;
+
+#[path = "namespace_identity.rs"]
+mod identity;

@@ -31,6 +31,29 @@ pub(crate) fn fail_if_exists(output: PreparedOutput) -> Result {
     fail_if_exists_with(output, |_| Ok(()))
 }
 
+pub(super) fn resume_armed(
+    seed: Seed,
+    output: PreparedOutput,
+    reservation: ArmedReservation,
+) -> PublicationResult {
+    match main_file::publish(output, reservation) {
+        Ok(published) => finish_published(seed, published, None),
+        Err(failure) if failure.owner.desired_proven => finish_published(
+            seed,
+            PublishedMain {
+                output: failure.owner.output,
+                reservation: failure.owner.reservation,
+            },
+            Some(Problem::main(&failure.cause)),
+        ),
+        Err(failure) => outcome_unknown(
+            seed,
+            failure.owner.reservation.identity,
+            Problem::main(&failure.cause),
+        ),
+    }
+}
+
 fn fail_if_exists_with(
     output: PreparedOutput,
     mut checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
@@ -235,6 +258,7 @@ fn not_published(
     seed.result(
         FinalState {
             reservation_identity,
+            main_namespace_may_have_been_attempted: false,
             publication: PublicationStatus::NotPublished,
             destination_content: content,
             main_access_policy: AccessPolicy::Unclassified,
@@ -245,7 +269,7 @@ fn not_published(
     )
 }
 
-fn outcome_unknown(
+pub(super) fn outcome_unknown(
     seed: Seed,
     reservation_identity: super::namespace::Identity,
     cause: Problem,
@@ -253,6 +277,7 @@ fn outcome_unknown(
     seed.result(
         FinalState {
             reservation_identity,
+            main_namespace_may_have_been_attempted: true,
             publication: PublicationStatus::OutcomeUnknown,
             destination_content: DestinationContent::Unclassified,
             main_access_policy: AccessPolicy::Unclassified,
@@ -263,7 +288,7 @@ fn outcome_unknown(
     )
 }
 
-fn finish_published(
+pub(super) fn finish_published(
     mut seed: Seed,
     published: PublishedMain,
     cause: Option<Problem>,
@@ -273,6 +298,7 @@ fn finish_published(
         Ok(completed) => seed.result(
             FinalState {
                 reservation_identity: completed.reservation_identity,
+                main_namespace_may_have_been_attempted: true,
                 publication: PublicationStatus::Published,
                 destination_content: DestinationContent::Desired,
                 main_access_policy: AccessPolicy::CreatorOnly,
@@ -313,6 +339,7 @@ fn finish_published(
             seed.result(
                 FinalState {
                     reservation_identity,
+                    main_namespace_may_have_been_attempted: true,
                     publication: PublicationStatus::Published,
                     destination_content: DestinationContent::Desired,
                     main_access_policy: main_access,

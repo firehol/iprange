@@ -158,6 +158,28 @@ impl CanonicalReservation {
             Err(cause) => Err(Failure { owner, cause }),
         }
     }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn resume_armed(
+        self,
+        output: &PreparedOutput,
+    ) -> Result<ArmedReservation, Failure<Self>> {
+        if self.header.state != State::MainMayHaveBeenAttempted || self.header.sequence != 2 {
+            return Err(Failure {
+                owner: self,
+                cause: Error::HeaderInvariant,
+            });
+        }
+        if let Err(cause) = verify_canonical_reservation(&self, output) {
+            return Err(Failure { owner: self, cause });
+        }
+        Ok(ArmedReservation {
+            name: self.name,
+            file: self.file,
+            identity: self.identity,
+            header: self.header,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -266,7 +288,7 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
         owner.reservation.identity,
         &owner.reservation.name,
         owner.reservation.header,
-        0,
+        selected_block(owner.reservation.header),
         output,
         OutputLocation::Private,
     )
@@ -367,7 +389,7 @@ fn verify_private_reservation(
             identity: reservation.identity,
             private_name: &reservation.name,
             header: reservation.header,
-            block: 0,
+            block: selected_block(reservation.header),
             reservation_location: ReservationLocation::Private,
             output_location: OutputLocation::Private,
         },
@@ -383,10 +405,14 @@ fn verify_canonical_reservation(
         reservation.identity,
         &reservation.name,
         reservation.header,
-        0,
+        selected_block(reservation.header),
         output,
         OutputLocation::Private,
     )
+}
+
+fn selected_block(header: Header) -> usize {
+    usize::try_from(header.sequence - 1).expect("selected sequence is one or two")
 }
 
 fn verify_canonical(

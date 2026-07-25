@@ -164,6 +164,28 @@ pub(crate) struct PreparedOutput {
 }
 
 impl PreparedOutput {
+    pub(super) fn resume(
+        destination: Destination,
+        attempt_id: [u8; 16],
+        inspected: super::file_inspection::Inspected,
+    ) -> Result<Self, Error> {
+        let name = destination
+            .output_name(attempt_id)
+            .map_err(Error::Namespace)?;
+        Ok(Self {
+            attempt: OutputAttempt {
+                destination,
+                attempt_id,
+                name,
+                identity: inspected.identity,
+            },
+            file: inspected.file,
+            meta: inspected.meta,
+            byte_length: inspected.byte_length,
+            sha512: inspected.sha512,
+        })
+    }
+
     pub(crate) fn verify_private(&self) -> Result<(), Error> {
         self.verify(Location::Private)
     }

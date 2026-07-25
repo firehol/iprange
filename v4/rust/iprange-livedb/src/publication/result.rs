@@ -1,10 +1,13 @@
 //! Fixed publication facts and the two-entry direct-operation cleanup ledger.
 
+use crate::contract::PAGE_SIZE;
+use crate::error::ErrorCode;
 use crate::validation::LocalFileIdentity;
 
-use super::namespace::Identity;
+use super::namespace::{Destination, Identity, NamespaceError};
 use super::output::PreparedOutput;
 use super::problem::Problem;
+use super::reservation::{self, Header, Policy, State};
 
 const POSIX_KIND: u16 = 1;
 const CLEANUP_CAPACITY: usize = 2;
@@ -149,6 +152,42 @@ impl PublicationResult {
     pub(crate) const fn cleanup_state(&self) -> CleanupState {
         self.cleanup.state()
     }
+
+    pub(super) fn header_for(&self, destination: &Destination) -> Result<Header, Problem> {
+        require_result_binding(self, destination)?;
+        let state = if self.main_namespace_may_have_been_attempted {
+            State::MainMayHaveBeenAttempted
+        } else {
+            State::Prepared
+        };
+        let header = Header {
+            state,
+            database_id: self.attempt.database_id,
+            transaction_id: self.attempt.transaction_id,
+            commit_nonce: self.attempt.commit_nonce,
+            attempt_id: self.attempt.publication_attempt_id,
+            reservation_identity: self.attempt.reservation_identity.bytes,
+            policy: Policy::FailIfExists,
+            output_byte_length: self.attempt.output_byte_length,
+            output_identity: self.attempt.output_identity.bytes,
+            output_sha512: self.attempt.output_sha512,
+            previous: None,
+            basename_len: u32::try_from(destination.main().bytes().len())
+                .map_err(|_| destination_name_mismatch())?,
+            basename_commitment: destination.basename_commitment(),
+            security_commitment: self.attempt.creation_security.commitment,
+            sequence: state as u64,
+        };
+        let mut bytes = [0u8; 2 * PAGE_SIZE];
+        let block = usize::from(state == State::MainMayHaveBeenAttempted);
+        let encoded = (&mut bytes[block * PAGE_SIZE..(block + 1) * PAGE_SIZE])
+            .try_into()
+            .expect("fixed reservation block");
+        header.encode(encoded);
+        reservation::select(&bytes)
+            .map_err(|_| conflict("caller publication result is internally inconsistent"))?;
+        Ok(header)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,6 +224,7 @@ pub(super) struct Seed {
 
 pub(super) struct FinalState {
     pub(super) reservation_identity: Identity,
+    pub(super) main_namespace_may_have_been_attempted: bool,
     pub(super) publication: PublicationStatus,
     pub(super) destination_content: DestinationContent,
     pub(super) main_access_policy: AccessPolicy,
@@ -226,6 +266,35 @@ impl Seed {
         }
     }
 
+    pub(super) fn reconstruct(
+        destination: &Destination,
+        header: Header,
+    ) -> Result<Self, NamespaceError> {
+        let private_output = destination.output_name(header.attempt_id)?;
+        let private_reservation = destination.reservation_name(header.attempt_id)?;
+        Ok(Self {
+            database_id: header.database_id,
+            transaction_id: header.transaction_id,
+            commit_nonce: header.commit_nonce,
+            attempt_id: header.attempt_id,
+            directory_identity: local(destination.directory().identity()),
+            destination_basename: destination.main().bytes().into(),
+            output_identity: local_raw(header.output_identity),
+            output_byte_length: header.output_byte_length,
+            output_sha512: header.output_sha512,
+            creation_security: CreationSecurity {
+                kind: POSIX_KIND,
+                commitment: header.security_commitment,
+            },
+            private_output_basename: private_output.bytes().into(),
+            names: Names {
+                private_output: Some(private_output.bytes().into()),
+                private_reservation: Some(private_reservation.bytes().into()),
+                coordination: Some(destination.coordination().bytes().into()),
+            },
+        })
+    }
+
     pub(super) fn result(
         self,
         state: FinalState,
@@ -247,10 +316,7 @@ impl Seed {
                 reservation_identity: local(state.reservation_identity),
                 creation_security: self.creation_security,
             },
-            main_namespace_may_have_been_attempted: matches!(
-                state.publication,
-                PublicationStatus::Published | PublicationStatus::OutcomeUnknown
-            ),
+            main_namespace_may_have_been_attempted: state.main_namespace_may_have_been_attempted,
             publication: state.publication,
             destination_content: state.destination_content,
             later_canonical: LaterCanonical::None,
@@ -306,8 +372,52 @@ impl Seed {
 }
 
 fn local(identity: Identity) -> LocalFileIdentity {
+    local_raw(identity.encode())
+}
+
+fn local_raw(bytes: [u8; 32]) -> LocalFileIdentity {
     LocalFileIdentity {
         kind: POSIX_KIND,
-        bytes: identity.encode(),
+        bytes,
     }
+}
+
+fn require_result_binding(
+    result: &PublicationResult,
+    destination: &Destination,
+) -> Result<(), Problem> {
+    let directory = local(destination.directory().identity());
+    if result.attempt.directory_identity != directory {
+        return Err(Problem::new(
+            ErrorCode::DirectoryIdentityMismatch,
+            None,
+            "caller publication result belongs to another directory",
+        ));
+    }
+    if result.attempt.destination_basename_encoding != POSIX_KIND
+        || result.attempt.destination_basename.as_ref() != destination.main().bytes()
+    {
+        return Err(destination_name_mismatch());
+    }
+    if result.attempt.output_identity.kind != POSIX_KIND
+        || result.attempt.reservation_identity.kind != POSIX_KIND
+        || result.attempt.creation_security.kind != POSIX_KIND
+    {
+        return Err(conflict(
+            "caller publication result has another identity kind",
+        ));
+    }
+    Ok(())
+}
+
+const fn destination_name_mismatch() -> Problem {
+    Problem::new(
+        ErrorCode::DestinationNameMismatch,
+        None,
+        "caller publication result belongs to another destination name",
+    )
+}
+
+const fn conflict(detail: &'static str) -> Problem {
+    Problem::new(ErrorCode::Conflict, None, detail)
 }

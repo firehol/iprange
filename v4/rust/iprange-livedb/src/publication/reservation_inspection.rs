@@ -35,17 +35,34 @@ pub(super) struct Inspected {
     pub(super) access: AccessPolicy,
 }
 
+impl Inspected {
+    pub(super) fn verify(&self, destination: &Destination) -> Result<(), Problem> {
+        destination
+            .directory()
+            .verify()
+            .map_err(|error| Problem::namespace(&error))?;
+        let name = match self.location {
+            Location::Private => &self.name,
+            Location::Canonical => destination.coordination(),
+        };
+        destination
+            .directory()
+            .verify_name(name, self.identity)
+            .map_err(|error| Problem::namespace(&error))?;
+        let selected = read_selected(&self.file).map_err(strict_record)?;
+        if selected.header != self.header {
+            return Err(conflict("publication reservation changed after inspection"));
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn discover(
     destination: &Destination,
     cancellation: &CancellationToken,
 ) -> Result<Option<Inspected>, Problem> {
-    cancellation.check().map_err(|error| Problem::sdk(&error))?;
-    if let Some(regular) = destination
-        .directory()
-        .open_regular(destination.coordination(), true)
-        .map_err(|error| Problem::namespace(&error))?
-    {
-        return inspect_canonical(destination, regular, cancellation).map(Some);
+    if let Some(inspected) = canonical(destination, cancellation)? {
+        return Ok(Some(inspected));
     }
     let found = scan_private(destination, cancellation)?;
     destination
@@ -55,26 +72,76 @@ pub(super) fn discover(
     Ok(found)
 }
 
+pub(super) fn canonical(
+    destination: &Destination,
+    cancellation: &CancellationToken,
+) -> Result<Option<Inspected>, Problem> {
+    cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    let Some(regular) = destination
+        .directory()
+        .open_regular(destination.coordination(), true)
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    inspect_canonical(destination, regular, cancellation).map(Some)
+}
+
+pub(super) fn exact_private(
+    destination: &Destination,
+    expected: Header,
+    cancellation: &CancellationToken,
+) -> Result<Option<Inspected>, Problem> {
+    cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    let name = destination
+        .reservation_name(expected.attempt_id)
+        .map_err(|error| Problem::namespace(&error))?;
+    let Some(regular) = destination
+        .directory()
+        .open_regular(&name, true)
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    lock_operation(&regular, cancellation)?;
+    destination
+        .directory()
+        .verify_name(&name, regular.identity)
+        .map_err(|error| Problem::namespace(&error))?;
+    let selected = read_selected(&regular.file).map_err(strict_record)?;
+    require_bound(
+        destination,
+        selected.header,
+        regular.identity,
+        Some(expected.attempt_id),
+    )?;
+    if selected.header != expected {
+        return Err(conflict("caller result and private reservation disagree"));
+    }
+    Ok(Some(inspected(name, regular, selected, Location::Private)))
+}
+
 fn inspect_canonical(
     destination: &Destination,
     regular: Regular,
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
-    live_lock::lock(&regular.file, OPERATION_LOCK, Mode::Exclusive)
-        .map_err(|error| Problem::sdk(&error))?;
-    cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    lock_operation(&regular, cancellation)?;
     destination
         .directory()
         .verify_name(destination.coordination(), regular.identity)
         .map_err(|error| Problem::namespace(&error))?;
     let selected = read_selected(&regular.file).map_err(strict_record)?;
     require_bound(destination, selected.header, regular.identity, None)?;
+    let private_name = destination
+        .reservation_name(selected.header.attempt_id)
+        .map_err(|error| Problem::namespace(&error))?;
     destination
         .directory()
         .verify()
         .map_err(|error| Problem::namespace(&error))?;
     Ok(inspected(
-        destination.coordination().clone(),
+        private_name,
         regular,
         selected,
         Location::Canonical,
@@ -92,7 +159,7 @@ fn scan_private(
             return Ok(());
         };
         let name = Name::new(bytes).map_err(|error| Problem::namespace(&error))?;
-        let Some(candidate) = inspect_private(destination, name, attempt_id)? else {
+        let Some(candidate) = inspect_private(destination, name, attempt_id, cancellation)? else {
             return Ok(());
         };
         if found.is_some() {
@@ -114,6 +181,7 @@ fn inspect_private(
     destination: &Destination,
     name: Name,
     attempt_id: [u8; 16],
+    cancellation: &CancellationToken,
 ) -> Result<Option<Inspected>, Problem> {
     let regular = match destination.directory().open_regular(&name, true) {
         Ok(Some(regular)) => regular,
@@ -136,8 +204,7 @@ fn inspect_private(
     {
         return Ok(None);
     }
-    live_lock::lock(&regular.file, OPERATION_LOCK, Mode::Exclusive)
-        .map_err(|error| Problem::sdk(&error))?;
+    lock_operation(&regular, cancellation)?;
     destination
         .directory()
         .verify_name(&name, regular.identity)
@@ -164,6 +231,12 @@ fn inspected(name: Name, regular: Regular, selected: Selected, location: Locatio
         location,
         access,
     }
+}
+
+fn lock_operation(regular: &Regular, cancellation: &CancellationToken) -> Result<(), Problem> {
+    live_lock::lock_cancellable(&regular.file, OPERATION_LOCK, Mode::Exclusive, cancellation)
+        .map_err(|error| Problem::sdk(&error))?;
+    cancellation.check().map_err(|error| Problem::sdk(&error))
 }
 
 fn require_bound(
