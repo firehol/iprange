@@ -9951,6 +9951,45 @@ requirements are normative in the Pre-Implementation Gate above.
   deletion authorization; the interrupted uncommitted normal-range file remains
   untouched and excluded from this milestone.
 
+### 2026-07-25 - range-tree simplification plan
+
+- The old exact contract permitted reachable empty leaves and compensated with
+  per-child counts and endpoint summaries. That mechanism caused the audited
+  traversal failures and conflicts with the replacement architecture's
+  zero-root-only empty representation.
+- The normative tree contract now uses nonempty slotted pages. Each branch key
+  is the exact first key in its nonempty child; point lookup is the ordinary
+  greatest-key-not-after-target descent at every level. Deleting the final leaf
+  entry removes that child, and an empty complete tree becomes root zero.
+- All ordered indexes use the same branch-key direction and slotted-page
+  convention. Tree-specific codecs retain compact fixed range cells: IPv4 leaf
+  cells are 12 bytes and branch cells 8 bytes; IPv6 cells are 36 and 20 bytes.
+  The only common overhead is one two-byte slot per cell.
+- Normal range access checks page number, header, type, family, level, slot, and
+  selected-cell bounds but does not check page CRCs or scan unselected records.
+  One fixed 4 KiB caller-owned buffer and positional reads keep point lookup
+  allocation-free and independent of file size.
+
+### 2026-07-25 - immutable direct lookup implementation
+
+- The public immutable reader now exposes family-specific direct point lookup.
+  It rejects the wrong family or membership value kind before page I/O.
+- The range path is 182 physical lines. Its functions are each below 30
+  non-comment lines and at or below cyclomatic complexity 9. It uses checked
+  positional reads and one stack-owned page buffer; the selected path is bounded
+  by the exact maximum tree level.
+- Permanent tests cover empty roots, IPv4 gaps and inclusive boundaries, direct
+  value zero, two-level real-first-key descent, full-space IPv6 through the
+  maximum address, out-of-bounds children, selected malformed pages, and the
+  deliberate absence of data-page CRC checks during ordinary lookup.
+- A thread-local allocation counter proves a warmed successful point lookup
+  performs zero heap allocations. A public integration test independently
+  encodes a checksummed three-page IPv6 image, opens it, and reads the expected
+  value.
+- Validation passes on the current toolchain and Rust 1.74: 40 unit tests and
+  one public integration test. Warnings-denied all-target Clippy, formatting,
+  and `git diff --check` pass.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -10,7 +10,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
 use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::key::{Ipv4Key, Ipv6Key};
 use crate::path;
+use crate::range_tree;
 
 /// Public logical identity and selected generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +50,7 @@ impl DatabaseInfo {
 /// Reader pinned to one immutable file generation.
 #[derive(Debug)]
 pub struct ImmutableReader {
-    _file: File,
+    file: File,
     bootstrap: Bootstrap,
 }
 
@@ -76,15 +78,38 @@ impl ImmutableReader {
         let bootstrap =
             bootstrap::open_meta_pages(meta0, meta1, physical_bytes, OpenMode::ImmutableReader)?;
         require_sidecar_absent(&sidecar)?;
-        Ok(Self {
-            _file: file,
-            bootstrap,
-        })
+        Ok(Self { file, bootstrap })
     }
 
     /// Identity and counters from the selected metadata page.
     pub fn info(&self) -> DatabaseInfo {
         DatabaseInfo::from_bootstrap(self.bootstrap)
+    }
+
+    /// Look up one address in an IPv4 direct-value database.
+    pub fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
+        self.require_direct(AddressFamily::Ipv4)?;
+        range_tree::lookup(&self.file, &self.bootstrap.meta, address)
+    }
+
+    /// Look up one address in an IPv6 direct-value database.
+    pub fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
+        self.require_direct(AddressFamily::Ipv6)?;
+        range_tree::lookup(&self.file, &self.bootstrap.meta, address)
+    }
+
+    fn require_direct(&self, family: AddressFamily) -> Result<()> {
+        if self.bootstrap.meta.value_kind != ValueKind::Direct {
+            return Err(Error::InvalidArgument(
+                "direct lookup requires a direct-value database",
+            ));
+        }
+        if self.bootstrap.meta.address_family != family {
+            return Err(Error::InvalidArgument(
+                "lookup address family does not match the database",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -213,6 +238,11 @@ mod tests {
         assert_ne!(info.database_id, [0; 16]);
         assert_ne!(info.commit_nonce, [0; 16]);
         assert_eq!(fs::metadata(&path.0).unwrap().len(), 8192);
+        assert_eq!(reader.lookup_direct_v4(Ipv4Key(1)).unwrap(), None);
+        assert!(matches!(
+            reader.lookup_direct_v6(Ipv6Key::MIN),
+            Err(Error::InvalidArgument(_))
+        ));
     }
 
     #[test]
@@ -232,6 +262,10 @@ mod tests {
         assert_eq!(info.address_family, AddressFamily::Ipv6);
         assert_eq!(info.value_kind, ValueKind::Membership);
         assert_eq!(info.value_tag.bytes(), b"feeds");
+        assert!(matches!(
+            reader.lookup_direct_v6(Ipv6Key::MIN),
+            Err(Error::InvalidArgument(_))
+        ));
     }
 
     #[test]

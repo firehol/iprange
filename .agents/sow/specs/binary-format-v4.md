@@ -331,8 +331,7 @@ For `membership` files:
 
 The following root/count relations are bootstrap invariants:
 
-- `range_record_count > 0` requires nonzero `range_root`; a zero count permits
-  either canonical root zero or a legal all-empty range tree;
+- `range_record_count == 0` if and only if `range_root == 0`;
 - `active_feed_count == 0` requires both catalog roots and `feed_used_root` zero;
   a nonzero active count requires all three roots nonzero;
 - `membership_entry_count == 0` requires both dictionary roots and
@@ -410,39 +409,34 @@ publish new roots. A reachable page MUST have exactly one owning graph path;
 page aliasing between roots or within a graph is invalid unless this
 specification explicitly says otherwise. No such alias is currently defined.
 
-For every tightly packed fixed-record page not given a stronger rule below,
-records begin at byte 32, `lower == 32 + item_count * record_size`, and
-`upper == 4096`. The multiplication and addition are checked. All bytes from
-`lower` through byte 4095 are zero.
+Every ordered-index B+tree page (types 1 through 10 and 16 through 17) uses the
+slotted-page convention in section 7. Root zero is the only empty-tree
+representation; every reachable B+tree leaf and branch is nonempty.
 
 ### 5.3 Tree descent invariants
 
 Every branch pointer is a non-meta page below selected `page_count`. Its child
 has the page type and `aux` required by that owning tree, and its level is
-exactly one less than the parent level. Branch pages are nonempty unless a
-section explicitly permits otherwise; no section permits a zero-child branch.
-Non-range leaves are nonempty unless their whole tree is represented by root
-zero. Keys and fences use the ordering stated by their tree section.
+exactly one less than the parent level. Every branch key is the exact first key
+in that nonempty child subtree. Branch keys are strictly increasing.
 
 Ordinary access checks the level decrease, child bounds, expected type, and
 expected `aux` before following every pointer. It stops after
 `MAX_TREE_LEVEL + 1` pages. These checks prevent cycles, stack exhaustion, and
 out-of-bounds access without computing page CRCs or performing full validation.
-Explicit `Validate` additionally proves global ownership, exact summaries, and
-cross-page ordering.
+Explicit `Validate` additionally proves global ownership and cross-page
+ordering.
 
 ## 6. Range tree and range records
 
 The range tree is a COW B+tree ordered by record `from`. `range_root == 0`
 means an empty map.
 
-Range pages use `aux == address_family`. Their fixed records start at byte 32
-and are tightly packed. `upper == 4096`; `lower` equals the first unused byte.
-Unused bytes are zero.
+Range pages use `aux == address_family` and the slotted-page convention.
 
 ### 6.1 Range leaf
 
-A leaf has page type 2 and `level == 0`.
+A leaf has page type 2, `level == 0`, and at least one record.
 
 IPv4 leaf records are 12 bytes:
 
@@ -458,8 +452,7 @@ from:u128  to:u128  value:u32
 
 The intervals are inclusive. Every record MUST have `from <= to`. Records are
 strictly ordered by `from` and MUST NOT overlap. Globally adjacent records with
-the same value MUST be coalesced. A leaf MAY contain zero records, including
-when it is a reachable non-root child.
+the same value MUST be coalesced.
 
 In a direct file, `value` is an opaque caller-defined `u32`; zero is valid. In
 a membership file, `value` is a nonzero `membership_id` present in the selected
@@ -468,84 +461,47 @@ stored as a range record.
 
 ### 6.2 Range branch
 
-A branch has page type 1 and `level > 0`. Branch entries carry exact subtree
-summaries so legal empty children never force descent through an unbounded run
-of empty pages.
+A branch has page type 1, `level > 0`, and at least one entry.
 
-An IPv4 entry is 32 bytes:
+An IPv4 entry is 8 bytes:
 
 ```text
-lower_fence:u32
-child_pgno:u32
-subtree_record_count:u64
-first_from:u32
-last_from:u32
-last_to:u32
-reserved:u32 = 0
+first_from:u32  child_pgno:u32
 ```
 
-An IPv6 entry is 80 bytes:
+An IPv6 entry is 20 bytes:
 
 ```text
-lower_fence:u128
-child_pgno:u32
-reserved:u32 = 0
-subtree_record_count:u64
-first_from:u128
-last_from:u128
-last_to:u128
+first_from:u128  child_pgno:u32
 ```
 
-Fences are strictly increasing. The first root fence is the all-zero address.
-For a non-root branch, its first fence equals the lower fence assigned by its
-parent. An entry owns records whose `from` is at least its fence and less than
-the next fence; the final entry uses the upper bound inherited from its parent.
-A record's `to` MAY cross a later fence.
+`first_from` is the exact first range start in the nonempty child subtree.
+Entries are strictly ordered by `first_from`. A non-root one-child branch is
+legal; writers collapse a one-child root.
 
-For a nonempty child, `subtree_record_count` is its exact record count,
-`first_from` and `last_from` are its first and last record starts, and `last_to`
-is the final record's endpoint. Because ranges are globally ordered and
-non-overlapping, that endpoint is also the subtree's greatest endpoint. For an
-empty child, the count and all three summary addresses are zero.
-
-A branch has at least one child; a zero-child branch is invalid. A non-root
-one-child branch, an empty child, and an all-empty branch subtree are legal.
-Writers SHOULD collapse redundant branches and represent a completely empty
-map with `range_root == 0`, but readers MUST accept every legal form.
-
-Point lookup and backward-cursor initialization choose the rightmost nonempty
-entry whose `first_from <= target`. They repeat that rule at every branch,
-then choose the leaf's rightmost record whose `from <= target`; point lookup
-finally tests that record's `to`. If no qualifying entry exists in a subtree,
-predecessor search resumes at the nearest earlier nonempty sibling recorded on
-the bounded ancestor stack. Forward seek first tests that predecessor for
-containment, then advances to the first later record when needed. Cursor and
-query traversal use the exact counts to skip whole empty subtrees. Work is
-bounded by tree height times the fixed number of entries in one page; it MUST
-NOT scale with the total number of consecutive empty leaves or subtrees.
+Point lookup chooses the greatest branch `first_from` not greater than the
+target at each level, then chooses the greatest leaf `from` not greater than the
+target and tests that record's `to`. If no key qualifies, the target is absent.
+Forward and backward cursors retain only the bounded ancestor path needed to
+move to the next or previous nonempty page. No empty-subtree summaries,
+predecessor backtracking, or empty-page skipping exist.
 
 ## 7. Slotted-page convention
 
-Catalog-name pages, catalog-index leaves, and membership-ID leaves contain
-variable-length records and use this convention:
+Every ordered-index B+tree page uses this convention:
 
 - `item_count` is the slot count.
 - The slot array starts at byte 32 and contains `item_count` little-endian
   `u16` record offsets in logical key order.
 - `lower == 32 + 2 * item_count`.
-- `upper` is the smallest record offset, or 4096 when empty.
-- Each record begins with `record_len:u16` and `record_flags:u16`.
-- `record_flags` is zero unless a record layout below defines bits.
-- Records MUST be wholly within `[upper,4096)`, MUST NOT overlap, and MUST be
-  referenced exactly once.
+- `upper` is the smallest record offset.
+- Each type-specific record MUST be wholly within `[upper,4096)`, MUST NOT
+  overlap another record, and MUST be referenced by exactly one slot.
 - Every gap and every unused byte is zero.
 
-Membership-ID records explicitly specialize bytes `[2,4)` as
-`storage:u8, reserved:u8`; that layout replaces the generic `record_flags` field
-for that page type.
-
-Non-root catalog and dictionary leaves MUST be nonempty. An empty complete
-tree is represented by a zero root.
+There is no generic per-record header. Variable-length record layouts below
+define their own `record_len`; fixed-width records contain only their declared
+fields. Empty reachable pages are invalid.
 
 ## 8. Feed catalog
 
@@ -581,7 +537,7 @@ name:name_len bytes
 
 `record_len == 12 + name_len`.
 
-A name-branch record stores the exact maximum name in its nonempty child:
+A name-branch record stores the exact first name in its nonempty child:
 
 ```text
 record_len:u16
@@ -589,28 +545,26 @@ record_flags:u16 = 0
 child_pgno:u32
 name_len:u8
 reserved:3 bytes = 0
-max_name:name_len bytes
+first_name:name_len bytes
 ```
 
 `record_len == 12 + name_len`. Branch keys are strictly increasing. Lookup
-chooses the first maximum key greater than or equal to the target.
+chooses the greatest first key less than or equal to the target.
 
 ### 8.2 Numeric index
 
 The numeric tree is ordered by `feed_index`.
 Index branches have page type 5 and positive level. Index leaves have page type
-6 and level zero. Both use `aux == 0`; branches are fixed-record pages and
-leaves use the slotted-page convention.
+6 and level zero. Both use `aux == 0` and the slotted-page convention.
 
 An index-leaf record has the same layout as a name-leaf record and is ordered
-by `feed_index`. An index branch is fixed-width and contains tightly packed
-8-byte entries starting at byte 32:
+by `feed_index`. An index branch contains fixed-width 8-byte records:
 
 ```text
-max_feed_index:u32  child_pgno:u32
+first_feed_index:u32  child_pgno:u32
 ```
 
-The maximum indexes are strictly increasing and exactly match their nonempty
+The first indexes are strictly increasing and exactly match their nonempty
 children.
 
 The name and numeric trees MUST contain exactly the same pairs. Their record
@@ -646,17 +600,16 @@ zero and has no dictionary entry or stored range.
 ### 9.1 Membership-ID tree
 
 The ID tree is ordered by nonzero `membership_id`.
-ID branches have page type 7, positive level, and fixed records. ID leaves have
-page type 8, level zero, and use the slotted-page convention. Both use
-`aux == 0`.
+ID branches have page type 7 and positive level. ID leaves have page type 8 and
+level zero. Both use `aux == 0` and the slotted-page convention.
 
-An ID branch is fixed-width and has tightly packed 8-byte entries:
+An ID branch has fixed-width 8-byte records:
 
 ```text
-max_membership_id:u32  child_pgno:u32
+first_membership_id:u32  child_pgno:u32
 ```
 
-Maximum IDs are strictly increasing and exactly match their nonempty children.
+First IDs are strictly increasing and exactly match their nonempty children.
 
 An ID leaf is slotted. Its record is:
 
@@ -697,12 +650,12 @@ The hash tree is ordered by the tuple:
 Digest bytes compare unsigned lexicographically; `word_count` and
 `membership_id` then compare numerically.
 
-Hash-leaf entries are fixed 40-byte tuples in that order. Hash-branch entries
-append `child_pgno:u32` and are 44 bytes. Branch keys are the exact maximum
-tuple in each nonempty child.
+Hash-leaf records are fixed 40-byte tuples in that order. Hash-branch records
+append `child_pgno:u32` and are 44 bytes. Branch keys are the exact first tuple
+in each nonempty child.
 
 Hash branches have page type 9 and positive level. Hash leaves have page type
-10 and level zero. Both use `aux == 0` and tightly packed fixed records.
+10 and level zero. Both use `aux == 0` and the slotted-page convention.
 
 Interning computes SHA-256, searches all entries with the same digest and word
 count, and compares the complete canonical bitmap bytes. A digest collision
@@ -1047,7 +1000,7 @@ The retirement tree is ordered by unique `retired_by_txn` values.
 A retirement branch has type 16 and fixed 16-byte entries:
 
 ```text
-max_retired_by_txn:u64  child_pgno:u32  reserved:u32=0
+first_retired_by_txn:u64  child_pgno:u32  reserved:u32=0
 ```
 
 A retirement leaf has type 17 and fixed 32-byte entries:
@@ -1071,11 +1024,10 @@ the checked blob length is exactly `4 * page_count`, and
 stored.
 
 Retirement branches have positive level, retirement leaves have level zero,
-and both use `aux == 0` and tightly packed fixed records.
-Branch keys are strictly increasing, equal the exact maximum transaction in
+and both use `aux == 0` and the slotted-page convention.
+Branch keys are strictly increasing, equal the exact first transaction in
 their nonempty children, and every child level is exactly one below its parent.
-Retirement branches and non-root leaves are nonempty; an empty complete tree is
-root zero.
+An empty complete tree is root zero.
 
 `retired_by_txn == T` means transaction T made the pages unreachable. The batch
 is safe to reclaim when no active reader has a transaction below T. An active
@@ -3711,24 +3663,18 @@ BLOB_INVALID
 METADATA_INVALID
 ```
 
-Conservative address-fence trust is deterministic. A range-branch entry may
-bound an unreadable or invalid descendant only when every page from the
-recovery-selected root through that entry has a valid normalized CRC, expected
-type/level, valid local layout, and a unique checked path. The entry must have
-nonzero count and locally valid `first_from <= last_from <= last_to`; its
-inclusive `[first_from,last_to]` envelope then participates in
-`bounded_possible_span_addresses`. A valid zero-count entry contributes no
-address envelope. If the nearest such entry is unavailable or locally invalid,
-the failure sets `has_unbounded_unknown`. Bytes from the failed child itself,
-including record endpoints on a checksum-failed leaf, are never promoted to a
-trusted fence. A CRC-valid range record with valid endpoints that is rejected
-only for a known cross-record, catalog, or membership conflict contributes its
-interval to `rejected_addresses` instead.
+Range branch separators contain only the exact first `from` key of each child;
+they deliberately carry no address-coverage summary. An unreadable or invalid
+range descendant therefore sets `has_unbounded_unknown`. Bytes from the failed
+child itself, including record endpoints on a checksum-failed leaf, are never
+promoted to a trusted fence. A CRC-valid range record with valid endpoints that
+is rejected only for a known cross-record, catalog, or membership conflict
+contributes its interval to `rejected_addresses` instead.
 
 Unknown coverage without trustworthy conservative bounds sets
 `has_unbounded_unknown`; it MUST NOT be assigned a guessed cardinality.
-Parent lower fences alone are never enough to infer affected address
-cardinality because a predecessor range may cross a later fence. Cardinality
+Parent branch keys alone are never enough to infer affected address cardinality
+because a predecessor range may cross a later key. Cardinality
 unions MUST avoid double counting overlapping rejected records or possible-span
 envelopes.
 

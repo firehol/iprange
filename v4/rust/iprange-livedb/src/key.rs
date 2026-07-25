@@ -7,36 +7,15 @@ use crate::contract::AddressFamily;
 
 /// Common private interface over the two key widths, so physical algorithms are
 /// written once and width-specialized at compile time.
-#[allow(dead_code)] // Mutation/CIDR layers use the remaining key operations in later chunks.
 pub(crate) trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// Key width in bytes (4 or 16).
     const WIDTH: usize;
     /// The IP family.
     const FAMILY: AddressFamily;
-    /// The minimum address (`0.0.0.0` / `::`).
-    const MIN: Self;
-    /// The maximum address (all-ones).
-    const MAX: Self;
-
-    /// Serialize the key little-endian into the first [`WIDTH`](Self::WIDTH) bytes of
-    /// `out`. Panics if `out` is shorter than `WIDTH`.
-    fn write_le(self, out: &mut [u8]);
 
     /// Deserialize a key from the first [`WIDTH`](Self::WIDTH) bytes of `src`. Panics
     /// if `src` is shorter than `WIDTH`.
     fn read_le(src: &[u8]) -> Self;
-
-    /// right-trim at `to + 1` after the family-boundary pre-check.
-    /// `self + 1`, or `None` at the family maximum.
-    /// right-trim at `to + 1` after the family-boundary pre-check.
-    fn checked_inc(self) -> Option<Self>;
-
-    /// `self - 1`, or `None` at the family minimum.
-    fn checked_dec(self) -> Option<Self>;
-
-    /// Widen the key to `u128` for exact cardinality arithmetic outside the hot
-    /// comparison path.
-    fn to_u128(self) -> u128;
 }
 
 /// An IPv4 address as a big-endian-valued `u32` (e.g. `192.0.2.1` = `0xC000_0201`),
@@ -68,32 +47,10 @@ impl Ipv4Key {
 impl IpKey for Ipv4Key {
     const WIDTH: usize = 4;
     const FAMILY: AddressFamily = AddressFamily::Ipv4;
-    const MIN: Self = Self::MIN;
-    const MAX: Self = Self::MAX;
-
-    #[inline]
-    fn write_le(self, out: &mut [u8]) {
-        out[..4].copy_from_slice(&self.0.to_le_bytes());
-    }
 
     #[inline]
     fn read_le(src: &[u8]) -> Self {
         Ipv4Key(u32::from_le_bytes([src[0], src[1], src[2], src[3]]))
-    }
-
-    #[inline]
-    fn checked_inc(self) -> Option<Self> {
-        self.checked_next()
-    }
-
-    #[inline]
-    fn checked_dec(self) -> Option<Self> {
-        self.checked_previous()
-    }
-
-    #[inline]
-    fn to_u128(self) -> u128 {
-        self.0 as u128
     }
 }
 
@@ -168,14 +125,6 @@ impl Ipv6Key {
 impl IpKey for Ipv6Key {
     const WIDTH: usize = 16;
     const FAMILY: AddressFamily = AddressFamily::Ipv6;
-    const MIN: Self = Self::MIN;
-    const MAX: Self = Self::MAX;
-
-    #[inline]
-    fn write_le(self, out: &mut [u8]) {
-        out[..8].copy_from_slice(&self.lo.to_le_bytes());
-        out[8..16].copy_from_slice(&self.hi.to_le_bytes());
-    }
 
     #[inline]
     fn read_le(src: &[u8]) -> Self {
@@ -187,21 +136,6 @@ impl IpKey for Ipv6Key {
             hi: u64::from_le_bytes(h),
             lo: u64::from_le_bytes(l),
         }
-    }
-
-    #[inline]
-    fn checked_inc(self) -> Option<Self> {
-        self.checked_next()
-    }
-
-    #[inline]
-    fn checked_dec(self) -> Option<Self> {
-        self.checked_previous()
-    }
-
-    #[inline]
-    fn to_u128(self) -> u128 {
-        ((self.hi as u128) << 64) | (self.lo as u128)
     }
 }
 
@@ -217,7 +151,8 @@ mod tests {
             lo: 0x1,
         };
         let mut buf = [0u8; 16];
-        k.write_le(&mut buf);
+        buf[..8].copy_from_slice(&k.lo.to_le_bytes());
+        buf[8..].copy_from_slice(&k.hi.to_le_bytes());
         let expected: [u8; 16] = [
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // lo, little-endian
             0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
@@ -234,8 +169,7 @@ mod tests {
     fn ipv4_worked_example_192_0_2_1() {
         // 192.0.2.1 = 0xC000_0201 -> LE bytes 01 02 00 c0.
         let k = Ipv4Key(0xC000_0201);
-        let mut buf = [0u8; 4];
-        k.write_le(&mut buf);
+        let buf = k.0.to_le_bytes();
         assert_eq!(buf, [0x01, 0x02, 0x00, 0xc0]);
         assert_eq!(Ipv4Key::read_le(&buf), k);
     }
@@ -258,35 +192,35 @@ mod tests {
                 hi: 5,
                 lo: u64::MAX
             }
-            .checked_inc(),
+            .checked_next(),
             Some(Ipv6Key { hi: 6, lo: 0 }),
             "carry from lo into hi"
         );
         assert_eq!(
-            Ipv6Key { hi: 0, lo: 41 }.checked_inc(),
+            Ipv6Key { hi: 0, lo: 41 }.checked_next(),
             Some(Ipv6Key { hi: 0, lo: 42 })
         );
-        assert_eq!(Ipv6Key::MAX.checked_inc(), None, "no +1 at family_max");
+        assert_eq!(Ipv6Key::MAX.checked_next(), None, "no +1 at family_max");
     }
 
     #[test]
     fn checked_dec_v6_borrow_and_min() {
         assert_eq!(
-            Ipv6Key { hi: 6, lo: 0 }.checked_dec(),
+            Ipv6Key { hi: 6, lo: 0 }.checked_previous(),
             Some(Ipv6Key {
                 hi: 5,
                 lo: u64::MAX
             }),
             "borrow from hi into lo"
         );
-        assert_eq!(Ipv6Key::MIN.checked_dec(), None, "no -1 at family_min");
+        assert_eq!(Ipv6Key::MIN.checked_previous(), None, "no -1 at family_min");
     }
 
     #[test]
     fn checked_inc_dec_v4_bounds() {
-        assert_eq!(Ipv4Key(41).checked_inc(), Some(Ipv4Key(42)));
-        assert_eq!(Ipv4Key::MAX.checked_inc(), None);
-        assert_eq!(Ipv4Key(42).checked_dec(), Some(Ipv4Key(41)));
-        assert_eq!(Ipv4Key::MIN.checked_dec(), None);
+        assert_eq!(Ipv4Key(41).checked_next(), Some(Ipv4Key(42)));
+        assert_eq!(Ipv4Key::MAX.checked_next(), None);
+        assert_eq!(Ipv4Key(42).checked_previous(), Some(Ipv4Key(41)));
+        assert_eq!(Ipv4Key::MIN.checked_previous(), None);
     }
 }

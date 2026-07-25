@@ -7,8 +7,10 @@ pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_SHIFT: u8 = 12;
 pub const META_SIZE: u16 = 256;
 pub const MAX_PAGE_COUNT: u64 = 1u64 << 32;
+pub const MAX_TREE_LEVEL: u16 = 31;
 pub const MAX_METADATA_UNCOMPRESSED: u64 = 1_048_576;
 pub const META_MAGIC: [u8; 8] = *b"IPRANGE4";
+pub const PAGE_MAGIC: [u8; 4] = *b"IP4P";
 
 pub const META_CRC_OFFSET: usize = 252;
 

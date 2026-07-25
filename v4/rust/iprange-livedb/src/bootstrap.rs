@@ -190,12 +190,12 @@ fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<Me
             return Err(MetaProblem::RootBounds);
         }
     }
-    if meta.range_record_count != 0 && meta.range_root == 0 {
+    if (meta.range_record_count == 0) != (meta.range_root == 0) {
         return Err(MetaProblem::CountInvariant);
     }
     let leaf_capacity = match meta.address_family {
-        AddressFamily::Ipv4 => ((PAGE_SIZE - 32) / 12) as u64,
-        AddressFamily::Ipv6 => ((PAGE_SIZE - 32) / 36) as u64,
+        AddressFamily::Ipv4 => ((PAGE_SIZE - 32) / (12 + 2)) as u64,
+        AddressFamily::Ipv6 => ((PAGE_SIZE - 32) / (36 + 2)) as u64,
     };
     let maximum_range_records = (meta.page_count - 2)
         .checked_mul(leaf_capacity)

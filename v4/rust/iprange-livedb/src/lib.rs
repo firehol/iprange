@@ -15,8 +15,10 @@ mod crc32c;
 mod database;
 #[path = "sdk_error.rs"]
 pub mod error;
+mod file_io;
 pub mod key;
 mod path;
+mod range_tree;
 
 pub use bootstrap::MetaSelection;
 pub use cardinality::{Cardinality129, CardinalityOverflow};
@@ -24,3 +26,6 @@ pub use contract::{AddressFamily, ValueKind, ValueTag};
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use key::{Ipv4Key, Ipv6Key};
+
+#[cfg(test)]
+mod test_alloc;

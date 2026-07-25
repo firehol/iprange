@@ -14,6 +14,7 @@ pub enum ErrorCode {
     Unsupported,
     Io,
     Format,
+    Corrupt,
 }
 
 /// One SDK failure with its original cause where one exists.
@@ -25,6 +26,7 @@ pub enum Error {
     Unsupported(&'static str),
     Io(io::Error),
     Format(FormatError),
+    Corrupt(&'static str),
 }
 
 impl Error {
@@ -35,6 +37,7 @@ impl Error {
             Self::Unsupported(_) => ErrorCode::Unsupported,
             Self::Io(_) => ErrorCode::Io,
             Self::Format(_) => ErrorCode::Format,
+            Self::Corrupt(_) => ErrorCode::Corrupt,
         }
     }
 }
@@ -47,6 +50,7 @@ impl fmt::Display for Error {
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
             Self::Io(error) => write!(output, "I/O error: {error}"),
             Self::Format(error) => write!(output, "invalid v4 file: {error:?}"),
+            Self::Corrupt(detail) => write!(output, "malformed v4 page: {detail}"),
         }
     }
 }
@@ -58,7 +62,8 @@ impl std::error::Error for Error {
             Self::InvalidArgument(_)
             | Self::WrongMode(_)
             | Self::Unsupported(_)
-            | Self::Format(_) => None,
+            | Self::Format(_)
+            | Self::Corrupt(_) => None,
         }
     }
 }
