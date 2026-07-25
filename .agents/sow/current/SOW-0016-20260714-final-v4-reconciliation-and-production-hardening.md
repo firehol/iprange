@@ -10342,6 +10342,115 @@ requirements are normative in the Pre-Implementation Gate above.
   graph is 8,681 physical lines including embedded tests; every active
   production and separate test file remains at or below 490 lines.
 
+### 2026-07-25 - feed-catalog mutation foundation plan
+
+- The existing COW B+tree is the one local pattern to reuse, but it currently
+  assumes fixed-width keys and leaves. The exact feed catalog instead has
+  variable-length name records in both name-tree levels and numeric-tree
+  leaves. Adding a second tree implementation would duplicate path copying,
+  split, delete, retirement, and corruption handling.
+- Generalize the existing tree codec so each format supplies record selection,
+  key decoding, branch encoding, and maximum cell sizes. Splits remain a
+  bounded page-local pass and balance actual encoded bytes rather than record
+  counts; no heap allocation or scratch file is introduced.
+- Variable first-key replacement can grow a catalog record. The generic tree
+  will split that one private branch page when the replacement no longer fits,
+  then propagate the split through the already bounded COW path. This avoids
+  permanent slack and handles cumulative growth of different branch keys.
+- Add permanent fixed- and variable-record tree tests before using the
+  generalized tree for catalog mutation. Then add the two catalog codecs and
+  update both indexes atomically through `DraftStore`, retiring every replaced
+  committed path through the existing retirement mechanism.
+- Feed-index ownership remains internal. The public mutation surface will be
+  exposed only as one coherent transaction-bound `FeedRef` API; no temporary
+  public raw-index method will be added. A used-index bitmap and feed creation,
+  exact lookup, enumeration, and rename will be integrated before this slice is
+  called public.
+- Validation will include long names, mixed record sizes, multi-level splits,
+  first-key growth, deletion, abort, durable reopen, index agreement, lowest
+  reusable index, allocation counts, current and Rust 1.74 suites,
+  warnings-denied Clippy, formatting, complexity, diff, and SOW audit checks.
+
+### 2026-07-25 - membership interning and ownership plan
+
+- Public callers identify feeds by transaction-bound `FeedRef` values. They
+  never receive or supply feed indexes, membership IDs, raw bitmap words, or
+  precomputed combinations.
+- The SDK builds canonical membership bitmaps lazily from existing dictionary
+  entries plus requested feed changes. SHA-256 is calculated in fixed-size
+  batches, hash collisions are resolved by comparing every word, and large
+  values are written directly into the final immutable blob tree. This requires
+  neither a whole-bitmap allocation nor a sorting or spill file.
+- Every newly interned membership ID starts with refcount zero. Range-tree
+  insertion and removal record signed refcount changes in an operation-private,
+  page-backed COW tree. Commit drains this bounded-memory delta tree, applies
+  checked refcounts, and deletes zero-reference dictionary entries, reverse-hash
+  entries, used-ID bits, and blob pages before publishing metadata.
+- Operation-private delta pages are discarded, not retired. Committed
+  dictionary/blob pages replaced or removed by COW remain protected through the
+  existing reader-safe retirement path.
+- The membership-ID namespace reuses the lowest free ID. It may grow to the
+  full `u32` space and shrinks only when trailing IDs become unused; feed-index
+  capacity remains monotonic while individual holes remain reusable.
+- Permanent tests will cover duplicate interning, deliberate hash collisions,
+  inline and multi-page blobs, lowest-ID reuse, reference-count changes caused
+  by range split/coalescing, zero-reference cleanup, abort, commit/reopen,
+  corruption and arithmetic failures, bounded heap behavior, current and Rust
+  1.74 suites, warnings-denied Clippy, formatting, complexity, diff, and SOW
+  audit checks.
+
+### 2026-07-25 - advanced membership mutation implementation
+
+- Rust now exposes one explicit advanced membership transaction. Callers use
+  transaction-bound `FeedRef` and `MembershipRef` values; public methods neither
+  accept nor reveal membership IDs, feed indexes, bitmap words, or caller-built
+  combinations.
+- Feed lookup, ensure, enumeration, rename, and delete operate on both catalog
+  indexes and the sparse used-index bitmap in one private draft. Allocation
+  chooses the lowest zero bit, a committed deletion makes that bit reusable,
+  and deleting a feed removes its bit from every stored address membership
+  before removing the catalog entry.
+- The existing COW B+tree is now codec-driven for fixed and variable records.
+  It balances splits by encoded bytes and handles first-key growth without a
+  second tree implementation, whole-tree workspace, external sort, or temporary
+  file.
+- Membership construction hashes canonical words in fixed batches, compares
+  all words after a SHA-256 collision, interns equal values, stores large values
+  directly in the final unpublished blob tree, and returns only an opaque
+  transaction reference. The page-backed private delta tree aggregates exact
+  range-record refcount changes; preparation removes every zero-reference
+  dictionary/hash/used-bit/blob entry before publication.
+- `Replace`, `Union`, `Difference`, `Intersection`, and `Xor` apply per address.
+  Overlapping inputs retain call order, changed intervals split only where
+  needed, empty results disappear, and adjacent equal results coalesce. A
+  200-step randomized non-idempotent reference test checks the range rewrite
+  after every operation.
+- Automatic transaction destruction performs no I/O. Dropping the transaction
+  leaves its unpublished draft for explicit writer `Abort` or `Close`; a
+  permanent test proves that `Abort` still has work to discard. Explicit commit
+  of a builder-only logical no-op discards its unpublished pages, returns
+  `NoPendingTransaction`, and leaves the writer reusable.
+- Permanent tests cover 1,000 mixed-length feed names and multi-level catalog
+  splits; commit/reopen and abort; every membership operation; dictionary
+  deduplication; deliberate hash collision full comparison; inline and
+  multi-page blobs; exact refcounts; unused-combination cleanup; membership-ID
+  and feed-index reuse; feed deletion; stale-reference rejection before
+  mutation; full range clearing; committed blob retirement; and operation-
+  private delta cleanup.
+- The compiled active Rust graph is 13,047 physical lines excluding separate
+  test files; every active production file is below 500 lines and every function
+  added or changed in this slice is at or below cyclomatic complexity 9. The
+  graph is 78% smaller than the replaced 60,827-line implementation, but it is
+  still above the directional 5,000-line goal and above its 10,000-line warning
+  range. This is a safe functional checkpoint, not a claim that the final Rust
+  SDK is lean enough. Remaining work must keep testing whether modules can be
+  removed or shared without obscuring the format or weakening bounded behavior.
+- Current and Rust 1.74 all-feature suites each pass 133 tests with one
+  intentionally ignored subprocess entry point. Warnings-denied all-target
+  Clippy, formatting, benchmark compilation, `git diff --check`, the SOW audit,
+  and the zero-warning complexity gate over the exact compiled production graph
+  pass. Disconnected obsolete source is not included in that graph or claim.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -59,9 +59,19 @@ impl Store for MemoryStore {
     }
 }
 
-impl RangeStore for MemoryStore {
+impl crate::fixed_tree::RetiringStore for MemoryStore {
     fn retire_pages(&mut self, pages: &[u32]) -> Result<()> {
         self.retired.extend_from_slice(pages);
+        Ok(())
+    }
+}
+
+impl RangeStore for MemoryStore {
+    fn range_record_added(&mut self, _value: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn range_record_removed(&mut self, _value: u32) -> Result<()> {
         Ok(())
     }
 }
@@ -250,6 +260,53 @@ fn endpoint_arithmetic_handles_both_full_address_spaces() {
             (u128::MAX, u128::MAX, 21),
         ]
     );
+}
+
+#[test]
+fn transforms_match_scalar_state_after_each_non_idempotent_operation() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut expected = [None; 256];
+    let mut random = 0x9e37_79b9u32;
+
+    for step in 0..200 {
+        random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let first = (random & 255) as usize;
+        random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let second = (random & 255) as usize;
+        let from = first.min(second);
+        let to = first.max(second);
+        let mode = step % 4;
+        transform(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(from as u32),
+            Ipv4Key(to as u32),
+            |_, old| Ok(mapped(old, mode)),
+        )
+        .unwrap();
+        for value in &mut expected[from..=to] {
+            *value = mapped(*value, mode);
+        }
+        for (address, wanted) in expected.iter().enumerate() {
+            let actual = read_predecessor::<Ipv4Key, _>(&store, root, Ipv4Key(address as u32))
+                .unwrap()
+                .filter(|range| range.to.0 >= address as u32)
+                .map(|range| range.value);
+            assert_eq!(actual, *wanted, "step {step}, address {address}");
+        }
+    }
+}
+
+fn mapped(value: Option<u32>, mode: usize) -> Option<u32> {
+    match mode {
+        0 => value.map(|value| value ^ 3).filter(|value| *value != 0),
+        1 => Some(value.unwrap_or(0) | 4),
+        2 => value.filter(|value| *value != 7),
+        _ => value.map_or(Some(9), |_| None),
+    }
 }
 
 #[test]

@@ -28,6 +28,8 @@ mod live_lock;
 mod live_reader;
 mod live_sidecar;
 mod live_writer;
+mod membership_delta;
+mod membership_dictionary;
 mod membership_tree;
 mod membership_view;
 mod metadata;
@@ -38,10 +40,13 @@ mod range_mutation;
 mod range_tree;
 mod retirement;
 mod slotted_page;
+mod used_bitmap;
 
 pub use bootstrap::MetaSelection;
 pub use cardinality::{Cardinality129, CardinalityOverflow};
-pub use contract::{AddressFamily, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED};
+pub use contract::{
+    AddressFamily, MembershipOperation, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED,
+};
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use feed::{FeedEntry, FeedName};
@@ -49,8 +54,8 @@ pub use feed_catalog::FeedCursor;
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
-    create_live, CommitDurability, CommitResult, CreateResult, CreationState, LiveWriter,
-    ReclaimResult, TransactionBudget,
+    create_live, CommitDurability, CommitResult, CreateResult, CreationState, FeedRef, LiveWriter,
+    MembershipRef, MembershipTransaction, ReclaimResult, TransactionBudget, TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};

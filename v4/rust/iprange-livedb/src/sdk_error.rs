@@ -11,6 +11,10 @@ pub use crate::bootstrap::BootstrapError as FormatError;
 pub enum ErrorCode {
     InvalidArgument,
     NameInvalid,
+    NameExists,
+    NameNotFound,
+    StaleReference,
+    ForeignReference,
     WrongState,
     WrongMode,
     Unsupported,
@@ -19,6 +23,8 @@ pub enum ErrorCode {
     Corrupt,
     ArithmeticOverflow,
     PageSpaceExhausted,
+    FeedIndexExhausted,
+    MembershipIdExhausted,
     BudgetExceeded,
     WorkLimitTooSmall,
     BufferTooSmall,
@@ -37,6 +43,10 @@ pub enum ErrorCode {
 pub enum Error {
     InvalidArgument(&'static str),
     NameInvalid,
+    NameExists,
+    NameNotFound,
+    StaleReference,
+    ForeignReference,
     WrongState(&'static str),
     WrongMode(&'static str),
     Unsupported(&'static str),
@@ -45,6 +55,8 @@ pub enum Error {
     Corrupt(&'static str),
     ArithmeticOverflow(&'static str),
     PageSpaceExhausted,
+    FeedIndexExhausted,
+    MembershipIdExhausted,
     BudgetExceeded(&'static str),
     WorkLimitTooSmall {
         required_pages: u64,
@@ -69,6 +81,10 @@ impl Error {
         match self {
             Self::InvalidArgument(_) => ErrorCode::InvalidArgument,
             Self::NameInvalid => ErrorCode::NameInvalid,
+            Self::NameExists => ErrorCode::NameExists,
+            Self::NameNotFound => ErrorCode::NameNotFound,
+            Self::StaleReference => ErrorCode::StaleReference,
+            Self::ForeignReference => ErrorCode::ForeignReference,
             Self::WrongState(_) => ErrorCode::WrongState,
             Self::WrongMode(_) => ErrorCode::WrongMode,
             Self::Unsupported(_) => ErrorCode::Unsupported,
@@ -77,6 +93,8 @@ impl Error {
             Self::Corrupt(_) => ErrorCode::Corrupt,
             Self::ArithmeticOverflow(_) => ErrorCode::ArithmeticOverflow,
             Self::PageSpaceExhausted => ErrorCode::PageSpaceExhausted,
+            Self::FeedIndexExhausted => ErrorCode::FeedIndexExhausted,
+            Self::MembershipIdExhausted => ErrorCode::MembershipIdExhausted,
             Self::BudgetExceeded(_) => ErrorCode::BudgetExceeded,
             Self::WorkLimitTooSmall { .. } => ErrorCode::WorkLimitTooSmall,
             Self::BufferTooSmall { .. } => ErrorCode::BufferTooSmall,
@@ -100,6 +118,12 @@ impl fmt::Display for Error {
         match self {
             Self::InvalidArgument(detail) => write!(output, "invalid argument: {detail}"),
             Self::NameInvalid => output.write_str("feed name is invalid"),
+            Self::NameExists => output.write_str("feed name already exists"),
+            Self::NameNotFound => output.write_str("feed name does not exist"),
+            Self::StaleReference => output.write_str("operation reference is stale"),
+            Self::ForeignReference => {
+                output.write_str("operation reference belongs to another transaction")
+            }
             Self::WrongState(detail) => write!(output, "wrong operation state: {detail}"),
             Self::WrongMode(detail) => write!(output, "wrong database mode: {detail}"),
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
@@ -108,6 +132,8 @@ impl fmt::Display for Error {
             Self::Corrupt(detail) => write!(output, "malformed v4 page: {detail}"),
             Self::ArithmeticOverflow(detail) => write!(output, "arithmetic overflow: {detail}"),
             Self::PageSpaceExhausted => output.write_str("v4 page-number space is exhausted"),
+            Self::FeedIndexExhausted => output.write_str("feed-index space is exhausted"),
+            Self::MembershipIdExhausted => output.write_str("membership-ID space is exhausted"),
             Self::BudgetExceeded(detail) => write!(output, "resource budget exceeded: {detail}"),
             Self::WorkLimitTooSmall { required_pages } => {
                 write!(
@@ -147,6 +173,10 @@ impl std::error::Error for Error {
             Self::CleanupIncomplete { cause, .. } => Some(cause.as_ref()),
             Self::InvalidArgument(_)
             | Self::NameInvalid
+            | Self::NameExists
+            | Self::NameNotFound
+            | Self::StaleReference
+            | Self::ForeignReference
             | Self::WrongState(_)
             | Self::WrongMode(_)
             | Self::Unsupported(_)
@@ -154,6 +184,8 @@ impl std::error::Error for Error {
             | Self::Corrupt(_)
             | Self::ArithmeticOverflow(_)
             | Self::PageSpaceExhausted
+            | Self::FeedIndexExhausted
+            | Self::MembershipIdExhausted
             | Self::BudgetExceeded(_)
             | Self::WorkLimitTooSmall { .. }
             | Self::BufferTooSmall { .. }

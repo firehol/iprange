@@ -2,6 +2,7 @@
 
 mod commit;
 mod create;
+mod membership;
 mod reclaim;
 
 use std::fs::File;
@@ -19,6 +20,7 @@ use crate::metadata;
 use crate::random;
 
 pub use create::{create_live, CreateResult, CreationState};
+pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub use reclaim::ReclaimResult;
 
 /// Maximum resources retained by one writer transaction.
@@ -205,10 +207,7 @@ impl LiveWriter {
         Ok(())
     }
 
-    fn mutate(
-        &mut self,
-        operation: impl FnOnce(&mut DraftStore<'_>) -> Result<bool>,
-    ) -> Result<bool> {
+    fn mutate<T>(&mut self, operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>) -> Result<T> {
         self.require_healthy()?;
         let started = self.draft.is_none();
         if started {

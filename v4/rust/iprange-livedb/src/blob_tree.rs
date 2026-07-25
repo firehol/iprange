@@ -5,6 +5,7 @@ use std::fs::File;
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
+use crate::fixed_tree::Store;
 use crate::slotted_page::{self, Header, HEADER_SIZE};
 
 const BLOB_BRANCH: u8 = 11;
@@ -21,11 +22,70 @@ pub(crate) fn read_words(
     start: u32,
     output: &mut [u64],
 ) -> Result<()> {
+    read_words_source(&FileSource { file, meta }, root, total_words, start, output)
+}
+
+pub(crate) fn read_words_from<S: Store>(
+    store: &S,
+    root: u32,
+    total_words: u32,
+    start: u32,
+    output: &mut [u64],
+) -> Result<()> {
+    read_words_source(store, root, total_words, start, output)
+}
+
+trait Source {
+    fn selected_txn(&self) -> u64;
+    fn page_count(&self) -> u64;
+    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()>;
+}
+
+impl<S: Store> Source for S {
+    fn selected_txn(&self) -> u64 {
+        self.target_txn()
+    }
+
+    fn page_count(&self) -> u64 {
+        self.page_limit()
+    }
+
+    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+        Store::read(self, page_number, page)
+    }
+}
+
+struct FileSource<'a> {
+    file: &'a File,
+    meta: &'a MetaV4,
+}
+
+impl Source for FileSource<'_> {
+    fn selected_txn(&self) -> u64 {
+        self.meta.txn_id
+    }
+
+    fn page_count(&self) -> u64 {
+        self.meta.page_count
+    }
+
+    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+        file_io::read_page(self.file, page_number, self.meta.page_count, page)
+    }
+}
+
+fn read_words_source<S: Source>(
+    source: &S,
+    root: u32,
+    total_words: u32,
+    start: u32,
+    output: &mut [u64],
+) -> Result<()> {
     let total_bytes = u64::from(total_words) * 8;
     let mut offset = u64::from(start) * 8;
     let mut written = 0;
     while written < output.len() {
-        let leaf = find_leaf(file, meta, root, total_bytes, offset)?;
+        let leaf = find_leaf(source, root, total_bytes, offset)?;
         let local = usize::try_from(offset - leaf.offset)
             .map_err(|_| Error::ArithmeticOverflow("membership blob offset"))?;
         let available = (leaf.data_len - local) / 8;
@@ -52,7 +112,7 @@ struct Leaf {
     data_len: usize,
 }
 
-fn find_leaf(file: &File, meta: &MetaV4, root: u32, total_bytes: u64, target: u64) -> Result<Leaf> {
+fn find_leaf<S: Source>(source: &S, root: u32, total_bytes: u64, target: u64) -> Result<Leaf> {
     if target >= total_bytes {
         return Err(Error::Corrupt("membership blob request exceeds its length"));
     }
@@ -62,26 +122,26 @@ fn find_leaf(file: &File, meta: &MetaV4, root: u32, total_bytes: u64, target: u6
     let mut page = [0; PAGE_SIZE];
 
     for _ in 0..=MAX_TREE_LEVEL {
-        file_io::read_page(file, page_number, meta.page_count, &mut page)?;
+        source.read(page_number, &mut page)?;
         let level = u16_le(&page, 18);
         if level == 0 {
             return parse_leaf(
                 page,
-                meta.txn_id,
+                source.selected_txn(),
                 expected,
                 expected_offset,
                 total_bytes,
                 target,
             );
         }
-        let header = parse_branch(&page, meta.txn_id, expected)?;
-        let first = branch_record(&page, &header, 0, meta.page_count)?;
+        let header = parse_branch(&page, source.selected_txn(), expected)?;
+        let first = branch_record(&page, &header, 0, source.page_count())?;
         if first.offset != expected_offset {
             return Err(Error::Corrupt(
                 "membership blob branch starts at a wrong offset",
             ));
         }
-        let record = select_branch(&page, &header, target, meta.page_count)?;
+        let record = select_branch(&page, &header, target, source.page_count())?;
         page_number = record.child;
         expected_offset = record.offset;
         expected = Some(header.level - 1);

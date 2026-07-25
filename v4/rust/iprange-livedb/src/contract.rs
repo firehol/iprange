@@ -37,6 +37,16 @@ pub enum ValueKind {
     Membership = 2,
 }
 
+/// One per-address membership operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MembershipOperation {
+    Replace,
+    Union,
+    Difference,
+    Intersection,
+    Xor,
+}
+
 impl ValueKind {
     pub const fn from_wire(value: u8) -> Option<Self> {
         match value {

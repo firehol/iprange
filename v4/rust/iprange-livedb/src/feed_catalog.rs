@@ -9,6 +9,10 @@ use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
 use crate::file_io;
 use crate::slotted_page::{self, Header};
 
+mod mutation;
+
+pub(crate) use mutation::{delete, insert, rename};
+
 const NAME_BRANCH: u8 = 3;
 const NAME_LEAF: u8 = 4;
 const INDEX_BRANCH: u8 = 5;
@@ -283,6 +287,10 @@ fn lookup_leaf(
 
 fn decode_name_record(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> Result<NameRecord> {
     let record = slotted_page::record(page, header, index, 13, MAX_NAME_RECORD)?;
+    decode_record(record)
+}
+
+fn decode_record(record: &[u8]) -> Result<NameRecord> {
     let name_len = usize::from(record[8]);
     if usize::from(u16_le(record, 0)) != NAME_RECORD_BASE + name_len
         || u16_le(record, 2) != 0

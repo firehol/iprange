@@ -61,11 +61,11 @@ impl Codec for RetirementCodec {
     const KEY_SIZE: usize = 12;
     const LEAF_SIZE: usize = 16;
 
-    fn read_key(cell: &[u8]) -> Self::Key {
-        Key {
+    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+        Ok(Key {
             txn: u64_le(cell, 0),
             first: u32_le(cell, 8),
-        }
+        })
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {

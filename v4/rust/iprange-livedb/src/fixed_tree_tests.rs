@@ -15,8 +15,8 @@ impl Codec for U32Codec {
     const KEY_SIZE: usize = 4;
     const LEAF_SIZE: usize = 8;
 
-    fn read_key(cell: &[u8]) -> Self::Key {
-        u32_le(cell, 0)
+    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+        Ok(u32_le(cell, 0))
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
@@ -43,8 +43,8 @@ impl Codec for WideCodec {
     const KEY_SIZE: usize = 56;
     const LEAF_SIZE: usize = 64;
 
-    fn read_key(cell: &[u8]) -> Self::Key {
-        cell[..56].try_into().unwrap()
+    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+        Ok(cell[..56].try_into().unwrap())
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
@@ -57,6 +57,60 @@ impl Codec for WideCodec {
         } else {
             Err(Error::Corrupt("test leaf size is invalid"))
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct VarKey {
+    bytes: [u8; 32],
+    len: u8,
+}
+
+struct VariableCodec;
+
+impl Codec for VariableCodec {
+    type Key = VarKey;
+
+    const BRANCH_TYPE: u8 = 1;
+    const LEAF_TYPE: u8 = 2;
+    const AUX: u32 = 0;
+    const KEY_SIZE: usize = 0;
+    const LEAF_SIZE: usize = 0;
+    const MAX_BRANCH_SIZE: usize = 44;
+    const MAX_LEAF_SIZE: usize = 44;
+
+    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+        decode_variable(cell).map(|(key, _)| key)
+    }
+
+    fn write_key(_key: Self::Key, _output: &mut [u8]) {}
+
+    fn validate_leaf(cell: &[u8]) -> Result<()> {
+        decode_variable(cell).map(|_| ())
+    }
+
+    fn leaf_cell<'a>(
+        page: &'a [u8; PAGE_SIZE],
+        header: &slotted_page::Header,
+        index: usize,
+    ) -> Result<&'a [u8]> {
+        slotted_page::record(page, header, index, 13, Self::MAX_LEAF_SIZE)
+    }
+
+    fn branch_cell<'a>(
+        page: &'a [u8; PAGE_SIZE],
+        header: &slotted_page::Header,
+        index: usize,
+    ) -> Result<&'a [u8]> {
+        slotted_page::record(page, header, index, 13, Self::MAX_BRANCH_SIZE)
+    }
+
+    fn write_branch(key: Self::Key, child: u32, output: &mut [u8]) -> Result<usize> {
+        encode_variable(key, child, output)
+    }
+
+    fn read_branch_child(cell: &[u8]) -> Result<u32> {
+        decode_variable(cell).map(|(_, child)| child)
     }
 }
 
@@ -134,6 +188,81 @@ fn wide_record(key: u32) -> [u8; 64] {
     cell[..56].copy_from_slice(&wide_key(key));
     cell[56..].copy_from_slice(&(key as u64).to_le_bytes());
     cell
+}
+
+fn variable_key(key: u32) -> VarKey {
+    let name = format!("{key:05}{}", "x".repeat((key as usize * 17) % 28));
+    let mut bytes = [0; 32];
+    bytes[..name.len()].copy_from_slice(name.as_bytes());
+    VarKey {
+        bytes,
+        len: name.len() as u8,
+    }
+}
+
+fn variable_record(key: u32, value: u32) -> Vec<u8> {
+    let key = variable_key(key);
+    let mut record = vec![0; 12 + usize::from(key.len)];
+    encode_variable(key, value, &mut record).unwrap();
+    record
+}
+
+fn encode_variable(key: VarKey, value: u32, output: &mut [u8]) -> Result<usize> {
+    let len = 12 + usize::from(key.len);
+    if output.len() < len {
+        return Err(Error::InvalidArgument("variable test buffer is too small"));
+    }
+    output[..len].fill(0);
+    output[..2].copy_from_slice(&(len as u16).to_le_bytes());
+    output[4..8].copy_from_slice(&value.to_le_bytes());
+    output[8] = key.len;
+    output[12..len].copy_from_slice(&key.bytes[..usize::from(key.len)]);
+    Ok(len)
+}
+
+fn decode_variable(cell: &[u8]) -> Result<(VarKey, u32)> {
+    let len = cell.get(8).copied().map(usize::from).unwrap_or(0);
+    if !(1..=32).contains(&len)
+        || cell.len() != 12 + len
+        || u16::from_le_bytes(cell[..2].try_into().unwrap()) as usize != cell.len()
+        || cell[2..4] != [0; 2]
+        || cell[9..12] != [0; 3]
+    {
+        return Err(Error::Corrupt("variable test record is malformed"));
+    }
+    let mut bytes = [0; 32];
+    bytes[..len].copy_from_slice(&cell[12..]);
+    Ok((
+        VarKey {
+            bytes,
+            len: len as u8,
+        },
+        u32_le(cell, 4),
+    ))
+}
+
+fn variable_lookup(store: &MemoryStore, root: u32, key: VarKey) -> Result<Option<u32>> {
+    if root == 0 {
+        return Ok(None);
+    }
+    let mut page_number = root;
+    let mut page = [0; PAGE_SIZE];
+    loop {
+        store.read(page_number, &mut page)?;
+        let header = page::parse::<VariableCodec>(&page, store.target_txn, None)?;
+        let (index, exists) =
+            page::lower_bound::<VariableCodec>(&page, &header, key, header.level == 0)?;
+        if header.level == 0 {
+            return exists
+                .then(|| {
+                    let cell = VariableCodec::leaf_cell(&page, &header, index)?;
+                    decode_variable(cell).map(|(_, value)| value)
+                })
+                .transpose();
+        }
+        page_number =
+            page::branch_child::<VariableCodec>(&page, &header, index, store.page_limit())?;
+    }
 }
 
 fn lookup(store: &MemoryStore, root: u32, key: u32) -> Result<Option<u32>> {
@@ -289,4 +418,42 @@ fn branch_splits_create_and_search_a_three_level_tree() {
             .as_slice(),
         wide_record(4_999)
     );
+}
+
+#[test]
+fn variable_records_split_replace_and_delete_without_padding() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in (0..3_000).rev() {
+        insert::<VariableCodec, _>(
+            &mut store,
+            &mut root,
+            &variable_record(key, key + 1),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    for key in 0..3_000 {
+        assert_eq!(
+            variable_lookup(&store, root, variable_key(key)).unwrap(),
+            Some(key + 1)
+        );
+    }
+
+    for key in (0..3_000).step_by(3) {
+        delete::<VariableCodec, _>(
+            &mut store,
+            &mut root,
+            variable_key(key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    for key in 0..3_000 {
+        let expected = (key % 3 != 0).then_some(key + 1);
+        assert_eq!(
+            variable_lookup(&store, root, variable_key(key)).unwrap(),
+            expected
+        );
+    }
 }

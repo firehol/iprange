@@ -1,5 +1,9 @@
 //! File-backed unpublished page ownership for one COW transaction.
 
+#[path = "draft_store/catalog.rs"]
+mod catalog_ops;
+#[path = "draft_store/membership.rs"]
+mod membership_ops;
 #[path = "draft_store/metadata.rs"]
 mod metadata_ops;
 
@@ -8,10 +12,10 @@ use std::fs::File;
 use crate::contract::{u32_le, u64_le, MetaV4, MAX_PAGE_COUNT, PAGE_SHIFT, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
-use crate::fixed_tree::{RetiredPages, Store};
+use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::free_bitmap::{self, BitmapStore};
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::range_mutation::{self, RangeStore};
+use crate::range_mutation;
 use crate::retirement;
 use crate::slotted_page::put_u32;
 
@@ -34,6 +38,7 @@ pub(crate) struct Draft {
     growth_pages: u64,
     changed: bool,
     metadata_staged: bool,
+    membership_delta_root: u32,
 }
 
 impl Draft {
@@ -53,6 +58,7 @@ impl Draft {
             growth_pages: 0,
             changed: false,
             metadata_staged: false,
+            membership_delta_root: 0,
         })
     }
 
@@ -139,6 +145,7 @@ impl<'a> DraftStore<'a> {
         if !self.draft.changed {
             return Ok(());
         }
+        self.finish_membership_deltas()?;
         self.release_private_pages()?;
         self.finish_bitmap_shape()
     }
@@ -461,7 +468,7 @@ impl BitmapStore for DraftStore<'_> {
     }
 }
 
-impl RangeStore for DraftStore<'_> {
+impl RetiringStore for DraftStore<'_> {
     fn retire_pages(&mut self, pages: &[u32]) -> Result<()> {
         for &page in pages {
             self.retire_one(page)?;

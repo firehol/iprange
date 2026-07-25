@@ -20,6 +20,10 @@ impl LiveWriter {
     /// Publish all pending changes through the alternate metadata page.
     pub fn commit(&mut self) -> Result<CommitResult> {
         self.require_healthy()?;
+        if self.draft.as_ref().is_some_and(|draft| !draft.changed()) {
+            self.discard_draft()?;
+            return Err(Error::NoPendingTransaction);
+        }
         let attempt = self
             .draft
             .as_ref()

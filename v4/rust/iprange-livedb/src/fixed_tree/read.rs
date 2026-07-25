@@ -1,18 +1,17 @@
-//! Bounded fixed-tree record searches.
+//! Bounded tree-record searches.
 
 use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::slotted_page;
 
-use super::page::{branch_child, lower_bound, parse};
+use super::page::{branch_child, codec_cell, lower_bound, parse};
 use super::{Codec, Store};
 
-const MAX_LEAF_SIZE: usize = 64;
 const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
 
-/// One copied fixed-width leaf record.
+/// One copied leaf record.
 pub(crate) struct LeafBuf {
-    bytes: [u8; MAX_LEAF_SIZE],
+    bytes: [u8; PAGE_SIZE],
     len: usize,
 }
 
@@ -64,27 +63,37 @@ pub(crate) fn at_or_after<C: Codec, S: Store>(
     if root == 0 {
         return Ok(None);
     }
-    let (path, mut depth, page, header) = descend::<C, S>(store, root, key)?;
+    let (path, depth, page, header) = descend::<C, S>(store, root, key)?;
     let (index, _) = lower_bound::<C>(&page, &header, key, true)?;
     if index < header.item_count {
         return copy_leaf::<C>(&page, &header, index).map(Some);
     }
+    next_leaf::<C, S>(store, &path, depth)
+}
 
+fn next_leaf<C: Codec, S: Store>(
+    store: &S,
+    path: &[Frame; MAX_PATH],
+    mut depth: usize,
+) -> Result<Option<LeafBuf>> {
     while depth > 0 {
         depth -= 1;
-        let mut frame = path[depth];
+        let frame = path[depth];
         if frame.index + 1 >= frame.item_count {
             continue;
         }
-        frame.index += 1;
-        let mut branch = [0; PAGE_SIZE];
-        store.read(frame.page_number, &mut branch)?;
-        let branch_header = parse::<C>(&branch, store.target_txn(), Some(frame.level))?;
-        let child = branch_child::<C>(&branch, &branch_header, frame.index, store.page_limit())?;
-        let (page, header) = descend_left::<C, S>(store, child, frame.level - 1)?;
-        return copy_leaf::<C>(&page, &header, 0).map(Some);
+        return first_in_right_subtree::<C, S>(store, frame).map(Some);
     }
     Ok(None)
+}
+
+fn first_in_right_subtree<C: Codec, S: Store>(store: &S, frame: Frame) -> Result<LeafBuf> {
+    let mut branch = [0; PAGE_SIZE];
+    store.read(frame.page_number, &mut branch)?;
+    let header = parse::<C>(&branch, store.target_txn(), Some(frame.level))?;
+    let child = branch_child::<C>(&branch, &header, frame.index + 1, store.page_limit())?;
+    let (page, header) = descend_left::<C, S>(store, child, frame.level - 1)?;
+    copy_leaf::<C>(&page, &header, 0)
 }
 
 fn descend<C: Codec, S: Store>(
@@ -146,13 +155,13 @@ fn copy_leaf<C: Codec>(
     header: &slotted_page::Header,
     index: usize,
 ) -> Result<LeafBuf> {
-    let source = slotted_page::cell(page, header, index, C::LEAF_SIZE)?;
-    if source.len() > MAX_LEAF_SIZE {
-        return Err(Error::Unsupported("fixed B+tree leaf is too large"));
+    let source = codec_cell::<C>(page, header, index)?;
+    if source.len() > C::MAX_LEAF_SIZE {
+        return Err(Error::Corrupt("B+tree leaf exceeds its codec limit"));
     }
     C::validate_leaf(source)?;
     let mut output = LeafBuf {
-        bytes: [0; MAX_LEAF_SIZE],
+        bytes: [0; PAGE_SIZE],
         len: source.len(),
     };
     output.bytes[..source.len()].copy_from_slice(source);
