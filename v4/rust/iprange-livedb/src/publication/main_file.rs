@@ -45,6 +45,7 @@ pub(crate) struct RetiringMain {
     pub(crate) published: PublishedMain,
     pub(crate) reservation_unlinked: bool,
     pub(crate) directory_synced: bool,
+    pub(crate) reservation_retired_proven: bool,
 }
 
 #[derive(Debug)]
@@ -170,6 +171,7 @@ impl PublishedMain {
             published: self,
             reservation_unlinked: false,
             directory_synced: false,
+            reservation_retired_proven: false,
         };
         match retire_steps(&mut owner, &mut checkpoint) {
             Ok(()) => {
@@ -241,13 +243,14 @@ fn sync_retirement(owner: &mut RetiringMain) -> Result<(), Error> {
     Ok(())
 }
 
-fn verify_retired(owner: &RetiringMain) -> Result<(), Error> {
+fn verify_retired(owner: &mut RetiringMain) -> Result<(), Error> {
     let output = &owner.published.output;
     let destination = output.attempt.destination();
     destination.directory().verify()?;
     destination
         .directory()
         .require_absent(destination.coordination())?;
+    owner.reservation_retired_proven = true;
     output.verify_main().map_err(Error::Output)
 }
 

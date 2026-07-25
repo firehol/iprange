@@ -1,0 +1,395 @@
+use std::ffi::OsStr;
+use std::fs;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::*;
+use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::error::ErrorCode;
+use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
+use crate::key::Ipv4Key;
+use crate::publication::output::CreatedOutput;
+use crate::publication::reservation_file::ReservationDraft;
+use crate::publication::result::{CleanupState, PublicationStatus};
+use crate::test_alloc::count_thread_allocations;
+
+#[test]
+fn success_returns_exact_published_facts_and_no_residue() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let expected_attempt = output.attempt.attempt_id();
+    let expected_output = output.attempt.identity().encode();
+    let expected_length = output.byte_length;
+    let expected_digest = output.sha512;
+
+    let result = fail_if_exists(output).unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::Published);
+    assert_eq!(result.destination_content, DestinationContent::Desired);
+    assert!(result.main_namespace_may_have_been_attempted);
+    assert_eq!(result.main_access_policy, AccessPolicy::CreatorOnly);
+    assert_eq!(result.coordination_access_policy, AccessPolicy::Absent);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert!(result.cause.is_none());
+    assert_eq!(result.attempt.publication_attempt_id, expected_attempt);
+    assert_eq!(result.attempt.output_identity.bytes, expected_output);
+    assert_eq!(result.attempt.output_byte_length, expected_length);
+    assert_eq!(result.attempt.output_sha512, expected_digest);
+    assert_eq!(&*result.attempt.destination_basename, b"result.v4");
+    assert!(paths.main.exists());
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn pre_boundary_failure_returns_preparation_error_after_exact_cleanup() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let failure = fail_if_exists_with(output, |point| {
+        if point == Point::ReservationCreated {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap_err();
+
+    assert_eq!(failure.cause, Problem::injected());
+    assert_eq!(failure.cleanup_state(), CleanupState::Clean);
+    assert_eq!(
+        &*failure.private_output_basename,
+        file_name(&paths.private_output)
+    );
+    assert!(!paths.main.exists());
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn state1_failure_is_not_published_and_cleans_both_artifacts() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::State1Selected {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.destination_content, DestinationContent::Absent);
+    assert!(!result.main_namespace_may_have_been_attempted);
+    assert_eq!(result.coordination_access_policy, AccessPolicy::Absent);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(result.cause, Some(Problem::injected()));
+    assert_no_attempt_files(&paths);
+}
+
+#[test]
+fn acquired_state1_failure_retires_the_canonical_reservation() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::ReservationAcquired {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_no_attempt_files(&paths);
+}
+
+#[test]
+fn state2_failure_retains_resolver_authority_without_cleanup_residue() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::State2Selected {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::OutcomeUnknown);
+    assert_eq!(result.destination_content, DestinationContent::Unclassified);
+    assert!(result.main_namespace_may_have_been_attempted);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert!(paths.private_output.exists());
+    assert!(paths.coordination.exists());
+    assert!(!paths.main.exists());
+}
+
+#[test]
+fn main_race_after_state2_is_outcome_unknown_and_never_overwrites() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::State2Selected {
+            fs::write(&paths.main, b"racing-main").unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::OutcomeUnknown);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(fs::read(&paths.main).unwrap(), b"racing-main");
+    assert!(paths.private_output.exists());
+    assert!(paths.coordination.exists());
+}
+
+#[test]
+fn failed_shared_directory_sync_ledgers_both_unlinked_artifacts() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| match point {
+        Point::State1Selected | Point::CleanupDirectorySync => Err(Problem::injected()),
+        _ => Ok(()),
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.cleanup_state(), CleanupState::ResiduePossible);
+    assert_eq!(result.cleanup.len(), 2);
+    assert_eq!(
+        result
+            .cleanup
+            .iter()
+            .map(|artifact| artifact.kind)
+            .collect::<Vec<_>>(),
+        [
+            ArtifactKind::PrivateOutput,
+            ArtifactKind::PrivateReservation
+        ]
+    );
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+}
+
+#[test]
+fn individual_cleanup_failures_report_only_the_exact_owned_artifact() {
+    for (cleanup_point, expected_kind) in [
+        (Point::CleanupOutput, ArtifactKind::PrivateOutput),
+        (Point::CleanupReservation, ArtifactKind::PrivateReservation),
+    ] {
+        let directory = TempDirectory::new();
+        let (output, paths) = prepared_output(&directory.path);
+        let result = fail_if_exists_with(output, |point| {
+            if point == Point::State1Selected || point == cleanup_point {
+                Err(Problem::injected())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(result.cleanup.len(), 1);
+        let artifact = result.cleanup.get(0).unwrap();
+        assert_eq!(artifact.kind, expected_kind);
+        let expected_name = match expected_kind {
+            ArtifactKind::PrivateOutput => file_name(&paths.private_output),
+            ArtifactKind::PrivateReservation => file_name(&paths.private_reservation),
+        };
+        assert_eq!(&*artifact.basename, expected_name);
+    }
+}
+
+#[test]
+fn foreign_coordination_is_preserved_while_owned_artifacts_are_cleaned() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    fs::write(&paths.coordination, b"foreign").unwrap();
+
+    let result = fail_if_exists(output).unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.destination_content, DestinationContent::Absent);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(result.cause.unwrap().code, ErrorCode::NameExists);
+    assert_eq!(fs::read(&paths.coordination).unwrap(), b"foreign");
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+}
+
+#[test]
+fn existing_main_is_never_removed_or_classified_without_reading_it() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    fs::write(&paths.main, b"existing").unwrap();
+
+    let result = fail_if_exists(output).unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.destination_content, DestinationContent::Unclassified);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(fs::read(&paths.main).unwrap(), b"existing");
+    assert!(!paths.private_output.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn published_reservation_conflict_is_reported_as_cleanup_residue() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let extra = directory.path.join("extra-link");
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::DesiredProven {
+            fs::hard_link(&paths.coordination, &extra).unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::Published);
+    assert_eq!(result.destination_content, DestinationContent::Desired);
+    assert_eq!(result.cleanup_state(), CleanupState::ResiduePossible);
+    assert_eq!(result.cleanup.len(), 1);
+    assert_eq!(
+        result.cleanup.get(0).unwrap().kind,
+        ArtifactKind::PrivateReservation
+    );
+    assert!(paths.main.exists());
+    assert!(paths.coordination.exists());
+    assert!(extra.exists());
+}
+
+#[test]
+fn post_proof_failure_remains_published_and_cleanup_still_runs() {
+    let directory = TempDirectory::new();
+    let (output, paths) = prepared_output(&directory.path);
+    let result = fail_if_exists_with(output, |point| {
+        if point == Point::DesiredProven {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::Published);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(result.cause, Some(Problem::injected()));
+    assert!(paths.main.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn post_boundary_success_allocates_no_heap() {
+    let directory = TempDirectory::new();
+    let (output, _) = prepared_output(&directory.path);
+    let seed = Seed::capture(&output);
+    let reservation = ReservationDraft::create(&output)
+        .unwrap()
+        .initialize(&output)
+        .unwrap();
+
+    let (result, allocations) =
+        count_thread_allocations(|| from_private(seed, output, reservation, &mut |_| Ok(())));
+
+    assert_eq!(allocations, 0);
+    assert_eq!(result.unwrap().publication, PublicationStatus::Published);
+}
+
+fn prepared_output(directory: &Path) -> (PreparedOutput, Paths) {
+    let main = directory.join("result.v4");
+    let secured = CreatedOutput::create(&main).unwrap().secure().unwrap();
+    let (attempt, file) = secured.into_parts();
+    let private_output = named_path(directory, attempt.name());
+    let private_reservation = named_path(
+        directory,
+        &attempt
+            .destination()
+            .reservation_name(attempt.attempt_id())
+            .unwrap(),
+    );
+    let coordination = named_path(directory, attempt.destination().coordination());
+    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 3).unwrap();
+    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    (
+        output,
+        Paths {
+            main,
+            private_output,
+            private_reservation,
+            coordination,
+        },
+    )
+}
+
+fn named_path(directory: &Path, name: &crate::publication::namespace::Name) -> PathBuf {
+    directory.join(OsStr::from_bytes(name.bytes()))
+}
+
+fn file_name(path: &Path) -> &[u8] {
+    path.file_name().unwrap().as_bytes()
+}
+
+fn assert_no_attempt_files(paths: &Paths) {
+    assert!(!paths.main.exists());
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+    assert!(!paths.coordination.exists());
+}
+
+fn direct_spec() -> OutputSpec {
+    OutputSpec {
+        address_family: AddressFamily::Ipv4,
+        value_kind: ValueKind::Direct,
+        value_tag: ValueTag::RETENTION,
+        database_id: [31; 16],
+        transaction_id: 32,
+        commit_nonce: [33; 16],
+        feed_index_limit: 0,
+    }
+}
+
+fn output_budget() -> OutputBudget {
+    OutputBudget {
+        max_heap_bytes: 2 * 1024 * 1024,
+        max_output_pages: 100_000,
+    }
+}
+
+struct Paths {
+    main: PathBuf,
+    private_output: PathBuf,
+    private_reservation: PathBuf,
+    coordination: PathBuf,
+}
+
+struct TempDirectory {
+    path: PathBuf,
+}
+
+impl TempDirectory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "iprange-v4-publication-attempt-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        Self { path }
+    }
+}
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.path).unwrap();
+    }
+}

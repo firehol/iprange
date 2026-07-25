@@ -11210,6 +11210,70 @@ requirements are normative in the Pre-Implementation Gate above.
   formatting/diff checks passed. Changed production files remain at or below 423
   lines and measured function cyclomatic complexity remains at or below 8.
 
+### 2026-07-25 - structured publication result and cleanup plan
+
+- One small orchestration module will compose the already-proven output,
+  reservation, main-publication, and retirement states. It returns a factual
+  structured result after synchronized reservation state 1; failures before
+  that boundary return a preparation failure. It will not duplicate filesystem
+  or codec logic.
+- Result identity, tuple, digest, access commitment, exact destination basename,
+  and both attempt-private basenames are captured before the state-1 boundary.
+  Failure handling after that point therefore performs no name construction,
+  digest pass, graph validation, or unbounded allocation.
+- A direct fail-if-exists result has only three primary states. Before selected
+  state 2 it is `NotPublished`; from selected state 2 until exact desired proof
+  it is `OutcomeUnknown`; after desired proof it remains `Published` even if
+  reservation retirement fails. The durable reservation phase, not an
+  in-memory syscall flag, controls this classification.
+- Definitive pre-publication failure removes only the exact owned private output
+  and reservation inode. Linux cleanup accepts the reservation at its exact
+  private or canonical name, never removes a foreign replacement, synchronizes
+  the retained directory once, and proves the old descriptors have zero links.
+  `OutcomeUnknown` intentionally retains its output and reservation as resolver
+  authority and does not misreport them as cleanup failures.
+- The direct operation owns at most two cleanup artifacts, so its ledger is a
+  fixed two-entry structure rather than a generic growable framework. Each
+  unresolved entry records the exact role, directory/name/identity/security
+  facts, and typed cause. Shared directory-sync failure leaves every affected
+  entry unresolved.
+- Permanent tests will cover each ownership-state failure, clean and failed
+  pre-publication cleanup, state-2 retention, published cleanup residue, foreign
+  name preservation, exact result fields, and zero implicit validation. Crash
+  subprocess coverage and the restart resolver remain the following milestone.
+
+### 2026-07-25 - structured publication result and cleanup milestone
+
+- Implemented one fail-if-exists orchestrator over the existing ownership
+  states. Synchronized state 1 is the exact result boundary; state 2 is the
+  exact ambiguity boundary; desired-content proof is the exact `Published`
+  boundary. The durable state, not a syscall-return flag, controls the result.
+- The result records the attempted tuple, attempt and directory identities, raw
+  destination basename, output identity/length/SHA-512, reservation identity,
+  creation-security commitment, access classifications, primary publication and
+  content facts, cleanup state, and typed cause. All variable names are captured
+  before state 1.
+- Definitive pre-publication cleanup removes only exact owned output/reservation
+  inodes, handles the reservation's private/canonical rename interval, preserves
+  foreign names, synchronizes the retained directory once, and proves zero
+  links. Its ledger is exactly two fixed entries. `OutcomeUnknown` deliberately
+  retains resolver authority and reports no false cleanup residue.
+- Permanent tests cover every ownership phase, main and coordination conflicts,
+  a racing main after state 2, independent and shared cleanup failures, exact
+  result fields, Published cleanup residue, and foreign-file preservation. A
+  measured success beginning immediately after state 1 performs zero heap
+  allocations.
+- Current Rust, no-default-features, and Rust 1.74.1 suites each pass 245 tests
+  with one intentionally ignored subprocess entry point. Warnings-denied
+  all-target Clippy, benchmark compilation, formatting, diff checks, and the SOW
+  audit pass. New production files are 378 lines or smaller; the complete
+  publication production slice remains at or below 423 lines per file and
+  measured function complexity remains at or below 9.
+- The result remains private until the snapshot/recovery workflow supplies the
+  complete public operation. Crash subprocess coverage and the restart resolver
+  are next; no snapshot traversal, replacement policy, live transition, signing,
+  C ABI, or Go implementation was added.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -42,6 +42,14 @@ pub enum ErrorCode {
     LiveRecoveryCurrentGenerationUnreadable,
     RecoveryCandidateChanged,
     ForkedHandle,
+    DurabilityUnsupported,
+    PublicationUnsupported,
+    AccessPolicyUnsupported,
+    Conflict,
+    Unresolvable,
+    DirectoryIdentityMismatch,
+    DestinationNameMismatch,
+    CleanupConflict,
 }
 
 /// One SDK failure with its original cause where one exists.
