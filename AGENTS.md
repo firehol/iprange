@@ -37,6 +37,43 @@ During active work, authority is ordered as follows:
 Completed SOWs are historical records. An old `locked`, `production grade`, or
 acceptance claim does not override a later regression finding or current spec.
 
+### v4 engineering philosophy
+
+The v4 format and SDK must be surgical: simple, thin, clear, maintainable, and
+fast because of their design. Correctness and durability are required, but
+complexity is not evidence of either.
+
+- Every mechanism must map to an approved requirement, a concrete failure if it
+  is omitted, and the simplest implementation that prevents that failure.
+- Prefer the smallest coherent design over speculative flexibility. Do not keep
+  dead code, compatibility for unreleased formats, test-only production
+  machinery, or abstractions without a current caller.
+- Keep one owner for each invariant. Separate byte encoding, storage I/O, range
+  semantics, explicit validation/recovery, operating-system coordination, and
+  user workflows where those responsibilities are genuinely distinct. Do not
+  split code merely to satisfy a metric.
+- Aim for roughly 5,000 lines of production code per language implementation.
+  This is a design target, not a hard limit. A justified 6,000, 7,000, or even
+  10,000-line implementation is acceptable; unexplained growth requires
+  rethinking the design before adding more code.
+- Aim for files below roughly 500 lines. A cohesive 600, 700, or even
+  1,000-line file is acceptable when splitting it would reduce clarity.
+- Functions should normally have one purpose. Combining tightly coupled work is
+  acceptable when it is simpler and clearer. Complexity measurements are review
+  signals, not mechanical gates; helper chains and indirection created only to
+  satisfy a metric are defects.
+- Hot paths must make their costs visible: no hidden whole-file validation,
+  temporary sorting files, file-sized heap state, or per-item allocation where
+  reusable bounded workspace is sufficient. Performance claims require
+  benchmarks on representative workloads.
+- Build Rust first. Complete it, prove correctness and durability, benchmark
+  realistic `update-ipsets` workflows, and demonstrate that it materially
+  improves that architecture. Start the pure-Go port only after the user accepts
+  the Rust result; then require Go to cross-open and semantically match Rust.
+
+The governing review question is: **is this the simplest clear implementation
+of the required behavior?**
+
 ## SOW System
 
 This project uses a local Statement of Work system.

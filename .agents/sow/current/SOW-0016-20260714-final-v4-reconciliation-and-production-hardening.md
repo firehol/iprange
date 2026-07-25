@@ -120,6 +120,25 @@ the allocator/finalizer yet, so the following physical-commit slice must keep
 the Linux operation barrier held through finalization, page output, metadata
 publication, and the lease update.
 
+2026-07-25 architecture reset: the user rejected the size, structure, and
+indirection of the current implementation. Passing internal tests does not make
+an implementation suitable when it has no usable public SDK and its design has
+grown far beyond the format's intended simplicity. The existing implementation
+is evidence only; unfinished work is not an accepted milestone.
+
+The replacement follows the engineering philosophy in `AGENTS.md`: every
+mechanism must trace to an approved requirement and concrete failure; production
+code aims for roughly 5,000 lines per language, files aim for roughly 500 lines,
+and functions normally have one purpose. These are review triggers, not
+mechanical limits. Larger code is acceptable only when it is the simplest clear
+implementation.
+
+Implementation order is now binding: finish and prove Rust first, benchmark
+realistic update-ipsets workflows, and demonstrate that the Rust SDK is a major
+architectural improvement for update-ipsets. The pure-Go port must not begin
+until the user accepts the Rust result. The interrupted uncommitted normal-range
+workspace is preserved but is not a valid basis for continued implementation.
+
 ## Requirements
 
 ### Purpose
@@ -9271,6 +9290,40 @@ requirements are normative in the Pre-Implementation Gate above.
   (683 tests), Rust formatting, warnings-denied all-target/all-feature Clippy,
   and all-feature benchmark compilation. The unchanged Go surface also passes
   `go -C v4/go test ./... -count=1` and `go -C v4/go vet ./...`.
+
+### 2026-07-24 - owned lock-held normal-range backing plan
+
+- Evidence: after the new pre-lock owner, the ordinary publication proof still
+  declares the coordinator journals, live slots, bitmap planner arenas,
+  shadow slots, payload journals, proof indexes, finalization scratch, and
+  terminal journals as many fixture-local arrays
+  (`v4/rust/iprange-livedb/src/retirement_writer.rs:11006-11189`). This keeps
+  the correct path test-only and leaves its retained-memory accounting limited
+  to the coordinator view rather than the complete operation owner.
+- Add a second crate-private, fixed-capacity owner for those lock-held
+  partitions. Its explicit capacity will cover maximum terminal/live pages,
+  bitmap replacement/index slots, logical range payload pages, and
+  page-number-index pages. All derived lengths use checked arithmetic before
+  the first allocation; invalid/overflowing capacity fails before a writer
+  barrier or transaction draft exists.
+- Store every variable-sized partition in fallibly reserved vectors and reset
+  every partition to its canonical empty value before a later attempt. A
+  temporary borrowing scratch view may expose internal slices only to the
+  crate-private finalizer; it does not expose any SDK or caller-controlled
+  page/bitmap value.
+- Make the ordinary Linux integration proof obtain every former large local
+  array from this owner. It will set the fixed-point workspace's transaction
+  retained-byte charge to the complete owner size, while the coordinator still
+  uses only its exact terminal journal prefix. This proves the resource budget
+  cannot undercount hidden planner/proof/terminal memory.
+- Keep the actual operation orchestration in the proof for this slice. The
+  following slice will move that finalizer callback and its explicit
+  pre-publication abort handling behind the same owner. No public API, v4
+  byte, validation default, temporary file, or Go behavior changes here.
+- Tests will cover invalid and arithmetic-overflow capacity before allocation,
+  canonical reset across attempts, full retained-byte charging, the real Linux
+  success/failure paths using owned backing, and zero allocations after
+  workspace construction.
 
 ### 2026-07-24 - transaction abort-latch validation
 
