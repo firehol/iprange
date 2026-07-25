@@ -11691,6 +11691,58 @@ requirements are normative in the Pre-Implementation Gate above.
   checks, exact public recovery results, and publication remain subsequent
   recovery steps.
 
+### 2026-07-25 - bounded recovery-table architecture correction
+
+- The earlier table plan said catalog candidates and membership locators would
+  each use the two-file merge sorter. That cannot preserve all three approved
+  constraints together: one ownership set must remain live across every graph,
+  catalog membership must be queryable while bitmap blobs are checked, and a
+  later disordered range pass must still fit within two simultaneously retained
+  scratch files.
+- The implementation will instead pre-count only fixed-width table capacity,
+  reset that planning traversal, then perform the reporting traversal once.
+  Catalog candidates and membership locators use one bounded fixed-record store:
+  exact heap storage when it fits, otherwise one authenticated scratch file.
+- Catalog reconciliation uses fixed open-addressed name and index tables.
+  Membership locators use a fixed sequential record area plus an ID table.
+  This preserves every source-record counter, detects the same whole name,
+  index, and duplicate-ID conflicts, provides bounded direct lookups, and
+  removes sorting from a workload that only needs equality and exact-key lookup.
+- When ranges also require external ordering, their initial runs append after
+  the retained table region. The page-ownership file becomes the merge peer
+  after the source rescan. Merge resets only each file's run region, so the
+  catalog and membership prefix remains readable until output construction
+  finishes. At most one scratch attempt, two files, and four total descriptors
+  remain live.
+- This is an internal algorithm correction, not a format or public-contract
+  change. It is smaller, linear expected time rather than sort time, keeps
+  scratch proportional to counted records, and follows the approved thin/lean
+  implementation direction.
+
+### 2026-07-25 - bounded recovery-table milestone
+
+- Catalog candidates and membership locators now use exact fixed-record
+  storage: heap when the complete table fits, otherwise one authenticated
+  scratch file. Open-addressed name, feed-index, and membership-ID maps replace
+  the unbounded vectors and sorting passes.
+- A single scratch attempt owns every recovery artifact. Fixed table handles
+  share the manager's retained descriptor instead of duplicating it. When
+  ranges need external ordering, runs begin after the live table prefix and
+  alternate with the page-ownership file, preserving the two-file ceiling.
+- Permanent tests force a 1,000-feed catalog and locator spill through one
+  authorized file, prove exact recovered membership, prove partial table-file
+  cleanup on byte-budget failure, and exercise multi-pass range sorting with
+  only 128 heap bytes while retaining the table prefix.
+- Current all-feature and no-default suites each pass 300 tests, with two
+  subprocess entry points ignored. The all-feature suite also passes on Rust
+  1.74.1. Current-toolchain Windows GNU cross-compilation passes; Rust 1.74
+  Windows cross-compilation was not run because that toolchain has no Windows
+  standard-library target installed.
+- Strict all-target Clippy passes in all-feature and no-default modes.
+  Formatting passes. All changed recovery production files are below 500
+  physical lines; Lizard reports no changed function above cyclomatic
+  complexity 9 or 100 lines.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

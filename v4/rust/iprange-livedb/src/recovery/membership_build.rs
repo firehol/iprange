@@ -88,20 +88,21 @@ fn build<K: MembershipKey, S: RecoverySink>(
         ordered,
         catalog,
         memberships,
+        tables,
         metadata,
         pages,
     } = analysis;
     let mut pages = Some(pages);
-    for entry in catalog.entries() {
-        if let Err(cause) = builder.push_feed(entry.name, entry.index) {
-            let failed = failed_pages(
-                pages.take().expect("analysis retains page ownership"),
-                cause,
-            );
-            return Err(failure(builder, failed.cause, report, failed.scratch));
-        }
+    if let Err(cause) =
+        catalog.for_each(&tables, |entry| builder.push_feed(entry.name, entry.index))
+    {
+        let failed = failed_pages(
+            pages.take().expect("analysis retains page ownership"),
+            cause,
+        );
+        return Err(failure(builder, failed.cause, report, failed.scratch));
     }
-    let retained = match retained_bytes(&catalog, &memberships, &metadata) {
+    let retained = match retained_bytes(&tables, &metadata) {
         Ok(retained) => retained,
         Err(cause) => {
             let failed = failed_pages(
@@ -117,6 +118,7 @@ fn build<K: MembershipKey, S: RecoverySink>(
         budget,
         cancellation,
         memberships: &memberships,
+        tables: &tables,
     };
     let mut reporter = Reporter::resume(report, sink);
     let result = if ordered {
@@ -137,8 +139,7 @@ fn build<K: MembershipKey, S: RecoverySink>(
             pages.take().expect("analysis retains page ownership"),
         )
     };
-    drop(catalog);
-    drop(memberships);
+    drop(tables);
     let report = reporter.finish();
     let scratch = match result {
         Ok(scratch) => scratch,
@@ -176,6 +177,7 @@ struct BuildContext<'a> {
     budget: &'a RecoveryBudget,
     cancellation: &'a CancellationToken,
     memberships: &'a super::membership_index::MembershipIndex,
+    tables: &'a super::tables::Tables,
 }
 
 #[allow(clippy::result_large_err)]
@@ -192,6 +194,7 @@ fn build_ordered<K: MembershipKey, S: RecoverySink>(
             context.file,
             context.meta,
             context.memberships,
+            context.tables,
             builder,
             reporter,
             context.cancellation,
@@ -303,6 +306,7 @@ fn emit_sorted<K: MembershipKey, S: RecoverySink>(
         context.file,
         context.meta,
         context.memberships,
+        context.tables,
         builder,
         reporter,
         context.cancellation,
@@ -328,6 +332,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
         context.file,
         context.meta,
         context.memberships,
+        context.tables,
         builder,
         reporter,
         context.cancellation,
@@ -340,6 +345,10 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
             retained_heap_bytes: retained,
             readable_records,
             cancellation: context.cancellation,
+            initial_area: context
+                .tables
+                .scratch_region()
+                .map(|(slot, base)| external_sort::SortArea::new(slot, base)),
         },
         pages,
         |record| components.push(record),
@@ -378,15 +387,10 @@ fn external_failure(error: ExternalSortFailure) -> BuildFailure {
     }
 }
 
-fn retained_bytes(
-    catalog: &super::catalog::Catalog,
-    memberships: &super::membership_index::MembershipIndex,
-    metadata: &Option<Vec<u8>>,
-) -> Result<u64> {
-    catalog
+fn retained_bytes(tables: &super::tables::Tables, metadata: &Option<Vec<u8>>) -> Result<u64> {
+    tables
         .retained_bytes()
-        .checked_add(memberships.retained_bytes())
-        .and_then(|value| value.checked_add(retained_metadata_bytes(metadata)))
+        .checked_add(retained_metadata_bytes(metadata))
         .ok_or(Error::ArithmeticOverflow("recovery retained heap"))
 }
 

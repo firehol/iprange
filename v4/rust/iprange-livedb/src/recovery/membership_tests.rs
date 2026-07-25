@@ -226,6 +226,109 @@ fn damaged_blob_rejects_its_membership_and_known_range() {
     validate_clean(&paths.output);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn ordered_recovery_spills_all_tables_to_one_file() {
+    let paths = Paths::new("table-scratch");
+    let mut source = source_builder(&paths.source, 2048);
+    for index in 1..=1000 {
+        source
+            .push_feed(FeedName::new(&format!("feed-{index:04}")).unwrap(), index)
+            .unwrap();
+    }
+    let mut words = vec![0; 16];
+    words[15] = 1 << 40;
+    source
+        .push_membership_v4(Ipv4Key(0), Ipv4Key(9), &Words(words))
+        .unwrap();
+    let finished = source.finish().unwrap();
+    let meta = finished.meta;
+    drop(finished.file);
+
+    let budget = RecoveryBudget {
+        max_heap_bytes: 64 * 1024,
+        max_output_pages: 100_000,
+        max_open_files: 3,
+        max_scratch_bytes: 2 * 1024 * 1024,
+        max_scratch_files: 1,
+        scratch_directory: Some(paths.scratch.clone()),
+    };
+    let source = File::open(&paths.source).unwrap();
+    let result = construct(
+        &source,
+        meta,
+        output_builder(&paths.output, meta),
+        &budget,
+        &CancellationToken::new(),
+        &mut |_: &RecoveryUnknownEnvelope| Ok(RecoverySinkControl::Continue),
+    )
+    .unwrap();
+    drop(result.finished.file);
+
+    assert!(result.scratch.as_ref().is_some_and(|value| value.clean()));
+    assert_eq!(result.report.catalog_entries.accepted, 2000);
+    assert_eq!(fs::read_dir(&paths.scratch).unwrap().count(), 0);
+    let reader = ImmutableReader::open(&paths.output).unwrap();
+    assert_eq!(reader.info().active_feed_count, 1000);
+    assert_eq!(reader.lookup_feed("feed-0001").unwrap().unwrap().index, 1);
+    assert_eq!(
+        reader.lookup_feed("feed-1000").unwrap().unwrap().index,
+        1000
+    );
+    assert!(reader
+        .lookup_membership_v4(Ipv4Key(5))
+        .unwrap()
+        .unwrap()
+        .contains_index(1000)
+        .unwrap());
+    validate_clean(&paths.output);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn table_scratch_budget_failure_removes_its_partial_file() {
+    let paths = Paths::new("table-budget");
+    let mut source = source_builder(&paths.source, 64);
+    for index in 1..=20 {
+        source
+            .push_feed(FeedName::new(&format!("feed-{index:02}")).unwrap(), index)
+            .unwrap();
+    }
+    source
+        .push_membership_v4(Ipv4Key(0), Ipv4Key(9), &Words(vec![1 << 1]))
+        .unwrap();
+    let finished = source.finish().unwrap();
+    let meta = finished.meta;
+    drop(finished.file);
+
+    let budget = RecoveryBudget {
+        max_heap_bytes: 4096,
+        max_output_pages: 100_000,
+        max_open_files: 3,
+        max_scratch_bytes: 128,
+        max_scratch_files: 1,
+        scratch_directory: Some(paths.scratch.clone()),
+    };
+    let source = File::open(&paths.source).unwrap();
+    let failure = construct(
+        &source,
+        meta,
+        output_builder(&paths.output, meta),
+        &budget,
+        &CancellationToken::new(),
+        &mut |_: &RecoveryUnknownEnvelope| Ok(RecoverySinkControl::Continue),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure.cause,
+        Error::BudgetExceeded("recovery scratch bytes")
+    ));
+    assert!(failure.scratch.as_ref().is_some_and(|value| value.clean()));
+    assert_eq!(fs::read_dir(&paths.scratch).unwrap().count(), 0);
+    drop(failure.builder.into_file());
+}
+
 fn source_builder(path: &Path, feed_index_limit: u64) -> Builder {
     builder(
         path,

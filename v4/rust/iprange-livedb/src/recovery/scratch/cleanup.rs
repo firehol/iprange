@@ -26,7 +26,7 @@ pub(super) fn remove(
     directory: &Directory,
     owner: &Owned,
 ) -> std::result::Result<(), ScratchProblem> {
-    let file = attached_file(owner)?;
+    let file = &owner.shared.file;
     if !require_named_link(directory, owner, file)? {
         return Ok(());
     }
@@ -37,12 +37,6 @@ pub(super) fn remove(
         return Err(conflict("owned recovery scratch lost its exact name"));
     }
     require_unlinked(file)
-}
-
-fn attached_file(owner: &Owned) -> std::result::Result<&File, ScratchProblem> {
-    owner.file.as_ref().ok_or(conflict(
-        "owned recovery scratch was not returned for cleanup",
-    ))
 }
 
 fn require_named_link(

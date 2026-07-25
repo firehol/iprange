@@ -13,11 +13,13 @@ use crate::validation::{ValidationObject, ValidationReason};
 use super::direct_output::DirectKey;
 use super::membership_index::{Locator, MembershipIndex};
 use super::report::{RecoverySink, Reporter, Unknown};
+use super::tables::Tables;
 
 pub(crate) struct Components<'a, 'b, S, K> {
     file: &'a File,
     meta: MetaV4,
     memberships: &'a MembershipIndex,
+    tables: &'a Tables,
     builder: &'a mut Builder,
     reporter: &'a mut Reporter<'b, S>,
     cancellation: &'a CancellationToken,
@@ -45,6 +47,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
         file: &'a File,
         meta: MetaV4,
         memberships: &'a MembershipIndex,
+        tables: &'a Tables,
         builder: &'a mut Builder,
         reporter: &'a mut Reporter<'b, S>,
         cancellation: &'a CancellationToken,
@@ -53,6 +56,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
             file,
             meta,
             memberships,
+            tables,
             builder,
             reporter,
             cancellation,
@@ -96,7 +100,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
     }
 
     fn resolve(&mut self, record: Record<K>) -> Result<Option<Locator>> {
-        let membership = self.memberships.get(record.value);
+        let membership = self.memberships.get(self.tables, record.value)?;
         if membership.is_none() {
             self.reporter.unknown(Unknown {
                 reason: ValidationReason::MembershipMissing,

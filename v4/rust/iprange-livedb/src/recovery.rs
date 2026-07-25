@@ -6,6 +6,8 @@ mod bounded_vec;
 mod budget;
 #[allow(dead_code)]
 mod catalog;
+#[allow(dead_code)]
+mod catalog_table;
 mod classify;
 #[allow(dead_code)]
 mod direct;
@@ -27,6 +29,10 @@ mod membership_index;
 #[allow(dead_code)]
 mod membership_output;
 #[allow(dead_code)]
+mod membership_table;
+#[allow(dead_code)]
+mod membership_words;
+#[allow(dead_code)]
 mod metadata;
 #[allow(dead_code)]
 mod page_set;
@@ -39,6 +45,8 @@ mod report;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod scratch;
+#[allow(dead_code)]
+mod tables;
 #[allow(dead_code)]
 mod tree_scan;
 

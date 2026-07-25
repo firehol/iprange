@@ -1,83 +1,62 @@
 //! Reconciliation of the redundant recovery-readable feed catalogs.
 
 use std::fs::File;
-use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::feed::{FeedEntry, FeedName};
+use crate::feed::FeedName;
 use crate::feed_catalog;
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
+use super::catalog_table::Builder;
+pub(crate) use super::catalog_table::Catalog;
 use super::page_set::PageSet;
 use super::report::{RecoverySink, Reporter, Unknown};
+use super::tables::Tables;
 use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
-use super::{bounded_vec, bounded_vec::push};
 
-#[derive(Clone, Copy)]
-struct Candidate {
-    entry: FeedEntry,
-    rejected: bool,
-}
-
-pub(crate) struct Catalog {
-    entries: Vec<Candidate>,
-}
-
-impl Catalog {
-    pub(crate) fn entries(&self) -> impl Iterator<Item = FeedEntry> + '_ {
-        self.entries.iter().map(|candidate| candidate.entry)
-    }
-
-    pub(crate) fn contains(&self, index: u32) -> bool {
-        self.entries
-            .binary_search_by_key(&index, |candidate| candidate.entry.index)
-            .is_ok()
-    }
-
-    pub(crate) fn active_word(&self, word: u32) -> u64 {
-        let first = u64::from(word) * 64;
-        let end = first + 64;
-        let start = self
-            .entries
-            .partition_point(|candidate| u64::from(candidate.entry.index) < first);
-        let mut active = 0;
-        for candidate in &self.entries[start..] {
-            let index = u64::from(candidate.entry.index);
-            if index >= end {
-                break;
-            }
-            active |= 1u64 << (index - first);
-        }
-        active
-    }
-
-    pub(crate) fn retained_bytes(&self) -> u64 {
-        self.entries.capacity() as u64 * size_of::<Candidate>() as u64
-    }
+pub(crate) fn count(
+    file: &File,
+    meta: MetaV4,
+    pages: &mut PageSet,
+    cancellation: &CancellationToken,
+) -> Result<u64> {
+    let mut events = CountEvents { meta, count: 0 };
+    tree_scan::scan::<NameCodec, _>(
+        file,
+        meta,
+        meta.catalog_name_root,
+        pages,
+        cancellation,
+        &mut events,
+    )?;
+    tree_scan::scan::<IndexCodec, _>(
+        file,
+        meta,
+        meta.catalog_index_root,
+        pages,
+        cancellation,
+        &mut events,
+    )?;
+    Ok(events.count)
 }
 
 pub(crate) fn recover<S: RecoverySink>(
     file: &File,
     meta: MetaV4,
     pages: &mut PageSet,
-    max_heap_bytes: u64,
+    tables: &mut Tables,
     cancellation: &CancellationToken,
     reporter: &mut Reporter<'_, S>,
 ) -> Result<Catalog> {
-    let available = max_heap_bytes
-        .checked_sub(pages.retained_bytes())
-        .ok_or(Error::BudgetExceeded("recovery catalog candidates"))?;
-    let maximum = bounded_vec::maximum::<Candidate>(available);
-    let mut candidates = Vec::new();
+    let mut builder = Builder::new(tables);
     {
         let mut events = Events {
             meta,
             object: NameCodec::OBJECT,
             reporter,
-            candidates: &mut candidates,
-            maximum,
+            builder: &mut builder,
         };
         tree_scan::scan::<NameCodec, _>(
             file,
@@ -97,18 +76,17 @@ pub(crate) fn recover<S: RecoverySink>(
             &mut events,
         )?;
     }
-    reconcile(candidates, reporter)
+    builder.finish(reporter)
 }
 
-struct Events<'a, 'b, S> {
+struct Events<'a, 'b, 'c, S> {
     meta: MetaV4,
     object: ValidationObject,
     reporter: &'a mut Reporter<'b, S>,
-    candidates: &'a mut Vec<Candidate>,
-    maximum: usize,
+    builder: &'a mut Builder<'c>,
 }
 
-impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
+impl<S: RecoverySink> TreeEvents for Events<'_, '_, '_, S> {
     fn page_accepted(&mut self) -> Result<()> {
         self.reporter.page_accepted()
     }
@@ -140,102 +118,45 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
                 Some(page),
             );
         }
-        push(
-            self.candidates,
-            Candidate {
-                entry,
-                rejected: false,
-            },
-            self.maximum,
-            "recovery catalog candidates",
-        )
+        self.builder.push(entry, self.reporter)
     }
 }
 
-fn reconcile<S: RecoverySink>(
-    mut candidates: Vec<Candidate>,
-    reporter: &mut Reporter<'_, S>,
-) -> Result<Catalog> {
-    candidates.sort_unstable_by(|left, right| {
-        (left.entry.name, left.entry.index).cmp(&(right.entry.name, right.entry.index))
-    });
-    mark_name_conflicts(&mut candidates, reporter)?;
-    candidates.sort_unstable_by(|left, right| {
-        (left.entry.index, left.entry.name).cmp(&(right.entry.index, right.entry.name))
-    });
-    mark_index_conflicts(&mut candidates, reporter)?;
-    let rejected = candidates
-        .iter()
-        .filter(|candidate| candidate.rejected)
-        .count() as u64;
-    let accepted = candidates.len() as u64 - rejected;
-    reporter.catalog_rejected(rejected)?;
-    reporter.catalog_accepted(accepted)?;
-    candidates.retain(|candidate| !candidate.rejected);
-    candidates.dedup_by_key(|candidate| (candidate.entry.index, candidate.entry.name));
-    candidates.shrink_to_fit();
-    Ok(Catalog {
-        entries: candidates,
-    })
+struct CountEvents {
+    meta: MetaV4,
+    count: u64,
 }
 
-fn mark_name_conflicts<S: RecoverySink>(
-    candidates: &mut [Candidate],
-    reporter: &mut Reporter<'_, S>,
-) -> Result<()> {
-    let mut start = 0;
-    while start < candidates.len() {
-        let mut end = start + 1;
-        while end < candidates.len() && candidates[end].entry.name == candidates[start].entry.name {
-            end += 1;
-        }
-        if candidates[start..end]
-            .windows(2)
-            .any(|pair| pair[0].entry.index != pair[1].entry.index)
-        {
-            for candidate in &mut candidates[start..end] {
-                candidate.rejected = true;
-            }
-            emit(
-                reporter,
-                ValidationReason::CatalogInvalid,
-                ValidationObject::CatalogNameTree,
-                None,
-            )?;
-        }
-        start = end;
+impl TreeEvents for CountEvents {
+    fn page_accepted(&mut self) -> Result<()> {
+        Ok(())
     }
-    Ok(())
-}
 
-fn mark_index_conflicts<S: RecoverySink>(
-    candidates: &mut [Candidate],
-    reporter: &mut Reporter<'_, S>,
-) -> Result<()> {
-    let mut start = 0;
-    while start < candidates.len() {
-        let mut end = start + 1;
-        while end < candidates.len() && candidates[end].entry.index == candidates[start].entry.index
-        {
-            end += 1;
-        }
-        if candidates[start..end]
-            .windows(2)
-            .any(|pair| pair[0].entry.name != pair[1].entry.name)
-        {
-            for candidate in &mut candidates[start..end] {
-                candidate.rejected = true;
-            }
-            emit(
-                reporter,
-                ValidationReason::CatalogInvalid,
-                ValidationObject::CatalogIndexTree,
-                None,
-            )?;
-        }
-        start = end;
+    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
+        Ok(())
     }
-    Ok(())
+
+    fn unknown(
+        &mut self,
+        _reason: ValidationReason,
+        _object: ValidationObject,
+        _page: Option<u32>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn leaf(&mut self, _page: u32, _index: usize, cell: Option<&[u8]>) -> Result<()> {
+        let Some(entry) = cell.and_then(|cell| feed_catalog::decode_entry(cell).ok()) else {
+            return Ok(());
+        };
+        if u64::from(entry.index) < self.meta.feed_index_limit {
+            self.count = self
+                .count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow("recovery catalog count"))?;
+        }
+        Ok(())
+    }
 }
 
 struct NameCodec;
@@ -295,7 +216,7 @@ impl Codec for IndexCodec {
     }
 }
 
-fn emit<S: RecoverySink>(
+pub(crate) fn emit<S: RecoverySink>(
     reporter: &mut Reporter<'_, S>,
     reason: ValidationReason,
     object: ValidationObject,

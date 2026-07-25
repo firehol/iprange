@@ -2,6 +2,8 @@
 
 use std::fs::File;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::contract::MetaV4;
 use crate::error::{Error, ErrorCode, Result};
@@ -82,11 +84,15 @@ pub(crate) struct Scratch {
 }
 
 struct Owned {
-    file: Option<File>,
+    shared: Arc<SharedFile>,
     name: Name,
     identity: Identity,
     ordinal: u32,
-    length: u64,
+}
+
+struct SharedFile {
+    file: File,
+    length: AtomicU64,
 }
 
 impl Scratch {
@@ -134,7 +140,7 @@ impl Scratch {
         self.install(slot, ordinal)?;
         let header = header(self.source, self.attempt_id, ordinal, self.profile);
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
-        let file = owned.file.as_ref().expect("new scratch file is attached");
+        let file = &owned.shared.file;
         security::secure_creator_only(file, self.profile).map_err(namespace_error)?;
         file_io::write_exact_at(file, &header, 0)?;
         Ok(ScratchSlot(slot))
@@ -147,6 +153,10 @@ impl Scratch {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn remaining_bytes(&self) -> u64 {
+        self.max_bytes - self.retained_bytes
     }
 
     fn free_slot(&self) -> Result<usize> {
@@ -176,18 +186,20 @@ impl Scratch {
         let identity =
             regular_identity(&file, self.directory.identity().device).map_err(namespace_error)?;
         self.owned[slot] = Some(Owned {
-            file: Some(file),
+            shared: Arc::new(SharedFile {
+                file,
+                length: AtomicU64::new(HEADER_SIZE),
+            }),
             name,
             identity,
             ordinal,
-            length: HEADER_SIZE,
         });
         self.retained_bytes += HEADER_SIZE;
         Ok(())
     }
 
     pub(crate) fn length(&self, slot: ScratchSlot) -> u64 {
-        self.owner(slot).length
+        self.owner(slot).shared.length.load(Ordering::Relaxed)
     }
 
     pub(crate) fn write(&mut self, slot: ScratchSlot, offset: u64, bytes: &[u8]) -> Result<()> {
@@ -199,10 +211,10 @@ impl Scratch {
         let end = offset
             .checked_add(bytes.len() as u64)
             .ok_or(Error::ArithmeticOverflow("recovery scratch write"))?;
-        let old = self.owner(slot).length;
+        let old = self.length(slot);
         let new = old.max(end);
         self.require_growth(old, new)?;
-        self.owner_mut(slot).length = new;
+        self.owner(slot).shared.length.store(new, Ordering::Relaxed);
         self.retained_bytes = self.retained_bytes - old + new;
         file_io::write_exact_at(self.file(slot), bytes, offset)
     }
@@ -211,7 +223,7 @@ impl Scratch {
         let end = offset
             .checked_add(bytes.len() as u64)
             .ok_or(Error::ArithmeticOverflow("recovery scratch read"))?;
-        if offset < HEADER_SIZE || end > self.owner(slot).length {
+        if offset < HEADER_SIZE || end > self.length(slot) {
             return Err(Error::Corrupt("scratch read exceeds its retained length"));
         }
         file_io::read_exact_at(self.file(slot), bytes, offset)
@@ -227,34 +239,31 @@ impl Scratch {
                 "scratch length cannot exclude its ownership header",
             ));
         }
-        let old = self.owner(slot).length;
+        let old = self.length(slot);
         self.require_growth(old, length)?;
         self.file(slot).set_len(length)?;
-        self.owner_mut(slot).length = length;
+        self.owner(slot)
+            .shared
+            .length
+            .store(length, Ordering::Relaxed);
         self.retained_bytes = self.retained_bytes - old + length;
         Ok(())
     }
 
     pub(crate) fn detach(&mut self, slot: ScratchSlot) -> Result<ScratchFile> {
-        let owner = self.owner_mut(slot);
-        let file = owner
-            .file
-            .take()
-            .ok_or(Error::WrongState("scratch file is already detached"))?;
+        let owner = self.owner(slot);
         Ok(ScratchFile {
             slot,
-            file,
-            length: owner.length,
+            shared: Arc::clone(&owner.shared),
         })
     }
 
     pub(crate) fn attach(&mut self, detached: ScratchFile) -> ScratchSlot {
-        let owner = self.owner_mut(detached.slot);
+        let owner = self.owner(detached.slot);
         assert!(
-            owner.file.is_none() && owner.length == detached.length,
+            Arc::ptr_eq(&owner.shared, &detached.shared),
             "detached scratch ownership changed"
         );
-        owner.file = Some(detached.file);
         detached.slot
     }
 
@@ -334,18 +343,8 @@ impl Scratch {
             .expect("scratch slot is owned")
     }
 
-    fn owner_mut(&mut self, slot: ScratchSlot) -> &mut Owned {
-        self.owned
-            .get_mut(slot.0)
-            .and_then(Option::as_mut)
-            .expect("scratch slot is owned")
-    }
-
     fn file(&self, slot: ScratchSlot) -> &File {
-        self.owner(slot)
-            .file
-            .as_ref()
-            .expect("scratch file is attached")
+        &self.owner(slot).shared.file
     }
 
     fn require_growth(&self, old: u64, new: u64) -> Result<()> {

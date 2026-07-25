@@ -32,6 +32,19 @@ pub(crate) struct SortRequest<'a> {
     pub(crate) retained_heap_bytes: u64,
     pub(crate) readable_records: u64,
     pub(crate) cancellation: &'a CancellationToken,
+    pub(crate) initial_area: Option<SortArea>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SortArea {
+    slot: ScratchSlot,
+    base: u64,
+}
+
+impl SortArea {
+    pub(crate) fn new(slot: ScratchSlot, base: u64) -> Self {
+        Self { slot, base }
+    }
 }
 
 // Exact scratch ownership must remain in the error without a failure-path box.
@@ -61,7 +74,7 @@ pub(crate) fn sort_and_emit<K: DirectKey>(
         let _ = pages.release(&mut scratch);
         return finish(scratch, Err(cause));
     }
-    let first = match scratch.create() {
+    let first = match first_area(&mut scratch, request.initial_area) {
         Ok(first) => first,
         Err(cause) => {
             let _ = pages.release(&mut scratch);
@@ -91,6 +104,15 @@ pub(crate) fn sort_and_emit<K: DirectKey>(
         )
     });
     finish(scratch, result)
+}
+
+fn first_area(scratch: &mut Scratch, initial: Option<SortArea>) -> Result<SortArea> {
+    let area = match initial {
+        Some(area) => area,
+        None => SortArea::new(scratch.create()?, 128),
+    };
+    scratch.resize(area.slot, area.base)?;
+    Ok(area)
 }
 
 fn prepare_records<K: IpKey>(
@@ -127,7 +149,7 @@ fn scan_runs<K: DirectKey>(
     meta: MetaV4,
     pages: &mut PageSet,
     records: &mut Vec<Record<K>>,
-    first: ScratchSlot,
+    first: SortArea,
     readable_records: u64,
     cancellation: &CancellationToken,
     scratch: &mut Scratch,
@@ -169,16 +191,16 @@ fn sort_runs_and_emit<K: DirectKey>(
 
 #[derive(Clone, Copy)]
 struct Runs {
-    slot: ScratchSlot,
+    area: SortArea,
     end: u64,
     count: u64,
 }
 
 impl Runs {
-    fn new(slot: ScratchSlot) -> Self {
+    fn new(area: SortArea) -> Self {
         Self {
-            slot,
-            end: 128,
+            area,
+            end: area.base,
             count: 0,
         }
     }
@@ -192,7 +214,7 @@ impl Runs {
             return Ok(());
         }
         records.sort_unstable_by(record_order);
-        self.end = write_run(scratch, self.slot, self.end, records)?;
+        self.end = write_run(scratch, self.area.slot, self.end, records)?;
         self.count = self
             .count
             .checked_add(1)
@@ -258,42 +280,39 @@ fn merge_all<K: DirectKey>(
     mut input: Runs,
     reusable: Option<ScratchSlot>,
     cancellation: &CancellationToken,
-) -> Result<ScratchSlot> {
+) -> Result<SortArea> {
     if input.count <= 1 {
-        return Ok(input.slot);
+        return Ok(input.area);
     }
     let mut output = match reusable {
-        Some(slot) => {
-            scratch.reset(slot)?;
-            slot
-        }
-        None => scratch.create()?,
+        Some(slot) => SortArea::new(slot, 128),
+        None => SortArea::new(scratch.create()?, 128),
     };
     while input.count > 1 {
-        scratch.reset(output)?;
+        scratch.resize(output.slot, output.base)?;
         let merged = merge_pass::<K>(scratch, input, output, cancellation)?;
-        output = input.slot;
+        output = input.area;
         input = merged;
     }
-    Ok(input.slot)
+    Ok(input.area)
 }
 
 fn merge_pass<K: DirectKey>(
     scratch: &mut Scratch,
     input: Runs,
-    output: ScratchSlot,
+    output: SortArea,
     cancellation: &CancellationToken,
 ) -> Result<Runs> {
-    let mut source_at = 128;
-    let mut destination_at = 128;
+    let mut source_at = input.area.base;
+    let mut destination_at = output.base;
     let mut remaining_runs = input.count;
     let mut output_runs = 0;
     while remaining_runs != 0 {
         cancellation.check()?;
-        let left = read_run::<K>(scratch, input.slot, source_at)?;
+        let left = read_run::<K>(scratch, input.area.slot, source_at)?;
         source_at = left.end;
         let right = if remaining_runs > 1 {
-            let run = read_run::<K>(scratch, input.slot, source_at)?;
+            let run = read_run::<K>(scratch, input.area.slot, source_at)?;
             source_at = run.end;
             Some(run)
         } else {
@@ -301,8 +320,8 @@ fn merge_pass<K: DirectKey>(
         };
         destination_at = merge_runs::<K>(
             scratch,
-            input.slot,
-            output,
+            input.area.slot,
+            output.slot,
             destination_at,
             left,
             right,
@@ -311,11 +330,11 @@ fn merge_pass<K: DirectKey>(
         remaining_runs -= if right.is_some() { 2 } else { 1 };
         output_runs += 1;
     }
-    if source_at != scratch.length(input.slot) {
+    if source_at != scratch.length(input.area.slot) {
         return Err(Error::Corrupt("scratch run framing has trailing bytes"));
     }
     Ok(Runs {
-        slot: output,
+        area: output,
         end: destination_at,
         count: output_runs,
     })
@@ -323,16 +342,16 @@ fn merge_pass<K: DirectKey>(
 
 fn emit_sorted<K: DirectKey>(
     scratch: &Scratch,
-    slot: ScratchSlot,
+    area: SortArea,
     expected: u64,
     cancellation: &CancellationToken,
     emit: &mut impl FnMut(Record<K>) -> Result<()>,
 ) -> Result<()> {
-    let run = read_run::<K>(scratch, slot, 128)?;
-    if run.count != expected || run.end != scratch.length(slot) {
+    let run = read_run::<K>(scratch, area.slot, area.base)?;
+    if run.count != expected || run.end != scratch.length(area.slot) {
         return Err(Error::Corrupt("final recovery scratch run is incomplete"));
     }
-    let mut reader = RunReader::<K>::new(slot, run);
+    let mut reader = RunReader::<K>::new(area.slot, run);
     while let Some(record) = reader.next(scratch)? {
         cancellation.check()?;
         emit(record)?;

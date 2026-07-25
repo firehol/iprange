@@ -1,56 +1,52 @@
 //! Recovery of authoritative membership-ID records and bitmap bytes.
 
 use std::fs::File;
-use std::mem::size_of;
 
 use sha2::{Digest, Sha256};
 
-use crate::blob_tree;
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
-use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::file_io;
-use crate::immutable_output::MembershipWords;
 use crate::membership_dictionary::codec::{self, Record as StoredRecord, Storage as StoredStorage};
-use crate::slotted_page;
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
-use super::bounded_vec;
 use super::catalog::Catalog;
 use super::membership_blob;
+use super::membership_table::Insert;
+pub(crate) use super::membership_table::MembershipIndex;
+use super::membership_words::read_inline;
 use super::page_set::PageSet;
 use super::report::{RecoverySink, Reporter, Unknown};
+use super::tables::Tables;
 use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
-
-const WORD_BUFFER: usize = 64;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Locator {
     pub(crate) id: u32,
     pub(crate) word_count: u32,
     pub(crate) digest: [u8; 32],
-    leaf_page: u32,
-    leaf_index: u16,
-    storage: StoredStorage,
-    rejected: bool,
+    pub(crate) leaf_page: u32,
+    pub(crate) leaf_index: u16,
+    pub(crate) storage: StoredStorage,
+    pub(crate) rejected: bool,
 }
 
-pub(crate) struct MembershipIndex {
-    entries: Vec<Locator>,
-}
-
-impl MembershipIndex {
-    pub(crate) fn get(&self, id: u32) -> Option<Locator> {
-        self.entries
-            .binary_search_by_key(&id, |entry| entry.id)
-            .ok()
-            .map(|index| self.entries[index])
-    }
-
-    pub(crate) fn retained_bytes(&self) -> u64 {
-        self.entries.capacity() as u64 * size_of::<Locator>() as u64
-    }
+pub(crate) fn count(
+    file: &File,
+    meta: MetaV4,
+    pages: &mut PageSet,
+    cancellation: &CancellationToken,
+) -> Result<u64> {
+    let mut events = CountEvents { meta, count: 0 };
+    tree_scan::scan::<IdCodec, _>(
+        file,
+        meta,
+        meta.membership_id_root,
+        pages,
+        cancellation,
+        &mut events,
+    )?;
+    Ok(events.count)
 }
 
 pub(crate) fn recover<S: RecoverySink>(
@@ -58,25 +54,17 @@ pub(crate) fn recover<S: RecoverySink>(
     meta: MetaV4,
     catalog: &Catalog,
     pages: &mut PageSet,
-    max_heap_bytes: u64,
+    tables: &mut Tables,
     cancellation: &CancellationToken,
     reporter: &mut Reporter<'_, S>,
 ) -> Result<MembershipIndex> {
-    let retained = pages
-        .retained_bytes()
-        .checked_add(catalog.retained_bytes())
-        .ok_or(Error::ArithmeticOverflow("recovery membership heap"))?;
-    let available = max_heap_bytes
-        .checked_sub(retained)
-        .ok_or(Error::BudgetExceeded("recovery membership table"))?;
-    let maximum = bounded_vec::maximum::<Locator>(available);
-    let mut entries = Vec::new();
+    let mut entries = MembershipIndex::new(tables);
     {
         let mut events = Events {
             meta,
             reporter,
             entries: &mut entries,
-            maximum,
+            tables,
         };
         tree_scan::scan::<IdCodec, _>(
             file,
@@ -87,23 +75,24 @@ pub(crate) fn recover<S: RecoverySink>(
             &mut events,
         )?;
     }
-    validate_entries(
+    Validation {
         file,
         meta,
         catalog,
         pages,
+        tables,
         cancellation,
         reporter,
-        &mut entries,
-    )?;
-    reconcile(entries, reporter)
+    }
+    .entries(&entries)?;
+    finish(entries, tables, reporter)
 }
 
 struct Events<'a, 'b, S> {
     meta: MetaV4,
     reporter: &'a mut Reporter<'b, S>,
-    entries: &'a mut Vec<Locator>,
-    maximum: usize,
+    entries: &'a mut MembershipIndex,
+    tables: &'a mut Tables,
 }
 
 impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
@@ -140,8 +129,8 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
         }
         let leaf_index = u16::try_from(index)
             .map_err(|_| Error::Corrupt("membership leaf index exceeds its page"))?;
-        bounded_vec::push(
-            self.entries,
+        self.entries.push(
+            self.tables,
             Locator {
                 id: record.id,
                 word_count: record.word_count,
@@ -151,8 +140,6 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
                 storage: record.storage,
                 rejected: false,
             },
-            self.maximum,
-            "recovery membership table",
         )
     }
 }
@@ -167,62 +154,123 @@ fn record_fields_valid(record: StoredRecord, meta: MetaV4) -> bool {
         }
 }
 
-fn validate_entries<S: RecoverySink>(
-    file: &File,
+struct CountEvents {
     meta: MetaV4,
-    catalog: &Catalog,
-    pages: &mut PageSet,
-    cancellation: &CancellationToken,
-    reporter: &mut Reporter<'_, S>,
-    entries: &mut [Locator],
-) -> Result<()> {
-    for entry in entries {
-        cancellation.check()?;
-        if !validate_entry(file, meta, catalog, pages, cancellation, reporter, *entry)? {
-            entry.rejected = true;
+    count: u64,
+}
+
+impl TreeEvents for CountEvents {
+    fn page_accepted(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn unknown(
+        &mut self,
+        _reason: ValidationReason,
+        _object: ValidationObject,
+        _page: Option<u32>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn leaf(&mut self, _page: u32, _index: usize, cell: Option<&[u8]>) -> Result<()> {
+        let Some(record) = cell.and_then(|cell| codec::decode(cell).ok()) else {
+            return Ok(());
+        };
+        if record_fields_valid(record, self.meta) {
+            self.count = self
+                .count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow("recovery membership count"))?;
+        }
+        Ok(())
+    }
+}
+
+struct Validation<'a, 'b, S> {
+    file: &'a File,
+    meta: MetaV4,
+    catalog: &'a Catalog,
+    pages: &'a mut PageSet,
+    tables: &'a mut Tables,
+    cancellation: &'a CancellationToken,
+    reporter: &'a mut Reporter<'b, S>,
+}
+
+impl<S: RecoverySink> Validation<'_, '_, S> {
+    fn entries(&mut self, entries: &MembershipIndex) -> Result<()> {
+        for index in 0..entries.records_len() {
+            self.one(entries, index)?;
+        }
+        Ok(())
+    }
+
+    fn one(&mut self, entries: &MembershipIndex, index: u64) -> Result<()> {
+        self.cancellation.check()?;
+        let entry = entries.record(self.tables, index)?;
+        if !self.entry(entry)? {
+            entries.reject(self.tables, index)?;
             emit(
-                reporter,
+                self.reporter,
                 ValidationReason::MembershipInvalid,
                 ValidationObject::MembershipDictionary,
                 Some(entry.leaf_page),
             )?;
         }
+        self.register_id(entries, entry.id, index)
     }
-    Ok(())
-}
 
-fn validate_entry<S: RecoverySink>(
-    file: &File,
-    meta: MetaV4,
-    catalog: &Catalog,
-    pages: &mut PageSet,
-    cancellation: &CancellationToken,
-    reporter: &mut Reporter<'_, S>,
-    entry: Locator,
-) -> Result<bool> {
-    let mut bitmap = BitmapCheck::new(catalog);
-    let complete = match entry.storage {
-        StoredStorage::Inline => {
-            let bytes = read_inline(file, meta, entry)?;
-            bitmap.consume(bytes.as_slice())?;
-            true
+    fn register_id(&mut self, entries: &MembershipIndex, id: u32, index: u64) -> Result<()> {
+        let Insert::Duplicate {
+            first,
+            newly_conflicted,
+        } = entries.insert_id(self.tables, id, index)?
+        else {
+            return Ok(());
+        };
+        entries.reject(self.tables, first)?;
+        entries.reject(self.tables, index)?;
+        if newly_conflicted {
+            emit(
+                self.reporter,
+                ValidationReason::MembershipInvalid,
+                ValidationObject::MembershipDictionary,
+                None,
+            )?;
         }
-        StoredStorage::Blob(root) => membership_blob::scan(
-            file,
-            meta,
-            root,
-            entry.word_count,
-            pages,
-            cancellation,
-            reporter,
-            |bytes| bitmap.consume(bytes),
-        )?,
-    };
-    Ok(complete && bitmap.valid(entry.word_count, entry.digest))
+        Ok(())
+    }
+
+    fn entry(&mut self, entry: Locator) -> Result<bool> {
+        let mut bitmap = BitmapCheck::new(self.catalog, self.tables);
+        let complete = match entry.storage {
+            StoredStorage::Inline => {
+                let bytes = read_inline(self.file, self.meta, entry)?;
+                bitmap.consume(bytes.as_slice())?;
+                true
+            }
+            StoredStorage::Blob(root) => membership_blob::scan(
+                self.file,
+                self.meta,
+                root,
+                entry.word_count,
+                self.pages,
+                self.cancellation,
+                self.reporter,
+                |bytes| bitmap.consume(bytes),
+            )?,
+        };
+        Ok(complete && bitmap.valid(entry.word_count, entry.digest))
+    }
 }
 
 struct BitmapCheck<'a> {
     catalog: &'a Catalog,
+    tables: &'a Tables,
     hasher: Sha256,
     words: u32,
     last: u64,
@@ -230,9 +278,10 @@ struct BitmapCheck<'a> {
 }
 
 impl<'a> BitmapCheck<'a> {
-    fn new(catalog: &'a Catalog) -> Self {
+    fn new(catalog: &'a Catalog, tables: &'a Tables) -> Self {
         Self {
             catalog,
+            tables,
             hasher: Sha256::new(),
             words: 0,
             last: 0,
@@ -249,7 +298,15 @@ impl<'a> BitmapCheck<'a> {
         self.hasher.update(bytes);
         for bytes in bytes.chunks_exact(8) {
             let value = u64::from_le_bytes(bytes.try_into().expect("eight-byte word"));
-            self.inactive |= value & !self.catalog.active_word(self.words) != 0;
+            let mut remaining = value;
+            while remaining != 0 {
+                let bit = remaining.trailing_zeros();
+                let index = u64::from(self.words) * 64 + u64::from(bit);
+                let index = u32::try_from(index)
+                    .map_err(|_| Error::Corrupt("recovery membership feed bit is invalid"))?;
+                self.inactive |= !self.catalog.contains(self.tables, index)?;
+                remaining &= remaining - 1;
+            }
             self.last = value;
             self.words = self
                 .words
@@ -260,178 +317,26 @@ impl<'a> BitmapCheck<'a> {
     }
 
     fn valid(self, expected_words: u32, expected_digest: [u8; 32]) -> bool {
+        let digest = <Sha256 as Digest>::finalize(self.hasher);
         self.words == expected_words
             && self.last != 0
             && !self.inactive
-            && <Sha256 as Digest>::finalize(self.hasher).as_slice() == expected_digest
+            && digest.as_slice() == expected_digest
     }
 }
 
-struct InlineBytes {
-    bytes: [u8; PAGE_SIZE],
-    len: usize,
-}
-
-impl InlineBytes {
-    fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len]
-    }
-}
-
-fn read_inline(file: &File, meta: MetaV4, locator: Locator) -> Result<InlineBytes> {
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_page(file, locator.leaf_page, meta.page_count, &mut page)?;
-    if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
-        return Err(Error::RecoveryCandidateChanged);
-    }
-    let header = slotted_page::parse(&page, meta.txn_id, codec::ID_LEAF, 0, Some(0))?;
-    let cell = slotted_page::record(
-        &page,
-        &header,
-        usize::from(locator.leaf_index),
-        codec::ID_BASE,
-        codec::MAX_ID_RECORD,
-    )?;
-    let record = codec::decode(cell)?;
-    if !matches_inline(record, locator) {
-        return Err(Error::RecoveryCandidateChanged);
-    }
-    let source = &cell[codec::ID_BASE..];
-    let mut bytes = [0; PAGE_SIZE];
-    bytes[..source.len()].copy_from_slice(source);
-    Ok(InlineBytes {
-        bytes,
-        len: source.len(),
-    })
-}
-
-fn matches_inline(record: StoredRecord, locator: Locator) -> bool {
-    record.id == locator.id
-        && record.word_count == locator.word_count
-        && record.digest == locator.digest
-        && record.storage == StoredStorage::Inline
-}
-
-fn reconcile<S: RecoverySink>(
-    mut entries: Vec<Locator>,
+fn finish<S: RecoverySink>(
+    entries: MembershipIndex,
+    tables: &Tables,
     reporter: &mut Reporter<'_, S>,
 ) -> Result<MembershipIndex> {
-    entries.sort_unstable_by_key(|entry| entry.id);
-    let mut start = 0;
-    while start < entries.len() {
-        let mut end = start + 1;
-        while end < entries.len() && entries[end].id == entries[start].id {
-            end += 1;
-        }
-        if end - start > 1 {
-            for entry in &mut entries[start..end] {
-                entry.rejected = true;
-            }
-            emit(
-                reporter,
-                ValidationReason::MembershipInvalid,
-                ValidationObject::MembershipDictionary,
-                None,
-            )?;
-        }
-        start = end;
+    let mut rejected = 0u64;
+    for index in 0..entries.records_len() {
+        rejected += u64::from(entries.record(tables, index)?.rejected);
     }
-    let rejected = entries.iter().filter(|entry| entry.rejected).count() as u64;
     reporter.membership_rejected(rejected)?;
-    reporter.membership_accepted(entries.len() as u64 - rejected)?;
-    entries.retain(|entry| !entry.rejected);
-    entries.shrink_to_fit();
-    Ok(MembershipIndex { entries })
-}
-
-pub(crate) struct RecoveredWords<'a> {
-    file: &'a File,
-    meta: MetaV4,
-    locator: Locator,
-}
-
-impl Locator {
-    pub(crate) fn words<'a>(self, file: &'a File, meta: MetaV4) -> RecoveredWords<'a> {
-        RecoveredWords {
-            file,
-            meta,
-            locator: self,
-        }
-    }
-
-    pub(crate) fn equal(self, other: Self, file: &File, meta: MetaV4) -> Result<bool> {
-        if self.word_count != other.word_count || self.digest != other.digest {
-            return Ok(false);
-        }
-        let left = self.words(file, meta);
-        let right = other.words(file, meta);
-        let mut left_words = [0; WORD_BUFFER];
-        let mut right_words = [0; WORD_BUFFER];
-        let mut start = 0;
-        while start < self.word_count {
-            let count = (self.word_count - start).min(WORD_BUFFER as u32) as usize;
-            left.read_words(start, &mut left_words[..count])?;
-            right.read_words(start, &mut right_words[..count])?;
-            if left_words[..count] != right_words[..count] {
-                return Ok(false);
-            }
-            start += count as u32;
-        }
-        Ok(true)
-    }
-}
-
-impl MembershipWords for RecoveredWords<'_> {
-    fn word_count(&self) -> u32 {
-        self.locator.word_count
-    }
-
-    fn read_words(&self, start: u32, output: &mut [u64]) -> Result<()> {
-        let end = start
-            .checked_add(output.len() as u32)
-            .ok_or(Error::ArithmeticOverflow("recovery membership read"))?;
-        if end > self.locator.word_count {
-            return Err(Error::Corrupt(
-                "recovery membership read exceeds its bitmap",
-            ));
-        }
-        match self.locator.storage {
-            StoredStorage::Inline => {
-                read_inline_words(self.file, self.meta, self.locator, start, output)
-            }
-            StoredStorage::Blob(root) => blob_tree::read_words(
-                self.file,
-                &self.meta,
-                root,
-                self.locator.word_count,
-                start,
-                output,
-            ),
-        }
-    }
-}
-
-fn read_inline_words(
-    file: &File,
-    meta: MetaV4,
-    locator: Locator,
-    start: u32,
-    output: &mut [u64],
-) -> Result<()> {
-    let bytes = read_inline(file, meta, locator)?;
-    let bytes = bytes.as_slice();
-    let start = usize::try_from(start)
-        .ok()
-        .and_then(|word| word.checked_mul(8))
-        .ok_or(Error::ArithmeticOverflow("recovery membership offset"))?;
-    for (index, word) in output.iter_mut().enumerate() {
-        *word = u64::from_le_bytes(
-            bytes[start + index * 8..start + (index + 1) * 8]
-                .try_into()
-                .expect("eight-byte word"),
-        );
-    }
-    Ok(())
+    reporter.membership_accepted(entries.records_len() - rejected)?;
+    Ok(entries)
 }
 
 struct IdCodec;

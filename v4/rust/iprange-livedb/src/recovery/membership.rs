@@ -1,11 +1,13 @@
 //! Analysis of one recovery-readable membership generation.
 
 use std::fs::File;
+use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::metadata;
 use crate::range_tree::Record;
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
@@ -15,6 +17,7 @@ use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
 use super::range_scan::{self, RangeEvents};
 use super::report::{RecoveryReport, RecoverySink, Reporter, Unknown};
+use super::tables::{Counts, Tables};
 use super::{RecoveryBudget, ScratchCleanup};
 
 pub(crate) struct MembershipAnalysis {
@@ -23,6 +26,7 @@ pub(crate) struct MembershipAnalysis {
     pub(crate) ordered: bool,
     pub(crate) catalog: Catalog,
     pub(crate) memberships: MembershipIndex,
+    pub(crate) tables: Tables,
     pub(crate) metadata: Option<Vec<u8>>,
     pub(crate) pages: PageSet,
 }
@@ -65,20 +69,23 @@ pub(crate) fn analyze<S: RecoverySink>(
     let result = analyze_graphs(file, meta, budget, cancellation, &mut pages, &mut reporter);
     let report = reporter.finish();
     match result {
-        Ok((readable_records, ordered, catalog, memberships, metadata)) => Ok(MembershipAnalysis {
-            report,
-            readable_records,
-            ordered,
-            catalog,
-            memberships,
-            metadata,
-            pages,
-        }),
+        Ok((readable_records, ordered, catalog, memberships, tables, metadata)) => {
+            Ok(MembershipAnalysis {
+                report,
+                readable_records,
+                ordered,
+                catalog,
+                memberships,
+                tables,
+                metadata,
+                pages,
+            })
+        }
         Err(cause) => Err(failure_with_pages(pages, cause, report)),
     }
 }
 
-type Graphs = (u64, bool, Catalog, MembershipIndex, Option<Vec<u8>>);
+type Graphs = (u64, bool, Catalog, MembershipIndex, Tables, Option<Vec<u8>>);
 
 fn analyze_graphs<S: RecoverySink>(
     file: &File,
@@ -88,23 +95,9 @@ fn analyze_graphs<S: RecoverySink>(
     pages: &mut PageSet,
     reporter: &mut Reporter<'_, S>,
 ) -> Result<Graphs> {
-    let catalog = catalog::recover(
-        file,
-        meta,
-        pages,
-        budget.max_heap_bytes,
-        cancellation,
-        reporter,
-    )?;
-    let memberships = membership_index::recover(
-        file,
-        meta,
-        &catalog,
-        pages,
-        budget.max_heap_bytes,
-        cancellation,
-        reporter,
-    )?;
+    let mut tables = prepare_tables(file, meta, budget, cancellation, pages)?;
+    let (catalog, memberships) =
+        recover_tables(file, meta, cancellation, pages, reporter, &mut tables)?;
     let ranges = match meta.address_family {
         AddressFamily::Ipv4 => {
             analyze_ranges::<Ipv4Key, S>(file, meta, pages, cancellation, reporter)
@@ -113,17 +106,75 @@ fn analyze_graphs<S: RecoverySink>(
             analyze_ranges::<Ipv6Key, S>(file, meta, pages, cancellation, reporter)
         }
     }?;
-    let table_bytes = catalog
-        .retained_bytes()
-        .checked_add(memberships.retained_bytes())
-        .ok_or(Error::ArithmeticOverflow("recovery membership heap"))?;
+    let metadata = read_metadata(file, meta, budget, cancellation, pages, reporter, &tables)?;
+    Ok((ranges.0, ranges.1, catalog, memberships, tables, metadata))
+}
+
+fn prepare_tables(
+    file: &File,
+    meta: MetaV4,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    pages: &mut PageSet,
+) -> Result<Tables> {
+    let counts = Counts {
+        catalog: catalog::count(file, meta, pages, cancellation)?,
+        memberships: membership_index::count(file, meta, pages, cancellation)?,
+    };
+    pages.reset()?;
+    Tables::allocate(counts, pages, budget, required_table_heap_reserve(meta)?)
+}
+
+fn recover_tables<S: RecoverySink>(
+    file: &File,
+    meta: MetaV4,
+    cancellation: &CancellationToken,
+    pages: &mut PageSet,
+    reporter: &mut Reporter<'_, S>,
+    tables: &mut Tables,
+) -> Result<(Catalog, MembershipIndex)> {
+    let catalog = catalog::recover(file, meta, pages, tables, cancellation, reporter)?;
+    let memberships =
+        membership_index::recover(file, meta, &catalog, pages, tables, cancellation, reporter)?;
+    Ok((catalog, memberships))
+}
+
+fn read_metadata<S: RecoverySink>(
+    file: &File,
+    meta: MetaV4,
+    budget: &RecoveryBudget,
+    cancellation: &CancellationToken,
+    pages: &mut PageSet,
+    reporter: &mut Reporter<'_, S>,
+    tables: &Tables,
+) -> Result<Option<Vec<u8>>> {
+    let table_bytes = tables.retained_bytes();
     let metadata_heap = budget
         .max_heap_bytes
         .checked_sub(table_bytes)
         .ok_or(Error::BudgetExceeded("recovery metadata output"))?;
-    let metadata =
-        recovery_metadata::read(file, meta, pages, metadata_heap, cancellation, reporter)?;
-    Ok((ranges.0, ranges.1, catalog, memberships, metadata))
+    recovery_metadata::read(file, meta, pages, metadata_heap, cancellation, reporter)
+}
+
+fn required_table_heap_reserve(meta: MetaV4) -> Result<u64> {
+    let metadata = if meta.metadata_root == 0 {
+        0
+    } else {
+        meta.metadata_uncompressed_len
+            .checked_add(metadata::DEFLATE_HEAP_OVERHEAD)
+            .ok_or(Error::ArithmeticOverflow("recovery metadata heap"))?
+    };
+    let range = if meta.range_root == 0 {
+        0
+    } else {
+        match meta.address_family {
+            AddressFamily::Ipv4 => size_of::<Record<Ipv4Key>>() as u64,
+            AddressFamily::Ipv6 => size_of::<Record<Ipv6Key>>() as u64,
+        }
+    };
+    metadata
+        .checked_add(range)
+        .ok_or(Error::ArithmeticOverflow("recovery table heap reserve"))
 }
 
 fn analyze_ranges<K: IpKey, S: RecoverySink>(

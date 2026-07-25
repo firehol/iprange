@@ -307,6 +307,7 @@ fn build_external<K: DirectKey, S: RecoverySink>(
             retained_heap_bytes: metadata_bytes,
             readable_records,
             cancellation: context.cancellation,
+            initial_area: None,
         },
         pages,
         |record| components.push(record),

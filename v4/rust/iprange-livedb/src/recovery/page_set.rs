@@ -29,6 +29,7 @@ struct FileSlots {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 struct Fallback {
     directory: PathBuf,
     source: MetaV4,
@@ -46,8 +47,6 @@ pub(crate) struct PageSet {
     fallback: Option<Fallback>,
     #[cfg(target_os = "linux")]
     scratch: Option<Scratch>,
-    #[cfg(target_os = "linux")]
-    completed: Option<ScratchCleanup>,
 }
 
 pub(crate) struct PageSetFailure {
@@ -106,7 +105,6 @@ impl PageSet {
             len: 0,
             fallback,
             scratch: None,
-            completed: None,
         })
     }
 
@@ -196,8 +194,19 @@ impl PageSet {
     pub(crate) fn release(mut self, scratch: &mut Scratch) -> Option<ScratchSlot> {
         match mem::replace(&mut self.slots, Slots::Heap(Vec::new())) {
             Slots::Heap(_) => None,
-            Slots::File(slots) => Some(scratch.attach(slots.file)),
+            Slots::File(slots) => {
+                let slot = scratch.attach(slots.file);
+                Some(slot)
+            }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn create_scratch_file(&mut self, length: u64) -> Result<ScratchFile> {
+        let scratch = self.ensure_scratch()?;
+        let slot = scratch.create()?;
+        scratch.resize(slot, length)?;
+        scratch.detach(slot)
     }
 
     #[cfg(target_os = "linux")]
@@ -206,7 +215,7 @@ impl PageSet {
             let _ = self.release(&mut scratch);
             Some(scratch.cleanup())
         } else {
-            self.completed.take()
+            None
         }
     }
 
@@ -244,49 +253,58 @@ impl PageSet {
         }
         let fallback = self
             .fallback
-            .take()
+            .clone()
             .ok_or(Error::BudgetExceeded("recovery page-ownership table"))?;
-        let slots = fallback.file_slots()?;
+        let slots = self.file_slots(&fallback)?;
         if exceeds_load(self.len + 1, slots) {
             return Err(Error::BudgetExceeded("recovery page-ownership table"));
         }
-        let (scratch, output) = self.create_file_slots(&fallback, slots)?;
+        let output = self.create_file_slots(slots)?;
         self.slots = Slots::File(output);
-        self.scratch = Some(scratch);
         Ok(())
     }
 
     #[cfg(target_os = "linux")]
-    fn create_file_slots(
-        &mut self,
-        fallback: &Fallback,
-        slots: usize,
-    ) -> Result<(Scratch, FileSlots)> {
+    fn create_file_slots(&mut self, slots: usize) -> Result<FileSlots> {
         let length = table_length(slots)?;
-        let mut scratch = Scratch::start(
-            &fallback.directory,
-            fallback.source,
-            fallback.max_bytes,
-            fallback.max_files,
-            fallback.max_open_files,
-        )?;
-        let slot = match scratch.create() {
-            Ok(slot) => slot,
-            Err(cause) => return Err(self.finish_failed_attempt(scratch, cause)),
-        };
-        if let Err(cause) = scratch.resize(slot, length) {
-            return Err(self.finish_failed_attempt(scratch, cause));
-        }
-        let file = match scratch.detach(slot) {
-            Ok(file) => file,
-            Err(cause) => return Err(self.finish_failed_attempt(scratch, cause)),
-        };
+        let scratch = self.ensure_scratch()?;
+        let slot = scratch.create()?;
+        scratch.resize(slot, length)?;
+        let file = scratch.detach(slot)?;
         let mut output = FileSlots { file, slots };
-        if let Err(cause) = self.copy_claims(&mut output) {
-            scratch.attach(output.file);
-            return Err(self.finish_failed_attempt(scratch, cause));
+        self.copy_claims(&mut output)?;
+        Ok(output)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn ensure_scratch(&mut self) -> Result<&mut Scratch> {
+        if self.scratch.is_none() {
+            let fallback = self
+                .fallback
+                .as_ref()
+                .ok_or(Error::BudgetExceeded("recovery scratch"))?;
+            self.scratch = Some(start_scratch(fallback)?);
         }
-        Ok((scratch, output))
+        Ok(self.scratch.as_mut().expect("scratch was initialized"))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn file_slots(&self, fallback: &Fallback) -> Result<usize> {
+        let available = match &self.scratch {
+            Some(scratch) => scratch.remaining_bytes(),
+            None => {
+                let reserve = if fallback.max_files >= 2 {
+                    HEADER_SIZE
+                } else {
+                    0
+                };
+                fallback
+                    .max_bytes
+                    .checked_sub(reserve)
+                    .ok_or(Error::BudgetExceeded("recovery page-ownership scratch"))?
+            }
+        };
+        fallback.file_slots(available)
     }
 
     #[cfg(target_os = "linux")]
@@ -301,35 +319,17 @@ impl PageSet {
     }
 
     #[cfg(target_os = "linux")]
-    fn finish_failed_attempt(&mut self, scratch: Scratch, cause: Error) -> Error {
-        let cleanup = scratch.cleanup();
-        let result = if cleanup.clean() {
-            cause
-        } else {
-            Error::CleanupIncomplete {
-                cause: Box::new(cause),
-                cleanup: Box::new(residue_error(&cleanup)),
-            }
-        };
-        self.completed = Some(cleanup);
-        result
-    }
-
-    #[cfg(target_os = "linux")]
     fn reset_file(&mut self) -> Result<()> {
-        let Slots::File(slots) = mem::replace(&mut self.slots, Slots::Heap(Vec::new())) else {
+        let Slots::File(slots) = &self.slots else {
             unreachable!("file reset requires file slots")
         };
-        let count = slots.slots;
         let scratch = self
             .scratch
             .as_mut()
             .expect("file page set retains its scratch attempt");
-        let slot = scratch.attach(slots.file);
+        let slot = slots.file.slot();
         scratch.reset(slot)?;
-        scratch.resize(slot, table_length(count)?)?;
-        let file = scratch.detach(slot)?;
-        self.slots = Slots::File(FileSlots { file, slots: count });
+        scratch.resize(slot, table_length(slots.slots)?)?;
         Ok(())
     }
 }
@@ -396,12 +396,9 @@ impl FileSlots {
 
 #[cfg(target_os = "linux")]
 impl Fallback {
-    fn file_slots(&self) -> Result<usize> {
-        let reserved = if self.max_files >= 2 { HEADER_SIZE } else { 0 };
-        let table_bytes = self
-            .max_bytes
-            .checked_sub(reserved)
-            .and_then(|value| value.checked_sub(HEADER_SIZE))
+    fn file_slots(&self, available: u64) -> Result<usize> {
+        let table_bytes = available
+            .checked_sub(HEADER_SIZE)
             .ok_or(Error::BudgetExceeded("recovery page-ownership scratch"))?;
         let affordable =
             usize::try_from(table_bytes / size_of::<u64>() as u64).unwrap_or(usize::MAX);
@@ -411,6 +408,17 @@ impl Fallback {
         }
         Ok(slots)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn start_scratch(fallback: &Fallback) -> Result<Scratch> {
+    Scratch::start(
+        &fallback.directory,
+        fallback.source,
+        fallback.max_bytes,
+        fallback.max_files,
+        fallback.max_open_files,
+    )
 }
 
 fn heap_slots(slots: usize) -> Result<Vec<u64>> {

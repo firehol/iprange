@@ -120,7 +120,7 @@ fn disordered_membership_ranges_use_the_bounded_shared_external_sort() {
     swap_first_two_ranges(&finished.file, meta);
     drop(finished.file);
     let budget = RecoveryBudget {
-        max_heap_bytes: 2048,
+        max_heap_bytes: 128,
         max_output_pages: 100_000,
         max_open_files: 4,
         max_scratch_bytes: 64 * 1024,
