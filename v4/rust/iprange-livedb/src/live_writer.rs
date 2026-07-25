@@ -2,6 +2,7 @@
 
 mod commit;
 mod create;
+mod reclaim;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::random;
 
 pub use create::{create_live, CreateResult, CreationState};
+pub use reclaim::ReclaimResult;
 
 /// Maximum resources retained by one writer transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

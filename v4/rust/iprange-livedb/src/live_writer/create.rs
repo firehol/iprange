@@ -46,23 +46,20 @@ pub fn create_live(
     let path = path.as_ref();
     validate_destination(path, reader_capacity)?;
     let attempt = Attempt::new(reader_capacity)?;
-    let sidecar = Sidecar::create(
-        path,
-        attempt.database_id,
-        random::nonzero_128()?,
-        reader_capacity,
-    )?;
+    let sidecar = match reserve_sidecar(path, attempt) {
+        Ok(sidecar) => sidecar,
+        Err(result) => return Ok(result),
+    };
+    if let Err(cause) = sidecar.initialize_creating() {
+        return Ok(attempt.failed(path, &sidecar, None, cause));
+    }
     if let Err(cause) = prepare_sidecar(path, &sidecar) {
         return Ok(attempt.failed(path, &sidecar, None, cause));
     }
 
-    let main = match live_sidecar::create_private(path) {
-        Ok(file) => file,
-        Err(cause) => return Ok(attempt.failed(path, &sidecar, None, cause)),
-    };
-    let main_identity = match live_sidecar::identity(&main) {
-        Ok(identity) => identity,
-        Err(cause) => return Ok(attempt.unknown(cause)),
+    let (main, main_identity) = match create_main(path, &sidecar, attempt) {
+        Ok(main) => main,
+        Err(result) => return Ok(result),
     };
     let meta = empty_meta(
         address_family,
@@ -75,6 +72,39 @@ pub fn create_live(
         return Ok(attempt.failed(path, &sidecar, Some(main_identity), cause));
     }
     Ok(attempt.created())
+}
+
+fn reserve_sidecar(path: &Path, attempt: Attempt) -> std::result::Result<Sidecar, CreateResult> {
+    let sidecar_id = random::nonzero_128().map_err(|cause| attempt.not_created(cause))?;
+    Sidecar::reserve(
+        path,
+        attempt.database_id,
+        sidecar_id,
+        attempt.reader_capacity,
+    )
+    .map_err(|cause| {
+        if cause.residue_possible() {
+            attempt.unknown(cause)
+        } else {
+            attempt.not_created(cause)
+        }
+    })
+}
+
+fn create_main(
+    path: &Path,
+    sidecar: &Sidecar,
+    attempt: Attempt,
+) -> std::result::Result<(std::fs::File, Identity), CreateResult> {
+    let file = live_sidecar::create_private(path).map_err(|cause| {
+        if cause.residue_possible() {
+            attempt.unknown(cause)
+        } else {
+            attempt.failed(path, sidecar, None, cause)
+        }
+    })?;
+    let identity = live_sidecar::identity(&file).map_err(|cause| attempt.unknown(cause))?;
+    Ok((file, identity))
 }
 
 impl Attempt {
@@ -90,6 +120,10 @@ impl Attempt {
         self.result(CreationState::Created, false, None)
     }
 
+    fn not_created(self, cause: Error) -> CreateResult {
+        self.result(CreationState::NotCreated, false, Some(cause))
+    }
+
     fn unknown(self, cause: Error) -> CreateResult {
         self.result(CreationState::OutcomeUnknown, true, Some(cause))
     }
@@ -101,10 +135,12 @@ impl Attempt {
         main_identity: Option<Identity>,
         cause: Error,
     ) -> CreateResult {
-        if cleanup(path, sidecar, main_identity).is_ok() {
-            self.result(CreationState::NotCreated, false, Some(cause))
-        } else {
-            self.unknown(cause)
+        match cleanup(path, sidecar, main_identity) {
+            Ok(()) => self.not_created(cause),
+            Err(cleanup) => self.unknown(Error::CleanupIncomplete {
+                cause: Box::new(cause),
+                cleanup: Box::new(cleanup),
+            }),
         }
     }
 
@@ -174,6 +210,7 @@ fn validate_destination(path: &Path, reader_capacity: u32) -> Result<()> {
 
 fn prepare_sidecar(path: &Path, sidecar: &Sidecar) -> Result<()> {
     live_sidecar::sync_parent(&sidecar.path)?;
+    crate::fault::crash("create.after_sidecar_parent_sync");
     require_absent(path)
 }
 
@@ -189,9 +226,14 @@ fn initialize_pair(
     file_io::write_exact_at(main, &page, 0)?;
     file_io::write_exact_at(main, &page, PAGE_SIZE as u64)?;
     main.sync_all()?;
+    crate::fault::crash("create.after_main_sync");
     live_sidecar::sync_parent(path)?;
+    crate::fault::crash("create.after_main_parent_sync");
     sidecar.publish_ready()?;
-    live_sidecar::sync_parent(&sidecar.path)
+    crate::fault::crash("create.after_ready_sync");
+    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::fault::crash("create.after_ready_parent_sync");
+    Ok(())
 }
 
 fn cleanup(path: &Path, sidecar: &Sidecar, main_identity: Option<Identity>) -> Result<()> {

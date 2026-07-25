@@ -123,6 +123,50 @@ impl<'a> DraftStore<'a> {
         self.finish_bitmap_shape()
     }
 
+    pub(crate) fn select_reclamation(
+        &self,
+        oldest_reader: Option<u64>,
+        max_transactions: u64,
+        max_pages: u64,
+    ) -> Result<Option<retirement::Reclamation>> {
+        retirement::select_reclamation(
+            self,
+            self.draft.meta.retirement_root,
+            self.draft.meta.txn_id - 1,
+            oldest_reader,
+            max_transactions,
+            max_pages,
+        )
+    }
+
+    pub(crate) fn apply_reclamation(&mut self, selection: retirement::Reclamation) -> Result<()> {
+        let mut transactions = 0u64;
+        let mut pages = 0u64;
+        let mut previous_txn = 0u64;
+
+        loop {
+            let Some(extent) = retirement::first(self, self.draft.meta.retirement_root)? else {
+                break;
+            };
+            if extent.transaction() > selection.through_txn {
+                break;
+            }
+            if extent.transaction() != previous_txn {
+                transactions += 1;
+                previous_txn = extent.transaction();
+            }
+            pages = pages
+                .checked_add(extent.page_count())
+                .ok_or(Error::ArithmeticOverflow("reclaimed page count"))?;
+            self.reclaim_extent(extent)?;
+        }
+        if transactions != selection.transactions || pages != selection.pages {
+            return Err(Error::Corrupt("reclamation selection changed"));
+        }
+        self.draft.changed = true;
+        Ok(())
+    }
+
     fn release_private_pages(&mut self) -> Result<()> {
         loop {
             self.replenish_reserve()?;
@@ -197,6 +241,39 @@ impl<'a> DraftStore<'a> {
             }
         }
         Ok(())
+    }
+
+    fn reclaim_extent(&mut self, extent: retirement::Extent) -> Result<()> {
+        for page in extent.pages() {
+            let page = u32::try_from(page)
+                .map_err(|_| Error::Corrupt("reclaimed page exceeds page-number space"))?;
+            self.free_one(page)?;
+        }
+
+        let mut root = self.draft.meta.retirement_root;
+        let mut count = self.draft.meta.retired_extent_count;
+        let generated = retirement::remove_extent(self, &mut root, &mut count, extent)?;
+        self.draft.meta.retirement_root = root;
+        self.draft.meta.retired_extent_count = count;
+        for &page in generated.as_slice() {
+            self.retire_one(page)?;
+        }
+        self.drain_allocator_retired()
+    }
+
+    fn free_one(&mut self, page_number: u32) -> Result<()> {
+        let mut root = self.draft.meta.free_bitmap_root;
+        let mut retired = RetiredPages::new();
+        free_bitmap::set_free(
+            self,
+            &mut root,
+            self.draft.meta.page_count,
+            page_number,
+            &mut retired,
+        )?;
+        self.draft.meta.free_bitmap_root = root;
+        self.draft.allocator_retired.extend(retired.as_slice())?;
+        self.drain_allocator_retired()
     }
 
     fn drain_allocator_retired(&mut self) -> Result<()> {

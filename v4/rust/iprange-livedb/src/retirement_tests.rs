@@ -93,6 +93,7 @@ fn arbitrary_page_order_coalesces_within_each_transaction() {
     );
     assert_eq!(count, 3);
     assert!(add_page(&mut store, &mut root, &mut count, 9, 10).is_err());
+    assert!(add_page(&mut store, &mut root, &mut count, 9, 20).is_err());
 }
 
 #[test]
@@ -114,4 +115,44 @@ fn first_change_of_a_committed_tree_reports_only_its_old_path() {
 
     let second = add_page(&mut store, &mut root, &mut count, 3, 5).unwrap();
     assert!(second.as_slice().is_empty());
+}
+
+#[test]
+fn reclamation_selects_only_complete_oldest_safe_transactions() {
+    let mut store = MemoryStore::new(5);
+    store.pages.resize(100, [0; PAGE_SIZE]);
+    let mut root = 0;
+    let mut count = 0;
+    for (txn, page) in [(2, 10), (2, 11), (3, 20), (3, 22), (4, 30)] {
+        add_page(&mut store, &mut root, &mut count, txn, page).unwrap();
+    }
+
+    assert_eq!(
+        select_reclamation(&store, root, 4, Some(3), 10, 10).unwrap(),
+        Some(Reclamation {
+            transactions: 2,
+            pages: 4,
+            through_txn: 3,
+        })
+    );
+    assert_eq!(
+        select_reclamation(&store, root, 4, None, 1, 10).unwrap(),
+        Some(Reclamation {
+            transactions: 1,
+            pages: 2,
+            through_txn: 2,
+        })
+    );
+    assert_eq!(
+        select_reclamation(&store, root, 4, None, 10, 3).unwrap(),
+        Some(Reclamation {
+            transactions: 1,
+            pages: 2,
+            through_txn: 2,
+        })
+    );
+    assert!(matches!(
+        select_reclamation(&store, root, 4, None, 10, 1),
+        Err(Error::WorkLimitTooSmall { required_pages: 2 })
+    ));
 }

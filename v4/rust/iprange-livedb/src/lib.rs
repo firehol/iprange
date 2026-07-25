@@ -16,6 +16,7 @@ mod database;
 mod draft_store;
 #[path = "sdk_error.rs"]
 pub mod error;
+mod fault;
 mod file_io;
 mod fixed_tree;
 mod free_bitmap;
@@ -41,9 +42,11 @@ pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
     create_live, CommitDurability, CommitResult, CreateResult, CreationState, LiveWriter,
-    TransactionBudget,
+    ReclaimResult, TransactionBudget,
 };
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
 
+#[cfg(test)]
+mod live_crash_tests;
 #[cfg(test)]
 mod test_alloc;

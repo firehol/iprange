@@ -10102,6 +10102,66 @@ requirements are normative in the Pre-Implementation Gate above.
   reclamation, explicit validation/recovery, snapshots, crash injection,
   update-ipsets-shaped benchmarks, and final complexity review remain pending.
 
+### 2026-07-25 - live durability and reclamation plan
+
+- Crash proof uses child processes terminated at named creation and commit
+  boundaries. The hooks exist only in Rust test builds; normal builds compile
+  them to no-ops. Restart tests inspect the real files, open them through the
+  public API, and prove that pre-publication state is invisible, an ambiguous
+  meta write selects one complete generation, and synchronized publication is
+  visible.
+- Separate process-death tests prove that the operating system releases reader
+  slots and the writer lease. The next conforming opener clears stale slot
+  bytes while holding the slot lock; no process identity or liveness check is
+  added.
+- Known creation failures clean only paths that still name the exact retained
+  inode. Failures after a path can no longer be proved to name that inode remain
+  `OutcomeUnknown` with possible residue; cleanup never removes a replacement.
+- `Reclaim(max_transactions, max_pages)` remains the approved clean-writer,
+  auto-publishing operation. It holds the existing exclusive gate from the
+  stable reader scan through commit, selects only complete oldest safe
+  transaction groups, and streams their extents directly into the private free
+  bitmap. It keeps no page list proportional to the file.
+- Reclamation deletes selected retirement records in key order. Committed
+  bitmap and retirement pages copied by that maintenance transaction are
+  retired under its new transaction ID before the alternate meta page is
+  published. A pinned older reader blocks unsafe groups; releasing it permits
+  a later reclaim and subsequent allocation may reuse those pages.
+
+### 2026-07-25 - live durability and reclamation implementation
+
+- Rust now exposes the clean-writer `Reclaim` operation. It selects complete
+  oldest safe transaction groups under both caller limits, reports the exact
+  selected transaction/page counts, and uses the ordinary alternate-meta commit
+  result. `WorkLimitTooSmall` reports the first safe group's exact page count
+  before mutation.
+- Reclamation keeps only counters, one extent, and fixed tree/bitmap paths. A
+  pinned reader blocks unsafe groups; after that reader closes, reclamation
+  auto-publishes one new generation. A resource-budget failure discards the
+  complete private draft, leaves the old generation readable, and permits a
+  later retry.
+- Test-only child-process crash points cover creation, ordinary commit, and
+  reclamation before private-page synchronization, after synchronization, after
+  the alternate-meta write, and after meta synchronization. Restart selects
+  only a complete generation. Separate child exits prove automatic reader-slot
+  and writer-lease release without process-liveness metadata.
+- Active malformed or future reader records fail closed; unlocked stale bytes
+  are cleared before reuse. Creation now distinguishes failures that left no
+  artifact from failures whose exact cleanup could not be proved, and retains
+  both the original and cleanup causes.
+- The active implementation graph is 6,935 physical lines, including embedded
+  tests; every implementation file remains at or below 473 lines. All new
+  creation, reclamation, and retirement functions are at or below cyclomatic
+  complexity 9. Thirteen pre-existing algorithmic tree/bitmap/range-page
+  functions remain above that review signal and require the final clarity
+  review; the limit is not being waived.
+- Validation passes on the current toolchain and Rust 1.74: 84 tests pass and
+  one subprocess entry point is intentionally ignored by the parent harness.
+  Warnings-denied all-target Clippy, formatting, `git diff --check`, and the SOW
+  audit pass. Go remains unchanged. Injected short-write/sync errors,
+  cancellation, cross-platform execution, and later format surfaces remain
+  pending.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -46,7 +46,7 @@ pub(crate) struct Sidecar {
 }
 
 impl Sidecar {
-    pub(crate) fn create(
+    pub(crate) fn reserve(
         main: &Path,
         database_id: [u8; 16],
         sidecar_id: [u8; 16],
@@ -58,27 +58,46 @@ impl Sidecar {
             ));
         }
         let path = path::canonical_sidecar(main)?;
-        let length = sidecar_length(capacity)?;
         let file = create_private(&path)?;
-        file.set_len(length)?;
-        let header = Header {
-            capacity,
-            database_id,
-            sidecar_id,
+        let identity = match identity(&file) {
+            Ok(identity) => identity,
+            Err(cause) => return Err(created_failure(&path, &file, cause)),
         };
-        write_header(&file, header, STATE_CREATING)?;
-        file.sync_all()?;
-        let identity = identity(&file)?;
         Ok(Self {
             file,
             path,
-            header,
+            header: Header {
+                capacity,
+                database_id,
+                sidecar_id,
+            },
             identity,
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn create(
+        main: &Path,
+        database_id: [u8; 16],
+        sidecar_id: [u8; 16],
+        capacity: u32,
+    ) -> Result<Self> {
+        let sidecar = Self::reserve(main, database_id, sidecar_id, capacity)?;
+        sidecar.initialize_creating()?;
+        Ok(sidecar)
+    }
+
+    pub(crate) fn initialize_creating(&self) -> Result<()> {
+        self.file.set_len(sidecar_length(self.header.capacity)?)?;
+        write_header(&self.file, self.header, STATE_CREATING)?;
+        self.file.sync_all()?;
+        crate::fault::crash("create.after_sidecar_sync");
+        Ok(())
+    }
+
     pub(crate) fn publish_ready(&self) -> Result<()> {
         write_header(&self.file, self.header, STATE_READY)?;
+        crate::fault::crash("create.after_ready_write");
         Ok(self.file.sync_all()?)
     }
 
@@ -167,14 +186,21 @@ impl Sidecar {
     }
 
     pub(crate) fn scan_at_most(&self, committed_txn: u64) -> Result<()> {
+        self.oldest_reader(committed_txn).map(|_| ())
+    }
+
+    pub(crate) fn oldest_reader(&self, committed_txn: u64) -> Result<Option<u64>> {
+        let mut oldest = None;
         self.scan_readers(|txn| {
             if txn > committed_txn {
                 return Err(Error::Corrupt(
                     "reader slot names an uncommitted transaction",
                 ));
             }
+            oldest = Some(oldest.map_or(txn, |current: u64| current.min(txn)));
             Ok(())
-        })
+        })?;
+        Ok(oldest)
     }
 
     fn scan_slot(&self, slot: u32) -> Result<Option<u64>> {
@@ -271,10 +297,28 @@ pub(crate) fn create_private(path: &Path) -> Result<File> {
     {
         use std::os::fd::AsRawFd;
         if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
+            let cause = std::io::Error::last_os_error().into();
+            return Err(created_failure(path, &file, cause));
         }
     }
     Ok(file)
+}
+
+fn created_failure(path: &Path, file: &File, cause: Error) -> Error {
+    match remove_created(path, file) {
+        Ok(()) => cause,
+        Err(cleanup) => Error::CleanupIncomplete {
+            cause: Box::new(cause),
+            cleanup: Box::new(cleanup),
+        },
+    }
+}
+
+fn remove_created(path: &Path, file: &File) -> Result<()> {
+    let expected = identity(file)?;
+    verify_path(path, expected)?;
+    fs::remove_file(path)?;
+    sync_parent(path)
 }
 
 pub(crate) fn sync_parent(path: &Path) -> Result<()> {

@@ -42,40 +42,49 @@ impl LiveWriter {
             return Ok(result(attempt, CommitDurability::NotCommitted, cause));
         }
 
-        let phase = self.commit_locked();
-        let unlock = self.sidecar.unlock_gate();
-        match phase {
+        let mut result = self.finish_commit_locked(attempt);
+        self.apply_commit_unlock(&mut result, self.sidecar.unlock_gate());
+        Ok(result)
+    }
+
+    pub(super) fn finish_commit_locked(
+        &mut self,
+        attempt: ([u8; 16], u64, [u8; 16]),
+    ) -> CommitResult {
+        match self.commit_locked() {
             Phase::BeforePublication(cause) => {
-                if unlock.is_err() {
-                    self.state = State::Unusable;
-                }
                 let cause = self.abort_after(cause);
-                Ok(result(attempt, CommitDurability::NotCommitted, cause))
+                result(attempt, CommitDurability::NotCommitted, cause)
             }
             Phase::OutcomeUnknown(cause) => {
                 self.draft = None;
                 self.state = State::OutcomeUnknown;
-                Ok(result(attempt, CommitDurability::OutcomeUnknown, cause))
+                result(attempt, CommitDurability::OutcomeUnknown, cause)
             }
             Phase::Committed(base) => {
                 self.base = base;
                 self.draft = None;
-                let cause = unlock.err();
-                if cause.is_some() {
-                    self.state = State::Unusable;
-                }
-                Ok(CommitResult {
+                CommitResult {
                     database_id: attempt.0,
                     transaction_id: attempt.1,
                     commit_nonce: attempt.2,
                     durability: CommitDurability::Committed,
-                    cause,
-                })
+                    cause: None,
+                }
             }
         }
     }
 
-    fn prepare(&mut self) -> Result<()> {
+    pub(super) fn apply_commit_unlock(&mut self, result: &mut CommitResult, unlock: Result<()>) {
+        if let Err(cause) = unlock {
+            self.state = State::Unusable;
+            if result.cause.is_none() {
+                result.cause = Some(cause);
+            }
+        }
+    }
+
+    pub(super) fn prepare(&mut self) -> Result<()> {
         let draft = self.draft.as_mut().unwrap();
         DraftStore::new(
             &self.file,
@@ -91,9 +100,11 @@ impl LiveWriter {
             Ok(()) => {}
             Err(error) => return Phase::BeforePublication(error),
         }
+        crate::fault::crash("commit.before_private_sync");
         if let Err(error) = self.file.sync_all() {
             return Phase::BeforePublication(error.into());
         }
+        crate::fault::crash("commit.after_private_sync");
 
         let draft = self.draft.as_ref().unwrap();
         let target_page = 1 - self.base.selected_meta_page;
@@ -106,9 +117,11 @@ impl LiveWriter {
         ) {
             return Phase::OutcomeUnknown(error);
         }
+        crate::fault::crash("commit.after_meta_write");
         if let Err(error) = self.file.sync_all() {
             return Phase::OutcomeUnknown(error.into());
         }
+        crate::fault::crash("commit.after_meta_sync");
         Phase::Committed(Bootstrap {
             meta: draft.meta,
             selection: MetaSelection::ProvenCurrent,
@@ -126,7 +139,7 @@ impl LiveWriter {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)
     }
 
-    fn require_unchanged_base(&self) -> Result<()> {
+    pub(super) fn require_unchanged_base(&self) -> Result<()> {
         let selected = database::bootstrap_file(&self.file, OpenMode::Writer)?;
         if selected.meta != self.base.meta {
             return Err(Error::WrongMode(

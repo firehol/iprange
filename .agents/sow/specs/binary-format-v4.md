@@ -958,7 +958,8 @@ coalesced when adjacent. A page appears in exactly one extent.
 
 `retired_by_txn == T` means transaction T removed the pages from the current
 roots. Its complete transaction group is safe when no active reader has a
-transaction below T. A transaction-zero registration blocks all reclamation.
+transaction below T. Reader registration is protected by the gate, so the
+compact sidecar protocol has no transaction-zero registration.
 
 The writer updates retirement after every other logical root. The first insert
 copies at most the committed rightmost path; those replaced retirement pages

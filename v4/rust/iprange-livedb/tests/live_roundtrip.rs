@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
     create_live, AddressFamily, CommitDurability, CreationState, Error, ImmutableReader, Ipv4Key,
-    Ipv6Key, LiveReader, LiveWriter, TransactionBudget, ValueKind, ValueTag,
+    Ipv6Key, LiveReader, LiveWriter, ReclaimResult, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -46,6 +46,24 @@ fn budget() -> TransactionBudget {
         max_file_growth_pages: 10_000,
         max_open_files: 2,
     }
+}
+
+#[test]
+fn creation_failure_before_artifacts_is_reported_without_residue() {
+    let files = TestPair::new("create-failure");
+    let path = files.main.join("missing").join("database");
+    let result = create_live(
+        &path,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+    )
+    .unwrap();
+    assert_eq!(result.state, CreationState::NotCreated);
+    assert!(!result.residue_possible);
+    assert!(matches!(result.cause, Some(Error::Io(_))));
+    assert!(!path.exists());
 }
 
 #[test]
@@ -157,4 +175,101 @@ fn full_ipv6_space_round_trips_without_endpoint_overflow() {
         Some(9)
     );
     reader.close().unwrap();
+}
+
+#[test]
+fn reclamation_waits_for_old_readers_then_auto_publishes() {
+    let files = TestPair::new("reclaim");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        2,
+    )
+    .unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    writer
+        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 1)
+        .unwrap();
+    writer.commit().unwrap();
+
+    let pinned = LiveReader::open(&files.main).unwrap();
+    assert_eq!(pinned.info().unwrap().transaction_id, 2);
+    writer
+        .assign_direct_v4(Ipv4Key(12), Ipv4Key(18), 2)
+        .unwrap();
+    writer.commit().unwrap();
+
+    assert!(matches!(
+        writer.reclaim(10, 10_000).unwrap(),
+        ReclaimResult::NoChange
+    ));
+    pinned.close().unwrap();
+
+    let reclaimed = writer.reclaim(10, 10_000).unwrap();
+    match reclaimed {
+        ReclaimResult::NoChange => panic!("released reader left reclamation blocked"),
+        ReclaimResult::Commit {
+            transaction_count,
+            page_count,
+            commit,
+        } => {
+            assert_eq!(transaction_count, 1);
+            assert!(page_count > 0);
+            assert_eq!(commit.transaction_id, 4);
+            assert_eq!(commit.durability, CommitDurability::Committed);
+        }
+    }
+    writer.close().unwrap();
+
+    let reader = LiveReader::open(&files.main).unwrap();
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(11)).unwrap(), Some(1));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(2));
+    reader.close().unwrap();
+}
+
+#[test]
+fn failed_reclamation_discards_its_complete_private_draft() {
+    let files = TestPair::new("reclaim-abort");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+    )
+    .unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    writer
+        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 1)
+        .unwrap();
+    writer.commit().unwrap();
+    writer
+        .assign_direct_v4(Ipv4Key(12), Ipv4Key(18), 2)
+        .unwrap();
+    writer.commit().unwrap();
+    writer.close().unwrap();
+
+    let mut tiny = budget();
+    tiny.max_private_pages = 1;
+    let mut writer = LiveWriter::open(&files.main, tiny).unwrap();
+    assert!(matches!(
+        writer.reclaim(10, 10_000),
+        Err(Error::TransactionAborted(_))
+    ));
+    writer.close().unwrap();
+
+    let reader = LiveReader::open(&files.main).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 3);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(11)).unwrap(), Some(1));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(2));
+    reader.close().unwrap();
+
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    assert!(matches!(
+        writer.reclaim(10, 10_000).unwrap(),
+        ReclaimResult::Commit { .. }
+    ));
+    writer.close().unwrap();
 }

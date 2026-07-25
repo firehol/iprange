@@ -148,6 +148,23 @@ fn stale_slot_bytes_are_cleared_before_reuse() {
 }
 
 #[test]
+fn malformed_or_future_active_slots_fail_closed() {
+    let files = TestFiles::new("active-malformed");
+    let scanner = create_ready(&files, 1);
+    let owner = Sidecar::open(&files.main, [1; 16]).unwrap();
+    let slot = owner.claim_reader(7).unwrap();
+    let offset = slot_offset(slot).unwrap();
+
+    file_io::write_exact_at(&owner.file, &[0x5a; SLOT_SIZE as usize], offset).unwrap();
+    assert!(matches!(scanner.scan_at_most(7), Err(Error::Corrupt(_))));
+
+    owner.release_reader(slot).unwrap();
+    let slot = owner.claim_reader(8).unwrap();
+    assert!(matches!(scanner.scan_at_most(7), Err(Error::Corrupt(_))));
+    owner.release_reader(slot).unwrap();
+}
+
+#[test]
 fn replacement_at_the_canonical_path_is_detected() {
     let mut files = TestFiles::new("replace");
     let sidecar = create_ready(&files, 1);
