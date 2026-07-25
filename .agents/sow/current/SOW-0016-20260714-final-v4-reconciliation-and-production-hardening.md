@@ -11442,6 +11442,90 @@ requirements are normative in the Pre-Implementation Gate above.
   change was needed for this slice because it implements the current section-20
   contract without changing it.
 
+### 2026-07-25 - recovery construction plan
+
+- Recovery will add one policy layer over the existing page codecs, immutable
+  output builder, and fail-if-exists publisher. It will not add another file
+  format, mutable database, transaction mechanism, or normal-ingestion sorting
+  path.
+- Construction starts with an internal direct-value slice over an already
+  retained exact candidate. A first checked traversal verifies reachable pages,
+  reports damage, and determines whether all readable records remain globally
+  ordered. A stable ordered candidate is traversed again and streamed directly
+  into the prospective final inode with constant record state; no sorting file
+  is created.
+- Ordered overlap handling retains only one connected component. A one-record
+  component is copied; every record in a multi-record overlapping component is
+  rejected, and its exact interval union is added once to rejected address
+  coverage. Adjacent equal accepted records are coalesced before the existing
+  canonical builder sees them.
+- If readable records are no longer ordered, recovery uses only the
+  caller-authorized section-14.4 scratch path: fixed-width records, bounded heap,
+  bounded descriptors, authenticated exclusive names, deterministic merge
+  order, exact cleanup, and no page/range object allocation. Zero scratch
+  authority either completes through the ordered path or returns the typed
+  resource failure before output publication.
+- Page ownership uses a preallocated sparse table charged to the heap budget,
+  with a file-backed fixed-slot form only when explicitly authorized. It is
+  proportional to reachable pages and its declared capacity, never the highest
+  sparse page number or the selected meta's declared page count.
+- Metadata remains all-or-nothing. Recovery copies it only after the complete
+  CRC-checked chain, zlib stream, checksum, and exact decompressed length verify;
+  otherwise it emits one truthful metadata damage envelope and produces an
+  output with metadata absent.
+- The following membership slice reuses the same traversal/report/scratch
+  machinery. It reconciles the redundant catalog indexes without renumbering,
+  treats the membership-ID tree as bitmap authority, verifies every active feed
+  bit, and lets the existing builder recreate hashes, used indexes, IDs, and
+  refcounts.
+- Source retention and final rechecks remain mode-specific and precede every
+  destination reservation. Immutable and offline candidates keep their lifetime
+  lock through construction; live recovery gets the dedicated exact-generation
+  slot path. All source protection is released before the already-tested
+  fail-if-exists publisher can block, preserving the section-19 deadlock rule.
+- Permanent coverage will include clean direct and membership recovery, isolated
+  unreadable subtrees, unordered and overlapping records, complete-component
+  rejection, catalog conflicts, missing/invalid memberships, metadata damage,
+  sparse page numbers, heap/scratch/output/file-descriptor budgets, sink and
+  cancellation failures, exact candidate replacement, live pinning, cleanup,
+  publication crash resolution, explicit output validation, Rust 1.74, static
+  checks, complexity, and allocation/scaling measurements.
+
+### 2026-07-25 - direct recovery construction foundation
+
+- The first recovery construction slice is implemented internally. It performs
+  one bounded analysis pass, then streams already ordered direct ranges into the
+  prospective final inode or uses one exactly reserved heap buffer for
+  disordered readable ranges. It does not create a normal-ingestion sorting
+  file.
+- CRC-valid readable overlap components are rejected whole; accepted adjacent
+  equal ranges are coalesced; reversed records and unreadable subtrees remain
+  reported damage rather than guessed state. Full-space IPv6 cardinality uses
+  `Cardinality129`.
+- The same sparse page-ownership table covers the reachable range and metadata
+  graphs. It is sized from the caller heap budget and reachable-page estimate,
+  not the highest page number.
+- Metadata is retained only after its complete page chain, CRCs, exact zlib
+  stream, checksum, and declared output length verify. A damaged chain is
+  omitted while independently verified ranges remain recoverable.
+- The append-only output builder now preserves ownership on finalization errors,
+  allowing the later public recovery layer to clean the exact private inode.
+- Analysis and construction are separate modules; immutable-output identity and
+  empty-meta setup are also separate from range/catalog construction. All four
+  resulting production files are below 500 physical lines.
+- Six permanent direct tests cover clean ordered recovery, a damaged leaf,
+  complete overlap-component rejection, disordered input, insufficient heap
+  before output mutation, and valid versus damaged metadata.
+- Checkpoint validation is green: all six recovery tests run and pass; the full
+  all-feature and no-default-feature suites each pass with 227 passed and two
+  ignored unit tests plus every integration target; the same all-feature matrix
+  passes on Rust 1.74; strict all-target Clippy, formatting, the SOW audit, and
+  the recovery-slice complexity limits pass.
+- This is not a public recovery API yet. Authorized external sorting,
+  membership/catalog reconstruction, source-mode retention and final rechecks,
+  exact cleanup/result composition, and fail-if-exists publication remain in the
+  current recovery milestone.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

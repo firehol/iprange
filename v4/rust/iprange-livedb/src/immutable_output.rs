@@ -16,6 +16,7 @@ use crate::range_mutation;
 use crate::used_bitmap::{self, Kind};
 
 mod membership;
+mod setup;
 
 pub(crate) use membership::MembershipWords;
 
@@ -42,6 +43,12 @@ pub(crate) struct Finished {
     pub(crate) meta: MetaV4,
 }
 
+#[derive(Debug)]
+pub(crate) struct FinishFailure {
+    pub(crate) builder: Builder,
+    pub(crate) cause: Error,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LastRange<K> {
     to: K,
@@ -61,11 +68,11 @@ pub(crate) struct Builder {
 
 impl Builder {
     pub(crate) fn new(file: File, spec: OutputSpec, budget: OutputBudget) -> Result<Self> {
-        require_new_output(&file, spec, budget)?;
+        setup::require_new_output(&file, spec, budget)?;
         file.set_len((2 * PAGE_SIZE) as u64)?;
         Ok(Self {
             file,
-            meta: empty_meta(spec),
+            meta: setup::empty_meta(spec),
             budget,
             last_v4: None,
             last_v6: None,
@@ -105,25 +112,43 @@ impl Builder {
     }
 
     pub(crate) fn write_metadata(&mut self, input: &[u8]) -> Result<()> {
-        self.mutate(|output| output.write_metadata_inner(input))
+        self.write_metadata_with_budget(input, self.budget.max_heap_bytes)
+    }
+
+    pub(crate) fn write_metadata_with_budget(
+        &mut self,
+        input: &[u8],
+        max_heap_bytes: u64,
+    ) -> Result<()> {
+        self.mutate(|output| output.write_metadata_inner(input, max_heap_bytes))
     }
 
     pub(crate) fn finish(self) -> Result<Finished> {
-        self.require_active()?;
-        let bytes = self
-            .meta
-            .page_count
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or(Error::ArithmeticOverflow("immutable output length"))?;
-        self.file.set_len(bytes)?;
-        let mut page = [0; PAGE_SIZE];
-        self.meta.encode_into(&mut page);
-        file_io::write_exact_at(&self.file, &page, 0)?;
-        file_io::write_exact_at(&self.file, &page, PAGE_SIZE as u64)?;
-        Ok(Finished {
-            file: self.file,
-            meta: self.meta,
-        })
+        self.finish_owned().map_err(|failure| failure.cause)
+    }
+
+    // The owner must remain available for exact cleanup without a failure-path allocation.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn finish_owned(self) -> std::result::Result<Finished, FinishFailure> {
+        let result = finish(&self);
+        match result {
+            Ok(()) => Ok(Finished {
+                file: self.file,
+                meta: self.meta,
+            }),
+            Err(cause) => Err(FinishFailure {
+                builder: self,
+                cause,
+            }),
+        }
+    }
+
+    pub(crate) fn into_file(self) -> File {
+        self.file
+    }
+
+    pub(crate) fn meta(&self) -> MetaV4 {
+        self.meta
     }
 
     fn mutate<T>(&mut self, operation: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
@@ -247,13 +272,13 @@ impl Builder {
         Ok(())
     }
 
-    fn write_metadata_inner(&mut self, input: &[u8]) -> Result<()> {
+    fn write_metadata_inner(&mut self, input: &[u8], max_heap_bytes: u64) -> Result<()> {
         if self.metadata_staged {
             return Err(Error::WrongState(
                 "immutable output metadata is already set",
             ));
         }
-        let compressed = metadata::compress(input, self.budget.max_heap_bytes)?;
+        let compressed = metadata::compress(input, max_heap_bytes)?;
         self.meta.metadata_root = metadata::write_chain(self, &compressed)?;
         self.meta.metadata_uncompressed_len = input.len() as u64;
         self.meta.metadata_compressed_len = compressed.len() as u64;
@@ -287,6 +312,20 @@ impl Builder {
         self.meta.membership_entry_count = state.entry_count;
         self.meta.membership_id_limit = state.id_limit;
     }
+}
+
+fn finish(output: &Builder) -> Result<()> {
+    output.require_active()?;
+    let bytes = output
+        .meta
+        .page_count
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(Error::ArithmeticOverflow("immutable output length"))?;
+    output.file.set_len(bytes)?;
+    let mut page = [0; PAGE_SIZE];
+    output.meta.encode_into(&mut page);
+    file_io::write_exact_at(&output.file, &page, 0)?;
+    file_io::write_exact_at(&output.file, &page, PAGE_SIZE as u64)
 }
 
 impl Store for Builder {
@@ -365,68 +404,6 @@ impl range_mutation::RangeStore for Builder {
         Err(Error::Corrupt(
             "immutable output attempted to rewrite an ordered range",
         ))
-    }
-}
-
-fn require_new_output(file: &File, spec: OutputSpec, budget: OutputBudget) -> Result<()> {
-    if file.metadata()?.len() != 0 {
-        return Err(Error::InvalidArgument("immutable output file is not empty"));
-    }
-    require_output_identity(spec)?;
-    require_output_limits(spec, budget)
-}
-
-fn require_output_identity(spec: OutputSpec) -> Result<()> {
-    if spec.database_id == [0; 16] || spec.commit_nonce == [0; 16] || spec.transaction_id == 0 {
-        return Err(Error::InvalidArgument(
-            "immutable output identity is invalid",
-        ));
-    }
-    Ok(())
-}
-
-fn require_output_limits(spec: OutputSpec, budget: OutputBudget) -> Result<()> {
-    if budget.max_output_pages < 2 {
-        return Err(Error::BudgetExceeded("immutable output pages"));
-    }
-    if spec.feed_index_limit > MAX_PAGE_COUNT
-        || (spec.value_kind == ValueKind::Direct && spec.feed_index_limit != 0)
-    {
-        return Err(Error::InvalidArgument(
-            "immutable output feed-index limit is invalid",
-        ));
-    }
-    Ok(())
-}
-
-fn empty_meta(spec: OutputSpec) -> MetaV4 {
-    MetaV4 {
-        address_family: spec.address_family,
-        value_kind: spec.value_kind,
-        value_tag: spec.value_tag,
-        database_id: spec.database_id,
-        txn_id: spec.transaction_id,
-        commit_nonce: spec.commit_nonce,
-        page_count: 2,
-        range_record_count: 0,
-        active_feed_count: 0,
-        feed_index_limit: spec.feed_index_limit,
-        membership_entry_count: 0,
-        membership_id_limit: u64::from(spec.value_kind == ValueKind::Membership),
-        metadata_uncompressed_len: 0,
-        metadata_compressed_len: 0,
-        retired_extent_count: 0,
-        range_root: 0,
-        catalog_name_root: 0,
-        catalog_index_root: 0,
-        feed_used_root: 0,
-        membership_id_root: 0,
-        membership_hash_root: 0,
-        membership_used_root: 0,
-        metadata_root: 0,
-        free_bitmap_root: 0,
-        retirement_root: 0,
-        allocator_reserve: [0; 4],
     }
 }
 

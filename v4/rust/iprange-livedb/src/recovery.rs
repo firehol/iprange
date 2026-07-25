@@ -1,10 +1,31 @@
 //! Recovery candidate identity shared by inspection, validation, and recovery.
 
+#[allow(dead_code)]
+mod budget;
 mod classify;
+#[allow(dead_code)]
+mod direct;
+#[allow(dead_code)]
+mod direct_build;
+#[allow(dead_code)]
+mod direct_output;
+#[allow(dead_code)]
+mod metadata;
+#[allow(dead_code)]
+mod page_set;
+#[allow(dead_code)]
+mod range_scan;
+#[allow(dead_code)]
+mod report;
 
 use crate::validation::{LocalFileIdentity, ValidationProgress};
 
+pub use budget::RecoveryBudget;
 pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};
+pub use report::{
+    RecoveryLogicalCounts, RecoveryPageCounts, RecoveryReport, RecoverySink, RecoverySinkControl,
+    RecoveryUnknownEnvelope,
+};
 
 pub(crate) mod inspection;
 

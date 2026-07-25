@@ -15,11 +15,11 @@ use crate::slotted_page::{put_u16, put_u32, put_u64};
 
 const PAGE_TYPE: u8 = 13;
 const BODY_OFFSET: usize = 32;
-const DATA_OFFSET: usize = 48;
+pub(crate) const DATA_OFFSET: usize = 48;
 const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
-const MAX_PAGES: usize = 260;
+pub(crate) const MAX_PAGES: usize = 260;
 // Covers the pinned miniz backend's fixed workspace; allocation tests enforce it.
-const DEFLATE_HEAP_OVERHEAD: u64 = 512 * 1024;
+pub(crate) const DEFLATE_HEAP_OVERHEAD: u64 = 512 * 1024;
 
 pub(crate) fn compressed_bound(uncompressed_len: usize) -> usize {
     let blocks = std::cmp::max(1, uncompressed_len.div_ceil(65_535));
@@ -250,12 +250,12 @@ fn walk(
     Ok(())
 }
 
-struct ParsedPage<'a> {
-    next: u32,
-    bytes: &'a [u8],
+pub(crate) struct ParsedPage<'a> {
+    pub(crate) next: u32,
+    pub(crate) bytes: &'a [u8],
 }
 
-fn parse_page<'a>(
+pub(crate) fn parse_page<'a>(
     page: &'a [u8; PAGE_SIZE],
     page_number: u32,
     meta: &MetaV4,

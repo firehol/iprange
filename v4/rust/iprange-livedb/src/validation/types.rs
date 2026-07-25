@@ -99,10 +99,14 @@ pub enum ValidationReason {
     AllocationPartitionInvalid,
     RetirementOrderInvalid,
     RetirementListInvalid,
+    CatalogInvalid,
+    MembershipMissing,
+    MembershipInvalid,
+    MetadataInvalid,
 }
 
 impl ValidationReason {
-    pub const COUNT: usize = 36;
+    pub const COUNT: usize = 40;
 
     #[inline]
     pub(crate) const fn index(self) -> usize {
