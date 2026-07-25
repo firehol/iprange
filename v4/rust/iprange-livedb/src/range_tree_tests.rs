@@ -5,6 +5,7 @@ use crate::bootstrap;
 use crate::contract::{AddressFamily, MetaV4};
 use crate::database::ImmutableReader;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::range_cursor::{DirectRange, RangeDirection};
 use crate::test_alloc::count_thread_allocations;
 use std::fs;
 use std::path::PathBuf;
@@ -191,4 +192,89 @@ fn malformed_selected_pages_fail_safely_without_crc_validation() {
     leaf[28..32].fill(0xa5);
     let (reader, _path) = fixture(meta(AddressFamily::Ipv4, 3, 2, 1), &[(2, leaf)]);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(1));
+}
+
+#[test]
+fn cursors_cross_leaf_boundaries_in_both_directions() {
+    let branch = v4_branch(&[(10, 3), (100, 4)]);
+    let first = v4_leaf(&[(10, 20, 1), (30, 40, 2)]);
+    let second = v4_leaf(&[(100, 110, 3)]);
+    let (reader, _path) = fixture(
+        meta(AddressFamily::Ipv4, 5, 2, 3),
+        &[(2, branch), (3, first), (4, second)],
+    );
+
+    let expected = [
+        DirectRange {
+            from: Ipv4Key(10),
+            to: Ipv4Key(20),
+            value: 1,
+        },
+        DirectRange {
+            from: Ipv4Key(30),
+            to: Ipv4Key(40),
+            value: 2,
+        },
+        DirectRange {
+            from: Ipv4Key(100),
+            to: Ipv4Key(110),
+            value: 3,
+        },
+    ];
+
+    let mut forward = reader.direct_cursor_v4(RangeDirection::Forward).unwrap();
+    for range in expected {
+        assert_eq!(forward.next_range().unwrap(), Some(range));
+    }
+    assert_eq!(forward.next_range().unwrap(), None);
+
+    let mut backward = reader.direct_cursor_v4(RangeDirection::Backward).unwrap();
+    for range in expected.into_iter().rev() {
+        assert_eq!(backward.next_range().unwrap(), Some(range));
+    }
+    assert_eq!(backward.next_range().unwrap(), None);
+}
+
+#[test]
+fn cursor_seek_includes_a_containing_range_then_follows_direction() {
+    let branch = v4_branch(&[(10, 3), (100, 4)]);
+    let first = v4_leaf(&[(10, 20, 1)]);
+    let second = v4_leaf(&[(100, 110, 2)]);
+    let (reader, _path) = fixture(
+        meta(AddressFamily::Ipv4, 5, 2, 2),
+        &[(2, branch), (3, first), (4, second)],
+    );
+
+    let mut forward = reader.direct_cursor_v4(RangeDirection::Forward).unwrap();
+    forward.seek(Ipv4Key(15)).unwrap();
+    assert_eq!(forward.next_range().unwrap().unwrap().from, Ipv4Key(10));
+    forward.seek(Ipv4Key(21)).unwrap();
+    assert_eq!(forward.next_range().unwrap().unwrap().from, Ipv4Key(100));
+    forward.seek(Ipv4Key(111)).unwrap();
+    assert_eq!(forward.next_range().unwrap(), None);
+
+    let mut backward = reader.direct_cursor_v4(RangeDirection::Backward).unwrap();
+    backward.seek(Ipv4Key(105)).unwrap();
+    assert_eq!(backward.next_range().unwrap().unwrap().from, Ipv4Key(100));
+    backward.seek(Ipv4Key(99)).unwrap();
+    assert_eq!(backward.next_range().unwrap().unwrap().from, Ipv4Key(10));
+    backward.seek(Ipv4Key(9)).unwrap();
+    assert_eq!(backward.next_range().unwrap(), None);
+}
+
+#[test]
+fn warmed_cursor_step_allocates_nothing_even_across_a_leaf() {
+    let branch = v4_branch(&[(10, 3), (100, 4)]);
+    let first = v4_leaf(&[(10, 20, 1)]);
+    let second = v4_leaf(&[(100, 110, 2)]);
+    let (reader, _path) = fixture(
+        meta(AddressFamily::Ipv4, 5, 2, 2),
+        &[(2, branch), (3, first), (4, second)],
+    );
+    let mut cursor = reader.direct_cursor_v4(RangeDirection::Forward).unwrap();
+    assert_eq!(cursor.next_range().unwrap().unwrap().value, 1);
+
+    let (result, allocations) = count_thread_allocations(|| cursor.next_range());
+    assert_eq!(result.unwrap().unwrap().value, 2);
+    assert_eq!(allocations, 0);
 }

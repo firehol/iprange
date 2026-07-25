@@ -9990,6 +9990,26 @@ requirements are normative in the Pre-Implementation Gate above.
   one public integration test. Warnings-denied all-target Clippy, formatting,
   and `git diff --check` pass.
 
+### 2026-07-25 - immutable direct cursor implementation
+
+- The public immutable reader now opens family-specific forward and backward
+  direct-range cursors. Seek returns a containing interval when one exists or
+  the nearest interval in the chosen direction.
+- A cursor retains one 4 KiB page and a fixed 31-frame ancestor path. It
+  re-reads branch pages only when crossing a leaf boundary, performs no heap
+  allocation during warmed movement, and performs the same selected-path safety
+  checks as point lookup without implicit data-page CRC validation.
+- Permanent tests cover both directions across leaf boundaries, forward and
+  backward seek through ranges and gaps, end-of-tree behavior, and zero
+  allocations on a step that crosses into another leaf. The public integration
+  fixture exercises the exported IPv6 cursor.
+- The cursor implementation is 319 physical lines; every function is at or
+  below cyclomatic complexity 8. All active implementation and test files
+  remain below 500 lines.
+- Validation passes on the current toolchain and Rust 1.74: 43 unit tests and
+  one public integration test. Warnings-denied all-target Clippy and formatting
+  pass.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

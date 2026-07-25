@@ -7,15 +7,23 @@ use crate::error::{Error, Result};
 use crate::file_io;
 use crate::key::IpKey;
 
-const HEADER_SIZE: usize = 32;
-const RANGE_BRANCH: u8 = 1;
-const RANGE_LEAF: u8 = 2;
+pub(crate) const HEADER_SIZE: usize = 32;
+pub(crate) const RANGE_BRANCH: u8 = 1;
+pub(crate) const RANGE_LEAF: u8 = 2;
 
-struct Header {
-    item_count: usize,
-    level: u16,
-    lower: usize,
-    upper: usize,
+#[derive(Clone, Copy)]
+pub(crate) struct Header {
+    pub(crate) item_count: usize,
+    pub(crate) level: u16,
+    pub(crate) lower: usize,
+    pub(crate) upper: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Record<K> {
+    pub(crate) from: K,
+    pub(crate) to: K,
+    pub(crate) value: u32,
 }
 
 pub(crate) fn lookup<K: IpKey>(file: &File, meta: &MetaV4, target: K) -> Result<Option<u32>> {
@@ -43,8 +51,7 @@ pub(crate) fn lookup<K: IpKey>(file: &File, meta: &MetaV4, target: K) -> Result<
         let Some(index) = greatest_not_after::<K>(&page, &header, cell_len, target)? else {
             return Ok(None);
         };
-        let cell = cell(&page, &header, index, cell_len)?;
-        page_number = u32_le(cell, K::WIDTH);
+        page_number = branch_child::<K>(&page, &header, index)?;
         expected_level = Some(header.level - 1);
     }
 
@@ -60,19 +67,14 @@ fn lookup_leaf<K: IpKey>(
     let Some(index) = greatest_not_after::<K>(page, header, cell_len, target)? else {
         return Ok(None);
     };
-    let cell = cell(page, header, index, cell_len)?;
-    let from = K::read_le(cell);
-    let to = K::read_le(&cell[K::WIDTH..]);
-    if from > to {
-        return Err(Error::Corrupt("selected range has reversed endpoints"));
-    }
-    if target > to {
+    let record = leaf_record::<K>(page, header, index)?;
+    if target > record.to {
         return Ok(None);
     }
-    Ok(Some(u32_le(cell, K::WIDTH * 2)))
+    Ok(Some(record.value))
 }
 
-fn parse_header<K: IpKey>(
+pub(crate) fn parse_header<K: IpKey>(
     page: &[u8; PAGE_SIZE],
     selected_txn: u64,
     expected_level: Option<u16>,
@@ -134,7 +136,7 @@ fn parse_slot_bounds(page: &[u8; PAGE_SIZE], item_count: usize) -> Result<(usize
     Ok((lower, upper))
 }
 
-fn greatest_not_after<K: IpKey>(
+pub(crate) fn greatest_not_after<K: IpKey>(
     page: &[u8; PAGE_SIZE],
     header: &Header,
     cell_len: usize,
@@ -152,6 +154,33 @@ fn greatest_not_after<K: IpKey>(
         }
     }
     Ok(lower.checked_sub(1))
+}
+
+pub(crate) fn branch_child<K: IpKey>(
+    page: &[u8; PAGE_SIZE],
+    header: &Header,
+    index: usize,
+) -> Result<u32> {
+    let cell = cell(page, header, index, K::WIDTH + 4)?;
+    Ok(u32_le(cell, K::WIDTH))
+}
+
+pub(crate) fn leaf_record<K: IpKey>(
+    page: &[u8; PAGE_SIZE],
+    header: &Header,
+    index: usize,
+) -> Result<Record<K>> {
+    let cell = cell(page, header, index, K::WIDTH * 2 + 4)?;
+    let from = K::read_le(cell);
+    let to = K::read_le(&cell[K::WIDTH..]);
+    if from > to {
+        return Err(Error::Corrupt("selected range has reversed endpoints"));
+    }
+    Ok(Record {
+        from,
+        to,
+        value: u32_le(cell, K::WIDTH * 2),
+    })
 }
 
 fn cell<'a>(

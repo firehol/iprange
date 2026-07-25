@@ -18,6 +18,7 @@ pub mod error;
 mod file_io;
 pub mod key;
 mod path;
+mod range_cursor;
 mod range_tree;
 
 pub use bootstrap::MetaSelection;
@@ -26,6 +27,7 @@ pub use contract::{AddressFamily, ValueKind, ValueTag};
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use key::{Ipv4Key, Ipv6Key};
+pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
 
 #[cfg(test)]
 mod test_alloc;

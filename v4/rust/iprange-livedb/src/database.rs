@@ -12,6 +12,7 @@ use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::path;
+use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::range_tree;
 
 /// Public logical identity and selected generation.
@@ -96,6 +97,18 @@ impl ImmutableReader {
     pub fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
         self.require_direct(AddressFamily::Ipv6)?;
         range_tree::lookup(&self.file, &self.bootstrap.meta, address)
+    }
+
+    /// Open an ordered cursor over an IPv4 direct-value database.
+    pub fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
+        self.require_direct(AddressFamily::Ipv4)?;
+        DirectCursorV4::new(&self.file, &self.bootstrap.meta, direction)
+    }
+
+    /// Open an ordered cursor over an IPv6 direct-value database.
+    pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
+        self.require_direct(AddressFamily::Ipv6)?;
+        DirectCursorV6::new(&self.file, &self.bootstrap.meta, direction)
     }
 
     fn require_direct(&self, family: AddressFamily) -> Result<()> {

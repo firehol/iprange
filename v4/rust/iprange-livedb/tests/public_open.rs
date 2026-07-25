@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use iprange_livedb::{AddressFamily, ImmutableReader, Ipv6Key, MetaSelection, ValueKind, ValueTag};
+use iprange_livedb::{
+    AddressFamily, ImmutableReader, Ipv6Key, MetaSelection, RangeDirection, ValueKind, ValueTag,
+};
 
 const PAGE_SIZE: usize = 4096;
 
@@ -109,4 +111,11 @@ fn public_immutable_open_and_direct_lookup() {
         reader.lookup_direct_v6(Ipv6Key::from_u128(21)).unwrap(),
         None
     );
+
+    let mut cursor = reader.direct_cursor_v6(RangeDirection::Forward).unwrap();
+    let range = cursor.next_range().unwrap().unwrap();
+    assert_eq!(range.from, Ipv6Key::from_u128(10));
+    assert_eq!(range.to, Ipv6Key::from_u128(20));
+    assert_eq!(range.value, 42);
+    assert_eq!(cursor.next_range().unwrap(), None);
 }
