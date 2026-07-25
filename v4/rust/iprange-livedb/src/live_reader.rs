@@ -10,6 +10,7 @@ use crate::feed_catalog::FeedCursor;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::membership_view::MembershipView;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 
 /// Reader registered against one committed generation of a live database.
@@ -92,6 +93,20 @@ impl LiveReader {
     pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         self.require_owner()?;
         self.core.feed_cursor_live(self.owner_pid)
+    }
+
+    /// Look up one address in this pinned IPv4 membership generation.
+    pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
+        self.require_owner()?;
+        self.core
+            .lookup_membership_v4(address, Some(self.owner_pid))
+    }
+
+    /// Look up one address in this pinned IPv6 membership generation.
+    pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
+        self.require_owner()?;
+        self.core
+            .lookup_membership_v6(address, Some(self.owner_pid))
     }
 
     /// Exact decompressed metadata length, or absence.

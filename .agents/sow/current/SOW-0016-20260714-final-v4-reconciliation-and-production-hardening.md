@@ -10290,6 +10290,58 @@ requirements are normative in the Pre-Implementation Gate above.
   graph is 8,172 physical lines including embedded tests; every active
   production and separate test file remains at or below 490 lines.
 
+### 2026-07-25 - lazy membership view plan
+
+- Membership address lookup will resolve the selected range's private
+  membership ID inside the SDK and return a reader-borrowing
+  `MembershipView`; the ID itself remains hidden.
+- The view exposes the checked word count, random word reads, and sequential
+  caller-buffer word batches. It never materializes a legal maximum bitmap and
+  performs no heap allocation on a warmed successful read.
+- Inline dictionary values retain only their ID-leaf location and re-read that
+  selected page when words are requested. Blob values retain only the exact
+  blob root and descend the fixed 16-byte offset tree directly into 4,048-byte
+  chunks. Batched reads copy complete available runs from each selected chunk
+  rather than performing one tree descent per word.
+- Ordinary lookup checks selected range, dictionary, and blob bounds, record
+  geometry, ownership, lengths, storage mode, and child levels. It deliberately
+  does not verify page CRCs, recompute SHA-256, scan all dictionary entries,
+  validate refcounts globally, or cross-check every set bit against the catalog;
+  those remain explicit `Validate` responsibilities.
+- Permanent tests will cover inline and multi-leaf blob values, random and
+  batched reads, end truncation, wrong family/kind, absent addresses, malformed
+  selected ID/blob records and children, ordinary bad CRCs, live process
+  ownership, maximum declared word counts without allocation, and zero
+  warmed-path allocations.
+
+### 2026-07-25 - lazy membership view implementation
+
+- Rust membership point lookup now resolves the range value through the
+  selected ID tree and returns a reader-borrowing `MembershipView`; no public
+  method reveals or accepts the internal membership ID.
+- The view exposes checked word count, random words, caller-buffer batches, and
+  read-only feed-index membership tests. Inline values re-read one selected ID
+  leaf. Blob batches descend the fixed offset tree once per 4,048-byte chunk and
+  cross chunk boundaries without materializing the complete bitmap.
+- The selected path enforces ID namespace, refcount presence, word/byte bounds,
+  storage geometry, child/page/level/transaction bounds, exact blob coverage,
+  canonical nonzero final words when observed, and fork ownership. It does not
+  calculate ordinary-path CRCs, hashes, global refcounts, or catalog-wide bit
+  validity.
+- Permanent tests cover inline and two-leaf blob values, truncated batched
+  output, maximum 67,108,864-word declarations as constant-size views, missing
+  IDs, trailing zero words, malformed selected ID/blob records and children,
+  wrong kind/family, bad ordinary-path CRCs, live process ownership, and zero
+  warmed lookup/read allocations.
+- The database open tests moved to their own logical test file rather than
+  allowing `database.rs` to grow past the file-size review target.
+- The current toolchain and Rust 1.74 each pass 119 tests with one intentionally
+  ignored subprocess entry point. Warnings-denied all-target Clippy, formatting,
+  `git diff --check`, the SOW audit, and complexity analysis pass. Every new
+  function is at or below cyclomatic complexity 9. The active production-module
+  graph is 8,681 physical lines including embedded tests; every active
+  production and separate test file remains at or below 490 lines.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

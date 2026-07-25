@@ -7,6 +7,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
+mod blob_tree;
 mod bootstrap;
 pub mod cardinality;
 mod contract;
@@ -27,6 +28,8 @@ mod live_lock;
 mod live_reader;
 mod live_sidecar;
 mod live_writer;
+mod membership_tree;
+mod membership_view;
 mod metadata;
 mod path;
 mod random;
@@ -49,6 +52,7 @@ pub use live_writer::{
     create_live, CommitDurability, CommitResult, CreateResult, CreationState, LiveWriter,
     ReclaimResult, TransactionBudget,
 };
+pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
 
 #[cfg(test)]
