@@ -4,8 +4,8 @@ use std::fs::File;
 use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{MetaV4, PAGE_SIZE};
-use crate::error::{Error, ErrorCode, Result};
+use crate::contract::MetaV4;
+use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::range_tree::Record;
 use crate::validation::ValidationReason;
@@ -13,7 +13,7 @@ use crate::validation::ValidationReason;
 use super::direct_output::DirectKey;
 use super::page_set::PageSet;
 use super::range_scan::{self, RangeEvents};
-use super::scratch::{Scratch, ScratchCleanup, ScratchSlot};
+use super::scratch::{residue_error, Scratch, ScratchCleanup, ScratchSlot};
 use super::RecoveryBudget;
 
 #[path = "external_sort/streams.rs"]
@@ -25,92 +25,113 @@ pub(crate) struct ExternalSortFailure {
     pub(crate) cleanup: Option<ScratchCleanup>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SortRequest<'a> {
+    pub(crate) meta: MetaV4,
+    pub(crate) budget: &'a RecoveryBudget,
+    pub(crate) retained_heap_bytes: u64,
+    pub(crate) readable_records: u64,
+    pub(crate) cancellation: &'a CancellationToken,
+}
+
 // Exact scratch ownership must remain in the error without a failure-path box.
 #[allow(clippy::result_large_err)]
 pub(crate) fn sort_and_emit<K: DirectKey>(
     file: &File,
-    meta: MetaV4,
-    budget: &RecoveryBudget,
-    retained_heap_bytes: u64,
-    readable_records: u64,
-    cancellation: &CancellationToken,
+    request: SortRequest<'_>,
+    mut pages: PageSet,
     mut emit: impl FnMut(Record<K>) -> Result<()>,
 ) -> std::result::Result<ScratchCleanup, ExternalSortFailure> {
-    let prepared = prepare::<K>(file, meta, budget, retained_heap_bytes);
-    let (mut pages, mut records) = match prepared {
-        Ok(prepared) => prepared,
-        Err(cause) => return Err(no_attempt(cause)),
+    let mut records =
+        match prepare_records::<K>(request.budget, request.retained_heap_bytes, &pages) {
+            Ok(records) => records,
+            Err(cause) => return Err(page_failure(pages, cause)),
+        };
+    if let Err(cause) = pages.reset() {
+        return Err(page_failure(pages, cause));
+    }
+    let mut scratch = match pages.take_scratch() {
+        Some(scratch) => scratch,
+        None => match start_scratch(request.meta, request.budget) {
+            Ok(scratch) => scratch,
+            Err(cause) => return Err(page_failure(pages, cause)),
+        },
     };
-    let directory = budget
-        .scratch_directory
-        .as_deref()
-        .ok_or(Error::BudgetExceeded("recovery unordered ranges"));
-    let mut scratch = match directory.and_then(|directory| {
-        Scratch::start(
-            directory,
-            meta,
-            budget.max_scratch_bytes,
-            budget.max_scratch_files,
-            budget.max_open_files,
-        )
-    }) {
-        Ok(scratch) => scratch,
-        Err(cause) => return Err(no_attempt(cause)),
+    if let Err(cause) = scratch.require_external_sort() {
+        let _ = pages.release(&mut scratch);
+        return finish(scratch, Err(cause));
+    }
+    let first = match scratch.create() {
+        Ok(first) => first,
+        Err(cause) => {
+            let _ = pages.release(&mut scratch);
+            return finish(scratch, Err(cause));
+        }
     };
-    let result = execute(
+    let runs = scan_runs(
         file,
-        meta,
+        request.meta,
         &mut pages,
         &mut records,
-        readable_records,
-        cancellation,
+        first,
+        request.readable_records,
+        request.cancellation,
         &mut scratch,
-        &mut emit,
     );
+    drop(records);
+    let reusable = pages.release(&mut scratch);
+    let result = runs.and_then(|runs| {
+        sort_runs_and_emit(
+            &mut scratch,
+            runs,
+            reusable,
+            request.readable_records,
+            request.cancellation,
+            &mut emit,
+        )
+    });
     finish(scratch, result)
 }
 
-fn prepare<K: IpKey>(
-    file: &File,
-    meta: MetaV4,
+fn prepare_records<K: IpKey>(
     budget: &RecoveryBudget,
     retained_heap_bytes: u64,
-) -> Result<(PageSet, Vec<Record<K>>)> {
+    pages: &PageSet,
+) -> Result<Vec<Record<K>>> {
     let record_size = size_of::<Record<K>>() as u64;
     let available = budget
         .max_heap_bytes
         .checked_sub(retained_heap_bytes)
+        .and_then(|value| value.checked_sub(pages.retained_bytes()))
         .and_then(|value| value.checked_sub(record_size))
         .ok_or(Error::BudgetExceeded("recovery unordered range buffer"))?;
-    let physical_pages = file.metadata()?.len() / PAGE_SIZE as u64;
-    let pages = PageSet::new(available, meta.page_count.min(physical_pages))?;
-    let record_bytes = budget
-        .max_heap_bytes
-        .checked_sub(retained_heap_bytes)
-        .and_then(|value| value.checked_sub(pages.retained_bytes()))
-        .ok_or(Error::BudgetExceeded("recovery unordered range buffer"))?;
-    let capacity = usize::try_from(record_bytes / record_size)
+    let capacity = usize::try_from((available + record_size) / record_size)
         .unwrap_or(usize::MAX)
         .max(1);
     let mut records = Vec::new();
     records
         .try_reserve_exact(capacity)
         .map_err(|_| Error::BudgetExceeded("recovery unordered range buffer"))?;
-    Ok((pages, records))
+    let retained = (records.capacity() as u64)
+        .checked_mul(record_size)
+        .ok_or(Error::ArithmeticOverflow("recovery unordered range buffer"))?;
+    if retained > available + record_size {
+        return Err(Error::BudgetExceeded("recovery unordered range buffer"));
+    }
+    Ok(records)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute<K: DirectKey>(
+fn scan_runs<K: DirectKey>(
     file: &File,
     meta: MetaV4,
     pages: &mut PageSet,
     records: &mut Vec<Record<K>>,
+    first: ScratchSlot,
     readable_records: u64,
     cancellation: &CancellationToken,
     scratch: &mut Scratch,
-    emit: &mut impl FnMut(Record<K>) -> Result<()>,
-) -> Result<()> {
-    let first = scratch.create()?;
+) -> Result<Runs> {
     let mut runs = Runs::new(first);
     let capacity = records.capacity();
     {
@@ -128,10 +149,21 @@ fn execute<K: DirectKey>(
             return Err(Error::RecoveryCandidateChanged);
         }
     }
+    Ok(runs)
+}
+
+fn sort_runs_and_emit<K: DirectKey>(
+    scratch: &mut Scratch,
+    runs: Runs,
+    reusable: Option<ScratchSlot>,
+    readable_records: u64,
+    cancellation: &CancellationToken,
+    emit: &mut impl FnMut(Record<K>) -> Result<()>,
+) -> Result<()> {
     if readable_records == 0 {
         return Ok(());
     }
-    let sorted = merge_all::<K>(scratch, runs, cancellation)?;
+    let sorted = merge_all::<K>(scratch, runs, reusable, cancellation)?;
     emit_sorted(scratch, sorted, readable_records, cancellation, emit)
 }
 
@@ -224,12 +256,19 @@ impl<K: DirectKey> RangeEvents<K> for ScanEvents<'_, K> {
 fn merge_all<K: DirectKey>(
     scratch: &mut Scratch,
     mut input: Runs,
+    reusable: Option<ScratchSlot>,
     cancellation: &CancellationToken,
 ) -> Result<ScratchSlot> {
     if input.count <= 1 {
         return Ok(input.slot);
     }
-    let mut output = scratch.create()?;
+    let mut output = match reusable {
+        Some(slot) => {
+            scratch.reset(slot)?;
+            slot
+        }
+        None => scratch.create()?,
+    };
     while input.count > 1 {
         scratch.reset(output)?;
         let merged = merge_pass::<K>(scratch, input, output, cancellation)?;
@@ -329,22 +368,28 @@ fn finish(
     }
 }
 
-fn residue_error(cleanup: &ScratchCleanup) -> Error {
-    let problem = cleanup
-        .residues
-        .first()
-        .expect("unclean scratch has one residue")
-        .problem;
-    match (problem.code, problem.os_code) {
-        (ErrorCode::Io, Some(code)) => Error::Io(std::io::Error::from_raw_os_error(code)),
-        _ => Error::Corrupt(problem.detail),
-    }
+fn start_scratch(meta: MetaV4, budget: &RecoveryBudget) -> Result<Scratch> {
+    let directory = budget
+        .scratch_directory
+        .as_deref()
+        .ok_or(Error::BudgetExceeded("recovery unordered ranges"))?;
+    Scratch::start(
+        directory,
+        meta,
+        budget.max_scratch_bytes,
+        budget.max_scratch_files,
+        budget.max_open_files,
+    )
 }
 
-fn no_attempt(cause: Error) -> ExternalSortFailure {
-    ExternalSortFailure {
-        cause,
-        cleanup: None,
+#[allow(clippy::result_large_err)]
+fn page_failure(pages: PageSet, cause: Error) -> ExternalSortFailure {
+    match pages.finish(Err(cause)) {
+        Err(failure) => ExternalSortFailure {
+            cause: failure.cause,
+            cleanup: failure.cleanup,
+        },
+        Ok(_) => unreachable!("failed page scan cannot finish successfully"),
     }
 }
 

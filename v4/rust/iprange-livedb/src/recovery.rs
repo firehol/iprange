@@ -31,6 +31,8 @@ mod metadata;
 #[allow(dead_code)]
 mod page_set;
 #[allow(dead_code)]
+mod range_build;
+#[allow(dead_code)]
 mod range_scan;
 #[allow(dead_code)]
 mod report;
@@ -41,6 +43,12 @@ mod scratch;
 mod tree_scan;
 
 use crate::validation::{LocalFileIdentity, ValidationProgress};
+
+#[cfg(target_os = "linux")]
+pub(crate) use scratch::ScratchCleanup;
+#[cfg(not(target_os = "linux"))]
+#[derive(Clone, Debug)]
+pub(crate) struct ScratchCleanup;
 
 pub use budget::RecoveryBudget;
 pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};

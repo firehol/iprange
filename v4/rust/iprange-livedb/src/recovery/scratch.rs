@@ -1,11 +1,9 @@
 //! Exact ownership and bounded I/O for authorized recovery scratch files.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::contract::MetaV4;
-use crate::crc32c;
 use crate::error::{Error, ErrorCode, Result};
 use crate::file_io;
 use crate::publication::namespace::{regular_identity, Directory, Identity, Name, NamespaceError};
@@ -13,9 +11,20 @@ use crate::publication::security::{self, Profile};
 use crate::random;
 use crate::validation::LocalFileIdentity;
 
-const HEADER_SIZE: u64 = 128;
-const OWNER_RECOVERY: u16 = 2;
-const POSIX_IDENTITY: u16 = 1;
+#[path = "scratch/cleanup.rs"]
+mod cleanup;
+pub(crate) use cleanup::residue_error;
+use cleanup::{remove, residue, scratch_problem, set_removed_problems};
+#[path = "scratch/fixed.rs"]
+mod fixed;
+pub(crate) use fixed::ScratchFile;
+#[path = "scratch/format.rs"]
+mod format;
+#[cfg(test)]
+use format::hex;
+pub(crate) use format::HEADER_SIZE;
+use format::{header, scratch_name, POSIX_IDENTITY};
+
 const MAX_OWNED: usize = 2;
 
 /// One retained scratch slot.
@@ -67,12 +76,13 @@ pub(crate) struct Scratch {
     source: MetaV4,
     max_bytes: u64,
     max_files: usize,
+    max_open_files: u32,
     retained_bytes: u64,
     owned: [Option<Owned>; MAX_OWNED],
 }
 
 struct Owned {
-    file: File,
+    file: Option<File>,
     name: Name,
     identity: Identity,
     ordinal: u32,
@@ -87,12 +97,12 @@ impl Scratch {
         max_files: u32,
         max_open_files: u32,
     ) -> Result<Self> {
-        if max_files < 2 || max_open_files < 4 {
+        if max_files == 0 || max_open_files < 3 {
             return Err(Error::BudgetExceeded(
-                "external recovery sort requires two scratch files",
+                "recovery scratch requires one file descriptor",
             ));
         }
-        if max_bytes < 2 * HEADER_SIZE {
+        if max_bytes < HEADER_SIZE {
             return Err(Error::BudgetExceeded("recovery scratch bytes"));
         }
         let directory = Directory::open(directory).map_err(namespace_error)?;
@@ -108,6 +118,7 @@ impl Scratch {
             max_files: usize::try_from(max_files)
                 .unwrap_or(usize::MAX)
                 .min(MAX_OWNED),
+            max_open_files,
             retained_bytes: 0,
             owned: [None, None],
         })
@@ -123,9 +134,19 @@ impl Scratch {
         self.install(slot, ordinal)?;
         let header = header(self.source, self.attempt_id, ordinal, self.profile);
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
-        security::secure_creator_only(&owned.file, self.profile).map_err(namespace_error)?;
-        file_io::write_exact_at(&owned.file, &header, 0)?;
+        let file = owned.file.as_ref().expect("new scratch file is attached");
+        security::secure_creator_only(file, self.profile).map_err(namespace_error)?;
+        file_io::write_exact_at(file, &header, 0)?;
         Ok(ScratchSlot(slot))
+    }
+
+    pub(crate) fn require_external_sort(&self) -> Result<()> {
+        if self.max_files < 2 || self.max_open_files < 4 {
+            return Err(Error::BudgetExceeded(
+                "external recovery sort requires two scratch files",
+            ));
+        }
+        Ok(())
     }
 
     fn free_slot(&self) -> Result<usize> {
@@ -155,7 +176,7 @@ impl Scratch {
         let identity =
             regular_identity(&file, self.directory.identity().device).map_err(namespace_error)?;
         self.owned[slot] = Some(Owned {
-            file,
+            file: Some(file),
             name,
             identity,
             ordinal,
@@ -183,7 +204,7 @@ impl Scratch {
         self.require_growth(old, new)?;
         self.owner_mut(slot).length = new;
         self.retained_bytes = self.retained_bytes - old + new;
-        file_io::write_exact_at(&self.owner(slot).file, bytes, offset)
+        file_io::write_exact_at(self.file(slot), bytes, offset)
     }
 
     pub(crate) fn read(&self, slot: ScratchSlot, offset: u64, bytes: &mut [u8]) -> Result<()> {
@@ -193,15 +214,48 @@ impl Scratch {
         if offset < HEADER_SIZE || end > self.owner(slot).length {
             return Err(Error::Corrupt("scratch read exceeds its retained length"));
         }
-        file_io::read_exact_at(&self.owner(slot).file, bytes, offset)
+        file_io::read_exact_at(self.file(slot), bytes, offset)
     }
 
     pub(crate) fn reset(&mut self, slot: ScratchSlot) -> Result<()> {
+        self.resize(slot, HEADER_SIZE)
+    }
+
+    pub(crate) fn resize(&mut self, slot: ScratchSlot, length: u64) -> Result<()> {
+        if length < HEADER_SIZE {
+            return Err(Error::InvalidArgument(
+                "scratch length cannot exclude its ownership header",
+            ));
+        }
         let old = self.owner(slot).length;
-        self.owner(slot).file.set_len(HEADER_SIZE)?;
-        self.owner_mut(slot).length = HEADER_SIZE;
-        self.retained_bytes = self.retained_bytes - old + HEADER_SIZE;
+        self.require_growth(old, length)?;
+        self.file(slot).set_len(length)?;
+        self.owner_mut(slot).length = length;
+        self.retained_bytes = self.retained_bytes - old + length;
         Ok(())
+    }
+
+    pub(crate) fn detach(&mut self, slot: ScratchSlot) -> Result<ScratchFile> {
+        let owner = self.owner_mut(slot);
+        let file = owner
+            .file
+            .take()
+            .ok_or(Error::WrongState("scratch file is already detached"))?;
+        Ok(ScratchFile {
+            slot,
+            file,
+            length: owner.length,
+        })
+    }
+
+    pub(crate) fn attach(&mut self, detached: ScratchFile) -> ScratchSlot {
+        let owner = self.owner_mut(detached.slot);
+        assert!(
+            owner.file.is_none() && owner.length == detached.length,
+            "detached scratch ownership changed"
+        );
+        owner.file = Some(detached.file);
+        detached.slot
     }
 
     pub(crate) fn cleanup(mut self) -> ScratchCleanup {
@@ -287,6 +341,13 @@ impl Scratch {
             .expect("scratch slot is owned")
     }
 
+    fn file(&self, slot: ScratchSlot) -> &File {
+        self.owner(slot)
+            .file
+            .as_ref()
+            .expect("scratch file is attached")
+    }
+
     fn require_growth(&self, old: u64, new: u64) -> Result<()> {
         let total = self
             .retained_bytes
@@ -297,122 +358,6 @@ impl Scratch {
             return Err(Error::BudgetExceeded("recovery scratch bytes"));
         }
         Ok(())
-    }
-}
-
-fn set_removed_problems(
-    removed: &[bool; MAX_OWNED],
-    problems: &mut [Option<ScratchProblem>; MAX_OWNED],
-    problem: ScratchProblem,
-) {
-    for index in 0..MAX_OWNED {
-        if removed[index] {
-            problems[index] = Some(problem);
-        }
-    }
-}
-
-fn remove(directory: &Directory, owner: &Owned) -> std::result::Result<(), ScratchProblem> {
-    let metadata = owner
-        .file
-        .metadata()
-        .map_err(|error| io_problem(&error, "inspect owned recovery scratch"))?;
-    if metadata.nlink() > 1 {
-        return Err(ScratchProblem {
-            code: ErrorCode::CleanupConflict,
-            os_code: None,
-            detail: "owned recovery scratch has unexpected links",
-        });
-    }
-    if metadata.nlink() == 0 {
-        directory
-            .require_absent(&owner.name)
-            .map_err(|error| scratch_problem(&error))?;
-        return Ok(());
-    }
-    let removed = directory
-        .unlink_exact(&owner.name, owner.identity)
-        .map_err(|error| scratch_problem(&error))?;
-    if !removed {
-        return Err(ScratchProblem {
-            code: ErrorCode::CleanupConflict,
-            os_code: None,
-            detail: "owned recovery scratch lost its exact name",
-        });
-    }
-    let links = owner
-        .file
-        .metadata()
-        .map_err(|error| io_problem(&error, "recheck owned recovery scratch"))?
-        .nlink();
-    if links != 0 {
-        return Err(ScratchProblem {
-            code: ErrorCode::CleanupConflict,
-            os_code: None,
-            detail: "owned recovery scratch remained linked after removal",
-        });
-    }
-    Ok(())
-}
-
-fn residue(
-    directory_identity: LocalFileIdentity,
-    profile: Profile,
-    owner: Owned,
-    problem: ScratchProblem,
-) -> ScratchResidue {
-    ScratchResidue {
-        ordinal: owner.ordinal,
-        directory_identity,
-        basename: owner.name.bytes().into(),
-        identity: local(owner.identity),
-        creation_security_kind: POSIX_IDENTITY,
-        creation_security_commitment: profile.commitment(),
-        problem,
-    }
-}
-
-fn header(source: MetaV4, attempt: [u8; 16], ordinal: u32, profile: Profile) -> [u8; 128] {
-    let mut bytes = [0; 128];
-    bytes[0..8].copy_from_slice(b"IPR4SCR1");
-    bytes[8..10].copy_from_slice(&1u16.to_le_bytes());
-    bytes[10..12].copy_from_slice(&(HEADER_SIZE as u16).to_le_bytes());
-    bytes[12..14].copy_from_slice(&OWNER_RECOVERY.to_le_bytes());
-    bytes[16..32].copy_from_slice(&source.database_id);
-    bytes[32..40].copy_from_slice(&source.txn_id.to_le_bytes());
-    bytes[40..56].copy_from_slice(&source.commit_nonce);
-    bytes[56..72].copy_from_slice(&attempt);
-    bytes[72..76].copy_from_slice(&ordinal.to_le_bytes());
-    bytes[76..78].copy_from_slice(&POSIX_IDENTITY.to_le_bytes());
-    bytes[80..112].copy_from_slice(&profile.commitment());
-    let checksum = crc32c::crc32c_with_zeroed(&bytes, 124, 4).expect("fixed scratch header");
-    bytes[124..128].copy_from_slice(&checksum.to_le_bytes());
-    bytes
-}
-
-fn scratch_name(attempt: [u8; 16], ordinal: u32) -> Result<Name> {
-    let mut bytes = [0u8; 62];
-    bytes[..17].copy_from_slice(b".iprange-scratch-");
-    let mut at = 17;
-    for byte in attempt {
-        bytes[at] = hex(byte >> 4);
-        bytes[at + 1] = hex(byte & 0x0f);
-        at += 2;
-    }
-    bytes[at] = b'-';
-    at += 1;
-    for shift in (0..8).rev() {
-        bytes[at] = hex(((ordinal >> (shift * 4)) & 0x0f) as u8);
-        at += 1;
-    }
-    bytes[at..].copy_from_slice(b".tmp");
-    Name::new(&bytes).map_err(namespace_error)
-}
-
-fn hex(value: u8) -> u8 {
-    match value {
-        0..=9 => b'0' + value,
-        _ => b'a' + value - 10,
     }
 }
 
@@ -441,32 +386,6 @@ fn namespace_error(error: NamespaceError) -> Error {
         | NamespaceError::AccessPolicy => {
             Error::Unsupported("scratch directory does not meet the ownership contract")
         }
-    }
-}
-
-fn scratch_problem(error: &NamespaceError) -> ScratchProblem {
-    match error {
-        NamespaceError::ForkedHandle => ScratchProblem {
-            code: ErrorCode::ForkedHandle,
-            os_code: None,
-            detail: "scratch owner crossed fork",
-        },
-        NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => {
-            io_problem(source, "recovery scratch cleanup failed")
-        }
-        _ => ScratchProblem {
-            code: ErrorCode::CleanupConflict,
-            os_code: None,
-            detail: "recovery scratch ownership changed",
-        },
-    }
-}
-
-fn io_problem(error: &std::io::Error, detail: &'static str) -> ScratchProblem {
-    ScratchProblem {
-        code: ErrorCode::Io,
-        os_code: error.raw_os_error(),
-        detail,
     }
 }
 

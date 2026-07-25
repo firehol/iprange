@@ -1,30 +1,23 @@
 //! Canonical immutable output from one membership recovery analysis.
 
 use std::fs::File;
-use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::immutable_output::{Builder, Finished};
-use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_tree::Record;
-use crate::validation::ValidationReason;
 
 #[cfg(target_os = "linux")]
 use super::external_sort::{self, ExternalSortFailure};
 use super::membership::{analyze, MembershipAnalysis};
 use super::membership_output::{Components, MembershipKey};
 use super::page_set::PageSet;
-use super::range_scan::{self, RangeEvents};
+use super::range_build::{buffer_fits, events, require_count, reserve};
+use super::range_scan;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
-#[cfg(target_os = "linux")]
-use super::scratch::ScratchCleanup;
-use super::RecoveryBudget;
-
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Debug)]
-pub(crate) struct ScratchCleanup;
+use super::{RecoveryBudget, ScratchCleanup};
 
 #[derive(Debug)]
 pub(crate) struct MembershipConstruction {
@@ -55,7 +48,7 @@ pub(crate) fn construct<S: RecoverySink>(
     }
     let analysis = match analyze(file, source_meta, budget, cancellation, sink) {
         Ok(analysis) => analysis,
-        Err(error) => return Err(failure(builder, error.cause, error.report, None)),
+        Err(error) => return Err(failure(builder, error.cause, error.report, error.scratch)),
     };
     match source_meta.address_family {
         AddressFamily::Ipv4 => build::<Ipv4Key, S>(
@@ -96,13 +89,28 @@ fn build<K: MembershipKey, S: RecoverySink>(
         catalog,
         memberships,
         metadata,
+        pages,
     } = analysis;
+    let mut pages = Some(pages);
     for entry in catalog.entries() {
         if let Err(cause) = builder.push_feed(entry.name, entry.index) {
-            return Err(failure(builder, cause, report, None));
+            let failed = failed_pages(
+                pages.take().expect("analysis retains page ownership"),
+                cause,
+            );
+            return Err(failure(builder, failed.cause, report, failed.scratch));
         }
     }
-    let retained = retained_bytes(&catalog, &memberships, &metadata);
+    let retained = match retained_bytes(&catalog, &memberships, &metadata) {
+        Ok(retained) => retained,
+        Err(cause) => {
+            let failed = failed_pages(
+                pages.take().expect("analysis retains page ownership"),
+                cause,
+            );
+            return Err(failure(builder, failed.cause, report, failed.scratch));
+        }
+    };
     let context = BuildContext {
         file,
         meta: source_meta,
@@ -117,10 +125,8 @@ fn build<K: MembershipKey, S: RecoverySink>(
             &mut builder,
             &mut reporter,
             readable_records,
-            retained,
+            pages.take().expect("analysis retains page ownership"),
         )
-        .map(|()| None)
-        .map_err(BuildFailure::plain)
     } else {
         build_sorted::<K, S>(
             context,
@@ -128,6 +134,7 @@ fn build<K: MembershipKey, S: RecoverySink>(
             &mut reporter,
             readable_records,
             retained,
+            pages.take().expect("analysis retains page ownership"),
         )
     };
     drop(catalog);
@@ -162,15 +169,6 @@ struct BuildFailure {
     scratch: Option<ScratchCleanup>,
 }
 
-impl BuildFailure {
-    fn plain(cause: Error) -> Self {
-        Self {
-            cause,
-            scratch: None,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct BuildContext<'a> {
     file: &'a File,
@@ -180,39 +178,38 @@ struct BuildContext<'a> {
     memberships: &'a super::membership_index::MembershipIndex,
 }
 
+#[allow(clippy::result_large_err)]
 fn build_ordered<K: MembershipKey, S: RecoverySink>(
     context: BuildContext<'_>,
     builder: &mut Builder,
     reporter: &mut Reporter<'_, S>,
     readable_records: u64,
-    retained: u64,
-) -> Result<()> {
-    let heap = context
-        .budget
-        .max_heap_bytes
-        .checked_sub(retained)
-        .ok_or(Error::BudgetExceeded("recovery page-ownership table"))?;
-    let mut pages = page_set(context.file, context.meta, heap)?;
-    let mut components = Components::<S, K>::new(
-        context.file,
-        context.meta,
-        context.memberships,
-        builder,
-        reporter,
-        context.cancellation,
-    );
-    {
-        let mut events = build_events(true, |record| components.push(record));
-        range_scan::scan(
+    mut pages: PageSet,
+) -> BuildResult {
+    let scan = (|| {
+        pages.reset()?;
+        let mut components = Components::<S, K>::new(
             context.file,
             context.meta,
-            &mut pages,
+            context.memberships,
+            builder,
+            reporter,
             context.cancellation,
-            &mut events,
-        )?;
-        require_count(events.readable_records, readable_records)?;
-    }
-    components.finish()
+        );
+        {
+            let mut events = events(true, |record| components.push(record));
+            range_scan::scan(
+                context.file,
+                context.meta,
+                &mut pages,
+                context.cancellation,
+                &mut events,
+            )?;
+            require_count(events.readable_records(), readable_records)?;
+        }
+        components.finish()
+    })();
+    finish_pages(pages, scan)
 }
 
 #[allow(clippy::result_large_err)]
@@ -222,51 +219,78 @@ fn build_sorted<K: MembershipKey, S: RecoverySink>(
     reporter: &mut Reporter<'_, S>,
     readable_records: u64,
     retained: u64,
+    pages: PageSet,
 ) -> BuildResult {
-    match range_buffer_bytes::<K>(readable_records, retained, context.budget) {
+    let total = match retained.checked_add(pages.retained_bytes()) {
+        Some(total) => total,
+        None => {
+            return finish_pages(
+                pages,
+                Err(Error::ArithmeticOverflow("recovery retained heap")),
+            )
+        }
+    };
+    match buffer_fits::<K>(readable_records, total, context.budget) {
         Ok(_) => {
-            let records = collect_sorted::<K>(context, readable_records, retained)
-                .map_err(BuildFailure::plain)?;
-            emit_sorted(context, builder, reporter, records).map_err(BuildFailure::plain)?;
-            Ok(None)
+            build_in_memory::<K, S>(context, builder, reporter, readable_records, total, pages)
         }
-        Err(Error::BudgetExceeded(_)) => {
-            build_external::<K, S>(context, builder, reporter, readable_records, retained)
-        }
-        Err(cause) => Err(BuildFailure::plain(cause)),
+        Err(Error::BudgetExceeded(_)) => build_external::<K, S>(
+            context,
+            builder,
+            reporter,
+            readable_records,
+            retained,
+            pages,
+        ),
+        Err(cause) => finish_pages(pages, Err(cause)),
     }
 }
 
-fn collect_sorted<K: MembershipKey>(
+#[allow(clippy::result_large_err)]
+fn build_in_memory<K: MembershipKey, S: RecoverySink>(
     context: BuildContext<'_>,
+    builder: &mut Builder,
+    reporter: &mut Reporter<'_, S>,
     readable_records: u64,
     retained: u64,
-) -> Result<Vec<Record<K>>> {
-    let record_bytes = range_buffer_bytes::<K>(readable_records, retained, context.budget)?;
-    let mut records = reserve_ranges::<K>(readable_records)?;
-    let heap = context
+    mut pages: PageSet,
+) -> BuildResult {
+    let available = context
         .budget
         .max_heap_bytes
         .checked_sub(retained)
-        .and_then(|value| value.checked_sub(record_bytes))
-        .ok_or(Error::BudgetExceeded("recovery page-ownership table"))?;
-    let mut pages = page_set(context.file, context.meta, heap)?;
-    let mut events = build_events(false, |record| {
-        records.push(record);
+        .ok_or(Error::BudgetExceeded("recovery unordered ranges"));
+    let mut records = match available.and_then(|bytes| reserve::<K>(readable_records, bytes)) {
+        Ok(records) => records,
+        Err(cause) => return finish_pages(pages, Err(cause)),
+    };
+    let scan = (|| {
+        pages.reset()?;
+        let mut events = events(false, |record| {
+            records.push(record);
+            Ok(())
+        });
+        range_scan::scan(
+            context.file,
+            context.meta,
+            &mut pages,
+            context.cancellation,
+            &mut events,
+        )?;
+        require_count(events.readable_records(), readable_records)?;
+        records.sort_unstable_by(|left, right| {
+            (left.from, left.to, left.value).cmp(&(right.from, right.to, right.value))
+        });
         Ok(())
-    });
-    range_scan::scan(
-        context.file,
-        context.meta,
-        &mut pages,
-        context.cancellation,
-        &mut events,
-    )?;
-    require_count(events.readable_records, readable_records)?;
-    records.sort_unstable_by(|left, right| {
-        (left.from, left.to, left.value).cmp(&(right.from, right.to, right.value))
-    });
-    Ok(records)
+    })();
+    if let Err(cause) = scan {
+        drop(records);
+        return finish_pages(pages, Err(cause));
+    }
+    let scratch = finish_pages(pages, Ok(()))?;
+    emit_sorted(context, builder, reporter, records)
+        .map_err(|cause| after_cleanup(cause, &scratch))?;
+    Ok(scratch)
 }
 
 fn emit_sorted<K: MembershipKey, S: RecoverySink>(
@@ -298,6 +322,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     reporter: &mut Reporter<'_, S>,
     readable_records: u64,
     retained: u64,
+    pages: PageSet,
 ) -> BuildResult {
     let mut components = Components::<S, K>::new(
         context.file,
@@ -309,11 +334,14 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     );
     let cleanup = external_sort::sort_and_emit::<K>(
         context.file,
-        context.meta,
-        context.budget,
-        retained,
-        readable_records,
-        context.cancellation,
+        external_sort::SortRequest {
+            meta: context.meta,
+            budget: context.budget,
+            retained_heap_bytes: retained,
+            readable_records,
+            cancellation: context.cancellation,
+        },
+        pages,
         |record| components.push(record),
     )
     .map_err(external_failure)?;
@@ -332,10 +360,14 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     _reporter: &mut Reporter<'_, S>,
     _readable_records: u64,
     _retained: u64,
+    pages: PageSet,
 ) -> BuildResult {
-    Err(BuildFailure::plain(Error::Unsupported(
-        "external recovery sorting is not implemented on this platform",
-    )))
+    finish_pages(
+        pages,
+        Err(Error::Unsupported(
+            "external recovery sorting is not implemented on this platform",
+        )),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -346,43 +378,16 @@ fn external_failure(error: ExternalSortFailure) -> BuildFailure {
     }
 }
 
-fn range_buffer_bytes<K: IpKey>(
-    records: u64,
-    retained: u64,
-    budget: &RecoveryBudget,
-) -> Result<u64> {
-    let bytes = records
-        .checked_mul(size_of::<Record<K>>() as u64)
-        .ok_or(Error::ArithmeticOverflow("recovery range buffer"))?;
-    if bytes
-        .checked_add(retained)
-        .is_some_and(|total| total <= budget.max_heap_bytes)
-    {
-        Ok(bytes)
-    } else {
-        Err(Error::BudgetExceeded("recovery unordered ranges"))
-    }
-}
-
-fn reserve_ranges<K: IpKey>(records: u64) -> Result<Vec<Record<K>>> {
-    let length =
-        usize::try_from(records).map_err(|_| Error::BudgetExceeded("recovery unordered ranges"))?;
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(length)
-        .map_err(|_| Error::BudgetExceeded("recovery unordered ranges"))?;
-    Ok(output)
-}
-
 fn retained_bytes(
     catalog: &super::catalog::Catalog,
     memberships: &super::membership_index::MembershipIndex,
     metadata: &Option<Vec<u8>>,
-) -> u64 {
+) -> Result<u64> {
     catalog
         .retained_bytes()
-        .saturating_add(memberships.retained_bytes())
-        .saturating_add(retained_metadata_bytes(metadata))
+        .checked_add(memberships.retained_bytes())
+        .and_then(|value| value.checked_add(retained_metadata_bytes(metadata)))
+        .ok_or(Error::ArithmeticOverflow("recovery retained heap"))
 }
 
 fn retained_metadata_bytes(metadata: &Option<Vec<u8>>) -> u64 {
@@ -404,16 +409,25 @@ fn write_metadata(
     builder.write_metadata_with_budget(metadata, available)
 }
 
-fn page_set(file: &File, meta: MetaV4, heap: u64) -> Result<PageSet> {
-    let physical_pages = file.metadata()?.len() / PAGE_SIZE as u64;
-    PageSet::new(heap, meta.page_count.min(physical_pages))
+#[allow(clippy::result_large_err)]
+fn finish_pages(pages: PageSet, result: Result<()>) -> BuildResult {
+    pages.finish(result).map_err(|failure| BuildFailure {
+        cause: failure.cause,
+        scratch: failure.cleanup,
+    })
 }
 
-fn require_count(actual: u64, expected: u64) -> Result<()> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(Error::RecoveryCandidateChanged)
+fn failed_pages(pages: PageSet, cause: Error) -> BuildFailure {
+    match finish_pages(pages, Err(cause)) {
+        Err(failure) => failure,
+        Ok(_) => unreachable!("failed page scan cannot finish successfully"),
+    }
+}
+
+fn after_cleanup(cause: Error, scratch: &Option<ScratchCleanup>) -> BuildFailure {
+    BuildFailure {
+        cause,
+        scratch: scratch.clone(),
     }
 }
 
@@ -443,60 +457,6 @@ fn failure(
         cause,
         report,
         scratch,
-    }
-}
-
-fn build_events<K, F>(ordered: bool, emit: F) -> BuildEvents<K, F> {
-    BuildEvents {
-        ordered,
-        previous_from: None,
-        readable_records: 0,
-        emit,
-    }
-}
-
-struct BuildEvents<K, F> {
-    ordered: bool,
-    previous_from: Option<K>,
-    readable_records: u64,
-    emit: F,
-}
-
-impl<K: IpKey, F: FnMut(Record<K>) -> Result<()>> RangeEvents<K> for BuildEvents<K, F> {
-    fn page_accepted(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
-        Ok(())
-    }
-
-    fn unknown(
-        &mut self,
-        _reason: ValidationReason,
-        _page: Option<u32>,
-        _unbounded: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn range(&mut self, _page: u32, record: Option<Record<K>>) -> Result<()> {
-        let Some(record) = record else {
-            return Ok(());
-        };
-        if self.ordered
-            && self
-                .previous_from
-                .is_some_and(|previous| previous >= record.from)
-        {
-            return Err(Error::RecoveryCandidateChanged);
-        }
-        self.previous_from = Some(record.from);
-        self.readable_records = self
-            .readable_records
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("recovery readable ranges"))?;
-        (self.emit)(record)
     }
 }
 

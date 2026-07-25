@@ -1,10 +1,12 @@
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::crc32c;
 
 struct TempDirectory {
     path: PathBuf,
@@ -77,6 +79,13 @@ fn exact_names_headers_io_and_cleanup_round_trip() {
     scratch.read(first, HEADER_SIZE, &mut read).unwrap();
     assert_eq!(&read, b"abcdef");
     assert_eq!(scratch.length(first), HEADER_SIZE + 6);
+    scratch.resize(first, HEADER_SIZE + 64).unwrap();
+    let detached = scratch.detach(first).unwrap();
+    detached.write(HEADER_SIZE, b"detached").unwrap();
+    let mut detached_read = [0; 8];
+    detached.read(HEADER_SIZE, &mut detached_read).unwrap();
+    assert_eq!(&detached_read, b"detached");
+    assert_eq!(scratch.attach(detached), first);
     scratch.reset(first).unwrap();
     assert_eq!(scratch.length(first), HEADER_SIZE);
     assert_eq!(scratch.length(second), HEADER_SIZE);
@@ -91,21 +100,37 @@ fn exact_names_headers_io_and_cleanup_round_trip() {
 fn byte_file_and_descriptor_budgets_fail_before_growth() {
     let directory = TempDirectory::new("budgets");
     assert!(matches!(
-        Scratch::start(&directory.path, meta(), 255, 2, 4),
+        Scratch::start(&directory.path, meta(), 127, 2, 4),
         Err(Error::BudgetExceeded("recovery scratch bytes"))
     ));
     assert!(matches!(
-        Scratch::start(&directory.path, meta(), 4096, 1, 4),
+        Scratch::start(&directory.path, meta(), 4096, 0, 4),
         Err(Error::BudgetExceeded(
-            "external recovery sort requires two scratch files"
+            "recovery scratch requires one file descriptor"
         ))
     ));
     assert!(matches!(
-        Scratch::start(&directory.path, meta(), 4096, 2, 3),
+        Scratch::start(&directory.path, meta(), 4096, 2, 2),
+        Err(Error::BudgetExceeded(
+            "recovery scratch requires one file descriptor"
+        ))
+    ));
+    let scratch = Scratch::start(&directory.path, meta(), 4096, 1, 3).unwrap();
+    assert!(matches!(
+        scratch.require_external_sort(),
         Err(Error::BudgetExceeded(
             "external recovery sort requires two scratch files"
         ))
     ));
+    assert!(scratch.cleanup().clean());
+    let scratch = Scratch::start(&directory.path, meta(), 4096, 2, 3).unwrap();
+    assert!(matches!(
+        scratch.require_external_sort(),
+        Err(Error::BudgetExceeded(
+            "external recovery sort requires two scratch files"
+        ))
+    ));
+    assert!(scratch.cleanup().clean());
 
     let mut scratch = Scratch::start(&directory.path, meta(), 256, 2, 4).unwrap();
     let first = scratch.create().unwrap();

@@ -15,7 +15,7 @@ use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
 use super::range_scan::{self, RangeEvents};
 use super::report::{RecoveryReport, RecoverySink, Reporter, Unknown};
-use super::RecoveryBudget;
+use super::{RecoveryBudget, ScratchCleanup};
 
 pub(crate) struct MembershipAnalysis {
     pub(crate) report: RecoveryReport,
@@ -24,11 +24,13 @@ pub(crate) struct MembershipAnalysis {
     pub(crate) catalog: Catalog,
     pub(crate) memberships: MembershipIndex,
     pub(crate) metadata: Option<Vec<u8>>,
+    pub(crate) pages: PageSet,
 }
 
 pub(crate) struct MembershipAnalysisFailure {
     pub(crate) cause: Error,
     pub(crate) report: RecoveryReport,
+    pub(crate) scratch: Option<ScratchCleanup>,
 }
 
 #[allow(clippy::result_large_err)]
@@ -40,24 +42,26 @@ pub(crate) fn analyze<S: RecoverySink>(
     sink: &mut S,
 ) -> std::result::Result<MembershipAnalysis, MembershipAnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
-        return Err(failure(cause, RecoveryReport::default()));
+        return Err(failure(cause, RecoveryReport::default(), None));
     }
     if meta.value_kind != ValueKind::Membership {
         return Err(failure(
             Error::WrongMode("membership recovery requires membership values"),
             RecoveryReport::default(),
+            None,
         ));
     }
     let physical_pages = match file.metadata() {
         Ok(metadata) => metadata.len() / PAGE_SIZE as u64,
-        Err(cause) => return Err(failure(cause.into(), RecoveryReport::default())),
+        Err(cause) => return Err(failure(cause.into(), RecoveryReport::default(), None)),
     };
     let mut reporter = Reporter::new(sink);
     let page_heap = budget.max_heap_bytes / 2;
-    let mut pages = match PageSet::new(page_heap, meta.page_count.min(physical_pages)) {
-        Ok(pages) => pages,
-        Err(cause) => return Err(failure(cause, reporter.finish())),
-    };
+    let mut pages =
+        match PageSet::for_recovery(page_heap, meta.page_count.min(physical_pages), meta, budget) {
+            Ok(pages) => pages,
+            Err(cause) => return Err(failure(cause, reporter.finish(), None)),
+        };
     let result = analyze_graphs(file, meta, budget, cancellation, &mut pages, &mut reporter);
     let report = reporter.finish();
     match result {
@@ -68,8 +72,9 @@ pub(crate) fn analyze<S: RecoverySink>(
             catalog,
             memberships,
             metadata,
+            pages,
         }),
-        Err(cause) => Err(failure(cause, report)),
+        Err(cause) => Err(failure_with_pages(pages, cause, report)),
     }
 }
 
@@ -208,6 +213,25 @@ fn page_interval(page: u32) -> PhysicalByteInterval {
     }
 }
 
-fn failure(cause: Error, report: RecoveryReport) -> MembershipAnalysisFailure {
-    MembershipAnalysisFailure { cause, report }
+fn failure(
+    cause: Error,
+    report: RecoveryReport,
+    scratch: Option<ScratchCleanup>,
+) -> MembershipAnalysisFailure {
+    MembershipAnalysisFailure {
+        cause,
+        report,
+        scratch,
+    }
+}
+
+fn failure_with_pages(
+    pages: PageSet,
+    cause: Error,
+    report: RecoveryReport,
+) -> MembershipAnalysisFailure {
+    match pages.finish(Err(cause)) {
+        Err(failed) => failure(failed.cause, report, failed.cleanup),
+        Ok(_) => unreachable!("failed analysis cannot finish successfully"),
+    }
 }

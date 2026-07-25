@@ -230,7 +230,7 @@ fn disordered_recovery_refuses_insufficient_heap_before_output_mutation() {
 
     assert!(matches!(
         failure.cause,
-        Error::BudgetExceeded("recovery page-ownership table")
+        Error::BudgetExceeded("recovery unordered ranges")
     ));
     assert_eq!(failure.report.ranges.examined, 3);
     drop(failure.builder.into_file());
@@ -249,10 +249,10 @@ fn disordered_direct_recovery_uses_bounded_multi_pass_scratch() {
     let meta = finish_ranges(source_builder(&paths.source), &ranges);
     swap_first_two_records(&paths.source, meta);
     let budget = RecoveryBudget {
-        max_heap_bytes: 256,
+        max_heap_bytes: 32,
         max_output_pages: 20_000,
         max_open_files: 4,
-        max_scratch_bytes: 4096,
+        max_scratch_bytes: 16 * 1024,
         max_scratch_files: 2,
         scratch_directory: Some(paths.scratch.clone()),
     };
@@ -448,7 +448,7 @@ fn edit_root_leaf(path: &Path, meta: MetaV4, edit: impl FnOnce(&mut [u8; PAGE_SI
     file_io::write_exact_at(&file, &page, u64::from(meta.range_root) * PAGE_SIZE as u64).unwrap();
 }
 
-fn output_ranges(path: &Path) -> Vec<(u32, u32, u32)> {
+pub(super) fn output_ranges(path: &Path) -> Vec<(u32, u32, u32)> {
     let reader = ImmutableReader::open(path).unwrap();
     let mut cursor = reader.direct_cursor_v4(RangeDirection::Forward).unwrap();
     let mut ranges = Vec::new();

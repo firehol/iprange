@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::contract::{u16_le, ValueTag};
+use crate::contract::{u16_le, ValueTag, PAGE_SIZE};
 use crate::database::ImmutableReader;
 use crate::feed::FeedName;
 use crate::immutable_output::{MembershipWords, OutputBudget, OutputSpec};

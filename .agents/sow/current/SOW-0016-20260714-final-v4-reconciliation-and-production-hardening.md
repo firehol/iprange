@@ -11655,6 +11655,42 @@ requirements are normative in the Pre-Implementation Gate above.
   scratch maintenance, source-mode guards and final candidate rechecks, exact
   public results/cleanup, and fail-if-exists publication remain required.
 
+### 2026-07-25 - file-backed recovery ownership milestone
+
+- One page-ownership set now survives analysis and is reset for construction.
+  It starts as a fixed-capacity heap hash table and migrates once, only under
+  explicit caller authority, to one fixed-slot authenticated scratch file.
+  Capacity follows reachable claims and budget rather than the highest page
+  number.
+- Ordered construction reuses that file directly and then removes it. For
+  disordered construction, the page-table file stays open during the range
+  rescan, the second scratch file receives sorted runs, and the released page
+  file becomes merge output. The operation therefore retains at most one
+  scratch attempt and two scratch files.
+- Every analysis and construction failure now consumes page ownership
+  explicitly and returns the exact scratch-attempt cleanup facts. Allocation,
+  migration, reset, scan, sink, merge, metadata, and builder failures cannot
+  silently drop an attempted scratch cleanup.
+- Heap accounting now includes the retained page table and actual reserved
+  range-vector capacity. Analysis no longer allocates a second page table for
+  construction. Shared second-pass range counting/order logic lives in one
+  small module instead of duplicate direct and membership implementations.
+- Permanent coverage proves sparse maximum page numbers, heap exhaustion,
+  migration/reset, insufficient scratch without artifacts, one-file ordered
+  recovery, two-file multipass recovery with a 32-byte heap, and sink-stop
+  cleanup. Both direct external tests now force the file-backed ownership tier.
+- Current all-feature and no-default suites pass with 244 unit tests passed,
+  two subprocess entry points ignored, and 54 integration tests passed. The
+  all-feature matrix also passes on Rust 1.74.1; Windows cross-compilation,
+  strict all-target Clippy, formatting, diff checks, and the SOW audit pass.
+- The changed recovery production files are each below 500 physical lines.
+  Complexity analysis reports no changed function above cyclomatic complexity
+  9.
+- Catalog and membership-locator overflow still require bounded storage.
+  Authenticated abandoned-scratch maintenance, public source guards and final
+  checks, exact public recovery results, and publication remain subsequent
+  recovery steps.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

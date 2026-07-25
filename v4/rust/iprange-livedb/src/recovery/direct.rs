@@ -11,18 +11,20 @@ use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
 use super::range_scan::{self, RangeEvents};
 use super::report::{RecoveryReport, RecoverySink, Reporter, Unknown};
-use super::RecoveryBudget;
+use super::{RecoveryBudget, ScratchCleanup};
 
 pub(crate) struct DirectAnalysis {
     pub(crate) report: RecoveryReport,
     pub(crate) readable_records: u64,
     pub(crate) ordered: bool,
     pub(super) metadata: Option<Vec<u8>>,
+    pub(super) pages: PageSet,
 }
 
 pub(crate) struct DirectAnalysisFailure {
     pub(crate) cause: Error,
     pub(crate) report: RecoveryReport,
+    pub(crate) scratch: Option<ScratchCleanup>,
 }
 
 // A partial report must survive sink, I/O, and budget failures without allocating then.
@@ -35,22 +37,34 @@ pub(crate) fn analyze<S: RecoverySink>(
     sink: &mut S,
 ) -> std::result::Result<DirectAnalysis, DirectAnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
-        return Err(analysis_failure(cause, RecoveryReport::default()));
+        return Err(analysis_failure(cause, RecoveryReport::default(), None));
     }
     if meta.value_kind != ValueKind::Direct {
         return Err(analysis_failure(
             Error::WrongMode("direct recovery requires direct values"),
             RecoveryReport::default(),
+            None,
         ));
     }
     let physical_pages = match file.metadata() {
         Ok(metadata) => metadata.len() / PAGE_SIZE as u64,
-        Err(cause) => return Err(analysis_failure(cause.into(), RecoveryReport::default())),
+        Err(cause) => {
+            return Err(analysis_failure(
+                cause.into(),
+                RecoveryReport::default(),
+                None,
+            ))
+        }
     };
     let mut reporter = Reporter::new(sink);
-    let mut pages = match PageSet::new(budget.max_heap_bytes, meta.page_count.min(physical_pages)) {
+    let mut pages = match PageSet::for_recovery(
+        budget.max_heap_bytes,
+        meta.page_count.min(physical_pages),
+        meta,
+        budget,
+    ) {
         Ok(pages) => pages,
-        Err(cause) => return Err(analysis_failure(cause, reporter.finish())),
+        Err(cause) => return Err(analysis_failure(cause, reporter.finish(), None)),
     };
     let ranges = match meta.address_family {
         AddressFamily::Ipv4 => {
@@ -78,8 +92,9 @@ pub(crate) fn analyze<S: RecoverySink>(
             readable_records,
             ordered,
             metadata,
+            pages,
         }),
-        Err(cause) => Err(analysis_failure(cause, report)),
+        Err(cause) => Err(analysis_failure_with_pages(pages, cause, report)),
     }
 }
 
@@ -100,8 +115,27 @@ fn analyze_family<K: IpKey, S: RecoverySink>(
     Ok((events.readable_records, events.ordered))
 }
 
-fn analysis_failure(cause: Error, report: RecoveryReport) -> DirectAnalysisFailure {
-    DirectAnalysisFailure { cause, report }
+fn analysis_failure(
+    cause: Error,
+    report: RecoveryReport,
+    scratch: Option<ScratchCleanup>,
+) -> DirectAnalysisFailure {
+    DirectAnalysisFailure {
+        cause,
+        report,
+        scratch,
+    }
+}
+
+fn analysis_failure_with_pages(
+    pages: PageSet,
+    cause: Error,
+    report: RecoveryReport,
+) -> DirectAnalysisFailure {
+    match pages.finish(Err(cause)) {
+        Err(failure) => analysis_failure(failure.cause, report, failure.cleanup),
+        Ok(_) => unreachable!("failed analysis cannot finish successfully"),
+    }
 }
 
 struct AnalysisEvents<'a, 'b, S, K> {
