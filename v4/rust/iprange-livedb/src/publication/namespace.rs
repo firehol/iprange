@@ -103,6 +103,11 @@ impl Destination {
         Ok(())
     }
 
+    pub(crate) fn require_fail_if_exists_available(&self) -> Result<(), NamespaceError> {
+        self.directory.require_absent(&self.main)?;
+        self.directory.require_absent(&self.coordination)
+    }
+
     pub(crate) fn output_name(&self, attempt: [u8; 16]) -> Result<Name, NamespaceError> {
         self.attempt_name(b".iprange-publish-", attempt)
     }
@@ -436,6 +441,20 @@ pub(crate) fn regular_identity(
     }
     if metadata.nlink() != 1 {
         return Err(NamespaceError::LinkCount(metadata.nlink()));
+    }
+    Ok(metadata_identity(&metadata))
+}
+
+pub(crate) fn regular_identity_any_link(
+    file: &File,
+    directory_device: u64,
+) -> Result<Identity, NamespaceError> {
+    let metadata = file.metadata().map_err(NamespaceError::Io)?;
+    if !metadata.is_file() {
+        return Err(NamespaceError::NotRegular);
+    }
+    if metadata.dev() != directory_device {
+        return Err(NamespaceError::CrossFilesystem);
     }
     Ok(metadata_identity(&metadata))
 }

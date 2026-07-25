@@ -12,6 +12,7 @@ use super::result::{
     AccessPolicy, ArtifactKind, CleanupArtifacts, DestinationContent, FinalState, NameSlot,
     PreparationFailure, PublicationResult, PublicationStatus, Seed,
 };
+use crate::cancellation::CancellationToken;
 
 pub(crate) type Result = std::result::Result<PublicationResult, Box<PreparationFailure>>;
 
@@ -29,6 +30,21 @@ enum Point {
 
 pub(crate) fn fail_if_exists(output: PreparedOutput) -> Result {
     fail_if_exists_with(output, |_| Ok(()))
+}
+
+pub(crate) fn fail_if_exists_cancellable(
+    output: PreparedOutput,
+    cancellation: &CancellationToken,
+) -> Result {
+    fail_if_exists_with(output, |point| {
+        if matches!(
+            point,
+            Point::CleanupOutput | Point::CleanupReservation | Point::CleanupDirectorySync
+        ) {
+            return Ok(());
+        }
+        cancellation.check().map_err(|error| Problem::sdk(&error))
+    })
 }
 
 pub(super) fn resume_armed(

@@ -49,6 +49,12 @@ pub(crate) struct FinishFailure {
     pub(crate) cause: Error,
 }
 
+#[derive(Debug)]
+pub(crate) struct NewFailure {
+    pub(crate) file: File,
+    pub(crate) cause: Error,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LastRange<K> {
     to: K,
@@ -68,8 +74,20 @@ pub(crate) struct Builder {
 
 impl Builder {
     pub(crate) fn new(file: File, spec: OutputSpec, budget: OutputBudget) -> Result<Self> {
-        setup::require_new_output(&file, spec, budget)?;
-        file.set_len((2 * PAGE_SIZE) as u64)?;
+        Self::new_owned(file, spec, budget).map_err(|failure| failure.cause)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn new_owned(
+        file: File,
+        spec: OutputSpec,
+        budget: OutputBudget,
+    ) -> std::result::Result<Self, NewFailure> {
+        if let Err(cause) = setup::require_new_output(&file, spec, budget)
+            .and_then(|()| file.set_len((2 * PAGE_SIZE) as u64).map_err(Error::from))
+        {
+            return Err(NewFailure { file, cause });
+        }
         Ok(Self {
             file,
             meta: setup::empty_meta(spec),

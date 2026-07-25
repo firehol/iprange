@@ -200,6 +200,11 @@ fn individual_cleanup_failures_report_only_the_exact_owned_artifact() {
         let expected_name = match expected_kind {
             ArtifactKind::PrivateOutput => file_name(&paths.private_output),
             ArtifactKind::PrivateReservation => file_name(&paths.private_reservation),
+            ArtifactKind::OwnedCoordination
+            | ArtifactKind::AuthorizedScratch
+            | ArtifactKind::UnpublishedMainTail => {
+                panic!("direct publication returned an unrelated cleanup kind")
+            }
         };
         assert_eq!(&*artifact.basename, expected_name);
     }

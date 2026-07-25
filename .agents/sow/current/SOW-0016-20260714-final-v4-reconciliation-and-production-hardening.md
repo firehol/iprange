@@ -11800,6 +11800,72 @@ requirements are normative in the Pre-Implementation Gate above.
   Runtime maintenance is currently Linux-only; other targets return the
   explicit unsupported result until their approved cleanup primitive exists.
 
+### 2026-07-25 - public recovery integration plan
+
+- The remaining recovery gap is composition, not another recovery algorithm.
+  The bounded scanners/builders already produce a canonical private immutable
+  file, and the fail-if-exists publisher already owns the crash-safe namespace
+  state machine. The public layer will connect them without copying source data
+  into another intermediate file.
+- Immutable recovery will retain a shared source-lifetime lock, require the
+  canonical sidecar to remain absent, bind the exact candidate before the scan,
+  and repeat the path/sidecar/candidate checks after construction. Offline
+  recovery will require an explicit caller-certification value, retain the
+  exclusive source-lifetime lock, and repeat the exact candidate check.
+- Live recovery will accept only the exact `Newest` token. Under the retained
+  sidecar operation gate it will reclassify that token, scan the complete reader
+  table, and claim one slot at the exact selected transaction. Its final check
+  will verify the retained main/sidecar identities, header, active slot, and the
+  exact cached metadata tuple used by construction; it will not require the old
+  physical meta page to remain selected.
+- Every source mode will explicitly release its lifetime/reader authority after
+  the private output is complete and before output digesting, destination
+  lifetime locking, reservation, or publication. A failed release will retain
+  an opaque retryable source-cleanup guard and will block publication.
+- Publication result types will become one portable public contract reused by
+  recovery and the later compact-snapshot entry point. Recovery preparation
+  failures will contain the partial report, optional output/scratch attempt
+  facts, bounded cleanup ledger, optional source-cleanup guard, and typed cause.
+  Successful preparation will return the recovery report plus the existing
+  factual fail-if-exists publication result, including non-publication and
+  outcome-unknown states.
+- `max_open_files` will continue to count the source, prospective output, and
+  authorized scratch descriptors exactly as established by the recovery
+  implementation. Live recovery reserves one additional descriptor for its
+  retained sidecar before passing the remaining allowance to the builder.
+- Permanent tests will cover all three source modes, exact candidate rebinding,
+  live slot ownership/release, destination/source identity conflicts, sink and
+  cancellation failure cleanup, source replacement before final checks,
+  publication races, direct and membership outputs, and absence of an output
+  sidecar. Non-Linux entry points will remain compile-visible and return the
+  current explicit unsupported result until the platform publication slice is
+  implemented.
+
+### 2026-07-25 - public recovery integration evidence
+
+- Public immutable, caller-quiesced offline, and live recovery now compose the
+  existing bounded scanners/builders with exact source-generation protection
+  and crash-resolvable fail-if-exists publication. Source protection is released
+  before destination publication begins; a release failure retains an opaque
+  retryable cleanup guard and blocks publication.
+- Terminal success and preparation-failure types report the recovery report,
+  scratch/output attempt facts, complete bounded cleanup ledger, coordination
+  cleanup, housekeeping, visible housekeeping, and typed cause. The same
+  portable publication-result contract is ready for the compact-snapshot path.
+- Ten permanent recovery tests cover direct and membership success, all three
+  source modes, previous-generation offline recovery, exact live slot
+  ownership/release, stale candidates, source replacement, destination races,
+  cancellation, sink failure, and private-output cleanup.
+- Current all-feature and no-default suites each pass 314 tests, with two
+  subprocess entry points ignored. Rust 1.74.1 passes the same all-feature
+  suite. Current Windows GNU cross-compilation, strict Clippy in both feature
+  modes, benchmark compilation, formatting, and diff checks pass.
+- Every changed production file remains below 500 physical lines. Lizard
+  reports no changed function above cyclomatic complexity 9 or 100 lines.
+  Recovery publication is currently implemented on Linux; other targets return
+  the explicit unsupported result until their approved publication primitives
+  are implemented.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

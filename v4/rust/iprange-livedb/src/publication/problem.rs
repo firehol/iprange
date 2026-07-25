@@ -6,13 +6,7 @@ use super::main_file;
 use super::namespace::NamespaceError;
 use super::output;
 use super::reservation_file;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Problem {
-    pub(crate) code: ErrorCode,
-    pub(crate) os_code: Option<i32>,
-    pub(crate) detail: &'static str,
-}
+pub(crate) use super::types::PublicationProblem as Problem;
 
 impl Problem {
     pub(crate) const fn injected() -> Self {
@@ -121,14 +115,6 @@ impl Problem {
                 "retired reservation still has a link",
             ),
             main_file::Error::Injected => Self::injected(),
-        }
-    }
-
-    pub(crate) const fn new(code: ErrorCode, os_code: Option<i32>, detail: &'static str) -> Self {
-        Self {
-            code,
-            os_code,
-            detail,
         }
     }
 

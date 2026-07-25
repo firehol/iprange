@@ -40,9 +40,9 @@ mod membership_view;
 mod metadata;
 mod name_binding;
 mod path;
-// Recovery and snapshots connect the tested publisher in later slices.
+// The portable result contract is public; platform publication stays internal.
 #[allow(dead_code)]
-mod publication;
+pub mod publication;
 mod random;
 mod range_cursor;
 mod range_mutation;

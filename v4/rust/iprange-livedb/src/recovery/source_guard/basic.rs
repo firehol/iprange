@@ -1,0 +1,147 @@
+//! Immutable and caller-quiesced recovery source protection.
+
+use super::*;
+
+impl BasicSource {
+    pub(super) fn open(
+        path: &Path,
+        candidate: RecoveryCandidate,
+        immutable: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<Self> {
+        let sidecar = sidecar_path(path, immutable)?;
+        require_sidecar_absent(sidecar.as_deref())?;
+        let file = open_file(path, immutable)?;
+        let identity = live_sidecar::identity_any_link(&file)?;
+        live_lock::lock_cancellable(
+            &file,
+            MAIN_LIFETIME_LOCK,
+            lifetime_mode(immutable),
+            cancellation,
+        )?;
+        finish_open(file, path, sidecar, identity, candidate, cancellation)
+    }
+
+    pub(super) fn final_check(&self, used: MetaV4, cancellation: &CancellationToken) -> Result<()> {
+        if self.meta != used {
+            return Err(Error::RecoveryCandidateChanged);
+        }
+        let selected = bind(
+            &self.file,
+            &self.path,
+            self.sidecar.as_deref(),
+            self.identity,
+            self.candidate,
+            cancellation,
+        )?;
+        if selected != used {
+            return Err(Error::RecoveryCandidateChanged);
+        }
+        Ok(())
+    }
+
+    pub(super) fn release(&mut self) -> Result<()> {
+        if self.lifetime_locked {
+            live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK)?;
+            self.lifetime_locked = false;
+        }
+        Ok(())
+    }
+}
+
+fn finish_open(
+    file: File,
+    path: &Path,
+    sidecar: Option<PathBuf>,
+    identity: Identity,
+    candidate: RecoveryCandidate,
+    cancellation: &CancellationToken,
+) -> Result<BasicSource> {
+    match bind(
+        &file,
+        path,
+        sidecar.as_deref(),
+        identity,
+        candidate,
+        cancellation,
+    ) {
+        Ok(meta) => Ok(BasicSource {
+            file,
+            path: path.to_path_buf(),
+            sidecar,
+            identity,
+            candidate,
+            meta,
+            lifetime_locked: true,
+        }),
+        Err(cause) => {
+            let _ = live_lock::unlock(&file, MAIN_LIFETIME_LOCK);
+            Err(cause)
+        }
+    }
+}
+
+fn sidecar_path(path: &Path, immutable: bool) -> Result<Option<PathBuf>> {
+    immutable
+        .then(|| crate::path::canonical_sidecar(path))
+        .transpose()
+}
+
+fn require_sidecar_absent(sidecar: Option<&Path>) -> Result<()> {
+    if let Some(path) = sidecar {
+        database::require_sidecar_absent(path)?;
+    }
+    Ok(())
+}
+
+fn open_file(path: &Path, immutable: bool) -> Result<File> {
+    if immutable {
+        database::open_read_only(path)
+    } else {
+        live_sidecar::open_rw(path)
+    }
+}
+
+fn lifetime_mode(immutable: bool) -> Mode {
+    if immutable {
+        Mode::Shared
+    } else {
+        Mode::Exclusive
+    }
+}
+
+fn bind(
+    file: &File,
+    path: &Path,
+    sidecar: Option<&Path>,
+    identity: Identity,
+    candidate: RecoveryCandidate,
+    cancellation: &CancellationToken,
+) -> Result<MetaV4> {
+    verify_path(path, sidecar, identity)?;
+    let meta = select(file, public_identity(identity), candidate, cancellation)?;
+    verify_path(path, sidecar, identity)?;
+    Ok(meta)
+}
+
+fn verify_path(path: &Path, sidecar: Option<&Path>, identity: Identity) -> Result<()> {
+    live_sidecar::verify_path_any_link(path, identity).map_err(candidate_changed)?;
+    if let Some(path) = sidecar {
+        database::require_sidecar_absent(path).map_err(candidate_changed)?;
+    }
+    Ok(())
+}
+
+fn select(
+    file: &File,
+    identity: crate::validation::LocalFileIdentity,
+    candidate: RecoveryCandidate,
+    cancellation: &CancellationToken,
+) -> Result<MetaV4> {
+    if candidate.source_identity != identity {
+        return Err(Error::RecoveryCandidateChanged);
+    }
+    read_classified(file, cancellation)?
+        .selected_meta(&candidate)
+        .ok_or(Error::RecoveryCandidateChanged)
+}

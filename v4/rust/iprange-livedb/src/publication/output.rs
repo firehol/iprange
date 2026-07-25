@@ -13,9 +13,13 @@ use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::{file_io, random};
 
-use super::namespace::{regular_identity, Destination, Identity, Name, NamespaceError};
+use super::namespace::{
+    regular_identity, regular_identity_any_link, Destination, Identity, Name, NamespaceError,
+};
+use super::{CreationSecurity, PrivateOutputAttempt};
 
 const DIGEST_BUFFER_SIZE: usize = 64 * 1024;
+const POSIX_KIND: u16 = 1;
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -42,7 +46,20 @@ pub(crate) struct CreatedOutput {
 
 impl CreatedOutput {
     pub(crate) fn create(path: &Path) -> Result<Self, Error> {
+        Self::create_with(path, false)
+    }
+
+    pub(crate) fn create_absent(path: &Path) -> Result<Self, Error> {
+        Self::create_with(path, true)
+    }
+
+    fn create_with(path: &Path, require_absent: bool) -> Result<Self, Error> {
         let destination = Destination::bind(path).map_err(Error::Namespace)?;
+        if require_absent {
+            destination
+                .require_fail_if_exists_available()
+                .map_err(Error::Namespace)?;
+        }
         let attempt_id = random::nonzero_128().map_err(Error::Sdk)?;
         let name = destination
             .output_name(attempt_id)
@@ -57,6 +74,26 @@ impl CreatedOutput {
             name,
             file,
         })
+    }
+
+    pub(crate) fn facts(&self) -> PrivateOutputAttempt {
+        let identity =
+            regular_identity_any_link(&self.file, self.destination.directory().identity().device)
+                .ok()
+                .map(local);
+        facts(&self.destination, self.attempt_id, &self.name, identity)
+    }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.file
+    }
+
+    pub(crate) fn destination(&self) -> &Destination {
+        &self.destination
+    }
+
+    pub(crate) fn name(&self) -> &Name {
+        &self.name
     }
 
     // The fixed-size owner is returned inline to preserve zero-allocation cleanup authority.
@@ -131,6 +168,31 @@ impl OutputAttempt {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn prepare_cancellable(
+        self,
+        finished: Finished,
+        cancellation: &CancellationToken,
+    ) -> Result<PreparedOutput, Failure<UnpreparedOutput>> {
+        let owner = UnpreparedOutput {
+            attempt: self,
+            finished,
+        };
+        match prepare_cancellable(&owner, cancellation) {
+            Ok((byte_length, sha512)) => {
+                let UnpreparedOutput { attempt, finished } = owner;
+                Ok(PreparedOutput {
+                    attempt,
+                    file: finished.file,
+                    meta: finished.meta,
+                    byte_length,
+                    sha512,
+                })
+            }
+            Err(cause) => Err(Failure { owner, cause }),
+        }
+    }
+
     pub(crate) fn destination(&self) -> &Destination {
         &self.destination
     }
@@ -145,6 +207,15 @@ impl OutputAttempt {
 
     pub(crate) fn identity(&self) -> Identity {
         self.identity
+    }
+
+    pub(crate) fn facts(&self) -> PrivateOutputAttempt {
+        facts(
+            &self.destination,
+            self.attempt_id,
+            &self.name,
+            Some(local(self.identity)),
+        )
     }
 }
 
@@ -235,6 +306,43 @@ fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
     Ok((byte_length, sha512))
 }
 
+fn prepare_cancellable(
+    owner: &UnpreparedOutput,
+    cancellation: &CancellationToken,
+) -> Result<(u64, [u8; 64]), Error> {
+    cancellation.check().map_err(Error::Sdk)?;
+    verify_custody(&owner.attempt, &owner.finished.file, Location::Private)?;
+    live_lock::lock_cancellable(
+        &owner.finished.file,
+        MAIN_LIFETIME_LOCK,
+        Mode::Exclusive,
+        cancellation,
+    )
+    .map_err(Error::Sdk)?;
+    let byte_length = inspect_finished(owner)?;
+    let sha512 = digest_cancellable(&owner.finished.file, byte_length, cancellation)?;
+    finish_cancellable(owner, byte_length, cancellation)?;
+    Ok((byte_length, sha512))
+}
+
+fn finish_cancellable(
+    owner: &UnpreparedOutput,
+    byte_length: u64,
+    cancellation: &CancellationToken,
+) -> Result<(), Error> {
+    owner
+        .finished
+        .file
+        .sync_all()
+        .map_err(crate::error::Error::from)?;
+    cancellation.check().map_err(Error::Sdk)?;
+    let final_length = inspect_finished(owner)?;
+    if final_length != byte_length {
+        return Err(Error::FinishedLengthChanged);
+    }
+    Ok(())
+}
+
 fn inspect_finished(owner: &UnpreparedOutput) -> Result<u64, Error> {
     inspect_exact(
         &owner.attempt,
@@ -279,6 +387,32 @@ fn verify_custody(attempt: &OutputAttempt, file: &File, location: Location) -> R
     }
     attempt.destination.verify_created(file)?;
     Ok(())
+}
+
+fn facts(
+    destination: &Destination,
+    attempt_id: [u8; 16],
+    name: &Name,
+    identity: Option<crate::validation::LocalFileIdentity>,
+) -> PrivateOutputAttempt {
+    PrivateOutputAttempt {
+        publication_attempt_id: attempt_id,
+        directory_identity: local(destination.directory().identity()),
+        basename_encoding: POSIX_KIND,
+        basename: name.bytes().into(),
+        identity,
+        creation_security: CreationSecurity {
+            kind: POSIX_KIND,
+            commitment: destination.security_commitment(),
+        },
+    }
+}
+
+fn local(identity: Identity) -> crate::validation::LocalFileIdentity {
+    crate::validation::LocalFileIdentity {
+        kind: POSIX_KIND,
+        bytes: identity.encode(),
+    }
 }
 
 #[derive(Clone, Copy)]

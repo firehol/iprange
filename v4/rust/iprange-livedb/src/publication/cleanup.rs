@@ -4,9 +4,10 @@ use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 
 use super::namespace::{regular_identity, Directory, Identity, Name, NamespaceError};
-use super::output::PreparedOutput;
+use super::output::{CreatedOutput, OutputAttempt, PreparedOutput};
 use super::problem::Problem;
 use super::result::{ArtifactKind, CleanupArtifacts, NameSlot, Seed};
+use super::{CleanupArtifact, DirectoryRole, PrivateOutputAttempt};
 
 #[derive(Clone, Copy)]
 pub(super) enum ReservationLocation {
@@ -49,6 +50,38 @@ pub(super) fn discard(
     reservation: Option<ReservationOwner<'_>>,
 ) -> Summary {
     discard_with(seed, output, reservation, |_| Ok(()))
+}
+
+pub(crate) fn discard_created(
+    created: &CreatedOutput,
+) -> (PrivateOutputAttempt, Option<CleanupArtifact>) {
+    let facts = created.facts();
+    let identity = facts
+        .identity
+        .and_then(|value| Identity::decode(value.bytes));
+    let problem = discard_one(
+        created.destination().directory(),
+        created.name(),
+        created.file(),
+        identity,
+    );
+    let artifact = problem.map(|problem| early_artifact(&facts, problem));
+    (facts, artifact)
+}
+
+pub(crate) fn discard_attempt(
+    attempt: &OutputAttempt,
+    file: &File,
+) -> (PrivateOutputAttempt, Option<CleanupArtifact>) {
+    let facts = attempt.facts();
+    let problem = discard_one(
+        attempt.destination().directory(),
+        attempt.name(),
+        file,
+        Some(attempt.identity()),
+    );
+    let artifact = problem.map(|problem| early_artifact(&facts, problem));
+    (facts, artifact)
 }
 
 pub(super) fn discard_with(
@@ -140,6 +173,65 @@ fn discard_owners_with(
         artifacts,
         main_absent: directory.require_absent(destination.main()).is_ok(),
         coordination_absent: directory.require_absent(destination.coordination()).is_ok(),
+    }
+}
+
+fn discard_one(
+    directory: &Directory,
+    name: &Name,
+    file: &File,
+    identity: Option<Identity>,
+) -> Option<Problem> {
+    let identity = match identity {
+        Some(identity) => identity,
+        None => {
+            return Some(Problem::cleanup_conflict(
+                "private output identity was not established",
+            ))
+        }
+    };
+    let removal = match remove_output(
+        directory,
+        OutputOwner {
+            file,
+            identity,
+            name,
+        },
+    ) {
+        Ok(removal) => removal,
+        Err(problem) => return Some(problem),
+    };
+    finish_one(directory, removal)
+}
+
+fn finish_one(directory: &Directory, removal: Removal<'_>) -> Option<Problem> {
+    match removal.state {
+        RemovalState::Failed(problem) => Some(problem),
+        RemovalState::NeedsSync(file) => directory
+            .sync()
+            .and_then(|()| directory.verify())
+            .map_err(|error| Problem::namespace(&error))
+            .and_then(|()| match links(file)? {
+                0 => Ok(()),
+                _ => Err(Problem::cleanup_conflict(
+                    "private output removal was not proved",
+                )),
+            })
+            .err(),
+    }
+}
+
+fn early_artifact(facts: &PrivateOutputAttempt, error: Problem) -> CleanupArtifact {
+    CleanupArtifact {
+        kind: ArtifactKind::PrivateOutput,
+        directory_role: DirectoryRole::Destination,
+        directory_identity: facts.directory_identity,
+        basename_encoding: facts.basename_encoding,
+        basename: facts.basename.clone(),
+        identity: facts.identity,
+        creation_security: Some(facts.creation_security.clone()),
+        unpublished_tail: None,
+        error,
     }
 }
 

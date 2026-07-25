@@ -1,5 +1,6 @@
 //! Recovery candidate identity shared by inspection, validation, and recovery.
 
+mod api;
 #[allow(dead_code)]
 mod bounded_vec;
 #[allow(dead_code)]
@@ -46,8 +47,10 @@ mod report;
 #[allow(dead_code)]
 mod scratch;
 mod scratch_maintenance;
+mod source_guard;
 #[allow(dead_code)]
 mod tables;
+mod terminal;
 #[allow(dead_code)]
 mod tree_scan;
 
@@ -59,6 +62,10 @@ pub(crate) use scratch::ScratchCleanup;
 #[derive(Clone, Debug)]
 pub(crate) struct ScratchCleanup;
 
+pub use api::{
+    recover_immutable, recover_live, recover_offline, OfflineQuiescenceCertification,
+    RecoveryOutcome,
+};
 pub use budget::RecoveryBudget;
 pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};
 pub use report::{
@@ -70,6 +77,8 @@ pub use scratch_maintenance::{
     AbandonedScratchEntry, AbandonedScratchList, AbandonedScratchSink, AbandonedScratchSinkControl,
     ScratchOwnerKind,
 };
+pub use source_guard::RecoverySourceCleanupGuard;
+pub use terminal::{RecoveryPreparationFailure, RecoveryResult, RecoveryScratchAttempt};
 
 pub(crate) mod inspection;
 
@@ -122,6 +131,10 @@ pub struct RecoveryCandidateInspection {
     pub progress: ValidationProgress,
     candidates: [Option<RecoveryCandidate>; 2],
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery/api_tests.rs"]
+mod api_tests;
 
 impl RecoveryCandidateInspection {
     pub fn candidate_count(&self) -> usize {

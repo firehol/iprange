@@ -1,4 +1,4 @@
-//! Fixed publication facts and the two-entry direct-operation cleanup ledger.
+//! Construction and validation of portable publication result facts.
 
 use crate::contract::PAGE_SIZE;
 use crate::error::ErrorCode;
@@ -8,51 +8,16 @@ use super::namespace::{Destination, Identity, NamespaceError};
 use super::output::PreparedOutput;
 use super::problem::Problem;
 use super::reservation::{self, Header, Policy, State};
+#[allow(unused_imports)]
+pub(crate) use super::types::CleanupState;
+pub(crate) use super::types::{
+    AccessPolicy, ArtifactKind, CleanupArtifact, CleanupArtifacts, CoordinationCleanup,
+    CreationSecurity, DestinationContent, DirectoryRole, Housekeeping, LaterCanonical,
+    PublicationAttempt as AttemptFacts, PublicationPreparationFailure as PreparationFailure,
+    PublicationResult, PublicationStatus,
+};
 
 const POSIX_KIND: u16 = 1;
-const CLEANUP_CAPACITY: usize = 2;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PublicationStatus {
-    NotPublished,
-    Published,
-    OutcomeUnknown,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DestinationContent {
-    Desired,
-    Absent,
-    Other,
-    Unclassified,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LaterCanonical {
-    None,
-    ReservationOrTransition,
-    ReadyLiveSidecar,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AccessPolicy {
-    Absent,
-    CreatorOnly,
-    ChangedOrUnproven,
-    Unclassified,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CleanupState {
-    Clean,
-    ResiduePossible,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArtifactKind {
-    PrivateOutput,
-    PrivateReservation,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NameSlot {
@@ -61,98 +26,7 @@ pub(super) enum NameSlot {
     Coordination,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CreationSecurity {
-    pub(crate) kind: u16,
-    pub(crate) commitment: [u8; 32],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CleanupArtifact {
-    pub(crate) kind: ArtifactKind,
-    pub(crate) directory_identity: LocalFileIdentity,
-    pub(crate) basename_encoding: u16,
-    pub(crate) basename: Box<[u8]>,
-    pub(crate) identity: Option<LocalFileIdentity>,
-    pub(crate) creation_security: CreationSecurity,
-    pub(crate) error: Problem,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CleanupArtifacts {
-    entries: [Option<CleanupArtifact>; CLEANUP_CAPACITY],
-    len: usize,
-}
-
-impl CleanupArtifacts {
-    pub(super) const fn new() -> Self {
-        Self {
-            entries: [None, None],
-            len: 0,
-        }
-    }
-
-    pub(super) fn push(&mut self, artifact: CleanupArtifact) {
-        assert!(self.len < CLEANUP_CAPACITY, "fixed cleanup ledger overflow");
-        self.entries[self.len] = Some(artifact);
-        self.len += 1;
-    }
-
-    pub(crate) const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) const fn state(&self) -> CleanupState {
-        if self.len == 0 {
-            CleanupState::Clean
-        } else {
-            CleanupState::ResiduePossible
-        }
-    }
-
-    pub(crate) fn get(&self, index: usize) -> Option<&CleanupArtifact> {
-        self.entries.get(index)?.as_ref()
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &CleanupArtifact> {
-        self.entries[..self.len].iter().flatten()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AttemptFacts {
-    pub(crate) database_id: [u8; 16],
-    pub(crate) transaction_id: u64,
-    pub(crate) commit_nonce: [u8; 16],
-    pub(crate) publication_attempt_id: [u8; 16],
-    pub(crate) directory_identity: LocalFileIdentity,
-    pub(crate) destination_basename_encoding: u16,
-    pub(crate) destination_basename: Box<[u8]>,
-    pub(crate) output_identity: LocalFileIdentity,
-    pub(crate) output_byte_length: u64,
-    pub(crate) output_sha512: [u8; 64],
-    pub(crate) reservation_identity: LocalFileIdentity,
-    pub(crate) creation_security: CreationSecurity,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PublicationResult {
-    pub(crate) attempt: AttemptFacts,
-    pub(crate) main_namespace_may_have_been_attempted: bool,
-    pub(crate) publication: PublicationStatus,
-    pub(crate) destination_content: DestinationContent,
-    pub(crate) later_canonical: LaterCanonical,
-    pub(crate) main_access_policy: AccessPolicy,
-    pub(crate) coordination_access_policy: AccessPolicy,
-    pub(crate) cleanup: CleanupArtifacts,
-    pub(crate) cause: Option<Problem>,
-}
-
 impl PublicationResult {
-    pub(crate) const fn cleanup_state(&self) -> CleanupState {
-        self.cleanup.state()
-    }
-
     pub(super) fn header_for(&self, destination: &Destination) -> Result<Header, Problem> {
         require_result_binding(self, destination)?;
         let state = if self.main_namespace_may_have_been_attempted {
@@ -187,23 +61,6 @@ impl PublicationResult {
         reservation::select(&bytes)
             .map_err(|_| conflict("caller publication result is internally inconsistent"))?;
         Ok(header)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PreparationFailure {
-    pub(crate) publication_attempt_id: [u8; 16],
-    pub(crate) directory_identity: LocalFileIdentity,
-    pub(crate) private_output_basename: Box<[u8]>,
-    pub(crate) output_identity: LocalFileIdentity,
-    pub(crate) creation_security: CreationSecurity,
-    pub(crate) cleanup: CleanupArtifacts,
-    pub(crate) cause: Problem,
-}
-
-impl PreparationFailure {
-    pub(crate) const fn cleanup_state(&self) -> CleanupState {
-        self.cleanup.state()
     }
 }
 
@@ -313,6 +170,7 @@ impl Seed {
                 output_identity: self.output_identity,
                 output_byte_length: self.output_byte_length,
                 output_sha512: self.output_sha512,
+                previous_destination: None,
                 reservation_identity: local(state.reservation_identity),
                 creation_security: self.creation_security,
             },
@@ -320,9 +178,16 @@ impl Seed {
             publication: state.publication,
             destination_content: state.destination_content,
             later_canonical: LaterCanonical::None,
+            live_lineage: None,
+            later_attempt_or_sidecar_id: None,
+            later_selected_transaction_id: None,
+            later_selected_commit_nonce: None,
             main_access_policy: state.main_access_policy,
             coordination_access_policy: state.coordination_access_policy,
             cleanup,
+            coordination_cleanup: CoordinationCleanup::None,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Box::default(),
             cause,
         }
     }
@@ -335,10 +200,14 @@ impl Seed {
         PreparationFailure {
             publication_attempt_id: self.attempt_id,
             directory_identity: self.directory_identity,
+            private_output_basename_encoding: POSIX_KIND,
             private_output_basename: self.private_output_basename,
             output_identity: self.output_identity,
             creation_security: self.creation_security,
             cleanup,
+            coordination_cleanup: CoordinationCleanup::None,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Box::default(),
             cause,
         }
     }
@@ -352,11 +221,13 @@ impl Seed {
     ) -> CleanupArtifact {
         CleanupArtifact {
             kind,
+            directory_role: DirectoryRole::Destination,
             directory_identity: self.directory_identity,
             basename_encoding: POSIX_KIND,
             basename: self.take_name(name),
             identity: identity.map(local),
-            creation_security: self.creation_security.clone(),
+            creation_security: Some(self.creation_security.clone()),
+            unpublished_tail: None,
             error,
         }
     }

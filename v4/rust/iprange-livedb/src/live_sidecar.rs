@@ -185,6 +185,14 @@ impl Sidecar {
         live_lock::unlock(&self.file, offset)
     }
 
+    pub(crate) fn verify_reader(&self, slot: u32, transaction: u64) -> Result<()> {
+        let offset = slot_offset_checked(slot, self.header.capacity)?;
+        if self.read_active_slot(offset)? != Some(transaction) {
+            return Err(Error::Corrupt("owned reader slot changed"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn scan_readers(&self, mut observe: impl FnMut(u64) -> Result<()>) -> Result<()> {
         for slot in 0..self.header.capacity {
             if let Some(txn) = self.scan_slot(slot)? {
