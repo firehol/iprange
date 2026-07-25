@@ -139,6 +139,158 @@ architectural improvement for update-ipsets. The pure-Go port must not begin
 until the user accepts the Rust result. The interrupted uncommitted normal-range
 workspace is preserved but is not a valid basis for continued implementation.
 
+### 2026-07-25 - replacement pre-implementation gate
+
+#### Problem and root cause
+
+The current Rust crate has 60,827 production lines after test-only modules are
+excluded, 47 source files, several production files above 10,000 lines, and no
+usable file reader or writer in its public API. The normative binary-format
+specification is 4,476 lines. The implementation grew by encoding each
+intermediate ownership and cleanup proof as a separate mechanism instead of
+making those states impossible in the format and write order.
+
+The replacement is a clean implementation. Existing code and tests are evidence
+for required behavior and past failures; they are not architecture to preserve.
+The interrupted normal-range workspace remains untouched until the old
+implementation can be removed without losing uncommitted work.
+
+#### Evidence reviewed
+
+- User decisions 4-68 in this SOW, with signing and general multi-file algebra
+  remaining in SOW-0017 and SOW-0018.
+- `.agents/sow/specs/binary-format-v4.md`,
+  `.agents/sow/specs/design-iprange-engine.md`, and
+  `.agents/sow/specs/update-ipsets-v4-adoption-findings.md`.
+- Current Rust public surface in `v4/rust/iprange-livedb/src/lib.rs`; only value,
+  key, error, and cardinality types are public.
+- Current production-size and complexity evidence recorded in this SOW and the
+  architecture-reset status above.
+- `firehol/update-ipsets @ e593366f7b0a`: roughly 421 configured plain,
+  retention, and merged feeds; feeds are processed independently and current
+  retention is an I/O-heavy cohort workflow.
+- `LMDB/lmdb @ 389e1009a86c`:
+  `libraries/liblmdb/mdb.c:872-960` uses an external reader table,
+  `libraries/liblmdb/mdb.c:1361-1390` uses committed meta pages, and
+  `libraries/liblmdb/mdb.c:2695-3070` performs COW page allocation/touch.
+  Its large in-memory dirty/free page lists are not suitable for this format's
+  file-size-independent heap requirement.
+- `cberner/redb @ fe0141159c73`:
+  `src/tree_store/btree_mutator.rs:460-925` and
+  `src/tree_store/page_store/page_manager.rs:192-224` confirm that generic COW
+  trees and immediate reuse of uncommitted pages are proven patterns. Redb's
+  table types, savepoints, caches, durability modes, and generic value system
+  are explicitly out of scope.
+
+#### Minimal architecture
+
+- One generic slotted-page COW B+tree implementation serves the range map, both
+  catalog indexes, both membership indexes, transaction deltas, and retirement
+  batches. Tree identifiers and codecs enforce each root's key/value contract.
+- A zero root is the only empty tree. Reachable non-root leaves and branches are
+  never empty. Deletion removes an empty child; sparse nonempty pages are legal
+  and compact snapshots repack them. This removes empty-subtree traversal and
+  rebalancing machinery from normal reads and writes.
+- A writer changes a committed page by copying it once. The parent immediately
+  points to that transaction-private page, which can then be updated in place.
+  Therefore no file-sized old-page-to-new-page map is required.
+- Unordered ranges are applied directly, in arrival order, to the
+  transaction-private range tree. Ordered rebuild paths stream directly into
+  final COW pages. No normal workflow creates a sorting or spill file.
+- Retired committed page numbers stream into same-file transaction-private batch
+  pages. The retirement tree is updated last, so pages replaced while updating
+  that tree append to the still-open batch without a recursive fixed-point
+  planner.
+- The persistent hierarchical free bitmap remains the allocation authority. A
+  small fixed array of page numbers in the meta page is reserved solely for
+  copying allocator paths. This breaks allocator self-reference without a large
+  heap workspace. Unused reserve pages carry forward; exhaustion falls back to
+  aligned tail growth.
+- Abort discards private roots. Reused free pages remain free in the committed
+  bitmap, and aligned tail growth is truncated immediately or by the next writer
+  open. No cleanup ledger or later commit can publish a failed prefix.
+- Commit has only two durable phases: synchronize all private pages, then write
+  and synchronize the alternate meta page. Failure before meta writing is
+  `NotCommitted`; failure after it begins is `OutcomeUnknown`. There is no
+  fallible post-publication phase.
+- Live coordination uses one fixed sidecar. A reader holds an OS byte-range lock
+  on its slot for its lifetime. Registration uses a shared gate lock; commit
+  uses the exclusive gate while scanning stable slot transaction IDs and
+  publishing the meta. Process death releases locks automatically, eliminating
+  PID/start-token reaping and stale-slot state transitions.
+- Metadata remains one optional zlib-compressed payload, at most 1 MiB before
+  compression, replaced as a whole in private COW pages.
+- Default open and normal operations perform only bounds and arithmetic checks
+  needed for safe access. Full page CRC and ownership checks remain explicit
+  validation/recovery work.
+
+#### Separation and size review
+
+The new Rust implementation begins in an isolated crate so the interrupted old
+tree is not modified. Its intended production modules are:
+
+1. public types and errors;
+2. exact meta/page codecs;
+3. positional file access and page ownership;
+4. one generic B+tree;
+5. range semantics;
+6. allocation and retirement;
+7. feed catalog and memberships;
+8. live reader coordination;
+9. public readers/writers and exact workflows;
+10. explicit validation, recovery, and snapshots.
+
+The initial production-code target is roughly 5,000 lines. Exceeding it is not
+a failure, but every material increase must identify the requirement and
+concrete omitted failure that justify it. Files aim for roughly 500 lines and
+functions normally have one purpose under the same review philosophy.
+
+#### Risk and blast radius
+
+- This replaces all unreleased v4 bytes and all current Rust implementation
+  internals. No compatibility reader or migration is allowed.
+- The highest risks are COW split/delete correctness, crash ordering, allocator
+  self-reference, reader-generation reclamation, full-space IPv6 arithmetic,
+  membership refcounts, source failure, and accidental implicit validation.
+- The old Rust and Go implementations remain isolated until replacement
+  behavior is proven. They must not be treated as fallback production SDKs.
+- No production or customer data is needed. Tests and benchmarks use synthetic
+  addresses, feed names, paths, metadata, and injected I/O failures.
+
+#### Implementation and validation order
+
+1. Exact public types, wire codec, empty create/open, and immutable reader.
+2. Generic COW tree plus direct lookup, cursor, sequential assignment, abort,
+   and durable commit.
+3. Free bitmap, streamed retirement, live sidecar, reclamation, and crash tests.
+4. Opaque JSON metadata.
+5. Feed catalog, SDK-owned membership interning, and advanced membership
+   operations.
+6. Named-feed replacement, direct replacement, retention refresh, import, and
+   snapshot workflows.
+7. Explicit validation and recovery.
+8. Fault injection at every durable boundary; corruption, same-failure,
+   allocation, descriptor, RSS, and scaling checks.
+9. update-ipsets-shaped benchmarks and integration proof.
+
+Every slice must be reachable through the public Rust API, keep warnings denied,
+and pass formatting, unit, integration, and SOW checks. No Go implementation
+work begins in this sequence.
+
+#### Artifact impact and open decisions
+
+- `AGENTS.md` now contains the permanent philosophy and Rust-first gate.
+- The architecture and exact binary-format specifications must be replaced by
+  the concise proven contract as the new bytes land; the C ABI remains later in
+  the Rust sequence and must be a thin adapter.
+- End-user SDK documentation and a concrete project skill are created only from
+  the proven public workflow.
+- SOW-0017 and SOW-0018 remain pending and unchanged.
+- No product decision is open. Page layout, module boundaries, and exact
+  Rust naming are implementation details. Any newly discovered caller-visible
+  behavior, compatibility, recovery, or risk choice stops implementation for a
+  numbered user decision.
+
 ## Requirements
 
 ### Purpose

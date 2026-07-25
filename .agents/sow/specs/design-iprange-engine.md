@@ -1,7 +1,7 @@
 # iprange Engine and SDK Architecture
 
 **Status:** Current unsigned Phase-1 target architecture
-**Last updated:** 2026-07-21
+**Last updated:** 2026-07-25
 
 This document defines the product and language architecture for the next
 `iprange` engine. The exact portable file contract is defined by
@@ -54,25 +54,27 @@ release requirements. They are not optional hardening phases.
 
 ## Architecture
 
-### Two native engines, three SDK surfaces
+### Rust first, then equivalent SDK surfaces
 
-Rust and Go each implement the complete v4 behavior: creation, lookup, scans,
-advanced logical transactions, exact high-level replacement/import workflows,
+Rust implements and proves the complete v4 behavior first: creation, lookup,
+scans, advanced logical changes, exact high-level replacement/import workflows,
 feed lifecycle, retention refresh, validation, recovery, reclamation, and
-unsigned snapshotting.
+unsigned snapshotting. It must then be benchmarked on realistic
+`update-ipsets` workloads and accepted as a material architectural improvement
+before the Go port begins.
 
-The Go implementation is pure Go and must not require cgo. The C SDK is built
-from the Rust implementation, so there is one low-level implementation for Rust
-and C rather than two implementations that can drift.
+After that gate, the Go implementation is a pure-Go semantic port and must not
+require cgo. The C SDK is a thin boundary over the proven Rust implementation,
+not a separate implementation or a driver of core design.
 
-Rust and Go are peers for public behavior. Neither implementation's physical
-tree layout, page allocation order, or zlib output is the wire oracle. The
-normative specification and shared corpus are the oracle.
+The completed Rust and Go implementations are peers for public behavior.
+Neither implementation's physical tree layout, page allocation order, or zlib
+output is the wire oracle. The normative specification and shared corpus are
+the oracle.
 
 ### Two semantic API layers
 
-Both implementations expose two public layers over one private transaction
-engine:
+The v4 writer exposes two public semantic layers over the same COW format:
 
 - The **advanced logical layer** has separate direct and membership transaction
   surfaces. Direct callers assign semantic `u32` values to ranges. Membership
@@ -88,9 +90,10 @@ engine:
 
 Both layers accept unordered, duplicate, and overlapping range input and produce
 the canonical normalized map inside the same caller-facing operation. Public
-APIs expose logical state changes, never physical storage operations. Go and
-Rust may use idiomatic names, while the versioned Rust-provided C ABI freezes
-its exact symbol and layout manifest.
+APIs expose logical state changes, never physical storage operations. Rust
+defines and proves the semantics first. The later Go port may use idiomatic
+names, while the Rust-provided C ABI freezes its exact symbol and layout
+manifest only after the Rust API is stable.
 
 ### One v4 format, two operating modes
 
@@ -173,22 +176,20 @@ mutation. Cleanup failure poisons the writer.
 Exact high-level replacements/imports, feed lifecycle operations, and retention
 refresh use clean writers and private transactional drafts. `SnapshotTo` instead
 owns an isolated destination output and may coexist with source writes by pinning
-one reader generation; it releases source protection before taking blocking
-destination locks. None exposes partial work at the canonical destination, and
-every unresolved cleanup artifact is reported by an exact bounded residue
-ledger. `Commit` reports the attempted transaction, its random 128-bit commit
-nonce, and one of `NotCommitted`, `Committed`, or `OutcomeUnknown`. Reopen resolves an unknown
-attempt only by the exact database/transaction/nonce tuple; callers are never
-asked to infer publication from a generic I/O error or a later transaction
-number.
+one reader generation. None exposes partial work as a successful output.
+`Commit` reports the attempted transaction, its random 128-bit commit nonce, and
+one of `NotCommitted`, `Committed`, or `OutcomeUnknown`. Reopen resolves an
+unknown attempt only by the exact database/transaction/nonce tuple; callers are
+never asked to infer publication from a generic I/O error or a later
+transaction number.
 
 A writer owns at most one active advanced transaction or high-level workflow.
 An ordinary transaction may stage at most one metadata set/clear alongside its
 range or feed changes. `Abort` discards the whole draft; explicit `Close` on a
 healthy pending writer runs that abort protocol and never commits. Automatic
-destructors/finalizers never begin coordination cleanup. `Reclaim` is a separate
-bounded clean-writer maintenance operation that commits itself only when it
-actually reclaims pages.
+destructors/finalizers never perform file I/O. `Reclaim` is a separate bounded
+clean-writer maintenance operation that commits itself only when it actually
+reclaims pages.
 
 ### Readers and reclamation
 
@@ -201,19 +202,14 @@ There is no permanent transaction history. Open and normal operation must not
 materialize allocator state proportional to file size or past transaction
 count.
 
-The transaction-private allocator is one shared pool divided into exact
-work-unit scopes. Bitmap and retirement consumers for one work unit share that
-unit's capacity; they do not reserve the same payload twice. A work-unit scope
-is active only while those consumers hold mutation authority. Finalization is an
-atomic exact-scope transition that resolves every unused committed, safely
-reclaimed, and appended page to the allocator fixed point, synchronizes the
-shared unpublished tail, retains output bindings, seals the scope, and
-invalidates every earlier mutation handle. Sealing is not cleanup: retained
-pages remain readable and bound until they are written or the transaction is
-aborted. Later cleanup unbinds those pages and closes the empty scope. A later
-work unit receives only a single-use successor authority and may read an earlier
-sealed scope without reopening its mutation authority. Foreign scopes are never
-released or finalized by another work unit.
+The writer copies a committed page at most once: after its parent points to the
+transaction-private copy, later changes update that private page in place.
+Retired committed page numbers stream into same-file retirement batches rather
+than a heap list. A small fixed reserve in the selected meta supplies pages for
+COW changes to the free bitmap itself, avoiding recursive allocation machinery.
+Abort discards private roots; reused free pages remain free according to the
+committed meta, while aligned appended growth is truncated immediately or by
+the next writer open.
 
 ### Validation and recovery
 
@@ -281,14 +277,16 @@ Every engine-created artifact starts creator-private (`0600` on POSIX and the
 equivalent protected user-only Windows DACL), independent of process defaults.
 Applications deliberately widen or change ownership only after publication.
 
-Rust and Go are compared operation by operation. A 5–10% performance band is a
-target where the runtimes permit it, not permission to trade correctness or
-bounded resources for a benchmark. Any material exception needs measured,
-documented cause.
+The Rust implementation is measured first against the current update-ipsets
+workflows. After acceptance and the Go port, Rust and Go are compared operation
+by operation. A 5–10% performance band is a target where the runtimes permit it,
+not permission to trade correctness or bounded resources for a benchmark. Any
+material exception needs measured, documented cause.
 
 ## Cross-language conformance
 
-Conformance is semantic, not byte-identical:
+After the Rust acceptance gate and Go port, conformance is semantic, not
+byte-identical:
 
 - both implementations must open current Phase-1 v4 files produced by the other;
 - both expose identical ranges, direct values, feed names and indexes,
@@ -301,9 +299,8 @@ Conformance is semantic, not byte-identical:
   handle invalidation, metadata read-your-writes, batched source/sink, and
   cancellation semantics;
 - mixed Go/Rust subprocesses must coordinate on the same live database in both
-  directions, including reader/writer slots, process-start tokens, reclamation,
-  sidecar identity/replacement, reservation phases, and SHA-512-bound
-  publication/transition resolution;
+  directions, including OS-held reader/writer locks, pinned transaction IDs,
+  sidecar/database identity, and reclamation;
 - mutable tree shape, membership IDs, page placement, and zlib byte streams may
   differ when the observable committed state is the same.
 
