@@ -229,6 +229,7 @@ fn write_state1(draft: &ReservationDraft) -> Result<(), Error> {
     header.encode(&mut block);
     file_io::write_exact_at(&draft.file, &block, 0)?;
     draft.file.sync_all().map_err(error::Error::from)?;
+    crate::fault::crash("publication.after_reservation_state1_sync");
     Ok(())
 }
 
@@ -257,7 +258,9 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
     destination
         .directory()
         .rename_noreplace(&owner.reservation.name, destination.coordination())?;
+    crate::fault::crash("publication.after_reservation_rename");
     destination.directory().sync()?;
+    crate::fault::crash("publication.after_reservation_directory_sync");
     verify_canonical(
         &owner.reservation.file,
         owner.reservation.identity,
@@ -288,13 +291,16 @@ fn arm_with(
     let mut block = [0; PAGE_SIZE];
     target.encode(&mut block);
     file_io::write_exact_at(&owner.reservation.file, &block, PAGE_SIZE as u64)?;
+    crate::fault::crash("publication.after_reservation_state2_write");
     owner
         .reservation
         .file
         .sync_all()
         .map_err(error::Error::from)?;
+    crate::fault::crash("publication.after_reservation_state2_sync");
     select_exact(&owner.reservation.file, target, 1)?;
     owner.state2_selected = true;
+    crate::fault::crash("publication.after_reservation_state2_selection");
     after_selection()?;
     verify_canonical(
         &owner.reservation.file,

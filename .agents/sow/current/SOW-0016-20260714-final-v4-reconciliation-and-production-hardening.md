@@ -11274,6 +11274,49 @@ requirements are normative in the Pre-Implementation Gate above.
   are next; no snapshot traversal, replacement policy, live transition, signing,
   C ABI, or Go implementation was added.
 
+### 2026-07-25 - publication crash-matrix plan
+
+- Add test-only process exits immediately after synchronized state 1,
+  reservation rename and directory sync, state-2 write/sync/selection, main
+  rename/file sync/directory sync/desired proof, reservation unlink, and final
+  retirement sync. Production builds keep these checkpoints as inlined no-ops.
+- Each parent test inspects the post-crash namespace without running cleanup.
+  Any present private or main output must have a complete selectable immutable
+  bootstrap and exact attempted tuple; any present reservation must have an
+  exact selectable state-1/state-2 record. There may be at most one output and
+  one reservation inode for the attempt.
+- While a reservation remains canonical, ordinary immutable open must stay
+  closed. Once retirement leaves no coordination inode, a present main must open
+  normally. The test accepts only the exact legal state for each checkpoint and
+  never treats process-crash persistence as proof of power-loss durability; the
+  existing file/directory synchronization calls provide that contract.
+- This slice adds no resolver action. Its evidence fixes the exact restart states
+  that the following resolver must classify and complete/remove.
+
+### 2026-07-25 - publication crash-matrix milestone
+
+- Added 12 subprocess crash points covering synchronized state 1, both
+  reservation namespace durability steps, every state-2 step, all four main
+  publication durability/proof steps, and both reservation-retirement steps.
+- Every restart inspection passed. Before main rename there is one complete
+  private output and one selectable private/canonical reservation. From main
+  rename through desired proof there is one complete desired main behind a
+  selectable state-2 reservation, so ordinary immutable open remains closed.
+  After retirement unlink/sync there is one complete normally openable main and
+  no coordination name.
+- The tests inspect post-crash state only; they do not perform cleanup or claim
+  that process exit simulates power loss. File and directory synchronization
+  remain the durability mechanism, while these tests prove the implementation's
+  exact restart namespace and codec states.
+- Current Rust, no-default-features, and Rust 1.74.1 suites each pass 248 tests
+  with two intentionally ignored subprocess entry points. Warnings-denied
+  Clippy, benchmark compilation, formatting, diff checks, and complexity checks
+  pass. The production reservation state machine remains 429 lines and below
+  the complexity threshold.
+- The next slice is the restart resolver that consumes these exact durable
+  states. No public snapshot API, replacement policy, live transition, signing,
+  C ABI, or Go implementation was added.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.
