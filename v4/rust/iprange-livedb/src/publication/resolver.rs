@@ -426,6 +426,6 @@ fn require_no_later(later: &Option<Inspected>) -> Result<(), Problem> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "resolver_tests.rs"]
 mod tests;

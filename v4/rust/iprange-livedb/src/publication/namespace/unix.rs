@@ -457,7 +457,7 @@ fn require_local_filesystem(file: &File) -> Result<(), NamespaceError> {
     }
     #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
     {
-        if stat.f_flags as u64 & libc::MNT_LOCAL as u64 != 0 {
+        if stat.f_flags & libc::MNT_LOCAL != 0 {
             Ok(())
         } else {
             Err(NamespaceError::Unsupported)

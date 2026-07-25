@@ -90,6 +90,15 @@ pub(super) fn canonical(
     cancellation: &CancellationToken,
 ) -> Result<Option<Inspected>, Problem> {
     cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    #[cfg(target_os = "freebsd")]
+    let Some(regular) = destination
+        .directory()
+        .open_regular_any_link(destination.coordination(), true)
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    #[cfg(not(target_os = "freebsd"))]
     let Some(regular) = destination
         .directory()
         .open_regular(destination.coordination(), true)
@@ -140,15 +149,25 @@ fn inspect_canonical(
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
     lock_operation(&regular, cancellation)?;
-    destination
-        .directory()
-        .verify_name(destination.coordination(), regular.identity)
-        .map_err(|error| Problem::namespace(&error))?;
     let selected = read_selected(&regular.file).map_err(strict_record)?;
     require_bound(destination, selected.header, regular.identity, None)?;
     let private_name = destination
         .reservation_name(selected.header.attempt_id)
         .map_err(|error| Problem::namespace(&error))?;
+    #[cfg(target_os = "freebsd")]
+    destination
+        .directory()
+        .finish_noreplace_transition(&private_name, destination.coordination(), regular.identity)
+        .map_err(|error| Problem::namespace(&error))?;
+    destination
+        .directory()
+        .verify_name(destination.coordination(), regular.identity)
+        .map_err(|error| Problem::namespace(&error))?;
+    if read_selected(&regular.file).map_err(strict_record)? != selected {
+        return Err(conflict(
+            "publication reservation changed during inspection",
+        ));
+    }
     destination
         .directory()
         .verify()

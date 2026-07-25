@@ -12299,6 +12299,23 @@ Adapter checkpoint:
   specified authenticated inert-GC cleanup, housekeeping APIs, and native
   process/crash proof. Publication-residue handling also remains Unix-only.
 
+FreeBSD no-replace recovery checkpoint:
+
+- The retained namespace now recognizes only the exact legal FreeBSD
+  no-replace transition: the attempt-derived private and canonical names must
+  identify the same expected regular inode with link count two. It
+  synchronizes the retained directory, removes only that private alias,
+  synchronizes again, and proves canonical link count one and private absence.
+- Canonical reservation and main-output inspection may open a multi-link inode
+  only long enough to authenticate its reservation/output identity and finish
+  that exact transition. A foreign identity, a third link, malformed authority,
+  or any other pair remains a conflict and is not changed.
+- The fallback has crash points after link creation, first directory sync,
+  alias removal, and final directory sync. The exact transition classifier and
+  idempotent completion are exercised on Linux with the same hard-link
+  semantics; FreeBSD cross-compilation passes. Native FreeBSD crash execution
+  remains part of the authorized-system acceptance gate.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

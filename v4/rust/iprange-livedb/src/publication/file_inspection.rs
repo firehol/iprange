@@ -57,6 +57,15 @@ pub(super) fn main(
     header: Header,
     cancellation: &CancellationToken,
 ) -> Result<Option<Inspected>, Problem> {
+    #[cfg(target_os = "freebsd")]
+    let Some(regular) = destination
+        .directory()
+        .open_regular_any_link(destination.main(), false)
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    #[cfg(not(target_os = "freebsd"))]
     let Some(regular) = destination
         .directory()
         .open_regular(destination.main(), false)
@@ -64,6 +73,16 @@ pub(super) fn main(
     else {
         return Ok(None);
     };
+    #[cfg(target_os = "freebsd")]
+    if regular.identity.encode() == header.output_identity {
+        let private = destination
+            .output_name(header.attempt_id)
+            .map_err(|error| Problem::namespace(&error))?;
+        destination
+            .directory()
+            .finish_noreplace_transition(&private, destination.main(), regular.identity)
+            .map_err(|error| Problem::namespace(&error))?;
+    }
     inspect(
         destination,
         destination.main().clone(),

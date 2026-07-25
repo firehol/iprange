@@ -67,6 +67,6 @@ pub fn resolve_publication(
     resolver::resolve(path.as_ref(), supplied, mode, cancellation)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 #[path = "publication/crash_tests.rs"]
 mod crash_tests;

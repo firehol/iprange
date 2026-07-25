@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -59,6 +60,7 @@ fn private_creation_is_exclusive_nofollow_and_creator_only() {
     ));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn inherited_extended_access_acl_is_removed() {
     let directory = TempDirectory::new();
@@ -81,6 +83,66 @@ fn inherited_extended_access_acl_is_removed() {
         regular.creator_only_commitment().unwrap(),
         destination.security_commitment()
     );
+}
+
+#[test]
+fn freebsd_noreplace_transition_finishes_only_the_exact_pair() {
+    let directory = TempDirectory::new();
+    let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
+    let source = destination.output_name([4; 16]).unwrap();
+    let file = destination.create(&source).unwrap();
+    let identity = regular_identity(&file, destination.directory().identity()).unwrap();
+
+    std::fs::hard_link(
+        directory
+            .path
+            .join(OsString::from_vec(source.bytes().to_vec())),
+        directory.path.join("output.v4"),
+    )
+    .unwrap();
+    let retained = destination
+        .directory()
+        .open_regular_any_link(destination.main(), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.identity, identity);
+    destination
+        .directory()
+        .finish_noreplace_transition(&source, destination.main(), identity)
+        .unwrap();
+    destination
+        .directory()
+        .verify_name(destination.main(), identity)
+        .unwrap();
+    destination.directory().require_absent(&source).unwrap();
+    destination
+        .directory()
+        .finish_noreplace_transition(&source, destination.main(), identity)
+        .unwrap();
+}
+
+#[test]
+fn freebsd_noreplace_transition_rejects_extra_or_foreign_links() {
+    let directory = TempDirectory::new();
+    let destination = Destination::bind(&directory.path.join("output.v4")).unwrap();
+    let source = destination.output_name([5; 16]).unwrap();
+    let file = destination.create(&source).unwrap();
+    let identity = regular_identity(&file, destination.directory().identity()).unwrap();
+    let source_path = directory
+        .path
+        .join(OsString::from_vec(source.bytes().to_vec()));
+    std::fs::hard_link(&source_path, directory.path.join("output.v4")).unwrap();
+    std::fs::hard_link(&source_path, directory.path.join("third")).unwrap();
+
+    assert!(matches!(
+        destination
+            .directory()
+            .finish_noreplace_transition(&source, destination.main(), identity),
+        Err(NamespaceError::LinkCount(3))
+    ));
+    assert!(source_path.exists());
+    assert!(directory.path.join("output.v4").exists());
+    assert!(directory.path.join("third").exists());
 }
 
 #[test]
@@ -184,6 +246,7 @@ impl Drop for TempDirectory {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn install_extended_acl(file: &File) -> bool {
     const ACL_NAME: &[u8] = b"system.posix_acl_access\0";
     const USER_OBJ: u16 = 0x01;
