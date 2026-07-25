@@ -17,6 +17,8 @@ mod draft_store;
 #[path = "sdk_error.rs"]
 pub mod error;
 mod fault;
+mod feed;
+mod feed_catalog;
 mod file_io;
 mod fixed_tree;
 mod free_bitmap;
@@ -39,6 +41,8 @@ pub use cardinality::{Cardinality129, CardinalityOverflow};
 pub use contract::{AddressFamily, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED};
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
+pub use feed::{FeedEntry, FeedName};
+pub use feed_catalog::FeedCursor;
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{

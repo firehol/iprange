@@ -65,14 +65,7 @@ pub(crate) fn cell<'a>(
     index: usize,
     cell_len: usize,
 ) -> Result<&'a [u8]> {
-    if index >= header.item_count {
-        return Err(Error::Corrupt("slotted-page slot index is invalid"));
-    }
-    let slot = HEADER_SIZE + index * 2;
-    if slot + 2 > header.lower {
-        return Err(Error::Corrupt("slotted-page slot is outside the array"));
-    }
-    let start = usize::from(u16_le(page, slot));
+    let start = slot_start(page, header, index)?;
     let end = start
         .checked_add(cell_len)
         .ok_or(Error::Corrupt("slotted-page cell end overflows"))?;
@@ -82,6 +75,45 @@ pub(crate) fn cell<'a>(
         ));
     }
     Ok(&page[start..end])
+}
+
+pub(crate) fn record<'a>(
+    page: &'a [u8; PAGE_SIZE],
+    header: &Header,
+    index: usize,
+    minimum_len: usize,
+    maximum_len: usize,
+) -> Result<&'a [u8]> {
+    let start = slot_start(page, header, index)?;
+    if start < header.upper || start + 2 > PAGE_SIZE {
+        return Err(Error::Corrupt(
+            "slotted-page record is outside the record area",
+        ));
+    }
+    let record_len = usize::from(u16_le(page, start));
+    if !(minimum_len..=maximum_len).contains(&record_len) {
+        return Err(Error::Corrupt("slotted-page record length is invalid"));
+    }
+    let end = start
+        .checked_add(record_len)
+        .ok_or(Error::Corrupt("slotted-page record end overflows"))?;
+    if end > PAGE_SIZE {
+        return Err(Error::Corrupt(
+            "slotted-page record is outside the record area",
+        ));
+    }
+    Ok(&page[start..end])
+}
+
+fn slot_start(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> Result<usize> {
+    if index >= header.item_count {
+        return Err(Error::Corrupt("slotted-page slot index is invalid"));
+    }
+    let slot = HEADER_SIZE + index * 2;
+    if slot + 2 > header.lower {
+        return Err(Error::Corrupt("slotted-page slot is outside the array"));
+    }
+    Ok(usize::from(u16_le(page, slot)))
 }
 
 pub(crate) struct Builder<'a> {

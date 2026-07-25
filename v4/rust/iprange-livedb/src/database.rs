@@ -9,6 +9,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
 use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::feed::FeedEntry;
+use crate::feed_catalog::{self, FeedCursor};
 use crate::file_io;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::metadata;
@@ -101,6 +103,16 @@ impl ImmutableReader {
         self.core.direct_cursor_v6(direction)
     }
 
+    /// Look up one exact feed name in a membership database.
+    pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
+        self.core.lookup_feed(name)
+    }
+
+    /// Enumerate feeds in ascending feed-index order.
+    pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
+        self.core.feed_cursor()
+    }
+
     /// Exact decompressed metadata length, or absence.
     pub fn metadata_json_len(&self) -> Option<u64> {
         self.core.metadata_json_len()
@@ -162,6 +174,22 @@ impl ReaderCore {
     ) -> Result<DirectCursorV6<'_>> {
         self.require_direct(AddressFamily::Ipv6)?;
         DirectCursorV6::new_live(&self.file, &self.bootstrap.meta, direction, owner_pid)
+    }
+
+    pub(crate) fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
+        feed_catalog::require_membership(&self.bootstrap.meta)?;
+        let name = crate::feed::FeedName::new(name)?;
+        feed_catalog::lookup(&self.file, &self.bootstrap.meta, &name)
+    }
+
+    pub(crate) fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
+        feed_catalog::require_membership(&self.bootstrap.meta)?;
+        FeedCursor::new(&self.file, &self.bootstrap.meta)
+    }
+
+    pub(crate) fn feed_cursor_live(&self, owner_pid: u32) -> Result<FeedCursor<'_>> {
+        feed_catalog::require_membership(&self.bootstrap.meta)?;
+        FeedCursor::new_live(&self.file, &self.bootstrap.meta, owner_pid)
     }
 
     pub(crate) fn metadata_json_len(&self) -> Option<u64> {

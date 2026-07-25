@@ -10236,6 +10236,60 @@ requirements are normative in the Pre-Implementation Gate above.
   including embedded tests; every active source and test file is at or below
   490 lines.
 
+### 2026-07-25 - immutable named-feed catalog plan
+
+- This is the first public slice of the approved membership implementation.
+  Callers receive copied feed names and observable indexes; no mutation accepts
+  an index, bitmap word, or membership ID as authority.
+- Rust will expose one fixed-capacity `FeedName`, one copied `{name,index}`
+  entry, exact name lookup, and an allocation-free cursor in ascending
+  feed-index order on immutable and live readers. Empty catalogs are valid.
+- Lookup and cursor traversal read only their selected root-to-leaf paths.
+  They perform checked page, slot, record-length, name, ordering, child, and
+  transaction bounds needed for safe access, but deliberately do not calculate
+  page CRCs or cross-validate the complete pair of catalog trees. That remains
+  explicit `Validate` work.
+- The numeric cursor retains one fixed ancestor stack and one page buffer.
+  Variable-length name records are decoded into the fixed public name value, so
+  neither lookup nor cursor steps allocate through the heap.
+- This mirrors the small proven cursor shape in
+  `cberner/redb @ fe0141159c73`,
+  `src/tree_store/btree_cursor.rs:85-193`, and the page-local binary search plus
+  ancestor cursor used by `LMDB/lmdb @ 389e1009a86c`,
+  `libraries/liblmdb/mdb.c:6700-6795,7860-7945`. v4 keeps fixed arrays rather
+  than either library's general-purpose dynamic transaction machinery.
+- Permanent tests will exercise boundary-length valid names, every invalid-name
+  class, exact misses, multi-page/multi-level trees, malformed selected records
+  and children, no implicit CRC check, ascending enumeration, end stability,
+  fork rejection for live cursors, and zero warmed-path allocations. Catalog
+  mutation, membership views, dictionary interning, and membership range
+  changes remain the following slices.
+
+### 2026-07-25 - immutable named-feed catalog implementation
+
+- Rust now exposes a fixed-capacity validated `FeedName`, copied `FeedEntry`,
+  exact name lookup, and an ascending feed-index cursor on both immutable and
+  live readers. Invalid caller names and wrong database kinds fail before
+  catalog page access.
+- Name lookup follows only the selected variable-key tree path. Enumeration
+  retains one fixed ancestor stack and one page buffer, detects declared-count
+  and index-order disagreement as it walks, and returns copied names without a
+  heap allocation. Neither path accepts an index back as mutation authority.
+- Selected page, slot, variable-record, name, index-limit, transaction, level,
+  and child bounds are checked. Ordinary reads deliberately ignore page CRC and
+  do not cross-validate the complete name tree, numeric tree, or used bitmap;
+  those are explicit validation responsibilities.
+- Permanent tests cover empty and branched catalogs, exact misses, maximum
+  255-byte names, every caller grammar class, malformed selected records and
+  children, declared-count and index-order disagreement, bad ordinary-path CRC,
+  live cursor process ownership, and zero warmed-path allocations.
+- The current toolchain and Rust 1.74 each pass 111 tests with one intentionally
+  ignored subprocess entry point. Warnings-denied all-target Clippy, formatting,
+  `git diff --check`, the SOW audit, and complexity analysis pass. Every new
+  function is at or below cyclomatic complexity 9. The active production-module
+  graph is 8,172 physical lines including embedded tests; every active
+  production and separate test file remains at or below 490 lines.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -10,6 +10,7 @@ pub use crate::bootstrap::BootstrapError as FormatError;
 #[non_exhaustive]
 pub enum ErrorCode {
     InvalidArgument,
+    NameInvalid,
     WrongState,
     WrongMode,
     Unsupported,
@@ -35,6 +36,7 @@ pub enum ErrorCode {
 #[non_exhaustive]
 pub enum Error {
     InvalidArgument(&'static str),
+    NameInvalid,
     WrongState(&'static str),
     WrongMode(&'static str),
     Unsupported(&'static str),
@@ -66,6 +68,7 @@ impl Error {
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidArgument(_) => ErrorCode::InvalidArgument,
+            Self::NameInvalid => ErrorCode::NameInvalid,
             Self::WrongState(_) => ErrorCode::WrongState,
             Self::WrongMode(_) => ErrorCode::WrongMode,
             Self::Unsupported(_) => ErrorCode::Unsupported,
@@ -96,6 +99,7 @@ impl fmt::Display for Error {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument(detail) => write!(output, "invalid argument: {detail}"),
+            Self::NameInvalid => output.write_str("feed name is invalid"),
             Self::WrongState(detail) => write!(output, "wrong operation state: {detail}"),
             Self::WrongMode(detail) => write!(output, "wrong database mode: {detail}"),
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
@@ -142,6 +146,7 @@ impl std::error::Error for Error {
             Self::TransactionAborted(cause) => Some(cause.as_ref()),
             Self::CleanupIncomplete { cause, .. } => Some(cause.as_ref()),
             Self::InvalidArgument(_)
+            | Self::NameInvalid
             | Self::WrongState(_)
             | Self::WrongMode(_)
             | Self::Unsupported(_)

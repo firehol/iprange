@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::bootstrap::OpenMode;
 use crate::database::{self, DatabaseInfo, ReaderCore};
 use crate::error::{Error, Result};
+use crate::feed::FeedEntry;
+use crate::feed_catalog::FeedCursor;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
@@ -78,6 +80,18 @@ impl LiveReader {
     pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.require_owner()?;
         self.core.direct_cursor_v6_live(direction, self.owner_pid)
+    }
+
+    /// Look up one exact feed name in this pinned membership generation.
+    pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
+        self.require_owner()?;
+        self.core.lookup_feed(name)
+    }
+
+    /// Enumerate this generation's feeds in ascending feed-index order.
+    pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
+        self.require_owner()?;
+        self.core.feed_cursor_live(self.owner_pid)
     }
 
     /// Exact decompressed metadata length, or absence.
