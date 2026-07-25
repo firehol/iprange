@@ -83,11 +83,13 @@ fn populated_direct_database_validates_explicitly() {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(30), 7)
+    let cancellation = iprange_livedb::CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(30), 7).unwrap();
+    transaction
+        .set_metadata_json(br#"{"source":"test"}"#)
         .unwrap();
-    writer.set_metadata_json(br#"{"source":"test"}"#).unwrap();
-    writer.commit().unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     fs::copy(&paths.live, &paths.snapshot).unwrap();
 
@@ -108,7 +110,9 @@ fn populated_membership_database_validates_all_indexes() {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&paths.live, transaction_budget()).unwrap();
-    let mut transaction = writer.begin_membership_transaction().unwrap();
+    let mut transaction = writer
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+        .unwrap();
     let alpha = transaction
         .ensure_feed(FeedName::new("alpha").unwrap())
         .unwrap();

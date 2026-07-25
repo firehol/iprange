@@ -73,7 +73,9 @@ fn transaction_builds_splits_renames_and_reopens_catalog() {
 
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         for index in (0..1_000).rev() {
             transaction.ensure_feed(generated(index)).unwrap();
         }
@@ -120,14 +122,19 @@ fn dropped_transaction_requires_explicit_writer_abort() {
 
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         transaction.ensure_feed(name("temporary")).unwrap();
     }
     assert!(matches!(
         writer.commit(),
         Err(iprange_livedb::Error::WrongState(_))
     ));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
     let reader = LiveReader::open(&files.main).unwrap();
     assert!(reader.lookup_feed("temporary").unwrap().is_none());
     reader.close().unwrap();
@@ -148,12 +155,16 @@ fn unused_membership_builder_commit_cleans_the_draft() {
 
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         transaction.ensure_feed(name("existing")).unwrap();
         transaction.commit().unwrap();
     }
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let feed = transaction.lookup_feed(name("existing")).unwrap().unwrap();
         let empty = transaction.empty_membership().unwrap();
         let _unused = transaction.add_feed(empty, feed).unwrap();
@@ -163,7 +174,7 @@ fn unused_membership_builder_commit_cleans_the_draft() {
         ));
     }
     assert!(writer
-        .begin_membership_transaction()
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
         .unwrap()
         .abort()
         .is_ok());

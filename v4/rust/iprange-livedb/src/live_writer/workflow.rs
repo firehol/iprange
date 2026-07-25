@@ -118,14 +118,14 @@ impl<'a> PreparedOperation<'a> {
 
     fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
         self.check_or_abort()?;
-        let changed = self.abort_on_error(|writer| writer.set_metadata_json(input))?;
+        let changed = self.abort_on_error(|writer| writer.stage_metadata_json(input))?;
         self.check_or_abort()?;
         Ok(changed)
     }
 
     fn clear_metadata_json(&mut self) -> Result<bool> {
         self.check_or_abort()?;
-        let changed = self.abort_on_error(LiveWriter::clear_metadata_json)?;
+        let changed = self.abort_on_error(LiveWriter::stage_clear_metadata_json)?;
         self.check_or_abort()?;
         Ok(changed)
     }

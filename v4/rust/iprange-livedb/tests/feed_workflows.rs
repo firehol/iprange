@@ -168,7 +168,9 @@ fn replace_feed_preserves_other_feeds_reports_and_detects_no_change() {
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let alpha = transaction.ensure_feed(name("alpha")).unwrap();
         let beta = transaction.ensure_feed(name("beta")).unwrap();
         let empty = transaction.empty_membership().unwrap();
@@ -353,7 +355,10 @@ fn feed_input_failures_and_cancellation_abort_the_complete_workflow() {
         unfinished.add_ranges_v4_slice(&[range(1, 2)]).unwrap();
     }
     assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
 
     assert!(matches!(
         writer.begin_replace_feed(name("missing"), &cancellation),

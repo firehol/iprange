@@ -66,7 +66,9 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
 
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let feed_a = transaction.ensure_feed(feed_name("a")).unwrap();
         let feed_b = transaction.ensure_feed(feed_name("b")).unwrap();
         let feed_c = transaction.ensure_feed(feed_name("c")).unwrap();
@@ -145,7 +147,9 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
     reader.close().unwrap();
 
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let feed_b = transaction.lookup_feed(feed_name("b")).unwrap().unwrap();
         let empty = transaction.empty_membership().unwrap();
         let membership_b = transaction.add_feed(empty, feed_b).unwrap();
@@ -172,7 +176,9 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
     reader.close().unwrap();
 
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let reused = transaction.ensure_feed(feed_name("d")).unwrap();
         assert_eq!(reused.name(), feed_name("d"));
         assert_eq!(
@@ -185,7 +191,9 @@ fn membership_algebra_commits_canonical_ranges_and_reclaims_unused_values() {
     reader.close().unwrap();
 
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let empty = transaction.empty_membership().unwrap();
         transaction
             .apply_v4(Ipv4Key(0), Ipv4Key(99), empty, MembershipOperation::Replace)

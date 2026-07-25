@@ -76,7 +76,8 @@ fn maximum_metadata_uses_the_exact_minimum_heap_budget() {
     .unwrap();
     let payload = pseudo_random(LIMIT);
     let mut writer = LiveWriter::open(&files.main, budget(STORED_BOUND)).unwrap();
-    assert!(writer.set_metadata_json(&payload).unwrap());
+    let cancellation = iprange_livedb::CancellationToken::new();
+    assert!(writer.set_metadata_json(&payload, &cancellation).unwrap());
     assert_eq!(
         writer.commit().unwrap().durability,
         CommitDurability::Committed
@@ -89,7 +90,7 @@ fn maximum_metadata_uses_the_exact_minimum_heap_budget() {
         Some(&payload[..])
     );
 
-    assert!(writer.clear_metadata_json().unwrap());
+    assert!(writer.clear_metadata_json(&cancellation).unwrap());
     assert_eq!(
         writer.commit().unwrap().durability,
         CommitDurability::Committed
@@ -122,15 +123,15 @@ fn oversized_input_is_a_precondition_error_and_preserves_the_draft() {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget(2 * 1024 * 1024)).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
+    let cancellation = iprange_livedb::CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
     assert!(matches!(
-        writer.set_metadata_json(&vec![0; 1_048_577]),
+        transaction.set_metadata_json(&vec![0; 1_048_577]),
         Err(Error::InvalidArgument(_))
     ));
     assert_eq!(
-        writer.commit().unwrap().durability,
+        transaction.commit().unwrap().durability,
         CommitDurability::Committed
     );
     writer.close().unwrap();

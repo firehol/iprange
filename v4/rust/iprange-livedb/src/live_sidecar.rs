@@ -13,6 +13,7 @@ use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::path;
 use crate::slotted_page::{put_u16, put_u32, put_u64};
+use crate::validation::LocalFileIdentity;
 
 const MAGIC: [u8; 8] = *b"IPRDRS4\0";
 const HEADER_SIZE: u16 = 68;
@@ -37,6 +38,35 @@ impl Identity {
         bytes[8..16].copy_from_slice(&self.inode.to_le_bytes());
         bytes
     }
+}
+
+pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
+    LocalFileIdentity {
+        kind: 1,
+        bytes: identity.encode(),
+    }
+}
+
+pub(crate) fn parent_identity(path: &Path) -> Result<LocalFileIdentity> {
+    let parent = path.parent().ok_or(Error::InvalidArgument(
+        "database path has no parent directory",
+    ))?;
+    let file = File::open(parent)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_dir() {
+        return Err(Error::InvalidArgument("database parent is not a directory"));
+    }
+    #[cfg(unix)]
+    {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&metadata.dev().to_le_bytes());
+        bytes[8..16].copy_from_slice(&metadata.ino().to_le_bytes());
+        Ok(LocalFileIdentity { kind: 1, bytes })
+    }
+    #[cfg(not(unix))]
+    Err(Error::Unsupported(
+        "directory identity is not implemented on this platform",
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +186,10 @@ impl Sidecar {
         } else {
             Err(Error::WriterBusy)
         }
+    }
+
+    pub(crate) fn release_writer(&self) -> Result<()> {
+        live_lock::unlock(&self.file, WRITER_LOCK)
     }
 
     pub(crate) fn claim_reader(&self, txn: u64) -> Result<u32> {

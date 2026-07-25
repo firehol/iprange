@@ -74,7 +74,7 @@ impl Problem {
             output::Error::Namespace(cause) => Self::namespace(cause),
             output::Error::Sdk(cause) => Self::sdk(cause),
             output::Error::Bootstrap(_) => {
-                Self::plain(ErrorCode::Format, "output metadata is malformed")
+                Self::plain(ErrorCode::FormatInvalid, "output metadata is malformed")
             }
             output::Error::FinishedMetaChanged => {
                 Self::plain(ErrorCode::Conflict, "finished output metadata changed")
@@ -91,14 +91,15 @@ impl Problem {
             reservation_file::Error::Sdk(cause) => Self::sdk(cause),
             reservation_file::Error::Output(cause) => Self::output(cause),
             reservation_file::Error::Codec(_) => {
-                Self::plain(ErrorCode::Corrupt, "reservation record is malformed")
+                Self::plain(ErrorCode::FormatInvalid, "reservation record is malformed")
             }
             reservation_file::Error::HeaderChanged => {
                 Self::plain(ErrorCode::Conflict, "reservation record changed")
             }
-            reservation_file::Error::HeaderInvariant => {
-                Self::plain(ErrorCode::Corrupt, "reservation state is inconsistent")
-            }
+            reservation_file::Error::HeaderInvariant => Self::plain(
+                ErrorCode::FormatInvalid,
+                "reservation state is inconsistent",
+            ),
             reservation_file::Error::LengthChanged => {
                 Self::plain(ErrorCode::Conflict, "reservation length changed")
             }

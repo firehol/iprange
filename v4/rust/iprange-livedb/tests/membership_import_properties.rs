@@ -257,7 +257,9 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
     }
 
     let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
-    let mut source_transaction = source_writer.begin_membership_transaction().unwrap();
+    let mut source_transaction = source_writer
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+        .unwrap();
     let mut source_membership = source_transaction.empty_membership().unwrap();
     for index in 0..70 {
         let feed = source_transaction
@@ -281,7 +283,9 @@ fn import_translates_sparse_feed_indexes_across_bitmap_words() {
     source_writer.close().unwrap();
 
     let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
-    let mut destination_transaction = writer.begin_membership_transaction().unwrap();
+    let mut destination_transaction = writer
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+        .unwrap();
     let mut destination_membership = destination_transaction.empty_membership().unwrap();
     for index in 0..70 {
         let feed = destination_transaction

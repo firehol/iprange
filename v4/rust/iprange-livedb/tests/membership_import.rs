@@ -82,7 +82,9 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
 
     let mut source_writer = LiveWriter::open(&source_files.main, budget()).unwrap();
     {
-        let mut transaction = source_writer.begin_membership_transaction().unwrap();
+        let mut transaction = source_writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let alpha = transaction.ensure_feed(name("alpha")).unwrap();
         let beta = transaction.ensure_feed(name("beta")).unwrap();
         let empty = transaction.empty_membership().unwrap();
@@ -111,7 +113,9 @@ fn live_import_unions_names_preserves_destination_and_reports_exactly() {
 
     let mut writer = LiveWriter::open(&destination_files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let alpha = transaction.ensure_feed(name("alpha")).unwrap();
         let charlie = transaction.ensure_feed(name("charlie")).unwrap();
         let empty = transaction.empty_membership().unwrap();

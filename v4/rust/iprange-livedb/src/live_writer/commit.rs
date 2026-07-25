@@ -8,8 +8,11 @@ use crate::draft_store::DraftStore;
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::Mode;
+use crate::publication::CoordinationCleanup;
 
-use super::{verify_pair, CommitDurability, CommitResult, LiveWriter, State};
+use super::{
+    verify_pair, CommitCleanupArtifacts, CommitDurability, CommitResult, LiveWriter, State,
+};
 
 enum Phase {
     BeforePublication(Error),
@@ -34,7 +37,7 @@ impl LiveWriter {
         let attempt = self.commit_attempt()?;
         if let Err(cause) = self.prepare_and_lock(cancellation) {
             let cause = self.abort_after(cause);
-            return Ok(result(attempt, CommitDurability::NotCommitted, cause));
+            return Ok(self.failed_result(attempt, CommitDurability::NotCommitted, cause));
         }
         let mut result = self.finish_commit_locked_with(attempt, cancellation);
         self.apply_commit_unlock(&mut result, self.sidecar.unlock_gate());
@@ -90,21 +93,25 @@ impl LiveWriter {
         match self.commit_locked(cancellation) {
             Phase::BeforePublication(cause) => {
                 let cause = self.abort_after(cause);
-                result(attempt, CommitDurability::NotCommitted, cause)
+                self.failed_result(attempt, CommitDurability::NotCommitted, cause)
             }
             Phase::OutcomeUnknown(cause) => {
                 self.draft = None;
                 self.state = State::OutcomeUnknown;
-                result(attempt, CommitDurability::OutcomeUnknown, cause)
+                self.failed_result(attempt, CommitDurability::OutcomeUnknown, cause)
             }
             Phase::Committed(base) => {
                 self.base = base;
                 self.draft = None;
                 CommitResult {
-                    database_id: attempt.0,
-                    transaction_id: attempt.1,
-                    commit_nonce: attempt.2,
+                    attempted_database_id: attempt.0,
+                    directory_identity: self.directory_identity,
+                    main_identity: self.main_public_identity,
+                    attempted_transaction_id: attempt.1,
+                    attempted_commit_nonce: attempt.2,
                     durability: CommitDurability::Committed,
+                    cleanup: CommitCleanupArtifacts::clean(),
+                    coordination_cleanup: CoordinationCleanup::None,
                     cause: None,
                 }
             }
@@ -117,6 +124,7 @@ impl LiveWriter {
             if result.cause.is_none() {
                 result.cause = Some(cause);
             }
+            result.coordination_cleanup = CoordinationCleanup::RetainedWriterCloseRequired;
         }
     }
 
@@ -213,25 +221,43 @@ impl LiveWriter {
         }
         Ok(())
     }
+
+    fn failed_result(
+        &self,
+        attempt: ([u8; 16], u64, [u8; 16]),
+        durability: CommitDurability,
+        cause: Error,
+    ) -> CommitResult {
+        let cleanup = if self.draft.is_some() {
+            CommitCleanupArtifacts::tail(self.unpublished_tail_artifact(cause.code()))
+        } else {
+            CommitCleanupArtifacts::clean()
+        };
+        let coordination_cleanup = if durability == CommitDurability::OutcomeUnknown
+            || self.state != State::Healthy
+            || !cleanup.is_empty()
+        {
+            CoordinationCleanup::RetainedWriterCloseRequired
+        } else {
+            CoordinationCleanup::None
+        };
+        CommitResult {
+            attempted_database_id: attempt.0,
+            directory_identity: self.directory_identity,
+            main_identity: self.main_public_identity,
+            attempted_transaction_id: attempt.1,
+            attempted_commit_nonce: attempt.2,
+            durability,
+            cleanup,
+            coordination_cleanup,
+            cause: Some(cause),
+        }
+    }
 }
 
 fn checkpoint(cancellation: Option<&CancellationToken>) -> Result<()> {
     match cancellation {
         Some(token) => token.check(),
         None => Ok(()),
-    }
-}
-
-fn result(
-    attempt: ([u8; 16], u64, [u8; 16]),
-    durability: CommitDurability,
-    cause: Error,
-) -> CommitResult {
-    CommitResult {
-        database_id: attempt.0,
-        transaction_id: attempt.1,
-        commit_nonce: attempt.2,
-        durability,
-        cause: Some(cause),
     }
 }

@@ -181,7 +181,7 @@ fn read_bootstrap(file: &File) -> Result<(MetaV4, u64), Problem> {
     }
     let mut pages = [0; 2 * PAGE_SIZE];
     file_io::read_exact_at(file, &mut pages, 0).map_err(|error| {
-        if error.code() == ErrorCode::Corrupt {
+        if error.code() == ErrorCode::FormatInvalid {
             conflict("publication destination changed while reading metadata")
         } else {
             Problem::sdk(&error)

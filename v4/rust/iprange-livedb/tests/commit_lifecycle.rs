@@ -1,0 +1,207 @@
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use iprange_livedb::{
+    create_live, resolve_commit, AbortOutcome, AddressFamily, CancellationToken, CloseOutcome,
+    CommitCleanupArtifacts, CommitDurability, CommitResolution, CommitResolutionMode, CommitResult,
+    Error, Ipv4Key, LiveReader, LiveWriter, LocalFileRelation, TransactionBudget, ValueKind,
+    ValueTag,
+};
+
+struct TestPair {
+    main: PathBuf,
+}
+
+impl TestPair {
+    fn new(label: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        Self {
+            main: std::env::temp_dir().join(format!(
+                "iprange-v4-commit-{label}-{}-{unique}",
+                std::process::id()
+            )),
+        }
+    }
+
+    fn sidecar(&self) -> PathBuf {
+        let mut name = self.main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        self.main.with_file_name(name)
+    }
+}
+
+impl Drop for TestPair {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.main);
+        let _ = fs::remove_file(self.sidecar());
+    }
+}
+
+fn budget() -> TransactionBudget {
+    TransactionBudget {
+        max_heap_bytes: 2 * 1024 * 1024,
+        max_private_pages: 10_000,
+        max_file_growth_pages: 10_000,
+        max_open_files: 2,
+    }
+}
+
+fn create(files: &TestPair) {
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"asn").unwrap(),
+        1,
+    )
+    .unwrap();
+}
+
+fn commit_one(writer: &mut LiveWriter, value: u32) -> CommitResult {
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction
+        .assign_v4(Ipv4Key(value), Ipv4Key(value), value)
+        .unwrap();
+    transaction.commit().unwrap()
+}
+
+fn altered_attempt(source: &CommitResult, transaction_id: u64, nonce: [u8; 16]) -> CommitResult {
+    CommitResult {
+        attempted_database_id: source.attempted_database_id,
+        directory_identity: source.directory_identity,
+        main_identity: source.main_identity,
+        attempted_transaction_id: transaction_id,
+        attempted_commit_nonce: nonce,
+        durability: CommitDurability::OutcomeUnknown,
+        cleanup: CommitCleanupArtifacts::default(),
+        coordination_cleanup: iprange_livedb::publication::CoordinationCleanup::None,
+        cause: None,
+    }
+}
+
+#[test]
+fn commit_result_and_live_resolution_report_exact_facts() {
+    let files = TestPair::new("resolve");
+    create(&files);
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let committed = commit_one(&mut writer, 7);
+
+    assert_eq!(committed.durability, CommitDurability::Committed);
+    assert_eq!(committed.attempted_transaction_id, 2);
+    assert_ne!(committed.directory_identity.bytes, [0; 32]);
+    assert_ne!(committed.main_identity.bytes, [0; 32]);
+    assert!(committed.cleanup.is_empty());
+    assert!(matches!(
+        resolve_commit(
+            &files.main,
+            &committed,
+            CommitResolutionMode::Live,
+            &cancellation,
+        ),
+        Err(Error::WriterBusy)
+    ));
+
+    assert_eq!(writer.close().unwrap().outcome, CloseOutcome::Closed);
+    let resolved = resolve_commit(
+        &files.main,
+        &committed,
+        CommitResolutionMode::Live,
+        &cancellation,
+    )
+    .unwrap();
+    assert_eq!(resolved.resolution, CommitResolution::Committed);
+    assert_eq!(
+        resolved.local_file_relation,
+        LocalFileRelation::SameLocalFile
+    );
+
+    let wrong_nonce = altered_attempt(&committed, committed.attempted_transaction_id, [0x55; 16]);
+    assert_eq!(
+        resolve_commit(
+            &files.main,
+            &wrong_nonce,
+            CommitResolutionMode::Live,
+            &cancellation,
+        )
+        .unwrap()
+        .resolution,
+        CommitResolution::NotCommitted
+    );
+}
+
+#[test]
+fn later_generations_do_not_invent_an_old_commit_outcome() {
+    let files = TestPair::new("superseded");
+    create(&files);
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let first = commit_one(&mut writer, 7);
+    let _second = commit_one(&mut writer, 8);
+    writer.close().unwrap();
+
+    let old_unknown = altered_attempt(&first, 1, [0x66; 16]);
+    let resolved = resolve_commit(
+        &files.main,
+        &old_unknown,
+        CommitResolutionMode::Live,
+        &cancellation,
+    )
+    .unwrap();
+    assert_eq!(resolved.resolution, CommitResolution::SupersededUnknown);
+}
+
+#[test]
+fn resolution_reports_a_deliberate_logical_copy_as_a_different_local_file() {
+    let source = TestPair::new("copy-source");
+    let copy = TestPair::new("copy-destination");
+    create(&source);
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&source.main, budget()).unwrap();
+    let committed = commit_one(&mut writer, 7);
+    writer.close().unwrap();
+    fs::copy(&source.main, &copy.main).unwrap();
+
+    let resolved = resolve_commit(
+        &copy.main,
+        &committed,
+        CommitResolutionMode::Immutable,
+        &cancellation,
+    )
+    .unwrap();
+    assert_eq!(resolved.resolution, CommitResolution::Committed);
+    assert_eq!(
+        resolved.local_file_relation,
+        LocalFileRelation::DifferentLocalFile
+    );
+}
+
+#[test]
+fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
+    let files = TestPair::new("close");
+    create(&files);
+    let token = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    drop(transaction);
+
+    let closed = writer.close().unwrap();
+    assert_eq!(closed.outcome, CloseOutcome::Closed);
+    assert_eq!(closed.abort_outcome, Some(AbortOutcome::Aborted));
+    assert!(closed.cleanup.is_empty());
+
+    let mut replacement = LiveWriter::open(&files.main, budget()).unwrap();
+    replacement.close().unwrap();
+    assert_eq!(writer.close().unwrap().outcome, CloseOutcome::Closed);
+
+    let reader = LiveReader::open(&files.main).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 1);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
+    reader.close().unwrap();
+}

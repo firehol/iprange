@@ -257,7 +257,9 @@ fn populated_membership(files: TestFiles) -> TestFiles {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
-    let mut transaction = writer.begin_membership_transaction().unwrap();
+    let mut transaction = writer
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+        .unwrap();
     let alpha = transaction
         .ensure_feed(FeedName::new("alpha").unwrap())
         .unwrap();

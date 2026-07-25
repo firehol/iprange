@@ -11,6 +11,7 @@ mod blob_tree;
 mod bootstrap;
 mod cancellation;
 pub mod cardinality;
+mod commit_resolution;
 mod contract;
 #[path = "checksum.rs"]
 mod crc32c;
@@ -59,6 +60,10 @@ mod workflow;
 pub use bootstrap::MetaSelection;
 pub use cancellation::CancellationToken;
 pub use cardinality::{Cardinality129, CardinalityOverflow};
+pub use commit_resolution::{
+    resolve_commit, CommitResolution, CommitResolutionMode, CommitResolutionResult,
+    LocalFileRelation,
+};
 pub use contract::{
     AddressFamily, MembershipOperation, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED,
 };
@@ -70,11 +75,12 @@ pub use feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
-    create_live, CommitDurability, CommitResult, CreateFeed, CreateResult, CreationState,
-    DirectReplacement, FeedRef, FinishedWorkflow, LiveWriter, MembershipImport,
-    MembershipImportSource, MembershipRef, MembershipTransaction, PreparedFeedChange,
-    PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh, TransactionBudget,
-    TransactionFeedCursor,
+    create_live, AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
+    CommitCleanupArtifacts, CommitDurability, CommitResult, CreateFeed, CreateResult,
+    CreationState, DirectReplacement, DirectTransaction, FeedRef, FinishedWorkflow, LiveWriter,
+    LocalBasename, MembershipImport, MembershipImportSource, MembershipRef, MembershipTransaction,
+    PreparedFeedChange, PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh,
+    TransactionBudget, TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use publication::{

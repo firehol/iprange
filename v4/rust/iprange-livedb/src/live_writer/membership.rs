@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MembershipOperation, ValueKind};
 use crate::draft_store::{Draft, DraftStore};
 use crate::error::{Error, Result};
@@ -62,6 +63,7 @@ pub struct MembershipTransaction<'a> {
     database_id: [u8; 16],
     operation_nonce: [u8; 16],
     membership_epoch: u64,
+    cancellation: CancellationToken,
 }
 
 /// Ordered transaction-bound feed enumeration.
@@ -74,7 +76,11 @@ pub struct TransactionFeedCursor<'a> {
 
 impl LiveWriter {
     /// Begin one advanced membership transaction on a clean writer.
-    pub fn begin_membership_transaction(&mut self) -> Result<MembershipTransaction<'_>> {
+    pub fn begin_membership_transaction(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<MembershipTransaction<'_>> {
+        cancellation.check()?;
         self.require_healthy()?;
         if self.base.meta.value_kind != ValueKind::Membership {
             return Err(Error::WrongMode(
@@ -90,6 +96,7 @@ impl LiveWriter {
             database_id: self.base.meta.database_id,
             operation_nonce,
             membership_epoch: 0,
+            cancellation: cancellation.clone(),
             writer: self,
         })
     }
@@ -97,8 +104,9 @@ impl LiveWriter {
 
 impl MembershipTransaction<'_> {
     /// Enumerate the current private catalog by ascending feed index.
-    pub fn feed_cursor(&self) -> Result<TransactionFeedCursor<'_>> {
+    pub fn feed_cursor(&mut self) -> Result<TransactionFeedCursor<'_>> {
         self.require_active()?;
+        self.check_or_abort()?;
         let meta = self.writer.draft.as_ref().unwrap().meta;
         Ok(TransactionFeedCursor {
             cursor: FeedCursor::new_live(&self.writer.file, &meta, self.writer.owner_pid)?,
@@ -108,8 +116,9 @@ impl MembershipTransaction<'_> {
     }
 
     /// Construct the empty membership without allocating an internal ID.
-    pub fn empty_membership(&self) -> Result<MembershipRef> {
+    pub fn empty_membership(&mut self) -> Result<MembershipRef> {
         self.require_active()?;
+        self.check_or_abort()?;
         Ok(self.membership_reference(0, 0))
     }
 
@@ -117,9 +126,11 @@ impl MembershipTransaction<'_> {
     pub fn add_feed(&mut self, membership: MembershipRef, feed: FeedRef) -> Result<MembershipRef> {
         self.require_current_membership(membership)?;
         self.require_current_feed(feed)?;
+        self.check_or_abort()?;
         let interned = self.writer.mutate(|store| {
             store.add_feed_to_membership(membership.id, membership.word_count, feed.entry)
         })?;
+        self.check_or_abort()?;
         Ok(self.membership_reference(interned.id, interned.word_count))
     }
 
@@ -133,9 +144,12 @@ impl MembershipTransaction<'_> {
     ) -> Result<bool> {
         self.require_family(AddressFamily::Ipv4, from <= to)?;
         self.require_current_membership(membership)?;
-        self.writer.mutate(|store| {
+        self.check_or_abort()?;
+        let changed = self.writer.mutate(|store| {
             store.apply_membership_v4(from, to, membership.id, membership.word_count, operation)
-        })
+        })?;
+        self.check_or_abort()?;
+        Ok(changed)
     }
 
     /// Apply one membership operation to an inclusive IPv6 interval.
@@ -148,43 +162,54 @@ impl MembershipTransaction<'_> {
     ) -> Result<bool> {
         self.require_family(AddressFamily::Ipv6, from <= to)?;
         self.require_current_membership(membership)?;
-        self.writer.mutate(|store| {
+        self.check_or_abort()?;
+        let changed = self.writer.mutate(|store| {
             store.apply_membership_v6(from, to, membership.id, membership.word_count, operation)
-        })
+        })?;
+        self.check_or_abort()?;
+        Ok(changed)
     }
 
     /// Return an exact existing feed without creating it.
     pub fn lookup_feed(&mut self, name: FeedName) -> Result<Option<FeedRef>> {
         self.require_active()?;
+        self.check_or_abort()?;
         let entry = self.writer.mutate(|store| store.lookup_feed(&name))?;
+        self.check_or_abort()?;
         Ok(entry.map(|entry| self.reference(entry)))
     }
 
     /// Return the exact feed, creating it at the lowest free index if absent.
     pub fn ensure_feed(&mut self, name: FeedName) -> Result<FeedRef> {
         self.require_active()?;
+        self.check_or_abort()?;
         let (entry, _) = self.writer.mutate(|store| store.ensure_feed(name))?;
+        self.check_or_abort()?;
         Ok(self.reference(entry))
     }
 
     /// Rename one referenced feed while preserving its membership.
     pub fn rename_feed(&mut self, feed: FeedRef, new_name: FeedName) -> Result<FeedRef> {
         self.require_current_feed(feed)?;
+        self.check_or_abort()?;
         let entry = self
             .writer
             .mutate(|store| store.rename_feed_ref(feed.entry, new_name))?;
+        self.check_or_abort()?;
         Ok(self.reference(entry))
     }
 
     /// Delete one feed and clear its bit from every stored membership.
     pub fn delete_feed(&mut self, feed: FeedRef) -> Result<()> {
         self.require_current_feed(feed)?;
+        self.check_or_abort()?;
         let next_epoch = self
             .membership_epoch
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow("membership reference epoch"))?;
         self.writer
             .mutate(|store| store.delete_feed_membership(feed.entry))?;
+        self.check_or_abort()?;
         self.membership_epoch = next_epoch;
         Ok(())
     }
@@ -192,12 +217,24 @@ impl MembershipTransaction<'_> {
     /// Stage one exact opaque metadata replacement in this transaction.
     pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
         self.require_active()?;
-        self.writer.set_metadata_json(input)
+        self.check_or_abort()?;
+        let changed = self.writer.stage_metadata_json(input)?;
+        self.check_or_abort()?;
+        Ok(changed)
+    }
+
+    /// Stage metadata absence in this transaction.
+    pub fn clear_metadata_json(&mut self) -> Result<bool> {
+        self.require_active()?;
+        self.check_or_abort()?;
+        let changed = self.writer.stage_clear_metadata_json()?;
+        self.check_or_abort()?;
+        Ok(changed)
     }
 
     /// Publish this transaction through the alternate metadata page.
     pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit()
+        self.writer.commit_cancellable(&self.cancellation)
     }
 
     /// Discard this transaction and invalidate all of its references.
@@ -298,6 +335,13 @@ impl MembershipTransaction<'_> {
             ));
         }
         self.writer.require_healthy()
+    }
+
+    fn check_or_abort(&mut self) -> Result<()> {
+        self.require_active()?;
+        self.cancellation
+            .check()
+            .map_err(|cause| self.writer.abort_after(cause))
     }
 }
 

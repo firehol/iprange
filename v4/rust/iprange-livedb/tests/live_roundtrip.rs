@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, AddressFamily, CommitDurability, CreationState, Error, ImmutableReader, Ipv4Key,
-    Ipv6Key, LiveReader, LiveWriter, ReclaimResult, TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, CommitDurability, CreationState, Error,
+    ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, LiveWriter, ReclaimResult, TransactionBudget,
+    ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -100,7 +101,7 @@ fn live_generations_are_atomic_and_old_readers_stay_pinned() {
         .unwrap();
     let committed = writer.commit().unwrap();
     assert_eq!(committed.durability, CommitDurability::Committed);
-    assert_eq!(committed.transaction_id, 2);
+    assert_eq!(committed.attempted_transaction_id, 2);
     assert!(committed.cause.is_none());
 
     assert_eq!(old.lookup_direct_v4(Ipv4Key(22)).unwrap(), None);
@@ -137,7 +138,10 @@ fn abort_and_noop_never_publish_a_generation() {
     assert!(!writer.clear_direct_v4(Ipv4Key(1), Ipv4Key(2)).unwrap());
     assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
     writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 7).unwrap();
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
     writer.close().unwrap();
 
     let reader = LiveReader::open(&files.main).unwrap();
@@ -217,7 +221,7 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
         } => {
             assert_eq!(transaction_count, 1);
             assert!(page_count > 0);
-            assert_eq!(commit.transaction_id, 4);
+            assert_eq!(commit.attempted_transaction_id, 4);
             assert_eq!(commit.durability, CommitDurability::Committed);
         }
     }
@@ -290,35 +294,35 @@ fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
 
     let payload = b"{ definitely not required to be valid JSON }\n";
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
-    assert!(writer.set_metadata_json(payload).unwrap());
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    assert!(transaction.set_metadata_json(payload).unwrap());
     assert_eq!(
-        writer.metadata_json_len().unwrap(),
+        transaction.metadata_json_len().unwrap(),
         Some(payload.len() as u64)
     );
     assert_eq!(
-        writer.metadata_json().unwrap().as_deref(),
+        transaction.metadata_json().unwrap().as_deref(),
         Some(&payload[..])
     );
 
     let mut too_small = vec![0x55; payload.len() - 1];
     assert!(matches!(
-        writer.read_metadata_json(&mut too_small),
+        transaction.read_metadata_json(&mut too_small),
         Err(Error::BufferTooSmall { required }) if required == payload.len() as u64
     ));
     assert!(too_small.iter().all(|&byte| byte == 0x55));
     assert!(matches!(
-        writer.clear_metadata_json(),
+        transaction.clear_metadata_json(),
         Err(Error::WrongState(_))
     ));
     assert!(matches!(
-        writer.assign_direct_v4(Ipv4Key(30), Ipv4Key(40), 9),
+        transaction.assign_v4(Ipv4Key(30), Ipv4Key(40), 9),
         Err(Error::WrongState(_))
     ));
 
-    let commit = writer.commit().unwrap();
+    let commit = transaction.commit().unwrap();
     assert_eq!(commit.durability, CommitDurability::Committed);
     assert_eq!(old.metadata_json_len().unwrap(), None);
 
@@ -345,23 +349,27 @@ fn equal_replacement_and_clear_have_the_exact_generation_semantics() {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    let cancellation = CancellationToken::new();
 
-    assert!(!writer.clear_metadata_json().unwrap());
+    assert!(!writer.clear_metadata_json(&cancellation).unwrap());
     assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
-    assert!(writer.set_metadata_json(b"").unwrap());
+    assert!(writer.set_metadata_json(b"", &cancellation).unwrap());
     assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
-    assert_eq!(writer.commit().unwrap().transaction_id, 2);
+    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 2);
 
     writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
     assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
 
-    assert!(writer.set_metadata_json(b"").unwrap());
-    assert_eq!(writer.commit().unwrap().transaction_id, 3);
-    assert!(writer.clear_metadata_json().unwrap());
+    assert!(writer.set_metadata_json(b"", &cancellation).unwrap());
+    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 3);
+    assert!(writer.clear_metadata_json(&cancellation).unwrap());
     assert_eq!(writer.metadata_json_len().unwrap(), None);
-    assert_eq!(writer.commit().unwrap().transaction_id, 4);
-    assert!(!writer.clear_metadata_json().unwrap());
+    assert_eq!(writer.commit().unwrap().attempted_transaction_id, 4);
+    assert!(!writer.clear_metadata_json(&cancellation).unwrap());
     assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
     writer.close().unwrap();
 
@@ -385,14 +393,15 @@ fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
     let mut tiny = budget();
     tiny.max_heap_bytes = 1;
     let mut writer = LiveWriter::open(&files.main, tiny).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
-        .unwrap();
+    let token = CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
     assert!(matches!(
-        writer.set_metadata_json(b"x"),
+        transaction.set_metadata_json(b"x"),
         Err(Error::TransactionAborted(cause))
             if matches!(*cause, Error::BudgetExceeded(_))
     ));
+    drop(transaction);
     assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
     writer.close().unwrap();
 

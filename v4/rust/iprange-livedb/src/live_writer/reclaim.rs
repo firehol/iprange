@@ -9,6 +9,8 @@ use super::{verify_pair, CommitResult, LiveWriter, State};
 
 /// Result of one clean-writer reclamation operation.
 #[derive(Debug)]
+// CommitResult keeps its bounded basename inline so commit finalization allocates nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum ReclaimResult {
     /// No complete retirement transaction was safe and within both limits.
     NoChange,

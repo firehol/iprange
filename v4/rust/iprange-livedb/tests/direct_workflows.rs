@@ -284,7 +284,10 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
         writer.assign_direct_v4(Ipv4Key(30), Ipv4Key(40), 2),
         Err(Error::WrongState(_))
     ));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
 
     let prepared_drop = CancellationToken::new();
     {
@@ -294,14 +297,17 @@ fn unfinished_source_failure_and_cancellation_cannot_publish_partial_input() {
     }
     assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
     assert!(matches!(
-        writer.set_metadata_json(b"{}"),
+        writer.set_metadata_json(b"{}", &CancellationToken::new()),
         Err(Error::WrongState(_))
     ));
     assert!(matches!(
         writer.metadata_json_len(),
         Err(Error::WrongState(_))
     ));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
 
     let mut workflow = writer.begin_direct_replacement(&cancellation).unwrap();
     let mut source = FailingSource::new(direct(50, 60, 3));

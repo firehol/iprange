@@ -114,6 +114,68 @@ fn adjacent_transaction_uses_parity() {
 }
 
 #[test]
+fn commit_resolution_uses_both_exact_meta_identities() {
+    let old = empty_direct_meta(1);
+    let mut current = old;
+    current.txn_id = 2;
+    current.commit_nonce = [3; 16];
+    let bytes = image(current, old);
+    let page0 = (&bytes[..PAGE_SIZE]).try_into().unwrap();
+    let page1 = (&bytes[PAGE_SIZE..]).try_into().unwrap();
+
+    assert_eq!(
+        resolve_commit_attempt(
+            page0,
+            page1,
+            bytes.len() as u64,
+            old.database_id,
+            2,
+            [3; 16],
+        ),
+        Ok(CommitAttemptResolution::Committed)
+    );
+    assert_eq!(
+        resolve_commit_attempt(
+            page0,
+            page1,
+            bytes.len() as u64,
+            old.database_id,
+            2,
+            [9; 16],
+        ),
+        Ok(CommitAttemptResolution::NotCommitted)
+    );
+    assert_eq!(
+        resolve_commit_attempt(
+            page0,
+            page1,
+            bytes.len() as u64,
+            old.database_id,
+            3,
+            [9; 16],
+        ),
+        Ok(CommitAttemptResolution::NotCommitted)
+    );
+    let mut later = current;
+    later.txn_id = 3;
+    later.commit_nonce = [4; 16];
+    let advanced = image(current, later);
+    let advanced0 = (&advanced[..PAGE_SIZE]).try_into().unwrap();
+    let advanced1 = (&advanced[PAGE_SIZE..]).try_into().unwrap();
+    assert_eq!(
+        resolve_commit_attempt(
+            advanced0,
+            advanced1,
+            advanced.len() as u64,
+            old.database_id,
+            1,
+            [9; 16],
+        ),
+        Ok(CommitAttemptResolution::SupersededUnknown)
+    );
+}
+
+#[test]
 fn pair_gap_and_equal_disagreement_fail_closed() {
     let old = empty_direct_meta(1);
     let mut gap = old;

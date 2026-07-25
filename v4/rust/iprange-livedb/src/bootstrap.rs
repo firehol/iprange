@@ -70,6 +70,13 @@ pub struct Bootstrap {
     pub physical_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CommitAttemptResolution {
+    Committed,
+    NotCommitted,
+    SupersededUnknown,
+}
+
 #[derive(Clone, Copy)]
 struct IdentityReadable {
     meta: MetaV4,
@@ -117,6 +124,44 @@ pub(crate) fn database_id_from_meta_pages(
         [Ok(identity), _] | [_, Ok(identity)] => Ok(identity.meta.database_id),
         [Err(meta0), Err(meta1)] => Err(BootstrapError::NoBootstrapMeta { meta0, meta1 }),
     }
+}
+
+pub(crate) fn resolve_commit_attempt(
+    page0: &[u8; PAGE_SIZE],
+    page1: &[u8; PAGE_SIZE],
+    physical_bytes: u64,
+    database_id: [u8; 16],
+    transaction_id: u64,
+    commit_nonce: [u8; 16],
+) -> Result<CommitAttemptResolution, BootstrapError> {
+    let selected = open_meta_pages(page0, page1, physical_bytes, OpenMode::Writer)?;
+    if selected.meta.database_id != database_id {
+        return Err(BootstrapError::StaticIdentityMismatch);
+    }
+
+    let identities = [identity_readable(page0), identity_readable(page1)];
+    let candidates = identities
+        .map(|identity| identity.and_then(|identity| bootstrap_valid(identity, physical_bytes)));
+    let [Ok(meta0), Ok(meta1)] = candidates else {
+        return Err(BootstrapError::CurrentGenerationUnprovable);
+    };
+    if [meta0, meta1]
+        .iter()
+        .any(|meta| meta.txn_id == transaction_id && meta.commit_nonce == commit_nonce)
+    {
+        return Ok(CommitAttemptResolution::Committed);
+    }
+    if [meta0, meta1]
+        .iter()
+        .any(|meta| meta.txn_id == transaction_id && meta.commit_nonce != commit_nonce)
+        || selected.meta.txn_id < transaction_id
+    {
+        return Ok(CommitAttemptResolution::NotCommitted);
+    }
+    if selected.meta.txn_id > transaction_id {
+        return Ok(CommitAttemptResolution::SupersededUnknown);
+    }
+    Err(BootstrapError::CurrentGenerationUnprovable)
 }
 
 fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {

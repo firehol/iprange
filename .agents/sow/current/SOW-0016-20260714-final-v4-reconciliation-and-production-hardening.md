@@ -11990,6 +11990,113 @@ requirements are normative in the Pre-Implementation Gate above.
   gates are still open: publication, snapshot, and residue mutation currently
   work on Linux, while other targets return the explicit unsupported result.
 
+### 2026-07-25 - Rust completion reconciliation
+
+Problem and evidence:
+
+- The green Linux test suite proves the implemented slices, not the complete
+  Phase-1 Rust contract. A direct comparison of the public Rust surface against
+  `binary-format-v4.md` found missing live initialization/reset, exact
+  unknown-commit resolution, structured close/cleanup reporting, and the
+  explicit advanced transaction boundary.
+- `CreateLive` still creates the canonical pair directly instead of using the
+  specified coordination-name reservation protocol.
+- Required macOS and Windows operations still contain explicit unsupported
+  branches. FreeBSD remains deliberately unsupported unless its required
+  locking primitive can be proved.
+- The Rust workspace has no active benchmark target. Therefore update-ipsets
+  suitability and the required memory, descriptor, page-touch, and scaling
+  bounds are not yet evidenced.
+- The active Rust error module is not the stable numeric error registry described
+  by the public contracts. The older numeric module is disconnected from the
+  compiled crate and is not evidence of a working API.
+- These are already-resolved requirements in the normative specifications; no
+  new product decision is required. Historical SOW text that conflicts with the
+  current simple reader-slot protocol will not be reintroduced.
+
+Ordered implementation plan:
+
+1. Reconcile the active Rust public errors, results, and transaction boundary.
+   Direct, membership, metadata, commit, abort, close, and exact-resolution
+   operations must report the facts required by the spec without implicit
+   validation.
+2. Complete live namespace lifecycle operations: reservation-safe `CreateLive`,
+   `InitializeLive`, `ResetLiveCoordination`, exact `ResolveCommit`, and
+   retryable structured cleanup. Preserve the current simple external reader
+   table and CoW generation model.
+3. Implement and prove the required macOS and Windows file, lock, identity,
+   sidecar, snapshot, recovery, and publication primitives. Keep unsupported
+   targets explicit and side-effect free.
+4. Add update-ipsets-shaped benchmarks and permanent resource-bound tests.
+   Measure unordered arrival-order normalization, retention refresh, independent
+   named-feed updates, membership queries, compact snapshots, memory, file
+   descriptors, page touches, sparse-file behavior, and scale.
+5. Run crash, fault, corruption, cancellation, concurrency, fuzz/property,
+   sanitizer-equivalent, minimum-Rust, and cross-target gates. Simplify any hot
+   path or module whose cost or structure cannot be justified by evidence.
+6. Stabilize the proven Rust SDK and then implement the thin Rust-provided C ABI.
+   Reconcile specs, public docs, conformance artifacts, project skills, obsolete
+   tracked references, and this SOW. Do not begin the Go port until the user
+   accepts the Rust implementation and measured update-ipsets suitability.
+
+Risk and blast radius:
+
+- Commit-result and writer-state changes affect every mutating workflow. They
+  will be introduced behind tests before callers are migrated.
+- Namespace lifecycle and replacement operations can lose or select the wrong
+  file if identity checks are incomplete. Every mutation must retain exact
+  handles, use no-follow opens, and prove the selected inode before unlink or
+  replacement.
+- Cross-platform emulation is insufficient proof. Local cross-compilation is a
+  first gate; execution on authorized macOS and Windows systems remains required
+  before claiming portability.
+- Benchmark work must not introduce a second sorting architecture or hidden
+  temporary-file path. Unordered input continues to mutate the final CoW
+  transaction directly in arrival order.
+
+Validation plan:
+
+- Add focused permanent tests with each contract slice, then run the complete
+  all-feature and no-default suites, formatting, warnings-denied Clippy, Rust
+  1.74.1, and diff checks.
+- Add subprocess crash points for every new namespace and commit transition,
+  same-failure searches across all mutation paths, and bounded-resource tests
+  at exact limits and one step beyond.
+- Cross-compile every supported target locally. Run native tests on other
+  systems only after explicit user authorization.
+- Record measured update-ipsets-shaped benchmark baselines and compare them with
+  the current C/update-ipsets workflow before recommending adoption.
+
+### 2026-07-25 - advanced transactions and commit lifecycle milestone
+
+- The active Rust error registry now exposes the exact contiguous numeric
+  Phase-1 codes `1..=64`; the compiled error variants map to those stable
+  public codes.
+- Direct and membership transactions now begin with an explicit cancellation
+  token. Direct range changes are applied in arrival order, metadata participates
+  in the same draft, and cancellation or abort discards the complete draft.
+  Metadata-only writer calls also require explicit cancellation.
+- Commit, abort, and close now return bounded structured facts. Commit results
+  identify the exact attempted database, directory, file, transaction, nonce,
+  durability, residue, coordination cleanup, and failure cause. Close is
+  retryable and releases the writer lease only after the selected committed
+  generation is proven and unpublished tail bytes are removed.
+- Public commit resolution now distinguishes exact commit, definite
+  non-commit, and superseded-unknown. Live resolution requires a free writer
+  lease and stable file identities; immutable resolution requires sidecar
+  absence. A copied file can prove the same committed transaction while being
+  reported truthfully as a different local file.
+- Seven focused integration tests cover arrival-order overwrite, complete-draft
+  cancellation, exact and conflicting nonce resolution, writer-busy handling,
+  superseded attempts, copied-file identity, and retryable close semantics.
+- Current-toolchain all-feature and no-default suites each pass 359 tests; two
+  crash-subprocess entry points are intentionally ignored. Rust 1.74.1 passes
+  the same all-feature suite. Formatting, diff checks, and strict
+  workspace/all-feature/all-target Clippy with warnings denied pass.
+- This is a checkpoint, not Rust completion. Live namespace transitions,
+  required portability, resource and update-ipsets benchmark evidence, reader
+  close hardening, active error specificity, and the C ABI remain open.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

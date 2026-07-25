@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    create_live, AddressFamily, CreationState, ImmutableReader, Ipv4Key, LiveReader, LiveWriter,
-    TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, CreationState, ImmutableReader, Ipv4Key,
+    LiveReader, LiveWriter, TransactionBudget, ValueKind, ValueTag,
 };
 
 const CHILD_TEST: &str = "live_crash_tests::crash_child";
@@ -122,7 +122,7 @@ fn commit_crashes_select_only_a_complete_generation() {
         assert_eq!(reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), None);
         reader.close().unwrap();
 
-        let writer = LiveWriter::open(&files.0, budget()).unwrap();
+        let mut writer = LiveWriter::open(&files.0, budget()).unwrap();
         writer.close().unwrap();
     }
 
@@ -167,7 +167,7 @@ fn process_death_releases_reader_and_writer_locks() {
     reader.close().unwrap();
 
     run_child(&files.0, "writer", None);
-    let writer = LiveWriter::open(&files.0, budget()).unwrap();
+    let mut writer = LiveWriter::open(&files.0, budget()).unwrap();
     writer.close().unwrap();
 }
 
@@ -224,7 +224,9 @@ fn crash_child() {
         }
         "metadata" => {
             let mut writer = LiveWriter::open(&path, budget()).unwrap();
-            writer.set_metadata_json(b"metadata crash value").unwrap();
+            writer
+                .set_metadata_json(b"metadata crash value", &CancellationToken::new())
+                .unwrap();
             let _ = writer.commit();
         }
         "reader" => {

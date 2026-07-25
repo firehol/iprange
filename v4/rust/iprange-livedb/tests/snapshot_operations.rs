@@ -164,7 +164,7 @@ fn cancellation_existing_destination_and_budget_failure_publish_nothing() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(failure.cause.code, ErrorCode::BudgetExceeded);
+    assert_eq!(failure.cause.code, ErrorCode::InsufficientResourceBudget);
     assert!(!files.output.exists());
     assert_no_private_artifacts(&files.directory);
 }
@@ -183,7 +183,10 @@ fn heap_and_exact_output_page_budgets_fail_before_publication() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(heap_failure.cause.code, ErrorCode::BudgetExceeded);
+    assert_eq!(
+        heap_failure.cause.code,
+        ErrorCode::InsufficientResourceBudget
+    );
     assert!(!files.output.exists());
     assert_no_private_artifacts(&files.directory);
 
@@ -209,7 +212,10 @@ fn heap_and_exact_output_page_budgets_fail_before_publication() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(page_failure.cause.code, ErrorCode::BudgetExceeded);
+    assert_eq!(
+        page_failure.cause.code,
+        ErrorCode::InsufficientResourceBudget
+    );
     assert!(!files.output.exists());
     assert_no_private_artifacts(&files.directory);
 
@@ -240,7 +246,7 @@ fn live_snapshot_requires_the_sidecar_descriptor_budget() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(failure.cause.code, ErrorCode::BudgetExceeded);
+    assert_eq!(failure.cause.code, ErrorCode::InsufficientResourceBudget);
     assert!(!files.output.exists());
 }
 
@@ -371,7 +377,7 @@ fn malformed_traversal_fails_cleanly_but_crc_damage_is_not_implicitly_validated(
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(failure.cause.code, ErrorCode::Corrupt);
+    assert_eq!(failure.cause.code, ErrorCode::FormatInvalid);
     assert!(!malformed.output.exists());
     assert_no_private_artifacts(&malformed.directory);
 
@@ -555,14 +561,14 @@ fn populated_direct(files: TestFiles) -> TestFiles {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 1)
+    let cancellation = iprange_livedb::CancellationToken::new();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    transaction.assign_v4(Ipv4Key(12), Ipv4Key(18), 2).unwrap();
+    transaction
+        .set_metadata_json(br#"{"source":"test"}"#)
         .unwrap();
-    writer
-        .assign_direct_v4(Ipv4Key(12), Ipv4Key(18), 2)
-        .unwrap();
-    writer.set_metadata_json(br#"{"source":"test"}"#).unwrap();
-    writer.commit().unwrap();
+    transaction.commit().unwrap();
     writer.close().unwrap();
     files
 }
@@ -577,7 +583,9 @@ fn populated_membership(files: TestFiles) -> TestFiles {
     )
     .unwrap();
     let mut writer = LiveWriter::open(&files.live, transaction_budget()).unwrap();
-    let mut transaction = writer.begin_membership_transaction().unwrap();
+    let mut transaction = writer
+        .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+        .unwrap();
     let alpha = transaction
         .ensure_feed(FeedName::new("alpha").unwrap())
         .unwrap();
@@ -590,9 +598,8 @@ fn populated_membership(files: TestFiles) -> TestFiles {
     transaction
         .apply_v4(Ipv4Key(5), Ipv4Key(9), both, MembershipOperation::Replace)
         .unwrap();
+    transaction.set_metadata_json(b"{}").unwrap();
     transaction.commit().unwrap();
-    writer.set_metadata_json(b"{}").unwrap();
-    writer.commit().unwrap();
     writer.close().unwrap();
     files
 }

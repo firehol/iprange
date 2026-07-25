@@ -225,7 +225,7 @@ fn live_inspection_requires_bound_coordination_and_explicit_resources() {
         &CancellationToken::new(),
     )
     .unwrap_err();
-    assert_eq!(error.code(), ErrorCode::BudgetExceeded);
+    assert_eq!(error.code(), ErrorCode::InsufficientResourceBudget);
 
     let cancellation = CancellationToken::new();
     cancellation.cancel();

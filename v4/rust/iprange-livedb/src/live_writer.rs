@@ -1,19 +1,23 @@
 //! Single live writer and direct range transaction surface.
 
+mod close;
 mod commit;
 mod create;
+mod direct;
 mod direct_workflow;
 mod feed_lifecycle;
 mod feed_workflow;
 mod membership;
 mod membership_import;
 mod reclaim;
+mod result;
 mod workflow;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
+use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED};
 use crate::database;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
@@ -23,13 +27,19 @@ use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::metadata;
 use crate::random;
+use crate::validation::LocalFileIdentity;
 
 pub use create::{create_live, CreateResult, CreationState};
+pub use direct::DirectTransaction;
 pub use direct_workflow::{DirectReplacement, RetentionRefresh};
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub use membership_import::{MembershipImport, MembershipImportSource};
 pub use reclaim::ReclaimResult;
+pub use result::{
+    AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
+    CommitCleanupArtifacts, LocalBasename,
+};
 pub use workflow::{FinishedWorkflow, PreparedFeedChange, PreparedWorkflow};
 
 /// Maximum resources retained by one writer transaction.
@@ -60,29 +70,14 @@ impl TransactionBudget {
     }
 }
 
-/// Factual publication state of one attempted commit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommitDurability {
-    NotCommitted,
-    Committed,
-    OutcomeUnknown,
-}
-
-/// Exact identity and durability result of one attempted commit.
-#[derive(Debug)]
-pub struct CommitResult {
-    pub database_id: [u8; 16],
-    pub transaction_id: u64,
-    pub commit_nonce: [u8; 16],
-    pub durability: CommitDurability,
-    pub cause: Option<Error>,
-}
+pub use result::{CommitDurability, CommitResult};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Healthy,
     OutcomeUnknown,
     Unusable,
+    Closed,
 }
 
 /// Exclusive writer for one live database.
@@ -91,6 +86,9 @@ pub struct LiveWriter {
     pub(super) file: File,
     pub(super) main_path: PathBuf,
     pub(super) main_identity: Identity,
+    pub(super) directory_identity: LocalFileIdentity,
+    pub(super) main_public_identity: LocalFileIdentity,
+    pub(super) main_basename: LocalBasename,
     pub(super) sidecar: Sidecar,
     pub(super) base: Bootstrap,
     pub(super) budget: TransactionBudget,
@@ -103,6 +101,9 @@ struct OpenedMain {
     path: PathBuf,
     file: File,
     identity: Identity,
+    directory_identity: LocalFileIdentity,
+    public_identity: LocalFileIdentity,
+    basename: LocalBasename,
     initial: Bootstrap,
 }
 
@@ -121,6 +122,9 @@ impl LiveWriter {
             file: main.file,
             main_path: main.path,
             main_identity: main.identity,
+            directory_identity: main.directory_identity,
+            main_public_identity: main.public_identity,
+            main_basename: main.basename,
             sidecar,
             base,
             budget,
@@ -159,7 +163,26 @@ impl LiveWriter {
     /// The minimum heap budget is the zlib stored-block bound from the v4
     /// specification. With 512 KiB of additional budget, the writer first
     /// attempts normal DEFLATE compression and falls back to stored blocks.
-    pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
+    pub fn set_metadata_json(
+        &mut self,
+        input: &[u8],
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        self.require_healthy()?;
+        if self.draft.is_some() {
+            return Err(Error::WrongState(
+                "metadata-only mutation requires a clean writer",
+            ));
+        }
+        cancellation.check()?;
+        let result = self.stage_metadata_json(input);
+        if result.is_ok() {
+            self.check_metadata_cancellation(cancellation)?;
+        }
+        result
+    }
+
+    pub(super) fn stage_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
         if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
@@ -169,13 +192,38 @@ impl LiveWriter {
     }
 
     /// Stage metadata absence, or report an already-absent no-op.
-    pub fn clear_metadata_json(&mut self) -> Result<bool> {
+    pub fn clear_metadata_json(&mut self, cancellation: &CancellationToken) -> Result<bool> {
+        self.require_healthy()?;
+        if self.draft.is_some() {
+            return Err(Error::WrongState(
+                "metadata-only mutation requires a clean writer",
+            ));
+        }
+        cancellation.check()?;
+        let result = self.stage_clear_metadata_json();
+        if result.is_ok() {
+            self.check_metadata_cancellation(cancellation)?;
+        }
+        result
+    }
+
+    pub(super) fn stage_clear_metadata_json(&mut self) -> Result<bool> {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
         if self.current_meta().metadata_root == 0 {
             return Ok(false);
         }
         self.mutate(|store| store.clear_metadata())
+    }
+
+    fn check_metadata_cancellation(&mut self, cancellation: &CancellationToken) -> Result<()> {
+        cancellation.check().map_err(|cause| {
+            if self.draft.is_some() {
+                self.abort_after(cause)
+            } else {
+                cause
+            }
+        })
     }
 
     /// Exact decompressed length of the committed or staged metadata.
@@ -201,22 +249,18 @@ impl LiveWriter {
     }
 
     /// Discard all unpublished changes.
-    pub fn abort(&mut self) -> Result<bool> {
+    pub fn abort(&mut self) -> Result<AbortResult> {
         self.require_healthy()?;
         if self.draft.is_none() {
-            return Ok(false);
+            return Err(Error::NoPendingTransaction);
         }
-        self.discard_draft()?;
-        Ok(true)
-    }
-
-    /// Abort a healthy pending transaction and release the writer lease.
-    pub fn close(mut self) -> Result<()> {
-        self.require_owner()?;
-        if self.state == State::Healthy && self.draft.is_some() {
-            self.discard_draft()?;
+        match self.discard_draft() {
+            Ok(()) => Ok(AbortResult::aborted()),
+            Err(cause) => Ok(AbortResult::incomplete(
+                self.unpublished_tail_artifact(cause.code()),
+                cause,
+            )),
         }
-        Ok(())
     }
 
     fn mutate<T>(&mut self, operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>) -> Result<T> {
@@ -303,6 +347,7 @@ impl LiveWriter {
                 Err(Error::WrongMode("writer has an unresolved commit outcome"))
             }
             State::Unusable => Err(Error::WrongMode("writer is unusable")),
+            State::Closed => Err(Error::WrongState("writer is closed")),
         }
     }
 
@@ -345,6 +390,23 @@ impl LiveWriter {
         }
         Error::TransactionAborted(Box::new(cause))
     }
+
+    fn unpublished_tail_artifact(
+        &self,
+        cleanup_error: crate::error::ErrorCode,
+    ) -> CommitCleanupArtifact {
+        CommitCleanupArtifact {
+            directory_identity: self.directory_identity,
+            main_basename: self.main_basename,
+            main_identity: self.main_public_identity,
+            expected_database_id: self.base.meta.database_id,
+            target_transaction_id: self.base.meta.txn_id,
+            target_commit_nonce: self.base.meta.commit_nonce,
+            committed_target_length: self.base.committed_bytes,
+            observed_tail_end_exclusive: self.file.metadata().ok().map(|metadata| metadata.len()),
+            cleanup_error,
+        }
+    }
 }
 
 fn open_locked(
@@ -368,6 +430,9 @@ fn open_main(path: &Path) -> Result<OpenedMain> {
     let path = path.to_path_buf();
     let file = live_sidecar::open_rw(&path)?;
     let identity = live_sidecar::identity(&file)?;
+    let directory_identity = live_sidecar::parent_identity(&path)?;
+    let public_identity = live_sidecar::public_identity(identity);
+    let basename = LocalBasename::from_path(&path)?;
     live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
     live_sidecar::verify_path(&path, identity)?;
     let initial = database::bootstrap_file(&file, OpenMode::Writer)?;
@@ -375,6 +440,9 @@ fn open_main(path: &Path) -> Result<OpenedMain> {
         path,
         file,
         identity,
+        directory_identity,
+        public_identity,
+        basename,
         initial,
     })
 }

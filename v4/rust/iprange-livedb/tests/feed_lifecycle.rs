@@ -87,7 +87,9 @@ fn rename_and_delete_preserve_other_feeds_and_reuse_the_committed_index() {
     .unwrap();
     let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
     {
-        let mut transaction = writer.begin_membership_transaction().unwrap();
+        let mut transaction = writer
+            .begin_membership_transaction(&iprange_livedb::CancellationToken::new())
+            .unwrap();
         let alpha = transaction.ensure_feed(name("alpha")).unwrap();
         let beta = transaction.ensure_feed(name("beta")).unwrap();
         transaction.ensure_feed(name("empty")).unwrap();
@@ -285,10 +287,13 @@ fn lifecycle_failure_or_dropped_handle_cannot_publish_partial_state() {
     );
     assert!(matches!(writer.commit(), Err(Error::WrongState(_))));
     assert!(matches!(
-        writer.set_metadata_json(b"{}"),
+        writer.set_metadata_json(b"{}", &CancellationToken::new()),
         Err(Error::WrongState(_))
     ));
-    assert!(writer.abort().unwrap());
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
 
     let mut oversized = writer
         .rename_feed(name("alpha"), name("oversized"), &cancellation)
