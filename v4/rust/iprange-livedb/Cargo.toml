@@ -1,20 +1,12 @@
 [package]
 name = "iprange-livedb"
 version = "0.0.0"
-description = "Reader/writer for the iprange v4 live mutable on-disk DB format"
+description = "Rust SDK for the iprange v4 database format"
 autobenches = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-default = ["std"]
-std = ["alloc"]
-alloc = []
-os = ["std", "dep:getrandom", "dep:libc"]
-
 [dependencies]
-getrandom = { version = "0.3.4", optional = true }
-libc = { version = "0.2.186", optional = true }
-sha2 = { version = "0.10.9", default-features = false }
+libc = "0.2.186"

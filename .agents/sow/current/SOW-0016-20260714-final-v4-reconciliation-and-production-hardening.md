@@ -9916,6 +9916,41 @@ requirements are normative in the Pre-Implementation Gate above.
   `git diff --check` and `.agents/sow/audit.sh` pass before the final SOW
   checkpoint update and are rerun with it.
 
+### 2026-07-25 - lean Rust foundation
+
+- The active Rust module graph is now the replacement implementation, not the
+  previous 60,827-line internal graph. Its first foundation has 2,047 physical
+  source lines including embedded unit tests; every active source and test file
+  is below 500 lines.
+- The first public slice is `ImmutableReader::open`. It opens without following
+  the final symlink on supported Unix platforms, requires a regular aligned
+  file, rejects a present canonical `.readers` sidecar, reads exactly the two
+  meta pages, requires exact immutable length, and exposes the selected static
+  identity, generation, counts, and factual meta selection.
+- A proposed public `CreateImmutable` API was removed before commit because
+  section 14 explicitly forbids it. Canonical empty-image encoding remains
+  private test evidence until the approved `CreateLive` workflow owns creation.
+- A permanent test proves ordinary immutable open succeeds even when the
+  selected range root points at a malformed non-meta page. This is intentional:
+  open performs O(1) bootstrap and does not silently run `Validate`.
+- The active checksum implementation is a compact compile-time-table CRC-32C.
+  The 270-line architecture-specific acceleration was not retained because no
+  benchmark establishes that meta-page checksum speed matters. Hardware
+  specialization may return only if representative validation benchmarks prove
+  it useful.
+- The active crate currently depends only on `libc`. Obsolete `no_std`/feature
+  combinations and unused digest/random dependencies are not part of this
+  slice. Safe non-follow open on non-Unix platforms currently returns
+  `Unsupported`; Windows support remains required before final acceptance and
+  will not silently follow reparse points.
+- Validation passes on the current toolchain and the declared Rust 1.74 MSRV:
+  34 unit tests and one public integration test. Warnings-denied all-target
+  Clippy, formatting, and `git diff --check` pass.
+- The prior implementation files remain present but are outside the compiled
+  module graph. They will be removed only with the separately required explicit
+  deletion authorization; the interrupted uncommitted normal-range file remains
+  untouched and excluded from this milestone.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

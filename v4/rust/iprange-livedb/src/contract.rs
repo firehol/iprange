@@ -1,18 +1,14 @@
 //! Exact unsigned Phase-1 v4 wire constants and meta-page codec.
 
+#[cfg(test)]
 use crate::crc32c;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_SHIFT: u8 = 12;
 pub const META_SIZE: u16 = 256;
 pub const MAX_PAGE_COUNT: u64 = 1u64 << 32;
-pub const MAX_TREE_LEVEL: u16 = 31;
 pub const MAX_METADATA_UNCOMPRESSED: u64 = 1_048_576;
-pub const BITMAP_LEAF_WORDS: usize = 500;
-pub const BITMAP_LEAF_BITS: u64 = 32_000;
-pub const BITMAP_FANOUT: u64 = 256;
 pub const META_MAGIC: [u8; 8] = *b"IPRANGE4";
-pub const PAGE_MAGIC: [u8; 4] = *b"IP4P";
 
 pub const META_CRC_OFFSET: usize = 252;
 
@@ -115,6 +111,7 @@ pub(crate) struct MetaV4 {
 }
 
 impl MetaV4 {
+    #[cfg(test)]
     pub(crate) fn encode_into(&self, page: &mut [u8; PAGE_SIZE]) {
         page.fill(0);
         page[0..8].copy_from_slice(&META_MAGIC);
@@ -209,16 +206,19 @@ pub(crate) fn u64_le(bytes: &[u8], at: usize) -> u64 {
 }
 
 #[inline]
+#[cfg(test)]
 fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
     bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
 }
 
 #[inline]
+#[cfg(test)]
 fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
     bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 #[inline]
+#[cfg(test)]
 fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
     bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
 }
