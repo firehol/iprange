@@ -43,7 +43,7 @@ The main file has these fundamental properties:
 - COW publication by one alternate-meta write with CRC tear detection;
 - an optional opaque file-level zlib-compressed payload;
 - a persistent COW free-page bitmap;
-- persistent reader-protected retirement batches;
+- persistent reader-protected retirement extents;
 - no implicit full validation during open or ordinary access.
 
 Cross-language compatibility is semantic. Go and Rust writers MAY choose
@@ -189,7 +189,7 @@ Each meta page is exactly 4,096 bytes. Bytes `[0,256)` have this layout:
 | 112 | 8 | `membership_id_limit` | zero for direct; otherwise `1..2^32` |
 | 120 | 8 | `metadata_uncompressed_len` | exact decompressed length |
 | 128 | 8 | `metadata_compressed_len` | exact zlib-stream length |
-| 136 | 8 | `retirement_batch_count` | current batch count |
+| 136 | 8 | `retired_extent_count` | current retirement extent count |
 | 144 | 4 | `range_root` | range-tree root or zero |
 | 148 | 4 | `catalog_name_root` | name-index root or zero |
 | 152 | 4 | `catalog_index_root` | numeric-index root or zero |
@@ -200,7 +200,8 @@ Each meta page is exactly 4,096 bytes. Bytes `[0,256)` have this layout:
 | 172 | 4 | `metadata_root` | first metadata chunk or zero |
 | 176 | 4 | `free_bitmap_root` | free-page bitmap root or zero |
 | 180 | 4 | `retirement_root` | retirement-tree root or zero |
-| 184 | 68 | reserved | zero |
+| 184 | 16 | `allocator_reserve[4]` | optional meta-owned page numbers |
+| 200 | 52 | reserved | zero |
 | 252 | 4 | `meta_crc32c` | CRC-32C of the full meta page |
 
 Bytes `[256,4096)` MUST be zero. To compute `meta_crc32c`, bytes `[252,256)`
@@ -327,7 +328,9 @@ For `membership` files:
 - `membership_entry_count <= range_record_count` because every live dictionary
   entry has at least one range-record reference.
 
-`retirement_batch_count <= txn_id - 1`. All count subtraction is checked.
+Every nonzero allocator-reserve page is in `[2,page_count)`, distinct from the
+other reserve entries, and distinct from every nonzero root in the same meta.
+Zero denotes an empty reserve slot.
 
 The following root/count relations are bootstrap invariants:
 
@@ -337,7 +340,7 @@ The following root/count relations are bootstrap invariants:
 - `membership_entry_count == 0` requires both dictionary roots and
   `membership_used_root` zero and `membership_id_limit == 1`; a nonzero count
   requires all three roots nonzero;
-- `retirement_batch_count == 0` if and only if `retirement_root == 0`; and
+- `retired_extent_count == 0` if and only if `retirement_root == 0`; and
 - direct-file zero requirements override every membership relation above.
 
 If `metadata_root` is zero, both metadata lengths MUST be zero. If it is
@@ -885,189 +888,114 @@ Searching scans summary and leaf words as `u64` values and uses the least
 significant one bit. It MUST NOT scan linearly from bit zero across represented
 pages.
 
-## 13. Free pages and retirement batches
+## 13. Free pages and retirement
 
 The free-page bitmap's governing limit is `page_count`. A one bit means the
-page is currently free and safe for immediate overwrite. Meta pages, current
-reachable pages, and pages protected by a retirement batch MUST have zero bits.
+page is currently free and safe to overwrite. Meta pages, current reachable
+pages, meta-owned allocator-reserve pages, and retired pages have zero bits.
 Bits beyond `page_count` are zero.
 
-Allocation may take only a bit that was one in the selected committed free
-bitmap when the transaction began, or a page explicitly released by a safe
-retirement reclamation performed under the live operation lock. A page made
-unreachable by the current unpublished draft is never reusable by that draft;
-it remains part of the authoritative old generation until publication.
+Allocation takes the lowest eligible free-page bit, then aligned tail growth.
+At `MAX_PAGE_COUNT`, absence of an eligible bit returns
+`PageSpaceExhausted` before mutation. Checked page-number, byte-offset,
+`off_t`, and host-index conversions precede every access.
 
-Before the first destructive overwrite authorized by the selected committed
-free bitmap, the transaction MUST verify the normalized CRC and local structural
-invariants of every committed bitmap page on the chosen root-to-leaf path. This
-includes page type/kind/level, bounds, reserved bytes, item counts, the selected
-summary bit and child relationship at each branch, and the in-range one bit in
-the leaf. The descended child proves the selected summary path; this narrow
-check does not recursively prove unselected subtrees or the global live/free
-partition.
+Before a committed free bit authorizes overwrite, the transaction verifies the
+normalized CRC and local invariants of that selected bitmap root-to-leaf path:
+page type/kind/level, bounds, reserved bytes, counts, summary/child
+relationship, and the selected in-range one bit. This narrow check does not
+validate unselected subtrees or the global page partition. A committed bitmap
+page is checked and copied at most once per transaction; its private copy is
+then updated in place.
 
-Each committed bitmap page is verified at most once per transaction, when first
-read into that transaction's existing COW page state. All later allocations on
-that private verified path MUST reuse that state rather than rechecking the
-committed page per allocated data page. A CRC or local-invariant failure aborts
-the complete pending transaction before any candidate page is overwritten.
+The four `allocator_reserve` entries break the bitmap's allocation dependency.
+A transaction uses a nonzero reserve entry only as the destination of a
+committed bitmap-page copy, removes it from the pending meta, and otherwise
+falls back to tail growth for such copies. Four pages are sufficient for the
+maximum free-bitmap path at the `2^32` page limit. Before commit, empty reserve
+slots may be replenished with aligned tail pages. Reserve contents are ignored
+until overwritten; abort therefore leaves every reserve named by the selected
+meta safely reusable even if the failed draft wrote it.
 
-The same rule applies when reclamation releases pages from committed retirement
-metadata. Reclamation is necessarily two-pass for each selected batch. Its
-first bounded streaming pass MUST completely verify every committed retirement-
-tree and page-list blob page on the selected path, the complete list's exact
-length, normalized CRCs and local structure, batch ordering, globally strictly
-increasing unique in-range page numbers, and the reader-transaction safety
-condition. No page from that batch may be inserted into the free bitmap or
-reused until this complete first pass succeeds. A second bounded streaming pass
-may then apply the already proven list; it MUST recheck the same selected batch
-identity/root and abort before release if the committed selection changed.
-Neither pass proves global unreachability without explicit `Validate`.
-Deliberately self-consistent corruption with recomputed CRCs therefore remains
-inside the caller's explicit validation trust choice; ordinary torn or
-checksum-detectable allocator damage cannot authorize an overwrite.
+A page created by the current unpublished transaction is not part of an older
+reader generation. If that private page becomes unused, the transaction may
+reuse it directly or expose it as free in its private bitmap. A replaced
+committed page is different: it is never reused by the same transaction and is
+inserted into the retirement tree under the target transaction.
 
-Allocation takes the lowest eligible free-page bit. If there is none and
-`page_count < MAX_PAGE_COUNT`, it appends at the pending `page_count`. At
-`MAX_PAGE_COUNT`, absence of an eligible free bit returns typed
-`PageSpaceExhausted` before mutation. Page numbers, byte offsets, host `off_t`,
-mapping lengths, and host index conversions are checked before use.
-
-Free-bitmap and summary changes are themselves COW and publish with the same
-meta as every other root. Every mutation records each replaced committed page
-in transaction-owned, fixed-width scratch; it does not rebuild the complete
-retirement list after each call. Before publication, transaction preparation
-sorts and deduplicates that stream and reserves a checked worst-case number of
-eligible or appended pages for both the free-page and reader-protected outcomes.
-
-Under the live operation lock, publication scans the stable reader table. For
-new transaction `T`, a transaction-zero registration or any active reader with
-`txn_id < T` protects every page removed from the selected generation. Those
-pages enter the single batch for `T`. When no such registration exists, they
-are published directly as free, but they are never reused by the same draft.
-The writer then runs a monotonic fixed-point construction using only its
-pre-reserved capacity and transaction scratch. Physical page identities are
-selected under the live operation lock from the current draft's eligible free
-pages, verifier-proven reclaimed pages, and then the live unpublished tail; a
-pre-lock capacity plan does not reserve a physical page number:
-
-1. reserve pages without exposing them as free in the draft;
-2. rebuild every affected bitmap path;
-3. add every replaced committed bitmap, retirement-tree, and retirement-blob
-   page to the same protected batch or direct-free set selected above;
-4. rebuild the affected free bitmap, retirement batch, and tree paths; and
-5. repeat until no newly replaced committed page or newly required private page
-   exists.
-
-Private pages created and superseded within the same draft are returned only to
-the private reservation pool or unpublished tail; they are not retirement
-history. The iteration is bounded by the fixed tree-height limits, the sorted
-candidate count, and the precomputed reservation. It performs no heap
-allocation, external-scratch creation, or unbounded discovery while the operation lock is
-held. Reservation exhaustion aborts the whole transaction; it MUST NOT fall
-through to publication.
-
-Every fixed-point read from the current draft carries exact provenance. A page
-is either from the selected committed generation or is a transaction-private
-page identified by its work unit, reservation scope, slot, page number, binding
-epoch, owner, and generation. Replacing a committed page adds it to the
-protected retirement batch or direct-free set chosen for the transaction.
-Replacing an earlier transaction-private page returns it only to that page's
-exact scope and never creates retirement history. A carried eligible-source
-entry already consumed by an earlier work unit is skipped by the coordinator's
-monotonic source authority; if the current draft free bitmap itself still
-advertises an already-owned page as free, the transaction aborts as stale or
-inconsistent rather than silently skipping it.
-
-Multiple work units form one linear, single-use predecessor/successor chain.
-Each work unit replans from the exact current draft root and live pending page
-count, binds its proof to that predecessor and exact scope, mutates only after
-complete preflight, resynchronizes every touched scope, seals the work unit, and
-issues at most one successor. Two plans may inspect one predecessor, but only
-one may consume it. A failure after private mutation that cannot be rolled back
-by the same composite journal aborts the complete unpublished transaction and
-issues no successor.
-
-Pages removed from the current generation but potentially visible to an older
-registered reader MUST NOT enter the free bitmap. They enter one transaction-
-grouped retirement batch.
+Every ordinary commit retires replaced committed pages, whether or not a reader
+currently needs them. Commit does not perform reader-dependent allocator
+finalization. This deliberate one-maintenance-operation delay gives one uniform
+bounded commit path. `Reclaim` alone proves which retired generations are safe,
+moves their pages to the free bitmap, and removes their retirement entries.
+The retirement tree contains only unreclaimed pages, not permanent history.
 
 ### 13.1 Retirement tree
 
-The retirement tree is ordered by unique `retired_by_txn` values.
-
-A retirement branch has type 16 and fixed 16-byte entries:
-
-```text
-first_retired_by_txn:u64  child_pgno:u32  reserved:u32=0
-```
-
-A retirement leaf has type 17 and fixed 32-byte entries:
+The retirement tree is ordered lexicographically by
+`(retired_by_txn, first_pgno)`. Branch records are:
 
 ```text
-reserved:u64 = 0
-retired_by_txn:u64
-page_count:u64
-page_list_blob_root:u32
-reserved:u32 = 0
+first_retired_by_txn:u64  first_pgno:u32  child_pgno:u32
 ```
 
-The page list is a kind-2 blob containing exactly `page_count` strictly
-increasing unique `u32` page numbers. A listed page MUST be in
-`[2, committed page_count)`, unreachable from every current root, absent from
-every other batch, and zero in the free bitmap.
+Leaf records are canonical contiguous extents:
 
-For every batch, `1 <= page_count <= 2^32`, `page_list_blob_root` is nonzero,
-the checked blob length is exactly `4 * page_count`, and
-`1 < retired_by_txn <= selected_txn_id`. An empty retirement batch is never
-stored.
+```text
+retired_by_txn:u64  first_pgno:u32  page_count:u32
+```
 
-Retirement branches have positive level, retirement leaves have level zero,
-and both use `aux == 0` and the slotted-page convention.
-Branch keys are strictly increasing, equal the exact first transaction in
-their nonempty children, and every child level is exactly one below its parent.
-An empty complete tree is root zero.
+Both records are 16 bytes. Branches have type 16 and positive level; leaves
+have type 17 and level zero. Both use `aux == 0` and the slotted-page
+convention. Branch keys are the exact first key in each child. Root zero is the
+only empty representation.
 
-`retired_by_txn == T` means transaction T made the pages unreachable. The batch
-is safe to reclaim when no active reader has a transaction below T. An active
-registration at transaction zero prevents every reclamation.
+Every leaf has `1 < retired_by_txn <= selected_txn_id`, `first_pgno >= 2`,
+`page_count > 0`, and checked `first_pgno + page_count <= selected
+page_count`. Extents for one transaction are strictly increasing, disjoint, and
+coalesced when adjacent. A page appears in exactly one extent.
+`retired_extent_count` is the exact number of leaf records.
 
-Safe batches are streamed into the free bitmap and removed. Pages retired by
-that allocator/retirement COW update are accounted for like all other replaced
-pages. The structure contains only outstanding reader protection; it MUST NOT
-retain permanent allocation history.
+`retired_by_txn == T` means transaction T removed the pages from the current
+roots. Its complete transaction group is safe when no active reader has a
+transaction below T. A transaction-zero registration blocks all reclamation.
 
-`Reclaim(max_batches,max_pages,cancellation)` is a clean-writer, auto-publishing maintenance
-operation using the writer's existing transaction resource budget. Both limits
-MUST be nonzero. It selects only complete oldest eligible batches fitting both
-limits. If the oldest eligible batch alone exceeds `max_pages`, it returns
-`WorkLimitTooSmall` with that batch's required page count before mutation. Once
-one or more batches have been selected, it stops before the next oversized
-batch. Structural preparation occurs before the operation lock where safe;
-reader-threshold selection, the bounded second pass, COW finalization, and
-publication hold that lock continuously. Its internal commit receives the
-already-owned lock and MUST NOT reacquire it. Existing pinned readers continue;
-new registration waits. The result is `NoChange`, which publishes no generation,
-or exact reclaimed batch/page counters plus the complete `CommitResult`. There
-is no separately staged reclaim draft and no second per-call resource budget.
-There is no immutable/offline writer mode; compacting an immutable file is a
-`SnapshotTo` operation producing another immutable file. No implementation may
-decide a batch is safe before it holds the same barrier used for publication.
+The writer updates retirement after every other logical root. The first insert
+copies at most the committed rightmost path; those replaced retirement pages
+are then inserted under the same target transaction. Later inserts and extent
+coalescing update the private path in place. No page-list blob, sorting pass,
+fixed-point planner, or file-sized retirement workspace exists.
+
+`Reclaim(max_transactions,max_pages,cancellation)` is a clean-writer,
+auto-publishing maintenance operation using the writer's existing transaction
+resource budget. Both limits are nonzero. Under the exclusive operation gate it
+scans stable reader registrations and selects complete oldest safe transaction
+groups fitting both limits. If the oldest safe group alone exceeds
+`max_pages`, it returns `WorkLimitTooSmall` with that exact page count before
+mutation. Once one or more groups are selected, it stops before the next group
+that would exceed either limit.
+
+Reclaim streams the selected extents into the private free bitmap, deletes the
+selected retirement records, and retires the committed bitmap/retirement pages
+that this maintenance transaction replaces under its own target transaction.
+It publishes no generation when no group is selected. Otherwise its result
+contains exact reclaimed transaction/page counters and the complete
+`CommitResult`. The operation lock remains held from the reader scan through
+publication; existing readers continue and new registration waits.
 
 Normal live commits do not reduce committed `page_count`, even when the highest
 pages become free. Only unpublished tail cleanup may truncate a live file.
-The compact snapshot operations are the supported path that physically compacts
-committed free trailing space.
+Compact snapshots are the supported physical compaction path.
 
-Every committed page from 2 through `page_count-1` MUST be exactly one of:
+Every committed page from 2 through `page_count-1` is exactly one of:
 
 - reachable from a current root;
+- named by `allocator_reserve`;
 - marked free; or
-- listed in one retirement batch.
+- covered by one retirement extent.
 
-Explicit validation checks this partition with bounded memory or external
-scratch storage. Open does not.
+Explicit validation checks this partition with bounded memory or authorized
+external scratch. Open does not.
 
 ## 14. Transactions, mutations, and commit durability
 
@@ -1166,10 +1094,9 @@ reported independently.
 
 The durability phases are:
 
-1. Acquire the live operation lock; recheck the writer lease,
-   retained identities, sidecar table, and unchanged selected generation; scan
-   the stable registrations; and finalize the allocator/retirement fixed point
-   and complete target meta using only prepared scratch and reserved pages.
+1. Acquire the live operation lock; recheck the writer lease, retained
+   identities, sidecar binding, and unchanged selected generation, then
+   complete the target meta using only prepared state.
 2. Synchronize every new or changed non-meta page and required file growth.
 3. Begin writing the complete target meta page.
 4. Synchronize the target meta page to durable storage.
@@ -1818,1120 +1745,255 @@ cancellation only as a cause. It never abandons cleanup authority.
 ## 15. External live-reader sidecar
 
 The canonical sidecar pathname is the exact database pathname plus `.readers`.
-It is host-local coordination state and is not part of the portable v4 bytes.
+It is host-local coordination state, not part of the portable v4 main-file
+bytes, and is never distributed with an immutable snapshot.
 
-Live coordination is supported only on a local filesystem whose locking and
-file-identity primitives satisfy this section. NFS, SMB, and other remote or
-userspace filesystems are unsupported unless an implementation has separately
-proved equivalent semantics. The database directory MUST be controlled by the
-database owner and not writable by an untrusted principal. The protocol
-protects cooperating implementations and detects accidental replacement; it
-cannot make a correctly forged replacement by an attacker with directory write
-access safe.
+A live database is supported only on a local filesystem whose byte-range locks
+are owned by an open file description or handle and are released automatically
+when its last descriptor closes. Traditional process-associated POSIX
+`F_SETLK` locks are forbidden. NFS, SMB, userspace filesystems, and platforms
+without proven equivalent semantics return `Unsupported`.
 
-The no-follow rule applies to the final main-file and sidecar components.
-Implementations resolve and retain the containing directory first, then perform
-all final-component operations relative to that descriptor or handle. POSIX
-uses the `*at` family with no-follow flags. Windows uses `NtCreateFile` with an
-`OBJECT_ATTRIBUTES.RootDirectory` equal to the retained directory handle, a
-single relative component, `FILE_OPEN_REPARSE_POINT`, and
-`FILE_NON_DIRECTORY_FILE`; reparse points and non-regular files are rejected.
-Windows renames use the same retained directory through
-`SetFileInformationByHandle(FileRenameInfoEx)`. Trust in any parent path
-resolution is part of the caller-controlled-directory precondition; the format
-does not claim to defeat a malicious ancestor namespace.
+The database directory must be controlled by the database owner. Main and
+sidecar final components are opened without following symlinks. They must be
+regular files with one link. Each handle retains the originally opened
+descriptors and their local file identities. It never reopens a pathname for
+content access, slot removal, or commit. Critical mutations recheck both
+canonical paths against those retained identities and fail if either path was
+removed, linked, or replaced.
 
-Normal live open MUST NOT create, resize, replace, repair, or silently reset a
-missing or malformed sidecar.
+Normal live open never creates, resizes, repairs, resets, or replaces a missing
+or malformed sidecar. Explicit creation and offline transition operations are
+the only writers of its header or length.
 
-### 15.1 Explicit creation and transition APIs
+### 15.1 Exact sidecar layout
 
-`CreateLive(path, family, value_kind, value_tag, reader_capacity,
-cancellation)` creates a new v4 database and its sidecar. Capacity is REQUIRED,
-MUST be nonzero, and has no default. Family, kind, canonical 16-byte tag,
-capacity, checked sidecar size, and host limits are validated before reservation
-creation. The call accepts no writer transaction budget, feeds, ranges, or JSON
-metadata and returns only `CreateResult`, never a writer lease. A caller opens
-the created database separately with `OpenLiveWriter` and its transaction
-budget.
-
-The created main is exactly the canonical empty transaction-1 image for the
-supplied family/kind/tag: fresh nonzero database ID and commit nonce,
-`page_count == 2`, identical complete meta images on pages 0 and 1, absent
-metadata, zero range/free/retirement state, and zero catalog/dictionary state.
-Direct files have every membership field zero. Membership files have
-`membership_id_limit == 1` and all other membership/catalog counts, limits,
-and roots zero. The sidecar has the requested nonzero capacity and every slot
-zero before it becomes ready. No initial feed, range, or metadata is implicit.
-
-`InitializeLive(path, capacity, cancellation)` creates a sidecar for an existing
-immutable v4 file. It is an explicit offline transition. The caller MUST prove
-that no process can still treat the file as an uncoordinated immutable
-snapshot; the engine cannot discover immutable readers because they
-intentionally do not register. Cooperating implementations take the exclusive
-main-file lifetime lock defined below, recheck the main identity/path and
-sidecar absence, select the exact meta, and hash the stable exact main bytes.
-They then create and synchronize a complete private kind-4 reservation containing
-that identity, tuple, length, and digest, publish that same reservation inode at
-canonical `.readers` with no-replace, synchronize the namespace, and recheck the
-still-locked main path/descriptor identity, link count, length, and tuple before
-conversion. The exclusive lifetime lock is retained continuously, so cooperating
-actors cannot change the main and the first stable digest remains authoritative;
-initialization does not add a redundant second full-file hash. It converts that
-exact reservation inode through sidecar state 2 containing the complete attempt
-record to state 1 before releasing the main lock. Acquisition is no-replace and
-MUST fail if the canonical sidecar/reservation path already exists.
-
-`InitializeLive` and `ResetLiveCoordination` return a structured transition
-result containing:
+The exact sidecar length is checked as:
 
 ```text
-operation: Initialize | Reset
-attempted_database_id:[16]byte
-attempted_txn_id:u64
-attempted_commit_nonce:[16]byte
-transition_attempt_id:[16]byte
-attempted_reader_capacity:u32
-directory_identity_kind:u16
-directory_local_identity:[32]byte
-destination_basename_encoding:u16
-destination_basename:bounded byte sequence
-identity_kind:u16
-coordination_local_identity:[32]byte
-main_local_identity:[32]byte
-main_byte_length:u64
-main_sha512:[64]byte
-previous_coordination_local_identity: optional [32]byte
-previous_sidecar_id: optional [16]byte
-previous_reader_capacity: optional u32
-transition: NotInitialized | OldCoordinationRetained | LeftImmutable | Initialized | OutcomeUnknown
-creation_security_kind:u16
-creation_security_commitment:[32]byte
-main_access_policy: CreatorOnly | ChangedOrUnproven | Unclassified
-coordination_access_policy: Absent | CreatorOnly | ChangedOrUnproven | Unclassified
-cleanup_state: Clean | ResiduePossible
-cleanup_artifacts: bounded sequence of CleanupArtifact
-coordination_cleanup: None | CleanupGuard | RetainedReaderCloseRequired | RetainedWriterCloseRequired
-housekeeping: None | CrashReappearancePossible | Visible
-visible_housekeeping: bounded sequence of HousekeepingArtifact
-cause: optional typed error
+4096 + capacity * 16
 ```
 
-The transition-attempt ID is the reservation and eventual sidecar ID. The three
-previous-coordination fields are absent for initialization. For reset, previous
-coordination identity is present; previous sidecar ID and capacity are present
-together only when the old header was selectable. The structured-result
-boundary begins after the complete private kind-4 or kind-5 reservation has
-been synchronized and its identity is known, before any canonical namespace
-change. Earlier failure is an ordinary typed error with the same exact cleanup
-report.
-The durable kind-4/kind-5 reservation or origin-2/origin-3 sidecar record is
-authoritative after a process crash.
+`capacity` is a nonzero caller-selected `u32`. The first 4,096 bytes are one
+checksummed header page:
 
-`ResolveLiveTransition(path, optional result, Complete | Remove, cancellation)` requires the
-same caller-certified offline exclusivity, takes the exclusive main lifetime
-lock, and requires equality between caller and on-disk records when both exist.
-Before inspecting or changing any main, coordination, or private name, it opens
-and retains the containing directory and, when a caller result is supplied,
-requires its directory identity kind and local identity to equal the result's
-recorded parent identity. A mismatch is typed `DirectoryIdentityMismatch` and
-changes nothing. Without a caller result, an authoritative complete canonical or
-private reservation record is bound to the identity of the retained directory
-that contains it; the returned resolution records that parent identity.
-A selectable incomplete kind-4/kind-5 reservation or origin-2/origin-3 state-2
-sidecar remains resolvable after a process-domain change. Under the retained
-exclusive main lifetime lock and exact coordination operation lock, the
-resolver treats every old slot as opaque. `Remove` may retire only the exact
-attempt. `Complete` first writes and synchronizes the freshly derived current
-domain into the next CRC-valid attempt block, zero-initializes every slot, and
-then publishes state 1. It never interprets or reaps an old-domain owner. An
-state-1 sidecar that is the attempted transition's new ready coordination and
-has a mismatched process domain is already live; this resolver returns typed
-`LiveCoordinationDomainMismatchRequiresReset` before slot inspection, whole-file
-hashing, or content-lineage classification, and the caller uses offline
-`ResetLiveCoordination`. This does not reject the exact old state-1 sidecar named
-by an in-progress kind-5 reset record: the resolver may atomically replace that
-old coordination while treating its slots as opaque, as the reset rows require.
-A private kind-4/kind-5 reservation may be bound to this path without a caller
-result only from its complete record, never its random name alone. Kind 4
-requires the retained main identity, tuple, length, and digest to match. Kind 5
-requires the retained main identity/database and exact old canonical
-coordination identity to match; its tuple, length, and digest are then classified
-by the reset rows below, so later legitimate live activity does not erase
-attempt ownership. Zero or multiple matching records are respectively absent or
-conflict.
+| Offset | Size | Field | Required value |
+|---:|---:|---|---|
+| 0 | 8 | magic | ASCII `IPRDRS4\0` |
+| 8 | 2 | header size | `68` |
+| 10 | 2 | slot size | `16` |
+| 12 | 4 | state | `0=creating`, `1=ready` |
+| 16 | 4 | capacity | nonzero |
+| 20 | 12 | reserved | zero |
+| 32 | 16 | database ID | exact main-file `database_id` |
+| 48 | 16 | sidecar ID | random and nonzero |
+| 64 | 4 | CRC-32C | complete page with this field zero |
+| 68 | 4028 | reserved | zero |
 
-Its structured result reports independent facts:
+Ordinary open accepts only state 1 and exact length. A zero, creating, unknown,
+checksum-failed, identity-mismatched, or noncanonical header fails closed.
+The random sidecar ID distinguishes replacement of the coordination inode
+during one process lifetime. The retained local file identity remains the
+authority for the currently opened inode.
+
+Reader slot `i` is the 16-byte record at:
 
 ```text
-primary: OldCoordinationRetained | LeftImmutable | Initialized | OutcomeUnknown
-destination_content: Desired | Previous | Absent | Other | Unclassified
-later_canonical: None | ReservationOrTransition | ReadyLiveSidecar
-live_lineage: optional SameGenerationExactBytes |
-                       SameGenerationPhysicalBytesChanged |
-                       AdvancedGeneration |
-                       UnavailableDomainMismatch
-later_attempt_or_sidecar_id: optional [16]byte
-later_selected_txn_id: optional u64
-later_selected_commit_nonce: optional [16]byte
-creation_security_kind:u16
-creation_security_commitment:[32]byte
-main_access_policy: CreatorOnly | ChangedOrUnproven | Unclassified
-coordination_access_policy: Absent | CreatorOnly | ChangedOrUnproven | Unclassified
-cleanup_state, cleanup_artifacts, coordination_cleanup, housekeeping,
-visible_housekeeping, cause
+offset = 4096 + i * 16
 ```
 
-The same orthogonal field meanings are used by `ResolveCreateLive` and
-`ResolvePublication`; each retains only its operation-specific `primary` enum.
-A later valid owner is never displaced or treated as authority for old-attempt
-cleanup. An active/uncertain later live writer returns `WriterBusy` before stable
-physical inspection. A ready later sidecar from another process domain reports
-`UnavailableDomainMismatch` with destination content `Unclassified`; no slot is
-inspected, no whole-file hash is computed, and nothing is mutated. The operation
-otherwise returns typed `Conflict`/`Unresolvable`/`TransitionSuperseded` when the
-state table requires it.
-
-The exhaustive state table is:
-
-- An exact origin-2/origin-3 state-1 sidecar bound to the same main inode proves
-  that the live transition succeeded. The exact attempted tuple and whole-file
-  digest reports primary `Initialized` plus
-  `SameGenerationExactBytes`; the same bootstrap-valid attempted tuple with
-  changed exact bytes reports `SameGenerationPhysicalBytesChanged`; and a later
-  bootstrap-valid transaction in the same database reports
-  `AdvancedGeneration`. Content change without transaction advancement can
-  be a legal unpublished COW draft or damage, so the result does not classify
-  its cause and the caller may run explicit validation. Either mode only
-  synchronizes and rechecks this successful pair; `Remove` never silently
-  undoes it. The attempted transaction ID with a different nonce is `Conflict`.
-- For initialization, an exact kind-4 reservation at canonical or private name,
-  or an exact origin-2 state-2 sidecar, is incomplete.
-  `Complete` restores the same reservation inode to canonical `.readers` when
-  necessary, reinitializes every slot, publishes state 1, synchronizes and
-  rechecks, then returns `Initialized`. `Remove` retires only that exact
-  coordination inode, synchronizes, and returns `LeftImmutable`.
-- For reset, an exact old canonical coordination inode plus the exact attempted
-  main tuple, length, and digest proves atomic replacement did not occur and the
-  main did not advance. `Complete` requires the exact private kind-5
-  reservation, retries the exact atomic replacement, and then converts it;
-  absence of that required inode is `Unresolvable`. `Remove` removes that exact
-  private reservation when present, or accepts its proven absence, then
-  synchronizes and rechecks both names before returning
-  `OldCoordinationRetained`.
-- For reset, if that same old canonical coordination inode and main inode remain
-  bound but the main now selects a later bootstrap-valid transaction in the same
-  database, ordinary live use advanced after the interrupted reset. `Complete`
-  returns typed `TransitionSuperseded` without applying or rewriting the stale
-  reservation. `Remove` removes that exact private reservation when present, or
-  accepts its proven absence, synchronizes and rechecks both names, and reports
-  primary `OldCoordinationRetained` plus `AdvancedGeneration`.
-- For reset, if that old coordination/main pair remains bound and bootstrap-valid
-  at the exact attempted transaction and nonce but the exact file length or
-  digest changed, the stale attempt cannot distinguish a legal unpublished COW
-  draft from damage. `Complete` returns typed `TransitionSuperseded` without
-  applying or rewriting it. `Remove` performs the same exact private-residue
-  cleanup and reports primary `OldCoordinationRetained` plus
-  `SameGenerationPhysicalBytesChanged`; the caller may
-  intentionally validate before starting a new reset. The attempted transaction
-  ID with a different nonce is `Conflict`, not content change or advancement.
-- For reset, an exact canonical kind-5 reservation or origin-3 state-2 sidecar
-  means the old sidecar was retired. `Complete` finishes conversion and returns
-  `Initialized`; `Remove` retires only the new coordination inode,
-  synchronizes, and returns `LeftImmutable`.
-- If canonical coordination is absent and the retained main is exact and
-  unchanged, `Complete` requires the exact private reservation inode, restores
-  it to the canonical name, and proceeds from its recorded phase; absence of
-  that required inode is `Unresolvable`. `Remove` removes that exact private
-  reservation when present, or accepts its proven absence, then synchronizes
-  the main and namespace, rechecks both names, and returns `LeftImmutable`.
-- A foreign/replaced coordination or main inode is `Conflict`. A locally valid
-  but operation/phase-inconsistent combination is `Conflict`. A required exact
-  private reservation missing for `Complete` or an unselectable authoritative
-  attempt/new-coordination record is `Unresolvable`; none is
-  guessed, recreated with a new identity, or removed.
-
-For reset, this does not require the prior old sidecar header to be selectable.
-A valid kind-5 attempt with flag bit 1 clear intentionally binds an unselectable
-old coordination inode by its exact retained local identity. Under the caller-
-certified offline and cross-domain rules above, `Complete` may atomically replace
-that exact opaque old inode and `Remove` may retain it while removing only the
-exact private attempt.
-
-Direct initialization returns `NotInitialized` when no canonical reservation
-namespace attempt took effect; private cleanup is reported independently and
-may be `ResiduePossible`. If canonical acquisition or conversion began but
-resolution later proves
-an unchanged immutable main and durable coordination absence, it returns
-`LeftImmutable`. Direct reset returns `OldCoordinationRetained` when the old
-exact sidecar is proven canonical; private cleanup is again independent. It
-returns `LeftImmutable` only when absence of a new sidecar after old-sidecar
-replacement is proven. From the first
-canonical namespace attempt through successful state-1 publication, any
-indeterminate failure is `OutcomeUnknown`. `Initialized` requires selected
-state 1 at exact size plus successful main, coordination, and namespace
-synchronization and final identity rechecks. Cleanup failure never changes a
-proven primary transition outcome; it is reported by the residue ledger and
-prevents a clean retry until resolved.
-
-`ResetLiveCoordination(path, capacity, cancellation)` is explicit and offline. It MUST obtain
-the exclusive main-file lifetime lock and MUST establish that no live
-cooperating handle remains. It MUST NOT infer safety from timestamps. A caller
-that cannot establish offline exclusivity cannot reset. Under the old
-coordination inode's operation lock, it treats every old slot as opaque: it
-does not inspect, reap, or derive authority from an owner PID, thread ID, start
-token, or nonce. It reselects the main meta, truncates any aligned unpublished
-tail to exact committed length, and synchronizes the main only under the
-caller's certified offline authority. It then creates and synchronizes the
-complete private kind-5 reservation, including the exact old coordination
-identity and the freshly derived current process domain, before changing the
-canonical namespace. Under both operation locks it atomically replaces the old canonical
-sidecar with that exact reservation inode and synchronizes the namespace. Thus
-canonical `.readers` changes directly from the old sidecar to a durable reset
-attempt record; there is no absent-name window and no reset-retirement failure
-without an attempt record. It then converts the reservation through origin-3
-sidecar state 2 to state 1. A filesystem unable to atomically replace the open
-old coordination inode returns `DurabilityUnsupported` before the namespace
-attempt. Resolution classifies whether the old sidecar or new reservation won
-that atomic replacement; it never guesses from absence.
-
-A live main file and its sidecar MUST each have link count one. This prevents
-two hard-link path aliases from deriving independent `.readers` files for the
-same inode. Link count and both canonical path identities are rechecked before
-writer publication. Direct live rename or relink is unsupported in Phase 1;
-ordinary open/reset never rebinds the basename commitment. Relocation requires
-`SnapshotTo` at a new immutable path, explicit `InitializeLive` there, and an
-application-controlled switch. After caller-certified quiescence, external
-tooling may remove the old pair at its own operational risk; Phase 1 provides no
-engine-owned old-pair retirement API.
-
-Partial create/initialize output MUST be removed when the operation can prove
-it created it. A crash-left partial file is never repaired by ordinary open.
-
-Before creating anything, `CreateLive` generates the database ID, transaction
-commit nonce, and random nonzero creation-attempt ID. That one ID is also the
-namespace-reservation ID and eventual `sidecar_id`. Its private main name is
-exactly `.iprange-live-<id>.tmp`, where `<id>` is the 32 lowercase hexadecimal
-digits of the creation-attempt ID. The name is relative to the retained
-destination directory and is created exclusively without following a symlink.
-This exact name makes a crash-left private main discoverable without a broad
-temporary-file guess.
-
-`CreateLive` uses this exact sidecar-before-main publication order:
-
-1. require the final main absent, exclusively publish and synchronize the exact
-   ready reservation from section 20.1 at the canonical `.readers` path after
-   taking its operation lock, retain that descriptor/lock and local identity,
-   then recheck final-main absence;
-2. exclusively create the main file under the exact private name above, fully
-   initialize it, compute its exact SHA-512 digest, and synchronize that inode;
-3. while still holding the reservation inode's operation lock, recheck the reservation,
-   private-main identity/content, and final-main absence; update and synchronize
-   the still-state-1 reservation with the complete main identity/length/digest;
-   write and synchronize a valid sidecar `state == 2` image with the complete
-   main attempt record through the alternate 4,096-byte header block;
-   grow that **same inode** to the exact reader-table size, zero and synchronize
-   every slot while state 2 remains selected; then publish and synchronize the
-   ready `state == 1` image through the alternate header block;
-4. while still holding that operation lock, recheck the ready sidecar,
-   private-main identity/content, and final-main absence; publish and
-   synchronize sidecar `state == 3` (main namespace may have been attempted)
-   through the alternate header block;
-   atomically publish the same main inode at the final name with no-replace;
-   synchronize the namespace; publish and synchronize restored sidecar
-   `state == 1` through the alternate block; and release the lock.
-
-The canonical reservation exists from the beginning of the attempt and is
-never absent while the private main is being prepared or converted. It therefore
-serializes the whole operation against every immutable publisher, competing
-`CreateLive`, `InitializeLive`, and replacement. Publishing the valid main last
-ensures every crash-left partial state fails ordinary immutable and live open:
-before step 4 the main is absent, while the reservation, transition sidecar, or
-ready orphan sidecar blocks unrelated publication. Publishing the main first is
-forbidden.
-
-Because the main file and sidecar are two directory entries, `CreateLive`
-cannot promise one two-file atomic rename. Its result contains:
+Its encoding is:
 
 ```text
-attempted_database_id:[16]byte
-attempted_txn_id:u64
-attempted_commit_nonce:[16]byte
-create_attempt_id:[16]byte
-attempted_reader_capacity:u32
-directory_identity_kind:u16
-directory_local_identity:[32]byte
-destination_basename_encoding:u16
-destination_basename:bounded byte sequence
-identity_kind:u16
-coordination_local_identity:[32]byte
-attempted_main_local_identity: optional [32]byte
-attempted_main_byte_length: optional u64
-attempted_main_sha512: optional [64]byte
-creation: NotCreated | Created | OutcomeUnknown
-creation_security_kind:u16
-creation_security_commitment:[32]byte
-main_access_policy: CreatorOnly | ChangedOrUnproven | Unclassified
-coordination_access_policy: Absent | CreatorOnly | ChangedOrUnproven | Unclassified
-cleanup_state: Clean | ResiduePossible
-cleanup_artifacts: bounded sequence of CleanupArtifact
-coordination_cleanup: None | CleanupGuard | RetainedReaderCloseRequired | RetainedWriterCloseRequired
-housekeeping: None | CrashReappearancePossible | Visible
-visible_housekeeping: bounded sequence of HousekeepingArtifact
-cause: optional typed error
+selected_txn:u64le
+bitwise_not_selected_txn:u64le
 ```
 
-The structured-result boundary starts after the private ready reservation has
-been synchronized and its identity is known, before its canonical no-replace
-publication. A failure to publish it canonically therefore returns a resolvable
-`NotCreated` record. An earlier failure is an ordinary typed error and
-the exact cleanup report; it cannot fabricate sentinel identities or digests. The
-optional main fields become present together only after the exact private main
-is synchronized. Its digest covers every byte. `Created` requires
-both fully initialized files and the final synchronized namespace. From the
-selection of the synchronized state-3 write-ahead record until resolution, an
-indeterminate failure is `OutcomeUnknown`, including a failure before the
-process can prove whether it entered the final-main namespace call. A pre-state-3
-failure is `NotCreated` whenever final-main non-publication is proven; failed
-cleanup is reported independently as `ResiduePossible` and does not falsify
-that primary outcome. Ordinary open fails safely on every partial pair.
-
-`ResolveCreateLive(path, optional result, Complete | Remove, cancellation)` is the only online
-operation permitted to resolve that exact partial attempt. A complete caller
-result may identify it, but is not required after a process crash. A valid
-canonical initial kind-3 reservation reconstructs ID, tuple, capacity, and
-derived names and is sufficient for `Remove`; `Complete` additionally requires
-either its synchronized nonzero output fields, a sidecar attempt record, or a
-fully validated and hashed exact private main from which those fields are
-reconstructed. It retains the directory and, before inspection or action,
-requires a supplied result's directory identity kind and local identity to equal
-that retained parent. A mismatch is typed `DirectoryIdentityMismatch` and
-changes nothing. Without a caller result, the authoritative complete canonical
-reservation/sidecar record is bound to the identity of the retained directory
-that contains it, and that parent identity is returned. The resolver opens every
-present canonical component plus the exact private
-reservation/main without following symlinks,
-and matches the create-attempt/reservation/sidecar ID, identity kind, and exact
-coordination identity, then compares every available main identity, tuple,
-length, and digest under the phase-specific rules below. Sidecar
-conversion uses the exact reader capacity from the caller result or
-reconstructed attempt record; the resolver never substitutes a default or
-caller override. A matching reservation, transition sidecar, or ready sidecar
-is locked with its operation lock before the phase-specific inspection or any
-namespace change. When that exact
-coordination inode is at its private reservation name,
-`Complete` first restores the same inode to canonical `.readers` with the
-no-replace publication and synchronization protocol. Its operation-specific
-primary is `Created | Removed | OutcomeUnknown`, or a typed
-`Conflict`/`Unresolvable`/`WriterBusy` error. The structured result uses the
-common independent `destination_content`, `later_canonical`, `live_lineage`,
-later-owner identity, cleanup, coordination, and housekeeping fields defined by
-`ResolveLiveTransition`. Cleanup never changes an already proven primary.
-
-If canonical coordination is absent and no caller result survives, path-specific
-Create resolution performs a bounded streamed scan of exact private reservation
-names. It opens only complete selectable kind-3 records
-whose retained parent identity and section-3 destination-name commitment match
-the requested path. Zero matches means absent, exactly one reconstructs the
-attempt authority, and more than one is `Conflict`; only that record's attempt ID
-may derive and inspect the private main. Random filenames or unbound private-main
-bytes remain insufficient authority.
-
-A selectable kind-3 reservation, origin-1 state-2/state-3 sidecar, or origin-1
-state-1 sidecar while the final main is absent remains resolvable after a
-process-domain change. Under its exact operation lock and every phase-required
-main lifetime lock, the resolver treats old slots as opaque. `Remove` may retire
-only the exact attempt in the existing absent-final-main removal row; a state-3
-sidecar paired with the exact final main remains a successful creation crash
-state and both modes finish state 1. Whenever the exhaustive rows finish the
-transition, the resolver first writes and synchronizes the freshly derived
-current domain into the next CRC-valid attempt block, zero-initializes every
-slot, and then continues to state 1. Only an exact state-1 sidecar paired with a
-present valid final main has established ready live coordination; a mismatched
-domain there returns typed
-`LiveCoordinationDomainMismatchRequiresReset` before slot inspection, whole-file
-hashing, or lineage classification; it is handled by caller-certified offline
-`ResetLiveCoordination`, not by CreateLive resolution.
-
-Before classifying a final main paired with a state-1 sidecar, the resolver
-takes the shared main lifetime lock and then the sidecar operation lock. Under
-that lock it strictly scans the complete sidecar, reaps the writer lease only
-with the section-15.3 OS death proof, and requires the lease to be free. An
-active or uncertain writer returns typed `WriterBusy` before tuple or physical-
-content classification. The resolver keeps both locks through meta selection,
-the complete length/digest pass when needed, file and namespace
-synchronization, and final identity/tuple rechecks. This prevents a new writer
-claim and makes the physical comparison stable while allowing registered
-readers to coexist.
-
-- If the final main and exact state-1 sidecar form the valid identity-bound pair,
-  the sidecar state proves that creation completed. The same selected attempted
-  tuple plus the exact prepared length/digest reports primary `Created` plus
-  `SameGenerationExactBytes`; the same bootstrap-valid selected tuple with
-  changed exact bytes reports `SameGenerationPhysicalBytesChanged`; and a later
-  bootstrap-valid transaction in the same database reports
-  `AdvancedGeneration`. Physical change without selected-
-  tuple advancement can be an aligned unpublished tail, an inactive-meta write,
-  another unpublished COW draft, or damage; the resolver reports the fact but
-  does not guess its cause. Either mode synchronizes and rechecks this successful
-  pair, and `Remove` never silently undoes it. The attempted transaction ID with
-  a different nonce is `Conflict`.
-- If the final main and exact state-3 sidecar form the valid pair, ordinary live
-  use was never possible. The exact attempted tuple, identity, length, and digest
-  are therefore still mandatory. The resolver synchronizes the reopened main
-  and namespace, restores and synchronizes state 1 under the operation lock,
-  rechecks all identities, and reports primary `Created` plus
-  `SameGenerationExactBytes`; any mismatch is
-  `Conflict`.
-- If the final main is absent and the exact private main plus exact coordination
-  inode are present, `Complete` finishes or repeats the in-place reservation-to-
-  sidecar conversion and performs steps 3-4. Before publishing through an
-  already-ready sidecar it synchronizes that retained sidecar under the lock.
-- If the final main is absent, `Remove` unlinks only the exact private main,
-  then retires only the exact reservation/transition/ready coordination inode
-  owned by this result using the platform reservation-retirement protocol, and
-  synchronizes the namespace. Either component may already be absent.
-  `Complete` cannot proceed when any complete main identity/length/digest field
-  or the private main itself is absent.
-- A present final main that is neither the exact attempted generation nor a
-  valid later generation on the exact attempted inode, or a foreign, replaced,
-  malformed, or mismatched private main or coordination inode, is never removed
-  or repaired by this API. It returns a typed conflict requiring caller-certified
-  offline handling.
-
-Every other locally valid but phase-inconsistent combination is also
-`Conflict`. In particular, an exact final main paired only with a kind-3
-reservation or state-2 sidecar is not a legal CreateLive crash state: main
-publication is authorized only after selected sidecar state 3. The resolver
-does not infer or repair a missing phase transition.
-
-`ListAbandonedCreateTemps(directory, cancellation, sink)` is an explicit read-only offline aid. It
-enumerates only exact `.iprange-live-<32 lowercase hex>.tmp` names and reports
-the no-follow regular-file identity plus a bootstrap-readable v4 tuple when one
-exists; it changes nothing. `RemoveAbandonedCreateTemp(directory,
-expected_directory_identity, id, expected identity, optional readable tuple,
-cancellation)` applies the section-14.4 idempotent
-cleanup rule only to that exact matching private file. Exact name plus no-follow identity
-is sufficient for a partial file with no readable tuple; when a tuple is
-readable it MUST also match.
-The caller MUST first certify that no create or resolve operation is active in
-the directory. It never removes a canonical main or sidecar and never infers
-abandonment from age. `ResetLiveCoordination` is not a creation-cleanup API.
-
-`InspectCreateResidue(path, cancellation)` is an explicit read-only offline aid for the
-canonical coordination name. It first retains the containing directory and
-reports its identity kind/local identity, the coordination inode's no-follow
-local identity, any fully readable reservation or sidecar attempt record,
-derived private names, and exact main comparison without changing them. It also
-returns an optional non-serializable opaque residue handle retaining that exact
-directory and coordination descriptor only when canonical coordination was
-successfully opened. Canonical absence produces a directory-only report and no
-handle. A valid reconstructed record may be passed
-directly to `ResolveCreateLive`.
-
-`RemoveCreateResidue(residue_handle, cancellation)` may remove a canonical residue only with
-that present handle and after the caller certifies that the final main is absent
-and no create, initialize, reset, publication, resolver, live handle, or
-immutable reader is active in the destination namespace. It takes the retained
-coordination operation lock, rechecks the canonical path against the retained
-descriptor and parent, and rechecks final-main absence before acting. If either
-header selects any reservation or sidecar record—including a kind-3/origin-1
-CreateLive record—the operation returns `Conflict`; the caller must use that
-record's operation-specific resolver. Only a coordination inode with neither
-header selectable is eligible for this offline escape hatch. The retained
-same-process descriptor from `InspectCreateResidue` is then the only SDK
-mutation authority; a serialized local identity, raw untrusted attempt ID, or
-operator record is insufficient because POSIX inode identities can be reused.
-A process restart therefore requires a fresh inspection of the current
-canonical inode. Age and pathname alone are never proof.
-
-The inspection result owns its opaque residue handle. `Close`/C-ABI destroy is
-idempotent, closes only the retained descriptors, and performs no namespace or
-slot transition; an inspect-only caller MUST invoke it. `RemoveCreateResidue`
-and `RemovePublicationResidue` borrow a mutable handle and mark it closed only
-after successful final proof. On error the same handle remains open and
-retryable. Language destruction may only close these descriptors because a
-residue handle owns no active slot and no process-local state-2 provenance.
-
-### 15.2 Sidecar header
-
-The 8,192-byte sidecar header region contains two independently CRC-protected
-4,096-byte blocks at physical offsets 0 and 4,096, so one torn 4 KiB
-storage-block write cannot damage both. Each block contains a 512-byte header
-record followed by zero bytes `[512,4096)`. Table offsets below are relative to
-the start of either block:
-
-| Offset | Size | Field |
-|---:|---:|---|
-| 0 | 8 | ASCII `IPR4RDRS` |
-| 8 | 2 | `sidecar_version = 1` |
-| 10 | 2 | `header_record_size = 512` |
-| 12 | 2 | `slot_size = 64` |
-| 14 | 2 | `identity_kind` |
-| 16 | 4 | explicit `capacity` |
-| 20 | 4 | `state` (`1=ready`, `2=initializing`, `3=main namespace may have been attempted`) |
-| 24 | 16 | main-file `database_id` |
-| 40 | 32 | local main-file identity |
-| 72 | 32 | local sidecar identity |
-| 104 | 16 | random nonzero `sidecar_id` |
-| 120 | 2 | `origin` (`1=CreateLive`, `2=InitializeLive`, `3=ResetLiveCoordination`) |
-| 122 | 2 | `attempt_record_version = 1` |
-| 124 | 8 | initial/attempted `txn_id` |
-| 132 | 16 | initial/attempted `commit_nonce` |
-| 148 | 8 | initial/attempted main byte length |
-| 156 | 64 | SHA-512 of exact initial/attempted main bytes |
-| 220 | 2 | `process_domain_kind` (`1=Linux PID namespace`, `2=FreeBSD jail`, `3=host-global`) |
-| 222 | 2 | zero |
-| 224 | 32 | `process_domain_token` |
-| 256 | 2 | destination-basename encoding kind |
-| 258 | 2 | zero |
-| 260 | 4 | destination-basename encoded byte length |
-| 264 | 32 | destination-basename SHA-256 commitment from section 3 |
-| 296 | 2 | creation-security kind from section 15.6 |
-| 298 | 2 | zero |
-| 300 | 32 | creation-security commitment from section 15.6 |
-| 332 | 164 | zero |
-| 496 | 8 | nonzero `header_seq` |
-| 504 | 4 | zero |
-| 508 | 4 | block CRC-32C |
-
-CRC covers the complete 4,096-byte block with `[508,512)` zero. Header selection
-examines both block positions and recognizes both sidecar and reservation magic
-during conversion. It selects the CRC-valid block with the greater sequence;
-when both valid sequences differ, the greater MUST be exactly the checked
-`lower + 1`. Equal sequences are legal only for byte-identical 4,096-byte
-blocks. A zero sequence, sequence gap, sequence wrap, or equal-sequence
-disagreement is malformed.
-The creation-security kind/commitment is immutable across all selected sidecar
-phases and every later normal writer header update. A mismatch between valid
-header copies or the attempt's reservation/result is malformed.
-
-Every header/phase transition writes one complete prospective 4,096-byte block
-with `header_seq = selected + 1` into the other position, synchronizes it, and
-re-reads it as selected before taking the action that transition authorizes. It
-never overwrites the sole selected block. A torn new block therefore leaves the
-previous complete attempt record authoritative. If neither block is valid, the
-coordination inode is corrupt and only caller-certified offline reset/removal
-may act; the normal protocol never creates that state.
-
-If the selected sequence is `u64::MAX`, a transition returns typed
-`CoordinationSequenceExhausted` before changing the selected block or taking the
-authorized action. Sequence numbers never wrap.
-
-States 2 and 3 are recognized only by exact `ResolveCreateLive` for origin 1 or
-`ResolveLiveTransition` for origins 2-3. State 3 is valid only for origin 1;
-origins 2-3 with state 3 are conflicts. State 2 is allowed at 8,192 bytes, the
-exact final size, or an intermediate checked size no greater than that final
-size; the resolver reinitializes every slot rather than trusting partial bytes.
-Ordinary live open accepts only the selected state 1 at exact final size.
-
-The attempt record is written before sidecar state 2 is synchronized. It binds
-an interrupted conversion/publication to exact main content without an
-in-memory result. For state 1 it is retained as creation provenance but is not a
-current-main digest and is never required to remain equal after live use becomes
-possible; resolvers classify the selected tuple and any physical-content change
-as specified above. For states 2 and 3 it is mandatory recovery evidence;
-unknown origin/version, zero
-transaction/nonce/length, invalid destination-basename commitment, or a
-mismatched exact main is a conflict. State 1 retains the same basename
-commitment so ordinary live open and every resolver remain bound to the
-canonical main component even after later transactions advance.
-
-`identity_kind == 1` is POSIX. In each 32-byte identity, bytes `[0,8)` are
-`st_dev:u64`, bytes `[8,16)` are `st_ino:u64`, and the remainder is zero.
-`identity_kind == 2` is Windows. Bytes `[0,8)` are the volume identity,
-bytes `[8,24)` are the 128-bit file identity, and the remainder is zero. Other
-kinds are invalid. The sidecar records its own identity obtained from the
-retained descriptor after exclusive sidecar creation or reservation creation;
-copying a valid header onto a different inode therefore does not create a valid
-replacement.
-
-The process domain makes stored PIDs meaningful. On Linux, kind 1 is mandatory
-and the token is the POSIX local identity encoding (`st_dev`, `st_ino`, then
-zeros) of the caller's own `/proc/self/ns/pid`; inability to obtain it makes live
-coordination unsupported. On FreeBSD, kind 2 is mandatory and the token is
-`ki_jid:u32` from the caller's canonical `kinfo_proc` followed by 28 zero bytes.
-JID zero denotes the host. macOS and Windows use kind 3 with an all-zero token
-because their supported Phase-1 host processes use one host-global PID domain;
-an isolated environment where that cannot be established returns
-`LiveCoordinationUnsupported`. Every ordinary opener, resolver, and operation
-that interprets or reaps slots requires its freshly derived kind/token to equal
-the sidecar first. Cross-PID-namespace, cross-jail, and cross-container ordinary
-live coordination is unsupported even when the main/sidecar files are visible
-in both environments; immutable files remain portable. The one explicit
-exception is offline `ResetLiveCoordination`: after caller-certified quiescence
-and the exclusive locks in section 15.1, it treats old-domain slots as opaque,
-atomically retires that exact old sidecar, and writes the current domain into
-the kind-5 reservation and resulting sidecar. This is the supported recovery
-path after a reboot, PID-namespace recreation, jail change, or intentional
-offline domain migration.
-Each explicit create/initialize/reset generates a cryptographically random
-nonzero sidecar ID. Handles cache and recheck it together with both OS
-identities before critical operations.
-
-The exact sidecar size is `8192 + (capacity + 1) * 64`, checked in `u64` and
-against host file-offset and mapping limits. The first 64-byte slot begins at
-offset 8,192 and is the single writer lease; the following `capacity` slots are
-reader registrations.
-Open MUST reject a symlink, non-regular file, link count other than one, wrong
-size, incompatible header, database-ID mismatch, either local identity
-mismatch, equal main/coordination local identities, or a main-file link count
-other than one. It also recomputes the section-3 commitment from the exact
-caller-supplied main basename and rejects a kind, length, or digest mismatch.
-Main and coordination must be distinct inodes/lock domains.
-
-Every sidecar is created by reservation conversion. Conversion keeps the
-complete updated reservation block, writes and synchronizes sidecar state 2
-through the other block while the file is still 8,192 bytes, then grows, zeroes,
-and synchronizes the slots before publishing state 1 through the alternate
-block. Publication or conversion synchronizes the namespace as required. A
-selected zero, state-2, state-3, or unknown state is not ready and ordinary
-open MUST fail; it MUST NOT finish initialization.
-
-### 15.3 Writer lease and reader slots
-
-The writer lease and every reader slot share this 64-byte encoding:
-
-| Offset | Size | Field |
-|---:|---:|---|
-| 0 | 4 | `state` (`0=free`, `1=active`, `2=transition`) |
-| 4 | 4 | zero |
-| 8 | 8 | `txn_id` (`0` while registering) |
-| 16 | 8 | process ID |
-| 24 | 8 | OS process-start token, or zero if unavailable |
-| 32 | 8 | thread/task ID, or zero if unavailable |
-| 40 | 16 | cryptographically random nonzero per-claim nonce |
-| 56 | 4 | reserved zero |
-| 60 | 4 | slot CRC-32C |
-
-An exact all-zero slot is free and has no CRC. For an active slot, CRC is
-calculated over the prospective state-1 image with `[60,64)` zero. Active
-process ID and the 128-bit nonce are nonzero, and all reserved fields are zero.
-The stored process ID MUST convert exactly, without truncation or sign change,
-to the host process-ID type used by `kill`/`OpenProcess`; a nonzero thread/task
-ID MUST likewise fit its host native type before any host use. An unrepresentable
-value is malformed and is never truncated into authority over another process.
-Nonce generation uses a CSPRNG and failure occurs before transition provenance
-is armed or any slot byte is changed. State zero
-with any nonzero byte, state 2 observed after acquiring the operation lock
-without this process's exact armed transition provenance, an unknown state, or
-an active slot with invalid fields or CRC is malformed and fails closed.
-Ordinary open never treats it as free or repairs it.
-
-All slot transitions occur under the operation lock. State 2 is the exact
-transient updating value and is never a valid stable slot. Claim first writes
-`state=2`, then writes the body plus the CRC calculated for the prospective
-state-1 image, and writes `state=1` last. Updating an active slot first writes
-`state=2`, writes the new body and prospective state-1 CRC, then restores
-`state=1` last. Clearing first writes `state=2`, zeroes bytes `[4,64)`, then
-writes `state=0` last. A crash or torn write is thus either the old valid active
-image, the new valid image, or a malformed image that fails closed; it is never
-silently accepted as a free slot. Cross-process visibility ordering is
-established by the operation lock and the platform's documented positional-I/O
-or shared-mapping barriers.
-
-Before update or clear, a handle MUST compare the slot's state, process/start
-identity, nonzero nonce, and role with the values it claimed. A mismatch is not
-another handle's slot and fails closed.
-
-Every open attempt, established live handle, and cleanup guard that can write a
-slot owns one in-memory **transition provenance** record. It contains the exact
-sidecar/header identity, role and slot index, transition kind
-(`Claim | Update | Clear`), expected source image (`Zero` or the owned active
-claim, or an exact `ProvenDeadActive` claim), prospective active owner identity
-and nonce when applicable, and an `armed` bit. `ProvenDeadActive` stores the
-complete valid old slot image and the exact section-15.3 OS death-proof class and
-observations established for that image. Under the object's mutex and the
-operation lock, the implementation populates this record and sets `armed=true`
-immediately before the first attempt to write state 2. It clears the record only
-after it reads back the complete target state 1 or all-zero image. An error
-before that proof retains both the armed record and the already-held operation
-lock; retained descriptor, lifetime lock, and object ownership are not released.
-An armed transition MUST NOT release and later reacquire the operation lock.
-Otherwise a first write that in fact changed nothing could permit a second
-process to begin a transition in the same slot, leaving an indistinguishable
-state-2 image that the first process could incorrectly clear. The cleanup guard
-owns the held lock until readback proves the original transition complete,
-or absent through the exact target/all-zero readback rules below.
-
-An armed transition makes its owner authoritative to abandon that transition
-by proving the slot absent or clearing it to zero under the same retained
-descriptor and identities. Retry accepts an all-zero slot, a well-formed active
-image with the same role/owner/nonce (using either the old or prospective
-transaction during an interrupted update), or state 2 from that exact armed
-transition. Because the armed owner continuously holds the exclusive operation
-lock, a different active nonce cannot be a conforming later reuse; it proves
-foreign mutation or broken lock discipline and is `CleanupConflict`. Any state-2
-image without matching in-process armed provenance, or any other malformed or
-foreign image, remains fail-closed. Thus a process may finish only a transition
-it initiated; a new process can never infer ownership of crash-left state 2.
-
-Nonce uniqueness is a cryptographic probabilistic identity assumption, not a
-deterministic global registry: an exact independent 128-bit collision cannot be
-distinguished from the original claim. The accepted collision probability is
-`2^-128` per independent draw under the required CSPRNG. Conformance therefore
-injects generator failure and all-zero-output rejection before any write, but does not claim
-that a forced exact collision is safely detectable.
-
-Reaping a proven-dead foreign claim is a `Clear` transition with
-`ProvenDeadActive` as its source. The reaper MUST recheck the exact active image
-and establish the canonical death proof while holding the operation lock, then
-perform the role-specific pre-clear work below, and only then arm the provenance
-record before its first state-2 write.
-
-Reader-slot reaping has no main-file cleanup. Before clearing a proven-dead
-writer lease, however, the reaper MUST retain the main descriptor/lifetime lock,
-reselect the committed meta under the same operation lock, and compare the
-physical length with that exact generation's committed length. Any longer
-aligned region is recorded as an exact `UnpublishedMainTail` and is truncated,
-main-file synchronized, and identity/length/meta rechecked through the section-
-14.4 rule while the old valid lease still establishes exclusive writer
-authority. The writer `Clear` transition MUST NOT be armed before that proof.
-An unselectable generation, unaligned/short main, unexpected growth, or cleanup
-failure stops the enclosing operation without clearing the lease and transfers
-an opaque guard containing the exact `ProvenDeadActive` source plus any tail
-obligation. Guard retry repeats the tail proof before it may arm `Clear`.
-Already-written inactive pages or an inactive meta within committed length are
-not rewritten by ordinary reaping; selected-meta authority and explicit
-validation remain separate.
-
-An error after arming also stops the enclosing operation. A failed open returns
-`LiveOpenCleanupRequired`; a standalone resolver or inspection/mutation
-operation returns typed `LiveCoordinationCleanupRequired`; both carry the same
-opaque guard. An established live handle retains the reaping record itself,
-becomes cleanup-only, and finishes the foreign writer-tail/clear obligation
-before clearing its own claim. No scan, resolver, commit, reclamation pass, or
-stale-owner reap may discard a pre-clear writer obligation, an armed transition,
-or reduce either to a generic I/O error.
-
-The writer lease uses a nonzero selected transaction in `txn_id`. A reader uses
-transaction zero only during registration, then publishes its selected nonzero
-transaction in the same slot. A valid active lease or slot is cleared or reaped
-only through this protocol.
-
-Process-start tokens are platform-canonical so Go and Rust compare the same
-value. Linux stores unsigned `/proc/<pid>/stat` field 22 clock ticks, parsing
-after the final `)` of the command field. macOS reads
-`proc_pidinfo(PROC_PIDTBSDINFO)` and encodes
-`pbi_start_tvsec * 1_000_000 + pbi_start_tvusec`. FreeBSD reads
-`sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID, pid)` and encodes
-`ki_start.tv_sec * 1_000_000 + ki_start.tv_usec`. The microsecond fields MUST
-be in `0..999999`; multiplication and addition are checked. Windows reads the
-creation time from `GetProcessTimes` and stores the unsigned 100-nanosecond
-`FILETIME` value. If that exact nonzero token cannot be obtained, the writer
-stores zero. Thread/task ID never participates in death proof.
-
-A zero stored token or a zero/unreadable current token never proves staleness.
-Start-token mismatch proves PID reuse only when both the valid stored slot token
-and the freshly read token are nonzero. On POSIX,
-`kill(pid, 0)` returning `ESRCH` proves death; success and `EPERM` mean the PID
-exists, after which that two-nonzero start-token mismatch proves that the recorded
-instance is gone. On Windows, only a successfully opened process handle may
-prove death: a signaled handle proves termination, and a nonzero creation-time
-mismatch with both values nonzero proves PID reuse. `OpenProcess` failure, access denial, unavailable
-times, `WAIT_FAILED`, and every other uncertain result mean alive. Equality or
-uncertainty always means alive.
-
-### 15.4 One locking protocol
-
-The protocol uses two open-description-associated whole-file locks and the
-on-disk writer lease:
-
-- the **lifetime lock** is held shared on the retained main-file descriptor for
-  the complete lifetime of every live handle and exclusively for
-  initialize/reset; and
-- the **operation lock** is held exclusively on the retained sidecar descriptor
-  for writer-lease claim/removal, reader registration/update/removal, stale
-  reaping, oldest-reader scans, reclamation decisions, and writer publication.
-
-On POSIX local filesystems these locks use `flock(LOCK_SH/LOCK_EX)` semantics.
-On Windows they use `LockFileEx` on the exact one-byte range
-`[2^44, 2^44 + 1)` of the respective main or sidecar handle: shared mode for a
-shared lifetime lock and exclusive mode for every exclusive lock. This range
-starts immediately after the maximum legal v4 main-file length and is also
-above the maximum sidecar length. A platform without equivalent
-open-description-associated automatic release MUST return typed
-`LiveCoordinationUnsupported`; it MUST NOT silently fall back to
-process-associated POSIX record locks. Traditional `F_SETLK` locks are
-forbidden because closing an unrelated descriptor for the inode can release
-them.
-
-Each live handle owns an in-process mutex that encloses every acquisition,
-transition, and release involving its retained operation-lock descriptor.
-The descriptor or Windows handle used for locking MUST NOT be duplicated into
-or shared with another logical handle; another handle performs an independent
-no-follow open. This local mutex is required because reacquiring `flock` or
-`LockFileEx` through the same open description is not a thread mutex. Lookup
-methods do not take this mutex and may run concurrently; writer methods and
-close/registration transitions obey section 15.6's per-handle serialization
-contract.
-
-Single-writer exclusion is the dedicated writer lease, inspected and claimed
-under the operation lock. An active lease owned by a process not proven dead
-returns typed `WriterBusy`. A crashed writer is reaped by the same strict
-OS-proof rule as a reader slot.
-
-Every handle retains the originally opened main-file descriptor, containing
-directory descriptor, and sidecar descriptor. It MUST NOT reopen the sidecar
-pathname to update or clear a slot. Path checks use the retained directory
-descriptor and no-follow relative stat. Before every critical operation it MUST
-compare both canonical path identities, link counts, database ID, and sidecar
-header identities with the retained descriptors. Missing, aliased, or replaced
-paths fail closed. Cleanup MAY clear the handle's old retained slot through its
-descriptor but MUST report the replacement.
-
-Every engine-owned descriptor is close-on-exec on POSIX and non-inheritable on
-Windows. Every live reader/writer, cleanup guard, residue handle, and persistent child
-handle caches its creator process ID. Each public/content/cleanup method compares
-the current process ID before taking an inherited mutex, lock, or writing any
-byte; a mismatch returns typed `ForkedHandle` and performs no slot, file, or
-namespace mutation. In a POSIX fork child, destructor/finalizer/C-destroy on the
-copied object may only close that child's inherited descriptors and mappings; it
-MUST NOT unlock the shared `flock` open description, clear a parent-owned slot,
-commit, unlink scratch, or finish an armed transition. The parent copy remains
-the sole authority. A fork child that needs v4 access opens independent handles.
-
-### 15.5 Registration and commit barrier
-
-A live reader:
-
-1. opens and bootstrap-validates the main file without following symlinks;
-2. takes a shared lifetime lease;
-3. opens and validates the existing sidecar and both retained identities;
-4. takes the exclusive operation lock and scans the writer lease and complete
-   explicitly sized reader table for malformed state;
-5. claims a free reader slot with transaction zero and makes it visible;
-6. selects a meta page;
-7. updates the same slot to the selected transaction;
-8. releases the operation lock; and
-9. establishes data-page read access limited to the selected committed byte
-   range.
-
-An ordinary live reader has not proved the selected graph/allocation partition.
-A self-consistently corrupt graph can therefore point at a page that committed
-allocator metadata also authorizes a concurrent writer to overwrite. A safe-
-language implementation MUST NOT create a shared reference or ordinary slice
-into live mapped bytes unless every byte covered by that reference is proven
-immutable for its complete lifetime. Rust and Go ordinary live readers use
-fixed caller-/cursor-owned page buffers with positional reads, or an equivalent
-raw-copy mechanism that cannot create a language-level alias with a concurrent
-writer. A raw mapping may remain an internal optimization only when it preserves
-the same memory-safety property on plausible corruption. Immutable readers may
-borrow their certified-offline bytes normally.
-
-If no slot is free, open returns typed `ReaderCapacityExhausted`.
-
-All fallible setup that can occur before step 5 does so before the slot is
-published. If selection, slot update, read-view setup, allocation, identity recheck, or
-any later open step fails after the claim may be visible, open keeps the
-operation-lock descriptor and first tries to clear and read back that exact
-claim under the operation lock. Proven clearing returns the original open error.
-If clearing or its final identity/slot recheck cannot be proved, the error is
-`LiveOpenCleanupRequired` and carries an opaque cleanup guard rather than a
-reader handle.
-
-The guard retains the original directory, main, and sidecar descriptors plus
-claim kind (`ReaderSlot` or `WriterLease`), exact slot index, database ID,
-sidecar ID, both local identities, transaction, process/start/thread tokens, and
-claim nonce, the complete transition-provenance record from the failed open
-attempt, plus any exact unpublished-main-tail cleanup obligation. For a failed
-foreign-writer reap this includes the complete `ProvenDeadActive` source even
-when tail cleanup failed before the `Clear` provenance could be armed. It exposes
-only idempotent `RetryCleanup` and `Close`. `Close` MUST execute the same
-proof-and-cleanup protocol as `RetryCleanup`; it is not an abandon operation. Both methods retain
-the guard, its descriptors, and retry authority on every error, and mark it
-closed/release ownership only after proven success. Neither method may consume
-or discard retry authority on error. The guard cannot read or mutate database
-content.
-
-Under its per-guard mutex, retry retains an inherited armed transition's already-
-held sidecar operation lock. If no transition was armed, it acquires the retained
-sidecar operation lock. It then rechecks descriptor/header identity and applies
-the transition-provenance rule above. If the failed opener had already completed
-its claim/update and a later setup step failed, retry arms a new `Clear`
-transition before writing state 2. If claim, update, or that clear itself stopped
-in state 2, the inherited armed record and continuously held operation lock
-authorize completion to zero. This authority remains deliberately process-local.
-
-A different active nonce is `CleanupConflict` and MUST NOT be cleared. No
-conforming claimant can reuse the slot while the guard continuously owns the
-exclusive operation lock. A malformed nonzero image, unknown state, or any
-ownership mismatch also remains `CleanupConflict`.
-
-The guard clears the exact claim through the retained descriptor, but for a
-writer it first resolves any recorded tail by the section-14.4
-identity/length/truncate rule while the lease remains owned; a new `Clear`
-transition cannot be armed until that tail obligation is proven resolved. It
-then reads back zero and reports whether the canonical path was unchanged or
-replaced. Success releases the retained lifetime lock and descriptors. Until
-success or process exit, the claim intentionally continues to block reclamation
-or writers rather than being guessed stale. Destructors/finalizers MUST NOT begin
-a slot or lease transition. Callers MUST explicitly resolve or close the guard,
-and the C ABI exposes it as an opaque owned handle. Dropping an armed cleanup-
-only guard abandons process-local provenance and requires caller-certified
-offline coordination reset.
-
-Established live readers and writers use the same rule. Their `Close` operation
-is idempotent and non-abandoning: it takes a mutable/non-consuming handle, marks
-the handle cleanup-only before its first clear attempt, and does not mark it
-closed or release ownership until exact all-zero readback proves the old claim
-absent. On error the same handle, descriptors, lifetime lock, and
-armed provenance remain available, and only another `Close` attempt is allowed.
-Before a writer arms its own lease `Clear`, `Close` MUST truncate and synchronize
-every recorded `UnpublishedMainTail` through the section-14.4 exact
-identity/length rule while that lease or its armed transition provenance remains
-owned. Tail-cleanup failure retains the close-only writer and leaves its lease
-uncleared; it never releases the only authority needed for a safe retry.
-Rust close therefore cannot consume the handle on error; the C ABI cannot
-destroy an unresolved opaque handle; Go retains the receiver. Finalizers and
-destructors never begin the transition. Dropping an unclosed established handle
-leaves its valid claim fail-closed until process exit or caller-certified
-offline reset. Phase 1 has no hidden process-global cleanup registry.
-
-A writer with any still-owned feed reference, membership reference, membership
-builder, or other persistent child returns `HandleBusy` from Close before Abort,
-lease clearing, or any state change. Commit and explicit Abort may terminate the
-operation and invalidate those children, but their wrappers remain parent borrows
-until explicitly destroyed; Close continues to return `HandleBusy` until then.
-No new child is admitted once Close begins.
-
-The same cleanup-only transition applies if the writer-lease transaction update
-after durable meta publication fails at state 2 or has an uncertain final
-state-1 write. Commit still reports the factual `Committed` durability and the
-coordination cleanup error independently; that writer permits only retrying
-`Close`. A successful exact clear closes it, after which the caller may reopen
-the committed database. No post-publication coordination failure changes the
-commit result to `NotCommitted` or permits the transaction to be retried.
-
-A live writer open may use an initial bootstrap only to identify the candidate
-database and sidecar. Before truncating, mapping for mutation, or exposing the
-writer, it MUST take the shared lifetime lock and exclusive operation lock,
-validate and scan the complete sidecar, reap only proven-dead owners, reselect
-the main meta from the retained descriptor, and then claim the dedicated writer
-lease with that exact selected transaction. It rechecks both canonical path
-identities and link counts and only then truncates a provably unpublished tail
-to the reselected committed length. Any failure after lease publication follows
-the exact cleanup-guard protocol above and never exposes a writer. This
-reselection prevents a stale pre-lock bootstrap from truncating or mutating over
-a newer commit.
-
-Internal live registrations used by validation, recovery, or snapshotting obey
-the same rule. Their terminal error carries the cleanup guard when claim clearing
-cannot be proved; no internal helper may discard it or reduce it to a generic I/O
-error.
-
-During commit the writer again takes the operation lock, verifies that its
-lease nonce/owner/transaction and selected main generation are unchanged, and
-holds the lock from its oldest-reader scan through durable meta publication and
-writer-lease transaction update. This prevents a new transaction-zero
-registration from appearing inside allocator finalization or publication while
-already registered readers continue without blocking.
-
-Registration, update, removal, reaping, and oldest-reader scans all use the
-same operation lock. A slot is reaped only by the exact OS proof above;
-unsupported checks and transient errors mean alive.
-
-For a structurally and CRC-valid active slot, proven-dead owner reaping occurs
-before comparing its transaction with the selected main meta. This precedence
-is required for a writer that dies after durable meta publication but before
-phase-5 lease update: its otherwise valid lease carries the previous
-transaction and is safely cleared as dead. If the owner is not proven dead, the
-transaction checks below apply. A state-2, CRC-invalid, or structurally invalid
-slot cannot use this exception because its claimed owner is not trusted.
-
-Every active reader transaction MUST be zero during registration or no greater
-than the currently selected main transaction. A larger value or a writer-lease
-transaction that does not match the selected generation is malformed and fails
-closed, except for the brief lease update performed under the operation lock
-immediately after durable publication.
-
-An immutable open is permitted only when the caller explicitly chooses
-immutable mode and the canonical sidecar path is absent. It never creates
-coordination. Because immutable readers intentionally hold no lifetime lock,
-the caller is responsible for never opening a live database through immutable
-mode and for certifying offline exclusivity before `InitializeLive`.
-
-### 15.6 Public open modes, handle concurrency, and access policy
-
-Phase 1 exposes three explicit constructors:
-
-- `OpenImmutableReader(path)` requires sidecar absence and exact committed file
-  length;
-- `OpenLiveReader(path, cancellation)` discovers fixed capacity from the bound
-  sidecar and registers; and
-- `OpenLiveWriter(path, transaction_resource_budget, cancellation)` claims the
-  dedicated lease and stores that one writer budget.
-
-None performs general validation or implicitly creates, repairs, resets,
-initializes, relocates, or switches mode. Main bootstrap is constant-time; live
-open additionally performs its mandatory O(reader-capacity) coordination scan.
-Snapshot is path-based and takes explicit `Immutable | Live` source mode,
-destination policy, operation/output budget, and cancellation; it does not
-borrow an already-open reader whose source protection cannot be released before
-destination locking.
-
-Reader point lookups and independent scans may run concurrently with no per-call
-active counter, mutex, or atomic. The caller MUST ensure Reader `Close` does not
-race any Reader call; Rust ownership enforces this where possible and Go/C state
-it as a lifetime rule. A persistent cursor, membership view, feed reference, or
-other child borrows its parent. Parent Close returns `HandleBusy` while a child
-exists and admits no new child after Close begins.
-
-Each writer, cursor, membership view, writer feed/membership reference, cleanup/
-residue handle, and mutable result is otherwise caller-serialized. The FFI
-boundary uses a fail-fast non-reentrant gate returning `HandleBusy` before
-mutation; it never silently waits. Different handles may run concurrently under
-the database locks. A source or sink callback MUST NOT reenter its originating
-handle.
-
-Every engine-created main, sidecar, private output, reservation, authorized
-scratch, and Windows GC artifact is **CreatorOnly**, independent of process
-umask or directory defaults. POSIX mode is exactly `0600`; inherited extended
-ACL grants are neutralized. Windows uses a protected non-inheriting DACL for the
-effective token user SID. The effective principal is captured at attempt start;
-the applied state is verified and synchronized through the retained descriptor
-before a canonical publication boundary. Failure to prove it is
-`AccessPolicyUnsupported` before that boundary.
-
-At attempt start the engine derives one creation-security commitment; callers
-cannot supply or override it. Its exact encoding is:
-
-```text
-SHA-256("IPR4SEC1" || security_kind:u16le ||
-        principal_length:u32le || principal_bytes || policy_bytes)
-```
-
-`security_kind == 1` is POSIX. `principal_bytes` is the effective UID converted
-losslessly to `u64le`; `policy_bytes` is the ASCII literal
-`POSIX-MODE-0600-NO-EXTENDED-ACL`. Verification requires that UID as owner,
-effective mode exactly `0600`, and no extended access/default ACL grant.
-`security_kind == 2` is Windows. `principal_bytes` is the effective token user
-SID in canonical binary SID encoding; `policy_bytes` is the ASCII literal
-`WINDOWS-PROTECTED-NONINHERITING-USER-FULL`. Verification requires that SID as
-owner and a protected, non-inheriting DACL granting full access only to that SID,
-with no other allow ACE. Other kinds, lossy UID/SID encodings, or noncanonical
-policy bytes are invalid.
-
-The kind and commitment are copied unchanged into every reservation, sidecar,
-GC envelope, destination-owning result, and preparation error created by the
-attempt. Thus a later resolver compares current semantic security state with the
-original principal/policy without redefining the creator as the resolver's
-current principal. An engine-created private inode must match the recorded
-commitment before it can cross a canonical namespace boundary. The commitment
-contains no secret and does not replace OS access control.
-
-Ordinary opens and files supplied to `InitializeLive` never enforce or mutate
-CreatorOnly. `ReplaceExisting` does not copy prior owner/group/mode/ACL/xattrs or
-security descriptor; the new inode is CreatorOnly. A later legitimate access
-change is reported independently as `CreatorOnly | ChangedOrUnproven`, never
-changes content classification, never permits republishing, and is never
-silently restored by a resolver. Applications deliberately widen or change
-ownership after factual publication, and for live use must update both main and
-sidecar consistently. Results and resolvers report main and coordination access
-separately as `CreatorOnly | ChangedOrUnproven | Unclassified`, with
-coordination additionally permitting `Absent`; one field never conflates an
-intentionally pre-existing main with an engine-created sidecar.
-
+An all-zero slot is inactive. A locked active slot has nonzero
+`selected_txn` and an exact bitwise complement. No PID, process-start token,
+thread ID, claim nonce, transition state, or slot checksum exists. Slot
+ownership is the lifetime byte-range lock, not the stale bytes.
+
+### 15.2 Lock ranges and ownership
+
+Every logical handle independently opens the main and sidecar. It does not
+duplicate another handle's locking descriptor.
+
+The protocol uses these one-byte advisory lock ranges:
+
+| File | Offset | Purpose |
+|---|---:|---|
+| main | `2^44` | live-handle lifetime lock |
+| sidecar | 0 | registration/publication gate |
+| sidecar | 1 | single-writer lease |
+| sidecar | reader slot offset | ownership of that reader slot |
+
+Every live reader and writer holds the main lifetime range shared for its full
+handle lifetime. Offline initialize/reset takes it exclusively. The writer
+holds the sidecar writer range exclusively for its full handle lifetime. Each
+reader holds its own slot range exclusively for its full handle lifetime.
+
+The operating system releasing a slot or writer lock after process death is
+the proof that its previous owner is gone. An available slot lock therefore
+authorizes clearing or replacing stale bytes. An unavailable slot lock means a
+reader is active; its record must be structurally valid. There is no PID
+liveness inference and no persistent interrupted slot-transition state.
+
+The gate is:
+
+- exclusive while a live open scans the table and claims a lease or slot;
+- shared while an established reader clears its slot;
+- exclusive during commit and reclamation from their reader scan through
+  metadata publication; and
+- exclusive for offline coordination transitions.
+
+This barrier prevents a writer from publishing between a reader's meta
+selection and slot claim. Transaction-zero registrations are unnecessary.
+
+Lock ranges may extend beyond end of file. Advisory locks do not authorize
+ordinary reads or writes to those byte offsets. Slot bytes are volatile
+coordination hints and are not synchronized for database durability; the held
+lock and gate establish their authority and visibility.
+
+### 15.3 Scanning, registration, and reclamation
+
+A complete reader-table scan is `O(capacity)`. For every slot, the scanner
+tries its exclusive slot lock:
+
+- success proves no reader owns it; any stale bytes are cleared, then the lock
+  is released;
+- contention proves a reader owns it; the scanner reads the fixed record and
+  requires a nonzero transaction, exact complement, and a transaction no newer
+  than the selected main generation.
+
+Malformed active state fails closed. The normal protocol never clears a slot
+whose ownership lock is unavailable.
+
+A live reader open:
+
+1. opens the main without following the final component;
+2. takes the shared main lifetime lock and verifies the retained path identity;
+3. performs constant-time live bootstrap to obtain the database ID;
+4. opens and validates the existing bound sidecar;
+5. takes the gate exclusively;
+6. rechecks both identities and the sidecar header;
+7. reselects the current main generation and scans all slots;
+8. locks one available slot and writes the selected transaction plus complement;
+9. rechecks both identities and releases the gate; and
+10. limits all reads to that pinned generation's committed page count.
+
+If no slot is available, open returns `ReaderCapacityExhausted`. A reader
+performs no full-file validation and no data-page checksum walk.
+
+A reader slot at transaction `R` protects every page retired by transaction
+`T` when `R < T`. Therefore a complete retirement transaction group is safe
+to reclaim exactly when no active slot contains a transaction below its
+`retired_by_txn`. Reclaim holds the gate exclusively from this scan through
+its own commit.
+
+A live writer open follows the same main/sidecar validation and full slot scan,
+then claims the writer range. It returns `WriterBusy` when that range is
+owned. After the claim, an aligned physical tail beyond the selected committed
+length is unpublished growth and is truncated and synchronized before the
+writer is returned. A short or unaligned file fails bootstrap.
+
+### 15.4 Commit barrier
+
+Ordinary data commit always retires every replaced committed page. It does not
+make reader-dependent allocation decisions.
+
+Commit preparation finishes before taking the gate. The writer then holds the
+gate exclusively while it:
+
+1. rechecks the retained main and sidecar path identities and ready header;
+2. reselects and requires the unchanged committed base generation;
+3. scans every reader slot for malformed active state;
+4. synchronizes all private non-meta pages and file growth;
+5. writes the complete alternate meta page;
+6. synchronizes that meta page; and
+7. releases the gate.
+
+Existing readers continue through retained positional-read descriptors. New
+readers cannot select a generation until publication finishes. A failure before
+the first alternate-meta write is `NotCommitted`; a failure from that first
+write until its successful synchronization is `OutcomeUnknown`; success is
+`Committed`. Exact database ID, transaction ID, and commit nonce identify the
+attempt.
+
+### 15.5 Creation and offline transitions
+
+`CreateLive(path, family, value_kind, value_tag, reader_capacity)` accepts no
+writer budget, ranges, feeds, or metadata. It creates only the canonical empty
+transaction-1 pair and returns no writer handle.
+
+Creation ordering is sidecar first:
+
+1. exclusively create the canonical sidecar in state 0, size it, write its
+   complete header, synchronize it, and synchronize the parent directory;
+2. exclusively create the canonical main, write identical empty transaction-1
+   meta pages, synchronize it, and synchronize the parent directory;
+3. rewrite and synchronize the sidecar header as state 1.
+
+Thus every crash-left intermediate state blocks immutable open and fails live
+open. `CreateResult` reports the database ID, creation commit nonce, reader
+capacity, `NotCreated | Created | OutcomeUnknown`, whether residue may remain,
+and an optional typed cause. Known-owned failure cleanup removes the main and
+synchronizes that removal before removing the sidecar.
+
+`InitializeLive` is an explicit offline conversion of an existing immutable
+main. The caller must first prove no unregistered immutable reader can remain.
+The operation takes the exclusive main lifetime lock, rechecks immutable
+identity and exact length, creates a state-0 sidecar bound to its database ID,
+and publishes state 1 only after all checks and synchronization succeed.
+
+`ResetLiveCoordination` is an explicit offline repair for a missing or corrupt
+sidecar. The caller must certify quiescence. It takes the exclusive main
+lifetime lock and must prove that no conforming live handle remains before
+publishing a newly identified empty sidecar. Ordinary open never performs this
+transition.
+
+Direct live rename/relink is unsupported in Phase 1. Relocation uses a compact
+immutable snapshot, explicit initialization at the destination, and an
+application-controlled switch.
+
+### 15.6 Handle lifetime, fork, and access policy
+
+Reader point lookups and independent cursors need no per-lookup mutex or active
+counter. The caller must not race handle close with another method. A cursor
+borrows its reader, so Rust prevents closing the parent first. Mutable writer
+methods and each cursor are caller-serialized.
+
+Every live handle caches its creator process ID. A forked copy rejects public
+operations with `ForkedHandle`. Its destructor only closes the child's
+descriptors. It never clears a slot, unlocks explicitly, truncates, aborts,
+commits, or changes a namespace. The parent remains the owner of the inherited
+open-description locks.
+
+Explicit reader close takes the gate shared, clears its slot, and releases the
+slot lock. Explicit healthy writer close aborts unpublished growth before
+releasing its descriptors. Automatic destructors perform no file or namespace
+I/O. Dropping a reader without explicit close is still safe: descriptor close
+releases the slot lock, and the next exclusive scan clears its stale bytes.
+
+Engine-created main and sidecar files use creator-only access. POSIX mode is
+exactly `0600`, independent of umask; Windows uses a protected descriptor for
+the effective user. Opens never silently change existing access. Every
+descriptor is close-on-exec or non-inheritable.
+
+Linux and macOS use native open-file-description byte-range locks. Windows uses
+equivalent per-handle byte-range locks. FreeBSD and any other target remain
+unsupported until an equivalent automatic-release primitive is proven and
+tested; implementations must not substitute process-associated record locks.
+
+Phase-1 constructors are explicit:
+
+- `OpenImmutableReader(path)` requires sidecar absence and exact committed
+  main length;
+- `OpenLiveReader(path)` requires and registers through the existing sidecar;
+- `OpenLiveWriter(path, transaction_budget)` claims the writer lease.
+
+None performs general validation, auto-detects mode, or implicitly creates,
+repairs, initializes, relocates, or resets coordination.
 ## 16. Public semantic operations
 
 ### 16.1 Common operation model and direct transactions
@@ -3331,7 +2393,7 @@ For a selected generation, validation checks at minimum:
 - blob and metadata graph length, order, cycles, CRCs, zlib framing, checksum,
   output length, and metadata limits;
 - free/reachable/retired page partition and bitmap summaries; and
-- retirement ordering, uniqueness, counts, and page lists.
+- retirement ordering, canonical extents, uniqueness, and counts.
 
 Validation MUST use checked arithmetic and caller-bounded memory. Under explicit
 nonzero external-scratch authority it MAY use bounded scratch to prove global
@@ -3745,7 +2807,7 @@ It streams a new ordinary v4 file containing only:
 - the exact decompressed metadata payload, recompressed as one valid v4 zlib
   stream when metadata is present.
 
-It excludes unpublished growth, free pages, retirement batches, unreachable
+It excludes unpublished growth, free pages, retirement extents, unreachable
 pages, deleted bytes, and the source sidecar. The output free and retirement
 roots and counts are zero.
 

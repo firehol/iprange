@@ -1,6 +1,5 @@
 //! Exact unsigned Phase-1 v4 wire constants and meta-page codec.
 
-#[cfg(test)]
 use crate::crc32c;
 
 pub const PAGE_SIZE: usize = 4096;
@@ -99,7 +98,7 @@ pub(crate) struct MetaV4 {
     pub(crate) membership_id_limit: u64,
     pub(crate) metadata_uncompressed_len: u64,
     pub(crate) metadata_compressed_len: u64,
-    pub(crate) retirement_batch_count: u64,
+    pub(crate) retired_extent_count: u64,
     pub(crate) range_root: u32,
     pub(crate) catalog_name_root: u32,
     pub(crate) catalog_index_root: u32,
@@ -110,10 +109,10 @@ pub(crate) struct MetaV4 {
     pub(crate) metadata_root: u32,
     pub(crate) free_bitmap_root: u32,
     pub(crate) retirement_root: u32,
+    pub(crate) allocator_reserve: [u32; 4],
 }
 
 impl MetaV4 {
-    #[cfg(test)]
     pub(crate) fn encode_into(&self, page: &mut [u8; PAGE_SIZE]) {
         page.fill(0);
         page[0..8].copy_from_slice(&META_MAGIC);
@@ -133,7 +132,7 @@ impl MetaV4 {
         put_u64(page, 112, self.membership_id_limit);
         put_u64(page, 120, self.metadata_uncompressed_len);
         put_u64(page, 128, self.metadata_compressed_len);
-        put_u64(page, 136, self.retirement_batch_count);
+        put_u64(page, 136, self.retired_extent_count);
         put_u32(page, 144, self.range_root);
         put_u32(page, 148, self.catalog_name_root);
         put_u32(page, 152, self.catalog_index_root);
@@ -144,6 +143,9 @@ impl MetaV4 {
         put_u32(page, 172, self.metadata_root);
         put_u32(page, 176, self.free_bitmap_root);
         put_u32(page, 180, self.retirement_root);
+        for (index, page_number) in self.allocator_reserve.iter().enumerate() {
+            put_u32(page, 184 + index * 4, *page_number);
+        }
         let crc = crc32c::crc32c_with_zeroed(page, META_CRC_OFFSET, 4).unwrap();
         put_u32(page, META_CRC_OFFSET, crc);
     }
@@ -170,7 +172,7 @@ impl MetaV4 {
             membership_id_limit: u64_le(page, 112),
             metadata_uncompressed_len: u64_le(page, 120),
             metadata_compressed_len: u64_le(page, 128),
-            retirement_batch_count: u64_le(page, 136),
+            retired_extent_count: u64_le(page, 136),
             range_root: u32_le(page, 144),
             catalog_name_root: u32_le(page, 148),
             catalog_index_root: u32_le(page, 152),
@@ -181,6 +183,12 @@ impl MetaV4 {
             metadata_root: u32_le(page, 172),
             free_bitmap_root: u32_le(page, 176),
             retirement_root: u32_le(page, 180),
+            allocator_reserve: [
+                u32_le(page, 184),
+                u32_le(page, 188),
+                u32_le(page, 192),
+                u32_le(page, 196),
+            ],
         })
     }
 
@@ -208,19 +216,16 @@ pub(crate) fn u64_le(bytes: &[u8], at: usize) -> u64 {
 }
 
 #[inline]
-#[cfg(test)]
 fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
     bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
 }
 
 #[inline]
-#[cfg(test)]
 fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
     bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 #[inline]
-#[cfg(test)]
 fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
     bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
 }

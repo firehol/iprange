@@ -16,6 +16,12 @@ pub(crate) trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
     /// Deserialize a key from the first [`WIDTH`](Self::WIDTH) bytes of `src`. Panics
     /// if `src` is shorter than `WIDTH`.
     fn read_le(src: &[u8]) -> Self;
+
+    /// Serialize the key into the first [`WIDTH`](Self::WIDTH) bytes.
+    fn write_le(self, output: &mut [u8]);
+
+    fn checked_next(self) -> Option<Self>;
+    fn checked_previous(self) -> Option<Self>;
 }
 
 /// An IPv4 address as a big-endian-valued `u32` (e.g. `192.0.2.1` = `0xC000_0201`),
@@ -51,6 +57,21 @@ impl IpKey for Ipv4Key {
     #[inline]
     fn read_le(src: &[u8]) -> Self {
         Ipv4Key(u32::from_le_bytes([src[0], src[1], src[2], src[3]]))
+    }
+
+    #[inline]
+    fn write_le(self, output: &mut [u8]) {
+        output[..4].copy_from_slice(&self.0.to_le_bytes());
+    }
+
+    #[inline]
+    fn checked_next(self) -> Option<Self> {
+        self.checked_next()
+    }
+
+    #[inline]
+    fn checked_previous(self) -> Option<Self> {
+        self.checked_previous()
     }
 }
 
@@ -136,6 +157,22 @@ impl IpKey for Ipv6Key {
             hi: u64::from_le_bytes(h),
             lo: u64::from_le_bytes(l),
         }
+    }
+
+    #[inline]
+    fn write_le(self, output: &mut [u8]) {
+        output[..8].copy_from_slice(&self.lo.to_le_bytes());
+        output[8..16].copy_from_slice(&self.hi.to_le_bytes());
+    }
+
+    #[inline]
+    fn checked_next(self) -> Option<Self> {
+        self.checked_next()
+    }
+
+    #[inline]
+    fn checked_previous(self) -> Option<Self> {
+        self.checked_previous()
     }
 }
 

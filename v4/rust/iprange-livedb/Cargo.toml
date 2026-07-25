@@ -9,4 +9,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+getrandom = { version = "=0.3.4", features = ["std"] }
 libc = "0.2.186"

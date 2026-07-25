@@ -1148,24 +1148,28 @@ Open decisions:
     heap according to file size or history.
 21. User decision (2026-07-16): use one strict external reader-table sidecar for
     live concurrent access. Its canonical name is the database path plus
-    `.readers`; it has a versioned fixed-layout header bound to the local database
+    `.readers`; it has a versioned fixed-layout header bound to the database
     identity and an explicit reader capacity. Open must reject symlinks,
     non-regular files, incompatible headers, incorrect size, and path replacement.
     Every handle and guard retains the originally opened file descriptor and never
     reopens the pathname. Registration, update, removal, stale reaping, and the
-    writer's oldest-reader scan use one defined cross-process locking protocol. A
-    reader registers transaction zero before selecting a meta page, then publishes
-    the selected transaction. Commit prevents new registration from the
-    oldest-reader snapshot through atomic meta publication, without blocking
-    already-registered reads. A slot is reaped only when the operating system
-    proves its owner is dead; uncertainty is treated as alive. Normal live open
-    never silently recreates a missing, malformed, or replaced table. Reset is an
-    explicit offline operation which requires proof that no live users remain.
+    writer's oldest-reader scan use one defined cross-process locking protocol.
+    Implementation clarification (2026-07-25): each reader holds an
+    open-description lock on its slot for its complete lifetime and the
+    registration/publication gate covers meta selection plus slot publication.
+    Therefore the selected transaction is written directly; no transaction-zero
+    state or PID liveness inference is needed. Lock availability is the operating
+    system's proof that stale slot bytes are unowned. Commit prevents new
+    registration through atomic meta publication without blocking established
+    reads. Normal live open never silently recreates a missing, malformed, or
+    replaced table. Reset is an explicit offline operation which requires proof
+    that no live users remain.
 22. User decision (2026-07-16): add an immutable, nonzero 128-bit random
     `database_id` to the v4 static identity. It is stored identically in both meta
     pages and in the live-reader sidecar header; disagreement is an O(1) bootstrap
-    rejection. The sidecar also records the local operating-system file identity
-    so independent filesystem copies cannot accidentally share coordination. A
+    rejection. Live handles retain and check the local operating-system
+    identities of the main and sidecar so path replacement cannot redirect an
+    established handle. A
     newly created database and a recovery output receive a new ID. A byte-for-byte
     copy preserves the logical database ID, while its local file identity and
     sidecar remain independent. Rename preserves the ID. This field is identity,
@@ -10009,6 +10013,94 @@ requirements are normative in the Pre-Implementation Gate above.
 - Validation passes on the current toolchain and Rust 1.74: 43 unit tests and
   one public integration test. Warnings-denied all-target Clippy and formatting
   pass.
+
+### 2026-07-25 - allocator and retirement simplification plan
+
+- The free bitmap covers at most `2^32` pages. Its fixed radix makes the maximum
+  root-to-leaf path four pages, so the meta now owns exactly four optional
+  allocator-reserve page numbers. A transaction uses these before aligned tail
+  growth when it first copies a committed bitmap path. This breaks allocator
+  self-reference without a fixed-point planner or file-sized workspace.
+- A reserve page is meta-owned scratch: it is neither reachable, free, nor
+  retired, and its existing bytes are irrelevant. Abort leaves the selected
+  meta authoritative, so an overwritten reserve remains safely reusable. A
+  successful commit removes consumed reserve numbers and replenishes empty
+  slots from aligned tail growth.
+- Every replaced committed page is inserted into one ordered retirement tree
+  under the target transaction, even when no old reader currently exists.
+  `Reclaim` alone moves complete safe generations into the free bitmap. This
+  gives one uniform commit path and deliberately permits a bounded reclamation
+  delay instead of performing reader-dependent allocator finalization inside
+  every data commit.
+- Retirement leaves store canonical contiguous page extents keyed by
+  `(retired_by_txn, first_page)`. They do not point to separate page-list blobs.
+  The transaction updates the retirement tree after other roots; its first COW
+  right-path copies are added to that same private tree, after which further
+  inserts update private pages in place. This removes blob planning, sorting,
+  deduplication workspaces, and recursive retirement-tree finalization.
+- These are internal physical choices. Reader visibility, explicit reclamation,
+  commit durability, public logical operations, and the absence of permanent
+  history are unchanged.
+
+### 2026-07-25 - live coordination simplification plan
+
+- The previous sidecar protocol stored process IDs, process-start tokens,
+  thread IDs, claim nonces, slot states, and per-slot checksums, then required
+  recovery state for interrupted slot writes. None is needed when the slot's
+  byte-range lock itself is held for the complete reader lifetime.
+- The replacement sidecar has one checksummed 4 KiB header followed by fixed
+  16-byte reader slots. A live reader holds an exclusive
+  open-file-description lock on its slot and stores only
+  `(selected_txn, bitwise_not_selected_txn)`. The operating system releases the
+  lock when the last descriptor for that open description closes. Therefore an
+  available slot lock is direct proof that no conforming reader owns the stale
+  bytes; no PID liveness inference or persistent slot transition is required.
+- One gate byte is shared while a reader selects a generation and claims or
+  releases its slot. Commit and reclamation hold it exclusively from their
+  reader scan through metadata publication. This makes transaction-zero
+  registrations unnecessary: a writer cannot observe the interval between
+  reader generation selection and slot publication.
+- A separate open-description byte lock is the writer lease. A shared lifetime
+  lock on the main file prevents live-to-immutable transition while a handle is
+  open. Every critical mutation rechecks the originally opened main and sidecar
+  identities against their canonical paths. Forked handles reject every
+  explicit operation; destructors only close descriptors and perform no I/O.
+- Linux and macOS expose the required open-file-description byte-range locks;
+  Windows exposes equivalent per-handle byte-range locks. A platform without
+  this automatic-release ownership model returns `Unsupported`; traditional
+  process-associated POSIX locks remain forbidden. FreeBSD support requires
+  separate proof of an equivalent primitive before final cross-platform
+  acceptance.
+- This is an internal physical simplification. It preserves explicit live
+  mode, caller-sized reader capacity, one writer, pinned reader generations,
+  fail-closed malformed active slots, crash-safe stale-slot reuse, and the
+  commit/reclamation barrier. The obsolete detailed sidecar wire section must
+  be replaced with this proven protocol before the SOW closes.
+
+### 2026-07-25 - direct live vertical slice
+
+- The obsolete reader-sidecar section was replaced by the exact compact
+  protocol: one checksummed 4 KiB header, 16-byte transaction/complement slots,
+  open-description slot ownership, one writer lock, and one
+  registration/publication gate. The normative section shrank by 1,270 lines.
+- Rust now exposes empty live creation, registered live readers, an exclusive
+  live writer, ordered direct IPv4/IPv6 assignment and clear, whole-draft
+  abort, and alternate-meta commit with
+  `NotCommitted | Committed | OutcomeUnknown`.
+- A public file-backed test proves two generations, exact nested overwrite
+  order, old-reader pinning, reader-capacity exhaustion/reuse, writer exclusion,
+  no-op/abort non-publication, and full-space IPv6 endpoints.
+- The active Rust module graph is 6,387 physical source lines including
+  embedded unit tests. Every active implementation file is at most 473 lines.
+  This is inside the directional size envelope, not a completion claim.
+- Current validation is green: 71 unit tests, four public integration tests,
+  warnings-denied all-target Clippy, formatting, `git diff --check`, Rust 1.74,
+  and the project SOW audit.
+- This milestone is Linux-proven only. macOS uses the same native lock API but
+  is not yet target-tested; Windows locking/opening is not implemented; FreeBSD
+  still lacks a proven equivalent primitive. Membership, JSON metadata,
+  reclamation, explicit validation/recovery, snapshots, crash injection,
+  update-ipsets-shaped benchmarks, and final complexity review remain pending.
 
 ### Historical adversarial-audit evidence
 

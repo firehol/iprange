@@ -24,7 +24,7 @@ pub(crate) fn read_page(
 }
 
 #[cfg(unix)]
-fn read_exact_at(file: &File, mut output: &mut [u8], mut offset: u64) -> Result<()> {
+pub(crate) fn read_exact_at(file: &File, mut output: &mut [u8], mut offset: u64) -> Result<()> {
     while !output.is_empty() {
         match file.read_at(output, offset) {
             Ok(0) => return Err(Error::Corrupt("page is physically truncated")),
@@ -42,9 +42,40 @@ fn read_exact_at(file: &File, mut output: &mut [u8], mut offset: u64) -> Result<
 }
 
 #[cfg(not(unix))]
-fn read_exact_at(_file: &File, _output: &mut [u8], _offset: u64) -> Result<()> {
+pub(crate) fn read_exact_at(_file: &File, _output: &mut [u8], _offset: u64) -> Result<()> {
     Err(Error::Unsupported(
         "safe positional file reads are not implemented on this platform",
+    ))
+}
+
+#[cfg(unix)]
+pub(crate) fn write_exact_at(file: &File, mut input: &[u8], mut offset: u64) -> Result<()> {
+    while !input.is_empty() {
+        match file.write_at(input, offset) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "positional page write made no progress",
+                )
+                .into())
+            }
+            Ok(written) => {
+                input = &input[written..];
+                offset = offset
+                    .checked_add(written as u64)
+                    .ok_or(Error::ArithmeticOverflow("page write offset"))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn write_exact_at(_file: &File, _input: &[u8], _offset: u64) -> Result<()> {
+    Err(Error::Unsupported(
+        "safe positional file writes are not implemented on this platform",
     ))
 }
 

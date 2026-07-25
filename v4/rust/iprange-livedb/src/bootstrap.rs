@@ -9,9 +9,7 @@ use crate::crc32c;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenMode {
     ImmutableReader,
-    #[cfg(test)]
     LiveReader,
-    #[cfg(test)]
     Writer,
 }
 
@@ -39,6 +37,7 @@ pub enum MetaProblem {
     CountInvariant,
     MetadataInvariant,
     RetirementInvariant,
+    AllocatorReserve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,31 +93,58 @@ pub(crate) fn open_meta_pages(
     physical_bytes: u64,
     mode: OpenMode,
 ) -> Result<Bootstrap, BootstrapError> {
+    require_geometry(physical_bytes)?;
+    let identities = [identity_readable(page0), identity_readable(page1)];
+    require_same_identity(identities)?;
+    let candidates = identities
+        .map(|identity| identity.and_then(|identity| bootstrap_valid(identity, physical_bytes)));
+    let (meta, selection, selected_meta_page) =
+        select_candidates(page0, page1, candidates[0], candidates[1])?;
+    finish_open(meta, selection, selected_meta_page, physical_bytes, mode)
+}
+
+fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {
     if physical_bytes < (2 * PAGE_SIZE) as u64 {
         return Err(BootstrapError::FileTooShort);
     }
     if physical_bytes % PAGE_SIZE as u64 != 0 {
         return Err(BootstrapError::FileUnaligned);
     }
-    let identity0 = identity_readable(page0);
-    let identity1 = identity_readable(page1);
+    Ok(())
+}
 
-    if let (Ok(left), Ok(right)) = (identity0, identity1) {
+fn require_same_identity(
+    identities: [Result<IdentityReadable, MetaProblem>; 2],
+) -> Result<(), BootstrapError> {
+    if let [Ok(left), Ok(right)] = identities {
         if !left.meta.static_identity_eq(&right.meta) {
             return Err(BootstrapError::StaticIdentityMismatch);
         }
     }
+    Ok(())
+}
 
-    let candidate0 = identity0.and_then(|identity| bootstrap_valid(identity, physical_bytes));
-    let candidate1 = identity1.and_then(|identity| bootstrap_valid(identity, physical_bytes));
+fn select_candidates(
+    page0: &[u8; PAGE_SIZE],
+    page1: &[u8; PAGE_SIZE],
+    candidate0: Result<MetaV4, MetaProblem>,
+    candidate1: Result<MetaV4, MetaProblem>,
+) -> Result<(MetaV4, MetaSelection, u8), BootstrapError> {
+    match (candidate0, candidate1) {
+        (Err(meta0), Err(meta1)) => Err(BootstrapError::NoBootstrapMeta { meta0, meta1 }),
+        (Ok(meta), Err(_)) => Ok((meta, MetaSelection::SoleMeta0, 0)),
+        (Err(_), Ok(meta)) => Ok((meta, MetaSelection::SoleMeta1, 1)),
+        (Ok(meta0), Ok(meta1)) => select_pair(page0, page1, meta0, meta1),
+    }
+}
 
-    let (meta, selection, selected_meta_page) = match (candidate0, candidate1) {
-        (Err(meta0), Err(meta1)) => return Err(BootstrapError::NoBootstrapMeta { meta0, meta1 }),
-        (Ok(meta), Err(_)) => (meta, MetaSelection::SoleMeta0, 0),
-        (Err(_), Ok(meta)) => (meta, MetaSelection::SoleMeta1, 1),
-        (Ok(meta0), Ok(meta1)) => select_pair(page0, page1, meta0, meta1)?,
-    };
-
+fn finish_open(
+    meta: MetaV4,
+    selection: MetaSelection,
+    selected_meta_page: u8,
+    physical_bytes: u64,
+    mode: OpenMode,
+) -> Result<Bootstrap, BootstrapError> {
     if mode != OpenMode::ImmutableReader && selection != MetaSelection::ProvenCurrent {
         return Err(BootstrapError::CurrentGenerationUnprovable);
     }
@@ -140,25 +166,8 @@ pub(crate) fn open_meta_pages(
 }
 
 fn identity_readable(page: &[u8; PAGE_SIZE]) -> Result<IdentityReadable, MetaProblem> {
-    if page[0..8] != META_MAGIC {
-        return Err(MetaProblem::Magic);
-    }
-    if u16_le(page, 8) != META_SIZE || page[10] != PAGE_SHIFT {
-        return Err(MetaProblem::FixedValue);
-    }
-    if page[13..16].iter().any(|&byte| byte != 0)
-        || page[184..252].iter().any(|&byte| byte != 0)
-        || page[256..].iter().any(|&byte| byte != 0)
-    {
-        return Err(MetaProblem::Reserved);
-    }
-    let stored_crc = u32_le(page, META_CRC_OFFSET);
-    if crc32c::crc32c_with_zeroed(page, META_CRC_OFFSET, 4) != Some(stored_crc) {
-        return Err(MetaProblem::Checksum);
-    }
-    if AddressFamily::from_wire(page[11]).is_none() || ValueKind::from_wire(page[12]).is_none() {
-        return Err(MetaProblem::FixedValue);
-    }
+    require_identity_header(page)?;
+    require_identity_body(page)?;
     let meta = MetaV4::decode_unchecked(page).ok_or(MetaProblem::Tag)?;
     if meta.database_id == [0; 16] {
         return Err(MetaProblem::DatabaseId);
@@ -166,8 +175,49 @@ fn identity_readable(page: &[u8; PAGE_SIZE]) -> Result<IdentityReadable, MetaPro
     Ok(IdentityReadable { meta })
 }
 
+fn require_identity_header(page: &[u8; PAGE_SIZE]) -> Result<(), MetaProblem> {
+    if page[0..8] != META_MAGIC {
+        return Err(MetaProblem::Magic);
+    }
+    if u16_le(page, 8) != META_SIZE || page[10] != PAGE_SHIFT {
+        return Err(MetaProblem::FixedValue);
+    }
+    if AddressFamily::from_wire(page[11]).is_none() || ValueKind::from_wire(page[12]).is_none() {
+        return Err(MetaProblem::FixedValue);
+    }
+    Ok(())
+}
+
+fn require_identity_body(page: &[u8; PAGE_SIZE]) -> Result<(), MetaProblem> {
+    let reserved = [&page[13..16], &page[200..252], &page[256..]];
+    if reserved
+        .into_iter()
+        .any(|bytes| bytes.iter().any(|&byte| byte != 0))
+    {
+        return Err(MetaProblem::Reserved);
+    }
+    let stored_crc = u32_le(page, META_CRC_OFFSET);
+    if crc32c::crc32c_with_zeroed(page, META_CRC_OFFSET, 4) != Some(stored_crc) {
+        return Err(MetaProblem::Checksum);
+    }
+    Ok(())
+}
+
 fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<MetaV4, MetaProblem> {
     let meta = identity.meta;
+    validate_generation(&meta, physical_bytes)?;
+    validate_roots(&meta)?;
+    validate_range_count(&meta)?;
+    validate_retirement_count(&meta)?;
+    validate_metadata(&meta)?;
+    match meta.value_kind {
+        ValueKind::Direct => validate_direct(&meta)?,
+        ValueKind::Membership => validate_membership(&meta)?,
+    }
+    Ok(meta)
+}
+
+fn validate_generation(meta: &MetaV4, physical_bytes: u64) -> Result<(), MetaProblem> {
     if meta.txn_id == 0 {
         return Err(MetaProblem::Transaction);
     }
@@ -184,12 +234,19 @@ fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<Me
     if physical_bytes < committed_bytes {
         return Err(MetaProblem::PhysicalLength);
     }
+    Ok(())
+}
 
-    for root in roots(&meta) {
+fn validate_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
+    for root in roots(meta) {
         if root != 0 && (root < 2 || u64::from(root) >= meta.page_count) {
             return Err(MetaProblem::RootBounds);
         }
     }
+    validate_allocator_reserve(meta)
+}
+
+fn validate_range_count(meta: &MetaV4) -> Result<(), MetaProblem> {
     if (meta.range_record_count == 0) != (meta.range_root == 0) {
         return Err(MetaProblem::CountInvariant);
     }
@@ -203,68 +260,107 @@ fn bootstrap_valid(identity: IdentityReadable, physical_bytes: u64) -> Result<Me
     if meta.range_record_count > maximum_range_records {
         return Err(MetaProblem::CountInvariant);
     }
-    if meta.retirement_batch_count > meta.txn_id - 1
-        || (meta.retirement_batch_count == 0) != (meta.retirement_root == 0)
+    Ok(())
+}
+
+fn validate_retirement_count(meta: &MetaV4) -> Result<(), MetaProblem> {
+    let maximum_retired_extents = (meta.page_count - 2)
+        .checked_mul(((PAGE_SIZE - 32) / (16 + 2)) as u64)
+        .ok_or(MetaProblem::RetirementInvariant)?;
+    if meta.retired_extent_count > maximum_retired_extents
+        || (meta.retired_extent_count == 0) != (meta.retirement_root == 0)
     {
         return Err(MetaProblem::RetirementInvariant);
     }
+    Ok(())
+}
+
+fn validate_metadata(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.metadata_root == 0 {
         if meta.metadata_uncompressed_len != 0 || meta.metadata_compressed_len != 0 {
             return Err(MetaProblem::MetadataInvariant);
         }
-    } else {
-        let blocks = core::cmp::max(
-            1,
-            meta.metadata_uncompressed_len
-                .checked_add(65_534)
-                .ok_or(MetaProblem::MetadataInvariant)?
-                / 65_535,
-        );
-        let maximum_zlib_bytes = meta
-            .metadata_uncompressed_len
-            .checked_add(
-                5u64.checked_mul(blocks)
-                    .ok_or(MetaProblem::MetadataInvariant)?,
-            )
-            .and_then(|value| value.checked_add(6))
-            .ok_or(MetaProblem::MetadataInvariant)?;
-        let maximum_compressed_bytes = (meta.page_count - 2)
-            .checked_mul(4048)
-            .ok_or(MetaProblem::MetadataInvariant)?;
-        if meta.metadata_compressed_len == 0
-            || meta.metadata_compressed_len > maximum_compressed_bytes
-            || meta.metadata_compressed_len > maximum_zlib_bytes
-            || meta.metadata_uncompressed_len > MAX_METADATA_UNCOMPRESSED
+        return Ok(());
+    }
+    if !metadata_lengths_valid(meta)? {
+        return Err(MetaProblem::MetadataInvariant);
+    }
+    Ok(())
+}
+
+fn metadata_lengths_valid(meta: &MetaV4) -> Result<bool, MetaProblem> {
+    let blocks = core::cmp::max(
+        1,
+        meta.metadata_uncompressed_len
+            .checked_add(65_534)
+            .ok_or(MetaProblem::MetadataInvariant)?
+            / 65_535,
+    );
+    let maximum_zlib_bytes = meta
+        .metadata_uncompressed_len
+        .checked_add(
+            5u64.checked_mul(blocks)
+                .ok_or(MetaProblem::MetadataInvariant)?,
+        )
+        .and_then(|value| value.checked_add(6))
+        .ok_or(MetaProblem::MetadataInvariant)?;
+    let maximum_compressed_bytes = (meta.page_count - 2)
+        .checked_mul(4048)
+        .ok_or(MetaProblem::MetadataInvariant)?;
+    Ok(meta.metadata_compressed_len != 0
+        && meta.metadata_compressed_len <= maximum_compressed_bytes
+        && meta.metadata_compressed_len <= maximum_zlib_bytes
+        && meta.metadata_uncompressed_len <= MAX_METADATA_UNCOMPRESSED)
+}
+
+fn validate_allocator_reserve(meta: &MetaV4) -> Result<(), MetaProblem> {
+    let roots = roots(meta);
+    for (index, page_number) in meta.allocator_reserve.iter().copied().enumerate() {
+        if page_number == 0 {
+            continue;
+        }
+        if page_number < 2
+            || u64::from(page_number) >= meta.page_count
+            || roots.contains(&page_number)
+            || meta.allocator_reserve[..index].contains(&page_number)
         {
-            return Err(MetaProblem::MetadataInvariant);
+            return Err(MetaProblem::AllocatorReserve);
         }
     }
-
-    match meta.value_kind {
-        ValueKind::Direct => validate_direct(&meta)?,
-        ValueKind::Membership => validate_membership(&meta)?,
-    }
-    Ok(meta)
+    Ok(())
 }
 
 fn validate_direct(meta: &MetaV4) -> Result<(), MetaProblem> {
-    if meta.active_feed_count != 0
-        || meta.feed_index_limit != 0
-        || meta.membership_entry_count != 0
-        || meta.membership_id_limit != 0
-        || meta.catalog_name_root != 0
-        || meta.catalog_index_root != 0
-        || meta.feed_used_root != 0
-        || meta.membership_id_root != 0
-        || meta.membership_hash_root != 0
-        || meta.membership_used_root != 0
-    {
+    let fields = (
+        meta.active_feed_count,
+        meta.feed_index_limit,
+        meta.membership_entry_count,
+        meta.membership_id_limit,
+        meta.catalog_name_root,
+        meta.catalog_index_root,
+        meta.feed_used_root,
+        meta.membership_id_root,
+        meta.membership_hash_root,
+        meta.membership_used_root,
+    );
+    if fields != (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) {
         return Err(MetaProblem::KindInvariant);
     }
     Ok(())
 }
 
 fn validate_membership(meta: &MetaV4) -> Result<(), MetaProblem> {
+    validate_membership_counts(meta)?;
+    validate_catalog_roots(meta)?;
+    validate_membership_roots(meta)
+}
+
+fn validate_membership_counts(meta: &MetaV4) -> Result<(), MetaProblem> {
+    validate_membership_limits(meta)?;
+    validate_membership_presence(meta)
+}
+
+fn validate_membership_limits(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.feed_index_limit > MAX_PAGE_COUNT
         || meta.active_feed_count > meta.feed_index_limit
         || meta.membership_entry_count > u64::from(u32::MAX)
@@ -274,6 +370,10 @@ fn validate_membership(meta: &MetaV4) -> Result<(), MetaProblem> {
     {
         return Err(MetaProblem::CountInvariant);
     }
+    Ok(())
+}
+
+fn validate_membership_presence(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.active_feed_count == 0
         && (meta.membership_entry_count != 0 || meta.range_record_count != 0)
     {
@@ -282,6 +382,10 @@ fn validate_membership(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.membership_entry_count == 0 && meta.range_record_count != 0 {
         return Err(MetaProblem::CountInvariant);
     }
+    Ok(())
+}
+
+fn validate_catalog_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.active_feed_count == 0 {
         if meta.catalog_name_root != 0 || meta.catalog_index_root != 0 || meta.feed_used_root != 0 {
             return Err(MetaProblem::KindInvariant);
@@ -292,6 +396,10 @@ fn validate_membership(meta: &MetaV4) -> Result<(), MetaProblem> {
     {
         return Err(MetaProblem::KindInvariant);
     }
+    Ok(())
+}
+
+fn validate_membership_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
     if meta.membership_entry_count == 0 {
         if meta.membership_id_root != 0
             || meta.membership_hash_root != 0

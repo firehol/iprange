@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::bootstrap;
-use crate::contract::{AddressFamily, MetaV4};
+use crate::contract::{AddressFamily, MetaV4, PAGE_MAGIC};
 use crate::database::ImmutableReader;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_cursor::{DirectRange, RangeDirection};
+use crate::slotted_page::HEADER_SIZE;
 use crate::test_alloc::count_thread_allocations;
 use std::fs;
 use std::path::PathBuf;

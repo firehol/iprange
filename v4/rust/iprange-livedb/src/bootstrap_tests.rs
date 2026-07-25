@@ -20,7 +20,7 @@ pub(crate) fn empty_direct_meta(txn_id: u64) -> MetaV4 {
         membership_id_limit: 0,
         metadata_uncompressed_len: 0,
         metadata_compressed_len: 0,
-        retirement_batch_count: 0,
+        retired_extent_count: 0,
         range_root: 0,
         catalog_name_root: 0,
         catalog_index_root: 0,
@@ -31,6 +31,7 @@ pub(crate) fn empty_direct_meta(txn_id: u64) -> MetaV4 {
         metadata_root: 0,
         free_bitmap_root: 0,
         retirement_root: 0,
+        allocator_reserve: [0; 4],
     }
 }
 
@@ -231,7 +232,7 @@ fn identity_field_matrix_fails_closed() {
     assert_identity_problem(11, 5, MetaProblem::FixedValue);
     assert_identity_problem(12, 3, MetaProblem::FixedValue);
     assert_identity_problem(13, 1, MetaProblem::Reserved);
-    assert_identity_problem(184, 1, MetaProblem::Reserved);
+    assert_identity_problem(200, 1, MetaProblem::Reserved);
     assert_identity_problem(256, 1, MetaProblem::Reserved);
 
     let mut malformed_tag = image(empty_direct_meta(1), empty_direct_meta(1));
@@ -304,8 +305,13 @@ fn dynamic_bootstrap_field_matrix_fails_closed() {
         },
         {
             let mut meta = empty_direct_meta(1);
-            meta.retirement_batch_count = 1;
+            meta.retired_extent_count = 1;
             (meta, MetaProblem::RetirementInvariant)
+        },
+        {
+            let mut meta = empty_direct_meta(1);
+            meta.allocator_reserve[0] = 1;
+            (meta, MetaProblem::AllocatorReserve)
         },
     ];
     for (meta, expected) in cases {
@@ -327,6 +333,41 @@ fn dynamic_bootstrap_field_matrix_fails_closed() {
             meta1: MetaProblem::PhysicalLength,
         })
     );
+}
+
+#[test]
+fn allocator_reserve_is_bounded_unique_and_not_a_root() {
+    let mut valid = empty_direct_meta(1);
+    valid.page_count = 3;
+    valid.allocator_reserve[0] = 2;
+    let mut bytes = image(valid, valid);
+    bytes.resize(3 * PAGE_SIZE, 0);
+    assert!(open(&bytes, OpenMode::ImmutableReader).is_ok());
+
+    let mut duplicate = valid;
+    duplicate.allocator_reserve[1] = 2;
+    let mut bytes = image(duplicate, duplicate);
+    bytes.resize(3 * PAGE_SIZE, 0);
+    assert!(matches!(
+        open(&bytes, OpenMode::ImmutableReader),
+        Err(BootstrapError::NoBootstrapMeta {
+            meta0: MetaProblem::AllocatorReserve,
+            meta1: MetaProblem::AllocatorReserve,
+        })
+    ));
+
+    let mut root_alias = valid;
+    root_alias.range_root = 2;
+    root_alias.range_record_count = 1;
+    let mut bytes = image(root_alias, root_alias);
+    bytes.resize(3 * PAGE_SIZE, 0);
+    assert!(matches!(
+        open(&bytes, OpenMode::ImmutableReader),
+        Err(BootstrapError::NoBootstrapMeta {
+            meta0: MetaProblem::AllocatorReserve,
+            meta1: MetaProblem::AllocatorReserve,
+        })
+    ));
 }
 
 #[test]

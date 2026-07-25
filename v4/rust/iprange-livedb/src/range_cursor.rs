@@ -5,7 +5,7 @@ use std::fs::File;
 use std::marker::PhantomData;
 
 use crate::contract::{MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::file_io;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::range_tree::{self, Header};
@@ -51,11 +51,17 @@ struct Cursor<'a, K> {
     index: usize,
     needs_advance: bool,
     finished: bool,
+    owner_pid: Option<u32>,
     key: PhantomData<K>,
 }
 
 impl<'a, K: IpKey> Cursor<'a, K> {
-    fn new(file: &'a File, meta: &MetaV4, direction: RangeDirection) -> Result<Self> {
+    fn new(
+        file: &'a File,
+        meta: &MetaV4,
+        direction: RangeDirection,
+        owner_pid: Option<u32>,
+    ) -> Result<Self> {
         let mut cursor = Self {
             file,
             meta: *meta,
@@ -67,6 +73,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
             index: 0,
             needs_advance: false,
             finished: meta.range_root == 0,
+            owner_pid,
             key: PhantomData,
         };
         if !cursor.finished {
@@ -76,6 +83,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
     }
 
     fn seek(&mut self, target: K) -> Result<()> {
+        self.require_owner()?;
         self.depth = 0;
         self.needs_advance = false;
         self.finished = self.meta.range_root == 0;
@@ -143,6 +151,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
     }
 
     fn next(&mut self) -> Result<Option<DirectRange<K>>> {
+        self.require_owner()?;
         if self.finished {
             return Ok(None);
         }
@@ -273,6 +282,13 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         self.needs_advance = false;
         self.finished = false;
     }
+
+    fn require_owner(&self) -> Result<()> {
+        if self.owner_pid.is_some_and(|pid| pid != std::process::id()) {
+            return Err(Error::ForkedHandle);
+        }
+        Ok(())
+    }
 }
 
 macro_rules! public_cursor {
@@ -288,7 +304,18 @@ macro_rules! public_cursor {
                 direction: RangeDirection,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: Cursor::new(file, meta, direction)?,
+                    inner: Cursor::new(file, meta, direction, None)?,
+                })
+            }
+
+            pub(crate) fn new_live(
+                file: &'a File,
+                meta: &MetaV4,
+                direction: RangeDirection,
+                owner_pid: u32,
+            ) -> Result<Self> {
+                Ok(Self {
+                    inner: Cursor::new(file, meta, direction, Some(owner_pid))?,
                 })
             }
 
