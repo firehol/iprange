@@ -13,6 +13,7 @@ mod shrink;
 use page::{page_has_candidate, parse, stamp, Header, BRANCH_CHILDREN, LEAF_BITS, MAX_LEVEL};
 
 pub(crate) use mutation::{clear, set, take_lowest};
+pub(crate) use search::read_words;
 pub(crate) use shrink::membership as shrink_membership;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -6,7 +6,9 @@ use crate::fixed_tree::Store;
 use crate::slotted_page::HEADER_SIZE;
 
 use super::page::{branch_child, first_summary, lowest_leaf, parse};
-use super::{add_child_base, child_index, coverage, leaf_word_index, required_level, Kind};
+use super::{
+    add_child_base, child_index, coverage, leaf_word_index, required_level, Kind, LEAF_BITS,
+};
 
 pub(super) fn find_lowest<S: Store>(
     store: &S,
@@ -137,6 +139,125 @@ pub(super) fn contains<S: Store>(
         page_number = next.0;
         base = next.1;
         level -= 1;
+    }
+}
+
+pub(crate) fn read_words<S: Store>(
+    store: &S,
+    root: u32,
+    limit: u64,
+    kind: Kind,
+    start: u32,
+    output: &mut [u64],
+) -> Result<()> {
+    let end = require_word_range(limit, start, output.len())?;
+    output.fill(0);
+    required_level(limit)?;
+    if root == 0 || output.is_empty() {
+        return Ok(());
+    }
+    copy_words(store, root, limit, kind, start, end, output)?;
+    mask_last_word(start, limit, output);
+    Ok(())
+}
+
+fn copy_words<S: Store>(
+    store: &S,
+    root: u32,
+    limit: u64,
+    kind: Kind,
+    start: u32,
+    end: u64,
+    output: &mut [u64],
+) -> Result<()> {
+    let mut at = start;
+    while u64::from(at) < end {
+        let base = u64::from(at) * 64;
+        let leaf_base = base / LEAF_BITS * LEAF_BITS;
+        let within = ((base - leaf_base) / 64) as usize;
+        let count = output
+            .len()
+            .saturating_sub((at - start) as usize)
+            .min(LEAF_BITS as usize / 64 - within);
+        if let Some(page) = find_leaf(store, root, limit, kind, base, leaf_base)? {
+            copy_leaf_words(&page, within, &mut output[(at - start) as usize..][..count]);
+        }
+        at = at
+            .checked_add(count as u32)
+            .ok_or(Error::ArithmeticOverflow("used bitmap word range"))?;
+    }
+    Ok(())
+}
+
+fn require_word_range(limit: u64, start: u32, count: usize) -> Result<u64> {
+    let end = u64::from(start)
+        .checked_add(count as u64)
+        .ok_or(Error::ArithmeticOverflow("used bitmap word range"))?;
+    let word_limit = limit
+        .checked_add(63)
+        .ok_or(Error::ArithmeticOverflow("used bitmap word limit"))?
+        / 64;
+    if end > word_limit {
+        Err(Error::InvalidArgument(
+            "used bitmap word range exceeds its limit",
+        ))
+    } else {
+        Ok(end)
+    }
+}
+
+fn find_leaf<S: Store>(
+    store: &S,
+    root: u32,
+    limit: u64,
+    kind: Kind,
+    base: u64,
+    leaf_base: u64,
+) -> Result<Option<[u8; PAGE_SIZE]>> {
+    let bit = u32::try_from(base).map_err(|_| Error::Corrupt("used bitmap word is invalid"))?;
+    let mut page_number = root;
+    let mut level = required_level(limit)?;
+    let mut page_base = 0u64;
+    let mut page = [0; PAGE_SIZE];
+    loop {
+        store.read(page_number, &mut page)?;
+        let header = parse(
+            &page,
+            store.target_txn(),
+            kind,
+            Some(level),
+            page_base,
+            limit,
+        )?;
+        if level == 0 {
+            if page_base != leaf_base {
+                return Err(Error::Corrupt("used bitmap leaf coverage is invalid"));
+            }
+            return Ok(Some(page));
+        }
+        let Some(next) = exact_child(store, &page, &header, bit, level, page_base)? else {
+            return Ok(None);
+        };
+        page_number = next.0;
+        page_base = next.1;
+        level -= 1;
+    }
+}
+
+fn copy_leaf_words(page: &[u8; PAGE_SIZE], start: usize, output: &mut [u64]) {
+    for (offset, word) in output.iter_mut().enumerate() {
+        *word = u64_le(page, HEADER_SIZE + (start + offset) * 8);
+    }
+}
+
+fn mask_last_word(start: u32, limit: u64, output: &mut [u64]) {
+    let tail = limit % 64;
+    if tail == 0 || output.is_empty() {
+        return;
+    }
+    let last = (limit / 64) as u32;
+    if last >= start && u64::from(last - start) < output.len() as u64 {
+        output[(last - start) as usize] &= (1u64 << tail) - 1;
     }
 }
 

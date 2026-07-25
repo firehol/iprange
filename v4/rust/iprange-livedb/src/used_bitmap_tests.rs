@@ -152,6 +152,39 @@ fn membership_zero_is_never_an_allocation_candidate() {
 }
 
 #[test]
+fn sequential_word_reads_cross_sparse_leaf_boundaries() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let limit = 32_002;
+    for bit in [3, 31_999, 32_001] {
+        set(
+            &mut store,
+            &mut root,
+            limit,
+            Kind::Feed,
+            bit,
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+
+    let mut words = vec![u64::MAX; 501];
+    read_words(&store, root, limit, Kind::Feed, 0, &mut words).unwrap();
+    assert_eq!(words[0], 1 << 3);
+    assert!(words[1..499].iter().all(|&word| word == 0));
+    assert_eq!(words[499], 1 << 63);
+    assert_eq!(words[500], 1 << 1);
+
+    let mut crossing = [0; 2];
+    read_words(&store, root, limit, Kind::Feed, 499, &mut crossing).unwrap();
+    assert_eq!(crossing, [1 << 63, 1 << 1]);
+    assert!(matches!(
+        read_words(&store, root, limit, Kind::Feed, 500, &mut [0; 2]),
+        Err(Error::InvalidArgument(_))
+    ));
+}
+
+#[test]
 fn clear_of_final_bit_omits_the_root() {
     let mut store = MemoryStore::new();
     let mut root = 0;

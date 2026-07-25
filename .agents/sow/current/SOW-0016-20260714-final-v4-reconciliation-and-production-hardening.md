@@ -10873,6 +10873,72 @@ requirements are normative in the Pre-Implementation Gate above.
   bounded recovery scratch, snapshot publication, update-ipsets-shaped
   benchmarks, and the final simplification pass remain pending.
 
+### 2026-07-25 - shared immutable-output writer plan
+
+- Recovery and compact snapshots both produce one ordinary immutable v4 file.
+  They will share one append-only output writer over the existing page codecs,
+  trees, metadata chain, membership interning, and checksums. There will be no
+  second format, temporary sorting database, or duplicate tree implementation.
+- The writer owns only the private inode that can become the final result. It
+  allocates pages sequentially, writes every non-meta page with the requested
+  output transaction, enforces `max_output_pages` before allocation, and
+  finalizes two identical metadata pages. Free, retirement, allocator-reserve,
+  and unpublished state remain absent.
+- Callers supply already ordered, accepted logical ranges. The writer rejects
+  reversed, overlapping, out-of-order, or noncanonical adjacent records instead
+  of silently applying last-wins mutation semantics. This keeps source
+  traversal/recovery policy separate from deterministic output construction.
+- Exact catalog `(name,index)` pairs and the non-shrinking feed-index limit are
+  preserved. Membership words remain streamed in fixed batches; the writer
+  verifies that every set bit names an accepted active feed, interns equal
+  bitmaps, rebuilds IDs/hash/used indexes, and recomputes range-record
+  refcounts. A legal maximum-width membership is never materialized.
+- Metadata uses the existing bounded compressor and page-chain writer. The
+  caller's heap budget covers the complete bounded metadata value; no
+  per-range heap object or scratch file is introduced.
+- This internal milestone stops at a complete private immutable file. Source
+  pinning, section-20 publication/resolution, recovery damage traversal/reporting,
+  and snapshot public APIs remain separate later slices. Permanent tests will
+  reopen and explicitly validate direct and membership outputs, cover exact
+  tuple/metadata preservation, page-budget refusal, malformed ordered input,
+  membership deduplication/refcounts, and zero allocation per streamed record
+  after setup.
+
+### 2026-07-25 - shared immutable-output writer implementation
+
+- One private append-only builder now constructs both direct and membership v4
+  files from ordered accepted records. It reuses the existing range/catalog/
+  membership/metadata codecs, allocates only sequential final pages, enforces
+  the output-page budget before allocation, emits no free/retirement/reserve
+  state, and writes two identical complete metadata pages only at finish.
+- Any construction error permanently poisons that private output; it cannot
+  later be finished or published. Reversed, overlapping, out-of-order, and
+  adjacent-equal ranges fail explicitly rather than invoking rewrite behavior.
+- Membership input remains caller-streamed. Fixed-size batch reads compare every
+  supplied bit with the output feed-used bitmap, including across sparse bitmap
+  leaf boundaries. Equal memberships are interned, large memberships go
+  directly into final blob pages, and exact range-record refcounts are applied
+  without a temporary delta tree or materialized maximum bitmap.
+- Permanent tests cover empty direct and membership outputs, exact tuple and
+  metadata preservation including present-empty metadata, full-space IPv6,
+  sparse memberships crossing the 32,000-bit leaf boundary, inactive/trailing
+  membership rejection, dictionary deduplication and refcounts, page and heap
+  budget refusal, permanent failure state, malformed range order, a validated
+  2,000-range multi-level output, and zero warmed-path heap allocations for
+  both direct and streamed-membership records.
+- Current and Rust 1.74 all-feature suites each pass 196 tests with one
+  intentionally ignored subprocess entry point. Warnings-denied all-target
+  Clippy, benchmark compilation, formatting, diff checks, and changed-module
+  complexity checks pass. The exact compiled production graph is 94 files and
+  23,029 physical lines with zero functions above cyclomatic complexity 9.
+  The builder is 472 lines and its membership helper is 95 lines. The total
+  implementation remains far above the directional size goal and still
+  requires the final simplification pass.
+- This milestone deliberately ends with a private finished inode. Durable
+  fail-if-exists publication is the next dependency; source pinning, recovery
+  policy/reporting, and compact-snapshot traversal will use this one builder
+  rather than introduce another output engine.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

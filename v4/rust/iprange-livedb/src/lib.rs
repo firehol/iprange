@@ -26,6 +26,9 @@ mod file_io;
 mod fixed_tree;
 mod free_bitmap;
 pub mod key;
+// Recovery and compact snapshots wire this tested private builder in later slices.
+#[allow(dead_code)]
+mod immutable_output;
 mod live_lock;
 mod live_reader;
 mod live_sidecar;
