@@ -3,6 +3,7 @@
 use super::*;
 use crate::bootstrap::tests::empty_direct_meta;
 use crate::database::ImmutableReader;
+use crate::file_io;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

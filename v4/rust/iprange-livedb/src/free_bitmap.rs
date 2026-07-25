@@ -1,9 +1,14 @@
 //! Hierarchical free-page bitmap with bounded four-page paths.
 
+#[path = "free_bitmap/mutation.rs"]
+mod mutation;
+
+pub(crate) use mutation::{ensure_level, set_free, take_lowest};
+
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::fixed_tree::{RetiredPages, Store};
+use crate::fixed_tree::Store;
 use crate::slotted_page::{put_u16, put_u32, put_u64, HEADER_SIZE};
 
 const BITMAP_BRANCH: u8 = 14;
@@ -29,262 +34,24 @@ struct Header {
     level: u16,
 }
 
-#[derive(Clone, Copy)]
-struct Frame {
-    page_number: u32,
-    child_index: usize,
-    level: u16,
-}
-
-const EMPTY_FRAME: Frame = Frame {
-    page_number: 0,
-    child_index: 0,
-    level: 0,
-};
-
-pub(crate) fn set_free<S: BitmapStore>(
-    store: &mut S,
-    root: &mut u32,
-    limit: u64,
-    bit: u32,
-    retired: &mut RetiredPages,
-) -> Result<()> {
-    require_bit(limit, bit)?;
-    let required = required_level(limit)?;
-    if *root == 0 {
-        *root = new_subtree(store, required, bit)?;
-        return Ok(());
-    }
-    grow_root(store, root, required)?;
-
-    let (mut page_number, mut page, mut header) = touch(store, *root, required, retired)?;
-    *root = page_number;
-    while header.level > 0 {
-        let index = child_index(bit, header.level)?;
-        let child = branch_child(&page, &header, index, store.page_limit())?;
-        if child == 0 {
-            let new_child = new_subtree(store, header.level - 1, bit)?;
-            set_branch_child(&mut page, index, new_child)?;
-            stamp(&mut page)?;
-            store.write(page_number, &page)?;
-            return Ok(());
-        }
-        let (private_child, child_page, child_header) =
-            touch(store, child, header.level - 1, retired)?;
-        if private_child != child {
-            set_branch_child(&mut page, index, private_child)?;
-            stamp(&mut page)?;
-            store.write(page_number, &page)?;
-        }
-        page_number = private_child;
-        page = child_page;
-        header = child_header;
-    }
-
-    let word_index = leaf_word_index(bit);
-    let mask = 1u64 << (u64::from(bit) % 64);
-    let at = HEADER_SIZE + word_index * 8;
-    let word = u64_le(&page, at);
-    if word & mask != 0 {
-        return Err(Error::Corrupt("page is already free"));
-    }
-    put_u64(&mut page, at, word | mask);
-    stamp(&mut page)?;
-    store.write(page_number, &page)
-}
-
-pub(crate) fn take_lowest<S: BitmapStore>(
-    store: &mut S,
-    root: &mut u32,
-    limit: u64,
-    retired: &mut RetiredPages,
-) -> Result<Option<u32>> {
-    if *root == 0 {
-        return Ok(None);
-    }
-    let required = required_level(limit)?;
-    let (mut page_number, mut page, mut header) = touch(store, *root, required, retired)?;
-    *root = page_number;
-    let mut path = [EMPTY_FRAME; (MAX_BITMAP_LEVEL + 1) as usize];
-    let mut depth = 0;
-    let mut base = 0u64;
-
-    while header.level > 0 {
-        let index = first_summary(&page).ok_or(Error::Corrupt("free summary is empty"))?;
-        path[depth] = Frame {
-            page_number,
-            child_index: index,
-            level: header.level,
-        };
-        depth += 1;
-        let child_coverage = coverage(header.level - 1)?;
-        base = base
-            .checked_add(
-                child_coverage
-                    .checked_mul(index as u64)
-                    .ok_or(Error::Corrupt("free bitmap coverage overflow"))?,
-            )
-            .ok_or(Error::Corrupt("free bitmap coverage overflow"))?;
-        let child = branch_child(&page, &header, index, store.page_limit())?;
-        if child == 0 {
-            return Err(Error::Corrupt("free summary names an absent child"));
-        }
-        let (private_child, child_page, child_header) =
-            touch(store, child, header.level - 1, retired)?;
-        if private_child != child {
-            set_branch_child(&mut page, index, private_child)?;
-            stamp(&mut page)?;
-            store.write(page_number, &page)?;
-        }
-        page_number = private_child;
-        page = child_page;
-        header = child_header;
-    }
-
-    let (word_index, word) = first_leaf_word(&page).ok_or(Error::Corrupt("free leaf is empty"))?;
-    let bit_in_word = word.trailing_zeros() as u64;
-    let selected = base
-        .checked_add((word_index as u64) * 64 + bit_in_word)
-        .ok_or(Error::Corrupt("free page number overflow"))?;
-    if selected < 2 || selected >= limit || selected >= (1u64 << 32) {
-        return Err(Error::Corrupt("free bit is outside allocatable bounds"));
-    }
-    let selected = selected as u32;
-    if selected == page_number
-        || path[..depth]
-            .iter()
-            .any(|frame| frame.page_number == selected)
-        || store.allocation_forbidden(selected)
-    {
-        return Err(Error::Corrupt("free bit names protected allocator state"));
-    }
-
-    let at = HEADER_SIZE + word_index * 8;
-    put_u64(&mut page, at, word & !(1u64 << bit_in_word));
-    if first_leaf_word(&page).is_some() {
-        stamp(&mut page)?;
-        store.write(page_number, &page)?;
-        return Ok(Some(selected));
-    }
-
-    store.discard_private(page_number)?;
-    while depth > 0 {
-        depth -= 1;
-        let frame = path[depth];
-        let mut parent = [0; PAGE_SIZE];
-        store.read(frame.page_number, &mut parent)?;
-        parse(&parent, store.target_txn(), Some(frame.level), false)?;
-        set_branch_child(&mut parent, frame.child_index, 0)?;
-        if first_summary(&parent).is_some() {
-            stamp(&mut parent)?;
-            store.write(frame.page_number, &parent)?;
-            return Ok(Some(selected));
-        }
-        store.discard_private(frame.page_number)?;
-    }
-    *root = 0;
-    Ok(Some(selected))
-}
-
-pub(crate) fn ensure_level<S: BitmapStore>(
-    store: &mut S,
-    root: &mut u32,
-    limit: u64,
-) -> Result<()> {
-    if *root == 0 {
-        return Ok(());
-    }
-    loop {
-        let required = required_level(limit.max(store.page_limit()))?;
-        let before = store.page_limit();
-        grow_root(store, root, required)?;
-        if store.page_limit() == before {
-            return Ok(());
-        }
-    }
-}
-
-fn touch<S: BitmapStore>(
-    store: &mut S,
-    page_number: u32,
-    expected_level: u16,
-    retired: &mut RetiredPages,
-) -> Result<(u32, [u8; PAGE_SIZE], Header)> {
-    let mut page = [0; PAGE_SIZE];
-    store.read(page_number, &mut page)?;
-    let born_txn = u64_le(&page, 8);
-    let header = parse(
-        &page,
-        store.target_txn(),
-        Some(expected_level),
-        born_txn != store.target_txn(),
-    )?;
-    if born_txn == store.target_txn() {
-        return Ok((page_number, page, header));
-    }
-    let private = store.allocate_bitmap_page()?;
-    put_u64(&mut page, 8, store.target_txn());
-    stamp(&mut page)?;
-    store.write(private, &page)?;
-    retired.push(page_number)?;
-    Ok((private, page, header))
-}
-
-fn grow_root<S: BitmapStore>(store: &mut S, root: &mut u32, required: u16) -> Result<()> {
-    let mut page = [0; PAGE_SIZE];
-    store.read(*root, &mut page)?;
-    let mut level = parse(&page, store.target_txn(), None, false)?.level;
-    if level > required {
-        return Err(Error::Corrupt("free bitmap root level is too high"));
-    }
-    while level < required {
-        let parent = store.allocate_bitmap_page()?;
-        let mut page = new_branch(store.target_txn(), level + 1);
-        set_branch_child(&mut page, 0, *root)?;
-        stamp(&mut page)?;
-        store.write(parent, &page)?;
-        *root = parent;
-        level += 1;
-    }
-    Ok(())
-}
-
-fn new_subtree<S: BitmapStore>(store: &mut S, level: u16, bit: u32) -> Result<u32> {
-    if level == 0 {
-        let page_number = store.allocate_bitmap_page()?;
-        let mut page = new_leaf(store.target_txn());
-        let word = leaf_word_index(bit);
-        put_u64(
-            &mut page,
-            HEADER_SIZE + word * 8,
-            1u64 << (u64::from(bit) % 64),
-        );
-        stamp(&mut page)?;
-        store.write(page_number, &page)?;
-        return Ok(page_number);
-    }
-    let child = new_subtree(store, level - 1, bit)?;
-    let page_number = store.allocate_bitmap_page()?;
-    let mut page = new_branch(store.target_txn(), level);
-    set_branch_child(&mut page, child_index(bit, level)?, child)?;
-    stamp(&mut page)?;
-    store.write(page_number, &page)?;
-    Ok(page_number)
-}
-
 fn parse(
     page: &[u8; PAGE_SIZE],
     selected_txn: u64,
     expected_level: Option<u16>,
     verify_crc: bool,
 ) -> Result<Header> {
-    if page[..4] != PAGE_MAGIC
-        || page[5] != 0
-        || u16_le(page, 6) != HEADER_SIZE as u16
-        || u32_le(page, 24) != FREE_AUX
-    {
-        return Err(Error::Corrupt("free bitmap header is invalid"));
-    }
+    let header = parse_header(page, selected_txn, expected_level)?;
+    verify_checksum(page, verify_crc)?;
+    validate_body(page, &header)?;
+    Ok(header)
+}
+
+fn parse_header(
+    page: &[u8; PAGE_SIZE],
+    selected_txn: u64,
+    expected_level: Option<u16>,
+) -> Result<Header> {
+    validate_prefix(page)?;
     let born_txn = u64_le(page, 8);
     let level = u16_le(page, 18);
     if born_txn == 0
@@ -298,30 +65,59 @@ fn parse(
     if item_count == 0 {
         return Err(Error::Corrupt("reachable free bitmap page is empty"));
     }
-    if verify_crc && crc32c::crc32c_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+    Ok(Header { level })
+}
+
+fn validate_prefix(page: &[u8; PAGE_SIZE]) -> Result<()> {
+    if page[..4] != PAGE_MAGIC
+        || page[5] != 0
+        || u16_le(page, 6) != HEADER_SIZE as u16
+        || u32_le(page, 24) != FREE_AUX
+    {
+        return Err(Error::Corrupt("free bitmap header is invalid"));
+    }
+    Ok(())
+}
+
+fn verify_checksum(page: &[u8; PAGE_SIZE], required: bool) -> Result<()> {
+    if required && crc32c::crc32c_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         return Err(Error::Corrupt("free bitmap checksum is invalid"));
     }
+    Ok(())
+}
 
-    if level == 0 {
-        if page[4] != BITMAP_LEAF
-            || u16_le(page, 20) as usize != LEAF_END
-            || u16_le(page, 22) as usize != PAGE_SIZE
-            || page[LEAF_END..].iter().any(|&byte| byte != 0)
-            || first_leaf_word(page).is_none()
-            || nonzero_leaf_words(page) != item_count
-        {
-            return Err(Error::Corrupt("free bitmap leaf is invalid"));
-        }
-    } else if page[4] != BITMAP_BRANCH
+fn validate_body(page: &[u8; PAGE_SIZE], header: &Header) -> Result<()> {
+    if header.level == 0 {
+        validate_leaf(page)
+    } else {
+        validate_branch(page)
+    }
+}
+
+fn validate_leaf(page: &[u8; PAGE_SIZE]) -> Result<()> {
+    if page[4] != BITMAP_LEAF
+        || u16_le(page, 20) as usize != LEAF_END
+        || u16_le(page, 22) as usize != PAGE_SIZE
+        || page[LEAF_END..].iter().any(|&byte| byte != 0)
+        || first_leaf_word(page).is_none()
+        || nonzero_leaf_words(page) != usize::from(u16_le(page, 16))
+    {
+        return Err(Error::Corrupt("free bitmap leaf is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_branch(page: &[u8; PAGE_SIZE]) -> Result<()> {
+    if page[4] != BITMAP_BRANCH
         || u16_le(page, 20) as usize != BRANCH_END
         || u16_le(page, 22) as usize != PAGE_SIZE
         || page[BRANCH_END..].iter().any(|&byte| byte != 0)
         || first_summary(page).is_none()
-        || nonzero_children(page)? != item_count
+        || nonzero_children(page)? != usize::from(u16_le(page, 16))
     {
         return Err(Error::Corrupt("free bitmap branch is invalid"));
     }
-    Ok(Header { level })
+    Ok(())
 }
 
 fn new_leaf(txn: u64) -> [u8; PAGE_SIZE] {

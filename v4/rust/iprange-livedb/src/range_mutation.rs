@@ -97,6 +97,15 @@ pub(crate) fn clear<K: IpKey, S: RangeStore>(
     replace(store, root, record_count, from, to, None)
 }
 
+pub(crate) fn retire_tree<K, S, F>(store: &mut S, root: u32, checkpoint: F) -> Result<()>
+where
+    K: IpKey,
+    S: RangeStore,
+    F: FnMut() -> Result<()>,
+{
+    fixed_tree::retire_tree::<RangeCodec<K>, S, F>(store, root, checkpoint)
+}
+
 pub(crate) fn transform<K, S, F>(
     store: &mut S,
     root: &mut u32,

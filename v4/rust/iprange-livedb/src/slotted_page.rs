@@ -21,6 +21,16 @@ pub(crate) fn parse(
     aux: u32,
     expected_level: Option<u16>,
 ) -> Result<Header> {
+    validate_identity(page, selected_txn, page_type, aux)?;
+    parse_shape(page, expected_level)
+}
+
+fn validate_identity(
+    page: &[u8; PAGE_SIZE],
+    selected_txn: u64,
+    page_type: u8,
+    aux: u32,
+) -> Result<()> {
     if page[..4] != PAGE_MAGIC || page[5] != 0 || u16_le(page, 6) != HEADER_SIZE as u16 {
         return Err(Error::Corrupt("slotted-page header is invalid"));
     }
@@ -28,6 +38,15 @@ pub(crate) fn parse(
     if born_txn == 0 || born_txn > selected_txn {
         return Err(Error::Corrupt("slotted-page transaction is invalid"));
     }
+    if page[4] != page_type || u32_le(page, 24) != aux {
+        return Err(Error::Corrupt(
+            "slotted-page type or discriminator is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_shape(page: &[u8; PAGE_SIZE], expected_level: Option<u16>) -> Result<Header> {
     let item_count = usize::from(u16_le(page, 16));
     let level = u16_le(page, 18);
     if item_count == 0 || level > MAX_TREE_LEVEL {
@@ -35,11 +54,6 @@ pub(crate) fn parse(
     }
     if expected_level.is_some_and(|expected| expected != level) {
         return Err(Error::Corrupt("slotted-page child level is invalid"));
-    }
-    if page[4] != page_type || u32_le(page, 24) != aux {
-        return Err(Error::Corrupt(
-            "slotted-page type or discriminator is invalid",
-        ));
     }
 
     let lower = usize::from(u16_le(page, 20));

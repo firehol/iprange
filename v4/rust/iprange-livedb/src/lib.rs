@@ -9,6 +9,7 @@
 
 mod blob_tree;
 mod bootstrap;
+mod cancellation;
 pub mod cardinality;
 mod contract;
 #[path = "checksum.rs"]
@@ -40,9 +41,12 @@ mod range_mutation;
 mod range_tree;
 mod retirement;
 mod slotted_page;
+mod source;
 mod used_bitmap;
+mod workflow;
 
 pub use bootstrap::MetaSelection;
+pub use cancellation::CancellationToken;
 pub use cardinality::{Cardinality129, CardinalityOverflow};
 pub use contract::{
     AddressFamily, MembershipOperation, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED,
@@ -54,11 +58,14 @@ pub use feed_catalog::FeedCursor;
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
-    create_live, CommitDurability, CommitResult, CreateResult, CreationState, FeedRef, LiveWriter,
-    MembershipRef, MembershipTransaction, ReclaimResult, TransactionBudget, TransactionFeedCursor,
+    create_live, CommitDurability, CommitResult, CreateResult, CreationState, DirectReplacement,
+    FeedRef, FinishedWorkflow, LiveWriter, MembershipRef, MembershipTransaction, PreparedWorkflow,
+    ReclaimResult, RetentionRefresh, TransactionBudget, TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
+pub use source::{RangeSource, SliceSource};
+pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
 
 #[cfg(test)]
 mod live_crash_tests;

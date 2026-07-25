@@ -2,6 +2,7 @@
 
 mod commit;
 mod create;
+mod direct_workflow;
 mod membership;
 mod reclaim;
 
@@ -20,6 +21,9 @@ use crate::metadata;
 use crate::random;
 
 pub use create::{create_live, CreateResult, CreationState};
+pub use direct_workflow::{
+    DirectReplacement, FinishedWorkflow, PreparedWorkflow, RetentionRefresh,
+};
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub use reclaim::ReclaimResult;
 
@@ -172,6 +176,7 @@ impl LiveWriter {
     /// Exact decompressed length of the committed or staged metadata.
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
         self.require_healthy()?;
+        self.require_operation_owned()?;
         let meta = self.current_meta();
         Ok((meta.metadata_root != 0).then_some(meta.metadata_uncompressed_len))
     }
@@ -179,12 +184,14 @@ impl LiveWriter {
     /// Fill caller storage from the committed or staged metadata.
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
         self.require_healthy()?;
+        self.require_operation_owned()?;
         metadata::read(&self.file, &self.current_meta(), output)
     }
 
     /// Return the complete committed or staged bounded metadata value.
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.require_healthy()?;
+        self.require_operation_owned()?;
         metadata::read_vec(&self.file, &self.current_meta())
     }
 
@@ -238,6 +245,11 @@ impl LiveWriter {
     fn require_direct(&self, family: AddressFamily, ordered: bool) -> Result<()> {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
+        if self.draft.as_ref().is_some_and(Draft::workflow_active) {
+            return Err(Error::WrongState(
+                "an exact workflow owns the pending transaction",
+            ));
+        }
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
@@ -251,12 +263,24 @@ impl LiveWriter {
     }
 
     fn require_metadata_stage_available(&self) -> Result<()> {
+        self.require_operation_owned()?;
+        if self.draft.as_ref().is_some_and(Draft::workflow_input_open) {
+            return Err(Error::WrongState("workflow input is not finished"));
+        }
         if self.draft.as_ref().is_some_and(Draft::metadata_staged) {
             return Err(Error::WrongState(
                 "this transaction already staged metadata",
             ));
         }
         Ok(())
+    }
+
+    fn require_operation_owned(&self) -> Result<()> {
+        if self.draft.as_ref().is_some_and(Draft::operation_abandoned) {
+            Err(Error::WrongState("operation handle was dropped"))
+        } else {
+            Ok(())
+        }
     }
 
     fn current_meta(&self) -> MetaV4 {

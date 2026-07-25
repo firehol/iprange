@@ -6,18 +6,20 @@ mod catalog_ops;
 mod membership_ops;
 #[path = "draft_store/metadata.rs"]
 mod metadata_ops;
+#[path = "draft_store/storage.rs"]
+mod storage;
+#[path = "draft_store/workflow.rs"]
+mod workflow_ops;
 
 use std::fs::File;
 
-use crate::contract::{u32_le, u64_le, MetaV4, MAX_PAGE_COUNT, PAGE_SHIFT, PAGE_SIZE};
+use crate::contract::{u32_le, MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::file_io;
-use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
-use crate::free_bitmap::{self, BitmapStore};
+use crate::fixed_tree::{RetiredPages, Store};
+use crate::free_bitmap;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_mutation;
 use crate::retirement;
-use crate::slotted_page::put_u32;
 
 const PRIVATE_MAGIC: u32 = 0x5046_5245;
 
@@ -39,6 +41,15 @@ pub(crate) struct Draft {
     changed: bool,
     metadata_staged: bool,
     membership_delta_root: u32,
+    workflow: WorkflowState,
+    operation_abandoned: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkflowState {
+    None,
+    Input,
+    Prepared,
 }
 
 impl Draft {
@@ -59,6 +70,8 @@ impl Draft {
             changed: false,
             metadata_staged: false,
             membership_delta_root: 0,
+            workflow: WorkflowState::None,
+            operation_abandoned: false,
         })
     }
 
@@ -76,6 +89,37 @@ impl Draft {
         } else {
             self.base
         }
+    }
+
+    pub(crate) fn begin_range_workflow(&mut self) -> Result<()> {
+        if self.workflow != WorkflowState::None {
+            return Err(Error::WrongState("another exact workflow is active"));
+        }
+        self.meta.range_root = 0;
+        self.meta.range_record_count = 0;
+        self.workflow = WorkflowState::Input;
+        Ok(())
+    }
+
+    pub(crate) fn workflow_input_open(&self) -> bool {
+        self.workflow == WorkflowState::Input
+    }
+
+    pub(crate) fn workflow_active(&self) -> bool {
+        self.workflow != WorkflowState::None
+    }
+
+    pub(crate) fn operation_abandoned(&self) -> bool {
+        self.operation_abandoned
+    }
+
+    pub(crate) fn abandon_operation(&mut self) {
+        self.operation_abandoned = true;
+    }
+
+    fn finish_workflow(&mut self) {
+        self.workflow = WorkflowState::Prepared;
+        self.changed = true;
     }
 }
 
@@ -141,13 +185,26 @@ impl<'a> DraftStore<'a> {
         Ok(changed)
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare(&mut self) -> Result<()> {
+        self.prepare_with_checkpoint(&mut || Ok(()))
+    }
+
+    pub(crate) fn prepare_with_checkpoint<F>(&mut self, checkpoint: &mut F) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        if self.draft.workflow_input_open() {
+            return Err(Error::WrongState("workflow input is not finished"));
+        }
         if !self.draft.changed {
             return Ok(());
         }
+        checkpoint()?;
         self.finish_membership_deltas()?;
-        self.release_private_pages()?;
-        self.finish_bitmap_shape()
+        checkpoint()?;
+        self.release_private_pages(checkpoint)?;
+        self.finish_bitmap_shape(checkpoint)
     }
 
     pub(crate) fn select_reclamation(
@@ -194,19 +251,27 @@ impl<'a> DraftStore<'a> {
         Ok(())
     }
 
-    fn release_private_pages(&mut self) -> Result<()> {
+    fn release_private_pages<F>(&mut self, checkpoint: &mut F) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         loop {
+            checkpoint()?;
             self.replenish_reserve()?;
             self.drain_allocator_retired()?;
-            self.drain_private_stack()?;
+            self.drain_private_stack(checkpoint)?;
             if self.draft.allocator_retired.as_slice().is_empty() {
                 return Ok(());
             }
         }
     }
 
-    fn drain_private_stack(&mut self) -> Result<()> {
+    fn drain_private_stack<F>(&mut self, checkpoint: &mut F) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         while self.draft.private_head != 0 {
+            checkpoint()?;
             let page = self.pop_private()?;
             let mut root = self.draft.meta.free_bitmap_root;
             let mut retired = RetiredPages::new();
@@ -224,8 +289,12 @@ impl<'a> DraftStore<'a> {
         Ok(())
     }
 
-    fn finish_bitmap_shape(&mut self) -> Result<()> {
+    fn finish_bitmap_shape<F>(&mut self, checkpoint: &mut F) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         loop {
+            checkpoint()?;
             self.replenish_reserve()?;
             let mut root = self.draft.meta.free_bitmap_root;
             let limit = self.draft.meta.page_count;
@@ -376,120 +445,6 @@ impl<'a> DraftStore<'a> {
         self.draft.growth_pages += 1;
         Ok(page_number)
     }
-}
-
-impl Store for DraftStore<'_> {
-    fn target_txn(&self) -> u64 {
-        self.draft.meta.txn_id
-    }
-
-    fn page_limit(&self) -> u64 {
-        self.draft.meta.page_count
-    }
-
-    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        file_io::read_page(self.file, page_number, self.draft.meta.page_count, page)
-    }
-
-    fn allocate(&mut self) -> Result<u32> {
-        if self.draft.private_head != 0 {
-            return self.pop_private();
-        }
-        let mut root = self.draft.meta.free_bitmap_root;
-        let mut retired = RetiredPages::new();
-        let limit = self.committed_page_count;
-        if let Some(page) = free_bitmap::take_lowest(self, &mut root, limit, &mut retired)? {
-            self.charge_private()?;
-            self.draft.meta.free_bitmap_root = root;
-            self.draft.allocator_retired.extend(retired.as_slice())?;
-            return Ok(page);
-        }
-        self.draft.meta.free_bitmap_root = root;
-        self.allocate_tail()
-    }
-
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
-            return Err(Error::Corrupt("draft write is outside page bounds"));
-        }
-        let offset = u64::from(page_number)
-            .checked_shl(u32::from(PAGE_SHIFT))
-            .ok_or(Error::ArithmeticOverflow("draft page offset"))?;
-        file_io::write_exact_at(self.file, page, offset)
-    }
-
-    fn discard_private(&mut self, page_number: u32) -> Result<()> {
-        if page_number < 2
-            || u64::from(page_number) >= self.draft.meta.page_count
-            || page_number == self.draft.private_head
-        {
-            return Err(Error::Corrupt("discarded private page is invalid"));
-        }
-        let mut page = [0; PAGE_SIZE];
-        self.read(page_number, &mut page)?;
-        if u64_le(&page, 8) != self.draft.meta.txn_id {
-            return Err(Error::Corrupt(
-                "committed page cannot enter the private stack",
-            ));
-        }
-        page.fill(0);
-        put_u32(&mut page, 0, PRIVATE_MAGIC);
-        put_u32(&mut page, 4, self.draft.private_head);
-        self.write(page_number, &page)?;
-        self.draft.private_head = page_number;
-        Ok(())
-    }
-}
-
-impl BitmapStore for DraftStore<'_> {
-    fn allocate_bitmap_page(&mut self) -> Result<u32> {
-        if self.draft.private_head != 0 {
-            return self.pop_private();
-        }
-        if let Some(slot) = self
-            .draft
-            .meta
-            .allocator_reserve
-            .iter_mut()
-            .find(|page| **page != 0)
-        {
-            let page = *slot;
-            *slot = 0;
-            self.charge_private()?;
-            return Ok(page);
-        }
-        self.allocate_tail()
-    }
-
-    fn allocation_forbidden(&self, page_number: u32) -> bool {
-        page_number < 2
-            || self.draft.meta.allocator_reserve.contains(&page_number)
-            || roots(&self.draft.meta).contains(&page_number)
-    }
-}
-
-impl RetiringStore for DraftStore<'_> {
-    fn retire_pages(&mut self, pages: &[u32]) -> Result<()> {
-        for &page in pages {
-            self.retire_one(page)?;
-        }
-        self.drain_allocator_retired()
-    }
-}
-
-fn roots(meta: &MetaV4) -> [u32; 10] {
-    [
-        meta.range_root,
-        meta.catalog_name_root,
-        meta.catalog_index_root,
-        meta.feed_used_root,
-        meta.membership_id_root,
-        meta.membership_hash_root,
-        meta.membership_used_root,
-        meta.metadata_root,
-        meta.free_bitmap_root,
-        meta.retirement_root,
-    ]
 }
 
 #[cfg(test)]

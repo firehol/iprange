@@ -28,6 +28,7 @@ pub enum ErrorCode {
     BudgetExceeded,
     WorkLimitTooSmall,
     BufferTooSmall,
+    Cancelled,
     Random,
     WriterBusy,
     ReaderCapacityExhausted,
@@ -64,6 +65,7 @@ pub enum Error {
     BufferTooSmall {
         required: u64,
     },
+    Cancelled,
     Random(getrandom::Error),
     WriterBusy,
     ReaderCapacityExhausted,
@@ -98,6 +100,7 @@ impl Error {
             Self::BudgetExceeded(_) => ErrorCode::BudgetExceeded,
             Self::WorkLimitTooSmall { .. } => ErrorCode::WorkLimitTooSmall,
             Self::BufferTooSmall { .. } => ErrorCode::BufferTooSmall,
+            Self::Cancelled => ErrorCode::Cancelled,
             Self::Random(_) => ErrorCode::Random,
             Self::WriterBusy => ErrorCode::WriterBusy,
             Self::ReaderCapacityExhausted => ErrorCode::ReaderCapacityExhausted,
@@ -147,6 +150,7 @@ impl fmt::Display for Error {
                     "output buffer is too small; {required} bytes are required"
                 )
             }
+            Self::Cancelled => output.write_str("operation was cancelled"),
             Self::Random(error) => write!(output, "operating-system randomness failed: {error}"),
             Self::WriterBusy => output.write_str("another live writer owns this database"),
             Self::ReaderCapacityExhausted => {
@@ -189,6 +193,7 @@ impl std::error::Error for Error {
             | Self::BudgetExceeded(_)
             | Self::WorkLimitTooSmall { .. }
             | Self::BufferTooSmall { .. }
+            | Self::Cancelled
             | Self::WriterBusy
             | Self::ReaderCapacityExhausted
             | Self::NoPendingTransaction

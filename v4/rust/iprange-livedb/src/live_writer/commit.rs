@@ -1,6 +1,7 @@
 //! Durable alternate-meta publication.
 
 use crate::bootstrap::{Bootstrap, MetaSelection, OpenMode};
+use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::database;
 use crate::draft_store::DraftStore;
@@ -19,13 +20,42 @@ enum Phase {
 impl LiveWriter {
     /// Publish all pending changes through the alternate metadata page.
     pub fn commit(&mut self) -> Result<CommitResult> {
+        self.commit_with(None)
+    }
+
+    pub(super) fn commit_cancellable(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<CommitResult> {
+        self.commit_with(Some(cancellation))
+    }
+
+    fn commit_with(&mut self, cancellation: Option<&CancellationToken>) -> Result<CommitResult> {
+        let attempt = self.commit_attempt()?;
+        if let Err(cause) = self.prepare_and_lock(cancellation) {
+            let cause = self.abort_after(cause);
+            return Ok(result(attempt, CommitDurability::NotCommitted, cause));
+        }
+        let mut result = self.finish_commit_locked_with(attempt, cancellation);
+        self.apply_commit_unlock(&mut result, self.sidecar.unlock_gate());
+        Ok(result)
+    }
+
+    fn commit_attempt(&mut self) -> Result<([u8; 16], u64, [u8; 16])> {
         self.require_healthy()?;
+        self.require_operation_owned()?;
+        if self
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.workflow_input_open())
+        {
+            return Err(Error::WrongState("workflow input is not finished"));
+        }
         if self.draft.as_ref().is_some_and(|draft| !draft.changed()) {
             self.discard_draft()?;
             return Err(Error::NoPendingTransaction);
         }
-        let attempt = self
-            .draft
+        self.draft
             .as_ref()
             .filter(|draft| draft.changed())
             .map(|draft| {
@@ -35,27 +65,29 @@ impl LiveWriter {
                     draft.meta.commit_nonce,
                 )
             })
-            .ok_or(Error::NoPendingTransaction)?;
+            .ok_or(Error::NoPendingTransaction)
+    }
 
-        if let Err(cause) = self.prepare() {
-            let cause = self.abort_after(cause);
-            return Ok(result(attempt, CommitDurability::NotCommitted, cause));
-        }
-        if let Err(cause) = self.sidecar.lock_gate(Mode::Exclusive) {
-            let cause = self.abort_after(cause);
-            return Ok(result(attempt, CommitDurability::NotCommitted, cause));
-        }
-
-        let mut result = self.finish_commit_locked(attempt);
-        self.apply_commit_unlock(&mut result, self.sidecar.unlock_gate());
-        Ok(result)
+    fn prepare_and_lock(&mut self, cancellation: Option<&CancellationToken>) -> Result<()> {
+        checkpoint(cancellation)?;
+        self.prepare_with(cancellation)?;
+        checkpoint(cancellation)?;
+        self.sidecar.lock_gate(Mode::Exclusive)
     }
 
     pub(super) fn finish_commit_locked(
         &mut self,
         attempt: ([u8; 16], u64, [u8; 16]),
     ) -> CommitResult {
-        match self.commit_locked() {
+        self.finish_commit_locked_with(attempt, None)
+    }
+
+    fn finish_commit_locked_with(
+        &mut self,
+        attempt: ([u8; 16], u64, [u8; 16]),
+        cancellation: Option<&CancellationToken>,
+    ) -> CommitResult {
+        match self.commit_locked(cancellation) {
             Phase::BeforePublication(cause) => {
                 let cause = self.abort_after(cause);
                 result(attempt, CommitDurability::NotCommitted, cause)
@@ -89,26 +121,40 @@ impl LiveWriter {
     }
 
     pub(super) fn prepare(&mut self) -> Result<()> {
+        self.prepare_with(None)
+    }
+
+    fn prepare_with(&mut self, cancellation: Option<&CancellationToken>) -> Result<()> {
         let draft = self.draft.as_mut().unwrap();
-        DraftStore::new(
+        let mut store = DraftStore::new(
             &self.file,
             self.base.meta.page_count,
             self.budget.pages(),
             draft,
-        )
-        .prepare()
+        );
+        let mut check = || checkpoint(cancellation);
+        store.prepare_with_checkpoint(&mut check)
     }
 
-    fn commit_locked(&self) -> Phase {
+    fn commit_locked(&self, cancellation: Option<&CancellationToken>) -> Phase {
+        if let Err(error) = checkpoint(cancellation) {
+            return Phase::BeforePublication(error);
+        }
         match self.prepublication_checks() {
             Ok(()) => {}
             Err(error) => return Phase::BeforePublication(error),
+        }
+        if let Err(error) = checkpoint(cancellation) {
+            return Phase::BeforePublication(error);
         }
         crate::fault::crash("commit.before_private_sync");
         if let Err(error) = self.file.sync_all() {
             return Phase::BeforePublication(error.into());
         }
         crate::fault::crash("commit.after_private_sync");
+        if let Err(error) = checkpoint(cancellation) {
+            return Phase::BeforePublication(error);
+        }
 
         let draft = self.draft.as_ref().unwrap();
         let target_page = 1 - self.base.selected_meta_page;
@@ -166,6 +212,13 @@ impl LiveWriter {
             return Err(Error::Corrupt("draft file length is inconsistent"));
         }
         Ok(())
+    }
+}
+
+fn checkpoint(cancellation: Option<&CancellationToken>) -> Result<()> {
+    match cancellation {
+        Some(token) => token.check(),
+        None => Ok(()),
     }
 }
 

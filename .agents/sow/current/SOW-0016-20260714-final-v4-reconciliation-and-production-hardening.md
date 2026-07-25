@@ -10447,9 +10447,88 @@ requirements are normative in the Pre-Implementation Gate above.
   removed or shared without obscuring the format or weakening bounded behavior.
 - Current and Rust 1.74 all-feature suites each pass 133 tests with one
   intentionally ignored subprocess entry point. Warnings-denied all-target
-  Clippy, formatting, benchmark compilation, `git diff --check`, the SOW audit,
-  and the zero-warning complexity gate over the exact compiled production graph
-  pass. Disconnected obsolete source is not included in that graph or claim.
+  Clippy, formatting, benchmark compilation, `git diff --check`, and the SOW
+  audit pass. The complexity result was incorrectly recorded as zero-warning at
+  this checkpoint: the next exact compiled-graph run found five active
+  violations in the already-present free-bitmap and slotted-page code. They are
+  corrected and validated in the next slice. Disconnected obsolete source is
+  not included in the compiled-graph claim.
+
+### 2026-07-25 - exact direct workflows and retention plan
+
+- The next Rust slice implements the first update-ipsets adoption milestone:
+  complete direct-map replacement and exact `retention` refresh for both address
+  families. It does not add feed import, snapshots, validation, recovery, Go, or
+  C ABI work.
+- A workflow starts only on a clean matching writer and marks its draft as
+  input-incomplete. Dropping the Rust workflow performs no I/O; the unfinished
+  draft cannot be committed or mixed with another mutation and requires
+  explicit writer `Abort` or `Close`.
+- Repeated synchronous source calls preserve batch and record order. Direct
+  replacement applies each supplied value immediately to an initially empty
+  private range root. Retention first builds the desired address union with the
+  new refresh value, then streams the committed ranges and overlays each old
+  value only where desired coverage remains. No caller sorting, whole-input
+  allocation, external scratch, or temporary file is used.
+- `FinishInput` scans the committed and private canonical roots once to produce
+  exact `Cardinality129` change classes and detect logical equality. A no-op
+  discards all private pages and leaves the writer clean. A changed result
+  retires the detached committed range tree through a fixed-depth page walk,
+  marks the draft commit-ready, and permits only one optional metadata stage,
+  `Commit`, or `Abort`.
+- One explicit thread-safe cancellation token is checked before source pulls,
+  between records, during retention overlay, comparison, and detached-tree
+  retirement. Source failure, invalid source protocol, cancellation, malformed
+  selected pages, budget exhaustion, or storage failure aborts the complete
+  workflow under the existing writer cleanup rule.
+- Permanent tests will cover unordered overlap/order, exact reports, empty/full
+  IPv4 and IPv6, stable retention values, partial splits, removal and
+  reappearance, no-op cleanup, metadata in the same generation, dropped-input
+  commit rejection, source failure after earlier batches, cancellation, page
+  retirement/reclamation, bounded allocation behavior, Rust 1.74, formatting,
+  warnings-denied Clippy, benchmark compilation, complexity, diff, and SOW
+  audit checks.
+
+### 2026-07-25 - exact direct workflows and retention implementation
+
+- `DirectReplacement` and the special `RetentionRefresh` workflow now implement
+  the planned full-file semantics for IPv4 and IPv6. Input is applied directly
+  to the unpublished destination tree in supplied order; neither workflow sorts,
+  retains the complete input, creates spill files, or creates a temporary v4
+  database.
+- Retention preserves the committed timestamp for every address still present,
+  assigns the refresh timestamp only to newly present addresses, removes absent
+  addresses, and treats a later reappearance as new. It rejects databases whose
+  15-byte value tag is not exactly `retention`.
+- `FinishInput` returns one exact 18-field report. A logical no-op discards the
+  complete draft; a changed result owns the draft until explicit commit or
+  abort. Dropping an input or prepared handle performs no I/O and leaves only
+  explicit writer abort/close available; bare mutation, metadata access, and
+  commit cannot publish the abandoned operation.
+- One cloneable cancellation token is checked through input, comparison,
+  retention overlay, detached-tree retirement, optional metadata compression,
+  private-page preparation, and the last safe point before publication. Source
+  failure and cancellation discard the whole unpublished workflow.
+- Permanent tests prove supplied-order overlap, exact reports, same-generation
+  metadata, logical no-op cleanup, full-space IPv6 cardinality without overflow,
+  retention full-delta behavior, source failure after accepted input,
+  cancellation, abandoned handles, 2,000-record multi-level tree retirement and
+  reclamation, and empty replacement.
+- Two deterministic property tests execute 100 randomized direct replacements
+  and 100 randomized retention refreshes against scalar 128-address reference
+  maps. A counting allocator proves that ingestion and `FinishInput` allocate
+  zero engine heap objects for a 1,000-record borrowed slice.
+- Current and Rust 1.74 all-feature suites each pass 141 tests with one
+  intentionally ignored subprocess entry point. Formatting, warnings-denied
+  all-target Clippy, and all-feature benchmark compilation pass.
+- Rechecking the exact compiled production graph exposed five older complexity
+  violations that contradicted the previous recorded result. The free-bitmap
+  mutation and page-validation functions were split by purpose, as was the
+  566-line draft-storage module. The resulting graph has 63 files and 14,573
+  physical lines; its largest file has 471 lines and Lizard reports zero
+  functions above cyclomatic complexity 9. This is cleaner and easier to audit,
+  but it is still materially above the directional whole-engine line goal and
+  remains an explicit reduction pressure for later Rust slices.
 
 ### Historical adversarial-audit evidence
 

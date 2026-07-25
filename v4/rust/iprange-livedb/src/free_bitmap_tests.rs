@@ -1,6 +1,7 @@
 //! Free bitmap tests across leaf and branch boundaries.
 
 use super::*;
+use crate::fixed_tree::{RetiredPages, Store};
 
 struct MemoryStore {
     txn: u64,

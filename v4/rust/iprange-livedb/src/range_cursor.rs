@@ -17,7 +17,7 @@ pub enum RangeDirection {
     Backward,
 }
 
-/// One canonical direct-value interval.
+/// One inclusive direct-value interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirectRange<K> {
     pub from: K,
@@ -40,7 +40,7 @@ const EMPTY_FRAME: Frame = Frame {
     level: 0,
 };
 
-struct Cursor<'a, K> {
+pub(crate) struct Cursor<'a, K> {
     file: &'a File,
     meta: MetaV4,
     direction: RangeDirection,
@@ -56,7 +56,7 @@ struct Cursor<'a, K> {
 }
 
 impl<'a, K: IpKey> Cursor<'a, K> {
-    fn new(
+    pub(crate) fn new(
         file: &'a File,
         meta: &MetaV4,
         direction: RangeDirection,
@@ -150,7 +150,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         Ok(())
     }
 
-    fn next(&mut self) -> Result<Option<DirectRange<K>>> {
+    pub(crate) fn next(&mut self) -> Result<Option<DirectRange<K>>> {
         self.require_owner()?;
         if self.finished {
             return Ok(None);

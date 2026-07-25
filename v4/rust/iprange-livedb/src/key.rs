@@ -3,7 +3,9 @@
 //! Checked increment/decrement implement the numeric boundary rules used by
 //! mutation code to trim at `from - 1` and `to + 1`.
 
+use crate::cardinality::Cardinality129;
 use crate::contract::AddressFamily;
+use crate::error::{Error, Result};
 
 /// Common private interface over the two key widths, so physical algorithms are
 /// written once and width-specialized at compile time.
@@ -22,6 +24,7 @@ pub(crate) trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
 
     fn checked_next(self) -> Option<Self>;
     fn checked_previous(self) -> Option<Self>;
+    fn inclusive_cardinality(self, to: Self) -> Result<Cardinality129>;
 }
 
 /// An IPv4 address as a big-endian-valued `u32` (e.g. `192.0.2.1` = `0xC000_0201`),
@@ -72,6 +75,12 @@ impl IpKey for Ipv4Key {
     #[inline]
     fn checked_previous(self) -> Option<Self> {
         self.checked_previous()
+    }
+
+    #[inline]
+    fn inclusive_cardinality(self, to: Self) -> Result<Cardinality129> {
+        Cardinality129::ipv4_inclusive(self.0, to.0)
+            .map_err(|_| Error::ArithmeticOverflow("IPv4 interval cardinality"))
     }
 }
 
@@ -173,6 +182,12 @@ impl IpKey for Ipv6Key {
     #[inline]
     fn checked_previous(self) -> Option<Self> {
         self.checked_previous()
+    }
+
+    #[inline]
+    fn inclusive_cardinality(self, to: Self) -> Result<Cardinality129> {
+        Cardinality129::ipv6_inclusive(self.hi, self.lo, to.hi, to.lo)
+            .map_err(|_| Error::ArithmeticOverflow("IPv6 interval cardinality"))
     }
 }
 

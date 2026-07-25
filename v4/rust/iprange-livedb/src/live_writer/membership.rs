@@ -326,6 +326,14 @@ impl LiveWriter {
     }
 }
 
+impl Drop for MembershipTransaction<'_> {
+    fn drop(&mut self) {
+        if let Some(draft) = self.writer.draft.as_mut() {
+            draft.abandon_operation();
+        }
+    }
+}
+
 impl TransactionFeedCursor<'_> {
     /// Return the next transaction-bound feed.
     pub fn next_feed(&mut self) -> Result<Option<FeedRef>> {

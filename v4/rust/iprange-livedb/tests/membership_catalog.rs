@@ -123,6 +123,10 @@ fn dropped_transaction_requires_explicit_writer_abort() {
         let mut transaction = writer.begin_membership_transaction().unwrap();
         transaction.ensure_feed(name("temporary")).unwrap();
     }
+    assert!(matches!(
+        writer.commit(),
+        Err(iprange_livedb::Error::WrongState(_))
+    ));
     assert!(writer.abort().unwrap());
     let reader = LiveReader::open(&files.main).unwrap();
     assert!(reader.lookup_feed("temporary").unwrap().is_none());
