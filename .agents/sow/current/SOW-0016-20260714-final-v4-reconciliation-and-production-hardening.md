@@ -11043,6 +11043,65 @@ requirements are normative in the Pre-Implementation Gate above.
   the state-1/state-2 namespace state machine, structured results, crash tests,
   cleanup, and resolution remain in the active publication milestone.
 
+### 2026-07-25 - prepared immutable output implementation plan
+
+- Output construction uses explicit ownership states. `CreatedOutput` owns the
+  exact private name and descriptor from the instant exclusive creation
+  succeeds; `SecuredOutput` adds the proven inode identity and normalized access
+  policy; `OutputAttempt` remains the cleanup authority while the shared
+  immutable builder owns the descriptor; and `PreparedOutput` regains both
+  after finalization. Every fallible state transition returns the owning state
+  with its exact cause, so no failure can silently orphan an artifact.
+- Preparation first proves the finalized descriptor and private name still
+  identify the recorded regular, link-count-one inode with the expected
+  creator-only policy. It then takes the exclusive main lifetime lock once,
+  rechecks custody, reads only the two meta pages to select the exact immutable
+  tuple and physical length, and compares that meta byte contract with the
+  builder's returned `MetaV4`.
+- SHA-512 is computed through one monotonically increasing positional pass using
+  a fixed stack buffer. The file is then synchronized, and identity, private
+  name, link count, access policy, exact physical length, and selected meta are
+  rechecked while the same descriptor and lock remain retained. There is no
+  second digest pass and no implicit graph validation.
+- Permanent tests will prove exact digest bytes, one complete sequential pass,
+  retained lock ownership, zero heap allocation in the warmed preparation path,
+  path replacement/hard-link/access-policy rejection, ownership retention on
+  failure, and successful preparation despite corruption confined to a
+  non-meta page. The latter is the explicit proof that publication preparation
+  does not substitute for caller-requested `Validate`.
+
+### 2026-07-25 - prepared immutable output implementation evidence
+
+- The explicit creation, secured-build, unprepared, and prepared ownership
+  states are implemented. Exclusive creation is the final fallible step before
+  `CreatedOutput` owns the descriptor; security and preparation failures return
+  the complete owner and cause inline. The fixed-size failure is deliberately
+  not boxed, preserving the measured zero-allocation preparation path.
+- Preparation retains one exclusive lifetime lock from before bootstrap
+  selection through one fixed-buffer SHA-512 pass, file synchronization, and
+  final exact identity/name/link-count/access/length/meta proof. Permanent tests
+  prove the digest, monotonic one-pass reads, retained lock, zero warmed heap
+  allocations, exact owner recovery after hard-link or path-replacement
+  failures, access-policy rejection, and builder/file meta agreement.
+- A corrupted non-meta page still prepares successfully. This is intentional
+  evidence that preparation performs only required local/bootstrap checks and
+  never invokes full structural validation by default.
+- Current and Rust 1.74.1 all-feature suites each pass 218 tests with one
+  intentionally ignored subprocess entry point. The no-default suite,
+  warnings-denied all-target Clippy, benchmark compilation, targeted formatting,
+  and diff checks pass. The publication production files are at most 494
+  physical lines; Lizard reports 83 functions, average CCN 3.0, and no function
+  above CCN 9 or 500 lines.
+- One initial parallel no-default run caught the known POSIX fork window in
+  which a crash-test subprocess briefly inherits close-on-exec locked
+  descriptors before `exec`. Isolated reproduction proved release was correct;
+  the new lock test now tolerates that bounded 100 ms test-only window while
+  still failing a real retained lock. The repeated parallel suite passes.
+- Reservation file I/O and the state-1/state-2 namespace state machine remain
+  the next publication sub-slice. No public API, snapshot traversal, recovery
+  policy, replacement publication, live transition, signing, or Go code was
+  added.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

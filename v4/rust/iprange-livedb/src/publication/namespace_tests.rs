@@ -45,7 +45,7 @@ fn private_creation_is_exclusive_nofollow_and_creator_only() {
         regular.creator_only_commitment(),
         Err(NamespaceError::AccessPolicy)
     ));
-    destination.secure_created(&regular).unwrap();
+    destination.secure_created(&regular.file).unwrap();
     assert_eq!(
         regular.creator_only_commitment().unwrap(),
         destination.security_commitment()
@@ -76,7 +76,7 @@ fn inherited_extended_access_acl_is_removed() {
         regular.creator_only_commitment(),
         Err(NamespaceError::AccessPolicy)
     ));
-    destination.secure_created(&regular).unwrap();
+    destination.secure_created(&regular.file).unwrap();
     assert_eq!(
         regular.creator_only_commitment().unwrap(),
         destination.security_commitment()

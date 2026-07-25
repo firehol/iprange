@@ -101,8 +101,15 @@ impl Destination {
         self.security.commitment()
     }
 
-    pub(crate) fn secure_created(&self, file: &Regular) -> Result<(), NamespaceError> {
-        security::secure_creator_only(&file.file, self.security)
+    pub(crate) fn secure_created(&self, file: &File) -> Result<(), NamespaceError> {
+        security::secure_creator_only(file, self.security)
+    }
+
+    pub(crate) fn verify_created(&self, file: &File) -> Result<(), NamespaceError> {
+        if security::creator_only_commitment(file)? != self.security.commitment() {
+            return Err(NamespaceError::AccessPolicy);
+        }
+        Ok(())
     }
 
     pub(crate) fn output_name(&self, attempt: [u8; 16]) -> Result<Name, NamespaceError> {
@@ -425,7 +432,10 @@ fn parent(path: &Path) -> &Path {
     }
 }
 
-fn regular_identity(file: &File, directory_device: u64) -> Result<Identity, NamespaceError> {
+pub(super) fn regular_identity(
+    file: &File,
+    directory_device: u64,
+) -> Result<Identity, NamespaceError> {
     let metadata = file.metadata().map_err(NamespaceError::Io)?;
     if !metadata.is_file() {
         return Err(NamespaceError::NotRegular);
