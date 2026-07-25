@@ -1980,6 +1980,21 @@ exactly `0600`, independent of umask; Windows uses a protected descriptor for
 the effective user. Opens never silently change existing access. Every
 descriptor is close-on-exec or non-inheritable.
 
+For POSIX creation-security kind 1, the engine removes an inherited extended
+access ACL, applies mode `0600`, and verifies the retained regular inode is
+owned by the attempt-start effective UID with that exact mode. Filesystems that
+cannot prove this fail with `AccessPolicyUnsupported`. The 32-byte commitment
+is:
+
+```text
+SHA-256("IPR4PSEC" || effective_uid:u32le || 0600:u32le)
+```
+
+The same attempt-start commitment is recorded for every separately created
+inode in that attempt. A resolver recomputes it from each retained inode's
+current owner, mode, and absent extended access ACL. A mismatch reports
+`ChangedOrUnproven`; it never silently changes existing access.
+
 Linux and macOS use native open-file-description byte-range locks. Windows uses
 equivalent per-handle byte-range locks. FreeBSD and any other target remain
 unsupported until an equivalent automatic-release primitive is proven and

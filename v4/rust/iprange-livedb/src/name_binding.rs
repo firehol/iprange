@@ -8,6 +8,7 @@ const NAME_DOMAIN: &[u8; 8] = b"IPR4NAME";
 #[repr(u16)]
 pub(crate) enum BasenameEncoding {
     PosixBytes = 1,
+    #[cfg(any(test, target_os = "windows"))]
     WindowsUtf16Le = 2,
 }
 
@@ -16,7 +17,9 @@ pub(crate) enum BasenameBindingError {
     Empty,
     TooLong,
     InvalidPosixComponent,
+    #[cfg(any(test, target_os = "windows"))]
     InvalidWindowsComponent,
+    #[cfg(any(test, target_os = "windows"))]
     InvalidUtf16,
 }
 
@@ -30,6 +33,7 @@ pub(crate) fn basename_commitment(
     let length = u32::try_from(bytes.len()).map_err(|_| BasenameBindingError::TooLong)?;
     match encoding {
         BasenameEncoding::PosixBytes => validate_posix(bytes)?,
+        #[cfg(any(test, target_os = "windows"))]
         BasenameEncoding::WindowsUtf16Le => validate_windows_utf16le(bytes)?,
     }
 
@@ -48,6 +52,7 @@ fn validate_posix(bytes: &[u8]) -> Result<(), BasenameBindingError> {
     Ok(())
 }
 
+#[cfg(any(test, target_os = "windows"))]
 fn validate_windows_utf16le(bytes: &[u8]) -> Result<(), BasenameBindingError> {
     if bytes.len() % 2 != 0 {
         return Err(BasenameBindingError::InvalidUtf16);

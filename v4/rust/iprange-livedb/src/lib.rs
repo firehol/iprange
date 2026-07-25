@@ -38,7 +38,11 @@ mod membership_dictionary;
 mod membership_tree;
 mod membership_view;
 mod metadata;
+mod name_binding;
 mod path;
+// Recovery and snapshots connect the tested publisher in later slices.
+#[allow(dead_code)]
+mod publication;
 mod random;
 mod range_cursor;
 mod range_mutation;

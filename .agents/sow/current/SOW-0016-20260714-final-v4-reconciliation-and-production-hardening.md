@@ -10939,6 +10939,110 @@ requirements are normative in the Pre-Implementation Gate above.
   policy/reporting, and compact-snapshot traversal will use this one builder
   rather than introduce another output engine.
 
+### 2026-07-25 - durable fail-if-exists publication plan
+
+- This slice implements the shared Linux `FailIfExists` publication path used
+  by recovery and the default snapshot policy. It does not add recovery policy,
+  snapshot traversal, replacement publication, live transitions, signing, or
+  any Go code.
+- The publisher retains the destination directory and operates on one-component
+  names relative to that descriptor. It creates the exact private output and
+  reservation names with `O_EXCL | O_NOFOLLOW`, applies and verifies effective
+  creator-only access, records device/inode identities, and uses only
+  `renameat2(RENAME_NOREPLACE)`, exact `unlinkat`, file `fsync`, and retained
+  directory `fsync`. Unsupported filesystems or namespace primitives fail
+  explicitly rather than falling back to a check-then-rename race.
+- The prepared output is locked once, hashed once with SHA-512 in a fixed
+  buffer, synchronized, and rechecked against its exact tuple, length, identity,
+  link count, and private name. That same descriptor and lock remain the chain
+  of custody through namespace publication and final proof.
+- The previously unspecified POSIX creation-security commitment is now exact:
+  remove any inherited access ACL, apply and verify owner-only mode `0600` and
+  attempt-start effective UID, then bind those normalized facts with the
+  domain-separated SHA-256 formula recorded in section 15.6. This is the
+  mechanical encoding of selected decision 64A, not a new access-policy choice.
+- A small reservation codec implements the exact 8,192-byte, two-block
+  `IPR4RSV1` write-ahead record for publication kinds 1-2. Live-only fields are
+  canonical zero and the obsolete disconnected reservation/sidecar conversion
+  machinery is not connected. Selection accepts one intact block or two
+  identical/adjacent blocks and permits only the state-1 to state-2 transition.
+- Direct publication acquires the canonical `.readers` reservation atomically,
+  proves the destination main is absent, synchronizes and reselects state 2,
+  publishes the exact private output without replacement, synchronizes the
+  directory, and proves exact desired content before reporting `Published`.
+  Reservation retirement is independent cleanup. Before selected state 2 the
+  main was not attempted; from selected state 2 until exact desired proof the
+  factual result may be `OutcomeUnknown`.
+- Resolution uses either the exact canonical reservation or one uniquely
+  destination-bound private reservation. It never derives an attempt-private
+  name from an untrusted filename alone. It classifies the current main by
+  retained identity, tuple, byte length, and SHA-512; `Complete` may retry only
+  with the exact retained artifacts, while `Remove` never removes a main.
+- Permanent tests will cover codec corruption/selection, raw POSIX basenames,
+  symlinks and hard links, existing main/coordination conflicts, exact access
+  mode, one-pass hashing, every state-1/state-2 namespace crash boundary,
+  complete/remove resolution, foreign artifact refusal, directory replacement,
+  cleanup residue, and zero implicit structural validation.
+- The Linux contracts were checked against the current official
+  [`renameat2(2)`](https://man7.org/linux/man-pages/man2/rename.2.html),
+  [`fsync(2)`](https://man7.org/linux/man-pages/man2/fsync.2.html), and
+  [`acl(5)`](https://man7.org/linux/man-pages/man5/acl.5.html) documentation.
+  `RENAME_NOREPLACE` provides the atomic absent-name condition; file `fsync`
+  does not persist its directory entry; and mode `0600` maps any extended ACL
+  mask and other entry to no effective non-owner permission.
+- Reused open-source evidence:
+  `systemd/systemd @ c844a88f69aa`,
+  `src/basic/fs-util.c:77-103` and `src/basic/sync-util.c:16-80`, confirms the
+  preferred no-replace primitive and separate directory synchronization.
+  `etcd-io/etcd @ 3e3b4c181c69`,
+  `server/storage/wal/wal.go:195-223,801-806`, independently synchronizes the
+  retained directory after rename. `containerd/containerd @ 8496e9ad6835`,
+  `pkg/atomicfile/file.go:102-116`, stops after file sync and rename and is
+  therefore not sufficient for this crash-durability contract.
+- The implementation is split at real responsibilities: retained namespace and
+  access proof, reservation codec, publication/result state, and resolver.
+  Each sub-slice is validated and committed before the next one. The old
+  disconnected 1,240-line reservation codec, 1,135-line sidecar codec,
+  1,818-line result contract, and 4,996-line Linux adapter are evidence only and
+  are not reactivated.
+
+### 2026-07-25 - publication reservation and namespace foundation
+
+- The first publication sub-slice is implemented without exposing a public API.
+  One exact kind-1/kind-2 reservation codec writes and selects the two 4,096-byte
+  CRC-protected blocks, enforces all fixed and zero fields, accepts only the
+  legitimate sequence-1 prepared and sequence-2 namespace-attempted states, and
+  falls back to the intact prepared block after a torn newer write. Corrupt,
+  conflicting, nonadjacent, foreign-kind, and attempt-mismatched records fail
+  closed.
+- One retained Linux directory adapter now binds raw POSIX basename bytes and
+  their exact commitment, derives only the two fixed attempt-private names,
+  creates with `O_EXCL | O_NOFOLLOW`, rejects symlinks and hard links, publishes
+  with `renameat2(RENAME_NOREPLACE)`, synchronizes the retained directory, and
+  unlinks only an exact recorded inode. The supported-filesystem check is the
+  existing conservative local-filesystem set; no racy rename fallback exists.
+- Creation security captures the effective UID once at destination binding,
+  applies mode `0600`, removes an inherited extended access ACL, verifies the
+  retained inode, and records the domain-separated commitment. Resolver-side
+  inspection recomputes from the inode owner rather than the resolver's current
+  user. Permanent tests prove mode normalization and actual removal of a
+  synthetic extended POSIX ACL.
+- Main-name validation now uses exact raw POSIX bytes instead of a lossy Unicode
+  conversion. The existing basename commitment module is connected to the
+  production graph; its Windows-only variants remain compiled on Windows and in
+  portable codec tests without causing dead production code on Linux.
+- Current and Rust 1.74 all-feature suites each pass 210 tests with one
+  intentionally ignored subprocess entry point. The no-default suite, formatting,
+  warnings-denied all-target Clippy, benchmark compilation, diff checks, and SOW
+  audit pass. The exact compiled production graph is 98 files and 24,221
+  physical lines; all 1,498 measured functions remain at or below cyclomatic
+  complexity 9. New responsibility files are 484 lines or smaller. The whole
+  engine remains far above the directional size goal, and the final
+  simplification pass remains mandatory.
+- This is not yet publication: output locking/digesting, reservation file I/O,
+  the state-1/state-2 namespace state machine, structured results, crash tests,
+  cleanup, and resolution remain in the active publication milestone.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

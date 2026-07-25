@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+
 pub(crate) fn canonical_sidecar(main: &Path) -> Result<PathBuf> {
     let name = main
         .file_name()
@@ -16,9 +19,18 @@ pub(crate) fn canonical_sidecar(main: &Path) -> Result<PathBuf> {
     Ok(main.with_file_name(sidecar_name))
 }
 
-fn validate_main_name(name: &OsStr) -> Result<()> {
-    let name = name.to_string_lossy();
+pub(crate) fn validate_main_name(name: &OsStr) -> Result<()> {
+    #[cfg(unix)]
     let bytes = name.as_bytes();
+    #[cfg(not(unix))]
+    let owned = name.to_string_lossy();
+    #[cfg(not(unix))]
+    let bytes = owned.as_bytes();
+    if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&0) {
+        return Err(Error::InvalidArgument(
+            "database file name is not one path component",
+        ));
+    }
     if starts_with_ascii_case(bytes, b".iprange-") {
         return Err(Error::InvalidArgument(
             "database file name uses the reserved .iprange- prefix",
