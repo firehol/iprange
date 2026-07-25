@@ -8,13 +8,14 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
-use crate::contract::{AddressFamily, ValueKind};
+use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED};
 use crate::database;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::metadata;
 use crate::random;
 
 pub use create::{create_live, CreateResult, CreationState};
@@ -41,6 +42,7 @@ impl TransactionBudget {
 
     fn pages(self) -> PageBudget {
         PageBudget {
+            max_heap_bytes: self.max_heap_bytes,
             max_private_pages: self.max_private_pages,
             max_growth_pages: self.max_file_growth_pages,
         }
@@ -141,6 +143,49 @@ impl LiveWriter {
         self.mutate(|store| store.clear_v6(from, to))
     }
 
+    /// Compress and stage one exact opaque metadata replacement.
+    ///
+    /// The minimum heap budget is the zlib stored-block bound from the v4
+    /// specification. With 512 KiB of additional budget, the writer first
+    /// attempts normal DEFLATE compression and falls back to stored blocks.
+    pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
+        self.require_healthy()?;
+        self.require_metadata_stage_available()?;
+        if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
+            return Err(Error::InvalidArgument("metadata exceeds 1 MiB"));
+        }
+        self.mutate(|store| store.set_metadata(input))
+    }
+
+    /// Stage metadata absence, or report an already-absent no-op.
+    pub fn clear_metadata_json(&mut self) -> Result<bool> {
+        self.require_healthy()?;
+        self.require_metadata_stage_available()?;
+        if self.current_meta().metadata_root == 0 {
+            return Ok(false);
+        }
+        self.mutate(|store| store.clear_metadata())
+    }
+
+    /// Exact decompressed length of the committed or staged metadata.
+    pub fn metadata_json_len(&self) -> Result<Option<u64>> {
+        self.require_healthy()?;
+        let meta = self.current_meta();
+        Ok((meta.metadata_root != 0).then_some(meta.metadata_uncompressed_len))
+    }
+
+    /// Fill caller storage from the committed or staged metadata.
+    pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
+        self.require_healthy()?;
+        metadata::read(&self.file, &self.current_meta(), output)
+    }
+
+    /// Return the complete committed or staged bounded metadata value.
+    pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
+        self.require_healthy()?;
+        metadata::read_vec(&self.file, &self.current_meta())
+    }
+
     /// Discard all unpublished changes.
     pub fn abort(&mut self) -> Result<bool> {
         self.require_healthy()?;
@@ -193,6 +238,7 @@ impl LiveWriter {
 
     fn require_direct(&self, family: AddressFamily, ordered: bool) -> Result<()> {
         self.require_healthy()?;
+        self.require_metadata_stage_available()?;
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
@@ -203,6 +249,22 @@ impl LiveWriter {
             ));
         }
         Ok(())
+    }
+
+    fn require_metadata_stage_available(&self) -> Result<()> {
+        if self.draft.as_ref().is_some_and(Draft::metadata_staged) {
+            return Err(Error::WrongState(
+                "this transaction already staged metadata",
+            ));
+        }
+        Ok(())
+    }
+
+    fn current_meta(&self) -> MetaV4 {
+        self.draft
+            .as_ref()
+            .map(Draft::metadata_meta)
+            .unwrap_or(self.base.meta)
     }
 
     fn require_healthy(&self) -> Result<()> {

@@ -41,7 +41,7 @@ impl Drop for TestPair {
 
 fn budget() -> TransactionBudget {
     TransactionBudget {
-        max_heap_bytes: 0,
+        max_heap_bytes: 2 * 1024 * 1024,
         max_private_pages: 10_000,
         max_file_growth_pages: 10_000,
         max_open_files: 2,
@@ -272,4 +272,133 @@ fn failed_reclamation_discards_its_complete_private_draft() {
         ReclaimResult::Commit { .. }
     ));
     writer.close().unwrap();
+}
+
+#[test]
+fn metadata_is_atomic_exact_and_visible_to_the_staging_writer() {
+    let files = TestPair::new("metadata");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        2,
+    )
+    .unwrap();
+    let old = LiveReader::open(&files.main).unwrap();
+    assert_eq!(old.metadata_json_len().unwrap(), None);
+
+    let payload = b"{ definitely not required to be valid JSON }\n";
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+    writer
+        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
+        .unwrap();
+    assert!(writer.set_metadata_json(payload).unwrap());
+    assert_eq!(
+        writer.metadata_json_len().unwrap(),
+        Some(payload.len() as u64)
+    );
+    assert_eq!(
+        writer.metadata_json().unwrap().as_deref(),
+        Some(&payload[..])
+    );
+
+    let mut too_small = vec![0x55; payload.len() - 1];
+    assert!(matches!(
+        writer.read_metadata_json(&mut too_small),
+        Err(Error::BufferTooSmall { required }) if required == payload.len() as u64
+    ));
+    assert!(too_small.iter().all(|&byte| byte == 0x55));
+    assert!(matches!(
+        writer.clear_metadata_json(),
+        Err(Error::WrongState(_))
+    ));
+    assert!(matches!(
+        writer.assign_direct_v4(Ipv4Key(30), Ipv4Key(40), 9),
+        Err(Error::WrongState(_))
+    ));
+
+    let commit = writer.commit().unwrap();
+    assert_eq!(commit.durability, CommitDurability::Committed);
+    assert_eq!(old.metadata_json_len().unwrap(), None);
+
+    let current = LiveReader::open(&files.main).unwrap();
+    assert_eq!(
+        current.metadata_json().unwrap().as_deref(),
+        Some(&payload[..])
+    );
+    assert_eq!(current.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(7));
+    old.close().unwrap();
+    current.close().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn equal_replacement_and_clear_have_the_exact_generation_semantics() {
+    let files = TestPair::new("metadata-replace");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"asn").unwrap(),
+        1,
+    )
+    .unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget()).unwrap();
+
+    assert!(!writer.clear_metadata_json().unwrap());
+    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    assert!(writer.set_metadata_json(b"").unwrap());
+    assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
+    assert_eq!(writer.commit().unwrap().transaction_id, 2);
+
+    writer.assign_direct_v4(Ipv4Key(1), Ipv4Key(2), 9).unwrap();
+    assert_eq!(writer.metadata_json().unwrap(), Some(Vec::new()));
+    assert!(writer.abort().unwrap());
+
+    assert!(writer.set_metadata_json(b"").unwrap());
+    assert_eq!(writer.commit().unwrap().transaction_id, 3);
+    assert!(writer.clear_metadata_json().unwrap());
+    assert_eq!(writer.metadata_json_len().unwrap(), None);
+    assert_eq!(writer.commit().unwrap().transaction_id, 4);
+    assert!(!writer.clear_metadata_json().unwrap());
+    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    writer.close().unwrap();
+
+    let reader = LiveReader::open(&files.main).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 4);
+    assert_eq!(reader.metadata_json().unwrap(), None);
+    reader.close().unwrap();
+}
+
+#[test]
+fn metadata_resource_failure_aborts_all_earlier_draft_changes() {
+    let files = TestPair::new("metadata-budget");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+    )
+    .unwrap();
+    let mut tiny = budget();
+    tiny.max_heap_bytes = 1;
+    let mut writer = LiveWriter::open(&files.main, tiny).unwrap();
+    writer
+        .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 7)
+        .unwrap();
+    assert!(matches!(
+        writer.set_metadata_json(b"x"),
+        Err(Error::TransactionAborted(cause))
+            if matches!(*cause, Error::BudgetExceeded(_))
+    ));
+    assert!(matches!(writer.commit(), Err(Error::NoPendingTransaction)));
+    writer.close().unwrap();
+
+    let reader = LiveReader::open(&files.main).unwrap();
+    assert_eq!(reader.info().unwrap().transaction_id, 1);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
+    assert_eq!(reader.metadata_json().unwrap(), None);
+    reader.close().unwrap();
 }

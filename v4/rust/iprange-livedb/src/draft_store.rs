@@ -1,5 +1,8 @@
 //! File-backed unpublished page ownership for one COW transaction.
 
+#[path = "draft_store/metadata.rs"]
+mod metadata_ops;
+
 use std::fs::File;
 
 use crate::contract::{u32_le, u64_le, MetaV4, MAX_PAGE_COUNT, PAGE_SHIFT, PAGE_SIZE};
@@ -16,18 +19,21 @@ const PRIVATE_MAGIC: u32 = 0x5046_5245;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PageBudget {
+    pub(crate) max_heap_bytes: u64,
     pub(crate) max_private_pages: u64,
     pub(crate) max_growth_pages: u64,
 }
 
 #[derive(Debug)]
 pub(crate) struct Draft {
+    base: MetaV4,
     pub(crate) meta: MetaV4,
     private_head: u32,
     allocator_retired: RetiredPages,
     private_pages: u64,
     growth_pages: u64,
     changed: bool,
+    metadata_staged: bool,
 }
 
 impl Draft {
@@ -39,17 +45,31 @@ impl Draft {
             .ok_or(Error::ArithmeticOverflow("transaction ID"))?;
         meta.commit_nonce = nonce;
         Ok(Self {
+            base,
             meta,
             private_head: 0,
             allocator_retired: RetiredPages::new(),
             private_pages: 0,
             growth_pages: 0,
             changed: false,
+            metadata_staged: false,
         })
     }
 
     pub(crate) fn changed(&self) -> bool {
         self.changed
+    }
+
+    pub(crate) fn metadata_staged(&self) -> bool {
+        self.metadata_staged
+    }
+
+    pub(crate) fn metadata_meta(&self) -> MetaV4 {
+        if self.metadata_staged {
+            self.meta
+        } else {
+            self.base
+        }
     }
 }
 

@@ -55,6 +55,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     publish(&test.file, creation, 1);
 
     let budget = PageBudget {
+        max_heap_bytes: 0,
         max_private_pages: 20_000,
         max_growth_pages: 20_000,
     };
@@ -107,6 +108,7 @@ fn ipv6_assignment_and_clear_use_the_same_file_store() {
     let mut creation = empty_direct_meta(1);
     creation.address_family = crate::contract::AddressFamily::Ipv6;
     let budget = PageBudget {
+        max_heap_bytes: 0,
         max_private_pages: 100,
         max_growth_pages: 100,
     };
@@ -131,6 +133,7 @@ fn page_budget_failure_happens_before_the_first_allocation() {
         &test.file,
         creation.page_count,
         PageBudget {
+            max_heap_bytes: 0,
             max_private_pages: 0,
             max_growth_pages: 0,
         },

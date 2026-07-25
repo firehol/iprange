@@ -10162,6 +10162,80 @@ requirements are normative in the Pre-Implementation Gate above.
   cancellation, cross-platform execution, and later format surfaces remain
   pending.
 
+### 2026-07-25 - compressed metadata implementation plan
+
+- The approved contract is one optional opaque byte string. The SDK does not
+  parse JSON. Absence, empty bytes, and every other byte sequence remain
+  distinct; the uncompressed limit is exactly 1,048,576 bytes.
+- Rust will use `flate2` 1.1.9 with its default pure-Rust backend for normal
+  RFC 1950 zlib compression and decompression. This release supports Rust 1.67
+  and therefore the project's Rust 1.74 minimum. If normal compression would
+  exceed the format's exact stored-block bound, a small local RFC 1950 stored
+  encoder will produce the guaranteed bounded representation.
+  Evidence: `rust-lang/flate2-rs @
+  19ddb18bf11199858fbc6504d079448fafd1606e`,
+  `Cargo.toml:1-8,21-30,41-64` and `src/mem.rs:163-190,450-490`.
+- Writer compression is charged against `max_heap_bytes` before allocation and
+  completes during `SetMetadataJSON`, never during commit. Compressed bytes are
+  written to at most 260 forward COW pages using a fixed page-number array.
+  Replaced committed chunks enter the existing retirement tree; clear needs no
+  new metadata page.
+- Reads walk only the selected metadata chain and stream zlib output directly
+  into caller storage. They enforce exact chain geometry, one complete stream,
+  Adler-32, declared input/output lengths, and no trailing stream or bytes, but
+  deliberately do not perform data-page CRC validation. Too-small output is
+  rejected before touching it.
+- A draft records whether its single metadata stage was consumed. A second stage
+  and oversized caller input fail before mutation. Compression, allocation,
+  page-write, old-chain, or retirement failure follows the existing whole-draft
+  abort path. Writer reads use the draft metadata root, giving exact
+  read-your-writes without retaining a second uncompressed copy.
+- Permanent tests will cover absent/empty/arbitrary bytes, highly compressible
+  and incompressible maximum input, exact bounds, pinned generations,
+  read-your-writes, equal-byte replacement, clear/no-change, one-stage state,
+  too-small buffers, resource failure, malformed chains, malformed/trailing
+  zlib streams, and ordinary reads with a bad page CRC. Cancellation remains a
+  required common operation layer and will be added consistently rather than
+  inventing a metadata-only token shape.
+
+### 2026-07-25 - compressed metadata implementation
+
+- Rust now exposes metadata presence/length, caller-buffer reads, and bounded
+  allocation helpers on immutable readers, live readers, and the live writer.
+  The writer exposes exact replacement and clear staging with read-your-writes.
+  Empty bytes remain present; clear absence remains an O(1) no-op; equal-byte
+  replacement still publishes a new generation.
+- Metadata uses the exact type-13 forward COW chain. Reads stream each selected
+  compressed chunk directly into caller output, reject malformed links,
+  offsets, padding, zlib headers, dictionaries, checksums, concatenation,
+  trailing bytes, and declared-length mismatch, and deliberately ignore page
+  CRCs on this ordinary path. Replacement pages use the existing retirement
+  tree and remain protected by pinned old readers.
+- The exact stored-block output bound is the minimum writer heap requirement.
+  With an additional fixed 512 KiB budget, the pinned pure-Rust miniz backend
+  first attempts normal DEFLATE and falls back to a local stored-block encoder
+  if needed. Linux allocation measurement observed 319,326 bytes of compressor
+  overhead for the maximum repeated payload; a permanent test checks both
+  maximum repeated and pseudo-random inputs remain within the 512 KiB charge.
+  A maximum incompressible payload succeeds with exactly the 1,048,667-byte
+  minimum budget and writes the full 260-page chain.
+- Oversized input and a second metadata stage fail before mutation. Compression,
+  heap budget, page allocation/write, old-chain, and retirement failures use
+  whole-draft abort. Once metadata is staged, further data mutation is rejected;
+  only commit or abort remains valid.
+- Metadata-only crash tests cover every durable commit boundary and expose
+  either absence or the complete value after restart. Public integration tests
+  cover maximum-size storage, pinned-generation replacement/clear, reclamation,
+  exact buffer errors, staged reads, equal replacement, and preservation of an
+  existing draft after an oversized precondition error.
+- Validation passes on the current toolchain and Rust 1.74 with 102 passing
+  tests and one intentionally ignored subprocess entry point. Warnings-denied
+  all-target Clippy, formatting, metadata complexity analysis, and locked
+  dependency resolution pass. Every new function is at or below cyclomatic
+  complexity 9. The active implementation graph is 7,623 physical lines
+  including embedded tests; every active source and test file is at or below
+  490 lines.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

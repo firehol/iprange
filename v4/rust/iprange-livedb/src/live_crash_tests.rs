@@ -42,7 +42,7 @@ impl Drop for Pair {
 
 fn budget() -> TransactionBudget {
     TransactionBudget {
-        max_heap_bytes: 0,
+        max_heap_bytes: 2 * 1024 * 1024,
         max_private_pages: 10_000,
         max_file_growth_pages: 10_000,
         max_open_files: 2,
@@ -136,6 +136,25 @@ fn commit_crashes_select_only_a_complete_generation() {
 }
 
 #[test]
+fn metadata_crashes_select_absence_or_the_complete_value() {
+    let payload = b"metadata crash value";
+    for (point, expected) in [
+        ("commit.before_private_sync", None),
+        ("commit.after_private_sync", None),
+        ("commit.after_meta_write", Some(&payload[..])),
+        ("commit.after_meta_sync", Some(&payload[..])),
+    ] {
+        let files = Pair::new(point);
+        create(&files.0, 1);
+        run_child(&files.0, "metadata", Some(point));
+
+        let reader = LiveReader::open(&files.0).unwrap();
+        assert_eq!(reader.metadata_json().unwrap().as_deref(), expected);
+        reader.close().unwrap();
+    }
+}
+
+#[test]
 fn process_death_releases_reader_and_writer_locks() {
     let files = Pair::new("locks");
     create(&files.0, 1);
@@ -198,6 +217,11 @@ fn crash_child() {
             writer
                 .assign_direct_v4(Ipv4Key(10), Ipv4Key(20), 123)
                 .unwrap();
+            let _ = writer.commit();
+        }
+        "metadata" => {
+            let mut writer = LiveWriter::open(&path, budget()).unwrap();
+            writer.set_metadata_json(b"metadata crash value").unwrap();
             let _ = writer.commit();
         }
         "reader" => {

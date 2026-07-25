@@ -10,6 +10,7 @@ pub use crate::bootstrap::BootstrapError as FormatError;
 #[non_exhaustive]
 pub enum ErrorCode {
     InvalidArgument,
+    WrongState,
     WrongMode,
     Unsupported,
     Io,
@@ -19,6 +20,7 @@ pub enum ErrorCode {
     PageSpaceExhausted,
     BudgetExceeded,
     WorkLimitTooSmall,
+    BufferTooSmall,
     Random,
     WriterBusy,
     ReaderCapacityExhausted,
@@ -33,6 +35,7 @@ pub enum ErrorCode {
 #[non_exhaustive]
 pub enum Error {
     InvalidArgument(&'static str),
+    WrongState(&'static str),
     WrongMode(&'static str),
     Unsupported(&'static str),
     Io(io::Error),
@@ -43,6 +46,9 @@ pub enum Error {
     BudgetExceeded(&'static str),
     WorkLimitTooSmall {
         required_pages: u64,
+    },
+    BufferTooSmall {
+        required: u64,
     },
     Random(getrandom::Error),
     WriterBusy,
@@ -60,6 +66,7 @@ impl Error {
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidArgument(_) => ErrorCode::InvalidArgument,
+            Self::WrongState(_) => ErrorCode::WrongState,
             Self::WrongMode(_) => ErrorCode::WrongMode,
             Self::Unsupported(_) => ErrorCode::Unsupported,
             Self::Io(_) => ErrorCode::Io,
@@ -69,6 +76,7 @@ impl Error {
             Self::PageSpaceExhausted => ErrorCode::PageSpaceExhausted,
             Self::BudgetExceeded(_) => ErrorCode::BudgetExceeded,
             Self::WorkLimitTooSmall { .. } => ErrorCode::WorkLimitTooSmall,
+            Self::BufferTooSmall { .. } => ErrorCode::BufferTooSmall,
             Self::Random(_) => ErrorCode::Random,
             Self::WriterBusy => ErrorCode::WriterBusy,
             Self::ReaderCapacityExhausted => ErrorCode::ReaderCapacityExhausted,
@@ -88,6 +96,7 @@ impl fmt::Display for Error {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument(detail) => write!(output, "invalid argument: {detail}"),
+            Self::WrongState(detail) => write!(output, "wrong operation state: {detail}"),
             Self::WrongMode(detail) => write!(output, "wrong database mode: {detail}"),
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
             Self::Io(error) => write!(output, "I/O error: {error}"),
@@ -100,6 +109,12 @@ impl fmt::Display for Error {
                 write!(
                     output,
                     "work limit is too small; {required_pages} pages are required"
+                )
+            }
+            Self::BufferTooSmall { required } => {
+                write!(
+                    output,
+                    "output buffer is too small; {required} bytes are required"
                 )
             }
             Self::Random(error) => write!(output, "operating-system randomness failed: {error}"),
@@ -127,6 +142,7 @@ impl std::error::Error for Error {
             Self::TransactionAborted(cause) => Some(cause.as_ref()),
             Self::CleanupIncomplete { cause, .. } => Some(cause.as_ref()),
             Self::InvalidArgument(_)
+            | Self::WrongState(_)
             | Self::WrongMode(_)
             | Self::Unsupported(_)
             | Self::Format(_)
@@ -135,6 +151,7 @@ impl std::error::Error for Error {
             | Self::PageSpaceExhausted
             | Self::BudgetExceeded(_)
             | Self::WorkLimitTooSmall { .. }
+            | Self::BufferTooSmall { .. }
             | Self::WriterBusy
             | Self::ReaderCapacityExhausted
             | Self::NoPendingTransaction

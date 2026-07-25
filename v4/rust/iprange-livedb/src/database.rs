@@ -11,6 +11,7 @@ use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::metadata;
 use crate::path;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::range_tree;
@@ -99,6 +100,21 @@ impl ImmutableReader {
     pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.core.direct_cursor_v6(direction)
     }
+
+    /// Exact decompressed metadata length, or absence.
+    pub fn metadata_json_len(&self) -> Option<u64> {
+        self.core.metadata_json_len()
+    }
+
+    /// Fill caller storage with the exact opaque metadata bytes.
+    pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
+        self.core.read_metadata_json(output)
+    }
+
+    /// Return the complete bounded metadata value, or absence.
+    pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
+        self.core.metadata_json()
+    }
 }
 
 impl ReaderCore {
@@ -146,6 +162,19 @@ impl ReaderCore {
     ) -> Result<DirectCursorV6<'_>> {
         self.require_direct(AddressFamily::Ipv6)?;
         DirectCursorV6::new_live(&self.file, &self.bootstrap.meta, direction, owner_pid)
+    }
+
+    pub(crate) fn metadata_json_len(&self) -> Option<u64> {
+        (self.bootstrap.meta.metadata_root != 0)
+            .then_some(self.bootstrap.meta.metadata_uncompressed_len)
+    }
+
+    pub(crate) fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
+        metadata::read(&self.file, &self.bootstrap.meta, output)
+    }
+
+    pub(crate) fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
+        metadata::read_vec(&self.file, &self.bootstrap.meta)
     }
 
     fn require_direct(&self, family: AddressFamily) -> Result<()> {
@@ -351,6 +380,21 @@ mod tests {
 
         let reader = ImmutableReader::open(&path.0).unwrap();
         assert_eq!(reader.info().range_record_count, 1);
+    }
+
+    #[test]
+    fn open_does_not_validate_the_metadata_chain() {
+        let path = TestPath::new("no-implicit-metadata-validation");
+        let mut meta = empty_meta(AddressFamily::Ipv4, ValueKind::Direct, ValueTag::RETENTION);
+        meta.page_count = 3;
+        meta.metadata_root = 2;
+        meta.metadata_uncompressed_len = 0;
+        meta.metadata_compressed_len = 8;
+        write_image(&path.0, meta, 3);
+
+        let reader = ImmutableReader::open(&path.0).unwrap();
+        assert_eq!(reader.metadata_json_len(), Some(0));
+        assert!(matches!(reader.metadata_json(), Err(Error::Corrupt(_))));
     }
 
     #[test]

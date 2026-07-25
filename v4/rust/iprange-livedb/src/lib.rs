@@ -25,6 +25,7 @@ mod live_lock;
 mod live_reader;
 mod live_sidecar;
 mod live_writer;
+mod metadata;
 mod path;
 mod random;
 mod range_cursor;
@@ -35,7 +36,7 @@ mod slotted_page;
 
 pub use bootstrap::MetaSelection;
 pub use cardinality::{Cardinality129, CardinalityOverflow};
-pub use contract::{AddressFamily, ValueKind, ValueTag};
+pub use contract::{AddressFamily, ValueKind, ValueTag, MAX_METADATA_UNCOMPRESSED};
 pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use key::{Ipv4Key, Ipv6Key};

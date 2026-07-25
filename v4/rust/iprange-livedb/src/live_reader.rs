@@ -80,6 +80,24 @@ impl LiveReader {
         self.core.direct_cursor_v6_live(direction, self.owner_pid)
     }
 
+    /// Exact decompressed metadata length, or absence.
+    pub fn metadata_json_len(&self) -> Result<Option<u64>> {
+        self.require_owner()?;
+        Ok(self.core.metadata_json_len())
+    }
+
+    /// Fill caller storage with this generation's exact opaque metadata bytes.
+    pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
+        self.require_owner()?;
+        self.core.read_metadata_json(output)
+    }
+
+    /// Return this generation's complete bounded metadata value, or absence.
+    pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
+        self.require_owner()?;
+        self.core.metadata_json()
+    }
+
     /// Clear this registration. Dropping without close remains crash-safe.
     pub fn close(self) -> Result<()> {
         self.require_owner()?;
