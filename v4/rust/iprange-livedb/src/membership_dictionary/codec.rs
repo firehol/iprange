@@ -5,27 +5,27 @@ use crate::error::{Error, Result};
 use crate::fixed_tree::Codec;
 use crate::slotted_page::{self, Header};
 
-pub(super) const ID_BRANCH: u8 = 7;
-pub(super) const ID_LEAF: u8 = 8;
+pub(crate) const ID_BRANCH: u8 = 7;
+pub(crate) const ID_LEAF: u8 = 8;
 pub(super) const HASH_BRANCH: u8 = 9;
 pub(super) const HASH_LEAF: u8 = 10;
-pub(super) const ID_BASE: usize = 64;
-pub(super) const MAX_ID_RECORD: usize = PAGE_SIZE - slotted_page::HEADER_SIZE - 2;
-pub(super) const MAX_WORD_COUNT: u32 = 67_108_864;
+pub(crate) const ID_BASE: usize = 64;
+pub(crate) const MAX_ID_RECORD: usize = PAGE_SIZE - slotted_page::HEADER_SIZE - 2;
+pub(crate) const MAX_WORD_COUNT: u32 = 67_108_864;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Storage {
+pub(crate) enum Storage {
     Inline,
     Blob(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Record {
-    pub(super) id: u32,
-    pub(super) refcount: u64,
-    pub(super) word_count: u32,
-    pub(super) digest: [u8; 32],
-    pub(super) storage: Storage,
+pub(crate) struct Record {
+    pub(crate) id: u32,
+    pub(crate) refcount: u64,
+    pub(crate) word_count: u32,
+    pub(crate) digest: [u8; 32],
+    pub(crate) storage: Storage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -94,7 +94,7 @@ impl Codec for HashCodec {
     }
 }
 
-pub(super) fn decode(cell: &[u8]) -> Result<Record> {
+pub(crate) fn decode(cell: &[u8]) -> Result<Record> {
     require_record_envelope(cell)?;
     let id = u32_le(cell, 4);
     let refcount = u64_le(cell, 8);

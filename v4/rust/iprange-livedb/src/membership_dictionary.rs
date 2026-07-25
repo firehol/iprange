@@ -2,7 +2,7 @@
 
 mod algebra;
 mod blob;
-mod codec;
+pub(crate) mod codec;
 mod record;
 
 use sha2::{Digest, Sha256};

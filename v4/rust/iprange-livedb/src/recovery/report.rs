@@ -158,6 +158,52 @@ impl<'a, S: RecoverySink> Reporter<'a, S> {
         increment(&mut self.report.ranges.rejected, "recovery ranges rejected")
     }
 
+    pub(crate) fn catalog_examined(&mut self) -> Result<()> {
+        increment(
+            &mut self.report.catalog_entries.examined,
+            "recovery catalog entries examined",
+        )
+    }
+
+    pub(crate) fn catalog_accepted(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.catalog_entries.accepted,
+            count,
+            "recovery catalog entries accepted",
+        )
+    }
+
+    pub(crate) fn catalog_rejected(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.catalog_entries.rejected,
+            count,
+            "recovery catalog entries rejected",
+        )
+    }
+
+    pub(crate) fn membership_examined(&mut self) -> Result<()> {
+        increment(
+            &mut self.report.membership_entries.examined,
+            "recovery membership entries examined",
+        )
+    }
+
+    pub(crate) fn membership_accepted(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.membership_entries.accepted,
+            count,
+            "recovery membership entries accepted",
+        )
+    }
+
+    pub(crate) fn membership_rejected(&mut self, count: u64) -> Result<()> {
+        add_count(
+            &mut self.report.membership_entries.rejected,
+            count,
+            "recovery membership entries rejected",
+        )
+    }
+
     pub(crate) fn metadata_chunk_examined(&mut self) -> Result<()> {
         increment(
             &mut self.report.metadata_chunks.examined,
@@ -225,6 +271,13 @@ impl<'a, S: RecoverySink> Reporter<'a, S> {
 fn increment(value: &mut u64, purpose: &'static str) -> Result<()> {
     *value = value
         .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow(purpose))?;
+    Ok(())
+}
+
+fn add_count(value: &mut u64, count: u64, purpose: &'static str) -> Result<()> {
+    *value = value
+        .checked_add(count)
         .ok_or(Error::ArithmeticOverflow(purpose))?;
     Ok(())
 }

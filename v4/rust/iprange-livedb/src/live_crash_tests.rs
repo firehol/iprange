@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -11,6 +12,7 @@ use crate::{
 const CHILD_TEST: &str = "live_crash_tests::crash_child";
 const CHILD_ACTION: &str = "IPRANGE_V4_TEST_ACTION";
 const CHILD_PATH: &str = "IPRANGE_V4_TEST_PATH";
+static PAIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Pair(PathBuf);
 
@@ -20,8 +22,9 @@ impl Pair {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = PAIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         Self(std::env::temp_dir().join(format!(
-            "iprange-v4-crash-{label}-{}-{unique}",
+            "iprange-v4-crash-{label}-{}-{unique}-{sequence}",
             std::process::id()
         )))
     }

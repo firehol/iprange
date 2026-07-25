@@ -11577,6 +11577,84 @@ requirements are normative in the Pre-Implementation Gate above.
   remain required before scratch support is complete. Membership reconstruction
   and the public recovery/publication layer remain later steps in this SOW.
 
+### 2026-07-25 - membership recovery implementation plan
+
+- Membership recovery will reuse the existing feed-catalog, membership-record,
+  blob, immutable-output, range, and metadata codecs. One small recovery tree
+  walker will add only the weaker salvage policy: CRC-valid reachable pages are
+  traversed independently, bad pages or records are reported, and no child,
+  range, feed, or bitmap bytes are guessed.
+- One ownership set spans both catalog trees, the authoritative membership-ID
+  tree, every membership blob, the range tree, and metadata. A page is counted
+  once; a repeated page is a cycle on its current path or an alias otherwise.
+  The existing fixed-capacity heap table remains the first tier. The authorized
+  scratch tier will store fixed-width ownership keys when the reachable graph
+  exceeds that table; it will not allocate by the selected meta's highest page
+  number.
+- Valid catalog records from both redundant trees become fixed `(name,index)`
+  candidates. They are sorted first by name and then by index. Equal pairs are
+  deduplicated for output, while every source record remains accounted for.
+  Every record in a conflicting name or index group is rejected; accepted
+  indexes are preserved exactly and the selected `feed_index_limit` is never
+  shrunk.
+- The membership-ID tree is the only bitmap authority. Each record is accepted
+  only after its complete inline bytes or reachable blob, canonical trailing
+  word, SHA-256 digest, and every set feed bit verify against the reconciled
+  catalog. Stored hash indexes, used bitmaps, and refcounts are ignored and
+  rebuilt by the existing immutable-output builder.
+- Accepted membership locators are sorted by source ID. Duplicate ID groups are
+  rejected. Range recovery then resolves each source ID through that table,
+  rejects a range whose complete membership is absent, applies the existing
+  whole-overlap-component rule, compares equal-digest memberships byte-for-byte
+  before coalescing adjacent output, and lets the builder assign new internal
+  IDs. Callers never receive or manage those IDs.
+- Catalog and locator tables use exact reserved heap when they fit. Otherwise
+  they use the same caller-authorized two-file fixed-record merge machinery as
+  disordered ranges, within one recovery scratch attempt. Source and prospective
+  output descriptors remain charged, and no normal ingestion/import path gains
+  a temporary file.
+- Permanent tests will cover clean inline and blob membership recovery,
+  one-sided catalog survival, equal-pair deduplication, name/index conflicts,
+  inactive bits, missing and duplicate membership IDs, damaged blobs, source-ID
+  renumbering, equal-bitmap range coalescing, overlap rejection, metadata,
+  cancellation/sink failures, and heap/scratch/page/file limits before the
+  public mode and publication layer is connected.
+
+### 2026-07-25 - membership recovery semantic milestone
+
+- Recovery now scans both catalog trees independently, accepts only
+  conflict-free `(name,index)` pairs, preserves sparse feed indexes and the
+  selected high-water mark, and lets the immutable builder regenerate every
+  derived catalog structure.
+- The membership-ID tree is authoritative. Inline and blob bitmaps require
+  complete CRC-checked storage, exact SHA-256 bytes, a nonzero final word, and
+  only accepted catalog bits. Duplicate IDs are rejected; hash trees, used
+  bitmaps, and source refcounts are intentionally ignored and rebuilt.
+- Range recovery rejects missing memberships and every complete maximal overlap
+  component. Equal-digest memberships are compared byte-for-byte before
+  adjacent ranges coalesce, and output membership IDs remain builder-owned.
+- One page-ownership set spans catalog, membership, blob, range, and metadata
+  graphs. The disordered range path reuses the bounded two-file external sorter;
+  normal ingestion and import still create no sorting files.
+- Eight permanent membership tests cover clean inline/blob recovery, one-sided
+  redundant catalog survival, name/index conflict isolation, damaged blobs,
+  exact equal-bitmap coalescing, duplicate membership IDs, whole-component
+  overlap rejection, and forced external range sorting.
+- A parallel crash-test collision exposed that timestamp-only temporary names
+  were not unique at the clock's effective resolution. A process-local
+  monotonic suffix now makes every crash-test pair distinct; the production
+  namespace was not involved.
+- Current and Rust 1.74 all-feature suites pass with 241 unit tests passed and
+  two ignored plus every integration target. The no-default-feature suite,
+  strict all-target Clippy, formatting, SOW audit, and recovery complexity
+  checks pass. The new production files are 485 lines or smaller except the
+  cohesive 505-line membership build orchestrator; no measured function exceeds
+  cyclomatic complexity 9.
+- This checkpoint proves the recovery semantics, not the public operation.
+  File-backed ownership/catalog/locator overflow, authenticated abandoned
+  scratch maintenance, source-mode guards and final candidate rechecks, exact
+  public results/cleanup, and fail-if-exists publication remain required.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

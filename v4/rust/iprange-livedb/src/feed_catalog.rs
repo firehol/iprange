@@ -13,12 +13,12 @@ mod mutation;
 
 pub(crate) use mutation::{delete, insert, rename};
 
-const NAME_BRANCH: u8 = 3;
-const NAME_LEAF: u8 = 4;
-const INDEX_BRANCH: u8 = 5;
-const INDEX_LEAF: u8 = 6;
-const NAME_RECORD_BASE: usize = 12;
-const MAX_NAME_RECORD: usize = NAME_RECORD_BASE + MAX_FEED_NAME;
+pub(crate) const NAME_BRANCH: u8 = 3;
+pub(crate) const NAME_LEAF: u8 = 4;
+pub(crate) const INDEX_BRANCH: u8 = 5;
+pub(crate) const INDEX_LEAF: u8 = 6;
+pub(crate) const NAME_RECORD_BASE: usize = 12;
+pub(crate) const MAX_NAME_RECORD: usize = NAME_RECORD_BASE + MAX_FEED_NAME;
 
 pub(crate) fn lookup(file: &File, meta: &MetaV4, name: &FeedName) -> Result<Option<FeedEntry>> {
     if meta.catalog_name_root == 0 {
@@ -291,6 +291,14 @@ fn decode_name_record(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> 
 }
 
 fn decode_record(record: &[u8]) -> Result<NameRecord> {
+    let entry = decode_entry(record)?;
+    Ok(NameRecord {
+        name: entry.name,
+        value: entry.index,
+    })
+}
+
+pub(crate) fn decode_entry(record: &[u8]) -> Result<FeedEntry> {
     let name_len = usize::from(record[8]);
     if usize::from(u16_le(record, 0)) != NAME_RECORD_BASE + name_len
         || u16_le(record, 2) != 0
@@ -300,9 +308,9 @@ fn decode_record(record: &[u8]) -> Result<NameRecord> {
     }
     let name = FeedName::from_stored(&record[NAME_RECORD_BASE..])
         .ok_or(Error::Corrupt("feed catalog name is invalid"))?;
-    Ok(NameRecord {
+    Ok(FeedEntry {
         name,
-        value: u32_le(record, 4),
+        index: u32_le(record, 4),
     })
 }
 
