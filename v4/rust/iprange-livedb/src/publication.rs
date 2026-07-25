@@ -6,4 +6,6 @@ mod namespace;
 mod output;
 mod reservation;
 #[cfg(target_os = "linux")]
+mod reservation_file;
+#[cfg(target_os = "linux")]
 mod security;

@@ -162,6 +162,16 @@ pub(crate) struct PreparedOutput {
     pub(crate) sha512: [u8; 64],
 }
 
+impl PreparedOutput {
+    pub(crate) fn verify_private(&self) -> Result<(), Error> {
+        let length = inspect_exact(&self.attempt, &self.file, self.meta)?;
+        if length != self.byte_length {
+            return Err(Error::FinishedLengthChanged);
+        }
+        Ok(())
+    }
+}
+
 fn secure_created(created: &CreatedOutput) -> Result<Identity, Error> {
     let directory = created.destination.directory();
     let identity = regular_identity(&created.file, directory.identity().device)?;
@@ -177,7 +187,7 @@ fn secure_created(created: &CreatedOutput) -> Result<Identity, Error> {
 }
 
 fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
-    verify_custody(owner)?;
+    verify_custody(&owner.attempt, &owner.finished.file)?;
     live_lock::lock(&owner.finished.file, MAIN_LIFETIME_LOCK, Mode::Exclusive)
         .map_err(Error::Sdk)?;
     let byte_length = inspect_finished(owner)?;
@@ -195,34 +205,32 @@ fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
 }
 
 fn inspect_finished(owner: &UnpreparedOutput) -> Result<u64, Error> {
-    verify_custody(owner)?;
-    let byte_length = owner
-        .finished
-        .file
-        .metadata()
-        .map_err(crate::error::Error::from)?
-        .len();
+    inspect_exact(&owner.attempt, &owner.finished.file, owner.finished.meta)
+}
+
+fn inspect_exact(attempt: &OutputAttempt, file: &File, expected: MetaV4) -> Result<u64, Error> {
+    verify_custody(attempt, file)?;
+    let byte_length = file.metadata().map_err(crate::error::Error::from)?.len();
     let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(&owner.finished.file, &mut pages, 0).map_err(Error::Sdk)?;
+    file_io::read_exact_at(file, &mut pages, 0).map_err(Error::Sdk)?;
     let page0 = (&pages[..PAGE_SIZE]).try_into().expect("fixed meta page");
     let page1 = (&pages[PAGE_SIZE..]).try_into().expect("fixed meta page");
     let opened = bootstrap::open_meta_pages(page0, page1, byte_length, OpenMode::ImmutableReader)
         .map_err(Error::Bootstrap)?;
-    if opened.meta != owner.finished.meta {
+    if opened.meta != expected {
         return Err(Error::FinishedMetaChanged);
     }
     Ok(byte_length)
 }
 
-fn verify_custody(owner: &UnpreparedOutput) -> Result<(), Error> {
-    let attempt = &owner.attempt;
+fn verify_custody(attempt: &OutputAttempt, file: &File) -> Result<(), Error> {
     let directory = attempt.destination.directory();
-    let identity = regular_identity(&owner.finished.file, directory.identity().device)?;
+    let identity = regular_identity(file, directory.identity().device)?;
     if identity != attempt.identity {
         return Err(NamespaceError::IdentityChanged.into());
     }
     directory.verify_name(&attempt.name, identity)?;
-    attempt.destination.verify_created(&owner.finished.file)?;
+    attempt.destination.verify_created(file)?;
     Ok(())
 }
 

@@ -11102,6 +11102,67 @@ requirements are normative in the Pre-Implementation Gate above.
   policy, replacement publication, live transition, signing, or Go code was
   added.
 
+### 2026-07-25 - durable reservation state implementation plan
+
+- A separate reservation-file module will keep codec, filesystem, and
+  publication responsibilities distinct. It will reuse the retained destination
+  directory and security profile already owned by the prepared output; no path
+  will be reopened to establish authority.
+- `ReservationDraft` will own the exact private reservation descriptor from
+  exclusive creation and retain optional identity/header facts as they become
+  known. Initialization will normalize access, set the exact 8,192-byte length,
+  write/synchronize/select the state-1 block, take operation lock byte zero,
+  and recheck the exact private inode. Any failure returns that complete owner
+  and cause.
+- `PrivateReservation` will atomically rename that same inode to canonical
+  `.readers` with `RENAME_NOREPLACE`, synchronize the retained directory, and
+  verify canonical identity, link count, access, selected header, and private
+  name absence. A failure retains both exact names, descriptor, identity,
+  header, and whether the canonical namespace call began; no foreign canonical
+  inode is removed.
+- `CanonicalReservation` will write state 2 only to the alternate block,
+  synchronize it, re-read it as the selected header, and retain whether that
+  durable ambiguity boundary was crossed on every failure. `ArmedReservation`
+  is the only state from which the later main-name call will be possible.
+- Every transition rechecks the prepared output's identity, private name,
+  creator-only access, physical length, and exact immutable meta without
+  rehashing or graph validation. Tests will cover exact state-1/state-2 bytes,
+  operation-lock retention, no-replace conflict, same-inode canonical
+  acquisition, output/reservation tampering, and ownership/phase retention.
+
+### 2026-07-25 - durable reservation state implementation evidence
+
+- The reservation filesystem state is isolated in one 416-line module. A draft
+  retains its exact private name, descriptor, and every identity/header fact as
+  it becomes known. Successful initialization normalizes creator-only access,
+  writes and synchronizes the exact state-1 block, selects it back from disk,
+  takes operation lock byte zero, and rechecks the locked inode.
+- Canonical acquisition uses only `renameat2(RENAME_NOREPLACE)` on the retained
+  directory. It synchronizes that directory and proves the canonical name is the
+  same regular link-count-one inode, the private name is absent, security and
+  state-1 bytes are unchanged, and the prepared output remains exact. An
+  existing `.readers` is preserved byte-for-byte and the failure retains the
+  locked private reservation.
+- Arming writes state 2 only through the alternate block, synchronizes, selects
+  the exact new header, records the durable ambiguity boundary, and repeats the
+  complete reservation/output custody proof. Permanent injected-boundary
+  coverage proves a later failure retains `state2_selected == true`; tampering
+  before that write retains false.
+- Seven permanent tests cover exact header binding, security, lock retention,
+  same-inode acquisition, no-replace conflict, created-artifact ownership,
+  hard-link rejection, pre-state-2 tampering, and post-selection phase
+  retention. Current Rust, Rust 1.74.1, and no-default suites each pass 225
+  tests with one intentionally ignored subprocess entry point. Warnings-denied
+  all-target Clippy and benchmark compilation pass.
+- The new production module is 416 physical lines. Across it and prepared-output
+  handling, Lizard reports 41 functions, average CCN 3.0, no function above CCN
+  8, and no threshold violation. The first version exposed two helpers above
+  CCN 9; they were split by responsibility before this milestone.
+- Main-name publication, exact desired-content proof, reservation retirement,
+  structured results, crash subprocess coverage, and resolution remain pending.
+  No public API, replacement policy, recovery/snapshot traversal, live
+  transition, signing, or Go code was added.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.
