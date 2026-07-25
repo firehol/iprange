@@ -3,6 +3,7 @@
 mod commit;
 mod create;
 mod direct_workflow;
+mod feed_lifecycle;
 mod feed_workflow;
 mod membership;
 mod reclaim;
@@ -27,7 +28,7 @@ pub use direct_workflow::{DirectReplacement, RetentionRefresh};
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub use reclaim::ReclaimResult;
-pub use workflow::{FinishedWorkflow, PreparedWorkflow};
+pub use workflow::{FinishedWorkflow, PreparedFeedChange, PreparedWorkflow};
 
 /// Maximum resources retained by one writer transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

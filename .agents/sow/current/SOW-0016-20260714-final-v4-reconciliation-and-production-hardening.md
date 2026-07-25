@@ -10615,6 +10615,61 @@ requirements are normative in the Pre-Implementation Gate above.
   complexity 9. The line count remains above the directional goal and must keep
   exerting reduction pressure; this checkpoint does not claim otherwise.
 
+### 2026-07-25 - delete and rename lifecycle plan
+
+- The next Rust slice implements the remaining immediate one-feed lifecycle
+  calls: `DeleteFeed(name)` and `RenameFeed(old,new)`. They require a clean
+  membership writer, have no range input and no `FinishInput` report, and return
+  one prepared lifecycle handle for optional metadata plus commit/abort.
+- Delete requires the exact source name, clears only that feed's bit from every
+  private membership with cancellation checkpoints, removes both catalog
+  indexes, and makes its numeric index reusable only after commit. Every other
+  feed and its coverage remains unchanged.
+- Rename requires the old name present and the new name absent, changes only the
+  catalog name, and preserves the feed index and every membership. There is no
+  alias, upsert, or same-name no-op.
+- Preconditions and a pre-cancelled token fail before creating a draft. Once a
+  draft starts, cancellation, membership/refcount, storage, budget, or metadata
+  failure aborts the complete lifecycle change. Dropping the prepared handle
+  performs no I/O and leaves only explicit writer abort/close legal.
+- The common prepared-operation ownership is factored once and shared with
+  report-bearing workflows, avoiding duplicate metadata/commit/abort logic.
+  Validation will cover catalog and membership preservation, exact index
+  stability/reuse, empty feeds, metadata in the same generation, preconditions,
+  cancellation, dropped-handle safety, IPv4/IPv6, Rust 1.74, all static/build
+  gates, and exact compiled-graph size/complexity.
+
+### 2026-07-25 - delete and rename lifecycle implementation
+
+- Implemented immediate `delete_feed` and `rename_feed` operations in
+  `v4/rust/iprange-livedb/src/live_writer/feed_lifecycle.rs`. Both require a
+  clean membership writer and return one prepared handle limited to one optional
+  metadata stage plus commit/abort.
+- Delete uses the existing membership algebra over the complete address space,
+  with cancellation checks between transformed ranges, then removes the exact
+  catalog entry. Rename changes only the two catalog indexes. Successful delete
+  makes the index the deterministic lowest-free choice for a later create;
+  rename preserves the index and all coverage.
+- Factored the shared prepared-operation ownership in
+  `v4/rust/iprange-livedb/src/live_writer/workflow.rs`. A cancellation or
+  metadata error now aborts the entire lifecycle draft for both report-bearing
+  and reportless workflows; a dropped handle still requires explicit abort and
+  cannot be published accidentally.
+- Added five public integration tests in
+  `v4/rust/iprange-livedb/tests/feed_lifecycle.rs`. They prove old-reader
+  generation isolation, other-feed preservation, index stability and reuse,
+  empty-feed deletion, metadata publication/clear, missing/existing-name
+  preconditions, pre-cancellation, dropped-handle and invalid-metadata rollback,
+  cancellation before publication, direct-mode rejection, and full-space IPv6
+  deletion.
+- Current and Rust 1.74 all-feature suites each pass 152 tests with one
+  intentionally ignored subprocess entry point. Formatting, warnings-denied
+  all-target Clippy, and all-feature benchmark compilation pass. The exact
+  compiled production graph has 67 files and 15,627 physical lines; its largest
+  file has 471 lines and Lizard reports zero functions above cyclomatic
+  complexity 9. The implementation remains above the directional line-count
+  goal; this checkpoint records that fact rather than weakening the goal.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -101,14 +101,14 @@ impl LiveWriter {
         Ok(existing)
     }
 
-    fn start_feed_workflow_draft(&mut self) -> Result<()> {
+    pub(super) fn start_feed_workflow_draft(&mut self) -> Result<()> {
         let mut draft = Draft::new(self.base.meta, random::nonzero_128()?)?;
         draft.begin_membership_workflow()?;
         self.draft = Some(draft);
         Ok(())
     }
 
-    fn require_feed_workflow_ready(&self) -> Result<()> {
+    pub(super) fn require_feed_workflow_ready(&self) -> Result<()> {
         self.require_healthy()?;
         if self.base.meta.value_kind != ValueKind::Membership {
             return Err(Error::WrongMode(

@@ -18,8 +18,19 @@ pub enum FinishedWorkflow<'a> {
 /// Changed workflow prepared for optional metadata and publication.
 #[derive(Debug)]
 pub struct PreparedWorkflow<'a> {
-    writer: &'a mut LiveWriter,
+    operation: PreparedOperation<'a>,
     report: WorkflowReport,
+}
+
+/// Prepared feed delete or rename awaiting optional metadata and publication.
+#[derive(Debug)]
+pub struct PreparedFeedChange<'a> {
+    operation: PreparedOperation<'a>,
+}
+
+#[derive(Debug)]
+struct PreparedOperation<'a> {
+    writer: &'a mut LiveWriter,
     cancellation: CancellationToken,
 }
 
@@ -47,9 +58,8 @@ impl<'a> PreparedWorkflow<'a> {
         cancellation: CancellationToken,
     ) -> Self {
         Self {
-            writer,
             report,
-            cancellation,
+            operation: PreparedOperation::new(writer, cancellation),
         }
     }
 
@@ -58,24 +68,73 @@ impl<'a> PreparedWorkflow<'a> {
     }
 
     pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
-        self.check_or_abort()?;
-        let changed = self.writer.set_metadata_json(input)?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.operation.set_metadata_json(input)
     }
 
     pub fn clear_metadata_json(&mut self) -> Result<bool> {
+        self.operation.clear_metadata_json()
+    }
+
+    pub fn commit(self) -> Result<CommitResult> {
+        self.operation.commit()
+    }
+
+    pub fn abort(self) -> Result<()> {
+        self.operation.abort()
+    }
+}
+
+impl<'a> PreparedFeedChange<'a> {
+    pub(super) fn new(writer: &'a mut LiveWriter, cancellation: CancellationToken) -> Self {
+        Self {
+            operation: PreparedOperation::new(writer, cancellation),
+        }
+    }
+
+    pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
+        self.operation.set_metadata_json(input)
+    }
+
+    pub fn clear_metadata_json(&mut self) -> Result<bool> {
+        self.operation.clear_metadata_json()
+    }
+
+    pub fn commit(self) -> Result<CommitResult> {
+        self.operation.commit()
+    }
+
+    pub fn abort(self) -> Result<()> {
+        self.operation.abort()
+    }
+}
+
+impl<'a> PreparedOperation<'a> {
+    fn new(writer: &'a mut LiveWriter, cancellation: CancellationToken) -> Self {
+        Self {
+            writer,
+            cancellation,
+        }
+    }
+
+    fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
         self.check_or_abort()?;
-        let changed = self.writer.clear_metadata_json()?;
+        let changed = self.abort_on_error(|writer| writer.set_metadata_json(input))?;
         self.check_or_abort()?;
         Ok(changed)
     }
 
-    pub fn commit(self) -> Result<CommitResult> {
+    fn clear_metadata_json(&mut self) -> Result<bool> {
+        self.check_or_abort()?;
+        let changed = self.abort_on_error(LiveWriter::clear_metadata_json)?;
+        self.check_or_abort()?;
+        Ok(changed)
+    }
+
+    fn commit(self) -> Result<CommitResult> {
         self.writer.commit_cancellable(&self.cancellation)
     }
 
-    pub fn abort(self) -> Result<()> {
+    fn abort(self) -> Result<()> {
         self.writer.abort()?;
         Ok(())
     }
@@ -85,9 +144,22 @@ impl<'a> PreparedWorkflow<'a> {
             .check()
             .map_err(|error| self.writer.abort_after(error))
     }
+
+    fn abort_on_error<T>(
+        &mut self,
+        operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
+    ) -> Result<T> {
+        operation(self.writer).map_err(|error| {
+            if self.writer.draft.is_some() {
+                self.writer.abort_after(error)
+            } else {
+                error
+            }
+        })
+    }
 }
 
-impl Drop for PreparedWorkflow<'_> {
+impl Drop for PreparedOperation<'_> {
     fn drop(&mut self) {
         if let Some(draft) = self.writer.draft.as_mut() {
             draft.abandon_operation();

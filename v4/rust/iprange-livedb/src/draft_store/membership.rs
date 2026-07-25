@@ -75,6 +75,18 @@ impl DraftStore<'_> {
     }
 
     pub(crate) fn delete_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
+        self.delete_feed_membership_cancellable(feed, &mut || Ok(()))
+    }
+
+    pub(crate) fn delete_feed_membership_cancellable<F>(
+        &mut self,
+        feed: FeedEntry,
+        checkpoint: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        checkpoint()?;
         let member = self.add_feed_to_membership(0, 0, feed)?;
         match self.draft.meta.address_family {
             crate::contract::AddressFamily::Ipv4 => {
@@ -84,7 +96,7 @@ impl DraftStore<'_> {
                     member.id,
                     member.word_count,
                     MembershipOperation::Difference,
-                    &mut || Ok(()),
+                    checkpoint,
                 )?;
             }
             crate::contract::AddressFamily::Ipv6 => {
@@ -94,10 +106,11 @@ impl DraftStore<'_> {
                     member.id,
                     member.word_count,
                     MembershipOperation::Difference,
-                    &mut || Ok(()),
+                    checkpoint,
                 )?;
             }
         }
+        checkpoint()?;
         self.remove_feed(feed)
     }
 

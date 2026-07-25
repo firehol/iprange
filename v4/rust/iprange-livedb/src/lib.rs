@@ -62,8 +62,8 @@ pub use live_reader::LiveReader;
 pub use live_writer::{
     create_live, CommitDurability, CommitResult, CreateFeed, CreateResult, CreationState,
     DirectReplacement, FeedRef, FinishedWorkflow, LiveWriter, MembershipRef, MembershipTransaction,
-    PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh, TransactionBudget,
-    TransactionFeedCursor,
+    PreparedFeedChange, PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh,
+    TransactionBudget, TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
