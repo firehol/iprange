@@ -7,6 +7,7 @@ use crate::database::{self, DatabaseInfo, ReaderCore};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::FeedCursor;
+use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
@@ -93,6 +94,28 @@ impl LiveReader {
     pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         self.require_owner()?;
         self.core.feed_cursor_live(self.owner_pid)
+    }
+
+    /// Open an ordered cursor over one exact IPv4 named feed.
+    pub fn feed_range_cursor_v4(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV4<'_>> {
+        self.require_owner()?;
+        self.core
+            .feed_range_cursor_v4_live(name, direction, self.owner_pid)
+    }
+
+    /// Open an ordered cursor over one exact IPv6 named feed.
+    pub fn feed_range_cursor_v6(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV6<'_>> {
+        self.require_owner()?;
+        self.core
+            .feed_range_cursor_v6_live(name, direction, self.owner_pid)
     }
 
     /// Look up one address in this pinned IPv4 membership generation.

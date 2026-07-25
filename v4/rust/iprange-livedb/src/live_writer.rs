@@ -3,8 +3,10 @@
 mod commit;
 mod create;
 mod direct_workflow;
+mod feed_workflow;
 mod membership;
 mod reclaim;
+mod workflow;
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -21,11 +23,11 @@ use crate::metadata;
 use crate::random;
 
 pub use create::{create_live, CreateResult, CreationState};
-pub use direct_workflow::{
-    DirectReplacement, FinishedWorkflow, PreparedWorkflow, RetentionRefresh,
-};
+pub use direct_workflow::{DirectReplacement, RetentionRefresh};
+pub use feed_workflow::{CreateFeed, ReplaceFeed};
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
 pub use reclaim::ReclaimResult;
+pub use workflow::{FinishedWorkflow, PreparedWorkflow};
 
 /// Maximum resources retained by one writer transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

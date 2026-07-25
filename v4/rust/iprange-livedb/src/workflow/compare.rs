@@ -7,6 +7,8 @@ use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
+use crate::feed::FeedEntry;
+use crate::feed_range_cursor::ProjectionCursor;
 use crate::key::IpKey;
 use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 
@@ -33,23 +35,126 @@ pub(crate) fn maps<K: IpKey>(
     after: &MetaV4,
     cancellation: &CancellationToken,
 ) -> Result<Comparison> {
-    Sweep::<K>::new(file, before, after)?.run(cancellation)
+    let old = MapStream::<K>::new(file, &before.meta)?;
+    let new = MapStream::<K>::new(file, after)?;
+    Ok(Sweep::new(old, new, cancellation)?
+        .run(cancellation)?
+        .comparison)
 }
 
-struct Sweep<'a, K: IpKey> {
-    old_cursor: Cursor<'a, K>,
-    new_cursor: Cursor<'a, K>,
+pub(crate) fn feeds<K: IpKey>(
+    file: &File,
+    before: &MetaV4,
+    before_feed: Option<FeedEntry>,
+    after: &MetaV4,
+    after_feed: FeedEntry,
+    cancellation: &CancellationToken,
+) -> Result<ScannedComparison> {
+    let old = FeedStream::<K>::new(file, before, before_feed)?;
+    let new = FeedStream::<K>::new(file, after, Some(after_feed))?;
+    Sweep::new(old, new, cancellation)?.run(cancellation)
+}
+
+pub(crate) struct ScannedComparison {
+    pub(crate) comparison: Comparison,
+    pub(crate) before_intervals: u64,
+    pub(crate) after_intervals: u64,
+}
+
+trait RangeStream<K> {
+    fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>>;
+}
+
+struct MapStream<'a, K> {
+    cursor: Cursor<'a, K>,
+}
+
+impl<'a, K: IpKey> MapStream<'a, K> {
+    fn new(file: &'a File, meta: &MetaV4) -> Result<Self> {
+        Ok(Self {
+            cursor: Cursor::new(file, meta, RangeDirection::Forward, None)?,
+        })
+    }
+}
+
+impl<K: IpKey> RangeStream<K> for MapStream<'_, K> {
+    fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>> {
+        cancellation.check()?;
+        self.cursor.next()
+    }
+}
+
+struct FeedStream<'a, K> {
+    cursor: Option<ProjectionCursor<'a, K>>,
+}
+
+impl<'a, K: IpKey> FeedStream<'a, K> {
+    fn new(file: &'a File, meta: &MetaV4, feed: Option<FeedEntry>) -> Result<Self> {
+        let cursor = feed
+            .map(|feed| {
+                ProjectionCursor::new(file, meta, feed.index, RangeDirection::Forward, None)
+            })
+            .transpose()?;
+        Ok(Self { cursor })
+    }
+}
+
+impl<K: IpKey> RangeStream<K> for FeedStream<'_, K> {
+    fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>> {
+        let Some(cursor) = &mut self.cursor else {
+            return Ok(None);
+        };
+        Ok(cursor
+            .next_with(&mut || cancellation.check())?
+            .map(|range| DirectRange {
+                from: range.from,
+                to: range.to,
+                value: 1,
+            }))
+    }
+}
+
+struct Counted<S> {
+    inner: S,
+    intervals: u64,
+}
+
+impl<S> Counted<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            intervals: 0,
+        }
+    }
+}
+
+impl<K, S: RangeStream<K>> RangeStream<K> for Counted<S> {
+    fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>> {
+        let next = self.inner.next(cancellation)?;
+        if next.is_some() {
+            self.intervals = self
+                .intervals
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow("workflow interval count"))?;
+        }
+        Ok(next)
+    }
+}
+
+struct Sweep<K, L, R> {
+    old_cursor: Counted<L>,
+    new_cursor: Counted<R>,
     old: Option<DirectRange<K>>,
     new: Option<DirectRange<K>>,
     result: Comparison,
 }
 
-impl<'a, K: IpKey> Sweep<'a, K> {
-    fn new(file: &'a File, before: &Bootstrap, after: &MetaV4) -> Result<Self> {
-        let mut old_cursor = Cursor::<K>::new(file, &before.meta, RangeDirection::Forward, None)?;
-        let mut new_cursor = Cursor::<K>::new(file, after, RangeDirection::Forward, None)?;
-        let old = old_cursor.next()?;
-        let new = new_cursor.next()?;
+impl<K: IpKey, L: RangeStream<K>, R: RangeStream<K>> Sweep<K, L, R> {
+    fn new(old_cursor: L, new_cursor: R, cancellation: &CancellationToken) -> Result<Self> {
+        let mut old_cursor = Counted::new(old_cursor);
+        let mut new_cursor = Counted::new(new_cursor);
+        let old = old_cursor.next(cancellation)?;
+        let new = new_cursor.next(cancellation)?;
         Ok(Self {
             old_cursor,
             new_cursor,
@@ -59,37 +164,46 @@ impl<'a, K: IpKey> Sweep<'a, K> {
         })
     }
 
-    fn run(mut self, cancellation: &CancellationToken) -> Result<Comparison> {
+    fn run(mut self, cancellation: &CancellationToken) -> Result<ScannedComparison> {
         cancellation.check()?;
         while self.old.is_some() || self.new.is_some() {
             cancellation.check()?;
-            self.step()?;
+            self.step(cancellation)?;
         }
         verify(&self.result)?;
-        Ok(self.result)
+        Ok(ScannedComparison {
+            comparison: self.result,
+            before_intervals: self.old_cursor.intervals,
+            after_intervals: self.new_cursor.intervals,
+        })
     }
 
-    fn step(&mut self) -> Result<()> {
+    fn step(&mut self, cancellation: &CancellationToken) -> Result<()> {
         match (self.old, self.new) {
-            (Some(left), Some(right)) => self.step_pair(left, right),
+            (Some(left), Some(right)) => self.step_pair(left, right, cancellation),
             (Some(left), None) => {
                 add_removed(&mut self.result, length(left)?)?;
-                self.old = self.old_cursor.next()?;
+                self.old = self.old_cursor.next(cancellation)?;
                 Ok(())
             }
             (None, Some(right)) => {
                 add_added(&mut self.result, length(right)?)?;
-                self.new = self.new_cursor.next()?;
+                self.new = self.new_cursor.next(cancellation)?;
                 Ok(())
             }
             (None, None) => Ok(()),
         }
     }
 
-    fn step_pair(&mut self, left: DirectRange<K>, right: DirectRange<K>) -> Result<()> {
+    fn step_pair(
+        &mut self,
+        left: DirectRange<K>,
+        right: DirectRange<K>,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
         let step = compare_pair(left, right, &mut self.result)?;
-        self.old = advance(&mut self.old_cursor, left, step.left)?;
-        self.new = advance(&mut self.new_cursor, right, step.right)?;
+        self.old = advance(&mut self.old_cursor, left, step.left, cancellation)?;
+        self.new = advance(&mut self.new_cursor, right, step.right, cancellation)?;
         Ok(())
     }
 }
@@ -200,14 +314,15 @@ fn align_starts<K: IpKey>(
     Ok(())
 }
 
-fn advance<K: IpKey>(
-    cursor: &mut Cursor<'_, K>,
+fn advance<K: IpKey, S: RangeStream<K>>(
+    cursor: &mut S,
     mut range: DirectRange<K>,
     action: Advance<K>,
+    cancellation: &CancellationToken,
 ) -> Result<Option<DirectRange<K>>> {
     match action {
         Advance::Keep => Ok(Some(range)),
-        Advance::Consume => cursor.next(),
+        Advance::Consume => cursor.next(cancellation),
         Advance::After(end) => {
             range.from = end
                 .checked_next()

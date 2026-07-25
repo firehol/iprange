@@ -141,6 +141,17 @@ pub(crate) fn lookup_v6<'a>(
     )
 }
 
+pub(crate) fn id_contains_index(
+    file: &File,
+    meta: &MetaV4,
+    id: u32,
+    feed_index: u32,
+) -> Result<bool> {
+    let view = lookup(file, meta, Some(id), None)?
+        .ok_or(Error::Corrupt("range names an absent membership"))?;
+    view.contains_index(feed_index)
+}
+
 fn lookup<'a>(
     file: &'a File,
     meta: &MetaV4,

@@ -11,10 +11,11 @@ use crate::range_cursor::DirectRange;
 use crate::source::{RangeSource, SliceSource};
 use crate::workflow::compare;
 use crate::workflow::{
-    AddressRange, DirectReportInput, LogicalChange, WorkflowKind, WorkflowReport,
+    AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
 
-use super::{CommitResult, LiveWriter};
+use super::workflow::{classify, drain_source, require_ordered};
+use super::{FinishedWorkflow, LiveWriter, PreparedWorkflow};
 
 /// Complete unordered direct-map replacement.
 #[derive(Debug)]
@@ -27,21 +28,6 @@ pub struct DirectReplacement<'a> {
 pub struct RetentionRefresh<'a> {
     core: ExactDirect<'a>,
     refresh_value: u32,
-}
-
-/// Result of `FinishInput`.
-#[derive(Debug)]
-pub enum FinishedWorkflow<'a> {
-    NoChange(WorkflowReport),
-    Changed(PreparedWorkflow<'a>),
-}
-
-/// Changed workflow prepared for optional metadata and publication.
-#[derive(Debug)]
-pub struct PreparedWorkflow<'a> {
-    writer: &'a mut LiveWriter,
-    report: WorkflowReport,
-    cancellation: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -203,71 +189,13 @@ impl<'a> RetentionRefresh<'a> {
     }
 }
 
-impl FinishedWorkflow<'_> {
-    pub fn report(&self) -> &WorkflowReport {
-        match self {
-            Self::NoChange(report) => report,
-            Self::Changed(prepared) => prepared.report(),
-        }
-    }
-
-    /// Abort a changed prepared result; a no-change result is already clean.
-    pub fn abort(self) -> Result<()> {
-        match self {
-            Self::NoChange(_) => Ok(()),
-            Self::Changed(prepared) => prepared.abort(),
-        }
-    }
-}
-
-impl PreparedWorkflow<'_> {
-    pub fn report(&self) -> &WorkflowReport {
-        &self.report
-    }
-
-    pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
-        self.check_or_abort()?;
-        let changed = self.writer.set_metadata_json(input)?;
-        self.check_or_abort()?;
-        Ok(changed)
-    }
-
-    pub fn clear_metadata_json(&mut self) -> Result<bool> {
-        self.check_or_abort()?;
-        let changed = self.writer.clear_metadata_json()?;
-        self.check_or_abort()?;
-        Ok(changed)
-    }
-
-    pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_cancellable(&self.cancellation)
-    }
-
-    pub fn abort(self) -> Result<()> {
-        self.writer.abort()?;
-        Ok(())
-    }
-
-    fn check_or_abort(&mut self) -> Result<()> {
-        self.cancellation
-            .check()
-            .map_err(|error| self.writer.abort_after(error))
-    }
-}
-
-impl Drop for PreparedWorkflow<'_> {
-    fn drop(&mut self) {
-        if let Some(draft) = self.writer.draft.as_mut() {
-            draft.abandon_operation();
-        }
-    }
-}
-
 impl<'a> ExactDirect<'a> {
-    fn require_family(&self, family: AddressFamily) -> Result<()> {
+    fn require_family(&mut self, family: AddressFamily) -> Result<()> {
         self.require_active()?;
         if self.writer.base.meta.address_family != family {
-            return Err(Error::WrongMode("range family does not match the database"));
+            return Err(self
+                .writer
+                .abort_after(Error::WrongMode("range family does not match the database")));
         }
         Ok(())
     }
@@ -330,8 +258,8 @@ impl<'a> ExactDirect<'a> {
         let comparison = compare_maps(&self.writer.file, base, &after, &self.cancellation)
             .map_err(|error| self.writer.abort_after(error))?;
         let logical_change = classify(&comparison);
-        Ok(WorkflowReport::direct(
-            DirectReportInput {
+        Ok(WorkflowReport::replacement(
+            ReplacementReportInput {
                 workflow: self.workflow,
                 logical_change,
                 input_record_count: self.input_records,
@@ -378,43 +306,11 @@ impl<'a> ExactDirect<'a> {
         let cancellation = self.cancellation;
         self.writer
             .mutate(|store| store.finish_direct_workflow(&base, &cancellation))?;
-        Ok(FinishedWorkflow::Changed(PreparedWorkflow {
-            writer: self.writer,
+        Ok(FinishedWorkflow::Changed(PreparedWorkflow::new(
+            self.writer,
             report,
             cancellation,
-        }))
-    }
-}
-
-fn drain_source<R, S, F>(
-    source: &mut S,
-    cancellation: &CancellationToken,
-    input_records: &mut u64,
-    mut apply: F,
-) -> Result<()>
-where
-    R: Copy,
-    S: RangeSource<R>,
-    F: FnMut(R) -> Result<()>,
-{
-    loop {
-        cancellation.check()?;
-        let Some(batch) = source.next_batch()? else {
-            return Ok(());
-        };
-        if batch.is_empty() {
-            return Err(Error::InvalidArgument(
-                "range source returned an empty batch",
-            ));
-        }
-        for &record in batch {
-            cancellation.check()?;
-            let next = input_records
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("workflow input record count"))?;
-            apply(record)?;
-            *input_records = next;
-        }
+        )))
     }
 }
 
@@ -438,25 +334,6 @@ fn compare_maps(
     match after.address_family {
         AddressFamily::Ipv4 => compare::maps::<Ipv4Key>(file, before, after, cancellation),
         AddressFamily::Ipv6 => compare::maps::<Ipv6Key>(file, before, after, cancellation),
-    }
-}
-
-fn classify(comparison: &crate::workflow::Comparison) -> LogicalChange {
-    if comparison.changed == Cardinality129::ZERO
-        && comparison.added == Cardinality129::ZERO
-        && comparison.removed == Cardinality129::ZERO
-    {
-        LogicalChange::NoChange
-    } else {
-        LogicalChange::Changed
-    }
-}
-
-fn require_ordered<K: Ord>(from: K, to: K) -> Result<()> {
-    if from > to {
-        Err(Error::InvalidArgument("range start exceeds range end"))
-    } else {
-        Ok(())
     }
 }
 

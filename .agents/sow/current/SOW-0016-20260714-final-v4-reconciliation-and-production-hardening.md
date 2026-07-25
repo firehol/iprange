@@ -10530,6 +10530,91 @@ requirements are normative in the Pre-Implementation Gate above.
   but it is still materially above the directional whole-engine line goal and
   remains an explicit reduction pressure for later Rust slices.
 
+### 2026-07-25 - exact named-feed workflow plan
+
+- The next Rust slice implements `BeginCreateFeed` and `BeginReplaceFeed` for
+  membership files plus the reusable ordered per-feed cursor required by the
+  Phase-1 query surface. Delete, rename, whole-file import, snapshot, validation,
+  recovery, Go, and C ABI work are outside this slice.
+- Create checks that the exact name is absent, allocates the SDK-owned lowest
+  free feed index, and unions every supplied value-free range into that feed.
+  Replace checks that the name exists, preserves its index, clears only that
+  feed's bit from the private destination map, then unions the complete supplied
+  snapshot. Other feeds and metadata remain unchanged.
+- Input is accepted in repeated borrowed batches and applied directly to the
+  destination's unpublished COW tree. Duplicates, overlap, adjacency, and random
+  order are accepted; reversed or wrong-family input aborts the whole workflow.
+  There is no input sort, whole-feed buffer, spill file, or temporary database.
+- Before reporting, the workflow finalizes its private membership refcount
+  deltas and uses one allocation-free forward comparison of the committed and
+  private projections of that named feed. The projection cursor filters
+  membership IDs by the SDK-owned feed index and coalesces adjacent coverage
+  even when other feed bits differ.
+- The report's before/after record counts and address classes describe only the
+  coalesced named-feed projection. `changed_value_addresses` is always zero.
+  After-projection coverage is also the normalized input summary. Empty input is
+  a valid cataloged empty feed. Create is always `Changed`; replace returns
+  `NoChange` and discards all private work when projected membership is equal.
+- The existing cancellation token and prepared-workflow handle are reused.
+  Cancellation is checked before source pulls, between records, inside range
+  transformations, while filtering raw membership ranges, during comparison,
+  metadata staging, and commit. Source, membership, storage, budget, or
+  cancellation failure aborts the entire private operation.
+- Validation will cover empty and populated create, unordered/overlapping
+  replace, preservation of other feeds, projection coalescing, exact reports,
+  no-change cleanup, wrong preconditions/family, source failure, cancellation,
+  metadata in the same commit, refcount cleanup, index stability, forward and
+  backward public per-feed cursors, randomized scalar-reference properties,
+  zero per-record engine allocations, Rust 1.74, formatting, warnings-denied
+  Clippy, benchmark compilation, exact compiled-graph complexity, diff, and SOW
+  audit gates.
+
+### 2026-07-25 - exact named-feed workflow implementation
+
+- `BeginCreateFeed` and `BeginReplaceFeed` now implement the planned
+  one-feed-at-a-time membership workflows for both address families. Create
+  allocates the lowest SDK-owned free index; replace preserves the existing
+  index; empty input leaves an active empty catalog entry; exact precondition
+  errors leave the writer clean.
+- Replace removes only the selected feed from the unpublished destination map
+  before applying the complete supplied snapshot. Other feed bits, other catalog
+  entries, and metadata are preserved. Every unordered/duplicate/overlapping
+  input range is unioned directly into the final private tree with no sorting,
+  whole-input storage, spill file, or temporary v4 file.
+- One shared comparison engine now handles direct maps and named-feed
+  projections. The feed projection cursor lazily tests SDK-owned membership
+  values, coalesces adjacent selected coverage across differing other-feed bits,
+  supports forward and backward readers, and allocates nothing during warmed
+  traversal. The workflow comparison counts projection intervals during the same
+  sweep rather than rescanning.
+- Create always reports a catalog change, including an empty feed. Replace
+  reports `NoChange` only when the final named-feed projection is identical,
+  then truncates every unpublished page and leaves no pending transaction.
+  Changed workflows reuse the common prepared handle for one optional metadata
+  stage and cancellable commit/abort.
+- Source failure, reversed input, wrong-family input, cancellation, membership
+  translation/refcount failure, storage failure, and budget failure abort the
+  complete workflow. Cancellation is checked across source pulls, records,
+  range transformations, projection filtering, comparison, membership-delta
+  finalization, metadata, and commit preparation.
+- Permanent integration tests cover populated and empty create, unordered
+  replace, exact 18-field reports, same-generation metadata, stable indexes,
+  preservation and coalesced projection of another feed, forward/backward
+  cursors, no-change cleanup, missing/existing-name preconditions, source
+  failure, wrong family, cancellation, abandoned input, and full-space IPv6.
+- A deterministic property test executes 100 random replacements over a
+  128-address scalar set while verifying every address of both the replaced feed
+  and an independently preserved feed. A counting allocator proves zero engine
+  heap allocations during 1,000-record borrowed-slice ingestion and
+  `FinishInput`.
+- Current and Rust 1.74 all-feature suites each pass 147 tests with one
+  intentionally ignored subprocess entry point. Formatting, warnings-denied
+  all-target Clippy, and all-feature benchmark compilation pass. The exact
+  compiled production graph has 66 files and 15,481 physical lines; its largest
+  file has 471 lines and Lizard reports zero functions above cyclomatic
+  complexity 9. The line count remains above the directional goal and must keep
+  exerting reduction pressure; this checkpoint does not claim otherwise.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

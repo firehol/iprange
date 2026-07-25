@@ -53,7 +53,7 @@ pub struct WorkflowReport {
 }
 
 impl WorkflowReport {
-    pub(crate) fn direct(input: DirectReportInput, comparison: Comparison) -> Self {
+    pub(crate) fn replacement(input: ReplacementReportInput, comparison: Comparison) -> Self {
         Self {
             workflow: input.workflow,
             logical_change: input.logical_change,
@@ -77,7 +77,7 @@ impl WorkflowReport {
     }
 }
 
-pub(crate) struct DirectReportInput {
+pub(crate) struct ReplacementReportInput {
     pub(crate) workflow: WorkflowKind,
     pub(crate) logical_change: LogicalChange,
     pub(crate) input_record_count: u64,

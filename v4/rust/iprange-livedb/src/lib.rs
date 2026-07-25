@@ -21,6 +21,7 @@ pub mod error;
 mod fault;
 mod feed;
 mod feed_catalog;
+mod feed_range_cursor;
 mod file_io;
 mod fixed_tree;
 mod free_bitmap;
@@ -55,12 +56,14 @@ pub use database::{DatabaseInfo, ImmutableReader};
 pub use error::{Error, ErrorCode, Result};
 pub use feed::{FeedEntry, FeedName};
 pub use feed_catalog::FeedCursor;
+pub use feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 pub use key::{Ipv4Key, Ipv6Key};
 pub use live_reader::LiveReader;
 pub use live_writer::{
-    create_live, CommitDurability, CommitResult, CreateResult, CreationState, DirectReplacement,
-    FeedRef, FinishedWorkflow, LiveWriter, MembershipRef, MembershipTransaction, PreparedWorkflow,
-    ReclaimResult, RetentionRefresh, TransactionBudget, TransactionFeedCursor,
+    create_live, CommitDurability, CommitResult, CreateFeed, CreateResult, CreationState,
+    DirectReplacement, FeedRef, FinishedWorkflow, LiveWriter, MembershipRef, MembershipTransaction,
+    PreparedWorkflow, ReclaimResult, ReplaceFeed, RetentionRefresh, TransactionBudget,
+    TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};

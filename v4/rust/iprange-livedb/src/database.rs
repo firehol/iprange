@@ -11,6 +11,7 @@ use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::{self, FeedCursor};
+use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::file_io;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::membership_view::{self, MembershipView};
@@ -114,6 +115,24 @@ impl ImmutableReader {
         self.core.feed_cursor()
     }
 
+    /// Open an ordered cursor over one exact IPv4 named feed.
+    pub fn feed_range_cursor_v4(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV4<'_>> {
+        self.core.feed_range_cursor_v4(name, direction)
+    }
+
+    /// Open an ordered cursor over one exact IPv6 named feed.
+    pub fn feed_range_cursor_v6(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV6<'_>> {
+        self.core.feed_range_cursor_v6(name, direction)
+    }
+
     /// Look up one address in an IPv4 membership database.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
         self.core.lookup_membership_v4(address, None)
@@ -203,6 +222,60 @@ impl ReaderCore {
         FeedCursor::new_live(&self.file, &self.bootstrap.meta, owner_pid)
     }
 
+    pub(crate) fn feed_range_cursor_v4(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV4<'_>> {
+        self.require_membership_family(AddressFamily::Ipv4)?;
+        let feed = self.require_feed(name)?;
+        FeedRangeCursorV4::new(&self.file, &self.bootstrap.meta, feed.index, direction)
+    }
+
+    pub(crate) fn feed_range_cursor_v6(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+    ) -> Result<FeedRangeCursorV6<'_>> {
+        self.require_membership_family(AddressFamily::Ipv6)?;
+        let feed = self.require_feed(name)?;
+        FeedRangeCursorV6::new(&self.file, &self.bootstrap.meta, feed.index, direction)
+    }
+
+    pub(crate) fn feed_range_cursor_v4_live(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+        owner_pid: u32,
+    ) -> Result<FeedRangeCursorV4<'_>> {
+        self.require_membership_family(AddressFamily::Ipv4)?;
+        let feed = self.require_feed(name)?;
+        FeedRangeCursorV4::new_live(
+            &self.file,
+            &self.bootstrap.meta,
+            feed.index,
+            direction,
+            owner_pid,
+        )
+    }
+
+    pub(crate) fn feed_range_cursor_v6_live(
+        &self,
+        name: &str,
+        direction: RangeDirection,
+        owner_pid: u32,
+    ) -> Result<FeedRangeCursorV6<'_>> {
+        self.require_membership_family(AddressFamily::Ipv6)?;
+        let feed = self.require_feed(name)?;
+        FeedRangeCursorV6::new_live(
+            &self.file,
+            &self.bootstrap.meta,
+            feed.index,
+            direction,
+            owner_pid,
+        )
+    }
+
     pub(crate) fn lookup_membership_v4(
         &self,
         address: Ipv4Key,
@@ -244,6 +317,21 @@ impl ReaderCore {
             ));
         }
         Ok(())
+    }
+
+    fn require_membership_family(&self, family: AddressFamily) -> Result<()> {
+        feed_catalog::require_membership(&self.bootstrap.meta)?;
+        if self.bootstrap.meta.address_family != family {
+            return Err(Error::InvalidArgument(
+                "feed cursor address family does not match the database",
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_feed(&self, name: &str) -> Result<FeedEntry> {
+        let name = crate::feed::FeedName::new(name)?;
+        feed_catalog::lookup(&self.file, &self.bootstrap.meta, &name)?.ok_or(Error::NameNotFound)
     }
 }
 

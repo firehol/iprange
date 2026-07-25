@@ -92,11 +92,20 @@ impl Draft {
     }
 
     pub(crate) fn begin_range_workflow(&mut self) -> Result<()> {
+        self.begin_workflow()?;
+        self.meta.range_root = 0;
+        self.meta.range_record_count = 0;
+        Ok(())
+    }
+
+    pub(crate) fn begin_membership_workflow(&mut self) -> Result<()> {
+        self.begin_workflow()
+    }
+
+    fn begin_workflow(&mut self) -> Result<()> {
         if self.workflow != WorkflowState::None {
             return Err(Error::WrongState("another exact workflow is active"));
         }
-        self.meta.range_root = 0;
-        self.meta.range_record_count = 0;
         self.workflow = WorkflowState::Input;
         Ok(())
     }
@@ -201,7 +210,7 @@ impl<'a> DraftStore<'a> {
             return Ok(());
         }
         checkpoint()?;
-        self.finish_membership_deltas()?;
+        self.finish_membership_deltas_with_checkpoint(checkpoint)?;
         checkpoint()?;
         self.release_private_pages(checkpoint)?;
         self.finish_bitmap_shape(checkpoint)

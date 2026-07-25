@@ -1,4 +1,4 @@
-//! Exact direct-workflow preparation in unpublished pages.
+//! Exact workflow preparation in unpublished pages.
 
 use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
@@ -40,6 +40,24 @@ impl DraftStore<'_> {
                 })?;
             }
         }
+        self.draft.finish_workflow();
+        Ok(())
+    }
+
+    pub(crate) fn finalize_membership_workflow(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        cancellation.check()?;
+        self.finish_membership_deltas_with_checkpoint(&mut || cancellation.check())?;
+        cancellation.check()
+    }
+
+    pub(crate) fn finish_membership_workflow(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        self.finalize_membership_workflow(cancellation)?;
         self.draft.finish_workflow();
         Ok(())
     }

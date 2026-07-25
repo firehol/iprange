@@ -41,7 +41,9 @@ impl DraftStore<'_> {
         word_count: u32,
         operation: MembershipOperation,
     ) -> Result<bool> {
-        self.apply_membership(from, to, membership_id, word_count, operation)
+        self.apply_membership(from, to, membership_id, word_count, operation, &mut || {
+            Ok(())
+        })
     }
 
     pub(crate) fn apply_membership_v6(
@@ -52,7 +54,24 @@ impl DraftStore<'_> {
         word_count: u32,
         operation: MembershipOperation,
     ) -> Result<bool> {
-        self.apply_membership(from, to, membership_id, word_count, operation)
+        self.apply_membership(from, to, membership_id, word_count, operation, &mut || {
+            Ok(())
+        })
+    }
+
+    pub(crate) fn apply_membership_cancellable<K: IpKey, F>(
+        &mut self,
+        from: K,
+        to: K,
+        membership_id: u32,
+        word_count: u32,
+        operation: MembershipOperation,
+        checkpoint: &mut F,
+    ) -> Result<bool>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        self.apply_membership(from, to, membership_id, word_count, operation, checkpoint)
     }
 
     pub(crate) fn delete_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
@@ -65,6 +84,7 @@ impl DraftStore<'_> {
                     member.id,
                     member.word_count,
                     MembershipOperation::Difference,
+                    &mut || Ok(()),
                 )?;
             }
             crate::contract::AddressFamily::Ipv6 => {
@@ -74,6 +94,7 @@ impl DraftStore<'_> {
                     member.id,
                     member.word_count,
                     MembershipOperation::Difference,
+                    &mut || Ok(()),
                 )?;
             }
         }
@@ -100,13 +121,20 @@ impl DraftStore<'_> {
         }
     }
 
-    pub(super) fn finish_membership_deltas(&mut self) -> Result<()> {
+    pub(super) fn finish_membership_deltas_with_checkpoint<F>(
+        &mut self,
+        checkpoint: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Result<()>,
+    {
         if self.draft.meta.value_kind != ValueKind::Membership {
             return require_empty_delta(self.draft.membership_delta_root);
         }
         let mut state = self.membership_state();
         let mut root = self.draft.membership_delta_root;
         while let Some(delta) = membership_delta::take_first(self, &mut root)? {
+            checkpoint()?;
             membership_dictionary::apply_delta(self, &mut state, delta)?;
         }
         self.draft.membership_delta_root = root;
@@ -137,18 +165,23 @@ impl DraftStore<'_> {
         self.draft.meta.membership_id_limit = state.id_limit;
     }
 
-    fn apply_membership<K: IpKey>(
+    fn apply_membership<K: IpKey, F>(
         &mut self,
         from: K,
         to: K,
         membership_id: u32,
         word_count: u32,
         operation: MembershipOperation,
-    ) -> Result<bool> {
+        checkpoint: &mut F,
+    ) -> Result<bool>
+    where
+        F: FnMut() -> Result<()>,
+    {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
         let changed =
             range_mutation::transform(self, &mut root, &mut count, from, to, |store, current| {
+                checkpoint()?;
                 store.combine_memberships(
                     current.unwrap_or(0),
                     membership_id,

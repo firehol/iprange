@@ -37,6 +37,7 @@ pub(crate) struct State {
     pub(crate) id_limit: u64,
 }
 
+#[derive(Debug)]
 pub(crate) struct Interned {
     pub(crate) id: u32,
     pub(crate) word_count: u32,
