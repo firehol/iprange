@@ -32,7 +32,7 @@ impl Identity {
 pub(crate) struct Name(CString);
 
 impl Name {
-    fn new(bytes: &[u8]) -> Result<Self, NamespaceError> {
+    pub(crate) fn new(bytes: &[u8]) -> Result<Self, NamespaceError> {
         if bytes.is_empty() || bytes == b"." || bytes == b".." || bytes.contains(&b'/') {
             return Err(NamespaceError::InvalidName);
         }
@@ -492,3 +492,7 @@ fn hex(value: u8) -> u8 {
 #[cfg(test)]
 #[path = "namespace_tests.rs"]
 mod tests;
+
+#[path = "namespace_scan.rs"]
+mod scan;
+pub(crate) use scan::ScanError;

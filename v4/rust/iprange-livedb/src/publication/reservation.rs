@@ -253,6 +253,7 @@ fn decode(block: &[u8; PAGE_SIZE]) -> Result<Header, Problem> {
         core.output.identity,
     )?;
     let basename_len = decode_basename_len(block)?;
+    let security_commitment = decode_security(block)?;
     let sequence = decode_sequence(block, core.state)?;
 
     Ok(Header {
@@ -269,9 +270,18 @@ fn decode(block: &[u8; PAGE_SIZE]) -> Result<Header, Problem> {
         previous,
         basename_len,
         basename_commitment: array(block, 420),
-        security_commitment: array(block, 464),
+        security_commitment,
         sequence,
     })
+}
+
+fn decode_security(block: &[u8; PAGE_SIZE]) -> Result<[u8; 32], Problem> {
+    let commitment = array(block, 464);
+    if commitment == [0; 32] {
+        Err(Problem::Security)
+    } else {
+        Ok(commitment)
+    }
 }
 
 fn decode_core(block: &[u8; PAGE_SIZE]) -> Result<CoreFields, Problem> {

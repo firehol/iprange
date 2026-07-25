@@ -6,6 +6,7 @@ use std::path::Path;
 use sha2::{Digest, Sha512};
 
 use crate::bootstrap::{self, BootstrapError, OpenMode};
+use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::immutable_output::Finished;
 use crate::live_lock::{self, Mode};
@@ -264,10 +265,23 @@ enum Location {
     Main,
 }
 
-fn digest(file: &File, byte_length: u64) -> Result<[u8; 64], Error> {
+pub(super) fn digest(file: &File, byte_length: u64) -> Result<[u8; 64], Error> {
     digest_with(byte_length, |offset, output| {
         file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
     })
+}
+
+pub(super) fn digest_cancellable(
+    file: &File,
+    byte_length: u64,
+    cancellation: &CancellationToken,
+) -> Result<[u8; 64], Error> {
+    let result = digest_with(byte_length, |offset, output| {
+        cancellation.check().map_err(Error::Sdk)?;
+        file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
+    });
+    cancellation.check().map_err(Error::Sdk)?;
+    result
 }
 
 fn digest_with(

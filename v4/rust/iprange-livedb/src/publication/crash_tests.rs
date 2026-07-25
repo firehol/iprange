@@ -7,12 +7,18 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bootstrap::{self, OpenMode};
+use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
+use crate::error::ErrorCode;
 use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
 use crate::key::Ipv4Key;
 use crate::publication::attempt;
+use crate::publication::file_inspection::{self, Content};
+use crate::publication::namespace::Destination;
 use crate::publication::output::CreatedOutput;
 use crate::publication::reservation::{self, State};
+use crate::publication::reservation_inspection::{self, Location};
+use crate::test_alloc::count_thread_allocations;
 use crate::ImmutableReader;
 
 const CHILD_TEST: &str = "publication::crash_tests::crash_child";
@@ -56,8 +62,24 @@ fn reservation_crashes_leave_one_complete_output_and_selectable_authority() {
         let main = directory.path.join("result.v4");
         run_child(&main, point);
         let artifacts = Artifacts::inspect(&directory.path, &main);
+        let destination = Destination::bind(&main).unwrap();
+        let inspected = reservation_inspection::discover(&destination, &CancellationToken::new())
+            .unwrap()
+            .unwrap();
 
         assert!(!main.exists(), "{point}");
+        assert_eq!(inspected.location, location, "{point}");
+        assert!(
+            file_inspection::main(&destination, inspected.header, &CancellationToken::new())
+                .unwrap()
+                .is_none()
+        );
+        let output =
+            file_inspection::private(&destination, inspected.header, &CancellationToken::new())
+                .unwrap()
+                .unwrap();
+        assert_eq!(output.content, Content::Desired, "{point}");
+        assert_eq!(output.identity.encode(), inspected.header.output_identity);
         assert_eq!(artifacts.private_outputs.len(), 1, "{point}");
         assert_complete_output(&artifacts.private_outputs[0]);
         let reservation = match location {
@@ -104,8 +126,26 @@ fn main_crashes_expose_only_the_complete_desired_inode_behind_reservation() {
         let main = directory.path.join("result.v4");
         run_child(&main, point);
         let artifacts = Artifacts::inspect(&directory.path, &main);
+        let destination = Destination::bind(&main).unwrap();
+        let inspected = reservation_inspection::discover(&destination, &CancellationToken::new())
+            .unwrap()
+            .unwrap();
+        let output =
+            file_inspection::main(&destination, inspected.header, &CancellationToken::new())
+                .unwrap()
+                .unwrap();
 
         assert_complete_output(&main);
+        assert_eq!(inspected.location, Location::Canonical, "{point}");
+        assert_eq!(output.content, Content::Desired, "{point}");
+        assert_eq!(output.identity.encode(), inspected.header.output_identity);
+        assert!(file_inspection::private(
+            &destination,
+            inspected.header,
+            &CancellationToken::new()
+        )
+        .unwrap()
+        .is_none());
         assert!(artifacts.private_outputs.is_empty(), "{point}");
         assert!(artifacts.private_reservations.is_empty(), "{point}");
         assert!(artifacts.coordination.exists(), "{point}");
@@ -114,6 +154,62 @@ fn main_crashes_expose_only_the_complete_desired_inode_behind_reservation() {
         assert_eq!(selected.output_identity, local_identity(&main), "{point}");
         assert!(ImmutableReader::open(&main).is_err(), "{point}");
     }
+}
+
+#[test]
+fn private_scan_requires_one_unique_bound_reservation() {
+    let directory = TempDirectory::new("duplicate-private-reservations");
+    let main = directory.path.join("result.v4");
+    run_child(&main, "publication.after_reservation_state1_sync");
+    run_child(&main, "publication.after_reservation_state1_sync");
+    let destination = Destination::bind(&main).unwrap();
+
+    let problem =
+        reservation_inspection::discover(&destination, &CancellationToken::new()).unwrap_err();
+    assert_eq!(problem.code, ErrorCode::Conflict);
+    assert_eq!(
+        Artifacts::inspect(&directory.path, &main)
+            .private_reservations
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn malformed_canonical_reservation_is_not_private_scan_authority() {
+    let directory = TempDirectory::new("malformed-canonical");
+    let main = directory.path.join("result.v4");
+    let artifacts = Artifacts::inspect(&directory.path, &main);
+    fs::write(&artifacts.coordination, [0; 2 * PAGE_SIZE]).unwrap();
+    let destination = Destination::bind(&main).unwrap();
+
+    let problem =
+        reservation_inspection::discover(&destination, &CancellationToken::new()).unwrap_err();
+    assert_eq!(problem.code, ErrorCode::Unresolvable);
+    assert_eq!(
+        fs::read(&artifacts.coordination).unwrap(),
+        [0; 2 * PAGE_SIZE]
+    );
+}
+
+#[test]
+fn empty_private_scan_is_cancellable_and_allocation_bounded() {
+    let directory = TempDirectory::new("bounded-private-scan");
+    let main = directory.path.join("result.v4");
+    for index in 0..512 {
+        fs::write(directory.path.join(format!("foreign-{index}")), b"x").unwrap();
+    }
+    let destination = Destination::bind(&main).unwrap();
+    let cancellation = CancellationToken::new();
+    let (found, allocations) =
+        count_thread_allocations(|| reservation_inspection::discover(&destination, &cancellation));
+    assert!(found.unwrap().is_none());
+    assert_eq!(allocations, 0);
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let problem = reservation_inspection::discover(&destination, &cancellation).unwrap_err();
+    assert_eq!(problem.code, ErrorCode::Cancelled);
 }
 
 #[test]
@@ -212,9 +308,20 @@ fn output_budget() -> OutputBudget {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReservationPlace {
     Private,
     Canonical,
+}
+
+impl PartialEq<ReservationPlace> for Location {
+    fn eq(&self, other: &ReservationPlace) -> bool {
+        matches!(
+            (self, other),
+            (Self::Private, ReservationPlace::Private)
+                | (Self::Canonical, ReservationPlace::Canonical)
+        )
+    }
 }
 
 struct Artifacts {

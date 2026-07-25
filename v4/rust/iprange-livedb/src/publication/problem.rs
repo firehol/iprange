@@ -121,7 +121,7 @@ impl Problem {
         }
     }
 
-    const fn new(code: ErrorCode, os_code: Option<i32>, detail: &'static str) -> Self {
+    pub(crate) const fn new(code: ErrorCode, os_code: Option<i32>, detail: &'static str) -> Self {
         Self {
             code,
             os_code,
@@ -137,7 +137,7 @@ impl Problem {
         Self::new(ErrorCode::Io, source.raw_os_error(), detail)
     }
 
-    fn sdk(error: &SdkError) -> Self {
+    pub(crate) fn sdk(error: &SdkError) -> Self {
         let os_code = match error {
             SdkError::Io(source) => source.raw_os_error(),
             _ => None,

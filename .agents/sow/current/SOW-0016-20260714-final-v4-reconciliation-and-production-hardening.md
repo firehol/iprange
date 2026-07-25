@@ -11317,6 +11317,77 @@ requirements are normative in the Pre-Implementation Gate above.
   states. No public snapshot API, replacement policy, live transition, signing,
   C ABI, or Go implementation was added.
 
+### 2026-07-25 - direct-publication restart resolver plan
+
+- Implement the resolver in two internal slices. The first is read-only:
+  retain the destination directory, select an exact canonical reservation or
+  stream the directory for one unique bound private reservation, and classify
+  the stable main/private output under lifetime locks. The second composes those
+  proven owners with the existing reservation, main-publication, retirement,
+  and cleanup states for `Complete` and `Remove`; it will not create a parallel
+  namespace engine.
+- Directory discovery will use a fresh retained directory stream and visit one
+  raw POSIX basename at a time. It will retain at most one matching reservation,
+  check cancellation between entries, and verify the parent identity before and
+  after the scan. Random, malformed, symlink, hard-linked, foreign-destination,
+  and wrong-attempt names are never authority.
+- Reservation inspection will require the exact 8,192-byte dual-block record,
+  selected phase, self identity, fail-if-exists policy, attempt-derived private
+  name, destination length/commitment, and retained-directory binding. A
+  malformed canonical record remains untouched and fails online resolution;
+  zero bound private records means no reconstructed attempt and multiple bound
+  records are `Conflict`.
+- Main and private-output inspection will open without following links, take the
+  required lifetime lock, read only the constant-size bootstrap pages, stream
+  one SHA-512 pass through a fixed 64-KiB buffer, and recheck descriptor/path
+  identity and length. It will not call structural validation or traverse the
+  page graph. Exact tuple plus length/digest is `Desired`; another complete v4
+  file is `Other`; malformed or unstable bytes fail closed.
+- For an absent fail-if-exists destination, `Complete` requires both exact
+  artifacts and resumes from their selected durable phase; `Remove` deletes
+  only those exact artifacts and proves synchronized absence. Exact desired
+  content is synchronized and reported `Published` regardless of which historic
+  rename produced it. A third main is never overwritten or removed. Missing
+  required completion state is `Unresolvable`; mismatched state is `Conflict`;
+  an indeterminate namespace/synchronization/recheck result is
+  `OutcomeUnknown`.
+- Permanent tests will feed every crash-matrix state into both resolver modes
+  where applicable, plus canonical corruption, duplicate bound private records,
+  parent/name/identity mismatch, missing artifacts, foreign main preservation,
+  cancellation, access-policy changes, no implicit graph validation, and
+  bounded-memory directory scanning. The result remains internal until the
+  complete snapshot/recovery API is assembled.
+
+### 2026-07-25 - restart inspection milestone
+
+- Implemented the read-only half of the resolver. Canonical coordination is
+  opened no-follow and selected strictly. When it is absent, a fresh retained
+  directory stream visits raw names one at a time and retains only one complete
+  fail-if-exists record bound to the exact destination and self identity.
+  Canonical corruption is `Unresolvable`; two bound private records are
+  `Conflict`; unrelated and invalid private names are not authority.
+- Reservation inspection takes and retains the operation lock, rechecks the
+  exact name/inode/selected record, and classifies current access separately
+  from recorded ownership. Empty persisted creation-security commitments are
+  now rejected by the codec instead of becoming meaningless authority.
+- Main/private output inspection takes the appropriate lifetime lock, opens only
+  the two bootstrap pages, streams one cancellable SHA-512 pass through a fixed
+  64-KiB buffer, and rechecks metadata, length, retained parent, name, and inode.
+  It does not traverse or validate the page graph. Private completion input must
+  additionally match the exact recorded identity and creator-only commitment.
+- Every pre-main and post-main crash point is now consumed successfully by the
+  restart inspector. Permanent tests also prove malformed canonical bytes are
+  preserved, duplicate private authority is rejected, cancellation is typed,
+  and scanning 512 unrelated entries performs zero Rust heap allocations.
+- Current Rust, no-default-features, and Rust 1.74.1 suites each pass 252 tests
+  with two intentionally ignored subprocess entry points. Warnings-denied
+  all-target Clippy, benchmark compilation, formatting, diff checks, and the SOW
+  audit pass.
+- The complete publication production slice is 3,914 physical lines. Every file
+  is at or below 498 lines; Lizard reports 208 functions, average CCN 2.9, and
+  no function above CCN 9. Resolver mutation and result reconstruction remain
+  the next slice; no Go or public API code was added.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.
