@@ -8,7 +8,11 @@ use crate::{error, file_io};
 
 use super::namespace::{regular_identity, Identity, Name, NamespaceError};
 use super::output::{self, PreparedOutput};
-use super::reservation::{self, Header, Policy, SelectError, Selected, State};
+use super::reservation::{Header, Policy, SelectError, State};
+
+#[path = "reservation_verify.rs"]
+mod verification;
+use verification::{select_exact, Expected, OutputLocation, ReservationLocation};
 
 const FILE_SIZE: usize = 2 * PAGE_SIZE;
 const OPERATION_LOCK: u64 = 0;
@@ -36,6 +40,7 @@ pub(crate) struct ReservationDraft {
     pub(crate) file: File,
     pub(crate) identity: Option<Identity>,
     pub(crate) header: Option<Header>,
+    pub(crate) state1_selected: bool,
 }
 
 impl ReservationDraft {
@@ -54,6 +59,7 @@ impl ReservationDraft {
             file,
             identity: None,
             header: None,
+            state1_selected: false,
         })
     }
 
@@ -169,6 +175,32 @@ pub(crate) struct ArmedReservation {
     pub(crate) header: Header,
 }
 
+impl ArmedReservation {
+    pub(crate) fn verify_before_main(&self, output: &PreparedOutput) -> Result<(), Error> {
+        verify_canonical(
+            &self.file,
+            self.identity,
+            &self.name,
+            self.header,
+            1,
+            output,
+            OutputLocation::Private,
+        )
+    }
+
+    pub(crate) fn verify_after_main(&self, output: &PreparedOutput) -> Result<(), Error> {
+        verify_canonical(
+            &self.file,
+            self.identity,
+            &self.name,
+            self.header,
+            1,
+            output,
+            OutputLocation::Main,
+        )
+    }
+}
+
 fn initialize(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
     prepare_header(draft, output)?;
     write_state1(draft)?;
@@ -200,9 +232,19 @@ fn write_state1(draft: &ReservationDraft) -> Result<(), Error> {
     Ok(())
 }
 
-fn lock_state1(draft: &ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
+fn lock_state1(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
+    lock_state1_with(draft, output, || Ok(()))
+}
+
+fn lock_state1_with(
+    draft: &mut ReservationDraft,
+    output: &PreparedOutput,
+    after_selection: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), Error> {
     let header = draft.header.ok_or(Error::HeaderInvariant)?;
     verify_private(draft, output, header, 0)?;
+    draft.state1_selected = true;
+    after_selection()?;
     live_lock::lock(&draft.file, OPERATION_LOCK, Mode::Exclusive)?;
     verify_private(draft, output, header, 0)
 }
@@ -223,6 +265,7 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
         owner.reservation.header,
         0,
         output,
+        OutputLocation::Private,
     )
 }
 
@@ -237,6 +280,11 @@ fn arm_with(
 ) -> Result<(), Error> {
     let target = owner.target.ok_or(Error::HeaderInvariant)?;
     verify_canonical_reservation(&owner.reservation, output)?;
+    output
+        .attempt
+        .destination()
+        .directory()
+        .require_absent(output.attempt.destination().main())?;
     let mut block = [0; PAGE_SIZE];
     target.encode(&mut block);
     file_io::write_exact_at(&owner.reservation.file, &block, PAGE_SIZE as u64)?;
@@ -255,6 +303,7 @@ fn arm_with(
         target,
         1,
         output,
+        OutputLocation::Private,
     )
 }
 
@@ -287,14 +336,17 @@ fn verify_private(
     header: Header,
     block: usize,
 ) -> Result<(), Error> {
-    verify(
+    verification::verify(
         &draft.file,
-        draft.identity.ok_or(Error::HeaderInvariant)?,
-        &draft.name,
-        header,
-        block,
         output,
-        false,
+        Expected {
+            identity: draft.identity.ok_or(Error::HeaderInvariant)?,
+            private_name: &draft.name,
+            header,
+            block,
+            reservation_location: ReservationLocation::Private,
+            output_location: OutputLocation::Private,
+        },
     )
 }
 
@@ -302,14 +354,17 @@ fn verify_private_reservation(
     reservation: &PrivateReservation,
     output: &PreparedOutput,
 ) -> Result<(), Error> {
-    verify(
+    verification::verify(
         &reservation.file,
-        reservation.identity,
-        &reservation.name,
-        reservation.header,
-        0,
         output,
-        false,
+        Expected {
+            identity: reservation.identity,
+            private_name: &reservation.name,
+            header: reservation.header,
+            block: 0,
+            reservation_location: ReservationLocation::Private,
+            output_location: OutputLocation::Private,
+        },
     )
 }
 
@@ -324,6 +379,7 @@ fn verify_canonical_reservation(
         reservation.header,
         0,
         output,
+        OutputLocation::Private,
     )
 }
 
@@ -334,69 +390,20 @@ fn verify_canonical(
     header: Header,
     block: usize,
     output: &PreparedOutput,
+    output_location: OutputLocation,
 ) -> Result<(), Error> {
-    verify(file, identity, private_name, header, block, output, true)
-}
-
-fn verify(
-    file: &File,
-    identity: Identity,
-    private_name: &Name,
-    header: Header,
-    block: usize,
-    output: &PreparedOutput,
-    canonical: bool,
-) -> Result<(), Error> {
-    verify_inode(file, identity, output)?;
-    verify_location(private_name, identity, output, canonical)?;
-    verify_contents(file, header, block)
-}
-
-fn verify_inode(file: &File, identity: Identity, output: &PreparedOutput) -> Result<(), Error> {
-    output.verify_private().map_err(Error::Output)?;
-    let destination = output.attempt.destination();
-    let directory = destination.directory();
-    directory.verify()?;
-    if regular_identity(file, directory.identity().device)? != identity {
-        return Err(NamespaceError::IdentityChanged.into());
-    }
-    Ok(destination.verify_created(file)?)
-}
-
-fn verify_location(
-    private_name: &Name,
-    identity: Identity,
-    output: &PreparedOutput,
-    canonical: bool,
-) -> Result<(), Error> {
-    let destination = output.attempt.destination();
-    let directory = destination.directory();
-    let name = if canonical {
-        destination.coordination()
-    } else {
-        private_name
-    };
-    directory.verify_name(name, identity)?;
-    if canonical {
-        directory.require_absent(private_name)?;
-    }
-    Ok(())
-}
-
-fn verify_contents(file: &File, header: Header, block: usize) -> Result<(), Error> {
-    if file.metadata().map_err(error::Error::from)?.len() != FILE_SIZE as u64 {
-        return Err(Error::LengthChanged);
-    }
-    select_exact(file, header, block)
-}
-
-fn select_exact(file: &File, header: Header, block: usize) -> Result<(), Error> {
-    let mut bytes = [0; FILE_SIZE];
-    file_io::read_exact_at(file, &mut bytes, 0)?;
-    if reservation::select(&bytes).map_err(Error::Codec)? != (Selected { header, block }) {
-        return Err(Error::HeaderChanged);
-    }
-    Ok(())
+    verification::verify(
+        file,
+        output,
+        Expected {
+            identity,
+            private_name,
+            header,
+            block,
+            reservation_location: ReservationLocation::Canonical,
+            output_location,
+        },
+    )
 }
 
 impl From<NamespaceError> for Error {

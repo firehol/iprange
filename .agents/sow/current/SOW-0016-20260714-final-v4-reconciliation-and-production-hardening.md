@@ -11163,6 +11163,53 @@ requirements are normative in the Pre-Implementation Gate above.
   No public API, replacement policy, recovery/snapshot traversal, live
   transition, signing, or Go code was added.
 
+### 2026-07-25 - main publication implementation plan
+
+- Reservation drafts will retain an explicit `state1_selected` fact. This is the
+  structured-result boundary: a failure before it is a preparation failure; a
+  failure after it has the complete synchronized facts needed for a resolvable
+  `NotPublished` record.
+- Canonical state-1 reservations will recheck that the main is absent before
+  writing state 2. A pre-existing main therefore leaves state 1 authoritative
+  and cannot enter the ambiguity window. After state 2, the main publisher uses
+  only the retained directory, exact private-output name, and
+  `RENAME_NOREPLACE`.
+- The main publication owner will record whether the namespace call started,
+  whether rename returned success, and whether exact desired content became
+  durable and proven. It will retain the prepared output and armed reservation
+  on every failure. Main file synchronization, directory synchronization, and
+  exact main identity/name/link-count/access/length/meta proof occur under the
+  original output lifetime lock, without a second digest pass.
+- Once desired content is proved, reservation retirement is orthogonal cleanup.
+  It unlinks only the exact canonical reservation inode, proves zero links on
+  the retained descriptor, synchronizes and verifies the directory, and
+  rechecks the main. Any retirement failure retains a `Published` fact plus
+  exact cleanup state rather than changing it to `OutcomeUnknown`.
+- Permanent tests will cover pre-existing and racing main names, exact same-inode
+  publication, lock retention after rename, injected post-rename ambiguity,
+  durable desired proof, exact retirement, and post-publication cleanup failure
+  classification. Crash subprocess coverage and serialized public results will
+  follow on top of these explicit states.
+
+### 2026-07-25 - atomic main publication milestone
+
+- Implemented the exact no-replace main-name transition, main-file and directory
+  synchronization, same-inode proof under the retained lifetime lock, and exact
+  reservation retirement. The implementation never replaces a racing main and
+  performs no implicit graph validation or second digest pass.
+- Failures retain the prepared output, armed reservation, and explicit facts for
+  whether the main namespace call started, the rename succeeded, desired content
+  was proved, the reservation was unlinked, and retirement was synchronized.
+  These facts are the input to the next structured-result and resolver milestone.
+- Added permanent tests for the state-1 result boundary, main-exists rejection
+  before state 2, no-overwrite races, every main durability checkpoint, lock
+  retention, exact retirement, and cleanup failure after publication.
+- Validation passed: 232 Rust tests passed and one was intentionally ignored
+  with all features, the same suite passed without default features and on Rust
+  1.74.1, Clippy passed with warnings denied, benchmark targets compiled, and
+  formatting/diff checks passed. Changed production files remain at or below 423
+  lines and measured function cyclomatic complexity remains at or below 8.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

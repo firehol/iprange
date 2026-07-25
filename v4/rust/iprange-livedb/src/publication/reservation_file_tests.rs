@@ -118,6 +118,7 @@ fn initialization_failure_returns_the_created_reservation() {
     ));
     assert!(private_path.exists());
     assert_eq!(failure.owner.file.metadata().unwrap().len(), 0);
+    assert!(!failure.owner.state1_selected);
 }
 
 #[test]
@@ -162,6 +163,29 @@ fn canonical_tampering_fails_before_state2_and_retains_phase() {
 }
 
 #[test]
+fn existing_main_is_rejected_before_state2() {
+    let directory = TempDirectory::new();
+    let (output, _) = prepared_output(&directory.path);
+    let canonical = ReservationDraft::create(&output)
+        .unwrap()
+        .initialize(&output)
+        .unwrap()
+        .acquire(&output)
+        .unwrap();
+    let main = named_path(&directory.path, output.attempt.destination().main());
+    fs::write(&main, b"existing").unwrap();
+
+    let failure = canonical.arm(&output).unwrap_err();
+    assert!(!failure.owner.state2_selected);
+    assert!(matches!(
+        failure.cause,
+        Error::Namespace(NamespaceError::Exists)
+    ));
+    assert_eq!(failure.owner.reservation.header.state, State::Prepared);
+    assert_eq!(fs::read(main).unwrap(), b"existing");
+}
+
+#[test]
 fn failure_after_state2_selection_retains_the_durable_phase() {
     let directory = TempDirectory::new();
     let (output, _) = prepared_output(&directory.path);
@@ -182,6 +206,20 @@ fn failure_after_state2_selection_retains_the_durable_phase() {
     assert!(matches!(result, Err(Error::HeaderInvariant)));
     assert!(owner.state2_selected);
     select_exact(&owner.reservation.file, target, 1).unwrap();
+}
+
+#[test]
+fn failure_after_state1_selection_retains_the_result_boundary() {
+    let directory = TempDirectory::new();
+    let (output, _) = prepared_output(&directory.path);
+    let mut draft = ReservationDraft::create(&output).unwrap();
+    prepare_header(&mut draft, &output).unwrap();
+    write_state1(&draft).unwrap();
+
+    let result = lock_state1_with(&mut draft, &output, || Err(Error::HeaderInvariant));
+    assert!(matches!(result, Err(Error::HeaderInvariant)));
+    assert!(draft.state1_selected);
+    select_exact(&draft.file, draft.header.unwrap(), 0).unwrap();
 }
 
 fn prepared_output(directory: &Path) -> (PreparedOutput, PathBuf) {

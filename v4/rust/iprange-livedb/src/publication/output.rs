@@ -164,7 +164,15 @@ pub(crate) struct PreparedOutput {
 
 impl PreparedOutput {
     pub(crate) fn verify_private(&self) -> Result<(), Error> {
-        let length = inspect_exact(&self.attempt, &self.file, self.meta)?;
+        self.verify(Location::Private)
+    }
+
+    pub(crate) fn verify_main(&self) -> Result<(), Error> {
+        self.verify(Location::Main)
+    }
+
+    fn verify(&self, location: Location) -> Result<(), Error> {
+        let length = inspect_exact(&self.attempt, &self.file, self.meta, location)?;
         if length != self.byte_length {
             return Err(Error::FinishedLengthChanged);
         }
@@ -187,7 +195,7 @@ fn secure_created(created: &CreatedOutput) -> Result<Identity, Error> {
 }
 
 fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
-    verify_custody(&owner.attempt, &owner.finished.file)?;
+    verify_custody(&owner.attempt, &owner.finished.file, Location::Private)?;
     live_lock::lock(&owner.finished.file, MAIN_LIFETIME_LOCK, Mode::Exclusive)
         .map_err(Error::Sdk)?;
     let byte_length = inspect_finished(owner)?;
@@ -205,11 +213,21 @@ fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
 }
 
 fn inspect_finished(owner: &UnpreparedOutput) -> Result<u64, Error> {
-    inspect_exact(&owner.attempt, &owner.finished.file, owner.finished.meta)
+    inspect_exact(
+        &owner.attempt,
+        &owner.finished.file,
+        owner.finished.meta,
+        Location::Private,
+    )
 }
 
-fn inspect_exact(attempt: &OutputAttempt, file: &File, expected: MetaV4) -> Result<u64, Error> {
-    verify_custody(attempt, file)?;
+fn inspect_exact(
+    attempt: &OutputAttempt,
+    file: &File,
+    expected: MetaV4,
+    location: Location,
+) -> Result<u64, Error> {
+    verify_custody(attempt, file, location)?;
     let byte_length = file.metadata().map_err(crate::error::Error::from)?.len();
     let mut pages = [0; 2 * PAGE_SIZE];
     file_io::read_exact_at(file, &mut pages, 0).map_err(Error::Sdk)?;
@@ -223,15 +241,27 @@ fn inspect_exact(attempt: &OutputAttempt, file: &File, expected: MetaV4) -> Resu
     Ok(byte_length)
 }
 
-fn verify_custody(attempt: &OutputAttempt, file: &File) -> Result<(), Error> {
+fn verify_custody(attempt: &OutputAttempt, file: &File, location: Location) -> Result<(), Error> {
     let directory = attempt.destination.directory();
     let identity = regular_identity(file, directory.identity().device)?;
     if identity != attempt.identity {
         return Err(NamespaceError::IdentityChanged.into());
     }
-    directory.verify_name(&attempt.name, identity)?;
+    match location {
+        Location::Private => directory.verify_name(&attempt.name, identity)?,
+        Location::Main => {
+            directory.verify_name(attempt.destination.main(), identity)?;
+            directory.require_absent(&attempt.name)?;
+        }
+    }
     attempt.destination.verify_created(file)?;
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum Location {
+    Private,
+    Main,
 }
 
 fn digest(file: &File, byte_length: u64) -> Result<[u8; 64], Error> {
