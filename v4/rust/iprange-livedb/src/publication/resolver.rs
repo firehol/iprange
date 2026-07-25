@@ -30,6 +30,11 @@ mod verification;
 use verification::{
     check_cancellation, final_later, synchronize, verify_destination, verify_no_later,
 };
+#[path = "resolver_authority.rs"]
+mod authority;
+#[path = "replacement_resolver.rs"]
+mod replacement;
+use authority::BaseResolution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -43,47 +48,23 @@ pub(super) fn resolve(
     mode: Mode,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResult, Problem> {
-    dispatch(inspect(path, supplied, cancellation)?, mode, cancellation)
-}
-
-fn inspect(
-    path: &Path,
-    supplied: Option<&PublicationResult>,
-    cancellation: &CancellationToken,
-) -> Result<Resolution, Problem> {
-    let destination = Destination::bind(path).map_err(|error| Problem::namespace(&error))?;
-    let supplied_header = supplied
-        .map(|result| result.header_for(&destination))
-        .transpose()?;
-    let authority = inspect_authority(&destination, supplied_header, cancellation)?;
-    let header = authority.header;
-    let seed =
-        Seed::reconstruct(&destination, header).map_err(|error| Problem::namespace(&error))?;
-    let main = file_inspection::main(&destination, header, cancellation)?;
-    Ok(Resolution {
-        destination,
-        header,
-        seed,
-        exact: authority.exact,
-        later: authority.later,
-        main,
-    })
-}
-
-fn inspect_authority(
-    destination: &Destination,
-    supplied_header: Option<Header>,
-    cancellation: &CancellationToken,
-) -> Result<Authority, Problem> {
-    let discovered = reservation_inspection::discover(destination, cancellation)?;
-    let mut authority = choose_authority(supplied_header, discovered)?;
-    if let Some(header) = supplied_header {
-        if authority.exact.is_none() {
-            authority.exact =
-                reservation_inspection::exact_private(destination, header, cancellation)?;
-        }
+    let base = authority::inspect(path, supplied, cancellation)?;
+    if base.header.policy == super::reservation::Policy::ReplaceExisting {
+        return replacement::dispatch(base, mode, cancellation);
     }
-    Ok(authority)
+    let main = file_inspection::main(&base.destination, base.header, cancellation)?;
+    dispatch(
+        Resolution {
+            destination: base.destination,
+            header: base.header,
+            seed: base.seed,
+            exact: base.exact,
+            later: base.later,
+            main,
+        },
+        mode,
+        cancellation,
+    )
 }
 
 fn dispatch(
@@ -161,47 +142,6 @@ fn resolve_absent(
             DestinationContent::Absent,
             cancellation,
         ),
-    }
-}
-
-fn choose_authority(
-    supplied: Option<Header>,
-    discovered: Option<Inspected>,
-) -> Result<Authority, Problem> {
-    match (supplied, discovered) {
-        (None, None) => Err(unresolvable(
-            "no publication result or bound reservation is available",
-        )),
-        (Some(header), None) => Ok(Authority {
-            header,
-            exact: None,
-            later: None,
-        }),
-        (None, Some(reservation)) => Ok(Authority {
-            header: reservation.header,
-            exact: Some(reservation),
-            later: None,
-        }),
-        (Some(header), Some(reservation)) if header == reservation.header => Ok(Authority {
-            header,
-            exact: Some(reservation),
-            later: None,
-        }),
-        (Some(header), Some(reservation)) if header.attempt_id == reservation.header.attempt_id => {
-            Err(conflict(
-                "caller result and reservation disagree for the same attempt",
-            ))
-        }
-        (Some(header), Some(reservation)) if reservation.location == Location::Canonical => {
-            Ok(Authority {
-                header,
-                exact: None,
-                later: Some(reservation),
-            })
-        }
-        (Some(_), Some(_)) => Err(conflict(
-            "another private publication attempt is bound to the destination",
-        )),
     }
 }
 
@@ -462,15 +402,9 @@ const fn unresolvable(detail: &'static str) -> Problem {
     Problem::new(ErrorCode::Unresolvable, None, detail)
 }
 
-enum ArmFailure {
+pub(super) enum ArmFailure {
     Problem(Problem),
     Unknown(Problem),
-}
-
-struct Authority {
-    header: Header,
-    exact: Option<Inspected>,
-    later: Option<Inspected>,
 }
 
 struct Resolution {

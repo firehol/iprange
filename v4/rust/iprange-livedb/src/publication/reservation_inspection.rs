@@ -10,7 +10,7 @@ use crate::{error, file_io};
 
 use super::namespace::{Destination, Identity, Name, NamespaceError, Regular, ScanError};
 use super::problem::Problem;
-use super::reservation::{self, Header, Policy, Selected};
+use super::reservation::{self, Header, Selected};
 use super::result::AccessPolicy;
 
 const FILE_SIZE: u64 = (2 * PAGE_SIZE) as u64;
@@ -54,6 +54,19 @@ impl Inspected {
             return Err(conflict("publication reservation changed after inspection"));
         }
         Ok(())
+    }
+
+    pub(super) fn unlock_operation(&self) -> Result<(), Problem> {
+        live_lock::unlock(&self.file, OPERATION_LOCK).map_err(|error| Problem::sdk(&error))
+    }
+
+    pub(super) fn relock_operation(
+        &self,
+        destination: &Destination,
+        cancellation: &CancellationToken,
+    ) -> Result<(), Problem> {
+        lock_operation_file(&self.file, cancellation)?;
+        self.verify(destination)
     }
 }
 
@@ -234,20 +247,21 @@ fn inspected(name: Name, regular: Regular, selected: Selected, location: Locatio
 }
 
 fn lock_operation(regular: &Regular, cancellation: &CancellationToken) -> Result<(), Problem> {
-    live_lock::lock_cancellable(&regular.file, OPERATION_LOCK, Mode::Exclusive, cancellation)
+    lock_operation_file(&regular.file, cancellation)
+}
+
+fn lock_operation_file(file: &File, cancellation: &CancellationToken) -> Result<(), Problem> {
+    live_lock::lock_cancellable(file, OPERATION_LOCK, Mode::Exclusive, cancellation)
         .map_err(|error| Problem::sdk(&error))?;
     cancellation.check().map_err(|error| Problem::sdk(&error))
 }
 
-fn require_bound(
+pub(super) fn require_bound(
     destination: &Destination,
     header: Header,
     identity: Identity,
     filename_attempt: Option<[u8; 16]>,
 ) -> Result<(), Problem> {
-    if header.policy != Policy::FailIfExists || header.previous.is_some() {
-        return Err(conflict("reservation policy is not fail-if-exists"));
-    }
     if header.reservation_identity != identity.encode() {
         return Err(conflict(
             "reservation self identity does not match its inode",

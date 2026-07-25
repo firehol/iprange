@@ -29,6 +29,7 @@ enum Point {
 }
 
 pub(crate) fn fail_if_exists(output: PreparedOutput) -> Result {
+    debug_assert!(output.previous.is_none());
     fail_if_exists_with(output, |_| Ok(()))
 }
 
@@ -36,7 +37,24 @@ pub(crate) fn fail_if_exists_cancellable(
     output: PreparedOutput,
     cancellation: &CancellationToken,
 ) -> Result {
-    fail_if_exists_with(output, |point| {
+    debug_assert!(output.previous.is_none());
+    publish_with(output, Some(cancellation), |point| {
+        if matches!(
+            point,
+            Point::CleanupOutput | Point::CleanupReservation | Point::CleanupDirectorySync
+        ) {
+            return Ok(());
+        }
+        cancellation.check().map_err(|error| Problem::sdk(&error))
+    })
+}
+
+pub(crate) fn replace_existing_cancellable(
+    output: PreparedOutput,
+    cancellation: &CancellationToken,
+) -> Result {
+    debug_assert!(output.previous.is_some());
+    publish_with(output, Some(cancellation), |point| {
         if matches!(
             point,
             Point::CleanupOutput | Point::CleanupReservation | Point::CleanupDirectorySync
@@ -72,6 +90,14 @@ pub(super) fn resume_armed(
 
 fn fail_if_exists_with(
     output: PreparedOutput,
+    checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
+) -> Result {
+    publish_with(output, None, checkpoint)
+}
+
+fn publish_with(
+    output: PreparedOutput,
+    cancellation: Option<&CancellationToken>,
     mut checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
 ) -> Result {
     let seed = Seed::capture(&output);
@@ -123,13 +149,14 @@ fn fail_if_exists_with(
             );
         }
     };
-    from_private(seed, output, reservation, &mut checkpoint)
+    from_private(seed, output, reservation, cancellation, &mut checkpoint)
 }
 
 fn from_private(
     seed: Seed,
     output: PreparedOutput,
     reservation: PrivateReservation,
+    cancellation: Option<&CancellationToken>,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
 ) -> Result {
     if let Err(cause) = checkpoint(Point::State1Selected) {
@@ -156,13 +183,14 @@ fn from_private(
             ))
         }
     };
-    from_canonical(seed, output, reservation, checkpoint)
+    from_canonical(seed, output, reservation, cancellation, checkpoint)
 }
 
 fn from_canonical(
     seed: Seed,
     output: PreparedOutput,
     reservation: CanonicalReservation,
+    cancellation: Option<&CancellationToken>,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
 ) -> Result {
     if let Err(cause) = checkpoint(Point::ReservationAcquired) {
@@ -174,6 +202,18 @@ fn from_canonical(
             cause,
             checkpoint,
         ));
+    }
+    if let Some(previous) = &output.previous {
+        if let Err(cause) = previous.verify_content(output.attempt.destination(), cancellation) {
+            return Ok(not_published(
+                seed,
+                output,
+                canonical_owner(&reservation),
+                reservation.identity,
+                Problem::replacement(&cause),
+                checkpoint,
+            ));
+        }
     }
 
     let reservation = match reservation.arm(&output) {
@@ -258,10 +298,17 @@ fn not_published(
     cause: Problem,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
 ) -> PublicationResult {
+    let previous_unchanged = output.previous.as_ref().is_some_and(|previous| {
+        previous
+            .verify_content(output.attempt.destination(), None)
+            .is_ok()
+    });
     let cleanup = cleanup::discard_with(&mut seed, &output, Some(reservation), |point| {
         checkpoint(cleanup_point(point))
     });
-    let content = if cleanup.main_absent {
+    let content = if previous_unchanged {
+        DestinationContent::Previous
+    } else if cleanup.main_absent {
         DestinationContent::Absent
     } else {
         DestinationContent::Unclassified
@@ -344,6 +391,16 @@ pub(super) fn finish_published(
                 AccessPolicy::ChangedOrUnproven
             };
             let mut cleanup = CleanupArtifacts::new();
+            if !failure.owner.previous_retired_proven {
+                if let Some(previous) = &failure.owner.published.output.previous {
+                    cleanup.push(seed.artifact(
+                        ArtifactKind::PrivateOutput,
+                        NameSlot::PrivateOutput,
+                        Some(previous.identity),
+                        retirement,
+                    ));
+                }
+            }
             if !failure.owner.reservation_retired_proven {
                 cleanup.push(seed.artifact(
                     ArtifactKind::PrivateReservation,

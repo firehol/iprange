@@ -231,6 +231,11 @@ fn initialize(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(
 
 fn prepare_header(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
     output.verify_private().map_err(Error::Output)?;
+    if output.previous.is_some() {
+        output
+            .verify_destination_before_main()
+            .map_err(Error::Output)?;
+    }
     let destination = output.attempt.destination();
     let directory = destination.directory();
     let identity = regular_identity(&draft.file, directory.identity().device)?;
@@ -305,11 +310,14 @@ fn arm_with(
 ) -> Result<(), Error> {
     let target = owner.target.ok_or(Error::HeaderInvariant)?;
     verify_canonical_reservation(&owner.reservation, output)?;
-    output
-        .attempt
-        .destination()
-        .directory()
-        .require_absent(output.attempt.destination().main())?;
+    if output.previous.is_some() {
+        output
+            .verify_destination_before_main()
+            .map_err(Error::Output)?;
+    } else {
+        let destination = output.attempt.destination();
+        destination.directory().require_absent(destination.main())?;
+    }
     let mut block = [0; PAGE_SIZE];
     target.encode(&mut block);
     file_io::write_exact_at(&owner.reservation.file, &block, PAGE_SIZE as u64)?;
@@ -339,6 +347,14 @@ fn header(output: &PreparedOutput, identity: Identity) -> Result<Header, Error> 
     let destination = output.attempt.destination();
     let basename_len =
         u32::try_from(destination.main().bytes().len()).map_err(|_| Error::HeaderInvariant)?;
+    let previous = output
+        .previous
+        .as_ref()
+        .map(|previous| super::reservation::Previous {
+            identity: previous.identity.encode(),
+            byte_length: previous.byte_length,
+            sha512: previous.sha512,
+        });
     Ok(Header {
         state: State::Prepared,
         database_id: output.meta.database_id,
@@ -346,11 +362,15 @@ fn header(output: &PreparedOutput, identity: Identity) -> Result<Header, Error> 
         commit_nonce: output.meta.commit_nonce,
         attempt_id: output.attempt.attempt_id(),
         reservation_identity: identity.encode(),
-        policy: Policy::FailIfExists,
+        policy: if previous.is_some() {
+            Policy::ReplaceExisting
+        } else {
+            Policy::FailIfExists
+        },
         output_byte_length: output.byte_length,
         output_identity: output.attempt.identity().encode(),
         output_sha512: output.sha512,
-        previous: None,
+        previous,
         basename_len,
         basename_commitment: destination.basename_commitment(),
         security_commitment: destination.security_commitment(),

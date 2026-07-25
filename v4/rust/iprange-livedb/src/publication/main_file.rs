@@ -15,6 +15,7 @@ pub(crate) enum Error {
     Sdk(error::Error),
     Output(output::Error),
     Reservation(reservation_file::Error),
+    PreviousLinkCount(u64),
     ReservationLinkCount(u64),
     Injected,
 }
@@ -43,6 +44,8 @@ pub(crate) struct PublishedMain {
 #[derive(Debug)]
 pub(crate) struct RetiringMain {
     pub(crate) published: PublishedMain,
+    pub(crate) previous_unlinked: bool,
+    pub(crate) previous_retired_proven: bool,
     pub(crate) reservation_unlinked: bool,
     pub(crate) directory_synced: bool,
     pub(crate) reservation_retired_proven: bool,
@@ -61,6 +64,7 @@ enum Point {
     MainSynced,
     DirectorySynced,
     DesiredProven,
+    PreviousUnlinked,
     ReservationUnlinked,
     RetirementSynced,
 }
@@ -112,17 +116,32 @@ fn verify_before_main(owner: &MainAttempt) -> Result<(), Error> {
         .reservation
         .verify_before_main(&owner.output)
         .map_err(Error::Reservation)?;
-    let destination = owner.output.attempt.destination();
-    destination.directory().require_absent(destination.main())?;
-    Ok(())
+    if owner.output.previous.is_some() {
+        owner
+            .output
+            .verify_destination_before_main()
+            .map_err(Error::Output)
+    } else {
+        let destination = owner.output.attempt.destination();
+        destination
+            .directory()
+            .require_absent(destination.main())
+            .map_err(Error::Namespace)
+    }
 }
 
 fn rename_main(owner: &mut MainAttempt) -> Result<(), Error> {
     let destination = owner.output.attempt.destination();
     owner.main_call_started = true;
-    destination
-        .directory()
-        .rename_noreplace(owner.output.attempt.name(), destination.main())?;
+    if owner.output.previous.is_some() {
+        destination
+            .directory()
+            .rename_exchange(owner.output.attempt.name(), destination.main())?;
+    } else {
+        destination
+            .directory()
+            .rename_noreplace(owner.output.attempt.name(), destination.main())?;
+    }
     owner.rename_succeeded = true;
     crate::fault::crash("publication.after_main_rename");
     Ok(())
@@ -169,6 +188,8 @@ impl PublishedMain {
     ) -> Result<PublishedOutput, Failure<RetiringMain>> {
         let mut owner = RetiringMain {
             published: self,
+            previous_unlinked: false,
+            previous_retired_proven: false,
             reservation_unlinked: false,
             directory_synced: false,
             reservation_retired_proven: false,
@@ -192,11 +213,51 @@ fn retire_steps(
     checkpoint: &mut impl FnMut(Point) -> Result<(), Error>,
 ) -> Result<(), Error> {
     verify_published(&owner.published)?;
+    if unlink_previous(owner)? {
+        checkpoint(Point::PreviousUnlinked)?;
+    }
     unlink_reservation(owner)?;
     checkpoint(Point::ReservationUnlinked)?;
     sync_retirement(owner)?;
     checkpoint(Point::RetirementSynced)?;
     verify_retired(owner)
+}
+
+fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
+    let published = &owner.published;
+    let Some(previous) = &published.output.previous else {
+        owner.previous_retired_proven = true;
+        return Ok(false);
+    };
+    let destination = published.output.attempt.destination();
+    previous.verify_private_or_retired(destination, published.output.attempt.name())?;
+    if previous
+        .file
+        .metadata()
+        .map_err(error::Error::from)?
+        .nlink()
+        == 0
+    {
+        owner.previous_unlinked = true;
+        return Ok(false);
+    }
+    if !destination
+        .directory()
+        .unlink_exact(published.output.attempt.name(), previous.identity)?
+    {
+        return Err(NamespaceError::Missing.into());
+    }
+    owner.previous_unlinked = true;
+    let links = previous
+        .file
+        .metadata()
+        .map_err(error::Error::from)?
+        .nlink();
+    if links != 0 {
+        return Err(Error::PreviousLinkCount(links));
+    }
+    crate::fault::crash("publication.after_previous_unlink");
+    Ok(true)
 }
 
 fn verify_published(published: &PublishedMain) -> Result<(), Error> {
@@ -250,6 +311,10 @@ fn verify_retired(owner: &mut RetiringMain) -> Result<(), Error> {
     destination
         .directory()
         .require_absent(destination.coordination())?;
+    if let Some(previous) = &output.previous {
+        previous.verify_retired(destination, output.attempt.name())?;
+    }
+    owner.previous_retired_proven = true;
     owner.reservation_retired_proven = true;
     output.verify_main().map_err(Error::Output)
 }

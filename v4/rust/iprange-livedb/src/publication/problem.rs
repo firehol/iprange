@@ -5,6 +5,7 @@ use crate::error::{Error as SdkError, ErrorCode};
 use super::main_file;
 use super::namespace::NamespaceError;
 use super::output;
+use super::replacement;
 use super::reservation_file;
 pub(crate) use super::types::PublicationProblem as Problem;
 
@@ -104,12 +105,32 @@ impl Problem {
         }
     }
 
+    pub(crate) fn replacement(error: &replacement::Error) -> Self {
+        match error {
+            replacement::Error::Namespace(cause) => Self::namespace(cause),
+            replacement::Error::Sdk(cause) => Self::sdk(cause),
+            replacement::Error::Output(cause) => Self::output(cause),
+            replacement::Error::SameIdentity => Self::plain(
+                ErrorCode::Conflict,
+                "replacement source and destination identities match",
+            ),
+            replacement::Error::ContentChanged => Self::plain(
+                ErrorCode::Conflict,
+                "replacement destination content changed",
+            ),
+        }
+    }
+
     pub(crate) fn main(error: &main_file::Error) -> Self {
         match error {
             main_file::Error::Namespace(cause) => Self::namespace(cause),
             main_file::Error::Sdk(cause) => Self::sdk(cause),
             main_file::Error::Output(cause) => Self::output(cause),
             main_file::Error::Reservation(cause) => Self::reservation(cause),
+            main_file::Error::PreviousLinkCount(_) => Self::plain(
+                ErrorCode::CleanupConflict,
+                "retired previous destination still has a link",
+            ),
             main_file::Error::ReservationLinkCount(_) => Self::plain(
                 ErrorCode::CleanupConflict,
                 "retired reservation still has a link",

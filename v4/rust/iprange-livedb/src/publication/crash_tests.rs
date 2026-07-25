@@ -16,6 +16,7 @@ use crate::publication::attempt;
 use crate::publication::file_inspection::{self, Content};
 use crate::publication::namespace::Destination;
 use crate::publication::output::CreatedOutput;
+use crate::publication::replacement;
 use crate::publication::reservation::{self, State};
 use crate::publication::reservation_inspection::{self, Location};
 use crate::test_alloc::count_thread_allocations;
@@ -23,6 +24,7 @@ use crate::ImmutableReader;
 
 const CHILD_TEST: &str = "publication::crash_tests::crash_child";
 const CHILD_PATH: &str = "IPRANGE_V4_PUBLICATION_CRASH_PATH";
+const CHILD_REPLACE: &str = "IPRANGE_V4_PUBLICATION_CRASH_REPLACE";
 
 #[test]
 fn reservation_crashes_leave_one_complete_output_and_selectable_authority() {
@@ -233,6 +235,54 @@ fn retirement_crashes_leave_a_normally_openable_complete_main() {
 }
 
 #[test]
+fn replacement_crashes_preserve_exact_previous_or_desired_state() {
+    for point in [
+        "publication.after_reservation_state1_sync",
+        "publication.after_reservation_rename",
+        "publication.after_reservation_directory_sync",
+        "publication.after_reservation_state2_write",
+        "publication.after_reservation_state2_sync",
+        "publication.after_reservation_state2_selection",
+        "publication.after_main_rename",
+        "publication.after_main_sync",
+        "publication.after_main_directory_sync",
+        "publication.after_main_proof",
+        "publication.after_previous_unlink",
+        "publication.after_reservation_unlink",
+        "publication.after_retirement_sync",
+    ] {
+        let directory = TempDirectory::new(point);
+        let main = directory.path.join("result.v4");
+        run_replacement_child(&main, point);
+        let artifacts = Artifacts::inspect(&directory.path, &main);
+
+        if point.contains("reservation_") && !point.contains("unlink") {
+            assert_eq!(fs::read(&main).unwrap(), b"previous bytes", "{point}");
+            assert_eq!(artifacts.private_outputs.len(), 1, "{point}");
+            assert_complete_output(&artifacts.private_outputs[0]);
+        } else {
+            assert_complete_output(&main);
+            if matches!(
+                point,
+                "publication.after_main_rename"
+                    | "publication.after_main_sync"
+                    | "publication.after_main_directory_sync"
+                    | "publication.after_main_proof"
+            ) {
+                assert_eq!(artifacts.private_outputs.len(), 1, "{point}");
+                assert_eq!(
+                    fs::read(&artifacts.private_outputs[0]).unwrap(),
+                    b"previous bytes",
+                    "{point}"
+                );
+            } else {
+                assert!(artifacts.private_outputs.is_empty(), "{point}");
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "subprocess entry point"]
 fn crash_child() {
     let main = PathBuf::from(std::env::var_os(CHILD_PATH).unwrap());
@@ -241,7 +291,13 @@ fn crash_child() {
     let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 17).unwrap();
     let output = attempt.prepare(builder.finish().unwrap()).unwrap();
-    let _ = attempt::fail_if_exists(output);
+    if std::env::var_os(CHILD_REPLACE).is_some() {
+        fs::write(&main, b"previous bytes").unwrap();
+        let output = replacement::bind(output, &CancellationToken::new()).unwrap();
+        let _ = attempt::replace_existing_cancellable(output, &CancellationToken::new());
+    } else {
+        let _ = attempt::fail_if_exists(output);
+    }
     panic!("configured publication crash point was not reached");
 }
 
@@ -251,6 +307,19 @@ pub(super) fn run_child(main: &Path, point: &str) {
         .arg("--exact")
         .arg(CHILD_TEST)
         .env(CHILD_PATH, main)
+        .env("IPRANGE_V4_TEST_CRASH_AT", point)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(86), "{point}");
+}
+
+pub(super) fn run_replacement_child(main: &Path, point: &str) {
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--ignored")
+        .arg("--exact")
+        .arg(CHILD_TEST)
+        .env(CHILD_PATH, main)
+        .env(CHILD_REPLACE, "1")
         .env("IPRANGE_V4_TEST_CRASH_AT", point)
         .status()
         .unwrap();

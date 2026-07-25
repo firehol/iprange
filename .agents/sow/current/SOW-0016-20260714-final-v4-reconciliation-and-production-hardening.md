@@ -11866,6 +11866,130 @@ requirements are normative in the Pre-Implementation Gate above.
   the explicit unsupported result until their approved publication primitives
   are implemented.
 
+### 2026-07-25 - compact unsigned snapshot implementation plan
+
+- `SnapshotTo` will use a dedicated `SnapshotBudget` containing only retained
+  heap, output-page, and open-file limits. Normal snapshot construction creates
+  no sorting or scratch files. Live mode reserves the retained sidecar
+  descriptor in addition to source and private output.
+- The recovery source guard will be generalized, not duplicated. Snapshot
+  immutable mode will select an ordinary current generation under a shared
+  lifetime lock and sidecar-absence checks. Live mode will select and claim the
+  current generation under the retained sidecar gate. Both cache the complete
+  selected meta, repeat their exact final checks, and expose the existing
+  retryable cleanup guard if source release fails.
+- A small logical copier will stream the selected raw range map in order into
+  the existing immutable-output builder. Membership snapshots first preserve
+  every exact feed name/index, then lazily read each referenced SDK-owned bitmap
+  while rebuilding membership IDs. Metadata is read and recompressed within the
+  caller's aggregate heap limit. The output preserves source identity,
+  generation, family, kind/tag, feed-index limit, logical data, and exact
+  decompressed metadata while rebuilding canonical empty allocator/retirement
+  state. It performs only traversal safety checks and no implicit CRC/full
+  validation.
+- Source protection will be released after construction and exact final source
+  checks, before output digesting or any destination lock/reservation. A failed
+  release cleans or ledgers the exact private output and returns a pre-publication
+  `SnapshotPreparationFailure`; no source guard crosses the publication
+  boundary.
+- The first publication sub-slice will compose the already proven
+  fail-if-exists publisher. The following sub-slice will add the specified
+  existing-destination replacement protocol, including stable previous
+  identity/length/SHA-512 evidence, same-path immutable compaction, atomic
+  replacement, and factual terminal resolution. It will not silently switch
+  policies.
+- Public terminal types will include private-output facts, complete bounded
+  cleanup artifacts, source/destination coordination cleanup, housekeeping,
+  visible housekeeping, and the typed cause. Separate authenticated list/remove
+  operations will cover abandoned private publication outputs; reservation
+  inspection/removal and direct resolver entry points will expose the existing
+  restart machinery without pathname or age guesses.
+- Permanent tests will cover direct and membership logical equivalence,
+  preserved identity/generation/feed indexes/metadata, compact physical state,
+  immutable/live pinning, source races and release ordering, cancellation and
+  malformed traversal failure, all budget boundaries, no scratch files,
+  fail-if-exists and replacement publication, same-path rules, destination
+  races, preparation residue, restart resolution, and abandoned-temp
+  authentication/removal. Allocation, descriptor, page-touch, crash, and
+  update-ipsets-shaped benchmarks will follow the complete operation.
+
+### 2026-07-25 - publication residue API plan
+
+- The Rust public API will expose the section-20.1 inspection/removal boundary
+  without serializing mutation authority. Inspection retains the destination
+  directory and canonical coordination descriptors in an opaque process-local
+  handle only when that exact canonical inode exists. Canonical absence returns
+  no handle and may reconstruct only one uniquely bound private reservation.
+- A selectable kind-1/kind-2 reservation reconstructs the portable attempt and
+  durable phase facts used by `ResolvePublication`. An unselectable canonical
+  inode remains reportable and removable only through its retained same-process
+  handle; online resolution and directory-wide maintenance never remove it.
+- Offline removal consumes that handle, rechecks the directory and exact
+  canonical regular link-count-one inode, rejects either selectable header,
+  exclusively locks and classifies the current main without changing it, then
+  unlinks only the retained coordination inode and synchronizes/rechecks the
+  directory. A post-unlink failure is returned as factual cleanup residue,
+  never as an unqualified success.
+- Permanent tests will cover absent, valid, malformed, selectable-after-
+  inspection, replaced/hard-linked coordination, unchanged arbitrary and v4
+  mains, cancellation, idempotence/consumed authority, and no main mutation.
+
+### 2026-07-25 - compact snapshot and replacement-publication milestone
+
+- The public `snapshot_to` operation now snapshots one exact immutable or live
+  generation into a canonical immutable v4 file. It preserves the selected
+  database identity, transaction, commit nonce, value kind/tag, feed names and
+  indexes, range semantics, and decompressed metadata while rebuilding only
+  live allocator and retirement state.
+- Construction is bounded by explicit heap, output-page, and descriptor limits.
+  It streams already ordered logical ranges directly into the final private
+  output, creates no sorting/scratch file, does not perform implicit CRC or
+  whole-graph validation, and releases the source guard before entering the
+  destination publication protocol.
+- `FailIfExists` retains the existing no-overwrite protocol.
+  `ReplaceExisting` binds and hashes the exact previous inode, atomically
+  exchanges complete files, keeps both lifetimes locked through retirement,
+  and records enough authenticated evidence for either restart completion or
+  rollback. Same-path immutable compaction is supported; a live database cannot
+  replace its own source path.
+- Twelve permanent integration tests cover direct and membership equivalence,
+  metadata and feed-index preservation, exact budget boundaries, cancellation,
+  malformed traversal, non-implicit CRC handling, source pathname replacement,
+  a concurrent live commit, destination policy, arbitrary previous bytes, and
+  same-path rules. Publication unit and subprocess crash tests cover every
+  replacement checkpoint before and after the atomic exchange.
+
+### 2026-07-25 - publication maintenance and residue milestone
+
+- Public constant-memory list/remove operations now authenticate exact private
+  output and reservation names, identities, bindings, headers, tuples, and
+  optional complete-file digests. Removal is explicit, idempotent, no-follow,
+  caller-quiesced, and directory-durable; it never guesses from age or prefix.
+- Public restart resolution can complete or remove one exact interrupted
+  fail-if-exists or replacement attempt using supplied terminal evidence or a
+  selectable retained reservation. It never substitutes full validation.
+- Canonical residue inspection is read-only. An unselectable canonical inode
+  can be removed only by consuming its same-process retained handle after exact
+  identity, link-count, lock, binding, main-file evidence, and directory
+  rechecks. Selectable publication reservations and live sidecars are never
+  removed by this offline path, and the main file is never changed.
+- Nine maintenance tests and eight canonical-residue tests cover malformed
+  names and content, exact evidence, cancellation, sink failure, identity and
+  directory replacement, hard links, durable/idempotent removal, later valid
+  coordination, arbitrary and readable v4 mains, and no main mutation.
+
+### 2026-07-25 - compact-snapshot checkpoint validation
+
+- Current-toolchain all-feature and no-default suites each pass 353 tests; two
+  subprocess entry points are intentionally ignored. Rust 1.74.1 passes the
+  same all-feature suite.
+- Formatting and diff checks pass. Strict workspace/all-feature/all-target
+  Clippy with warnings denied passes.
+- Newly split publication modules keep each changed production file below 500
+  physical lines. The remaining full portability and performance acceptance
+  gates are still open: publication, snapshot, and residue mutation currently
+  work on Linux, while other targets return the explicit unsupported result.
+
 ### Historical adversarial-audit evidence
 
 The evidence below records the original test-only rounds exactly as executed.

@@ -421,6 +421,15 @@ fn read_header(file: &File) -> Result<Header> {
     })
 }
 
+pub(crate) fn has_selectable_header(file: &File) -> Result<bool> {
+    if file.metadata()?.len() < PAGE_SIZE as u64 {
+        return Ok(false);
+    }
+    let mut page = [0; PAGE_SIZE];
+    file_io::read_exact_at(file, &mut page, 0)?;
+    Ok(header_shape_valid(&page) && header_checksum_valid(&page))
+}
+
 fn header_shape_valid(page: &[u8; PAGE_SIZE]) -> bool {
     let fixed = (
         &page[..8],

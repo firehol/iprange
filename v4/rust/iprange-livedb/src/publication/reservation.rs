@@ -202,6 +202,15 @@ pub(crate) fn select(bytes: &[u8]) -> Result<Selected, SelectError> {
     }
 }
 
+pub(crate) fn contains_selectable_header(bytes: &[u8]) -> bool {
+    if bytes.len() != FILE_SIZE {
+        return false;
+    }
+    let left: &[u8; PAGE_SIZE] = bytes[..PAGE_SIZE].try_into().expect("checked size");
+    let right: &[u8; PAGE_SIZE] = bytes[PAGE_SIZE..].try_into().expect("checked size");
+    decode(left).is_ok() || decode(right).is_ok()
+}
+
 fn selected_at(header: Header, block: usize) -> Result<Selected, SelectError> {
     if header.sequence != block as u64 + 1 {
         return Err(SelectError::InvalidTransition);

@@ -10,6 +10,7 @@ use crate::error::ErrorCode;
 use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
 use crate::key::Ipv4Key;
 use crate::publication::output::CreatedOutput;
+use crate::publication::replacement;
 use crate::publication::reservation_file::ReservationDraft;
 use crate::publication::result::{CleanupState, PublicationStatus};
 use crate::test_alloc::count_thread_allocations;
@@ -300,10 +301,73 @@ fn post_boundary_success_allocates_no_heap() {
         .unwrap();
 
     let (result, allocations) =
-        count_thread_allocations(|| from_private(seed, output, reservation, &mut |_| Ok(())));
+        count_thread_allocations(|| from_private(seed, output, reservation, None, &mut |_| Ok(())));
 
     assert_eq!(allocations, 0);
     assert_eq!(result.unwrap().publication, PublicationStatus::Published);
+}
+
+#[test]
+fn replacement_publishes_exact_output_and_retires_the_previous_inode() {
+    let directory = TempDirectory::new();
+    let (output, paths, previous) = prepared_replacement_output(&directory.path);
+
+    let result = replace_existing_cancellable(output, &CancellationToken::new()).unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::Published);
+    assert_eq!(result.destination_content, DestinationContent::Desired);
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert_eq!(
+        result.attempt.previous_destination.as_ref().unwrap().sha512,
+        previous
+    );
+    assert!(paths.main.exists());
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn replacement_state1_failure_preserves_and_classifies_previous_bytes() {
+    let directory = TempDirectory::new();
+    let (output, paths, _) = prepared_replacement_output(&directory.path);
+    let result = publish_with(output, None, |point| {
+        if point == Point::State1Selected {
+            Err(Problem::injected())
+        } else {
+            Ok(())
+        }
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.destination_content, DestinationContent::Previous);
+    assert_eq!(fs::read(&paths.main).unwrap(), b"previous bytes");
+    assert!(!paths.private_output.exists());
+    assert!(!paths.private_reservation.exists());
+    assert!(!paths.coordination.exists());
+}
+
+#[test]
+fn replacement_path_race_is_detected_before_state2() {
+    let directory = TempDirectory::new();
+    let (output, paths, _) = prepared_replacement_output(&directory.path);
+    let displaced = directory.path.join("displaced");
+    let result = publish_with(output, None, |point| {
+        if point == Point::ReservationAcquired {
+            fs::rename(&paths.main, &displaced).unwrap();
+            fs::write(&paths.main, b"racing bytes").unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(result.publication, PublicationStatus::NotPublished);
+    assert_eq!(result.destination_content, DestinationContent::Unclassified);
+    assert_eq!(fs::read(&paths.main).unwrap(), b"racing bytes");
+    assert_eq!(fs::read(&displaced).unwrap(), b"previous bytes");
+    assert!(!paths.private_output.exists());
+    assert!(!paths.coordination.exists());
 }
 
 fn prepared_output(directory: &Path) -> (PreparedOutput, Paths) {
@@ -331,6 +395,14 @@ fn prepared_output(directory: &Path) -> (PreparedOutput, Paths) {
             coordination,
         },
     )
+}
+
+fn prepared_replacement_output(directory: &Path) -> (PreparedOutput, Paths, [u8; 64]) {
+    let (output, paths) = prepared_output(directory);
+    fs::write(&paths.main, b"previous bytes").unwrap();
+    let output = replacement::bind(output, &CancellationToken::new()).unwrap();
+    let digest = output.previous.as_ref().unwrap().sha512;
+    (output, paths, digest)
 }
 
 fn named_path(directory: &Path, name: &crate::publication::namespace::Name) -> PathBuf {

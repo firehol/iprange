@@ -13,8 +13,8 @@ pub(crate) use super::types::CleanupState;
 pub(crate) use super::types::{
     AccessPolicy, ArtifactKind, CleanupArtifact, CleanupArtifacts, CoordinationCleanup,
     CreationSecurity, DestinationContent, DirectoryRole, Housekeeping, LaterCanonical,
-    PublicationAttempt as AttemptFacts, PublicationPreparationFailure as PreparationFailure,
-    PublicationResult, PublicationStatus,
+    PreviousDestination, PublicationAttempt as AttemptFacts,
+    PublicationPreparationFailure as PreparationFailure, PublicationResult, PublicationStatus,
 };
 
 const POSIX_KIND: u16 = 1;
@@ -34,6 +34,15 @@ impl PublicationResult {
         } else {
             State::Prepared
         };
+        let previous =
+            self.attempt
+                .previous_destination
+                .as_ref()
+                .map(|previous| reservation::Previous {
+                    identity: previous.identity.bytes,
+                    byte_length: previous.byte_length,
+                    sha512: previous.sha512,
+                });
         let header = Header {
             state,
             database_id: self.attempt.database_id,
@@ -41,11 +50,15 @@ impl PublicationResult {
             commit_nonce: self.attempt.commit_nonce,
             attempt_id: self.attempt.publication_attempt_id,
             reservation_identity: self.attempt.reservation_identity.bytes,
-            policy: Policy::FailIfExists,
+            policy: if previous.is_some() {
+                Policy::ReplaceExisting
+            } else {
+                Policy::FailIfExists
+            },
             output_byte_length: self.attempt.output_byte_length,
             output_identity: self.attempt.output_identity.bytes,
             output_sha512: self.attempt.output_sha512,
-            previous: None,
+            previous,
             basename_len: u32::try_from(destination.main().bytes().len())
                 .map_err(|_| destination_name_mismatch())?,
             basename_commitment: destination.basename_commitment(),
@@ -74,6 +87,7 @@ pub(super) struct Seed {
     output_identity: LocalFileIdentity,
     output_byte_length: u64,
     output_sha512: [u8; 64],
+    previous_destination: Option<PreviousDestination>,
     creation_security: CreationSecurity,
     private_output_basename: Box<[u8]>,
     names: Names,
@@ -110,6 +124,14 @@ impl Seed {
             output_identity: local(output.attempt.identity()),
             output_byte_length: output.byte_length,
             output_sha512: output.sha512,
+            previous_destination: output
+                .previous
+                .as_ref()
+                .map(|previous| PreviousDestination {
+                    identity: local(previous.identity),
+                    byte_length: previous.byte_length,
+                    sha512: previous.sha512,
+                }),
             creation_security: CreationSecurity {
                 kind: POSIX_KIND,
                 commitment: destination.security_commitment(),
@@ -139,6 +161,11 @@ impl Seed {
             output_identity: local_raw(header.output_identity),
             output_byte_length: header.output_byte_length,
             output_sha512: header.output_sha512,
+            previous_destination: header.previous.map(|previous| PreviousDestination {
+                identity: local_raw(previous.identity),
+                byte_length: previous.byte_length,
+                sha512: previous.sha512,
+            }),
             creation_security: CreationSecurity {
                 kind: POSIX_KIND,
                 commitment: header.security_commitment,
@@ -170,7 +197,7 @@ impl Seed {
                 output_identity: self.output_identity,
                 output_byte_length: self.output_byte_length,
                 output_sha512: self.output_sha512,
-                previous_destination: None,
+                previous_destination: self.previous_destination,
                 reservation_identity: local(state.reservation_identity),
                 creation_security: self.creation_security,
             },
@@ -273,6 +300,11 @@ fn require_result_binding(
     if result.attempt.output_identity.kind != POSIX_KIND
         || result.attempt.reservation_identity.kind != POSIX_KIND
         || result.attempt.creation_security.kind != POSIX_KIND
+        || result
+            .attempt
+            .previous_destination
+            .as_ref()
+            .is_some_and(|previous| previous.identity.kind != POSIX_KIND)
     {
         return Err(conflict(
             "caller publication result has another identity kind",

@@ -6,8 +6,9 @@ use crate::error::ErrorCode;
 use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
 use crate::key::Ipv4Key;
 use crate::publication::attempt;
-use crate::publication::crash_tests::{run_child, Artifacts, TempDirectory};
+use crate::publication::crash_tests::{run_child, run_replacement_child, Artifacts, TempDirectory};
 use crate::publication::output::CreatedOutput;
+use crate::publication::replacement;
 use crate::publication::reservation;
 use crate::publication::result::{
     AccessPolicy, CleanupArtifacts, CleanupState, DestinationContent, LaterCanonical,
@@ -32,6 +33,14 @@ const POST_MAIN: &[&str] = &[
     "publication.after_main_sync",
     "publication.after_main_directory_sync",
     "publication.after_main_proof",
+];
+
+const REPLACEMENT_POST_MAIN: &[&str] = &[
+    "publication.after_main_rename",
+    "publication.after_main_sync",
+    "publication.after_main_directory_sync",
+    "publication.after_main_proof",
+    "publication.after_previous_unlink",
 ];
 
 #[test]
@@ -74,6 +83,62 @@ fn remove_discards_every_pre_main_crash_state() {
         assert_eq!(result.cleanup_state(), CleanupState::Clean, "{point}");
         assert!(!main.exists(), "{point}");
         assert_clean(&directory, &main, point);
+    }
+}
+
+#[test]
+fn replacement_complete_resumes_every_pre_main_crash_state() {
+    for point in PRE_MAIN {
+        let directory = TempDirectory::new(point);
+        let main = directory.path.join("result.v4");
+        run_replacement_child(&main, point);
+
+        let result = resolve(&main, None, Mode::Complete, &CancellationToken::new()).unwrap();
+
+        assert_published(&result, point);
+        assert!(result.attempt.previous_destination.is_some(), "{point}");
+        assert_clean(&directory, &main, point);
+    }
+}
+
+#[test]
+fn replacement_remove_preserves_previous_for_every_pre_main_crash_state() {
+    for point in PRE_MAIN {
+        let directory = TempDirectory::new(point);
+        let main = directory.path.join("result.v4");
+        run_replacement_child(&main, point);
+
+        let result = resolve(&main, None, Mode::Remove, &CancellationToken::new()).unwrap();
+
+        assert_eq!(
+            result.publication,
+            PublicationStatus::NotPublished,
+            "{point}"
+        );
+        assert_eq!(
+            result.destination_content,
+            DestinationContent::Previous,
+            "{point}"
+        );
+        assert_eq!(fs::read(&main).unwrap(), b"previous bytes", "{point}");
+        assert_clean(&directory, &main, point);
+    }
+}
+
+#[test]
+fn replacement_both_modes_finish_every_post_exchange_crash_state() {
+    for point in REPLACEMENT_POST_MAIN {
+        for mode in [Mode::Complete, Mode::Remove] {
+            let directory = TempDirectory::new(point);
+            let main = directory.path.join("result.v4");
+            run_replacement_child(&main, point);
+
+            let result = resolve(&main, None, mode, &CancellationToken::new()).unwrap();
+
+            assert_published(&result, point);
+            assert!(result.attempt.previous_destination.is_some(), "{point}");
+            assert_clean(&directory, &main, point);
+        }
     }
 }
 
@@ -165,6 +230,22 @@ fn supplied_result_resolves_after_reservation_retirement() {
 
         assert_published(&result, "supplied-result");
         assert_clean(&directory, &main, "supplied-result");
+    }
+}
+
+#[test]
+fn supplied_replacement_result_resolves_after_reservation_retirement() {
+    for mode in [Mode::Complete, Mode::Remove] {
+        let directory = TempDirectory::new("supplied-replacement-result");
+        let main = directory.path.join("result.v4");
+        fs::write(&main, b"previous bytes").unwrap();
+        let original = publish_replacement(&main);
+
+        let result = resolve(&main, Some(&original), mode, &CancellationToken::new()).unwrap();
+
+        assert_published(&result, "supplied-replacement-result");
+        assert!(result.attempt.previous_destination.is_some());
+        assert_clean(&directory, &main, "supplied-replacement-result");
     }
 }
 
@@ -581,6 +662,29 @@ fn publish(
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 17).unwrap();
     let output = attempt.prepare(builder.finish().unwrap()).unwrap();
     attempt::fail_if_exists(output).unwrap()
+}
+
+fn publish_replacement(main: &std::path::Path) -> PublicationResult {
+    let secured = CreatedOutput::create(main).unwrap().secure().unwrap();
+    let (attempt, file) = secured.into_parts();
+    let spec = OutputSpec {
+        address_family: AddressFamily::Ipv4,
+        value_kind: ValueKind::Direct,
+        value_tag: ValueTag::RETENTION,
+        database_id: [41; 16],
+        transaction_id: 42,
+        commit_nonce: [43; 16],
+        feed_index_limit: 0,
+    };
+    let budget = OutputBudget {
+        max_heap_bytes: 2 * 1024 * 1024,
+        max_output_pages: 100_000,
+    };
+    let mut builder = Builder::new(file, spec, budget).unwrap();
+    builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 17).unwrap();
+    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = replacement::bind(output, &CancellationToken::new()).unwrap();
+    attempt::replace_existing_cancellable(output, &CancellationToken::new()).unwrap()
 }
 
 fn private_reservation_name(attempt: [u8; 16]) -> String {

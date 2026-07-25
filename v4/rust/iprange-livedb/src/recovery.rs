@@ -47,7 +47,7 @@ mod report;
 #[allow(dead_code)]
 mod scratch;
 mod scratch_maintenance;
-mod source_guard;
+pub(crate) mod source_guard;
 #[allow(dead_code)]
 mod tables;
 mod terminal;

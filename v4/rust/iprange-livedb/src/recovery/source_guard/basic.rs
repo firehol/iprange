@@ -22,18 +22,36 @@ impl BasicSource {
         finish_open(file, path, sidecar, identity, candidate, cancellation)
     }
 
+    pub(super) fn open_current(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
+        let sidecar = crate::path::canonical_sidecar(path)?;
+        require_sidecar_absent(Some(&sidecar))?;
+        let file = database::open_read_only(path)?;
+        let identity = live_sidecar::identity_any_link(&file)?;
+        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+        finish_current_open(file, path, sidecar, identity, cancellation)
+    }
+
     pub(super) fn final_check(&self, used: MetaV4, cancellation: &CancellationToken) -> Result<()> {
         if self.meta != used {
             return Err(Error::RecoveryCandidateChanged);
         }
-        let selected = bind(
-            &self.file,
-            &self.path,
-            self.sidecar.as_deref(),
-            self.identity,
-            self.candidate,
-            cancellation,
-        )?;
+        let selected = match self.selection {
+            BasicSelection::Candidate(candidate) => bind(
+                &self.file,
+                &self.path,
+                self.sidecar.as_deref(),
+                self.identity,
+                candidate,
+                cancellation,
+            )?,
+            BasicSelection::Current => bind_current(
+                &self.file,
+                &self.path,
+                self.sidecar.as_deref(),
+                self.identity,
+                cancellation,
+            )?,
+        };
         if selected != used {
             return Err(Error::RecoveryCandidateChanged);
         }
@@ -70,7 +88,31 @@ fn finish_open(
             path: path.to_path_buf(),
             sidecar,
             identity,
-            candidate,
+            selection: BasicSelection::Candidate(candidate),
+            meta,
+            lifetime_locked: true,
+        }),
+        Err(cause) => {
+            let _ = live_lock::unlock(&file, MAIN_LIFETIME_LOCK);
+            Err(cause)
+        }
+    }
+}
+
+fn finish_current_open(
+    file: File,
+    path: &Path,
+    sidecar: PathBuf,
+    identity: Identity,
+    cancellation: &CancellationToken,
+) -> Result<BasicSource> {
+    match bind_current(&file, path, Some(&sidecar), identity, cancellation) {
+        Ok(meta) => Ok(BasicSource {
+            file,
+            path: path.to_path_buf(),
+            sidecar: Some(sidecar),
+            identity,
+            selection: BasicSelection::Current,
             meta,
             lifetime_locked: true,
         }),
@@ -120,6 +162,20 @@ fn bind(
 ) -> Result<MetaV4> {
     verify_path(path, sidecar, identity)?;
     let meta = select(file, public_identity(identity), candidate, cancellation)?;
+    verify_path(path, sidecar, identity)?;
+    Ok(meta)
+}
+
+fn bind_current(
+    file: &File,
+    path: &Path,
+    sidecar: Option<&Path>,
+    identity: Identity,
+    cancellation: &CancellationToken,
+) -> Result<MetaV4> {
+    verify_path(path, sidecar, identity)?;
+    cancellation.check()?;
+    let meta = database::bootstrap_file(file, crate::bootstrap::OpenMode::ImmutableReader)?.meta;
     verify_path(path, sidecar, identity)?;
     Ok(meta)
 }

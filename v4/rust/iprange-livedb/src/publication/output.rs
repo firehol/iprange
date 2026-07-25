@@ -3,8 +3,6 @@
 use std::fs::File;
 use std::path::Path;
 
-use sha2::{Digest, Sha512};
-
 use crate::bootstrap::{self, BootstrapError, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
@@ -16,10 +14,19 @@ use crate::{file_io, random};
 use super::namespace::{
     regular_identity, regular_identity_any_link, Destination, Identity, Name, NamespaceError,
 };
+use super::replacement::PreviousMain;
 use super::{CreationSecurity, PrivateOutputAttempt};
 
-const DIGEST_BUFFER_SIZE: usize = 64 * 1024;
 const POSIX_KIND: u16 = 1;
+
+#[path = "output_digest.rs"]
+mod output_digest;
+pub(super) use output_digest::{digest, digest_cancellable};
+#[cfg(test)]
+use output_digest::{digest_with, DIGEST_BUFFER_SIZE};
+#[path = "output_resume.rs"]
+mod output_resume;
+pub(super) use output_resume::ResumedOutput;
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -162,6 +169,7 @@ impl OutputAttempt {
                     meta: finished.meta,
                     byte_length,
                     sha512,
+                    previous: None,
                 })
             }
             Err(cause) => Err(Failure { owner, cause }),
@@ -187,6 +195,7 @@ impl OutputAttempt {
                     meta: finished.meta,
                     byte_length,
                     sha512,
+                    previous: None,
                 })
             }
             Err(cause) => Err(Failure { owner, cause }),
@@ -232,31 +241,10 @@ pub(crate) struct PreparedOutput {
     pub(crate) meta: MetaV4,
     pub(crate) byte_length: u64,
     pub(crate) sha512: [u8; 64],
+    pub(crate) previous: Option<PreviousMain>,
 }
 
 impl PreparedOutput {
-    pub(super) fn resume(
-        destination: Destination,
-        attempt_id: [u8; 16],
-        inspected: super::file_inspection::Inspected,
-    ) -> Result<Self, Error> {
-        let name = destination
-            .output_name(attempt_id)
-            .map_err(Error::Namespace)?;
-        Ok(Self {
-            attempt: OutputAttempt {
-                destination,
-                attempt_id,
-                name,
-                identity: inspected.identity,
-            },
-            file: inspected.file,
-            meta: inspected.meta,
-            byte_length: inspected.byte_length,
-            sha512: inspected.sha512,
-        })
-    }
-
     pub(crate) fn verify_private(&self) -> Result<(), Error> {
         self.verify(Location::Private)
     }
@@ -265,10 +253,34 @@ impl PreparedOutput {
         self.verify(Location::Main)
     }
 
+    pub(crate) fn verify_destination_before_main(&self) -> Result<(), Error> {
+        match &self.previous {
+            Some(previous) => previous
+                .verify_canonical_namespace(self.attempt.destination())
+                .map_err(Error::Namespace),
+            None => self
+                .attempt
+                .destination()
+                .directory()
+                .require_absent(self.attempt.destination().main())
+                .map_err(Error::Namespace),
+        }
+    }
+
     fn verify(&self, location: Location) -> Result<(), Error> {
         let length = inspect_exact(&self.attempt, &self.file, self.meta, location)?;
         if length != self.byte_length {
             return Err(Error::FinishedLengthChanged);
+        }
+        match (&self.previous, location) {
+            (None, Location::Main) => self
+                .attempt
+                .destination()
+                .directory()
+                .require_absent(self.attempt.name())?,
+            (Some(previous), Location::Main) => previous
+                .verify_private_or_retired(self.attempt.destination(), self.attempt.name())?,
+            (_, Location::Private) => {}
         }
         Ok(())
     }
@@ -382,7 +394,6 @@ fn verify_custody(attempt: &OutputAttempt, file: &File, location: Location) -> R
         Location::Private => directory.verify_name(&attempt.name, identity)?,
         Location::Main => {
             directory.verify_name(attempt.destination.main(), identity)?;
-            directory.require_absent(&attempt.name)?;
         }
     }
     attempt.destination.verify_created(file)?;
@@ -419,45 +430,6 @@ fn local(identity: Identity) -> crate::validation::LocalFileIdentity {
 enum Location {
     Private,
     Main,
-}
-
-pub(super) fn digest(file: &File, byte_length: u64) -> Result<[u8; 64], Error> {
-    digest_with(byte_length, |offset, output| {
-        file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
-    })
-}
-
-pub(super) fn digest_cancellable(
-    file: &File,
-    byte_length: u64,
-    cancellation: &CancellationToken,
-) -> Result<[u8; 64], Error> {
-    let result = digest_with(byte_length, |offset, output| {
-        cancellation.check().map_err(Error::Sdk)?;
-        file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
-    });
-    cancellation.check().map_err(Error::Sdk)?;
-    result
-}
-
-fn digest_with(
-    byte_length: u64,
-    mut read: impl FnMut(u64, &mut [u8]) -> Result<(), Error>,
-) -> Result<[u8; 64], Error> {
-    let mut hasher = Sha512::new();
-    let mut buffer = [0; DIGEST_BUFFER_SIZE];
-    let mut offset = 0;
-    while offset < byte_length {
-        let remaining = byte_length - offset;
-        let length = usize::try_from(remaining.min(DIGEST_BUFFER_SIZE as u64))
-            .expect("digest chunk fits usize");
-        read(offset, &mut buffer[..length])?;
-        hasher.update(&buffer[..length]);
-        offset = offset
-            .checked_add(length as u64)
-            .ok_or(Error::FinishedLengthChanged)?;
-    }
-    Ok(hasher.finalize().into())
 }
 
 impl From<NamespaceError> for Error {

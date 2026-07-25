@@ -50,6 +50,7 @@ mod range_tree;
 pub mod recovery;
 mod retirement;
 mod slotted_page;
+pub mod snapshot;
 mod source;
 mod used_bitmap;
 pub mod validation;
@@ -76,7 +77,17 @@ pub use live_writer::{
     TransactionFeedCursor,
 };
 pub use membership_view::MembershipView;
+pub use publication::{
+    inspect_publication_residue, remove_publication_residue, resolve_publication,
+    PublicationResidueCoordination, PublicationResidueHandle, PublicationResidueInspection,
+    PublicationResidueMain, PublicationResidueMainContent, PublicationResidueRemoval,
+    PublicationResolutionMode,
+};
 pub use range_cursor::{DirectCursorV4, DirectCursorV6, DirectRange, RangeDirection};
+pub use snapshot::{
+    snapshot_to, SnapshotBudget, SnapshotOutcome, SnapshotPreparationFailure,
+    SnapshotPublicationPolicy, SnapshotResult, SnapshotSourceMode,
+};
 pub use source::{RangeSource, SliceSource};
 pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
 
