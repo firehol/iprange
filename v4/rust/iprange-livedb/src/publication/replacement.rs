@@ -11,6 +11,7 @@ use super::namespace::{
     NamespaceError,
 };
 use super::output::{self, PreparedOutput};
+use super::reservation::Policy;
 
 #[derive(Debug)]
 pub(crate) struct PreviousMain {
@@ -36,11 +37,28 @@ pub(crate) struct Failure {
 }
 
 pub(crate) fn bind(
-    mut output: PreparedOutput,
+    output: PreparedOutput,
     cancellation: &CancellationToken,
 ) -> Result<PreparedOutput, Box<Failure>> {
+    bind_with(output, Policy::ReplaceExisting, cancellation)
+}
+
+pub(crate) fn bind_no_rollback(
+    output: PreparedOutput,
+    cancellation: &CancellationToken,
+) -> Result<PreparedOutput, Box<Failure>> {
+    bind_with(output, Policy::ReplaceExistingNoRollback, cancellation)
+}
+
+fn bind_with(
+    mut output: PreparedOutput,
+    policy: Policy,
+    cancellation: &CancellationToken,
+) -> Result<PreparedOutput, Box<Failure>> {
+    debug_assert!(policy.is_replacement());
     match open(&output, cancellation) {
         Ok(previous) => {
+            output.policy = policy;
             output.previous = Some(previous);
             Ok(output)
         }

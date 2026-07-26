@@ -16,7 +16,7 @@ pub(crate) use super::types::CleanupState;
 pub(crate) use super::types::{
     AccessPolicy, ArtifactKind, CleanupArtifact, CleanupArtifacts, CoordinationCleanup,
     CreationSecurity, DestinationContent, DirectoryRole, Housekeeping, LaterCanonical,
-    PreviousDestination, PublicationAttempt as AttemptFacts,
+    PreviousDestination, PublicationAttempt as AttemptFacts, PublicationPolicy,
     PublicationPreparationFailure as PreparationFailure, PublicationResult, PublicationStatus,
 };
 
@@ -51,10 +51,10 @@ impl PublicationResult {
             commit_nonce: self.attempt.commit_nonce,
             attempt_id: self.attempt.publication_attempt_id,
             reservation_identity: self.attempt.reservation_identity.bytes,
-            policy: if previous.is_some() {
-                Policy::ReplaceExisting
-            } else {
-                Policy::FailIfExists
+            policy: match self.attempt.publication_policy {
+                PublicationPolicy::FailIfExists => Policy::FailIfExists,
+                PublicationPolicy::ReplaceExisting => Policy::ReplaceExisting,
+                PublicationPolicy::ReplaceExistingNoRollback => Policy::ReplaceExistingNoRollback,
             },
             output_byte_length: self.attempt.output_byte_length,
             output_identity: self.attempt.output_identity.bytes,
@@ -88,6 +88,7 @@ pub(super) struct Seed {
     output_identity: LocalFileIdentity,
     output_byte_length: u64,
     output_sha512: [u8; 64],
+    publication_policy: PublicationPolicy,
     previous_destination: Option<PreviousDestination>,
     creation_security: CreationSecurity,
     private_output_basename: Box<[u8]>,
@@ -125,6 +126,7 @@ impl Seed {
             output_identity: local(output.attempt.identity()),
             output_byte_length: output.byte_length,
             output_sha512: output.sha512,
+            publication_policy: public_policy(output.policy),
             previous_destination: output
                 .previous
                 .as_ref()
@@ -162,6 +164,7 @@ impl Seed {
             output_identity: local_raw(header.output_identity),
             output_byte_length: header.output_byte_length,
             output_sha512: header.output_sha512,
+            publication_policy: public_policy(header.policy),
             previous_destination: header.previous.map(|previous| PreviousDestination {
                 identity: local_raw(previous.identity),
                 byte_length: previous.byte_length,
@@ -198,6 +201,7 @@ impl Seed {
                 output_identity: self.output_identity,
                 output_byte_length: self.output_byte_length,
                 output_sha512: self.output_sha512,
+                publication_policy: self.publication_policy,
                 previous_destination: self.previous_destination,
                 reservation_identity: local(state.reservation_identity),
                 creation_security: self.creation_security,
@@ -267,6 +271,14 @@ impl Seed {
             NameSlot::Coordination => &mut self.names.coordination,
         };
         name.take().expect("each artifact name is consumed once")
+    }
+}
+
+const fn public_policy(policy: Policy) -> PublicationPolicy {
+    match policy {
+        Policy::FailIfExists => PublicationPolicy::FailIfExists,
+        Policy::ReplaceExisting => PublicationPolicy::ReplaceExisting,
+        Policy::ReplaceExistingNoRollback => PublicationPolicy::ReplaceExistingNoRollback,
     }
 }
 

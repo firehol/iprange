@@ -16,6 +16,7 @@ use super::namespace::{
     NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND,
 };
 use super::replacement::PreviousMain;
+use super::reservation::Policy;
 use super::{CreationSecurity, PrivateOutputAttempt};
 
 #[path = "output_digest.rs"]
@@ -165,6 +166,7 @@ impl OutputAttempt {
                     meta: finished.meta,
                     byte_length,
                     sha512,
+                    policy: Policy::FailIfExists,
                     previous: None,
                 })
             }
@@ -191,6 +193,7 @@ impl OutputAttempt {
                     meta: finished.meta,
                     byte_length,
                     sha512,
+                    policy: Policy::FailIfExists,
                     previous: None,
                 })
             }
@@ -237,6 +240,7 @@ pub(crate) struct PreparedOutput {
     pub(crate) meta: MetaV4,
     pub(crate) byte_length: u64,
     pub(crate) sha512: [u8; 64],
+    pub(crate) policy: Policy,
     pub(crate) previous: Option<PreviousMain>,
 }
 

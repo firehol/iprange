@@ -9,7 +9,7 @@ use crate::live_sidecar::{self, Identity, Sidecar, State};
 use crate::validation::LocalFileIdentity;
 
 use super::transition::{remove_exact, LockedMain};
-use super::LiveTransitionResolutionMode;
+use super::{LiveResetPolicy, LiveTransitionResolutionMode};
 
 /// Location of an interrupted live-coordination artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +257,7 @@ fn complete_private_reset(
             canonical_path,
             sidecar.local_identity(),
             None,
+            LiveResetPolicy::RollbackSafe,
         )?;
         live_sidecar::sync_parent(canonical_path)?;
         main.verify()?;

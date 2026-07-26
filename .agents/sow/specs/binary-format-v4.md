@@ -1146,11 +1146,13 @@ for idempotent `Close`.
   `SetFileInformationByHandle(FileRenameInfoEx)` on that retained source handle
   with a `FILE_RENAME_INFO` buffer: `RootDirectory` is the retained destination
   directory handle and `FileName` is one simple relative name. No-replace uses
-  flags zero; replacement uses flags `0x1 | 0x2`
+  flags zero. Explicit no-rollback replacement uses flags `0x1 | 0x2`
   (replace-if-exists plus POSIX semantics, so retained handles to the replaced
-  inode remain valid). The implementation then calls `FlushFileBuffers` on the
-  renamed file handle and rechecks the final entry through the retained
-  directory before reporting namespace durability. Phase-1 durable Windows
+  inode remain valid but its old name is discarded). Those flags are not an
+  atomic exchange and MUST NOT implement strict rollback-safe replacement.
+  The implementation then calls `FlushFileBuffers` on the renamed file handle
+  and rechecks the final entry through the retained directory before reporting
+  namespace durability. Phase-1 durable Windows
   namespace publication is supported only on a local NTFS volume, for which the
   documented `FILE_FLAG_WRITE_THROUGH` contract includes rename metadata.
   Another Windows filesystem is unsupported until the implementation has
@@ -1954,25 +1956,33 @@ The operation takes the exclusive main lifetime lock, rechecks immutable
 identity and exact length, creates a state-0 sidecar bound to its database ID,
 and publishes state 1 only after all checks and synchronization succeed.
 
-`ResetLiveCoordination` is an explicit offline repair for a missing or corrupt
-sidecar. The caller must certify quiescence. It takes the exclusive main
+`ResetLiveCoordination(path, capacity, RollbackSafe | DiscardPrevious,
+cancellation)` is an explicit offline repair for a missing or corrupt sidecar.
+The caller must certify quiescence. It takes the exclusive main
 lifetime lock and must prove that no conforming live handle remains. It
 exclusively creates the deterministic private name
 `<main-basename>.readers.reset`, prepares and synchronizes one complete ready
 sidecar there, then installs it atomically:
 
 - when canonical `.readers` is absent, no-replace rename is required;
-- when canonical `.readers` exists, an atomic exchange is required. The inode
-  moved to the private name MUST equal the previously retained canonical
-  identity. A mismatch is atomically exchanged back before conflict is
-  returned; a failed rollback is `OutcomeUnknown`.
+- when canonical `.readers` exists and policy is `RollbackSafe`, an atomic
+  exchange is required. The inode moved to the private name MUST equal the
+  previously retained canonical identity. A mismatch is atomically exchanged
+  back before conflict is returned; a failed rollback is `OutcomeUnknown`;
+- when canonical `.readers` exists and policy is `DiscardPrevious`, an atomic
+  destructive replacement is permitted after the old identity and complete new
+  sidecar are rechecked. The old inode need not retain a name after the new
+  inode wins.
 
 After successful exchange, the canonical identity/header and unchanged main
 are synchronized and rechecked before the exact old inode is removed from the
 private name. Failure to remove that old inode leaves the reset factually
 `Initialized` with cleanup residue. The deterministic private name is
 SDK-reserved and makes an interrupted reset discoverable without guessing
-random directory entries.
+random directory entries. After successful `DiscardPrevious`, resolution may
+only complete the installed sidecar; rollback is unavailable. No platform
+silently changes `RollbackSafe` into `DiscardPrevious`, and a platform without
+exchange rejects a strict reset before creating the private sidecar.
 
 `ResolveInterruptedLiveTransition(path, Complete | Rollback, cancellation)` is
 the restart entry point when the original in-memory result was lost. It performs
@@ -2840,7 +2850,8 @@ only destination-originated coordination cleanup alongside the recovery report.
 
 ```text
 SnapshotTo(source_path, Immutable | Live, destination_path,
-           FailIfExists | ReplaceExisting, snapshot_resource_budget,
+           FailIfExists | ReplaceExisting | ReplaceExistingNoRollback,
+           snapshot_resource_budget,
            cancellation)
 ```
 
@@ -2868,15 +2879,15 @@ from retaining opposite shared locks while waiting for exclusive destination
 locks.
 
 An immutable source MAY use its own canonical path as the destination only with
-`ReplaceExisting`; this is the atomic in-place compaction path. After releasing
-source protection, replacement MUST reopen and exclusively lock the same
-recorded old inode, recheck its tuple/identity/digest and sidecar absence, and
-then follow the ordinary replacement protocol. Any intervening change is a
-typed conflict. `FailIfExists` on the same path returns the ordinary
-destination-exists precondition error. A live source targeting its own canonical
-path is rejected before output construction because its required sidecar makes
-immutable replacement preconditions false; callers snapshot live state to a
-different path.
+`ReplaceExisting` or `ReplaceExistingNoRollback`; this is the atomic in-place
+compaction path. After releasing source protection, replacement MUST reopen and
+exclusively lock the same recorded old inode, recheck its tuple/identity/digest
+and sidecar absence, and then follow the ordinary replacement protocol. Any
+intervening change is a typed conflict. `FailIfExists` on the same path returns
+the ordinary destination-exists precondition error. A live source targeting its
+own canonical path is rejected before output construction because its required
+sidecar makes immutable replacement preconditions false; callers snapshot live
+state to a different path.
 
 It streams a new ordinary v4 file containing only:
 
@@ -2975,13 +2986,13 @@ private reservation inspection/removal uses the section 20.1 APIs.
 ### 20.1 Namespace publication reservation
 
 Immutable output publication owns the canonical destination `.readers` name
-for its complete critical section. `FailIfExists`, `ReplaceExisting`, compact
-snapshot, and recovery output creation retain one transient reservation until
-main publication and namespace durability are resolved, then retire it. An
-existing immutable main is not an exception: `ReplaceExisting` first locks that
-main and then acquires the same reservation. Live create, initialize, and reset
-use only the simple section-15 sidecar protocol and never use this reservation
-format.
+for its complete critical section. `FailIfExists`, `ReplaceExisting`,
+`ReplaceExistingNoRollback`, compact snapshot, and recovery output creation
+retain one transient reservation until main publication and namespace
+durability are resolved, then retire it. An existing immutable main is not an
+exception: either replacement policy first locks that main and then acquires
+the same reservation. Live create, initialize, and reset use only the simple
+section-15 sidecar protocol and never use this reservation format.
 
 The immutable-publication reservation is exactly 8,192 bytes: two 4,096-byte
 blocks with identical field positions. Table offsets are relative to the start
@@ -3000,7 +3011,7 @@ of either block:
 | 72 | 2 | `identity_kind` from section 15.2 |
 | 74 | 6 | zero |
 | 80 | 32 | this reservation file's local identity |
-| 112 | 2 | publication policy (`1=FailIfExists`, `2=ReplaceExisting`) |
+| 112 | 2 | publication policy (`1=FailIfExists`, `2=ReplaceExisting`, `3=ReplaceExistingNoRollback`) |
 | 114 | 2 | attempted-output `identity_kind` |
 | 116 | 4 | `record_flags` (bit 0 = previous destination present; all other bits zero) |
 | 120 | 8 | attempted output byte length |
@@ -3046,8 +3057,8 @@ transition below.
 
 The destination-basename encoding, exact encoded length, and SHA-256 commitment
 are mandatory from the first synchronized image. The complete output identity,
-page-aligned length, and SHA-512 digest are also mandatory. `ReplaceExisting`
-requires flag bit 0 plus all three previous-destination fields;
+page-aligned length, and SHA-512 digest are also mandatory. Both replacement
+policies require flag bit 0 plus all three previous-destination fields;
 `FailIfExists` requires the flag and those fields to be zero. Unknown policies,
 flags, inconsistent optional fields, zero mandatory values, or nonzero reserved
 bytes are malformed.
@@ -3132,22 +3143,23 @@ readable and caller-certified absence of any active publisher/resolver. It uses
 the section-14.4 idempotent cleanup rule and never touches canonical `.readers`
 or a main file.
 
-`SnapshotTo` requires the caller to choose `FailIfExists` or
-`ReplaceExisting`; its convenience wrapper defaults to `FailIfExists` and never
-switches policy. Recovery always uses `FailIfExists`. Source and destination
-MUST NOT name the same inode except for the exact immutable
-`SnapshotTo(source_path, source_path, ReplaceExisting)` compaction case defined
-in section 20. Recovery, a live source, and `FailIfExists` never receive this
-exception. Both policies reject a pre-existing canonical destination sidecar
-or reservation, including an orphan left by partial creation; that rejection
-is the failed atomic reservation acquisition itself, not a racy preliminary
+`SnapshotTo` requires the caller to choose `FailIfExists`, `ReplaceExisting`,
+or `ReplaceExistingNoRollback`; its convenience wrapper defaults to
+`FailIfExists` and never switches policy. Recovery always uses `FailIfExists`.
+Source and destination MUST NOT name the same inode except for the exact
+immutable same-path compaction case using either replacement policy defined in
+section 20. Recovery, a live source, and `FailIfExists` never receive this
+exception. Every policy rejects a pre-existing canonical destination sidecar or
+reservation, including an orphan left by partial creation; that rejection is
+the failed atomic reservation acquisition itself, not a racy preliminary
 check.
 
-`FailIfExists` uses the reservation protocol above. `ReplaceExisting` requires
-an already existing no-follow regular, link-count-one, sidecar-free destination;
-it need not contain valid v4 bytes. Absence is a typed precondition failure
-rather than a switch to replace semantics. Under caller-certified absence of
-non-cooperating modifiers, it takes that inode's exclusive lifetime lock,
+`FailIfExists` uses the reservation protocol above. Both replacement policies
+require an already existing no-follow regular, link-count-one, sidecar-free
+destination; it need not contain valid v4 bytes. Absence is a typed precondition
+failure rather than a switch to replace semantics. Under caller-certified
+absence of non-cooperating modifiers, replacement takes that inode's exclusive
+lifetime lock,
 rechecks the canonical identity and link count, synchronizes and reads the
 stable previous bytes, records their exact byte length and SHA-512 digest, and
 then atomically acquires the canonical reservation. Any inability to establish
@@ -3168,6 +3180,18 @@ Thus a concurrent `InitializeLive` or delayed absent-path publisher cannot
 create coordination state between the checks and replacement, and a waiter
 that opened the old inode fails its post-lock path-identity recheck.
 
+`ReplaceExisting` requires one rollback-safe atomic exchange. The previous
+inode becomes the exact attempt-derived private name until desired publication
+is proved and retirement completes. A platform/filesystem without exchange
+returns `DurabilityUnsupported` before output construction and never
+downgrades. `ReplaceExistingNoRollback` may instead use an atomic destructive
+replacement after the same preparation and rechecks. The canonical name remains
+old or becomes the complete new inode, but once the new inode wins the previous
+inode need not retain a name. A resolver may remove a no-rollback attempt while
+the exact previous inode remains canonical. If the desired inode is canonical,
+`Complete` is the only possible resolution and `Remove` returns
+`Unresolvable` without mutation.
+
 The result contains:
 
 ```text
@@ -3183,6 +3207,7 @@ attempted_output_identity_kind:u16
 attempted_output_local_identity:[32]byte
 attempted_output_byte_length:u64
 attempted_output_sha512:[64]byte
+publication_policy: FailIfExists | ReplaceExisting | ReplaceExistingNoRollback
 previous_destination_local_identity: optional [32]byte
 previous_destination_byte_length: optional u64
 previous_destination_sha512: optional [64]byte
@@ -3225,8 +3250,9 @@ orthogonal fields below rather than inventing compound result values.
 
 Publication-attempt ID equals the reservation ID and determines the private
 output name. The three previous-destination fields are all absent for
-`FailIfExists` and all present for `ReplaceExisting`; the previous length/digest
-are computed over stable bytes while its exclusive lifetime lock is held. The
+`FailIfExists` and all present for either replacement policy; the previous
+length/digest are computed over stable bytes while its exclusive lifetime lock
+is held. The
 structured-result boundary begins only after the prepared output identity and
 digest, applicable previous identity/length/digest, and synchronized private
 reservation identity are known. Failure to publish that reservation canonically
@@ -3457,8 +3483,8 @@ publication reports its newly generated tuple even on `NotPublished` or
 
 Recovery output uses the same prepared-final-inode publication and structured
 result contract, but its destination policy is always `FailIfExists`. Recovery
-never accepts `ReplaceExisting` and never overwrites a pre-existing main or
-sidecar.
+never accepts either replacement policy and never overwrites a pre-existing
+main or sidecar.
 
 The output has no sidecar. Converting it to live use requires explicit
 `InitializeLive(path, capacity, cancellation)`; live open never performs that transition

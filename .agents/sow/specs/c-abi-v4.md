@@ -2,7 +2,7 @@
 
 **Status:** Normative Phase-1 binding rules and frozen generation-1 symbol/numeric surface; exact generated prototype/layout manifest is an implementation deliverable after Rust proof
 **ABI generation:** 1
-**Last updated:** 2026-07-21
+**Last updated:** 2026-07-27
 
 This document defines the stable C boundary exported by the Rust v4 engine. The
 semantic behavior and durable file contract remain normative in
@@ -281,7 +281,9 @@ listed.
 - sink outcome: `CONTINUE=1`, `STOP=2`, `ERROR=3`;
 - cursor direction: `FORWARD=1`, `BACKWARD=2`;
 - open/source mode: `IMMUTABLE=1`, `LIVE=2`, `OFFLINE=3`;
-- destination policy: `FAIL_IF_EXISTS=1`, `REPLACE_EXISTING=2`;
+- destination policy: `FAIL_IF_EXISTS=1`, `REPLACE_EXISTING=2`,
+  `REPLACE_EXISTING_NO_ROLLBACK=3`;
+- live reset policy: `ROLLBACK_SAFE=1`, `DISCARD_PREVIOUS=2`;
 - resolver action: `COMPLETE=1`, `REMOVE=2`;
 - membership operation: `REPLACE=1`, `UNION=2`, `DIFFERENCE=3`,
   `INTERSECTION=4`, `XOR=5`;

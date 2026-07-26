@@ -181,6 +181,9 @@ fn evidence(header: Header) -> AbandonedReservationEvidence {
         policy: match header.policy {
             Policy::FailIfExists => AbandonedReservationPolicy::FailIfExists,
             Policy::ReplaceExisting => AbandonedReservationPolicy::ReplaceExisting,
+            Policy::ReplaceExistingNoRollback => {
+                AbandonedReservationPolicy::ReplaceExistingNoRollback
+            }
         },
         phase: match header.state {
             State::Prepared => AbandonedReservationPhase::Prepared,

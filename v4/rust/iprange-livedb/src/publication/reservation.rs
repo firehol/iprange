@@ -35,6 +35,7 @@ impl State {
 pub(crate) enum Policy {
     FailIfExists = 1,
     ReplaceExisting = 2,
+    ReplaceExistingNoRollback = 3,
 }
 
 impl Policy {
@@ -42,8 +43,16 @@ impl Policy {
         match value {
             1 => Some(Self::FailIfExists),
             2 => Some(Self::ReplaceExisting),
+            3 => Some(Self::ReplaceExistingNoRollback),
             _ => None,
         }
+    }
+
+    pub(crate) const fn is_replacement(self) -> bool {
+        matches!(
+            self,
+            Self::ReplaceExisting | Self::ReplaceExistingNoRollback
+        )
     }
 }
 
@@ -426,7 +435,7 @@ fn decode_previous(
     let byte_length = u64_le(block, 452);
     match policy {
         Policy::FailIfExists => decode_absent_previous(flags, identity, sha512, byte_length),
-        Policy::ReplaceExisting => decode_present_previous(
+        Policy::ReplaceExisting | Policy::ReplaceExistingNoRollback => decode_present_previous(
             flags,
             identity,
             byte_length,

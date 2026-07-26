@@ -529,6 +529,29 @@ pub(crate) fn install_noreplace(
         .map_err(namespace_error)
 }
 
+pub(crate) fn install_replace_discarding(
+    private: &Path,
+    private_file: &File,
+    canonical: &Path,
+    expected_private: Identity,
+    expected_canonical: Identity,
+) -> Result<()> {
+    let (directory, private_name, canonical_name) = bind_pair(private, canonical)?;
+    directory
+        .verify_name(&private_name, expected_private)
+        .and_then(|()| directory.verify_name(&canonical_name, expected_canonical))
+        .map_err(|_| {
+            Error::CleanupConflict("canonical coordination changed during discarding reset")
+        })?;
+    directory
+        .replace_discarding_destination(&private_name, private_file, &canonical_name)
+        .map_err(namespace_error)?;
+    directory
+        .require_absent(&private_name)
+        .and_then(|()| directory.verify_name(&canonical_name, expected_private))
+        .map_err(namespace_error)
+}
+
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 pub(crate) fn install_exchange(
     private: &Path,
@@ -548,7 +571,7 @@ pub(crate) fn install_exchange(
         ));
     }
     directory
-        .replace(&private_name, private_file, &canonical_name)
+        .exchange(&private_name, private_file, &canonical_name)
         .map_err(namespace_error)?;
     if directory
         .verify_name(&canonical_name, expected_private)
@@ -561,7 +584,7 @@ pub(crate) fn install_exchange(
     }
 
     let cause = Error::CleanupConflict("canonical coordination changed during reset");
-    match directory.replace(&canonical_name, private_file, &private_name) {
+    match directory.exchange(&canonical_name, private_file, &private_name) {
         Ok(()) => Err(cause),
         Err(cleanup) => Err(Error::CleanupIncomplete {
             cause: Box::new(cause),
@@ -613,7 +636,7 @@ fn namespace_error(error: NamespaceError) -> Error {
         NamespaceError::ForkedHandle => Error::ForkedHandle,
         NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => Error::Io(source),
         NamespaceError::Unsupported | NamespaceError::CrossFilesystem => {
-            Error::Unsupported("live file namespace lacks required local operations")
+            Error::DurabilityUnsupported("live file namespace lacks required local operations")
         }
         NamespaceError::NotDirectory
         | NamespaceError::NotRegular

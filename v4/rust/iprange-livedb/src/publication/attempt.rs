@@ -30,6 +30,7 @@ enum Point {
 
 pub(crate) fn fail_if_exists(output: PreparedOutput) -> Result {
     debug_assert!(output.previous.is_none());
+    debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
     fail_if_exists_with(output, |_| Ok(()))
 }
 
@@ -38,6 +39,7 @@ pub(crate) fn fail_if_exists_cancellable(
     cancellation: &CancellationToken,
 ) -> Result {
     debug_assert!(output.previous.is_none());
+    debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
     publish_with(output, Some(cancellation), |point| {
         if matches!(
             point,
@@ -54,6 +56,7 @@ pub(crate) fn replace_existing_cancellable(
     cancellation: &CancellationToken,
 ) -> Result {
     debug_assert!(output.previous.is_some());
+    debug_assert!(output.policy.is_replacement());
     publish_with(output, Some(cancellation), |point| {
         if matches!(
             point,

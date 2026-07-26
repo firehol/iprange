@@ -51,6 +51,15 @@ mod platform {
         budget
             .validate(source_mode, publication_policy)
             .map_err(|cause| Box::new(SnapshotPreparationFailure::early(cause)))?;
+        if publication_policy == SnapshotPublicationPolicy::ReplaceExisting {
+            publication::namespace::require_exchange_available().map_err(|_| {
+                Box::new(SnapshotPreparationFailure::early(
+                    Error::DurabilityUnsupported(
+                        "rollback-safe replacement requires atomic name exchange",
+                    ),
+                ))
+            })?;
+        }
         let source = open_source(source_path, source_mode, cancellation)?;
         if let Err(cause) =
             reject_live_self(&source, source_mode, destination_path, publication_policy)
@@ -61,7 +70,10 @@ mod platform {
             SnapshotPublicationPolicy::FailIfExists => {
                 CreatedOutput::create_absent(destination_path)
             }
-            SnapshotPublicationPolicy::ReplaceExisting => CreatedOutput::create(destination_path),
+            SnapshotPublicationPolicy::ReplaceExisting
+            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
+                CreatedOutput::create(destination_path)
+            }
         };
         let created = match created {
             Ok(created) => created,
@@ -105,7 +117,11 @@ mod platform {
         policy: SnapshotPublicationPolicy,
     ) -> std::result::Result<(), PublicationProblem> {
         if source_mode != SnapshotSourceMode::Live
-            || policy != SnapshotPublicationPolicy::ReplaceExisting
+            || !matches!(
+                policy,
+                SnapshotPublicationPolicy::ReplaceExisting
+                    | SnapshotPublicationPolicy::ReplaceExistingNoRollback
+            )
         {
             return Ok(());
         }
@@ -222,8 +238,18 @@ mod platform {
         };
         let prepared = match policy {
             SnapshotPublicationPolicy::FailIfExists => prepared,
-            SnapshotPublicationPolicy::ReplaceExisting => {
-                match publication::replacement::bind(prepared, cancellation) {
+            SnapshotPublicationPolicy::ReplaceExisting
+            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
+                let bound = match policy {
+                    SnapshotPublicationPolicy::ReplaceExisting => {
+                        publication::replacement::bind(prepared, cancellation)
+                    }
+                    SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
+                        publication::replacement::bind_no_rollback(prepared, cancellation)
+                    }
+                    SnapshotPublicationPolicy::FailIfExists => unreachable!(),
+                };
+                match bound {
                     Ok(prepared) => prepared,
                     Err(failure) => {
                         let (facts, artifact) =
@@ -242,7 +268,8 @@ mod platform {
             SnapshotPublicationPolicy::FailIfExists => {
                 publication::attempt::fail_if_exists_cancellable(prepared, cancellation)
             }
-            SnapshotPublicationPolicy::ReplaceExisting => {
+            SnapshotPublicationPolicy::ReplaceExisting
+            | SnapshotPublicationPolicy::ReplaceExistingNoRollback => {
                 publication::attempt::replace_existing_cancellable(prepared, cancellation)
             }
         };

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
     create_live, reset_live_coordination, AddressFamily, CancellationToken, CloseOutcome, Error,
-    LiveReader, LiveTransitionStatus, ValueKind, ValueTag,
+    LiveReader, LiveResetPolicy, LiveTransitionStatus, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -58,7 +58,13 @@ fn successful_close_is_idempotent_and_releases_all_locks() {
     assert!(closed.cause.is_none());
     assert!(matches!(reader.info(), Err(Error::WrongState(_))));
 
-    let reset = reset_live_coordination(&files.main, 2, &CancellationToken::new()).unwrap();
+    let reset = reset_live_coordination(
+        &files.main,
+        2,
+        LiveResetPolicy::RollbackSafe,
+        &CancellationToken::new(),
+    )
+    .unwrap();
     assert_eq!(reset.status, LiveTransitionStatus::Initialized);
     assert_eq!(reader.close().unwrap().outcome, CloseOutcome::Closed);
 }

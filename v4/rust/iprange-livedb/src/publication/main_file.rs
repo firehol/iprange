@@ -4,7 +4,7 @@ use crate::error;
 
 use super::namespace::{regular_link_count, sync_file, NamespaceError};
 use super::output::{self, PreparedOutput};
-use super::reservation::Header;
+use super::reservation::{Header, Policy};
 use super::reservation_file::{self, ArmedReservation};
 
 #[derive(Debug)]
@@ -131,18 +131,24 @@ fn verify_before_main(owner: &MainAttempt) -> Result<(), Error> {
 fn rename_main(owner: &mut MainAttempt) -> Result<(), Error> {
     let destination = owner.output.attempt.destination();
     owner.main_call_started = true;
-    if owner.output.previous.is_some() {
-        destination.directory().replace(
+    match owner.output.policy {
+        Policy::FailIfExists => destination.directory().rename_noreplace(
             owner.output.attempt.name(),
             &owner.output.file,
             destination.main(),
-        )?;
-    } else {
-        destination.directory().rename_noreplace(
+        )?,
+        Policy::ReplaceExisting => destination.directory().exchange(
             owner.output.attempt.name(),
             &owner.output.file,
             destination.main(),
-        )?;
+        )?,
+        Policy::ReplaceExistingNoRollback => {
+            destination.directory().replace_discarding_destination(
+                owner.output.attempt.name(),
+                &owner.output.file,
+                destination.main(),
+            )?
+        }
     }
     owner.rename_succeeded = true;
     crate::fault::crash("publication.after_main_rename");

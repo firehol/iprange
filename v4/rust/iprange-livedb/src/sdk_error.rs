@@ -89,6 +89,7 @@ pub enum Error {
     WrongState(&'static str),
     WrongMode(&'static str),
     Unsupported(&'static str),
+    DurabilityUnsupported(&'static str),
     Io(io::Error),
     Format(FormatError),
     Corrupt(&'static str),
@@ -138,6 +139,7 @@ impl Error {
             Self::WrongState(_) => ErrorCode::WrongState,
             Self::WrongMode(_) => ErrorCode::WrongState,
             Self::Unsupported(_) => ErrorCode::OsUnsupported,
+            Self::DurabilityUnsupported(_) => ErrorCode::DurabilityUnsupported,
             Self::Io(_) => ErrorCode::Io,
             Self::Format(_) => ErrorCode::FormatInvalid,
             Self::Corrupt(_) => ErrorCode::FormatInvalid,
@@ -194,6 +196,9 @@ impl fmt::Display for Error {
             Self::WrongState(detail) => write!(output, "wrong operation state: {detail}"),
             Self::WrongMode(detail) => write!(output, "wrong database mode: {detail}"),
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
+            Self::DurabilityUnsupported(detail) => {
+                write!(output, "durability is unsupported: {detail}")
+            }
             Self::Io(error) => write!(output, "I/O error: {error}"),
             Self::Format(error) => write!(output, "invalid v4 file: {error:?}"),
             Self::Corrupt(detail) => write!(output, "malformed v4 page: {detail}"),
@@ -270,6 +275,7 @@ impl std::error::Error for Error {
             | Self::WrongState(_)
             | Self::WrongMode(_)
             | Self::Unsupported(_)
+            | Self::DurabilityUnsupported(_)
             | Self::Format(_)
             | Self::Corrupt(_)
             | Self::ArithmeticOverflow(_)

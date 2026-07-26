@@ -13,7 +13,8 @@ use crate::random;
 use crate::validation::LocalFileIdentity;
 
 use super::{
-    LiveCoordinationLocation, LiveTransitionOperation, LiveTransitionResult, LiveTransitionStatus,
+    LiveCoordinationLocation, LiveResetPolicy, LiveTransitionOperation, LiveTransitionResult,
+    LiveTransitionStatus,
 };
 
 pub(super) struct LockedMain {
@@ -28,6 +29,7 @@ pub(super) struct LockedMain {
 
 struct Attempt {
     operation: LiveTransitionOperation,
+    reset_policy: Option<LiveResetPolicy>,
     database_id: [u8; 16],
     transaction_id: u64,
     commit_nonce: [u8; 16],
@@ -50,6 +52,7 @@ pub fn initialize_live(
     database::require_sidecar_absent(&crate::path::canonical_sidecar(&main.path)?)?;
     let attempt = Attempt::new(
         LiveTransitionOperation::Initialize,
+        None,
         &main,
         reader_capacity,
         None,
@@ -92,14 +95,21 @@ pub fn initialize_live(
 pub fn reset_live_coordination(
     path: impl AsRef<Path>,
     reader_capacity: u32,
+    policy: LiveResetPolicy,
     cancellation: &CancellationToken,
 ) -> Result<LiveTransitionResult> {
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     let canonical = crate::path::canonical_sidecar(&main.path)?;
     let previous = existing_identity(&canonical)?;
+    if previous.is_some() && policy == LiveResetPolicy::RollbackSafe {
+        crate::publication::namespace::require_exchange_available().map_err(|_| {
+            Error::DurabilityUnsupported("rollback-safe live reset requires atomic name exchange")
+        })?;
+    }
     let attempt = Attempt::new(
         LiveTransitionOperation::Reset,
+        Some(policy),
         &main,
         reader_capacity,
         previous.map(live_sidecar::public_identity),
@@ -147,9 +157,14 @@ pub fn reset_live_coordination(
     }
 
     crate::fault::crash("live_reset.before_replace");
-    if let Err(cause) =
-        super::namespace::install(&sidecar.path, &sidecar.file, &canonical, identity, previous)
-    {
+    if let Err(cause) = super::namespace::install(
+        &sidecar.path,
+        &sidecar.file,
+        &canonical,
+        identity,
+        previous,
+        policy,
+    ) {
         if cause.residue_possible() {
             return Ok(attempt.unknown(
                 new_identity,
@@ -166,7 +181,7 @@ pub fn reset_live_coordination(
         ));
     }
     crate::fault::crash("live_reset.after_replace");
-    match finish_reset(&main, &sidecar, &canonical, identity, previous) {
+    match finish_reset(&main, &sidecar, &canonical, identity, previous, policy) {
         Ok(None) => Ok(attempt.initialized(new_identity)),
         Ok(Some(cause)) => Ok(attempt.initialized_with_residue(new_identity, cause)),
         Err(cause) => Ok(attempt.unknown(new_identity, LiveCoordinationLocation::Canonical, cause)),
@@ -219,12 +234,14 @@ impl LockedMain {
 impl Attempt {
     fn new(
         operation: LiveTransitionOperation,
+        reset_policy: Option<LiveResetPolicy>,
         main: &LockedMain,
         reader_capacity: u32,
         previous_sidecar_identity: Option<LocalFileIdentity>,
     ) -> Result<Self> {
         Ok(Self {
             operation,
+            reset_policy,
             database_id: main.bootstrap.meta.database_id,
             transaction_id: main.bootstrap.meta.txn_id,
             commit_nonce: main.bootstrap.meta.commit_nonce,
@@ -329,6 +346,7 @@ impl Attempt {
     ) -> LiveTransitionResult {
         LiveTransitionResult {
             operation: self.operation,
+            reset_policy: self.reset_policy,
             status,
             database_id: self.database_id,
             transaction_id: self.transaction_id,
@@ -392,16 +410,21 @@ fn finish_reset(
     canonical: &Path,
     identity: Identity,
     previous: Option<Identity>,
+    policy: LiveResetPolicy,
 ) -> Result<Option<Error>> {
     live_sidecar::sync_parent(canonical)?;
     crate::fault::crash("live_reset.after_directory_sync");
     main.verify()?;
     live_sidecar::verify_path(canonical, identity)?;
     sidecar.verify_header()?;
-    if let Some(previous) = previous {
+    if let (Some(previous), LiveResetPolicy::RollbackSafe) = (previous, policy) {
         if let Err(cause) = remove_exact(&sidecar.path, previous) {
             return Ok(Some(cause));
         }
+    } else if live_sidecar::path_identity(&sidecar.path)?.is_some() {
+        return Err(Error::CleanupConflict(
+            "discarding reset retained an unexpected private sidecar",
+        ));
     }
     Ok(None)
 }

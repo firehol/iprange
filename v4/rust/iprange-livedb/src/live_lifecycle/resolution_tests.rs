@@ -173,6 +173,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
         &files.sidecar(),
         sidecar.local_identity(),
         Some(previous),
+        LiveResetPolicy::RollbackSafe,
     )
     .unwrap();
     live_sidecar::sync_parent(&files.sidecar()).unwrap();
@@ -230,6 +231,8 @@ fn supplied(
 ) -> LiveTransitionResult {
     LiveTransitionResult {
         operation,
+        reset_policy: (operation == LiveTransitionOperation::Reset)
+            .then_some(LiveResetPolicy::RollbackSafe),
         status: LiveTransitionStatus::OutcomeUnknown,
         database_id: main.bootstrap.meta.database_id,
         transaction_id: main.bootstrap.meta.txn_id,

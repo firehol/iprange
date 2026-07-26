@@ -8,6 +8,8 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::live_sidecar::{self, Identity};
 
+use super::LiveResetPolicy;
+
 /// Install `private` at `canonical` without losing an unexpected inode.
 pub(super) fn install(
     private: &Path,
@@ -15,9 +17,19 @@ pub(super) fn install(
     canonical: &Path,
     private_identity: Identity,
     previous: Option<Identity>,
+    policy: LiveResetPolicy,
 ) -> Result<()> {
     match previous {
-        Some(previous) => exchange(private, private_file, canonical, private_identity, previous),
+        Some(previous) if policy == LiveResetPolicy::RollbackSafe => {
+            exchange(private, private_file, canonical, private_identity, previous)
+        }
+        Some(previous) => live_sidecar::install_replace_discarding(
+            private,
+            private_file,
+            canonical,
+            private_identity,
+            previous,
+        ),
         None => live_sidecar::install_noreplace(private, private_file, canonical, private_identity),
     }
 }
@@ -41,7 +53,7 @@ fn exchange(
     _private_identity: Identity,
     _previous: Identity,
 ) -> Result<()> {
-    Err(Error::Unsupported(
+    Err(Error::DurabilityUnsupported(
         "atomic sidecar exchange is not implemented on this platform",
     ))
 }
@@ -102,6 +114,7 @@ mod tests {
             &paths.canonical,
             live_sidecar::identity(&private).unwrap(),
             Some(expected),
+            LiveResetPolicy::RollbackSafe,
         );
         assert!(
             matches!(result, Err(Error::CleanupConflict(_))),

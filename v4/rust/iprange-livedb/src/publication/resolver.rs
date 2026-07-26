@@ -49,7 +49,7 @@ pub(super) fn resolve(
     cancellation: &CancellationToken,
 ) -> Result<PublicationResult, Problem> {
     let base = authority::inspect(path, supplied, cancellation)?;
-    if base.header.policy == super::reservation::Policy::ReplaceExisting {
+    if base.header.policy.is_replacement() {
         return replacement::dispatch(base, mode, cancellation);
     }
     let main = file_inspection::main(&base.destination, base.header, cancellation)?;

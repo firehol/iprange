@@ -8,7 +8,7 @@ use crate::{error, file_io};
 
 use super::namespace::{regular_identity, sync_file, Identity, Name, NamespaceError};
 use super::output::{self, PreparedOutput};
-use super::reservation::{Header, Policy, SelectError, State};
+use super::reservation::{Header, SelectError, State};
 
 #[path = "reservation_verify.rs"]
 mod verification;
@@ -357,11 +357,7 @@ fn header(output: &PreparedOutput, identity: Identity) -> Result<Header, Error> 
         commit_nonce: output.meta.commit_nonce,
         attempt_id: output.attempt.attempt_id(),
         reservation_identity: identity.encode(),
-        policy: if previous.is_some() {
-            Policy::ReplaceExisting
-        } else {
-            Policy::FailIfExists
-        },
+        policy: output.policy,
         output_byte_length: output.byte_length,
         output_identity: output.attempt.identity().encode(),
         output_sha512: output.sha512,

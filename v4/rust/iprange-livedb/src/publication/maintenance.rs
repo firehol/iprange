@@ -26,6 +26,7 @@ pub struct PublicationDigest {
 pub enum AbandonedReservationPolicy {
     FailIfExists,
     ReplaceExisting,
+    ReplaceExistingNoRollback,
 }
 
 /// Durable namespace phase recorded in a private reservation.

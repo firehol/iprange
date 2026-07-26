@@ -5,6 +5,14 @@ use crate::validation::LocalFileIdentity;
 
 const CLEANUP_CAPACITY: usize = 4;
 
+/// Namespace policy selected for one immutable publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicationPolicy {
+    FailIfExists,
+    ReplaceExisting,
+    ReplaceExistingNoRollback,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicationStatus {
     NotPublished,
@@ -225,6 +233,7 @@ pub struct PublicationAttempt {
     pub output_identity: LocalFileIdentity,
     pub output_byte_length: u64,
     pub output_sha512: [u8; 64],
+    pub publication_policy: PublicationPolicy,
     pub previous_destination: Option<PreviousDestination>,
     pub reservation_identity: LocalFileIdentity,
     pub creation_security: CreationSecurity,

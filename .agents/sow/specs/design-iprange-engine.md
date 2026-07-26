@@ -177,6 +177,11 @@ Exact high-level replacements/imports, feed lifecycle operations, and retention
 refresh use clean writers and private transactional drafts. `SnapshotTo` instead
 owns an isolated destination output and may coexist with source writes by pinning
 one reader generation. None exposes partial work as a successful output.
+Namespace publication distinguishes rollback-safe replacement from explicit
+no-rollback replacement. Strict replacement requires an atomic exchange and
+fails before mutation when the platform/filesystem lacks it. The no-rollback
+policy may atomically discard the previous name only when the caller explicitly
+selects it; no API silently downgrades.
 `Commit` reports the attempted transaction, its random 128-bit commit nonce, and
 one of `NotCommitted`, `Committed`, or `OutcomeUnknown`. Reopen resolves an
 unknown attempt only by the exact database/transaction/nonce tuple; callers are

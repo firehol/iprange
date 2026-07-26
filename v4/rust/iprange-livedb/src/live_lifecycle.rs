@@ -24,6 +24,13 @@ pub enum LiveTransitionOperation {
     Reset,
 }
 
+/// Namespace guarantee selected for replacing existing live coordination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveResetPolicy {
+    RollbackSafe,
+    DiscardPrevious,
+}
+
 /// Factual state after one offline transition attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiveTransitionStatus {
@@ -45,6 +52,7 @@ pub enum LiveCoordinationLocation {
 #[derive(Debug)]
 pub struct LiveTransitionResult {
     pub operation: LiveTransitionOperation,
+    pub reset_policy: Option<LiveResetPolicy>,
     pub status: LiveTransitionStatus,
     pub database_id: [u8; 16],
     pub transaction_id: u64,

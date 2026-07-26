@@ -25,7 +25,16 @@ impl Directory {
         self.rename(source, source_file, destination, 0)
     }
 
-    pub(crate) fn replace(
+    pub(crate) fn exchange(
+        &self,
+        _source: &Name,
+        _source_file: &File,
+        _destination: &Name,
+    ) -> Result<(), NamespaceError> {
+        Err(NamespaceError::Unsupported)
+    }
+
+    pub(crate) fn replace_discarding_destination(
         &self,
         source: &Name,
         source_file: &File,

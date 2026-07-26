@@ -77,8 +77,9 @@ pub use key::{Ipv4Key, Ipv6Key};
 pub use live_lifecycle::{
     initialize_live, reset_live_coordination, resolve_create_live,
     resolve_interrupted_live_transition, resolve_live_transition, LiveCoordinationLocation,
-    LiveResidueKind, LiveResidueResult, LiveResidueStatus, LiveTransitionOperation,
-    LiveTransitionResolutionMode, LiveTransitionResult, LiveTransitionStatus,
+    LiveResetPolicy, LiveResidueKind, LiveResidueResult, LiveResidueStatus,
+    LiveTransitionOperation, LiveTransitionResolutionMode, LiveTransitionResult,
+    LiveTransitionStatus,
 };
 pub use live_reader::{LiveReader, ReaderCloseResult};
 pub use live_writer::{

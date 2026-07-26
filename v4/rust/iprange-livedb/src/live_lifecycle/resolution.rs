@@ -9,7 +9,8 @@ use crate::validation::LocalFileIdentity;
 
 use super::transition::{existing_identity, remove_exact, LockedMain};
 use super::{
-    LiveCoordinationLocation, LiveTransitionOperation, LiveTransitionResult, LiveTransitionStatus,
+    LiveCoordinationLocation, LiveResetPolicy, LiveTransitionOperation, LiveTransitionResult,
+    LiveTransitionStatus,
 };
 
 /// Requested terminal action for an exact interrupted transition.
@@ -140,6 +141,13 @@ fn resolve_reset(
             if canonical.state != State::Ready {
                 return Err(Error::Conflict("completed reset sidecar is not ready"));
             }
+            if supplied.reset_policy == Some(LiveResetPolicy::DiscardPrevious)
+                && mode == LiveTransitionResolutionMode::Rollback
+            {
+                return Err(Error::Unresolvable(
+                    "discarding reset cannot restore the previous sidecar",
+                ));
+            }
             match private {
                 Some(ResetPrivate::Previous(identity)) => {
                     remove_exact(&private_path, identity)?;
@@ -205,6 +213,9 @@ fn resolve_reset(
                 &canonical_path,
                 private.sidecar.local_identity(),
                 previous,
+                supplied
+                    .reset_policy
+                    .expect("validated reset result has a reset policy"),
             )?;
             live_sidecar::sync_parent(&canonical_path)?;
             main.verify()?;
@@ -290,6 +301,15 @@ fn require_supplied(supplied: &LiveTransitionResult) -> Result<()> {
             "live transition result is incomplete",
         ));
     }
+    match (supplied.operation, supplied.reset_policy) {
+        (LiveTransitionOperation::Initialize, None) | (LiveTransitionOperation::Reset, Some(_)) => {
+        }
+        _ => {
+            return Err(Error::InvalidArgument(
+                "live transition result has an inconsistent reset policy",
+            ))
+        }
+    }
     if supplied.new_sidecar_identity.is_none()
         && supplied.status == LiveTransitionStatus::OutcomeUnknown
     {
@@ -358,6 +378,7 @@ fn resolved(
 ) -> LiveTransitionResult {
     LiveTransitionResult {
         operation: supplied.operation,
+        reset_policy: supplied.reset_policy,
         status,
         database_id: supplied.database_id,
         transaction_id: supplied.transaction_id,

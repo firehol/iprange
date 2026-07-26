@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use iprange_livedb::publication::{CleanupState, PublicationStatus};
+use iprange_livedb::publication::{
+    resolve_publication, CleanupState, PublicationPolicy, PublicationResolutionMode,
+    PublicationStatus,
+};
 use iprange_livedb::{
     create_live, snapshot_to, AddressFamily, CancellationToken, DirectRange, ErrorCode, FeedName,
     FinishedWorkflow, ImmutableReader, Ipv4Key, LiveWriter, MembershipOperation, SnapshotBudget,
@@ -66,6 +69,10 @@ fn immutable_direct_snapshot_preserves_identity_generation_ranges_and_metadata()
     .unwrap();
 
     assert_eq!(result.publication.publication, PublicationStatus::Published);
+    assert_eq!(
+        result.publication.attempt.publication_policy,
+        PublicationPolicy::FailIfExists
+    );
     assert_eq!(result.cleanup_state(), CleanupState::Clean);
     assert!(!sidecar(&files.output).exists());
     let output = ImmutableReader::open(&files.output).unwrap();
@@ -269,6 +276,10 @@ fn replacement_accepts_arbitrary_previous_bytes_and_reports_exact_evidence() {
     .unwrap();
 
     assert_eq!(result.publication.publication, PublicationStatus::Published);
+    assert_eq!(
+        result.publication.attempt.publication_policy,
+        PublicationPolicy::ReplaceExisting
+    );
     assert_eq!(result.cleanup_state(), CleanupState::Clean);
     let evidence = result
         .publication
@@ -289,6 +300,41 @@ fn replacement_accepts_arbitrary_previous_bytes_and_reports_exact_evidence() {
             .unwrap(),
         Some(2)
     );
+    assert_no_private_artifacts(&files.directory);
+}
+
+#[test]
+fn no_rollback_replacement_is_explicit_and_cannot_be_removed_after_publication() {
+    let files = populated_direct(TestFiles::new("replace-no-rollback"));
+    fs::copy(&files.live, &files.source).unwrap();
+    fs::write(&files.output, b"previous").unwrap();
+
+    let result = snapshot_to(
+        &files.source,
+        SnapshotSourceMode::Immutable,
+        &files.output,
+        SnapshotPublicationPolicy::ReplaceExistingNoRollback,
+        &budget(3),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(result.publication.publication, PublicationStatus::Published);
+    assert_eq!(
+        result.publication.attempt.publication_policy,
+        PublicationPolicy::ReplaceExistingNoRollback
+    );
+    assert!(result.publication.attempt.previous_destination.is_some());
+    let published = fs::read(&files.output).unwrap();
+    let error = resolve_publication(
+        &files.output,
+        Some(&result.publication),
+        PublicationResolutionMode::Remove,
+        &CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unresolvable);
+    assert_eq!(fs::read(&files.output).unwrap(), published);
     assert_no_private_artifacts(&files.directory);
 }
 

@@ -203,7 +203,13 @@ fn reset_crashes_leave_a_retryable_or_ready_database() {
         .unwrap();
         assert_eq!(recovered.status, LiveResidueStatus::Removed);
         assert!(!files.reset_temp().exists());
-        reset_live_coordination(&files.0, 2, &CancellationToken::new()).unwrap();
+        reset_live_coordination(
+            &files.0,
+            2,
+            crate::LiveResetPolicy::RollbackSafe,
+            &CancellationToken::new(),
+        )
+        .unwrap();
         let mut reader = LiveReader::open(&files.0, &CancellationToken::new()).unwrap();
         reader.close().unwrap();
     }
@@ -377,7 +383,12 @@ fn crash_child() {
             let _ = initialize_live(&path, 1, &CancellationToken::new());
         }
         "reset" => {
-            let _ = reset_live_coordination(&path, 2, &CancellationToken::new());
+            let _ = reset_live_coordination(
+                &path,
+                2,
+                crate::LiveResetPolicy::RollbackSafe,
+                &CancellationToken::new(),
+            );
         }
         _ => panic!("unknown child action"),
     }

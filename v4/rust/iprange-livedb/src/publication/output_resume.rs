@@ -7,6 +7,7 @@ use crate::contract::MetaV4;
 use crate::publication::file_inspection::Inspected;
 use crate::publication::namespace::{Destination, Identity};
 use crate::publication::replacement::PreviousMain;
+use crate::publication::reservation::Policy;
 
 use super::{Error, OutputAttempt, PreparedOutput};
 
@@ -35,6 +36,7 @@ impl PreparedOutput {
                 byte_length: inspected.byte_length,
                 sha512: inspected.sha512,
             },
+            Policy::FailIfExists,
             None,
         )
     }
@@ -44,14 +46,17 @@ impl PreparedOutput {
         attempt_id: [u8; 16],
         output: ResumedOutput,
         previous: PreviousMain,
+        policy: Policy,
     ) -> Result<Self, Error> {
-        Self::resume_with(destination, attempt_id, output, Some(previous))
+        debug_assert!(policy.is_replacement());
+        Self::resume_with(destination, attempt_id, output, policy, Some(previous))
     }
 
     fn resume_with(
         destination: Destination,
         attempt_id: [u8; 16],
         output: ResumedOutput,
+        policy: Policy,
         previous: Option<PreviousMain>,
     ) -> Result<Self, Error> {
         let name = destination
@@ -68,6 +73,7 @@ impl PreparedOutput {
             meta: output.meta,
             byte_length: output.byte_length,
             sha512: output.sha512,
+            policy,
             previous,
         })
     }

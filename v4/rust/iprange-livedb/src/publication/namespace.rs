@@ -12,6 +12,14 @@ mod platform;
 
 pub(crate) use platform::*;
 
+pub(crate) const fn require_exchange_available() -> Result<(), NamespaceError> {
+    if cfg!(any(target_os = "linux", target_vendor = "apple")) {
+        Ok(())
+    } else {
+        Err(NamespaceError::Unsupported)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum NamespaceError {
     InvalidName,

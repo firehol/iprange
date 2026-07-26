@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use iprange_livedb::{
     create_live, initialize_live, reset_live_coordination, resolve_live_transition, AddressFamily,
     CancellationToken, Error, ImmutableReader, LiveCoordinationLocation, LiveReader,
-    LiveTransitionOperation, LiveTransitionResolutionMode, LiveTransitionStatus, LiveWriter,
-    TransactionBudget, ValueKind, ValueTag,
+    LiveResetPolicy, LiveTransitionOperation, LiveTransitionResolutionMode, LiveTransitionStatus,
+    LiveWriter, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -119,8 +119,15 @@ fn reset_replaces_corrupt_coordination_without_changing_the_main() {
     let before = fs::read(&files.main).unwrap();
     fs::write(files.sidecar(), b"corrupt").unwrap();
 
-    let result = reset_live_coordination(&files.main, 2, &CancellationToken::new()).unwrap();
+    let result = reset_live_coordination(
+        &files.main,
+        2,
+        LiveResetPolicy::RollbackSafe,
+        &CancellationToken::new(),
+    )
+    .unwrap();
     assert_eq!(result.operation, LiveTransitionOperation::Reset);
+    assert_eq!(result.reset_policy, Some(LiveResetPolicy::RollbackSafe));
     assert_eq!(result.status, LiveTransitionStatus::Initialized);
     assert_eq!(
         result.new_sidecar_location,
@@ -153,6 +160,39 @@ fn reset_replaces_corrupt_coordination_without_changing_the_main() {
     ));
     first.close().unwrap();
     second.close().unwrap();
+}
+
+#[test]
+fn discarding_reset_reports_policy_and_cannot_roll_back_after_installation() {
+    let files = TestPair::new("reset-discard");
+    create(&files, 1);
+    let before = fs::read(&files.main).unwrap();
+    fs::write(files.sidecar(), b"corrupt").unwrap();
+
+    let result = reset_live_coordination(
+        &files.main,
+        2,
+        LiveResetPolicy::DiscardPrevious,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(result.status, LiveTransitionStatus::Initialized);
+    assert_eq!(result.reset_policy, Some(LiveResetPolicy::DiscardPrevious));
+    assert_eq!(fs::read(&files.main).unwrap(), before);
+    let canonical = fs::read(files.sidecar()).unwrap();
+    let error = resolve_live_transition(
+        &files.main,
+        &result,
+        LiveTransitionResolutionMode::Rollback,
+        &CancellationToken::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::Unresolvable(_)));
+    assert_eq!(fs::read(files.sidecar()).unwrap(), canonical);
+
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
+    reader.close().unwrap();
 }
 
 #[test]

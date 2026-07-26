@@ -24,6 +24,7 @@ pub enum SnapshotSourceMode {
 pub enum SnapshotPublicationPolicy {
     FailIfExists,
     ReplaceExisting,
+    ReplaceExistingNoRollback,
 }
 
 /// Maximum simultaneously retained snapshot construction resources.
@@ -52,8 +53,11 @@ impl SnapshotBudget {
             return Err(Error::BudgetExceeded("snapshot output pages"));
         }
         let required_files = if matches!(mode, SnapshotSourceMode::Live)
-            || matches!(policy, SnapshotPublicationPolicy::ReplaceExisting)
-        {
+            || matches!(
+                policy,
+                SnapshotPublicationPolicy::ReplaceExisting
+                    | SnapshotPublicationPolicy::ReplaceExistingNoRollback
+            ) {
             3
         } else {
             2

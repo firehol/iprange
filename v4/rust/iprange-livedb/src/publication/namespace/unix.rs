@@ -457,7 +457,11 @@ fn require_local_filesystem(file: &File) -> Result<(), NamespaceError> {
     }
     #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
     {
-        if stat.f_flags & libc::MNT_LOCAL != 0 {
+        #[cfg(target_vendor = "apple")]
+        let is_local = stat.f_flags & (libc::MNT_LOCAL as u32) != 0;
+        #[cfg(target_os = "freebsd")]
+        let is_local = stat.f_flags & libc::MNT_LOCAL != 0;
+        if is_local {
             Ok(())
         } else {
             Err(NamespaceError::Unsupported)

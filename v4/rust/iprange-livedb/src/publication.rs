@@ -7,6 +7,10 @@ use crate::cancellation::CancellationToken;
 pub(crate) mod attempt;
 pub(crate) mod cleanup;
 mod file_inspection;
+#[cfg(any(windows, test))]
+mod gc_codec;
+#[cfg(any(windows, test))]
+mod gc_name;
 mod main_file;
 mod maintenance;
 pub(crate) mod namespace;
@@ -41,8 +45,8 @@ pub use types::{
     AccessPolicy, ArtifactKind, ArtifactPresence, CleanupArtifact, CleanupArtifacts, CleanupState,
     CoordinationCleanup, CreationSecurity, DestinationContent, DirectoryRole, Housekeeping,
     HousekeepingArtifact, HousekeepingState, LaterCanonical, LiveLineage, PreviousDestination,
-    PrivateOutputAttempt, PublicationAttempt, PublicationPreparationFailure, PublicationProblem,
-    PublicationResult, PublicationStatus, UnpublishedTailFacts,
+    PrivateOutputAttempt, PublicationAttempt, PublicationPolicy, PublicationPreparationFailure,
+    PublicationProblem, PublicationResult, PublicationStatus, UnpublishedTailFacts,
 };
 
 /// Requested terminal action for one exact interrupted publication.

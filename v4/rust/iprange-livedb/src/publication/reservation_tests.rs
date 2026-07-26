@@ -19,7 +19,7 @@ fn header(policy: Policy) -> Header {
         output_byte_length: 3 * PAGE_SIZE as u64,
         output_identity: identity(4, 6),
         output_sha512: [7; 64],
-        previous: (policy == Policy::ReplaceExisting).then_some(Previous {
+        previous: policy.is_replacement().then_some(Previous {
             identity: identity(4, 8),
             byte_length: 0,
             sha512: [9; 64],
@@ -127,7 +127,7 @@ fn selection_rejects_disagreement_gaps_and_invalid_transitions() {
 }
 
 #[test]
-fn fail_if_exists_and_replace_have_exact_previous_fields() {
+fn every_policy_has_exact_previous_fields() {
     let absent = one_block(header(Policy::FailIfExists));
     assert_eq!(
         select(&absent).unwrap().header.previous,
@@ -135,23 +135,26 @@ fn fail_if_exists_and_replace_have_exact_previous_fields() {
         "fail-if-exists must not invent prior bytes"
     );
 
-    let replacement = header(Policy::ReplaceExisting);
-    let bytes = one_block(replacement);
-    assert_eq!(
-        select(&bytes).unwrap().header.previous,
-        replacement.previous
-    );
+    for policy in [Policy::ReplaceExisting, Policy::ReplaceExistingNoRollback] {
+        let replacement = header(policy);
+        let bytes = one_block(replacement);
+        assert_eq!(
+            select(&bytes).unwrap().header,
+            replacement,
+            "policy {policy:?}"
+        );
 
-    let mut invalid = bytes;
-    invalid[116..120].fill(0);
-    rewrite_crc(&mut invalid[..PAGE_SIZE]);
-    assert!(matches!(
-        select(&invalid),
-        Err(SelectError::NoValidHeader {
-            block0: Problem::Previous,
-            ..
-        })
-    ));
+        let mut invalid = bytes;
+        invalid[116..120].fill(0);
+        rewrite_crc(&mut invalid[..PAGE_SIZE]);
+        assert!(matches!(
+            select(&invalid),
+            Err(SelectError::NoValidHeader {
+                block0: Problem::Previous,
+                ..
+            })
+        ));
+    }
 }
 
 #[test]

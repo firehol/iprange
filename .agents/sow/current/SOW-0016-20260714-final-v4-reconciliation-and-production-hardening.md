@@ -500,7 +500,7 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: open. All user/product decisions through decision 68 are resolved, the
+Status: open. All user/product decisions through decision 70 are resolved, the
 normative specification is synchronized and independently contradiction-audited,
 and the decision-45 unsigned/signing phase split is resolved. Implementation is
 in progress under this gate.
@@ -2112,6 +2112,31 @@ Open decisions:
     corruption. Checkpoint start and rollback change epochs, mutation counters,
     and historical checkpoint scratch, so this does not satisfy the exact
     pre-mutation/byte-for-byte atomicity contract.
+70. User decision (2026-07-27): Windows and FreeBSD 14 do not provide the
+    rollback-safe atomic exchange required by strict replacement and
+    reset-over-existing. Their destructive replacement primitives must never be
+    presented as exchange.
+    **70A (selected, long-term-best):** retain the strict rollback-safe modes and
+    add explicit no-rollback alternatives. `ReplaceExisting` and
+    `LiveResetPolicy::RollbackSafe` fail before namespace mutation with
+    `DurabilityUnsupported` when atomic exchange is unavailable.
+    `ReplaceExistingNoRollback` and `LiveResetPolicy::DiscardPrevious` may use
+    atomic destructive replacement only after the complete new inode is
+    synchronized and rechecked. They preserve the guarantee that the canonical
+    name resolves to either the complete previous inode or the complete new
+    inode; they do not preserve the previous inode after the new inode wins.
+    The persisted reservation and every result identify the selected policy.
+    A no-rollback resolver may remove the attempt while the previous inode is
+    still proved canonical, but once the new inode is canonical it can only
+    complete; it cannot restore the previous inode. No API silently downgrades
+    strict replacement to no-rollback. Caller-certified quiescence and absence
+    of non-cooperating namespace modifiers remain mandatory.
+    **70B (rejected):** expose strict modes only and always fail on platforms
+    without exchange. This is correct but unnecessarily removes an explicit
+    caller-accepted publication option.
+    **70C (rejected):** automatically fall back to destructive replacement.
+    This can remove rollback authority without the caller knowingly accepting
+    that loss.
 
 ## Plan
 
@@ -12315,6 +12340,27 @@ FreeBSD no-replace recovery checkpoint:
   idempotent completion are exercised on Linux with the same hard-link
   semantics; FreeBSD cross-compilation passes. Native FreeBSD crash execution
   remains part of the authorized-system acceptance gate.
+
+Explicit no-rollback replacement checkpoint:
+
+- Decision 70 is implemented without automatic fallback. Snapshot
+  `ReplaceExisting` and live-reset `RollbackSafe` use only atomic exchange;
+  `ReplaceExistingNoRollback` and `DiscardPrevious` use a distinct destructive
+  replacement path after the complete new inode and previous identity are
+  synchronized and rechecked.
+- Publication reservation policy 3 is encoded and selected with the same exact
+  previous-inode evidence as strict replacement. Every publication result and
+  live-transition result reports the selected policy. A no-rollback resolver
+  may remove a prepared attempt while the previous inode remains canonical,
+  but returns `Unresolvable` without mutation after the desired inode wins.
+- Windows and FreeBSD no longer present destructive rename as exchange. Strict
+  replacement is rejected before output/private-sidecar construction on those
+  platforms. Linux permanent tests prove strict replacement, no-rollback
+  publication, exact result policy, and post-install rollback rejection.
+- Rust formatting, the all-feature suite (393 passed, 2 subprocess entry points
+  ignored), strict all-target Clippy, and warning-denied cross-checks for
+  Windows GNU, FreeBSD, and Apple ARM pass. Native cross-platform crash tests
+  remain in the authorized-system acceptance gate.
 
 ### Historical adversarial-audit evidence
 

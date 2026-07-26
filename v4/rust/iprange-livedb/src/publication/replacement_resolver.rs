@@ -14,7 +14,7 @@ use crate::publication::output::{PreparedOutput, ResumedOutput};
 use crate::publication::problem::Problem;
 use crate::publication::replacement::PreviousMain;
 use crate::publication::replacement_inspection::{self, Content, Inspected, Location, Pair};
-use crate::publication::reservation::{Header, State};
+use crate::publication::reservation::{Header, Policy, State};
 use crate::publication::reservation_inspection;
 use crate::publication::result::{
     AccessPolicy, ArtifactKind, DestinationContent, FinalState, NameSlot, PublicationResult,
@@ -36,7 +36,7 @@ pub(super) fn dispatch(
             require_no_later(&base.later)?;
             resolve_previous(base, pair, mode, cancellation)
         }
-        Some(Content::Desired) => resolve_desired(base, pair, cancellation),
+        Some(Content::Desired) => resolve_desired(base, pair, mode, cancellation),
         Some(Content::Other) => {
             require_no_later(&base.later)?;
             resolve_other(base, pair, cancellation)
@@ -97,6 +97,7 @@ fn complete_previous(
             sha512: private.sha512,
         },
         previous,
+        base.header.policy,
     )
     .map_err(|error| Problem::output(&error))?;
     cancellation.check().map_err(|error| Problem::sdk(&error))?;
@@ -161,8 +162,14 @@ fn remove_previous(
 fn resolve_desired(
     mut base: BaseResolution,
     pair: Pair,
+    mode: Mode,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResult, Problem> {
+    if base.header.policy == Policy::ReplaceExistingNoRollback && mode == Mode::Remove {
+        return Err(unresolvable(
+            "no-rollback replacement cannot restore a discarded destination",
+        ));
+    }
     let main = pair.main.as_ref().expect("dispatch selected desired main");
     synchronize(main, &base.destination, cancellation)?;
     let (output, foreign_private) = desired_cleanup(pair.private.as_ref(), base.header);

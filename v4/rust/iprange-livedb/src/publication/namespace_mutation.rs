@@ -73,7 +73,55 @@ impl Directory {
         Err(NamespaceError::Unsupported)
     }
 
-    pub(crate) fn replace(
+    pub(crate) fn exchange(
+        &self,
+        _source: &Name,
+        _source_file: &File,
+        _destination: &Name,
+    ) -> Result<(), NamespaceError> {
+        self.check_creator()?;
+        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+        {
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::renameat2(
+                    self.file.as_raw_fd(),
+                    _source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    _destination.c_str().as_ptr(),
+                    libc::RENAME_EXCHANGE,
+                )
+            };
+            #[cfg(target_vendor = "apple")]
+            let result = unsafe {
+                libc::renameatx_np(
+                    self.file.as_raw_fd(),
+                    _source.c_str().as_ptr(),
+                    self.file.as_raw_fd(),
+                    _destination.c_str().as_ptr(),
+                    libc::RENAME_SWAP,
+                )
+            };
+            if result == 0 {
+                return Ok(());
+            }
+            let source = io::Error::last_os_error();
+            match source.raw_os_error() {
+                Some(libc::ENOENT) => Err(NamespaceError::Missing),
+                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
+                    Err(NamespaceError::Unsupported)
+                }
+                _ => Err(NamespaceError::IoAt {
+                    operation: "atomically exchange publication names",
+                    source,
+                }),
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        Err(NamespaceError::Unsupported)
+    }
+
+    pub(crate) fn replace_discarding_destination(
         &self,
         source: &Name,
         _source_file: &File,
@@ -82,27 +130,6 @@ impl Directory {
         self.check_creator()?;
         #[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd"))]
         {
-            #[cfg(target_os = "linux")]
-            let result = unsafe {
-                libc::renameat2(
-                    self.file.as_raw_fd(),
-                    source.c_str().as_ptr(),
-                    self.file.as_raw_fd(),
-                    destination.c_str().as_ptr(),
-                    libc::RENAME_EXCHANGE,
-                )
-            };
-            #[cfg(target_vendor = "apple")]
-            let result = unsafe {
-                libc::renameatx_np(
-                    self.file.as_raw_fd(),
-                    source.c_str().as_ptr(),
-                    self.file.as_raw_fd(),
-                    destination.c_str().as_ptr(),
-                    libc::RENAME_SWAP,
-                )
-            };
-            #[cfg(target_os = "freebsd")]
             let result = unsafe {
                 libc::renameat(
                     self.file.as_raw_fd(),
@@ -121,7 +148,7 @@ impl Directory {
                     Err(NamespaceError::Unsupported)
                 }
                 _ => Err(NamespaceError::IoAt {
-                    operation: "atomically replace publication name",
+                    operation: "atomically replace and discard publication destination",
                     source,
                 }),
             }
