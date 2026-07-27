@@ -7,15 +7,15 @@ use iprange_livedb::c_abi_support::ReaderCursorItem;
 use iprange_livedb::{CancellationToken, Error};
 
 use crate::abi::{
-    Cancellation, CoverageSinkFn, DirectRange, DirectSinkFn, FeedInfo, FeedSinkFn, MembershipRange,
+    Cancellation, CoverageSinkFn, DirectRange, DirectSinkFn, FeedSinkFn, MembershipRange,
     MembershipSinkFn, Range,
 };
 use crate::callback;
 use crate::cursor::{self, Kind};
 use crate::error::{call_with_output, required_output, CallError, ErrorHandle};
+use crate::feed_batch::FeedBatch;
 use crate::handle::{BorrowedMembershipViewHandle, CursorHandle, ReaderHandle};
 use crate::membership::decode_name;
-use crate::reader::encode_feed;
 use crate::report::ReportHandle;
 use crate::sink::{self, Control};
 
@@ -380,63 +380,17 @@ fn enumerate_feeds(
     callback_fn: FeedSinkFn,
     context: *mut c_void,
 ) -> (u64, Result<(), CallError>) {
-    let mut batch = [FeedInfo::default(); BATCH_CAPACITY];
-    let mut length = 0usize;
-    let mut count = 0u64;
-    let mut callback_error = None;
     let reader = match reader.get() {
         Ok(reader) => reader,
-        Err(error) => return (count, Err(error.into())),
+        Err(error) => return (0, Err(error.into())),
     };
+    let mut batch = FeedBatch::new(callback_fn, context, "feed scan count");
     let result = reader.enumerate_feeds(|feed| {
         if cancellation.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        batch[length] = encode_feed(feed);
-        length += 1;
-        if length != batch.len() {
-            return Ok(true);
-        }
-        match sink::feed(callback_fn, context, &batch) {
-            Ok(control) => {
-                count = count
-                    .checked_add(length as u64)
-                    .ok_or(Error::ArithmeticOverflow("feed scan count"))?;
-                length = 0;
-                Ok(control == Control::Continue)
-            }
-            Err(error) => {
-                callback_error = Some(error);
-                Err(Error::InvalidArgument("C feed sink failed"))
-            }
-        }
+        batch.push(feed)
     });
-    if let Some(error) = callback_error {
-        return (count, Err(error));
-    }
-    if let Err(error) = result {
-        return (count, Err(error.into()));
-    }
-    if length == 0 {
-        return (count, Ok(()));
-    }
-    match sink::feed(callback_fn, context, &batch[..length]) {
-        Ok(control) => {
-            count = match count.checked_add(length as u64) {
-                Some(count) => count,
-                None => {
-                    return (
-                        count,
-                        Err(Error::ArithmeticOverflow("feed scan count").into()),
-                    )
-                }
-            };
-            if control == Control::Stop {
-                (count, Err(Error::StoppedBySink.into()))
-            } else {
-                (count, Ok(()))
-            }
-        }
-        Err(error) => (count, Err(error)),
-    }
+    let result = result.map(|_| ()).map_err(CallError::from);
+    batch.finish(result)
 }

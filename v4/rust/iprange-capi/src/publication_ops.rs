@@ -33,32 +33,19 @@ pub unsafe extern "C" fn iprange_v4_abi1_snapshot_to(
         *output = std::ptr::null_mut();
         let source_mode = decode_source_mode(source_mode)?;
         let destination_policy = decode_policy(destination_policy)?;
-        let budget = unsafe { required_input(budget, "snapshot budget is null")? };
-        let budget = decode_budget(budget)?;
+        let budget = unsafe { decode_budget_pointer(budget)? };
         let cancellation = callback::token(cancellation)?;
         let source = unsafe { path::decode(source)? };
         let destination = unsafe { path::decode(destination)? };
-        match iprange_livedb::snapshot_to(
+        let result = iprange_livedb::snapshot_to(
             source,
             source_mode,
             destination,
             destination_policy,
             &budget,
             &cancellation,
-        ) {
-            Ok(result) => {
-                *output = Box::into_raw(Box::new(ReportHandle::publication(result.publication)));
-                Ok::<_, CallError>(())
-            }
-            Err(mut failure) => {
-                let mut report = ReportHandle::snapshot_preparation(&failure);
-                report.set_cleanup_guard(failure.source_cleanup.take());
-                *output = Box::into_raw(Box::new(report));
-                let cleanup = failure.cleanup.iter().map(facts::cleanup).collect();
-                let error = ErrorHandle::publication_failure(failure.cause, cleanup, None);
-                Err(error.into())
-            }
-        }
+        );
+        finish_snapshot(output, result)
     })
 }
 
@@ -75,33 +62,82 @@ pub unsafe extern "C" fn iprange_v4_abi1_resolve_publication(
         // SAFETY: pointers and tagged inputs are validated before work starts.
         let output = unsafe { required_output(report_output, "report output is null")? };
         *output = std::ptr::null_mut();
-        let supplied_report = if supplied.is_null() {
-            None
-        } else {
-            Some(unsafe {
-                crate::handle::required_handle_input(supplied, "publication report is null")?
-            })
-        };
+        let supplied_report = unsafe { optional_publication_report(supplied)? };
         let _supplied_guard = supplied_report.map(ReportHandle::enter).transpose()?;
         let supplied = supplied_report
             .map(ReportHandle::publication_attempt)
             .transpose()?;
-        let action = match action {
-            1 => PublicationResolutionMode::Complete,
-            2 => PublicationResolutionMode::Remove,
-            _ => {
-                return Err(
-                    BoundaryError::invalid_enum("unknown publication resolution action").into(),
-                )
-            }
-        };
-        let cancellation = callback::token(cancellation)?;
-        let destination = unsafe { path::decode(destination)? };
+        let (destination, action, cancellation) =
+            unsafe { decode_resolution_inputs(destination, action, cancellation)? };
         let result =
             iprange_livedb::resolve_publication(destination, supplied, action, &cancellation)?;
         *output = Box::into_raw(Box::new(ReportHandle::publication(result)));
         Ok::<_, CallError>(())
     })
+}
+
+fn finish_snapshot(
+    output: &mut *mut ReportHandle,
+    result: iprange_livedb::SnapshotOutcome,
+) -> Result<(), CallError> {
+    match result {
+        Ok(result) => {
+            *output = Box::into_raw(Box::new(ReportHandle::publication(result.publication)));
+            Ok(())
+        }
+        Err(mut failure) => {
+            let mut report = ReportHandle::snapshot_preparation(&failure);
+            report.set_cleanup_guard(failure.source_cleanup.take());
+            *output = Box::into_raw(Box::new(report));
+            let cleanup = failure.cleanup.iter().map(facts::cleanup).collect();
+            let error = ErrorHandle::publication_failure(failure.cause, cleanup, None);
+            Err(error.into())
+        }
+    }
+}
+
+fn decode_publication_resolution_action(
+    action: u32,
+) -> Result<PublicationResolutionMode, BoundaryError> {
+    match action {
+        1 => Ok(PublicationResolutionMode::Complete),
+        2 => Ok(PublicationResolutionMode::Remove),
+        _ => Err(BoundaryError::invalid_enum(
+            "unknown publication resolution action",
+        )),
+    }
+}
+
+unsafe fn decode_resolution_inputs(
+    destination: Path,
+    action: u32,
+    cancellation: Cancellation,
+) -> Result<
+    (
+        std::path::PathBuf,
+        PublicationResolutionMode,
+        iprange_livedb::CancellationToken,
+    ),
+    CallError,
+> {
+    let action = decode_publication_resolution_action(action)?;
+    let cancellation = callback::token(cancellation)?;
+    // SAFETY: the caller supplies a tagged path with a checked extent.
+    let destination = unsafe { path::decode(destination)? };
+    Ok((destination, action, cancellation))
+}
+
+unsafe fn optional_publication_report<'a>(
+    supplied: *const ReportHandle,
+) -> Result<Option<&'a ReportHandle>, BoundaryError> {
+    if supplied.is_null() {
+        Ok(None)
+    } else {
+        // SAFETY: the non-null opaque report pointer is validated before use.
+        Ok(Some(unsafe {
+            crate::handle::required_handle_input(supplied, "publication report is null")?
+        }))
+    }
 }
 
 #[no_mangle]
@@ -183,4 +219,11 @@ fn decode_budget(value: &SnapshotBudget) -> Result<iprange_livedb::SnapshotBudge
         value.max_output_pages,
         value.max_open_files,
     ))
+}
+
+unsafe fn decode_budget_pointer(
+    value: *const SnapshotBudget,
+) -> Result<iprange_livedb::SnapshotBudget, CallError> {
+    let value = unsafe { required_input(value, "snapshot budget is null")? };
+    Ok(decode_budget(value)?)
 }

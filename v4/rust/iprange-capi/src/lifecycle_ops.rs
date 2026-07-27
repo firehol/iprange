@@ -109,14 +109,13 @@ pub unsafe extern "C" fn iprange_v4_abi1_resolve_create_live(
         let supplied =
             unsafe { crate::handle::required_handle_input(supplied, "creation report is null")? };
         let _supplied_guard = supplied.enter()?;
-        let mode = decode_transition_action(action)?;
-        let cancellation = callback::token(cancellation)?;
-        let source = unsafe { path::decode(source)? };
+        let inputs = unsafe { decode_transition_inputs(source, action, cancellation)? };
+        let attempt = supplied.create_attempt()?;
         let result = iprange_livedb::resolve_create_live(
-            source,
-            supplied.create_attempt()?,
-            mode,
-            &cancellation,
+            inputs.source,
+            attempt,
+            inputs.mode,
+            &inputs.cancellation,
         )?;
         *output = Box::into_raw(Box::new(ReportHandle::create(result, true)));
         Ok::<_, CallError>(())
@@ -139,14 +138,13 @@ pub unsafe extern "C" fn iprange_v4_abi1_resolve_live_transition(
         let supplied =
             unsafe { crate::handle::required_handle_input(supplied, "transition report is null")? };
         let _supplied_guard = supplied.enter()?;
-        let mode = decode_transition_action(action)?;
-        let cancellation = callback::token(cancellation)?;
-        let source = unsafe { path::decode(source)? };
+        let inputs = unsafe { decode_transition_inputs(source, action, cancellation)? };
+        let attempt = supplied.transition_attempt()?;
         let result = iprange_livedb::resolve_live_transition(
-            source,
-            supplied.transition_attempt()?,
-            mode,
-            &cancellation,
+            inputs.source,
+            attempt,
+            inputs.mode,
+            &inputs.cancellation,
         )?;
         *output = Box::into_raw(Box::new(ReportHandle::live_transition(result, true)));
         Ok::<_, CallError>(())
@@ -191,22 +189,69 @@ pub unsafe extern "C" fn iprange_v4_abi1_resolve_commit(
         let supplied =
             unsafe { crate::handle::required_handle_input(supplied, "commit report is null")? };
         let _supplied_guard = supplied.enter()?;
-        let mode = match source_mode {
-            1 => CommitResolutionMode::Immutable,
-            2 => CommitResolutionMode::Live,
-            _ => return Err(BoundaryError::invalid_enum("unknown commit source mode").into()),
-        };
-        let cancellation = callback::token(cancellation)?;
-        let source = unsafe { path::decode(source)? };
+        let inputs = unsafe { decode_commit_inputs(source, source_mode, cancellation)? };
+        let attempt = supplied.commit_attempt()?;
         let result = iprange_livedb::resolve_commit(
-            source,
-            supplied.commit_attempt()?,
-            mode,
-            &cancellation,
+            inputs.source,
+            attempt,
+            inputs.mode,
+            &inputs.cancellation,
         )?;
         *output = Box::into_raw(Box::new(ReportHandle::commit_resolution(result)));
         Ok::<_, CallError>(())
     })
+}
+
+struct TransitionInputs {
+    source: std::path::PathBuf,
+    mode: LiveTransitionResolutionMode,
+    cancellation: iprange_livedb::CancellationToken,
+}
+
+unsafe fn decode_transition_inputs(
+    source: Path,
+    action: u32,
+    cancellation: Cancellation,
+) -> Result<TransitionInputs, CallError> {
+    let mode = decode_transition_action(action)?;
+    let cancellation = callback::token(cancellation)?;
+    // SAFETY: the caller supplies a tagged path with a checked extent.
+    let source = unsafe { path::decode(source)? };
+    Ok(TransitionInputs {
+        source,
+        mode,
+        cancellation,
+    })
+}
+
+struct CommitInputs {
+    source: std::path::PathBuf,
+    mode: CommitResolutionMode,
+    cancellation: iprange_livedb::CancellationToken,
+}
+
+unsafe fn decode_commit_inputs(
+    source: Path,
+    source_mode: u32,
+    cancellation: Cancellation,
+) -> Result<CommitInputs, CallError> {
+    let mode = decode_commit_mode(source_mode)?;
+    let cancellation = callback::token(cancellation)?;
+    // SAFETY: the caller supplies a tagged path with a checked extent.
+    let source = unsafe { path::decode(source)? };
+    Ok(CommitInputs {
+        source,
+        mode,
+        cancellation,
+    })
+}
+
+fn decode_commit_mode(source_mode: u32) -> Result<CommitResolutionMode, BoundaryError> {
+    match source_mode {
+        1 => Ok(CommitResolutionMode::Immutable),
+        2 => Ok(CommitResolutionMode::Live),
+        _ => Err(BoundaryError::invalid_enum("unknown commit source mode")),
+    }
 }
 
 fn decode_family(value: u32) -> Result<AddressFamily, BoundaryError> {

@@ -51,14 +51,7 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_lookup_direct(
             let value = unsafe { required_output(value, "direct value output is null")? };
             *present = 0;
             *value = 0;
-            let found = match ip::decode(address)? {
-                Key::V4(address) => reader.get()?.lookup_direct_v4(address)?,
-                Key::V6(address) => reader.get()?.lookup_direct_v6(address)?,
-            };
-            if let Some(found) = found {
-                *present = 1;
-                *value = found;
-            }
+            store_direct_lookup(present, value, lookup_direct(reader, ip::decode(address)?)?);
             Ok::<_, CallError>(())
         },
     )
@@ -81,17 +74,11 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_lookup_membership(
                 unsafe { crate::handle::required_handle_input(reader, "reader handle is null")? };
             let output = unsafe { required_output(output, "membership view output is null")? };
             *output = std::ptr::null_mut();
-            let address = ip::decode(address)?;
-            let membership = match address {
-                Key::V4(address) => reader.get()?.lookup_membership_token_v4(address)?,
-                Key::V6(address) => reader.get()?.lookup_membership_token_v6(address)?,
-            };
-            if let Some(membership) = membership {
-                *output = Box::into_raw(Box::new(MembershipViewHandle::new(
-                    ArcClone::reader(reader)?,
-                    membership,
-                )));
-            }
+            store_membership_lookup(
+                output,
+                reader,
+                lookup_membership(reader, ip::decode(address)?)?,
+            )?;
             Ok::<_, CallError>(())
         },
     )
@@ -117,16 +104,12 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_lookup_feed(
             let reader =
                 unsafe { crate::handle::required_handle_input(reader, "reader handle is null")? };
             let name = unsafe { crate::error::input_slice(name_pointer, name_length)? };
-            let name = std::str::from_utf8(name)
-                .map_err(|_| BoundaryError::invalid_argument("feed name is not UTF-8"))?;
+            let name = decode_feed_name(name)?;
             let present = unsafe { required_output(present, "presence output is null")? };
             let output = unsafe { required_output(output, "feed output is null")? };
             *present = 0;
             *output = FeedInfo::default();
-            if let Some(feed) = reader.get()?.lookup_feed(name)? {
-                *present = 1;
-                *output = encode_feed(feed);
-            }
+            store_feed_lookup(present, output, reader.get()?.lookup_feed(name)?);
             Ok::<_, CallError>(())
         },
     )
@@ -177,21 +160,86 @@ pub unsafe extern "C" fn iprange_v4_abi1_reader_metadata_read(
             let reader =
                 unsafe { crate::handle::required_handle_input(reader, "reader handle is null")? };
             let required = unsafe { required_output(required, "required length output is null")? };
-            let Some(length) = reader.get()?.metadata_json_len()? else {
-                *required = 0;
-                return Ok::<_, CallError>(());
-            };
-            *required = length;
-            if output.length < length {
-                return Err(BoundaryError::buffer_too_small(length).into());
-            }
-            let output = unsafe { output_slice(output.pointer, output.length)? };
-            reader
-                .get()?
-                .read_metadata_json(&mut output[..length as usize])?;
+            // SAFETY: the buffer extent was validated by call_with_outputs.
+            unsafe { read_metadata(reader, output, required)? };
             Ok::<_, CallError>(())
         },
     )
+}
+
+fn lookup_direct(reader: &ReaderHandle, address: Key) -> Result<Option<u32>, CallError> {
+    Ok(match address {
+        Key::V4(address) => reader.get()?.lookup_direct_v4(address)?,
+        Key::V6(address) => reader.get()?.lookup_direct_v6(address)?,
+    })
+}
+
+fn store_direct_lookup(present: &mut u8, value: &mut u32, found: Option<u32>) {
+    if let Some(found) = found {
+        *present = 1;
+        *value = found;
+    }
+}
+
+fn lookup_membership(
+    reader: &ReaderHandle,
+    address: Key,
+) -> Result<Option<iprange_livedb::c_abi_support::MembershipToken>, CallError> {
+    Ok(match address {
+        Key::V4(address) => reader.get()?.lookup_membership_token_v4(address)?,
+        Key::V6(address) => reader.get()?.lookup_membership_token_v6(address)?,
+    })
+}
+
+fn store_membership_lookup(
+    output: &mut *mut MembershipViewHandle,
+    reader: &ReaderHandle,
+    membership: Option<iprange_livedb::c_abi_support::MembershipToken>,
+) -> Result<(), CallError> {
+    if let Some(membership) = membership {
+        *output = Box::into_raw(Box::new(MembershipViewHandle::new(
+            ArcClone::reader(reader)?,
+            membership,
+        )));
+    }
+    Ok(())
+}
+
+fn decode_feed_name(bytes: &[u8]) -> Result<&str, BoundaryError> {
+    std::str::from_utf8(bytes)
+        .map_err(|_| BoundaryError::invalid_argument("feed name is not UTF-8"))
+}
+
+fn store_feed_lookup(
+    present: &mut u8,
+    output: &mut FeedInfo,
+    feed: Option<iprange_livedb::FeedEntry>,
+) {
+    if let Some(feed) = feed {
+        *present = 1;
+        *output = encode_feed(feed);
+    }
+}
+
+unsafe fn read_metadata(
+    reader: &ReaderHandle,
+    output: MutableByteSlice,
+    required: &mut u64,
+) -> Result<(), CallError> {
+    let Some(length) = reader.get()?.metadata_json_len()? else {
+        *required = 0;
+        return Ok(());
+    };
+    *required = length;
+    if output.length < length {
+        return Err(BoundaryError::buffer_too_small(length).into());
+    }
+    // SAFETY: call_with_outputs validated the caller's complete buffer.
+    let output = unsafe { output_slice(output.pointer, output.length)? };
+    reader
+        .get()?
+        .read_metadata_json(&mut output[..length as usize])?;
+    Ok(())
 }
 
 #[no_mangle]

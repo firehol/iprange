@@ -45,24 +45,14 @@ pub unsafe extern "C" fn iprange_v4_abi1_validate(
         let cancellation = callback::token(cancellation)?;
         let source = unsafe { path::decode(source)? };
         let mut adapter = ValidationAdapter::new(sink_callback, sink_context);
-        match iprange_livedb::validation::validate(
+        let result = iprange_livedb::validation::validate(
             source,
             mode,
             &budget,
             &cancellation,
             &mut adapter,
-        ) {
-            Ok(result) => {
-                *output = Box::into_raw(Box::new(ReportHandle::validation(result)));
-                Ok(())
-            }
-            Err(failure) => {
-                *output = Box::into_raw(Box::new(ReportHandle::validation_failure(
-                    &failure.progress,
-                )));
-                Err(adapter.failure.unwrap_or_else(|| failure.cause.into()))
-            }
-        }
+        );
+        finish_validation(output, result, adapter)
     })
 }
 
@@ -125,10 +115,9 @@ fn recover(
     error_output: *mut *mut ErrorHandle,
 ) -> u32 {
     call_with_output(error_output, report_output, "report output is null", || {
-        // SAFETY: the output is initialized before any input work.
+        // SAFETY: all pointers and tagged inputs are validated before work starts.
         let output = unsafe { required_output(report_output, "report output is null")? };
         *output = std::ptr::null_mut();
-        // SAFETY: opaque and fixed inputs are validated before typed use.
         let candidates = unsafe {
             crate::handle::required_handle_input(
                 request.candidate_report,
@@ -137,57 +126,131 @@ fn recover(
         };
         let _candidate_guard = candidates.enter()?;
         let candidate = candidates.candidate(request.candidate_index)?;
-        let budget = unsafe { required_input(request.budget, "recovery budget is null")? };
-        let budget = unsafe { decode_recovery_budget(budget)? };
-        let cancellation = callback::token(request.cancellation)?;
-        let source = unsafe { path::decode(request.source)? };
-        let destination = unsafe { path::decode(request.destination)? };
+        let inputs = unsafe { decode_recovery_inputs(&request)? };
         let mut adapter = RecoveryAdapter::new(request.sink_callback, request.sink_context);
-        let result = match request.mode {
-            RecoveryMode::Immutable => iprange_livedb::recovery::recover_immutable(
-                source,
-                candidate,
-                destination,
-                &budget,
-                &mut adapter,
-                &cancellation,
-            ),
-            RecoveryMode::Live => iprange_livedb::recovery::recover_live(
-                source,
-                candidate,
-                destination,
-                &budget,
-                &mut adapter,
-                &cancellation,
-            ),
-            RecoveryMode::Offline => iprange_livedb::recovery::recover_offline(
-                source,
-                candidate,
-                destination,
-                OfflineQuiescenceCertification::CallerCertified,
-                &budget,
-                &mut adapter,
-                &cancellation,
-            ),
-        };
-        match result {
-            Ok(result) => {
-                *output = Box::into_raw(Box::new(ReportHandle::recovery(result)));
-                Ok(())
-            }
-            Err(mut failure) => {
-                let mut report = ReportHandle::recovery_preparation(&failure);
-                report.set_cleanup_guard(failure.source_cleanup.take());
-                *output = Box::into_raw(Box::new(report));
-                if let Some(callback) = adapter.failure {
-                    return Err(callback);
-                }
-                let cleanup = failure.cleanup.iter().map(facts::cleanup).collect();
-                let error = ErrorHandle::publication_failure(failure.cause, cleanup, None);
-                Err(error.into())
-            }
-        }
+        let result = dispatch_recovery(
+            request.mode,
+            inputs.source,
+            candidate,
+            inputs.destination,
+            &inputs.budget,
+            &mut adapter,
+            &inputs.cancellation,
+        );
+        finish_recovery(output, result, adapter)
     })
+}
+
+fn finish_validation(
+    output: &mut *mut ReportHandle,
+    result: Result<
+        iprange_livedb::validation::ValidationResult,
+        iprange_livedb::validation::ValidationFailure,
+    >,
+    adapter: ValidationAdapter,
+) -> Result<(), CallError> {
+    match result {
+        Ok(result) => {
+            *output = Box::into_raw(Box::new(ReportHandle::validation(result)));
+            Ok(())
+        }
+        Err(failure) => {
+            *output = Box::into_raw(Box::new(ReportHandle::validation_failure(
+                &failure.progress,
+            )));
+            Err(adapter.failure.unwrap_or_else(|| failure.cause.into()))
+        }
+    }
+}
+
+struct RecoveryInputs {
+    source: PathBuf,
+    destination: PathBuf,
+    budget: iprange_livedb::recovery::RecoveryBudget,
+    cancellation: iprange_livedb::CancellationToken,
+}
+
+unsafe fn decode_recovery_inputs(request: &RecoveryRequest) -> Result<RecoveryInputs, CallError> {
+    // SAFETY: the caller supplies the fixed inputs and checked path extents.
+    let budget = unsafe { required_input(request.budget, "recovery budget is null")? };
+    let budget = unsafe { decode_recovery_budget(budget)? };
+    let cancellation = callback::token(request.cancellation)?;
+    let source = unsafe { path::decode(request.source)? };
+    let destination = unsafe { path::decode(request.destination)? };
+    Ok(RecoveryInputs {
+        source,
+        destination,
+        budget,
+        cancellation,
+    })
+}
+
+fn dispatch_recovery(
+    mode: RecoveryMode,
+    source: PathBuf,
+    candidate: iprange_livedb::recovery::RecoveryCandidate,
+    destination: PathBuf,
+    budget: &iprange_livedb::recovery::RecoveryBudget,
+    adapter: &mut RecoveryAdapter,
+    cancellation: &iprange_livedb::CancellationToken,
+) -> iprange_livedb::recovery::RecoveryOutcome {
+    match mode {
+        RecoveryMode::Immutable => iprange_livedb::recovery::recover_immutable(
+            source,
+            candidate,
+            destination,
+            budget,
+            adapter,
+            cancellation,
+        ),
+        RecoveryMode::Live => iprange_livedb::recovery::recover_live(
+            source,
+            candidate,
+            destination,
+            budget,
+            adapter,
+            cancellation,
+        ),
+        RecoveryMode::Offline => iprange_livedb::recovery::recover_offline(
+            source,
+            candidate,
+            destination,
+            OfflineQuiescenceCertification::CallerCertified,
+            budget,
+            adapter,
+            cancellation,
+        ),
+    }
+}
+
+fn finish_recovery(
+    output: &mut *mut ReportHandle,
+    result: iprange_livedb::recovery::RecoveryOutcome,
+    adapter: RecoveryAdapter,
+) -> Result<(), CallError> {
+    match result {
+        Ok(result) => {
+            *output = Box::into_raw(Box::new(ReportHandle::recovery(result)));
+            Ok(())
+        }
+        Err(failure) => store_recovery_failure(output, failure, adapter.failure),
+    }
+}
+
+fn store_recovery_failure(
+    output: &mut *mut ReportHandle,
+    mut failure: Box<iprange_livedb::recovery::RecoveryPreparationFailure>,
+    callback: Option<CallError>,
+) -> Result<(), CallError> {
+    let mut report = ReportHandle::recovery_preparation(&failure);
+    report.set_cleanup_guard(failure.source_cleanup.take());
+    *output = Box::into_raw(Box::new(report));
+    if let Some(callback) = callback {
+        return Err(callback);
+    }
+    let cleanup = failure.cleanup.iter().map(facts::cleanup).collect();
+    let error = ErrorHandle::publication_failure(failure.cause, cleanup, None);
+    Err(error.into())
 }
 
 #[no_mangle]

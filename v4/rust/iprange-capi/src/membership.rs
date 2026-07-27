@@ -9,16 +9,14 @@ use crate::callback;
 use crate::error::{
     call, call_with_output, input_slice, required_output, BoundaryError, CallError, ErrorHandle,
 };
+use crate::feed_batch::FeedBatch;
 use crate::handle::{
     MembershipBuilderHandle, MembershipRefHandle, WriterFeedRefHandle, WriterHandle,
 };
 use crate::ip::{self, Key};
 use crate::reader::encode_feed;
-use crate::sink::{self, Control};
 use crate::source;
 use crate::writer::finish_source;
-
-const FEED_BATCH_CAPACITY: usize = 256;
 
 #[no_mangle]
 pub unsafe extern "C" fn iprange_v4_abi1_writer_begin_membership(
@@ -109,65 +107,9 @@ pub unsafe extern "C" fn iprange_v4_abi1_writer_feed_enumerate(
                 unsafe { crate::handle::required_handle_input(writer, "writer handle is null")? };
             let count_output =
                 unsafe { required_output(count_output, "feed count output is null")? };
-            *count_output = 0;
-            let mut batch = [FeedInfo::default(); FEED_BATCH_CAPACITY];
-            let mut length = 0usize;
-            let mut delivered = 0u64;
-            let mut callback_error = None;
-            let result = writer.with_mut(|inner| {
-                Ok(inner.enumerate_transaction_feeds(|feed| {
-                    batch[length] = encode_feed(iprange_livedb::FeedEntry {
-                        name: feed.name(),
-                        index: feed.index(),
-                    });
-                    length += 1;
-                    if length != batch.len() {
-                        return Ok(true);
-                    }
-                    match sink::feed(callback_fn, context, &batch) {
-                        Ok(control) => {
-                            delivered = delivered.checked_add(length as u64).ok_or(
-                                iprange_livedb::Error::ArithmeticOverflow(
-                                    "transaction feed scan count",
-                                ),
-                            )?;
-                            length = 0;
-                            Ok(control == Control::Continue)
-                        }
-                        Err(error) => {
-                            callback_error = Some(error);
-                            Err(iprange_livedb::Error::InvalidArgument("C feed sink failed"))
-                        }
-                    }
-                })?)
-            });
-            if let Some(error) = callback_error {
-                *count_output = delivered;
-                return Err(error);
-            }
-            *count_output = delivered;
-            result?;
-            if length != 0 {
-                match sink::feed(callback_fn, context, &batch[..length]) {
-                    Ok(control) => {
-                        delivered = delivered.checked_add(length as u64).ok_or(
-                            iprange_livedb::Error::ArithmeticOverflow(
-                                "transaction feed scan count",
-                            ),
-                        )?;
-                        if control == Control::Stop {
-                            *count_output = delivered;
-                            return Err(iprange_livedb::Error::StoppedBySink.into());
-                        }
-                    }
-                    Err(error) => {
-                        *count_output = delivered;
-                        return Err(error);
-                    }
-                }
-            }
-            *count_output = delivered;
-            Ok::<_, CallError>(())
+            let (count, result) = enumerate_transaction_feeds(writer, callback_fn, context);
+            *count_output = count;
+            result
         },
     )
 }
@@ -186,19 +128,8 @@ pub unsafe extern "C" fn iprange_v4_abi1_writer_feed_rename(
         output,
         "feed reference output is null",
         || {
-            // SAFETY: all pointers and the name extent are validated before use.
-            let writer =
-                unsafe { crate::handle::required_handle_input(writer, "writer handle is null")? };
-            let feed =
-                unsafe { crate::handle::required_handle_input(feed, "feed reference is null")? };
-            let _feed_guard = feed.enter()?;
-            feed.require_parent(writer)?;
-            let output = unsafe { required_output(output, "feed reference output is null")? };
-            *output = std::ptr::null_mut();
-            let name = unsafe { decode_name(name_pointer, name_length)? };
-            let renamed = writer.with_mut(|inner| Ok(inner.feed_rename(feed.value, name)?))?;
-            *output = Box::into_raw(Box::new(WriterFeedRefHandle::new(writer, renamed)));
-            Ok::<_, CallError>(())
+            // SAFETY: call_with_output validates the output, and the helper validates all inputs.
+            unsafe { rename_feed(writer, feed, name_pointer, name_length, output) }
         },
     )
 }
@@ -380,33 +311,100 @@ pub unsafe extern "C" fn iprange_v4_abi1_writer_membership_apply_ranges(
     error_output: *mut *mut ErrorHandle,
 ) -> u32 {
     call(error_output, || {
-        // SAFETY: both opaque pointers are validated before use.
-        let writer =
-            unsafe { crate::handle::required_handle_input(writer, "writer handle is null")? };
-        let membership = unsafe {
-            crate::handle::required_handle_input(membership, "membership reference is null")?
-        };
-        let _membership_guard = membership.enter()?;
-        membership.require_parent(writer)?;
-        let operation = decode_operation(operation)?;
-        writer.with_mut(|inner| {
-            let result = source::drain_coverage(callback, context, |records| {
-                for record in records {
-                    match ip::decode_range(*record)? {
-                        (Key::V4(from), Key::V4(to)) => {
-                            inner.membership_apply_v4(from, to, membership.value, operation)?;
-                        }
-                        (Key::V6(from), Key::V6(to)) => {
-                            inner.membership_apply_v6(from, to, membership.value, operation)?;
-                        }
-                        _ => unreachable!("range decoder returns one matching family"),
-                    }
-                }
-                Ok(())
-            });
-            finish_source(inner, result)
-        })
+        // SAFETY: the helper validates both opaque pointers before use.
+        unsafe { apply_membership_ranges(writer, membership, operation, callback, context) }
     })
+}
+
+fn enumerate_transaction_feeds(
+    writer: &WriterHandle,
+    callback: FeedSinkFn,
+    context: *mut c_void,
+) -> (u64, Result<(), CallError>) {
+    let mut batch = FeedBatch::new(callback, context, "transaction feed scan count");
+    let result = writer.with_mut(|inner| {
+        inner.enumerate_transaction_feeds(|feed| {
+            batch.push(iprange_livedb::FeedEntry {
+                name: feed.name(),
+                index: feed.index(),
+            })
+        })?;
+        Ok(())
+    });
+    batch.finish(result)
+}
+
+unsafe fn rename_feed(
+    writer: *const WriterHandle,
+    feed: *const WriterFeedRefHandle,
+    name_pointer: *const u8,
+    name_length: u64,
+    output: *mut *mut WriterFeedRefHandle,
+) -> Result<(), CallError> {
+    // SAFETY: the C caller supplies opaque handles and the checked name extent.
+    let writer = unsafe { crate::handle::required_handle_input(writer, "writer handle is null")? };
+    let feed = unsafe { crate::handle::required_handle_input(feed, "feed reference is null")? };
+    let _feed_guard = feed.enter()?;
+    feed.require_parent(writer)?;
+    let output = unsafe { required_output(output, "feed reference output is null")? };
+    *output = std::ptr::null_mut();
+    let name = unsafe { decode_name(name_pointer, name_length)? };
+    let renamed = writer.with_mut(|inner| Ok(inner.feed_rename(feed.value, name)?))?;
+    *output = Box::into_raw(Box::new(WriterFeedRefHandle::new(writer, renamed)));
+    Ok(())
+}
+
+unsafe fn apply_membership_ranges(
+    writer: *const WriterHandle,
+    membership: *const MembershipRefHandle,
+    operation: u32,
+    callback: CoverageSourceFn,
+    context: *mut c_void,
+) -> Result<(), CallError> {
+    // SAFETY: the C caller supplies opaque handles validated before typed use.
+    let writer = unsafe { crate::handle::required_handle_input(writer, "writer handle is null")? };
+    let membership = unsafe {
+        crate::handle::required_handle_input(membership, "membership reference is null")?
+    };
+    let _membership_guard = membership.enter()?;
+    membership.require_parent(writer)?;
+    let operation = decode_operation(operation)?;
+    writer.with_mut(|inner| {
+        let result = source::drain_coverage(callback, context, |records| {
+            apply_membership_batch(inner, records, membership.value, operation)
+        });
+        finish_source(inner, result)
+    })
+}
+
+fn apply_membership_batch(
+    writer: &mut iprange_livedb::c_abi_support::Writer,
+    records: &[crate::abi::Range],
+    membership: iprange_livedb::MembershipRef,
+    operation: MembershipOperation,
+) -> Result<(), CallError> {
+    for record in records {
+        apply_membership_range(writer, *record, membership, operation)?;
+    }
+    Ok(())
+}
+
+fn apply_membership_range(
+    writer: &mut iprange_livedb::c_abi_support::Writer,
+    record: crate::abi::Range,
+    membership: iprange_livedb::MembershipRef,
+    operation: MembershipOperation,
+) -> Result<(), CallError> {
+    match ip::decode_range(record)? {
+        (Key::V4(from), Key::V4(to)) => {
+            writer.membership_apply_v4(from, to, membership, operation)?;
+        }
+        (Key::V6(from), Key::V6(to)) => {
+            writer.membership_apply_v6(from, to, membership, operation)?;
+        }
+        _ => unreachable!("range decoder returns one matching family"),
+    }
+    Ok(())
 }
 
 pub(crate) unsafe fn decode_name(

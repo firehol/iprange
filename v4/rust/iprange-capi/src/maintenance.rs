@@ -225,9 +225,9 @@ pub unsafe extern "C" fn iprange_v4_abi1_remove_abandoned_publication_temp(
         *output = std::ptr::null_mut();
         let expected_directory_identity = decode_identity(expected_directory_identity)?;
         let expected_artifact_identity = decode_identity(expected_artifact_identity)?;
-        let publication_attempt_id = unsafe { decode_id(publication_attempt_id)? };
-        let expected_tuple = unsafe { optional_tuple(expected_tuple)? };
-        let expected_digest = unsafe { optional_digest(expected_digest)? };
+        let (publication_attempt_id, expected_tuple, expected_digest) = unsafe {
+            decode_publication_evidence(publication_attempt_id, expected_tuple, expected_digest)?
+        };
         let cancellation = callback::token(cancellation)?;
         let directory = unsafe { path::decode(directory)? };
         let result = publication::remove_abandoned_publication_temp(
@@ -299,8 +299,8 @@ pub unsafe extern "C" fn iprange_v4_abi1_remove_housekeeping_artifact(
         *output = std::ptr::null_mut();
         let expected_directory_identity = decode_identity(expected_directory_identity)?;
         let expected_envelope_identity = decode_identity(expected_envelope_identity)?;
-        let attempt_id = unsafe { decode_id(attempt_id)? };
-        let expected_payload = unsafe { optional_payload(expected_payload)? };
+        let (attempt_id, expected_payload) =
+            unsafe { decode_housekeeping_evidence(attempt_id, expected_payload)? };
         let cancellation = callback::token(cancellation)?;
         let directory = unsafe { path::decode(directory)? };
         let result = publication::remove_windows_housekeeping(
@@ -315,6 +315,32 @@ pub unsafe extern "C" fn iprange_v4_abi1_remove_housekeeping_artifact(
         *output = Box::into_raw(Box::new(ReportHandle::housekeeping_removal(result)));
         Ok::<_, CallError>(())
     })
+}
+
+type PublicationEvidence = (
+    [u8; 16],
+    Option<publication::PublicationTuple>,
+    Option<publication::PublicationDigest>,
+);
+
+unsafe fn decode_publication_evidence(
+    publication_attempt_id: *const u8,
+    expected_tuple: *const PublicationTuple,
+    expected_digest: *const PublicationDigest,
+) -> Result<PublicationEvidence, BoundaryError> {
+    let attempt_id = unsafe { decode_id(publication_attempt_id)? };
+    let tuple = unsafe { optional_tuple(expected_tuple)? };
+    let digest = unsafe { optional_digest(expected_digest)? };
+    Ok((attempt_id, tuple, digest))
+}
+
+unsafe fn decode_housekeeping_evidence(
+    attempt_id: *const u8,
+    expected_payload: *const HousekeepingPayload,
+) -> Result<([u8; 16], Option<publication::HousekeepingPayloadIdentity>), BoundaryError> {
+    let attempt_id = unsafe { decode_id(attempt_id)? };
+    let payload = unsafe { optional_payload(expected_payload)? };
+    Ok((attempt_id, payload))
 }
 
 #[derive(Default)]

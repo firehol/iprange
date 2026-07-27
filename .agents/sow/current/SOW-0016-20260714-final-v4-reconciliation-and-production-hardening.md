@@ -12935,6 +12935,68 @@ Implementation and validation:
   Rust-first boundary and the later bidirectional Go gate without claiming
   cross-language evidence that does not yet exist.
 
+### 2026-07-27 - final Rust simplification boundary
+
+Evidence and root cause:
+
+- The exact release-module dependency graph contains 185 active core files and
+  50,329 physical source lines. This remains far above the directional size
+  goal because the frozen Phase-1 contract includes portable live coordination,
+  durable publication and recovery, explicit validation, and the complete
+  136-function C boundary. It must not grow merely to satisfy an invented
+  abstraction.
+- Lizard reports no active database-core function above cyclomatic complexity
+  9. It reports 19 C-boundary functions above 9, with a maximum of 15. These
+  functions combine pointer decoding, callback adaptation, operation dispatch,
+  result conversion, and error publication. The behavior is already covered;
+  the remaining issue is separation of those boundary responsibilities.
+- Several large files are fixed ABI registries or report projections whose
+  mechanical splitting would add navigation and module plumbing without making
+  the contract clearer. File size remains a design warning, not a reason to
+  rewrite cohesive generated or registry-shaped code.
+
+Frozen cleanup scope:
+
+1. Refactor only the 19 measured C-boundary functions into small helpers with
+   one visible responsibility and bring measured complexity to at most 9.
+2. Preserve every exported symbol, C layout, numeric constant, callback
+   contract, error chain, format byte, and core call. Do not add another API,
+   execution path, temporary-file mechanism, or compatibility layer.
+3. Split a large source file only where it contains independently named
+   responsibilities and the split reduces cognitive load. Do not chase the
+   directional line targets mechanically.
+4. Prove behavioral identity with the generated header and manifest checks,
+   native C/C++ callers, complete Rust suites on current Rust and 1.74.1,
+   strict Clippy, formatting, and exact complexity analysis.
+
+Implementation and validation:
+
+- The 19 boundary functions above complexity 9 were separated at their natural
+  decode, dispatch, batching, and result-conversion seams. Reader and writer
+  feed enumeration now share one 256-entry callback batch adapter; a permanent
+  257-feed test proves the full-batch and tail path. No exported symbol, layout,
+  numeric registry, format byte, core operation, or error code changed.
+- The first mechanical version of this cleanup added too much forwarding and
+  typed plumbing. It was reduced before commit. The final C-boundary source is
+  10,616 physical lines including inline tests, versus 10,273 before this
+  slice. Lizard reports 9,600 non-comment lines, 479 functions, average
+  complexity 3.3, maximum complexity 9, and zero warnings above the agreed
+  threshold.
+- The complete final workspace matrix passes on current Rust and Rust 1.74.1:
+  429 test functions, 426 passed and three intentional ignored entry points.
+  Generated header and manifest equality, exact exports, C11/C++17 layout
+  compilation, and all five native C behavior programs pass.
+- Strict all-feature/all-target Clippy with warnings denied, warning-denied
+  rustdoc, formatting, diff checks, Apple ARM/Windows GNU/FreeBSD cross-target
+  checks, and the SOW audit pass. Nightly AddressSanitizer with leak detection
+  passes all 14 C-boundary unit tests; Valgrind reports no definite or indirect
+  leaks across the five native C programs.
+- One first Rust 1.74 full-suite run transiently observed `WriterBusy` after a
+  writer-handle drop in an unchanged core sidecar test while crash subprocess
+  tests ran concurrently. The exact test immediately passed alone and the
+  complete Rust 1.74 suite then passed unchanged. This did not reproduce and
+  provides no evidence of a defect in this C-boundary slice.
+
 ### Phase-1 core-SDK production-hardening gate
 
 Pending. Before SOW completion, this section must record:

@@ -12,6 +12,7 @@ mod cursor;
 mod error;
 mod export;
 mod facts;
+mod feed_batch;
 mod handle;
 mod ip;
 mod lifecycle;

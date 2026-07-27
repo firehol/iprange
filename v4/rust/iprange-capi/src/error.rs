@@ -430,12 +430,29 @@ unsafe fn validate_and_clear_outputs(
 ) -> Result<(), BoundaryError> {
     let error_slot =
         (!error_output.is_null()).then(|| output_slot(error_output, "error output is invalid"));
+    validate_output_slots(error_slot, outputs)?;
+    reject_output_overlaps(error_slot, outputs)?;
+    // SAFETY: every output slot is valid and disjoint.
+    unsafe { clear_output_slots(error_output, outputs) }
+}
+
+fn validate_output_slots(
+    error_slot: Option<OutputSlot>,
+    outputs: &[OutputSlot],
+) -> Result<(), BoundaryError> {
     if let Some(slot) = error_slot {
         validate_output_slot(slot)?;
     }
     for &slot in outputs {
         validate_output_slot(slot)?;
     }
+    Ok(())
+}
+
+fn reject_output_overlaps(
+    error_slot: Option<OutputSlot>,
+    outputs: &[OutputSlot],
+) -> Result<(), BoundaryError> {
     for left in 0..outputs.len() {
         if let Some(error) = error_slot {
             reject_output_overlap(error, outputs[left])?;
@@ -444,7 +461,13 @@ unsafe fn validate_and_clear_outputs(
             reject_output_overlap(outputs[left], outputs[right])?;
         }
     }
+    Ok(())
+}
 
+unsafe fn clear_output_slots(
+    error_output: *mut *mut ErrorHandle,
+    outputs: &[OutputSlot],
+) -> Result<(), BoundaryError> {
     if !error_output.is_null() {
         // SAFETY: the optional output slot was validated and does not overlap another output.
         unsafe { error_output.write(std::ptr::null_mut()) };
