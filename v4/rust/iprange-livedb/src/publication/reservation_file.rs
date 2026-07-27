@@ -22,6 +22,7 @@ pub(crate) enum Error {
     Namespace(NamespaceError),
     Sdk(error::Error),
     Output(output::Error),
+    Gc(super::PublicationProblem),
     Codec(SelectError),
     HeaderChanged,
     HeaderInvariant,

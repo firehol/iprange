@@ -309,6 +309,7 @@ fn bind_candidate(
     if candidate.label != RecoveryCandidateLabel::Newest {
         return Err(Error::RecoveryCandidateChanged);
     }
+    crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     live_sidecar::verify_path(path, identity).map_err(candidate_changed)?;
     Ok(meta)
 }
@@ -322,6 +323,7 @@ fn bind_current(
     live_sidecar::verify_path(path, identity).map_err(live_coordination)?;
     cancellation.check()?;
     let meta = database::bootstrap_file(file, OpenMode::LiveReader)?.meta;
+    crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     live_sidecar::verify_path(path, identity).map_err(live_coordination)?;
     Ok(meta)
 }

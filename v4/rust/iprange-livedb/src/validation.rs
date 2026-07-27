@@ -87,6 +87,9 @@ fn validate_offline<S: ValidationSink>(
     let meta = classified
         .selected_meta(candidate)
         .ok_or_else(|| failure(Error::RecoveryCandidateChanged, ValidationProgress::new()))?;
+    source
+        .require_available(meta.database_id)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let mut context = context::Context::new(&source.file, meta, budget, cancellation, sink)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let scan = context
@@ -223,9 +226,16 @@ fn validate_immutable<S: ValidationSink>(
         ImmutableSource::open(path).map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let bootstrap = match database::bootstrap_file(&source.file, OpenMode::ImmutableReader) {
         Ok(bootstrap) => bootstrap,
-        Err(Error::Format(problem)) => return bootstrap_report(&source, problem, sink),
+        Err(Error::Format(problem)) => {
+            require_bound_source_available(&source)
+                .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+            return bootstrap_report(&source, problem, sink);
+        }
         Err(cause) => return Err(failure(cause, ValidationProgress::new())),
     };
+    source
+        .require_available(bootstrap.meta.database_id)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let mut context =
         context::Context::new(&source.file, bootstrap.meta, budget, cancellation, sink)
             .map_err(|cause| failure(cause, ValidationProgress::new()))?;
@@ -246,6 +256,14 @@ fn validate_immutable<S: ValidationSink>(
         generation: Some(generation(bootstrap.meta)),
         progress,
     })
+}
+
+fn require_bound_source_available(source: &ImmutableSource) -> Result<()> {
+    match source::selected_or_bound_database_id(&source.file) {
+        Ok(database_id) => source.require_available(database_id),
+        Err(Error::Format(_) | Error::Corrupt(_)) => Ok(()),
+        Err(cause) => Err(cause),
+    }
 }
 
 fn bootstrap_report<S: ValidationSink>(

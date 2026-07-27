@@ -25,7 +25,7 @@ impl TestFiles {
     }
 
     fn create_main(&self) {
-        create_private(&self.main).unwrap();
+        create_private_for_test(&self.main).unwrap();
     }
 
     fn sidecar(&self) -> PathBuf {
@@ -171,7 +171,7 @@ fn replacement_at_the_canonical_path_is_detected() {
     let old = files.sidecar().with_extension("readers.old");
     fs::rename(files.sidecar(), &old).unwrap();
     files.track(old);
-    create_private(&files.sidecar()).unwrap();
+    create_private_for_test(&files.sidecar()).unwrap();
 
     assert!(matches!(sidecar.verify_path(), Err(Error::WrongMode(_))));
 }
@@ -185,7 +185,7 @@ fn symlinks_are_not_followed() {
         let mut files = TestFiles::new("symlink");
         files.create_main();
         let target = files.main.with_extension("target");
-        create_private(&target).unwrap();
+        create_private_for_test(&target).unwrap();
         files.track(target.clone());
         symlink(&target, files.sidecar()).unwrap();
 

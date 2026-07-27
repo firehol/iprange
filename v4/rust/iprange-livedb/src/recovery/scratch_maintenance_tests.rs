@@ -156,25 +156,31 @@ fn exact_removal_is_cancellable_durable_and_idempotent() {
     assert!(matches!(error, Error::Cancelled));
     assert!(path.exists());
 
-    assert!(remove_abandoned_scratch(
-        &directory.path,
-        listed.directory_identity,
-        attempt,
-        0,
-        entry.artifact_identity,
-        &CancellationToken::new(),
-    )
-    .unwrap());
+    assert!(
+        remove_abandoned_scratch(
+            &directory.path,
+            listed.directory_identity,
+            attempt,
+            0,
+            entry.artifact_identity,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
     assert!(!path.exists());
-    assert!(!remove_abandoned_scratch(
-        &directory.path,
-        listed.directory_identity,
-        attempt,
-        0,
-        entry.artifact_identity,
-        &CancellationToken::new(),
-    )
-    .unwrap());
+    assert!(
+        !remove_abandoned_scratch(
+            &directory.path,
+            listed.directory_identity,
+            attempt,
+            0,
+            entry.artifact_identity,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
 }
 
 #[test]

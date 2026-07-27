@@ -246,6 +246,8 @@ fn supplied(
         new_sidecar_identity: Some(live_sidecar::public_identity(sidecar_identity)),
         new_sidecar_location: location,
         residue_possible: true,
+        housekeeping: crate::publication::Housekeeping::None,
+        visible_housekeeping: Box::default(),
         cause: None,
     }
 }

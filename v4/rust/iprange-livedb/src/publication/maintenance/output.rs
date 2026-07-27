@@ -1,4 +1,4 @@
-//! Linux private publication-output discovery and removal.
+//! Portable private publication-output discovery and exact removal.
 
 use std::fs::File;
 use std::path::Path;
@@ -8,21 +8,30 @@ use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
+#[cfg(unix)]
+use crate::publication::namespace::regular_link_count;
+#[cfg(windows)]
+use crate::publication::namespace::CREATION_SECURITY_KIND;
 use crate::publication::namespace::{
-    regular_link_count, Directory, Identity, Name, NamespaceError, ScanError,
+    Directory, Identity, Name, NamespaceError, ScanError, IDENTITY_KIND,
 };
 use crate::publication::output;
+use crate::publication::CleanupState;
+#[cfg(windows)]
+use crate::publication::CreationSecurity;
+#[cfg(windows)]
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
 use super::{
-    AbandonedPublicationTempEntry, AbandonedPublicationTempList, AbandonedPublicationTempSink,
-    AbandonedPublicationTempSinkControl, PublicationDigest, PublicationTuple,
+    AbandonedArtifactRemoval, AbandonedPublicationTempEntry, AbandonedPublicationTempList,
+    AbandonedPublicationTempSink, AbandonedPublicationTempSinkControl, Housekeeping,
+    PublicationDigest, PublicationProblem, PublicationTuple,
 };
 
 const PREFIX: &[u8] = b".iprange-publish-";
 const SUFFIX: &[u8] = b".tmp";
 const ENCODED_ID_LEN: usize = 32;
-const POSIX_IDENTITY: u16 = 1;
 
 pub(super) fn list<S: AbandonedPublicationTempSink>(
     path: &Path,
@@ -66,16 +75,33 @@ pub(super) fn remove(
     expected_tuple: Option<PublicationTuple>,
     expected_digest: Option<PublicationDigest>,
     cancellation: &CancellationToken,
-) -> Result<bool> {
+) -> Result<AbandonedArtifactRemoval> {
     cancellation.check()?;
+    if expected_tuple.is_some() != expected_digest.is_some() {
+        return Err(Error::InvalidArgument(
+            "publication tuple and digest evidence must both be present or absent",
+        ));
+    }
     let expected_directory = identity(expected_directory)?;
     let expected_artifact = identity(expected_artifact)?;
     let directory = Directory::open(path).map_err(namespace_error)?;
     require_directory(&directory, expected_directory)?;
     let name = encode_name(attempt)?;
-    let Some(found) = directory.entry(&name).map_err(namespace_error)? else {
+    let found = directory.entry(&name).map_err(namespace_error)?;
+    #[cfg(windows)]
+    if let Some(result) = resume(
+        &directory,
+        attempt,
+        &name,
+        expected_artifact,
+        expected_tuple.zip(expected_digest),
+        found.is_some(),
+    ) {
+        return Ok(result);
+    }
+    let Some(found) = found else {
         durable_absence(&directory, &name)?;
-        return Ok(false);
+        return Ok(removal(false, None, Housekeeping::None, Box::default()));
     };
     require_owned(
         found.regular,
@@ -105,21 +131,183 @@ pub(super) fn remove(
         ));
     }
     cancellation.check()?;
+    retire(
+        &directory,
+        &name,
+        regular,
+        attempt,
+        expected_artifact,
+        expected_tuple.zip(expected_digest),
+    )
+}
+
+#[cfg(unix)]
+fn retire(
+    directory: &Directory,
+    name: &Name,
+    regular: crate::publication::namespace::Regular,
+    _attempt: [u8; 16],
+    expected_artifact: Identity,
+    _evidence: Option<(PublicationTuple, PublicationDigest)>,
+) -> Result<AbandonedArtifactRemoval> {
     if !directory
-        .unlink_exact(&name, expected_artifact)
+        .unlink_exact(name, expected_artifact)
         .map_err(cleanup_error)?
     {
         return Err(Error::CleanupConflict(
             "publication temp lost its exact name",
         ));
     }
-    if regular_link_count(&regular.file).map_err(namespace_error)? != 0 {
-        return Err(Error::CleanupConflict(
-            "publication temp remained linked after removal",
+    match regular_link_count(&regular.file) {
+        Ok(0) => {}
+        Ok(_) => {
+            return Ok(removal(
+                true,
+                Some(crate::publication::problem::Problem::cleanup_conflict(
+                    "publication temp remained linked after removal",
+                )),
+                Housekeeping::None,
+                Box::default(),
+            ))
+        }
+        Err(error) => {
+            return Ok(removal(
+                true,
+                Some(crate::publication::problem::Problem::namespace(&error)),
+                Housekeeping::None,
+                Box::default(),
+            ))
+        }
+    }
+    if let Err(error) = durable_absence(directory, name) {
+        return Ok(removal(
+            true,
+            Some(crate::publication::problem::Problem::sdk(&error)),
+            Housekeeping::None,
+            Box::default(),
         ));
     }
-    durable_absence(&directory, &name)?;
-    Ok(true)
+    Ok(removal(true, None, Housekeeping::None, Box::default()))
+}
+
+#[cfg(windows)]
+fn retire(
+    directory: &Directory,
+    name: &Name,
+    regular: crate::publication::namespace::Regular,
+    attempt: [u8; 16],
+    expected_artifact: Identity,
+    evidence: Option<(PublicationTuple, PublicationDigest)>,
+) -> Result<AbandonedArtifactRemoval> {
+    use crate::publication::gc::{self, Authority};
+    use crate::publication::gc_codec::Payload;
+    use crate::publication::security;
+
+    let commitment = security::creator_only_commitment(&regular.file).map_err(namespace_error)?;
+    let payload = evidence.map(|(tuple, digest)| Payload {
+        byte_length: digest.byte_length,
+        sha512: digest.sha512,
+        database_id: tuple.database_id,
+        transaction_id: tuple.transaction_id,
+        commit_nonce: tuple.commit_nonce,
+    });
+    let retired = gc::retire(
+        directory,
+        Authority {
+            attempt_id: attempt,
+            ordinal: 0,
+            kind: ArtifactKind::PrivateOutput,
+            directory_role: DirectoryRole::Destination,
+            source_name: name,
+            source_file: &regular.file,
+            identity: expected_artifact,
+            creation_security: CreationSecurity {
+                kind: CREATION_SECURITY_KIND,
+                commitment,
+            },
+            payload,
+        },
+    );
+    Ok(removal(
+        true,
+        retired.problem,
+        retired.housekeeping,
+        retired
+            .visible
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    ))
+}
+
+#[cfg(windows)]
+fn resume(
+    directory: &Directory,
+    attempt: [u8; 16],
+    name: &Name,
+    identity: Identity,
+    evidence: Option<(PublicationTuple, PublicationDigest)>,
+    source_present: bool,
+) -> Option<AbandonedArtifactRemoval> {
+    use crate::publication::gc::{self, ResumeAuthority};
+    use crate::publication::gc_codec::Payload;
+
+    let payload = evidence.map(|(tuple, digest)| Payload {
+        byte_length: digest.byte_length,
+        sha512: digest.sha512,
+        database_id: tuple.database_id,
+        transaction_id: tuple.transaction_id,
+        commit_nonce: tuple.commit_nonce,
+    });
+    match gc::resume(
+        directory,
+        ResumeAuthority {
+            attempt_id: attempt,
+            ordinal: 0,
+            kind: ArtifactKind::PrivateOutput,
+            directory_role: DirectoryRole::Destination,
+            source_name: name,
+            identity,
+            payload,
+        },
+    ) {
+        Ok(Some(retired)) => Some(removal(
+            source_present,
+            retired.problem,
+            retired.housekeeping,
+            retired
+                .visible
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
+        Ok(None) => None,
+        Err(problem) => Some(removal(
+            source_present,
+            Some(problem),
+            Housekeeping::None,
+            Box::default(),
+        )),
+    }
+}
+
+fn removal(
+    source_present: bool,
+    cause: Option<PublicationProblem>,
+    housekeeping: Housekeeping,
+    visible_housekeeping: Box<[crate::publication::HousekeepingArtifact]>,
+) -> AbandonedArtifactRemoval {
+    AbandonedArtifactRemoval {
+        source_present,
+        cleanup_state: if cause.is_some() {
+            CleanupState::ResiduePossible
+        } else {
+            CleanupState::Clean
+        },
+        housekeeping,
+        visible_housekeeping,
+        cause,
+    }
 }
 
 fn inspect(
@@ -255,7 +443,7 @@ fn require_owned(regular: bool, links: u64, found: Identity, expected: Identity)
 }
 
 fn identity(identity: LocalFileIdentity) -> Result<Identity> {
-    if identity.kind != POSIX_IDENTITY {
+    if identity.kind != IDENTITY_KIND {
         return Err(Error::InvalidArgument(
             "unsupported publication identity kind",
         ));
@@ -265,7 +453,7 @@ fn identity(identity: LocalFileIdentity) -> Result<Identity> {
 
 fn local(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: POSIX_IDENTITY,
+        kind: IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }

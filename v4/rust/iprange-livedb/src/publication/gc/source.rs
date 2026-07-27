@@ -16,6 +16,7 @@ pub(super) const fn role_matches(kind: ArtifactKind, role: DirectoryRole) -> boo
             matches!(role, DirectoryRole::Destination | DirectoryRole::MainFile)
         }
         ArtifactKind::AuthorizedScratch => matches!(role, DirectoryRole::ScratchDirectory),
+        ArtifactKind::OwnedMain => matches!(role, DirectoryRole::MainFile),
         ArtifactKind::UnpublishedMainTail => false,
     }
 }
@@ -37,6 +38,7 @@ pub(super) fn name_matches(
         ArtifactKind::AuthorizedScratch => {
             source.bytes() == scratch_name(attempt_id, ordinal).bytes()
         }
+        ArtifactKind::OwnedMain => main_source(source),
         ArtifactKind::UnpublishedMainTail => false,
     }
 }
@@ -79,6 +81,15 @@ fn coordination_source(source: &Name) -> bool {
         return false;
     };
     let units = main
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    path::validate_main_name(&std::ffi::OsString::from_wide(&units)).is_ok()
+}
+
+fn main_source(source: &Name) -> bool {
+    let units = source
+        .bytes()
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect::<Vec<_>>();

@@ -17,7 +17,9 @@ use super::namespace::{
 };
 use super::replacement::PreviousMain;
 use super::reservation::Policy;
-use super::{CreationSecurity, PrivateOutputAttempt};
+use super::{
+    ArtifactKind, CreationSecurity, DirectoryRole, PrivateOutputAttempt, PublicationProblem,
+};
 
 #[path = "output_digest.rs"]
 mod output_digest;
@@ -33,6 +35,7 @@ pub(crate) enum Error {
     Namespace(NamespaceError),
     Sdk(crate::error::Error),
     Bootstrap(BootstrapError),
+    Gc(PublicationProblem),
     FinishedMetaChanged,
     FinishedLengthChanged,
 }
@@ -441,7 +444,19 @@ fn verify_custody(attempt: &OutputAttempt, file: &File, location: Location) -> R
         return Err(NamespaceError::IdentityChanged.into());
     }
     match location {
-        Location::Private => directory.verify_name(&attempt.name, identity)?,
+        Location::Private => {
+            super::gc_barrier::require_source_available(
+                directory,
+                attempt.attempt_id,
+                0,
+                ArtifactKind::PrivateOutput,
+                DirectoryRole::Destination,
+                &attempt.name,
+                identity,
+            )
+            .map_err(Error::Gc)?;
+            directory.verify_name(&attempt.name, identity)?;
+        }
         Location::Main => {
             directory.verify_name(attempt.destination.main(), identity)?;
         }

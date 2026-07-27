@@ -60,6 +60,7 @@ fn inspect_immutable(
 ) -> Result<RecoveryCandidateInspection> {
     let source = ImmutableSource::open(path)?;
     let classified = read_classified(&source.file, cancellation)?;
+    require_immutable_available(&source, &classified)?;
     source.verify()?;
     inspection(source.public_identity(), &classified)
 }
@@ -70,6 +71,7 @@ fn inspect_offline(
 ) -> Result<RecoveryCandidateInspection> {
     let source = OfflineSource::open(path)?;
     let classified = read_classified(&source.file, cancellation)?;
+    require_offline_available(&source, &classified)?;
     source.verify()?;
     inspection(source.public_identity(), &classified)
 }
@@ -84,6 +86,7 @@ fn inspect_live(
     live_sidecar::verify_path(path, identity)?;
     let initial = read_classified(&file, cancellation)?;
     let current = require_live_current(&initial)?;
+    crate::live_cleanup::require_main_available(path, identity, current.database_id)?;
     let sidecar =
         live_sidecar::Sidecar::open(path, current.database_id).map_err(live_coordination_error)?;
     sidecar
@@ -144,6 +147,31 @@ fn require_live_current(classified: &ClassifiedMetas) -> Result<MetaV4> {
     classified
         .current_recovery_meta()
         .ok_or(Error::LiveRecoveryCurrentGenerationUnreadable)
+}
+
+fn require_immutable_available(
+    source: &ImmutableSource,
+    classified: &ClassifiedMetas,
+) -> Result<()> {
+    for candidate in classified
+        .candidates(source.public_identity())
+        .into_iter()
+        .flatten()
+    {
+        source.require_available(candidate.database_id)?;
+    }
+    Ok(())
+}
+
+fn require_offline_available(source: &OfflineSource, classified: &ClassifiedMetas) -> Result<()> {
+    for candidate in classified
+        .candidates(source.public_identity())
+        .into_iter()
+        .flatten()
+    {
+        source.require_available(candidate.database_id)?;
+    }
+    Ok(())
 }
 
 fn live_coordination_error(cause: Error) -> Error {
@@ -219,6 +247,10 @@ impl OfflineSource {
 
     pub(crate) fn public_identity(&self) -> crate::validation::LocalFileIdentity {
         public_identity(self.identity)
+    }
+
+    pub(crate) fn require_available(&self, database_id: [u8; 16]) -> Result<()> {
+        crate::live_cleanup::require_main_available(&self.path, self.identity, database_id)
     }
 }
 

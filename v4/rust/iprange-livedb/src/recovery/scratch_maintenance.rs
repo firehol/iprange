@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::cancellation::CancellationToken;
 use crate::error::Result;
+use crate::publication::AbandonedArtifactRemoval;
 use crate::validation::LocalFileIdentity;
 
 /// Operation which created an authenticated scratch artifact.
@@ -80,8 +81,6 @@ pub fn list_abandoned_scratch<S: AbandonedScratchSink>(
 
 /// Remove one authenticated artifact after the caller certifies quiescence.
 ///
-/// Returns `true` when the exact name was present and removed, or `false` when
-/// its durable absence was already proved.
 pub fn remove_abandoned_scratch(
     directory: impl AsRef<Path>,
     expected_directory_identity: LocalFileIdentity,
@@ -89,7 +88,7 @@ pub fn remove_abandoned_scratch(
     ordinal: u32,
     expected_artifact_identity: LocalFileIdentity,
     cancellation: &CancellationToken,
-) -> Result<bool> {
+) -> Result<AbandonedArtifactRemoval> {
     #[cfg(any(unix, windows))]
     {
         platform::remove(
@@ -118,25 +117,33 @@ pub fn remove_abandoned_scratch(
 }
 
 #[cfg(any(unix, windows))]
+#[path = "scratch_maintenance/support.rs"]
+mod support;
+
+#[cfg(any(unix, windows))]
 mod platform {
     use std::fs::File;
     use std::path::Path;
 
     use crate::cancellation::CancellationToken;
     use crate::error::{Error, Result};
-    use crate::file_io;
-    use crate::publication::namespace::{
-        regular_link_count, Directory, Identity, Name, NamespaceError, ScanError, IDENTITY_KIND,
-    };
+    #[cfg(unix)]
+    use crate::publication::namespace::regular_link_count;
+    use crate::publication::namespace::{Directory, Identity, Name, ScanError};
+    use crate::publication::{AbandonedArtifactRemoval, Housekeeping};
+    #[cfg(windows)]
+    use crate::publication::{ArtifactKind, CreationSecurity, DirectoryRole};
     use crate::validation::LocalFileIdentity;
 
+    use super::support::{
+        authenticate, cleanup_error, deliver, durable_absence, entry, identity, namespace_error,
+        removal, require_directory, require_header, require_owned,
+    };
     use super::{
         AbandonedScratchAuthentication, AbandonedScratchEntry, AbandonedScratchList,
-        AbandonedScratchSink, AbandonedScratchSinkControl, ScratchOwnerKind,
+        AbandonedScratchSink,
     };
-    use crate::recovery::scratch::format::{
-        decode_header, decode_name, scratch_name, DecodedHeader, HEADER_SIZE,
-    };
+    use crate::recovery::scratch::format::{decode_name, scratch_name, DecodedHeader};
     use crate::recovery::scratch::local;
 
     pub(super) fn list<S: AbandonedScratchSink>(
@@ -199,7 +206,7 @@ mod platform {
         ordinal: u32,
         expected_artifact: LocalFileIdentity,
         cancellation: &CancellationToken,
-    ) -> Result<bool> {
+    ) -> Result<AbandonedArtifactRemoval> {
         cancellation.check()?;
         let expected_directory = identity(expected_directory)?;
         let expected_artifact = identity(expected_artifact)?;
@@ -278,14 +285,18 @@ mod platform {
     }
 
     impl Removal {
-        fn run(self, cancellation: &CancellationToken) -> Result<bool> {
-            if !self.present()? {
-                durable_absence(&self.directory, &self.name)?;
-                return Ok(false);
+        fn run(self, cancellation: &CancellationToken) -> Result<AbandonedArtifactRemoval> {
+            let present = self.present()?;
+            #[cfg(windows)]
+            if let Some(result) = self.resume(present) {
+                return Ok(result);
             }
-            let file = self.open_exact()?;
-            self.unlink(file, cancellation)?;
-            Ok(true)
+            if !present {
+                durable_absence(&self.directory, &self.name)?;
+                return Ok(removal(false, None, Housekeeping::None, Box::default()));
+            }
+            let (file, header) = self.open_exact()?;
+            self.retire(file, header, cancellation)
         }
 
         fn present(&self) -> Result<bool> {
@@ -301,7 +312,7 @@ mod platform {
             Ok(true)
         }
 
-        fn open_exact(&self) -> Result<File> {
+        fn open_exact(&self) -> Result<(File, DecodedHeader)> {
             let regular = self
                 .directory
                 .open_regular(&self.name, false)
@@ -310,14 +321,56 @@ mod platform {
                     "abandoned scratch lost its exact name",
                 ))?;
             require_owned(true, 1, regular.identity, self.expected_artifact)?;
-            require_header(&regular.file, self.attempt, self.ordinal)?;
+            let header = require_header(&regular.file, self.attempt, self.ordinal)?;
             self.directory
                 .verify_name(&self.name, self.expected_artifact)
                 .map_err(cleanup_error)?;
-            Ok(regular.file)
+            Ok((regular.file, header))
         }
 
-        fn unlink(&self, file: File, cancellation: &CancellationToken) -> Result<()> {
+        #[cfg(windows)]
+        fn resume(&self, source_present: bool) -> Option<AbandonedArtifactRemoval> {
+            use crate::publication::gc::{self, ResumeAuthority};
+
+            match gc::resume(
+                &self.directory,
+                ResumeAuthority {
+                    attempt_id: self.attempt,
+                    ordinal: self.ordinal,
+                    kind: ArtifactKind::AuthorizedScratch,
+                    directory_role: DirectoryRole::ScratchDirectory,
+                    source_name: &self.name,
+                    identity: self.expected_artifact,
+                    payload: None,
+                },
+            ) {
+                Ok(Some(retired)) => Some(removal(
+                    source_present,
+                    retired.problem,
+                    retired.housekeeping,
+                    retired
+                        .visible
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )),
+                Ok(None) => None,
+                Err(problem) => Some(removal(
+                    source_present,
+                    Some(problem),
+                    Housekeeping::None,
+                    Box::default(),
+                )),
+            }
+        }
+
+        #[cfg(unix)]
+        fn retire(
+            &self,
+            file: File,
+            _header: DecodedHeader,
+            cancellation: &CancellationToken,
+        ) -> Result<AbandonedArtifactRemoval> {
             cancellation.check()?;
             let removed = self
                 .directory
@@ -328,134 +381,75 @@ mod platform {
                     "abandoned scratch lost its exact name",
                 ));
             }
-            require_unlinked(&file)?;
-            durable_absence(&self.directory, &self.name)
-        }
-    }
-
-    fn authenticate(
-        file: &File,
-        parsed: ([u8; 16], u32),
-    ) -> Result<AbandonedScratchAuthentication> {
-        let mut bytes = [0; HEADER_SIZE as usize];
-        let header = match file_io::read_exact_at(file, &mut bytes, 0) {
-            Ok(()) => decode_header(&bytes),
-            Err(Error::Corrupt(_)) => None,
-            Err(cause) => return Err(cause),
-        };
-        let Some(header) = header else {
-            return Ok(AbandonedScratchAuthentication::Unauthenticated);
-        };
-        if !matches_name(header, parsed) {
-            return Ok(AbandonedScratchAuthentication::Unauthenticated);
-        }
-        Ok(AbandonedScratchAuthentication::Authenticated(owner(
-            header.owner_kind,
-        )?))
-    }
-
-    fn require_header(file: &File, attempt: [u8; 16], ordinal: u32) -> Result<()> {
-        match authenticate(file, (attempt, ordinal))? {
-            AbandonedScratchAuthentication::Authenticated(_) => Ok(()),
-            AbandonedScratchAuthentication::Unauthenticated => Err(Error::CleanupConflict(
-                "abandoned scratch header is unauthenticated",
-            )),
-        }
-    }
-
-    fn matches_name(header: DecodedHeader, parsed: ([u8; 16], u32)) -> bool {
-        header.attempt_id == parsed.0 && header.ordinal == parsed.1
-    }
-
-    fn owner(value: u16) -> Result<ScratchOwnerKind> {
-        match value {
-            1 => Ok(ScratchOwnerKind::Validation),
-            2 => Ok(ScratchOwnerKind::Recovery),
-            _ => Err(Error::Corrupt("scratch owner kind is invalid")),
-        }
-    }
-
-    fn entry(
-        directory_identity: LocalFileIdentity,
-        artifact_identity: LocalFileIdentity,
-        parsed: ([u8; 16], u32),
-        authentication: AbandonedScratchAuthentication,
-    ) -> AbandonedScratchEntry {
-        AbandonedScratchEntry {
-            directory_identity,
-            artifact_identity,
-            attempt_id: parsed.0,
-            ordinal: parsed.1,
-            authentication,
-        }
-    }
-
-    fn deliver<S: AbandonedScratchSink>(sink: &mut S, entry: &AbandonedScratchEntry) -> Result<()> {
-        match sink.entry(entry) {
-            Ok(AbandonedScratchSinkControl::Continue) => Ok(()),
-            Ok(AbandonedScratchSinkControl::Stop) => Err(Error::StoppedBySink),
-            Err(cause) => Err(Error::SinkFailed(Box::new(cause))),
-        }
-    }
-
-    fn durable_absence(directory: &Directory, name: &Name) -> Result<()> {
-        directory.sync().map_err(namespace_error)?;
-        directory.verify().map_err(namespace_error)?;
-        directory.require_absent(name).map_err(cleanup_error)
-    }
-
-    fn require_directory(directory: &Directory, expected: Identity) -> Result<()> {
-        if directory.identity() != expected {
-            return Err(Error::DirectoryIdentityMismatch);
-        }
-        Ok(())
-    }
-
-    fn require_unlinked(file: &File) -> Result<()> {
-        if regular_link_count(file).map_err(namespace_error)? != 0 {
-            return Err(Error::CleanupConflict(
-                "abandoned scratch remained linked after removal",
-            ));
-        }
-        Ok(())
-    }
-
-    fn require_owned(regular: bool, links: u64, found: Identity, expected: Identity) -> Result<()> {
-        if !regular || links != 1 || found != expected {
-            return Err(Error::CleanupConflict(
-                "abandoned scratch identity or link count changed",
-            ));
-        }
-        Ok(())
-    }
-
-    fn identity(identity: LocalFileIdentity) -> Result<Identity> {
-        if identity.kind != IDENTITY_KIND {
-            return Err(Error::InvalidArgument(
-                "unsupported abandoned scratch identity kind",
-            ));
-        }
-        Identity::decode(identity.bytes)
-            .ok_or(Error::InvalidArgument("invalid abandoned scratch identity"))
-    }
-
-    fn cleanup_error(error: NamespaceError) -> Error {
-        match error {
-            NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => Error::Io(source),
-            NamespaceError::ForkedHandle => Error::ForkedHandle,
-            _ => Error::CleanupConflict("abandoned scratch ownership changed"),
-        }
-    }
-
-    fn namespace_error(error: NamespaceError) -> Error {
-        match error {
-            NamespaceError::InvalidName => Error::InvalidArgument("invalid abandoned scratch name"),
-            NamespaceError::ForkedHandle => Error::ForkedHandle,
-            NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => Error::Io(source),
-            NamespaceError::Unsupported | NamespaceError::CrossFilesystem => {
-                Error::Unsupported("scratch directory lacks required local operations")
+            match regular_link_count(&file) {
+                Ok(0) => {}
+                Ok(_) => {
+                    return Ok(removal(
+                        true,
+                        Some(crate::publication::problem::Problem::cleanup_conflict(
+                            "abandoned scratch remained linked after removal",
+                        )),
+                        Housekeeping::None,
+                        Box::default(),
+                    ))
+                }
+                Err(error) => {
+                    return Ok(removal(
+                        true,
+                        Some(crate::publication::problem::Problem::namespace(&error)),
+                        Housekeeping::None,
+                        Box::default(),
+                    ))
+                }
             }
-            _ => Error::CleanupConflict("scratch directory entry changed"),
+            if let Err(error) = durable_absence(&self.directory, &self.name) {
+                return Ok(removal(
+                    true,
+                    Some(crate::publication::problem::Problem::sdk(&error)),
+                    Housekeeping::None,
+                    Box::default(),
+                ));
+            }
+            Ok(removal(true, None, Housekeeping::None, Box::default()))
+        }
+
+        #[cfg(windows)]
+        fn retire(
+            &self,
+            file: File,
+            header: DecodedHeader,
+            cancellation: &CancellationToken,
+        ) -> Result<AbandonedArtifactRemoval> {
+            use crate::publication::gc::{self, Authority};
+
+            cancellation.check()?;
+            let retired = gc::retire(
+                &self.directory,
+                Authority {
+                    attempt_id: self.attempt,
+                    ordinal: self.ordinal,
+                    kind: ArtifactKind::AuthorizedScratch,
+                    directory_role: DirectoryRole::ScratchDirectory,
+                    source_name: &self.name,
+                    source_file: &file,
+                    identity: self.expected_artifact,
+                    creation_security: CreationSecurity {
+                        kind: header.creation_security_kind,
+                        commitment: header.creation_security_commitment,
+                    },
+                    payload: None,
+                },
+            );
+            Ok(removal(
+                true,
+                retired.problem,
+                retired.housekeeping,
+                retired
+                    .visible
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ))
         }
     }
 }

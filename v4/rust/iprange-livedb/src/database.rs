@@ -184,6 +184,7 @@ fn select_immutable_generation(
     identity: live_sidecar::Identity,
 ) -> Result<Bootstrap> {
     let bootstrap = bootstrap_file(file, OpenMode::ImmutableReader)?;
+    crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
     live_sidecar::verify_path_any_link(path, identity)?;
     require_sidecar_absent(sidecar)?;
     Ok(bootstrap)

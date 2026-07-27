@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 
 use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::Mode;
 use crate::live_sidecar::{self, Identity, Sidecar, State};
+use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 use crate::validation::LocalFileIdentity;
 
-use super::transition::{remove_exact, LockedMain};
+use super::transition::LockedMain;
 use super::{LiveResetPolicy, LiveTransitionResolutionMode};
 
 /// Location of an interrupted live-coordination artifact.
@@ -25,10 +27,11 @@ pub enum LiveResidueStatus {
     Ready,
     Completed,
     Removed,
+    OutcomeUnknown,
 }
 
 /// Facts recovered directly from the retained main and sidecar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct LiveResidueResult {
     pub status: LiveResidueStatus,
     pub kind: Option<LiveResidueKind>,
@@ -37,12 +40,19 @@ pub struct LiveResidueResult {
     pub reader_capacity: Option<u32>,
     pub main_identity: Option<LocalFileIdentity>,
     pub sidecar_identity: Option<LocalFileIdentity>,
+    pub residue_possible: bool,
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
+    pub cause: Option<Error>,
 }
 
 enum Observed {
     Absent,
     Valid(Sidecar, State),
-    Malformed { identity: Identity },
+    Malformed {
+        file: std::fs::File,
+        identity: Identity,
+    },
 }
 
 struct Residues {
@@ -115,14 +125,15 @@ fn resolve_without_main(
         return Err(Error::DirectoryIdentityMismatch);
     }
     let facts = facts(kind, None, &residue);
-    remove_observed(&residue_path, residue)?;
-    if live_sidecar::parent_identity(path)? != directory_identity {
-        return Err(Error::DirectoryIdentityMismatch);
+    let mut cleanup = retire_observed(&residue_path, &residue);
+    match live_sidecar::parent_identity(path) {
+        Ok(found) if found == directory_identity => {}
+        Ok(_) => cleanup.absorb(live_cleanup::Outcome::failed(
+            Error::DirectoryIdentityMismatch,
+        )),
+        Err(cause) => cleanup.absorb(live_cleanup::Outcome::failed(cause)),
     }
-    Ok(LiveResidueResult {
-        status: LiveResidueStatus::Removed,
-        ..facts
-    })
+    Ok(after_removal(facts, cleanup))
 }
 
 fn resolve_with_main(
@@ -146,11 +157,11 @@ fn resolve_with_main(
         }
         (Observed::Valid(canonical, State::Ready), private) => {
             require_database(&main, &canonical)?;
-            remove_private_residue(&main, &private_path, private, cancellation)?;
-            Ok(completed_result(
-                &main,
-                LiveResidueKind::PrivateReset,
-                &canonical,
+            let cleanup = remove_private_residue(&main, &private_path, &private, cancellation)?;
+            Ok(with_cleanup(
+                completed_result(&main, LiveResidueKind::PrivateReset, &canonical),
+                cleanup,
+                true,
             ))
         }
         (Observed::Valid(sidecar, State::Creating), Observed::Absent) => {
@@ -183,23 +194,22 @@ fn resolve_with_main(
             let _ = canonical;
             remove_valid_private(&main, &private_path, sidecar, state, cancellation)
         }
-        (canonical, Observed::Malformed { identity })
+        (canonical, residue @ Observed::Malformed { .. })
             if mode == LiveTransitionResolutionMode::Rollback =>
         {
             let _ = canonical;
             cancellation.check()?;
             main.verify()?;
-            remove_exact(&private_path, identity)?;
-            main.verify()?;
-            Ok(LiveResidueResult {
-                status: LiveResidueStatus::Removed,
-                kind: Some(LiveResidueKind::PrivateReset),
-                database_id: Some(main.bootstrap.meta.database_id),
-                sidecar_id: None,
-                reader_capacity: None,
-                main_identity: Some(main.public_identity),
-                sidecar_identity: Some(live_sidecar::public_identity(identity)),
-            })
+            let facts = facts(
+                LiveResidueKind::PrivateReset,
+                Some(main.public_identity),
+                &residue,
+            );
+            let mut cleanup = retire_observed(&private_path, &residue);
+            if let Err(cause) = main.verify() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            Ok(after_removal(facts, cleanup))
         }
         (_, Observed::Valid(_, State::Creating)) => {
             Err(Error::Conflict("private reset sidecar is not ready"))
@@ -281,53 +291,66 @@ fn remove_valid_private(
     state: State,
     cancellation: &CancellationToken,
 ) -> Result<LiveResidueResult> {
+    let residue = Observed::Valid(sidecar, state);
+    let Observed::Valid(sidecar, _) = &residue else {
+        unreachable!("constructed valid residue")
+    };
     sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
-    let removed = (|| {
+    let prepared = (|| {
         cancellation.check()?;
         main.verify()?;
-        require_state(&sidecar, state)?;
-        remove_exact(path, sidecar.local_identity())?;
-        main.verify()
+        require_state(sidecar, state)
     })();
+    prepared?;
+    let facts = facts(
+        LiveResidueKind::PrivateReset,
+        Some(main.public_identity),
+        &residue,
+    );
+    let mut cleanup = retire_observed(path, &residue);
+    if let Err(cause) = main.verify() {
+        cleanup.absorb(live_cleanup::Outcome::failed(cause));
+    }
     let unlocked = sidecar.unlock_gate();
-    removed?;
-    unlocked?;
-    Ok(LiveResidueResult {
-        status: LiveResidueStatus::Removed,
-        ..facts(
-            LiveResidueKind::PrivateReset,
-            Some(main.public_identity),
-            &Observed::Valid(sidecar, state),
-        )
-    })
+    if let Err(cause) = unlocked {
+        cleanup.absorb(live_cleanup::Outcome::failed(cause));
+    }
+    Ok(after_removal(facts, cleanup))
 }
 
 fn remove_private_residue(
     main: &LockedMain,
     path: &Path,
-    residue: Observed,
+    residue: &Observed,
     cancellation: &CancellationToken,
-) -> Result<()> {
+) -> Result<live_cleanup::Outcome> {
     match residue {
-        Observed::Absent => Ok(()),
+        Observed::Absent => Ok(live_cleanup::Outcome::clean()),
         Observed::Valid(sidecar, state) => {
             sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
-            let removed = (|| {
+            let prepared = (|| {
                 cancellation.check()?;
                 main.verify()?;
-                require_state(&sidecar, state)?;
-                remove_exact(path, sidecar.local_identity())?;
-                main.verify()
+                require_state(sidecar, *state)
             })();
-            let unlocked = sidecar.unlock_gate();
-            removed?;
-            unlocked
+            prepared?;
+            let mut cleanup = retire_observed(path, residue);
+            if let Err(cause) = main.verify() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            if let Err(cause) = sidecar.unlock_gate() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            Ok(cleanup)
         }
-        Observed::Malformed { identity } => {
+        Observed::Malformed { .. } => {
             cancellation.check()?;
             main.verify()?;
-            remove_exact(path, identity)?;
-            main.verify()
+            let mut cleanup = retire_observed(path, residue);
+            if let Err(cause) = main.verify() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            Ok(cleanup)
         }
     }
 }
@@ -347,19 +370,46 @@ fn observe(path: &Path) -> Result<Observed> {
         Ok((sidecar, state)) => Ok(Observed::Valid(sidecar, state)),
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => {
             let file = live_sidecar::open_rw(path)?;
-            Ok(Observed::Malformed {
-                identity: live_sidecar::identity(&file)?,
-            })
+            let identity = live_sidecar::identity(&file)?;
+            Ok(Observed::Malformed { file, identity })
         }
         Err(cause) => Err(cause),
     }
 }
 
-fn remove_observed(path: &Path, residue: Observed) -> Result<()> {
-    match residue {
-        Observed::Absent => Ok(()),
-        Observed::Valid(sidecar, _) => remove_exact(path, sidecar.local_identity()),
-        Observed::Malformed { identity } => remove_exact(path, identity),
+fn retire_observed(path: &Path, residue: &Observed) -> live_cleanup::Outcome {
+    let (file, identity, attempt_id) = match residue {
+        Observed::Absent => return live_cleanup::Outcome::clean(),
+        Observed::Valid(sidecar, _) => (
+            &sidecar.file,
+            sidecar.local_identity(),
+            Ok(sidecar.header.sidecar_id),
+        ),
+        Observed::Malformed { file, identity } => (
+            file,
+            *identity,
+            live_cleanup::fresh_cleanup_attempt(
+                path,
+                *identity,
+                1,
+                ArtifactKind::OwnedCoordination,
+                DirectoryRole::MainFile,
+            ),
+        ),
+    };
+    match attempt_id {
+        Ok(attempt_id) => live_cleanup::remove(
+            path,
+            file,
+            identity,
+            CleanupAuthority {
+                attempt_id,
+                ordinal: 1,
+                kind: ArtifactKind::OwnedCoordination,
+                directory_role: DirectoryRole::MainFile,
+            },
+        ),
+        Err(cause) => live_cleanup::Outcome::failed(cause),
     }
 }
 
@@ -398,6 +448,10 @@ fn absent() -> LiveResidueResult {
         reader_capacity: None,
         main_identity: None,
         sidecar_identity: None,
+        residue_possible: false,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+        cause: None,
     }
 }
 
@@ -418,6 +472,10 @@ fn ready(main: &LockedMain, kind: LiveResidueKind, sidecar: &Sidecar) -> LiveRes
         reader_capacity: Some(sidecar.header.capacity),
         main_identity: Some(main.public_identity),
         sidecar_identity: Some(live_sidecar::public_identity(sidecar.local_identity())),
+        residue_possible: false,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+        cause: None,
     }
 }
 
@@ -434,6 +492,10 @@ fn completed_result(
         reader_capacity: Some(sidecar.header.capacity),
         main_identity: Some(main.public_identity),
         sidecar_identity: Some(live_sidecar::public_identity(sidecar.local_identity())),
+        residue_possible: false,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+        cause: None,
     }
 }
 
@@ -450,7 +512,7 @@ fn facts(
             Some(sidecar.header.capacity),
             Some(live_sidecar::public_identity(sidecar.local_identity())),
         ),
-        Observed::Malformed { identity } => (
+        Observed::Malformed { identity, .. } => (
             None,
             None,
             None,
@@ -465,5 +527,49 @@ fn facts(
         reader_capacity,
         main_identity,
         sidecar_identity,
+        residue_possible: false,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+        cause: None,
+    }
+}
+
+fn after_removal(result: LiveResidueResult, cleanup: live_cleanup::Outcome) -> LiveResidueResult {
+    with_cleanup(result, cleanup, false)
+}
+
+fn with_cleanup(
+    mut result: LiveResidueResult,
+    cleanup: live_cleanup::Outcome,
+    preserve_status: bool,
+) -> LiveResidueResult {
+    let clean = cleanup.is_clean();
+    if clean {
+        if !preserve_status {
+            result.status = LiveResidueStatus::Removed;
+        }
+    } else {
+        result.residue_possible = true;
+        if !preserve_status {
+            result.status = LiveResidueStatus::OutcomeUnknown;
+        }
+    }
+    result.housekeeping = merge_housekeeping(result.housekeeping, cleanup.housekeeping);
+    let mut visible = result.visible_housekeeping.into_vec();
+    visible.extend(cleanup.visible);
+    result.visible_housekeeping = visible.into_boxed_slice();
+    result.cause = cleanup.cause;
+    result
+}
+
+const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
     }
 }

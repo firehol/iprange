@@ -9,6 +9,7 @@ pub(crate) mod cleanup;
 mod file_inspection;
 #[cfg(windows)]
 pub(crate) mod gc;
+pub(crate) mod gc_barrier;
 #[cfg(any(windows, test))]
 mod gc_codec;
 #[cfg(windows)]
@@ -49,11 +50,12 @@ pub use residue::{
     PublicationResidueMainContent, PublicationResidueRemoval,
 };
 pub use types::{
-    AccessPolicy, ArtifactKind, ArtifactPresence, CleanupArtifact, CleanupArtifacts, CleanupState,
-    CoordinationCleanup, CreationSecurity, DestinationContent, DirectoryRole, Housekeeping,
-    HousekeepingArtifact, HousekeepingState, LaterCanonical, LiveLineage, PreviousDestination,
-    PrivateOutputAttempt, PublicationAttempt, PublicationPolicy, PublicationPreparationFailure,
-    PublicationProblem, PublicationResult, PublicationStatus, UnpublishedTailFacts,
+    AbandonedArtifactRemoval, AccessPolicy, ArtifactKind, ArtifactPresence, CleanupArtifact,
+    CleanupArtifacts, CleanupState, CoordinationCleanup, CreationSecurity, DestinationContent,
+    DirectoryRole, Housekeeping, HousekeepingArtifact, HousekeepingState, LaterCanonical,
+    LiveLineage, PreviousDestination, PrivateOutputAttempt, PublicationAttempt, PublicationPolicy,
+    PublicationPreparationFailure, PublicationProblem, PublicationResult, PublicationStatus,
+    UnpublishedTailFacts,
 };
 
 /// Requested terminal action for one exact interrupted publication.

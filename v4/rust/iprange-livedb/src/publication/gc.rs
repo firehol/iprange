@@ -7,8 +7,8 @@ use crate::file_io;
 use super::gc_codec::{self, Header, Payload};
 use super::gc_name;
 use super::namespace::{
-    regular_identity, sync_file, Directory, Identity, Name, BASENAME_ENCODING_KIND,
-    CREATION_SECURITY_KIND, IDENTITY_KIND,
+    regular_identity, sync_file, Directory, Identity, Name, NamespaceError, ScanError,
+    BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND,
 };
 use super::problem::Problem;
 use super::security::{self, Profile};
@@ -37,6 +37,16 @@ pub(crate) struct Retirement {
     pub(crate) problem: Option<Problem>,
     pub(crate) housekeeping: Housekeeping,
     pub(crate) visible: Option<HousekeepingArtifact>,
+}
+
+pub(crate) struct ResumeAuthority<'a> {
+    pub(crate) attempt_id: [u8; 16],
+    pub(crate) ordinal: u32,
+    pub(crate) kind: ArtifactKind,
+    pub(crate) directory_role: DirectoryRole,
+    pub(crate) source_name: &'a Name,
+    pub(crate) identity: Identity,
+    pub(crate) payload: Option<Payload>,
 }
 
 pub(crate) fn retire(directory: &Directory, authority: Authority<'_>) -> Retirement {
@@ -77,6 +87,133 @@ pub(crate) fn retire(directory: &Directory, authority: Authority<'_>) -> Retirem
         }
     };
     resolve(directory, &authority, envelope)
+}
+
+pub(crate) fn resume(
+    directory: &Directory,
+    expected: ResumeAuthority<'_>,
+) -> Result<Option<Retirement>, Problem> {
+    let envelope_name = gc_name::envelope(expected.attempt_id, expected.ordinal)
+        .map_err(|error| Problem::namespace(&error))?;
+    let Some(envelope) = open(directory, envelope_name, true)? else {
+        return Ok(None);
+    };
+    let header = &envelope.header;
+    if header.attempt_id != expected.attempt_id
+        || header.ordinal != expected.ordinal
+        || header.kind != expected.kind
+        || header.directory_role != expected.directory_role
+        || envelope.source_name != *expected.source_name
+        || header.artifact_identity != expected.identity.encode()
+        || header.payload != expected.payload
+    {
+        return Err(Problem::cleanup_conflict(
+            "GC authority does not match the abandoned artifact",
+        ));
+    }
+    Ok(Some(resolve_existing(directory, envelope)))
+}
+
+pub(crate) fn require_source_available(
+    directory: &Directory,
+    attempt_id: [u8; 16],
+    ordinal: u32,
+    kind: ArtifactKind,
+    directory_role: DirectoryRole,
+    source_name: &Name,
+    identity: Identity,
+) -> Result<(), Problem> {
+    let envelope_name =
+        gc_name::envelope(attempt_id, ordinal).map_err(|error| Problem::namespace(&error))?;
+    let Some(envelope) = open(directory, envelope_name, false)? else {
+        return Ok(());
+    };
+    let header = &envelope.header;
+    if header.attempt_id != attempt_id
+        || header.ordinal != ordinal
+        || header.kind != kind
+        || header.directory_role != directory_role
+        || envelope.source_name != *source_name
+        || header.artifact_identity != identity.encode()
+    {
+        return Err(Problem::cleanup_conflict(
+            "GC authority conflicts with the retained source",
+        ));
+    }
+    Err(Problem::cleanup_in_progress(
+        "retained source is owned by Windows housekeeping",
+    ))
+}
+
+pub(crate) fn fresh_attempt(
+    directory: &Directory,
+    source_name: &Name,
+    identity: Identity,
+    ordinal: u32,
+    kind: ArtifactKind,
+    directory_role: DirectoryRole,
+) -> Result<[u8; 16], Problem> {
+    require_unclaimed_source(directory, source_name, identity, kind, directory_role)?;
+    loop {
+        let attempt = crate::random::nonzero_128().map_err(|error| Problem::sdk(&error))?;
+        let envelope =
+            gc_name::envelope(attempt, ordinal).map_err(|error| Problem::namespace(&error))?;
+        let inert = gc_name::inert(attempt, ordinal).map_err(|error| Problem::namespace(&error))?;
+        match (
+            directory.require_absent(&envelope),
+            directory.require_absent(&inert),
+        ) {
+            (Ok(()), Ok(())) => return Ok(attempt),
+            (Err(NamespaceError::Exists), _) | (_, Err(NamespaceError::Exists)) => continue,
+            (Err(error), _) | (_, Err(error)) => return Err(Problem::namespace(&error)),
+        }
+    }
+}
+
+fn require_unclaimed_source(
+    directory: &Directory,
+    source_name: &Name,
+    identity: Identity,
+    kind: ArtifactKind,
+    directory_role: DirectoryRole,
+) -> Result<(), Problem> {
+    let mut exact_claims = 0u8;
+    let scan = directory.scan(|bytes| {
+        let Some(gc_name::Candidate::Envelope(Some((attempt, ordinal)))) =
+            gc_name::candidate(bytes)
+        else {
+            return Ok(());
+        };
+        let name =
+            gc_name::envelope(attempt, ordinal).map_err(|error| Problem::namespace(&error))?;
+        let Some(envelope) = open(directory, name, false)? else {
+            return Ok(());
+        };
+        if envelope.source_name != *source_name {
+            return Ok(());
+        }
+        if envelope.header.artifact_identity != identity.encode()
+            || envelope.header.kind != kind
+            || envelope.header.directory_role != directory_role
+        {
+            return Err(Problem::cleanup_conflict(
+                "GC authority conflicts with the retained source",
+            ));
+        }
+        exact_claims = exact_claims
+            .checked_add(1)
+            .ok_or_else(|| Problem::cleanup_conflict("duplicate GC source authority"))?;
+        Ok(())
+    });
+    match scan {
+        Ok(()) if exact_claims == 0 => Ok(()),
+        Ok(()) if exact_claims == 1 => Err(Problem::cleanup_in_progress(
+            "retained source is owned by Windows housekeeping",
+        )),
+        Ok(()) => Err(Problem::cleanup_conflict("duplicate GC source authority")),
+        Err(ScanError::Namespace(error)) => Err(Problem::namespace(&error)),
+        Err(ScanError::Visitor(problem)) => Err(problem),
+    }
 }
 
 pub(super) struct Envelope {

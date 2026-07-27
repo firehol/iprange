@@ -15,11 +15,18 @@ use super::output;
 use super::problem::Problem;
 use super::reservation::Header;
 use super::result::AccessPolicy;
+use super::{ArtifactKind, DirectoryRole};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Content {
     Desired,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Location {
+    Main,
+    Private,
 }
 
 #[derive(Debug)]
@@ -32,10 +39,19 @@ pub(super) struct Inspected {
     pub(super) sha512: [u8; 64],
     pub(super) content: Content,
     pub(super) access: AccessPolicy,
+    location: Location,
+    attempt_id: [u8; 16],
 }
 
 impl Inspected {
     pub(super) fn verify(&self, destination: &Destination) -> Result<(), Problem> {
+        require_available(
+            destination,
+            self.location,
+            self.attempt_id,
+            &self.name,
+            self.identity,
+        )?;
         let (meta, byte_length) = read_bootstrap(&self.file)?;
         if (meta, byte_length) != (self.meta, self.byte_length) {
             return Err(conflict("publication output changed after inspection"));
@@ -88,6 +104,7 @@ pub(super) fn main(
         destination.main().clone(),
         regular,
         header,
+        Location::Main,
         Mode::Shared,
         cancellation,
     )
@@ -130,6 +147,7 @@ pub(super) fn private_owned(
         name,
         regular,
         header,
+        Location::Private,
         Mode::Exclusive,
         cancellation,
     )?;
@@ -142,10 +160,18 @@ fn inspect(
     name: Name,
     regular: Regular,
     header: Header,
+    location: Location,
     mode: Mode,
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
     cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    require_available(
+        destination,
+        location,
+        header.attempt_id,
+        &name,
+        regular.identity,
+    )?;
     lock_output(&regular, mode, cancellation)?;
     destination
         .directory()
@@ -174,7 +200,30 @@ fn inspect(
         sha512,
         content,
         access,
+        location,
+        attempt_id: header.attempt_id,
     })
+}
+
+fn require_available(
+    destination: &Destination,
+    location: Location,
+    attempt_id: [u8; 16],
+    name: &Name,
+    identity: Identity,
+) -> Result<(), Problem> {
+    if location == Location::Private {
+        super::gc_barrier::require_source_available(
+            destination.directory(),
+            attempt_id,
+            0,
+            ArtifactKind::PrivateOutput,
+            DirectoryRole::Destination,
+            name,
+            identity,
+        )?;
+    }
+    Ok(())
 }
 
 fn lock_output(

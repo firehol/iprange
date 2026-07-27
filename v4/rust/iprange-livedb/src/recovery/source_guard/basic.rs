@@ -162,6 +162,7 @@ fn bind(
 ) -> Result<MetaV4> {
     verify_path(path, sidecar, identity)?;
     let meta = select(file, public_identity(identity), candidate, cancellation)?;
+    crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     verify_path(path, sidecar, identity)?;
     Ok(meta)
 }
@@ -176,6 +177,7 @@ fn bind_current(
     verify_path(path, sidecar, identity)?;
     cancellation.check()?;
     let meta = database::bootstrap_file(file, crate::bootstrap::OpenMode::ImmutableReader)?.meta;
+    crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     verify_path(path, sidecar, identity)?;
     Ok(meta)
 }

@@ -203,6 +203,7 @@ fn individual_cleanup_failures_report_only_the_exact_owned_artifact() {
             ArtifactKind::PrivateReservation => file_name(&paths.private_reservation),
             ArtifactKind::OwnedCoordination
             | ArtifactKind::AuthorizedScratch
+            | ArtifactKind::OwnedMain
             | ArtifactKind::UnpublishedMainTail => {
                 panic!("direct publication returned an unrelated cleanup kind")
             }

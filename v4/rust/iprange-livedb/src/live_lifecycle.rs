@@ -8,6 +8,7 @@ mod transition;
 
 use crate::error::Error;
 use crate::live_writer::LocalBasename;
+use crate::publication::{Housekeeping, HousekeepingArtifact};
 use crate::validation::LocalFileIdentity;
 
 pub use create_resolution::resolve_create_live;
@@ -66,5 +67,7 @@ pub struct LiveTransitionResult {
     pub new_sidecar_identity: Option<LocalFileIdentity>,
     pub new_sidecar_location: LiveCoordinationLocation,
     pub residue_possible: bool,
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
     pub cause: Option<Error>,
 }

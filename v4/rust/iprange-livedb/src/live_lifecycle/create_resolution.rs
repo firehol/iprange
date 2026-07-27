@@ -6,11 +6,13 @@ use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
 use crate::database;
 use crate::error::{Error, Result};
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, State, MAIN_LIFETIME_LOCK};
 use crate::live_writer::{
     empty_meta, write_empty_main, CreateResult, CreationState, LocalBasename,
 };
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
 use super::LiveTransitionResolutionMode;
@@ -22,14 +24,21 @@ enum Main {
         identity: Identity,
     },
     Malformed {
+        file: std::fs::File,
         identity: Identity,
     },
 }
 
 enum Coordination {
     Absent,
-    Exact { sidecar: Sidecar, state: State },
-    Malformed { identity: Identity },
+    Exact {
+        sidecar: Sidecar,
+        state: State,
+    },
+    Malformed {
+        file: std::fs::File,
+        identity: Identity,
+    },
 }
 
 /// Resolve only the exact creation attempt identified by `supplied`.
@@ -124,7 +133,15 @@ fn complete(
                 supplied.reader_capacity,
             ) {
                 Ok(sidecar) => sidecar,
-                Err(cause) => return Ok(unknown(supplied, main_identity(&main), None, cause)),
+                Err(failure) => {
+                    let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+                    return Ok(unknown_after_private_failure(
+                        supplied,
+                        main_identity(&main),
+                        sidecar_identity,
+                        failure,
+                    ));
+                }
             };
             let identity = live_sidecar::public_identity(sidecar.local_identity());
             if let Err(cause) = sidecar
@@ -147,18 +164,30 @@ fn complete(
     let (main_file, main_identity) = match main {
         Main::Exact { file, identity } => (file, live_sidecar::public_identity(identity)),
         Main::Absent => {
-            let file = match live_sidecar::create_private(path) {
-                Ok(file) => file,
-                Err(cause) => return Ok(unknown(supplied, None, Some(sidecar_identity), cause)),
+            let created = match live_sidecar::create_private(
+                path,
+                CleanupAuthority {
+                    attempt_id: supplied.database_id,
+                    ordinal: 0,
+                    kind: ArtifactKind::OwnedMain,
+                    directory_role: DirectoryRole::MainFile,
+                },
+            ) {
+                Ok(created) => created,
+                Err(failure) => {
+                    let main_identity = failure.identity.map(live_sidecar::public_identity);
+                    return Ok(unknown_after_private_failure(
+                        supplied,
+                        main_identity,
+                        Some(sidecar_identity),
+                        failure,
+                    ));
+                }
             };
-            let identity = match live_sidecar::identity(&file) {
-                Ok(identity) => identity,
-                Err(cause) => return Ok(unknown(supplied, None, Some(sidecar_identity), cause)),
-            };
-            let public = live_sidecar::public_identity(identity);
+            let public = live_sidecar::public_identity(created.identity);
             let meta = expected_meta(supplied);
             if let Err(cause) =
-                write_empty_main(&file, meta).and_then(|()| live_sidecar::sync_parent(path))
+                write_empty_main(&created.file, meta).and_then(|()| live_sidecar::sync_parent(path))
             {
                 return Ok(unknown(
                     supplied,
@@ -167,7 +196,7 @@ fn complete(
                     cause,
                 ));
             }
-            (file, public)
+            (created.file, public)
         }
         Main::Malformed { .. } => unreachable!("checked above"),
     };
@@ -204,19 +233,48 @@ fn rollback(
 ) -> Result<CreateResult> {
     let main_identity = main_identity(&main);
     let sidecar_identity = coordination_identity(&coordination);
-
-    if let Some(identity) = raw_main_identity(&main) {
-        if let Err(cause) = remove_exact(path, identity) {
-            return Ok(unknown(supplied, main_identity, sidecar_identity, cause));
+    let mut cleanup = live_cleanup::Outcome::clean();
+    if let Some((file, identity)) = raw_main(&main) {
+        cleanup.absorb(live_cleanup::remove(
+            path,
+            file,
+            identity,
+            CleanupAuthority {
+                attempt_id: supplied.database_id,
+                ordinal: 0,
+                kind: ArtifactKind::OwnedMain,
+                directory_role: DirectoryRole::MainFile,
+            },
+        ));
+        if !cleanup.is_clean() {
+            return Ok(cleanup_result(
+                supplied,
+                main_identity,
+                sidecar_identity,
+                cleanup,
+            ));
         }
     }
-    if let Some(identity) = raw_coordination_identity(&coordination) {
+    if let Some((file, identity)) = raw_coordination(&coordination) {
         let sidecar_path = crate::path::canonical_sidecar(path)?;
-        if let Err(cause) = remove_exact(&sidecar_path, identity) {
-            return Ok(unknown(supplied, main_identity, sidecar_identity, cause));
-        }
+        cleanup.absorb(live_cleanup::remove(
+            &sidecar_path,
+            file,
+            identity,
+            CleanupAuthority {
+                attempt_id: supplied.sidecar_id,
+                ordinal: 1,
+                kind: ArtifactKind::OwnedCoordination,
+                directory_role: DirectoryRole::MainFile,
+            },
+        ));
     }
-    Ok(not_created(supplied, main_identity, sidecar_identity))
+    Ok(cleanup_result(
+        supplied,
+        main_identity,
+        sidecar_identity,
+        cleanup,
+    ))
 }
 
 fn observe_main(
@@ -229,6 +287,7 @@ fn observe_main(
     }
     let file = live_sidecar::open_rw(path)?;
     let identity = live_sidecar::identity(&file)?;
+    live_cleanup::require_main_available(path, identity, supplied.database_id)?;
     let public = live_sidecar::public_identity(identity);
     if supplied
         .main_identity
@@ -249,7 +308,7 @@ fn observe_main(
             "creation path contains another valid database",
         )),
         Err(Error::Format(_) | Error::Corrupt(_)) if supplied.main_identity == Some(public) => {
-            Ok(Main::Malformed { identity })
+            Ok(Main::Malformed { file, identity })
         }
         Err(Error::Format(_) | Error::Corrupt(_)) => Err(Error::Conflict(
             "malformed main cannot be attributed to this creation",
@@ -263,6 +322,16 @@ fn observe_coordination(path: &Path, supplied: &CreateResult) -> Result<Coordina
         return Ok(Coordination::Absent);
     };
     let public = live_sidecar::public_identity(identity);
+    live_cleanup::require_available(
+        path,
+        identity,
+        CleanupAuthority {
+            attempt_id: supplied.sidecar_id,
+            ordinal: 1,
+            kind: ArtifactKind::OwnedCoordination,
+            directory_role: DirectoryRole::MainFile,
+        },
+    )?;
     if supplied
         .sidecar_identity
         .is_some_and(|expected| expected != public)
@@ -282,7 +351,15 @@ fn observe_coordination(path: &Path, supplied: &CreateResult) -> Result<Coordina
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_))
             if supplied.sidecar_identity == Some(public) =>
         {
-            Ok(Coordination::Malformed { identity })
+            let file = live_sidecar::open_rw(path)?;
+            let reopened = live_sidecar::identity(&file)?;
+            if reopened != identity {
+                return Err(Error::Conflict(
+                    "creation sidecar changed while it was reopened",
+                ));
+            }
+            live_sidecar::verify_path(path, identity)?;
+            Ok(Coordination::Malformed { file, identity })
         }
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => Err(Error::Conflict(
             "malformed sidecar cannot be attributed to this creation",
@@ -338,14 +415,19 @@ fn expected_meta(supplied: &CreateResult) -> crate::contract::MetaV4 {
     )
 }
 
-fn remove_exact(path: &Path, identity: Identity) -> Result<()> {
-    live_sidecar::remove_exact(path, identity)
-}
-
 fn raw_main_identity(main: &Main) -> Option<Identity> {
     match main {
         Main::Absent => None,
-        Main::Exact { identity, .. } | Main::Malformed { identity } => Some(*identity),
+        Main::Exact { identity, .. } | Main::Malformed { identity, .. } => Some(*identity),
+    }
+}
+
+fn raw_main(main: &Main) -> Option<(&std::fs::File, Identity)> {
+    match main {
+        Main::Absent => None,
+        Main::Exact { file, identity } | Main::Malformed { file, identity } => {
+            Some((file, *identity))
+        }
     }
 }
 
@@ -357,7 +439,15 @@ fn raw_coordination_identity(coordination: &Coordination) -> Option<Identity> {
     match coordination {
         Coordination::Absent => None,
         Coordination::Exact { sidecar, .. } => Some(sidecar.local_identity()),
-        Coordination::Malformed { identity } => Some(*identity),
+        Coordination::Malformed { identity, .. } => Some(*identity),
+    }
+}
+
+fn raw_coordination(coordination: &Coordination) -> Option<(&std::fs::File, Identity)> {
+    match coordination {
+        Coordination::Absent => None,
+        Coordination::Exact { sidecar, .. } => Some((&sidecar.file, sidecar.local_identity())),
+        Coordination::Malformed { file, identity } => Some((file, *identity)),
     }
 }
 
@@ -411,12 +501,90 @@ fn unknown(
     )
 }
 
+fn unknown_after_private_failure(
+    supplied: &CreateResult,
+    main_identity: Option<LocalFileIdentity>,
+    sidecar_identity: Option<LocalFileIdentity>,
+    failure: live_sidecar::PrivateCreationFailure,
+) -> CreateResult {
+    let housekeeping = merge_housekeeping(supplied.housekeeping, failure.cleanup.housekeeping);
+    let mut visible = supplied.visible_housekeeping.clone().into_vec();
+    visible.extend(failure.cleanup.visible);
+    let cause = match failure.cleanup.cause {
+        None => failure.cause,
+        Some(cleanup) => Error::CleanupIncomplete {
+            cause: Box::new(failure.cause),
+            cleanup: Box::new(cleanup),
+        },
+    };
+    result_with_housekeeping(
+        supplied,
+        CreationState::OutcomeUnknown,
+        main_identity,
+        sidecar_identity,
+        true,
+        housekeeping,
+        visible.into_boxed_slice(),
+        Some(cause),
+    )
+}
+
+fn cleanup_result(
+    supplied: &CreateResult,
+    main_identity: Option<LocalFileIdentity>,
+    sidecar_identity: Option<LocalFileIdentity>,
+    cleanup: live_cleanup::Outcome,
+) -> CreateResult {
+    let state = if cleanup.is_clean() {
+        CreationState::NotCreated
+    } else {
+        CreationState::OutcomeUnknown
+    };
+    let residue_possible = !cleanup.is_clean();
+    let housekeeping = merge_housekeeping(supplied.housekeeping, cleanup.housekeeping);
+    let mut visible = supplied.visible_housekeeping.clone().into_vec();
+    visible.extend(cleanup.visible);
+    result_with_housekeeping(
+        supplied,
+        state,
+        main_identity,
+        sidecar_identity,
+        residue_possible,
+        housekeeping,
+        visible.into_boxed_slice(),
+        cleanup.cause,
+    )
+}
+
 fn result(
     supplied: &CreateResult,
     state: CreationState,
     main_identity: Option<LocalFileIdentity>,
     sidecar_identity: Option<LocalFileIdentity>,
     residue_possible: bool,
+    cause: Option<Error>,
+) -> CreateResult {
+    result_with_housekeeping(
+        supplied,
+        state,
+        main_identity,
+        sidecar_identity,
+        residue_possible,
+        supplied.housekeeping,
+        supplied.visible_housekeeping.clone(),
+        cause,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn result_with_housekeeping(
+    supplied: &CreateResult,
+    state: CreationState,
+    main_identity: Option<LocalFileIdentity>,
+    sidecar_identity: Option<LocalFileIdentity>,
+    residue_possible: bool,
+    housekeeping: crate::publication::Housekeeping,
+    visible_housekeeping: Box<[crate::publication::HousekeepingArtifact]>,
     cause: Option<Error>,
 ) -> CreateResult {
     CreateResult {
@@ -433,7 +601,26 @@ fn result(
         reader_capacity: supplied.reader_capacity,
         state,
         residue_possible,
+        housekeeping,
+        visible_housekeeping,
         cause,
+    }
+}
+
+const fn merge_housekeeping(
+    left: crate::publication::Housekeeping,
+    right: crate::publication::Housekeeping,
+) -> crate::publication::Housekeeping {
+    use crate::publication::Housekeeping;
+
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
     }
 }
 

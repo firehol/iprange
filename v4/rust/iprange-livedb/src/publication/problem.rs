@@ -18,6 +18,10 @@ impl Problem {
         Self::new(ErrorCode::CleanupConflict, None, detail)
     }
 
+    pub(crate) const fn cleanup_in_progress(detail: &'static str) -> Self {
+        Self::new(ErrorCode::CleanupInProgress, None, detail)
+    }
+
     pub(crate) fn namespace(error: &NamespaceError) -> Self {
         match error {
             NamespaceError::InvalidName => {
@@ -76,6 +80,7 @@ impl Problem {
             output::Error::Bootstrap(_) => {
                 Self::plain(ErrorCode::FormatInvalid, "output metadata is malformed")
             }
+            output::Error::Gc(problem) => *problem,
             output::Error::FinishedMetaChanged => {
                 Self::plain(ErrorCode::Conflict, "finished output metadata changed")
             }
@@ -90,6 +95,7 @@ impl Problem {
             reservation_file::Error::Namespace(cause) => Self::namespace(cause),
             reservation_file::Error::Sdk(cause) => Self::sdk(cause),
             reservation_file::Error::Output(cause) => Self::output(cause),
+            reservation_file::Error::Gc(problem) => *problem,
             reservation_file::Error::Codec(_) => {
                 Self::plain(ErrorCode::FormatInvalid, "reservation record is malformed")
             }
@@ -155,5 +161,20 @@ impl Problem {
             _ => None,
         };
         Self::new(error.code(), os_code, "publication SDK operation failed")
+    }
+
+    pub(crate) fn into_sdk(self) -> SdkError {
+        match (self.code, self.os_code) {
+            (ErrorCode::Io, Some(code)) => SdkError::Io(std::io::Error::from_raw_os_error(code)),
+            (ErrorCode::NameInvalid, _) => SdkError::NameInvalid,
+            (ErrorCode::NameExists, _) => SdkError::NameExists,
+            (ErrorCode::NameNotFound, _) => SdkError::NameNotFound,
+            (ErrorCode::DurabilityUnsupported, _) => SdkError::DurabilityUnsupported(self.detail),
+            (ErrorCode::CleanupInProgress, _) => SdkError::CleanupInProgress(self.detail),
+            (ErrorCode::CleanupConflict, _) => SdkError::CleanupConflict(self.detail),
+            (ErrorCode::DirectoryIdentityMismatch, _) => SdkError::DirectoryIdentityMismatch,
+            (ErrorCode::ForkedHandle, _) => SdkError::ForkedHandle,
+            _ => SdkError::Conflict(self.detail),
+        }
     }
 }

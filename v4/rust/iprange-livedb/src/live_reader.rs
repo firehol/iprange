@@ -70,6 +70,11 @@ impl LiveReader {
         live_sidecar::verify_path(&main_path, main_identity)?;
 
         let initial = database::bootstrap_file(&file, OpenMode::LiveReader)?;
+        crate::live_cleanup::require_main_available(
+            &main_path,
+            main_identity,
+            initial.meta.database_id,
+        )?;
         let sidecar = Sidecar::open(&main_path, initial.meta.database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
         let registration = register(&file, &main_path, main_identity, &sidecar, cancellation);

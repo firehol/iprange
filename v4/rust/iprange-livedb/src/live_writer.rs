@@ -452,6 +452,7 @@ fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain
     live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(&path, identity)?;
     let initial = database::bootstrap_file(&file, OpenMode::Writer)?;
+    crate::live_cleanup::require_main_available(&path, identity, initial.meta.database_id)?;
     Ok(OpenedMain {
         path,
         file,

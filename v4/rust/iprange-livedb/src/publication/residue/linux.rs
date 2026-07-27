@@ -1,20 +1,18 @@
-//! Linux retained-descriptor implementation of publication residue handling.
+//! Retained-descriptor implementation of publication residue handling.
 
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::error::{Error, ErrorCode};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
+use crate::live_sidecar;
 use crate::validation::LocalFileIdentity;
 
+use crate::publication::namespace::IDENTITY_KIND;
 use crate::publication::namespace::{Destination, Identity, Regular};
-use crate::publication::output;
 use crate::publication::problem::Problem;
 use crate::publication::reservation::{self, Header, State};
 use crate::publication::reservation_inspection;
@@ -22,14 +20,13 @@ use crate::publication::result::{FinalState, Seed};
 use crate::publication::types::{
     AccessPolicy, CleanupArtifacts, CoordinationCleanup, DestinationContent, PublicationStatus,
 };
-use crate::publication::{PublicationDigest, PublicationTuple};
+use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 
 use super::{
     PublicationResidueCoordination, PublicationResidueHandle, PublicationResidueInspection,
-    PublicationResidueMain, PublicationResidueMainContent, PublicationResidueRemoval,
+    PublicationResidueRemoval,
 };
 
-const POSIX_IDENTITY: u16 = 1;
 const OPERATION_LOCK: u64 = 0;
 const RESERVATION_SIZE: usize = 2 * PAGE_SIZE;
 
@@ -108,38 +105,33 @@ pub(super) fn remove(
     .map_err(|error| Problem::sdk(&error))?;
     verify_coordination(&handle)?;
     reject_selectable(&handle.coordination)?;
-    let main = inspect_main(&handle.destination, cancellation)?;
+    let main = super::main::inspect(&handle.destination, cancellation)?;
     cancellation.check().map_err(|error| Problem::sdk(&error))?;
-    if !handle
-        .destination
-        .directory()
-        .unlink_exact(
-            handle.destination.coordination(),
-            handle.coordination_identity,
-        )
-        .map_err(|_| cleanup_conflict("canonical coordination ownership changed"))?
-    {
-        return Err(cleanup_conflict(
-            "canonical coordination disappeared before removal",
-        ));
-    }
-    if handle
-        .coordination
-        .metadata()
-        .map_err(Error::from)
-        .map_err(|error| Problem::sdk(&error))?
-        .nlink()
-        != 0
-    {
+    let retired = super::retirement::retire(
+        &handle.destination,
+        &handle.coordination,
+        handle.coordination_identity,
+    )?;
+    if let Some(cause) = retired.cause {
         return Ok(incomplete(
             &handle,
             main.as_ref(),
-            cleanup_conflict("removed coordination inode remains linked"),
+            cause,
+            retired.housekeeping,
+            retired.visible,
         ));
     }
     let later = match finish_removal(&handle, main.as_ref()) {
         Ok(later) => later,
-        Err(problem) => return Ok(incomplete(&handle, main.as_ref(), problem)),
+        Err(problem) => {
+            return Ok(incomplete(
+                &handle,
+                main.as_ref(),
+                problem,
+                retired.housekeeping,
+                retired.visible,
+            ))
+        }
     };
     Ok(PublicationResidueRemoval {
         directory_identity: local(handle.destination.directory().identity()),
@@ -149,6 +141,8 @@ pub(super) fn remove(
         coordination_access_policy: later.access,
         cleanup: CleanupArtifacts::new(),
         coordination_cleanup: CoordinationCleanup::None,
+        housekeeping: retired.housekeeping,
+        visible_housekeeping: retired.visible.into_boxed_slice(),
         cause: None,
     })
 }
@@ -164,11 +158,25 @@ fn classify_coordination(
     Problem,
 > {
     if let Some(header) = selected_bound_header(destination, regular)? {
+        require_coordination_available(
+            destination,
+            header.attempt_id,
+            DirectoryRole::Destination,
+            regular.identity,
+        )?;
         let access = reservation_access(regular, header);
         return Ok((
             PublicationResidueCoordination::PublicationReservation,
             Some(reconstruct(destination, header, access)?),
         ));
+    }
+    if let Ok((_, header)) = live_sidecar::read_header(&regular.file) {
+        require_coordination_available(
+            destination,
+            header.sidecar_id,
+            DirectoryRole::MainFile,
+            regular.identity,
+        )?;
     }
     if live_sidecar::has_selectable_header(&regular.file).map_err(|error| Problem::sdk(&error))? {
         return Ok((PublicationResidueCoordination::LiveSidecar, None));
@@ -270,83 +278,10 @@ fn reservation_bytes(file: &File) -> Result<Option<[u8; RESERVATION_SIZE]>, Prob
     Ok(Some(bytes))
 }
 
-fn inspect_main(
-    destination: &Destination,
-    cancellation: &CancellationToken,
-) -> Result<Option<MainGuard>, Problem> {
-    let Some(regular) = destination
-        .directory()
-        .open_regular(destination.main(), true)
-        .map_err(|error| Problem::namespace(&error))?
-    else {
-        return Ok(None);
-    };
-    live_lock::lock_cancellable(
-        &regular.file,
-        MAIN_LIFETIME_LOCK,
-        Mode::Exclusive,
-        cancellation,
-    )
-    .map_err(|error| Problem::sdk(&error))?;
-    destination
-        .directory()
-        .verify_name(destination.main(), regular.identity)
-        .map_err(|error| Problem::namespace(&error))?;
-    let byte_length = regular
-        .file
-        .metadata()
-        .map_err(Error::from)
-        .map_err(|error| Problem::sdk(&error))?
-        .len();
-    let sha512 = output::digest_cancellable(&regular.file, byte_length, cancellation)
-        .map_err(|error| Problem::output(&error))?;
-    let tuple = read_tuple(&regular.file, byte_length)?;
-    let access_policy = match crate::publication::security::creator_only_commitment(&regular.file) {
-        Ok(_) => AccessPolicy::CreatorOnly,
-        Err(_) => AccessPolicy::ChangedOrUnproven,
-    };
-    Ok(Some(MainGuard {
-        file: regular.file,
-        identity: regular.identity,
-        byte_length,
-        evidence: PublicationResidueMain {
-            identity: local(regular.identity),
-            content: if tuple.is_some() {
-                PublicationResidueMainContent::V4
-            } else {
-                PublicationResidueMainContent::Other
-            },
-            tuple,
-            digest: PublicationDigest {
-                byte_length,
-                sha512,
-            },
-            access_policy,
-        },
-    }))
-}
-
-fn read_tuple(file: &File, byte_length: u64) -> Result<Option<PublicationTuple>, Problem> {
-    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
-        return Ok(None);
-    }
-    let mut bytes = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut bytes, 0).map_err(|error| Problem::sdk(&error))?;
-    let left = (&bytes[..PAGE_SIZE]).try_into().expect("fixed meta page");
-    let right = (&bytes[PAGE_SIZE..]).try_into().expect("fixed meta page");
-    let Ok(opened) =
-        bootstrap::open_meta_pages(left, right, byte_length, OpenMode::ImmutableReader)
-    else {
-        return Ok(None);
-    };
-    Ok(Some(PublicationTuple {
-        database_id: opened.meta.database_id,
-        transaction_id: opened.meta.txn_id,
-        commit_nonce: opened.meta.commit_nonce,
-    }))
-}
-
-fn finish_removal(handle: &Handle, main: Option<&MainGuard>) -> Result<FinalCoordination, Problem> {
+fn finish_removal(
+    handle: &Handle,
+    main: Option<&super::main::Guard>,
+) -> Result<FinalCoordination, Problem> {
     handle
         .destination
         .directory()
@@ -406,8 +341,10 @@ fn final_coordination(handle: &Handle) -> Result<FinalCoordination, Problem> {
 
 fn incomplete(
     handle: &Handle,
-    main: Option<&MainGuard>,
+    main: Option<&super::main::Guard>,
     cause: Problem,
+    housekeeping: Housekeeping,
+    visible: Vec<HousekeepingArtifact>,
 ) -> PublicationResidueRemoval {
     PublicationResidueRemoval {
         directory_identity: local(handle.destination.directory().identity()),
@@ -417,16 +354,10 @@ fn incomplete(
         coordination_access_policy: AccessPolicy::Unclassified,
         cleanup: CleanupArtifacts::new(),
         coordination_cleanup: CoordinationCleanup::CleanupGuard,
+        housekeeping,
+        visible_housekeeping: visible.into_boxed_slice(),
         cause: Some(cause),
     }
-}
-
-#[derive(Debug)]
-struct MainGuard {
-    file: File,
-    identity: Identity,
-    byte_length: u64,
-    evidence: PublicationResidueMain,
 }
 
 #[derive(Clone, Copy)]
@@ -435,33 +366,28 @@ struct FinalCoordination {
     access: AccessPolicy,
 }
 
-impl MainGuard {
-    fn verify(&self, destination: &Destination) -> Result<(), Problem> {
-        destination
-            .directory()
-            .verify_name(destination.main(), self.identity)
-            .map_err(|error| Problem::namespace(&error))?;
-        if self
-            .file
-            .metadata()
-            .map_err(Error::from)
-            .map_err(|error| Problem::sdk(&error))?
-            .len()
-            != self.byte_length
-        {
-            return Err(cleanup_conflict(
-                "destination main length changed during removal",
-            ));
-        }
-        Ok(())
+fn local(identity: Identity) -> LocalFileIdentity {
+    LocalFileIdentity {
+        kind: IDENTITY_KIND,
+        bytes: identity.encode(),
     }
 }
 
-fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: POSIX_IDENTITY,
-        bytes: identity.encode(),
-    }
+fn require_coordination_available(
+    destination: &Destination,
+    attempt_id: [u8; 16],
+    role: DirectoryRole,
+    identity: Identity,
+) -> Result<(), Problem> {
+    crate::publication::gc_barrier::require_source_available(
+        destination.directory(),
+        attempt_id,
+        1,
+        ArtifactKind::OwnedCoordination,
+        role,
+        destination.coordination(),
+        identity,
+    )
 }
 
 const fn selection_conflict(detail: &'static str) -> Problem {

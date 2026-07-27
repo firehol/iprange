@@ -12,6 +12,8 @@ pub(crate) struct DecodedHeader {
     pub(crate) owner_kind: u16,
     pub(crate) attempt_id: [u8; 16],
     pub(crate) ordinal: u32,
+    pub(crate) creation_security_kind: u16,
+    pub(crate) creation_security_commitment: [u8; 32],
 }
 
 pub(super) fn header(
@@ -96,11 +98,14 @@ pub(crate) fn decode_header(bytes: &[u8; 128]) -> Option<DecodedHeader> {
     let valid = fixed_header_valid(bytes, owner_kind)
         && reserved_header_valid(bytes)
         && attempt_id != [0; 16]
+        && bytes[80..112].iter().any(|&byte| byte != 0)
         && header_crc_valid(bytes);
     valid.then_some(DecodedHeader {
         owner_kind,
         attempt_id,
         ordinal: u32_le(bytes, 72),
+        creation_security_kind: u16_le(bytes, 76),
+        creation_security_commitment: bytes[80..112].try_into().expect("fixed commitment"),
     })
 }
 

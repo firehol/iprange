@@ -235,6 +235,7 @@ fn valid(header: &Header) -> bool {
                 | ArtifactKind::PrivateReservation
                 | ArtifactKind::OwnedCoordination
                 | ArtifactKind::AuthorizedScratch
+                | ArtifactKind::OwnedMain
         )
         && matches!(header.directory_identity_kind, 1 | 2)
         && matches!(header.artifact_identity_kind, 1 | 2)
@@ -299,6 +300,7 @@ const fn kind_code(kind: ArtifactKind) -> u16 {
         ArtifactKind::PrivateReservation => 2,
         ArtifactKind::OwnedCoordination => 3,
         ArtifactKind::AuthorizedScratch => 4,
+        ArtifactKind::OwnedMain => 5,
         ArtifactKind::UnpublishedMainTail => 0,
     }
 }
@@ -309,6 +311,7 @@ const fn decode_kind(value: u16) -> Option<ArtifactKind> {
         2 => Some(ArtifactKind::PrivateReservation),
         3 => Some(ArtifactKind::OwnedCoordination),
         4 => Some(ArtifactKind::AuthorizedScratch),
+        5 => Some(ArtifactKind::OwnedMain),
         _ => None,
     }
 }

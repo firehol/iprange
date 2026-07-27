@@ -6,7 +6,7 @@ use crate::cancellation::CancellationToken;
 use crate::error::Result;
 use crate::validation::LocalFileIdentity;
 
-use super::{Housekeeping, HousekeepingArtifact, PublicationProblem};
+use super::{AbandonedArtifactRemoval, Housekeeping, HousekeepingArtifact, PublicationProblem};
 
 /// Logical generation recorded in one complete v4 output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -274,11 +274,11 @@ pub fn list_abandoned_publication_temps<S: AbandonedPublicationTempSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> Result<AbandonedPublicationTempList> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         output::list(directory.as_ref(), cancellation, sink)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (directory, cancellation, sink);
         Err(crate::error::Error::Unsupported(
@@ -289,9 +289,8 @@ pub fn list_abandoned_publication_temps<S: AbandonedPublicationTempSink>(
 
 /// Remove one exact private output after caller-certified quiescence.
 ///
-/// Returns `true` when it was removed and `false` when durable absence was
-/// already proved. Readable content requires exact tuple and digest evidence;
-/// partial content requires both optional arguments to be absent.
+/// Readable content requires exact tuple and digest evidence; partial content
+/// requires both optional arguments to be absent.
 pub fn remove_abandoned_publication_temp(
     directory: impl AsRef<Path>,
     expected_directory_identity: LocalFileIdentity,
@@ -300,8 +299,8 @@ pub fn remove_abandoned_publication_temp(
     expected_tuple: Option<PublicationTuple>,
     expected_digest: Option<PublicationDigest>,
     cancellation: &CancellationToken,
-) -> Result<bool> {
-    #[cfg(unix)]
+) -> Result<AbandonedArtifactRemoval> {
+    #[cfg(any(unix, windows))]
     {
         output::remove(
             directory.as_ref(),
@@ -313,7 +312,7 @@ pub fn remove_abandoned_publication_temp(
             cancellation,
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             directory,
@@ -336,11 +335,11 @@ pub fn list_abandoned_reservation_artifacts<S: AbandonedReservationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> Result<AbandonedReservationList> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         reservation::list(directory.as_ref(), cancellation, sink)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (directory, cancellation, sink);
         Err(crate::error::Error::Unsupported(
@@ -356,8 +355,8 @@ pub fn remove_abandoned_reservation_artifact(
     publication_attempt_id: [u8; 16],
     expected_artifact_identity: LocalFileIdentity,
     cancellation: &CancellationToken,
-) -> Result<bool> {
-    #[cfg(unix)]
+) -> Result<AbandonedArtifactRemoval> {
+    #[cfg(any(unix, windows))]
     {
         reservation::remove(
             directory.as_ref(),
@@ -367,7 +366,7 @@ pub fn remove_abandoned_reservation_artifact(
             cancellation,
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             directory,
@@ -382,10 +381,10 @@ pub fn remove_abandoned_reservation_artifact(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[path = "maintenance/output.rs"]
 mod output;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[path = "maintenance/reservation.rs"]
 mod reservation;
 

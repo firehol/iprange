@@ -1,4 +1,4 @@
-//! Linux private reservation discovery and exact offline removal.
+//! Portable private reservation discovery and exact offline removal.
 
 use std::fs::File;
 use std::path::Path;
@@ -8,23 +8,31 @@ use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
+#[cfg(unix)]
+use crate::publication::namespace::regular_link_count;
+#[cfg(windows)]
+use crate::publication::namespace::CREATION_SECURITY_KIND;
 use crate::publication::namespace::{
-    regular_link_count, Directory, Identity, Name, NamespaceError, ScanError,
+    Directory, Identity, Name, NamespaceError, ScanError, IDENTITY_KIND,
 };
 use crate::publication::reservation::{self as codec, Header, Policy, State};
+use crate::publication::CleanupState;
+#[cfg(windows)]
+use crate::publication::CreationSecurity;
+#[cfg(windows)]
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
 use super::{
-    AbandonedReservationEntry, AbandonedReservationEvidence, AbandonedReservationList,
-    AbandonedReservationPhase, AbandonedReservationPolicy, AbandonedReservationSink,
-    AbandonedReservationSinkControl, PublicationDigest, PublicationOutputEvidence,
-    PublicationTuple,
+    AbandonedArtifactRemoval, AbandonedReservationEntry, AbandonedReservationEvidence,
+    AbandonedReservationList, AbandonedReservationPhase, AbandonedReservationPolicy,
+    AbandonedReservationSink, AbandonedReservationSinkControl, Housekeeping, PublicationDigest,
+    PublicationOutputEvidence, PublicationProblem, PublicationTuple,
 };
 
 const PREFIX: &[u8] = b".iprange-reservation-";
 const SUFFIX: &[u8] = b".tmp";
 const ENCODED_ID_LEN: usize = 32;
-const POSIX_IDENTITY: u16 = 1;
 const OPERATION_LOCK: u64 = 0;
 const FILE_SIZE: usize = 2 * PAGE_SIZE;
 
@@ -67,16 +75,27 @@ pub(super) fn remove(
     attempt: [u8; 16],
     expected_artifact: LocalFileIdentity,
     cancellation: &CancellationToken,
-) -> Result<bool> {
+) -> Result<AbandonedArtifactRemoval> {
     cancellation.check()?;
     let expected_directory = identity(expected_directory)?;
     let expected_artifact = identity(expected_artifact)?;
     let directory = Directory::open(path).map_err(namespace_error)?;
     require_directory(&directory, expected_directory)?;
     let name = encode_name(attempt)?;
-    let Some(found) = directory.entry(&name).map_err(namespace_error)? else {
+    let found = directory.entry(&name).map_err(namespace_error)?;
+    #[cfg(windows)]
+    if let Some(result) = resume(
+        &directory,
+        attempt,
+        &name,
+        expected_artifact,
+        found.is_some(),
+    ) {
+        return Ok(result);
+    }
+    let Some(found) = found else {
         durable_absence(&directory, &name)?;
-        return Ok(false);
+        return Ok(removal(false, None, Housekeeping::None, Box::default()));
     };
     require_owned(
         found.regular,
@@ -96,21 +115,157 @@ pub(super) fn remove(
         .map_err(cleanup_error)?;
     require_readable_binding(&regular.file, attempt, expected_artifact)?;
     cancellation.check()?;
+    retire(&directory, &name, regular, attempt, expected_artifact)
+}
+
+#[cfg(unix)]
+fn retire(
+    directory: &Directory,
+    name: &Name,
+    regular: crate::publication::namespace::Regular,
+    _attempt: [u8; 16],
+    expected_artifact: Identity,
+) -> Result<AbandonedArtifactRemoval> {
     if !directory
-        .unlink_exact(&name, expected_artifact)
+        .unlink_exact(name, expected_artifact)
         .map_err(cleanup_error)?
     {
         return Err(Error::CleanupConflict(
             "reservation artifact lost its exact name",
         ));
     }
-    if regular_link_count(&regular.file).map_err(namespace_error)? != 0 {
-        return Err(Error::CleanupConflict(
-            "reservation artifact remained linked after removal",
+    match regular_link_count(&regular.file) {
+        Ok(0) => {}
+        Ok(_) => {
+            return Ok(removal(
+                true,
+                Some(crate::publication::problem::Problem::cleanup_conflict(
+                    "reservation artifact remained linked after removal",
+                )),
+                Housekeeping::None,
+                Box::default(),
+            ))
+        }
+        Err(error) => {
+            return Ok(removal(
+                true,
+                Some(crate::publication::problem::Problem::namespace(&error)),
+                Housekeeping::None,
+                Box::default(),
+            ))
+        }
+    }
+    if let Err(error) = durable_absence(directory, name) {
+        return Ok(removal(
+            true,
+            Some(crate::publication::problem::Problem::sdk(&error)),
+            Housekeeping::None,
+            Box::default(),
         ));
     }
-    durable_absence(&directory, &name)?;
-    Ok(true)
+    Ok(removal(true, None, Housekeeping::None, Box::default()))
+}
+
+#[cfg(windows)]
+fn retire(
+    directory: &Directory,
+    name: &Name,
+    regular: crate::publication::namespace::Regular,
+    attempt: [u8; 16],
+    expected_artifact: Identity,
+) -> Result<AbandonedArtifactRemoval> {
+    use crate::publication::gc::{self, Authority};
+    use crate::publication::security;
+
+    let commitment = security::creator_only_commitment(&regular.file).map_err(namespace_error)?;
+    let retired = gc::retire(
+        directory,
+        Authority {
+            attempt_id: attempt,
+            ordinal: 1,
+            kind: ArtifactKind::PrivateReservation,
+            directory_role: DirectoryRole::Destination,
+            source_name: name,
+            source_file: &regular.file,
+            identity: expected_artifact,
+            creation_security: CreationSecurity {
+                kind: CREATION_SECURITY_KIND,
+                commitment,
+            },
+            payload: None,
+        },
+    );
+    Ok(removal(
+        true,
+        retired.problem,
+        retired.housekeeping,
+        retired
+            .visible
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    ))
+}
+
+#[cfg(windows)]
+fn resume(
+    directory: &Directory,
+    attempt: [u8; 16],
+    name: &Name,
+    identity: Identity,
+    source_present: bool,
+) -> Option<AbandonedArtifactRemoval> {
+    use crate::publication::gc::{self, ResumeAuthority};
+
+    match gc::resume(
+        directory,
+        ResumeAuthority {
+            attempt_id: attempt,
+            ordinal: 1,
+            kind: ArtifactKind::PrivateReservation,
+            directory_role: DirectoryRole::Destination,
+            source_name: name,
+            identity,
+            payload: None,
+        },
+    ) {
+        Ok(Some(retired)) => Some(removal(
+            source_present,
+            retired.problem,
+            retired.housekeeping,
+            retired
+                .visible
+                .into_iter()
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
+        Ok(None) => None,
+        Err(problem) => Some(removal(
+            source_present,
+            Some(problem),
+            Housekeeping::None,
+            Box::default(),
+        )),
+    }
+}
+
+fn removal(
+    source_present: bool,
+    cause: Option<PublicationProblem>,
+    housekeeping: Housekeeping,
+    visible_housekeeping: Box<[crate::publication::HousekeepingArtifact]>,
+) -> AbandonedArtifactRemoval {
+    AbandonedArtifactRemoval {
+        source_present,
+        cleanup_state: if cause.is_some() {
+            CleanupState::ResiduePossible
+        } else {
+            CleanupState::Clean
+        },
+        housekeeping,
+        visible_housekeeping,
+        cause,
+    }
 }
 
 fn inspect(
@@ -277,7 +432,7 @@ fn require_owned(regular: bool, links: u64, found: Identity, expected: Identity)
 }
 
 fn identity(identity: LocalFileIdentity) -> Result<Identity> {
-    if identity.kind != POSIX_IDENTITY {
+    if identity.kind != IDENTITY_KIND {
         return Err(Error::InvalidArgument(
             "unsupported reservation identity kind",
         ));
@@ -287,7 +442,7 @@ fn identity(identity: LocalFileIdentity) -> Result<Identity> {
 
 fn local(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: POSIX_IDENTITY,
+        kind: IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }

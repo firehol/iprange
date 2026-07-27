@@ -9,12 +9,14 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
 use crate::path;
 use crate::publication::namespace::{
     retained_regular_identity, Directory, Name, NamespaceError, IDENTITY_KIND,
 };
 use crate::publication::security::{self, Profile};
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::slotted_page::put_u64;
 use crate::validation::LocalFileIdentity;
 
@@ -24,7 +26,7 @@ const WRITER_LOCK: u64 = 1;
 pub(crate) const MAIN_LIFETIME_LOCK: u64 = 1u64 << 44;
 
 pub(crate) use crate::publication::namespace::Identity;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use header::has_selectable_header;
 pub(crate) use header::{read_header, Header, State};
 use header::{sidecar_length, write_header};
@@ -50,6 +52,31 @@ pub(crate) fn parent_identity(path: &Path) -> Result<LocalFileIdentity> {
     })
 }
 
+pub(crate) struct CreatedPrivate {
+    pub(crate) file: File,
+    pub(crate) identity: Identity,
+}
+
+#[derive(Debug)]
+pub(crate) struct PrivateCreationFailure {
+    pub(crate) cause: Error,
+    pub(crate) cleanup: live_cleanup::Outcome,
+    pub(crate) identity: Option<Identity>,
+}
+
+impl PrivateCreationFailure {
+    #[cfg(test)]
+    pub(crate) fn into_error(self) -> Error {
+        match self.cleanup.cause {
+            Some(cleanup) => Error::CleanupIncomplete {
+                cause: Box::new(self.cause),
+                cleanup: Box::new(cleanup),
+            },
+            None => self.cause,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Sidecar {
     pub(crate) file: File,
@@ -64,13 +91,19 @@ impl Sidecar {
         database_id: [u8; 16],
         sidecar_id: [u8; 16],
         capacity: u32,
-    ) -> Result<Self> {
+    ) -> core::result::Result<Self, PrivateCreationFailure> {
         if capacity == 0 {
-            return Err(Error::InvalidArgument(
-                "reader capacity must be greater than zero",
-            ));
+            return Err(PrivateCreationFailure {
+                cause: Error::InvalidArgument("reader capacity must be greater than zero"),
+                cleanup: live_cleanup::Outcome::clean(),
+                identity: None,
+            });
         }
-        let path = path::canonical_sidecar(main)?;
+        let path = path::canonical_sidecar(main).map_err(|cause| PrivateCreationFailure {
+            cause,
+            cleanup: live_cleanup::Outcome::clean(),
+            identity: None,
+        })?;
         Self::reserve_at(path, database_id, sidecar_id, capacity)
     }
 
@@ -79,26 +112,32 @@ impl Sidecar {
         database_id: [u8; 16],
         sidecar_id: [u8; 16],
         capacity: u32,
-    ) -> Result<Self> {
+    ) -> core::result::Result<Self, PrivateCreationFailure> {
         if capacity == 0 {
-            return Err(Error::InvalidArgument(
-                "reader capacity must be greater than zero",
-            ));
+            return Err(PrivateCreationFailure {
+                cause: Error::InvalidArgument("reader capacity must be greater than zero"),
+                cleanup: live_cleanup::Outcome::clean(),
+                identity: None,
+            });
         }
-        let file = create_private(&path)?;
-        let identity = match identity(&file) {
-            Ok(identity) => identity,
-            Err(cause) => return Err(created_failure(&path, &file, cause)),
-        };
+        let created = create_private(
+            &path,
+            CleanupAuthority {
+                attempt_id: sidecar_id,
+                ordinal: 1,
+                kind: ArtifactKind::OwnedCoordination,
+                directory_role: DirectoryRole::MainFile,
+            },
+        )?;
         Ok(Self {
-            file,
+            file: created.file,
             path,
             header: Header {
                 capacity,
                 database_id,
                 sidecar_id,
             },
-            identity,
+            identity: created.identity,
         })
     }
 
@@ -109,7 +148,8 @@ impl Sidecar {
         sidecar_id: [u8; 16],
         capacity: u32,
     ) -> Result<Self> {
-        let sidecar = Self::reserve(main, database_id, sidecar_id, capacity)?;
+        let sidecar = Self::reserve(main, database_id, sidecar_id, capacity)
+            .map_err(PrivateCreationFailure::into_error)?;
         sidecar.initialize_creating()?;
         Ok(sidecar)
     }
@@ -154,6 +194,16 @@ impl Sidecar {
         if file.metadata()?.len() != sidecar_length(header.capacity)? {
             return Err(Error::Corrupt("reader table length is invalid"));
         }
+        live_cleanup::require_available(
+            &path,
+            identity,
+            CleanupAuthority {
+                attempt_id: header.sidecar_id,
+                ordinal: 1,
+                kind: ArtifactKind::OwnedCoordination,
+                directory_role: DirectoryRole::MainFile,
+            },
+        )?;
         Ok((
             Self {
                 file,
@@ -469,29 +519,55 @@ pub(crate) fn open_rw(path: &Path) -> Result<File> {
     Ok(regular.file)
 }
 
-pub(crate) fn create_private(path: &Path) -> Result<File> {
-    let (directory, name) = bind_path(path)?;
-    let profile = Profile::capture().map_err(namespace_error)?;
-    let file = directory.create(&name, &profile).map_err(namespace_error)?;
+pub(crate) fn create_private(
+    path: &Path,
+    authority: CleanupAuthority,
+) -> core::result::Result<CreatedPrivate, PrivateCreationFailure> {
+    let failure = |cause| PrivateCreationFailure {
+        cause,
+        cleanup: live_cleanup::Outcome::clean(),
+        identity: None,
+    };
+    let (directory, name) = bind_path(path).map_err(failure)?;
+    let profile = Profile::capture().map_err(|error| failure(namespace_error(error)))?;
+    let file = directory
+        .create(&name, &profile)
+        .map_err(|error| failure(namespace_error(error)))?;
+    let identity = match identity(&file) {
+        Ok(identity) => identity,
+        Err(cause) => {
+            return Err(PrivateCreationFailure {
+                cause,
+                cleanup: live_cleanup::Outcome::failed(Error::Unresolvable(
+                    "created live artifact has no proven local identity",
+                )),
+                identity: None,
+            })
+        }
+    };
     if let Err(error) = security::secure_creator_only(&file, &profile) {
-        return Err(created_failure(path, &file, namespace_error(error)));
+        return Err(PrivateCreationFailure {
+            cause: namespace_error(error),
+            cleanup: live_cleanup::remove(path, &file, identity, authority),
+            identity: Some(identity),
+        });
     }
-    Ok(file)
+    Ok(CreatedPrivate { file, identity })
 }
 
-fn created_failure(path: &Path, file: &File, cause: Error) -> Error {
-    match remove_created(path, file) {
-        Ok(()) => cause,
-        Err(cleanup) => Error::CleanupIncomplete {
-            cause: Box::new(cause),
-            cleanup: Box::new(cleanup),
+#[cfg(test)]
+pub(crate) fn create_private_for_test(path: &Path) -> Result<File> {
+    create_private(
+        path,
+        CleanupAuthority {
+            attempt_id: crate::random::nonzero_128()?,
+            ordinal: 0,
+            kind: ArtifactKind::OwnedMain,
+            directory_role: DirectoryRole::MainFile,
         },
-    }
-}
-
-fn remove_created(path: &Path, file: &File) -> Result<()> {
-    let expected = identity(file)?;
-    remove_exact(path, expected)
+    )
+    .map(|created| created.file)
+    .map_err(PrivateCreationFailure::into_error)
 }
 
 pub(crate) fn remove_exact(path: &Path, expected: Identity) -> Result<()> {
@@ -602,7 +678,7 @@ pub(crate) fn sync_parent(path: &Path) -> Result<()> {
         .map_err(namespace_error)
 }
 
-fn bind_path(path: &Path) -> Result<(Directory, Name)> {
+pub(crate) fn bind_path(path: &Path) -> Result<(Directory, Name)> {
     let parent = path.parent().ok_or(Error::InvalidArgument(
         "database path has no parent directory",
     ))?;

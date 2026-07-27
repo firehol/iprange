@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
-use crate::error::{Error, ErrorCode, Result};
+use crate::error::{Error, Result};
 use crate::validation::LocalFileIdentity;
 
 use super::gc;
@@ -282,13 +282,7 @@ fn local(identity: Identity) -> LocalFileIdentity {
 }
 
 fn problem_error(problem: Problem) -> Error {
-    match (problem.code, problem.os_code) {
-        (ErrorCode::Io, Some(code)) => Error::Io(std::io::Error::from_raw_os_error(code)),
-        (ErrorCode::CleanupInProgress, _) => Error::CleanupInProgress(problem.detail),
-        (ErrorCode::CleanupConflict, _) => Error::CleanupConflict(problem.detail),
-        (ErrorCode::DirectoryIdentityMismatch, _) => Error::DirectoryIdentityMismatch,
-        _ => Error::Conflict(problem.detail),
-    }
+    problem.into_sdk()
 }
 
 fn cleanup_error(error: NamespaceError) -> Error {

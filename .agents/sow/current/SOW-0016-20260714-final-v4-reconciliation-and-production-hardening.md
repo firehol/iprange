@@ -2161,6 +2161,27 @@ Open decisions:
     reporting a visible, unselectable newly created envelope; it never grants
     move or deletion authority. This adds no operation or compatibility mode and
     makes the already-required restart result self-contained.
+73. Derived Windows-cleanup correction (2026-07-27): failed `CreateLive` owns
+    both a canonical main and a canonical sidecar, but the four named GC payload
+    kinds cannot truthfully identify the main. Add authenticated GC artifact kind
+    `5=OwnedMain`; it is valid only for a section-3 main basename in the main-file
+    directory role. A creation main uses its nonzero database ID as cleanup
+    attempt ID and ordinal 0, so ordinary main bootstrap can derive exactly one
+    precedence envelope. Every sidecar cleanup uses the sidecar's own nonzero
+    sidecar ID and ordinal 1, so ordinary sidecar open can do the same without
+    scanning. Resultless removal of malformed coordination has no self-recorded
+    ID and therefore uses a fresh collision-checked cleanup ID under explicit
+    offline authority; restart discovery remains the streamed Windows
+    housekeeping API.
+
+    The existing section-14.4 requirement that every Windows artifact-removal
+    result report orthogonal housekeeping also means the three abandoned-
+    artifact removers cannot retain their current `bool` result. They return one
+    common factual result containing whether the authoritative source was
+    present, correctness cleanup state, housekeeping, bounded visible
+    housekeeping, and an optional typed cause. POSIX behavior is the same
+    contract with no housekeeping. This is error-reporting completion, not a new
+    product choice; the user explicitly delegated exact error presentation.
 
 ## Plan
 
@@ -12409,6 +12430,32 @@ Authenticated Windows housekeeping checkpoint:
   artifacts, ordinary-open envelope precedence, Windows abandoned-artifact
   removal, publication residue, and native process/crash execution remain in
   the next portability slice.
+
+Windows lifecycle and portable-removal checkpoint:
+
+- Failed live creation, initialization, reset, and resultless recovery now retire
+  only their exact retained main/coordination inodes through the authenticated
+  Windows GC protocol. A creation main derives ordinal 0 from its database ID;
+  every valid coordination inode derives ordinal 1 from its sidecar ID; explicit
+  malformed-coordination removal uses a fresh collision-checked cleanup ID.
+- Ordinary main, sidecar, publication output/reservation, validation, recovery,
+  and commit-resolution entry points now reject an exact selected GC envelope
+  before accepting the source inode. Exact abandoned-artifact removers instead
+  resume that same authenticated transition and return the common factual
+  removal result.
+- Canonical publication-residue inspection/removal is portable across POSIX and
+  Windows. It keeps the main immutable under its lifetime lock, checks main and
+  coordination GC precedence, uses authenticated Windows retirement, and
+  reports correctness residue separately from bounded housekeeping evidence.
+- The three abandoned-artifact removers report source presence, correctness
+  state, housekeeping, visible records, and typed cause. POSIX failures after a
+  confirmed unlink are returned as residue-bearing facts rather than a plain
+  error that would hide the changed namespace.
+- Formatting, 395 all-feature tests with two intentional subprocess entry
+  points ignored, strict native all-target Clippy in full and minimal feature
+  modes, warning-denied Windows GNU/FreeBSD/Apple ARM checks, and Windows GNU
+  library Clippy pass. Native Windows process/crash execution remains required
+  before Windows acceptance; no remote system was used without user approval.
 
 ### Historical adversarial-audit evidence
 

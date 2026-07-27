@@ -6,7 +6,9 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::file_io;
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_sidecar::{self, Identity, Sidecar};
+use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 use crate::random;
 use crate::validation::LocalFileIdentity;
 
@@ -36,6 +38,8 @@ pub struct CreateResult {
     pub reader_capacity: u32,
     pub state: CreationState,
     pub residue_possible: bool,
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
     pub cause: Option<Error>,
 }
 
@@ -74,13 +78,7 @@ pub fn create_live(
     }
     let sidecar = match reserve_sidecar(path, attempt) {
         Ok(sidecar) => sidecar,
-        Err(cause) => {
-            return Ok(if cause.residue_possible() {
-                attempt.unknown(cause)
-            } else {
-                attempt.not_created(cause)
-            })
-        }
+        Err(failure) => return Ok(attempt.reservation_failure(failure)),
     };
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.failed(path, &sidecar, None, cause));
@@ -92,28 +90,20 @@ pub fn create_live(
         return Ok(attempt.failed(path, &sidecar, None, cause));
     }
 
-    let main = match live_sidecar::create_private(path) {
+    let created_main = match live_sidecar::create_private(
+        path,
+        CleanupAuthority {
+            attempt_id: attempt.database_id,
+            ordinal: 0,
+            kind: ArtifactKind::OwnedMain,
+            directory_role: DirectoryRole::MainFile,
+        },
+    ) {
         Ok(main) => main,
-        Err(cause) => {
-            return Ok(if cause.residue_possible() {
-                attempt.unknown(cause)
-            } else {
-                attempt.failed(path, &sidecar, None, cause)
-            })
-        }
+        Err(failure) => return Ok(attempt.private_failure(&sidecar, failure)),
     };
-    let main_identity = match live_sidecar::identity(&main) {
-        Ok(identity) => identity,
-        Err(cause) => {
-            return Ok(attempt.result(
-                CreationState::OutcomeUnknown,
-                None,
-                Some(live_sidecar::public_identity(sidecar.local_identity())),
-                true,
-                Some(cause),
-            ))
-        }
-    };
+    let main = created_main.file;
+    let main_identity = created_main.identity;
     let meta = empty_meta(
         address_family,
         value_kind,
@@ -122,12 +112,15 @@ pub fn create_live(
         attempt.commit_nonce,
     );
     if let Err(cause) = initialize_pair(path, &main, &sidecar, meta, cancellation) {
-        return Ok(attempt.failed(path, &sidecar, Some(main_identity), cause));
+        return Ok(attempt.failed(path, &sidecar, Some((&main, main_identity)), cause));
     }
     Ok(attempt.created(main_identity, sidecar.local_identity()))
 }
 
-fn reserve_sidecar(path: &Path, attempt: Attempt) -> Result<Sidecar> {
+fn reserve_sidecar(
+    path: &Path,
+    attempt: Attempt,
+) -> core::result::Result<Sidecar, live_sidecar::PrivateCreationFailure> {
     Sidecar::reserve(
         path,
         attempt.database_id,
@@ -148,9 +141,9 @@ impl Attempt {
             address_family,
             value_kind,
             value_tag,
-            database_id: random::nonzero_128()?,
+            database_id: live_cleanup::unique_attempt_id(path, 0)?,
             commit_nonce: random::nonzero_128()?,
-            sidecar_id: random::nonzero_128()?,
+            sidecar_id: live_cleanup::unique_attempt_id(&crate::path::canonical_sidecar(path)?, 1)?,
             directory_identity: None,
             main_basename: LocalBasename::from_path(path)?,
             reader_capacity,
@@ -162,46 +155,83 @@ impl Attempt {
             CreationState::Created,
             Some(live_sidecar::public_identity(main)),
             Some(live_sidecar::public_identity(sidecar)),
-            false,
-            None,
+            live_cleanup::TerminalFacts::clean(),
         )
     }
 
     fn not_created(self, cause: Error) -> CreateResult {
-        self.result(CreationState::NotCreated, None, None, false, Some(cause))
+        self.result(
+            CreationState::NotCreated,
+            None,
+            None,
+            live_cleanup::TerminalFacts::cause(cause),
+        )
     }
 
-    fn unknown(self, cause: Error) -> CreateResult {
-        self.result(CreationState::OutcomeUnknown, None, None, true, Some(cause))
+    fn reservation_failure(self, failure: live_sidecar::PrivateCreationFailure) -> CreateResult {
+        let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+        self.failure_result(None, sidecar_identity, failure.cause, failure.cleanup)
+    }
+
+    fn private_failure(
+        self,
+        sidecar: &Sidecar,
+        failure: live_sidecar::PrivateCreationFailure,
+    ) -> CreateResult {
+        let main_identity = failure.identity.map(live_sidecar::public_identity);
+        let sidecar_identity = Some(live_sidecar::public_identity(sidecar.local_identity()));
+        let mut cleanup = failure.cleanup;
+        if cleanup.is_clean() {
+            cleanup.absorb(live_cleanup::remove(
+                &sidecar.path,
+                &sidecar.file,
+                sidecar.local_identity(),
+                CleanupAuthority {
+                    attempt_id: self.sidecar_id,
+                    ordinal: 1,
+                    kind: ArtifactKind::OwnedCoordination,
+                    directory_role: DirectoryRole::MainFile,
+                },
+            ));
+        }
+        self.failure_result(main_identity, sidecar_identity, failure.cause, cleanup)
     }
 
     fn failed(
         self,
         path: &Path,
         sidecar: &Sidecar,
-        main_identity: Option<Identity>,
+        main: Option<(&std::fs::File, Identity)>,
         cause: Error,
     ) -> CreateResult {
-        let public_main = main_identity.map(live_sidecar::public_identity);
+        let public_main = main.map(|(_, identity)| live_sidecar::public_identity(identity));
         let public_sidecar = Some(live_sidecar::public_identity(sidecar.local_identity()));
-        match cleanup(path, sidecar, main_identity) {
-            Ok(()) => self.result(
-                CreationState::NotCreated,
-                public_main,
-                public_sidecar,
-                false,
-                Some(cause),
-            ),
-            Err(cleanup) => self.result(
+        let cleanup = cleanup(path, sidecar, main, self.database_id, self.sidecar_id);
+        self.failure_result(public_main, public_sidecar, cause, cleanup)
+    }
+
+    fn failure_result(
+        self,
+        main_identity: Option<LocalFileIdentity>,
+        sidecar_identity: Option<LocalFileIdentity>,
+        cause: Error,
+        cleanup: live_cleanup::Outcome,
+    ) -> CreateResult {
+        let facts = live_cleanup::TerminalFacts::failed(cause, cleanup);
+        if facts.residue_possible {
+            self.result(
                 CreationState::OutcomeUnknown,
-                public_main,
-                public_sidecar,
-                true,
-                Some(Error::CleanupIncomplete {
-                    cause: Box::new(cause),
-                    cleanup: Box::new(cleanup),
-                }),
-            ),
+                main_identity,
+                sidecar_identity,
+                facts,
+            )
+        } else {
+            self.result(
+                CreationState::NotCreated,
+                main_identity,
+                sidecar_identity,
+                facts,
+            )
         }
     }
 
@@ -210,8 +240,7 @@ impl Attempt {
         state: CreationState,
         main_identity: Option<LocalFileIdentity>,
         sidecar_identity: Option<LocalFileIdentity>,
-        residue_possible: bool,
-        cause: Option<Error>,
+        facts: live_cleanup::TerminalFacts,
     ) -> CreateResult {
         CreateResult {
             address_family: self.address_family,
@@ -226,8 +255,10 @@ impl Attempt {
             sidecar_identity,
             reader_capacity: self.reader_capacity,
             state,
-            residue_possible,
-            cause,
+            residue_possible: facts.residue_possible,
+            housekeeping: facts.housekeeping,
+            visible_housekeeping: facts.visible_housekeeping,
+            cause: facts.cause,
         }
     }
 }
@@ -318,11 +349,42 @@ pub(crate) fn write_empty_main(main: &std::fs::File, meta: MetaV4) -> Result<()>
     Ok(())
 }
 
-fn cleanup(path: &Path, sidecar: &Sidecar, main_identity: Option<Identity>) -> Result<()> {
-    if let Some(identity) = main_identity {
-        live_sidecar::remove_exact(path, identity)?;
+fn cleanup(
+    path: &Path,
+    sidecar: &Sidecar,
+    main: Option<(&std::fs::File, Identity)>,
+    database_id: [u8; 16],
+    sidecar_id: [u8; 16],
+) -> live_cleanup::Outcome {
+    let mut outcome = live_cleanup::Outcome::clean();
+    if let Some((file, identity)) = main {
+        outcome.absorb(live_cleanup::remove(
+            path,
+            file,
+            identity,
+            CleanupAuthority {
+                attempt_id: database_id,
+                ordinal: 0,
+                kind: ArtifactKind::OwnedMain,
+                directory_role: DirectoryRole::MainFile,
+            },
+        ));
+        if !outcome.is_clean() {
+            return outcome;
+        }
     }
-    live_sidecar::remove_exact(&sidecar.path, sidecar.local_identity())
+    outcome.absorb(live_cleanup::remove(
+        &sidecar.path,
+        &sidecar.file,
+        sidecar.local_identity(),
+        CleanupAuthority {
+            attempt_id: sidecar_id,
+            ordinal: 1,
+            kind: ArtifactKind::OwnedCoordination,
+            directory_role: DirectoryRole::MainFile,
+        },
+    ));
+    outcome
 }
 
 fn require_absent(path: &Path) -> Result<()> {

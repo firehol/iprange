@@ -1348,7 +1348,7 @@ artifacts plus its fixed output/reservation overhead. A returned
 `CleanupArtifact` has this shape:
 
 ```text
-artifact_kind: PrivateOutput | PrivateReservation | OwnedCoordination | AuthorizedScratch | UnpublishedMainTail
+artifact_kind: PrivateOutput | PrivateReservation | OwnedCoordination | AuthorizedScratch | OwnedMain | UnpublishedMainTail
 directory_role: Destination | ScratchDirectory | MainFile
 directory_identity_kind:u16
 directory_local_identity:[32]byte
@@ -1383,7 +1383,9 @@ and is never an arbitrary path. `PrivateReservation` covers the owned reservatio
 inode before sidecar conversion. Once that same inode has selected sidecar magic
 or sidecar size, an obligated removal is `OwnedCoordination`; it remains bound to
 the original attempt/sidecar ID and exact identity at canonical, private, or
-authorized inert GC name.
+authorized inert GC name. `OwnedMain` is only the exact canonical main inode
+created by an incomplete `CreateLive`; it is never a published immutable output,
+an existing destination, or a mutable live main.
 
 `UnpublishedMainTail` requires identity kind/local identity, expected database
 ID, committed target transaction/nonce, and both length fields; all other
@@ -1517,7 +1519,12 @@ identity. `RemoveAbandonedScratch(scratch_directory,
 expected_directory_identity, attempt_id, ordinal,
 expected_artifact_identity, cancellation)` additionally requires caller-certified absence of
 an active validation/recovery operation with that attempt ID. Age is never
-abandonment proof.
+abandonment proof. It returns the common abandoned-artifact removal result:
+whether the authoritative source was present, `Clean | ResiduePossible`
+correctness cleanup, orthogonal housekeeping and bounded visible-housekeeping
+facts, and an optional typed cause. POSIX normally returns clean with no
+housekeeping; Windows correctness cleanup may be clean while inert housekeeping
+remains visible.
 
 The mandatory cross-language streaming core is synchronous and batched. The
 engine lends one bounded record buffer to a pull source, which returns
@@ -1601,7 +1608,7 @@ each block's bytes `[0,512)` are:
 | 0 | 8 | ASCII `IPR4GCA1` |
 | 8 | 2 | `header_record_size = 512` |
 | 10 | 2 | `version = 1` |
-| 12 | 2 | `artifact_kind` (`1=PrivateOutput`, `2=PrivateReservation`, `3=OwnedCoordination`, `4=AuthorizedScratch`) |
+| 12 | 2 | `artifact_kind` (`1=PrivateOutput`, `2=PrivateReservation`, `3=OwnedCoordination`, `4=AuthorizedScratch`, `5=OwnedMain`) |
 | 14 | 2 | basename encoding kind |
 | 16 | 16 | nonzero attempt ID |
 | 32 | 4 | ordinal |
@@ -1646,7 +1653,8 @@ The first hashes the stored exact authoritative/private component selected when
 cleanup began and the second hashes the exact inert GC component. For each
 artifact kind, the source component is one of the exact attempt-derived private
 names defined by this specification, canonical `.readers`, or deterministic
-`.readers.reset`; its stored bytes must reproduce the source commitment. The
+`.readers.reset`; `OwnedMain` instead requires the exact valid section-3 main
+filename component. Its stored bytes must reproduce the source commitment. The
 directory role is authenticated because it cannot be reconstructed from a
 directory path after restart. A digest-kind-1 payload identity has nonzero exact
 length, SHA-512, and the applicable tuple; digest kind zero requires those fields
@@ -1720,6 +1728,15 @@ same-volume local NTFS. Exact identity-bound housekeeping removal is exposed but
 makes no power-loss guarantee for the final unlink. Old ranges or JSON may
 therefore consume quota and remain confidential-data residue until truncation or
 housekeeping succeeds; results report that fact.
+
+A failed `CreateLive` main uses its nonzero database ID as GC attempt ID and
+ordinal 0. A live coordination inode uses its nonzero sidecar ID and ordinal 1.
+These self-recorded identifiers let ordinary main bootstrap and sidecar open
+check exactly one derived envelope without a directory scan. An explicit
+offline remover acting on malformed coordination, which has no trustworthy
+self-recorded sidecar ID, generates a fresh collision-checked cleanup attempt
+ID while retaining its same-process descriptor authority; restart discovery is
+then provided by `ListWindowsHousekeeping`.
 
 `ListWindowsHousekeeping(directory, cancellation, sink)` streams every exact GC
 envelope/source/inert candidate with its retained directory identity and
@@ -2989,6 +3006,8 @@ optional digest, cancellation)` applies the section-14.4
 idempotent cleanup rule only to the exact matching file. Exact name plus no-follow identity is
 sufficient for a partial file without readable logical state; every readable
 tuple/digest MUST additionally match.
+It returns the common abandoned-artifact removal result defined for
+`RemoveAbandonedScratch`, not a boolean which would lose Windows housekeeping.
 The caller MUST first certify that no publisher/resolver is active in every supplied
 directory. Neither aid infers
 abandonment from age or removes a canonical main, sidecar, or reservation;
@@ -3152,7 +3171,8 @@ reservation or resolver authority.
 attempt ID, local identity, cancellation)` additionally requires valid self-identity when
 readable and caller-certified absence of any active publisher/resolver. It uses
 the section-14.4 idempotent cleanup rule and never touches canonical `.readers`
-or a main file.
+or a main file. It returns the common abandoned-artifact removal result defined
+for `RemoveAbandonedScratch`.
 
 `SnapshotTo` requires the caller to choose `FailIfExists`, `ReplaceExisting`,
 or `ReplaceExistingNoRollback`; its convenience wrapper defaults to

@@ -182,6 +182,7 @@ fn resolve_locked(
         Ok(first) => first,
         Err(cause) => return Ok(unresolvable(attempt, opened, relation, cause)),
     };
+    crate::live_cleanup::require_main_available(path, opened.identity, first.selected_database_id)?;
     if let Some(sidecar) = sidecar {
         sidecar.scan_at_most_cancellable(first.selected_transaction_id, cancellation)?;
     }

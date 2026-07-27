@@ -6,10 +6,11 @@ use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::database;
 use crate::error::{Error, Result};
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::live_writer::LocalBasename;
-use crate::random;
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
 use super::{
@@ -49,11 +50,13 @@ pub fn initialize_live(
 ) -> Result<LiveTransitionResult> {
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
-    database::require_sidecar_absent(&crate::path::canonical_sidecar(&main.path)?)?;
+    let canonical = crate::path::canonical_sidecar(&main.path)?;
+    database::require_sidecar_absent(&canonical)?;
     let attempt = Attempt::new(
         LiveTransitionOperation::Initialize,
         None,
         &main,
+        &canonical,
         reader_capacity,
         None,
     )?;
@@ -72,8 +75,7 @@ pub fn initialize_live(
     let new_identity = live_sidecar::public_identity(identity);
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Canonical,
@@ -81,8 +83,7 @@ pub fn initialize_live(
     }
     if let Err(cause) = initialize_sidecar(&main, &sidecar, cancellation) {
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Canonical,
@@ -101,6 +102,7 @@ pub fn reset_live_coordination(
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     let canonical = crate::path::canonical_sidecar(&main.path)?;
+    let private = crate::path::live_transition_temp(&main.path)?;
     let previous = existing_identity(&canonical)?;
     if previous.is_some() && policy == LiveResetPolicy::RollbackSafe {
         crate::publication::namespace::require_exchange_available().map_err(|_| {
@@ -111,10 +113,10 @@ pub fn reset_live_coordination(
         LiveTransitionOperation::Reset,
         Some(policy),
         &main,
+        &private,
         reader_capacity,
         previous.map(live_sidecar::public_identity),
     )?;
-    let private = crate::path::live_transition_temp(&main.path)?;
     cancellation.check()?;
 
     let sidecar = match Sidecar::reserve_at(
@@ -130,8 +132,7 @@ pub fn reset_live_coordination(
     let new_identity = live_sidecar::public_identity(identity);
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Private,
@@ -139,8 +140,7 @@ pub fn reset_live_coordination(
     }
     if let Err(cause) = prepare_reset_sidecar(&main, &sidecar, cancellation) {
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Private,
@@ -148,8 +148,7 @@ pub fn reset_live_coordination(
     }
     if let Err(cause) = verify_previous(&canonical, previous) {
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Private,
@@ -173,8 +172,7 @@ pub fn reset_live_coordination(
             ));
         }
         return Ok(attempt.cleanup_created(
-            &sidecar.path,
-            identity,
+            &sidecar,
             new_identity,
             cause,
             LiveCoordinationLocation::Private,
@@ -200,6 +198,7 @@ impl LockedMain {
         cancellation.check()?;
         live_sidecar::verify_path(&path, identity)?;
         let bootstrap = database::bootstrap_file(&file, OpenMode::Writer)?;
+        live_cleanup::require_main_available(&path, identity, bootstrap.meta.database_id)?;
         if bootstrap.physical_bytes != bootstrap.committed_bytes {
             return Err(Error::WrongState(
                 "offline transition requires exact committed length",
@@ -236,6 +235,7 @@ impl Attempt {
         operation: LiveTransitionOperation,
         reset_policy: Option<LiveResetPolicy>,
         main: &LockedMain,
+        cleanup_source: &Path,
         reader_capacity: u32,
         previous_sidecar_identity: Option<LocalFileIdentity>,
     ) -> Result<Self> {
@@ -249,13 +249,18 @@ impl Attempt {
             main_identity: main.public_identity,
             main_basename: main.basename,
             reader_capacity,
-            sidecar_id: random::nonzero_128()?,
+            sidecar_id: live_cleanup::unique_attempt_id(cleanup_source, 1)?,
             previous_sidecar_identity,
         })
     }
 
-    fn reservation_failure(self, cause: Error) -> LiveTransitionResult {
-        let (status, location) = if cause.residue_possible() {
+    fn reservation_failure(
+        self,
+        failure: live_sidecar::PrivateCreationFailure,
+    ) -> LiveTransitionResult {
+        let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+        let facts = live_cleanup::TerminalFacts::failed(failure.cause, failure.cleanup);
+        let (status, location) = if facts.residue_possible {
             (
                 LiveTransitionStatus::OutcomeUnknown,
                 LiveCoordinationLocation::Unclassified,
@@ -266,8 +271,7 @@ impl Attempt {
                 LiveCoordinationLocation::Absent,
             )
         };
-        let residue_possible = cause.residue_possible();
-        self.result(status, None, location, residue_possible, Some(cause))
+        self.result(status, sidecar_identity, location, facts)
     }
 
     fn initialized(self, new_identity: LocalFileIdentity) -> LiveTransitionResult {
@@ -275,8 +279,7 @@ impl Attempt {
             LiveTransitionStatus::Initialized,
             Some(new_identity),
             LiveCoordinationLocation::Canonical,
-            false,
-            None,
+            live_cleanup::TerminalFacts::clean(),
         )
     }
 
@@ -289,8 +292,7 @@ impl Attempt {
             LiveTransitionStatus::Initialized,
             Some(new_identity),
             LiveCoordinationLocation::Canonical,
-            true,
-            Some(cause),
+            live_cleanup::TerminalFacts::residue(cause),
         )
     }
 
@@ -304,35 +306,43 @@ impl Attempt {
             LiveTransitionStatus::OutcomeUnknown,
             Some(new_identity),
             location,
-            true,
-            Some(cause),
+            live_cleanup::TerminalFacts::residue(cause),
         )
     }
 
     fn cleanup_created(
         self,
-        path: &Path,
-        identity: Identity,
+        sidecar: &Sidecar,
         public_identity: LocalFileIdentity,
         cause: Error,
         location: LiveCoordinationLocation,
     ) -> LiveTransitionResult {
-        match remove_exact(path, identity) {
-            Ok(()) => self.result(
+        let cleanup = live_cleanup::remove(
+            &sidecar.path,
+            &sidecar.file,
+            sidecar.local_identity(),
+            CleanupAuthority {
+                attempt_id: self.sidecar_id,
+                ordinal: 1,
+                kind: ArtifactKind::OwnedCoordination,
+                directory_role: DirectoryRole::MainFile,
+            },
+        );
+        let facts = live_cleanup::TerminalFacts::failed(cause, cleanup);
+        if facts.residue_possible {
+            self.result(
+                LiveTransitionStatus::OutcomeUnknown,
+                Some(public_identity),
+                location,
+                facts,
+            )
+        } else {
+            self.result(
                 LiveTransitionStatus::Unchanged,
                 Some(public_identity),
                 LiveCoordinationLocation::Absent,
-                false,
-                Some(cause),
-            ),
-            Err(cleanup) => self.unknown(
-                public_identity,
-                location,
-                Error::CleanupIncomplete {
-                    cause: Box::new(cause),
-                    cleanup: Box::new(cleanup),
-                },
-            ),
+                facts,
+            )
         }
     }
 
@@ -341,8 +351,7 @@ impl Attempt {
         status: LiveTransitionStatus,
         new_sidecar_identity: Option<LocalFileIdentity>,
         new_sidecar_location: LiveCoordinationLocation,
-        residue_possible: bool,
-        cause: Option<Error>,
+        facts: live_cleanup::TerminalFacts,
     ) -> LiveTransitionResult {
         LiveTransitionResult {
             operation: self.operation,
@@ -359,8 +368,10 @@ impl Attempt {
             previous_sidecar_identity: self.previous_sidecar_identity,
             new_sidecar_identity,
             new_sidecar_location,
-            residue_possible,
-            cause,
+            residue_possible: facts.residue_possible,
+            housekeeping: facts.housekeeping,
+            visible_housekeeping: facts.visible_housekeeping,
+            cause: facts.cause,
         }
     }
 }

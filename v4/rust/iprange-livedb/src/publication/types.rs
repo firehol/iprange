@@ -63,6 +63,7 @@ pub enum ArtifactKind {
     PrivateReservation,
     OwnedCoordination,
     AuthorizedScratch,
+    OwnedMain,
     UnpublishedMainTail,
 }
 
@@ -167,6 +168,16 @@ pub struct HousekeepingArtifact {
     pub kind: ArtifactKind,
     pub creation_security: CreationSecurity,
     pub selected_envelope_sequence: u64,
+}
+
+/// Factual outcome of one exact abandoned-artifact removal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AbandonedArtifactRemoval {
+    pub source_present: bool,
+    pub cleanup_state: CleanupState,
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
+    pub cause: Option<PublicationProblem>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

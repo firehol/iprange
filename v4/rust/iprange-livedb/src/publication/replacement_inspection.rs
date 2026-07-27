@@ -15,6 +15,7 @@ use super::output;
 use super::problem::Problem;
 use super::reservation::Header;
 use super::result::AccessPolicy;
+use super::{ArtifactKind, DirectoryRole};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Content {
@@ -40,6 +41,7 @@ pub(super) struct Inspected {
     pub(super) content: Content,
     pub(super) location: Location,
     pub(super) access: AccessPolicy,
+    attempt_id: [u8; 16],
     locked: bool,
 }
 
@@ -57,8 +59,18 @@ pub(super) fn inspect(
     let private_name = destination
         .output_name(header.attempt_id)
         .map_err(|error| Problem::namespace(&error))?;
-    let mut main = open(destination, destination.main().clone(), Location::Main)?;
-    let mut private = open(destination, private_name, Location::Private)?;
+    let mut main = open(
+        destination,
+        destination.main().clone(),
+        Location::Main,
+        header.attempt_id,
+    )?;
+    let mut private = open(
+        destination,
+        private_name,
+        Location::Private,
+        header.attempt_id,
+    )?;
     lock_role(
         &mut main,
         &mut private,
@@ -80,15 +92,21 @@ fn open(
     destination: &Destination,
     name: Name,
     location: Location,
+    attempt_id: [u8; 16],
 ) -> Result<Option<Inspected>, Problem> {
-    let regular = destination
+    let Some(regular) = destination
         .directory()
         .open_regular(&name, true)
-        .map_err(|error| Problem::namespace(&error))?;
-    Ok(regular.map(|regular| opened(name, location, regular)))
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    let entry = opened(name, location, attempt_id, regular);
+    require_available(destination, &entry)?;
+    Ok(Some(entry))
 }
 
-fn opened(name: Name, location: Location, regular: Regular) -> Inspected {
+fn opened(name: Name, location: Location, attempt_id: [u8; 16], regular: Regular) -> Inspected {
     Inspected {
         name,
         file: regular.file,
@@ -99,6 +117,7 @@ fn opened(name: Name, location: Location, regular: Regular) -> Inspected {
         content: Content::Other,
         location,
         access: AccessPolicy::Unclassified,
+        attempt_id,
         locked: false,
     }
 }
@@ -174,6 +193,7 @@ fn inspect_one(
     mut entry: Inspected,
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
+    require_available(destination, &entry)?;
     destination
         .directory()
         .verify_name(&entry.name, entry.identity)
@@ -250,6 +270,7 @@ fn access(entry: &Inspected, header: Header) -> AccessPolicy {
 }
 
 fn verify_stable(destination: &Destination, entry: &Inspected) -> Result<(), Problem> {
+    require_available(destination, entry)?;
     destination
         .directory()
         .verify()
@@ -268,6 +289,21 @@ fn verify_stable(destination: &Destination, entry: &Inspected) -> Result<(), Pro
         != entry.byte_length
     {
         return Err(conflict("replacement content changed while hashing"));
+    }
+    Ok(())
+}
+
+fn require_available(destination: &Destination, entry: &Inspected) -> Result<(), Problem> {
+    if entry.location == Location::Private {
+        super::gc_barrier::require_source_available(
+            destination.directory(),
+            entry.attempt_id,
+            0,
+            ArtifactKind::PrivateOutput,
+            DirectoryRole::Destination,
+            &entry.name,
+            entry.identity,
+        )?;
     }
     Ok(())
 }

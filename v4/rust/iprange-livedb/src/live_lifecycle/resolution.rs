@@ -4,10 +4,14 @@ use std::path::Path;
 
 use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
+use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_sidecar::{self, Sidecar, State};
+use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping};
 use crate::validation::LocalFileIdentity;
 
-use super::transition::{existing_identity, remove_exact, LockedMain};
+#[cfg(unix)]
+use super::transition::remove_exact;
+use super::transition::{existing_identity, LockedMain};
 use super::{
     LiveCoordinationLocation, LiveResetPolicy, LiveTransitionOperation, LiveTransitionResult,
     LiveTransitionStatus,
@@ -113,13 +117,17 @@ fn resolve_initialize(
             ))
         }
         (State::Creating, LiveTransitionResolutionMode::Rollback) => {
-            remove_exact(&canonical.sidecar.path, canonical.sidecar.local_identity())?;
             main.verify()?;
-            Ok(resolved(
+            let mut cleanup = cleanup_attempt(&canonical.sidecar, supplied);
+            if let Err(cause) = main.verify() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            Ok(resolved_after_cleanup(
                 supplied,
                 LiveTransitionStatus::Unchanged,
                 Some(canonical.identity),
                 LiveCoordinationLocation::Absent,
+                cleanup,
             ))
         }
     }
@@ -150,7 +158,7 @@ fn resolve_reset(
             }
             match private {
                 Some(ResetPrivate::Previous(identity)) => {
-                    remove_exact(&private_path, identity)?;
+                    remove_previous(&private_path, identity)?;
                 }
                 Some(ResetPrivate::Attempt(_)) => {
                     return Err(Error::Conflict(
@@ -194,13 +202,17 @@ fn resolve_reset(
 
     match mode {
         LiveTransitionResolutionMode::Rollback => {
-            remove_exact(&private_path, private.sidecar.local_identity())?;
             main.verify()?;
-            Ok(resolved(
+            let mut cleanup = cleanup_attempt(&private.sidecar, supplied);
+            if let Err(cause) = main.verify() {
+                cleanup.absorb(live_cleanup::Outcome::failed(cause));
+            }
+            Ok(resolved_after_cleanup(
                 supplied,
                 LiveTransitionStatus::Unchanged,
                 Some(private.identity),
                 LiveCoordinationLocation::Absent,
+                cleanup,
             ))
         }
         LiveTransitionResolutionMode::Complete => {
@@ -222,7 +234,7 @@ fn resolve_reset(
             live_sidecar::verify_path(&canonical_path, private.sidecar.local_identity())?;
             private.sidecar.verify_header()?;
             if let Some(previous) = previous {
-                remove_exact(&private_path, previous)?;
+                remove_previous(&private_path, previous)?;
             }
             Ok(resolved(
                 supplied,
@@ -310,6 +322,15 @@ fn require_supplied(supplied: &LiveTransitionResult) -> Result<()> {
             ))
         }
     }
+    if cfg!(windows)
+        && supplied.operation == LiveTransitionOperation::Reset
+        && supplied.reset_policy == Some(LiveResetPolicy::RollbackSafe)
+        && supplied.previous_sidecar_identity.is_some()
+    {
+        return Err(Error::Unresolvable(
+            "rollback-safe live reset is unavailable on Windows",
+        ));
+    }
     if supplied.new_sidecar_identity.is_none()
         && supplied.status == LiveTransitionStatus::OutcomeUnknown
     {
@@ -392,7 +413,80 @@ fn resolved(
         new_sidecar_identity,
         new_sidecar_location: location,
         residue_possible: false,
+        housekeeping: supplied.housekeeping,
+        visible_housekeeping: supplied.visible_housekeeping.clone(),
         cause: None,
+    }
+}
+
+fn cleanup_attempt(sidecar: &Sidecar, supplied: &LiveTransitionResult) -> live_cleanup::Outcome {
+    live_cleanup::remove(
+        &sidecar.path,
+        &sidecar.file,
+        sidecar.local_identity(),
+        CleanupAuthority {
+            attempt_id: supplied.sidecar_id,
+            ordinal: 1,
+            kind: ArtifactKind::OwnedCoordination,
+            directory_role: DirectoryRole::MainFile,
+        },
+    )
+}
+
+fn resolved_after_cleanup(
+    supplied: &LiveTransitionResult,
+    clean_status: LiveTransitionStatus,
+    new_sidecar_identity: Option<LocalFileIdentity>,
+    clean_location: LiveCoordinationLocation,
+    cleanup: live_cleanup::Outcome,
+) -> LiveTransitionResult {
+    let clean = cleanup.is_clean();
+    let mut result = resolved(
+        supplied,
+        if clean {
+            clean_status
+        } else {
+            LiveTransitionStatus::OutcomeUnknown
+        },
+        new_sidecar_identity,
+        if clean {
+            clean_location
+        } else {
+            supplied.new_sidecar_location
+        },
+    );
+    result.residue_possible = !clean;
+    result.housekeeping = merge_housekeeping(result.housekeeping, cleanup.housekeeping);
+    let mut visible = result.visible_housekeeping.into_vec();
+    visible.extend(cleanup.visible);
+    result.visible_housekeeping = visible.into_boxed_slice();
+    result.cause = cleanup.cause;
+    result
+}
+
+fn remove_previous(path: &Path, identity: live_sidecar::Identity) -> Result<()> {
+    #[cfg(unix)]
+    {
+        remove_exact(path, identity)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, identity);
+        Err(Error::Unresolvable(
+            "rollback-safe previous coordination cleanup is unavailable",
+        ))
+    }
+}
+
+const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
     }
 }
 

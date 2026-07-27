@@ -12,6 +12,7 @@ use super::namespace::{Destination, Identity, Name, NamespaceError, Regular, Sca
 use super::problem::Problem;
 use super::reservation::{self, Header, Selected};
 use super::result::AccessPolicy;
+use super::{ArtifactKind, DirectoryRole};
 
 const FILE_SIZE: u64 = (2 * PAGE_SIZE) as u64;
 const OPERATION_LOCK: u64 = 0;
@@ -37,6 +38,13 @@ pub(super) struct Inspected {
 
 impl Inspected {
     pub(super) fn verify(&self, destination: &Destination) -> Result<(), Problem> {
+        require_available(
+            destination,
+            self.location,
+            &self.name,
+            self.identity,
+            self.header,
+        )?;
         destination
             .directory()
             .verify()
@@ -65,6 +73,13 @@ impl Inspected {
         destination: &Destination,
         cancellation: &CancellationToken,
     ) -> Result<(), Problem> {
+        require_available(
+            destination,
+            self.location,
+            &self.name,
+            self.identity,
+            self.header,
+        )?;
         lock_operation_file(&self.file, cancellation)?;
         self.verify(destination)
     }
@@ -125,6 +140,13 @@ pub(super) fn exact_private(
     else {
         return Ok(None);
     };
+    require_available(
+        destination,
+        Location::Private,
+        &name,
+        regular.identity,
+        expected,
+    )?;
     lock_operation(&regular, cancellation)?;
     destination
         .directory()
@@ -148,8 +170,20 @@ fn inspect_canonical(
     regular: Regular,
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
-    lock_operation(&regular, cancellation)?;
     let selected = read_selected(&regular.file).map_err(strict_record)?;
+    require_available(
+        destination,
+        Location::Canonical,
+        destination.coordination(),
+        regular.identity,
+        selected.header,
+    )?;
+    lock_operation(&regular, cancellation)?;
+    if read_selected(&regular.file).map_err(strict_record)? != selected {
+        return Err(conflict(
+            "publication reservation changed while acquiring its lock",
+        ));
+    }
     require_bound(destination, selected.header, regular.identity, None)?;
     let private_name = destination
         .reservation_name(selected.header.attempt_id)
@@ -221,6 +255,15 @@ fn inspect_private(
         Err(error) if invalid_private_entry(&error) => return Ok(None),
         Err(error) => return Err(Problem::namespace(&error)),
     };
+    super::gc_barrier::require_source_available(
+        destination.directory(),
+        attempt_id,
+        1,
+        ArtifactKind::PrivateReservation,
+        DirectoryRole::Destination,
+        &name,
+        regular.identity,
+    )?;
     let selected = match read_selected(&regular.file) {
         Ok(selected) => selected,
         Err(ReadError::Invalid) => return Ok(None),
@@ -246,6 +289,28 @@ fn inspect_private(
         return Err(conflict("private reservation changed during inspection"));
     }
     Ok(Some(inspected(name, regular, selected, Location::Private)))
+}
+
+fn require_available(
+    destination: &Destination,
+    location: Location,
+    private_name: &Name,
+    identity: Identity,
+    header: Header,
+) -> Result<(), Problem> {
+    let (name, kind) = match location {
+        Location::Private => (private_name, ArtifactKind::PrivateReservation),
+        Location::Canonical => (destination.coordination(), ArtifactKind::OwnedCoordination),
+    };
+    super::gc_barrier::require_source_available(
+        destination.directory(),
+        header.attempt_id,
+        1,
+        kind,
+        DirectoryRole::Destination,
+        name,
+        identity,
+    )
 }
 
 fn inspected(name: Name, regular: Regular, selected: Selected, location: Location) -> Inspected {

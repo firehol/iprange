@@ -7,6 +7,7 @@ use crate::{error, file_io};
 use super::super::namespace::{regular_identity, Identity, Name, NamespaceError};
 use super::super::output::PreparedOutput;
 use super::super::reservation::{self, Header, Selected};
+use super::super::{ArtifactKind, DirectoryRole};
 use super::{Error, FILE_SIZE};
 
 #[derive(Clone, Copy)]
@@ -62,10 +63,22 @@ fn verify_inode(
 fn verify_location(output: &PreparedOutput, expected: &Expected<'_>) -> Result<(), Error> {
     let destination = output.attempt.destination();
     let directory = destination.directory();
-    let name = match expected.reservation_location {
-        ReservationLocation::Private => expected.private_name,
-        ReservationLocation::Canonical => destination.coordination(),
+    let (name, kind) = match expected.reservation_location {
+        ReservationLocation::Private => (expected.private_name, ArtifactKind::PrivateReservation),
+        ReservationLocation::Canonical => {
+            (destination.coordination(), ArtifactKind::OwnedCoordination)
+        }
     };
+    super::super::gc_barrier::require_source_available(
+        directory,
+        expected.header.attempt_id,
+        1,
+        kind,
+        DirectoryRole::Destination,
+        name,
+        expected.identity,
+    )
+    .map_err(Error::Gc)?;
     directory.verify_name(name, expected.identity)?;
     if matches!(
         expected.reservation_location,

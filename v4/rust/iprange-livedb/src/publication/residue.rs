@@ -9,8 +9,7 @@ use super::types::{
     AccessPolicy, CleanupArtifacts, CleanupState, CoordinationCleanup, PublicationProblem,
     PublicationResult,
 };
-use super::PublicationDigest;
-use super::PublicationTuple;
+use super::{Housekeeping, HousekeepingArtifact, PublicationDigest, PublicationTuple};
 
 /// Current classification of the canonical coordination name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,9 +50,9 @@ pub struct PublicationResidueInspection {
 /// Same-process authority for one exact canonical coordination inode.
 #[derive(Debug)]
 pub struct PublicationResidueHandle {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     inner: platform::Handle,
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     _unsupported: (),
 }
 
@@ -72,6 +71,8 @@ pub struct PublicationResidueRemoval {
     pub coordination_access_policy: AccessPolicy,
     pub cleanup: CleanupArtifacts,
     pub coordination_cleanup: CoordinationCleanup,
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
     pub cause: Option<PublicationProblem>,
 }
 
@@ -91,11 +92,11 @@ pub fn inspect_publication_residue(
     path: impl AsRef<Path>,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResidueInspection, PublicationProblem> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         platform::inspect(path.as_ref(), cancellation)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, cancellation);
         Err(PublicationProblem::new(
@@ -111,11 +112,11 @@ pub fn remove_publication_residue(
     handle: PublicationResidueHandle,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResidueRemoval, PublicationProblem> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         platform::remove(handle.inner, cancellation)
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (handle, cancellation);
         Err(PublicationProblem::new(
@@ -126,9 +127,17 @@ pub fn remove_publication_residue(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[path = "residue/linux.rs"]
 mod platform;
+
+#[cfg(any(unix, windows))]
+#[path = "residue/retirement.rs"]
+mod retirement;
+
+#[cfg(any(unix, windows))]
+#[path = "residue/main.rs"]
+mod main;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "residue_tests.rs"]

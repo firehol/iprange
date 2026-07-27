@@ -30,6 +30,7 @@ pub mod key;
 // Recovery and compact snapshots wire this tested private builder in later slices.
 #[allow(dead_code)]
 mod immutable_output;
+mod live_cleanup;
 mod live_lifecycle;
 mod live_lock;
 mod live_reader;

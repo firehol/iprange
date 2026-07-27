@@ -64,6 +64,10 @@ impl ImmutableSource {
     pub(crate) fn public_identity(&self) -> LocalFileIdentity {
         public_identity(self.identity)
     }
+
+    pub(crate) fn require_available(&self, database_id: [u8; 16]) -> Result<()> {
+        crate::live_cleanup::require_main_available(&self.path, self.identity, database_id)
+    }
 }
 
 impl LiveSource {
@@ -73,6 +77,7 @@ impl LiveSource {
         live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
         live_sidecar::verify_path(path, identity)?;
         let database_id = selected_or_bound_database_id(&file)?;
+        crate::live_cleanup::require_main_available(path, identity, database_id)?;
         let sidecar = live_sidecar::Sidecar::open(path, database_id)?;
         sidecar.lock_gate(Mode::Exclusive)?;
         let registration = register_live(&file, path, identity, &sidecar);
@@ -215,7 +220,7 @@ fn register_bootstrap(
     Ok(LiveRegistration::Bootstrap(problem))
 }
 
-fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8; 16]> {
+pub(crate) fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8; 16]> {
     match database::bootstrap_file(file, OpenMode::LiveReader) {
         Ok(bootstrap) => Ok(bootstrap.meta.database_id),
         Err(Error::Format(_)) => {
@@ -231,7 +236,7 @@ fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8; 16]> {
 
 pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
-        kind: 1,
+        kind: crate::publication::namespace::IDENTITY_KIND,
         bytes: identity.encode(),
     }
 }

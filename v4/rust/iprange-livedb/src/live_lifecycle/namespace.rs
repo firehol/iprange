@@ -100,11 +100,11 @@ mod tests {
     #[test]
     fn exchange_restores_a_foreign_canonical_inode() {
         let paths = Paths::new();
-        let private = live_sidecar::create_private(&paths.private).unwrap();
-        let original = live_sidecar::create_private(&paths.canonical).unwrap();
+        let private = live_sidecar::create_private_for_test(&paths.private).unwrap();
+        let original = live_sidecar::create_private_for_test(&paths.canonical).unwrap();
         let expected = live_sidecar::identity(&original).unwrap();
         fs::remove_file(&paths.canonical).unwrap();
-        let foreign = live_sidecar::create_private(&paths.canonical).unwrap();
+        let foreign = live_sidecar::create_private_for_test(&paths.canonical).unwrap();
         let foreign_identity = live_sidecar::identity(&foreign).unwrap();
         assert_ne!(expected, foreign_identity);
 

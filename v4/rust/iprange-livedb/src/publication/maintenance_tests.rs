@@ -64,36 +64,45 @@ fn exact_removal_handles_complete_partial_and_already_absent_outputs() {
     let complete_entry = entry(&entries, complete.attempt);
     let partial_entry = entry(&entries, partial_id);
 
-    assert!(remove_abandoned_publication_temp(
-        &directory.path,
-        complete_entry.directory_identity,
-        complete_entry.publication_attempt_id,
-        complete_entry.artifact_identity,
-        complete_entry.tuple,
-        complete_entry.digest,
-        &CancellationToken::new(),
-    )
-    .unwrap());
-    assert!(remove_abandoned_publication_temp(
-        &directory.path,
-        partial_entry.directory_identity,
-        partial_entry.publication_attempt_id,
-        partial_entry.artifact_identity,
-        None,
-        None,
-        &CancellationToken::new(),
-    )
-    .unwrap());
-    assert!(!remove_abandoned_publication_temp(
-        &directory.path,
-        partial_entry.directory_identity,
-        partial_entry.publication_attempt_id,
-        partial_entry.artifact_identity,
-        None,
-        None,
-        &CancellationToken::new(),
-    )
-    .unwrap());
+    assert!(
+        remove_abandoned_publication_temp(
+            &directory.path,
+            complete_entry.directory_identity,
+            complete_entry.publication_attempt_id,
+            complete_entry.artifact_identity,
+            complete_entry.tuple,
+            complete_entry.digest,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
+    assert!(
+        remove_abandoned_publication_temp(
+            &directory.path,
+            partial_entry.directory_identity,
+            partial_entry.publication_attempt_id,
+            partial_entry.artifact_identity,
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
+    assert!(
+        !remove_abandoned_publication_temp(
+            &directory.path,
+            partial_entry.directory_identity,
+            partial_entry.publication_attempt_id,
+            partial_entry.artifact_identity,
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
 }
 
 #[test]
@@ -234,14 +243,17 @@ fn reservation_removal_handles_bound_malformed_and_already_absent_artifacts() {
     let main = directory.path.join("result.v4");
     run_child(&main, "publication.after_reservation_state1_sync");
     let bound = listed_reservations(&directory.path)[0];
-    assert!(remove_abandoned_reservation_artifact(
-        &directory.path,
-        bound.directory_identity,
-        bound.publication_attempt_id,
-        bound.artifact_identity,
-        &CancellationToken::new(),
-    )
-    .unwrap());
+    assert!(
+        remove_abandoned_reservation_artifact(
+            &directory.path,
+            bound.directory_identity,
+            bound.publication_attempt_id,
+            bound.artifact_identity,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
 
     let malformed_id = [8; 16];
     fs::write(
@@ -250,22 +262,28 @@ fn reservation_removal_handles_bound_malformed_and_already_absent_artifacts() {
     )
     .unwrap();
     let malformed = reservation_entry(&listed_reservations(&directory.path), malformed_id);
-    assert!(remove_abandoned_reservation_artifact(
-        &directory.path,
-        malformed.directory_identity,
-        malformed.publication_attempt_id,
-        malformed.artifact_identity,
-        &CancellationToken::new(),
-    )
-    .unwrap());
-    assert!(!remove_abandoned_reservation_artifact(
-        &directory.path,
-        malformed.directory_identity,
-        malformed.publication_attempt_id,
-        malformed.artifact_identity,
-        &CancellationToken::new(),
-    )
-    .unwrap());
+    assert!(
+        remove_abandoned_reservation_artifact(
+            &directory.path,
+            malformed.directory_identity,
+            malformed.publication_attempt_id,
+            malformed.artifact_identity,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
+    assert!(
+        !remove_abandoned_reservation_artifact(
+            &directory.path,
+            malformed.directory_identity,
+            malformed.publication_attempt_id,
+            malformed.artifact_identity,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+        .source_present
+    );
 }
 
 #[test]
