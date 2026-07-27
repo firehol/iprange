@@ -1,76 +1,67 @@
 # iprange v4 conformance corpus
 
-The normative contract is
+The normative wire contract is
 [`../../.agents/sow/specs/binary-format-v4.md`](../../.agents/sow/specs/binary-format-v4.md).
+The former unreleased and incompatible experimental fixtures were deleted; they
+are not compatibility inputs.
 
-The former fixtures in this directory encoded unreleased, incompatible v4
-experiments and were removed. They are not compatibility inputs. The Phase-1
-corpus is rebuilt only from the exact current v4 contract during
-SOW-0016.
+## Rust-first foundation
 
-The completed corpus must contain independently produced Go and Rust files and
-must prove actual bidirectional opens. Each reader verifies the other writer's
-files semantically; mutable allocation order, tree shape, membership IDs, and
-zlib bytes need not match.
+`cases.json` is the language-neutral semantic manifest. The current foundation
+contains four compact immutable snapshots produced through the public Rust live
+writer and public snapshot operation:
 
-At minimum, fixtures and behavioral cases cover:
+- `rust/direct-ipv4.iprdb`: arrival-order direct assignments and clearing;
+- `rust/retention-ipv6.iprdb`: full IPv6 retention and empty metadata;
+- `rust/membership-ipv4.iprdb`: 70 named feeds, index reuse, and memberships
+  crossing the 64-bit boundary; and
+- `rust/membership-ipv6.iprdb`: full IPv6 membership and the 1 MiB metadata
+  limit stored compressed.
 
-- IPv4 and IPv6 direct ranges, including legal empty subtrees and both full
-  address spaces;
-- unordered, duplicate, adjacent, nested, and overlapping input across batch
-  boundaries, with direct assignments applied exactly in arrival order and feed
-  input reduced to coverage union;
-- named-feed catalog lifecycle, feed-index reuse, memberships wider than 64
-  bits, and lazy maximum-width access;
-- `FeedRef`/`MembershipRef` ownership and invalidation, all five advanced
-  membership operations, and atomic transactions that change several feeds;
-- high-level named-feed and direct replacement state machines, including
-  `Begin`, batched `AddRanges`, `FinishInput`, optional metadata, statistics,
-  commit, abort, source/sink failure, and cancellation;
-- exact ingestion-source composition: each range call drains one finite source,
-  `End` ends only that call, repeated calls concatenate in record order, and a
-  later source failure aborts every earlier accepted prefix;
-- every fixed `FinishInput` field for feed, direct, retention, and import
-  workflows, including checked record/feed/membership counter overflow;
-- name-based multi-feed import, including same-name union, missing-feed creation,
-  destination-only preservation, and internal source-index/membership-ID
-  translation;
-- exact `retention` refresh: old values survive continuous coverage, new
-  addresses receive the refresh value, removed addresses disappear, and a later
-  reappearance receives the later value;
-- absent, empty, and maximum-size opaque metadata;
-- metadata read-your-writes, exact two-call buffer behavior, equal-byte Set
-  staging, already-absent Clear, and rejection of a second metadata stage;
-- exact 129-bit cardinalities;
-- explicit immutable/live reader and live writer opens, pending-writer Close as
-  abort, empty advanced-operation termination, writer-child `HandleBusy`,
-  dropped-unclosed-handle fail-closed behavior, commit nonce, and durability-
-  outcome resolution;
-- bounded `Reclaim`, including `WorkLimitTooSmall`, automatic publication, and
-  no caller-pending maintenance draft;
-- mixed Go/Rust subprocess coordination on the same live database in both
-  directions, including reader slots, writer exclusion, process tokens,
-  reclamation, sidecar replacement, reservation recovery, and SHA-512-bound
-  publication/transition resolution;
-- orthogonal resolver facts for destination content, later canonical owner,
-  live lineage, access state, cleanup, and Windows housekeeping;
-- cancellation before work, during bounded processing, immediately before an
-  ambiguity boundary, and after that boundary with the factual durability or
-  publication outcome preserved;
-- compact unsigned snapshots with both destination policies, immutable
-  same-path compaction, recovery `FailIfExists`, and no external sorting files
-  for ordinary ingestion, transactions, abort, import, or snapshot construction;
-- explicit validation modes and reason-coded recovery;
-- CreatorOnly artifact creation and exact FreeBSD/Windows namespace behavior on
-  their supported test hosts;
-- generated ABI-1 C/C++ header and manifest checks plus native C compile/link and
-  behavior coverage; and
-- strict rejection of every obsolete or malformed format identity.
+The Rust test actually opens and explicitly validates every listed file. It
+compares every direct range, feed name/index, resolved membership, named-feed
+projection, exact decompressed metadata state and bytes, and exact 129-bit
+cardinality. It also derives temporary wrong-magic, short, and unaligned inputs
+from the valid corpus and proves their rejection. Normal tests never modify the
+committed corpus.
 
-Golden generation and test commands will be recorded here with the final
-implementation. A missing cross-language fixture is a test failure, never a
-skip.
+Run the read-only proof:
 
-Snapshot signing is intentionally absent from the Phase-1 corpus. Pending
-SOW-0017 adds authenticated-artifact cases only after the unsigned SDK is
-reliable and measured.
+```bash
+cargo test --manifest-path v4/rust/Cargo.toml --test conformance
+```
+
+Regenerate only the Rust-produced files explicitly:
+
+```bash
+cargo test --manifest-path v4/rust/Cargo.toml \
+  --test conformance regenerate_rust_fixtures -- --ignored --exact
+```
+
+Regeneration has no test-only wire encoder. It creates live files with the
+public writer, builds compact snapshots with `snapshot_to`, verifies all staged
+outputs against `cases.json`, and only then replaces the committed Rust files.
+
+## Cross-language gate
+
+This SOW is deliberately Rust-first. After the user accepts the Rust SDK and
+the Go port exists:
+
+- Go adds independently produced files to this same manifest;
+- both readers must open and semantically verify both producer sets;
+- malformed transformations must produce equivalent public errors; and
+- mixed Rust/Go subprocess tests must prove external reader-slot locks, writer
+  exclusion, reclamation, sidecar identity/replacement handling, and live
+  transition/publication resolution in both directions.
+
+Byte-identical files are not required. Page placement, mutable tree shape,
+membership IDs, and compressed bytes may differ when observable data is equal.
+At the cross-language gate, a missing required producer or skipped cross-open is
+a failure.
+
+Reachable empty leaves are malformed. An empty logical tree uses root page zero.
+Live reader coordination is external to the database and uses OS-held locks; it
+does not store process tokens in the database or sidecar.
+
+Snapshot signing is intentionally absent from Phase 1. Pending SOW-0017 adds
+authenticated artifacts only after the unsigned SDK is accepted and measured.

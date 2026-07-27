@@ -12880,6 +12880,61 @@ Validation:
   documentation, artifact reconciliation, and user judgment of the Rust SDK
   remain before any Go port.
 
+### 2026-07-27 - Rust-first conformance slice
+
+Purpose and scope:
+
+- Freeze only files produced by the accepted Rust implementation of the exact
+  current v4 contract. Do not begin or simulate the Go port.
+- Commit compact immutable snapshots for IPv4 direct arrival-order semantics,
+  full-space IPv6 retention with empty metadata, IPv4 membership catalog/index
+  reuse wider than 64 bits, and full-space IPv6 membership with maximum
+  compressed metadata.
+- Commit one language-neutral JSON manifest. The Rust conformance test must
+  genuinely open every Rust fixture, explicitly validate it, and compare all
+  direct ranges, named-feed indexes, resolved memberships, per-feed
+  projections, exact metadata state/bytes, and 129-bit cardinality.
+- Describe malformed-input transformations in the shared manifest rather than
+  preserving obsolete experimental files. The test must derive temporary
+  malformed files and prove exact rejection.
+- Fixture regeneration is an explicit ignored test operation. Normal tests are
+  read-only and fail for missing, extra, stale, or semantically wrong fixtures.
+- After user acceptance of Rust, the Go port adds independently produced Go
+  fixtures and makes both readers open both producer sets. Mixed Go/Rust live
+  coordination remains part of that later cross-language gate; it is not
+  falsely claimed by this Rust-only milestone.
+
+Risk controls:
+
+- Generation uses the public live writer followed by the public compact
+  snapshot operation, so no second encoder or test-only wire writer can drift
+  from production.
+- Expected data is synthetic and contains no sensitive information.
+- The implementation adds test/support code and committed fixtures only; it
+  does not change the frozen format or public API.
+
+Implementation and validation:
+
+- `v4/conformance/cases.json` now describes the four Rust foundation fixtures
+  and three derived malformed cases. The four compact files total 110,592
+  bytes; the 1 MiB repeated-text metadata case occupies a 40,960-byte snapshot.
+- The permanent test opens each committed file with `ImmutableReader`, invokes
+  explicit full validation, and independently compares every declared semantic
+  surface. It also rejects missing, extra, duplicated, stale, malformed, or
+  semantically different corpus entries.
+- Explicit regeneration completed through `create_live`, the public writer,
+  and `snapshot_to`; every staged snapshot passed the semantic verifier before
+  publication. No sidecar or private publication artifact remains in the
+  corpus.
+- Current Rust and Rust 1.74.1 each pass the complete all-feature/all-target
+  workspace matrix: 428 test functions, 425 passed and three intentional
+  ignored entry points (two subprocess children and fixture regeneration).
+  Strict all-target Clippy with warnings denied and formatting also pass.
+- `v4/conformance/README.md` now records exact generation/proof commands and
+  removes the obsolete empty-leaf and process-token claims. It states the
+  Rust-first boundary and the later bidirectional Go gate without claiming
+  cross-language evidence that does not yet exist.
+
 ### Phase-1 core-SDK production-hardening gate
 
 Pending. Before SOW completion, this section must record:

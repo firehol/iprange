@@ -178,6 +178,8 @@ dependencies = [
  "flate2",
  "getrandom",
  "libc",
+ "serde",
+ "serde_json",
  "sha2",
  "windows-sys",
 ]
