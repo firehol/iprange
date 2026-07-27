@@ -32,12 +32,17 @@ impl TestPair {
         name.push(".readers");
         self.main.with_file_name(name)
     }
+
+    fn saved_main(&self) -> PathBuf {
+        self.main.with_extension("saved")
+    }
 }
 
 impl Drop for TestPair {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.main);
         let _ = fs::remove_file(self.sidecar());
+        let _ = fs::remove_file(self.saved_main());
     }
 }
 
@@ -186,16 +191,24 @@ fn resolution_reports_a_deliberate_logical_copy_as_a_different_local_file() {
 fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     let files = TestPair::new("close");
     create(&files);
+    let committed_length = fs::metadata(&files.main).unwrap().len();
     let token = CancellationToken::new();
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
     drop(transaction);
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(&files.main)
+        .unwrap();
+    file.set_len(committed_length + 4096).unwrap();
+    drop(file);
 
     let closed = writer.close().unwrap();
     assert_eq!(closed.outcome, CloseOutcome::Closed);
     assert_eq!(closed.abort_outcome, Some(AbortOutcome::Aborted));
     assert!(closed.cleanup.is_empty());
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), committed_length);
 
     let mut replacement =
         LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
@@ -206,6 +219,80 @@ fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
     reader.close().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_abort_is_close_only_and_retries_the_exact_tail_cleanup() {
+    let files = TestPair::new("abort-retry");
+    create(&files);
+    let committed_length = fs::metadata(&files.main).unwrap().len();
+    let token = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    drop(transaction);
+
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(&files.main)
+        .unwrap();
+    file.set_len(committed_length + 4096).unwrap();
+    drop(file);
+    fs::rename(&files.main, files.saved_main()).unwrap();
+
+    let aborted = writer.abort().unwrap();
+    assert_eq!(aborted.outcome, AbortOutcome::AbortIncomplete);
+    assert_eq!(aborted.cleanup.len(), 1);
+    let tail = aborted.cleanup.get(0).unwrap();
+    assert_eq!(tail.committed_target_length, committed_length);
+    assert_eq!(
+        tail.observed_tail_end_exclusive,
+        Some(committed_length + 4096)
+    );
+    assert!(matches!(
+        writer.begin_direct_transaction(&CancellationToken::new()),
+        Err(Error::WrongMode(_))
+    ));
+
+    fs::rename(files.saved_main(), &files.main).unwrap();
+    let closed = writer.close().unwrap();
+    assert_eq!(closed.outcome, CloseOutcome::Closed);
+    assert_eq!(closed.abort_outcome, Some(AbortOutcome::Aborted));
+    assert!(closed.cleanup.is_empty());
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), committed_length);
+}
+
+#[test]
+fn failed_abort_never_extends_a_shortened_committed_file() {
+    let files = TestPair::new("abort-short-file");
+    create(&files);
+    let committed = fs::read(&files.main).unwrap();
+    let committed_length = committed.len() as u64;
+    let token = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    drop(transaction);
+
+    let shortened_length = committed_length - 4096;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&files.main)
+        .unwrap()
+        .set_len(shortened_length)
+        .unwrap();
+
+    let closed = writer.close().unwrap();
+    assert_eq!(closed.outcome, CloseOutcome::CloseIncomplete);
+    assert_eq!(closed.abort_outcome, Some(AbortOutcome::AbortIncomplete));
+    assert!(closed.cleanup.is_empty());
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), shortened_length);
+
+    fs::write(&files.main, committed).unwrap();
+    let closed = writer.close().unwrap();
+    assert_eq!(closed.outcome, CloseOutcome::Closed);
+    assert_eq!(closed.abort_outcome, Some(AbortOutcome::Aborted));
 }
 
 #[test]

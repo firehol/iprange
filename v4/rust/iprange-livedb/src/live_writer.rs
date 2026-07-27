@@ -21,7 +21,7 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED};
 use crate::database;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
-use crate::error::{Error, Result};
+use crate::error::{finish_with_cleanup, Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
@@ -100,6 +100,7 @@ pub struct LiveWriter {
     pub(super) base: Bootstrap,
     pub(super) budget: TransactionBudget,
     pub(super) draft: Option<Draft>,
+    unproved_tail_end: Option<u64>,
     state: State,
     owner_pid: u32,
 }
@@ -133,8 +134,7 @@ impl LiveWriter {
             &sidecar,
             cancellation,
         );
-        let unlocked = sidecar.unlock_gate();
-        let base = gate_result(opened, unlocked)?;
+        let base = finish_with_cleanup(opened, sidecar.unlock_gate())?;
 
         Ok(Self {
             file: main.file,
@@ -147,6 +147,7 @@ impl LiveWriter {
             base,
             budget,
             draft: None,
+            unproved_tail_end: None,
             state: State::Healthy,
             owner_pid: std::process::id(),
         })
@@ -275,7 +276,7 @@ impl LiveWriter {
         match self.discard_draft() {
             Ok(()) => Ok(AbortResult::aborted()),
             Err(cause) => Ok(AbortResult::incomplete(
-                self.unpublished_tail_artifact(cause.code()),
+                self.unpublished_tail_cleanup(cause.code()),
                 cause,
             )),
         }
@@ -408,16 +409,54 @@ impl LiveWriter {
     }
 
     fn discard_draft(&mut self) -> Result<()> {
-        match self.file.set_len(self.base.committed_bytes) {
+        match self.discard_draft_inner() {
             Ok(()) => {
                 self.draft = None;
+                self.unproved_tail_end = None;
                 Ok(())
             }
             Err(error) => {
                 self.state = State::Unusable;
-                Err(error.into())
+                Err(error)
             }
         }
+    }
+
+    fn discard_draft_inner(&mut self) -> Result<()> {
+        self.verify_discard_base()?;
+        self.trim_unpublished_tail()?;
+        self.verify_discard_result()
+    }
+
+    fn verify_discard_base(&self) -> Result<()> {
+        verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
+        self.require_unchanged_base()?;
+        verify_pair(&self.main_path, self.main_identity, &self.sidecar)
+    }
+
+    fn trim_unpublished_tail(&mut self) -> Result<()> {
+        let length = self.file.metadata()?.len();
+        if length < self.base.committed_bytes {
+            return Err(Error::Corrupt(
+                "main file is shorter than its committed generation",
+            ));
+        }
+        if length > self.base.committed_bytes {
+            self.unproved_tail_end = Some(length);
+            self.file.set_len(self.base.committed_bytes)?;
+            self.file.sync_all()?;
+        }
+        Ok(())
+    }
+
+    fn verify_discard_result(&self) -> Result<()> {
+        self.require_unchanged_base()?;
+        if self.file.metadata()?.len() != self.base.committed_bytes {
+            return Err(Error::Corrupt(
+                "unpublished tail cleanup changed file length",
+            ));
+        }
+        verify_pair(&self.main_path, self.main_identity, &self.sidecar)
     }
 
     pub(crate) fn abort_after(&mut self, cause: Error) -> Error {
@@ -440,11 +479,20 @@ impl LiveWriter {
         Error::TransactionAborted(Box::new(cause))
     }
 
-    fn unpublished_tail_artifact(
+    fn unpublished_tail_cleanup(
         &self,
         cleanup_error: crate::error::ErrorCode,
-    ) -> CommitCleanupArtifact {
-        CommitCleanupArtifact {
+    ) -> CommitCleanupArtifacts {
+        let current_end = self.file.metadata().ok().map(|metadata| metadata.len());
+        let observed_tail_end_exclusive = [self.unproved_tail_end, current_end]
+            .into_iter()
+            .flatten()
+            .filter(|&length| length > self.base.committed_bytes)
+            .max();
+        let Some(observed_tail_end_exclusive) = observed_tail_end_exclusive else {
+            return CommitCleanupArtifacts::clean();
+        };
+        CommitCleanupArtifacts::tail(CommitCleanupArtifact {
             directory_identity: self.directory_identity,
             main_basename: self.main_basename,
             main_identity: self.main_public_identity,
@@ -452,9 +500,9 @@ impl LiveWriter {
             target_transaction_id: self.base.meta.txn_id,
             target_commit_nonce: self.base.meta.commit_nonce,
             committed_target_length: self.base.committed_bytes,
-            observed_tail_end_exclusive: self.file.metadata().ok().map(|metadata| metadata.len()),
+            observed_tail_end_exclusive: Some(observed_tail_end_exclusive),
             cleanup_error,
-        }
+        })
     }
 }
 
@@ -528,11 +576,4 @@ fn trim_tail(file: &File, base: Bootstrap) -> Result<()> {
         file.sync_all()?;
     }
     Ok(())
-}
-
-fn gate_result<T>(operation: Result<T>, unlock: Result<()>) -> Result<T> {
-    match (operation, unlock) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), _) | (Ok(_), Err(error)) => Err(error),
-    }
 }

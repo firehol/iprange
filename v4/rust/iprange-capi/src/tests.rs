@@ -54,6 +54,7 @@ impl Drop for Files {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.main);
         let _ = fs::remove_file(self.sidecar());
+        let _ = fs::remove_file(self.sidecar().with_extension("readers.saved"));
     }
 }
 
@@ -299,6 +300,46 @@ fn fixed_cardinality_layout_and_version_are_exact() {
     assert_eq!(std::mem::size_of::<crate::abi::Cardinality129>(), 24);
     assert_eq!(std::mem::align_of::<crate::abi::Cardinality129>(), 8);
     assert_eq!(std::mem::size_of::<Ip>(), 20);
+}
+
+#[test]
+fn reader_close_failure_keeps_the_c_handle_retryable() {
+    let files = Files::new();
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"asn").unwrap(),
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    let mut reader = std::ptr::null_mut();
+    let mut error = std::ptr::null_mut();
+    let status = unsafe {
+        crate::lifecycle::iprange_v4_abi1_open_live_reader(
+            files.abi_path(),
+            Cancellation::default(),
+            &mut reader,
+            &mut error,
+        )
+    };
+    assert_ok(status, error);
+
+    let saved = files.sidecar().with_extension("readers.saved");
+    fs::rename(files.sidecar(), &saved).unwrap();
+    let status = unsafe { crate::lifecycle::iprange_v4_abi1_reader_close(reader, &mut error) };
+    assert_ne!(status, 0);
+    assert!(!error.is_null());
+    unsafe { destroy_error(error) };
+    error = std::ptr::null_mut();
+
+    fs::rename(&saved, files.sidecar()).unwrap();
+    let status = unsafe { crate::lifecycle::iprange_v4_abi1_reader_close(reader, &mut error) };
+    assert_ok(status, error);
+    let status = unsafe { crate::lifecycle::iprange_v4_abi1_reader_destroy(reader, &mut error) };
+    assert_ok(status, error);
 }
 
 #[test]

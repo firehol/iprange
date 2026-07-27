@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
@@ -85,6 +87,39 @@ fn live_inspection_is_read_only_and_returns_only_proven_current() {
         RecoveryCandidateLabel::Newest
     );
     assert_eq!(inspection.candidate(0).unwrap().transaction_id(), 2);
+    assert_eq!(fs::read(sidecar).unwrap(), before);
+}
+
+#[test]
+fn live_inspection_checks_cancellation_across_reader_capacity() {
+    let paths = Paths::new("live-capacity-cancellation");
+    create_live(
+        &paths.live,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        64,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let sidecar = sidecar_path(&paths.live);
+    let before = fs::read(&sidecar).unwrap();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&polls);
+    let cancellation = CancellationToken::from_poll(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+        false
+    }));
+
+    inspect_recovery_candidates(
+        &paths.live,
+        RecoveryInspectionMode::Live,
+        &ValidationBudget::heap_only(0, 2),
+        &cancellation,
+    )
+    .unwrap();
+
+    assert!(polls.load(Ordering::SeqCst) >= 64);
     assert_eq!(fs::read(sidecar).unwrap(), before);
 }
 

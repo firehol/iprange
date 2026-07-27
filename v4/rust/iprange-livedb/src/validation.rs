@@ -21,8 +21,10 @@ use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
 use crate::database;
 use crate::error::{Error, Result};
+use crate::publication::{CleanupArtifacts, CoordinationCleanup};
+use crate::recovery::RecoverySourceCleanupGuard;
 
-use source::{combine_cleanup, ImmutableSource, LiveBootstrapSource, LiveOpened, LiveSource};
+use source::{ImmutableSource, LiveBootstrapSource, LiveOpened, LiveSource};
 
 pub use types::{
     LocalFileIdentity, PhysicalByteInterval, ValidatedGeneration, ValidationAddressFence,
@@ -73,7 +75,7 @@ fn validate_offline<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    let source = crate::recovery::inspection::OfflineSource::open(path)
+    let source = crate::recovery::inspection::OfflineSource::open(path, cancellation)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let identity = source.public_identity();
     let classified = crate::recovery::inspection::read_classified(&source.file, cancellation)
@@ -140,7 +142,9 @@ fn validate_live<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    match LiveSource::open(path).map_err(|cause| failure(cause, ValidationProgress::new()))? {
+    match LiveSource::open(path, cancellation).map_err(|failure| {
+        failure_with_guard(failure.cause, ValidationProgress::new(), failure.guard)
+    })? {
         LiveOpened::Selected(source) => validate_live_selected(source, budget, cancellation, sink),
         LiveOpened::Bootstrap(source, problem) => validate_live_bootstrap(source, problem, sink),
     }
@@ -157,28 +161,21 @@ fn validate_live_selected<S: ValidationSink>(
     let mut context = match context::Context::new(&source.file, meta, budget, cancellation, sink) {
         Ok(context) => context,
         Err(cause) => {
-            return match source.close() {
-                Ok(()) => Err(failure(cause, ValidationProgress::new())),
-                Err(cleanup) => Err(failure(
-                    Error::CleanupIncomplete {
-                        cause: Box::new(cause),
-                        cleanup: Box::new(cleanup),
-                    },
-                    ValidationProgress::new(),
-                )),
-            };
+            let end = source.finish(Err(cause));
+            return Err(failure_with_guard(
+                end.cause.expect("failed validation retains its cause"),
+                ValidationProgress::new(),
+                end.guard,
+            ));
         }
     };
     let scan = context
         .reserve_allocator_pages()
         .and_then(|()| validate_selected(&mut context));
     let progress = context.finish();
-    let cleanup = source.close();
-    if let Err(cause) = scan {
-        return Err(failure(combine_cleanup(cause, cleanup), progress));
-    }
-    if let Err(cause) = cleanup {
-        return Err(failure(cause, progress));
+    let end = source.finish(scan);
+    if let Some(cause) = end.cause {
+        return Err(failure_with_guard(cause, progress, end.guard));
     }
     Ok(ValidationResult {
         valid: progress.finding_count == 0,
@@ -195,18 +192,11 @@ fn validate_live_bootstrap<S: ValidationSink>(
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
     let file_identity = source.public_identity();
     let mut progress = ValidationProgress::new();
-    let report = write_bootstrap_findings(problem, sink, &mut progress);
-    if report.is_ok() {
-        if let Err(cause) = progress.mark_untraversable(true) {
-            return Err(failure(cause, progress));
-        }
-    }
-    let cleanup = source.close();
-    if let Err(cause) = report {
-        return Err(failure(combine_cleanup(cause, cleanup), progress));
-    }
-    if let Err(cause) = cleanup {
-        return Err(failure(cause, progress));
+    let report = write_bootstrap_findings(problem, sink, &mut progress)
+        .and_then(|()| progress.mark_untraversable(true));
+    let end = source.finish(report);
+    if let Some(cause) = end.cause {
+        return Err(failure_with_guard(cause, progress, end.guard));
     }
     Ok(ValidationResult {
         valid: false,
@@ -222,8 +212,8 @@ fn validate_immutable<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    let source =
-        ImmutableSource::open(path).map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let source = ImmutableSource::open(path, cancellation)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let bootstrap = match database::bootstrap_file(&source.file, OpenMode::ImmutableReader) {
         Ok(bootstrap) => bootstrap,
         Err(Error::Format(problem)) => {
@@ -378,9 +368,25 @@ fn report_bootstrap_finding<S: ValidationSink>(
 }
 
 fn failure(cause: Error, progress: ValidationProgress) -> ValidationFailure {
+    failure_with_guard(cause, progress, None)
+}
+
+fn failure_with_guard(
+    cause: Error,
+    progress: ValidationProgress,
+    source_cleanup: Option<RecoverySourceCleanupGuard>,
+) -> ValidationFailure {
+    let coordination_cleanup = if source_cleanup.is_some() {
+        CoordinationCleanup::CleanupGuard
+    } else {
+        CoordinationCleanup::None
+    };
     ValidationFailure {
         cause,
         progress: Box::new(progress),
+        cleanup: Box::new(CleanupArtifacts::new()),
+        coordination_cleanup,
+        source_cleanup,
     }
 }
 

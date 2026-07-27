@@ -5,7 +5,7 @@ use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::database;
 use crate::draft_store::DraftStore;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 use crate::file_io;
 use crate::live_lock::Mode;
 use crate::publication::CoordinationCleanup;
@@ -23,17 +23,17 @@ enum Phase {
 impl LiveWriter {
     /// Publish all pending changes through the alternate metadata page.
     pub fn commit(&mut self, cancellation: &CancellationToken) -> Result<CommitResult> {
-        self.commit_with(Some(cancellation))
+        self.commit_with(cancellation)
     }
 
     pub(crate) fn commit_operation(
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<CommitResult> {
-        self.commit_with(Some(cancellation))
+        self.commit_with(cancellation)
     }
 
-    fn commit_with(&mut self, cancellation: Option<&CancellationToken>) -> Result<CommitResult> {
+    fn commit_with(&mut self, cancellation: &CancellationToken) -> Result<CommitResult> {
         let attempt = self.commit_attempt()?;
         if let Err(cause) = self.prepare_and_lock(cancellation) {
             let cause = self.abort_after(cause);
@@ -71,29 +71,26 @@ impl LiveWriter {
             .ok_or(Error::NoPendingTransaction)
     }
 
-    fn prepare_and_lock(&mut self, cancellation: Option<&CancellationToken>) -> Result<()> {
-        checkpoint(cancellation)?;
+    fn prepare_and_lock(&mut self, cancellation: &CancellationToken) -> Result<()> {
+        cancellation.check()?;
         self.prepare_with(cancellation)?;
-        checkpoint(cancellation)?;
-        match cancellation {
-            Some(cancellation) => self
-                .sidecar
-                .lock_gate_cancellable(Mode::Exclusive, cancellation),
-            None => self.sidecar.lock_gate(Mode::Exclusive),
-        }
+        cancellation.check()?;
+        self.sidecar
+            .lock_gate_cancellable(Mode::Exclusive, cancellation)
     }
 
     pub(super) fn finish_commit_locked(
         &mut self,
         attempt: ([u8; 16], u64, [u8; 16]),
+        cancellation: &CancellationToken,
     ) -> CommitResult {
-        self.finish_commit_locked_with(attempt, None)
+        self.finish_commit_locked_with(attempt, cancellation)
     }
 
     fn finish_commit_locked_with(
         &mut self,
         attempt: ([u8; 16], u64, [u8; 16]),
-        cancellation: Option<&CancellationToken>,
+        cancellation: &CancellationToken,
     ) -> CommitResult {
         match self.commit_locked(cancellation) {
             Phase::BeforePublication(cause) => {
@@ -102,12 +99,14 @@ impl LiveWriter {
             }
             Phase::OutcomeUnknown(cause) => {
                 self.draft = None;
+                self.unproved_tail_end = None;
                 self.state = State::OutcomeUnknown;
                 self.failed_result(attempt, CommitDurability::OutcomeUnknown, cause)
             }
             Phase::Committed(base) => {
                 self.base = base;
                 self.draft = None;
+                self.unproved_tail_end = None;
                 CommitResult {
                     attempted_database_id: attempt.0,
                     directory_identity: self.directory_identity,
@@ -126,9 +125,10 @@ impl LiveWriter {
     pub(super) fn apply_commit_unlock(&mut self, result: &mut CommitResult, unlock: Result<()>) {
         if let Err(cause) = unlock {
             self.state = State::Unusable;
-            if result.cause.is_none() {
-                result.cause = Some(cause);
-            }
+            result.cause = Some(match result.cause.take() {
+                Some(primary) => combine_errors(primary, Err(cause)),
+                None => cause,
+            });
             result.coordination_cleanup = CoordinationCleanup::RetainedWriterCloseRequired;
         }
     }
@@ -137,10 +137,10 @@ impl LiveWriter {
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<()> {
-        self.prepare_with(Some(cancellation))
+        self.prepare_with(cancellation)
     }
 
-    fn prepare_with(&mut self, cancellation: Option<&CancellationToken>) -> Result<()> {
+    fn prepare_with(&mut self, cancellation: &CancellationToken) -> Result<()> {
         let draft = self.draft.as_mut().unwrap();
         let mut store = DraftStore::new(
             &self.file,
@@ -148,19 +148,19 @@ impl LiveWriter {
             self.budget.pages(),
             draft,
         );
-        let mut check = || checkpoint(cancellation);
+        let mut check = || cancellation.check();
         store.prepare_with_checkpoint(&mut check)
     }
 
-    fn commit_locked(&self, cancellation: Option<&CancellationToken>) -> Phase {
-        if let Err(error) = checkpoint(cancellation) {
+    fn commit_locked(&self, cancellation: &CancellationToken) -> Phase {
+        if let Err(error) = cancellation.check() {
             return Phase::BeforePublication(error);
         }
-        match self.prepublication_checks() {
+        match self.prepublication_checks(cancellation) {
             Ok(()) => {}
             Err(error) => return Phase::BeforePublication(error),
         }
-        if let Err(error) = checkpoint(cancellation) {
+        if let Err(error) = cancellation.check() {
             return Phase::BeforePublication(error);
         }
         crate::fault::crash("commit.before_private_sync");
@@ -168,7 +168,7 @@ impl LiveWriter {
             return Phase::BeforePublication(error.into());
         }
         crate::fault::crash("commit.after_private_sync");
-        if let Err(error) = checkpoint(cancellation) {
+        if let Err(error) = cancellation.check() {
             return Phase::BeforePublication(error);
         }
 
@@ -197,10 +197,11 @@ impl LiveWriter {
         })
     }
 
-    fn prepublication_checks(&self) -> Result<()> {
+    fn prepublication_checks(&self, cancellation: &CancellationToken) -> Result<()> {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
         self.require_unchanged_base()?;
-        self.sidecar.scan_at_most(self.base.meta.txn_id)?;
+        self.sidecar
+            .scan_at_most_cancellable(self.base.meta.txn_id, cancellation)?;
         self.require_draft_length()?;
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)
     }
@@ -237,7 +238,7 @@ impl LiveWriter {
         cause: Error,
     ) -> CommitResult {
         let cleanup = if self.draft.is_some() {
-            CommitCleanupArtifacts::tail(self.unpublished_tail_artifact(cause.code()))
+            self.unpublished_tail_cleanup(cause.code())
         } else {
             CommitCleanupArtifacts::clean()
         };
@@ -260,12 +261,5 @@ impl LiveWriter {
             coordination_cleanup,
             cause: Some(cause),
         }
-    }
-}
-
-fn checkpoint(cancellation: Option<&CancellationToken>) -> Result<()> {
-    match cancellation {
-        Some(token) => token.check(),
-        None => Ok(()),
     }
 }

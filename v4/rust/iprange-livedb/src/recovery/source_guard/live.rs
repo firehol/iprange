@@ -57,14 +57,25 @@ impl LiveSource {
     }
 
     fn release_slot(&mut self) -> Result<()> {
-        if !self.slot_active {
+        if self.registration == RegistrationState::Released {
             return Ok(());
         }
         self.ensure_gate()?;
-        self.sidecar
-            .release_reader(self.slot)
-            .map_err(live_coordination)?;
-        self.slot_active = false;
+        if self.registration == RegistrationState::Active {
+            self.registration = RegistrationState::Clearing;
+        }
+        if self.registration == RegistrationState::Clearing {
+            self.sidecar
+                .clear_reader(self.slot)
+                .map_err(live_coordination)?;
+            self.registration = RegistrationState::Cleared;
+        }
+        if self.registration == RegistrationState::Cleared {
+            self.sidecar
+                .unlock_reader(self.slot)
+                .map_err(live_coordination)?;
+            self.registration = RegistrationState::Released;
+        }
         Ok(())
     }
 
@@ -129,10 +140,10 @@ fn finish_open(
 ) -> std::result::Result<Source, SourceOpenFailure> {
     match opened {
         Ok(source) => Ok(Source::Live(source)),
-        Err(LiveOpenFailure::Unclaimed(file, cause)) => {
-            let _ = live_lock::unlock(&file, MAIN_LIFETIME_LOCK);
-            Err(open_problem(cause))
-        }
+        Err(LiveOpenFailure::Unclaimed(file, cause)) => Err(open_problem(combine_errors(
+            cause,
+            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+        ))),
         Err(LiveOpenFailure::Claimed(source, cause)) => {
             let end = Source::Live(*source).abandon(cause);
             Err(SourceOpenFailure {
@@ -196,7 +207,15 @@ fn open_sidecar_locked(
         initial,
         cancellation,
     );
-    claim_or_release(file, path, identity, sidecar, candidate, prepared)
+    claim_or_release(
+        file,
+        path,
+        identity,
+        sidecar,
+        candidate,
+        prepared,
+        cancellation,
+    )
 }
 
 fn claim_or_release(
@@ -206,24 +225,30 @@ fn claim_or_release(
     sidecar: Sidecar,
     candidate: Option<RecoveryCandidate>,
     prepared: Result<MetaV4>,
+    cancellation: &CancellationToken,
 ) -> std::result::Result<LiveSource, LiveOpenFailure> {
     let meta = match prepared {
         Ok(meta) => meta,
         Err(cause) => {
-            let _ = sidecar.unlock_gate();
-            return Err(LiveOpenFailure::Unclaimed(file, cause));
+            return Err(LiveOpenFailure::Unclaimed(
+                file,
+                combine_errors(cause, sidecar.unlock_gate()),
+            ));
         }
     };
-    match claim_prepared(file, path, identity, sidecar, candidate, meta) {
+    match claim_prepared(file, path, identity, sidecar, candidate, meta, cancellation) {
         Ok(source) => Ok(source),
-        Err(ClaimFailure::Unclaimed(file, sidecar, cause)) => {
-            let _ = sidecar.unlock_gate();
-            Err(LiveOpenFailure::Unclaimed(file, cause))
-        }
+        Err(ClaimFailure::Unclaimed(file, sidecar, cause)) => Err(LiveOpenFailure::Unclaimed(
+            file,
+            combine_errors(cause, sidecar.unlock_gate()),
+        )),
         Err(ClaimFailure::Claimed(mut source, cause)) => {
             if let Err(unlock) = source.sidecar.unlock_gate().map_err(live_coordination) {
                 source.gate_locked = true;
-                return Err(LiveOpenFailure::Claimed(source, unlock));
+                return Err(LiveOpenFailure::Claimed(
+                    source,
+                    combine_errors(cause, Err(unlock)),
+                ));
             }
             source.gate_locked = false;
             Err(LiveOpenFailure::Claimed(source, cause))
@@ -250,7 +275,7 @@ fn prepare_claim(
         return Err(Error::RecoveryCandidateChanged);
     }
     sidecar
-        .scan_at_most(meta.txn_id)
+        .scan_at_most_cancellable(meta.txn_id, cancellation)
         .map_err(live_coordination)?;
     Ok(meta)
 }
@@ -263,8 +288,12 @@ fn claim_prepared(
     sidecar: Sidecar,
     candidate: Option<RecoveryCandidate>,
     meta: MetaV4,
+    cancellation: &CancellationToken,
 ) -> std::result::Result<LiveSource, ClaimFailure> {
-    let slot = match sidecar.claim_reader(meta.txn_id).map_err(live_coordination) {
+    let slot = match sidecar
+        .claim_reader_cancellable(meta.txn_id, cancellation)
+        .map_err(live_coordination)
+    {
         Ok(slot) => slot,
         Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause)),
     };
@@ -277,7 +306,7 @@ fn claim_prepared(
         candidate,
         meta,
         gate_locked: true,
-        slot_active: true,
+        registration: RegistrationState::Active,
         lifetime_locked: true,
         owner_pid: std::process::id(),
     };

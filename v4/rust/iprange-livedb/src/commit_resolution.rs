@@ -6,7 +6,7 @@ use crate::bootstrap::{self, Bootstrap, CommitAttemptResolution, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::database;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
@@ -110,8 +110,7 @@ pub fn resolve_commit(
             let sidecar = live_sidecar::Sidecar::open(path, attempt.attempted_database_id)?;
             sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
             if let Err(cause) = sidecar.claim_writer() {
-                let _ = sidecar.unlock_gate();
-                return Err(cause);
+                return Err(combine_errors(cause, sidecar.unlock_gate()));
             }
             let mut result = resolve_locked(
                 path,

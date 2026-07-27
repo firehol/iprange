@@ -154,11 +154,18 @@ fn finish_validation(
             *output = Box::into_raw(Box::new(ReportHandle::validation(result)));
             Ok(())
         }
-        Err(failure) => {
-            *output = Box::into_raw(Box::new(ReportHandle::validation_failure(
-                &failure.progress,
-            )));
-            Err(adapter.failure.unwrap_or_else(|| failure.cause.into()))
+        Err(mut failure) => {
+            let mut report = ReportHandle::validation_failure(&failure);
+            let cleanup_failed = failure.source_cleanup.is_some();
+            report.set_cleanup_guard(failure.source_cleanup.take());
+            *output = Box::into_raw(Box::new(report));
+            match adapter.failure {
+                Some(callback) if cleanup_failed => {
+                    Err(ErrorHandle::source_cleanup_failure(failure.cause, callback).into())
+                }
+                Some(callback) => Err(callback),
+                None => Err(failure.cause.into()),
+            }
         }
     }
 }

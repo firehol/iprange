@@ -92,10 +92,11 @@ impl<'a, S: ValidationSink> Context<'a, S> {
     }
 
     pub(crate) fn count_membership_range(&mut self, id: u32) -> Result<InsertResult> {
+        let cancellation = self.cancellation;
         self.memberships
             .as_mut()
             .ok_or(Error::Corrupt("direct validation has no membership table"))?
-            .count_range(id)
+            .count_range(id, cancellation)
     }
 
     pub(crate) fn define_membership(
@@ -105,11 +106,11 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         word_count: u32,
         digest: [u8; 32],
     ) -> Result<InsertResult> {
-        Ok(self
-            .memberships
+        let cancellation = self.cancellation;
+        self.memberships
             .as_mut()
             .ok_or(Error::Corrupt("direct validation has no membership table"))?
-            .define(id, refcount, word_count, digest))
+            .define(id, refcount, word_count, digest, cancellation)
     }
 
     pub(crate) fn mark_membership_reverse(
@@ -118,11 +119,11 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         word_count: u32,
         digest: [u8; 32],
     ) -> Result<bool> {
-        Ok(self
-            .memberships
+        let cancellation = self.cancellation;
+        self.memberships
             .as_mut()
             .ok_or(Error::Corrupt("direct validation has no membership table"))?
-            .mark_reverse(id, word_count, digest))
+            .mark_reverse(id, word_count, digest, cancellation)
     }
 
     pub(crate) fn membership_slots(&self) -> Result<usize> {
@@ -272,6 +273,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         page_number: u32,
         object: ValidationObject,
     ) -> Result<()> {
+        self.checkpoint()?;
         if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
             self.emit(
                 ValidationReason::PageOutOfBounds,
@@ -313,18 +315,32 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         Ok(())
     }
 
-    fn next_unclaimed(&self, mut page: u64) -> Result<Option<(u64, u64)>> {
-        while page < self.meta.page_count && self.claims.get(page as u32)? != UNCLAIMED {
-            page += 1;
-        }
+    fn next_unclaimed(&self, page: u64) -> Result<Option<(u64, u64)>> {
+        let page = self.skip_claimed(page)?;
         if page == self.meta.page_count {
             return Ok(None);
         }
-        let start = page;
-        while page < self.meta.page_count && self.claims.get(page as u32)? == UNCLAIMED {
+        Ok(Some((page, self.skip_unclaimed(page)?)))
+    }
+
+    fn skip_claimed(&self, mut page: u64) -> Result<u64> {
+        while page < self.meta.page_count && self.claims.get(page as u32)? != UNCLAIMED {
+            if page & 63 == 0 {
+                self.checkpoint()?;
+            }
             page += 1;
         }
-        Ok(Some((start, page)))
+        Ok(page)
+    }
+
+    fn skip_unclaimed(&self, mut page: u64) -> Result<u64> {
+        while page < self.meta.page_count && self.claims.get(page as u32)? == UNCLAIMED {
+            if page & 63 == 0 {
+                self.checkpoint()?;
+            }
+            page += 1;
+        }
+        Ok(page)
     }
 
     pub(crate) fn emit(

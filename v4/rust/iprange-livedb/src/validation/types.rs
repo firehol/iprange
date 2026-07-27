@@ -4,6 +4,8 @@ use crate::cardinality::Cardinality129;
 use crate::contract::{AddressFamily, ValueKind, ValueTag};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::publication::{CleanupArtifacts, CleanupState, CoordinationCleanup};
+use crate::recovery::RecoverySourceCleanupGuard;
 
 /// Explicit validation source and coordination mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -295,4 +297,18 @@ pub struct ValidationResult {
 pub struct ValidationFailure {
     pub cause: Error,
     pub progress: Box<ValidationProgress>,
+    pub cleanup: Box<CleanupArtifacts>,
+    pub coordination_cleanup: CoordinationCleanup,
+    pub source_cleanup: Option<RecoverySourceCleanupGuard>,
+}
+
+impl ValidationFailure {
+    pub const fn cleanup_state(&self) -> CleanupState {
+        if self.cleanup.is_empty() && matches!(self.coordination_cleanup, CoordinationCleanup::None)
+        {
+            CleanupState::Clean
+        } else {
+            CleanupState::ResiduePossible
+        }
+    }
 }

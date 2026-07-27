@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::database;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
-use crate::validation::source::{combine_cleanup, public_identity, ImmutableSource};
+use crate::validation::source::{public_identity, ImmutableSource};
 use crate::validation::ValidationBudget;
 
 use super::classify::{ClassifiedMetas, GenerationOrder};
@@ -58,7 +58,7 @@ fn inspect_immutable(
     path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
-    let source = ImmutableSource::open(path)?;
+    let source = ImmutableSource::open(path, cancellation)?;
     let classified = read_classified(&source.file, cancellation)?;
     require_immutable_available(&source, &classified)?;
     source.verify()?;
@@ -69,7 +69,7 @@ fn inspect_offline(
     path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
-    let source = OfflineSource::open(path)?;
+    let source = OfflineSource::open(path, cancellation)?;
     let classified = read_classified(&source.file, cancellation)?;
     require_offline_available(&source, &classified)?;
     source.verify()?;
@@ -82,7 +82,7 @@ fn inspect_live(
 ) -> Result<RecoveryCandidateInspection> {
     let file = database::open_read_only(path)?;
     let identity = live_sidecar::identity(&file)?;
-    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(path, identity)?;
     let initial = read_classified(&file, cancellation)?;
     let current = require_live_current(&initial)?;
@@ -90,7 +90,7 @@ fn inspect_live(
     let sidecar =
         live_sidecar::Sidecar::open(path, current.database_id).map_err(live_coordination_error)?;
     sidecar
-        .lock_gate(Mode::Exclusive)
+        .lock_gate_cancellable(Mode::Exclusive, cancellation)
         .map_err(live_coordination_error)?;
     let result = inspect_live_locked(path, &file, identity, &sidecar, cancellation);
     release_live_gate(&sidecar, result)
@@ -106,7 +106,7 @@ fn release_live_gate(
             unlocked?;
             Ok(result)
         }
-        Err(cause) => Err(combine_cleanup(cause, unlocked)),
+        Err(cause) => Err(combine_errors(cause, unlocked)),
     }
 }
 
@@ -127,7 +127,7 @@ fn inspect_live_locked(
         )));
     }
     sidecar
-        .inspect_at_most(current.txn_id)
+        .inspect_at_most_cancellable(current.txn_id, cancellation)
         .map_err(live_coordination_error)?;
     verify_live(path, identity, sidecar)?;
     live_inspection(public_identity(identity), &classified)
@@ -175,7 +175,11 @@ fn require_offline_available(source: &OfflineSource, classified: &ClassifiedMeta
 }
 
 fn live_coordination_error(cause: Error) -> Error {
-    Error::LiveRecoveryCoordinationUnavailable(Box::new(cause))
+    match cause {
+        Error::Cancelled => Error::Cancelled,
+        Error::LiveRecoveryCoordinationUnavailable(_) => cause,
+        cause => Error::LiveRecoveryCoordinationUnavailable(Box::new(cause)),
+    }
 }
 
 fn inspection(
@@ -229,10 +233,10 @@ pub(crate) struct OfflineSource {
 }
 
 impl OfflineSource {
-    pub(crate) fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
         let file = live_sidecar::open_rw(path)?;
         let identity = live_sidecar::identity_any_link(&file)?;
-        live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive)?;
+        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
         live_sidecar::verify_path_any_link(path, identity)?;
         Ok(Self {
             file,

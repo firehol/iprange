@@ -1,5 +1,6 @@
 use std::mem;
 
+use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Copy)]
@@ -76,8 +77,12 @@ impl Table {
         self.slots.len() as u64 * mem::size_of::<Slot>() as u64
     }
 
-    pub(crate) fn count_range(&mut self, id: u32) -> Result<InsertResult> {
-        let Some(index) = self.find_or_empty(id) else {
+    pub(crate) fn count_range(
+        &mut self,
+        id: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<InsertResult> {
+        let Some(index) = self.find_or_empty(id, cancellation)? else {
             return Ok(InsertResult::Full);
         };
         let result = if self.slots[index].id == 0 {
@@ -99,26 +104,33 @@ impl Table {
         stored_refcount: u64,
         word_count: u32,
         digest: [u8; 32],
-    ) -> InsertResult {
-        let Some(index) = self.find_or_empty(id) else {
-            return InsertResult::Full;
+        cancellation: &CancellationToken,
+    ) -> Result<InsertResult> {
+        let Some(index) = self.find_or_empty(id, cancellation)? else {
+            return Ok(InsertResult::Full);
         };
         let slot = &mut self.slots[index];
         if slot.id == 0 {
             slot.id = id;
         } else if slot.defined {
-            return InsertResult::Existing;
+            return Ok(InsertResult::Existing);
         }
         slot.stored_refcount = stored_refcount;
         slot.word_count = word_count;
         slot.digest = digest;
         slot.defined = true;
-        InsertResult::Inserted
+        Ok(InsertResult::Inserted)
     }
 
-    pub(crate) fn mark_reverse(&mut self, id: u32, word_count: u32, digest: [u8; 32]) -> bool {
-        let Some(index) = self.find(id) else {
-            return false;
+    pub(crate) fn mark_reverse(
+        &mut self,
+        id: u32,
+        word_count: u32,
+        digest: [u8; 32],
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        let Some(index) = self.find(id, cancellation)? else {
+            return Ok(false);
         };
         let slot = &mut self.slots[index];
         if !slot.defined
@@ -126,10 +138,10 @@ impl Table {
             || slot.digest != digest
             || slot.reverse_seen
         {
-            return false;
+            return Ok(false);
         }
         slot.reverse_seen = true;
-        true
+        Ok(true)
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -140,37 +152,71 @@ impl Table {
         self.slots.get(index).copied().filter(|slot| slot.id != 0)
     }
 
-    fn find(&self, id: u32) -> Option<usize> {
+    fn find(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
         if self.slots.is_empty() || id == 0 {
-            return None;
+            return Ok(None);
         }
         let mut index = hash(id) & self.mask;
-        for _ in 0..self.slots.len() {
+        for probe in 0..self.slots.len() {
+            if probe & 63 == 0 {
+                cancellation.check()?;
+            }
             match self.slots[index].id {
-                0 => return None,
-                found if found == id => return Some(index),
+                0 => return Ok(None),
+                found if found == id => return Ok(Some(index)),
                 _ => index = (index + 1) & self.mask,
             }
         }
-        None
+        Ok(None)
     }
 
-    fn find_or_empty(&self, id: u32) -> Option<usize> {
+    fn find_or_empty(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
         if self.slots.is_empty() || id == 0 {
-            return None;
+            return Ok(None);
         }
         let mut index = hash(id) & self.mask;
-        for _ in 0..self.slots.len() {
+        for probe in 0..self.slots.len() {
+            if probe & 63 == 0 {
+                cancellation.check()?;
+            }
             let found = self.slots[index].id;
             if found == 0 || found == id {
-                return Some(index);
+                return Ok(Some(index));
             }
             index = (index + 1) & self.mask;
         }
-        None
+        Ok(None)
     }
 }
 
 fn hash(id: u32) -> usize {
     (id.wrapping_mul(0x9e37_79b1)) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn long_probe_chain_has_bounded_cancellation_checkpoints() {
+        let mut table = Table::new(64, u64::MAX).unwrap();
+        let ready = CancellationToken::new();
+        for index in 0..64 {
+            table.count_range(1 + index * 128, &ready).unwrap();
+        }
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&polls);
+        let cancellation = CancellationToken::from_poll(Arc::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst) >= 1
+        }));
+        assert!(matches!(
+            table.count_range(1 + 64 * 128, &cancellation),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
+    }
 }

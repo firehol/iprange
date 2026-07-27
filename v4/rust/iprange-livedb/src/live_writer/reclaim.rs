@@ -2,7 +2,7 @@
 
 use crate::cancellation::CancellationToken;
 use crate::draft_store::{Draft, DraftStore};
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::Mode;
 use crate::retirement::Reclamation;
 
@@ -59,7 +59,10 @@ impl LiveWriter {
     ) -> Result<ReclaimResult> {
         match operation {
             Ok(None) => {
-                self.sidecar.unlock_gate()?;
+                if let Err(cause) = self.sidecar.unlock_gate() {
+                    self.state = State::Unusable;
+                    return Err(cause);
+                }
                 Ok(ReclaimResult::NoChange)
             }
             Ok(Some((selection, mut commit))) => {
@@ -81,10 +84,13 @@ impl LiveWriter {
         } else {
             cause
         };
-        if self.sidecar.unlock_gate().is_err() {
-            self.state = State::Unusable;
+        match self.sidecar.unlock_gate() {
+            Ok(()) => cause,
+            Err(cleanup) => {
+                self.state = State::Unusable;
+                combine_errors(cause, Err(cleanup))
+            }
         }
-        cause
     }
 
     fn reclaim_locked(
@@ -129,6 +135,9 @@ impl LiveWriter {
         .apply_reclamation(selection, &mut checkpoint)?;
         self.prepare_with_cancellation(cancellation)?;
         cancellation.check()?;
-        Ok(Some((selection, self.finish_commit_locked(attempt))))
+        Ok(Some((
+            selection,
+            self.finish_commit_locked(attempt, cancellation),
+        )))
     }
 }

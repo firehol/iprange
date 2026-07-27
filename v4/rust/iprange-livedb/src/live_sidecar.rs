@@ -7,7 +7,7 @@ mod header;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{u64_le, PAGE_SIZE};
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::file_io;
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
@@ -258,6 +258,7 @@ impl Sidecar {
         live_lock::unlock(&self.file, WRITER_LOCK)
     }
 
+    #[cfg(test)]
     pub(crate) fn claim_reader(&self, txn: u64) -> Result<u32> {
         self.claim_reader_inner(txn, None)
     }
@@ -285,26 +286,17 @@ impl Sidecar {
                 continue;
             }
             if let Err(cause) = check(cancellation) {
-                return Err(combine_cleanup(
-                    cause,
-                    live_lock::unlock(&self.file, offset),
-                ));
+                return Err(combine_errors(cause, live_lock::unlock(&self.file, offset)));
             }
             let mut active = [0; SLOT_SIZE as usize];
             put_u64(&mut active, 0, txn);
             put_u64(&mut active, 8, !txn);
-            if let Err(error) = file_io::write_exact_at(&self.file, &active, offset) {
-                let _ = live_lock::unlock(&self.file, offset);
-                return Err(error);
+            if let Err(cause) = file_io::write_exact_at(&self.file, &active, offset) {
+                return Err(combine_errors(cause, live_lock::unlock(&self.file, offset)));
             }
             return Ok(slot);
         }
         Err(Error::ReaderCapacityExhausted)
-    }
-
-    pub(crate) fn release_reader(&self, slot: u32) -> Result<()> {
-        self.clear_reader(slot)?;
-        self.unlock_reader(slot)
     }
 
     pub(crate) fn clear_reader(&self, slot: u32) -> Result<()> {
@@ -324,8 +316,17 @@ impl Sidecar {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn scan_readers(&self, mut observe: impl FnMut(u64) -> Result<()>) -> Result<()> {
         self.scan_readers_inner(None, &mut observe)
+    }
+
+    pub(crate) fn scan_readers_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+        mut observe: impl FnMut(u64) -> Result<()>,
+    ) -> Result<()> {
+        self.scan_readers_inner(Some(cancellation), &mut observe)
     }
 
     pub(crate) fn scan_at_most(&self, committed_txn: u64) -> Result<()> {
@@ -349,14 +350,28 @@ impl Sidecar {
         })
     }
 
-    pub(crate) fn inspect_at_most(&self, committed_txn: u64) -> Result<()> {
+    pub(crate) fn inspect_at_most_cancellable(
+        &self,
+        committed_txn: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        self.inspect_at_most_inner(committed_txn, Some(cancellation))
+    }
+
+    fn inspect_at_most_inner(
+        &self,
+        committed_txn: u64,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<()> {
         for slot in 0..self.header.capacity {
-            if let Some(txn) = self.inspect_slot(slot)? {
-                if txn > committed_txn {
-                    return Err(Error::Corrupt(
-                        "reader slot names an uncommitted transaction",
-                    ));
-                }
+            check(cancellation)?;
+            if self
+                .inspect_slot(slot)?
+                .is_some_and(|txn| txn > committed_txn)
+            {
+                return Err(Error::Corrupt(
+                    "reader slot names an uncommitted transaction",
+                ));
             }
         }
         Ok(())
@@ -443,9 +458,7 @@ impl Sidecar {
             }
             Ok(())
         })();
-        let unlocked = live_lock::unlock(&self.file, offset);
-        cleared?;
-        unlocked
+        finish_with_cleanup(cleared, live_lock::unlock(&self.file, offset))
     }
 }
 
@@ -453,16 +466,6 @@ fn check(cancellation: Option<&CancellationToken>) -> Result<()> {
     match cancellation {
         Some(cancellation) => cancellation.check(),
         None => Ok(()),
-    }
-}
-
-fn combine_cleanup(cause: Error, cleanup: Result<()>) -> Error {
-    match cleanup {
-        Ok(()) => cause,
-        Err(cleanup) => Error::CleanupIncomplete {
-            cause: Box::new(cause),
-            cleanup: Box::new(cleanup),
-        },
     }
 }
 

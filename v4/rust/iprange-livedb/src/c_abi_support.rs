@@ -15,9 +15,9 @@ use crate::range_cursor::{CursorState, DirectRange, RangeDirection};
 use crate::source::SliceSource;
 use crate::workflow::{AddressRange, WorkflowKind, WorkflowReport};
 use crate::{
-    AbortResult, AddressFamily, CancellationToken, CommitResult, DatabaseInfo, FeedEntry, FeedName,
-    FeedRef, ImmutableReader, LiveReader, LiveWriter, MembershipImportSource, MembershipOperation,
-    MembershipRef, ReaderCloseResult, ReclaimResult, TransactionBudget, ValueTag,
+    AbortResult, AddressFamily, CancellationToken, CloseOutcome, CommitResult, DatabaseInfo,
+    FeedEntry, FeedName, FeedRef, ImmutableReader, LiveReader, LiveWriter, MembershipImportSource,
+    MembershipOperation, MembershipRef, ReclaimResult, TransactionBudget, ValueTag,
 };
 
 /// Opaque membership identity retained only inside the binding.
@@ -376,14 +376,21 @@ impl Reader {
         }
     }
 
-    pub fn close(&mut self) -> Result<Option<ReaderCloseResult>> {
-        let result = match &mut self.inner {
-            ReaderInner::Immutable(_) => None,
-            ReaderInner::Live(reader) => Some(reader.close()?),
+    pub fn close(&mut self) -> Result<()> {
+        match &mut self.inner {
+            ReaderInner::Immutable(_) => {}
+            ReaderInner::Live(reader) => {
+                let result = reader.close()?;
+                if result.outcome != CloseOutcome::Closed {
+                    return Err(result
+                        .cause
+                        .unwrap_or(Error::CleanupInProgress("live reader close is incomplete")));
+                }
+            }
             ReaderInner::Closed => return Err(Error::WrongState("reader is closed")),
-        };
+        }
         self.inner = ReaderInner::Closed;
-        Ok(result)
+        Ok(())
     }
 
     fn import_source(&self) -> Result<MembershipImportSource<'_>> {

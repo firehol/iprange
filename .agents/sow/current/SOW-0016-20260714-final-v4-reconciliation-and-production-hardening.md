@@ -4,19 +4,21 @@
 
 Status: in-progress
 
-Sub-state: all unsigned Phase-1 product decisions are resolved. The exact
-wire/static foundation, shared allocator/late-binding lifecycle, and scoped
-retirement/selective-finalization work are implemented and accepted in Go and
-Rust. Go fixed-point coordinator chunks 1-3 are accepted. Rust chunks 1-3 have
-subsequently been changed by the unfinished sparse aggregate chunks 4-6 and must
-be reviewed again as one whole. The aggregate work is active: the current Rust
-no-default and all-features matrices compile and pass, but its production
-lifecycle and canonical-record finalization are still incomplete. Transaction
-durability, the remaining fixed-point coordinator work, feed catalog/membership,
-metadata, normalization/workflows, recovery, snapshots, public SDKs, and the
-Rust-provided C ABI remain pending. Snapshot signing remains wholly in pending
-SOW-0017 and cannot block the core SDK. The prior adversarial audit and its red
-tests remain the evidence baseline.
+Sub-state: all unsigned Phase-1 product decisions are resolved. The replacement
+Rust engine, Rust SDK, Rust-provided frozen C ABI, Rust-first conformance corpus,
+explicit validation/recovery, live coordination, compact snapshots, crash
+coverage, resource proof, and update-ipsets scale benchmark are locally
+complete. Current Rust, no-default-features, and Rust 1.74.1 each pass 436 tests
+with zero failures and three intentional ignored entry points; sanitizers,
+Valgrind, lint, documentation, formatting, and Windows GNU/Apple ARM/FreeBSD
+compile-only checks pass.
+
+Rust remains at the explicit user-acceptance gate. Native Windows, macOS, and
+FreeBSD runtime/crash execution has not been authorized or performed, and
+cross-compilation is not native proof. The Go port must not begin until the user
+accepts the Rust result; SOW-0016 cannot close until that independent port
+produces and cross-opens the shared corpus. Snapshot signing and high-level
+multi-file algebra remain isolated in pending SOW-0017 and SOW-0018.
 
 2026-07-24 restart execution: the Rust coordinator now uses three
 caller-provided fixed journals of prebound `Cell` writes instead of heap
@@ -13077,6 +13079,197 @@ Remaining gate:
   presented for user acceptance, the independently implemented Go port must add
   its producer corpus and complete bidirectional cross-open before the combined
   Phase-1 SOW can close.
+
+### 2026-07-27 - post-checkpoint Rust contract audit
+
+Problem and evidence:
+
+- `live_reader.rs` returned an incomplete close while restoring the reader to
+  the normal open state. `c_abi_support.rs` then marked every successful Rust
+  call closed even when its factual result was `CloseIncomplete`. This violates
+  the frozen non-consuming, close-only retry contract and lets the C handle
+  discard the only retry authority.
+- `live_writer.rs::discard_draft` only called `set_len`. It did not prove the
+  retained main/sidecar identities and selected generation, synchronize a
+  truncated tail, or repeat the final identity/meta/length checks required
+  before an unpublished-tail obligation may be dropped.
+- Validation live/immutable/offline source opens, live recovery inspection,
+  live recovery source registration, and commit prepublication checks accepted
+  a cancellation token but called blocking locks or `O(reader capacity)` scans
+  without it. Cancellation therefore did not have the bounded checkpoints
+  required by section 14.5.
+- Reader/writer opens, writer close, commit unlock, source-guard teardown, and
+  reader-slot claim/scan paths contained matches or ignored results that could
+  discard a simultaneous primary and cleanup failure.
+- Validation consumed its internal live source even when reader-slot release
+  failed, while `ValidationFailure` had no source-cleanup authority or common
+  coordination disposition. This contradicted section 18's explicit
+  operational-failure contract and the already-proven recovery/snapshot guard
+  ownership model.
+
+Affected contract and risk:
+
+- The format bytes and semantic mutation rules are unchanged. The affected
+  surfaces are live reader/writer lifecycle, validation/recovery coordination,
+  commit/abort durability reporting, the existing C reader close entry point,
+  and permanent lifecycle/cancellation tests.
+- Lost close authority can leave a reader registration unowned by the caller.
+  Unproved abort cleanup can report a reusable writer before tail durability is
+  established. Missing cancellation can make work proportional to configured
+  reader capacity or lock contention after cancellation. Lost secondary errors
+  make residue reporting incomplete.
+- The repair must preserve the exact 136-symbol C ABI, current result layouts,
+  file bytes, normal-operation no-temporary-file rule, bounded memory, and the
+  protected unrelated workspace changes.
+
+Implementation plan:
+
+1. Add a close-only native reader state; retain it after every incomplete close.
+   Make the internal C bridge close only after the native result is `Closed`,
+   otherwise return the cause and retain the same handle for retry.
+2. Make draft discard prove the exact base generation and identities before
+   cleanup, truncate only a real tail, synchronize that truncation, and repeat
+   exact meta/length/identity checks before clearing the draft. Retain a
+   close-only writer and report only a factual tail ledger entry on failure.
+3. Thread existing cancellation tokens through validation/recovery locks,
+   inspection scans, recovery source claim/scan, and commit prepublication
+   scans. Add the missing read-only cancellable sidecar inspection helper.
+4. Use one private primary-plus-cleanup error combiner in the affected paths;
+   preserve both failures without adding a new public error class.
+5. Reuse the existing source-cleanup guard for a failed validation live-source
+   release. Keep retry state in the guard, expose it through the existing C
+   report obligation, and preserve every frozen symbol and C layout.
+6. Add permanent tests for reader close-only retry through native and C
+   surfaces, abort failure/retry and exact length cleanup, and reader-capacity
+   cancellation and validation cleanup checkpoints.
+
+Validation plan:
+
+- Run focused lifecycle, validation, recovery, commit, and C-boundary tests,
+  then the complete all-feature/all-target workspace suite on current Rust and
+  Rust 1.74.1.
+- Re-run strict Clippy, formatting, warning-denied rustdoc, generated C
+  header/manifest and exact-export checks, native C/C++ behavior tests,
+  current-format conformance, cross-target checks, complexity/file-size
+  measurement, same-failure searches, and the SOW audit.
+- Re-run benchmark smoke and the relevant update-ipsets scale cases if the
+  repair changes the measured mutation/commit path.
+
+Artifact and decision gate:
+
+- This slice implements already normative behavior; it requires no format,
+  C ABI, or Phase-2 change. The Rust validation failure carrier and SDK guide
+  must expose the already-required cleanup facts and retry guard. Update the
+  Rust project skill only if validation establishes a new reusable workflow or
+  hazard.
+- No product/design decision is open. The frozen specification determines each
+  correction, and no implementation work may expand beyond this repair list.
+- The tests use synthetic local paths and contain no sensitive data.
+
+Implementation result:
+
+- An incomplete live-reader close now permanently enters a close-only state.
+  Native and C callers retain the same handle until slot, gate, and lifetime
+  cleanup really finish; normal reads cannot resume between retries.
+- Draft abort and writer close now prove the retained main and sidecar
+  identities, the exact committed generation, and the final file length.
+  Truncation applies only to an observed unpublished tail, is synchronized, and
+  is verified again before the draft obligation is cleared. A shortened
+  committed file is never extended or silently repaired.
+- Reader-capacity scans, slot claims, validation/recovery lifetime and gate
+  locks, validation graph loops, and commit prepublication scans now honor the
+  existing cancellation token at bounded checkpoints.
+- A failed live-validation source release retains one retryable cleanup guard.
+  The existing C report owns that guard until it is taken, and report
+  destruction fails with `HANDLE_BUSY` while the obligation remains. No C
+  symbol, layout, numeric registry, format byte, or new operation was added.
+- Primary operation failures and simultaneous cleanup failures are retained as
+  one complete cause chain in the affected open, close, commit, reclamation,
+  validation, recovery, and lifecycle paths.
+- The writer-ownership unit test intermittently failed only in the concurrent
+  all-target harness because it used file destruction for normal lease
+  transfer. It now exercises the explicit writer-release operation. The
+  independent process-death test still proves implicit operating-system lock
+  release.
+
+Permanent regression evidence:
+
+- Native and C reader-close tests remove the sidecar, prove normal access is
+  disabled after the failed close, restore only the filename, and complete the
+  same handle's close.
+- Abort tests prove retry after path loss removes the exact observed tail and
+  that close never extends a shortened committed file.
+- Validation's native and C tests induce a real retained-descriptor/path
+  failure, prove the cleanup guard cannot be discarded, restore the sidecar,
+  and complete cleanup through that same guard.
+- Capacity and long-probe tests cover cancellation through reader scans,
+  recovery inspection, commit prepublication checks, validation registration,
+  page classification, membership hash probes, and membership comparison.
+- The same-failure search found only three ignored `release` return values in
+  recovery scratch ownership transfer. Those return `Option<ScratchSlot>`, not
+  a fallible cleanup result; no remaining ignored unlock, synchronization, or
+  cleanup error was found in production sources.
+
+Final validation:
+
+- Current Rust, no-default-features, and Rust 1.74.1 each pass the complete
+  workspace/all-target matrix: 439 test functions, 436 passed, zero failed,
+  and three intentional ignored entry points. This includes crash matrices,
+  randomized/property workflows, current-format conformance, the exact
+  136-symbol manifest/export check, C11/C++17 header checks, and five real C
+  behavior programs.
+- Strict all-feature/all-target Clippy with warnings denied, formatting,
+  whitespace checks, and warning-denied rustdoc pass. Compile-only checks pass
+  for Windows GNU, Apple ARM, and FreeBSD; no unapproved remote machine was
+  used and these are not recorded as native runtime proof.
+- Nightly AddressSanitizer with leak detection passes all 15 C-boundary unit
+  tests and 313 active core unit tests; the two subprocess entry points remain
+  intentionally ignored. Valgrind reports no memory errors or
+  definite/indirect leaks across all five native C programs.
+- The release-scale benchmark remains bounded and near-linear. Direct
+  replacement of 10,000/100,000/1,000,000 ranges took
+  0.1468/1.4178/14.6995 seconds; retention refresh took
+  0.4396/5.2581/57.0803 seconds; both retained 22 counted allocations at every
+  size. The 100,000 nested-overwrite case took 5.3124 seconds. Feed replacement
+  of 10,000 ranges took 0.3884/0.3708/0.3878 seconds at
+  64/256/421 feeds with 23 allocations.
+- Million-range direct, retention, and snapshot operations remained below
+  7.8 MiB peak RSS, restored file descriptors to four, and left zero private
+  artifacts. Lookup and scan cases retained zero counted allocations. The
+  small one-run timing variations versus checkpoint `9a2311e` do not show a
+  scaling, allocation, descriptor, memory, or residue regression.
+
+Lean-code audit and correction:
+
+- The exact current Linux release dependency graph contains 214 active source
+  files and 61,024 physical lines, versus 214 files and 60,456 lines at
+  checkpoint `8183cf6`: this repair adds 568 active lines. Twenty-five active
+  files exceed the directional 500-line goal; none exceeds 1,000.
+  `validation/source.rs` is 540 lines because source acquisition and its
+  retryable cleanup state are one ownership state machine; a mechanical split
+  would separate state from its authority.
+- Earlier claims in this SOW that the active core had zero functions above
+  cyclomatic complexity 9 were based on an incomplete source selection and are
+  false. Cargo dependency files show 52 active functions above 9 at
+  `8183cf6`, with maximum 27. The repaired tree has the same 52 function
+  identities and maximum 27: this slice adds no function above 9 and removes
+  none. The existing 52 are a later simplification concern, not evidence that
+  this correctness repair should be mechanically split.
+
+Artifact reconciliation:
+
+- The format, frozen C ABI, normative specs, and project workflow are
+  unchanged. `ValidationFailure` now exposes its cleanup ledger, disposition,
+  and optional retry guard, and the Rust SDK guide documents that ownership.
+  This makes the public Rust failure carrier match the existing contract; it
+  introduces no new operation, user choice, file behavior, command, or Phase-2
+  surface.
+- `AGENTS.md` needs no update: the lean Rust-first philosophy and scope boundary
+  already apply. The Rust project skill needs no update: it already requires
+  Cargo-derived active-module measurement and the exact validation gates used
+  here. No end-user/operator output skill exists.
+- All evidence is synthetic. Durable artifacts contain no secrets, customer
+  data, personal data, private endpoints, or operational credentials.
 
 ### Phase-1 core-SDK production-hardening gate
 

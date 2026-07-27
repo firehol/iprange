@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, reset_live_coordination, AddressFamily, CancellationToken, CloseOutcome, Error,
-    LiveReader, LiveResetPolicy, LiveTransitionStatus, ValueKind, ValueTag,
+    c_abi_support::Reader as AbiReader, create_live, reset_live_coordination, AddressFamily,
+    CancellationToken, CloseOutcome, Error, LiveReader, LiveResetPolicy, LiveTransitionStatus,
+    ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -79,10 +80,25 @@ fn failed_close_keeps_exact_retry_authority() {
     let failed = reader.close().unwrap();
     assert_eq!(failed.outcome, CloseOutcome::CloseIncomplete);
     assert!(failed.cause.is_some());
-    assert_eq!(reader.info().unwrap().transaction_id, 1);
+    assert!(matches!(reader.info(), Err(Error::WrongState(_))));
 
     fs::rename(&saved, files.sidecar()).unwrap();
     assert_eq!(reader.close().unwrap().outcome, CloseOutcome::Closed);
     let mut replacement = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     replacement.close().unwrap();
+}
+
+#[test]
+fn c_bridge_keeps_the_reader_until_close_really_finishes() {
+    let files = TestPair::new("c-bridge-retry");
+    let mut reader = AbiReader::open_live(&files.main, &CancellationToken::new()).unwrap();
+    let saved = files.sidecar().with_extension("readers.saved");
+    fs::rename(files.sidecar(), &saved).unwrap();
+
+    assert!(reader.close().is_err());
+    assert!(matches!(reader.info(), Err(Error::WrongState(_))));
+
+    fs::rename(&saved, files.sidecar()).unwrap();
+    reader.close().unwrap();
+    assert!(matches!(reader.info(), Err(Error::WrongState(_))));
 }

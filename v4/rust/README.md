@@ -85,6 +85,11 @@ inspects bounded candidates and returns typed evidence so the caller can choose
 whether and how to revive data. Ordinary readers and writers do not repair,
 reset, initialize, validate, or switch modes automatically.
 
+Invalid content is a completed `ValidationResult`; an operational failure is a
+`ValidationFailure` with partial progress, cleanup facts, and any retained
+source-cleanup guard. When that guard is present, the caller must retry its
+cleanup before discarding the obligation.
+
 ## Build and verify
 
 The minimum supported Rust version is 1.74.

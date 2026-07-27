@@ -190,6 +190,23 @@ impl Error {
     }
 }
 
+pub(crate) fn combine_errors(cause: Error, cleanup: Result<()>) -> Error {
+    match cleanup {
+        Ok(()) => cause,
+        Err(cleanup) => Error::CleanupIncomplete {
+            cause: Box::new(cause),
+            cleanup: Box::new(cleanup),
+        },
+    }
+}
+
+pub(crate) fn finish_with_cleanup<T>(operation: Result<T>, cleanup: Result<()>) -> Result<T> {
+    match operation {
+        Ok(value) => cleanup.map(|()| value),
+        Err(cause) => Err(combine_errors(cause, cleanup)),
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

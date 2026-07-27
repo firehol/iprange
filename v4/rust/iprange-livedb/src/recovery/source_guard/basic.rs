@@ -92,10 +92,10 @@ fn finish_open(
             meta,
             lifetime_locked: true,
         }),
-        Err(cause) => {
-            let _ = live_lock::unlock(&file, MAIN_LIFETIME_LOCK);
-            Err(cause)
-        }
+        Err(cause) => Err(combine_errors(
+            cause,
+            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+        )),
     }
 }
 
@@ -116,10 +116,10 @@ fn finish_current_open(
             meta,
             lifetime_locked: true,
         }),
-        Err(cause) => {
-            let _ = live_lock::unlock(&file, MAIN_LIFETIME_LOCK);
-            Err(cause)
-        }
+        Err(cause) => Err(combine_errors(
+            cause,
+            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+        )),
     }
 }
 

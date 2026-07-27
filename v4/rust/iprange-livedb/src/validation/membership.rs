@@ -344,7 +344,7 @@ fn equal_memberships<S: ValidationSink>(
     if left.word_count()? != word_count || right.word_count()? != word_count {
         return Ok(false);
     }
-    compare_words(&left, &right, word_count)
+    compare_words(context, &left, &right, word_count)
 }
 
 fn open_membership<'a, S: ValidationSink>(
@@ -354,7 +354,8 @@ fn open_membership<'a, S: ValidationSink>(
     membership_view::by_id(context.file, &context.meta, id, None)
 }
 
-fn compare_words(
+fn compare_words<S: ValidationSink>(
+    context: &Context<'_, S>,
     left: &membership_view::MembershipView<'_>,
     right: &membership_view::MembershipView<'_>,
     word_count: u32,
@@ -363,6 +364,7 @@ fn compare_words(
     let mut right_words = [0; COMPARE_WORDS];
     let mut start = 0u32;
     while start < word_count {
+        context.checkpoint()?;
         let count = usize::try_from((word_count - start).min(COMPARE_WORDS as u32))
             .map_err(|_| Error::ArithmeticOverflow("validation membership comparison"))?;
         left.read_words(start, &mut left_words[..count])?;

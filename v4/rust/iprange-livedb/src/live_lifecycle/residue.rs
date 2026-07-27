@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::cancellation::CancellationToken;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::Mode;
 use crate::live_sidecar::{self, Identity, Sidecar, State};
@@ -177,7 +177,13 @@ fn resolve_with_main(
             require_database(&main, &sidecar)?;
             match mode {
                 LiveTransitionResolutionMode::Complete if state == State::Ready => {
-                    complete_private_reset(&main, &canonical_path, &private_path, sidecar)
+                    complete_private_reset(
+                        &main,
+                        &canonical_path,
+                        &private_path,
+                        sidecar,
+                        cancellation,
+                    )
                 }
                 LiveTransitionResolutionMode::Complete => {
                     Err(Error::Conflict("private reset sidecar is not ready"))
@@ -244,9 +250,7 @@ fn complete_canonical(
         sidecar.verify_path()?;
         sidecar.verify_header()
     })();
-    let unlocked = sidecar.unlock_gate();
-    completed?;
-    unlocked?;
+    finish_with_cleanup(completed, sidecar.unlock_gate())?;
     Ok(completed_result(main, LiveResidueKind::Canonical, sidecar))
 }
 
@@ -255,9 +259,11 @@ fn complete_private_reset(
     canonical_path: &Path,
     private_path: &Path,
     sidecar: Sidecar,
+    cancellation: &CancellationToken,
 ) -> Result<LiveResidueResult> {
-    sidecar.lock_gate(Mode::Exclusive)?;
+    sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
     let completed = (|| {
+        cancellation.check()?;
         main.verify()?;
         require_absent(canonical_path)?;
         require_state(&sidecar, State::Ready)?;
@@ -274,9 +280,7 @@ fn complete_private_reset(
         live_sidecar::verify_path(canonical_path, sidecar.local_identity())?;
         sidecar.verify_header()
     })();
-    let unlocked = sidecar.unlock_gate();
-    completed?;
-    unlocked?;
+    finish_with_cleanup(completed, sidecar.unlock_gate())?;
     Ok(completed_result(
         main,
         LiveResidueKind::PrivateReset,
@@ -301,7 +305,9 @@ fn remove_valid_private(
         main.verify()?;
         require_state(sidecar, state)
     })();
-    prepared?;
+    if let Err(cause) = prepared {
+        return Err(combine_errors(cause, sidecar.unlock_gate()));
+    }
     let facts = facts(
         LiveResidueKind::PrivateReset,
         Some(main.public_identity),
@@ -333,7 +339,9 @@ fn remove_private_residue(
                 main.verify()?;
                 require_state(sidecar, *state)
             })();
-            prepared?;
+            if let Err(cause) = prepared {
+                return Err(combine_errors(cause, sidecar.unlock_gate()));
+            }
             let mut cleanup = retire_observed(path, residue);
             if let Err(cause) = main.verify() {
                 cleanup.absorb(live_cleanup::Outcome::failed(cause));

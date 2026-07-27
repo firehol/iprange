@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
@@ -177,5 +179,34 @@ fn cancellation_at_commit_returns_factual_noncommit_and_cleans_the_draft() {
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
     reader.close().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn commit_checks_cancellation_across_reader_capacity() {
+    let files = TestPair::new("commit-capacity-cancellation");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"asn").unwrap(),
+        64,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&polls);
+    let token = CancellationToken::from_poll(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+        false
+    }));
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    polls.store(0, Ordering::SeqCst);
+
+    let result = transaction.commit().unwrap();
+    assert_eq!(result.durability, CommitDurability::Committed);
+    assert!(polls.load(Ordering::SeqCst) >= 64);
     writer.close().unwrap();
 }

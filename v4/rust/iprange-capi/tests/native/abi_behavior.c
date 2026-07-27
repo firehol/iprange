@@ -547,6 +547,67 @@ int main(int argc, char **argv)
 
     {
         size_t sidecar_length = strlen(argv[1]) + sizeof(".readers");
+        char *sidecar = malloc(sidecar_length);
+        cleanup_fault fault;
+        iprange_v4_abi1_cancellation cancellation = {0};
+        iprange_v4_abi1_validation_budget validation = {0};
+        iprange_v4_abi1_cleanup_guard *guard = NULL;
+        uint8_t changed = 0xff;
+        CHECK(sidecar != NULL);
+        CHECK(snprintf(sidecar, sidecar_length, "%s.readers", argv[1]) > 0);
+        fault.sidecar = sidecar;
+        fault.target_fd = -1;
+        fault.backup_fd = -1;
+        fault.injected = 0;
+        cancellation.callback = fail_source_cleanup_once;
+        cancellation.context = &fault;
+        validation.abi_version = IPRANGE_V4_ABI1_ABI_VERSION;
+        validation.struct_size = sizeof(validation);
+        validation.max_heap_bytes = 4 * 1024 * 1024;
+        validation.max_open_files = 2;
+
+        CHECK(iprange_v4_abi1_validate(
+                  path_from(argv[1]),
+                  IPRANGE_V4_ABI1_VALIDATION_MODE_LIVE_CURRENT,
+                  NULL,
+                  0,
+                  &validation,
+                  cancellation,
+                  NULL,
+                  NULL,
+                  &report,
+                  &error) == IPRANGE_V4_ABI1_STATUS_ERROR);
+        CHECK(fault.injected == 1);
+        CHECK(report != NULL);
+        CHECK(error != NULL);
+        CHECK(destroy_error(error) == 0);
+        error = NULL;
+        CHECK(iprange_v4_abi1_report_destroy(report, &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        code = inspect_error(error, &caller_present, &caller_code);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_HANDLE_BUSY);
+        CHECK(destroy_error(error) == 0);
+        error = NULL;
+        CHECK(iprange_v4_abi1_report_take_cleanup_guard(report, &guard, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(guard != NULL);
+        CHECK(error == NULL);
+        CHECK(destroy_report(report) == 0);
+        report = NULL;
+
+        CHECK(restore_sidecar(&fault) == 0);
+        CHECK(iprange_v4_abi1_cleanup_guard_retry(guard, &changed, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(changed == 1);
+        CHECK(iprange_v4_abi1_cleanup_guard_close(guard, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(iprange_v4_abi1_cleanup_guard_destroy(guard, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        free(sidecar);
+    }
+
+    {
+        size_t sidecar_length = strlen(argv[1]) + sizeof(".readers");
         size_t destination_length = strlen(argv[2]) + sizeof(".fault");
         char *sidecar = malloc(sidecar_length);
         char *destination = malloc(destination_length);

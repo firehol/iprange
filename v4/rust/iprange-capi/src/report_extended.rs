@@ -158,16 +158,18 @@ impl ReportHandle {
         }))
     }
 
-    pub(crate) fn validation_failure(progress: &validation::ValidationProgress) -> Self {
-        Self::new(Body::Validation(ValidationReport {
+    pub(crate) fn validation_failure(failure: &validation::ValidationFailure) -> Self {
+        let mut report = Self::new(Body::Validation(ValidationReport {
             abi_version: 1,
             struct_size: size_of::<ValidationReport>() as u32,
             valid: 0,
             reserved: [0; 7],
             file_identity: Default::default(),
             generation: Default::default(),
-            progress: facts::validation_progress(progress),
-        }))
+            progress: facts::validation_progress(&failure.progress),
+        }));
+        report.cleanup = failure.cleanup.iter().map(facts::cleanup).collect();
+        report
     }
 
     pub(crate) fn recovery_candidates(result: recovery::RecoveryCandidateInspection) -> Self {

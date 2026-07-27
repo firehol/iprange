@@ -227,10 +227,10 @@ impl AbortResult {
         }
     }
 
-    pub(super) fn incomplete(artifact: CommitCleanupArtifact, cause: Error) -> Self {
+    pub(super) fn incomplete(cleanup: CommitCleanupArtifacts, cause: Error) -> Self {
         Self {
             outcome: AbortOutcome::AbortIncomplete,
-            cleanup: CommitCleanupArtifacts::tail(artifact),
+            cleanup,
             coordination_cleanup: CoordinationCleanup::RetainedWriterCloseRequired,
             cause: Some(cause),
         }

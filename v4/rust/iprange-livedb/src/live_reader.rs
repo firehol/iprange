@@ -6,7 +6,7 @@ use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
 use crate::database::{self, DatabaseInfo, ReaderCore};
-use crate::error::{Error, Result};
+use crate::error::{finish_with_cleanup, Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::FeedCursor;
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
@@ -21,6 +21,7 @@ use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Open,
+    CloseOnly,
     GateHeldSlotActive,
     GateHeldSlotClearing,
     GateHeldSlotCleared,
@@ -78,12 +79,7 @@ impl LiveReader {
         let sidecar = Sidecar::open(&main_path, initial.meta.database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
         let registration = register(&file, &main_path, main_identity, &sidecar, cancellation);
-        let unlocked = sidecar.unlock_gate();
-
-        let (bootstrap, slot) = match (registration, unlocked) {
-            (Ok(registered), Ok(())) => registered,
-            (Err(error), _) | (Ok(_), Err(error)) => return Err(error),
-        };
+        let (bootstrap, slot) = finish_with_cleanup(registration, sidecar.unlock_gate())?;
         Ok(Self {
             core: ReaderCore::new(file, bootstrap),
             main_path,
@@ -208,8 +204,9 @@ impl LiveReader {
         if self.state == State::Closed {
             return Ok(reader_closed());
         }
-        if self.state == State::Open {
+        if matches!(self.state, State::Open | State::CloseOnly) {
             if let Err(cause) = self.sidecar.lock_gate(Mode::Shared) {
+                self.state = State::CloseOnly;
                 return Ok(reader_close_incomplete(cause));
             }
             self.state = State::GateHeldSlotActive;
@@ -258,7 +255,7 @@ impl LiveReader {
     fn release_gate_after_failure(&mut self, cause: Error) -> ReaderCloseResult {
         match self.sidecar.unlock_gate() {
             Ok(()) => {
-                self.state = State::Open;
+                self.state = State::CloseOnly;
                 reader_close_incomplete(cause)
             }
             Err(cleanup) => reader_close_incomplete(Error::CleanupIncomplete {

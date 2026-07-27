@@ -1,6 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
@@ -244,6 +246,40 @@ fn live_current_validation_pins_and_releases_its_reader_slot() {
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(150)).unwrap(), Some(9));
     reader.close().unwrap();
     writer.close().unwrap();
+}
+
+#[test]
+fn live_validation_checks_cancellation_across_reader_capacity() {
+    let paths = Paths::new("live-capacity-cancellation");
+    create_live(
+        &paths.live,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        64,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&polls);
+    let cancellation = CancellationToken::from_poll(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+        false
+    }));
+
+    let result = validate(
+        &paths.live,
+        ValidationMode::LiveCurrent,
+        &ValidationBudget::heap_only(1024 * 1024, 2),
+        &cancellation,
+        &mut |_: &iprange_livedb::validation::ValidationFinding| {
+            Ok(ValidationSinkControl::Continue)
+        },
+    )
+    .unwrap();
+
+    assert!(result.valid);
+    assert!(polls.load(Ordering::SeqCst) >= 64);
 }
 
 #[test]

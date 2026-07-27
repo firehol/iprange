@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
 use crate::database;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::publication::PublicationProblem;
@@ -65,9 +65,17 @@ pub(crate) struct LiveSource {
     candidate: Option<RecoveryCandidate>,
     meta: MetaV4,
     gate_locked: bool,
-    slot_active: bool,
+    registration: RegistrationState,
     lifetime_locked: bool,
     owner_pid: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegistrationState {
+    Active,
+    Clearing,
+    Cleared,
+    Released,
 }
 
 pub(crate) struct SourceEnd {
@@ -82,8 +90,14 @@ pub(crate) struct SourceOpenFailure {
 
 #[derive(Debug)]
 pub struct RecoverySourceCleanupGuard {
-    source: Option<Box<Source>>,
+    source: Option<GuardSource>,
     last_problem: PublicationProblem,
+}
+
+#[derive(Debug)]
+enum GuardSource {
+    Recovery(Box<Source>),
+    Validation(Box<crate::validation::source::ValidationCleanupSource>),
 }
 
 impl RecoverySourceCleanupGuard {
@@ -102,10 +116,36 @@ impl RecoverySourceCleanupGuard {
         match source.release() {
             Ok(()) => Ok(true),
             Err(cause) => {
-                self.last_problem = problem(&cause);
+                self.last_problem = source.problem(&cause);
                 self.source = Some(source);
                 Err(self.last_problem)
             }
+        }
+    }
+
+    pub(crate) fn for_validation(
+        source: crate::validation::source::ValidationCleanupSource,
+        cause: &Error,
+    ) -> Self {
+        Self {
+            source: Some(GuardSource::Validation(Box::new(source))),
+            last_problem: validation_problem(cause),
+        }
+    }
+}
+
+impl GuardSource {
+    fn release(&mut self) -> Result<()> {
+        match self {
+            Self::Recovery(source) => source.release(),
+            Self::Validation(source) => source.release(),
+        }
+    }
+
+    fn problem(&self, error: &Error) -> PublicationProblem {
+        match self {
+            Self::Recovery(_) => problem(error),
+            Self::Validation(_) => validation_problem(error),
         }
     }
 }
@@ -205,7 +245,7 @@ fn terminal(source: Source, checked: Result<()>, released: Result<()>) -> Source
         Err(cleanup) => SourceEnd {
             cause: checked.err().or_else(|| Some(cleanup_for_cause(&cleanup))),
             guard: Some(RecoverySourceCleanupGuard {
-                source: Some(Box::new(source)),
+                source: Some(GuardSource::Recovery(Box::new(source))),
                 last_problem: problem(&cleanup),
             }),
         },
@@ -242,4 +282,12 @@ pub(crate) fn problem(error: &Error) -> PublicationProblem {
         _ => None,
     };
     PublicationProblem::new(error.code(), os_code, "recovery source operation failed")
+}
+
+fn validation_problem(error: &Error) -> PublicationProblem {
+    let os_code = match error {
+        Error::Io(source) => source.raw_os_error(),
+        _ => None,
+    };
+    PublicationProblem::new(error.code(), os_code, "validation source cleanup failed")
 }

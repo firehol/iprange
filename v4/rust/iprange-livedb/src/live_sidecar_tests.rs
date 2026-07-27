@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
@@ -54,6 +56,11 @@ fn create_ready(files: &TestFiles, capacity: u32) -> Sidecar {
     sidecar
 }
 
+fn release_reader(sidecar: &Sidecar, slot: u32) {
+    sidecar.clear_reader(slot).unwrap();
+    sidecar.unlock_reader(slot).unwrap();
+}
+
 #[test]
 fn ready_sidecar_reopens_with_exact_binding() {
     let files = TestFiles::new("open");
@@ -97,6 +104,7 @@ fn one_writer_owns_the_database() {
 
     first.claim_writer().unwrap();
     assert!(matches!(second.claim_writer(), Err(Error::WriterBusy)));
+    first.release_writer().unwrap();
     drop(first);
     second.claim_writer().unwrap();
 }
@@ -127,11 +135,11 @@ fn reader_slots_report_capacity_scan_and_reuse() {
     active.sort_unstable();
     assert_eq!(active, [7, 11]);
 
-    first.release_reader(first_slot).unwrap();
+    release_reader(&first, first_slot);
     let reused = exhausted.claim_reader(13).unwrap();
     assert_eq!(reused, first_slot);
-    exhausted.release_reader(reused).unwrap();
-    second.release_reader(second_slot).unwrap();
+    release_reader(&exhausted, reused);
+    release_reader(&second, second_slot);
 }
 
 #[test]
@@ -158,10 +166,27 @@ fn malformed_or_future_active_slots_fail_closed() {
     file_io::write_exact_at(&owner.file, &[0x5a; SLOT_SIZE as usize], offset).unwrap();
     assert!(matches!(scanner.scan_at_most(7), Err(Error::Corrupt(_))));
 
-    owner.release_reader(slot).unwrap();
+    release_reader(&owner, slot);
     let slot = owner.claim_reader(8).unwrap();
     assert!(matches!(scanner.scan_at_most(7), Err(Error::Corrupt(_))));
-    owner.release_reader(slot).unwrap();
+    release_reader(&owner, slot);
+}
+
+#[test]
+fn read_only_capacity_inspection_checks_cancellation_per_slot() {
+    let files = TestFiles::new("inspect-cancel");
+    let sidecar = create_ready(&files, 64);
+    let polls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&polls);
+    let cancellation = CancellationToken::from_poll(Arc::new(move || {
+        observed.fetch_add(1, Ordering::SeqCst) >= 8
+    }));
+
+    assert!(matches!(
+        sidecar.inspect_at_most_cancellable(1, &cancellation),
+        Err(Error::Cancelled)
+    ));
+    assert!(polls.load(Ordering::SeqCst) < 64);
 }
 
 #[test]
