@@ -200,7 +200,7 @@ impl LiveWriter {
         if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
             return Err(Error::InvalidArgument("metadata exceeds 1 MiB"));
         }
-        self.mutate(|store| store.set_metadata(input))
+        self.mutate_uncached(|store| store.set_metadata(input))
     }
 
     /// Stage metadata absence, or report an already-absent no-op.
@@ -225,7 +225,7 @@ impl LiveWriter {
         if self.current_meta().metadata_root == 0 {
             return Ok(false);
         }
-        self.mutate(|store| store.clear_metadata())
+        self.mutate_uncached(|store| store.clear_metadata())
     }
 
     fn check_metadata_cancellation(&mut self, cancellation: &CancellationToken) -> Result<()> {
@@ -276,6 +276,21 @@ impl LiveWriter {
     }
 
     fn mutate<T>(&mut self, operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>) -> Result<T> {
+        self.mutate_with_cache(true, operation)
+    }
+
+    fn mutate_uncached<T>(
+        &mut self,
+        operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>,
+    ) -> Result<T> {
+        self.mutate_with_cache(false, operation)
+    }
+
+    fn mutate_with_cache<T>(
+        &mut self,
+        cache_pages: bool,
+        operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>,
+    ) -> Result<T> {
         self.require_healthy()?;
         let started = self.draft.is_none();
         if started {
@@ -284,12 +299,21 @@ impl LiveWriter {
 
         let result = {
             let draft = self.draft.as_mut().unwrap();
-            let mut store = DraftStore::new(
-                &self.file,
-                self.base.meta.page_count,
-                self.budget.pages(),
-                draft,
-            );
+            let mut store = if cache_pages {
+                DraftStore::new_cached(
+                    &self.file,
+                    self.base.meta.page_count,
+                    self.budget.pages(),
+                    draft,
+                )
+            } else {
+                DraftStore::new_uncached(
+                    &self.file,
+                    self.base.meta.page_count,
+                    self.budget.pages(),
+                    draft,
+                )
+            };
             operation(&mut store)
         };
         match result {

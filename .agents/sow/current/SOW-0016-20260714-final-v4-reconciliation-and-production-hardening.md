@@ -12624,6 +12624,134 @@ Follow-up mapping:
   explicitly rejected with evidence, or represented by a real SOW as required by
   the repository follow-up discipline.
 
+### 2026-07-27 - Rust update-ipsets performance-proof plan
+
+Evidence:
+
+- `firehol/update-ipsets @ e593366f7b0a` processes independent feed updates,
+  batches retention-cohort comparisons at 256 open cohorts, and currently has
+  about 421 configured feeds.
+- `firehol/blocklist-ipsets @ 4860c4a466b8` contains 149 public IPv4/IPv6 feed
+  files with about 5.98 million text lines in total. Its two largest aggregate
+  files contain about 2.06 million lines each. These public counts define scale;
+  committed tests and benchmarks use deterministic synthetic ranges rather than
+  copying mutable public feed content.
+- The active Rust workspace has no benchmark target. Existing unit tests prove
+  selected internal allocation and operation-count properties, but they do not
+  exercise complete public update-ipsets workflows or record end-to-end
+  resources.
+
+Implementation:
+
+1. Add one dependency-free benchmark executable using only the public Rust SDK.
+   Keep workload generation, resource measurement, scenarios, and reporting
+   logically separated. It must not add a sorting path or create input spill
+   files.
+2. Cover unordered arrival-order direct replacement, nested overwrite scaling,
+   exact retention refresh, independent named-feed create/replace, membership
+   lookup and ordered projection, live open, and compact unsigned snapshot.
+3. Use small deterministic smoke sizes for routine compilation/execution and
+   explicit scale sizes of 10,000, 100,000, and 1,000,000 input ranges. Exercise
+   feed-count scaling through 421 feeds and reader/cohort-related limits through
+   256 where the scenario applies. The public 2.06-million-line maximum is a
+   manual upper-scale point, not a normal test-suite workload.
+4. Report wall time, throughput, allocation calls/bytes, peak RSS, open file
+   descriptors, logical/physical file bytes, committed range/feed counts, and
+   unexpected directory artifacts. Separate snapshot construction from
+   destination replacement evidence.
+5. Add permanent non-timing resource tests for exact budget rejection,
+   allocation shape after fixed setup, no normal-workflow temporary files,
+   O(1) ordinary open, sparse page-number independence, descriptor bounds, and
+   deterministic non-quadratic work counters. Wall-clock numbers remain
+   evidence, never flaky pass/fail thresholds.
+6. Run comparable existing `update-ipsets` Go benchmarks at the checked consumer
+   commit on the same host and record commands and results. Architectural
+   suitability requires both measured improvement and simpler durable retention/
+   membership state; unlike-for-like measurements will be labelled explicitly
+   rather than presented as direct speedups.
+
+Risk controls:
+
+- Benchmark-only accounting must not enter production hot paths.
+- Resource tests enforce deterministic budgets and operation counts, not machine-
+  specific timing.
+- Scale runs operate only on new temporary databases and synthetic ranges. They
+  do not read, mutate, migrate, or publish operational retention/history data.
+- Any measured superlinear path, unbounded resource growth, unexpected temporary
+  artifact, or material regression blocks C-ABI work until its cause is fixed or
+  brought back as a real product decision.
+
+First measurement and repair:
+
+- The 1,000-to-100,000 range curves are linear, allocate a constant 21-22 times
+  per complete write workflow, allocate zero times per warmed lookup/cursor
+  operation, leak no descriptors, and leave no private artifacts.
+- End-to-end direct replacement currently sustains only about 40,000 ranges/s.
+  A Linux syscall trace of 10,000 unordered ranges records 109,050 positional
+  reads, 10,124 positional writes, and 10,094 PID checks. Positional reads
+  account for about 79% of traced syscall time. The implementation rereads the
+  same private B+tree path for each input record even though those pages belong
+  to the current unpublished transaction.
+- At 100,000 ranges, a v4 direct point lookup takes about 3.60 microseconds and
+  an ordered direct scan about 267 nanoseconds/range. The current flat
+  update-ipsets file-backed set measures about 0.17 microseconds/lookup and
+  3.9 nanoseconds/range on the same host. These are not equivalent formats—the
+  current set has no COW, live coordination, named feeds, or direct values—but
+  the gap is large enough that C-ABI work remains blocked.
+- Repair the demonstrated write-path reread storm first with one optional,
+  transaction-local, direct-mapped page cache charged to the existing heap
+  budget. It is an optimization only: a tiny heap budget uses no cache, all
+  writes remain write-through, abort/commit semantics are unchanged, and normal
+  ingestion still creates no external file. Re-measure before considering any
+  reader API or mmap change.
+
+Measured result:
+
+- The cache is capped at 4 MiB, uses one direct-mapped allocation, survives
+  repeated `DraftStore` views of the same unpublished transaction, and remains
+  write-through. A zero or sub-slot heap budget disables it without changing
+  behavior. Metadata compression and membership import use the uncached path so
+  the existing exact metadata heap charge and zero-allocation import contract
+  remain true.
+- For 10,000 direct input ranges, positional reads fell from 109,050 to 246.
+  End-to-end direct replacement improved from about 216 ms to 144 ms; 100,000
+  ranges improved from about 2.51 s to 1.43 s. Nested overwrite improved from
+  about 814 ms to 509 ms at 10,000 and from 8.40 s to 5.27 s at 100,000.
+  Retention refresh improved from about 655 ms to 452 ms at 10,000 and from
+  8.22 s to 5.16 s at 100,000. Replacing one 10,000-range feed in a 421-feed
+  file improved from about 586 ms to 382 ms.
+- The remaining 10,000-range trace contains 10,124 positional writes and 10,094
+  PID checks. PID checks account for only a few milliseconds and enforce the
+  existing fork boundary. They were deliberately left unchanged; removing or
+  batching them would add lifecycle risk without a material measured gain.
+- The benchmark source now generates unordered input through a fixed
+  1,024-record borrowed batch. It does not materialize the input feed or create
+  an input spill file. At 1,000,000 ranges, direct replacement completes in
+  about 14.4 s and retention refresh in about 56.7 s. Both retain a constant
+  22 measured allocations, four file descriptors before and after, less than
+  8 MiB peak RSS, and zero private artifacts. A compact unsigned snapshot of
+  the same million-range database completes in about 27.7 s with 31 small
+  allocations, stable descriptors, less than 8 MiB peak RSS, and no residue.
+- At 100,000 records, direct lookup measures about 2.51 microseconds per
+  address and direct ordered scan about 100 nanoseconds per range. A 421-feed
+  membership lookup measures about 4.78 microseconds per address and its
+  feed-local ordered scan about 2.06 microseconds per range. These remain
+  allocation-free. Opening a 100,000-range live database 100 times is
+  independent of range count: about 7.9 ms total at reader capacity 1 and
+  42.0 ms at capacity 256.
+- A permanent deterministic page-work test doubles the adversarial nested
+  assignment input and rejects quadratic growth. Existing permanent tests cover
+  exact budget rejection, zero-per-record allocation, O(1) ordinary open,
+  sparse maximum page numbers, descriptor budgets, atomic source failure, and
+  residue cleanup. The benchmark executable makes descriptor stability and
+  unexpected private artifacts hard failures rather than observational output.
+- The cache initially violated the existing zero-allocation membership-import
+  test by allocating once. The implementation was corrected rather than the
+  test weakened: cached and uncached draft views are now explicit, and the full
+  import remains heap-allocation-free. Final diff review also found that a cache
+  hit must not bypass the current page-count bound. The storage layer now checks
+  that bound before cache lookup, with a permanent regression test.
+
 ### Phase-1 core-SDK production-hardening gate
 
 Pending. Before SOW completion, this section must record:

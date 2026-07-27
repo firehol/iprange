@@ -1,5 +1,7 @@
 //! Ordered range-assignment tests against a scalar reference map.
 
+use std::cell::Cell;
+
 use super::*;
 use crate::key::{Ipv4Key, Ipv6Key};
 
@@ -8,6 +10,8 @@ struct MemoryStore {
     pages: Vec<[u8; PAGE_SIZE]>,
     retired: Vec<u32>,
     discarded: Vec<u32>,
+    reads: Cell<u64>,
+    writes: u64,
 }
 
 impl MemoryStore {
@@ -17,6 +21,8 @@ impl MemoryStore {
             pages: vec![[0; PAGE_SIZE]; 2],
             retired: Vec::new(),
             discarded: Vec::new(),
+            reads: Cell::new(0),
+            writes: 0,
         }
     }
 }
@@ -31,6 +37,7 @@ impl Store for MemoryStore {
     }
 
     fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+        self.reads.set(self.reads.get() + 1);
         *page = *self
             .pages
             .get(page_number as usize)
@@ -46,6 +53,7 @@ impl Store for MemoryStore {
     }
 
     fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
+        self.writes += 1;
         *self
             .pages
             .get_mut(page_number as usize)
@@ -411,4 +419,33 @@ fn many_disjoint_ranges_split_leaves_and_cow_only_once_per_path() {
     .unwrap();
     assert_eq!(store.retired.len(), retired_after_first_write);
     assert_eq!(count, 2_002);
+}
+
+#[test]
+fn nested_assignment_page_work_is_not_quadratic() {
+    let small = nested_assignment_page_work(512);
+    let large = nested_assignment_page_work(1_024);
+    assert!(
+        large <= small * 3,
+        "doubling input grew deterministic page work from {small} to {large}"
+    );
+}
+
+fn nested_assignment_page_work(count: u32) -> u64 {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut records = 0;
+    let end = count * 4 + 1;
+    for index in 0..count {
+        assign(
+            &mut store,
+            &mut root,
+            &mut records,
+            Ipv4Key(index),
+            Ipv4Key(end - index),
+            index % 2 + 1,
+        )
+        .unwrap();
+    }
+    store.reads.get() + store.writes
 }

@@ -148,3 +148,30 @@ fn page_budget_failure_happens_before_the_first_allocation() {
     assert_eq!(draft.meta.page_count, 2);
     assert!(!draft.changed());
 }
+
+#[test]
+fn cached_page_cannot_bypass_the_current_page_limit() {
+    let test = TestFile::new();
+    let creation = empty_direct_meta(1);
+    let mut draft = Draft::new(creation, [3; 16]).unwrap();
+    let mut store = DraftStore::new_cached(
+        &test.file,
+        creation.page_count,
+        PageBudget {
+            max_heap_bytes: 2 * PAGE_SIZE as u64,
+            max_private_pages: 1,
+            max_growth_pages: 1,
+        },
+        &mut draft,
+    );
+    let page_number = store.allocate().unwrap();
+    let page = [7; PAGE_SIZE];
+    store.write(page_number, &page).unwrap();
+    store.read(page_number, &mut [0; PAGE_SIZE]).unwrap();
+
+    store.draft.meta.page_count = u64::from(page_number);
+    assert!(matches!(
+        store.read(page_number, &mut [0; PAGE_SIZE]),
+        Err(Error::Corrupt(_))
+    ));
+}

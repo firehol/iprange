@@ -6,11 +6,14 @@ mod catalog_ops;
 mod membership_ops;
 #[path = "draft_store/metadata.rs"]
 mod metadata_ops;
+#[path = "draft_store/page_cache.rs"]
+mod page_cache;
 #[path = "draft_store/storage.rs"]
 mod storage;
 #[path = "draft_store/workflow.rs"]
 mod workflow_ops;
 
+use std::cell::RefCell;
 use std::fs::File;
 
 use crate::contract::{u32_le, MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
@@ -43,6 +46,7 @@ pub(crate) struct Draft {
     membership_delta_root: u32,
     workflow: WorkflowState,
     operation_abandoned: bool,
+    page_cache: RefCell<Option<page_cache::PageCache>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +76,7 @@ impl Draft {
             membership_delta_root: 0,
             workflow: WorkflowState::None,
             operation_abandoned: false,
+            page_cache: RefCell::new(None),
         })
     }
 
@@ -152,6 +157,26 @@ impl<'a> DraftStore<'a> {
             budget,
             draft,
         }
+    }
+
+    pub(crate) fn new_cached(
+        file: &'a File,
+        committed_page_count: u64,
+        budget: PageBudget,
+        draft: &'a mut Draft,
+    ) -> Self {
+        draft.ensure_page_cache(budget.max_heap_bytes);
+        Self::new(file, committed_page_count, budget, draft)
+    }
+
+    pub(crate) fn new_uncached(
+        file: &'a File,
+        committed_page_count: u64,
+        budget: PageBudget,
+        draft: &'a mut Draft,
+    ) -> Self {
+        draft.discard_page_cache();
+        Self::new(file, committed_page_count, budget, draft)
     }
 
     pub(crate) fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
@@ -470,6 +495,18 @@ impl<'a> DraftStore<'a> {
         self.draft.meta.page_count += 1;
         self.draft.growth_pages += 1;
         Ok(page_number)
+    }
+}
+
+impl Draft {
+    fn ensure_page_cache(&mut self, heap_budget: u64) {
+        if self.page_cache.get_mut().is_none() {
+            *self.page_cache.get_mut() = Some(page_cache::PageCache::new(heap_budget));
+        }
+    }
+
+    fn discard_page_cache(&mut self) {
+        *self.page_cache.get_mut() = None;
     }
 }
 

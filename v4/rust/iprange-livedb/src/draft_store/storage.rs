@@ -19,7 +19,23 @@ impl Store for DraftStore<'_> {
     }
 
     fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        file_io::read_page(self.file, page_number, self.draft.meta.page_count, page)
+        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
+            return Err(Error::Corrupt("page number is outside committed bounds"));
+        }
+        if self
+            .draft
+            .page_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|cache| cache.read(page_number, page))
+        {
+            return Ok(());
+        }
+        file_io::read_page(self.file, page_number, self.draft.meta.page_count, page)?;
+        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
+            cache.store(page_number, page);
+        }
+        Ok(())
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -46,7 +62,11 @@ impl Store for DraftStore<'_> {
         let offset = u64::from(page_number)
             .checked_shl(u32::from(PAGE_SHIFT))
             .ok_or(Error::ArithmeticOverflow("draft page offset"))?;
-        file_io::write_exact_at(self.file, page, offset)
+        file_io::write_exact_at(self.file, page, offset)?;
+        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
+            cache.store(page_number, page);
+        }
+        Ok(())
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {
