@@ -12997,6 +12997,87 @@ Implementation and validation:
   complete Rust 1.74 suite then passed unchanged. This did not reproduce and
   provides no evidence of a defect in this C-boundary slice.
 
+### 2026-07-27 - final Rust release-scale and artifact checkpoint
+
+Release-scale benchmark:
+
+- The public-SDK scale matrix ran at exact committed state `9a2311e` with
+  `cargo bench --manifest-path v4/rust/Cargo.toml --bench update_ipsets --
+  scale`. It used deterministic synthetic input and did not access operational
+  publisher data.
+- Direct replacement completed 10,000, 100,000, and 1,000,000 input ranges in
+  0.1443, 1.4227, and 14.7159 seconds. Retention refresh completed the same
+  sizes in 0.4525, 5.1911, and 56.9948 seconds. Each complete write retained 22
+  counted allocations across all three sizes.
+- Adversarial nested overwrite completed 10,000 and 100,000 inputs in 0.5064
+  and 5.3041 seconds. Replacing one 10,000-range feed took 0.3846, 0.3783, and
+  0.3626 seconds at 64, 256, and 421 cataloged feeds respectively, with 23
+  counted allocations.
+- One hundred thousand membership lookups took 0.5355, 0.5084, and 0.5421
+  seconds at 64, 256, and 421 feeds. Scanning 100,000 ranges of one feed in the
+  421-feed database took 0.1883 seconds. Direct lookup and direct scan of
+  100,000 records took 0.2634 and 0.00825 seconds. All lookup and scan cases
+  reported zero counted allocations.
+- Opening a 100,000-range live database 100 times took 0.00931 seconds at
+  reader capacity 1 and 0.03619 seconds at capacity 256. Compact snapshots of
+  100,000 and 1,000,000 ranges took 2.2564 and 26.5326 seconds with 31 counted
+  allocations.
+- The million-range direct, retention, and snapshot cases stayed below 7.8 MiB
+  peak RSS, kept file descriptors at four before and after, and left zero
+  private artifacts. Their final logical/physical sizes were
+  20,652,032/20,656,128, 43,540,480/43,544,576, and
+  28,393,472/28,393,472 bytes respectively.
+- Compared with the pre-C-ABI measured baseline, the final million-range
+  direct and retention times differ by about 2% and 0.5%; snapshot time improved
+  by about 4%. Constant allocation counts, bounded RSS, stable descriptors,
+  zero residue, and near-linear scaling are unchanged. There is no measured
+  release-slice scaling or resource regression.
+- The existing flat update-ipsets set remains substantially faster for simple
+  point lookup and ordered scan. It is not an equivalent format and lacks COW
+  publication, live-reader coordination, direct values, named feeds, exact
+  retention refresh, recovery, and portable compact snapshots. This evidence
+  supports bounded publisher suitability and an architectural improvement; it
+  does not claim a raw lookup or scan speedup.
+
+Durable artifact reconciliation:
+
+- Added `v4/rust/README.md` as the current unreleased Rust SDK guide. It states
+  the one-format boundary, direct/membership ownership, specialized retention
+  semantics, compressed 1 MiB metadata limit, explicit validation/recovery,
+  authorized-scratch rule, C ABI artifacts, benchmark evidence, exact platform
+  proof boundary, and the pre-Go acceptance gate.
+- Added `.agents/skills/project-v4-rust/SKILL.md` and its generated discovery
+  metadata. The project skill records the proven frozen-scope, compiled-module,
+  conformance, C-ABI, MSRV, resource, benchmark, and reporting workflow. The
+  skill validator passes with no template placeholders.
+- Updated `AGENTS.md` to index that concrete runtime project skill. The v4
+  engineering philosophy already records the lean Rust-first design and remains
+  unchanged.
+- The normative specs require no change in this checkpoint: the benchmark,
+  C-boundary simplification, SDK guide, and workflow memory describe the
+  already-frozen behavior and add no contract. The root README and legacy wiki
+  remain the released C CLI documentation; advertising the unreleased SDK
+  there would misstate current product status.
+- No output/reference end-user skill exists or is consumed outside repository
+  work, so none is affected. All new evidence is synthetic and durable
+  artifacts contain no secrets, operational paths, customer data, or personal
+  data.
+- Final documentation validation passes the project-skill validator, the
+  read-only current-format conformance test, Rust formatting, whitespace
+  checks, and the complete project SOW audit.
+
+Remaining gate:
+
+- Local Rust implementation, C ABI, conformance foundation, resource proof,
+  scale benchmark, documentation, and workflow memory are complete. Native
+  Windows, macOS, and FreeBSD runtime/crash execution has not been performed
+  because remote systems require explicit user authorization; cross-compilation
+  is not recorded as native proof.
+- This is not SOW closure or permission to start Go. After the Rust result is
+  presented for user acceptance, the independently implemented Go port must add
+  its producer corpus and complete bidirectional cross-open before the combined
+  Phase-1 SOW can close.
+
 ### Phase-1 core-SDK production-hardening gate
 
 Pending. Before SOW completion, this section must record:

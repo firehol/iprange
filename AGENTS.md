@@ -357,10 +357,12 @@ Skills must be updated during retrospection when:
 
 ### Project Skills Index
 
-No runtime input project skills exist yet. This project grows skills
-incrementally; a missing skill is better than a generic one. The active v4 SOW
-must decide at close whether the proven multi-language conformance, benchmark,
-and binary-format workflows are concrete enough to capture as project skills.
+Runtime input project skills:
+
+- `.agents/skills/project-v4-rust/SKILL.md` - load for changes, reviews,
+  benchmarks, portability claims, conformance work, or C-ABI work under
+  `v4/rust/` or `v4/conformance/`. It records the frozen Rust-first boundary and
+  the proven release-verification workflow.
 
 Legacy runtime skills:
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Rust v4"
+  short_description: "Run the frozen Rust v4 verification workflow"
+  default_prompt: "Use $project-v4-rust to verify a Rust v4 implementation change against the frozen format and C ABI."
