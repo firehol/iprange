@@ -4,9 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, Cardinality129, CommitDurability, Error,
-    FeedName, FinishedWorkflow, ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, LiveWriter,
-    LogicalChange, MembershipImportSource, MembershipOperation, RangeDirection, TransactionBudget,
-    ValueKind, ValueTag, WorkflowKind,
+    ErrorCode, FeedName, FinishedWorkflow, ImmutableReader, Ipv4Key, Ipv6Key, LiveReader,
+    LiveWriter, LogicalChange, MembershipImportSource, MembershipOperation, RangeDirection,
+    TransactionBudget, ValueKind, ValueTag, WorkflowKind,
 };
 
 struct TestPair {
@@ -430,24 +430,27 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
     ));
     same_writer.close().unwrap();
 
-    for (label, family, kind, tag) in [
+    for (label, family, kind, tag, expected) in [
         (
             "wrong-family",
             AddressFamily::Ipv6,
             ValueKind::Membership,
             &b"membership"[..],
+            ErrorCode::WrongAddressFamily,
         ),
         (
             "wrong-tag",
             AddressFamily::Ipv4,
             ValueKind::Membership,
             &b"other"[..],
+            ErrorCode::WrongValueTag,
         ),
         (
             "wrong-kind",
             AddressFamily::Ipv4,
             ValueKind::Direct,
             &b"membership"[..],
+            ErrorCode::WrongValueKind,
         ),
     ] {
         let incompatible_files = TestPair::new(label);
@@ -464,13 +467,10 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
             LiveReader::open(&incompatible_files.main, &CancellationToken::new()).unwrap();
         let mut candidate =
             LiveWriter::open(&destination_files.main, budget(), &CancellationToken::new()).unwrap();
-        assert!(matches!(
-            candidate.begin_membership_import(
-                MembershipImportSource::Live(&incompatible),
-                &cancellation
-            ),
-            Err(Error::WrongMode(_))
-        ));
+        let error = candidate
+            .begin_membership_import(MembershipImportSource::Live(&incompatible), &cancellation)
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
         assert!(matches!(
             candidate.commit(&CancellationToken::new()),
             Err(Error::NoPendingTransaction)

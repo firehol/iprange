@@ -413,7 +413,7 @@ fn wrong_kind_family_missing_id_and_trailing_zero_fail_closed() {
     let (reader, _path) = fixture(direct, &[]);
     assert!(matches!(
         reader.lookup_membership_v4(Ipv4Key(0)),
-        Err(Error::WrongMode(_))
+        Err(Error::WrongValueKind(_))
     ));
 
     let (reader, _path) = inline_fixture(&[1, 0]);
@@ -423,7 +423,7 @@ fn wrong_kind_family_missing_id_and_trailing_zero_fail_closed() {
     let (reader, _path) = inline_fixture(&[1]);
     assert!(matches!(
         reader.lookup_membership_v6(Ipv6Key::MIN),
-        Err(Error::InvalidArgument(_))
+        Err(Error::WrongAddressFamily(_))
     ));
 
     let (reader, path) = inline_fixture(&[1]);

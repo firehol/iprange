@@ -31,6 +31,53 @@ pub(super) fn retire(
     }
 }
 
+pub(super) fn retry(
+    destination: &Destination,
+    file: &File,
+    identity: Identity,
+    retirement_pending: bool,
+) -> Outcome {
+    #[cfg(unix)]
+    {
+        let _ = (destination, identity, retirement_pending);
+        let cause = match regular_link_count(file) {
+            Ok(0) => None,
+            Ok(_) => Some(cleanup_conflict(
+                "removed coordination inode remains linked",
+            )),
+            Err(error) => Some(Problem::namespace(&error)),
+        };
+        Outcome {
+            cause,
+            housekeeping: Housekeeping::None,
+            visible: Vec::new(),
+        }
+    }
+    #[cfg(windows)]
+    {
+        if retirement_pending
+            && destination
+                .directory()
+                .verify_name(destination.coordination(), identity)
+                .is_ok()
+        {
+            return match retire_windows(destination, file, identity) {
+                Ok(outcome) => outcome,
+                Err(cause) => Outcome {
+                    cause: Some(cause),
+                    housekeeping: Housekeeping::None,
+                    visible: Vec::new(),
+                },
+            };
+        }
+        Outcome {
+            cause: None,
+            housekeeping: Housekeeping::None,
+            visible: Vec::new(),
+        }
+    }
+}
+
 #[cfg(unix)]
 fn retire_unix(
     destination: &Destination,

@@ -12,6 +12,12 @@ use super::{AbortResult, CommitResult, LiveWriter};
 #[derive(Debug)]
 pub struct DirectTransaction<'a> {
     writer: &'a mut LiveWriter,
+    state: DirectState,
+}
+
+/// Borrow-free direct-operation state shared with language bindings.
+#[derive(Debug)]
+pub(crate) struct DirectState {
     operation_nonce: [u8; 16],
     cancellation: CancellationToken,
 }
@@ -22,10 +28,21 @@ impl LiveWriter {
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<DirectTransaction<'_>> {
+        let state = self.begin_direct_state(cancellation)?;
+        Ok(DirectTransaction {
+            writer: self,
+            state,
+        })
+    }
+
+    pub(crate) fn begin_direct_state(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<DirectState> {
         cancellation.check()?;
         self.require_healthy()?;
         if self.base.meta.value_kind != ValueKind::Direct {
-            return Err(Error::WrongMode(
+            return Err(Error::WrongValueKind(
                 "direct transaction requires a direct database",
             ));
         }
@@ -37,8 +54,7 @@ impl LiveWriter {
             self.base.meta,
             operation_nonce,
         )?);
-        Ok(DirectTransaction {
-            writer: self,
+        Ok(DirectState {
             operation_nonce,
             cancellation: cancellation.clone(),
         })
@@ -48,105 +64,169 @@ impl LiveWriter {
 impl DirectTransaction<'_> {
     /// Assign one inclusive IPv4 interval in exact call order.
     pub fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv4, from <= to)?;
-        self.run(|writer| writer.assign_direct_v4(from, to, value))
+        self.state.assign_v4(self.writer, from, to, value)
     }
 
     /// Assign one inclusive IPv6 interval in exact call order.
     pub fn assign_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv6, from <= to)?;
-        self.run(|writer| writer.assign_direct_v6(from, to, value))
+        self.state.assign_v6(self.writer, from, to, value)
     }
 
     /// Clear one inclusive IPv4 interval.
     pub fn clear_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv4, from <= to)?;
-        self.run(|writer| writer.clear_direct_v4(from, to))
+        self.state.clear_v4(self.writer, from, to)
     }
 
     /// Clear one inclusive IPv6 interval.
     pub fn clear_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv6, from <= to)?;
-        self.run(|writer| writer.clear_direct_v6(from, to))
+        self.state.clear_v6(self.writer, from, to)
     }
 
     /// Stage one exact metadata replacement in this transaction.
     pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
-        self.run(|writer| writer.stage_metadata_json(input))
+        self.state.set_metadata_json(self.writer, input)
     }
 
     /// Stage metadata absence in this transaction.
     pub fn clear_metadata_json(&mut self) -> Result<bool> {
-        self.run(LiveWriter::stage_clear_metadata_json)
+        self.state.clear_metadata_json(self.writer)
     }
 
     /// Exact decompressed length of committed or staged metadata.
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
-        self.require_active()?;
+        self.state.require_active(self.writer)?;
         self.writer.metadata_json_len()
     }
 
     /// Fill caller storage from committed or staged metadata.
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
-        self.require_active()?;
+        self.state.require_active(self.writer)?;
         self.writer.read_metadata_json(output)
     }
 
     /// Return the complete committed or staged bounded metadata value.
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
-        self.require_active()?;
+        self.state.require_active(self.writer)?;
         self.writer.metadata_json()
     }
 
     /// Publish this transaction.
     pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_operation(&self.cancellation)
+        self.writer.commit_operation(&self.state.cancellation)
     }
 
     /// Discard this transaction.
     pub fn abort(self) -> Result<AbortResult> {
         self.writer.abort()
     }
+}
 
-    fn run<T>(&mut self, operation: impl FnOnce(&mut LiveWriter) -> Result<T>) -> Result<T> {
-        self.check_or_abort()?;
-        let result = operation(self.writer);
+impl DirectState {
+    pub(crate) fn assign_v4(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        value: u32,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
+        self.run(writer, |writer| writer.assign_direct_v4(from, to, value))
+    }
+
+    pub(crate) fn assign_v6(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        value: u32,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
+        self.run(writer, |writer| writer.assign_direct_v6(from, to, value))
+    }
+
+    pub(crate) fn clear_v4(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv4Key,
+        to: Ipv4Key,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
+        self.run(writer, |writer| writer.clear_direct_v4(from, to))
+    }
+
+    pub(crate) fn clear_v6(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv6Key,
+        to: Ipv6Key,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
+        self.run(writer, |writer| writer.clear_direct_v6(from, to))
+    }
+
+    pub(crate) fn set_metadata_json(
+        &mut self,
+        writer: &mut LiveWriter,
+        input: &[u8],
+    ) -> Result<bool> {
+        self.run(writer, |writer| writer.stage_metadata_json(input))
+    }
+
+    pub(crate) fn clear_metadata_json(&mut self, writer: &mut LiveWriter) -> Result<bool> {
+        self.run(writer, LiveWriter::stage_clear_metadata_json)
+    }
+
+    pub(crate) fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    fn run<T>(
+        &mut self,
+        writer: &mut LiveWriter,
+        operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
+    ) -> Result<T> {
+        self.check_or_abort(writer)?;
+        let result = operation(writer);
         if result.is_ok() {
-            self.check_or_abort()?;
+            self.check_or_abort(writer)?;
         }
         result
     }
 
-    fn require_family(&self, family: AddressFamily, ordered: bool) -> Result<()> {
-        self.require_active()?;
+    fn require_family(
+        &self,
+        writer: &LiveWriter,
+        family: AddressFamily,
+        ordered: bool,
+    ) -> Result<()> {
+        self.require_active(writer)?;
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
-        if self.writer.base.meta.address_family != family {
-            return Err(Error::WrongMode(
+        if writer.base.meta.address_family != family {
+            return Err(Error::WrongAddressFamily(
                 "direct mutation does not match the database family",
             ));
         }
         Ok(())
     }
 
-    fn require_active(&self) -> Result<()> {
-        let active = self
-            .writer
+    pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
+        let active = writer
             .draft
             .as_ref()
             .is_some_and(|draft| draft.meta.commit_nonce == self.operation_nonce);
         if !active {
             return Err(Error::WrongState("direct transaction is no longer active"));
         }
-        self.writer.require_healthy()
+        writer.require_healthy()
     }
 
-    fn check_or_abort(&mut self) -> Result<()> {
-        self.require_active()?;
+    fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
+        self.require_active(writer)?;
         self.cancellation
             .check()
-            .map_err(|cause| self.writer.abort_after(cause))
+            .map_err(|cause| writer.abort_after(cause))
     }
 }
 

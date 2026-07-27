@@ -15,24 +15,27 @@ use crate::workflow::{
     AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
 
+use super::workflow::FinishedState;
 use super::workflow::{classify, drain_source, require_ordered};
-use super::{FinishedWorkflow, LiveWriter, PreparedWorkflow};
+use super::{FinishedWorkflow, LiveWriter, PreparedState};
 
 /// Complete creation of one exact named feed.
 #[derive(Debug)]
 pub struct CreateFeed<'a> {
-    core: ExactFeed<'a>,
+    writer: &'a mut LiveWriter,
+    state: ExactFeedState,
 }
 
 /// Complete replacement of one exact named feed.
 #[derive(Debug)]
 pub struct ReplaceFeed<'a> {
-    core: ExactFeed<'a>,
+    writer: &'a mut LiveWriter,
+    state: ExactFeedState,
 }
 
+/// Borrow-free exact-feed workflow state shared with language bindings.
 #[derive(Debug)]
-struct ExactFeed<'a> {
-    writer: &'a mut LiveWriter,
+pub(crate) struct ExactFeedState {
     cancellation: CancellationToken,
     workflow: WorkflowKind,
     feed: FeedEntry,
@@ -47,8 +50,10 @@ impl LiveWriter {
         name: FeedName,
         cancellation: &CancellationToken,
     ) -> Result<CreateFeed<'_>> {
+        let state = self.begin_exact_feed_state(name, true, cancellation)?;
         Ok(CreateFeed {
-            core: self.begin_exact_feed(name, true, cancellation)?,
+            writer: self,
+            state,
         })
     }
 
@@ -58,24 +63,25 @@ impl LiveWriter {
         name: FeedName,
         cancellation: &CancellationToken,
     ) -> Result<ReplaceFeed<'_>> {
+        let state = self.begin_exact_feed_state(name, false, cancellation)?;
         Ok(ReplaceFeed {
-            core: self.begin_exact_feed(name, false, cancellation)?,
+            writer: self,
+            state,
         })
     }
 
-    fn begin_exact_feed<'a>(
-        &'a mut self,
+    pub(crate) fn begin_exact_feed_state(
+        &mut self,
         name: FeedName,
         create: bool,
         cancellation: &CancellationToken,
-    ) -> Result<ExactFeed<'a>> {
+    ) -> Result<ExactFeedState> {
         let existing = self.check_feed_precondition(name, create, cancellation)?;
         self.start_feed_workflow_draft()?;
         let family = self.base.meta.address_family;
         let setup =
             self.mutate(|store| setup_feed(store, name, existing, create, family, cancellation))?;
-        Ok(ExactFeed {
-            writer: self,
+        Ok(ExactFeedState {
             cancellation: cancellation.clone(),
             workflow: if create {
                 WorkflowKind::CreateFeed
@@ -111,7 +117,7 @@ impl LiveWriter {
     pub(super) fn require_feed_workflow_ready(&self) -> Result<()> {
         self.require_healthy()?;
         if self.base.meta.value_kind != ValueKind::Membership {
-            return Err(Error::WrongMode(
+            return Err(Error::WrongValueKind(
                 "named-feed workflow requires a membership database",
             ));
         }
@@ -127,14 +133,16 @@ impl<'a> CreateFeed<'a> {
     where
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
-        self.core.add_ranges(AddressFamily::Ipv4, source)
+        self.state
+            .add_ranges(self.writer, AddressFamily::Ipv4, source)
     }
 
     pub fn add_ranges_v6<S>(&mut self, source: &mut S) -> Result<()>
     where
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
-        self.core.add_ranges(AddressFamily::Ipv6, source)
+        self.state
+            .add_ranges(self.writer, AddressFamily::Ipv6, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
@@ -146,7 +154,7 @@ impl<'a> CreateFeed<'a> {
     }
 
     pub fn finish_input(self) -> Result<FinishedWorkflow<'a>> {
-        self.core.finish()
+        self.state.finish(self.writer)
     }
 }
 
@@ -155,14 +163,16 @@ impl<'a> ReplaceFeed<'a> {
     where
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
-        self.core.add_ranges(AddressFamily::Ipv4, source)
+        self.state
+            .add_ranges(self.writer, AddressFamily::Ipv4, source)
     }
 
     pub fn add_ranges_v6<S>(&mut self, source: &mut S) -> Result<()>
     where
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
-        self.core.add_ranges(AddressFamily::Ipv6, source)
+        self.state
+            .add_ranges(self.writer, AddressFamily::Ipv6, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
@@ -174,17 +184,22 @@ impl<'a> ReplaceFeed<'a> {
     }
 
     pub fn finish_input(self) -> Result<FinishedWorkflow<'a>> {
-        self.core.finish()
+        self.state.finish(self.writer)
     }
 }
 
-impl<'a> ExactFeed<'a> {
-    fn add_ranges<K, S>(&mut self, family: AddressFamily, source: &mut S) -> Result<()>
+impl ExactFeedState {
+    pub(crate) fn add_ranges<K, S>(
+        &mut self,
+        writer: &mut LiveWriter,
+        family: AddressFamily,
+        source: &mut S,
+    ) -> Result<()>
     where
         K: IpKey,
         S: RangeSource<AddressRange<K>>,
     {
-        self.require_family(family)?;
+        self.require_family(writer, family)?;
         let id = self.member.id;
         let words = self.member.word_count;
         let cancellation = self.cancellation.clone();
@@ -194,7 +209,7 @@ impl<'a> ExactFeed<'a> {
             &mut self.input_records,
             |range| {
                 require_ordered(range.from, range.to)?;
-                self.writer.mutate(|store| {
+                writer.mutate(|store| {
                     store.apply_membership_cancellable(
                         range.from,
                         range.to,
@@ -208,45 +223,47 @@ impl<'a> ExactFeed<'a> {
             },
         );
         result.map_err(|error| {
-            if self.writer.draft.is_some() {
-                self.writer.abort_after(error)
+            if writer.draft.is_some() {
+                writer.abort_after(error)
             } else {
                 error
             }
         })
     }
 
-    fn finish(mut self) -> Result<FinishedWorkflow<'a>> {
-        self.require_active()?;
-        let cancellation = self.cancellation.clone();
-        self.writer
-            .mutate(|store| store.finalize_membership_workflow(&cancellation))?;
-        let report = self.prepare_report()?;
-        if report.logical_change == LogicalChange::NoChange {
-            self.writer.discard_draft()?;
-            return Ok(FinishedWorkflow::NoChange(report));
-        }
-        self.writer
-            .mutate(|store| store.finish_membership_workflow(&cancellation))?;
-        Ok(FinishedWorkflow::Changed(PreparedWorkflow::new(
-            self.writer,
-            report,
-            cancellation,
-        )))
+    pub(crate) fn finish<'a>(self, writer: &'a mut LiveWriter) -> Result<FinishedWorkflow<'a>> {
+        let finished = self.finish_state(writer)?;
+        Ok(finished.bind(writer))
     }
 
-    fn prepare_report(&mut self) -> Result<WorkflowReport> {
-        let after = self.writer.draft.as_ref().unwrap().meta;
+    pub(crate) fn finish_state(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
+        self.require_active(writer)?;
+        let cancellation = self.cancellation.clone();
+        writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
+        let report = self.prepare_report(writer)?;
+        if report.logical_change == LogicalChange::NoChange {
+            writer.discard_draft()?;
+            return Ok(FinishedState::NoChange(report));
+        }
+        writer.mutate(|store| store.finish_membership_workflow(&cancellation))?;
+        Ok(FinishedState::Changed {
+            report,
+            state: PreparedState::new(cancellation),
+        })
+    }
+
+    fn prepare_report(&mut self, writer: &mut LiveWriter) -> Result<WorkflowReport> {
+        let after = writer.draft.as_ref().unwrap().meta;
         let before_feed = (self.workflow == WorkflowKind::ReplaceFeed).then_some(self.feed);
         let scanned = compare_feeds(
-            &self.writer.file,
-            &self.writer.base.meta,
+            &writer.file,
+            &writer.base.meta,
             before_feed,
             &after,
             self.feed,
             &self.cancellation,
         )
-        .map_err(|error| self.writer.abort_after(error))?;
+        .map_err(|error| writer.abort_after(error))?;
         let logical_change = if self.workflow == WorkflowKind::CreateFeed {
             LogicalChange::Changed
         } else {
@@ -266,20 +283,19 @@ impl<'a> ExactFeed<'a> {
         ))
     }
 
-    fn require_family(&mut self, family: AddressFamily) -> Result<()> {
-        self.require_active()?;
-        if self.writer.base.meta.address_family != family {
-            return Err(self
-                .writer
-                .abort_after(Error::WrongMode("range family does not match the database")));
+    fn require_family(&mut self, writer: &mut LiveWriter, family: AddressFamily) -> Result<()> {
+        self.require_active(writer)?;
+        if writer.base.meta.address_family != family {
+            return Err(writer.abort_after(Error::WrongAddressFamily(
+                "range family does not match the database",
+            )));
         }
         Ok(())
     }
 
-    fn require_active(&self) -> Result<()> {
-        self.writer.require_healthy()?;
-        if !self
-            .writer
+    pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
+        writer.require_healthy()?;
+        if !writer
             .draft
             .as_ref()
             .is_some_and(Draft::workflow_input_open)

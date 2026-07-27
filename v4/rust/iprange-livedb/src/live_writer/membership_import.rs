@@ -23,7 +23,8 @@ use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 use crate::workflow::LogicalChange;
 use crate::ImmutableReader;
 
-use super::{FinishedWorkflow, LiveWriter, PreparedWorkflow};
+use super::workflow::FinishedState;
+use super::{FinishedWorkflow, LiveWriter, PreparedState};
 
 const WORD_BATCH: usize = 64;
 
@@ -43,7 +44,7 @@ pub struct MembershipImport<'writer, 'source> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Source<'a> {
+pub(crate) struct Source<'a> {
     file: &'a File,
     meta: MetaV4,
     identity: Identity,
@@ -68,57 +69,71 @@ impl LiveWriter {
         source: MembershipImportSource<'source>,
         cancellation: &CancellationToken,
     ) -> Result<MembershipImport<'writer, 'source>> {
-        self.require_feed_workflow_ready()?;
-        let source = Source::new(source)?;
-        require_compatible_source(self, &source)?;
-        cancellation.check()?;
-        self.start_feed_workflow_draft()?;
+        let source = self.begin_membership_import_state(source, cancellation)?;
         Ok(MembershipImport {
             writer: self,
             source,
             cancellation: cancellation.clone(),
         })
     }
+
+    pub(crate) fn begin_membership_import_state<'source>(
+        &mut self,
+        source: MembershipImportSource<'source>,
+        cancellation: &CancellationToken,
+    ) -> Result<Source<'source>> {
+        self.require_feed_workflow_ready()?;
+        let source = Source::new(source)?;
+        require_compatible_source(self, &source)?;
+        cancellation.check()?;
+        self.start_feed_workflow_draft()?;
+        Ok(source)
+    }
 }
 
 impl<'writer> MembershipImport<'writer, '_> {
     /// Import the complete pinned source and prepare its exact report.
     pub fn finish_input(self) -> Result<FinishedWorkflow<'writer>> {
-        self.require_active()?;
-        let stats = import_all(self.writer, self.source, &self.cancellation)?;
-        let cancellation = self.cancellation.clone();
-        self.writer
-            .mutate_uncached(|store| store.finalize_membership_workflow(&cancellation))?;
-        let report = report::prepare(self.writer, stats, &cancellation)?;
-        if report.logical_change == LogicalChange::NoChange {
-            self.writer.discard_draft()?;
-            return Ok(FinishedWorkflow::NoChange(report));
-        }
-        self.writer
-            .mutate_uncached(|store| store.finish_membership_workflow(&cancellation))?;
-        Ok(FinishedWorkflow::Changed(PreparedWorkflow::new(
-            self.writer,
-            report,
-            cancellation,
-        )))
+        let finished = finish_import_state(self.writer, self.source, &self.cancellation)?;
+        Ok(finished.bind(self.writer))
     }
+}
 
-    fn require_active(&self) -> Result<()> {
-        if self
-            .writer
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.workflow_input_open())
-        {
-            self.writer.require_healthy()
-        } else {
-            Err(Error::WrongState("membership import is not active"))
-        }
+pub(crate) fn finish_import_state(
+    writer: &mut LiveWriter,
+    source: Source<'_>,
+    cancellation: &CancellationToken,
+) -> Result<FinishedState> {
+    require_active(writer)?;
+    let stats = import_all(writer, source, cancellation)?;
+    let cancellation = cancellation.clone();
+    writer.mutate_uncached(|store| store.finalize_membership_workflow(&cancellation))?;
+    let report = report::prepare(writer, stats, &cancellation)?;
+    if report.logical_change == LogicalChange::NoChange {
+        writer.discard_draft()?;
+        return Ok(FinishedState::NoChange(report));
+    }
+    writer.mutate_uncached(|store| store.finish_membership_workflow(&cancellation))?;
+    Ok(FinishedState::Changed {
+        report,
+        state: PreparedState::new(cancellation),
+    })
+}
+
+fn require_active(writer: &LiveWriter) -> Result<()> {
+    if writer
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.workflow_input_open())
+    {
+        writer.require_healthy()
+    } else {
+        Err(Error::WrongState("membership import is not active"))
     }
 }
 
 impl<'a> Source<'a> {
-    fn new(source: MembershipImportSource<'a>) -> Result<Self> {
+    pub(crate) fn new(source: MembershipImportSource<'a>) -> Result<Self> {
         let (file, meta, owner_pid) = match source {
             MembershipImportSource::Immutable(reader) => {
                 let (file, meta) = reader.import_parts();
@@ -160,15 +175,18 @@ impl<'a> Source<'a> {
 
 fn require_compatible_source(writer: &LiveWriter, source: &Source<'_>) -> Result<()> {
     if source.meta.value_kind != ValueKind::Membership {
-        return Err(Error::WrongMode(
+        return Err(Error::WrongValueKind(
             "membership import requires a membership source",
         ));
     }
-    if source.meta.address_family != writer.base.meta.address_family
-        || source.meta.value_tag != writer.base.meta.value_tag
-    {
-        return Err(Error::WrongMode(
-            "membership import source family or value tag differs",
+    if source.meta.address_family != writer.base.meta.address_family {
+        return Err(Error::WrongAddressFamily(
+            "membership import source family differs",
+        ));
+    }
+    if source.meta.value_tag != writer.base.meta.value_tag {
+        return Err(Error::WrongValueTag(
+            "membership import source value tag differs",
         ));
     }
     if source.identity == writer.main_identity {

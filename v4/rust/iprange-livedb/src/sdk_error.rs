@@ -88,6 +88,9 @@ pub enum Error {
     ForeignReference,
     WrongState(&'static str),
     WrongMode(&'static str),
+    WrongAddressFamily(&'static str),
+    WrongValueKind(&'static str),
+    WrongValueTag(&'static str),
     Unsupported(&'static str),
     DurabilityUnsupported(&'static str),
     Io(io::Error),
@@ -139,6 +142,9 @@ impl Error {
             Self::ForeignReference => ErrorCode::ForeignReference,
             Self::WrongState(_) => ErrorCode::WrongState,
             Self::WrongMode(_) => ErrorCode::WrongState,
+            Self::WrongAddressFamily(_) => ErrorCode::WrongAddressFamily,
+            Self::WrongValueKind(_) => ErrorCode::WrongValueKind,
+            Self::WrongValueTag(_) => ErrorCode::WrongValueTag,
             Self::Unsupported(_) => ErrorCode::OsUnsupported,
             Self::DurabilityUnsupported(_) => ErrorCode::DurabilityUnsupported,
             Self::Io(_) => ErrorCode::Io,
@@ -197,6 +203,11 @@ impl fmt::Display for Error {
             }
             Self::WrongState(detail) => write!(output, "wrong operation state: {detail}"),
             Self::WrongMode(detail) => write!(output, "wrong database mode: {detail}"),
+            Self::WrongAddressFamily(detail) => {
+                write!(output, "wrong address family: {detail}")
+            }
+            Self::WrongValueKind(detail) => write!(output, "wrong value kind: {detail}"),
+            Self::WrongValueTag(detail) => write!(output, "wrong value tag: {detail}"),
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
             Self::DurabilityUnsupported(detail) => {
                 write!(output, "durability is unsupported: {detail}")
@@ -279,6 +290,9 @@ impl std::error::Error for Error {
             | Self::ForeignReference
             | Self::WrongState(_)
             | Self::WrongMode(_)
+            | Self::WrongAddressFamily(_)
+            | Self::WrongValueKind(_)
+            | Self::WrongValueTag(_)
             | Self::Unsupported(_)
             | Self::DurabilityUnsupported(_)
             | Self::Format(_)

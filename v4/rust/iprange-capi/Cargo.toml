@@ -1,0 +1,22 @@
+[package]
+name = "iprange-capi"
+version = "0.0.0"
+description = "Stable C ABI for the iprange v4 database"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "iprange_v4"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+iprange-livedb = { path = "../iprange-livedb" }
+
+[build-dependencies]
+cbindgen = { version = "=0.29.4", default-features = false }
+syn = { version = "=2.0.119", features = ["full"] }
+
+[dev-dependencies]
+serde_json = "=1.0.151"

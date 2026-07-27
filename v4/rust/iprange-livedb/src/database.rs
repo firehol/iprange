@@ -166,6 +166,11 @@ impl ImmutableReader {
     pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
         self.core.import_parts()
     }
+
+    pub(crate) fn c_abi_parts(&self) -> (&File, MetaV4, Option<u32>) {
+        let (file, meta) = self.core.import_parts();
+        (file, meta, None)
+    }
 }
 
 fn open_immutable_source(path: &Path, sidecar: &Path) -> Result<(File, live_sidecar::Identity)> {
@@ -346,12 +351,12 @@ impl ReaderCore {
 
     fn require_direct(&self, family: AddressFamily) -> Result<()> {
         if self.bootstrap.meta.value_kind != ValueKind::Direct {
-            return Err(Error::InvalidArgument(
+            return Err(Error::WrongValueKind(
                 "direct lookup requires a direct-value database",
             ));
         }
         if self.bootstrap.meta.address_family != family {
-            return Err(Error::InvalidArgument(
+            return Err(Error::WrongAddressFamily(
                 "lookup address family does not match the database",
             ));
         }
@@ -361,7 +366,7 @@ impl ReaderCore {
     fn require_membership_family(&self, family: AddressFamily) -> Result<()> {
         feed_catalog::require_membership(&self.bootstrap.meta)?;
         if self.bootstrap.meta.address_family != family {
-            return Err(Error::InvalidArgument(
+            return Err(Error::WrongAddressFamily(
                 "feed cursor address family does not match the database",
             ));
         }

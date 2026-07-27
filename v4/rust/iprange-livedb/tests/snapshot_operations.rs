@@ -11,10 +11,12 @@ use iprange_livedb::publication::{
     PublicationStatus,
 };
 use iprange_livedb::{
-    create_live, snapshot_to, AddressFamily, CancellationToken, DirectRange, ErrorCode, FeedName,
-    FinishedWorkflow, ImmutableReader, Ipv4Key, LiveWriter, MembershipOperation, SnapshotBudget,
+    create_live, snapshot_to, AddressFamily, CancellationToken, ErrorCode, FeedName,
+    ImmutableReader, Ipv4Key, LiveWriter, MembershipOperation, SnapshotBudget,
     SnapshotPublicationPolicy, SnapshotSourceMode, TransactionBudget, ValueKind, ValueTag,
 };
+#[cfg(target_os = "linux")]
+use iprange_livedb::{DirectRange, FinishedWorkflow};
 use sha2::{Digest, Sha512};
 
 struct TestFiles {

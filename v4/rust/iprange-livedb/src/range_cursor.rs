@@ -40,8 +40,7 @@ const EMPTY_FRAME: Frame = Frame {
     level: 0,
 };
 
-pub(crate) struct Cursor<'a, K> {
-    file: &'a File,
+pub(crate) struct CursorState<K> {
     meta: MetaV4,
     direction: RangeDirection,
     path: [Frame; MAX_TREE_LEVEL as usize],
@@ -55,15 +54,14 @@ pub(crate) struct Cursor<'a, K> {
     key: PhantomData<K>,
 }
 
-impl<'a, K: IpKey> Cursor<'a, K> {
+impl<K: IpKey> CursorState<K> {
     pub(crate) fn new(
-        file: &'a File,
+        file: &File,
         meta: &MetaV4,
         direction: RangeDirection,
         owner_pid: Option<u32>,
     ) -> Result<Self> {
         let mut cursor = Self {
-            file,
             meta: *meta,
             direction,
             path: [EMPTY_FRAME; MAX_TREE_LEVEL as usize],
@@ -77,12 +75,12 @@ impl<'a, K: IpKey> Cursor<'a, K> {
             key: PhantomData,
         };
         if !cursor.finished {
-            cursor.descend_edge(meta.range_root, None)?;
+            cursor.descend_edge(file, meta.range_root, None)?;
         }
         Ok(cursor)
     }
 
-    fn seek(&mut self, target: K) -> Result<()> {
+    pub(crate) fn seek(&mut self, file: &File, target: K) -> Result<()> {
         self.require_owner()?;
         self.depth = 0;
         self.needs_advance = false;
@@ -90,20 +88,20 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         if self.finished {
             return Ok(());
         }
-        if let Err(error) = self.seek_inner(target) {
+        if let Err(error) = self.seek_inner(file, target) {
             self.finished = true;
             return Err(error);
         }
         Ok(())
     }
 
-    fn seek_inner(&mut self, target: K) -> Result<()> {
+    fn seek_inner(&mut self, file: &File, target: K) -> Result<()> {
         let mut page_number = self.meta.range_root;
         let mut expected_level = None;
         loop {
-            let header = self.read(page_number, expected_level)?;
+            let header = self.read(file, page_number, expected_level)?;
             if header.level == 0 {
-                return self.seek_leaf(&header, target);
+                return self.seek_leaf(file, &header, target);
             }
             let found =
                 range_tree::greatest_not_after::<K>(&self.page, &header, K::WIDTH + 4, target)?;
@@ -122,7 +120,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         }
     }
 
-    fn seek_leaf(&mut self, header: &Header, target: K) -> Result<()> {
+    fn seek_leaf(&mut self, file: &File, header: &Header, target: K) -> Result<()> {
         let found =
             range_tree::greatest_not_after::<K>(&self.page, header, K::WIDTH * 2 + 4, target)?;
         match self.direction {
@@ -143,20 +141,20 @@ impl<'a, K: IpKey> Cursor<'a, K> {
                 } else {
                     self.leaf = Some(*header);
                     self.index = header.item_count - 1;
-                    self.advance_leaf()?;
+                    self.advance_leaf(file)?;
                 }
             }
         }
         Ok(())
     }
 
-    pub(crate) fn next(&mut self) -> Result<Option<DirectRange<K>>> {
+    pub(crate) fn next(&mut self, file: &File) -> Result<Option<DirectRange<K>>> {
         self.require_owner()?;
         if self.finished {
             return Ok(None);
         }
         if self.needs_advance {
-            if let Err(error) = self.advance() {
+            if let Err(error) = self.advance(file) {
                 self.finished = true;
                 return Err(error);
             }
@@ -180,7 +178,7 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         }))
     }
 
-    fn advance(&mut self) -> Result<()> {
+    fn advance(&mut self, file: &File) -> Result<()> {
         let item_count = self
             .leaf
             .as_ref()
@@ -198,10 +196,10 @@ impl<'a, K: IpKey> Cursor<'a, K> {
             self.needs_advance = false;
             return Ok(());
         }
-        self.advance_leaf()
+        self.advance_leaf(file)
     }
 
-    fn advance_leaf(&mut self) -> Result<()> {
+    fn advance_leaf(&mut self, file: &File) -> Result<()> {
         while self.depth > 0 {
             let slot = self.depth - 1;
             let mut frame = self.path[slot];
@@ -219,22 +217,27 @@ impl<'a, K: IpKey> Cursor<'a, K> {
             }
             self.path[slot] = frame;
             self.depth = slot + 1;
-            let header = self.read(frame.page_number, Some(frame.level))?;
+            let header = self.read(file, frame.page_number, Some(frame.level))?;
             if header.item_count != frame.item_count {
                 return Err(crate::error::Error::Corrupt(
                     "range branch changed during cursor traversal",
                 ));
             }
             let child = range_tree::branch_child::<K>(&self.page, &header, frame.index)?;
-            return self.descend_edge(child, Some(frame.level - 1));
+            return self.descend_edge(file, child, Some(frame.level - 1));
         }
         self.finished = true;
         Ok(())
     }
 
-    fn descend_edge(&mut self, mut page_number: u32, mut expected: Option<u16>) -> Result<()> {
+    fn descend_edge(
+        &mut self,
+        file: &File,
+        mut page_number: u32,
+        mut expected: Option<u16>,
+    ) -> Result<()> {
         loop {
-            let header = self.read(page_number, expected)?;
+            let header = self.read(file, page_number, expected)?;
             if header.level == 0 {
                 let index = match self.direction {
                     RangeDirection::Forward => 0,
@@ -254,8 +257,13 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         }
     }
 
-    fn read(&mut self, page_number: u32, expected_level: Option<u16>) -> Result<Header> {
-        file_io::read_page(self.file, page_number, self.meta.page_count, &mut self.page)?;
+    fn read(
+        &mut self,
+        file: &File,
+        page_number: u32,
+        expected_level: Option<u16>,
+    ) -> Result<Header> {
+        file_io::read_page(file, page_number, self.meta.page_count, &mut self.page)?;
         range_tree::parse_header::<K>(&self.page, self.meta.txn_id, expected_level)
     }
 
@@ -288,6 +296,33 @@ impl<'a, K: IpKey> Cursor<'a, K> {
             return Err(Error::ForkedHandle);
         }
         Ok(())
+    }
+}
+
+pub(crate) struct Cursor<'a, K> {
+    file: &'a File,
+    state: CursorState<K>,
+}
+
+impl<'a, K: IpKey> Cursor<'a, K> {
+    pub(crate) fn new(
+        file: &'a File,
+        meta: &MetaV4,
+        direction: RangeDirection,
+        owner_pid: Option<u32>,
+    ) -> Result<Self> {
+        Ok(Self {
+            file,
+            state: CursorState::new(file, meta, direction, owner_pid)?,
+        })
+    }
+
+    pub(crate) fn seek(&mut self, target: K) -> Result<()> {
+        self.state.seek(self.file, target)
+    }
+
+    pub(crate) fn next(&mut self) -> Result<Option<DirectRange<K>>> {
+        self.state.next(self.file)
     }
 }
 
@@ -334,8 +369,8 @@ macro_rules! public_cursor {
             fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
                 output
                     .debug_struct(stringify!($name))
-                    .field("direction", &self.inner.direction)
-                    .field("finished", &self.inner.finished)
+                    .field("direction", &self.inner.state.direction)
+                    .field("finished", &self.inner.state.finished)
                     .finish_non_exhaustive()
             }
         }

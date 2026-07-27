@@ -200,9 +200,12 @@ fn query_grammar_and_database_kind_fail_before_page_access() {
     let (reader, _path) = fixture(direct, &[]);
     assert!(matches!(
         reader.lookup_feed("alpha"),
-        Err(Error::WrongMode(_))
+        Err(Error::WrongValueKind(_))
     ));
-    assert!(matches!(reader.feed_cursor(), Err(Error::WrongMode(_))));
+    assert!(matches!(
+        reader.feed_cursor(),
+        Err(Error::WrongValueKind(_))
+    ));
 }
 
 #[test]

@@ -305,9 +305,14 @@ impl Builder {
     }
 
     fn require_mode(&self, kind: ValueKind, family: AddressFamily) -> Result<()> {
-        if self.meta.value_kind != kind || self.meta.address_family != family {
-            return Err(Error::WrongMode(
-                "immutable output operation does not match its format",
+        if self.meta.value_kind != kind {
+            return Err(Error::WrongValueKind(
+                "immutable output operation does not match its value kind",
+            ));
+        }
+        if self.meta.address_family != family {
+            return Err(Error::WrongAddressFamily(
+                "immutable output operation does not match its address family",
             ));
         }
         Ok(())

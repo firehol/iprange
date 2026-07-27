@@ -9,6 +9,8 @@
 
 mod blob_tree;
 mod bootstrap;
+#[doc(hidden)]
+pub mod c_abi_support;
 mod cancellation;
 pub mod cardinality;
 mod commit_resolution;

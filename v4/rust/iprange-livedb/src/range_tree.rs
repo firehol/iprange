@@ -21,7 +21,7 @@ pub(crate) struct Record<K> {
 
 pub(crate) fn lookup<K: IpKey>(file: &File, meta: &MetaV4, target: K) -> Result<Option<u32>> {
     if meta.address_family != K::FAMILY {
-        return Err(Error::InvalidArgument(
+        return Err(Error::WrongAddressFamily(
             "lookup address family does not match the database",
         ));
     }

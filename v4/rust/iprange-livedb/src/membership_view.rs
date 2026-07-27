@@ -19,6 +19,10 @@ pub struct MembershipView<'a> {
 }
 
 impl MembershipView<'_> {
+    pub(crate) const fn id(&self) -> u32 {
+        self.record.id
+    }
+
     /// Number of canonical little-endian `u64` bitmap words.
     pub fn word_count(&self) -> Result<u32> {
         self.require_owner()?;
@@ -186,12 +190,12 @@ fn lookup<'a>(
 
 fn require_kind(meta: &MetaV4, family: AddressFamily) -> Result<()> {
     if meta.value_kind != ValueKind::Membership {
-        return Err(Error::WrongMode(
+        return Err(Error::WrongValueKind(
             "membership lookup requires a membership database",
         ));
     }
     if meta.address_family != family {
-        return Err(Error::InvalidArgument(
+        return Err(Error::WrongAddressFamily(
             "lookup address family does not match the database",
         ));
     }

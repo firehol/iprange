@@ -31,16 +31,22 @@ use crate::validation::LocalFileIdentity;
 
 pub use create::{create_live, CreateResult, CreationState};
 pub(crate) use create::{empty_meta, write_empty_main};
+pub(crate) use direct::DirectState;
 pub use direct::DirectTransaction;
+pub(crate) use direct_workflow::ExactDirectState;
 pub use direct_workflow::{DirectReplacement, RetentionRefresh};
+pub(crate) use feed_workflow::ExactFeedState;
 pub use feed_workflow::{CreateFeed, ReplaceFeed};
+pub(crate) use membership::MembershipState;
 pub use membership::{FeedRef, MembershipRef, MembershipTransaction, TransactionFeedCursor};
+pub(crate) use membership_import::{finish_import_state, Source as MembershipImportStateSource};
 pub use membership_import::{MembershipImport, MembershipImportSource};
 pub use reclaim::ReclaimResult;
 pub use result::{
     AbortOutcome, AbortResult, CloseOutcome, CloseResult, CommitCleanupArtifact,
     CommitCleanupArtifacts, LocalBasename,
 };
+pub(crate) use workflow::{FinishedState, PreparedState};
 pub use workflow::{FinishedWorkflow, PreparedFeedChange, PreparedWorkflow};
 
 /// Maximum resources retained by one writer transaction.
@@ -275,7 +281,10 @@ impl LiveWriter {
         }
     }
 
-    fn mutate<T>(&mut self, operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>) -> Result<T> {
+    pub(crate) fn mutate<T>(
+        &mut self,
+        operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>,
+    ) -> Result<T> {
         self.mutate_with_cache(true, operation)
     }
 
@@ -338,10 +347,14 @@ impl LiveWriter {
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
-        if self.base.meta.value_kind != ValueKind::Direct || self.base.meta.address_family != family
-        {
-            return Err(Error::WrongMode(
-                "direct mutation does not match the database",
+        if self.base.meta.value_kind != ValueKind::Direct {
+            return Err(Error::WrongValueKind(
+                "direct mutation requires a direct database",
+            ));
+        }
+        if self.base.meta.address_family != family {
+            return Err(Error::WrongAddressFamily(
+                "direct mutation does not match the database family",
             ));
         }
         Ok(())
@@ -407,7 +420,7 @@ impl LiveWriter {
         }
     }
 
-    fn abort_after(&mut self, cause: Error) -> Error {
+    pub(crate) fn abort_after(&mut self, cause: Error) -> Error {
         let fatal = matches!(cause, Error::Io(_) | Error::Format(_) | Error::Corrupt(_));
         let result = self.abort_after_source(cause);
         if fatal {

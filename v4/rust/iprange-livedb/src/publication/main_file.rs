@@ -443,6 +443,6 @@ impl From<error::Error> for Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "main_file_tests.rs"]
 mod tests;

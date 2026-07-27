@@ -1,0 +1,174 @@
+language = "c"
+cpp_compat = true
+include_guard = "IPRANGE_V4_ABI1_H"
+include_version = true
+documentation = false
+style = "both"
+usize_is_size_t = false
+line_length = 100
+tab_width = 4
+after_includes = """
+#if defined(_WIN32)
+#  if defined(IPRANGE_V4_ABI1_BUILD)
+#    define IPRANGE_V4_ABI1_API __declspec(dllexport)
+#  else
+#    define IPRANGE_V4_ABI1_API __declspec(dllimport)
+#  endif
+#  define IPRANGE_V4_ABI1_CALL __cdecl
+#elif defined(__GNUC__) || defined(__clang__)
+#  define IPRANGE_V4_ABI1_API __attribute__((visibility(\"default\")))
+#  define IPRANGE_V4_ABI1_CALL
+#else
+#  define IPRANGE_V4_ABI1_API
+#  define IPRANGE_V4_ABI1_CALL
+#endif
+
+typedef struct iprange_v4_abi1_error iprange_v4_abi1_error;
+typedef struct iprange_v4_abi1_report iprange_v4_abi1_report;
+typedef struct iprange_v4_abi1_reader iprange_v4_abi1_reader;
+typedef struct iprange_v4_abi1_writer iprange_v4_abi1_writer;
+typedef struct iprange_v4_abi1_cursor iprange_v4_abi1_cursor;
+typedef struct iprange_v4_abi1_writer_feed_ref iprange_v4_abi1_writer_feed_ref;
+typedef struct iprange_v4_abi1_membership_view iprange_v4_abi1_membership_view;
+typedef struct iprange_v4_abi1_borrowed_membership_view iprange_v4_abi1_borrowed_membership_view;
+typedef struct iprange_v4_abi1_membership_builder iprange_v4_abi1_membership_builder;
+typedef struct iprange_v4_abi1_membership_ref iprange_v4_abi1_membership_ref;
+typedef struct iprange_v4_abi1_cleanup_guard iprange_v4_abi1_cleanup_guard;
+typedef struct iprange_v4_abi1_residue iprange_v4_abi1_residue;
+
+/*
+ * Generation-1 pointer and ownership contract
+ *
+ * - Every non-NULL pointer must address suitably aligned readable or writable
+ *   storage for the complete object or slice used by the call. A zero-length
+ *   slice may use NULL; a nonzero-length slice may not.
+ * - Writable caller ranges must not overlap another input, output, opaque
+ *   handle, or borrowed engine object used by the same call. The ABI rejects
+ *   overlap between declared output arguments. Pointers outside valid caller
+ *   allocations cannot be probed portably and violate this contract.
+ * - error_output may be NULL. When supplied, it and every fixed output are
+ *   initialized to NULL/zero before semantic work. The caller owns each
+ *   returned error, report, reader, writer, cursor, view, reference, builder,
+ *   cleanup guard, and residue handle until its matching close/destroy call.
+ * - Error and report destroy return HANDLE_BUSY while an untaken cleanup
+ *   obligation remains. Reader/writer Close may fail and does not free the
+ *   unresolved handle. Writer Close aborts pending work; it never commits it.
+ * - Callback batches, callback records, borrowed membership views, and error
+ *   causes remain engine-owned. They are valid only for their documented
+ *   parent lifetime and must never be freed or retained past that lifetime.
+ * - Handles documented as caller-serialized must not be used concurrently or
+ *   reentered from their callbacks. Different handles may run concurrently
+ *   subject to database locking.
+ * - Every function returns STATUS_OK or STATUS_ERROR. Numeric error_code and
+ *   report facts are stable classifiers; diagnostic text is informational.
+ */
+"""
+
+header = """
+/* Generated from the Rust ABI. Do not edit. */
+"""
+
+[export]
+prefix = "iprange_v4_abi1_"
+item_types = ["constants", "structs", "opaque", "typedefs", "functions"]
+exclude = [
+    "Header",
+    "ReaderHandle",
+    "WriterHandle",
+    "CursorHandle",
+    "WriterFeedRefHandle",
+    "MembershipViewHandle",
+    "BorrowedMembershipViewHandle",
+    "MembershipBuilderHandle",
+    "MembershipRefHandle",
+    "ErrorHandle",
+    "ReportHandle",
+    "CleanupGuardHandle",
+    "ResidueHandle",
+]
+
+[export.mangle]
+rename_types = "SnakeCase"
+remove_underscores = false
+
+[export.rename]
+"AbortReport" = "abort_report"
+"ArtifactRecord" = "artifact_record"
+"ArtifactSinkFn" = "artifact_sink_fn"
+"BorrowedMembershipViewHandle" = "borrowed_membership_view"
+"ByteSlice" = "byte_slice"
+"CallbackFailure" = "callback_failure"
+"CancelFn" = "cancel_fn"
+"Cancellation" = "cancellation"
+"Cardinality129" = "cardinality129"
+"CleanupArtifact" = "cleanup_artifact"
+"CleanupGuardHandle" = "cleanup_guard"
+"CloseReport" = "close_report"
+"CommitReport" = "commit_report"
+"CommitResolutionReport" = "commit_resolution_report"
+"CoverageSinkFn" = "coverage_sink_fn"
+"CoverageSourceFn" = "coverage_source_fn"
+"CreateReport" = "create_report"
+"CreationSecurity" = "creation_security"
+"CursorHandle" = "cursor"
+"DatabaseInfo" = "database_info"
+"DirectRange" = "direct_range"
+"DirectSinkFn" = "direct_sink_fn"
+"DirectSourceFn" = "direct_source_fn"
+"ErrorHandle" = "error"
+"FeedInfo" = "feed_info"
+"FeedSinkFn" = "feed_sink_fn"
+"FinishInputReport" = "finish_input_report"
+"HousekeepingArtifact" = "housekeeping_artifact"
+"HousekeepingPayload" = "housekeeping_payload"
+"HousekeepingRecord" = "housekeeping_record"
+"HousekeepingSinkFn" = "housekeeping_sink_fn"
+"Ip" = "ip"
+"LiveResidueReport" = "live_residue_report"
+"LiveTransitionReport" = "live_transition_report"
+"LocalBasename" = "local_basename"
+"LocalIdentity" = "local_identity"
+"LogicalCounts" = "logical_counts"
+"MembershipBuilderHandle" = "membership_builder"
+"MembershipRange" = "membership_range"
+"MembershipRefHandle" = "membership_ref"
+"MembershipSinkFn" = "membership_sink_fn"
+"MembershipViewHandle" = "membership_view"
+"MutableByteSlice" = "mutable_byte_slice"
+"OptionalBytes16" = "optional_bytes16"
+"OptionalIdentity" = "optional_identity"
+"OptionalU32" = "optional_u32"
+"OptionalU64" = "optional_u64"
+"Path" = "path"
+"PublicationAttemptReport" = "publication_attempt_report"
+"PublicationDigest" = "publication_digest"
+"PublicationReport" = "publication_report"
+"PublicationTuple" = "publication_tuple"
+"Range" = "range"
+"ReaderHandle" = "reader"
+"ReclaimReport" = "reclaim_report"
+"RecoveryBudget" = "recovery_budget"
+"RecoveryCandidate" = "recovery_candidate"
+"RecoveryCandidatesReport" = "recovery_candidates_report"
+"RecoveryFacts" = "recovery_facts"
+"RecoveryReport" = "recovery_report"
+"RecoveryUnknown" = "recovery_unknown"
+"RecoveryUnknownSinkFn" = "recovery_unknown_sink_fn"
+"ReportHandle" = "report"
+"ResidueHandle" = "residue"
+"ResidueReport" = "residue_report"
+"ScanReport" = "scan_report"
+"SnapshotBudget" = "snapshot_budget"
+"TransactionBudget" = "transaction_budget"
+"ValidationBudget" = "validation_budget"
+"ValidationFinding" = "validation_finding"
+"ValidationFindingSinkFn" = "validation_finding_sink_fn"
+"ValidationGeneration" = "validation_generation"
+"ValidationProgress" = "validation_progress"
+"ValidationReport" = "validation_report"
+"WriterFeedRefHandle" = "writer_feed_ref"
+"WriterHandle" = "writer"
+
+[fn]
+prefix = "IPRANGE_V4_ABI1_API IPRANGE_V4_ABI1_CALL"
+args = "vertical"

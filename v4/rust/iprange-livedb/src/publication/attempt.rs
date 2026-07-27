@@ -489,6 +489,6 @@ const fn cleanup_point(point: cleanup::Point) -> Point {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "attempt_tests.rs"]
 mod tests;

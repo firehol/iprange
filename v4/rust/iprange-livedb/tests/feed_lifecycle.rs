@@ -407,11 +407,11 @@ fn direct_database_rejects_named_feed_lifecycle_operations() {
     let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
     assert!(matches!(
         writer.delete_feed(name("alpha"), &cancellation),
-        Err(Error::WrongMode(_))
+        Err(Error::WrongValueKind(_))
     ));
     assert!(matches!(
         writer.rename_feed(name("alpha"), name("beta"), &cancellation),
-        Err(Error::WrongMode(_))
+        Err(Error::WrongValueKind(_))
     ));
     writer.close().unwrap();
 }

@@ -196,6 +196,12 @@ impl LiveReader {
         Ok(self.core.import_parts())
     }
 
+    pub(crate) fn c_abi_parts(&self) -> Result<(&std::fs::File, MetaV4, Option<u32>)> {
+        self.require_open()?;
+        let (file, meta) = self.core.import_parts();
+        Ok((file, meta, Some(self.owner_pid)))
+    }
+
     /// Clear this registration. An incomplete close retains retry authority.
     pub fn close(&mut self) -> Result<ReaderCloseResult> {
         self.require_owner()?;

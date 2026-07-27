@@ -27,6 +27,7 @@ pub(crate) use fixed::ScratchFile;
 #[path = "scratch/format.rs"]
 pub(super) mod format;
 #[cfg(test)]
+#[cfg(all(test, unix))]
 use format::hex;
 pub(crate) use format::HEADER_SIZE;
 use format::{header, scratch_name};
@@ -533,6 +534,6 @@ fn namespace_error(error: NamespaceError) -> Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "scratch_tests.rs"]
 mod tests;

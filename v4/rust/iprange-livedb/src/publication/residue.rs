@@ -62,7 +62,7 @@ impl PublicationResidueHandle {
 }
 
 /// Factual result after an offline canonical-residue removal attempt.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct PublicationResidueRemoval {
     pub directory_identity: LocalFileIdentity,
     pub coordination_identity: LocalFileIdentity,
@@ -73,6 +73,7 @@ pub struct PublicationResidueRemoval {
     pub coordination_cleanup: CoordinationCleanup,
     pub housekeeping: Housekeeping,
     pub visible_housekeeping: Box<[HousekeepingArtifact]>,
+    pub handle: Option<PublicationResidueHandle>,
     pub cause: Option<PublicationProblem>,
 }
 

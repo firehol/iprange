@@ -25,6 +25,7 @@ use super::{
 mod output_digest;
 pub(super) use output_digest::{digest, digest_cancellable};
 #[cfg(test)]
+#[cfg(all(test, unix))]
 use output_digest::{digest_with, DIGEST_BUFFER_SIZE};
 #[path = "output_resume.rs"]
 mod output_resume;
@@ -509,6 +510,6 @@ impl From<crate::error::Error> for Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "output_tests.rs"]
 mod tests;

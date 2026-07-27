@@ -50,7 +50,7 @@ pub(crate) fn analyze<S: RecoverySink>(
     }
     if meta.value_kind != ValueKind::Membership {
         return Err(failure(
-            Error::WrongMode("membership recovery requires membership values"),
+            Error::WrongValueKind("membership recovery requires membership values"),
             RecoveryReport::default(),
             None,
         ));

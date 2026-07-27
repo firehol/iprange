@@ -14,7 +14,7 @@ use crate::validation::LocalFileIdentity;
 use crate::publication::namespace::IDENTITY_KIND;
 use crate::publication::namespace::{Destination, Identity, Regular};
 use crate::publication::problem::Problem;
-use crate::publication::reservation::{self, Header, State};
+use crate::publication::reservation::{self, Header, State as ReservationState};
 use crate::publication::reservation_inspection;
 use crate::publication::result::{FinalState, Seed};
 use crate::publication::types::{
@@ -35,6 +35,15 @@ pub(super) struct Handle {
     destination: Destination,
     coordination: File,
     coordination_identity: Identity,
+    retired: Option<Retired>,
+}
+
+#[derive(Debug)]
+struct Retired {
+    main: Option<super::main::Guard>,
+    housekeeping: Housekeeping,
+    visible: Vec<HousekeepingArtifact>,
+    retirement_pending: bool,
 }
 
 pub(super) fn inspect(
@@ -85,16 +94,20 @@ pub(super) fn inspect(
                 destination,
                 coordination: regular.file,
                 coordination_identity: regular.identity,
+                retired: None,
             },
         }),
     })
 }
 
 pub(super) fn remove(
-    handle: Handle,
+    mut handle: Handle,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResidueRemoval, Problem> {
     cancellation.check().map_err(|error| Problem::sdk(&error))?;
+    if handle.retired.is_some() {
+        return Ok(finish_retired(handle));
+    }
     verify_coordination(&handle)?;
     live_lock::lock_cancellable(
         &handle.coordination,
@@ -112,39 +125,79 @@ pub(super) fn remove(
         &handle.coordination,
         handle.coordination_identity,
     )?;
-    if let Some(cause) = retired.cause {
-        return Ok(incomplete(
-            &handle,
-            main.as_ref(),
-            cause,
-            retired.housekeeping,
-            retired.visible,
-        ));
+    let cause = retired.cause;
+    handle.retired = Some(Retired {
+        main,
+        housekeeping: retired.housekeeping,
+        visible: retired.visible,
+        retirement_pending: cause.is_some(),
+    });
+    if let Some(cause) = cause {
+        return Ok(incomplete(handle, cause));
     }
-    let later = match finish_removal(&handle, main.as_ref()) {
+    Ok(finish_retired(handle))
+}
+
+fn finish_retired(mut handle: Handle) -> PublicationResidueRemoval {
+    if let Some(cause) = retry_retirement(&mut handle) {
+        return incomplete(handle, cause);
+    }
+    let main = handle
+        .retired
+        .as_ref()
+        .expect("retired cleanup has retained state")
+        .main
+        .as_ref();
+    let later = match finish_removal(&handle, main) {
         Ok(later) => later,
-        Err(problem) => {
-            return Ok(incomplete(
-                &handle,
-                main.as_ref(),
-                problem,
-                retired.housekeeping,
-                retired.visible,
-            ))
-        }
+        Err(problem) => return incomplete(handle, problem),
     };
-    Ok(PublicationResidueRemoval {
-        directory_identity: local(handle.destination.directory().identity()),
-        coordination_identity: local(handle.coordination_identity),
-        main: main.as_ref().map(|main| main.evidence),
+    let directory_identity = local(handle.destination.directory().identity());
+    let coordination_identity = local(handle.coordination_identity);
+    let Retired {
+        main,
+        housekeeping,
+        visible,
+        ..
+    } = handle
+        .retired
+        .take()
+        .expect("retired cleanup has retained state");
+    PublicationResidueRemoval {
+        directory_identity,
+        coordination_identity,
+        main: main.map(|main| main.evidence),
         later_coordination: later.kind,
         coordination_access_policy: later.access,
         cleanup: CleanupArtifacts::new(),
         coordination_cleanup: CoordinationCleanup::None,
-        housekeeping: retired.housekeeping,
-        visible_housekeeping: retired.visible.into_boxed_slice(),
+        housekeeping,
+        visible_housekeeping: visible.into_boxed_slice(),
+        handle: None,
         cause: None,
-    })
+    }
+}
+
+fn retry_retirement(handle: &mut Handle) -> Option<Problem> {
+    let Retired {
+        housekeeping,
+        visible,
+        retirement_pending,
+        ..
+    } = handle
+        .retired
+        .as_mut()
+        .expect("retirement retry has retained state");
+    let retried = super::retirement::retry(
+        &handle.destination,
+        &handle.coordination,
+        handle.coordination_identity,
+        *retirement_pending,
+    );
+    *housekeeping = merge_housekeeping(*housekeeping, retried.housekeeping);
+    visible.extend(retried.visible);
+    *retirement_pending = retried.cause.is_some();
+    retried.cause
 }
 
 fn classify_coordination(
@@ -209,7 +262,7 @@ fn reconstruct(
 ) -> Result<crate::publication::PublicationResult, Problem> {
     let seed =
         Seed::reconstruct(destination, header).map_err(|error| Problem::namespace(&error))?;
-    let publication = if header.state == State::Prepared {
+    let publication = if header.state == ReservationState::Prepared {
         PublicationStatus::NotPublished
     } else {
         PublicationStatus::OutcomeUnknown
@@ -218,7 +271,8 @@ fn reconstruct(
         FinalState {
             reservation_identity: Identity::decode(header.reservation_identity)
                 .expect("selected reservation identity is valid"),
-            main_namespace_may_have_been_attempted: header.state == State::MainMayHaveBeenAttempted,
+            main_namespace_may_have_been_attempted: header.state
+                == ReservationState::MainMayHaveBeenAttempted,
             publication,
             destination_content: DestinationContent::Unclassified,
             main_access_policy: AccessPolicy::Unclassified,
@@ -339,24 +393,43 @@ fn final_coordination(handle: &Handle) -> Result<FinalCoordination, Problem> {
     Ok(FinalCoordination { kind, access })
 }
 
-fn incomplete(
-    handle: &Handle,
-    main: Option<&super::main::Guard>,
-    cause: Problem,
-    housekeeping: Housekeeping,
-    visible: Vec<HousekeepingArtifact>,
-) -> PublicationResidueRemoval {
+fn incomplete(handle: Handle, cause: Problem) -> PublicationResidueRemoval {
+    let Retired {
+        main,
+        housekeeping,
+        visible,
+        ..
+    } = handle
+        .retired
+        .as_ref()
+        .expect("incomplete removal has retained state");
+    let main = main.as_ref().map(|main| main.evidence);
+    let housekeeping = *housekeeping;
+    let visible_housekeeping = visible.clone().into_boxed_slice();
     PublicationResidueRemoval {
         directory_identity: local(handle.destination.directory().identity()),
         coordination_identity: local(handle.coordination_identity),
-        main: main.map(|main| main.evidence),
+        main,
         later_coordination: PublicationResidueCoordination::Unselectable,
         coordination_access_policy: AccessPolicy::Unclassified,
         cleanup: CleanupArtifacts::new(),
         coordination_cleanup: CoordinationCleanup::CleanupGuard,
         housekeeping,
-        visible_housekeeping: visible.into_boxed_slice(),
+        visible_housekeeping,
+        handle: Some(PublicationResidueHandle { inner: handle }),
         cause: Some(cause),
+    }
+}
+
+const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
     }
 }
 
@@ -396,4 +469,69 @@ const fn selection_conflict(detail: &'static str) -> Problem {
 
 const fn cleanup_conflict(detail: &'static str) -> Problem {
     Problem::new(ErrorCode::CleanupConflict, None, detail)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod retry_tests {
+    use std::fs;
+
+    use crate::publication::crash_tests::TempDirectory;
+
+    use super::*;
+
+    #[test]
+    fn incomplete_removal_retains_exact_authority_for_retry() {
+        let directory = TempDirectory::new("residue-retry");
+        let main_path = directory.path.join("result.v4");
+        let coordination_path = main_path.with_file_name("result.v4.readers");
+        fs::write(&coordination_path, b"malformed").unwrap();
+
+        let inspected = inspect(&main_path, &CancellationToken::new()).unwrap();
+        let mut handle = inspected.handle.unwrap().inner;
+        verify_coordination(&handle).unwrap();
+        live_lock::lock_cancellable(
+            &handle.coordination,
+            OPERATION_LOCK,
+            Mode::Exclusive,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        reject_selectable(&handle.coordination).unwrap();
+        let main =
+            super::super::main::inspect(&handle.destination, &CancellationToken::new()).unwrap();
+        let retired = super::super::retirement::retire(
+            &handle.destination,
+            &handle.coordination,
+            handle.coordination_identity,
+        )
+        .unwrap();
+        assert!(retired.cause.is_none());
+        handle.retired = Some(Retired {
+            main,
+            housekeeping: retired.housekeeping,
+            visible: retired.visible,
+            retirement_pending: false,
+        });
+
+        let incomplete = incomplete(
+            handle,
+            cleanup_conflict("injected directory synchronization failure"),
+        );
+        assert_eq!(
+            incomplete.coordination_cleanup,
+            CoordinationCleanup::CleanupGuard
+        );
+        assert!(incomplete.handle.is_some());
+        assert!(!coordination_path.exists());
+
+        let completed =
+            remove(incomplete.handle.unwrap().inner, &CancellationToken::new()).unwrap();
+        assert!(completed.cause.is_none());
+        assert!(completed.handle.is_none());
+        assert_eq!(completed.coordination_cleanup, CoordinationCleanup::None);
+        assert_eq!(
+            completed.later_coordination,
+            PublicationResidueCoordination::Absent
+        );
+    }
 }

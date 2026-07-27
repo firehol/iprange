@@ -41,7 +41,7 @@ pub(crate) fn analyze<S: RecoverySink>(
     }
     if meta.value_kind != ValueKind::Direct {
         return Err(analysis_failure(
-            Error::WrongMode("direct recovery requires direct values"),
+            Error::WrongValueKind("direct recovery requires direct values"),
             RecoveryReport::default(),
             None,
         ));

@@ -45,6 +45,11 @@ impl FeedRef {
     pub const fn name(self) -> FeedName {
         self.entry.name
     }
+
+    /// Return the feed's current structural index.
+    pub const fn index(self) -> u32 {
+        self.entry.index
+    }
 }
 
 impl fmt::Debug for FeedRef {
@@ -60,6 +65,12 @@ impl fmt::Debug for FeedRef {
 #[derive(Debug)]
 pub struct MembershipTransaction<'a> {
     writer: &'a mut LiveWriter,
+    state: MembershipState,
+}
+
+/// Borrow-free membership-operation state shared with language bindings.
+#[derive(Debug)]
+pub(crate) struct MembershipState {
     database_id: [u8; 16],
     operation_nonce: [u8; 16],
     membership_epoch: u64,
@@ -80,10 +91,21 @@ impl LiveWriter {
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<MembershipTransaction<'_>> {
+        let state = self.begin_membership_state(cancellation)?;
+        Ok(MembershipTransaction {
+            writer: self,
+            state,
+        })
+    }
+
+    pub(crate) fn begin_membership_state(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<MembershipState> {
         cancellation.check()?;
         self.require_healthy()?;
         if self.base.meta.value_kind != ValueKind::Membership {
-            return Err(Error::WrongMode(
+            return Err(Error::WrongValueKind(
                 "membership transaction requires a membership database",
             ));
         }
@@ -92,12 +114,11 @@ impl LiveWriter {
         }
         let operation_nonce = random::nonzero_128()?;
         self.draft = Some(Draft::new(self.base.meta, operation_nonce)?);
-        Ok(MembershipTransaction {
+        Ok(MembershipState {
             database_id: self.base.meta.database_id,
             operation_nonce,
             membership_epoch: 0,
             cancellation: cancellation.clone(),
-            writer: self,
         })
     }
 }
@@ -105,33 +126,17 @@ impl LiveWriter {
 impl MembershipTransaction<'_> {
     /// Enumerate the current private catalog by ascending feed index.
     pub fn feed_cursor(&mut self) -> Result<TransactionFeedCursor<'_>> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        let meta = self.writer.draft.as_ref().unwrap().meta;
-        Ok(TransactionFeedCursor {
-            cursor: FeedCursor::new_live(&self.writer.file, &meta, self.writer.owner_pid)?,
-            database_id: self.database_id,
-            operation_nonce: self.operation_nonce,
-        })
+        self.state.feed_cursor(self.writer)
     }
 
     /// Construct the empty membership without allocating an internal ID.
     pub fn empty_membership(&mut self) -> Result<MembershipRef> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        Ok(self.membership_reference(0, 0))
+        self.state.empty_membership(self.writer)
     }
 
     /// Add one feed to a transaction-owned membership.
     pub fn add_feed(&mut self, membership: MembershipRef, feed: FeedRef) -> Result<MembershipRef> {
-        self.require_current_membership(membership)?;
-        self.require_current_feed(feed)?;
-        self.check_or_abort()?;
-        let interned = self.writer.mutate(|store| {
-            store.add_feed_to_membership(membership.id, membership.word_count, feed.entry)
-        })?;
-        self.check_or_abort()?;
-        Ok(self.membership_reference(interned.id, interned.word_count))
+        self.state.add_feed(self.writer, membership, feed)
     }
 
     /// Apply one membership operation to an inclusive IPv4 interval.
@@ -142,14 +147,8 @@ impl MembershipTransaction<'_> {
         membership: MembershipRef,
         operation: MembershipOperation,
     ) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv4, from <= to)?;
-        self.require_current_membership(membership)?;
-        self.check_or_abort()?;
-        let changed = self.writer.mutate(|store| {
-            store.apply_membership_v4(from, to, membership.id, membership.word_count, operation)
-        })?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state
+            .apply_v4(self.writer, from, to, membership, operation)
     }
 
     /// Apply one membership operation to an inclusive IPv6 interval.
@@ -160,86 +159,196 @@ impl MembershipTransaction<'_> {
         membership: MembershipRef,
         operation: MembershipOperation,
     ) -> Result<bool> {
-        self.require_family(AddressFamily::Ipv6, from <= to)?;
-        self.require_current_membership(membership)?;
-        self.check_or_abort()?;
-        let changed = self.writer.mutate(|store| {
-            store.apply_membership_v6(from, to, membership.id, membership.word_count, operation)
-        })?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state
+            .apply_v6(self.writer, from, to, membership, operation)
     }
 
     /// Return an exact existing feed without creating it.
     pub fn lookup_feed(&mut self, name: FeedName) -> Result<Option<FeedRef>> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        let entry = self.writer.mutate(|store| store.lookup_feed(&name))?;
-        self.check_or_abort()?;
-        Ok(entry.map(|entry| self.reference(entry)))
+        self.state.lookup_feed(self.writer, name)
     }
 
     /// Return the exact feed, creating it at the lowest free index if absent.
     pub fn ensure_feed(&mut self, name: FeedName) -> Result<FeedRef> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        let (entry, _) = self.writer.mutate(|store| store.ensure_feed(name))?;
-        self.check_or_abort()?;
-        Ok(self.reference(entry))
+        self.state.ensure_feed(self.writer, name)
     }
 
     /// Rename one referenced feed while preserving its membership.
     pub fn rename_feed(&mut self, feed: FeedRef, new_name: FeedName) -> Result<FeedRef> {
-        self.require_current_feed(feed)?;
-        self.check_or_abort()?;
-        let entry = self
-            .writer
-            .mutate(|store| store.rename_feed_ref(feed.entry, new_name))?;
-        self.check_or_abort()?;
-        Ok(self.reference(entry))
+        self.state.rename_feed(self.writer, feed, new_name)
     }
 
     /// Delete one feed and clear its bit from every stored membership.
     pub fn delete_feed(&mut self, feed: FeedRef) -> Result<()> {
-        self.require_current_feed(feed)?;
-        self.check_or_abort()?;
-        let next_epoch = self
-            .membership_epoch
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("membership reference epoch"))?;
-        self.writer
-            .mutate(|store| store.delete_feed_membership(feed.entry))?;
-        self.check_or_abort()?;
-        self.membership_epoch = next_epoch;
-        Ok(())
+        self.state.delete_feed(self.writer, feed)
     }
 
     /// Stage one exact opaque metadata replacement in this transaction.
     pub fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        let changed = self.writer.stage_metadata_json(input)?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state.set_metadata_json(self.writer, input)
     }
 
     /// Stage metadata absence in this transaction.
     pub fn clear_metadata_json(&mut self) -> Result<bool> {
-        self.require_active()?;
-        self.check_or_abort()?;
-        let changed = self.writer.stage_clear_metadata_json()?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state.clear_metadata_json(self.writer)
     }
 
     /// Publish this transaction through the alternate metadata page.
     pub fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_operation(&self.cancellation)
+        self.writer.commit_operation(&self.state.cancellation)
     }
 
     /// Discard this transaction and invalidate all of its references.
     pub fn abort(self) -> Result<super::AbortResult> {
         self.writer.abort()
+    }
+}
+
+impl MembershipState {
+    pub(crate) fn feed_cursor<'a>(
+        &mut self,
+        writer: &'a mut LiveWriter,
+    ) -> Result<TransactionFeedCursor<'a>> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        let meta = writer.draft.as_ref().unwrap().meta;
+        Ok(TransactionFeedCursor {
+            cursor: FeedCursor::new_live(&writer.file, &meta, writer.owner_pid)?,
+            database_id: self.database_id,
+            operation_nonce: self.operation_nonce,
+        })
+    }
+
+    pub(crate) fn empty_membership(&mut self, writer: &mut LiveWriter) -> Result<MembershipRef> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        Ok(self.membership_reference(0, 0))
+    }
+
+    pub(crate) fn add_feed(
+        &mut self,
+        writer: &mut LiveWriter,
+        membership: MembershipRef,
+        feed: FeedRef,
+    ) -> Result<MembershipRef> {
+        self.require_current_membership(writer, membership)?;
+        self.require_current_feed(writer, feed)?;
+        self.check_or_abort(writer)?;
+        let interned = writer.mutate(|store| {
+            store.add_feed_to_membership(membership.id, membership.word_count, feed.entry)
+        })?;
+        self.check_or_abort(writer)?;
+        Ok(self.membership_reference(interned.id, interned.word_count))
+    }
+
+    pub(crate) fn apply_v4(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        membership: MembershipRef,
+        operation: MembershipOperation,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
+        self.require_current_membership(writer, membership)?;
+        self.check_or_abort(writer)?;
+        let changed = writer.mutate(|store| {
+            store.apply_membership_v4(from, to, membership.id, membership.word_count, operation)
+        })?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn apply_v6(
+        &mut self,
+        writer: &mut LiveWriter,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        membership: MembershipRef,
+        operation: MembershipOperation,
+    ) -> Result<bool> {
+        self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
+        self.require_current_membership(writer, membership)?;
+        self.check_or_abort(writer)?;
+        let changed = writer.mutate(|store| {
+            store.apply_membership_v6(from, to, membership.id, membership.word_count, operation)
+        })?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn lookup_feed(
+        &mut self,
+        writer: &mut LiveWriter,
+        name: FeedName,
+    ) -> Result<Option<FeedRef>> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        let entry = writer.mutate(|store| store.lookup_feed(&name))?;
+        self.check_or_abort(writer)?;
+        Ok(entry.map(|entry| self.reference(entry)))
+    }
+
+    pub(crate) fn ensure_feed(
+        &mut self,
+        writer: &mut LiveWriter,
+        name: FeedName,
+    ) -> Result<FeedRef> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        let (entry, _) = writer.mutate(|store| store.ensure_feed(name))?;
+        self.check_or_abort(writer)?;
+        Ok(self.reference(entry))
+    }
+
+    pub(crate) fn rename_feed(
+        &mut self,
+        writer: &mut LiveWriter,
+        feed: FeedRef,
+        new_name: FeedName,
+    ) -> Result<FeedRef> {
+        self.require_current_feed(writer, feed)?;
+        self.check_or_abort(writer)?;
+        let entry = writer.mutate(|store| store.rename_feed_ref(feed.entry, new_name))?;
+        self.check_or_abort(writer)?;
+        Ok(self.reference(entry))
+    }
+
+    pub(crate) fn delete_feed(&mut self, writer: &mut LiveWriter, feed: FeedRef) -> Result<()> {
+        self.require_current_feed(writer, feed)?;
+        self.check_or_abort(writer)?;
+        let next_epoch = self
+            .membership_epoch
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow("membership reference epoch"))?;
+        writer.mutate(|store| store.delete_feed_membership(feed.entry))?;
+        self.check_or_abort(writer)?;
+        self.membership_epoch = next_epoch;
+        Ok(())
+    }
+
+    pub(crate) fn set_metadata_json(
+        &mut self,
+        writer: &mut LiveWriter,
+        input: &[u8],
+    ) -> Result<bool> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        let changed = writer.stage_metadata_json(input)?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn clear_metadata_json(&mut self, writer: &mut LiveWriter) -> Result<bool> {
+        self.require_active(writer)?;
+        self.check_or_abort(writer)?;
+        let changed = writer.stage_clear_metadata_json()?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
     }
 
     fn reference(&self, entry: FeedEntry) -> FeedRef {
@@ -260,8 +369,8 @@ impl MembershipTransaction<'_> {
         }
     }
 
-    fn require_reference(&self, feed: FeedRef) -> Result<()> {
-        self.require_active()?;
+    fn require_reference(&self, writer: &LiveWriter, feed: FeedRef) -> Result<()> {
+        self.require_active(writer)?;
         if feed.database_id != self.database_id {
             return Err(Error::ForeignReference);
         }
@@ -271,17 +380,21 @@ impl MembershipTransaction<'_> {
         Ok(())
     }
 
-    fn require_current_feed(&mut self, feed: FeedRef) -> Result<()> {
-        self.require_reference(feed)?;
-        if self.writer.feed_reference_current(feed.entry)? {
+    fn require_current_feed(&mut self, writer: &mut LiveWriter, feed: FeedRef) -> Result<()> {
+        self.require_reference(writer, feed)?;
+        if writer.feed_reference_current(feed.entry)? {
             Ok(())
         } else {
             Err(Error::StaleReference)
         }
     }
 
-    fn require_membership_reference(&self, membership: MembershipRef) -> Result<()> {
-        self.require_active()?;
+    fn require_membership_reference(
+        &self,
+        writer: &LiveWriter,
+        membership: MembershipRef,
+    ) -> Result<()> {
+        self.require_active(writer)?;
         if membership.database_id != self.database_id {
             return Err(Error::ForeignReference);
         }
@@ -297,34 +410,39 @@ impl MembershipTransaction<'_> {
         Ok(())
     }
 
-    fn require_current_membership(&mut self, membership: MembershipRef) -> Result<()> {
-        self.require_membership_reference(membership)?;
-        if self
-            .writer
-            .membership_reference_current(membership.id, membership.word_count)?
-        {
+    fn require_current_membership(
+        &mut self,
+        writer: &mut LiveWriter,
+        membership: MembershipRef,
+    ) -> Result<()> {
+        self.require_membership_reference(writer, membership)?;
+        if writer.membership_reference_current(membership.id, membership.word_count)? {
             Ok(())
         } else {
             Err(Error::StaleReference)
         }
     }
 
-    fn require_family(&self, family: AddressFamily, ordered: bool) -> Result<()> {
-        self.require_active()?;
+    fn require_family(
+        &self,
+        writer: &LiveWriter,
+        family: AddressFamily,
+        ordered: bool,
+    ) -> Result<()> {
+        self.require_active(writer)?;
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
-        if self.writer.base.meta.address_family != family {
-            return Err(Error::WrongMode(
+        if writer.base.meta.address_family != family {
+            return Err(Error::WrongAddressFamily(
                 "membership mutation does not match the database family",
             ));
         }
         Ok(())
     }
 
-    fn require_active(&self) -> Result<()> {
-        let active = self
-            .writer
+    pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
+        let active = writer
             .draft
             .as_ref()
             .is_some_and(|draft| draft.meta.commit_nonce == self.operation_nonce);
@@ -333,14 +451,14 @@ impl MembershipTransaction<'_> {
                 "membership transaction is no longer active",
             ));
         }
-        self.writer.require_healthy()
+        writer.require_healthy()
     }
 
-    fn check_or_abort(&mut self) -> Result<()> {
-        self.require_active()?;
+    fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
+        self.require_active(writer)?;
         self.cancellation
             .check()
-            .map_err(|cause| self.writer.abort_after(cause))
+            .map_err(|cause| writer.abort_after(cause))
     }
 }
 

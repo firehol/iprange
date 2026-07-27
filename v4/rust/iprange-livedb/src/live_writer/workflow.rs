@@ -31,7 +31,23 @@ pub struct PreparedFeedChange<'a> {
 #[derive(Debug)]
 struct PreparedOperation<'a> {
     writer: &'a mut LiveWriter,
+    state: PreparedState,
+}
+
+/// Borrow-free prepared-operation state shared with language bindings.
+#[derive(Debug)]
+pub(crate) struct PreparedState {
     cancellation: CancellationToken,
+}
+
+/// Borrow-free result of finishing an exact workflow.
+#[derive(Debug)]
+pub(crate) enum FinishedState {
+    NoChange(WorkflowReport),
+    Changed {
+        report: WorkflowReport,
+        state: PreparedState,
+    },
 }
 
 impl FinishedWorkflow<'_> {
@@ -52,17 +68,6 @@ impl FinishedWorkflow<'_> {
 }
 
 impl<'a> PreparedWorkflow<'a> {
-    pub(super) fn new(
-        writer: &'a mut LiveWriter,
-        report: WorkflowReport,
-        cancellation: CancellationToken,
-    ) -> Self {
-        Self {
-            report,
-            operation: PreparedOperation::new(writer, cancellation),
-        }
-    }
-
     pub fn report(&self) -> &WorkflowReport {
         &self.report
     }
@@ -85,9 +90,9 @@ impl<'a> PreparedWorkflow<'a> {
 }
 
 impl<'a> PreparedFeedChange<'a> {
-    pub(super) fn new(writer: &'a mut LiveWriter, cancellation: CancellationToken) -> Self {
+    pub(super) fn from_state(writer: &'a mut LiveWriter, state: PreparedState) -> Self {
         Self {
-            operation: PreparedOperation::new(writer, cancellation),
+            operation: PreparedOperation::new(writer, state),
         }
     }
 
@@ -109,52 +114,90 @@ impl<'a> PreparedFeedChange<'a> {
 }
 
 impl<'a> PreparedOperation<'a> {
-    fn new(writer: &'a mut LiveWriter, cancellation: CancellationToken) -> Self {
-        Self {
-            writer,
-            cancellation,
-        }
+    fn new(writer: &'a mut LiveWriter, state: PreparedState) -> Self {
+        Self { writer, state }
     }
 
     fn set_metadata_json(&mut self, input: &[u8]) -> Result<bool> {
-        self.check_or_abort()?;
-        let changed = self.abort_on_error(|writer| writer.stage_metadata_json(input))?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state.set_metadata_json(self.writer, input)
     }
 
     fn clear_metadata_json(&mut self) -> Result<bool> {
-        self.check_or_abort()?;
-        let changed = self.abort_on_error(LiveWriter::stage_clear_metadata_json)?;
-        self.check_or_abort()?;
-        Ok(changed)
+        self.state.clear_metadata_json(self.writer)
     }
 
     fn commit(self) -> Result<CommitResult> {
-        self.writer.commit_operation(&self.cancellation)
+        self.writer.commit_operation(&self.state.cancellation)
     }
 
     fn abort(self) -> Result<AbortResult> {
         self.writer.abort()
     }
+}
 
-    fn check_or_abort(&mut self) -> Result<()> {
+impl PreparedState {
+    pub(crate) fn new(cancellation: CancellationToken) -> Self {
+        Self { cancellation }
+    }
+
+    pub(crate) fn set_metadata_json(
+        &mut self,
+        writer: &mut LiveWriter,
+        input: &[u8],
+    ) -> Result<bool> {
+        self.check_or_abort(writer)?;
+        let changed = self.abort_on_error(writer, |writer| writer.stage_metadata_json(input))?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn clear_metadata_json(&mut self, writer: &mut LiveWriter) -> Result<bool> {
+        self.check_or_abort(writer)?;
+        let changed = self.abort_on_error(writer, LiveWriter::stage_clear_metadata_json)?;
+        self.check_or_abort(writer)?;
+        Ok(changed)
+    }
+
+    pub(crate) fn cancellation(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
         self.cancellation
             .check()
-            .map_err(|error| self.writer.abort_after(error))
+            .map_err(|error| writer.abort_after(error))
     }
 
     fn abort_on_error<T>(
         &mut self,
+        writer: &mut LiveWriter,
         operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
     ) -> Result<T> {
-        operation(self.writer).map_err(|error| {
-            if self.writer.draft.is_some() {
-                self.writer.abort_after(error)
+        operation(writer).map_err(|error| {
+            if writer.draft.is_some() {
+                writer.abort_after(error)
             } else {
                 error
             }
         })
+    }
+}
+
+impl FinishedState {
+    pub(crate) fn bind(self, writer: &mut LiveWriter) -> FinishedWorkflow<'_> {
+        match self {
+            Self::NoChange(report) => FinishedWorkflow::NoChange(report),
+            Self::Changed { report, state } => FinishedWorkflow::Changed(PreparedWorkflow {
+                report,
+                operation: PreparedOperation::new(writer, state),
+            }),
+        }
+    }
+
+    pub(crate) fn report(&self) -> &WorkflowReport {
+        match self {
+            Self::NoChange(report) | Self::Changed { report, .. } => report,
+        }
     }
 }
 

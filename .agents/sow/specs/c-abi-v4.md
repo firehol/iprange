@@ -98,7 +98,9 @@ All output pointers are initialized to null/zero before work that can fail. A
 function documents which factual result handles remain present with a nonzero
 status, including `Committed`, `Published`, `OutcomeUnknown`, partial validation
 counters, cleanup obligations, and housekeeping. A generic I/O status never
-hides those facts.
+hides those facts. When a nonzero status returns a factual report and an opaque
+cleanup guard, the report owns that guard; the accompanying typed error owns the
+guard only when no factual report is returned. The guard is never duplicated.
 
 ## Opaque handles and lifetime
 
@@ -316,10 +318,23 @@ listed.
 - commit resolution: `COMMITTED=1`, `NOT_COMMITTED=2`,
   `SUPERSEDED_UNKNOWN=3`, `UNRESOLVABLE=4`;
 - abort outcome: `ABORTED=1`, `ABORT_INCOMPLETE=2`;
+- close outcome: `CLOSED=1`, `INCOMPLETE=2`;
 - live-transition operation: `INITIALIZE=1`, `RESET=2`;
+- live-coordination location: `ABSENT=1`, `CANONICAL=2`, `PRIVATE=3`,
+  `UNCLASSIFIED=4`;
+- live-residue status: `ABSENT=1`, `READY=2`, `COMPLETED=3`, `REMOVED=4`,
+  `OUTCOME_UNKNOWN=5`;
+- live-residue kind: `CANONICAL=1`, `PRIVATE_RESET=2`;
 - artifact kind: `PRIVATE_OUTPUT=1`, `PRIVATE_RESERVATION=2`,
   `OWNED_COORDINATION=3`, `AUTHORIZED_SCRATCH=4`,
-  `UNPUBLISHED_MAIN_TAIL=5`;
+  `OWNED_MAIN=5`, `UNPUBLISHED_MAIN_TAIL=6`;
+- artifact presence: `ABSENT=1`, `PRESENT=2`, `UNCLASSIFIED=3`;
+- artifact record kind: `AUTHORIZED_SCRATCH=1`, `PUBLICATION_TEMP=2`,
+  `PUBLICATION_RESERVATION=3`;
+- scratch authentication: `UNAUTHENTICATED=0`, `VALIDATION=1`, `RECOVERY=2`;
+- abandoned-reservation phase: `PREPARED=1`,
+  `MAIN_MAY_HAVE_BEEN_ATTEMPTED=2`;
+- Windows housekeeping candidate: `ENVELOPE=1`, `INERT_PAYLOAD=2`;
 - directory role: `DESTINATION=1`, `SCRATCH_DIRECTORY=2`, `MAIN_FILE=3`;
 - local identity kind: `POSIX=1`, `WINDOWS=2`;
 - creation-security kind: `POSIX=1`, `WINDOWS=2`;
@@ -337,7 +352,18 @@ listed.
   `LIVE_TRANSITION=9`, `CREATE_RESOLUTION=10`,
   `LIVE_TRANSITION_RESOLUTION=11`, `PUBLICATION=12`, `VALIDATION=13`,
   `RECOVERY_CANDIDATES=14`, `RECOVERY=15`, `RESIDUE=16`,
-  `LIVE_RESIDUE=17`.
+  `LIVE_RESIDUE=17`;
+- residue operation: `INSPECT_PUBLICATION=1`, `REMOVE_PUBLICATION=2`,
+  `LIST_ABANDONED_SCRATCH=3`, `REMOVE_ABANDONED_SCRATCH=4`,
+  `LIST_ABANDONED_PUBLICATION_TEMPS=5`,
+  `REMOVE_ABANDONED_PUBLICATION_TEMP=6`,
+  `LIST_ABANDONED_RESERVATION_ARTIFACTS=7`,
+  `REMOVE_ABANDONED_RESERVATION_ARTIFACT=8`,
+  `LIST_HOUSEKEEPING_ARTIFACTS=9`, `REMOVE_HOUSEKEEPING_ARTIFACT=10`,
+  `SNAPSHOT_PREPARATION_FAILURE=11`;
+- residue coordination: `ABSENT=1`, `PUBLICATION_RESERVATION=2`,
+  `LIVE_SIDECAR=3`, `UNSELECTABLE=4`; and
+- residue main content: `V4=1`, `OTHER=2`.
 
 Validation and recovery share one stable reason-code namespace:
 
@@ -669,8 +695,6 @@ iprange_v4_abi1_inspect_publication_residue
 iprange_v4_abi1_remove_publication_residue
 iprange_v4_abi1_list_abandoned_scratch
 iprange_v4_abi1_remove_abandoned_scratch
-iprange_v4_abi1_list_abandoned_create_temps
-iprange_v4_abi1_remove_abandoned_create_temp
 iprange_v4_abi1_list_abandoned_publication_temps
 iprange_v4_abi1_remove_abandoned_publication_temp
 iprange_v4_abi1_list_abandoned_reservation_artifacts

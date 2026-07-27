@@ -26,7 +26,7 @@ impl LiveWriter {
         self.commit_with(Some(cancellation))
     }
 
-    pub(super) fn commit_operation(
+    pub(crate) fn commit_operation(
         &mut self,
         cancellation: &CancellationToken,
     ) -> Result<CommitResult> {

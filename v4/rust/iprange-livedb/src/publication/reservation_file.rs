@@ -462,6 +462,6 @@ impl From<error::Error> for Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "reservation_file_tests.rs"]
 mod tests;

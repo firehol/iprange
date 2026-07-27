@@ -89,7 +89,7 @@ fn opens_empty_direct_database() {
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(1)).unwrap(), None);
     assert!(matches!(
         reader.lookup_direct_v6(Ipv6Key::MIN),
-        Err(Error::InvalidArgument(_))
+        Err(Error::WrongAddressFamily(_))
     ));
 }
 
@@ -112,7 +112,7 @@ fn opens_empty_membership_database() {
     assert_eq!(info.value_tag.bytes(), b"feeds");
     assert!(matches!(
         reader.lookup_direct_v6(Ipv6Key::MIN),
-        Err(Error::InvalidArgument(_))
+        Err(Error::WrongValueKind(_))
     ));
 }
 

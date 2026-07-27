@@ -353,7 +353,7 @@ fn parse_index_header(
 
 pub(crate) fn require_membership(meta: &MetaV4) -> Result<()> {
     if meta.value_kind != ValueKind::Membership {
-        return Err(Error::WrongMode(
+        return Err(Error::WrongValueKind(
             "feed access requires a membership database",
         ));
     }
