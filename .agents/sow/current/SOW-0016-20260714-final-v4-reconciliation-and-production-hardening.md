@@ -391,9 +391,11 @@ Unknowns:
   valid files. Semantic contents match; internal tree shapes, membership IDs,
   and zlib streams need not be byte-identical.
 - Mixed Go/Rust subprocesses coordinate safely on the same live database in both
-  directions. Reader/writer slots, process tokens, reclamation, sidecar identity,
-  reservation phases, and SHA-512-bound publication/transition resolution are
-  interoperable, not merely independently tested.
+  directions. Reader/writer open-description locks and slots, reclamation,
+  sidecar identity, live `creating`/`ready` transitions, and SHA-512-bound
+  immutable-publication reservation phases are interoperable, not merely
+  independently tested. The live reader table has no PID or process-token
+  protocol.
 - The stable Rust-provided C ABI exposes the complete Phase-1 Rust behavior
   through opaque handles, caller-owned buffers or bounded callbacks, explicit
   ownership/lifetime rules, exact structured errors/results, and a panic-proof
@@ -410,12 +412,12 @@ Unknowns:
   reader modes satisfy decisions 6 and 20-22 without file-sized/history-sized
   heap materialization.
 - A live-open failure after slot/lease publication either proves exact cleanup or
-  returns an identity-bound opaque cleanup guard; interrupted guard-owned
-  claim, transaction-update, or clear state 2 is retryable only with retained
-  in-process provenance. Established handles retain the same authority across a
-  failed close, stale-owner reap, or writer-lease update, so no failed reader,
-  writer, validation, recovery, or snapshot path silently loses its only cleanup
-  authority.
+  returns an identity-bound opaque cleanup guard. Established handles retain the
+  same descriptor/lock authority across a failed close or writer-lease cleanup,
+  and stale slot bytes may be changed only after acquiring that slot's ownership
+  lock. No failed reader, writer, validation, recovery, or snapshot path silently
+  loses its only cleanup authority; no persistent per-slot transition state
+  exists.
 - Public mutations, exact migrations, commit durability outcomes, poisoning,
   cleanup, and retry rules satisfy decisions 13 and 24-25 at every injected
   failure point. Decision 41's commit nonce prevents another writer's reuse of
@@ -773,6 +775,13 @@ and shared validation before advancing.
 
 Validation plan:
 
+The 2026-07-25 replacement pre-implementation gate above supersedes this
+original gate's Rust/Go lockstep sequencing and its PID/process-token/
+transaction-zero/state-2 live-reader protocol. Current live coordination uses
+the exact open-description-lock protocol in decision 21 and binary-format
+section 15; immutable publication reservations retain their separate state-2
+and SHA-512 contract.
+
 - For each chunk: prove the targeted regression fails for the intended reason,
   implement both languages, run the targeted matrix, then the unaffected normal
   suites. Do not weaken an assertion merely because the old format cannot pass it;
@@ -794,35 +803,27 @@ Validation plan:
   that authority so no implementation invents a different meaning for generic
   exhaustion, overflow, conflict, cancellation, sink, or cleanup failures.
 - Run mixed Go/Rust subprocess matrices in both directions against one live
-  database: reader registration/release, writer exclusion, process-token death
-  proof, oldest-reader reclamation, sidecar replacement, every reservation/
-  sidecar write-ahead phase, and SHA-512-bound publication/transition inspection
+  database: reader registration/release, writer exclusion, process-death lock
+  release, oldest-reader reclamation, stale-slot clearing under the acquired
+  slot lock, sidecar replacement, every immutable-publication reservation phase,
+  every live `creating`/`ready` phase, and SHA-512-bound publication inspection
   and resolution.
-- Exercise stored-zero/current-nonzero and stored-nonzero/current-zero start
-  tokens, unrepresentable PID/thread values, Linux PID-namespace mismatch, and
-  FreeBSD jail-ID mismatch. No mismatch may reap a possibly live owner; an
-  unprovable process domain returns `LiveCoordinationUnsupported`. Reboot or
-  recreate the PID namespace/jail and prove ordinary live open fails closed,
-  while caller-certified offline `ResetLiveCoordination` treats old slots as
-  opaque, atomically replaces the exact old sidecar, and publishes the current
-  domain without interpreting an old PID.
 - On POSIX, fork with an active reader, writer, armed cleanup guard, residue
   handle, and persistent child handle through both native and C-ABI surfaces. Every child
   method rejects `ForkedHandle` before inherited mutex/lock use; child destruction
   only closes its copies and the parent remains authoritative/protected.
 - Inject every fallible reader/writer/internal-registration open step after slot
   or lease claim. Prove exact clearing before an ordinary error, or an opaque
-  identity-bound cleanup guard whose idempotent retry clears only its own claim
-  or its own provenance-backed interrupted claim/update/clear state 2,
-  recognizes a later valid nonce as proof that the old claim was cleared and
-  safely reused, survives path replacement safely, and is exposed through the C
-  ABI.
+  identity-bound cleanup guard whose idempotent retry changes only its retained
+  slot/lease authority, survives path replacement safely, and is exposed through
+  the C ABI.
 - Inject every established-reader close, established-writer close, and
   post-publication writer-lease update transition, plus every stale writer/reader
   reap from an opener, handle, resolver, and reclamation scan. Prove the
   non-consuming handle or transferred cleanup guard retains retry authority after
   each failure and follows the exact explicit-destruction policy selected by
-  decision 49; no hidden transition may lose the only state-2 provenance.
+  decision 49; no hidden transition may lose the only retained descriptor/lock
+  authority.
 - Run every transition/create/publication resolver with its exact recorded
   parent and with a replaced or different directory. Prove parent-identity
   mismatch is rejected before absence classification, artifact inspection, or
@@ -1630,6 +1631,13 @@ Open decisions:
     cleanup registry. This is the surgical Phase-1 choice: safe and simple, with
     the explicit risk that forgotten or abandoned cleanup can block more live
     use.
+    **Superseded coordination detail (2026-07-25):** decision 21's
+    open-description-lock protocol has no persistent slot/lease transition or
+    state 2. Dropping an ordinary reader or writer closes its descriptors and
+    releases its OS locks; a later exclusive scan may clear stale slot bytes
+    only after acquiring that slot lock. A close-only handle or transferred
+    cleanup guard remains explicitly retryable, and C-ABI destroy still refuses
+    a guard that owns pending cleanup.
 50. User decision (2026-07-21): resolution reports independent facts rather
     than a compound enum for every combination. Current destination content is
     classified independently from any later valid reservation/live owner and,
@@ -1650,6 +1658,11 @@ Open decisions:
     responsibility. Dominated implementation representations must be resolved
     from the established requirements and documented without consuming a user
     decision round-trip.
+    **Superseded coordination detail (2026-07-25):** the simple sidecar records
+    no process domain. A contended writer or slot lock is active/unknown and is
+    never inspected or reaped; an acquired lock is the OS proof that stale
+    volatile bytes are unowned. The orthogonal result contract remains
+    unchanged.
 51. User decision (2026-07-21): `Reclaim(max_batches,max_pages)` is one explicit,
     clean-writer, auto-publishing maintenance operation. It uses the writer's
     existing transaction resource budget; both work limits are nonzero, and it
@@ -13270,6 +13283,33 @@ Artifact reconciliation:
   here. No end-user/operator output skill exists.
 - All evidence is synthetic. Durable artifacts contain no secrets, customer
   data, personal data, private endpoints, or operational credentials.
+
+### 2026-07-27 - final local Rust acceptance audit
+
+- The committed Rust code at `dc8d8a1` was rechecked from the current worktree.
+  The all-feature and no-default-feature workspace/all-target matrices each
+  pass 439 test functions: 436 passed, zero failed, and three intentional
+  ignored entry points. Rust 1.74.1 passes the same complete all-feature matrix.
+- Strict all-feature/all-target Clippy with warnings denied, formatting, and
+  warning-denied rustdoc pass. Compile-only checks pass for Windows GNU, Apple
+  ARM, and FreeBSD. The SOW audit passes. These checks add no native runtime
+  claim for an unapproved remote system.
+- The exact generated C header/manifest, 136-symbol export set, C11/C++17
+  compilation, native C behavior, Rust-first conformance fixtures, crash and
+  property matrices, and smoke benchmark are exercised by the complete test
+  command and pass. The previously recorded release-scale, AddressSanitizer,
+  Valgrind, resource, and complexity evidence applies to the same committed
+  production code.
+- This audit found stale process-token/state-2 reader-table wording in the
+  SOW's current acceptance and original validation text. It was corrected to
+  the already-approved section-15 open-description-lock protocol. No format,
+  API, implementation, test, benchmark, or product decision changed.
+- The protected unrelated tracked file retains SHA-256
+  `c6b2ad14674c3958531b497b1de051897101bd1d35c301a02e611df6a20db2ac`;
+  unrelated generated and untracked workspace artifacts remain untouched.
+- The local Rust milestone now has no known unclosed local proof item. Native
+  Windows/macOS/FreeBSD runtime/crash proof and the user's Rust acceptance are
+  explicit external gates. Go remains prohibited until that acceptance.
 
 ### Phase-1 core-SDK production-hardening gate
 
