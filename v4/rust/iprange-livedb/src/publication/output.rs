@@ -67,11 +67,7 @@ impl CreatedOutput {
                 .require_fail_if_exists_available()
                 .map_err(Error::Namespace)?;
         }
-        let attempt_id = random::nonzero_128().map_err(Error::Sdk)?;
-        let name = destination
-            .output_name(attempt_id)
-            .map_err(Error::Namespace)?;
-        let file = destination.create(&name).map_err(Error::Namespace)?;
+        let (attempt_id, name, file) = create_attempt(&destination)?;
         Ok(Self {
             destination,
             attempt_id,
@@ -100,6 +96,10 @@ impl CreatedOutput {
         &self.name
     }
 
+    pub(crate) fn attempt_id(&self) -> [u8; 16] {
+        self.attempt_id
+    }
+
     // The fixed-size owner is returned inline to preserve zero-allocation cleanup authority.
     #[allow(clippy::result_large_err)]
     pub(crate) fn secure(self) -> Result<SecuredOutput, Failure<Self>> {
@@ -124,6 +124,64 @@ impl CreatedOutput {
             Err(cause) => Err(Failure { owner: self, cause }),
         }
     }
+}
+
+#[cfg(not(windows))]
+fn create_attempt(destination: &Destination) -> Result<([u8; 16], Name, File), Error> {
+    let attempt_id = random::nonzero_128().map_err(Error::Sdk)?;
+    let name = destination
+        .output_name(attempt_id)
+        .map_err(Error::Namespace)?;
+    let file = destination.create(&name).map_err(Error::Namespace)?;
+    Ok((attempt_id, name, file))
+}
+
+#[cfg(windows)]
+fn create_attempt(destination: &Destination) -> Result<([u8; 16], Name, File), Error> {
+    loop {
+        let attempt_id = random::nonzero_128().map_err(Error::Sdk)?;
+        let name = destination
+            .output_name(attempt_id)
+            .map_err(Error::Namespace)?;
+        if attempt_collision(destination, attempt_id, &name)? {
+            continue;
+        }
+        match destination.create(&name) {
+            Ok(file) => return Ok((attempt_id, name, file)),
+            Err(NamespaceError::Exists) => continue,
+            Err(error) => return Err(Error::Namespace(error)),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn attempt_collision(
+    destination: &Destination,
+    attempt_id: [u8; 16],
+    output: &Name,
+) -> Result<bool, Error> {
+    let reservation = destination
+        .reservation_name(attempt_id)
+        .map_err(Error::Namespace)?;
+    let envelope0 = super::gc_name::envelope(attempt_id, 0).map_err(Error::Namespace)?;
+    let inert0 = super::gc_name::inert(attempt_id, 0).map_err(Error::Namespace)?;
+    let envelope1 = super::gc_name::envelope(attempt_id, 1).map_err(Error::Namespace)?;
+    let inert1 = super::gc_name::inert(attempt_id, 1).map_err(Error::Namespace)?;
+    for name in [
+        output,
+        &reservation,
+        &envelope0,
+        &inert0,
+        &envelope1,
+        &inert1,
+    ] {
+        match destination.directory().require_absent(name) {
+            Ok(()) => {}
+            Err(NamespaceError::Exists) => return Ok(true),
+            Err(error) => return Err(Error::Namespace(error)),
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Debug)]

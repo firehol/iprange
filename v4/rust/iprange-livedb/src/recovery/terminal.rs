@@ -2,6 +2,8 @@
 
 use crate::error::Error;
 #[cfg(any(unix, windows))]
+use crate::publication::namespace::BASENAME_ENCODING_KIND;
+#[cfg(any(unix, windows))]
 use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::publication::{
     CleanupArtifact, CleanupArtifacts, CleanupState, CoordinationCleanup, CreationSecurity,
@@ -12,9 +14,7 @@ use crate::validation::LocalFileIdentity;
 
 use super::source_guard::{problem, RecoverySourceCleanupGuard};
 use super::{RecoveryReport, ScratchCleanup};
-
-#[cfg(any(unix, windows))]
-const POSIX_KIND: u16 = 1;
+use crate::publication::cleanup::EarlyDiscard;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryScratchAttempt {
@@ -82,7 +82,7 @@ impl RecoveryPreparationFailure {
         if let Some(artifact) = output_artifact {
             cleanup.push(artifact);
         }
-        let scratch = absorb_scratch(scratch, &mut cleanup);
+        let absorbed = absorb_scratch(scratch, &mut cleanup);
         let coordination_cleanup = if source_cleanup.is_some() {
             CoordinationCleanup::CleanupGuard
         } else {
@@ -90,12 +90,12 @@ impl RecoveryPreparationFailure {
         };
         Self {
             report,
-            scratch,
+            scratch: absorbed.attempt,
             output,
             cleanup,
             coordination_cleanup,
-            housekeeping: Housekeeping::None,
-            visible_housekeeping: Box::default(),
+            housekeeping: absorbed.housekeeping,
+            visible_housekeeping: absorbed.visible.into_boxed_slice(),
             source_cleanup,
             cause,
         }
@@ -127,16 +127,52 @@ impl RecoveryPreparationFailure {
             identity: Some(output_identity),
             creation_security,
         });
-        let scratch = absorb_scratch(scratch, &mut cleanup);
+        let absorbed = absorb_scratch(scratch, &mut cleanup);
+        let housekeeping = merge_housekeeping(housekeeping, absorbed.housekeeping);
+        let mut visible_housekeeping = visible_housekeeping.into_vec();
+        visible_housekeeping.extend(absorbed.visible);
         Self {
             report,
-            scratch,
+            scratch: absorbed.attempt,
             output,
             cleanup,
             coordination_cleanup,
             housekeeping,
-            visible_housekeeping,
+            visible_housekeeping: visible_housekeeping.into_boxed_slice(),
             source_cleanup: None,
+            cause,
+        }
+    }
+
+    pub(crate) fn discarded(
+        cause: PublicationProblem,
+        report: RecoveryReport,
+        discarded: EarlyDiscard,
+        scratch: Option<ScratchCleanup>,
+        source_cleanup: Option<RecoverySourceCleanupGuard>,
+    ) -> Self {
+        let mut cleanup = CleanupArtifacts::new();
+        if let Some(artifact) = discarded.artifact {
+            cleanup.push(artifact);
+        }
+        let absorbed = absorb_scratch(scratch, &mut cleanup);
+        let housekeeping = merge_housekeeping(discarded.housekeeping, absorbed.housekeeping);
+        let mut visible_housekeeping = discarded.visible_housekeeping.into_vec();
+        visible_housekeeping.extend(absorbed.visible);
+        let coordination_cleanup = if source_cleanup.is_some() {
+            CoordinationCleanup::CleanupGuard
+        } else {
+            CoordinationCleanup::None
+        };
+        Self {
+            report,
+            scratch: absorbed.attempt,
+            output: Some(discarded.output),
+            cleanup,
+            coordination_cleanup,
+            housekeeping,
+            visible_housekeeping: visible_housekeeping.into_boxed_slice(),
+            source_cleanup,
             cause,
         }
     }
@@ -147,26 +183,42 @@ pub(crate) fn completed(
     scratch: Option<ScratchCleanup>,
     mut publication: PublicationResult,
 ) -> RecoveryResult {
-    let scratch = absorb_scratch(scratch, &mut publication.cleanup);
+    let absorbed = absorb_scratch(scratch, &mut publication.cleanup);
+    publication.housekeeping = merge_housekeeping(publication.housekeeping, absorbed.housekeeping);
+    let mut visible = std::mem::take(&mut publication.visible_housekeeping).into_vec();
+    visible.extend(absorbed.visible);
+    publication.visible_housekeeping = visible.into_boxed_slice();
     RecoveryResult {
         report,
-        scratch,
+        scratch: absorbed.attempt,
         publication,
     }
+}
+
+struct AbsorbedScratch {
+    attempt: Option<RecoveryScratchAttempt>,
+    housekeeping: Housekeeping,
+    visible: Vec<HousekeepingArtifact>,
 }
 
 #[cfg(any(unix, windows))]
 fn absorb_scratch(
     cleanup: Option<ScratchCleanup>,
     artifacts: &mut CleanupArtifacts,
-) -> Option<RecoveryScratchAttempt> {
-    let cleanup = cleanup?;
+) -> AbsorbedScratch {
+    let Some(cleanup) = cleanup else {
+        return AbsorbedScratch {
+            attempt: None,
+            housekeeping: Housekeeping::None,
+            visible: Vec::new(),
+        };
+    };
     for residue in cleanup.residues {
         artifacts.push(CleanupArtifact {
             kind: ArtifactKind::AuthorizedScratch,
             directory_role: DirectoryRole::ScratchDirectory,
             directory_identity: residue.directory_identity,
-            basename_encoding: POSIX_KIND,
+            basename_encoding: BASENAME_ENCODING_KIND,
             basename: residue.basename,
             identity: Some(residue.identity),
             creation_security: Some(CreationSecurity {
@@ -181,21 +233,41 @@ fn absorb_scratch(
             },
         });
     }
-    Some(RecoveryScratchAttempt {
-        attempt_id: cleanup.attempt_id,
-        directory_identity: cleanup.directory_identity,
-        creation_security: CreationSecurity {
-            kind: cleanup.creation_security_kind,
-            commitment: cleanup.creation_security_commitment,
-        },
-    })
+    AbsorbedScratch {
+        attempt: Some(RecoveryScratchAttempt {
+            attempt_id: cleanup.attempt_id,
+            directory_identity: cleanup.directory_identity,
+            creation_security: CreationSecurity {
+                kind: cleanup.creation_security_kind,
+                commitment: cleanup.creation_security_commitment,
+            },
+        }),
+        housekeeping: cleanup.housekeeping,
+        visible: cleanup.visible_housekeeping,
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
 fn absorb_scratch(
     cleanup: Option<ScratchCleanup>,
     _artifacts: &mut CleanupArtifacts,
-) -> Option<RecoveryScratchAttempt> {
+) -> AbsorbedScratch {
     debug_assert!(cleanup.is_none());
-    None
+    AbsorbedScratch {
+        attempt: None,
+        housekeeping: Housekeeping::None,
+        visible: Vec::new(),
+    }
+}
+
+const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
+    }
 }

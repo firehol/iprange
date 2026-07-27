@@ -2,10 +2,14 @@
 
 use crate::error;
 
-use super::namespace::{regular_link_count, sync_file, NamespaceError};
+#[cfg(unix)]
+use super::namespace::regular_link_count;
+use super::namespace::{sync_file, NamespaceError};
 use super::output::{self, PreparedOutput};
+use super::problem::Problem;
 use super::reservation::{Header, Policy};
 use super::reservation_file::{self, ArmedReservation};
+use super::{Housekeeping, HousekeepingArtifact};
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -15,6 +19,7 @@ pub(crate) enum Error {
     Reservation(reservation_file::Error),
     PreviousLinkCount(u64),
     ReservationLinkCount(u64),
+    Gc(Problem),
     Injected,
 }
 
@@ -47,6 +52,8 @@ pub(crate) struct RetiringMain {
     pub(crate) reservation_unlinked: bool,
     pub(crate) directory_synced: bool,
     pub(crate) reservation_retired_proven: bool,
+    pub(crate) housekeeping: Housekeeping,
+    pub(crate) visible_housekeeping: Vec<HousekeepingArtifact>,
 }
 
 #[derive(Debug)]
@@ -54,6 +61,8 @@ pub(crate) struct PublishedOutput {
     pub(crate) output: PreparedOutput,
     pub(crate) reservation_identity: super::namespace::Identity,
     pub(crate) reservation_header: Header,
+    pub(crate) housekeeping: Housekeeping,
+    pub(crate) visible_housekeeping: Vec<HousekeepingArtifact>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,14 +210,23 @@ impl PublishedMain {
             reservation_unlinked: false,
             directory_synced: false,
             reservation_retired_proven: false,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Vec::new(),
         };
         match retire_steps(&mut owner, &mut checkpoint) {
             Ok(()) => {
-                let RetiringMain { published, .. } = owner;
+                let RetiringMain {
+                    published,
+                    housekeeping,
+                    visible_housekeeping,
+                    ..
+                } = owner;
                 Ok(PublishedOutput {
                     reservation_identity: published.reservation.identity,
                     reservation_header: published.reservation.header,
                     output: published.output,
+                    housekeeping,
+                    visible_housekeeping,
                 })
             }
             Err(cause) => Err(Failure { owner, cause }),
@@ -231,6 +249,7 @@ fn retire_steps(
     verify_retired(owner)
 }
 
+#[cfg(unix)]
 fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
     let published = &owner.published;
     let Some(previous) = &published.output.previous else {
@@ -258,6 +277,49 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
     Ok(true)
 }
 
+#[cfg(windows)]
+fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
+    use super::gc::{self, Authority};
+    use super::gc_codec::Payload;
+    use super::{ArtifactKind, CreationSecurity, DirectoryRole};
+
+    let published = &owner.published;
+    let Some(previous) = &published.output.previous else {
+        owner.previous_retired_proven = true;
+        return Ok(false);
+    };
+    let destination = published.output.attempt.destination();
+    previous.verify_private_or_retired(destination, published.output.attempt.name())?;
+    let retirement = gc::retire(
+        destination.directory(),
+        Authority {
+            attempt_id: published.output.attempt.attempt_id(),
+            ordinal: 0,
+            kind: ArtifactKind::PrivateOutput,
+            directory_role: DirectoryRole::Destination,
+            source_name: published.output.attempt.name(),
+            source_file: &previous.file,
+            identity: previous.identity,
+            creation_security: CreationSecurity {
+                kind: super::namespace::CREATION_SECURITY_KIND,
+                commitment: destination.security_commitment(),
+            },
+            payload: Some(Payload {
+                byte_length: previous.byte_length,
+                sha512: previous.sha512,
+                database_id: [0; 16],
+                transaction_id: 0,
+                commit_nonce: [0; 16],
+            }),
+        },
+    );
+    absorb_gc(owner, retirement)?;
+    owner.previous_unlinked = true;
+    owner.previous_retired_proven = true;
+    crate::fault::crash("publication.after_previous_unlink");
+    Ok(true)
+}
+
 fn verify_published(published: &PublishedMain) -> Result<(), Error> {
     published.output.verify_main().map_err(Error::Output)?;
     published
@@ -266,6 +328,7 @@ fn verify_published(published: &PublishedMain) -> Result<(), Error> {
         .map_err(Error::Reservation)
 }
 
+#[cfg(unix)]
 fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
     let published = &owner.published;
     let destination = published.output.attempt.destination();
@@ -280,6 +343,37 @@ fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
     if links != 0 {
         return Err(Error::ReservationLinkCount(links));
     }
+    crate::fault::crash("publication.after_reservation_unlink");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
+    use super::gc::{self, Authority};
+    use super::{ArtifactKind, CreationSecurity, DirectoryRole};
+
+    let published = &owner.published;
+    let destination = published.output.attempt.destination();
+    let retirement = gc::retire(
+        destination.directory(),
+        Authority {
+            attempt_id: published.output.attempt.attempt_id(),
+            ordinal: 1,
+            kind: ArtifactKind::OwnedCoordination,
+            directory_role: DirectoryRole::Destination,
+            source_name: destination.coordination(),
+            source_file: &published.reservation.file,
+            identity: published.reservation.identity,
+            creation_security: CreationSecurity {
+                kind: super::namespace::CREATION_SECURITY_KIND,
+                commitment: destination.security_commitment(),
+            },
+            payload: None,
+        },
+    );
+    absorb_gc(owner, retirement)?;
+    owner.reservation_unlinked = true;
+    owner.reservation_retired_proven = true;
     crate::fault::crash("publication.after_reservation_unlink");
     Ok(())
 }
@@ -304,12 +398,37 @@ fn verify_retired(owner: &mut RetiringMain) -> Result<(), Error> {
     destination
         .directory()
         .require_absent(destination.coordination())?;
-    if let Some(previous) = &output.previous {
-        previous.verify_retired(destination, output.attempt.name())?;
+    if !owner.previous_retired_proven {
+        if let Some(previous) = &output.previous {
+            previous.verify_retired(destination, output.attempt.name())?;
+        }
     }
     owner.previous_retired_proven = true;
     owner.reservation_retired_proven = true;
     output.verify_main().map_err(Error::Output)
+}
+
+#[cfg(windows)]
+fn absorb_gc(owner: &mut RetiringMain, retirement: super::gc::Retirement) -> Result<(), Error> {
+    owner.housekeeping = merge_housekeeping(owner.housekeeping, retirement.housekeeping);
+    owner.visible_housekeeping.extend(retirement.visible);
+    match retirement.problem {
+        Some(problem) => Err(Error::Gc(problem)),
+        None => Ok(()),
+    }
+}
+
+#[cfg(windows)]
+fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
+    }
 }
 
 impl From<NamespaceError> for Error {

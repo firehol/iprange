@@ -1619,28 +1619,36 @@ each block's bytes `[0,512)` are:
 | 264 | 8 | transaction ID when applicable, otherwise zero |
 | 272 | 16 | commit nonce when applicable, otherwise zero |
 | 288 | 2 | creation-security kind from section 15.6 |
-| 290 | 6 | zero |
+| 290 | 2 | directory role (`1=Destination`, `2=ScratchDirectory`, `3=MainFile`) |
+| 292 | 4 | zero |
 | 296 | 32 | creation-security commitment from section 15.6 |
-| 328 | 168 | zero |
+| 328 | 4 | exact source filename byte length |
+| 332 | 164 | zero |
 | 496 | 8 | nonzero sequence |
 | 504 | 4 | zero |
 | 508 | 4 | block CRC-32C |
 
-Bytes `[512,4096)` of each block are zero. CRC covers the full block with its
-CRC field zero. Selection uses the same independently selectable sequence/CRC
-rules as sidecar headers. `UnpublishedMainTail` is not a separately named inode
-and is invalid in a GC envelope. The two basename commitments are exactly:
+Bytes `[512,512+source_filename_length)` contain the exact filename component
+in the declared basename encoding; they never contain a directory or full path.
+The remaining bytes through 4,096 are zero. The filename is nonempty, must fit
+this block and the retained filesystem's component limit, and must be one valid
+component in the declared encoding. CRC covers the full block with its CRC field
+zero. Selection uses the same independently selectable sequence/CRC rules as
+sidecar headers. `UnpublishedMainTail` is not a separately named inode and is
+invalid in a GC envelope. The two basename commitments are exactly:
 
 ```text
 SHA-256("IPR4GCAUTH" || encoding_kind:u16le || name_len:u32le || name_bytes)
 SHA-256("IPR4GCNAME" || encoding_kind:u16le || name_len:u32le || name_bytes)
 ```
 
-The first hashes the exact authoritative/private component selected when cleanup
-began and the second hashes the exact inert GC component. For each artifact kind,
-the source component is one of the exact attempt-derived private names defined by
-this specification or canonical `.readers`; the commitment selects exactly one
-of those bounded candidates. A digest-kind-1 payload identity has nonzero exact
+The first hashes the stored exact authoritative/private component selected when
+cleanup began and the second hashes the exact inert GC component. For each
+artifact kind, the source component is one of the exact attempt-derived private
+names defined by this specification, canonical `.readers`, or deterministic
+`.readers.reset`; its stored bytes must reproduce the source commitment. The
+directory role is authenticated because it cannot be reconstructed from a
+directory path after restart. A digest-kind-1 payload identity has nonzero exact
 length, SHA-512, and the applicable tuple; digest kind zero requires those fields
 zero. Other digest kinds are invalid. An
 unknown/partial payload identity has those fields zero but still binds exact
@@ -1697,7 +1705,10 @@ and local identity, the envelope-committed source basename, exact inert-payload
 basename, source/inert presence state and optional local identities, artifact
 kind, creation-security kind/commitment, and selected envelope sequence. Its
 state is `MovePending | MoveAmbiguous | Inert | Conflict`; only `Inert` is pure
-housekeeping. It is sufficient to find the same transition after restart without
+housekeeping. `selected_envelope_sequence=0` means a newly created envelope is
+visible but neither block selected; it grants no move or deletion authority.
+Every selected envelope has a nonzero sequence. The artifact is sufficient to
+find the same transition after restart without
 relying on a current working directory or an untrusted random name.
 
 `Clean` means no correctness/retry-blocking obligation; it does not promise an

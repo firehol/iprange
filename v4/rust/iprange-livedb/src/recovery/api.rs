@@ -82,7 +82,7 @@ mod platform {
     use crate::publication::cleanup;
     use crate::publication::output::{CreatedOutput, OutputAttempt};
     use crate::publication::problem::Problem;
-    use crate::publication::{self, CleanupArtifact, PrivateOutputAttempt, PublicationProblem};
+    use crate::publication::{self, PublicationProblem};
     use crate::random;
 
     use super::*;
@@ -132,20 +132,17 @@ mod platform {
                     RecoveryReport::default(),
                     None,
                     None,
-                    None,
                 ))
             }
         };
         let secured = match created.secure() {
             Ok(secured) => secured,
             Err(failure) => {
-                let (facts, artifact) = cleanup::discard_created(&failure.owner);
                 return Err(fail_source(
                     source,
                     Problem::output(&failure.cause),
                     RecoveryReport::default(),
-                    Some(facts),
-                    artifact,
+                    Some(cleanup::discard_created(&failure.owner)),
                     None,
                 ));
             }
@@ -335,12 +332,11 @@ mod platform {
     ) -> RecoveryOutcome {
         let end = source.finish(source_meta, cancellation);
         if let Some(cause) = end.cause {
-            let (facts, artifact) = cleanup::discard_attempt(&attempt, &built.finished.file);
-            return Err(Box::new(RecoveryPreparationFailure::new(
+            let discarded = cleanup::discard_attempt(&attempt, &built.finished.file);
+            return Err(Box::new(RecoveryPreparationFailure::discarded(
                 problem(&cause),
                 built.report,
-                Some(facts),
-                artifact,
+                discarded,
                 built.scratch,
                 end.guard,
             )));
@@ -349,13 +345,12 @@ mod platform {
         let prepared = match attempt.prepare_cancellable(built.finished, cancellation) {
             Ok(prepared) => prepared,
             Err(failure) => {
-                let (facts, artifact) =
+                let discarded =
                     cleanup::discard_attempt(&failure.owner.attempt, &failure.owner.finished.file);
-                return Err(Box::new(RecoveryPreparationFailure::new(
+                return Err(Box::new(RecoveryPreparationFailure::discarded(
                     Problem::output(&failure.cause),
                     built.report,
-                    Some(facts),
-                    artifact,
+                    discarded,
                     built.scratch,
                     None,
                 )));
@@ -379,29 +374,26 @@ mod platform {
         report: RecoveryReport,
         scratch: Option<ScratchCleanup>,
     ) -> Box<RecoveryPreparationFailure> {
-        let (facts, artifact) = cleanup::discard_attempt(&attempt, &file);
-        fail_source(
-            source,
-            problem(&cause),
-            report,
-            Some(facts),
-            artifact,
-            scratch,
-        )
+        let discarded = cleanup::discard_attempt(&attempt, &file);
+        fail_source(source, problem(&cause), report, Some(discarded), scratch)
     }
 
     fn fail_source(
         source: Source,
         cause: PublicationProblem,
         report: RecoveryReport,
-        output: Option<PrivateOutputAttempt>,
-        artifact: Option<CleanupArtifact>,
+        discarded: Option<cleanup::EarlyDiscard>,
         scratch: Option<ScratchCleanup>,
     ) -> Box<RecoveryPreparationFailure> {
         let end = source.release_only();
-        Box::new(RecoveryPreparationFailure::new(
-            cause, report, output, artifact, scratch, end.guard,
-        ))
+        match discarded {
+            Some(discarded) => Box::new(RecoveryPreparationFailure::discarded(
+                cause, report, discarded, scratch, end.guard,
+            )),
+            None => Box::new(RecoveryPreparationFailure::new(
+                cause, report, None, None, scratch, end.guard,
+            )),
+        }
     }
 }
 

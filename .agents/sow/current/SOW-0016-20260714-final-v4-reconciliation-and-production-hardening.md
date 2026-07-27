@@ -2137,6 +2137,30 @@ Open decisions:
     **70C (rejected):** automatically fall back to destructive replacement.
     This can remove rollback authority without the caller knowingly accepting
     that loss.
+71. User decision (2026-07-27): the authenticated Windows GC envelope must
+    remain sufficient to resume and report one exact cleanup transition after
+    the authoritative source name has been moved away. A commitment alone
+    cannot recover an arbitrary canonical sidecar filename after that move.
+    **71A (selected, long-term-best):** store the exact source filename
+    component, never its directory or full path, in each existing 4,096-byte
+    envelope block. The filename remains authenticated by the block CRC and the
+    existing domain-separated source-name commitment. The envelope stays 8,192
+    bytes and keeps the same two-write durability protocol. The retained
+    directory identity supplies location authority separately.
+    **71B (rejected):** make the source filename optional after movement. This
+    would make inert-only restart evidence unable to identify the exact original
+    authoritative name promised by the result contract.
+    **71C (rejected):** add a third metadata file or encode the source name into
+    the GC filename. This adds another cleanup lifecycle or creates component-
+    length problems without improving authority.
+72. Derived format correction (2026-07-27): restart enumeration must reproduce
+    the exact `HousekeepingArtifact.directory_role`, but neither a directory path
+    nor artifact kind distinguishes publication coordination from live-main
+    coordination. Store the three-valued directory role in two previously
+    reserved authenticated GC-header bytes. Also define sequence zero only for
+    reporting a visible, unselectable newly created envelope; it never grants
+    move or deletion authority. This adds no operation or compatibility mode and
+    makes the already-required restart result self-contained.
 
 ## Plan
 
@@ -12361,6 +12385,30 @@ Explicit no-rollback replacement checkpoint:
   ignored), strict all-target Clippy, and warning-denied cross-checks for
   Windows GNU, FreeBSD, and Apple ARM pass. Native cross-platform crash tests
   remain in the authorized-system acceptance gate.
+
+Authenticated Windows housekeeping checkpoint:
+
+- The fixed 8,192-byte GC envelope now retains the exact source filename
+  component, never a path, plus the authenticated directory role needed to
+  reproduce terminal facts after restart. The dual-copy selector rejects
+  malformed, disagreeing, cross-directory, wrong-name, wrong-identity, and
+  changed-access records.
+- One shared resolver classifies the exact source/inert pair, completes only the
+  retained identity's no-replace move, and reports final unlink as factual
+  housekeeping rather than correctness cleanup. Its implementation is split
+  into envelope, source-binding, resolution, and maintenance modules; each is
+  below 500 physical lines.
+- Public constant-memory Windows housekeeping listing and exact identity-bound
+  removal are present. Publication/recovery cleanup results propagate visible
+  housekeeping, and scratch/output attempts reject pre-existing source,
+  envelope, or inert names before accepting a random attempt ID.
+- Current Linux all-feature tests pass 395 tests with two intentional subprocess
+  entry points ignored. Strict all-target Linux Clippy and warning-denied
+  Windows GNU check/Clippy pass.
+- This is a coherent checkpoint, not Windows completion. Live create/reset
+  artifacts, ordinary-open envelope precedence, Windows abandoned-artifact
+  removal, publication residue, and native process/crash execution remain in
+  the next portability slice.
 
 ### Historical adversarial-audit evidence
 

@@ -124,6 +124,7 @@ pub enum Error {
     Conflict(&'static str),
     Unresolvable(&'static str),
     CleanupConflict(&'static str),
+    CleanupInProgress(&'static str),
     ForkedHandle,
 }
 
@@ -173,6 +174,7 @@ impl Error {
             Self::Conflict(_) => ErrorCode::Conflict,
             Self::Unresolvable(_) => ErrorCode::Unresolvable,
             Self::CleanupConflict(_) => ErrorCode::CleanupConflict,
+            Self::CleanupInProgress(_) => ErrorCode::CleanupInProgress,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
         }
     }
@@ -252,6 +254,9 @@ impl fmt::Display for Error {
             Self::Conflict(detail) => write!(output, "conflict: {detail}"),
             Self::Unresolvable(detail) => write!(output, "unresolvable state: {detail}"),
             Self::CleanupConflict(detail) => write!(output, "cleanup conflict: {detail}"),
+            Self::CleanupInProgress(detail) => {
+                write!(output, "cleanup is in progress: {detail}")
+            }
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
         }
     }
@@ -297,6 +302,7 @@ impl std::error::Error for Error {
             | Self::Conflict(_)
             | Self::Unresolvable(_)
             | Self::CleanupConflict(_)
+            | Self::CleanupInProgress(_)
             | Self::ForkedHandle => None,
         }
     }

@@ -290,7 +290,12 @@ fn preparation(
     let cleanup = cleanup::discard_with(&mut seed, &output, reservation, |point| {
         checkpoint(cleanup_point(point))
     });
-    Err(Box::new(seed.preparation(cleanup.artifacts, cause)))
+    Err(Box::new(seed.preparation_with_housekeeping(
+        cleanup.artifacts,
+        cleanup.housekeeping,
+        cleanup.visible_housekeeping,
+        cause,
+    )))
 }
 
 fn not_published(
@@ -321,7 +326,7 @@ fn not_published(
     } else {
         AccessPolicy::Unclassified
     };
-    seed.result(
+    seed.result_with_housekeeping(
         FinalState {
             reservation_identity,
             main_namespace_may_have_been_attempted: false,
@@ -331,6 +336,8 @@ fn not_published(
             coordination_access_policy: coordination,
         },
         cleanup.artifacts,
+        cleanup.housekeeping,
+        cleanup.visible_housekeeping,
         Some(cause),
     )
 }
@@ -361,7 +368,7 @@ pub(super) fn finish_published(
 ) -> PublicationResult {
     let reservation_identity = published.reservation.identity;
     match published.retire() {
-        Ok(completed) => seed.result(
+        Ok(completed) => seed.result_with_housekeeping(
             FinalState {
                 reservation_identity: completed.reservation_identity,
                 main_namespace_may_have_been_attempted: true,
@@ -371,6 +378,8 @@ pub(super) fn finish_published(
                 coordination_access_policy: AccessPolicy::Absent,
             },
             CleanupArtifacts::new(),
+            completed.housekeeping,
+            completed.visible_housekeeping,
             cause,
         ),
         Err(failure) => {
@@ -412,7 +421,9 @@ pub(super) fn finish_published(
                     retirement,
                 ));
             }
-            seed.result(
+            let housekeeping = failure.owner.housekeeping;
+            let visible_housekeeping = failure.owner.visible_housekeeping;
+            seed.result_with_housekeeping(
                 FinalState {
                     reservation_identity,
                     main_namespace_may_have_been_attempted: true,
@@ -422,6 +433,8 @@ pub(super) fn finish_published(
                     coordination_access_policy: coordination,
                 },
                 cleanup,
+                housekeeping,
+                visible_housekeeping,
                 cause.or(Some(retirement)),
             )
         }

@@ -96,6 +96,17 @@ impl Name {
         Self::from_units(component.encode_wide().collect())
     }
 
+    pub(crate) fn from_encoded(bytes: &[u8]) -> Result<Self, NamespaceError> {
+        if bytes.len() % 2 != 0 {
+            return Err(NamespaceError::InvalidName);
+        }
+        let units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        Self::from_units(units)
+    }
+
     fn units(&self) -> &[u16] {
         &self.units
     }

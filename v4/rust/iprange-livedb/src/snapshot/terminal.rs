@@ -8,6 +8,7 @@ use crate::publication::{
 };
 use crate::recovery::RecoverySourceCleanupGuard;
 
+use crate::publication::cleanup::EarlyDiscard;
 use crate::recovery::source_guard::problem;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +68,31 @@ impl SnapshotPreparationFailure {
             coordination_cleanup,
             housekeeping: Housekeeping::None,
             visible_housekeeping: Box::default(),
+            source_cleanup,
+            cause,
+        }
+    }
+
+    pub(crate) fn discarded(
+        cause: PublicationProblem,
+        discarded: EarlyDiscard,
+        source_cleanup: Option<RecoverySourceCleanupGuard>,
+    ) -> Self {
+        let mut cleanup = CleanupArtifacts::new();
+        if let Some(artifact) = discarded.artifact {
+            cleanup.push(artifact);
+        }
+        let coordination_cleanup = if source_cleanup.is_some() {
+            CoordinationCleanup::CleanupGuard
+        } else {
+            CoordinationCleanup::None
+        };
+        Self {
+            output: Some(discarded.output),
+            cleanup,
+            coordination_cleanup,
+            housekeeping: discarded.housekeeping,
+            visible_housekeeping: discarded.visible_housekeeping,
             source_cleanup,
             cause,
         }

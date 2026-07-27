@@ -6,6 +6,8 @@ use crate::cancellation::CancellationToken;
 use crate::error::Result;
 use crate::validation::LocalFileIdentity;
 
+use super::{Housekeeping, HousekeepingArtifact, PublicationProblem};
+
 /// Logical generation recorded in one complete v4 output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublicationTuple {
@@ -128,6 +130,74 @@ pub trait AbandonedPublicationTempSink {
     ) -> Result<AbandonedPublicationTempSinkControl>;
 }
 
+/// Kind of exact Windows housekeeping name found during an offline scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowsHousekeepingCandidateKind {
+    Envelope,
+    InertPayload,
+}
+
+/// One exact Windows housekeeping candidate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowsHousekeepingEntry {
+    pub directory_identity: LocalFileIdentity,
+    pub candidate_kind: WindowsHousekeepingCandidateKind,
+    pub basename_encoding: u16,
+    pub basename: Box<[u8]>,
+    pub identity: Option<LocalFileIdentity>,
+    pub attempt_id: Option<[u8; 16]>,
+    pub ordinal: Option<u32>,
+    pub artifact: Option<HousekeepingArtifact>,
+    pub problem: Option<PublicationProblem>,
+}
+
+/// Completed constant-memory Windows housekeeping scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowsHousekeepingList {
+    pub directory_identity: LocalFileIdentity,
+    pub entries: u64,
+}
+
+/// Sink response for one borrowed Windows housekeeping candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowsHousekeepingSinkControl {
+    Continue,
+    Stop,
+}
+
+/// Synchronous consumer for Windows housekeeping candidates.
+pub trait WindowsHousekeepingSink {
+    fn entry(&mut self, entry: &WindowsHousekeepingEntry)
+        -> Result<WindowsHousekeepingSinkControl>;
+}
+
+impl<F> WindowsHousekeepingSink for F
+where
+    F: FnMut(&WindowsHousekeepingEntry) -> Result<WindowsHousekeepingSinkControl>,
+{
+    fn entry(
+        &mut self,
+        entry: &WindowsHousekeepingEntry,
+    ) -> Result<WindowsHousekeepingSinkControl> {
+        self(entry)
+    }
+}
+
+/// Optional exact content evidence supplied to housekeeping removal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HousekeepingPayloadIdentity {
+    pub tuple: Option<PublicationTuple>,
+    pub digest: PublicationDigest,
+}
+
+/// Factual terminal state from one Windows housekeeping removal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowsHousekeepingRemoval {
+    pub housekeeping: Housekeeping,
+    pub visible_housekeeping: Box<[HousekeepingArtifact]>,
+    pub cause: Option<PublicationProblem>,
+}
+
 impl<F> AbandonedPublicationTempSink for F
 where
     F: FnMut(&AbandonedPublicationTempEntry) -> Result<AbandonedPublicationTempSinkControl>,
@@ -137,6 +207,64 @@ where
         entry: &AbandonedPublicationTempEntry,
     ) -> Result<AbandonedPublicationTempSinkControl> {
         self(entry)
+    }
+}
+
+/// Stream exact Windows GC candidates without granting deletion authority.
+pub fn list_windows_housekeeping<S: WindowsHousekeepingSink>(
+    directory: impl AsRef<Path>,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+) -> Result<WindowsHousekeepingList> {
+    #[cfg(windows)]
+    {
+        super::gc_maintenance::list(directory.as_ref(), cancellation, sink)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (directory, cancellation, sink);
+        Err(crate::error::Error::Unsupported(
+            "Windows housekeeping is unavailable on this platform",
+        ))
+    }
+}
+
+/// Resolve and best-effort remove one exact authenticated Windows GC pair.
+pub fn remove_windows_housekeeping(
+    directory: impl AsRef<Path>,
+    expected_directory_identity: LocalFileIdentity,
+    attempt_id: [u8; 16],
+    ordinal: u32,
+    expected_envelope_identity: LocalFileIdentity,
+    expected_payload_identity: Option<HousekeepingPayloadIdentity>,
+    cancellation: &CancellationToken,
+) -> Result<WindowsHousekeepingRemoval> {
+    #[cfg(windows)]
+    {
+        super::gc_maintenance::remove(
+            directory.as_ref(),
+            expected_directory_identity,
+            attempt_id,
+            ordinal,
+            expected_envelope_identity,
+            expected_payload_identity,
+            cancellation,
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (
+            directory,
+            expected_directory_identity,
+            attempt_id,
+            ordinal,
+            expected_envelope_identity,
+            expected_payload_identity,
+            cancellation,
+        );
+        Err(crate::error::Error::Unsupported(
+            "Windows housekeeping is unavailable on this platform",
+        ))
     }
 }
 

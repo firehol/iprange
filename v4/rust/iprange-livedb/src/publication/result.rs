@@ -183,10 +183,42 @@ impl Seed {
         })
     }
 
+    #[cfg(windows)]
+    pub(super) const fn attempt_id(&self) -> [u8; 16] {
+        self.attempt_id
+    }
+
+    #[cfg(windows)]
+    pub(super) const fn creation_security(&self) -> &CreationSecurity {
+        &self.creation_security
+    }
+
+    #[cfg(windows)]
+    pub(super) const fn output_payload(&self) -> Option<super::gc_codec::Payload> {
+        Some(super::gc_codec::Payload {
+            byte_length: self.output_byte_length,
+            sha512: self.output_sha512,
+            database_id: self.database_id,
+            transaction_id: self.transaction_id,
+            commit_nonce: self.commit_nonce,
+        })
+    }
+
     pub(super) fn result(
         self,
         state: FinalState,
         cleanup: CleanupArtifacts,
+        cause: Option<Problem>,
+    ) -> PublicationResult {
+        self.result_with_housekeeping(state, cleanup, Housekeeping::None, Vec::new(), cause)
+    }
+
+    pub(super) fn result_with_housekeeping(
+        self,
+        state: FinalState,
+        cleanup: CleanupArtifacts,
+        housekeeping: Housekeeping,
+        visible_housekeeping: Vec<super::HousekeepingArtifact>,
         cause: Option<Problem>,
     ) -> PublicationResult {
         PublicationResult {
@@ -218,8 +250,8 @@ impl Seed {
             coordination_access_policy: state.coordination_access_policy,
             cleanup,
             coordination_cleanup: CoordinationCleanup::None,
-            housekeeping: Housekeeping::None,
-            visible_housekeeping: Box::default(),
+            housekeeping,
+            visible_housekeeping: visible_housekeeping.into_boxed_slice(),
             cause,
         }
     }
@@ -227,6 +259,16 @@ impl Seed {
     pub(super) fn preparation(
         self,
         cleanup: CleanupArtifacts,
+        cause: Problem,
+    ) -> PreparationFailure {
+        self.preparation_with_housekeeping(cleanup, Housekeeping::None, Vec::new(), cause)
+    }
+
+    pub(super) fn preparation_with_housekeeping(
+        self,
+        cleanup: CleanupArtifacts,
+        housekeeping: Housekeeping,
+        visible_housekeeping: Vec<super::HousekeepingArtifact>,
         cause: Problem,
     ) -> PreparationFailure {
         PreparationFailure {
@@ -238,8 +280,8 @@ impl Seed {
             creation_security: self.creation_security,
             cleanup,
             coordination_cleanup: CoordinationCleanup::None,
-            housekeeping: Housekeeping::None,
-            visible_housekeeping: Box::default(),
+            housekeeping,
+            visible_housekeeping: visible_housekeeping.into_boxed_slice(),
             cause,
         }
     }

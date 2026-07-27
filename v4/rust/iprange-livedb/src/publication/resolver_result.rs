@@ -61,7 +61,7 @@ pub(super) fn desired_result(
         PublicationStatus::OutcomeUnknown
     };
     let verified = verification.is_ok();
-    seed.result(
+    seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(header),
             main_namespace_may_have_been_attempted: true,
@@ -83,6 +83,8 @@ pub(super) fn desired_result(
             },
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         cause,
     )
     .with_later(later)
@@ -94,7 +96,7 @@ pub(super) fn desired_problem(
     summary: cleanup::Summary,
     problem: Problem,
 ) -> PublicationResult {
-    seed.result(
+    seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(header),
             main_namespace_may_have_been_attempted: true,
@@ -104,6 +106,8 @@ pub(super) fn desired_problem(
             coordination_access_policy: AccessPolicy::Unclassified,
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         Some(problem),
     )
 }
@@ -131,7 +135,7 @@ pub(super) fn published_output_result(
     } else {
         PublicationStatus::OutcomeUnknown
     };
-    seed.result(
+    seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(header),
             main_namespace_may_have_been_attempted: true,
@@ -153,6 +157,8 @@ pub(super) fn published_output_result(
             },
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         Some(problem),
     )
     .with_later(later)

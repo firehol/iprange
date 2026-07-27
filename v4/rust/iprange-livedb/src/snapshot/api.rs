@@ -34,7 +34,7 @@ mod platform {
     use crate::publication::cleanup;
     use crate::publication::output::{CreatedOutput, OutputAttempt};
     use crate::publication::problem::Problem;
-    use crate::publication::{self, CleanupArtifact, PrivateOutputAttempt, PublicationProblem};
+    use crate::publication::{self, PublicationProblem};
     use crate::recovery::source_guard::{problem, CurrentSourceMode, Source};
 
     use super::*;
@@ -64,7 +64,7 @@ mod platform {
         if let Err(cause) =
             reject_live_self(&source, source_mode, destination_path, publication_policy)
         {
-            return Err(fail_source(source, cause, None, None));
+            return Err(fail_source(source, cause, None));
         }
         let created = match publication_policy {
             SnapshotPublicationPolicy::FailIfExists => {
@@ -77,17 +77,15 @@ mod platform {
         };
         let created = match created {
             Ok(created) => created,
-            Err(cause) => return Err(fail_source(source, Problem::output(&cause), None, None)),
+            Err(cause) => return Err(fail_source(source, Problem::output(&cause), None)),
         };
         let secured = match created.secure() {
             Ok(secured) => secured,
             Err(failure) => {
-                let (facts, artifact) = cleanup::discard_created(&failure.owner);
                 return Err(fail_source(
                     source,
                     Problem::output(&failure.cause),
-                    Some(facts),
-                    artifact,
+                    Some(cleanup::discard_created(&failure.owner)),
                 ));
             }
         };
@@ -214,11 +212,10 @@ mod platform {
     ) -> SnapshotOutcome {
         let end = source.finish(source_meta, cancellation);
         if let Some(cause) = end.cause {
-            let (facts, artifact) = cleanup::discard_attempt(&attempt, &finished.file);
-            return Err(Box::new(SnapshotPreparationFailure::new(
+            let discarded = cleanup::discard_attempt(&attempt, &finished.file);
+            return Err(Box::new(SnapshotPreparationFailure::discarded(
                 problem(&cause),
-                Some(facts),
-                artifact,
+                discarded,
                 end.guard,
             )));
         }
@@ -226,12 +223,11 @@ mod platform {
         let prepared = match attempt.prepare_cancellable(finished, cancellation) {
             Ok(prepared) => prepared,
             Err(failure) => {
-                let (facts, artifact) =
+                let discarded =
                     cleanup::discard_attempt(&failure.owner.attempt, &failure.owner.finished.file);
-                return Err(Box::new(SnapshotPreparationFailure::new(
+                return Err(Box::new(SnapshotPreparationFailure::discarded(
                     Problem::output(&failure.cause),
-                    Some(facts),
-                    artifact,
+                    discarded,
                     None,
                 )));
             }
@@ -252,12 +248,11 @@ mod platform {
                 match bound {
                     Ok(prepared) => prepared,
                     Err(failure) => {
-                        let (facts, artifact) =
+                        let discarded =
                             cleanup::discard_attempt(&failure.output.attempt, &failure.output.file);
-                        return Err(Box::new(SnapshotPreparationFailure::new(
+                        return Err(Box::new(SnapshotPreparationFailure::discarded(
                             Problem::replacement(&failure.cause),
-                            Some(facts),
-                            artifact,
+                            discarded,
                             None,
                         )));
                     }
@@ -287,20 +282,24 @@ mod platform {
         file: std::fs::File,
         cause: Error,
     ) -> Box<SnapshotPreparationFailure> {
-        let (facts, artifact) = cleanup::discard_attempt(&attempt, &file);
-        fail_source(source, problem(&cause), Some(facts), artifact)
+        let discarded = cleanup::discard_attempt(&attempt, &file);
+        fail_source(source, problem(&cause), Some(discarded))
     }
 
     fn fail_source(
         source: Source,
         cause: PublicationProblem,
-        output: Option<PrivateOutputAttempt>,
-        artifact: Option<CleanupArtifact>,
+        discarded: Option<cleanup::EarlyDiscard>,
     ) -> Box<SnapshotPreparationFailure> {
         let end = source.release_only();
-        Box::new(SnapshotPreparationFailure::new(
-            cause, output, artifact, end.guard,
-        ))
+        match discarded {
+            Some(discarded) => Box::new(SnapshotPreparationFailure::discarded(
+                cause, discarded, end.guard,
+            )),
+            None => Box::new(SnapshotPreparationFailure::new(
+                cause, None, None, end.guard,
+            )),
+        }
     }
 }
 

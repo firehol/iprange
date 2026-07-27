@@ -8,7 +8,13 @@ use super::namespace::{
 use super::output::{CreatedOutput, OutputAttempt, PreparedOutput};
 use super::problem::Problem;
 use super::result::{ArtifactKind, CleanupArtifacts, NameSlot, Seed};
-use super::{CleanupArtifact, DirectoryRole, PrivateOutputAttempt};
+use super::{
+    CleanupArtifact, DirectoryRole, Housekeeping, HousekeepingArtifact, PrivateOutputAttempt,
+};
+
+#[cfg(windows)]
+#[path = "cleanup/windows.rs"]
+mod windows;
 
 #[derive(Clone, Copy)]
 pub(super) enum ReservationLocation {
@@ -34,8 +40,17 @@ pub(super) struct OutputOwner<'a> {
 
 pub(super) struct Summary {
     pub(super) artifacts: CleanupArtifacts,
+    pub(super) housekeeping: Housekeeping,
+    pub(super) visible_housekeeping: Vec<HousekeepingArtifact>,
     pub(super) main_absent: bool,
     pub(super) coordination_absent: bool,
+}
+
+pub(crate) struct EarlyDiscard {
+    pub(crate) output: PrivateOutputAttempt,
+    pub(crate) artifact: Option<CleanupArtifact>,
+    pub(crate) housekeeping: Housekeeping,
+    pub(crate) visible_housekeeping: Box<[HousekeepingArtifact]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,36 +68,55 @@ pub(super) fn discard(
     discard_with(seed, output, reservation, |_| Ok(()))
 }
 
-pub(crate) fn discard_created(
-    created: &CreatedOutput,
-) -> (PrivateOutputAttempt, Option<CleanupArtifact>) {
+pub(crate) fn discard_created(created: &CreatedOutput) -> EarlyDiscard {
     let facts = created.facts();
-    let identity = facts
-        .identity
-        .and_then(|value| Identity::decode(value.bytes));
-    let problem = discard_one(
-        created.destination().directory(),
-        created.name(),
-        created.file(),
-        identity,
-    );
-    let artifact = problem.map(|problem| early_artifact(&facts, problem));
-    (facts, artifact)
+    #[cfg(windows)]
+    {
+        windows::discard_created(created, facts)
+    }
+    #[cfg(unix)]
+    {
+        let identity = facts
+            .identity
+            .and_then(|value| Identity::decode(value.bytes));
+        let problem = discard_one(
+            created.destination().directory(),
+            created.name(),
+            created.file(),
+            identity,
+        );
+        let artifact = problem.map(|problem| early_artifact(&facts, problem));
+        EarlyDiscard {
+            output: facts,
+            artifact,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Box::default(),
+        }
+    }
 }
 
-pub(crate) fn discard_attempt(
-    attempt: &OutputAttempt,
-    file: &File,
-) -> (PrivateOutputAttempt, Option<CleanupArtifact>) {
+pub(crate) fn discard_attempt(attempt: &OutputAttempt, file: &File) -> EarlyDiscard {
     let facts = attempt.facts();
-    let problem = discard_one(
-        attempt.destination().directory(),
-        attempt.name(),
-        file,
-        Some(attempt.identity()),
-    );
-    let artifact = problem.map(|problem| early_artifact(&facts, problem));
-    (facts, artifact)
+    #[cfg(windows)]
+    {
+        windows::discard_attempt(attempt, file, facts)
+    }
+    #[cfg(unix)]
+    {
+        let problem = discard_one(
+            attempt.destination().directory(),
+            attempt.name(),
+            file,
+            Some(attempt.identity()),
+        );
+        let artifact = problem.map(|problem| early_artifact(&facts, problem));
+        EarlyDiscard {
+            output: facts,
+            artifact,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Box::default(),
+        }
+    }
 }
 
 pub(super) fn discard_with(
@@ -121,59 +155,68 @@ fn discard_owners_with(
     reservation: Option<ReservationOwner<'_>>,
     mut checkpoint: impl FnMut(Point) -> Result<(), Problem>,
 ) -> Summary {
-    let directory = destination.directory();
-    let output_removal = output.map(|owner| {
-        checkpoint(Point::OutputRemoval)
-            .and_then(|()| remove_output(directory, owner))
-            .unwrap_or_else(|problem| {
-                Removal::failed(
-                    ArtifactKind::PrivateOutput,
-                    NameSlot::PrivateOutput,
-                    Some(owner.identity),
-                    problem,
-                )
-            })
-    });
-    let reservation_removal = reservation.map(|owner| {
-        checkpoint(Point::ReservationRemoval)
-            .and_then(|()| remove_reservation(directory, destination.coordination(), owner))
-            .unwrap_or_else(|problem| {
-                Removal::failed(
-                    ArtifactKind::PrivateReservation,
-                    default_slot(owner.location),
-                    owner.identity,
-                    problem,
-                )
-            })
-    });
-    let needs_sync = output_removal.as_ref().is_some_and(Removal::needs_sync)
-        || reservation_removal
-            .as_ref()
-            .is_some_and(Removal::needs_sync);
-    let sync = if needs_sync {
-        checkpoint(Point::DirectorySync)
-            .and_then(|()| directory.sync().map_err(|error| Problem::namespace(&error)))
-            .and_then(|()| {
-                directory
-                    .verify()
-                    .map_err(|error| Problem::namespace(&error))
-            })
-            .err()
-    } else {
-        None
-    };
+    #[cfg(windows)]
+    {
+        windows::discard_owners(seed, destination, output, reservation, &mut checkpoint)
+    }
+    #[cfg(unix)]
+    {
+        let directory = destination.directory();
+        let output_removal = output.map(|owner| {
+            checkpoint(Point::OutputRemoval)
+                .and_then(|()| remove_output(directory, owner))
+                .unwrap_or_else(|problem| {
+                    Removal::failed(
+                        ArtifactKind::PrivateOutput,
+                        NameSlot::PrivateOutput,
+                        Some(owner.identity),
+                        problem,
+                    )
+                })
+        });
+        let reservation_removal = reservation.map(|owner| {
+            checkpoint(Point::ReservationRemoval)
+                .and_then(|()| remove_reservation(directory, destination.coordination(), owner))
+                .unwrap_or_else(|problem| {
+                    Removal::failed(
+                        ArtifactKind::PrivateReservation,
+                        default_slot(owner.location),
+                        owner.identity,
+                        problem,
+                    )
+                })
+        });
+        let needs_sync = output_removal.as_ref().is_some_and(Removal::needs_sync)
+            || reservation_removal
+                .as_ref()
+                .is_some_and(Removal::needs_sync);
+        let sync = if needs_sync {
+            checkpoint(Point::DirectorySync)
+                .and_then(|()| directory.sync().map_err(|error| Problem::namespace(&error)))
+                .and_then(|()| {
+                    directory
+                        .verify()
+                        .map_err(|error| Problem::namespace(&error))
+                })
+                .err()
+        } else {
+            None
+        };
 
-    let mut artifacts = CleanupArtifacts::new();
-    if let Some(removal) = output_removal {
-        finish_removal(seed, removal, sync, &mut artifacts);
-    }
-    if let Some(removal) = reservation_removal {
-        finish_removal(seed, removal, sync, &mut artifacts);
-    }
-    Summary {
-        artifacts,
-        main_absent: directory.require_absent(destination.main()).is_ok(),
-        coordination_absent: directory.require_absent(destination.coordination()).is_ok(),
+        let mut artifacts = CleanupArtifacts::new();
+        if let Some(removal) = output_removal {
+            finish_removal(seed, removal, sync, &mut artifacts);
+        }
+        if let Some(removal) = reservation_removal {
+            finish_removal(seed, removal, sync, &mut artifacts);
+        }
+        Summary {
+            artifacts,
+            housekeeping: Housekeeping::None,
+            visible_housekeeping: Vec::new(),
+            main_absent: directory.require_absent(destination.main()).is_ok(),
+            coordination_absent: directory.require_absent(destination.coordination()).is_ok(),
+        }
     }
 }
 
@@ -222,7 +265,7 @@ fn finish_one(directory: &Directory, removal: Removal<'_>) -> Option<Problem> {
     }
 }
 
-fn early_artifact(facts: &PrivateOutputAttempt, error: Problem) -> CleanupArtifact {
+pub(super) fn early_artifact(facts: &PrivateOutputAttempt, error: Problem) -> CleanupArtifact {
     CleanupArtifact {
         kind: ArtifactKind::PrivateOutput,
         directory_role: DirectoryRole::Destination,

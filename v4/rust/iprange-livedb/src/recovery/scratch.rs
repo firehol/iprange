@@ -19,6 +19,7 @@ use crate::validation::LocalFileIdentity;
 #[path = "scratch/cleanup.rs"]
 mod cleanup;
 pub(crate) use cleanup::residue_error;
+#[cfg(unix)]
 use cleanup::{remove, residue, scratch_problem, set_removed_problems};
 #[path = "scratch/fixed.rs"]
 mod fixed;
@@ -64,6 +65,8 @@ pub(crate) struct ScratchCleanup {
     pub(crate) creation_security_kind: u16,
     pub(crate) creation_security_commitment: [u8; 32],
     pub(crate) residues: Vec<ScratchResidue>,
+    pub(crate) housekeeping: crate::publication::Housekeeping,
+    pub(crate) visible_housekeeping: Vec<crate::publication::HousekeepingArtifact>,
 }
 
 impl ScratchCleanup {
@@ -116,7 +119,7 @@ impl Scratch {
         }
         let directory = Directory::open(directory).map_err(namespace_error)?;
         let profile = Profile::capture().map_err(namespace_error)?;
-        let attempt_id = random::nonzero_128()?;
+        let attempt_id = new_attempt(&directory)?;
         Ok(Self {
             directory,
             profile,
@@ -274,6 +277,28 @@ impl Scratch {
     }
 
     pub(crate) fn cleanup(mut self) -> ScratchCleanup {
+        #[cfg(unix)]
+        {
+            return self.cleanup_unix();
+        }
+        #[cfg(windows)]
+        {
+            return self.cleanup_windows();
+        }
+        #[allow(unreachable_code)]
+        ScratchCleanup {
+            attempt_id: self.attempt_id,
+            directory_identity: local(self.directory.identity()),
+            creation_security_kind: CREATION_SECURITY_KIND,
+            creation_security_commitment: self.profile.commitment(),
+            residues: Vec::new(),
+            housekeeping: crate::publication::Housekeeping::None,
+            visible_housekeeping: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn cleanup_unix(&mut self) -> ScratchCleanup {
         let directory_identity = local(self.directory.identity());
         let (removed, mut problems) = self.remove_all();
         self.prove_removals(&removed, &mut problems);
@@ -284,9 +309,67 @@ impl Scratch {
             creation_security_kind: CREATION_SECURITY_KIND,
             creation_security_commitment: self.profile.commitment(),
             residues,
+            housekeeping: crate::publication::Housekeeping::None,
+            visible_housekeeping: Vec::new(),
         }
     }
 
+    #[cfg(windows)]
+    fn cleanup_windows(&mut self) -> ScratchCleanup {
+        use crate::publication::gc::{self, Authority};
+        use crate::publication::{
+            ArtifactKind, CreationSecurity, DirectoryRole, Housekeeping, HousekeepingArtifact,
+        };
+
+        let directory_identity = local(self.directory.identity());
+        let mut residues = Vec::new();
+        let mut housekeeping = Housekeeping::None;
+        let mut visible_housekeeping: Vec<HousekeepingArtifact> = Vec::new();
+        for owner in self.owned.iter_mut().filter_map(Option::take) {
+            let retirement = gc::retire(
+                &self.directory,
+                Authority {
+                    attempt_id: self.attempt_id,
+                    ordinal: owner.ordinal,
+                    kind: ArtifactKind::AuthorizedScratch,
+                    directory_role: DirectoryRole::ScratchDirectory,
+                    source_name: &owner.name,
+                    source_file: &owner.shared.file,
+                    identity: owner.identity,
+                    creation_security: CreationSecurity {
+                        kind: CREATION_SECURITY_KIND,
+                        commitment: self.profile.commitment(),
+                    },
+                    payload: None,
+                },
+            );
+            housekeeping = merge_housekeeping(housekeeping, retirement.housekeeping);
+            visible_housekeeping.extend(retirement.visible);
+            if let Some(problem) = retirement.problem {
+                residues.push(cleanup::residue(
+                    directory_identity,
+                    &self.profile,
+                    owner,
+                    ScratchProblem {
+                        code: problem.code,
+                        os_code: problem.os_code,
+                        detail: problem.detail,
+                    },
+                ));
+            }
+        }
+        ScratchCleanup {
+            attempt_id: self.attempt_id,
+            directory_identity,
+            creation_security_kind: CREATION_SECURITY_KIND,
+            creation_security_commitment: self.profile.commitment(),
+            residues,
+            housekeeping,
+            visible_housekeeping,
+        }
+    }
+
+    #[cfg(unix)]
     fn remove_all(&self) -> ([bool; MAX_OWNED], [Option<ScratchProblem>; MAX_OWNED]) {
         let mut removed = [false; MAX_OWNED];
         let mut problems = [None; MAX_OWNED];
@@ -302,6 +385,7 @@ impl Scratch {
         (removed, problems)
     }
 
+    #[cfg(unix)]
     fn prove_removals(
         &self,
         removed: &[bool; MAX_OWNED],
@@ -326,6 +410,7 @@ impl Scratch {
         }
     }
 
+    #[cfg(unix)]
     fn collect_residues(
         &mut self,
         directory_identity: LocalFileIdentity,
@@ -363,6 +448,60 @@ impl Scratch {
             return Err(Error::BudgetExceeded("recovery scratch bytes"));
         }
         Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn new_attempt(_directory: &Directory) -> Result<[u8; 16]> {
+    random::nonzero_128()
+}
+
+#[cfg(windows)]
+fn new_attempt(directory: &Directory) -> Result<[u8; 16]> {
+    loop {
+        let attempt_id = random::nonzero_128()?;
+        let mut collision = false;
+        for ordinal in 0..MAX_OWNED as u32 {
+            let source = scratch_name(attempt_id, ordinal)?;
+            let envelope = crate::publication::gc_name::envelope(attempt_id, ordinal)
+                .map_err(namespace_error)?;
+            let inert =
+                crate::publication::gc_name::inert(attempt_id, ordinal).map_err(namespace_error)?;
+            for name in [&source, &envelope, &inert] {
+                match directory.require_absent(name) {
+                    Ok(()) => {}
+                    Err(NamespaceError::Exists) => {
+                        collision = true;
+                        break;
+                    }
+                    Err(error) => return Err(namespace_error(error)),
+                }
+            }
+            if collision {
+                break;
+            }
+        }
+        if !collision {
+            return Ok(attempt_id);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn merge_housekeeping(
+    left: crate::publication::Housekeeping,
+    right: crate::publication::Housekeeping,
+) -> crate::publication::Housekeeping {
+    use crate::publication::Housekeeping;
+
+    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
+        Housekeeping::Visible
+    } else if matches!(left, Housekeeping::CrashReappearancePossible)
+        || matches!(right, Housekeeping::CrashReappearancePossible)
+    {
+        Housekeeping::CrashReappearancePossible
+    } else {
+        Housekeeping::None
     }
 }
 

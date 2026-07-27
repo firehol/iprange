@@ -136,6 +136,7 @@ impl Problem {
                 ErrorCode::CleanupConflict,
                 "retired reservation still has a link",
             ),
+            main_file::Error::Gc(problem) => *problem,
             main_file::Error::Injected => Self::injected(),
         }
     }

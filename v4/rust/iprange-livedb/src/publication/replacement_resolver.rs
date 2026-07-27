@@ -132,7 +132,7 @@ fn remove_previous(
     } else {
         PublicationStatus::OutcomeUnknown
     };
-    let result = base.seed.result(
+    let result = base.seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(base.header),
             main_namespace_may_have_been_attempted: attempted(base.header.state),
@@ -154,6 +154,8 @@ fn remove_previous(
             },
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         cause,
     );
     Ok(record_cancellation(result, cancellation))
@@ -199,7 +201,7 @@ fn resolve_desired(
     };
     let result = base
         .seed
-        .result(
+        .result_with_housekeeping(
             FinalState {
                 reservation_identity: reservation_identity(base.header),
                 main_namespace_may_have_been_attempted: attempted(base.header.state),
@@ -221,6 +223,8 @@ fn resolve_desired(
                 },
             },
             summary.artifacts,
+            summary.housekeeping,
+            summary.visible_housekeeping,
             cause,
         )
         .with_later(base.later.as_ref());
@@ -249,7 +253,7 @@ fn resolve_other(
     } else {
         PublicationStatus::OutcomeUnknown
     };
-    let result = base.seed.result(
+    let result = base.seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(base.header),
             main_namespace_may_have_been_attempted: attempted(base.header.state),
@@ -271,6 +275,8 @@ fn resolve_other(
             },
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         cause,
     );
     Ok(record_cancellation(result, cancellation))

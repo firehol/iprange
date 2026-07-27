@@ -8,6 +8,12 @@ const SUFFIX: &[u8] = b".tmp";
 const ATTEMPT_HEX: usize = 32;
 const ORDINAL_HEX: usize = 8;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Candidate {
+    Envelope(Option<([u8; 16], u32)>),
+    Inert(Option<([u8; 16], u32)>),
+}
+
 pub(crate) fn envelope(attempt: [u8; 16], ordinal: u32) -> Result<Name, NamespaceError> {
     Name::new(&encode(ENVELOPE_PREFIX, attempt, ordinal)?)
 }
@@ -18,6 +24,20 @@ pub(crate) fn inert(attempt: [u8; 16], ordinal: u32) -> Result<Name, NamespaceEr
 
 pub(crate) fn decode_envelope(bytes: &[u8]) -> Option<([u8; 16], u32)> {
     decode(bytes, ENVELOPE_PREFIX)
+}
+
+pub(crate) fn decode_inert(bytes: &[u8]) -> Option<([u8; 16], u32)> {
+    decode(bytes, INERT_PREFIX)
+}
+
+pub(crate) fn candidate(bytes: &[u8]) -> Option<Candidate> {
+    if bytes.starts_with(ENVELOPE_PREFIX) {
+        Some(Candidate::Envelope(decode_envelope(bytes)))
+    } else if bytes.starts_with(INERT_PREFIX) {
+        Some(Candidate::Inert(decode_inert(bytes)))
+    } else {
+        None
+    }
 }
 
 fn encode(prefix: &[u8], attempt: [u8; 16], ordinal: u32) -> Result<Vec<u8>, NamespaceError> {

@@ -14,6 +14,7 @@ use crate::publication::result::{
     AccessPolicy, CleanupArtifacts, CleanupState, DestinationContent, LaterCanonical,
     PublicationStatus,
 };
+use crate::publication::Housekeeping;
 use crate::validation::{self, ValidationBudget, ValidationMode, ValidationSinkControl};
 use crate::ImmutableReader;
 
@@ -367,6 +368,8 @@ fn canonical_reuse_during_cleanup_is_reclassified_before_return() {
     run_child(&main, "publication.after_reservation_directory_sync");
     let summary = cleanup::Summary {
         artifacts: CleanupArtifacts::new(),
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Vec::new(),
         main_absent: false,
         coordination_absent: false,
     };

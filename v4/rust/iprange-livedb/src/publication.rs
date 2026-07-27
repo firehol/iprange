@@ -7,10 +7,14 @@ use crate::cancellation::CancellationToken;
 pub(crate) mod attempt;
 pub(crate) mod cleanup;
 mod file_inspection;
+#[cfg(windows)]
+pub(crate) mod gc;
 #[cfg(any(windows, test))]
 mod gc_codec;
+#[cfg(windows)]
+mod gc_maintenance;
 #[cfg(any(windows, test))]
-mod gc_name;
+pub(crate) mod gc_name;
 mod main_file;
 mod maintenance;
 pub(crate) mod namespace;
@@ -29,12 +33,15 @@ mod types;
 
 pub use maintenance::{
     list_abandoned_publication_temps, list_abandoned_reservation_artifacts,
-    remove_abandoned_publication_temp, remove_abandoned_reservation_artifact,
+    list_windows_housekeeping, remove_abandoned_publication_temp,
+    remove_abandoned_reservation_artifact, remove_windows_housekeeping,
     AbandonedPublicationTempEntry, AbandonedPublicationTempList, AbandonedPublicationTempSink,
     AbandonedPublicationTempSinkControl, AbandonedReservationEntry, AbandonedReservationEvidence,
     AbandonedReservationList, AbandonedReservationPhase, AbandonedReservationPolicy,
-    AbandonedReservationSink, AbandonedReservationSinkControl, PublicationDigest,
-    PublicationOutputEvidence, PublicationTuple,
+    AbandonedReservationSink, AbandonedReservationSinkControl, HousekeepingPayloadIdentity,
+    PublicationDigest, PublicationOutputEvidence, PublicationTuple,
+    WindowsHousekeepingCandidateKind, WindowsHousekeepingEntry, WindowsHousekeepingList,
+    WindowsHousekeepingRemoval, WindowsHousekeepingSink, WindowsHousekeepingSinkControl,
 };
 pub use residue::{
     inspect_publication_residue, remove_publication_residue, PublicationResidueCoordination,

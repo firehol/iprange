@@ -335,7 +335,7 @@ fn abandon(
     } else {
         PublicationStatus::OutcomeUnknown
     };
-    let result = seed.result(
+    let result = seed.result_with_housekeeping(
         FinalState {
             reservation_identity: reservation_identity(header),
             main_namespace_may_have_been_attempted: header.state == State::MainMayHaveBeenAttempted,
@@ -358,6 +358,8 @@ fn abandon(
             },
         },
         summary.artifacts,
+        summary.housekeeping,
+        summary.visible_housekeeping,
         cause,
     );
     Ok(record_cancellation(result, cancellation))
