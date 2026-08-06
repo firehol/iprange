@@ -13453,6 +13453,51 @@ only after the current relevant tracked state is committed. Unrelated untracked
 build directories, generated files, and binaries are not part of that
 preservation commit.
 
+The user's 2026-08-06 instruction after checkpoint `a352b4b` authorizes the
+fast-checksum implementation slice. The long-term-best implementation choice is
+to pin `crc32c` 0.6.8 and keep one thin local zero-field wrapper. This avoids a
+second custom unsafe SIMD implementation while providing runtime SSE4.2 on
+x86-64, ARM CRC on Rust 1.80 and newer, and slicing-by-eight software fallback.
+Rust 1.74.1 remains a required functional gate; its ARM build uses the fallback.
+
+Evidence for this slice:
+
+- `zowens/crc32c @ 254a861f7cc71bfe455e86f0e1d86e3c83c33390`,
+  `src/lib.rs:23-65`, `src/hw_x86_64.rs:1-107`,
+  `src/hw_aarch64.rs:1-83`, `src/sw.rs:1-55`, and `build.rs:187-199`:
+  runtime hardware dispatch, portable fallback, and the compiler boundary for
+  stable ARM intrinsics.
+- `ClickHouse/walshadow @ 662293fe9d4b`, `Cargo.toml:52` and
+  `src/catalog/desc_log.rs:1126-1129`; and `influxdata/rskafka @ 9b7699d2ed81`,
+  `Cargo.toml:25` and `src/protocol/record.rs:383-390`: current storage/protocol
+  users of the same narrow CRC32C dependency.
+- A pinned release microbenchmark over five alternating 250,000-page runs on
+  the reference x86-64 host measured median throughput of 0.565 GiB/s for the
+  active byte-at-a-time loop and 12.763 GiB/s for `crc32c` 0.6.8, a 22.60x
+  checksum-only speedup. This does not change the finding that CRC is now a
+  small commit-time fraction and cannot by itself meet the one-second workflow
+  target.
+
+The slice changes no bytes, format rule, public API, validation policy, or
+durability order. Validation must compare the backend against an independent
+reference across zero-field positions and lengths, preserve the standard
+vector, pass current/MSRV/four-target compiler gates, and measure the public
+workflow after the change. The only expected durable artifacts are the Rust
+dependency manifest/lock, checksum wrapper, tests, and this SOW; the format
+specification, C ABI specification, SDK documentation, project skill, and
+`AGENTS.md` remain behaviorally unchanged.
+
+Validation completed on 2026-08-06. The independent bitwise reference and
+standard-vector tests pass; both complete current-toolchain test matrices,
+warnings-denied Clippy and rustdoc, formatting, the Rust 1.74.1 all-feature
+matrix, and the four-target compiled-source gate pass. The source gate accounts
+for 311 repository sources across Linux, Windows, macOS, and FreeBSD plus the
+one exact runtime-compiled native fixture. Five pinned P-core release runs of
+the one-million-range direct replacement took 4.192, 4.525, 4.435, 4.178, and
+4.303 seconds. The replacement is correct and makes checksum cost disappear
+from the measurable hot profile, but it does not materially improve the whole
+workflow because per-record page access and reconstruction now dominate.
+
 1. Generate a canonical source inventory from compiler dependency manifests for
    production, tests, features, and supported targets. Classify every tracked
    source as active, test-only, platform-specific, generated, or obsolete.
