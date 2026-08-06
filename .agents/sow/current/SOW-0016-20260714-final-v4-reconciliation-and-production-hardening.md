@@ -4,21 +4,24 @@
 
 Status: in-progress
 
-Sub-state: all unsigned Phase-1 product decisions are resolved. The replacement
-Rust engine, Rust SDK, Rust-provided frozen C ABI, Rust-first conformance corpus,
-explicit validation/recovery, live coordination, compact snapshots, crash
-coverage, resource proof, and update-ipsets scale benchmark are locally
-complete. Current Rust, no-default-features, and Rust 1.74.1 each pass 436 tests
-with zero failures and three intentional ignored entry points; sanitizers,
-Valgrind, lint, documentation, formatting, and Windows GNU/Apple ARM/FreeBSD
-compile-only checks pass.
+Sub-state: the prior local-completion and Rust-acceptance claims are withdrawn.
+A fresh compiled-path and release-profile audit found that ordinary range
+mutation checksums and rewrites complete pages repeatedly, the active CRC module
+is hidden behind a misleading path alias while the hardware implementation is
+uncompiled, ordered snapshots use the random-update path, retention rewrites
+most surviving ranges, and substantial alternative implementation source is
+outside the Linux all-feature build. Passing semantic tests does not prove that
+the intended mechanism is compiled or that the hot path performs only necessary
+work.
 
-Rust remains at the explicit user-acceptance gate. Native Windows, macOS, and
-FreeBSD runtime/crash execution has not been authorized or performed, and
-cross-compilation is not native proof. The Go port must not begin until the user
-accepts the Rust result; SOW-0016 cannot close until that independent port
-produces and cross-opens the shared corpus. Snapshot signing and high-level
-multi-file algebra remain isolated in pending SOW-0017 and SOW-0018.
+User decision 74A starts a trust reset before further optimization: establish
+one exact compiled implementation, remove obsolete alternatives only after an
+explicit deletion-set approval, map every Phase-1 invariant to compiled public
+paths and executable evidence, add work-accounting gates, and then repair the
+measured hot paths in small proven slices. Rust is neither performance-complete
+nor accepted. Native Windows, macOS, and FreeBSD runtime/crash execution remains
+unauthorized and unperformed. The Go port remains blocked. Snapshot signing and
+high-level multi-file algebra remain isolated in pending SOW-0017 and SOW-0018.
 
 2026-07-24 restart execution: the Rust coordinator now uses three
 caller-provided fixed journals of prebound `Cell` writes instead of heap
@@ -13310,6 +13313,312 @@ Artifact reconciliation:
 - The local Rust milestone now has no known unclosed local proof item. Native
   Windows/macOS/FreeBSD runtime/crash proof and the user's Rust acceptance are
   explicit external gates. Go remains prohibited until that acceptance.
+
+### 2026-08-06 - compiled-path trust-reset pre-implementation gate
+
+#### Problem and root-cause model
+
+Facts:
+
+- The format architecture already requires a committed page to be copied at
+  most once and then changed in place, and it keeps general data-page checksum
+  work out of ordinary access. The active range-tree builder nevertheless
+  rebuilds and CRC-seals a full 4 KiB page after nearly every logical edit.
+- Release profiling attributes 54.01% of direct-ingestion core cycles to
+  `slotted_page::Builder::finish`. The active `checksum.rs` implementation is a
+  byte-at-a-time table loop. `lib.rs` loads it as module `crc32c` through a path
+  alias, while the tracked hardware-capable `crc32c.rs` is not compiled.
+- Fresh isolated all-feature Cargo dependency builds for Linux, Windows,
+  macOS, and FreeBSD identify 198 source files in the union of production
+  library graphs and 241 in the union of library-test graphs. Of 281 tracked
+  database source files, exactly 40 files containing 101,903 physical lines
+  and 658 `#[test]` functions are absent from every supported production and
+  test graph. They include a parallel Linux writer, page model, private-page
+  pool, range builder, checksum, sidecar, retirement, and writer-coordination
+  implementation.
+- The currently modified
+  `v4/rust/iprange-livedb/src/os/linux/live_writer/live_normal_range.rs` is in
+  that uncompiled set. It is protected unrelated work and is not deletion
+  authority.
+- The public-SDK million-range baselines reproduce at approximately 14.7
+  seconds for direct replacement, 56.7 seconds for retention refresh, and 26.6
+  seconds for snapshot construction. Direct ingestion executes about 116,000
+  instructions and 66,900 cycles per input range and issues approximately one
+  full-page write per input. Snapshot construction performs approximately 10.9
+  full-page reads and one full-page write per ordered input record at 10,000
+  records. These costs are wasted-work amplification, not storage-bandwidth,
+  allocation-count, descriptor-count, or temporary-file limits.
+- An instrumented all-feature library/integration test run passes but reports
+  only diagnostic coverage: approximately 82.29% total lines with a
+  mismatched-profile warning, while `validation/retirement.rs` reaches only
+  6.36%. Coverage percentage and passing test counts therefore cannot replace
+  invariant-specific public-path proof.
+
+Working theory:
+
+- Iterative replacement generations were retained side by side, implementation
+  existence was mistaken for runtime wiring, and acceptance emphasized
+  semantic outputs and bounded resources without measuring necessary work per
+  record/page. The CRC defect is one proven consequence. The audit must test
+  this theory across every Phase-1 surface rather than assume it is the only
+  occurrence.
+
+#### Evidence reviewed
+
+- `.agents/sow/specs/design-iprange-engine.md`, especially transaction-private
+  in-place mutation, explicit validation, resource bounds, and update-ipsets
+  acceptance.
+- `.agents/sow/specs/binary-format-v4.md`, especially committed page CRCs,
+  ordinary-path safety, allocator reuse, transaction memory, workflows,
+  validation, recovery, and snapshot construction.
+- The exact Cargo-generated `iprange-livedb` production and test dependency
+  manifests from isolated builds; tracked-source comparison; active module
+  declarations and path aliases.
+- `lib.rs`, `checksum.rs`, `crc32c.rs`, `slotted_page.rs`, `fixed_tree/*`,
+  `range_mutation.rs`, `draft_store/*`, `live_writer/*`, `snapshot/*`,
+  `immutable_output.rs`, and the update-ipsets benchmark scenarios.
+- Release `perf`, `perf annotate`, `strace -c`, allocation/RSS/descriptor/file
+  measurements, and repeated public-SDK benchmark baselines on the reference
+  Linux workstation.
+- The complete local coverage run and focused inspection of explicit-validation
+  integration tests and `validation/retirement.rs`.
+- `LMDB/lmdb @ 567292b5d4896d558c7f4fffbf711b86432cc15a`,
+  `libraries/liblmdb/mdb.c:2661-2675,3013-3075,4103-4175,4601-4617`:
+  dirty pages are touched once and flushed before meta publication.
+- `cberner/redb @ beb7c8ec7af5c4c2a37867301b5289cc0b84f01b`,
+  `src/tree_store/btree_mutator.rs:575-624` and
+  `src/tree_store/btree.rs:164-203`: uncommitted page checksums are explicitly
+  deferred and finalized only for dirty uncommitted pages.
+
+#### Affected contracts and surfaces
+
+- The active Rust module boundary, all main-file page producers, commit
+  preparation and durability ordering, COW range mutation, allocator and
+  retirement changes, membership/catalog mutation, metadata pages, compact
+  snapshots, explicit validation/recovery, public Rust workflows, and the thin
+  C boundary.
+- Tests, fixtures, benchmarks, source inventories, coverage evidence,
+  complexity/size claims, SDK documentation, the Rust project skill, `AGENTS.md`,
+  both v4 specifications, and this SOW's prior acceptance claims.
+- Go remains out of scope until the repaired Rust implementation is accepted.
+  Phase-2 signing and general multi-file algebra remain out of scope.
+
+#### Existing patterns to reuse
+
+- The exact current public APIs, scalar interval-map property oracles, explicit
+  validator, crash subprocesses, fault injection, allocation counters,
+  descriptor/resource probes, and semantic conformance corpus remain evidence
+  where they demonstrably reach the active implementation.
+- The format's double-meta publication and transaction-private page identity
+  make commit-time page sealing natural: unpublished pages need not have a valid
+  CRC until they become reachable from the new meta.
+- Fixed-depth tree stacks and caller-budgeted page storage preserve bounded
+  memory without per-record allocations or external sorting files.
+
+#### Risk and blast radius
+
+- Trust is currently limited to specifically exercised semantic behavior; Rust
+  release suitability, performance completion, and update-ipsets improvement
+  are unproved.
+- Deleting obsolete files without a reviewed inventory could destroy protected
+  work or a real platform implementation. User decision 75 resolves this risk:
+  first commit the complete relevant tracked state, including the 893-line
+  uncommitted obsolete workspace, and only then delete the exact reviewed
+  40-file set. Git history therefore preserves every deleted byte.
+- Deferring CRCs must never publish an unsealed page. Commit failure before meta
+  publication must leave the old generation authoritative; failure after meta
+  writing begins remains `OutcomeUnknown`. Explicit validation must accept every
+  successful output and detect damaged committed pages.
+- Optimizing by removing bounds/type/arithmetic checks would trade memory safety
+  for speed and is prohibited. The target is removal of maintenance,
+  housekeeping, redundant traversal/copying, and repeated durable work.
+- Changes affect the writer's most sensitive correctness path. Each slice must
+  be independently reversible by ordinary commits and validated before the next
+  slice; no worktree reset or unrelated-file cleanup is allowed.
+
+#### Sensitive-data handling plan
+
+- All inventories, profiles, tests, fixtures, and benchmarks use repository
+  paths and synthetic addresses/feeds/metadata. Durable artifacts will contain
+  no secrets, customer data, personal data, private endpoints, operational
+  credentials, or workstation-specific external-source paths.
+
+#### Approved decision and implementation plan
+
+User decision 74A selects the long-term-best trust reset rather than a surgical
+CRC/performance patch.
+
+User decision 75 authorizes deletion of the exact 40-file unreachable set below
+only after the current relevant tracked state is committed. Unrelated untracked
+build directories, generated files, and binaries are not part of that
+preservation commit.
+
+1. Generate a canonical source inventory from compiler dependency manifests for
+   production, tests, features, and supported targets. Classify every tracked
+   source as active, test-only, platform-specific, generated, or obsolete.
+2. Map every Phase-1 invariant and public operation to the exact compiled call
+   path, public black-box evidence, explicit validation evidence, fault/crash
+   evidence, and measured work. Source existence is not proof.
+3. Present the exact obsolete-file deletion set and protected-content findings
+   for explicit approval. Then remove only the approved set, eliminate
+   misleading core path aliases and broad dead-code suppression, and make an
+   unclassified production source or unwired required module fail automation.
+4. Add test-only work accounting. Ordinary ingestion must perform zero
+   data-page CRC validation/sealing; commit must seal each reachable dirty main
+   page once; committed pages may be copied at most once per transaction; no
+   input record may trigger synchronization, PID lookup, allocation, temporary
+   file creation, or unrelated maintenance.
+5. Repair the core in measured slices: commit-time CRC sealing; real in-place
+   private-page mutation and bounded write-back access; one traversal for one
+   logical range edit; ordered streaming snapshot construction; and one-pass
+   retention that derives preserved/new values while ingesting instead of
+   rewriting survivors.
+6. After each slice, run public semantic/property tests, explicit validation,
+   crash/fault tests, work counters, and release profiles. Stop on any need to
+   change caller-visible semantics or the approved format.
+7. Run the complete Rust/C/conformance/resource/portability gates and the final
+   update-ipsets-shaped acceptance matrix. Do not begin Go until the user accepts
+   this evidence.
+
+#### Validation plan
+
+- Compiler-derived source inventory must account for every tracked Rust source
+  and distinguish real target-specific code from obsolete alternative graphs.
+- Public operation tests must reopen every successful file and invoke explicit
+  full validation. Randomized direct, retention, and membership behavior must
+  match independent scalar/name-based models.
+- Add committed-page corruption, unsealed-page prevention, commit crash-point,
+  abort, source error, cancellation, tiny-budget, cache-eviction, sparse-file,
+  and old-reader reclamation coverage around the repaired paths.
+- Treat coverage as a discovery signal, not a percentage gate. Every critical
+  invariant branch needs an intentional test, including nonempty retirement
+  validation and all final page producers.
+- On the reference host, require five consecutive one-million-input release
+  runs with each direct replacement, retention refresh, and compact snapshot at
+  or below one second, while retaining bounded memory/descriptors, zero ordinary
+  temporary files, valid committed outputs, and near-linear larger-scale work.
+- Run formatting, warnings-denied Clippy/rustdoc, current and Rust 1.74.1 test
+  matrices, generated C artifacts and native C programs, conformance, sanitizer,
+  Valgrind, same-failure searches, and the SOW audit. Native remote platform
+  execution remains permission-gated.
+
+#### Compiled-source inventory result
+
+The inventory resolves path aliases such as `src/live_writer/../...` before
+classification. Without normalization, eight active platform/test files are
+falsely reported as unreachable.
+
+- Database crate: 281 tracked source files; 198 occur in at least one supported
+  production graph; 241 occur in at least one supported library-test graph; 40
+  occur in neither. The production graphs contain 185 files/50,888 physical
+  lines on Linux, 190/53,076 on Windows, 185/50,905 on macOS, and 185/50,917 on
+  FreeBSD. The four-target union is 54,373 physical lines. These physical counts
+  include any inline `cfg(test)` text in an otherwise production file, so they
+  are a size signal rather than an executable-line claim.
+- C-ABI crate: all 30 tracked source files occur in a supported production or
+  test graph; none is unwired. Its tracked source is 10,666 physical lines,
+  including its test module. The unwired-source defect is confined to the
+  database crate.
+- The 40 unreachable database files occupy 3,878,665 bytes. Thirty-nine match
+  their committed contents. The remaining file,
+  `v4/rust/iprange-livedb/src/os/linux/live_writer/live_normal_range.rs`, has
+  893 inserted and one deleted uncommitted line. It remains protected until the
+  user explicitly decides its disposition.
+- Removing broad `allow(dead_code)` attributes only in an isolated diagnostic
+  copy exposes 26 additional unused items inside the active graph. This is
+  separate from the 40 wholly unreachable files and requires caller/invariant
+  mapping before removal.
+
+The exact wholly unreachable set is:
+
+```text
+v4/rust/iprange-livedb/src/bitmap_cow.rs
+v4/rust/iprange-livedb/src/bitmap_cow/selective_finalization.rs
+v4/rust/iprange-livedb/src/bitmap_page.rs
+v4/rust/iprange-livedb/src/bitmap_reader.rs
+v4/rust/iprange-livedb/src/blob_page.rs
+v4/rust/iprange-livedb/src/blob_reader.rs
+v4/rust/iprange-livedb/src/crc32c.rs
+v4/rust/iprange-livedb/src/error.rs
+v4/rust/iprange-livedb/src/os.rs
+v4/rust/iprange-livedb/src/os/linux.rs
+v4/rust/iprange-livedb/src/os/linux/live_cleanup.rs
+v4/rust/iprange-livedb/src/os/linux/live_reader.rs
+v4/rust/iprange-livedb/src/os/linux/live_writer.rs
+v4/rust/iprange-livedb/src/os/linux/live_writer/live_normal_range.rs
+v4/rust/iprange-livedb/src/os/linux/live_writer/live_reclaim.rs
+v4/rust/iprange-livedb/src/page.rs
+v4/rust/iprange-livedb/src/page_number_index.rs
+v4/rust/iprange-livedb/src/page_source.rs
+v4/rust/iprange-livedb/src/private_page_pool.rs
+v4/rust/iprange-livedb/src/private_page_pool/selective_finalization.rs
+v4/rust/iprange-livedb/src/process_identity.rs
+v4/rust/iprange-livedb/src/range_builder.rs
+v4/rust/iprange-livedb/src/range_ownership_walk.rs
+v4/rust/iprange-livedb/src/range_page.rs
+v4/rust/iprange-livedb/src/range_pool_sink.rs
+v4/rust/iprange-livedb/src/range_reader.rs
+v4/rust/iprange-livedb/src/range_root_proof.rs
+v4/rust/iprange-livedb/src/range_staging.rs
+v4/rust/iprange-livedb/src/reclamation_finalizer.rs
+v4/rust/iprange-livedb/src/reservation.rs
+v4/rust/iprange-livedb/src/retirement_page.rs
+v4/rust/iprange-livedb/src/retirement_reader.rs
+v4/rust/iprange-livedb/src/retirement_writer.rs
+v4/rust/iprange-livedb/src/sequential_assignment.rs
+v4/rust/iprange-livedb/src/sidecar.rs
+v4/rust/iprange-livedb/src/sidecar_transition.rs
+v4/rust/iprange-livedb/src/writer_fixed_point.rs
+v4/rust/iprange-livedb/src/writer_result_contract.rs
+v4/rust/iprange-livedb/src/writer_transaction_contract.rs
+v4/rust/iprange-livedb/src/writer_transaction_core.rs
+```
+
+#### Phase-1 compiled-path and proof map
+
+This map records whether the current public path reaches the compiled mechanism.
+It does not declare correctness merely because a test exists.
+
+| Contract surface | Compiled owner and public path | Current independent evidence | Trust-reset result |
+| --- | --- | --- | --- |
+| Exact identity, constants, meta encoding, and meta selection (sections 1-4) | `contract.rs:96-209`, `bootstrap.rs:101-302`, and `database.rs:382-397`; every reader/writer begins there | `public_open.rs:85`, `conformance.rs:6`, and explicit validation tests | Wired. Static/geometry behavior has executable evidence; misleading CRC module alias remains. |
+| Common page identity, COW ownership, and slotted encoding (sections 5 and 7) | `slotted_page.rs:17-191`, `fixed_tree.rs`, and `draft_store/storage.rs` | fixed-tree/range property tests plus `validation.rs:156` corruption evidence | Wired, but `Builder::finish` CRC-seals every rebuild. This violates the necessary-work design and dominates the hot path. |
+| Canonical range map and arrival-order assignment (section 6) | public direct/workflow calls reach `range_mutation.rs:79-209`, then `fixed_tree/insert.rs:29` and `fixed_tree/delete.rs:19` | `advanced_transactions.rs:66`, `workflow_properties.rs:55`, and full-space IPv6 tests | Semantics exercised. Simple edits repeat predecessor/successor descents, full-page rebuilds, writes, and CRCs; no work-accounting proof exists. |
+| Feed catalog and lowest-free reusable indexes (section 8) | membership APIs reach `draft_store/catalog.rs:12-82`, `feed_catalog.rs:23-201`, and `used_bitmap/mutation.rs` | `membership_catalog.rs:63`, `feed_lifecycle.rs:78`, and `feed_workflow_properties.rs:59` | Wired and semantically exercised. Necessary-work and large sparse-index scaling remain unproved. |
+| SDK-owned canonical membership values, dictionary, and deltas (section 9) | `draft_store/membership.rs:32-183`, `membership_dictionary.rs:79-188`, and `membership_delta.rs` | `membership_mutation.rs:56` and randomized/sparse import tests | Wired and independently modeled at small domains. Cache overflow, spill aggregation, and work per distinct combination still need measured proof. |
+| Generic blobs and opaque zlib metadata (sections 10-11) | `blob_tree.rs`, `metadata.rs:24-361`, and `draft_store/metadata.rs:9-37`; public reader/writer methods call them directly | maximum-size, exact-byte, absence, atomicity, cancellation, and budget tests | Wired. Metadata compression is outside commit as required; no current correctness gap found. |
+| Hierarchical used/free bitmaps and retirement (sections 12-13) | `used_bitmap/*`, `free_bitmap/*`, `retirement.rs`, and `draft_store.rs:227-459` | reclamation, cancellation, allocator, and multilevel-tree tests | Wired. Explicit validation has no public test with a nonempty retirement tree; `validation/retirement.rs` had only 6.36% diagnostic line coverage. |
+| Mutation atomicity, budgets, abort, and durable commit (section 14) | `LiveWriter::mutate_with_cache` at `live_writer.rs:299`, abort at `live_writer.rs:411-481`, and commit at `live_writer/commit.rs:36-211` | public source/cancellation/cleanup tests and subprocess crash tests at `live_crash_tests.rs:93-335` | Outcome model and crash selection are exercised. There is no commit-time dirty-page sealing stage because pages are prematurely sealed and written throughout mutation. |
+| External live-reader coordination and lifecycle (section 15) | `live_sidecar.rs:81-468`, `live_reader.rs:65-230`, and `live_lifecycle/*` | live-generation, old-reader, close-retry, transition, replacement, and validation pinning tests | Linux native path is exercised and all target paths compile. Native Windows/macOS/FreeBSD runtime/crash proof remains permission-gated and unperformed. |
+| Advanced and high-level public operations (section 16) | `live_writer/direct.rs`, `direct_workflow.rs`, `feed_workflow.rs`, `membership.rs`, and `membership_import.rs`; `c_abi_support.rs` delegates to the same paths | randomized direct/feed/import models, lifecycle tests, source failures, cancellation, and exact reports | Public wiring exists. Direct replacement, retention, and snapshot fail the accepted one-million-input performance target; retention performs a second rewrite pass. |
+| Exact 129-bit cardinality (section 17) | `cardinality.rs:7-180` and workflow comparison/accounting | exhaustive edge/unit checks and full-IPv6 public workflows | Wired and currently has direct independent evidence; no gap found. |
+| Explicit bounded validation (section 18) | sole public entry `validation.rs:36`; graph walkers live under `validation/*` | public clean/corrupt/live/cancellation/sink tests | Explicit rather than implicit as required. Critical branch gaps remain for nonempty retirement and low-coverage blob/bitmap paths. |
+| Best-verifiable recovery (section 19) | `recovery/api.rs:18-77`, candidate inspection, guarded sources, scanners/builders, scratch, and terminal publication | public immutable/offline/live direct and membership recovery plus stale-identity/cancellation tests | Wired, but broad dead-code suppression hides unused helpers and diagnostic coverage leaves terminal/build branches weak. It is not yet trusted branch by branch. |
+| Compact snapshot and namespace publication (section 20) | `snapshot/api.rs:12`, `snapshot/build.rs:19-208`, `immutable_output.rs`, and `publication/*` | public direct/membership/live/replacement/failure/residue tests | Semantics and publication are wired. Ordered records are fed back through random B+tree mutation (`immutable_output.rs:274-284`), causing measured read/write amplification and unacceptable performance. |
+| Shared conformance (section 21) | public readers open committed `v4/conformance` corpus | `conformance.rs:6` rejects manifest/file drift and opens Rust fixtures | Rust-first evidence only. Bidirectional Go production/cross-process proof is intentionally blocked until Rust acceptance. |
+| Normative algorithms and thin C binding (section 22/C ABI) | active core modules above; all 30 C-ABI source files are compiler-reachable and `c_abi_support.rs` delegates to Rust public behavior | generated-header/manifest and native C behavior gates previously pass | Wiring is established, but performance and any repaired semantics must be re-proved through both Rust and C surfaces. |
+
+Cross-cutting measured-work failures override green semantic rows: direct
+ingestion performs about 116,000 instructions and 66,900 cycles per input,
+`Builder::finish` accounts for 54.01% of sampled core cycles, direct ingestion
+issues approximately one full-page write and one process-ID lookup per input,
+and ordered snapshot construction performs approximately 10.9 page reads plus
+one page write per record at 10,000 records. These are active compiled paths,
+not obsolete-source artifacts.
+
+#### Artifact impact and open decisions
+
+- Update the architecture and binary-format specs to state the necessary-work
+  hot-path rule and exact commit-time main-page sealing order. Update
+  `AGENTS.md`, the Rust project skill, SDK guide, benchmark evidence, and this
+  SOW so no artifact repeats a source-existence or passing-test-count claim as
+  wiring/performance proof.
+- No end-user/operator output skill exists. The released C CLI documentation is
+  unaffected because v4 remains unreleased.
+- The audit and non-destructive enforcement work may proceed. Destruction is
+  authorized by user decision 75 after the preservation commit records the
+  complete relevant tracked state. Any newly discovered caller-visible behavior,
+  format change, or risk acceptance is also a numbered user decision.
 
 ### Phase-1 core-SDK production-hardening gate
 
