@@ -240,6 +240,7 @@ impl ExactFeedState {
         self.require_active(writer)?;
         let cancellation = self.cancellation.clone();
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
+        writer.flush_draft_pages()?;
         let report = self.prepare_report(writer)?;
         if report.logical_change == LogicalChange::NoChange {
             writer.discard_draft()?;

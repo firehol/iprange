@@ -7,7 +7,6 @@ use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, 
 use crate::contract::{
     u16_le, u32_le, u64_le, MetaV4, MAX_METADATA_UNCOMPRESSED, PAGE_MAGIC, PAGE_SIZE,
 };
-use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::file_io;
 use crate::fixed_tree::Store;
@@ -357,8 +356,6 @@ fn encode_page(
     put_u16(page, 36, bytes.len() as u16);
     put_u64(page, 40, logical_offset);
     page[DATA_OFFSET..DATA_OFFSET + bytes.len()].copy_from_slice(bytes);
-    let checksum = crc32c::crc32c_with_zeroed(page, 28, 4).unwrap();
-    put_u32(page, 28, checksum);
 }
 
 pub(crate) struct Inflater<'a> {

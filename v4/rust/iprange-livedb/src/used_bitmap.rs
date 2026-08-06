@@ -3,7 +3,7 @@
 use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::put_u64;
+use crate::slotted_page::{put_u32, put_u64};
 
 mod mutation;
 mod page;
@@ -48,6 +48,7 @@ fn touch<S: Store>(
     }
     let private = store.allocate()?;
     put_u64(&mut page, 8, store.target_txn());
+    put_u32(&mut page, 28, 0);
     stamp(&mut page)?;
     store.write(private, &page)?;
     retired.push(page_number)?;

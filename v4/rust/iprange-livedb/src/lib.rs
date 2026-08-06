@@ -42,6 +42,7 @@ mod membership_tree;
 mod membership_view;
 mod metadata;
 mod name_binding;
+mod page_checksum;
 mod path;
 pub mod publication;
 mod random;

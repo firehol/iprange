@@ -87,6 +87,43 @@ pub(crate) fn assign<K: IpKey, S: RangeStore>(
     replace(store, root, record_count, from, to, Some(value))
 }
 
+pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    from: K,
+    to: K,
+    value: u32,
+) -> Result<bool> {
+    if from > to {
+        return Err(Error::InvalidArgument("range start is after its end"));
+    }
+    let range = Range { from, to, value };
+    let encoded = EncodedRange::new(range);
+    let mut retired = RetiredPages::new();
+    match fixed_tree::insert_if_local_gap::<RangeCodec<K>, S, _>(
+        store,
+        root,
+        encoded.as_slice(),
+        &mut retired,
+        |previous, next| local_gap_accepts::<K>(previous, next, range),
+    )? {
+        fixed_tree::LocalInsert::Inserted => {
+            if !retired.as_slice().is_empty() {
+                return Err(Error::Corrupt("private range insertion retired a page"));
+            }
+            *record_count = record_count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow("range record count"))?;
+            store.range_record_added(value)?;
+            Ok(true)
+        }
+        fixed_tree::LocalInsert::General => {
+            replace(store, root, record_count, from, to, Some(value))
+        }
+    }
+}
+
 pub(crate) fn clear<K: IpKey, S: RangeStore>(
     store: &mut S,
     root: &mut u32,
@@ -373,8 +410,35 @@ fn read_at_or_after<K: IpKey, S: Store>(store: &S, root: u32, key: K) -> Result<
         .transpose()
 }
 
+fn local_gap_accepts<K: IpKey>(
+    previous: Option<&[u8]>,
+    next: Option<&[u8]>,
+    range: Range<K>,
+) -> Result<bool> {
+    if let Some(previous) = previous {
+        let previous = decode_cell::<K>(previous)?;
+        if previous.to >= range.from
+            || (previous.value == range.value && previous.to.checked_next() == Some(range.from))
+        {
+            return Ok(false);
+        }
+    }
+    if let Some(next) = next {
+        let next = decode_cell::<K>(next)?;
+        if next.from <= range.to
+            || (next.value == range.value && range.to.checked_next() == Some(next.from))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn decode<K: IpKey>(cell: LeafBuf) -> Result<Range<K>> {
-    let cell = cell.as_slice();
+    decode_cell(cell.as_slice())
+}
+
+fn decode_cell<K: IpKey>(cell: &[u8]) -> Result<Range<K>> {
     RangeCodec::<K>::validate_leaf(cell)?;
     Ok(Range {
         from: K::read_le(cell),

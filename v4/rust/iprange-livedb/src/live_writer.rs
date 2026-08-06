@@ -296,6 +296,19 @@ impl LiveWriter {
         self.mutate_with_cache(false, operation)
     }
 
+    pub(crate) fn flush_draft_pages(&mut self) -> Result<()> {
+        let Some(draft) = self.draft.as_mut() else {
+            return Ok(());
+        };
+        DraftStore::new(
+            &self.file,
+            self.base.meta.page_count,
+            self.budget.pages(),
+            draft,
+        )
+        .flush_page_cache()
+    }
+
     fn mutate_with_cache<T>(
         &mut self,
         cache_pages: bool,
@@ -322,7 +335,7 @@ impl LiveWriter {
                     self.base.meta.page_count,
                     self.budget.pages(),
                     draft,
-                )
+                )?
             };
             operation(&mut store)
         };

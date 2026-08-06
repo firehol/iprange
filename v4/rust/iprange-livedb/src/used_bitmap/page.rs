@@ -177,11 +177,7 @@ pub(super) fn page_has_candidate(
     }
 }
 
-pub(super) fn stamp(page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-    put_u32(page, 28, 0);
-    let checksum = crate::crc32c::crc32c_with_zeroed(page, 28, 4)
-        .ok_or(Error::Corrupt("used bitmap checksum field is invalid"))?;
-    put_u32(page, 28, checksum);
+pub(super) fn stamp(_page: &mut [u8; PAGE_SIZE]) -> Result<()> {
     Ok(())
 }
 

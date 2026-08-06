@@ -251,6 +251,7 @@ impl ExactDirectState {
         self.require_active(writer)?;
         let base = writer.base;
         let cancellation = self.cancellation.clone();
+        writer.flush_draft_pages()?;
         let input_meta = writer.draft.as_ref().unwrap().meta;
         let input_snapshot = (
             input_meta.range_record_count,
@@ -281,6 +282,7 @@ impl ExactDirectState {
     ) -> Result<WorkflowReport> {
         self.require_active(writer)?;
         self.require_retention_prepared(writer, retention_prepared)?;
+        writer.flush_draft_pages()?;
         let (input_intervals, input_addresses) = self.input_summary(writer, input_snapshot)?;
         let after = writer.draft.as_ref().unwrap().meta;
         let comparison = compare_maps(&writer.file, base, &after, &self.cancellation)

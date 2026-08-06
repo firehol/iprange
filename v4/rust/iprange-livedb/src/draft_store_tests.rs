@@ -175,3 +175,50 @@ fn cached_page_cannot_bypass_the_current_page_limit() {
         Err(Error::Corrupt(_))
     ));
 }
+
+#[test]
+fn mutation_defers_each_data_page_checksum_until_prepare() {
+    let test = TestFile::new();
+    let creation = empty_direct_meta(1);
+    publish(&test.file, creation, 0);
+    publish(&test.file, creation, 1);
+    let budget = PageBudget {
+        max_heap_bytes: 4 * 1024 * 1024,
+        max_private_pages: 20_000,
+        max_growth_pages: 20_000,
+    };
+    let mut draft = Draft::new(creation, [3; 16]).unwrap();
+    crate::page_checksum::work::reset();
+    {
+        let mut store = DraftStore::new_cached(&test.file, creation.page_count, budget, &mut draft);
+        for key in 0..2_000_u32 {
+            store
+                .assign_v4(Ipv4Key(key * 2), Ipv4Key(key * 2), key)
+                .unwrap();
+        }
+        assert_eq!(crate::page_checksum::work::count(), 0);
+        store.prepare().unwrap();
+    }
+
+    let mut current_pages = 0;
+    for page_number in 2..draft.meta.page_count {
+        let mut page = [0; PAGE_SIZE];
+        file_io::read_page(
+            &test.file,
+            page_number as u32,
+            draft.meta.page_count,
+            &mut page,
+        )
+        .unwrap();
+        if page[..4] == crate::contract::PAGE_MAGIC
+            && crate::contract::u64_le(&page, 8) == draft.meta.txn_id
+        {
+            current_pages += 1;
+            assert_eq!(
+                u32_le(&page, 28),
+                crate::crc32c::crc32c_with_zeroed(&page, 28, 4).unwrap()
+            );
+        }
+    }
+    assert_eq!(crate::page_checksum::work::count(), current_pages);
+}

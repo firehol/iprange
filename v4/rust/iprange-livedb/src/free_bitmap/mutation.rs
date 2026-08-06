@@ -3,7 +3,7 @@
 use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::RetiredPages;
-use crate::slotted_page::{put_u64, HEADER_SIZE};
+use crate::slotted_page::{put_u32, put_u64, HEADER_SIZE};
 
 use super::{
     branch_child, child_index, coverage, first_leaf_word, first_summary, leaf_word_index,
@@ -347,6 +347,7 @@ fn copy_private<S: BitmapStore>(
 ) -> Result<(u32, [u8; PAGE_SIZE], Header)> {
     let private = store.allocate_bitmap_page()?;
     put_u64(&mut page, 8, store.target_txn());
+    put_u32(&mut page, 28, 0);
     stamp(&mut page)?;
     store.write(private, &page)?;
     retired.push(page_number)?;

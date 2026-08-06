@@ -1,8 +1,10 @@
 //! Optional bounded cache for pages owned or revisited by one draft.
 
 use crate::contract::PAGE_SIZE;
+use crate::error::Result;
+use crate::slotted_page::put_u32;
 
-const MAX_CACHE_BYTES: u64 = 4 * 1024 * 1024;
+const HEADER_SIZE: usize = 32;
 
 #[derive(Debug)]
 pub(super) struct PageCache {
@@ -13,6 +15,7 @@ pub(super) struct PageCache {
 struct Slot {
     page_number: u32,
     valid: bool,
+    dirty: bool,
     bytes: [u8; PAGE_SIZE],
 }
 
@@ -21,6 +24,7 @@ impl Slot {
         Self {
             page_number: 0,
             valid: false,
+            dirty: false,
             bytes: [0; PAGE_SIZE],
         }
     }
@@ -28,8 +32,7 @@ impl Slot {
 
 impl PageCache {
     pub(super) fn new(heap_budget: u64) -> Self {
-        let bytes = heap_budget.min(MAX_CACHE_BYTES);
-        let count = usize::try_from(bytes / std::mem::size_of::<Slot>() as u64).unwrap_or(0);
+        let count = usize::try_from(heap_budget / std::mem::size_of::<Slot>() as u64).unwrap_or(0);
         let mut slots = Vec::new();
         if count == 0 || slots.try_reserve_exact(count).is_err() {
             return Self { slots };
@@ -49,13 +52,103 @@ impl PageCache {
         true
     }
 
+    #[cfg(test)]
     pub(super) fn store(&mut self, page_number: u32, bytes: &[u8; PAGE_SIZE]) {
         let Some(index) = self.index(page_number) else {
             return;
         };
         self.slots[index].page_number = page_number;
         self.slots[index].valid = true;
+        self.slots[index].dirty = false;
         self.slots[index].bytes.copy_from_slice(bytes);
+    }
+
+    pub(super) fn header(&self, page_number: u32) -> Option<[u8; HEADER_SIZE]> {
+        let slot = self.slot(page_number)?;
+        if !slot.valid || slot.page_number != page_number {
+            return None;
+        }
+        Some(slot.bytes[..HEADER_SIZE].try_into().expect("fixed header"))
+    }
+
+    pub(super) fn store_dirty<F>(
+        &mut self,
+        page_number: u32,
+        bytes: &[u8; PAGE_SIZE],
+        tag: u32,
+        flush: &mut F,
+    ) -> Result<bool>
+    where
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let Some(index) = self.prepare_slot(page_number, flush)? else {
+            return Ok(false);
+        };
+        let slot = &mut self.slots[index];
+        slot.page_number = page_number;
+        slot.valid = true;
+        slot.dirty = true;
+        slot.bytes.copy_from_slice(bytes);
+        put_u32(&mut slot.bytes, 28, tag);
+        Ok(true)
+    }
+
+    pub(super) fn prepare<F>(&mut self, page_number: u32, flush: &mut F) -> Result<bool>
+    where
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        Ok(self.prepare_slot(page_number, flush)?.is_some())
+    }
+
+    pub(super) fn store_clean<F>(
+        &mut self,
+        page_number: u32,
+        bytes: &[u8; PAGE_SIZE],
+        flush: &mut F,
+    ) -> Result<bool>
+    where
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let Some(index) = self.prepare_slot(page_number, flush)? else {
+            return Ok(false);
+        };
+        let slot = &mut self.slots[index];
+        slot.page_number = page_number;
+        slot.valid = true;
+        slot.dirty = false;
+        slot.bytes.copy_from_slice(bytes);
+        Ok(true)
+    }
+
+    pub(super) fn flush<F>(&mut self, flush: &mut F) -> Result<()>
+    where
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        for slot in &mut self.slots {
+            if slot.valid && slot.dirty {
+                flush(slot.page_number, &slot.bytes)?;
+                slot.dirty = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_slot<F>(&mut self, page_number: u32, flush: &mut F) -> Result<Option<usize>>
+    where
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let Some(index) = self.index(page_number) else {
+            return Ok(None);
+        };
+        let slot = &mut self.slots[index];
+        if slot.valid && slot.page_number != page_number {
+            if slot.dirty {
+                flush(slot.page_number, &slot.bytes)?;
+            }
+            slot.valid = false;
+            slot.dirty = false;
+        }
+        Ok(Some(index))
     }
 
     fn slot(&self, page_number: u32) -> Option<&Slot> {
@@ -106,9 +199,6 @@ mod tests {
         let slot = std::mem::size_of::<Slot>() as u64;
         assert_eq!(PageCache::new(slot - 1).len(), 0);
         assert_eq!(PageCache::new(slot).len(), 1);
-        assert!(
-            (PageCache::new(u64::MAX).len() * std::mem::size_of::<Slot>()) as u64
-                <= MAX_CACHE_BYTES
-        );
+        assert_eq!(PageCache::new(slot * 3).len(), 3);
     }
 }

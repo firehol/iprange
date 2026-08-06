@@ -148,10 +148,6 @@ fn stamp(page: &mut [u8; PAGE_SIZE]) -> Result<()> {
         nonzero_children(page)?
     };
     put_u16(page, 16, count as u16);
-    put_u32(page, 28, 0);
-    let checksum = crc32c::crc32c_with_zeroed(page, 28, 4)
-        .ok_or(Error::Corrupt("free bitmap checksum field is invalid"))?;
-    put_u32(page, 28, checksum);
     Ok(())
 }
 

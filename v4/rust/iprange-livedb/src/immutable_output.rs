@@ -2,7 +2,9 @@
 
 use std::fs::File;
 
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_SIZE};
+use crate::contract::{
+    u64_le, AddressFamily, MetaV4, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_MAGIC, PAGE_SIZE,
+};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
@@ -12,6 +14,7 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::membership_delta::Delta;
 use crate::membership_dictionary::{self, State};
 use crate::metadata;
+use crate::page_checksum;
 use crate::range_mutation;
 use crate::used_bitmap::{self, Kind};
 
@@ -269,7 +272,7 @@ impl Builder {
     fn assign_range<K: IpKey>(&mut self, from: K, to: K, value: u32) -> Result<()> {
         let mut root = self.meta.range_root;
         let mut count = self.meta.range_record_count;
-        if !range_mutation::assign(self, &mut root, &mut count, from, to, value)? {
+        if !range_mutation::assign_private(self, &mut root, &mut count, from, to, value)? {
             return Err(Error::Corrupt("immutable output range was not inserted"));
         }
         self.meta.range_root = root;
@@ -326,6 +329,7 @@ impl Builder {
 
 fn finish(output: &Builder) -> Result<()> {
     output.require_active()?;
+    seal_pages(output)?;
     let bytes = output
         .meta
         .page_count
@@ -336,6 +340,23 @@ fn finish(output: &Builder) -> Result<()> {
     output.meta.encode_into(&mut page);
     file_io::write_exact_at(&output.file, &page, 0)?;
     file_io::write_exact_at(&output.file, &page, PAGE_SIZE as u64)
+}
+
+fn seal_pages(output: &Builder) -> Result<()> {
+    for page_number in 2..output.meta.page_count {
+        let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;
+        let mut page = [0; PAGE_SIZE];
+        file_io::read_page(&output.file, page_number, output.meta.page_count, &mut page)?;
+        if page[..4] != PAGE_MAGIC || u64_le(&page, 8) != output.meta.txn_id {
+            return Err(Error::Corrupt("immutable output page ownership is invalid"));
+        }
+        page_checksum::seal(&mut page)?;
+        let offset = u64::from(page_number)
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(Error::ArithmeticOverflow("immutable output page offset"))?;
+        file_io::write_exact_at(&output.file, &page, offset)?;
+    }
+    Ok(())
 }
 
 impl Store for Builder {

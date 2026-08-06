@@ -38,11 +38,13 @@ pub(crate) struct Draft {
     base: MetaV4,
     pub(crate) meta: MetaV4,
     private_head: u32,
+    dirty_head: u32,
     allocator_retired: RetiredPages,
     private_pages: u64,
     growth_pages: u64,
     changed: bool,
     metadata_staged: bool,
+    range_tree_private: bool,
     membership_delta_root: u32,
     workflow: WorkflowState,
     operation_abandoned: bool,
@@ -68,11 +70,13 @@ impl Draft {
             base,
             meta,
             private_head: 0,
+            dirty_head: 0,
             allocator_retired: RetiredPages::new(),
             private_pages: 0,
             growth_pages: 0,
             changed: false,
             metadata_staged: false,
+            range_tree_private: false,
             membership_delta_root: 0,
             workflow: WorkflowState::None,
             operation_abandoned: false,
@@ -100,6 +104,7 @@ impl Draft {
         self.begin_workflow()?;
         self.meta.range_root = 0;
         self.meta.range_record_count = 0;
+        self.range_tree_private = true;
         Ok(())
     }
 
@@ -174,15 +179,21 @@ impl<'a> DraftStore<'a> {
         committed_page_count: u64,
         budget: PageBudget,
         draft: &'a mut Draft,
-    ) -> Self {
-        draft.discard_page_cache();
-        Self::new(file, committed_page_count, budget, draft)
+    ) -> Result<Self> {
+        let store = Self::new(file, committed_page_count, budget, draft);
+        store.flush_page_cache()?;
+        store.draft.discard_page_cache();
+        Ok(store)
     }
 
     pub(crate) fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
-        let changed = range_mutation::assign(self, &mut root, &mut count, from, to, value)?;
+        let changed = if self.draft.range_tree_private {
+            range_mutation::assign_private(self, &mut root, &mut count, from, to, value)?
+        } else {
+            range_mutation::assign(self, &mut root, &mut count, from, to, value)?
+        };
         self.draft.meta.range_root = root;
         self.draft.meta.range_record_count = count;
         self.draft.changed |= changed;
@@ -192,7 +203,11 @@ impl<'a> DraftStore<'a> {
     pub(crate) fn assign_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
-        let changed = range_mutation::assign(self, &mut root, &mut count, from, to, value)?;
+        let changed = if self.draft.range_tree_private {
+            range_mutation::assign_private(self, &mut root, &mut count, from, to, value)?
+        } else {
+            range_mutation::assign(self, &mut root, &mut count, from, to, value)?
+        };
         self.draft.meta.range_root = root;
         self.draft.meta.range_record_count = count;
         self.draft.changed |= changed;
@@ -238,7 +253,9 @@ impl<'a> DraftStore<'a> {
         self.finish_membership_deltas_with_checkpoint(checkpoint)?;
         checkpoint()?;
         self.release_private_pages(checkpoint)?;
-        self.finish_bitmap_shape(checkpoint)
+        self.finish_bitmap_shape(checkpoint)?;
+        checkpoint()?;
+        self.seal_private_pages(checkpoint)
     }
 
     pub(crate) fn select_reclamation<F>(
@@ -457,7 +474,9 @@ impl<'a> DraftStore<'a> {
         }
         let mut page = [0; PAGE_SIZE];
         self.read(page_number, &mut page)?;
-        if u32_le(&page, 0) != PRIVATE_MAGIC {
+        if u32_le(&page, 0) != PRIVATE_MAGIC
+            || crate::contract::u64_le(&page, 8) != self.draft.meta.txn_id
+        {
             return Err(Error::Corrupt("private page stack link is invalid"));
         }
         let next = u32_le(&page, 4);

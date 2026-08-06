@@ -1,7 +1,6 @@
 //! Shared fixed-record slotted-page primitives.
 
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
-use crate::crc32c;
 use crate::error::{Error, Result};
 
 pub(crate) const HEADER_SIZE: usize = 32;
@@ -185,9 +184,6 @@ impl<'a> Builder<'a> {
         put_u16(self.page, 16, self.item_count as u16);
         put_u16(self.page, 20, (HEADER_SIZE + self.item_count * 2) as u16);
         put_u16(self.page, 22, self.upper as u16);
-        let checksum = crc32c::crc32c_with_zeroed(self.page, 28, 4)
-            .ok_or(Error::Corrupt("page checksum field is invalid"))?;
-        put_u32(self.page, 28, checksum);
         Ok(())
     }
 }
@@ -223,9 +219,11 @@ mod tests {
         assert_eq!(header.item_count, 2);
         assert_eq!(cell(&page, &header, 0, 12).unwrap(), &[1; 12]);
         assert_eq!(cell(&page, &header, 1, 12).unwrap(), &[2; 12]);
+        assert_eq!(u32_le(&page, 28), 0);
+        crate::page_checksum::seal(&mut page).unwrap();
         assert_eq!(
             u32_le(&page, 28),
-            crc32c::crc32c_with_zeroed(&page, 28, 4).unwrap()
+            crate::crc32c::crc32c_with_zeroed(&page, 28, 4).unwrap()
         );
     }
 

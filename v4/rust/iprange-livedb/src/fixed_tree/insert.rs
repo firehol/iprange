@@ -26,6 +26,12 @@ struct LeafTarget {
     exists: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalInsert {
+    Inserted,
+    General,
+}
+
 pub(crate) fn insert<C: Codec, S: Store>(
     store: &mut S,
     root: &mut u32,
@@ -40,6 +46,69 @@ pub(crate) fn insert<C: Codec, S: Store>(
     }
     let target = locate_leaf::<C, S>(store, root, key, retired)?;
     edit_leaf::<C, S>(store, root, leaf_cell, target)
+}
+
+pub(crate) fn insert_if_local_gap<C, S, F>(
+    store: &mut S,
+    root: &mut u32,
+    leaf_cell: &[u8],
+    retired: &mut RetiredPages,
+    mut accepts: F,
+) -> Result<LocalInsert>
+where
+    C: Codec,
+    S: Store,
+    F: FnMut(Option<&[u8]>, Option<&[u8]>) -> Result<bool>,
+{
+    require_leaf::<C>(leaf_cell)?;
+    if *root == 0 {
+        *root = new_leaf::<C, S>(store, leaf_cell)?;
+        return Ok(LocalInsert::Inserted);
+    }
+
+    let key = C::read_key(leaf_cell, 0)?;
+    let target = locate_leaf::<C, S>(store, root, key, retired)?;
+    if !retired.as_slice().is_empty() {
+        return Err(Error::Corrupt("private B+tree contains a committed page"));
+    }
+    if target.exists {
+        return Ok(LocalInsert::General);
+    }
+
+    let previous = if target.index > 0 {
+        Some(page::codec_cell::<C>(
+            &target.source,
+            &target.header,
+            target.index - 1,
+        )?)
+    } else if target.path.frames[..target.path.depth]
+        .iter()
+        .all(|frame| frame.index == 0)
+    {
+        None
+    } else {
+        return Ok(LocalInsert::General);
+    };
+    let next = if target.index < target.header.item_count {
+        Some(page::codec_cell::<C>(
+            &target.source,
+            &target.header,
+            target.index,
+        )?)
+    } else if target.path.frames[..target.path.depth]
+        .iter()
+        .all(|frame| frame.index + 1 == frame.item_count)
+    {
+        None
+    } else {
+        return Ok(LocalInsert::General);
+    };
+    if !accepts(previous, next)? {
+        return Ok(LocalInsert::General);
+    }
+
+    edit_leaf::<C, S>(store, root, leaf_cell, target)?;
+    Ok(LocalInsert::Inserted)
 }
 
 fn require_leaf<C: Codec>(leaf_cell: &[u8]) -> Result<()> {

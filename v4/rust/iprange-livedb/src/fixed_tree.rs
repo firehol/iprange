@@ -13,7 +13,7 @@ mod read;
 mod walk;
 
 pub(crate) use delete::delete;
-pub(crate) use insert::insert;
+pub(crate) use insert::{insert, insert_if_local_gap, LocalInsert};
 use page::{branch_child, build_edit, copy_page, key_at, lower_bound, parse, CellBuf, Edit};
 pub(crate) use read::{at_or_after, predecessor, LeafBuf};
 pub(crate) use walk::{discard_private_tree, retire_tree};
@@ -118,11 +118,13 @@ impl RetiredPages {
 struct Frame {
     page_number: u32,
     index: usize,
+    item_count: usize,
 }
 
 const EMPTY_FRAME: Frame = Frame {
     page_number: 0,
     index: 0,
+    item_count: 0,
 };
 
 struct Path {
@@ -162,7 +164,11 @@ fn private_path<C: Codec, S: Store>(
     while header.level > 0 {
         let (index, _) = lower_bound::<C>(&page, &header, key, false)?;
         let child = branch_child::<C>(&page, &header, index, store.page_limit())?;
-        path.push(Frame { page_number, index })?;
+        path.push(Frame {
+            page_number,
+            index,
+            item_count: header.item_count,
+        })?;
         let expected = Some(header.level - 1);
         let (private_child, child_page, child_header) =
             touch::<C, S>(store, child, expected, retired)?;

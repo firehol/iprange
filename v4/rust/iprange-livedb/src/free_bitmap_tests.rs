@@ -19,6 +19,14 @@ impl MemoryStore {
             forbidden: 0,
         }
     }
+
+    fn seal_current(&mut self) {
+        for page in &mut self.pages[2..] {
+            if page[..4] == PAGE_MAGIC && u64_le(page, 8) == self.txn {
+                crate::page_checksum::seal(page).unwrap();
+            }
+        }
+    }
 }
 
 impl Store for MemoryStore {
@@ -100,6 +108,7 @@ fn committed_path_is_copied_once_and_checksum_checked() {
         &mut RetiredPages::new(),
     )
     .unwrap();
+    store.seal_current();
     let committed = store.pages.clone();
     store.txn = 3;
 
@@ -122,6 +131,7 @@ fn committed_path_is_copied_once_and_checksum_checked() {
         &mut RetiredPages::new(),
     )
     .unwrap();
+    corrupt.seal_current();
     corrupt.pages[corrupt_root as usize][100] ^= 1;
     corrupt.txn = 3;
     assert!(take_lowest(

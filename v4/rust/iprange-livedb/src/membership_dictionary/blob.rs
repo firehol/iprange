@@ -222,7 +222,6 @@ fn write_leaf<S: Store, W: Words<S>>(
     for (index, value) in values[..count as usize].iter().enumerate() {
         put_u64(&mut page, LEAF_DATA + index * 8, *value);
     }
-    stamp(&mut page)?;
     store.write(page_number, &page)?;
     Ok(Node {
         offset: u64::from(offset_words) * 8,
@@ -308,11 +307,4 @@ fn flush<S: Store>(store: &mut S, level: &mut Level) -> Result<Node> {
     };
     *level = EMPTY_LEVEL;
     Ok(result)
-}
-
-fn stamp(page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-    let checksum = crate::crc32c::crc32c_with_zeroed(page, 28, 4)
-        .ok_or(Error::Corrupt("membership blob checksum field is invalid"))?;
-    put_u32(page, 28, checksum);
-    Ok(())
 }
