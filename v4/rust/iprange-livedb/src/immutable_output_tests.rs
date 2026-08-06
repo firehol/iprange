@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::cancellation::CancellationToken;
 use crate::database::ImmutableReader;
+use crate::key::IpKey;
 use crate::range_cursor::RangeDirection;
+use crate::range_tree;
+use crate::slotted_page;
 use crate::test_alloc::count_thread_allocations;
 use crate::validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl};
 
@@ -161,6 +164,53 @@ fn multi_level_direct_output_has_no_unreachable_build_pages() {
     }
     let finished = output.finish_owned().unwrap();
     assert_eq!(finished.meta.range_record_count, 2_000);
+    drop(finished.file);
+    validate_clean(&path.0);
+}
+
+#[test]
+fn branch_overflow_keeps_a_valid_one_child_right_edge() {
+    const LEAF_CAPACITY: usize =
+        (PAGE_SIZE - slotted_page::HEADER_SIZE) / (Ipv6Key::WIDTH * 2 + 4 + 2);
+    const BRANCH_CAPACITY: usize =
+        (PAGE_SIZE - slotted_page::HEADER_SIZE) / (Ipv6Key::WIDTH + 4 + 2);
+    const RECORD_COUNT: usize = LEAF_CAPACITY * BRANCH_CAPACITY + 1;
+
+    let path = TestPath::new("one-child-right-edge");
+    let mut output = builder(&path.0, direct_spec(AddressFamily::Ipv6), generous_budget());
+    for index in 0..RECORD_COUNT {
+        let address = Ipv6Key::from_u128((index as u128) * 2);
+        output
+            .push_direct_v6(address, address, index as u32)
+            .unwrap();
+    }
+    let finished = output.finish_owned().unwrap();
+
+    let mut root_page = [0; PAGE_SIZE];
+    file_io::read_page(
+        &finished.file,
+        finished.meta.range_root,
+        finished.meta.page_count,
+        &mut root_page,
+    )
+    .unwrap();
+    let root =
+        range_tree::parse_header::<Ipv6Key>(&root_page, finished.meta.txn_id, Some(2)).unwrap();
+    assert_eq!(root.item_count, 2);
+
+    let right = range_tree::branch_child::<Ipv6Key>(&root_page, &root, 1).unwrap();
+    let mut right_page = [0; PAGE_SIZE];
+    file_io::read_page(
+        &finished.file,
+        right,
+        finished.meta.page_count,
+        &mut right_page,
+    )
+    .unwrap();
+    let right =
+        range_tree::parse_header::<Ipv6Key>(&right_page, finished.meta.txn_id, Some(1)).unwrap();
+    assert_eq!(right.item_count, 1);
+
     drop(finished.file);
     validate_clean(&path.0);
 }
@@ -358,12 +408,21 @@ fn membership_rejects_inactive_bits_and_trailing_zero_words() {
 }
 
 #[test]
-fn warmed_ordered_range_push_allocates_no_heap() {
+fn leaf_rollover_allocates_no_heap() {
+    const LEAF_CAPACITY: usize =
+        (PAGE_SIZE - slotted_page::HEADER_SIZE) / (Ipv4Key::WIDTH * 2 + 4 + 2);
+
     let path = TestPath::new("allocation");
     let mut output = builder(&path.0, direct_spec(AddressFamily::Ipv4), generous_budget());
-    output.push_direct_v4(Ipv4Key(0), Ipv4Key(9), 1).unwrap();
+    for index in 0..LEAF_CAPACITY {
+        let address = Ipv4Key((index as u32) * 2);
+        output
+            .push_direct_v4(address, address, index as u32)
+            .unwrap();
+    }
+    let address = Ipv4Key((LEAF_CAPACITY as u32) * 2);
     let (result, allocations) =
-        count_thread_allocations(|| output.push_direct_v4(Ipv4Key(20), Ipv4Key(29), 2));
+        count_thread_allocations(|| output.push_direct_v4(address, address, LEAF_CAPACITY as u32));
     result.unwrap();
     assert_eq!(allocations, 0);
     drop(output.finish_owned().unwrap().file);

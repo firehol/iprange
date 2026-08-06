@@ -165,15 +165,15 @@ pub(crate) fn insert_fits(header: &Header, cell_len: usize) -> bool {
             .is_some_and(|upper| header.lower + 2 <= upper)
 }
 
-pub(crate) struct Builder<'a> {
-    page: &'a mut [u8; PAGE_SIZE],
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Appender {
     item_count: usize,
     upper: usize,
 }
 
-impl<'a> Builder<'a> {
+impl Appender {
     pub(crate) fn new(
-        page: &'a mut [u8; PAGE_SIZE],
+        page: &mut [u8; PAGE_SIZE],
         page_type: u8,
         born_txn: u64,
         level: u16,
@@ -187,13 +187,15 @@ impl<'a> Builder<'a> {
         put_u16(page, 18, level);
         put_u32(page, 24, aux);
         Self {
-            page,
             item_count: 0,
             upper: PAGE_SIZE,
         }
     }
 
-    pub(crate) fn push(&mut self, cell: &[u8]) -> Result<()> {
+    pub(crate) fn try_push(&mut self, page: &mut [u8; PAGE_SIZE], cell: &[u8]) -> Result<bool> {
+        if cell.is_empty() {
+            return Err(Error::InvalidArgument("slotted-page record is empty"));
+        }
         let lower = HEADER_SIZE
             .checked_add((self.item_count + 1) * 2)
             .ok_or_else(|| Error::corrupt("slotted-page slot array overflows"))?;
@@ -202,25 +204,59 @@ impl<'a> Builder<'a> {
             .checked_sub(cell.len())
             .ok_or_else(|| Error::corrupt("slotted-page record area overflows"))?;
         if lower > upper {
-            return Err(Error::InvalidArgument("slotted page is full"));
+            return Ok(false);
         }
-        self.page[upper..self.upper].copy_from_slice(cell);
-        put_u16(self.page, HEADER_SIZE + self.item_count * 2, upper as u16);
+        page[upper..self.upper].copy_from_slice(cell);
+        put_u16(page, HEADER_SIZE + self.item_count * 2, upper as u16);
         self.item_count += 1;
         self.upper = upper;
-        Ok(())
+        Ok(true)
     }
 
-    pub(crate) fn finish(self) -> Result<()> {
+    pub(crate) fn finish(self, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
         if self.item_count == 0 {
             return Err(Error::InvalidArgument(
                 "reachable slotted page cannot be empty",
             ));
         }
-        put_u16(self.page, 16, self.item_count as u16);
-        put_u16(self.page, 20, (HEADER_SIZE + self.item_count * 2) as u16);
-        put_u16(self.page, 22, self.upper as u16);
+        put_u16(page, 16, self.item_count as u16);
+        put_u16(page, 20, (HEADER_SIZE + self.item_count * 2) as u16);
+        put_u16(page, 22, self.upper as u16);
         Ok(())
+    }
+
+    pub(crate) fn item_count(self) -> usize {
+        self.item_count
+    }
+}
+
+pub(crate) struct Builder<'a> {
+    page: &'a mut [u8; PAGE_SIZE],
+    appender: Appender,
+}
+
+impl<'a> Builder<'a> {
+    pub(crate) fn new(
+        page: &'a mut [u8; PAGE_SIZE],
+        page_type: u8,
+        born_txn: u64,
+        level: u16,
+        aux: u32,
+    ) -> Self {
+        let appender = Appender::new(page, page_type, born_txn, level, aux);
+        Self { page, appender }
+    }
+
+    pub(crate) fn push(&mut self, cell: &[u8]) -> Result<()> {
+        if self.appender.try_push(self.page, cell)? {
+            Ok(())
+        } else {
+            Err(Error::InvalidArgument("slotted page is full"))
+        }
+    }
+
+    pub(crate) fn finish(self) -> Result<()> {
+        self.appender.finish(self.page)
     }
 }
 

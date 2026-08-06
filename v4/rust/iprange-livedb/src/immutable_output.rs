@@ -10,15 +10,15 @@ use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
 use crate::file_io;
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
-use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::key::{Ipv4Key, Ipv6Key};
 use crate::membership_delta::Delta;
 use crate::membership_dictionary::{self, State};
 use crate::metadata;
 use crate::page_checksum;
-use crate::range_mutation;
 use crate::used_bitmap::{self, Kind};
 
 mod membership;
+mod ranges;
 mod setup;
 
 pub(crate) use membership::MembershipWords;
@@ -57,19 +57,12 @@ pub(crate) struct NewFailure {
     pub(crate) cause: Error,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LastRange<K> {
-    to: K,
-    value: u32,
-}
-
 #[derive(Debug)]
 pub(crate) struct Builder {
     file: File,
     meta: MetaV4,
     budget: OutputBudget,
-    last_v4: Option<LastRange<Ipv4Key>>,
-    last_v6: Option<LastRange<Ipv6Key>>,
+    ranges: ranges::Ranges,
     metadata_staged: bool,
     failed: bool,
 }
@@ -86,12 +79,12 @@ impl Builder {
         {
             return Err(NewFailure { file, cause });
         }
+        let meta = setup::empty_meta(spec);
         Ok(Self {
             file,
-            meta: setup::empty_meta(spec),
+            meta,
             budget,
-            last_v4: None,
-            last_v6: None,
+            ranges: ranges::Ranges::new(meta.address_family, meta.txn_id, meta.value_kind),
             metadata_staged: false,
             failed: false,
         })
@@ -137,8 +130,8 @@ impl Builder {
 
     // The owner must remain available for exact cleanup without a failure-path allocation.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn finish_owned(self) -> std::result::Result<Finished, FinishFailure> {
-        let result = finish(&self);
+    pub(crate) fn finish_owned(mut self) -> std::result::Result<Finished, FinishFailure> {
+        let result = finish(&mut self);
         match result {
             Ok(()) => Ok(Finished {
                 file: self.file,
@@ -221,18 +214,22 @@ impl Builder {
 
     fn push_direct_v4_inner(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<()> {
         self.require_mode(ValueKind::Direct, AddressFamily::Ipv4)?;
-        require_order(self.last_v4, from, to, Some(value))?;
-        self.assign_range(from, to, value)?;
-        self.last_v4 = Some(LastRange { to, value });
-        Ok(())
+        self.ranges.push_v4(
+            &self.file,
+            &mut self.meta,
+            self.budget,
+            ranges::Record { from, to, value },
+        )
     }
 
     fn push_direct_v6_inner(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<()> {
         self.require_mode(ValueKind::Direct, AddressFamily::Ipv6)?;
-        require_order(self.last_v6, from, to, Some(value))?;
-        self.assign_range(from, to, value)?;
-        self.last_v6 = Some(LastRange { to, value });
-        Ok(())
+        self.ranges.push_v6(
+            &self.file,
+            &mut self.meta,
+            self.budget,
+            ranges::Record { from, to, value },
+        )
     }
 
     fn push_membership_v4_inner<W: MembershipWords>(
@@ -242,12 +239,14 @@ impl Builder {
         words: &W,
     ) -> Result<()> {
         self.require_mode(ValueKind::Membership, AddressFamily::Ipv4)?;
-        require_order(self.last_v4, from, to, None)?;
         let value = self.intern_membership(words)?;
-        require_adjacency(self.last_v4, from, value)?;
-        self.assign_range(from, to, value)?;
-        self.last_v4 = Some(LastRange { to, value });
-        Ok(())
+        self.ranges.push_v4(
+            &self.file,
+            &mut self.meta,
+            self.budget,
+            ranges::Record { from, to, value },
+        )?;
+        self.add_membership_reference(value)
     }
 
     fn push_membership_v6_inner<W: MembershipWords>(
@@ -257,26 +256,31 @@ impl Builder {
         words: &W,
     ) -> Result<()> {
         self.require_mode(ValueKind::Membership, AddressFamily::Ipv6)?;
-        require_order(self.last_v6, from, to, None)?;
         let value = self.intern_membership(words)?;
-        require_adjacency(self.last_v6, from, value)?;
-        self.assign_range(from, to, value)?;
-        self.last_v6 = Some(LastRange { to, value });
-        Ok(())
+        self.ranges.push_v6(
+            &self.file,
+            &mut self.meta,
+            self.budget,
+            ranges::Record { from, to, value },
+        )?;
+        self.add_membership_reference(value)
     }
 
     fn intern_membership<W: MembershipWords>(&mut self, source: &W) -> Result<u32> {
         membership::intern(self, source)
     }
 
-    fn assign_range<K: IpKey>(&mut self, from: K, to: K, value: u32) -> Result<()> {
-        let mut root = self.meta.range_root;
-        let mut count = self.meta.range_record_count;
-        if !range_mutation::assign_private(self, &mut root, &mut count, from, to, value)? {
-            return Err(Error::Corrupt("immutable output range was not inserted"));
-        }
-        self.meta.range_root = root;
-        self.meta.range_record_count = count;
+    fn add_membership_reference(&mut self, value: u32) -> Result<()> {
+        let mut state = self.membership_state();
+        membership_dictionary::apply_delta(
+            self,
+            &mut state,
+            Delta {
+                id: value,
+                change: 1,
+            },
+        )?;
+        self.store_membership_state(state);
         Ok(())
     }
 
@@ -327,8 +331,14 @@ impl Builder {
     }
 }
 
-fn finish(output: &Builder) -> Result<()> {
+fn finish(output: &mut Builder) -> Result<()> {
     output.require_active()?;
+    let (range_root, range_record_count) =
+        output
+            .ranges
+            .finish(&output.file, &mut output.meta, output.budget)?;
+    output.meta.range_root = range_root;
+    output.meta.range_record_count = range_record_count;
     seal_pages(output)?;
     let bytes = output
         .meta
@@ -340,6 +350,39 @@ fn finish(output: &Builder) -> Result<()> {
     output.meta.encode_into(&mut page);
     file_io::write_exact_at(&output.file, &page, 0)?;
     file_io::write_exact_at(&output.file, &page, PAGE_SIZE as u64)
+}
+
+fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
+    if meta.page_count == MAX_PAGE_COUNT {
+        return Err(Error::PageSpaceExhausted);
+    }
+    if meta.page_count >= budget.max_output_pages {
+        return Err(Error::BudgetExceeded("immutable output pages"));
+    }
+    let page = u32::try_from(meta.page_count).map_err(|_| Error::PageSpaceExhausted)?;
+    meta.page_count += 1;
+    Ok(page)
+}
+
+fn write_page(file: &File, meta: &MetaV4, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
+    if page_number < 2 || u64::from(page_number) >= meta.page_count {
+        return Err(Error::Corrupt("immutable output write is outside bounds"));
+    }
+    let offset = u64::from(page_number)
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(Error::ArithmeticOverflow("immutable output page offset"))?;
+    file_io::write_exact_at(file, page, offset)
+}
+
+fn append_page(
+    file: &File,
+    meta: &mut MetaV4,
+    budget: OutputBudget,
+    page: &[u8; PAGE_SIZE],
+) -> Result<u32> {
+    let page_number = reserve_page(meta, budget)?;
+    write_page(file, meta, page_number, page)?;
+    Ok(page_number)
 }
 
 fn seal_pages(output: &Builder) -> Result<()> {
@@ -373,25 +416,11 @@ impl Store for Builder {
     }
 
     fn allocate(&mut self) -> Result<u32> {
-        if self.meta.page_count == MAX_PAGE_COUNT {
-            return Err(Error::PageSpaceExhausted);
-        }
-        if self.meta.page_count >= self.budget.max_output_pages {
-            return Err(Error::BudgetExceeded("immutable output pages"));
-        }
-        let page = u32::try_from(self.meta.page_count).map_err(|_| Error::PageSpaceExhausted)?;
-        self.meta.page_count += 1;
-        Ok(page)
+        reserve_page(&mut self.meta, self.budget)
     }
 
     fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
-            return Err(Error::Corrupt("immutable output write is outside bounds"));
-        }
-        let offset = u64::from(page_number)
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or(Error::ArithmeticOverflow("immutable output page offset"))?;
-        file_io::write_exact_at(&self.file, page, offset)
+        write_page(&self.file, &self.meta, page_number, page)
     }
 
     fn discard_private(&mut self, _page_number: u32) -> Result<()> {
@@ -410,68 +439,6 @@ impl RetiringStore for Builder {
                 "immutable output attempted to retire an existing page",
             ))
         }
-    }
-}
-
-impl range_mutation::RangeStore for Builder {
-    fn range_record_added(&mut self, value: u32) -> Result<()> {
-        if self.meta.value_kind == ValueKind::Direct {
-            return Ok(());
-        }
-        let mut state = self.membership_state();
-        membership_dictionary::apply_delta(
-            self,
-            &mut state,
-            Delta {
-                id: value,
-                change: 1,
-            },
-        )?;
-        self.store_membership_state(state);
-        Ok(())
-    }
-
-    fn range_record_removed(&mut self, _value: u32) -> Result<()> {
-        Err(Error::Corrupt(
-            "immutable output attempted to rewrite an ordered range",
-        ))
-    }
-}
-
-fn require_order<K: IpKey>(
-    previous: Option<LastRange<K>>,
-    from: K,
-    to: K,
-    value: Option<u32>,
-) -> Result<()> {
-    if from > to {
-        return Err(Error::InvalidArgument("range start is after its end"));
-    }
-    let Some(previous) = previous else {
-        return Ok(());
-    };
-    if previous.to >= from {
-        return Err(Error::InvalidArgument(
-            "immutable output ranges are not strictly ordered",
-        ));
-    }
-    if value == Some(previous.value) && previous.to.checked_next() == Some(from) {
-        return Err(Error::InvalidArgument(
-            "adjacent equal ranges are not canonical",
-        ));
-    }
-    Ok(())
-}
-
-fn require_adjacency<K: IpKey>(previous: Option<LastRange<K>>, from: K, value: u32) -> Result<()> {
-    if previous
-        .is_some_and(|previous| previous.value == value && previous.to.checked_next() == Some(from))
-    {
-        Err(Error::InvalidArgument(
-            "adjacent equal ranges are not canonical",
-        ))
-    } else {
-        Ok(())
     }
 }
 

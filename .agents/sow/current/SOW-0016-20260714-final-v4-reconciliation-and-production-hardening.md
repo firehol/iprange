@@ -13588,6 +13588,59 @@ feature matrices, the Rust 1.74.1 matrix, native C callers, explicit validation,
 warnings-denied Clippy and rustdoc, formatting, the four-target 311-source graph,
 and the SOW audit pass on this exact slice.
 
+The next isolated slice is ordered immutable range construction. On the exact
+post-direct milestone, a pinned one-million-record compact snapshot takes 4.682
+seconds. Its source cursor is already canonical and ordered, but
+`immutable_output::Builder` sends every record through `assign_private`, paying
+tree descent and mutation for data that requires neither.
+
+The current v4.3 tree contract makes the replacement small: one unfinished leaf
+and six unfinished branch pages are sufficient to cover the complete `u32` page
+space at the minimum current range-branch fanout. Full pages stream directly to
+their final output page numbers; each emitted child contributes its exact first
+key to the next level; a sole root child is collapsed; and the specification's
+legal one-child non-root branch handles a final right edge without rebalancing.
+The workspace is fixed stack state, creates no scratch file or per-record heap,
+and remains shared by snapshot and recovery through the existing immutable
+builder. The obsolete historical packer cannot be reused because it encodes the
+removed fence/subtree-count layout. Validation must cover empty and single-leaf
+trees, the first one-child right-edge branch, deeper trees, IPv4/IPv6,
+membership interleaving, exact page-budget failure, explicit full validation,
+zero warmed per-record allocation, and five pinned one-million snapshots.
+
+The ordered immutable range slice is now implemented. The shared slotted-page
+appender writes each cell once without parsing the page under construction
+(`v4/rust/iprange-livedb/src/slotted_page.rs:168-231`). The immutable builder
+holds one leaf and six branch levels, streams full pages to their final page
+numbers, propagates exact first keys, collapses a sole root child, and emits no
+scratch file (`v4/rust/iprange-livedb/src/immutable_output/ranges.rs:91-370`).
+The old random-mutation call path is no longer used by immutable snapshot or
+recovery output.
+
+Permanent tests cover explicit validation of the first IPv6 branch overflow
+with a legal one-child right edge and zero allocation on an IPv4 leaf rollover
+(`v4/rust/iprange-livedb/src/immutable_output_tests.rs:171-216` and
+`:410-428`). The eleven focused immutable-output tests pass, including empty,
+single-leaf, multi-level, IPv4, IPv6, membership, malformed-order, metadata,
+and exact page-budget cases.
+
+The exact pinned one-million-record snapshot baseline was 4,682,386,284 ns.
+Five consecutive release runs after this slice measured 68,520,540;
+106,846,139; 66,369,494; 63,306,654; and 63,233,381 ns. Every run produced
+exactly 1,000,000 records with 31 counted allocations/939 bytes, four file
+descriptors before and after, a 14,176,256-byte logical output, and zero private
+artifacts. This is 43.8x faster at the slowest observed result and 74.0x faster
+at the fastest, with every run below the accepted one-second ceiling.
+
+The compiler-derived source graph now accounts for 312 sources across all four
+supported compilation targets plus the one runtime C fixture. Complete
+all-feature and no-default-feature workspace matrices, Rust 1.74.1, native C
+behavior, conformance, warnings-denied Clippy and rustdoc, formatting, and the
+default workspace suite pass on this slice. This implements the existing v4.3
+contract without changing the format, public API, C ABI, operator workflow, or
+documentation; therefore the active SOW is the only durable artifact that
+requires an update for this milestone.
+
 1. Generate a canonical source inventory from compiler dependency manifests for
    production, tests, features, and supported targets. Classify every tracked
    source as active, test-only, platform-specific, generated, or obsolete.
