@@ -3,14 +3,14 @@
 use super::*;
 use crate::bootstrap::tests::empty_direct_meta;
 use crate::database::ImmutableReader;
-use crate::file_io;
+use crate::mapping::{ByteSource, Mapping};
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestFile {
     path: PathBuf,
-    file: File,
+    mapping: Mapping,
 }
 
 impl TestFile {
@@ -30,7 +30,10 @@ impl TestFile {
             .open(&path)
             .unwrap();
         file.set_len((2 * PAGE_SIZE) as u64).unwrap();
-        Self { path, file }
+        Self {
+            path,
+            mapping: Mapping::read_write(file, (2 * PAGE_SIZE) as u64).unwrap(),
+        }
     }
 }
 
@@ -40,20 +43,26 @@ impl Drop for TestFile {
     }
 }
 
-fn publish(file: &File, meta: MetaV4, meta_page: u8) {
-    file.set_len(meta.page_count * PAGE_SIZE as u64).unwrap();
-    let mut page = [0; PAGE_SIZE];
-    meta.encode_into(&mut page);
-    file_io::write_exact_at(file, &page, u64::from(meta_page) * PAGE_SIZE as u64).unwrap();
-    file.sync_all().unwrap();
+fn publish(mapping: &mut Mapping, meta: MetaV4, meta_page: u8) {
+    mapping.resize(meta.page_count * PAGE_SIZE as u64).unwrap();
+    meta.encode_mapped(
+        mapping
+            .page_mut(u32::from(meta_page), meta.page_count)
+            .unwrap(),
+    )
+    .unwrap();
+    mapping
+        .flush_page(u32::from(meta_page), meta.page_count)
+        .unwrap();
+    mapping.sync_file().unwrap();
 }
 
 #[test]
 fn direct_drafts_publish_readable_cow_generations() {
-    let test = TestFile::new();
+    let mut test = TestFile::new();
     let creation = empty_direct_meta(1);
-    publish(&test.file, creation, 0);
-    publish(&test.file, creation, 1);
+    publish(&mut test.mapping, creation, 0);
+    publish(&mut test.mapping, creation, 1);
 
     let budget = PageBudget {
         max_heap_bytes: 0,
@@ -62,7 +71,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     };
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
     {
-        let mut store = DraftStore::new(&test.file, creation.page_count, budget, &mut draft);
+        let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
         for key in (0..2_000_u32).rev() {
             store
                 .assign_v4(Ipv4Key(key * 2), Ipv4Key(key * 2), key)
@@ -75,7 +84,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     assert_eq!(draft.meta.txn_id, 2);
     assert!(draft.meta.range_record_count < 2_000);
     assert!(draft.meta.allocator_reserve.iter().all(|&page| page != 0));
-    publish(&test.file, draft.meta, 0);
+    publish(&mut test.mapping, draft.meta, 0);
 
     let reader = ImmutableReader::open(&test.path).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), Some(5));
@@ -86,7 +95,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     let old_reader = ImmutableReader::open(&test.path).unwrap();
     let mut next = Draft::new(committed, [4; 16]).unwrap();
     {
-        let mut store = DraftStore::new(&test.file, committed.page_count, budget, &mut next);
+        let mut store = DraftStore::new(&mut test.mapping, committed.page_count, budget, &mut next);
         store.clear_v4(Ipv4Key(0), Ipv4Key(1_000)).unwrap();
         store.assign_v4(Ipv4Key(9_000), Ipv4Key(9_100), 7).unwrap();
         store.prepare().unwrap();
@@ -95,7 +104,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     assert_ne!(next.meta.retirement_root, 0);
     assert_eq!(old_reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), Some(5));
     assert_eq!(old_reader.lookup_direct_v4(Ipv4Key(9_050)).unwrap(), None);
-    publish(&test.file, next.meta, 1);
+    publish(&mut test.mapping, next.meta, 1);
 
     let reader = ImmutableReader::open(&test.path).unwrap();
     assert_eq!(reader.info().transaction_id, 3);
@@ -105,7 +114,7 @@ fn direct_drafts_publish_readable_cow_generations() {
 
 #[test]
 fn ipv6_assignment_and_clear_use_the_same_file_store() {
-    let test = TestFile::new();
+    let mut test = TestFile::new();
     let mut creation = empty_direct_meta(1);
     creation.address_family = crate::contract::AddressFamily::Ipv6;
     let budget = PageBudget {
@@ -114,7 +123,7 @@ fn ipv6_assignment_and_clear_use_the_same_file_store() {
         max_growth_pages: 100,
     };
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
-    let mut store = DraftStore::new(&test.file, creation.page_count, budget, &mut draft);
+    let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
     store
         .assign_v6(Ipv6Key::from_u128(0), Ipv6Key::from_u128(u128::MAX), 8)
         .unwrap();
@@ -127,11 +136,11 @@ fn ipv6_assignment_and_clear_use_the_same_file_store() {
 
 #[test]
 fn page_budget_failure_happens_before_the_first_allocation() {
-    let test = TestFile::new();
+    let mut test = TestFile::new();
     let creation = empty_direct_meta(1);
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
     let mut store = DraftStore::new(
-        &test.file,
+        &mut test.mapping,
         creation.page_count,
         PageBudget {
             max_heap_bytes: 0,
@@ -150,12 +159,12 @@ fn page_budget_failure_happens_before_the_first_allocation() {
 }
 
 #[test]
-fn cached_page_cannot_bypass_the_current_page_limit() {
-    let test = TestFile::new();
+fn mapped_page_cannot_bypass_the_current_page_limit() {
+    let mut test = TestFile::new();
     let creation = empty_direct_meta(1);
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
-    let mut store = DraftStore::new_cached(
-        &test.file,
+    let mut store = DraftStore::new(
+        &mut test.mapping,
         creation.page_count,
         PageBudget {
             max_heap_bytes: 2 * PAGE_SIZE as u64,
@@ -165,23 +174,21 @@ fn cached_page_cannot_bypass_the_current_page_limit() {
         &mut draft,
     );
     let page_number = store.allocate().unwrap();
-    let page = [7; PAGE_SIZE];
-    store.write(page_number, &page).unwrap();
-    store.read(page_number, &mut [0; PAGE_SIZE]).unwrap();
+    store.inspect_page(page_number, |_| Ok(())).unwrap();
 
     store.draft.meta.page_count = u64::from(page_number);
     assert!(matches!(
-        store.read(page_number, &mut [0; PAGE_SIZE]),
+        store.inspect_page(page_number, |_| Ok(())),
         Err(Error::Corrupt(_))
     ));
 }
 
 #[test]
 fn mutation_defers_each_data_page_checksum_until_prepare() {
-    let test = TestFile::new();
+    let mut test = TestFile::new();
     let creation = empty_direct_meta(1);
-    publish(&test.file, creation, 0);
-    publish(&test.file, creation, 1);
+    publish(&mut test.mapping, creation, 0);
+    publish(&mut test.mapping, creation, 1);
     let budget = PageBudget {
         max_heap_bytes: 4 * 1024 * 1024,
         max_private_pages: 20_000,
@@ -190,7 +197,8 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
     crate::page_checksum::work::reset();
     {
-        let mut store = DraftStore::new_cached(&test.file, creation.page_count, budget, &mut draft);
+        let mut store =
+            DraftStore::new_cached(&mut test.mapping, creation.page_count, budget, &mut draft);
         for key in 0..2_000_u32 {
             store
                 .assign_v4(Ipv4Key(key * 2), Ipv4Key(key * 2), key)
@@ -202,21 +210,17 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
 
     let mut current_pages = 0;
     for page_number in 2..draft.meta.page_count {
-        let mut page = [0; PAGE_SIZE];
-        file_io::read_page(
-            &test.file,
-            page_number as u32,
-            draft.meta.page_count,
-            &mut page,
-        )
-        .unwrap();
-        if page[..4] == crate::contract::PAGE_MAGIC
-            && crate::contract::u64_le(&page, 8) == draft.meta.txn_id
+        let page = test
+            .mapping
+            .page(page_number as u32, draft.meta.page_count)
+            .unwrap();
+        if page.equals(0, &crate::contract::PAGE_MAGIC)
+            && crate::contract::u64_le(page, 8) == draft.meta.txn_id
         {
             current_pages += 1;
             assert_eq!(
-                u32_le(&page, 28),
-                crate::crc32c::crc32c_with_zeroed(&page, 28, 4).unwrap()
+                u32_le(page, 28),
+                crate::crc32c::crc32c_source_with_zeroed(page, 28, 4).unwrap()
             );
         }
     }

@@ -4,9 +4,10 @@ use std::fs::File;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
+use crate::error;
 use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
-use crate::{error, file_io};
+use crate::mapping::Mapping;
 
 use super::namespace::{Destination, Identity, Name, NamespaceError, Regular, ScanError};
 use super::problem::Problem;
@@ -30,6 +31,7 @@ pub(super) enum Location {
 pub(super) struct Inspected {
     pub(super) name: Name,
     pub(super) file: File,
+    pub(super) mapping: Mapping,
     pub(super) identity: Identity,
     pub(super) header: Header,
     pub(super) location: Location,
@@ -57,7 +59,7 @@ impl Inspected {
             .directory()
             .verify_name(name, self.identity)
             .map_err(|error| Problem::namespace(&error))?;
-        let selected = read_selected(&self.file).map_err(strict_record)?;
+        let selected = read_selected(&self.mapping).map_err(strict_record)?;
         if selected.header != self.header {
             return Err(conflict("publication reservation changed after inspection"));
         }
@@ -152,7 +154,8 @@ pub(super) fn exact_private(
         .directory()
         .verify_name(&name, regular.identity)
         .map_err(|error| Problem::namespace(&error))?;
-    let selected = read_selected(&regular.file).map_err(strict_record)?;
+    let mapping = map_reservation(&regular.file).map_err(strict_record)?;
+    let selected = read_selected(&mapping).map_err(strict_record)?;
     require_bound(
         destination,
         selected.header,
@@ -162,7 +165,13 @@ pub(super) fn exact_private(
     if selected.header != expected {
         return Err(conflict("caller result and private reservation disagree"));
     }
-    Ok(Some(inspected(name, regular, selected, Location::Private)))
+    Ok(Some(inspected(
+        name,
+        regular,
+        mapping,
+        selected,
+        Location::Private,
+    )))
 }
 
 fn inspect_canonical(
@@ -170,7 +179,8 @@ fn inspect_canonical(
     regular: Regular,
     cancellation: &CancellationToken,
 ) -> Result<Inspected, Problem> {
-    let selected = read_selected(&regular.file).map_err(strict_record)?;
+    let mapping = map_reservation(&regular.file).map_err(strict_record)?;
+    let selected = read_selected(&mapping).map_err(strict_record)?;
     require_available(
         destination,
         Location::Canonical,
@@ -179,7 +189,7 @@ fn inspect_canonical(
         selected.header,
     )?;
     lock_operation(&regular, cancellation)?;
-    if read_selected(&regular.file).map_err(strict_record)? != selected {
+    if read_selected(&mapping).map_err(strict_record)? != selected {
         return Err(conflict(
             "publication reservation changed while acquiring its lock",
         ));
@@ -197,7 +207,7 @@ fn inspect_canonical(
         .directory()
         .verify_name(destination.coordination(), regular.identity)
         .map_err(|error| Problem::namespace(&error))?;
-    if read_selected(&regular.file).map_err(strict_record)? != selected {
+    if read_selected(&mapping).map_err(strict_record)? != selected {
         return Err(conflict(
             "publication reservation changed during inspection",
         ));
@@ -209,6 +219,7 @@ fn inspect_canonical(
     Ok(inspected(
         private_name,
         regular,
+        mapping,
         selected,
         Location::Canonical,
     ))
@@ -264,7 +275,12 @@ fn inspect_private(
         &name,
         regular.identity,
     )?;
-    let selected = match read_selected(&regular.file) {
+    let mapping = match map_reservation(&regular.file) {
+        Ok(mapping) => mapping,
+        Err(ReadError::Invalid) => return Ok(None),
+        Err(ReadError::Sdk(error)) => return Err(Problem::sdk(&error)),
+    };
+    let selected = match read_selected(&mapping) {
         Ok(selected) => selected,
         Err(ReadError::Invalid) => return Ok(None),
         Err(ReadError::Sdk(error)) => return Err(Problem::sdk(&error)),
@@ -284,11 +300,17 @@ fn inspect_private(
         .directory()
         .verify_name(&name, regular.identity)
         .map_err(|_| conflict("private reservation changed during inspection"))?;
-    let rechecked = read_selected(&regular.file).map_err(strict_record)?;
+    let rechecked = read_selected(&mapping).map_err(strict_record)?;
     if rechecked != selected {
         return Err(conflict("private reservation changed during inspection"));
     }
-    Ok(Some(inspected(name, regular, selected, Location::Private)))
+    Ok(Some(inspected(
+        name,
+        regular,
+        mapping,
+        selected,
+        Location::Private,
+    )))
 }
 
 fn require_available(
@@ -313,7 +335,13 @@ fn require_available(
     )
 }
 
-fn inspected(name: Name, regular: Regular, selected: Selected, location: Location) -> Inspected {
+fn inspected(
+    name: Name,
+    regular: Regular,
+    mapping: Mapping,
+    selected: Selected,
+    location: Location,
+) -> Inspected {
     let access = match regular.creator_only_commitment() {
         Ok(commitment) if commitment == selected.header.security_commitment => {
             AccessPolicy::CreatorOnly
@@ -323,6 +351,7 @@ fn inspected(name: Name, regular: Regular, selected: Selected, location: Locatio
     Inspected {
         name,
         file: regular.file,
+        mapping,
         identity: regular.identity,
         header: selected.header,
         location,
@@ -364,7 +393,7 @@ pub(super) fn require_bound(
     Ok(())
 }
 
-fn read_selected(file: &File) -> Result<Selected, ReadError> {
+fn map_reservation(file: &File) -> Result<Mapping, ReadError> {
     if file
         .metadata()
         .map_err(error::Error::from)
@@ -374,9 +403,16 @@ fn read_selected(file: &File) -> Result<Selected, ReadError> {
     {
         return Err(ReadError::Invalid);
     }
-    let mut bytes = [0; FILE_SIZE as usize];
-    file_io::read_exact_at(file, &mut bytes, 0).map_err(ReadError::Sdk)?;
-    reservation::select(&bytes).map_err(|_| ReadError::Invalid)
+    Mapping::read_write_view(file, FILE_SIZE).map_err(ReadError::Sdk)
+}
+
+fn read_selected(mapping: &Mapping) -> Result<Selected, ReadError> {
+    reservation::select(
+        mapping
+            .bytes(0, FILE_SIZE as usize)
+            .map_err(ReadError::Sdk)?,
+    )
+    .map_err(|_| ReadError::Invalid)
 }
 
 fn parse_private_name(bytes: &[u8]) -> Option<[u8; 16]> {

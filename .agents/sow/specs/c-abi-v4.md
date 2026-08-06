@@ -211,6 +211,16 @@ feed bit positions as mutation authority, membership IDs, bitmap ownership,
 dictionary hashes/refcounts, mmap pointers, Rust allocation, or Phase-2
 multi-file algebra.
 
+Explicit validation and recovery may internally use the version-matched
+SDK-provided fault worker required by the binary-format contract. The worker is
+not a public handle and receives no caller function pointer. It returns mapped
+protocol records to the parent library, and the parent alone invokes C sinks and
+constructs ABI reports/errors. Missing/incompatible worker or failed handler
+ownership is detected before source scanning or destination mutation. An owned
+physical mapped-source fault is recovery/validation damage (`IO_ERROR` in the
+report), while an unclassified worker failure is never relabeled as source
+damage.
+
 ## Metadata and variable output
 
 Metadata follows the stable two-call contract: query presence and exact
@@ -481,6 +491,8 @@ The typed-error code registry is:
 | 62 | `MEMBERSHIP_ID_EXHAUSTED` |
 | 63 | `READER_CAPACITY_EXHAUSTED` |
 | 64 | `CLEANUP_IN_PROGRESS` |
+| 65 | `FAULT_WORKER_UNAVAILABLE` |
+| 66 | `FAULT_WORKER_FAILED` |
 
 Factual `Committed`, `Published`, `OutcomeUnknown`, invalid validation content,
 and recovery damage are report fields, not error codes. Future ABI-1 additions

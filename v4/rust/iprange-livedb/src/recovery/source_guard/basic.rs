@@ -1,6 +1,7 @@
 //! Immutable and caller-quiesced recovery source protection.
 
 use super::*;
+use crate::contract::PAGE_SIZE;
 
 impl BasicSource {
     pub(super) fn open(
@@ -84,6 +85,7 @@ fn finish_open(
         cancellation,
     ) {
         Ok(meta) => Ok(BasicSource {
+            mapping: map_available(&file, meta)?,
             file,
             path: path.to_path_buf(),
             sidecar,
@@ -108,6 +110,7 @@ fn finish_current_open(
 ) -> Result<BasicSource> {
     match bind_current(&file, path, Some(&sidecar), identity, cancellation) {
         Ok(meta) => Ok(BasicSource {
+            mapping: map_available(&file, meta)?,
             file,
             path: path.to_path_buf(),
             sidecar: Some(sidecar),
@@ -150,6 +153,15 @@ fn lifetime_mode(immutable: bool) -> Mode {
     } else {
         Mode::Exclusive
     }
+}
+
+fn map_available(file: &File, meta: MetaV4) -> Result<Mapping> {
+    let declared = meta
+        .page_count
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(Error::ArithmeticOverflow("recovery source mapping length"))?;
+    let available = file.metadata()?.len().min(declared);
+    Mapping::read_only(file.try_clone()?, available)
 }
 
 fn bind(

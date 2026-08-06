@@ -1,10 +1,8 @@
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, ValueKind, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::file_io;
+use crate::mapping::{Mapping, PageView};
 
 use super::{
     membership_table::{InsertResult, Slot, Table},
@@ -17,7 +15,7 @@ const GRAPH: u8 = 1;
 const ALLOCATION: u8 = 2;
 
 pub(crate) struct Context<'a, S> {
-    pub(crate) file: &'a File,
+    pub(crate) mapping: &'a Mapping,
     pub(crate) meta: MetaV4,
     claims: Claims,
     memberships: Option<Table>,
@@ -30,7 +28,7 @@ pub(crate) struct Context<'a, S> {
 
 impl<'a, S: ValidationSink> Context<'a, S> {
     pub(crate) fn new(
-        file: &'a File,
+        mapping: &'a Mapping,
         meta: MetaV4,
         budget: &ValidationBudget,
         cancellation: &'a CancellationToken,
@@ -51,7 +49,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
             None
         };
         Ok(Self {
-            file,
+            mapping,
             meta,
             claims,
             memberships,
@@ -175,7 +173,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         page_number: u32,
         object: ValidationObject,
         path: &[u32],
-    ) -> Result<Option<[u8; PAGE_SIZE]>> {
+    ) -> Result<Option<PageView<'a>>> {
         self.checkpoint()?;
         if !self.require_graph_bounds(page_number, object)? {
             return Ok(None);
@@ -238,22 +236,25 @@ impl<'a, S: ValidationSink> Context<'a, S> {
         &mut self,
         page_number: u32,
         object: ValidationObject,
-    ) -> Result<Option<[u8; PAGE_SIZE]>> {
+    ) -> Result<Option<PageView<'a>>> {
         self.progress.count_page(object)?;
-        let mut page = [0; PAGE_SIZE];
-        if file_io::read_page(self.file, page_number, self.meta.page_count, &mut page).is_err() {
-            self.emit(
-                ValidationReason::IoError,
-                object,
-                Some(page_number),
-                None,
-                None,
-            )?;
-            self.progress
-                .mark_untraversable(object_has_addresses(object))?;
-            return Ok(None);
-        }
-        if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+        let mapping: &'a Mapping = self.mapping;
+        let page = match mapping.page(page_number, self.meta.page_count) {
+            Ok(page) => page,
+            Err(_) => {
+                self.emit(
+                    ValidationReason::IoError,
+                    object,
+                    Some(page_number),
+                    None,
+                    None,
+                )?;
+                self.progress
+                    .mark_untraversable(object_has_addresses(object))?;
+                return Ok(None);
+            }
+        };
+        if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
             self.emit(
                 ValidationReason::PageCrcMismatch,
                 object,

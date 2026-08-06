@@ -34,7 +34,7 @@ fn initialized_reservation_has_exact_header_security_and_lock() {
         reservation.header.basename_len,
         output.attempt.destination().main().bytes().len() as u32
     );
-    select_exact(&reservation.file, reservation.header, 0).unwrap();
+    select_exact(&reservation.mapping, reservation.header, 0).unwrap();
 
     let contender = OpenOptions::new()
         .read(true)
@@ -60,13 +60,13 @@ fn acquisition_and_arming_keep_one_inode_and_select_state2() {
         canonical_path.metadata().unwrap().ino(),
         expected_identity.inode
     );
-    select_exact(&canonical.file, canonical.header, 0).unwrap();
+    select_exact(&canonical.mapping, canonical.header, 0).unwrap();
 
     let armed = canonical.arm(&output).unwrap();
     assert_eq!(armed.identity, expected_identity);
     assert_eq!(armed.header.state, State::MainMayHaveBeenAttempted);
     assert_eq!(armed.header.sequence, 2);
-    select_exact(&armed.file, armed.header, 1).unwrap();
+    select_exact(&armed.mapping, armed.header, 1).unwrap();
     output.verify_private().unwrap();
 
     let contender = OpenOptions::new()
@@ -96,7 +96,7 @@ fn canonical_conflict_never_overwrites_and_returns_private_owner() {
     assert!(private_path.exists());
     assert_eq!(fs::read(canonical_path).unwrap(), b"foreign");
     select_exact(
-        &failure.owner.reservation.file,
+        &failure.owner.reservation.mapping,
         failure.owner.reservation.header,
         0,
     )
@@ -205,7 +205,7 @@ fn failure_after_state2_selection_retains_the_durable_phase() {
     let result = arm_with(&mut owner, &output, || Err(Error::HeaderInvariant));
     assert!(matches!(result, Err(Error::HeaderInvariant)));
     assert!(owner.state2_selected);
-    select_exact(&owner.reservation.file, target, 1).unwrap();
+    select_exact(&owner.reservation.mapping, target, 1).unwrap();
 }
 
 #[test]
@@ -214,12 +214,12 @@ fn failure_after_state1_selection_retains_the_result_boundary() {
     let (output, _) = prepared_output(&directory.path);
     let mut draft = ReservationDraft::create(&output).unwrap();
     prepare_header(&mut draft, &output).unwrap();
-    write_state1(&draft).unwrap();
+    write_state1(&mut draft).unwrap();
 
     let result = lock_state1_with(&mut draft, &output, || Err(Error::HeaderInvariant));
     assert!(matches!(result, Err(Error::HeaderInvariant)));
     assert!(draft.state1_selected);
-    select_exact(&draft.file, draft.header.unwrap(), 0).unwrap();
+    select_exact(draft.mapping.as_ref().unwrap(), draft.header.unwrap(), 0).unwrap();
 }
 
 fn prepared_output(directory: &Path) -> (PreparedOutput, PathBuf) {

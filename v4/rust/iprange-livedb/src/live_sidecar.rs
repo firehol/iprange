@@ -2,22 +2,22 @@
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 mod header;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
-use crate::file_io;
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
+use crate::mapping::{ByteSource, Mapping};
 use crate::path;
 use crate::publication::namespace::{
     retained_regular_identity, Directory, Name, NamespaceError, IDENTITY_KIND,
 };
 use crate::publication::security::{self, Profile};
 use crate::publication::{ArtifactKind, DirectoryRole};
-use crate::slotted_page::put_u64;
 use crate::validation::LocalFileIdentity;
 
 const SLOT_SIZE: u16 = 16;
@@ -29,7 +29,7 @@ pub(crate) use crate::publication::namespace::Identity;
 #[cfg(any(unix, windows))]
 pub(crate) use header::has_selectable_header;
 pub(crate) use header::{read_header, Header, State};
-use header::{sidecar_length, write_header};
+use header::{read_header_mapping, sidecar_length, write_header_mapping};
 
 pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
     LocalFileIdentity {
@@ -83,6 +83,7 @@ pub(crate) struct Sidecar {
     pub(crate) path: PathBuf,
     pub(crate) header: Header,
     identity: Identity,
+    mapping: Mutex<Option<Mapping>>,
 }
 
 impl Sidecar {
@@ -138,6 +139,7 @@ impl Sidecar {
                 sidecar_id,
             },
             identity: created.identity,
+            mapping: Mutex::new(None),
         })
     }
 
@@ -155,15 +157,27 @@ impl Sidecar {
     }
 
     pub(crate) fn initialize_creating(&self) -> Result<()> {
-        self.file.set_len(sidecar_length(self.header.capacity)?)?;
-        write_header(&self.file, self.header, State::Creating)?;
+        let length = sidecar_length(self.header.capacity)?;
+        self.file.set_len(length)?;
+        let mut guard = self.mapping_guard()?;
+        *guard = Some(Mapping::read_write_view(&self.file, length)?);
+        let mapping = guard
+            .as_mut()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        write_header_mapping(mapping, self.header, State::Creating)?;
+        mapping.flush_page(0, 1)?;
         self.file.sync_all()?;
         crate::fault::crash("create.after_sidecar_sync");
         Ok(())
     }
 
     pub(crate) fn publish_ready(&self) -> Result<()> {
-        write_header(&self.file, self.header, State::Ready)?;
+        let mut guard = self.mapping_guard()?;
+        let mapping = guard
+            .as_mut()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        write_header_mapping(mapping, self.header, State::Ready)?;
+        mapping.flush_page(0, 1)?;
         crate::fault::crash("create.after_ready_write");
         Ok(self.file.sync_all()?)
     }
@@ -191,7 +205,8 @@ impl Sidecar {
         let file = open_rw(&path)?;
         let identity = identity(&file)?;
         let (state, header) = read_header(&file)?;
-        if file.metadata()?.len() != sidecar_length(header.capacity)? {
+        let length = sidecar_length(header.capacity)?;
+        if file.metadata()?.len() != length {
             return Err(Error::Corrupt("reader table length is invalid"));
         }
         live_cleanup::require_available(
@@ -204,12 +219,14 @@ impl Sidecar {
                 directory_role: DirectoryRole::MainFile,
             },
         )?;
+        let mapping = Mapping::read_write_view(&file, length)?;
         Ok((
             Self {
                 file,
                 path,
                 header,
                 identity,
+                mapping: Mutex::new(Some(mapping)),
             },
             state,
         ))
@@ -224,7 +241,11 @@ impl Sidecar {
     }
 
     pub(crate) fn verify_header(&self) -> Result<()> {
-        if read_header(&self.file)? != (State::Ready, self.header) {
+        let guard = self.mapping_guard()?;
+        let mapping = guard
+            .as_ref()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        if read_header_mapping(mapping)? != (State::Ready, self.header) {
             return Err(Error::Corrupt("reader table header changed"));
         }
         Ok(())
@@ -288,10 +309,16 @@ impl Sidecar {
             if let Err(cause) = check(cancellation) {
                 return Err(combine_errors(cause, live_lock::unlock(&self.file, offset)));
             }
-            let mut active = [0; SLOT_SIZE as usize];
-            put_u64(&mut active, 0, txn);
-            put_u64(&mut active, 8, !txn);
-            if let Err(cause) = file_io::write_exact_at(&self.file, &active, offset) {
+            let written = (|| {
+                let mut guard = self.mapping_guard()?;
+                let mapping = guard
+                    .as_mut()
+                    .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+                let mut active = mapping.bytes_mut(offset, SLOT_SIZE as usize)?;
+                active.put_u64(0, txn)?;
+                active.put_u64(8, !txn)
+            })();
+            if let Err(cause) = written {
                 return Err(combine_errors(cause, live_lock::unlock(&self.file, offset)));
             }
             return Ok(slot);
@@ -301,7 +328,12 @@ impl Sidecar {
 
     pub(crate) fn clear_reader(&self, slot: u32) -> Result<()> {
         let offset = slot_offset_checked(slot, self.header.capacity)?;
-        file_io::write_exact_at(&self.file, &[0; SLOT_SIZE as usize], offset)
+        let mut guard = self.mapping_guard()?;
+        let mapping = guard
+            .as_mut()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        mapping.bytes_mut(offset, SLOT_SIZE as usize)?.fill(0);
+        Ok(())
     }
 
     pub(crate) fn unlock_reader(&self, slot: u32) -> Result<()> {
@@ -440,10 +472,13 @@ impl Sidecar {
     }
 
     fn read_active_slot(&self, offset: u64) -> Result<Option<u64>> {
-        let mut bytes = [0; SLOT_SIZE as usize];
-        file_io::read_exact_at(&self.file, &mut bytes, offset)?;
-        let txn = u64_le(&bytes, 0);
-        if txn == 0 || u64_le(&bytes, 8) != !txn {
+        let guard = self.mapping_guard()?;
+        let mapping = guard
+            .as_ref()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        let bytes = mapping.bytes(offset, SLOT_SIZE as usize)?;
+        let txn = u64_le(bytes, 0);
+        if txn == 0 || u64_le(bytes, 8) != !txn {
             return Err(Error::Corrupt("active reader slot is malformed"));
         }
         Ok(Some(txn))
@@ -451,14 +486,25 @@ impl Sidecar {
 
     fn clear_stale(&self, offset: u64) -> Result<()> {
         let cleared: Result<()> = (|| {
-            let mut bytes = [0; SLOT_SIZE as usize];
-            file_io::read_exact_at(&self.file, &mut bytes, offset)?;
-            if bytes.iter().any(|&byte| byte != 0) {
-                file_io::write_exact_at(&self.file, &[0; SLOT_SIZE as usize], offset)?;
+            let mut guard = self.mapping_guard()?;
+            let mapping = guard
+                .as_mut()
+                .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+            if !mapping
+                .bytes(offset, SLOT_SIZE as usize)?
+                .all_zero(0, SLOT_SIZE as usize)
+            {
+                mapping.bytes_mut(offset, SLOT_SIZE as usize)?.fill(0);
             }
             Ok(())
         })();
         finish_with_cleanup(cleared, live_lock::unlock(&self.file, offset))
+    }
+
+    fn mapping_guard(&self) -> Result<MutexGuard<'_, Option<Mapping>>> {
+        self.mapping
+            .lock()
+            .map_err(|_| Error::WrongState("reader table mapping lock is poisoned"))
     }
 }
 

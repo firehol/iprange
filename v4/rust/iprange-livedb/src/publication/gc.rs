@@ -2,7 +2,7 @@
 
 use std::fs::File;
 
-use crate::file_io;
+use crate::mapping::Mapping;
 
 use super::gc_codec::{self, Header, Payload};
 use super::gc_name;
@@ -278,7 +278,27 @@ fn create(
         .map_err(|error| Problem::namespace(&error))?;
     security::secure_creator_only(&file, &profile).map_err(|error| Problem::namespace(&error))?;
     let header = header(directory, authority, &inert_name);
-    file_io::write_exact_at(&file, &header.file_bytes(), 0)
+    file.set_len(gc_codec::FILE_SIZE as u64)
+        .map_err(crate::error::Error::from)
+        .map_err(|error| Problem::sdk(&error))?;
+    let mut mapping = Mapping::read_write_view(&file, gc_codec::FILE_SIZE as u64)
+        .map_err(|error| Problem::sdk(&error))?;
+    header
+        .encode(
+            &mut mapping
+                .page_mut(0, 2)
+                .map_err(|error| Problem::sdk(&error))?,
+        )
+        .map_err(|error| Problem::sdk(&error))?;
+    header
+        .encode(
+            &mut mapping
+                .page_mut(1, 2)
+                .map_err(|error| Problem::sdk(&error))?,
+        )
+        .map_err(|error| Problem::sdk(&error))?;
+    mapping
+        .flush_range(0, gc_codec::FILE_SIZE as u64)
         .map_err(|error| Problem::sdk(&error))?;
     sync_file(&file).map_err(|error| Problem::sdk(&error.into()))?;
     directory
@@ -327,9 +347,12 @@ fn load(
             "GC authority envelope has the wrong length",
         ));
     }
-    let mut bytes = [0; gc_codec::FILE_SIZE];
-    file_io::read_exact_at(&file, &mut bytes, 0).map_err(|error| Problem::sdk(&error))?;
-    let header = gc_codec::select(&bytes)
+    let mapping = Mapping::read_only_view(&file, gc_codec::FILE_SIZE as u64)
+        .map_err(|error| Problem::sdk(&error))?;
+    let bytes = mapping
+        .bytes(0, gc_codec::FILE_SIZE)
+        .map_err(|error| Problem::sdk(&error))?;
+    let header = gc_codec::select(bytes)
         .map_err(|_| Problem::cleanup_conflict("GC authority envelope is not selectable"))?;
     let (attempt_id, ordinal) = gc_name::decode_envelope(envelope_name.bytes())
         .ok_or_else(|| Problem::cleanup_conflict("GC envelope name is not canonical"))?;

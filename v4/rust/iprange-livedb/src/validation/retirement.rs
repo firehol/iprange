@@ -1,5 +1,6 @@
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
+use crate::mapping::ByteSource;
 
 use super::context::Context;
 use super::tree::{self, CellLayout, Codec};
@@ -29,18 +30,18 @@ impl Codec for RetirementCodec {
     const LEAF_LAYOUT: CellLayout = CellLayout::Fixed(16);
     const LEAF_INVALID: ValidationReason = ValidationReason::RetirementListInvalid;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key> {
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         Some(Key {
             transaction: u64_le(cell, 0),
             first_page: u32_le(cell, 8),
         })
     }
 
-    fn branch_child(cell: &[u8]) -> Option<u32> {
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
         Some(u32_le(cell, 12))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode(cell).map(|extent| extent.key)
     }
 }
@@ -133,7 +134,7 @@ fn mark_extent<S: ValidationSink>(context: &mut Context<'_, S>, extent: Extent) 
     Ok(())
 }
 
-fn decode(cell: &[u8]) -> Option<Extent> {
+fn decode<P: ByteSource>(cell: P) -> Option<Extent> {
     (cell.len() == 16).then(|| Extent {
         key: Key {
             transaction: u64_le(cell, 0),

@@ -186,29 +186,21 @@ fn branch_overflow_keeps_a_valid_one_child_right_edge() {
     }
     let finished = output.finish_owned().unwrap();
 
-    let mut root_page = [0; PAGE_SIZE];
-    file_io::read_page(
-        &finished.file,
-        finished.meta.range_root,
-        finished.meta.page_count,
-        &mut root_page,
-    )
-    .unwrap();
+    let root_page = finished
+        .mapping
+        .page(finished.meta.range_root, finished.meta.page_count)
+        .unwrap();
     let root =
-        range_tree::parse_header::<Ipv6Key>(&root_page, finished.meta.txn_id, Some(2)).unwrap();
+        range_tree::parse_header::<Ipv6Key, _>(root_page, finished.meta.txn_id, Some(2)).unwrap();
     assert_eq!(root.item_count, 2);
 
-    let right = range_tree::branch_child::<Ipv6Key>(&root_page, &root, 1).unwrap();
-    let mut right_page = [0; PAGE_SIZE];
-    file_io::read_page(
-        &finished.file,
-        right,
-        finished.meta.page_count,
-        &mut right_page,
-    )
-    .unwrap();
+    let right = range_tree::branch_child::<Ipv6Key, _>(root_page, &root, 1).unwrap();
+    let right_page = finished
+        .mapping
+        .page(right, finished.meta.page_count)
+        .unwrap();
     let right =
-        range_tree::parse_header::<Ipv6Key>(&right_page, finished.meta.txn_id, Some(1)).unwrap();
+        range_tree::parse_header::<Ipv6Key, _>(right_page, finished.meta.txn_id, Some(1)).unwrap();
     assert_eq!(right.item_count, 1);
 
     drop(finished.file);

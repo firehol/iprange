@@ -1,4 +1,5 @@
-use crate::contract::{MetaV4, PAGE_SIZE};
+use crate::contract::MetaV4;
+use crate::mapping::ByteSource;
 
 use super::{
     identity_readable, validate_commit_identity, validate_declared_page_count, validate_direct,
@@ -12,7 +13,7 @@ pub(crate) struct RecoveryMetaState {
     pub(crate) recovery: Result<MetaV4, MetaProblem>,
 }
 
-pub(crate) fn classify_recovery_meta(page: &[u8; PAGE_SIZE]) -> RecoveryMetaState {
+pub(crate) fn classify_recovery_meta<S: ByteSource>(page: S) -> RecoveryMetaState {
     let order = identity_readable(page).and_then(|identity| {
         validate_commit_identity(&identity.meta)?;
         Ok(identity.meta)

@@ -1,16 +1,14 @@
 //! Opaque bounded zlib metadata and its forward COW page chain.
 
-use std::fs::File;
-
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 
 use crate::contract::{
     u16_le, u32_le, u64_le, MetaV4, MAX_METADATA_UNCOMPRESSED, PAGE_MAGIC, PAGE_SIZE,
 };
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::fixed_tree::Store;
-use crate::slotted_page::{put_u16, put_u32, put_u64};
+use crate::mapping::{ByteRange, ByteSource, Mapping};
+use crate::slotted_page::PageEdit;
 
 const PAGE_TYPE: u8 = 13;
 const BODY_OFFSET: usize = 32;
@@ -137,15 +135,16 @@ pub(crate) fn write_chain<S: Store>(store: &mut S, compressed: &[u8]) -> Result<
         let start = index * CHUNK_CAPACITY;
         let end = std::cmp::min(start + CHUNK_CAPACITY, compressed.len());
         let next = pages.get(index + 1).copied().unwrap_or(0);
-        let mut page = [0; PAGE_SIZE];
-        encode_page(
-            &mut page,
-            store.target_txn(),
-            next,
-            start as u64,
-            &compressed[start..end],
-        );
-        store.write(pages[index], &page)?;
+        let target_txn = store.target_txn();
+        store.update_page(pages[index], |page| {
+            encode_page(
+                page,
+                target_txn,
+                next,
+                start as u64,
+                &compressed[start..end],
+            )
+        })?;
     }
     Ok(pages[0])
 }
@@ -155,19 +154,27 @@ pub(crate) fn collect_pages<S: Store>(store: &S, meta: &MetaV4) -> Result<ChainP
         pages: [0; MAX_PAGES],
         len: 0,
     };
-    walk(
-        meta,
-        |page_number, page| store.read(page_number, page),
-        |page_number, _| {
-            let slot = output
-                .pages
-                .get_mut(output.len)
-                .ok_or(Error::Corrupt("metadata chain exceeds its fixed bound"))?;
-            *slot = page_number;
-            output.len += 1;
-            Ok(())
-        },
-    )?;
+    let mut page_number = meta.metadata_root;
+    let mut logical_offset = 0u64;
+    let mut remaining = meta.metadata_compressed_len;
+    while remaining != 0 {
+        let slot = output
+            .pages
+            .get_mut(output.len)
+            .ok_or(Error::Corrupt("metadata chain exceeds its fixed bound"))?;
+        *slot = page_number;
+        output.len += 1;
+        let parsed = store.inspect_page(page_number, |page| {
+            let parsed = parse_page(page, page_number, meta, logical_offset, remaining)?;
+            Ok((parsed.next, parsed.bytes.len()))
+        })?;
+        logical_offset += parsed.1 as u64;
+        remaining -= parsed.1 as u64;
+        page_number = parsed.0;
+    }
+    if page_number != 0 {
+        return Err(Error::Corrupt("metadata chain has an extra page"));
+    }
     Ok(output)
 }
 
@@ -182,7 +189,7 @@ impl ChainPages {
     }
 }
 
-pub(crate) fn read(file: &File, meta: &MetaV4, output: &mut [u8]) -> Result<Option<usize>> {
+pub(crate) fn read(mapping: &Mapping, meta: &MetaV4, output: &mut [u8]) -> Result<Option<usize>> {
     if meta.metadata_root == 0 {
         return Ok(None);
     }
@@ -195,51 +202,39 @@ pub(crate) fn read(file: &File, meta: &MetaV4, output: &mut [u8]) -> Result<Opti
     }
 
     let mut inflater = Inflater::new(&mut output[..required]);
-    walk(
-        meta,
-        |page_number, page| file_io::read_page(file, page_number, meta.page_count, page),
-        |_, bytes| inflater.feed(bytes),
-    )?;
+    walk_mapping(mapping, meta, &mut inflater)?;
     inflater.finish(meta.metadata_compressed_len)?;
     Ok(Some(required))
 }
 
-pub(crate) fn read_vec(file: &File, meta: &MetaV4) -> Result<Option<Vec<u8>>> {
+pub(crate) fn read_vec(mapping: &Mapping, meta: &MetaV4) -> Result<Option<Vec<u8>>> {
     if meta.metadata_root == 0 {
         return Ok(None);
     }
     let length = usize::try_from(meta.metadata_uncompressed_len)
         .map_err(|_| Error::Corrupt("metadata length is not addressable"))?;
     let mut output = vec![0; length];
-    if read(file, meta, &mut output)? != Some(length) {
+    if read(mapping, meta, &mut output)? != Some(length) {
         return Err(Error::Corrupt("metadata length changed while reading"));
     }
     Ok(Some(output))
 }
 
-fn walk(
-    meta: &MetaV4,
-    mut read_page: impl FnMut(u32, &mut [u8; PAGE_SIZE]) -> Result<()>,
-    mut visit: impl FnMut(u32, &[u8]) -> Result<()>,
-) -> Result<()> {
-    if meta.metadata_root == 0 {
-        return Ok(());
-    }
+fn walk_mapping(mapping: &Mapping, meta: &MetaV4, inflater: &mut Inflater<'_>) -> Result<()> {
     let mut page_number = meta.metadata_root;
     let mut logical_offset = 0u64;
     let mut remaining = meta.metadata_compressed_len;
     let mut pages = 0usize;
-
     while remaining != 0 {
         if pages == MAX_PAGES {
             return Err(Error::Corrupt("metadata chain exceeds its fixed bound"));
         }
-        let mut page = [0; PAGE_SIZE];
-        read_page(page_number, &mut page)?;
-        let parsed = parse_page(&page, page_number, meta, logical_offset, remaining)?;
-        visit(page_number, parsed.bytes)?;
-        logical_offset += parsed.bytes.len() as u64;
-        remaining -= parsed.bytes.len() as u64;
+        let page = mapping.page(page_number, meta.page_count)?;
+        let parsed = parse_page(page, page_number, meta, logical_offset, remaining)?;
+        let length = parsed.bytes.len();
+        inflater.feed_source(parsed.bytes)?;
+        logical_offset += length as u64;
+        remaining -= length as u64;
         page_number = parsed.next;
         pages += 1;
     }
@@ -249,18 +244,18 @@ fn walk(
     Ok(())
 }
 
-pub(crate) struct ParsedPage<'a> {
+pub(crate) struct ParsedPage<S> {
     pub(crate) next: u32,
-    pub(crate) bytes: &'a [u8],
+    pub(crate) bytes: ByteRange<S>,
 }
 
-pub(crate) fn parse_page<'a>(
-    page: &'a [u8; PAGE_SIZE],
+pub(crate) fn parse_page<S: ByteSource>(
+    page: S,
     page_number: u32,
     meta: &MetaV4,
     expected_offset: u64,
     remaining: u64,
-) -> Result<ParsedPage<'a>> {
+) -> Result<ParsedPage<S>> {
     require_page_header(page, meta)?;
     let next = u32_le(page, 32);
     let length = usize::from(u16_le(page, 36));
@@ -274,19 +269,20 @@ pub(crate) fn parse_page<'a>(
     )?;
     Ok(ParsedPage {
         next,
-        bytes: &page[DATA_OFFSET..DATA_OFFSET + length],
+        bytes: ByteRange::new(page, DATA_OFFSET, length)
+            .ok_or(Error::Corrupt("metadata page body is invalid"))?,
     })
 }
 
-fn require_page_header(page: &[u8; PAGE_SIZE], meta: &MetaV4) -> Result<()> {
+fn require_page_header<S: ByteSource>(page: S, meta: &MetaV4) -> Result<()> {
     require_page_identity(page)?;
     require_page_generation(page, meta)
 }
 
-fn require_page_identity(page: &[u8; PAGE_SIZE]) -> Result<()> {
-    if page[..4] != PAGE_MAGIC
-        || page[4] != PAGE_TYPE
-        || page[5] != 0
+fn require_page_identity<S: ByteSource>(page: S) -> Result<()> {
+    if !page.equals(0, &PAGE_MAGIC)
+        || page.byte(4) != Some(PAGE_TYPE)
+        || page.byte(5) != Some(0)
         || u16_le(page, 6) != BODY_OFFSET as u16
         || u32_le(page, 24) != 0
     {
@@ -295,7 +291,7 @@ fn require_page_identity(page: &[u8; PAGE_SIZE]) -> Result<()> {
     Ok(())
 }
 
-fn require_page_generation(page: &[u8; PAGE_SIZE], meta: &MetaV4) -> Result<()> {
+fn require_page_generation<S: ByteSource>(page: S, meta: &MetaV4) -> Result<()> {
     let born_txn = u64_le(page, 8);
     if born_txn == 0 || born_txn > meta.txn_id || u16_le(page, 16) != 1 || u16_le(page, 18) != 0 {
         return Err(Error::Corrupt("metadata page header is invalid"));
@@ -303,8 +299,8 @@ fn require_page_generation(page: &[u8; PAGE_SIZE], meta: &MetaV4) -> Result<()> 
     Ok(())
 }
 
-fn require_page_body(
-    page: &[u8; PAGE_SIZE],
+fn require_page_body<S: ByteSource>(
+    page: S,
     expected_offset: u64,
     length: usize,
     expected_length: usize,
@@ -317,7 +313,7 @@ fn require_page_body(
     {
         return Err(Error::Corrupt("metadata page body is invalid"));
     }
-    if page[DATA_OFFSET + length..].iter().any(|&byte| byte != 0) {
+    if !page.all_zero(DATA_OFFSET + length, PAGE_SIZE - DATA_OFFSET - length) {
         return Err(Error::Corrupt("metadata page body is invalid"));
     }
     Ok(())
@@ -337,25 +333,25 @@ fn require_page_link(
     Ok(())
 }
 
-fn encode_page(
-    page: &mut [u8; PAGE_SIZE],
+fn encode_page<P: PageEdit>(
+    page: &mut P,
     born_txn: u64,
     next: u32,
     logical_offset: u64,
     bytes: &[u8],
-) {
+) -> Result<()> {
     page.fill(0);
-    page[..4].copy_from_slice(&PAGE_MAGIC);
-    page[4] = PAGE_TYPE;
-    put_u16(page, 6, BODY_OFFSET as u16);
-    put_u64(page, 8, born_txn);
-    put_u16(page, 16, 1);
-    put_u16(page, 20, (DATA_OFFSET + bytes.len()) as u16);
-    put_u16(page, 22, PAGE_SIZE as u16);
-    put_u32(page, 32, next);
-    put_u16(page, 36, bytes.len() as u16);
-    put_u64(page, 40, logical_offset);
-    page[DATA_OFFSET..DATA_OFFSET + bytes.len()].copy_from_slice(bytes);
+    page.write(0, &PAGE_MAGIC)?;
+    page.set_byte(4, PAGE_TYPE)?;
+    page.put_u16(6, BODY_OFFSET as u16)?;
+    page.put_u64(8, born_txn)?;
+    page.put_u16(16, 1)?;
+    page.put_u16(20, (DATA_OFFSET + bytes.len()) as u16)?;
+    page.put_u16(22, PAGE_SIZE as u16)?;
+    page.put_u32(32, next)?;
+    page.put_u16(36, bytes.len() as u16)?;
+    page.put_u64(40, logical_offset)?;
+    page.write(DATA_OFFSET, bytes)
 }
 
 pub(crate) struct Inflater<'a> {
@@ -398,6 +394,21 @@ impl<'a> Inflater<'a> {
             if step.consumed == 0 && step.produced == 0 {
                 return Err(Error::Corrupt("metadata zlib stream made no progress"));
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn feed_source<S: ByteSource>(&mut self, input: S) -> Result<()> {
+        const CHUNK: usize = 256;
+        let mut buffer = [0u8; CHUNK];
+        let mut offset = 0usize;
+        while offset < input.len() {
+            let length = (input.len() - offset).min(CHUNK);
+            if !input.copy_range_to(offset, &mut buffer[..length]) {
+                return Err(Error::Corrupt("metadata mapping changed while reading"));
+            }
+            self.feed(&buffer[..length])?;
+            offset += length;
         }
         Ok(())
     }

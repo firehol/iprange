@@ -1,5 +1,5 @@
-use crate::bootstrap::{classify_recovery_meta, MetaProblem, RecoveryMetaState};
-use crate::contract::{MetaV4, META_SIZE, PAGE_SIZE};
+use crate::bootstrap::{MetaProblem, RecoveryMetaState};
+use crate::contract::MetaV4;
 use crate::error::Result;
 use crate::validation::{LocalFileIdentity, ValidationProgress, ValidationReason};
 
@@ -17,12 +17,8 @@ pub(crate) struct ClassifiedMetas {
 }
 
 impl ClassifiedMetas {
-    pub(crate) fn new(pages: [Option<[u8; PAGE_SIZE]>; 2]) -> Self {
-        let states = [
-            pages[0].as_ref().map(classify_recovery_meta),
-            pages[1].as_ref().map(classify_recovery_meta),
-        ];
-        let order = classify_order(&pages, &states);
+    pub(crate) fn new(states: [Option<RecoveryMetaState>; 2]) -> Self {
+        let order = classify_order(&states);
         Self { states, order }
     }
 
@@ -128,13 +124,8 @@ impl ClassifiedMetas {
     }
 }
 
-fn classify_order(
-    pages: &[Option<[u8; PAGE_SIZE]>; 2],
-    states: &[Option<RecoveryMetaState>; 2],
-) -> GenerationOrder {
-    let (Some(page0), Some(page1), Some(state0), Some(state1)) =
-        (&pages[0], &pages[1], states[0], states[1])
-    else {
+fn classify_order(states: &[Option<RecoveryMetaState>; 2]) -> GenerationOrder {
+    let (Some(state0), Some(state1)) = (states[0], states[1]) else {
         return GenerationOrder::Unproven;
     };
     let (Ok(meta0), Ok(meta1)) = (state0.order, state1.order) else {
@@ -144,21 +135,17 @@ fn classify_order(
         return GenerationOrder::Unproven;
     }
     if meta0.txn_id == meta1.txn_id {
-        return equal_order(page0, page1, meta0.txn_id);
+        return equal_order(meta0, meta1);
     }
     adjacent_order(meta0, meta1)
 }
 
-fn equal_order(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
-    transaction: u64,
-) -> GenerationOrder {
-    if page0[..META_SIZE as usize] != page1[..META_SIZE as usize] {
+fn equal_order(meta0: MetaV4, meta1: MetaV4) -> GenerationOrder {
+    if meta0 != meta1 {
         return GenerationOrder::Unproven;
     }
     GenerationOrder::Proven {
-        current: (transaction & 1) as u8,
+        current: (meta0.txn_id & 1) as u8,
         previous: None,
     }
 }

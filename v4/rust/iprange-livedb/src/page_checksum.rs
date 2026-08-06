@@ -1,12 +1,23 @@
 //! Commit-time CRC sealing for non-meta main-file pages.
 
-use crate::contract::PAGE_SIZE;
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::slotted_page::put_u32;
+use crate::mapping::PageMut;
+#[cfg(test)]
+use crate::{contract::PAGE_SIZE, slotted_page::put_u32};
 
 const CRC_OFFSET: usize = 28;
 
+pub(crate) fn seal_mapped(page: &mut PageMut<'_>) -> Result<()> {
+    page.put_u32(CRC_OFFSET, 0)?;
+    let checksum = crc32c::crc32c_page_mut_with_zeroed(page, CRC_OFFSET, 4)
+        .ok_or(Error::Corrupt("page checksum field is invalid"))?;
+    page.put_u32(CRC_OFFSET, checksum)?;
+    work::sealed();
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn seal(page: &mut [u8; PAGE_SIZE]) -> Result<()> {
     put_u32(page, CRC_OFFSET, 0);
     let checksum = crc32c::crc32c_with_zeroed(page, CRC_OFFSET, 4)

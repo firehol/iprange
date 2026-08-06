@@ -5,9 +5,9 @@ use std::path::Path;
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_sidecar::{self, Identity, Sidecar};
+use crate::mapping::Mapping;
 use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 use crate::random;
 use crate::validation::LocalFileIdentity;
@@ -341,10 +341,10 @@ fn initialize_pair(
 
 pub(crate) fn write_empty_main(main: &std::fs::File, meta: MetaV4) -> Result<()> {
     main.set_len((2 * PAGE_SIZE) as u64)?;
-    let mut page = [0; PAGE_SIZE];
-    meta.encode_into(&mut page);
-    file_io::write_exact_at(main, &page, 0)?;
-    file_io::write_exact_at(main, &page, PAGE_SIZE as u64)?;
+    let mut mapping = Mapping::read_write_view(main, (2 * PAGE_SIZE) as u64)?;
+    meta.encode_mapped(mapping.page_mut(0, 2)?)?;
+    meta.encode_mapped(mapping.page_mut(1, 2)?)?;
+    mapping.flush_range(0, (2 * PAGE_SIZE) as u64)?;
     main.sync_all()?;
     Ok(())
 }

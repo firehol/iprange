@@ -6,9 +6,9 @@ use std::path::Path;
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::error::{Error, ErrorCode};
-use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar;
+use crate::mapping::Mapping;
 use crate::validation::LocalFileIdentity;
 
 use crate::publication::namespace::IDENTITY_KIND;
@@ -241,10 +241,13 @@ fn selected_bound_header(
     destination: &Destination,
     regular: &Regular,
 ) -> Result<Option<Header>, Problem> {
-    let Some(bytes) = reservation_bytes(&regular.file)? else {
+    let Some(mapping) = reservation_mapping(&regular.file)? else {
         return Ok(None);
     };
-    let Ok(selected) = reservation::select(&bytes) else {
+    let bytes = mapping
+        .bytes(0, RESERVATION_SIZE)
+        .map_err(|error| Problem::sdk(&error))?;
+    let Ok(selected) = reservation::select(bytes) else {
         return Ok(None);
     };
     if reservation_inspection::require_bound(destination, selected.header, regular.identity, None)
@@ -305,10 +308,12 @@ fn verify_coordination(handle: &Handle) -> Result<(), Problem> {
 }
 
 fn reject_selectable(file: &File) -> Result<(), Problem> {
-    if reservation_bytes(file)?
-        .as_ref()
-        .is_some_and(|bytes| reservation::contains_selectable_header(bytes))
-        || live_sidecar::has_selectable_header(file).map_err(|error| Problem::sdk(&error))?
+    if reservation_mapping(file)?.is_some_and(|mapping| {
+        mapping
+            .bytes(0, RESERVATION_SIZE)
+            .ok()
+            .is_some_and(reservation::contains_selectable_header)
+    }) || live_sidecar::has_selectable_header(file).map_err(|error| Problem::sdk(&error))?
     {
         return Err(selection_conflict(
             "selectable coordination requires its operation-specific resolver",
@@ -317,7 +322,7 @@ fn reject_selectable(file: &File) -> Result<(), Problem> {
     Ok(())
 }
 
-fn reservation_bytes(file: &File) -> Result<Option<[u8; RESERVATION_SIZE]>, Problem> {
+fn reservation_mapping(file: &File) -> Result<Option<Mapping>, Problem> {
     if file
         .metadata()
         .map_err(Error::from)
@@ -327,9 +332,9 @@ fn reservation_bytes(file: &File) -> Result<Option<[u8; RESERVATION_SIZE]>, Prob
     {
         return Ok(None);
     }
-    let mut bytes = [0; RESERVATION_SIZE];
-    file_io::read_exact_at(file, &mut bytes, 0).map_err(|error| Problem::sdk(&error))?;
-    Ok(Some(bytes))
+    Mapping::read_only_view(file, RESERVATION_SIZE as u64)
+        .map(Some)
+        .map_err(|error| Problem::sdk(&error))
 }
 
 fn finish_removal(

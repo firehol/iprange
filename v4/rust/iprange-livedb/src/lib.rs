@@ -25,7 +25,6 @@ mod fault;
 mod feed;
 mod feed_catalog;
 mod feed_range_cursor;
-mod file_io;
 mod fixed_tree;
 mod free_bitmap;
 mod immutable_output;
@@ -36,6 +35,7 @@ mod live_lock;
 mod live_reader;
 mod live_sidecar;
 mod live_writer;
+mod mapping;
 mod membership_delta;
 mod membership_dictionary;
 mod membership_tree;
@@ -111,3 +111,5 @@ pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
 mod live_crash_tests;
 #[cfg(test)]
 mod test_alloc;
+#[cfg(test)]
+mod test_support_tests;

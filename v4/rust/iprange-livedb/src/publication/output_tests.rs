@@ -8,9 +8,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sha2::{Digest, Sha512};
 
 use super::*;
-use crate::contract::{AddressFamily, ValueKind, ValueTag};
+use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
 use crate::key::Ipv4Key;
+use crate::mapping::test_support as file_io;
 use crate::test_alloc::count_thread_allocations;
 
 #[test]

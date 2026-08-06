@@ -2,6 +2,7 @@ use crate::contract::{u16_le, u32_le, ValueKind};
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
 use crate::feed_catalog::{self, FeedCursor};
+use crate::mapping::ByteSource;
 
 use super::bitmap::{self, Kind};
 use super::context::Context;
@@ -32,15 +33,15 @@ impl Codec for NameCodec {
     const BRANCH_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key> {
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode(cell).map(|entry| entry.name)
     }
 
-    fn branch_child(cell: &[u8]) -> Option<u32> {
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
         decode(cell).map(|entry| entry.index)
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode(cell).map(|entry| entry.name)
     }
 }
@@ -60,15 +61,15 @@ impl Codec for IndexCodec {
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key> {
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         Some(u32_le(cell, 0))
     }
 
-    fn branch_child(cell: &[u8]) -> Option<u32> {
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
         Some(u32_le(cell, 4))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode(cell).map(|entry| entry.index)
     }
 }
@@ -121,10 +122,10 @@ fn validate_used_bitmap<S: ValidationSink>(context: &mut Context<'_, S>) -> Resu
     Ok(())
 }
 
-fn validate_record<S: ValidationSink>(
+fn validate_record<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    cell: &[u8],
+    cell: P,
 ) -> Result<()> {
     let Some(entry) = decode(cell) else {
         return Ok(());
@@ -142,7 +143,7 @@ fn validate_record<S: ValidationSink>(
 }
 
 fn cross_check<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {
-    let mut cursor = match FeedCursor::new(context.file, &context.meta) {
+    let mut cursor = match FeedCursor::new(context.mapping, &context.meta) {
         Ok(cursor) => cursor,
         Err(_) => return bijection_finding(context),
     };
@@ -160,7 +161,7 @@ fn cross_check<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {
 }
 
 fn pair_matches<S: ValidationSink>(context: &Context<'_, S>, entry: FeedEntry) -> Result<bool> {
-    let name = match feed_catalog::lookup(context.file, &context.meta, &entry.name) {
+    let name = match feed_catalog::lookup(context.mapping, &context.meta, &entry.name) {
         Ok(name) => name,
         Err(_) => return Ok(false),
     };
@@ -177,18 +178,18 @@ fn pair_matches<S: ValidationSink>(context: &Context<'_, S>, entry: FeedEntry) -
     .or(Ok(false))
 }
 
-fn decode(cell: &[u8]) -> Option<FeedEntry> {
-    let name_len = usize::from(*cell.get(8)?);
+fn decode<P: ByteSource>(cell: P) -> Option<FeedEntry> {
+    let name_len = usize::from(cell.byte(8)?);
     if cell.len() != RECORD_BASE + name_len
         || usize::from(u16_le(cell, 0)) != cell.len()
         || u16_le(cell, 2) != 0
-        || cell.get(9..12)? != [0; 3]
+        || !cell.all_zero(9, 3)
     {
         return None;
     }
     Some(FeedEntry {
         index: u32_le(cell, 4),
-        name: FeedName::from_stored(cell.get(RECORD_BASE..)?)?,
+        name: FeedName::from_source(cell, RECORD_BASE, name_len)?,
     })
 }
 

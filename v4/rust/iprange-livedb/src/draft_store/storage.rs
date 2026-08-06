@@ -1,18 +1,26 @@
-//! File-backed page storage and allocator integration.
+//! Mapped page storage and allocator integration.
 
-use crate::contract::{u32_le, u64_le, MetaV4, PAGE_MAGIC, PAGE_SHIFT, PAGE_SIZE};
+use crate::contract::{u32_le, u64_le, MetaV4, PAGE_MAGIC};
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::free_bitmap::{self, BitmapStore};
+use crate::mapping::{ByteSource, PageMut, PageView};
 use crate::page_checksum;
-use crate::slotted_page::put_u32;
 
 use super::{DraftStore, PRIVATE_MAGIC};
 
 const DIRTY_END: u32 = 1;
 
 impl Store for DraftStore<'_> {
+    type ReadPage<'a>
+        = PageView<'a>
+    where
+        Self: 'a;
+    type WritePage<'a>
+        = PageMut<'a>
+    where
+        Self: 'a;
+
     fn target_txn(&self) -> u64 {
         self.draft.meta.txn_id
     }
@@ -21,66 +29,12 @@ impl Store for DraftStore<'_> {
         self.draft.meta.page_count
     }
 
-    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
-            return Err(Error::Corrupt("page number is outside committed bounds"));
-        }
-        if self
-            .draft
-            .page_cache
-            .borrow()
-            .as_ref()
-            .is_some_and(|cache| cache.read(page_number, page))
-        {
-            return Ok(());
-        }
-        let file = self.file;
-        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
-            cache.prepare(page_number, &mut |dirty_page, bytes| {
-                persist_unsealed(file, dirty_page, bytes)
-            })?;
-        }
-        file_io::read_page(self.file, page_number, self.draft.meta.page_count, page)?;
-        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
-            cache.store_clean(page_number, page, &mut |dirty_page, bytes| {
-                persist_unsealed(file, dirty_page, bytes)
-            })?;
-        }
-        Ok(())
-    }
-
-    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
     where
-        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
     {
-        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
-            return Err(Error::Corrupt("page number is outside committed bounds"));
-        }
-        let cache_enabled = self
-            .draft
-            .page_cache
-            .borrow()
-            .as_ref()
-            .is_some_and(|cache| cache.enabled());
-        if !cache_enabled {
-            let mut page = [0; PAGE_SIZE];
-            self.read(page_number, &mut page)?;
-            return inspect(&page);
-        }
-
-        let file = self.file;
-        let page_limit = self.draft.meta.page_count;
-        self.draft
-            .page_cache
-            .borrow_mut()
-            .as_mut()
-            .expect("enabled page cache is present")
-            .inspect(
-                page_number,
-                &mut |number, page| file_io::read_page(file, number, page_limit, page),
-                &mut |number, page| persist_unsealed(file, number, page),
-                inspect,
-            )
+        require_page(page_number, self.draft.meta.page_count)?;
+        inspect(self.mapping.page(page_number, self.draft.meta.page_count)?)
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -94,96 +48,71 @@ impl Store for DraftStore<'_> {
             self.charge_private()?;
             self.draft.meta.free_bitmap_root = root;
             self.draft.allocator_retired.extend(retired.as_slice())?;
+            self.claim_allocated(page)?;
             return Ok(page);
         }
         self.draft.meta.free_bitmap_root = root;
         self.allocate_tail()
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
-            return Err(Error::Corrupt("draft write is outside page bounds"));
-        }
-        let tag = if page[..4] == PAGE_MAGIC {
-            if u64_le(page, 8) != self.draft.meta.txn_id {
-                return Err(Error::Corrupt("draft write has the wrong transaction"));
-            }
-            self.dirty_tag(page_number)?
-        } else {
-            u32_le(page, 28)
-        };
-        self.persist_tagged(page_number, page, tag)
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        require_page(page_number, self.draft.meta.page_count)?;
+        let tag = self.dirty_tag(page_number)?;
+        let mut page = self
+            .mapping
+            .page_mut(page_number, self.draft.meta.page_count)?;
+        let result = update(&mut page)?;
+        require_private_output(page.view(), self.draft.meta.txn_id)?;
+        page.put_u32(28, tag)?;
+        Ok(result)
     }
 
-    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
     where
-        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
     {
-        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
-            return Err(Error::Corrupt("draft update is outside page bounds"));
-        }
-        let cache_enabled = self
-            .draft
-            .page_cache
-            .borrow()
-            .as_ref()
-            .is_some_and(|cache| cache.enabled());
-        if !cache_enabled {
-            let mut page = [0; PAGE_SIZE];
-            self.read(page_number, &mut page)?;
-            update(&mut page)?;
-            return self.write(page_number, &page);
-        }
-
-        let tag = self.dirty_tag(page_number)?;
-        let file = self.file;
-        let page_limit = self.draft.meta.page_count;
-        let target_txn = self.draft.meta.txn_id;
-        self.draft
-            .page_cache
-            .borrow_mut()
-            .as_mut()
-            .expect("enabled page cache is present")
-            .update(
-                page_number,
-                tag,
-                &mut |number, page| file_io::read_page(file, number, page_limit, page),
-                &mut |number, page| persist_unsealed(file, number, page),
-                |page| {
-                    if page[..4] != PAGE_MAGIC || u64_le(page, 8) != target_txn {
-                        return Err(Error::Corrupt("draft update has the wrong transaction"));
-                    }
-                    update(page)
-                },
-            )
+        require_page(source, self.draft.meta.page_count)?;
+        require_page(destination, self.draft.meta.page_count)?;
+        let tag = self.dirty_tag(destination)?;
+        let (source, mut destination) =
+            self.mapping
+                .page_pair(source, destination, self.draft.meta.page_count)?;
+        let result = copy(source, &mut destination)?;
+        require_private_output(destination.view(), self.draft.meta.txn_id)?;
+        destination.put_u32(28, tag)?;
+        Ok(result)
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {
-        if page_number < 2
-            || u64::from(page_number) >= self.draft.meta.page_count
-            || page_number == self.draft.private_head
-        {
+        if page_number == self.draft.private_head {
             return Err(Error::Corrupt("discarded private page is invalid"));
         }
-        let mut page = [0; PAGE_SIZE];
-        self.read(page_number, &mut page)?;
-        if u64_le(&page, 8) != self.draft.meta.txn_id {
-            return Err(Error::Corrupt(
-                "committed page cannot enter the private stack",
-            ));
-        }
-        let dirty_tag = u32_le(&page, 28);
-        if dirty_tag == 0 {
-            return Err(Error::Corrupt(
-                "private page is absent from the dirty chain",
-            ));
-        }
-        page.fill(0);
-        put_u32(&mut page, 0, PRIVATE_MAGIC);
-        put_u32(&mut page, 4, self.draft.private_head);
-        crate::slotted_page::put_u64(&mut page, 8, self.draft.meta.txn_id);
-        put_u32(&mut page, 28, dirty_tag);
-        self.write(page_number, &page)?;
+        let txn = self.draft.meta.txn_id;
+        let dirty_tag = self.inspect_page(page_number, |page| {
+            if u64_le(page, 8) != txn {
+                return Err(Error::Corrupt(
+                    "committed page cannot enter the private stack",
+                ));
+            }
+            let tag = u32_le(page, 28);
+            if tag == 0 {
+                return Err(Error::Corrupt(
+                    "private page is absent from the dirty chain",
+                ));
+            }
+            Ok(tag)
+        })?;
+        let next = self.draft.private_head;
+        self.update_page(page_number, |page| {
+            page.fill(0);
+            page.put_u32(0, PRIVATE_MAGIC)?;
+            page.put_u32(4, next)?;
+            page.put_u64(8, txn)?;
+            page.put_u32(28, dirty_tag)
+        })?;
         self.draft.private_head = page_number;
         Ok(())
     }
@@ -203,28 +132,22 @@ impl DraftStore<'_> {
             }
             remaining -= 1;
 
-            let mut page = [0; PAGE_SIZE];
-            self.read(page_number, &mut page)?;
-            let next = dirty_next(u32_le(&page, 28), page_number, self.page_limit())?;
-            if page[..4] == PAGE_MAGIC {
-                if u64_le(&page, 8) != self.draft.meta.txn_id {
+            let txn = self.draft.meta.txn_id;
+            let limit = self.draft.meta.page_count;
+            let (next, data_page) = self.inspect_page(page_number, |page| {
+                let next = dirty_next(u32_le(page, 28), page_number, limit)?;
+                if page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) != txn {
                     return Err(Error::Corrupt("dirty page has the wrong transaction"));
                 }
-                page_checksum::seal(&mut page)?;
-                self.persist(page_number, &page)?;
+                Ok((next, page.equals(0, &PAGE_MAGIC)))
+            })?;
+            if data_page {
+                let mut page = self.mapping.page_mut(page_number, limit)?;
+                page_checksum::seal_mapped(&mut page)?;
             }
             page_number = next;
         }
-        self.flush_page_cache()?;
         self.draft.dirty_head = 0;
-        Ok(())
-    }
-
-    pub(crate) fn flush_page_cache(&self) -> Result<()> {
-        let file = self.file;
-        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
-            cache.flush(&mut |page_number, bytes| persist_unsealed(file, page_number, bytes))?;
-        }
         Ok(())
     }
 
@@ -242,70 +165,52 @@ impl DraftStore<'_> {
     }
 
     fn existing_dirty_tag(&self, page_number: u32) -> Result<Option<u32>> {
-        let header = self
-            .draft
-            .page_cache
-            .borrow()
-            .as_ref()
-            .and_then(|cache| cache.header(page_number));
-        let header = match header {
-            Some(header) => Some(header),
-            None => self.file_header(page_number)?,
-        };
-        let Some(header) = header else {
-            return Ok(None);
-        };
-        let owned_data = header[..4] == PAGE_MAGIC && u64_le(&header, 8) == self.draft.meta.txn_id;
+        require_page(page_number, self.draft.meta.page_count)?;
+        let page = self.mapping.page(page_number, self.draft.meta.page_count)?;
+        let owned_data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == self.draft.meta.txn_id;
         let private_stack =
-            u32_le(&header, 0) == PRIVATE_MAGIC && u64_le(&header, 8) == self.draft.meta.txn_id;
-        let tag = u32_le(&header, 28);
+            u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == self.draft.meta.txn_id;
+        let tag = u32_le(page, 28);
         Ok(((owned_data || private_stack) && tag != 0).then_some(tag))
     }
 
-    fn file_header(&self, page_number: u32) -> Result<Option<[u8; 32]>> {
-        let offset = page_offset(page_number)?;
-        if self.file.metadata()?.len() < offset + 32 {
-            return Ok(None);
-        }
-        let mut header = [0; 32];
-        file_io::read_exact_at(self.file, &mut header, offset)?;
-        Ok(Some(header))
-    }
-
-    fn persist_tagged(&self, page_number: u32, page: &[u8; PAGE_SIZE], tag: u32) -> Result<()> {
-        let file = self.file;
-        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
-            if cache.store_dirty(page_number, page, tag, &mut |dirty_page, bytes| {
-                persist_unsealed(file, dirty_page, bytes)
-            })? {
-                return Ok(());
-            }
-        }
-        let mut bytes = *page;
-        put_u32(&mut bytes, 28, tag);
-        persist_unsealed(self.file, page_number, &bytes)
-    }
-
-    fn persist(&self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        let offset = page_offset(page_number)?;
-        let file = self.file;
-        if let Some(cache) = self.draft.page_cache.borrow_mut().as_mut() {
-            cache.store_clean(page_number, page, &mut |dirty_page, bytes| {
-                persist_unsealed(file, dirty_page, bytes)
-            })?;
-        }
-        file_io::write_exact_at(self.file, page, offset)
+    pub(super) fn claim_allocated(&mut self, page_number: u32) -> Result<()> {
+        require_page(page_number, self.draft.meta.page_count)?;
+        let tag = if self.draft.dirty_head == 0 {
+            DIRTY_END
+        } else {
+            self.draft.dirty_head
+        };
+        let txn = self.draft.meta.txn_id;
+        let mut page = self
+            .mapping
+            .page_mut(page_number, self.draft.meta.page_count)?;
+        page.zero(0, 32)?;
+        page.put_u32(0, PRIVATE_MAGIC)?;
+        page.put_u64(8, txn)?;
+        page.put_u32(28, tag)?;
+        self.draft.dirty_head = page_number;
+        Ok(())
     }
 }
 
-fn page_offset(page_number: u32) -> Result<u64> {
-    u64::from(page_number)
-        .checked_shl(u32::from(PAGE_SHIFT))
-        .ok_or(Error::ArithmeticOverflow("draft page offset"))
+fn require_private_output(page: PageView<'_>, target_txn: u64) -> Result<()> {
+    let data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == target_txn;
+    let private = u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == target_txn;
+    let reserve = page.all_zero(0, 28);
+    if data || private || reserve {
+        Ok(())
+    } else {
+        Err(Error::Corrupt("draft update has the wrong transaction"))
+    }
 }
 
-fn persist_unsealed(file: &std::fs::File, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-    file_io::write_exact_at(file, page, page_offset(page_number)?)
+fn require_page(page_number: u32, page_limit: u64) -> Result<()> {
+    if page_number < 2 || u64::from(page_number) >= page_limit {
+        Err(Error::Corrupt("page number is outside draft bounds"))
+    } else {
+        Ok(())
+    }
 }
 
 fn dirty_next(tag: u32, page_number: u32, page_limit: u64) -> Result<u32> {
@@ -333,6 +238,7 @@ impl BitmapStore for DraftStore<'_> {
             let page = *slot;
             *slot = 0;
             self.charge_private()?;
+            self.claim_allocated(page)?;
             return Ok(page);
         }
         self.allocate_tail()

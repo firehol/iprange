@@ -2,9 +2,10 @@
 
 use super::*;
 use crate::bootstrap;
-use crate::contract::{AddressFamily, ValueTag, PAGE_MAGIC};
+use crate::contract::{AddressFamily, ValueTag, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::database::ImmutableReader;
+use crate::mapping::Mapping;
 use crate::slotted_page::{put_u16, put_u32, put_u64, Builder, HEADER_SIZE};
 use crate::test_alloc::count_thread_allocations;
 use std::fs::{self, File};
@@ -305,7 +306,8 @@ fn lookup_and_cross_leaf_cursor_step_allocate_nothing() {
 fn live_cursor_rejects_a_foreign_process_owner() {
     let (_reader, path, meta) = two_feed_fixture(2);
     let file = File::open(&path.0).unwrap();
+    let mapping = Mapping::read_only(file, fs::metadata(&path.0).unwrap().len()).unwrap();
     let foreign = std::process::id().checked_add(1).unwrap();
-    let mut cursor = FeedCursor::new_live(&file, &meta, foreign).unwrap();
+    let mut cursor = FeedCursor::new_live(&mapping, &meta, foreign).unwrap();
     assert!(matches!(cursor.next_feed(), Err(Error::ForkedHandle)));
 }

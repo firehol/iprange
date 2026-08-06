@@ -7,12 +7,12 @@ use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::database;
 use crate::error::{combine_errors, Error, Result};
-use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
 use crate::live_writer::{
     CommitCleanupArtifact, CommitCleanupArtifacts, CommitResult, LocalBasename,
 };
+use crate::mapping::Mapping;
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::validation::LocalFileIdentity;
 
@@ -226,10 +226,9 @@ fn resolve_locked(
 
 fn classify(file: &std::fs::File, attempt: &CommitResult) -> Result<Classification> {
     let physical_bytes = file.metadata()?.len();
-    let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut pages, 0)?;
-    let page0 = (&pages[..PAGE_SIZE]).try_into().unwrap();
-    let page1 = (&pages[PAGE_SIZE..]).try_into().unwrap();
+    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
+    let page0 = mapping.page(0, 2)?;
+    let page1 = mapping.page(1, 2)?;
     let selected = bootstrap::open_meta_pages(page0, page1, physical_bytes, OpenMode::Writer)?;
     let resolution = match bootstrap::resolve_commit_attempt(
         page0,
@@ -312,10 +311,9 @@ fn trim_tail(
 
 fn classify_selected(file: &std::fs::File, resolution: CommitResolution) -> Result<Classification> {
     let physical_bytes = file.metadata()?.len();
-    let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut pages, 0)?;
-    let page0 = (&pages[..PAGE_SIZE]).try_into().unwrap();
-    let page1 = (&pages[PAGE_SIZE..]).try_into().unwrap();
+    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
+    let page0 = mapping.page(0, 2)?;
+    let page1 = mapping.page(1, 2)?;
     let selected = bootstrap::open_meta_pages(page0, page1, physical_bytes, OpenMode::Writer)?;
     Ok(classification(resolution, selected))
 }

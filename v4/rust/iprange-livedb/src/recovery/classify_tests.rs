@@ -1,10 +1,11 @@
 use super::*;
 use crate::bootstrap::tests::empty_direct_meta;
+use crate::contract::PAGE_SIZE;
 
-fn encoded(meta: MetaV4) -> [u8; PAGE_SIZE] {
+fn encoded(meta: MetaV4) -> RecoveryMetaState {
     let mut page = [0; PAGE_SIZE];
     meta.encode_into(&mut page);
-    page
+    crate::bootstrap::classify_recovery_meta(&page)
 }
 
 fn identity() -> LocalFileIdentity {

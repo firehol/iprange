@@ -1,15 +1,16 @@
 //! Page-local insertion and split propagation.
 
-use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
-use crate::slotted_page::{self, Builder};
+use crate::mapping::ByteSource;
+use crate::slotted_page::{self, Builder, PageEdit};
 
 use super::page::{
     self, branch_child, build_edit, build_pair_edit, key_at, lower_bound, parse, require_codec,
     CellBuf, Edit, PairEdit,
 };
 use super::{
-    private_path, private_path_select, Codec, Frame, LeafChoice, Path, PrivateLeaf, RetiredPages,
+    private_path, private_path_select, Codec, Frame, LeafSelector, Path, PrivateLeaf, RetiredPages,
     Store,
 };
 
@@ -23,7 +24,6 @@ struct BranchSplit<K> {
 struct LeafTarget {
     path: Path,
     page_number: u32,
-    source: [u8; PAGE_SIZE],
     header: crate::slotted_page::Header,
     index: usize,
     exists: bool,
@@ -42,11 +42,11 @@ pub(crate) fn insert<C: Codec, S: Store>(
     retired: &mut RetiredPages,
 ) -> Result<bool> {
     require_leaf::<C>(leaf_cell)?;
-    let key = C::read_key(leaf_cell, 0)?;
     if *root == 0 {
         *root = new_leaf::<C, S>(store, leaf_cell)?;
         return Ok(true);
     }
+    let key = C::read_key(leaf_cell, 0)?;
     let target = locate_leaf::<C, S>(store, root, key, retired)?;
     edit_leaf::<C, S>(store, root, leaf_cell, target)
 }
@@ -70,90 +70,44 @@ where
     }
 
     let key = C::read_key(leaf_cell, 0)?;
-    let leaf =
-        locate_local_gap::<C, S, F>(store, root, key, leaf_cell.len(), retired, &mut accepts)?;
-    apply_local_gap::<C, S>(store, root, leaf_cell, leaf)
-}
-
-fn locate_local_gap<C, S, F>(
-    store: &mut S,
-    root: &mut u32,
-    key: C::Key,
-    cell_len: usize,
-    retired: &mut RetiredPages,
-    accepts: &mut F,
-) -> Result<PrivateLeaf<GapDecision>>
-where
-    C: Codec,
-    S: Store,
-    F: FnMut(Option<&[u8]>, Option<&[u8]>) -> Result<bool>,
-{
-    let leaf = private_path_select::<C, S, GapDecision, _>(
-        store,
-        root,
+    let mut selector = GapSelector::<C, F> {
         key,
-        retired,
-        |page, header, path| {
-            Ok(LeafChoice::Return(gap_decision::<C, F>(
-                page, header, path, key, cell_len, accepts,
-            )?))
-        },
-    )?;
+        cell_len: leaf_cell.len(),
+        accepts: &mut accepts,
+        marker: std::marker::PhantomData,
+    };
+    let leaf = private_path_select::<C, S, _>(store, root, key, retired, &mut selector)?;
     if !retired.as_slice().is_empty() {
         return Err(Error::Corrupt("private B+tree contains a committed page"));
     }
-    Ok(leaf)
-}
-
-fn apply_local_gap<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    leaf_cell: &[u8],
-    leaf: PrivateLeaf<GapDecision>,
-) -> Result<LocalInsert> {
-    let PrivateLeaf {
-        path,
-        page_number,
-        header,
-        selection,
-        ..
-    } = leaf;
-    let Some(selection) = selection else {
-        unreachable!("local-gap selector requested a copied leaf")
+    let GapDecision::Insert { index, fits } = leaf.selection else {
+        return Ok(LocalInsert::General);
     };
-    match selection {
-        GapDecision::General => Ok(LocalInsert::General),
-        GapDecision::Insert { index, fits } => {
-            if fits {
-                insert_fitting_local_leaf::<C, S>(
-                    store,
-                    root,
-                    leaf_cell,
-                    &path,
-                    page_number,
-                    header,
-                    index,
-                )?;
-            } else {
-                let mut source = [0; PAGE_SIZE];
-                store.read(page_number, &mut source)?;
-                insert_local_leaf::<C, S>(
-                    store,
-                    root,
-                    leaf_cell,
-                    LeafTarget {
-                        path,
-                        page_number,
-                        source,
-                        header,
-                        index,
-                        exists: false,
-                    },
-                )?;
-            }
-            Ok(LocalInsert::Inserted)
+    let target = LeafTarget {
+        path: leaf.path,
+        page_number: leaf.page_number,
+        header: leaf.header,
+        index,
+        exists: false,
+    };
+    if fits {
+        apply_leaf_edit::<C, S>(
+            store,
+            target.page_number,
+            &target.header,
+            Edit {
+                index: target.index,
+                replace: false,
+                cell: leaf_cell,
+            },
+        )?;
+        if target.index == 0 {
+            propagate_first::<C, S>(store, root, &target.path, key)?;
         }
+    } else {
+        edit_leaf::<C, S>(store, root, leaf_cell, target)?;
     }
+    Ok(LocalInsert::Inserted)
 }
 
 #[derive(Clone, Copy)]
@@ -162,109 +116,65 @@ enum GapDecision {
     Insert { index: usize, fits: bool },
 }
 
-type GapNeighbors<'a> = (Option<&'a [u8]>, Option<&'a [u8]>);
-
-fn gap_decision<C, F>(
-    page: &[u8; PAGE_SIZE],
-    header: &crate::slotted_page::Header,
-    path: &Path,
+struct GapSelector<'a, C: Codec, F> {
     key: C::Key,
     cell_len: usize,
-    accepts: &mut F,
-) -> Result<GapDecision>
+    accepts: &'a mut F,
+    marker: std::marker::PhantomData<C>,
+}
+
+impl<C, S, F> LeafSelector<C, S> for GapSelector<'_, C, F>
 where
     C: Codec,
+    S: Store,
     F: FnMut(Option<&[u8]>, Option<&[u8]>) -> Result<bool>,
 {
-    let (index, exists) = lower_bound::<C>(page, header, key, true)?;
-    if exists {
-        return Ok(GapDecision::General);
-    }
-    let Some((previous, next)) = local_gap_neighbors::<C>(page, header, path, index)? else {
-        return Ok(GapDecision::General);
-    };
-    if !accepts(previous, next)? {
-        return Ok(GapDecision::General);
-    }
-    Ok(GapDecision::Insert {
-        index,
-        fits: slotted_page::insert_fits(header, cell_len),
-    })
-}
+    type Selection = GapDecision;
 
-fn local_gap_neighbors<'a, C: Codec>(
-    page: &'a [u8; PAGE_SIZE],
-    header: &crate::slotted_page::Header,
-    path: &Path,
-    index: usize,
-) -> Result<Option<GapNeighbors<'a>>> {
-    let previous = if index > 0 {
-        Some(page::codec_cell::<C>(page, header, index - 1)?)
-    } else if path.frames[..path.depth]
-        .iter()
-        .all(|frame| frame.index == 0)
+    fn select<'a>(
+        &mut self,
+        page: S::ReadPage<'a>,
+        header: &crate::slotted_page::Header,
+        path: &Path,
+    ) -> Result<Self::Selection>
+    where
+        S: 'a,
     {
-        None
-    } else {
-        return Ok(None);
-    };
-    let next = if index < header.item_count {
-        Some(page::codec_cell::<C>(page, header, index)?)
-    } else if path.frames[..path.depth]
-        .iter()
-        .all(|frame| frame.index + 1 == frame.item_count)
-    {
-        None
-    } else {
-        return Ok(None);
-    };
-    Ok(Some((previous, next)))
-}
-
-fn insert_local_leaf<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    leaf_cell: &[u8],
-    target: LeafTarget,
-) -> Result<()> {
-    if !slotted_page::insert_fits(&target.header, leaf_cell.len()) {
-        edit_leaf::<C, S>(store, root, leaf_cell, target)?;
-        return Ok(());
-    }
-    insert_fitting_local_leaf::<C, S>(
-        store,
-        root,
-        leaf_cell,
-        &target.path,
-        target.page_number,
-        target.header,
-        target.index,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn insert_fitting_local_leaf<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    leaf_cell: &[u8],
-    path: &Path,
-    page_number: u32,
-    header: crate::slotted_page::Header,
-    index: usize,
-) -> Result<()> {
-    store.update_page(page_number, |page| {
-        if !slotted_page::insert(page, &header, index, leaf_cell)? {
-            return Err(Error::Corrupt(
-                "private B+tree leaf changed during insertion",
-            ));
+        let (index, exists) = lower_bound::<C, _>(page, header, self.key, true)?;
+        if exists {
+            return Ok(GapDecision::General);
         }
-        Ok(())
-    })?;
-    if index == 0 {
-        let key = C::read_key(leaf_cell, 0)?;
-        propagate_first::<C, S>(store, root, path, key)?;
+        let previous = if index > 0 {
+            Some(super::read::copy_leaf::<C, _>(page, header, index - 1)?)
+        } else if path.frames[..path.depth]
+            .iter()
+            .all(|frame| frame.index == 0)
+        {
+            None
+        } else {
+            return Ok(GapDecision::General);
+        };
+        let next = if index < header.item_count {
+            Some(super::read::copy_leaf::<C, _>(page, header, index)?)
+        } else if path.frames[..path.depth]
+            .iter()
+            .all(|frame| frame.index + 1 == frame.item_count)
+        {
+            None
+        } else {
+            return Ok(GapDecision::General);
+        };
+        if !(self.accepts)(
+            previous.as_ref().map(super::LeafBuf::as_slice),
+            next.as_ref().map(super::LeafBuf::as_slice),
+        )? {
+            return Ok(GapDecision::General);
+        }
+        Ok(GapDecision::Insert {
+            index,
+            fits: slotted_page::insert_fits(header, self.cell_len),
+        })
     }
-    Ok(())
 }
 
 fn require_leaf<C: Codec>(leaf_cell: &[u8]) -> Result<()> {
@@ -281,13 +191,20 @@ fn locate_leaf<C: Codec, S: Store>(
     key: C::Key,
     retired: &mut RetiredPages,
 ) -> Result<LeafTarget> {
-    let (path, leaf_page, source, header) = private_path::<C, S>(store, root, key, retired)?;
-    let (index, exists) = lower_bound::<C>(&source, &header, key, true)?;
+    let leaf = private_path::<C, S>(store, root, key, retired)?;
+    inspect_leaf_target::<C, S>(store, leaf, key)
+}
+
+fn inspect_leaf_target<C: Codec, S: Store>(
+    _store: &S,
+    leaf: PrivateLeaf<(usize, bool)>,
+    _key: C::Key,
+) -> Result<LeafTarget> {
+    let (index, exists) = leaf.selection;
     Ok(LeafTarget {
-        path,
-        page_number: leaf_page,
-        source,
-        header,
+        path: leaf.path,
+        page_number: leaf.page_number,
+        header: leaf.header,
         index,
         exists,
     })
@@ -305,22 +222,14 @@ fn edit_leaf<C: Codec, S: Store>(
         cell: leaf_cell,
     };
     let total = edit.total(target.header.item_count);
-    if !page::edit_fits::<C>(&target.source, &target.header, edit, 0, total)? {
-        return split_leaf::<C, S>(store, root, target, edit);
+    let fits = store.inspect_page(target.page_number, |page| {
+        page::edit_fits::<C, _>(page, &target.header, edit, 0, total)
+    })?;
+    if !fits {
+        split_leaf::<C, S>(store, root, target, edit)?;
+        return Ok(true);
     }
-    write_leaf::<C, S>(store, root, target, edit, total)
-}
-
-fn write_leaf<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    target: LeafTarget,
-    edit: Edit<'_>,
-    total: usize,
-) -> Result<bool> {
-    let mut output = [0; PAGE_SIZE];
-    build_edit::<C>(&target.source, &target.header, edit, 0, total, &mut output)?;
-    store.write(target.page_number, &output)?;
+    apply_leaf_edit::<C, S>(store, target.page_number, &target.header, edit)?;
     if target.index == 0 {
         let key = C::read_key(edit.cell, 0)?;
         propagate_first::<C, S>(store, root, &target.path, key)?;
@@ -328,13 +237,41 @@ fn write_leaf<C: Codec, S: Store>(
     Ok(!target.exists)
 }
 
+fn apply_leaf_edit<C: Codec, S: Store>(
+    store: &mut S,
+    page_number: u32,
+    header: &crate::slotted_page::Header,
+    edit: Edit<'_>,
+) -> Result<()> {
+    store.update_page(page_number, |page| apply_edit::<C, _>(page, header, edit))
+}
+
+fn apply_edit<C: Codec, D: PageEdit>(
+    page: &mut D,
+    header: &crate::slotted_page::Header,
+    edit: Edit<'_>,
+) -> Result<()> {
+    let changed = if edit.replace {
+        let old_len = page::codec_cell::<C, _>(page.view(), header, edit.index)?.len();
+        slotted_page::replace(page, header, edit.index, old_len, edit.cell)?
+    } else {
+        slotted_page::insert(page, header, edit.index, edit.cell)?
+    };
+    if changed {
+        Ok(())
+    } else {
+        Err(Error::Corrupt("B+tree edit no longer fits"))
+    }
+}
+
 fn new_leaf<C: Codec, S: Store>(store: &mut S, cell: &[u8]) -> Result<u32> {
     let page_number = store.allocate()?;
-    let mut page = [0; PAGE_SIZE];
-    let mut builder = Builder::new(&mut page, C::LEAF_TYPE, store.target_txn(), 0, C::AUX);
-    builder.push(cell)?;
-    builder.finish()?;
-    store.write(page_number, &page)?;
+    let txn = store.target_txn();
+    store.update_page(page_number, |page| {
+        let mut builder = Builder::new(page, C::LEAF_TYPE, txn, 0, C::AUX);
+        builder.push(cell)?;
+        builder.finish()
+    })?;
     Ok(page_number)
 }
 
@@ -343,46 +280,63 @@ fn split_leaf<C: Codec, S: Store>(
     root: &mut u32,
     target: LeafTarget,
     edit: Edit<'_>,
-) -> Result<bool> {
-    let total = edit.total(target.header.item_count);
-    let middle = page::split_index::<C>(&target.source, &target.header, edit)?;
-    let mut left = [0; PAGE_SIZE];
-    let mut right = [0; PAGE_SIZE];
-    build_edit::<C>(&target.source, &target.header, edit, 0, middle, &mut left)?;
-    build_edit::<C>(
-        &target.source,
-        &target.header,
-        edit,
-        middle,
-        total,
-        &mut right,
-    )?;
-    publish_leaf_split::<C, S>(store, root, target, left, right)?;
-    Ok(true)
-}
-
-fn publish_leaf_split<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    target: LeafTarget,
-    left: [u8; PAGE_SIZE],
-    right: [u8; PAGE_SIZE],
 ) -> Result<()> {
+    let total = edit.total(target.header.item_count);
+    let middle = store.inspect_page(target.page_number, |source| {
+        page::split_index::<C, _>(source, &target.header, edit)
+    })?;
     let right_page = store.allocate()?;
-    store.write(target.page_number, &left)?;
-    store.write(right_page, &right)?;
-    let left_header = parse::<C>(&left, store.target_txn(), Some(0))?;
-    let right_header = parse::<C>(&right, store.target_txn(), Some(0))?;
+    store.copy_page(target.page_number, right_page, |source, output| {
+        build_edit::<C, _, _>(source, &target.header, edit, middle, total, output)
+    })?;
+    keep_left_edit::<C, S>(store, target.page_number, &target.header, edit, middle)?;
+
+    let left_first = first_key::<C, S>(store, target.page_number, 0)?;
+    let right_first = first_key::<C, S>(store, right_page, 0)?;
     propagate_split::<C, S>(
         store,
         root,
         &target.path,
         target.page_number,
-        key_at::<C>(&left, &left_header, 0)?,
+        left_first,
         right_page,
-        key_at::<C>(&right, &right_header, 0)?,
+        right_first,
         0,
     )
+}
+
+fn keep_left_edit<C: Codec, S: Store>(
+    store: &mut S,
+    page_number: u32,
+    header: &crate::slotted_page::Header,
+    edit: Edit<'_>,
+    middle: usize,
+) -> Result<()> {
+    let txn = store.target_txn();
+    store.update_page(page_number, |page| {
+        let edit_in_left = edit.index < middle;
+        let keep = middle - usize::from(edit_in_left && !edit.replace);
+        if keep == 0 {
+            let mut builder = Builder::new(
+                page,
+                if header.level == 0 {
+                    C::LEAF_TYPE
+                } else {
+                    C::BRANCH_TYPE
+                },
+                txn,
+                header.level,
+                C::AUX,
+            );
+            builder.push(edit.cell)?;
+            return builder.finish();
+        }
+        let left = slotted_page::truncate(page, header, keep)?;
+        if edit_in_left {
+            apply_edit::<C, _>(page, &left, edit)?;
+        }
+        Ok(())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -457,10 +411,13 @@ fn insert_branch<C: Codec, S: Store>(
     right_page: u32,
     right_first: C::Key,
 ) -> Result<Option<BranchSplit<C::Key>>> {
-    let mut source = [0; PAGE_SIZE];
-    store.read(frame.page_number, &mut source)?;
-    let header = parse::<C>(&source, store.target_txn(), None)?;
-    let left_child = branch_child::<C>(&source, &header, frame.index, store.page_limit())?;
+    let target_txn = store.target_txn();
+    let page_limit = store.page_limit();
+    let (header, left_child) = store.inspect_page(frame.page_number, |source| {
+        let header = parse::<C, _>(source, target_txn, None)?;
+        let child = branch_child::<C, _>(source, &header, frame.index, page_limit)?;
+        Ok((header, child))
+    })?;
     let left = CellBuf::branch::<C>(left_first, left_child)?;
     let right = CellBuf::branch::<C>(right_first, right_page)?;
     let edit = PairEdit {
@@ -468,71 +425,87 @@ fn insert_branch<C: Codec, S: Store>(
         left: left.as_slice(),
         right: right.as_slice(),
     };
-    apply_pair_edit::<C, S>(store, frame.page_number, &source, &header, edit)
+    apply_pair_edit::<C, S>(store, frame.page_number, &header, edit)
 }
 
 fn apply_pair_edit<C: Codec, S: Store>(
     store: &mut S,
     page_number: u32,
-    source: &[u8; PAGE_SIZE],
     header: &crate::slotted_page::Header,
     edit: PairEdit<'_>,
 ) -> Result<Option<BranchSplit<C::Key>>> {
-    let total = edit.total(header.item_count);
-    if page::pair_fits::<C>(source, header, edit)? {
-        write_pair_edit::<C, S>(store, page_number, source, header, edit, total)?;
+    let fits = store.inspect_page(page_number, |source| {
+        page::pair_fits::<C, _>(source, header, edit)
+    })?;
+    if fits {
+        store.update_page(page_number, |page| apply_pair::<C, _>(page, header, edit))?;
         return Ok(None);
     }
-    split_pair_edit::<C, S>(store, page_number, source, header, edit, total)
+    split_pair_edit::<C, S>(store, page_number, header, edit)
 }
 
-fn write_pair_edit<C: Codec, S: Store>(
-    store: &mut S,
-    page_number: u32,
-    source: &[u8; PAGE_SIZE],
+fn apply_pair<C: Codec, D: PageEdit>(
+    page: &mut D,
     header: &crate::slotted_page::Header,
     edit: PairEdit<'_>,
-    total: usize,
 ) -> Result<()> {
-    let mut output = [0; PAGE_SIZE];
-    build_pair_edit::<C>(source, header, edit, 0, total, &mut output)?;
-    store.write(page_number, &output)
+    let old_len = C::branch_cell(page.view(), header, edit.index)?.len();
+    if !slotted_page::replace(page, header, edit.index, old_len, edit.left)? {
+        return Err(Error::Corrupt("B+tree pair replacement no longer fits"));
+    }
+    let current = parse::<C, _>(page.view(), u64::MAX, Some(header.level))?;
+    if !slotted_page::insert(page, &current, edit.index + 1, edit.right)? {
+        return Err(Error::Corrupt("B+tree pair insertion no longer fits"));
+    }
+    Ok(())
 }
 
 fn split_pair_edit<C: Codec, S: Store>(
     store: &mut S,
     page_number: u32,
-    source: &[u8; PAGE_SIZE],
     header: &crate::slotted_page::Header,
     edit: PairEdit<'_>,
-    total: usize,
 ) -> Result<Option<BranchSplit<C::Key>>> {
-    let middle = page::pair_split_index::<C>(source, header, edit)?;
-    let mut left_page = [0; PAGE_SIZE];
-    let mut right_page = [0; PAGE_SIZE];
-    build_pair_edit::<C>(source, header, edit, 0, middle, &mut left_page)?;
-    build_pair_edit::<C>(source, header, edit, middle, total, &mut right_page)?;
-    split_branch::<C, S>(store, page_number, header, left_page, right_page)
-}
-
-fn split_branch<C: Codec, S: Store>(
-    store: &mut S,
-    left_page_number: u32,
-    header: &crate::slotted_page::Header,
-    left_page: [u8; PAGE_SIZE],
-    right_page: [u8; PAGE_SIZE],
-) -> Result<Option<BranchSplit<C::Key>>> {
-    let right_page_number = store.allocate()?;
-    store.write(left_page_number, &left_page)?;
-    store.write(right_page_number, &right_page)?;
-    let left_header = parse::<C>(&left_page, store.target_txn(), Some(header.level))?;
-    let right_header = parse::<C>(&right_page, store.target_txn(), Some(header.level))?;
+    let total = edit.total(header.item_count);
+    let middle = store.inspect_page(page_number, |source| {
+        page::pair_split_index::<C, _>(source, header, edit)
+    })?;
+    let right_page = store.allocate()?;
+    store.copy_page(page_number, right_page, |source, output| {
+        build_pair_edit::<C, _, _>(source, header, edit, middle, total, output)
+    })?;
+    keep_left_pair::<C, S>(store, page_number, header, edit, middle)?;
     Ok(Some(BranchSplit {
-        right_page: right_page_number,
-        right_first: key_at::<C>(&right_page, &right_header, 0)?,
-        left_first: key_at::<C>(&left_page, &left_header, 0)?,
+        right_page,
+        right_first: first_key::<C, S>(store, right_page, header.level)?,
+        left_first: first_key::<C, S>(store, page_number, header.level)?,
         level: header.level,
     }))
+}
+
+fn keep_left_pair<C: Codec, S: Store>(
+    store: &mut S,
+    page_number: u32,
+    header: &crate::slotted_page::Header,
+    edit: PairEdit<'_>,
+    middle: usize,
+) -> Result<()> {
+    store.update_page(page_number, |page| {
+        if middle <= edit.index {
+            slotted_page::truncate(page, header, middle)?;
+            return Ok(());
+        }
+        if middle == edit.index + 1 {
+            let left = slotted_page::truncate(page, header, middle)?;
+            let old_len = C::branch_cell(page.view(), &left, edit.index)?.len();
+            if slotted_page::replace(page, &left, edit.index, old_len, edit.left)? {
+                return Ok(());
+            }
+            return Err(Error::Corrupt("B+tree split replacement no longer fits"));
+        }
+        let left = slotted_page::truncate(page, header, middle - 1)?;
+        apply_pair::<C, _>(page, &left, edit)
+    })
 }
 
 fn new_root<C: Codec, S: Store>(
@@ -549,12 +522,13 @@ fn new_root<C: Codec, S: Store>(
     let page_number = store.allocate()?;
     let left = CellBuf::branch::<C>(left_first, left_page)?;
     let right = CellBuf::branch::<C>(right_first, right_page)?;
-    let mut page = [0; PAGE_SIZE];
-    let mut builder = Builder::new(&mut page, C::BRANCH_TYPE, store.target_txn(), level, C::AUX);
-    builder.push(left.as_slice())?;
-    builder.push(right.as_slice())?;
-    builder.finish()?;
-    store.write(page_number, &page)?;
+    let txn = store.target_txn();
+    store.update_page(page_number, |page| {
+        let mut builder = Builder::new(page, C::BRANCH_TYPE, txn, level, C::AUX);
+        builder.push(left.as_slice())?;
+        builder.push(right.as_slice())?;
+        builder.finish()
+    })?;
     Ok(page_number)
 }
 
@@ -603,56 +577,47 @@ fn replace_first_branch<C: Codec, S: Store>(
     frame: Frame,
     key: C::Key,
 ) -> Result<Option<BranchSplit<C::Key>>> {
-    let mut source = [0; PAGE_SIZE];
-    store.read(frame.page_number, &mut source)?;
-    let header = parse::<C>(&source, store.target_txn(), None)?;
-    let child = branch_child::<C>(&source, &header, frame.index, store.page_limit())?;
+    let target_txn = store.target_txn();
+    let page_limit = store.page_limit();
+    let (header, child) = store.inspect_page(frame.page_number, |source| {
+        let header = parse::<C, _>(source, target_txn, None)?;
+        let child = branch_child::<C, _>(source, &header, frame.index, page_limit)?;
+        Ok((header, child))
+    })?;
     let replacement = CellBuf::branch::<C>(key, child)?;
     let edit = Edit {
         index: frame.index,
         replace: true,
         cell: replacement.as_slice(),
     };
-    apply_branch_replacement::<C, S>(store, frame.page_number, &source, &header, edit)
-}
-
-fn apply_branch_replacement<C: Codec, S: Store>(
-    store: &mut S,
-    page_number: u32,
-    source: &[u8; PAGE_SIZE],
-    header: &crate::slotted_page::Header,
-    edit: Edit<'_>,
-) -> Result<Option<BranchSplit<C::Key>>> {
-    if page::edit_fits::<C>(source, header, edit, 0, header.item_count)? {
-        write_branch_replacement::<C, S>(store, page_number, source, header, edit)?;
+    let fits = store.inspect_page(frame.page_number, |source| {
+        page::edit_fits::<C, _>(source, &header, edit, 0, header.item_count)
+    })?;
+    if fits {
+        apply_leaf_edit::<C, S>(store, frame.page_number, &header, edit)?;
         return Ok(None);
     }
-    split_branch_replacement::<C, S>(store, page_number, source, header, edit)
+
+    let middle = store.inspect_page(frame.page_number, |source| {
+        page::split_index::<C, _>(source, &header, edit)
+    })?;
+    let right_page = store.allocate()?;
+    store.copy_page(frame.page_number, right_page, |source, output| {
+        build_edit::<C, _, _>(source, &header, edit, middle, header.item_count, output)
+    })?;
+    keep_left_edit::<C, S>(store, frame.page_number, &header, edit, middle)?;
+    Ok(Some(BranchSplit {
+        right_page,
+        right_first: first_key::<C, S>(store, right_page, header.level)?,
+        left_first: first_key::<C, S>(store, frame.page_number, header.level)?,
+        level: header.level,
+    }))
 }
 
-fn write_branch_replacement<C: Codec, S: Store>(
-    store: &mut S,
-    page_number: u32,
-    source: &[u8; PAGE_SIZE],
-    header: &crate::slotted_page::Header,
-    edit: Edit<'_>,
-) -> Result<()> {
-    let mut output = [0; PAGE_SIZE];
-    build_edit::<C>(source, header, edit, 0, header.item_count, &mut output)?;
-    store.write(page_number, &output)
-}
-
-fn split_branch_replacement<C: Codec, S: Store>(
-    store: &mut S,
-    page_number: u32,
-    source: &[u8; PAGE_SIZE],
-    header: &crate::slotted_page::Header,
-    edit: Edit<'_>,
-) -> Result<Option<BranchSplit<C::Key>>> {
-    let middle = page::split_index::<C>(source, header, edit)?;
-    let mut left = [0; PAGE_SIZE];
-    let mut right = [0; PAGE_SIZE];
-    build_edit::<C>(source, header, edit, 0, middle, &mut left)?;
-    build_edit::<C>(source, header, edit, middle, header.item_count, &mut right)?;
-    split_branch::<C, S>(store, page_number, header, left, right)
+fn first_key<C: Codec, S: Store>(store: &S, page_number: u32, level: u16) -> Result<C::Key> {
+    let target_txn = store.target_txn();
+    store.inspect_page(page_number, |page| {
+        let header = parse::<C, _>(page, target_txn, Some(level))?;
+        key_at::<C, _>(page, &header, 0)
+    })
 }

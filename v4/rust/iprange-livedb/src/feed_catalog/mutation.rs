@@ -1,9 +1,10 @@
 //! Atomic maintenance of the two feed-catalog indexes.
 
-use crate::contract::{u32_le, PAGE_SIZE};
+use crate::contract::u32_le;
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::fixed_tree::{self, Codec, RetiredPages, RetiringStore};
+use crate::mapping::{ByteRange, ByteSource};
 use crate::slotted_page::{self, Header};
 
 use super::{
@@ -24,25 +25,21 @@ impl Codec for NameCodec {
     const MAX_BRANCH_SIZE: usize = MAX_NAME_RECORD;
     const MAX_LEAF_SIZE: usize = MAX_NAME_RECORD;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         decode_record(cell).map(|record| record.name)
     }
 
     fn write_key(_key: Self::Key, _output: &mut [u8]) {}
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode_record(cell).map(|_| ())
     }
 
-    fn leaf_cell<'a>(page: &'a [u8; PAGE_SIZE], header: &Header, index: usize) -> Result<&'a [u8]> {
+    fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, NAME_RECORD_BASE + 1, MAX_NAME_RECORD)
     }
 
-    fn branch_cell<'a>(
-        page: &'a [u8; PAGE_SIZE],
-        header: &Header,
-        index: usize,
-    ) -> Result<&'a [u8]> {
+    fn branch_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, NAME_RECORD_BASE + 1, MAX_NAME_RECORD)
     }
 
@@ -50,7 +47,7 @@ impl Codec for NameCodec {
         encode(key, child, output)
     }
 
-    fn read_branch_child(cell: &[u8]) -> Result<u32> {
+    fn read_branch_child<S: ByteSource>(cell: S) -> Result<u32> {
         decode_record(cell).map(|record| record.value)
     }
 }
@@ -67,7 +64,7 @@ impl Codec for IndexCodec {
     const LEAF_SIZE: usize = 0;
     const MAX_LEAF_SIZE: usize = MAX_NAME_RECORD;
 
-    fn read_key(cell: &[u8], level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
         if level == 0 {
             decode_record(cell).map(|record| record.value)
         } else {
@@ -79,11 +76,11 @@ impl Codec for IndexCodec {
         output[..4].copy_from_slice(&key.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode_record(cell).map(|_| ())
     }
 
-    fn leaf_cell<'a>(page: &'a [u8; PAGE_SIZE], header: &Header, index: usize) -> Result<&'a [u8]> {
+    fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, NAME_RECORD_BASE + 1, MAX_NAME_RECORD)
     }
 }

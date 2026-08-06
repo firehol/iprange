@@ -6,6 +6,7 @@
 use crate::cardinality::Cardinality129;
 use crate::contract::AddressFamily;
 use crate::error::{Error, Result};
+use crate::mapping::ByteSource;
 
 /// Common private interface over the two key widths, so physical algorithms are
 /// written once and width-specialized at compile time.
@@ -17,7 +18,7 @@ pub(crate) trait IpKey: Copy + Ord + core::fmt::Debug + 'static {
 
     /// Deserialize a key from the first [`WIDTH`](Self::WIDTH) bytes of `src`. Panics
     /// if `src` is shorter than `WIDTH`.
-    fn read_le(src: &[u8]) -> Self;
+    fn read_le<S: ByteSource>(src: S, at: usize) -> Self;
 
     /// Serialize the key into the first [`WIDTH`](Self::WIDTH) bytes.
     fn write_le(self, output: &mut [u8]);
@@ -58,8 +59,10 @@ impl IpKey for Ipv4Key {
     const FAMILY: AddressFamily = AddressFamily::Ipv4;
 
     #[inline]
-    fn read_le(src: &[u8]) -> Self {
-        Ipv4Key(u32::from_le_bytes([src[0], src[1], src[2], src[3]]))
+    fn read_le<S: ByteSource>(src: S, at: usize) -> Self {
+        Ipv4Key(u32::from_le_bytes(
+            src.array(at).expect("validated IPv4 key"),
+        ))
     }
 
     #[inline]
@@ -157,11 +160,9 @@ impl IpKey for Ipv6Key {
     const FAMILY: AddressFamily = AddressFamily::Ipv6;
 
     #[inline]
-    fn read_le(src: &[u8]) -> Self {
-        let mut h = [0u8; 8];
-        let mut l = [0u8; 8];
-        l.copy_from_slice(&src[0..8]);
-        h.copy_from_slice(&src[8..16]);
+    fn read_le<S: ByteSource>(src: S, at: usize) -> Self {
+        let l = src.array(at).expect("validated IPv6 low limb");
+        let h = src.array(at + 8).expect("validated IPv6 high limb");
         Ipv6Key {
             hi: u64::from_le_bytes(h),
             lo: u64::from_le_bytes(l),
@@ -213,7 +214,7 @@ mod tests {
             buf, expected,
             "IPv6 key on-disk bytes must match the encoding"
         );
-        assert_eq!(Ipv6Key::read_le(&buf), k, "round-trip");
+        assert_eq!(Ipv6Key::read_le(&buf, 0), k, "round-trip");
         assert_eq!(k.to_u128(), 0x2001_0db8_0000_0000_0000_0000_0000_0001);
     }
 
@@ -223,7 +224,7 @@ mod tests {
         let k = Ipv4Key(0xC000_0201);
         let buf = k.0.to_le_bytes();
         assert_eq!(buf, [0x01, 0x02, 0x00, 0xc0]);
-        assert_eq!(Ipv4Key::read_le(&buf), k);
+        assert_eq!(Ipv4Key::read_le(&buf, 0), k);
     }
 
     #[test]

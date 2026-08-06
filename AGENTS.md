@@ -48,10 +48,26 @@ complexity is not evidence of either.
 - Prefer the smallest coherent design over speculative flexibility. Do not keep
   dead code, compatibility for unreleased formats, test-only production
   machinery, or abstractions without a current caller.
-- Keep one owner for each invariant. Separate byte encoding, storage I/O, range
+- Keep one owner for each invariant. Separate byte encoding, mapped storage,
+  range
   semantics, explicit validation/recovery, operating-system coordination, and
   user workflows where those responsibilities are genuinely distinct. Do not
   split code merely to satisfy a metric.
+- Persistent SDK content is mmap-only. Production code must not transfer main,
+  sidecar, snapshot, publication, recovery, or scratch bytes through
+  read/write/seek APIs, and a complete database page must never exist in a stack
+  buffer, heap buffer, cache, or anonymous mapping. Allocate and build pages only
+  at their final offsets in file-backed mappings; lifecycle, mapping, locking,
+  namespace, truncation, and durability syscalls remain required.
+- Preserve the external reader-table, transaction-grouped retirement, explicit
+  bounded reclaim, and lowest-free-page allocation contract. Active readers do
+  not by themselves force tail allocation. Live mapped parsers must not expose
+  ordinary Rust references whose validity assumes an unvalidated pointer cannot
+  name a reused page.
+- Explicit validation/recovery contains physical mapped-page faults in the
+  version-matched SDK worker. Its POSIX `SIGBUS` handler claims only an armed
+  SDK-owned mapping address and chains every unrelated signal to the previous
+  disposition; it never unwinds through Rust.
 - Aim for roughly 5,000 lines of production code per language implementation.
   This is a design target, not a hard limit. A justified 6,000, 7,000, or even
   10,000-line implementation is acceptable; unexplained growth requires

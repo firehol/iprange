@@ -10,8 +10,7 @@ use super::DraftStore;
 
 impl DraftStore<'_> {
     pub(crate) fn lookup_feed(&self, name: &FeedName) -> Result<Option<FeedEntry>> {
-        self.flush_page_cache()?;
-        feed_catalog::lookup(self.file, &self.draft.meta, name)
+        feed_catalog::lookup(self.mapping, &self.draft.meta, name)
     }
 
     pub(crate) fn ensure_feed(&mut self, name: FeedName) -> Result<(FeedEntry, bool)> {

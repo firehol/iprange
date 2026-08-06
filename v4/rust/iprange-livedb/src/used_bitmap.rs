@@ -1,16 +1,16 @@
 //! Sparse feed- and membership-used bitmaps.
 
-use crate::contract::{u64_le, PAGE_SIZE};
+use crate::contract::u64_le;
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::{put_u32, put_u64};
+use crate::slotted_page::PageSink;
 
 mod mutation;
 mod page;
 mod search;
 mod shrink;
 
-use page::{page_has_candidate, parse, stamp, Header, BRANCH_CHILDREN, LEAF_BITS, MAX_LEVEL};
+use page::{page_has_candidate, parse, Header, BRANCH_CHILDREN, LEAF_BITS, MAX_LEVEL};
 
 pub(crate) use mutation::{clear, set, take_lowest};
 pub(crate) use search::read_words;
@@ -39,20 +39,23 @@ fn touch<S: Store>(
     base: u64,
     limit: u64,
     retired: &mut RetiredPages,
-) -> Result<(u32, [u8; PAGE_SIZE], Header)> {
-    let mut page = [0; PAGE_SIZE];
-    store.read(page_number, &mut page)?;
-    let header = parse(&page, store.target_txn(), kind, Some(level), base, limit)?;
-    if u64_le(&page, 8) == store.target_txn() {
-        return Ok((page_number, page, header));
+) -> Result<(u32, Header)> {
+    let target_txn = store.target_txn();
+    let (header, private) = store.inspect_page(page_number, |page| {
+        let header = parse(page, target_txn, kind, Some(level), base, limit)?;
+        Ok((header, u64_le(page, 8) == target_txn))
+    })?;
+    if private {
+        return Ok((page_number, header));
     }
     let private = store.allocate()?;
-    put_u64(&mut page, 8, store.target_txn());
-    put_u32(&mut page, 28, 0);
-    stamp(&mut page)?;
-    store.write(private, &page)?;
+    store.copy_page(page_number, private, |source, output| {
+        output.write_source(0, source)?;
+        output.put_u64(8, target_txn)?;
+        output.put_u32(28, 0)
+    })?;
     retired.push(page_number)?;
-    Ok((private, page, header))
+    Ok((private, header))
 }
 
 fn subtree_has_candidate<S: Store>(
@@ -62,10 +65,11 @@ fn subtree_has_candidate<S: Store>(
     base: u64,
     limit: u64,
 ) -> Result<bool> {
-    let mut page = [0; PAGE_SIZE];
-    store.read(page_number, &mut page)?;
-    parse(&page, store.target_txn(), kind, None, base, limit)?;
-    page_has_candidate(&page, base, limit, kind)
+    let target_txn = store.target_txn();
+    store.inspect_page(page_number, |page| {
+        parse(page, target_txn, kind, None, base, limit)?;
+        page_has_candidate(page, base, limit, kind)
+    })
 }
 
 fn leaf_word_index(bit: u32) -> usize {

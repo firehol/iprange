@@ -3,6 +3,7 @@
 use crate::contract::{u32_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{self, Codec, RetiredPages, Store};
+use crate::mapping::ByteSource;
 
 const BRANCH_TYPE: u8 = 250;
 const LEAF_TYPE: u8 = 251;
@@ -25,7 +26,7 @@ impl Codec for DeltaCodec {
     const KEY_SIZE: usize = 4;
     const LEAF_SIZE: usize = 12;
 
-    fn read_key(cell: &[u8], level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
         if level == 0 {
             decode(cell).map(|delta| delta.id)
         } else {
@@ -37,7 +38,7 @@ impl Codec for DeltaCodec {
         output[..4].copy_from_slice(&key.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode(cell).map(|_| ())
     }
 }
@@ -113,12 +114,13 @@ fn require_private(retired: RetiredPages) -> Result<()> {
     }
 }
 
-fn decode(cell: &[u8]) -> Result<Delta> {
+fn decode<S: ByteSource>(cell: S) -> Result<Delta> {
     if cell.len() != 12 {
         return Err(Error::Corrupt("membership delta record is malformed"));
     }
-    let mut bytes = [0; 8];
-    bytes.copy_from_slice(&cell[4..]);
+    let bytes = cell
+        .array(4)
+        .ok_or(Error::Corrupt("membership delta record is malformed"))?;
     Ok(Delta {
         id: u32_le(cell, 0),
         change: i64::from_le_bytes(bytes),

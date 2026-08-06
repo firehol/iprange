@@ -33,8 +33,13 @@ fn header(policy: Policy) -> Header {
 
 fn one_block(header: Header) -> [u8; FILE_SIZE] {
     let mut bytes = [0; FILE_SIZE];
-    header.encode((&mut bytes[..PAGE_SIZE]).try_into().unwrap());
+    encode_block(header, &mut bytes[..PAGE_SIZE]);
     bytes
+}
+
+fn encode_block(header: Header, block: &mut [u8]) {
+    let page: &mut [u8; PAGE_SIZE] = block.try_into().expect("fixed reservation block");
+    header.encode(page).unwrap();
 }
 
 fn rewrite_crc(block: &mut [u8]) {
@@ -57,7 +62,7 @@ fn either_legitimate_surviving_block_is_authoritative() {
 
     let attempted = prepared.state2().unwrap();
     let mut second = [0; FILE_SIZE];
-    attempted.encode((&mut second[PAGE_SIZE..]).try_into().unwrap());
+    encode_block(attempted, &mut second[PAGE_SIZE..]);
     assert_eq!(
         select(&second).unwrap(),
         Selected {
@@ -72,7 +77,7 @@ fn adjacent_state2_is_selected_and_a_torn_copy_falls_back() {
     let first = header(Policy::FailIfExists);
     let second = first.state2().unwrap();
     let mut bytes = one_block(first);
-    second.encode((&mut bytes[PAGE_SIZE..]).try_into().unwrap());
+    encode_block(second, &mut bytes[PAGE_SIZE..]);
     assert_eq!(
         select(&bytes).unwrap(),
         Selected {
@@ -98,12 +103,12 @@ fn selection_rejects_disagreement_gaps_and_invalid_transitions() {
 
     let mut different = first;
     different.output_sha512[0] ^= 1;
-    different.encode((&mut bytes[PAGE_SIZE..]).try_into().unwrap());
+    encode_block(different, &mut bytes[PAGE_SIZE..]);
     assert_eq!(select(&bytes), Err(SelectError::EqualSequenceDisagreement));
 
     let mut gap = first;
     gap.sequence = 3;
-    gap.encode((&mut bytes[PAGE_SIZE..]).try_into().unwrap());
+    encode_block(gap, &mut bytes[PAGE_SIZE..]);
     assert_eq!(
         select(&bytes).unwrap(),
         Selected {
@@ -115,14 +120,11 @@ fn selection_rejects_disagreement_gaps_and_invalid_transitions() {
 
     let mut changed = first.state2().unwrap();
     changed.attempt_id[0] ^= 1;
-    changed.encode((&mut bytes[PAGE_SIZE..]).try_into().unwrap());
+    encode_block(changed, &mut bytes[PAGE_SIZE..]);
     assert_eq!(select(&bytes), Err(SelectError::AttemptMismatch));
 
     bytes.fill(0);
-    first
-        .state2()
-        .unwrap()
-        .encode((&mut bytes[..PAGE_SIZE]).try_into().unwrap());
+    encode_block(first.state2().unwrap(), &mut bytes[..PAGE_SIZE]);
     assert_eq!(select(&bytes), Err(SelectError::InvalidTransition));
 }
 

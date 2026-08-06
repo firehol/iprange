@@ -8,9 +8,9 @@ use crate::contract::{
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
-use crate::file_io;
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::{ByteSource, Mapping, PageMut, PageView};
 use crate::membership_delta::Delta;
 use crate::membership_dictionary::{self, State};
 use crate::metadata;
@@ -42,6 +42,7 @@ pub(crate) struct OutputBudget {
 #[derive(Debug)]
 pub(crate) struct Finished {
     pub(crate) file: File,
+    pub(crate) mapping: Mapping,
     pub(crate) meta: MetaV4,
 }
 
@@ -59,7 +60,7 @@ pub(crate) struct NewFailure {
 
 #[derive(Debug)]
 pub(crate) struct Builder {
-    file: File,
+    mapping: Mapping,
     meta: MetaV4,
     budget: OutputBudget,
     ranges: ranges::Ranges,
@@ -74,14 +75,36 @@ impl Builder {
         spec: OutputSpec,
         budget: OutputBudget,
     ) -> std::result::Result<Self, NewFailure> {
+        let capacity = match budget
+            .max_output_pages
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(Error::ArithmeticOverflow("immutable output capacity"))
+        {
+            Ok(capacity) => capacity,
+            Err(cause) => return Err(NewFailure { file, cause }),
+        };
         if let Err(cause) = setup::require_new_output(&file, spec, budget)
-            .and_then(|()| file.set_len((2 * PAGE_SIZE) as u64).map_err(Error::from))
+            .and_then(|()| file.set_len(capacity).map_err(Error::from))
         {
             return Err(NewFailure { file, cause });
         }
+        let mapped_file = match file.try_clone() {
+            Ok(mapped_file) => mapped_file,
+            Err(error) => {
+                return Err(NewFailure {
+                    file,
+                    cause: error.into(),
+                });
+            }
+        };
+        let mapping = match Mapping::read_write(mapped_file, capacity) {
+            Ok(mapping) => mapping,
+            Err(cause) => return Err(NewFailure { file, cause }),
+        };
+        drop(file);
         let meta = setup::empty_meta(spec);
         Ok(Self {
-            file,
+            mapping,
             meta,
             budget,
             ranges: ranges::Ranges::new(meta.address_family, meta.txn_id, meta.value_kind),
@@ -133,10 +156,17 @@ impl Builder {
     pub(crate) fn finish_owned(mut self) -> std::result::Result<Finished, FinishFailure> {
         let result = finish(&mut self);
         match result {
-            Ok(()) => Ok(Finished {
-                file: self.file,
-                meta: self.meta,
-            }),
+            Ok(()) => match self.mapping.file().try_clone() {
+                Ok(file) => Ok(Finished {
+                    file,
+                    mapping: self.mapping,
+                    meta: self.meta,
+                }),
+                Err(error) => Err(FinishFailure {
+                    builder: self,
+                    cause: error.into(),
+                }),
+            },
             Err(cause) => Err(FinishFailure {
                 builder: self,
                 cause,
@@ -145,7 +175,7 @@ impl Builder {
     }
 
     pub(crate) fn into_file(self) -> File {
-        self.file
+        self.mapping.into_file()
     }
 
     pub(crate) fn meta(&self) -> MetaV4 {
@@ -215,7 +245,7 @@ impl Builder {
     fn push_direct_v4_inner(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<()> {
         self.require_mode(ValueKind::Direct, AddressFamily::Ipv4)?;
         self.ranges.push_v4(
-            &self.file,
+            &mut self.mapping,
             &mut self.meta,
             self.budget,
             ranges::Record { from, to, value },
@@ -225,7 +255,7 @@ impl Builder {
     fn push_direct_v6_inner(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<()> {
         self.require_mode(ValueKind::Direct, AddressFamily::Ipv6)?;
         self.ranges.push_v6(
-            &self.file,
+            &mut self.mapping,
             &mut self.meta,
             self.budget,
             ranges::Record { from, to, value },
@@ -241,7 +271,7 @@ impl Builder {
         self.require_mode(ValueKind::Membership, AddressFamily::Ipv4)?;
         let value = self.intern_membership(words)?;
         self.ranges.push_v4(
-            &self.file,
+            &mut self.mapping,
             &mut self.meta,
             self.budget,
             ranges::Record { from, to, value },
@@ -258,7 +288,7 @@ impl Builder {
         self.require_mode(ValueKind::Membership, AddressFamily::Ipv6)?;
         let value = self.intern_membership(words)?;
         self.ranges.push_v6(
-            &self.file,
+            &mut self.mapping,
             &mut self.meta,
             self.budget,
             ranges::Record { from, to, value },
@@ -336,7 +366,7 @@ fn finish(output: &mut Builder) -> Result<()> {
     let (range_root, range_record_count) =
         output
             .ranges
-            .finish(&output.file, &mut output.meta, output.budget)?;
+            .finish(&mut output.mapping, &mut output.meta, output.budget)?;
     output.meta.range_root = range_root;
     output.meta.range_record_count = range_record_count;
     seal_pages(output)?;
@@ -345,11 +375,15 @@ fn finish(output: &mut Builder) -> Result<()> {
         .page_count
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(Error::ArithmeticOverflow("immutable output length"))?;
-    output.file.set_len(bytes)?;
-    let mut page = [0; PAGE_SIZE];
-    output.meta.encode_into(&mut page);
-    file_io::write_exact_at(&output.file, &page, 0)?;
-    file_io::write_exact_at(&output.file, &page, PAGE_SIZE as u64)
+    output.mapping.resize(bytes)?;
+    output
+        .meta
+        .encode_mapped(output.mapping.page_mut(0, output.meta.page_count)?)?;
+    output
+        .meta
+        .encode_mapped(output.mapping.page_mut(1, output.meta.page_count)?)?;
+    output.mapping.flush_range(0, bytes)?;
+    output.mapping.sync_file()
 }
 
 fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
@@ -364,34 +398,31 @@ fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
     Ok(page)
 }
 
-fn write_page(file: &File, meta: &MetaV4, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-    if page_number < 2 || u64::from(page_number) >= meta.page_count {
-        return Err(Error::Corrupt("immutable output write is outside bounds"));
-    }
-    let offset = u64::from(page_number)
-        .checked_mul(PAGE_SIZE as u64)
-        .ok_or(Error::ArithmeticOverflow("immutable output page offset"))?;
-    file_io::write_exact_at(file, page, offset)
-}
-
-fn seal_pages(output: &Builder) -> Result<()> {
+fn seal_pages(output: &mut Builder) -> Result<()> {
     for page_number in 2..output.meta.page_count {
         let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;
-        let mut page = [0; PAGE_SIZE];
-        file_io::read_page(&output.file, page_number, output.meta.page_count, &mut page)?;
-        if page[..4] != PAGE_MAGIC || u64_le(&page, 8) != output.meta.txn_id {
+        let mut page = output
+            .mapping
+            .page_mut(page_number, output.meta.page_count)?;
+        let view = page.view();
+        if !view.equals(0, &PAGE_MAGIC) || u64_le(view, 8) != output.meta.txn_id {
             return Err(Error::Corrupt("immutable output page ownership is invalid"));
         }
-        page_checksum::seal(&mut page)?;
-        let offset = u64::from(page_number)
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or(Error::ArithmeticOverflow("immutable output page offset"))?;
-        file_io::write_exact_at(&output.file, &page, offset)?;
+        page_checksum::seal_mapped(&mut page)?;
     }
     Ok(())
 }
 
 impl Store for Builder {
+    type ReadPage<'a>
+        = PageView<'a>
+    where
+        Self: 'a;
+    type WritePage<'a>
+        = PageMut<'a>
+    where
+        Self: 'a;
+
     fn target_txn(&self) -> u64 {
         self.meta.txn_id
     }
@@ -400,22 +431,63 @@ impl Store for Builder {
         self.meta.page_count
     }
 
-    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        file_io::read_page(&self.file, page_number, self.meta.page_count, page)
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
+    {
+        require_output_page(page_number, self.meta.page_count)?;
+        inspect(self.mapping.page(page_number, self.meta.page_count)?)
     }
 
     fn allocate(&mut self) -> Result<u32> {
         reserve_page(&mut self.meta, self.budget)
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        write_page(&self.file, &self.meta, page_number, page)
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        require_output_page(page_number, self.meta.page_count)?;
+        let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
+        let result = update(&mut page)?;
+        require_output_owner(page.view(), self.meta.txn_id)?;
+        Ok(result)
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        require_output_page(source, self.meta.page_count)?;
+        require_output_page(destination, self.meta.page_count)?;
+        let (source, mut destination) =
+            self.mapping
+                .page_pair(source, destination, self.meta.page_count)?;
+        let result = copy(source, &mut destination)?;
+        require_output_owner(destination.view(), self.meta.txn_id)?;
+        Ok(result)
     }
 
     fn discard_private(&mut self, _page_number: u32) -> Result<()> {
         Err(Error::Corrupt(
             "immutable output attempted to discard an append-only page",
         ))
+    }
+}
+
+fn require_output_page(page_number: u32, page_limit: u64) -> Result<()> {
+    if page_number < 2 || u64::from(page_number) >= page_limit {
+        Err(Error::Corrupt("immutable output page is outside bounds"))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_output_owner(page: PageView<'_>, txn: u64) -> Result<()> {
+    if page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == txn {
+        Ok(())
+    } else {
+        Err(Error::Corrupt("immutable output page ownership is invalid"))
     }
 }
 

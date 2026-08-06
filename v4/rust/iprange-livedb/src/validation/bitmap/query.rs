@@ -1,6 +1,6 @@
-use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC};
 use crate::error::{Error, Result};
-use crate::file_io;
+use crate::mapping::ByteSource;
 
 use super::super::context::Context;
 use super::super::ValidationSink;
@@ -51,18 +51,14 @@ impl BitmapQuery {
     }
 
     fn step<S: ValidationSink>(&mut self, context: &Context<'_, S>) -> Result<QueryStep> {
-        let mut page = [0; PAGE_SIZE];
-        file_io::read_page(
-            context.file,
-            self.page_number,
-            context.meta.page_count,
-            &mut page,
-        )?;
-        require_header(&page, context.meta.txn_id, self.kind, self.level)?;
+        let page = context
+            .mapping
+            .page(self.page_number, context.meta.page_count)?;
+        require_header(page, context.meta.txn_id, self.kind, self.level)?;
         if self.level == 0 {
-            return Ok(QueryStep::Found(query_leaf(&page, self.bit, self.base)));
+            return Ok(QueryStep::Found(query_leaf(page, self.bit, self.base)));
         }
-        let Some((child, base)) = query_child(&page, self.bit, self.base, self.level)? else {
+        let Some((child, base)) = query_child(page, self.bit, self.base, self.level)? else {
             return Ok(QueryStep::Found(false));
         };
         self.page_number = child;
@@ -76,14 +72,14 @@ fn bit_in_range(kind: Kind, bit: u32, limit: u64) -> bool {
     u64::from(bit) >= kind.first_candidate() && u64::from(bit) < limit
 }
 
-fn query_leaf(page: &[u8; PAGE_SIZE], bit: u32, base: u64) -> bool {
+fn query_leaf<P: ByteSource>(page: P, bit: u32, base: u64) -> bool {
     let local = u64::from(bit) - base;
     let word = u64_le(page, HEADER_SIZE + (local / 64) as usize * 8);
     word & (1u64 << (local % 64)) != 0
 }
 
-fn query_child(
-    page: &[u8; PAGE_SIZE],
+fn query_child<P: ByteSource>(
+    page: P,
     bit: u32,
     base: u64,
     level: u16,
@@ -106,7 +102,7 @@ fn query_child_base(base: u64, span: u64, index: usize) -> Result<u64> {
 }
 
 pub(super) fn require_header(
-    page: &[u8; PAGE_SIZE],
+    page: impl ByteSource,
     selected_txn: u64,
     kind: Kind,
     expected_level: u16,
@@ -119,8 +115,8 @@ pub(super) fn require_header(
     Ok(())
 }
 
-fn header_valid(
-    page: &[u8; PAGE_SIZE],
+fn header_valid<P: ByteSource>(
+    page: P,
     selected_txn: u64,
     kind: Kind,
     expected_level: u16,
@@ -131,9 +127,9 @@ fn header_valid(
     } else {
         BRANCH_TYPE
     };
-    page[..4] == PAGE_MAGIC
-        && page[4] == expected_type
-        && page[5] == 0
+    page.equals(0, &PAGE_MAGIC)
+        && page.byte(4) == Some(expected_type)
+        && page.byte(5) == Some(0)
         && u16_le(page, 6) == HEADER_SIZE as u16
         && born != 0
         && born <= selected_txn

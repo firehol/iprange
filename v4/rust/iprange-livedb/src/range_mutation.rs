@@ -6,6 +6,7 @@ use crate::contract::{u32_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{self, Codec, LeafBuf, RetiredPages, RetiringStore, Store};
 use crate::key::IpKey;
+use crate::mapping::ByteSource;
 
 const MAX_RANGE_CELL: usize = 36;
 
@@ -25,19 +26,19 @@ impl<K: IpKey> Codec for RangeCodec<K> {
     const KEY_SIZE: usize = K::WIDTH;
     const LEAF_SIZE: usize = K::WIDTH * 2 + 4;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
-        Ok(K::read_le(cell))
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
+        Ok(K::read_le(cell, 0))
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
         key.write_le(output);
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         if cell.len() != Self::LEAF_SIZE {
             return Err(Error::Corrupt("range leaf has the wrong record size"));
         }
-        if K::read_le(cell) > K::read_le(&cell[K::WIDTH..]) {
+        if K::read_le(cell, 0) > K::read_le(cell, K::WIDTH) {
             return Err(Error::Corrupt("range leaf has reversed endpoints"));
         }
         Ok(())
@@ -441,8 +442,8 @@ fn decode<K: IpKey>(cell: LeafBuf) -> Result<Range<K>> {
 fn decode_cell<K: IpKey>(cell: &[u8]) -> Result<Range<K>> {
     RangeCodec::<K>::validate_leaf(cell)?;
     Ok(Range {
-        from: K::read_le(cell),
-        to: K::read_le(&cell[K::WIDTH..]),
+        from: K::read_le(cell, 0),
+        to: K::read_le(cell, K::WIDTH),
         value: u32_le(cell, K::WIDTH * 2),
     })
 }

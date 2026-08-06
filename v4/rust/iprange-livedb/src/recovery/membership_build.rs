@@ -1,12 +1,11 @@
 //! Canonical immutable output from one membership recovery analysis.
 
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::immutable_output::{Builder, Finished};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::range_tree::Record;
 
 #[cfg(any(unix, windows))]
@@ -36,7 +35,7 @@ pub(crate) struct MembershipConstructionFailure {
 
 #[allow(clippy::result_large_err)]
 pub(crate) fn construct<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     source_meta: MetaV4,
     builder: Builder,
     budget: &RecoveryBudget,
@@ -46,13 +45,13 @@ pub(crate) fn construct<S: RecoverySink>(
     if let Err(cause) = require_builder(&builder, source_meta) {
         return Err(failure(builder, cause, RecoveryReport::default(), None));
     }
-    let analysis = match analyze(file, source_meta, budget, cancellation, sink) {
+    let analysis = match analyze(mapping, source_meta, budget, cancellation, sink) {
         Ok(analysis) => analysis,
         Err(error) => return Err(failure(builder, error.cause, error.report, error.scratch)),
     };
     match source_meta.address_family {
         AddressFamily::Ipv4 => build::<Ipv4Key, S>(
-            file,
+            mapping,
             source_meta,
             builder,
             budget,
@@ -61,7 +60,7 @@ pub(crate) fn construct<S: RecoverySink>(
             analysis,
         ),
         AddressFamily::Ipv6 => build::<Ipv6Key, S>(
-            file,
+            mapping,
             source_meta,
             builder,
             budget,
@@ -74,7 +73,7 @@ pub(crate) fn construct<S: RecoverySink>(
 
 #[allow(clippy::too_many_arguments, clippy::result_large_err)]
 fn build<K: MembershipKey, S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     source_meta: MetaV4,
     mut builder: Builder,
     budget: &RecoveryBudget,
@@ -113,7 +112,7 @@ fn build<K: MembershipKey, S: RecoverySink>(
         }
     };
     let context = BuildContext {
-        file,
+        mapping,
         meta: source_meta,
         budget,
         cancellation,
@@ -172,7 +171,7 @@ struct BuildFailure {
 
 #[derive(Clone, Copy)]
 struct BuildContext<'a> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     budget: &'a RecoveryBudget,
     cancellation: &'a CancellationToken,
@@ -191,7 +190,7 @@ fn build_ordered<K: MembershipKey, S: RecoverySink>(
     let scan = (|| {
         pages.reset()?;
         let mut components = Components::<S, K>::new(
-            context.file,
+            context.mapping,
             context.meta,
             context.memberships,
             context.tables,
@@ -202,7 +201,7 @@ fn build_ordered<K: MembershipKey, S: RecoverySink>(
         {
             let mut events = events(true, |record| components.push(record));
             range_scan::scan(
-                context.file,
+                context.mapping,
                 context.meta,
                 &mut pages,
                 context.cancellation,
@@ -274,7 +273,7 @@ fn build_in_memory<K: MembershipKey, S: RecoverySink>(
             Ok(())
         });
         range_scan::scan(
-            context.file,
+            context.mapping,
             context.meta,
             &mut pages,
             context.cancellation,
@@ -303,7 +302,7 @@ fn emit_sorted<K: MembershipKey, S: RecoverySink>(
     records: Vec<Record<K>>,
 ) -> Result<()> {
     let mut components = Components::<S, K>::new(
-        context.file,
+        context.mapping,
         context.meta,
         context.memberships,
         context.tables,
@@ -329,7 +328,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
     pages: PageSet,
 ) -> BuildResult {
     let mut components = Components::<S, K>::new(
-        context.file,
+        context.mapping,
         context.meta,
         context.memberships,
         context.tables,
@@ -338,7 +337,7 @@ fn build_external<K: MembershipKey, S: RecoverySink>(
         context.cancellation,
     );
     let cleanup = external_sort::sort_and_emit::<K>(
-        context.file,
+        context.mapping,
         external_sort::SortRequest {
             meta: context.meta,
             budget: context.budget,

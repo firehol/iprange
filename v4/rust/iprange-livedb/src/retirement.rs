@@ -3,6 +3,7 @@
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{self, Codec, LeafBuf, RetiredPages, Store};
+use crate::mapping::ByteSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Key {
@@ -61,7 +62,7 @@ impl Codec for RetirementCodec {
     const KEY_SIZE: usize = 12;
     const LEAF_SIZE: usize = 16;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         Ok(Key {
             txn: u64_le(cell, 0),
             first: u32_le(cell, 8),
@@ -73,7 +74,7 @@ impl Codec for RetirementCodec {
         output[8..12].copy_from_slice(&key.first.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         let extent = decode_slice(cell)?;
         if extent.key.txn <= 1 || extent.key.first < 2 || extent.count == 0 {
             return Err(Error::Corrupt("retirement extent has invalid fields"));
@@ -491,7 +492,7 @@ fn decode(cell: LeafBuf) -> Result<Extent> {
     decode_slice(cell.as_slice())
 }
 
-fn decode_slice(cell: &[u8]) -> Result<Extent> {
+fn decode_slice<S: ByteSource>(cell: S) -> Result<Extent> {
     if cell.len() != 16 {
         return Err(Error::Corrupt("retirement leaf has the wrong record size"));
     }

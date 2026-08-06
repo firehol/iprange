@@ -1,12 +1,11 @@
 //! Whole-component rejection and canonical membership-range output.
 
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::immutable_output::Builder;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::range_tree::Record;
 use crate::validation::{ValidationObject, ValidationReason};
 
@@ -16,7 +15,7 @@ use super::report::{RecoverySink, Reporter, Unknown};
 use super::tables::Tables;
 
 pub(crate) struct Components<'a, 'b, S, K> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     memberships: &'a MembershipIndex,
     tables: &'a Tables,
@@ -44,7 +43,7 @@ struct OutputRange<K> {
 
 impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
     pub(crate) fn new(
-        file: &'a File,
+        mapping: &'a Mapping,
         meta: MetaV4,
         memberships: &'a MembershipIndex,
         tables: &'a Tables,
@@ -53,7 +52,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
         cancellation: &'a CancellationToken,
     ) -> Self {
         Self {
-            file,
+            mapping,
             meta,
             memberships,
             tables,
@@ -158,7 +157,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
         if adjacent
             && previous
                 .membership
-                .equal(current.membership, self.file, self.meta)?
+                .equal(current.membership, self.mapping, self.meta)?
         {
             previous.to = current.to;
             self.output = Some(previous);
@@ -170,7 +169,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
     }
 
     fn push_output(&mut self, output: OutputRange<K>) -> Result<()> {
-        let words = output.membership.words(self.file, self.meta);
+        let words = output.membership.words(self.mapping, self.meta);
         K::push_membership(self.builder, output.from, output.to, &words)
     }
 }

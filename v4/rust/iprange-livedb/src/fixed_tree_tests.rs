@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 use super::*;
 use crate::contract::{u32_le, PAGE_SIZE};
+use crate::mapping::{ByteRange, ByteSource};
 use crate::slotted_page;
 
 struct U32Codec;
@@ -17,7 +18,7 @@ impl Codec for U32Codec {
     const KEY_SIZE: usize = 4;
     const LEAF_SIZE: usize = 8;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         Ok(u32_le(cell, 0))
     }
 
@@ -25,7 +26,7 @@ impl Codec for U32Codec {
         output[..4].copy_from_slice(&key.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         if cell.len() == Self::LEAF_SIZE {
             Ok(())
         } else {
@@ -45,15 +46,16 @@ impl Codec for WideCodec {
     const KEY_SIZE: usize = 56;
     const LEAF_SIZE: usize = 64;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
-        Ok(cell[..56].try_into().unwrap())
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
+        cell.array(0)
+            .ok_or(Error::Corrupt("test wide key is truncated"))
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
         output[..56].copy_from_slice(&key);
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         if cell.len() == Self::LEAF_SIZE {
             Ok(())
         } else {
@@ -81,29 +83,29 @@ impl Codec for VariableCodec {
     const MAX_BRANCH_SIZE: usize = 44;
     const MAX_LEAF_SIZE: usize = 44;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         decode_variable(cell).map(|(key, _)| key)
     }
 
     fn write_key(_key: Self::Key, _output: &mut [u8]) {}
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode_variable(cell).map(|_| ())
     }
 
-    fn leaf_cell<'a>(
-        page: &'a [u8; PAGE_SIZE],
+    fn leaf_cell<S: ByteSource>(
+        page: S,
         header: &slotted_page::Header,
         index: usize,
-    ) -> Result<&'a [u8]> {
+    ) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, 13, Self::MAX_LEAF_SIZE)
     }
 
-    fn branch_cell<'a>(
-        page: &'a [u8; PAGE_SIZE],
+    fn branch_cell<S: ByteSource>(
+        page: S,
         header: &slotted_page::Header,
         index: usize,
-    ) -> Result<&'a [u8]> {
+    ) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, 13, Self::MAX_BRANCH_SIZE)
     }
 
@@ -111,7 +113,7 @@ impl Codec for VariableCodec {
         encode_variable(key, child, output)
     }
 
-    fn read_branch_child(cell: &[u8]) -> Result<u32> {
+    fn read_branch_child<S: ByteSource>(cell: S) -> Result<u32> {
         decode_variable(cell).map(|(_, child)| child)
     }
 }
@@ -138,9 +140,21 @@ impl MemoryStore {
             updates: 0,
         }
     }
+
+    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+        self.reads.set(self.reads.get() + 1);
+        *page = *self
+            .pages
+            .get(page_number as usize)
+            .ok_or(Error::Corrupt("test page is out of bounds"))?;
+        Ok(())
+    }
 }
 
 impl Store for MemoryStore {
+    type ReadPage<'a> = &'a [u8; PAGE_SIZE];
+    type WritePage<'a> = [u8; PAGE_SIZE];
+
     fn target_txn(&self) -> u64 {
         self.target_txn
     }
@@ -149,19 +163,9 @@ impl Store for MemoryStore {
         self.pages.len() as u64
     }
 
-    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        self.reads.set(self.reads.get() + 1);
-        let source = self
-            .pages
-            .get(page_number as usize)
-            .ok_or(Error::Corrupt("test page is out of bounds"))?;
-        *page = *source;
-        Ok(())
-    }
-
-    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
     where
-        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
     {
         self.inspections.set(self.inspections.get() + 1);
         inspect(
@@ -178,19 +182,9 @@ impl Store for MemoryStore {
         Ok(page_number)
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        self.writes += 1;
-        let destination = self
-            .pages
-            .get_mut(page_number as usize)
-            .ok_or(Error::Corrupt("test page is out of bounds"))?;
-        *destination = *page;
-        Ok(())
-    }
-
-    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
     where
-        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
     {
         self.updates += 1;
         update(
@@ -198,6 +192,27 @@ impl Store for MemoryStore {
                 .get_mut(page_number as usize)
                 .ok_or(Error::Corrupt("test page is out of bounds"))?,
         )
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        self.reads.set(self.reads.get() + 1);
+        self.writes += 1;
+        let source = source as usize;
+        let destination = destination as usize;
+        if source == destination || source >= self.pages.len() || destination >= self.pages.len() {
+            return Err(Error::Corrupt("test copy pages are invalid"));
+        }
+        let (source_page, destination_page) = if source < destination {
+            let (left, right) = self.pages.split_at_mut(destination);
+            (&left[source], &mut right[0])
+        } else {
+            let (left, right) = self.pages.split_at_mut(source);
+            (&right[0], &mut left[destination])
+        };
+        copy(source_page, destination_page)
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {
@@ -256,18 +271,20 @@ fn encode_variable(key: VarKey, value: u32, output: &mut [u8]) -> Result<usize> 
     Ok(len)
 }
 
-fn decode_variable(cell: &[u8]) -> Result<(VarKey, u32)> {
-    let len = cell.get(8).copied().map(usize::from).unwrap_or(0);
+fn decode_variable<S: ByteSource>(cell: S) -> Result<(VarKey, u32)> {
+    let len = cell.byte(8).map(usize::from).unwrap_or(0);
     if !(1..=32).contains(&len)
         || cell.len() != 12 + len
-        || u16::from_le_bytes(cell[..2].try_into().unwrap()) as usize != cell.len()
-        || cell[2..4] != [0; 2]
-        || cell[9..12] != [0; 3]
+        || cell.array::<2>(0).map(u16::from_le_bytes).map(usize::from) != Some(cell.len())
+        || !cell.all_zero(2, 2)
+        || !cell.all_zero(9, 3)
     {
         return Err(Error::Corrupt("variable test record is malformed"));
     }
     let mut bytes = [0; 32];
-    bytes[..len].copy_from_slice(&cell[12..]);
+    if !cell.copy_range_to(12, &mut bytes[..len]) {
+        return Err(Error::Corrupt("variable test record is truncated"));
+    }
     Ok((
         VarKey {
             bytes,
@@ -285,9 +302,9 @@ fn variable_lookup(store: &MemoryStore, root: u32, key: VarKey) -> Result<Option
     let mut page = [0; PAGE_SIZE];
     loop {
         store.read(page_number, &mut page)?;
-        let header = page::parse::<VariableCodec>(&page, store.target_txn, None)?;
+        let header = page::parse::<VariableCodec, _>(&page, store.target_txn, None)?;
         let (index, exists) =
-            page::lower_bound::<VariableCodec>(&page, &header, key, header.level == 0)?;
+            page::lower_bound::<VariableCodec, _>(&page, &header, key, header.level == 0)?;
         if header.level == 0 {
             return exists
                 .then(|| {
@@ -297,7 +314,7 @@ fn variable_lookup(store: &MemoryStore, root: u32, key: VarKey) -> Result<Option
                 .transpose();
         }
         page_number =
-            page::branch_child::<VariableCodec>(&page, &header, index, store.page_limit())?;
+            page::branch_child::<VariableCodec, _>(&page, &header, index, store.page_limit())?;
     }
 }
 
@@ -309,17 +326,17 @@ fn lookup(store: &MemoryStore, root: u32, key: u32) -> Result<Option<u32>> {
     let mut page = [0; PAGE_SIZE];
     loop {
         store.read(page_number, &mut page)?;
-        let header = page::parse::<U32Codec>(&page, store.target_txn, None)?;
+        let header = page::parse::<U32Codec, _>(&page, store.target_txn, None)?;
         if header.level == 0 {
-            let (index, exists) = page::lower_bound::<U32Codec>(&page, &header, key, true)?;
+            let (index, exists) = page::lower_bound::<U32Codec, _>(&page, &header, key, true)?;
             if !exists {
                 return Ok(None);
             }
             let cell = slotted_page::cell(&page, &header, index, U32Codec::LEAF_SIZE)?;
             return Ok(Some(u32_le(cell, 4)));
         }
-        let (index, _) = page::lower_bound::<U32Codec>(&page, &header, key, false)?;
-        page_number = page::branch_child::<U32Codec>(&page, &header, index, store.page_limit())?;
+        let (index, _) = page::lower_bound::<U32Codec, _>(&page, &header, key, false)?;
+        page_number = page::branch_child::<U32Codec, _>(&page, &header, index, store.page_limit())?;
     }
 }
 
@@ -502,7 +519,7 @@ fn branch_splits_create_and_search_a_three_level_tree() {
 
     let mut page = [0; PAGE_SIZE];
     store.read(root, &mut page).unwrap();
-    let header = page::parse::<WideCodec>(&page, store.target_txn, None).unwrap();
+    let header = page::parse::<WideCodec, _>(&page, store.target_txn, None).unwrap();
     assert_eq!(header.level, 2);
     assert_eq!(
         predecessor::<WideCodec, _>(&store, root, wide_key(4_999))

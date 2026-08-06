@@ -2,6 +2,7 @@
 
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::{ByteRange, ByteSource, PageMut};
 
 pub(crate) const HEADER_SIZE: usize = 32;
 
@@ -13,8 +14,8 @@ pub(crate) struct Header {
     pub(crate) upper: usize,
 }
 
-pub(crate) fn parse(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn parse<S: ByteSource>(
+    page: S,
     selected_txn: u64,
     page_type: u8,
     aux: u32,
@@ -24,20 +25,24 @@ pub(crate) fn parse(
     parse_shape(page, expected_level)
 }
 
-fn validate_identity(
-    page: &[u8; PAGE_SIZE],
+fn validate_identity<S: ByteSource>(
+    page: S,
     selected_txn: u64,
     page_type: u8,
     aux: u32,
 ) -> Result<()> {
-    if page[..4] != PAGE_MAGIC || page[5] != 0 || u16_le(page, 6) != HEADER_SIZE as u16 {
+    if page.len() != PAGE_SIZE
+        || !page.equals(0, &PAGE_MAGIC)
+        || page.byte(5) != Some(0)
+        || u16_le(page, 6) != HEADER_SIZE as u16
+    {
         return Err(Error::Corrupt("slotted-page header is invalid"));
     }
     let born_txn = u64_le(page, 8);
     if born_txn == 0 || born_txn > selected_txn {
         return Err(Error::Corrupt("slotted-page transaction is invalid"));
     }
-    if page[4] != page_type || u32_le(page, 24) != aux {
+    if page.byte(4) != Some(page_type) || u32_le(page, 24) != aux {
         return Err(Error::Corrupt(
             "slotted-page type or discriminator is invalid",
         ));
@@ -45,7 +50,7 @@ fn validate_identity(
     Ok(())
 }
 
-fn parse_shape(page: &[u8; PAGE_SIZE], expected_level: Option<u16>) -> Result<Header> {
+fn parse_shape<S: ByteSource>(page: S, expected_level: Option<u16>) -> Result<Header> {
     let item_count = usize::from(u16_le(page, 16));
     let level = u16_le(page, 18);
     if item_count == 0 || level > MAX_TREE_LEVEL {
@@ -72,12 +77,12 @@ fn parse_shape(page: &[u8; PAGE_SIZE], expected_level: Option<u16>) -> Result<He
     })
 }
 
-pub(crate) fn cell<'a>(
-    page: &'a [u8; PAGE_SIZE],
+pub(crate) fn cell<S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
     cell_len: usize,
-) -> Result<&'a [u8]> {
+) -> Result<ByteRange<S>> {
     let start = slot_start(page, header, index)?;
     let end = start
         .checked_add(cell_len)
@@ -87,16 +92,18 @@ pub(crate) fn cell<'a>(
             "slotted-page cell is outside the record area",
         ));
     }
-    Ok(&page[start..end])
+    ByteRange::new(page, start, cell_len).ok_or(Error::Corrupt(
+        "slotted-page cell is outside the record area",
+    ))
 }
 
-pub(crate) fn record<'a>(
-    page: &'a [u8; PAGE_SIZE],
+pub(crate) fn record<S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
     minimum_len: usize,
     maximum_len: usize,
-) -> Result<&'a [u8]> {
+) -> Result<ByteRange<S>> {
     let start = slot_start(page, header, index)?;
     if start < header.upper || start + 2 > PAGE_SIZE {
         return Err(Error::Corrupt(
@@ -115,10 +122,12 @@ pub(crate) fn record<'a>(
             "slotted-page record is outside the record area",
         ));
     }
-    Ok(&page[start..end])
+    ByteRange::new(page, start, record_len).ok_or(Error::Corrupt(
+        "slotted-page record is outside the record area",
+    ))
 }
 
-fn slot_start(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> Result<usize> {
+fn slot_start<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<usize> {
     if index >= header.item_count {
         return Err(Error::Corrupt("slotted-page slot index is invalid"));
     }
@@ -129,11 +138,11 @@ fn slot_start(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> Result<u
     Ok(usize::from(u16_le(page, slot)))
 }
 
-pub(crate) fn insert(
-    page: &mut [u8; PAGE_SIZE],
+pub(crate) fn insert<D: PageEdit, S: ByteSource>(
+    page: &mut D,
     header: &Header,
     index: usize,
-    cell: &[u8],
+    cell: S,
 ) -> Result<bool> {
     if index > header.item_count {
         return Err(Error::Corrupt("slotted-page insertion index is invalid"));
@@ -146,15 +155,161 @@ pub(crate) fn insert(
     }
     let upper = header.upper - cell.len();
     let lower = header.lower + 2;
-
+    let boundary = if index == 0 {
+        PAGE_SIZE
+    } else {
+        slot_start(page.view(), header, index - 1)?
+    };
+    let moved = boundary
+        .checked_sub(header.upper)
+        .ok_or_else(|| Error::corrupt("slotted-page record order is invalid"))?;
+    page.copy_within(header.upper, upper, moved)?;
     let slot = HEADER_SIZE + index * 2;
-    page.copy_within(slot..header.lower, slot + 2);
-    page[upper..header.upper].copy_from_slice(cell);
-    put_u16(page, slot, upper as u16);
-    put_u16(page, 16, (header.item_count + 1) as u16);
-    put_u16(page, 20, lower as u16);
-    put_u16(page, 22, upper as u16);
+    page.copy_within(slot, slot + 2, header.lower - slot)?;
+    for shifted in index + 1..=header.item_count {
+        let at = HEADER_SIZE + shifted * 2;
+        let old = usize::from(u16_le(page.view(), at));
+        let adjusted = old
+            .checked_sub(cell.len())
+            .ok_or_else(|| Error::corrupt("slotted-page slot underflows"))?;
+        page.put_u16(at, adjusted as u16)?;
+    }
+    let inserted = boundary - cell.len();
+    page.write_source(inserted, cell)?;
+    page.put_u16(slot, inserted as u16)?;
+    page.put_u16(16, (header.item_count + 1) as u16)?;
+    page.put_u16(20, lower as u16)?;
+    page.put_u16(22, upper as u16)?;
     Ok(true)
+}
+
+pub(crate) fn replace<D: PageEdit, S: ByteSource>(
+    page: &mut D,
+    header: &Header,
+    index: usize,
+    old_len: usize,
+    cell: S,
+) -> Result<bool> {
+    if index >= header.item_count || old_len == 0 || cell.is_empty() {
+        return Err(Error::Corrupt("slotted-page replacement is invalid"));
+    }
+    let start = slot_start(page.view(), header, index)?;
+    let boundary = if index == 0 {
+        PAGE_SIZE
+    } else {
+        slot_start(page.view(), header, index - 1)?
+    };
+    if match start.checked_add(old_len) {
+        Some(end) => end != boundary,
+        None => true,
+    } {
+        return Err(Error::Corrupt("slotted-page records are not canonical"));
+    }
+
+    if cell.len() > old_len {
+        let growth = cell.len() - old_len;
+        if header.lower > header.upper.saturating_sub(growth) {
+            return Ok(false);
+        }
+        page.copy_within(header.upper, header.upper - growth, start - header.upper)?;
+        adjust_slots(page, header, index + 1, false, growth)?;
+        let new_start = start - growth;
+        page.write_source(new_start, cell)?;
+        page.put_u16(HEADER_SIZE + index * 2, new_start as u16)?;
+        page.put_u16(22, (header.upper - growth) as u16)?;
+    } else {
+        let shrink = old_len - cell.len();
+        if shrink != 0 {
+            page.copy_within(header.upper, header.upper + shrink, start - header.upper)?;
+            page.zero(header.upper, shrink)?;
+            adjust_slots(page, header, index + 1, true, shrink)?;
+        }
+        let new_start = start + shrink;
+        page.write_source(new_start, cell)?;
+        page.put_u16(HEADER_SIZE + index * 2, new_start as u16)?;
+        page.put_u16(22, (header.upper + shrink) as u16)?;
+    }
+    Ok(true)
+}
+
+pub(crate) fn remove<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    index: usize,
+    old_len: usize,
+) -> Result<()> {
+    if index >= header.item_count || header.item_count <= 1 || old_len == 0 {
+        return Err(Error::Corrupt("slotted-page removal is invalid"));
+    }
+    let start = slot_start(page.view(), header, index)?;
+    let boundary = if index == 0 {
+        PAGE_SIZE
+    } else {
+        slot_start(page.view(), header, index - 1)?
+    };
+    if match start.checked_add(old_len) {
+        Some(end) => end != boundary,
+        None => true,
+    } {
+        return Err(Error::Corrupt("slotted-page records are not canonical"));
+    }
+
+    page.copy_within(header.upper, header.upper + old_len, start - header.upper)?;
+    page.zero(header.upper, old_len)?;
+    adjust_slots(page, header, index + 1, true, old_len)?;
+    let slot = HEADER_SIZE + index * 2;
+    page.copy_within(slot + 2, slot, header.lower - slot - 2)?;
+    page.put_u16(header.lower - 2, 0)?;
+    page.put_u16(16, (header.item_count - 1) as u16)?;
+    page.put_u16(20, (header.lower - 2) as u16)?;
+    page.put_u16(22, (header.upper + old_len) as u16)?;
+    Ok(())
+}
+
+pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) -> Result<Header> {
+    if keep == 0 || keep > header.item_count {
+        return Err(Error::Corrupt("slotted-page truncation is invalid"));
+    }
+    if keep == header.item_count {
+        return Ok(*header);
+    }
+    let upper = slot_start(page.view(), header, keep - 1)?;
+    let lower = HEADER_SIZE + keep * 2;
+    page.zero(lower, header.lower - lower)?;
+    page.zero(header.upper, upper - header.upper)?;
+    page.put_u16(16, keep as u16)?;
+    page.put_u16(20, lower as u16)?;
+    page.put_u16(22, upper as u16)?;
+    Ok(Header {
+        item_count: keep,
+        level: header.level,
+        lower,
+        upper,
+    })
+}
+
+fn adjust_slots<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    start: usize,
+    add: bool,
+    amount: usize,
+) -> Result<()> {
+    for index in start..header.item_count {
+        let at = HEADER_SIZE + index * 2;
+        let old = usize::from(u16_le(page.view(), at));
+        let adjusted = if add {
+            old.checked_add(amount)
+        } else {
+            old.checked_sub(amount)
+        }
+        .ok_or_else(|| Error::corrupt("slotted-page slot adjustment overflows"))?;
+        if adjusted >= PAGE_SIZE {
+            return Err(Error::Corrupt("slotted-page slot adjustment is invalid"));
+        }
+        page.put_u16(at, adjusted as u16)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn insert_fits(header: &Header, cell_len: usize) -> bool {
@@ -172,27 +327,34 @@ pub(crate) struct Appender {
 }
 
 impl Appender {
-    pub(crate) fn new(
-        page: &mut [u8; PAGE_SIZE],
+    pub(crate) fn new<D: PageSink + ?Sized>(
+        page: &mut D,
         page_type: u8,
         born_txn: u64,
         level: u16,
         aux: u32,
     ) -> Self {
         page.fill(0);
-        page[..4].copy_from_slice(&PAGE_MAGIC);
-        page[4] = page_type;
-        put_u16(page, 6, HEADER_SIZE as u16);
-        put_u64(page, 8, born_txn);
-        put_u16(page, 18, level);
-        put_u32(page, 24, aux);
+        page.write(0, &PAGE_MAGIC)
+            .expect("fixed mapped header fits");
+        page.set_byte(4, page_type)
+            .expect("fixed mapped header fits");
+        page.put_u16(6, HEADER_SIZE as u16)
+            .expect("fixed mapped header fits");
+        page.put_u64(8, born_txn).expect("fixed mapped header fits");
+        page.put_u16(18, level).expect("fixed mapped header fits");
+        page.put_u32(24, aux).expect("fixed mapped header fits");
         Self {
             item_count: 0,
             upper: PAGE_SIZE,
         }
     }
 
-    pub(crate) fn try_push(&mut self, page: &mut [u8; PAGE_SIZE], cell: &[u8]) -> Result<bool> {
+    pub(crate) fn try_push<D: PageSink + ?Sized, S: ByteSource>(
+        &mut self,
+        page: &mut D,
+        cell: S,
+    ) -> Result<bool> {
         if cell.is_empty() {
             return Err(Error::InvalidArgument("slotted-page record is empty"));
         }
@@ -206,48 +368,38 @@ impl Appender {
         if lower > upper {
             return Ok(false);
         }
-        page[upper..self.upper].copy_from_slice(cell);
-        put_u16(page, HEADER_SIZE + self.item_count * 2, upper as u16);
+        page.write_source(upper, cell)?;
+        page.put_u16(HEADER_SIZE + self.item_count * 2, upper as u16)?;
         self.item_count += 1;
         self.upper = upper;
         Ok(true)
     }
 
-    pub(crate) fn finish(self, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+    pub(crate) fn finish<D: PageSink + ?Sized>(self, page: &mut D) -> Result<()> {
         if self.item_count == 0 {
             return Err(Error::InvalidArgument(
                 "reachable slotted page cannot be empty",
             ));
         }
-        put_u16(page, 16, self.item_count as u16);
-        put_u16(page, 20, (HEADER_SIZE + self.item_count * 2) as u16);
-        put_u16(page, 22, self.upper as u16);
+        page.put_u16(16, self.item_count as u16)?;
+        page.put_u16(20, (HEADER_SIZE + self.item_count * 2) as u16)?;
+        page.put_u16(22, self.upper as u16)?;
         Ok(())
-    }
-
-    pub(crate) fn item_count(self) -> usize {
-        self.item_count
     }
 }
 
-pub(crate) struct Builder<'a> {
-    page: &'a mut [u8; PAGE_SIZE],
+pub(crate) struct Builder<'a, D: PageSink + ?Sized> {
+    page: &'a mut D,
     appender: Appender,
 }
 
-impl<'a> Builder<'a> {
-    pub(crate) fn new(
-        page: &'a mut [u8; PAGE_SIZE],
-        page_type: u8,
-        born_txn: u64,
-        level: u16,
-        aux: u32,
-    ) -> Self {
+impl<'a, D: PageSink + ?Sized> Builder<'a, D> {
+    pub(crate) fn new(page: &'a mut D, page_type: u8, born_txn: u64, level: u16, aux: u32) -> Self {
         let appender = Appender::new(page, page_type, born_txn, level, aux);
         Self { page, appender }
     }
 
-    pub(crate) fn push(&mut self, cell: &[u8]) -> Result<()> {
+    pub(crate) fn push<S: ByteSource>(&mut self, cell: S) -> Result<()> {
         if self.appender.try_push(self.page, cell)? {
             Ok(())
         } else {
@@ -260,6 +412,76 @@ impl<'a> Builder<'a> {
     }
 }
 
+pub(crate) trait PageSink {
+    fn fill(&mut self, value: u8);
+    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()>;
+    fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()>;
+    fn copy_within(&mut self, source_at: usize, destination_at: usize, len: usize) -> Result<()>;
+    fn set_byte(&mut self, at: usize, value: u8) -> Result<()>;
+    fn put_u16(&mut self, at: usize, value: u16) -> Result<()>;
+    fn put_u32(&mut self, at: usize, value: u32) -> Result<()>;
+    fn put_u64(&mut self, at: usize, value: u64) -> Result<()>;
+}
+
+pub(crate) trait PageEdit: PageSink {
+    type View<'a>: ByteSource
+    where
+        Self: 'a;
+
+    fn view(&self) -> Self::View<'_>;
+    fn zero(&mut self, at: usize, len: usize) -> Result<()>;
+}
+
+impl PageSink for PageMut<'_> {
+    fn fill(&mut self, value: u8) {
+        PageMut::fill(self, value);
+    }
+
+    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
+        PageMut::write(self, at, bytes)
+    }
+
+    fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()> {
+        PageMut::write_source(self, at, bytes)
+    }
+
+    fn copy_within(&mut self, source_at: usize, destination_at: usize, len: usize) -> Result<()> {
+        PageMut::copy_within(self, source_at, destination_at, len)
+    }
+
+    fn set_byte(&mut self, at: usize, value: u8) -> Result<()> {
+        PageMut::set_byte(self, at, value)
+    }
+
+    fn put_u16(&mut self, at: usize, value: u16) -> Result<()> {
+        PageMut::put_u16(self, at, value)
+    }
+
+    fn put_u32(&mut self, at: usize, value: u32) -> Result<()> {
+        PageMut::put_u32(self, at, value)
+    }
+
+    fn put_u64(&mut self, at: usize, value: u64) -> Result<()> {
+        PageMut::put_u64(self, at, value)
+    }
+}
+
+impl PageEdit for PageMut<'_> {
+    type View<'a>
+        = crate::mapping::PageView<'a>
+    where
+        Self: 'a;
+
+    fn view(&self) -> Self::View<'_> {
+        PageMut::view(self)
+    }
+
+    fn zero(&mut self, at: usize, len: usize) -> Result<()> {
+        PageMut::zero(self, at, len)
+    }
+}
+
+#[cfg(test)]
 #[inline]
 pub(crate) fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
     bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
@@ -276,6 +498,82 @@ pub(crate) fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
 }
 
 #[cfg(test)]
+impl PageSink for [u8; PAGE_SIZE] {
+    fn fill(&mut self, value: u8) {
+        <[u8]>::fill(self, value);
+    }
+
+    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
+        let destination = self
+            .get_mut(at..at.saturating_add(bytes.len()))
+            .ok_or(Error::ArithmeticOverflow("test page write"))?;
+        destination.copy_from_slice(bytes);
+        Ok(())
+    }
+
+    fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()> {
+        let destination = self
+            .get_mut(at..at.saturating_add(bytes.len()))
+            .ok_or(Error::ArithmeticOverflow("test page write"))?;
+        if bytes.copy_range_to(0, destination) {
+            Ok(())
+        } else {
+            Err(Error::Corrupt("test page source changed"))
+        }
+    }
+
+    fn copy_within(&mut self, source_at: usize, destination_at: usize, len: usize) -> Result<()> {
+        let end = source_at
+            .checked_add(len)
+            .ok_or(Error::ArithmeticOverflow("test page copy"))?;
+        if end > PAGE_SIZE || destination_at.saturating_add(len) > PAGE_SIZE {
+            return Err(Error::ArithmeticOverflow("test page copy"));
+        }
+        <[u8]>::copy_within(self, source_at..end, destination_at);
+        Ok(())
+    }
+
+    fn set_byte(&mut self, at: usize, value: u8) -> Result<()> {
+        *self
+            .get_mut(at)
+            .ok_or(Error::ArithmeticOverflow("test page byte"))? = value;
+        Ok(())
+    }
+
+    fn put_u16(&mut self, at: usize, value: u16) -> Result<()> {
+        self.write(at, &value.to_le_bytes())
+    }
+
+    fn put_u32(&mut self, at: usize, value: u32) -> Result<()> {
+        self.write(at, &value.to_le_bytes())
+    }
+
+    fn put_u64(&mut self, at: usize, value: u64) -> Result<()> {
+        self.write(at, &value.to_le_bytes())
+    }
+}
+
+#[cfg(test)]
+impl PageEdit for [u8; PAGE_SIZE] {
+    type View<'a>
+        = &'a [u8; PAGE_SIZE]
+    where
+        Self: 'a;
+
+    fn view(&self) -> Self::View<'_> {
+        self
+    }
+
+    fn zero(&mut self, at: usize, len: usize) -> Result<()> {
+        let destination = self
+            .get_mut(at..at.saturating_add(len))
+            .ok_or(Error::ArithmeticOverflow("test page zero"))?;
+        destination.fill(0);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -289,8 +587,8 @@ mod tests {
 
         let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
         assert_eq!(header.item_count, 2);
-        assert_eq!(cell(&page, &header, 0, 12).unwrap(), &[1; 12]);
-        assert_eq!(cell(&page, &header, 1, 12).unwrap(), &[2; 12]);
+        assert_eq!(cell(&page, &header, 0, 12).unwrap().as_slice(), &[1; 12]);
+        assert_eq!(cell(&page, &header, 1, 12).unwrap().as_slice(), &[2; 12]);
         assert_eq!(u32_le(&page, 28), 0);
         crate::page_checksum::seal(&mut page).unwrap();
         assert_eq!(
@@ -326,7 +624,7 @@ mod tests {
 
         let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
         let records: Vec<&[u8]> = (0..header.item_count)
-            .map(|index| cell(&page, &header, index, 2).unwrap())
+            .map(|index| cell(&page, &header, index, 2).unwrap().as_slice())
             .collect();
         assert_eq!(records, [b"00", b"aa", b"bb", b"cc", b"zz"]);
         assert!(page[header.lower..header.upper]
@@ -345,5 +643,36 @@ mod tests {
 
         assert!(!insert(&mut page, &header, 1, b"x").unwrap());
         assert_eq!(page, before);
+    }
+
+    #[test]
+    fn in_place_edits_clear_vacated_record_bytes() {
+        let mut page = [0; PAGE_SIZE];
+        let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+        for cell in [b"aaaa", b"bbbb", b"cccc", b"dddd"] {
+            builder.push(cell).unwrap();
+        }
+        builder.finish().unwrap();
+
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(replace(&mut page, &header, 1, 4, b"b").unwrap());
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(page[header.lower..header.upper]
+            .iter()
+            .all(|&byte| byte == 0));
+
+        remove(&mut page, &header, 2, 4).unwrap();
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(page[header.lower..header.upper]
+            .iter()
+            .all(|&byte| byte == 0));
+
+        truncate(&mut page, &header, 2).unwrap();
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(page[header.lower..header.upper]
+            .iter()
+            .all(|&byte| byte == 0));
+        assert_eq!(cell(&page, &header, 0, 4).unwrap().as_slice(), b"aaaa");
+        assert_eq!(cell(&page, &header, 1, 1).unwrap().as_slice(), b"b");
     }
 }

@@ -1,11 +1,11 @@
 //! Allocation-free ordered projection of one named feed.
 
 use std::fmt;
-use std::fs::File;
 
 use crate::contract::{MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::membership_view;
 use crate::range_cursor::{CursorState, RangeDirection};
 use crate::workflow::AddressRange;
@@ -23,7 +23,7 @@ pub(crate) struct ProjectionState<K> {
 
 impl<K: IpKey> ProjectionState<K> {
     pub(crate) fn new(
-        file: &File,
+        mapping: &Mapping,
         meta: &MetaV4,
         feed_index: u32,
         direction: RangeDirection,
@@ -34,7 +34,7 @@ impl<K: IpKey> ProjectionState<K> {
             meta: *meta,
             feed_index,
             direction,
-            inner: CursorState::new(file, meta, direction, owner_pid)?,
+            inner: CursorState::new(mapping, meta, direction, owner_pid)?,
             pending: None,
             membership: None,
             raw_finished: false,
@@ -42,8 +42,8 @@ impl<K: IpKey> ProjectionState<K> {
         })
     }
 
-    pub(crate) fn seek(&mut self, file: &File, target: K) -> Result<()> {
-        self.inner.seek(file, target)?;
+    pub(crate) fn seek(&mut self, mapping: &Mapping, target: K) -> Result<()> {
+        self.inner.seek(mapping, target)?;
         self.pending = None;
         self.raw_finished = false;
         self.finished = false;
@@ -52,7 +52,7 @@ impl<K: IpKey> ProjectionState<K> {
 
     pub(crate) fn next_with<F>(
         &mut self,
-        file: &File,
+        mapping: &Mapping,
         checkpoint: &mut F,
     ) -> Result<Option<AddressRange<K>>>
     where
@@ -61,7 +61,7 @@ impl<K: IpKey> ProjectionState<K> {
         if self.finished {
             return Ok(None);
         }
-        match self.next_inner(file, checkpoint) {
+        match self.next_inner(mapping, checkpoint) {
             Ok(next) => {
                 self.finished = next.is_none()
                     || (self.raw_finished && self.pending.is_none() && next.is_some());
@@ -74,13 +74,17 @@ impl<K: IpKey> ProjectionState<K> {
         }
     }
 
-    fn next_inner<F>(&mut self, file: &File, checkpoint: &mut F) -> Result<Option<AddressRange<K>>>
+    fn next_inner<F>(
+        &mut self,
+        mapping: &Mapping,
+        checkpoint: &mut F,
+    ) -> Result<Option<AddressRange<K>>>
     where
         F: FnMut() -> Result<()>,
     {
         loop {
             checkpoint()?;
-            let Some(current) = self.next_member(file, checkpoint)? else {
+            let Some(current) = self.next_member(mapping, checkpoint)? else {
                 return Ok(self.pending.take());
             };
             let Some(pending) = self.pending else {
@@ -96,18 +100,27 @@ impl<K: IpKey> ProjectionState<K> {
         }
     }
 
-    fn next_member<F>(&mut self, file: &File, checkpoint: &mut F) -> Result<Option<AddressRange<K>>>
+    fn next_member<F>(
+        &mut self,
+        mapping: &Mapping,
+        checkpoint: &mut F,
+    ) -> Result<Option<AddressRange<K>>>
     where
         F: FnMut() -> Result<()>,
     {
         while !self.raw_finished {
             checkpoint()?;
-            let Some(range) = self.inner.next(file)? else {
+            let Some(range) = self.inner.next(mapping)? else {
                 self.raw_finished = true;
                 break;
             };
             let contains = cached_membership(&mut self.membership, range.value, || {
-                membership_view::id_contains_index(file, &self.meta, range.value, self.feed_index)
+                membership_view::id_contains_index(
+                    mapping,
+                    &self.meta,
+                    range.value,
+                    self.feed_index,
+                )
             })?;
             if contains {
                 return Ok(Some(AddressRange {
@@ -135,21 +148,21 @@ where
 }
 
 pub(crate) struct ProjectionCursor<'a, K> {
-    file: &'a File,
+    mapping: &'a Mapping,
     state: ProjectionState<K>,
 }
 
 impl<'a, K: IpKey> ProjectionCursor<'a, K> {
     pub(crate) fn new(
-        file: &'a File,
+        mapping: &'a Mapping,
         meta: &MetaV4,
         feed_index: u32,
         direction: RangeDirection,
         owner_pid: Option<u32>,
     ) -> Result<Self> {
         Ok(Self {
-            file,
-            state: ProjectionState::new(file, meta, feed_index, direction, owner_pid)?,
+            mapping,
+            state: ProjectionState::new(mapping, meta, feed_index, direction, owner_pid)?,
         })
     }
 
@@ -157,7 +170,7 @@ impl<'a, K: IpKey> ProjectionCursor<'a, K> {
     where
         F: FnMut() -> Result<()>,
     {
-        self.state.next_with(self.file, checkpoint)
+        self.state.next_with(self.mapping, checkpoint)
     }
 }
 
@@ -200,18 +213,18 @@ macro_rules! public_cursor {
 
         impl<'a> $name<'a> {
             pub(crate) fn new(
-                file: &'a File,
+                mapping: &'a Mapping,
                 meta: &MetaV4,
                 feed_index: u32,
                 direction: RangeDirection,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: ProjectionCursor::new(file, meta, feed_index, direction, None)?,
+                    inner: ProjectionCursor::new(mapping, meta, feed_index, direction, None)?,
                 })
             }
 
             pub(crate) fn new_live(
-                file: &'a File,
+                mapping: &'a Mapping,
                 meta: &MetaV4,
                 feed_index: u32,
                 direction: RangeDirection,
@@ -219,7 +232,7 @@ macro_rules! public_cursor {
             ) -> Result<Self> {
                 Ok(Self {
                     inner: ProjectionCursor::new(
-                        file,
+                        mapping,
                         meta,
                         feed_index,
                         direction,

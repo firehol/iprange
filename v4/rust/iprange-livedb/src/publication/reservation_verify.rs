@@ -2,7 +2,8 @@
 
 use std::fs::File;
 
-use crate::{error, file_io};
+use crate::error;
+use crate::mapping::Mapping;
 
 use super::super::namespace::{regular_identity, Identity, Name, NamespaceError};
 use super::super::output::PreparedOutput;
@@ -33,12 +34,13 @@ pub(super) struct Expected<'a> {
 
 pub(super) fn verify(
     file: &File,
+    mapping: &Mapping,
     output: &PreparedOutput,
     expected: Expected<'_>,
 ) -> Result<(), Error> {
     verify_inode(file, output, &expected)?;
     verify_location(output, &expected)?;
-    verify_contents(file, expected.header, expected.block)
+    verify_contents(file, mapping, expected.header, expected.block)
 }
 
 fn verify_inode(
@@ -89,17 +91,22 @@ fn verify_location(output: &PreparedOutput, expected: &Expected<'_>) -> Result<(
     Ok(())
 }
 
-fn verify_contents(file: &File, header: Header, block: usize) -> Result<(), Error> {
+fn verify_contents(
+    file: &File,
+    mapping: &Mapping,
+    header: Header,
+    block: usize,
+) -> Result<(), Error> {
     if file.metadata().map_err(error::Error::from)?.len() != FILE_SIZE as u64 {
         return Err(Error::LengthChanged);
     }
-    select_exact(file, header, block)
+    select_exact(mapping, header, block)
 }
 
-pub(super) fn select_exact(file: &File, header: Header, block: usize) -> Result<(), Error> {
-    let mut bytes = [0; FILE_SIZE];
-    file_io::read_exact_at(file, &mut bytes, 0)?;
-    if reservation::select(&bytes).map_err(|_| Error::Codec)? != (Selected { header, block }) {
+pub(super) fn select_exact(mapping: &Mapping, header: Header, block: usize) -> Result<(), Error> {
+    if reservation::select(mapping.bytes(0, FILE_SIZE)?).map_err(|_| Error::Codec)?
+        != (Selected { header, block })
+    {
         return Err(Error::HeaderChanged);
     }
     Ok(())

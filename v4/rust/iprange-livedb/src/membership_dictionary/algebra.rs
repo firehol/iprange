@@ -4,7 +4,7 @@ use crate::contract::MembershipOperation;
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiringStore, Store};
 
-use super::{decode, find_record, intern, read_words, Interned, State, Words, HASH_WORDS};
+use super::{find_record, intern, read_words, Interned, State, Words, HASH_WORDS};
 
 struct Combined {
     id_root: u32,
@@ -92,7 +92,7 @@ fn stored_word_count<S: Store>(store: &S, root: u32, id: u32) -> Result<u32> {
     }
     let found =
         find_record(store, root, id)?.ok_or(Error::Corrupt("range membership ID is missing"))?;
-    decode(found.as_slice()).map(|record| record.word_count)
+    Ok(found.record.word_count)
 }
 
 fn require_words<S: Store>(store: &S, root: u32, id: u32, expected: u32) -> Result<()> {

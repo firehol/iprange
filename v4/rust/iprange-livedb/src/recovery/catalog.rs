@@ -1,12 +1,11 @@
 //! Reconciliation of the redundant recovery-readable feed catalogs.
 
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::feed::FeedName;
 use crate::feed_catalog;
+use crate::mapping::{ByteSource, Mapping};
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
 use super::catalog_table::Builder;
@@ -17,14 +16,14 @@ use super::tables::Tables;
 use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
 
 pub(crate) fn count(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     cancellation: &CancellationToken,
 ) -> Result<u64> {
     let mut events = CountEvents { meta, count: 0 };
     tree_scan::scan::<NameCodec, _>(
-        file,
+        mapping,
         meta,
         meta.catalog_name_root,
         pages,
@@ -32,7 +31,7 @@ pub(crate) fn count(
         &mut events,
     )?;
     tree_scan::scan::<IndexCodec, _>(
-        file,
+        mapping,
         meta,
         meta.catalog_index_root,
         pages,
@@ -43,7 +42,7 @@ pub(crate) fn count(
 }
 
 pub(crate) fn recover<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     tables: &mut Tables,
@@ -59,7 +58,7 @@ pub(crate) fn recover<S: RecoverySink>(
             builder: &mut builder,
         };
         tree_scan::scan::<NameCodec, _>(
-            file,
+            mapping,
             meta,
             meta.catalog_name_root,
             pages,
@@ -68,7 +67,7 @@ pub(crate) fn recover<S: RecoverySink>(
         )?;
         events.object = IndexCodec::OBJECT;
         tree_scan::scan::<IndexCodec, _>(
-            file,
+            mapping,
             meta,
             meta.catalog_index_root,
             pages,
@@ -104,7 +103,7 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, '_, S> {
         emit(self.reporter, reason, object, page)
     }
 
-    fn leaf(&mut self, page: u32, _index: usize, cell: Option<&[u8]>) -> Result<()> {
+    fn leaf<P: ByteSource>(&mut self, page: u32, _index: usize, cell: Option<P>) -> Result<()> {
         self.reporter.catalog_examined()?;
         let Some(entry) = cell.and_then(|cell| feed_catalog::decode_entry(cell).ok()) else {
             return self.reporter.catalog_rejected(1);
@@ -145,7 +144,7 @@ impl TreeEvents for CountEvents {
         Ok(())
     }
 
-    fn leaf(&mut self, _page: u32, _index: usize, cell: Option<&[u8]>) -> Result<()> {
+    fn leaf<P: ByteSource>(&mut self, _page: u32, _index: usize, cell: Option<P>) -> Result<()> {
         let Some(entry) = cell.and_then(|cell| feed_catalog::decode_entry(cell).ok()) else {
             return Ok(());
         };
@@ -176,13 +175,13 @@ impl Codec for NameCodec {
     const BRANCH_INVALID: ValidationReason = ValidationReason::CatalogInvalid;
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogInvalid;
 
-    fn branch(cell: &[u8]) -> Option<(Self::Key, u32)> {
+    fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)> {
         feed_catalog::decode_entry(cell)
             .ok()
             .map(|entry| (entry.name, entry.index))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         feed_catalog::decode_entry(cell)
             .ok()
             .map(|entry| entry.name)
@@ -205,11 +204,11 @@ impl Codec for IndexCodec {
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogInvalid;
 
-    fn branch(cell: &[u8]) -> Option<(Self::Key, u32)> {
+    fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)> {
         Some((u32_le(cell, 0), u32_le(cell, 4)))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         feed_catalog::decode_entry(cell)
             .ok()
             .map(|entry| entry.index)

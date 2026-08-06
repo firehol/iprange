@@ -2,19 +2,20 @@
 
 use crate::contract::{u16_le, u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::slotted_page::{self, Builder, Header};
+use crate::mapping::{ByteRange, ByteSource};
+use crate::slotted_page::{self, Builder, Header, PageSink};
 
 use super::Codec;
 
 pub(super) struct CellBuf {
-    bytes: [u8; PAGE_SIZE],
+    bytes: [u8; MAX_TREE_CELL],
     len: usize,
 }
 
 impl CellBuf {
     pub(super) fn branch<C: Codec>(key: C::Key, child: u32) -> Result<Self> {
         let mut cell = Self {
-            bytes: [0; PAGE_SIZE],
+            bytes: [0; MAX_TREE_CELL],
             len: 0,
         };
         cell.len = C::write_branch(key, child, &mut cell.bytes)?;
@@ -28,6 +29,8 @@ impl CellBuf {
         &self.bytes[..self.len]
     }
 }
+
+const MAX_TREE_CELL: usize = 512;
 
 #[derive(Clone, Copy)]
 pub(super) struct Edit<'a> {
@@ -55,54 +58,64 @@ impl PairEdit<'_> {
     }
 }
 
-pub(super) fn build_edit<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+#[derive(Clone, Copy)]
+enum Cell<'a, S> {
+    Edit(&'a [u8]),
+    Existing(ByteRange<S>),
+}
+
+impl<S: ByteSource> ByteSource for Cell<'_, S> {
+    fn len(self) -> usize {
+        match self {
+            Self::Edit(bytes) => bytes.len(),
+            Self::Existing(bytes) => bytes.len(),
+        }
+    }
+
+    fn byte(self, at: usize) -> Option<u8> {
+        match self {
+            Self::Edit(bytes) => bytes.byte(at),
+            Self::Existing(bytes) => bytes.byte(at),
+        }
+    }
+
+    fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {
+        match self {
+            Self::Edit(bytes) => bytes.array(at),
+            Self::Existing(bytes) => bytes.array(at),
+        }
+    }
+
+    fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
+        match self {
+            Self::Edit(bytes) => bytes.copy_range_to(at, output),
+            Self::Existing(bytes) => bytes.copy_range_to(at, output),
+        }
+    }
+}
+
+pub(super) fn build_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
+    source: S,
     header: &Header,
     edit: Edit<'_>,
     start: usize,
     end: usize,
-    output: &mut [u8; PAGE_SIZE],
+    output: &mut D,
 ) -> Result<()> {
     let page_type = page_type::<C>(header.level);
     let mut builder = Builder::new(output, page_type, u64_le(source, 8), header.level, C::AUX);
     for virtual_index in start..end {
-        builder.push(virtual_cell::<C>(source, header, edit, virtual_index)?)?;
+        builder.push(virtual_cell::<C, _>(source, header, edit, virtual_index)?)?;
     }
     builder.finish()
 }
 
-pub(super) fn build_remove<C: Codec>(
-    source: &[u8; PAGE_SIZE],
-    header: &Header,
-    removed: usize,
-    output: &mut [u8; PAGE_SIZE],
-) -> Result<()> {
-    if removed >= header.item_count || header.item_count <= 1 {
-        return Err(Error::InvalidArgument(
-            "fixed B+tree removal would create an empty page",
-        ));
-    }
-    let mut builder = Builder::new(
-        output,
-        page_type::<C>(header.level),
-        u64_le(source, 8),
-        header.level,
-        C::AUX,
-    );
-    for index in 0..header.item_count {
-        if index != removed {
-            builder.push(codec_cell::<C>(source, header, index)?)?;
-        }
-    }
-    builder.finish()
-}
-
-pub(super) fn copy_page<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn copy_page<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
+    source: S,
     header: &Header,
     target_txn: u64,
     page_limit: u64,
-    output: &mut [u8; PAGE_SIZE],
+    output: &mut D,
 ) -> Result<()> {
     let mut builder = Builder::new(
         output,
@@ -113,7 +126,7 @@ pub(super) fn copy_page<C: Codec>(
     );
     let mut previous = None;
     for index in 0..header.item_count {
-        let cell = codec_cell::<C>(source, header, index)?;
+        let cell = codec_cell::<C, _>(source, header, index)?;
         let key = C::read_key(cell, header.level)?;
         if previous.is_some_and(|prior| prior >= key) {
             return Err(Error::Corrupt("B+tree page keys are not increasing"));
@@ -121,7 +134,7 @@ pub(super) fn copy_page<C: Codec>(
         if header.level == 0 {
             C::validate_leaf(cell)?;
         } else {
-            require_child::<C>(cell, page_limit)?;
+            require_child::<C, _>(cell, page_limit)?;
         }
         previous = Some(key);
         builder.push(cell)?;
@@ -129,8 +142,8 @@ pub(super) fn copy_page<C: Codec>(
     builder.finish()
 }
 
-pub(super) fn parse<C: Codec>(
-    page: &[u8; PAGE_SIZE],
+pub(super) fn parse<C: Codec, S: ByteSource>(
+    page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<Header> {
@@ -144,8 +157,8 @@ pub(super) fn parse<C: Codec>(
     )
 }
 
-pub(super) fn lower_bound<C: Codec>(
-    page: &[u8; PAGE_SIZE],
+pub(super) fn lower_bound<C: Codec, S: ByteSource>(
+    page: S,
     header: &Header,
     key: C::Key,
     insertion: bool,
@@ -154,13 +167,13 @@ pub(super) fn lower_bound<C: Codec>(
     let mut upper = header.item_count;
     while lower < upper {
         let middle = lower + (upper - lower) / 2;
-        if key_at::<C>(page, header, middle)? < key {
+        if key_at::<C, _>(page, header, middle)? < key {
             lower = middle + 1;
         } else {
             upper = middle;
         }
     }
-    let exists = lower < header.item_count && key_at::<C>(page, header, lower)? == key;
+    let exists = lower < header.item_count && key_at::<C, _>(page, header, lower)? == key;
     if insertion || exists || lower == 0 {
         Ok((lower, exists))
     } else {
@@ -168,52 +181,52 @@ pub(super) fn lower_bound<C: Codec>(
     }
 }
 
-pub(super) fn key_at<C: Codec>(
-    page: &[u8; PAGE_SIZE],
+pub(super) fn key_at<C: Codec, S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
 ) -> Result<C::Key> {
-    C::read_key(codec_cell::<C>(page, header, index)?, header.level)
+    C::read_key(codec_cell::<C, _>(page, header, index)?, header.level)
 }
 
-pub(super) fn branch_child<C: Codec>(
-    page: &[u8; PAGE_SIZE],
+pub(super) fn branch_child<C: Codec, S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
     page_limit: u64,
 ) -> Result<u32> {
     let cell = C::branch_cell(page, header, index)?;
-    require_child::<C>(cell, page_limit)
+    require_child::<C, _>(cell, page_limit)
 }
 
-pub(super) fn edit_fits<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn edit_fits<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: Edit<'_>,
     start: usize,
     end: usize,
 ) -> Result<bool> {
-    Ok(encoded_size::<C>(source, header, edit, start, end)? <= PAGE_SIZE)
+    Ok(encoded_size::<C, _>(source, header, edit, start, end)? <= PAGE_SIZE)
 }
 
-pub(super) fn split_index<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn split_index<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: Edit<'_>,
 ) -> Result<usize> {
     let total = edit.total(header.item_count);
     split_by_size(total, |index| {
-        Ok(virtual_cell::<C>(source, header, edit, index)?.len())
+        Ok(virtual_cell::<C, _>(source, header, edit, index)?.len())
     })
 }
 
-pub(super) fn build_pair_edit<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn build_pair_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
+    source: S,
     header: &Header,
     edit: PairEdit<'_>,
     start: usize,
     end: usize,
-    output: &mut [u8; PAGE_SIZE],
+    output: &mut D,
 ) -> Result<()> {
     let mut builder = Builder::new(
         output,
@@ -223,27 +236,27 @@ pub(super) fn build_pair_edit<C: Codec>(
         C::AUX,
     );
     for index in start..end {
-        builder.push(pair_cell::<C>(source, header, edit, index)?)?;
+        builder.push(pair_cell::<C, _>(source, header, edit, index)?)?;
     }
     builder.finish()
 }
 
-pub(super) fn pair_fits<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn pair_fits<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: PairEdit<'_>,
 ) -> Result<bool> {
-    Ok(pair_size::<C>(source, header, edit, 0, edit.total(header.item_count))? <= PAGE_SIZE)
+    Ok(pair_size::<C, _>(source, header, edit, 0, edit.total(header.item_count))? <= PAGE_SIZE)
 }
 
-pub(super) fn pair_split_index<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+pub(super) fn pair_split_index<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: PairEdit<'_>,
 ) -> Result<usize> {
     let total = edit.total(header.item_count);
     split_by_size(total, |index| {
-        Ok(pair_cell::<C>(source, header, edit, index)?.len())
+        Ok(pair_cell::<C, _>(source, header, edit, index)?.len())
     })
 }
 
@@ -252,14 +265,15 @@ pub(super) fn require_codec<C: Codec>() -> Result<()> {
         || C::MAX_LEAF_SIZE == 0
         || C::MAX_BRANCH_SIZE + 2 + slotted_page::HEADER_SIZE > PAGE_SIZE
         || C::MAX_LEAF_SIZE + 2 + slotted_page::HEADER_SIZE > PAGE_SIZE
+        || C::MAX_BRANCH_SIZE > MAX_TREE_CELL
     {
         return Err(Error::Unsupported("invalid B+tree codec"));
     }
     Ok(())
 }
 
-fn encoded_size<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+fn encoded_size<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: Edit<'_>,
     start: usize,
@@ -269,7 +283,7 @@ fn encoded_size<C: Codec>(
         .checked_sub(start)
         .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
     let payload = (start..end).try_fold(0usize, |used, index| {
-        used.checked_add(virtual_cell::<C>(source, header, edit, index)?.len())
+        used.checked_add(virtual_cell::<C, _>(source, header, edit, index)?.len())
             .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
     })?;
     page_size(count, payload)
@@ -283,8 +297,8 @@ fn page_size(count: usize, payload: usize) -> Result<usize> {
         .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
 }
 
-fn pair_size<C: Codec>(
-    source: &[u8; PAGE_SIZE],
+fn pair_size<C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: PairEdit<'_>,
     start: usize,
@@ -294,7 +308,7 @@ fn pair_size<C: Codec>(
         .checked_sub(start)
         .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
     let payload = (start..end).try_fold(0usize, |used, index| {
-        used.checked_add(pair_cell::<C>(source, header, edit, index)?.len())
+        used.checked_add(pair_cell::<C, _>(source, header, edit, index)?.len())
             .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
     })?;
     page_size(count, payload)
@@ -359,48 +373,48 @@ fn split_difference(
     Ok(Some(left.abs_diff(right)))
 }
 
-fn virtual_cell<'a, C: Codec>(
-    source: &'a [u8; PAGE_SIZE],
+fn virtual_cell<'a, C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: Edit<'a>,
     virtual_index: usize,
-) -> Result<&'a [u8]> {
+) -> Result<Cell<'a, S>> {
     if virtual_index == edit.index {
-        return Ok(edit.cell);
+        return Ok(Cell::Edit(edit.cell));
     }
     let source_index = if virtual_index > edit.index && !edit.replace {
         virtual_index - 1
     } else {
         virtual_index
     };
-    codec_cell::<C>(source, header, source_index)
+    codec_cell::<C, S>(source, header, source_index).map(Cell::Existing)
 }
 
-fn pair_cell<'a, C: Codec>(
-    source: &'a [u8; PAGE_SIZE],
+fn pair_cell<'a, C: Codec, S: ByteSource>(
+    source: S,
     header: &Header,
     edit: PairEdit<'a>,
     index: usize,
-) -> Result<&'a [u8]> {
+) -> Result<Cell<'a, S>> {
     if index == edit.index {
-        return Ok(edit.left);
+        return Ok(Cell::Edit(edit.left));
     }
     if index == edit.index + 1 {
-        return Ok(edit.right);
+        return Ok(Cell::Edit(edit.right));
     }
     let source_index = if index > edit.index + 1 {
         index - 1
     } else {
         index
     };
-    codec_cell::<C>(source, header, source_index)
+    codec_cell::<C, S>(source, header, source_index).map(Cell::Existing)
 }
 
-pub(super) fn codec_cell<'a, C: Codec>(
-    page: &'a [u8; PAGE_SIZE],
+pub(super) fn codec_cell<C: Codec, S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
-) -> Result<&'a [u8]> {
+) -> Result<ByteRange<S>> {
     if header.level == 0 {
         C::leaf_cell(page, header, index)
     } else {
@@ -408,7 +422,7 @@ pub(super) fn codec_cell<'a, C: Codec>(
     }
 }
 
-fn require_child<C: Codec>(cell: &[u8], page_limit: u64) -> Result<u32> {
+fn require_child<C: Codec, S: ByteSource>(cell: S, page_limit: u64) -> Result<u32> {
     let child = C::read_branch_child(cell)?;
     if child < 2 || u64::from(child) >= page_limit {
         return Err(Error::Corrupt("B+tree child page is invalid"));

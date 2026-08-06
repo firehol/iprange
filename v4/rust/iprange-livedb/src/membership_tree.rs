@@ -1,10 +1,8 @@
 //! Selected membership-dictionary record reads.
 
-use std::fs::File;
-
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::file_io;
+use crate::mapping::{ByteSource, Mapping};
 use crate::slotted_page::{self, Header};
 
 const ID_BRANCH: u8 = 7;
@@ -27,7 +25,7 @@ pub(crate) struct Record {
     pub(crate) storage: Storage,
 }
 
-pub(crate) fn find(file: &File, meta: &MetaV4, id: u32) -> Result<Option<Record>> {
+pub(crate) fn find(mapping: &Mapping, meta: &MetaV4, id: u32) -> Result<Option<Record>> {
     if id == 0 {
         return Err(Error::Corrupt("stored membership ID is zero"));
     }
@@ -36,19 +34,17 @@ pub(crate) fn find(file: &File, meta: &MetaV4, id: u32) -> Result<Option<Record>
     }
     let mut page_number = meta.membership_id_root;
     let mut expected = None;
-    let mut page = [0; PAGE_SIZE];
-
     for _ in 0..=MAX_TREE_LEVEL {
-        file_io::read_page(file, page_number, meta.page_count, &mut page)?;
-        let header = parse_header(&page, meta.txn_id, expected)?;
-        let (position, exact) = lower_bound(&page, &header, id, meta)?;
+        let page = mapping.page(page_number, meta.page_count)?;
+        let header = parse_header(page, meta.txn_id, expected)?;
+        let (position, exact) = lower_bound(page, &header, id, meta)?;
         if header.level == 0 {
-            return leaf_result(&page, &header, page_number, position, exact, meta);
+            return leaf_result(page, &header, page_number, position, exact, meta);
         }
         let Some(position) = position.checked_sub(usize::from(!exact)) else {
             return Ok(None);
         };
-        page_number = branch_child(&page, &header, position, meta.page_count)?;
+        page_number = branch_child(page, &header, position, meta.page_count)?;
         expected = Some(header.level - 1);
     }
     Err(Error::Corrupt(
@@ -57,24 +53,17 @@ pub(crate) fn find(file: &File, meta: &MetaV4, id: u32) -> Result<Option<Record>
 }
 
 pub(crate) fn read_inline_words(
-    file: &File,
+    mapping: &Mapping,
     meta: &MetaV4,
     selected: Record,
     start: u32,
     output: &mut [u64],
 ) -> Result<()> {
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_page(file, selected.leaf_page, meta.page_count, &mut page)?;
-    let header = parse_header(&page, meta.txn_id, Some(0))?;
-    let record = decode_record(
-        &page,
-        &header,
-        selected.leaf_page,
-        selected.leaf_index,
-        meta,
-    )?;
+    let page = mapping.page(selected.leaf_page, meta.page_count)?;
+    let header = parse_header(page, meta.txn_id, Some(0))?;
+    let record = decode_record(page, &header, selected.leaf_page, selected.leaf_index, meta)?;
     require_same_inline(record, selected)?;
-    let bytes = slotted_page::record(&page, &header, selected.leaf_index, RECORD_BASE, PAGE_SIZE)?;
+    let bytes = slotted_page::record(page, &header, selected.leaf_index, RECORD_BASE, PAGE_SIZE)?;
     let start = inline_offset(start)?;
     for (index, word) in output.iter_mut().enumerate() {
         *word = u64_le(bytes, start + index * 8);
@@ -100,8 +89,8 @@ fn inline_offset(word: u32) -> Result<usize> {
         .ok_or(Error::ArithmeticOverflow("membership word offset"))
 }
 
-fn lower_bound(
-    page: &[u8; PAGE_SIZE],
+fn lower_bound<S: ByteSource>(
+    page: S,
     header: &Header,
     target: u32,
     meta: &MetaV4,
@@ -120,7 +109,7 @@ fn lower_bound(
     Ok((lower, exact))
 }
 
-fn key_at(page: &[u8; PAGE_SIZE], header: &Header, index: usize, meta: &MetaV4) -> Result<u32> {
+fn key_at<S: ByteSource>(page: S, header: &Header, index: usize, meta: &MetaV4) -> Result<u32> {
     if header.level == 0 {
         return Ok(decode_record(page, header, 0, index, meta)?.id);
     }
@@ -129,8 +118,8 @@ fn key_at(page: &[u8; PAGE_SIZE], header: &Header, index: usize, meta: &MetaV4) 
     Ok(id)
 }
 
-fn leaf_result(
-    page: &[u8; PAGE_SIZE],
+fn leaf_result<S: ByteSource>(
+    page: S,
     header: &Header,
     page_number: u32,
     position: usize,
@@ -143,8 +132,8 @@ fn leaf_result(
     decode_record(page, header, page_number, position, meta).map(Some)
 }
 
-fn decode_record(
-    page: &[u8; PAGE_SIZE],
+fn decode_record<S: ByteSource>(
+    page: S,
     header: &Header,
     page_number: u32,
     index: usize,
@@ -166,8 +155,8 @@ fn decode_record(
     })
 }
 
-fn require_record_fields(
-    bytes: &[u8],
+fn require_record_fields<S: ByteSource>(
+    bytes: S,
     id: u32,
     word_count: u32,
     bitmap_len: u32,
@@ -179,7 +168,7 @@ fn require_record_fields(
         || word_count > MAX_WORD_COUNT
         || u64::from(word_count) > maximum_words(meta.feed_index_limit)
         || bitmap_len != word_count.checked_mul(8).unwrap()
-        || bytes[3] != 0
+        || bytes.byte(3) != Some(0)
         || u32_le(bytes, 28) != 0
     {
         return Err(Error::Corrupt("membership dictionary record is malformed"));
@@ -196,12 +185,17 @@ fn require_id(id: u32, limit: u64) -> Result<()> {
     Ok(())
 }
 
-fn storage(bytes: &[u8], bitmap_len: u32, blob_root: u32, page_count: u64) -> Result<Storage> {
-    match bytes[2] {
-        0 if blob_root == 0 && bytes.len() == RECORD_BASE + bitmap_len as usize => {
+fn storage<S: ByteSource>(
+    bytes: S,
+    bitmap_len: u32,
+    blob_root: u32,
+    page_count: u64,
+) -> Result<Storage> {
+    match bytes.byte(2) {
+        Some(0) if blob_root == 0 && bytes.len() == RECORD_BASE + bitmap_len as usize => {
             Ok(Storage::Inline)
         }
-        1 if bytes.len() == RECORD_BASE => {
+        Some(1) if bytes.len() == RECORD_BASE => {
             if blob_root < 2 || u64::from(blob_root) >= page_count {
                 return Err(Error::Corrupt("membership blob root is invalid"));
             }
@@ -215,8 +209,8 @@ fn maximum_words(feed_index_limit: u64) -> u64 {
     feed_index_limit.saturating_add(63) / 64
 }
 
-fn branch_child(
-    page: &[u8; PAGE_SIZE],
+fn branch_child<S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
     page_count: u64,
@@ -230,8 +224,8 @@ fn branch_child(
     Ok(child)
 }
 
-fn parse_header(
-    page: &[u8; PAGE_SIZE],
+fn parse_header<S: ByteSource>(
+    page: S,
     selected_txn: u64,
     expected: Option<u16>,
 ) -> Result<Header> {

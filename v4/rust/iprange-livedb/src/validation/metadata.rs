@@ -1,5 +1,6 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::{ByteRange, ByteSource, PageView};
 use crate::metadata::Inflater;
 
 use super::context::Context;
@@ -87,7 +88,7 @@ fn consume_page<S: ValidationSink>(
     let Some(page) = context.read_graph_page(page_number, ValidationObject::Metadata, path)? else {
         return Ok(None);
     };
-    let Some(chunk) = parse_page(context, page_number, &page, offset, remaining)? else {
+    let Some(chunk) = parse_page(context, page_number, page, offset, remaining)? else {
         context.mark_untraversable(false)?;
         return Ok(None);
     };
@@ -98,16 +99,16 @@ fn consume_page<S: ValidationSink>(
     }))
 }
 
-fn feed_chunk<S: ValidationSink>(
+fn feed_chunk<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     inflater: &mut Option<Inflater<'_>>,
     page_number: u32,
-    bytes: &[u8],
+    bytes: P,
 ) -> Result<()> {
     let Some(decoder) = inflater.as_mut() else {
         return Ok(());
     };
-    if decoder.feed(bytes).is_ok() {
+    if decoder.feed_source(bytes).is_ok() {
         return Ok(());
     }
     context.emit(
@@ -147,13 +148,13 @@ fn finish_chain<S: ValidationSink>(
     Ok(())
 }
 
-fn parse_page<'a, S: ValidationSink>(
-    context: &mut Context<'_, S>,
+fn parse_page<'m, S: ValidationSink>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &'a [u8; PAGE_SIZE],
+    page: PageView<'m>,
     expected_offset: u64,
     remaining: u64,
-) -> Result<Option<Chunk<'a>>> {
+) -> Result<Option<Chunk<PageView<'m>>>> {
     let length = usize::from(u16_le(page, 36));
     let expected_length = remaining.min(CHUNK_CAPACITY as u64) as usize;
     let final_chunk = remaining == length as u64;
@@ -170,12 +171,13 @@ fn parse_page<'a, S: ValidationSink>(
         report_page_problem(context, page_number, problem)?;
         return Ok(None);
     };
-    if page[DATA_OFFSET + length..].iter().any(|&byte| byte != 0) {
+    if !page.all_zero(DATA_OFFSET + length, PAGE_SIZE - DATA_OFFSET - length) {
         page_finding(context, page_number, ValidationReason::PageReservedNonzero)?;
     }
     Ok(Some(Chunk {
         next,
-        bytes: &page[DATA_OFFSET..DATA_OFFSET + length],
+        bytes: ByteRange::new(page, DATA_OFFSET, length)
+            .ok_or(Error::Corrupt("metadata payload is outside its page"))?,
     }))
 }
 
@@ -188,8 +190,8 @@ enum PageProblem {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn page_problem(
-    page: &[u8; PAGE_SIZE],
+fn page_problem<P: ByteSource>(
+    page: P,
     txn_id: u64,
     length: usize,
     expected_length: usize,
@@ -232,21 +234,21 @@ fn report_page_problem<S: ValidationSink>(
     }
 }
 
-fn common_header(page: &[u8; PAGE_SIZE]) -> bool {
-    page[..4] == PAGE_MAGIC && page[5] == 0 && u16_le(page, 6) == HEADER_SIZE as u16
+fn common_header<P: ByteSource>(page: P) -> bool {
+    page.equals(0, &PAGE_MAGIC) && page.byte(5) == Some(0) && u16_le(page, 6) == HEADER_SIZE as u16
 }
 
-fn born_valid(page: &[u8; PAGE_SIZE], txn_id: u64) -> bool {
+fn born_valid<P: ByteSource>(page: P, txn_id: u64) -> bool {
     let born = u64_le(page, 8);
     born != 0 && born <= txn_id
 }
 
-fn metadata_identity(page: &[u8; PAGE_SIZE]) -> bool {
-    page[4] == PAGE_TYPE && u32_le(page, 24) == 0
+fn metadata_identity<P: ByteSource>(page: P) -> bool {
+    page.byte(4) == Some(PAGE_TYPE) && u32_le(page, 24) == 0
 }
 
-fn chunk_geometry(
-    page: &[u8; PAGE_SIZE],
+fn chunk_geometry<P: ByteSource>(
+    page: P,
     length: usize,
     expected_length: usize,
     expected_offset: u64,
@@ -291,9 +293,9 @@ fn length_finding<S: ValidationSink>(
     )
 }
 
-struct Chunk<'a> {
+struct Chunk<P> {
     next: u32,
-    bytes: &'a [u8],
+    bytes: ByteRange<P>,
 }
 
 struct PageStep {

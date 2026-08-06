@@ -42,7 +42,9 @@ impl LiveWriter {
 
     fn close_base(&self) -> Result<Bootstrap> {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
-        let selected = database::bootstrap_file(&self.file, OpenMode::Writer)?;
+        let physical_bytes = self.mapping.file().metadata()?.len();
+        let selected =
+            database::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
         if selected.meta.database_id != self.base.meta.database_id {
             return Err(Error::WrongMode("live database identity changed"));
         }
@@ -63,7 +65,7 @@ impl LiveWriter {
     }
 
     fn trim_to(&mut self, committed_bytes: u64) -> Result<()> {
-        let length = self.file.metadata()?.len();
+        let length = self.mapping.file().metadata()?.len();
         if length < committed_bytes {
             return Err(Error::Corrupt(
                 "main file is shorter than its committed generation",
@@ -72,10 +74,10 @@ impl LiveWriter {
         let has_tail = length > committed_bytes;
         if has_tail {
             self.unproved_tail_end = Some(length);
-            self.file.set_len(committed_bytes)?;
+            self.mapping.resize(committed_bytes)?;
         }
         if has_tail || self.draft.is_some() {
-            self.file.sync_all()?;
+            self.mapping.sync_file()?;
         }
         Ok(())
     }
@@ -84,7 +86,7 @@ impl LiveWriter {
         if let Err(cause) = self.sidecar.unlock_gate() {
             return Ok(self.close_failure(had_pending, cause));
         }
-        if let Err(cause) = live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK) {
+        if let Err(cause) = live_lock::unlock(self.mapping.file(), MAIN_LIFETIME_LOCK) {
             return Ok(self.close_failure(had_pending, cause));
         }
         self.state = State::Closed;

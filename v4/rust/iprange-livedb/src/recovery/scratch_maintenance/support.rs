@@ -3,7 +3,7 @@
 use std::fs::File;
 
 use crate::error::{Error, Result};
-use crate::file_io;
+use crate::mapping::Mapping;
 use crate::publication::namespace::{Directory, Identity, Name, NamespaceError, IDENTITY_KIND};
 use crate::publication::{
     AbandonedArtifactRemoval, CleanupState, Housekeeping, PublicationProblem,
@@ -21,10 +21,12 @@ pub(super) fn authenticate(
     parsed: ([u8; 16], u32),
 ) -> Result<AbandonedScratchAuthentication> {
     let mut bytes = [0; HEADER_SIZE as usize];
-    let header = match file_io::read_exact_at(file, &mut bytes, 0) {
-        Ok(()) => decode_header(&bytes),
-        Err(Error::Corrupt(_)) => None,
-        Err(cause) => return Err(cause),
+    let header = if file.metadata()?.len() < HEADER_SIZE {
+        None
+    } else {
+        let mapping = Mapping::read_only_view(file, HEADER_SIZE)?;
+        mapping.bytes(0, bytes.len())?.copy_to(&mut bytes);
+        decode_header(&bytes)
     };
     let Some(header) = header else {
         return Ok(AbandonedScratchAuthentication::Unauthenticated);
@@ -43,7 +45,12 @@ pub(super) fn require_header(
     ordinal: u32,
 ) -> Result<DecodedHeader> {
     let mut bytes = [0; HEADER_SIZE as usize];
-    file_io::read_exact_at(file, &mut bytes, 0)?;
+    let mapping = Mapping::read_only_view(file, HEADER_SIZE)?;
+    if !mapping.bytes(0, bytes.len())?.copy_to(&mut bytes) {
+        return Err(Error::CleanupConflict(
+            "abandoned scratch header is unavailable",
+        ));
+    }
     let header = decode_header(&bytes).ok_or(Error::CleanupConflict(
         "abandoned scratch header is unauthenticated",
     ))?;

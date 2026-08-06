@@ -106,6 +106,14 @@ The sidecar is coordination state, not database content. It is never
 distributed or embedded. Opening mode is explicit because the main
 file alone cannot say whether local live coordination is required.
 
+All persistent SDK content is accessed through file-backed mappings. This
+includes the main file, live-reader sidecar, immutable/private outputs,
+publication-control artifacts, recovery input/output, and authorized recovery
+scratch. The SDK does not transfer those bytes through positional, buffered, or
+stream file-I/O APIs. OS calls for file/handle lifecycle, identity, geometry,
+mapping, sparse extension, truncation, locking, namespace changes, and
+durability remain required.
+
 The public constructors are distinct: immutable reader, live reader, and live
 writer. They never auto-create, repair, reset, initialize, or switch mode.
 `CreateLive` creates only the canonical empty live pair and returns a creation
@@ -173,6 +181,14 @@ operation either leaves the pending transaction untouched because it failed
 before mutation, or aborts the entire pending transaction after any possible
 mutation. Cleanup failure poisons the writer.
 
+Every COW destination page is allocated at its final offset in a writable
+file-backed mapping and built there. A complete page is never staged in a stack
+buffer, heap buffer, application cache, or anonymous mapping. Source records are
+decoded as bounded scalar values or copied directly from mapped source bytes to
+mapped destination bytes. Transaction capacity is checked, sparsely extended,
+and mapped before the hot mutation path; remap invalidates every prior internal
+view.
+
 Exact high-level replacements/imports, feed lifecycle operations, and retention
 refresh use clean writers and private transactional drafts. `SnapshotTo` instead
 owns an isolated destination output and may coexist with source writes by pinning
@@ -203,6 +219,13 @@ readers and one writer through a strict external reader table. Retired pages
 remain protected until no registered reader can observe them, then flow into a
 persistent hierarchical free-page bitmap.
 
+Ordinary commit always retires replaced committed pages. Explicit bounded
+`Reclaim` holds the operation gate from its stable reader-table scan through
+publication and moves only complete reader-safe transaction groups into the
+free bitmap. Later allocation takes the lowest eligible free page before tail
+growth. The existence of unrelated active readers does not create an
+append-only allocation fallback and does not require all readers to quiesce.
+
 There is no permanent transaction history. Open and normal operation must not
 materialize allocator state proportional to file size or past transaction
 count.
@@ -215,6 +238,12 @@ COW changes to the free bitmap itself, avoiding recursive allocation machinery.
 Abort discards private roots; reused free pages remain free according to the
 committed meta, while aligned appended growth is truncated immediately or by
 the next writer open.
+
+Live mappings expose checked raw page views, not ordinary Rust slices or
+references whose validity assumes an unvalidated pointer cannot name a reused
+page. Page views check mapped bounds and required local header/offset arithmetic,
+decode bounded values, and copy records mapped-to-mapped. No page view survives
+its operation, unmap, or remap.
 
 ### Validation and recovery
 
@@ -234,6 +263,23 @@ unreachable bytes. A proven current, recovery-readable meta is labelled
 generation-order-ambiguous candidates require explicit selection from an
 immutable copy or caller-certified offline source; candidates are never merged.
 
+Explicit validation, recovery-candidate inspection, and recovery run their
+faultable mapped-source scans in a version-matched SDK worker process. On POSIX,
+the worker installs `SIGBUS` handling only inside that process. It claims a
+kernel-generated signal only while a probe is armed and `si_addr` lies inside
+the exact registered SDK mapping; every other signal chains to the saved prior
+disposition with the correct ABI. An owned fault records fixed facts in mapped
+control state and terminates the worker. It never returns to the faulting access,
+unwinds or `longjmp`s through Rust, allocates, locks, calls user code, or performs
+content I/O in the handler. Windows applies the equivalent rule with
+`EXCEPTION_IN_PAGE_ERROR`; unowned exceptions continue searching.
+
+The parent accepts a physical-unreadability result only when worker identity,
+control generation, active mapping, fault offset, and exit state agree. It
+restarts from the last sealed mapped-scratch checkpoint, never from partial tree
+mutation, and never publishes partial output. Ordinary lookup and mutation do
+not install a process-global fault handler or pay worker-process overhead.
+
 Validation mode is explicit: current live, current immutable, or a selected
 offline recovery candidate. When bootstrap damage prevents selecting a normal
 generation, validation reports the trustworthy bootstrap findings and unknown
@@ -248,6 +294,8 @@ one-time runtime initialization. Resource use follows these rules:
 
 - a warmed successful lookup or cursor step allocates nothing through the
   language allocator and returns borrowed data or writes into caller storage;
+- no persistent-content path calls read/write/seek APIs, and no complete
+  database page exists outside a file-backed mapping;
 - an advanced range mutation is allocation-free only while the existing
   mapping, free pages, and preallocated transaction scratch suffice; a growth
   path remains bounded and must fail before mutation if its declared budget
@@ -268,7 +316,8 @@ one-time runtime initialization. Resource use follows these rules:
 - sparse page numbers must not produce page-number-sized heap structures;
 - virtual address use from a full-file mmap is proportional to file size and is
   measured separately from heap and resident memory;
-- algorithms must be measured for time, allocations, RSS, descriptors, and
+- algorithms must be measured separately for time, heap allocation, mapped
+  virtual bytes, RSS, page faults, descriptors, persistent-content syscalls, and
   scaling shape, not only happy-path throughput.
 
 Every potentially long operation has cancellation checkpoints with bounded

@@ -77,7 +77,7 @@ fn membership_meta(
 fn fixed_page(page_type: u8, cells: &[&[u8]]) -> [u8; PAGE_SIZE] {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, page_type, 1, 0, 0);
-    for cell in cells {
+    for &cell in cells {
         builder.push(cell).unwrap();
     }
     builder.finish().unwrap();
@@ -318,11 +318,12 @@ fn maximum_word_count_is_a_constant_size_view() {
     let path = TestPath::new();
     fs::write(&path.0, []).unwrap();
     let file = File::open(&path.0).unwrap();
+    let mapping = Mapping::read_only(file, 0).unwrap();
     let mut meta = bootstrap::tests::empty_direct_meta(1);
     meta.value_kind = ValueKind::Membership;
     meta.feed_index_limit = 1u64 << 32;
     let view = MembershipView {
-        file: &file,
+        mapping: &mapping,
         meta,
         record: Record {
             id: 1,
@@ -445,9 +446,10 @@ fn wrong_kind_family_missing_id_and_trailing_zero_fail_closed() {
 fn live_view_rejects_a_foreign_process_owner() {
     let (_reader, path) = inline_fixture(&[1, 2, 4]);
     let file = File::open(&path.0).unwrap();
+    let mapping = Mapping::read_only(file, fs::metadata(&path.0).unwrap().len()).unwrap();
     let meta = membership_meta(9, 3, 131, 5, 6, 7, 8);
     let foreign = std::process::id().checked_add(1).unwrap();
-    let view = lookup_v4(&file, &meta, Ipv4Key(10), Some(foreign))
+    let view = lookup_v4(&mapping, &meta, Ipv4Key(10), Some(foreign))
         .unwrap()
         .unwrap();
     assert!(matches!(view.word_count(), Err(Error::ForkedHandle)));

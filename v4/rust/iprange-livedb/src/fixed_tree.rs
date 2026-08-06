@@ -1,10 +1,11 @@
-//! Generic slotted-page COW B+tree.
+//! Generic mapped-page COW B+tree.
 
 use std::fmt;
 
-use crate::contract::{u64_le, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{u64_le, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
-use crate::slotted_page::Header;
+use crate::mapping::{ByteRange, ByteSource};
+use crate::slotted_page::{self, Header, PageEdit, PageSink};
 
 mod delete;
 mod insert;
@@ -14,8 +15,10 @@ mod walk;
 
 pub(crate) use delete::delete;
 pub(crate) use insert::{insert, insert_if_local_gap, LocalInsert};
-use page::{branch_child, build_edit, copy_page, key_at, lower_bound, parse, CellBuf, Edit};
-pub(crate) use read::{at_or_after, predecessor, LeafBuf};
+use page::{branch_child, codec_cell, copy_page, key_at, lower_bound, parse, CellBuf};
+pub(crate) use read::{
+    at_or_after, inspect_leaf, predecessor, predecessor_location, LeafBuf, LeafLocation,
+};
 pub(crate) use walk::{discard_private_tree, retire_tree};
 
 const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
@@ -31,20 +34,16 @@ pub(crate) trait Codec {
     const MAX_BRANCH_SIZE: usize = Self::KEY_SIZE + 4;
     const MAX_LEAF_SIZE: usize = Self::LEAF_SIZE;
 
-    fn read_key(cell: &[u8], level: u16) -> Result<Self::Key>;
+    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key>;
     fn write_key(key: Self::Key, output: &mut [u8]);
-    fn validate_leaf(cell: &[u8]) -> Result<()>;
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()>;
 
-    fn leaf_cell<'a>(page: &'a [u8; PAGE_SIZE], header: &Header, index: usize) -> Result<&'a [u8]> {
-        crate::slotted_page::cell(page, header, index, Self::LEAF_SIZE)
+    fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
+        slotted_page::cell(page, header, index, Self::LEAF_SIZE)
     }
 
-    fn branch_cell<'a>(
-        page: &'a [u8; PAGE_SIZE],
-        header: &Header,
-        index: usize,
-    ) -> Result<&'a [u8]> {
-        crate::slotted_page::cell(page, header, index, Self::KEY_SIZE + 4)
+    fn branch_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
+        slotted_page::cell(page, header, index, Self::KEY_SIZE + 4)
     }
 
     fn write_branch(key: Self::Key, child: u32, output: &mut [u8]) -> Result<usize> {
@@ -57,37 +56,33 @@ pub(crate) trait Codec {
         Ok(len)
     }
 
-    fn read_branch_child(cell: &[u8]) -> Result<u32> {
-        cell.get(Self::KEY_SIZE..Self::KEY_SIZE + 4)
-            .and_then(|bytes| bytes.try_into().ok())
+    fn read_branch_child<S: ByteSource>(cell: S) -> Result<u32> {
+        cell.array(Self::KEY_SIZE)
             .map(u32::from_le_bytes)
             .ok_or(Error::Corrupt("B+tree branch record is too short"))
     }
 }
 
 pub(crate) trait Store {
+    type ReadPage<'a>: ByteSource
+    where
+        Self: 'a;
+    type WritePage<'a>: PageEdit
+    where
+        Self: 'a;
+
     fn target_txn(&self) -> u64;
     fn page_limit(&self) -> u64;
-    fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()>;
-    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
     where
-        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
-    {
-        let mut page = [0; PAGE_SIZE];
-        self.read(page_number, &mut page)?;
-        inspect(&page)
-    }
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>;
     fn allocate(&mut self) -> Result<u32>;
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()>;
-    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
     where
-        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
-    {
-        let mut page = [0; PAGE_SIZE];
-        self.read(page_number, &mut page)?;
-        update(&mut page)?;
-        self.write(page_number, &page)
-    }
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>;
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>;
     fn discard_private(&mut self, page_number: u32) -> Result<()>;
 }
 
@@ -132,10 +127,10 @@ impl RetiredPages {
 }
 
 #[derive(Clone, Copy)]
-struct Frame {
-    page_number: u32,
-    index: usize,
-    item_count: usize,
+pub(super) struct Frame {
+    pub(super) page_number: u32,
+    pub(super) index: usize,
+    pub(super) item_count: usize,
 }
 
 const EMPTY_FRAME: Frame = Frame {
@@ -144,9 +139,9 @@ const EMPTY_FRAME: Frame = Frame {
     item_count: 0,
 };
 
-struct Path {
-    frames: [Frame; MAX_PATH],
-    depth: usize,
+pub(super) struct Path {
+    pub(super) frames: [Frame; MAX_PATH],
+    pub(super) depth: usize,
 }
 
 impl Path {
@@ -168,267 +163,194 @@ impl Path {
     }
 }
 
-struct PrivateTraversal {
-    page_number: u32,
-    expected_level: Option<u16>,
-    parent: Option<(u32, usize)>,
-    path: Path,
+pub(super) struct PrivateLeaf<T> {
+    pub(super) path: Path,
+    pub(super) page_number: u32,
+    pub(super) header: Header,
+    pub(super) selection: T,
 }
 
-impl PrivateTraversal {
-    fn new(root: u32) -> Self {
-        Self {
-            page_number: root,
-            expected_level: None,
-            parent: None,
-            path: Path::new(),
-        }
-    }
+pub(super) trait LeafSelector<C: Codec, S: Store> {
+    type Selection;
 
-    fn descend(
+    fn select<'a>(
         &mut self,
-        page_number: u32,
-        level: u16,
-        index: usize,
-        item_count: usize,
-        child: u32,
-    ) -> Result<()> {
-        self.path.push(Frame {
-            page_number,
-            index,
-            item_count,
-        })?;
-        self.parent = Some((page_number, index));
-        self.page_number = child;
-        self.expected_level = Some(level - 1);
-        Ok(())
-    }
-
-    fn take_path(&mut self) -> Path {
-        std::mem::replace(&mut self.path, Path::new())
-    }
-}
-
-enum LeafChoice<T> {
-    Return(T),
-    Copy,
-}
-
-struct PrivateLeaf<T> {
-    path: Path,
-    page_number: u32,
-    header: Header,
-    page: Option<[u8; PAGE_SIZE]>,
-    selection: Option<T>,
+        page: S::ReadPage<'a>,
+        header: &Header,
+        path: &Path,
+    ) -> Result<Self::Selection>
+    where
+        S: 'a;
 }
 
 enum InspectedPage<T> {
-    Committed,
-    Branch {
-        level: u16,
-        index: usize,
-        item_count: usize,
-        child: u32,
-    },
     Leaf {
         header: Header,
-        choice: LeafChoice<T>,
+        private: bool,
+        selection: T,
+    },
+    Branch {
+        header: Header,
+        private: bool,
+        index: usize,
+        child: u32,
     },
 }
 
-fn private_path<C: Codec, S: Store>(
+pub(super) fn private_path<C: Codec, S: Store>(
     store: &mut S,
     root: &mut u32,
     key: C::Key,
     retired: &mut RetiredPages,
-) -> Result<(Path, u32, [u8; PAGE_SIZE], Header)> {
-    let leaf = private_path_select::<C, S, (), _>(store, root, key, retired, |_, _, _| {
-        Ok(LeafChoice::Copy)
-    })?;
-    let Some(page) = leaf.page else {
-        unreachable!("copy-only private path returned a leaf selection")
-    };
-    Ok((leaf.path, leaf.page_number, page, leaf.header))
+) -> Result<PrivateLeaf<(usize, bool)>> {
+    private_path_select::<C, S, _>(store, root, key, retired, &mut KeySelector { key })
 }
 
-fn private_path_select<C, S, T, F>(
+struct KeySelector<K> {
+    key: K,
+}
+
+impl<C: Codec, S: Store> LeafSelector<C, S> for KeySelector<C::Key> {
+    type Selection = (usize, bool);
+
+    fn select<'a>(
+        &mut self,
+        page: S::ReadPage<'a>,
+        header: &Header,
+        _path: &Path,
+    ) -> Result<Self::Selection>
+    where
+        S: 'a,
+    {
+        lower_bound::<C, _>(page, header, self.key, true)
+    }
+}
+
+pub(super) fn private_path_select<C, S, L>(
     store: &mut S,
     root: &mut u32,
     key: C::Key,
     retired: &mut RetiredPages,
-    mut select: F,
-) -> Result<PrivateLeaf<T>>
+    selector: &mut L,
+) -> Result<PrivateLeaf<L::Selection>>
 where
     C: Codec,
     S: Store,
-    F: FnMut(&[u8; PAGE_SIZE], &Header, &Path) -> Result<LeafChoice<T>>,
+    L: LeafSelector<C, S>,
 {
-    let mut traversal = PrivateTraversal::new(*root);
+    let mut path = Path::new();
+    let mut page_number = *root;
+    let mut expected_level = None;
+    let mut parent = None;
 
     loop {
-        match inspect_page::<C, S, T, F>(
-            store,
-            traversal.page_number,
-            traversal.expected_level,
-            key,
-            &traversal.path,
-            &mut select,
-        )? {
-            InspectedPage::Committed => {
-                if let Some(leaf) = advance_committed::<C, S, T, F>(
-                    store,
-                    root,
-                    key,
-                    retired,
-                    &mut traversal,
-                    &mut select,
-                )? {
-                    return Ok(leaf);
-                }
+        let inspected =
+            inspect::<C, S, L>(store, page_number, expected_level, key, &path, selector)?;
+        let (header, private) = match inspected {
+            InspectedPage::Leaf {
+                header, private, ..
             }
-            InspectedPage::Branch {
-                level,
-                index,
-                item_count,
-                child,
-            } => {
-                traversal.descend(traversal.page_number, level, index, item_count, child)?;
+            | InspectedPage::Branch {
+                header, private, ..
+            } => (header, private),
+        };
+        let active_page = if private {
+            page_number
+        } else {
+            let copied = touch::<C, S>(store, page_number, &header, retired)?;
+            if let Some((parent_page, parent_index)) = parent {
+                replace_branch_child::<C, S>(store, parent_page, parent_index, copied)?;
+            } else {
+                *root = copied;
             }
-            InspectedPage::Leaf { header, choice } => {
-                let page_number = traversal.page_number;
-                return finish_leaf(&mut traversal, page_number, header, choice, || {
-                    let mut page = [0; PAGE_SIZE];
-                    store.read(page_number, &mut page)?;
-                    Ok(page)
+            copied
+        };
+
+        match inspected {
+            InspectedPage::Leaf { selection, .. } => {
+                return Ok(PrivateLeaf {
+                    path,
+                    page_number: active_page,
+                    header,
+                    selection,
                 });
+            }
+            InspectedPage::Branch { index, child, .. } => {
+                path.push(Frame {
+                    page_number: active_page,
+                    index,
+                    item_count: header.item_count,
+                })?;
+                parent = Some((active_page, index));
+                page_number = child;
+                expected_level = Some(header.level - 1);
             }
         }
     }
 }
 
-fn advance_committed<C, S, T, F>(
+pub(crate) fn replace_leaf_u64<C: Codec, S: Store>(
     store: &mut S,
     root: &mut u32,
     key: C::Key,
+    field_offset: usize,
+    value: u64,
     retired: &mut RetiredPages,
-    traversal: &mut PrivateTraversal,
-    select: &mut F,
-) -> Result<Option<PrivateLeaf<T>>>
-where
-    C: Codec,
-    S: Store,
-    F: FnMut(&[u8; PAGE_SIZE], &Header, &Path) -> Result<LeafChoice<T>>,
-{
-    let (private_page, page, header) = touch::<C, S>(
-        store,
-        traversal.page_number,
-        traversal.expected_level,
-        retired,
-    )?;
-    publish_touched_page::<C, S>(store, root, traversal.parent, private_page)?;
-    if header.level == 0 {
-        return select_committed_leaf(traversal, private_page, page, header, select).map(Some);
-    }
-    descend_committed_branch::<C, S>(store, traversal, key, private_page, &page, &header)?;
-    Ok(None)
-}
-
-fn publish_touched_page<C: Codec, S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    parent: Option<(u32, usize)>,
-    private_page: u32,
 ) -> Result<()> {
-    if let Some((parent_page, parent_index)) = parent {
-        replace_branch::<C, S>(store, parent_page, parent_index, None, private_page)?;
-    } else {
-        *root = private_page;
-    }
-    Ok(())
-}
-
-fn select_committed_leaf<T, F>(
-    traversal: &mut PrivateTraversal,
-    page_number: u32,
-    page: [u8; PAGE_SIZE],
-    header: Header,
-    select: &mut F,
-) -> Result<PrivateLeaf<T>>
-where
-    F: FnMut(&[u8; PAGE_SIZE], &Header, &Path) -> Result<LeafChoice<T>>,
-{
-    let choice = select(&page, &header, &traversal.path)?;
-    finish_leaf(traversal, page_number, header, choice, || Ok(page))
-}
-
-fn descend_committed_branch<C: Codec, S: Store>(
-    store: &S,
-    traversal: &mut PrivateTraversal,
-    key: C::Key,
-    private_page: u32,
-    page: &[u8; PAGE_SIZE],
-    header: &Header,
-) -> Result<()> {
-    let (index, _) = lower_bound::<C>(page, header, key, false)?;
-    let child = branch_child::<C>(page, header, index, store.page_limit())?;
-    traversal.descend(private_page, header.level, index, header.item_count, child)
-}
-
-fn finish_leaf<T, F>(
-    traversal: &mut PrivateTraversal,
-    page_number: u32,
-    header: Header,
-    choice: LeafChoice<T>,
-    load: F,
-) -> Result<PrivateLeaf<T>>
-where
-    F: FnOnce() -> Result<[u8; PAGE_SIZE]>,
-{
-    let (page, selection) = match choice {
-        LeafChoice::Return(selection) => (None, Some(selection)),
-        LeafChoice::Copy => (Some(load()?), None),
-    };
-    Ok(PrivateLeaf {
-        path: traversal.take_path(),
-        page_number,
-        header,
-        page,
-        selection,
+    let leaf = private_path::<C, S>(store, root, key, retired)?;
+    let target_txn = store.target_txn();
+    store.update_page(leaf.page_number, |page| {
+        let header = parse::<C, _>(page.view(), target_txn, Some(0))?;
+        let (index, exact) = lower_bound::<C, _>(page.view(), &header, key, true)?;
+        if !exact {
+            return Err(Error::Corrupt("B+tree update key is missing"));
+        }
+        let cell = codec_cell::<C, _>(page.view(), &header, index)?;
+        C::validate_leaf(cell)?;
+        if match field_offset.checked_add(8) {
+            Some(end) => end > cell.len(),
+            None => true,
+        } {
+            return Err(Error::Corrupt("B+tree update field is outside its leaf"));
+        }
+        let at = cell.source_offset() + field_offset;
+        page.put_u64(at, value)?;
+        C::validate_leaf(codec_cell::<C, _>(page.view(), &header, index)?)
     })
 }
 
-fn inspect_page<C, S, T, F>(
+fn inspect<C, S, L>(
     store: &S,
     page_number: u32,
     expected_level: Option<u16>,
     key: C::Key,
     path: &Path,
-    select: &mut F,
-) -> Result<InspectedPage<T>>
+    selector: &mut L,
+) -> Result<InspectedPage<L::Selection>>
 where
     C: Codec,
     S: Store,
-    F: FnMut(&[u8; PAGE_SIZE], &Header, &Path) -> Result<LeafChoice<T>>,
+    L: LeafSelector<C, S>,
 {
     let target_txn = store.target_txn();
     let page_limit = store.page_limit();
     store.inspect_page(page_number, |page| {
-        let header = parse::<C>(page, target_txn, expected_level)?;
-        if u64_le(page, 8) != target_txn {
-            return Ok(InspectedPage::Committed);
-        }
+        let header = parse::<C, _>(page, target_txn, expected_level)?;
+        let private = u64_le(page, 8) == target_txn;
         if header.level == 0 {
+            let selection = selector.select(page, &header, path)?;
             return Ok(InspectedPage::Leaf {
                 header,
-                choice: select(page, &header, path)?,
+                private,
+                selection,
             });
         }
-        let (index, _) = lower_bound::<C>(page, &header, key, false)?;
-        let child = branch_child::<C>(page, &header, index, page_limit)?;
+        let (index, _) = lower_bound::<C, _>(page, &header, key, false)?;
+        let child = branch_child::<C, _>(page, &header, index, page_limit)?;
         Ok(InspectedPage::Branch {
-            level: header.level,
+            header,
+            private,
             index,
-            item_count: header.item_count,
             child,
         })
     })
@@ -437,56 +359,45 @@ where
 fn touch<C: Codec, S: Store>(
     store: &mut S,
     page_number: u32,
-    expected_level: Option<u16>,
+    header: &Header,
     retired: &mut RetiredPages,
-) -> Result<(u32, [u8; PAGE_SIZE], Header)> {
-    let mut source = [0; PAGE_SIZE];
-    store.read(page_number, &mut source)?;
-    let header = parse::<C>(&source, store.target_txn(), expected_level)?;
-    if u64_le(&source, 8) == store.target_txn() {
-        return Ok((page_number, source, header));
-    }
-
+) -> Result<u32> {
     let private_page = store.allocate()?;
-    let mut output = [0; PAGE_SIZE];
-    copy_page::<C>(
-        &source,
-        &header,
-        store.target_txn(),
-        store.page_limit(),
-        &mut output,
-    )?;
-    store.write(private_page, &output)?;
+    let target_txn = store.target_txn();
+    let page_limit = store.page_limit();
+    store.copy_page(page_number, private_page, |source, output| {
+        copy_page::<C, _, _>(source, header, target_txn, page_limit, output)
+    })?;
     retired.push(page_number)?;
-    Ok((private_page, output, header))
+    Ok(private_page)
 }
 
-fn replace_branch<C: Codec, S: Store>(
+fn replace_branch_child<C: Codec, S: Store>(
     store: &mut S,
     page_number: u32,
     index: usize,
-    key: Option<C::Key>,
     child: u32,
 ) -> Result<()> {
-    let mut source = [0; PAGE_SIZE];
-    store.read(page_number, &mut source)?;
-    let header = parse::<C>(&source, store.target_txn(), None)?;
-    let old_key = key_at::<C>(&source, &header, index)?;
-    let key = key.unwrap_or(old_key);
-    let child = if child == 0 {
-        branch_child::<C>(&source, &header, index, store.page_limit())?
-    } else {
-        child
-    };
+    let target_txn = store.target_txn();
+    let page_limit = store.page_limit();
+    let (header, key, old_len) = store.inspect_page(page_number, |page| {
+        let header = parse::<C, _>(page, target_txn, None)?;
+        let key = key_at::<C, _>(page, &header, index)?;
+        let old_len = C::branch_cell(page, &header, index)?.len();
+        branch_child::<C, _>(page, &header, index, page_limit)?;
+        Ok((header, key, old_len))
+    })?;
     let replacement = CellBuf::branch::<C>(key, child)?;
-    let edit = Edit {
-        index,
-        replace: true,
-        cell: replacement.as_slice(),
-    };
-    let mut output = [0; PAGE_SIZE];
-    build_edit::<C>(&source, &header, edit, 0, header.item_count, &mut output)?;
-    store.write(page_number, &output)
+    if replacement.as_slice().len() != old_len {
+        return Err(Error::Corrupt("B+tree child replacement changed key size"));
+    }
+    store.update_page(page_number, |page| {
+        if slotted_page::replace(page, &header, index, old_len, replacement.as_slice())? {
+            Ok(())
+        } else {
+            Err(Error::Corrupt("B+tree child replacement no longer fits"))
+        }
+    })
 }
 
 #[cfg(test)]

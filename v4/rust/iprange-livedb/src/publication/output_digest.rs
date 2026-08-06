@@ -1,30 +1,36 @@
 //! Fixed-memory SHA-512 over exact publication bytes.
 
-use std::fs::File;
-
 use sha2::{Digest, Sha512};
 
 use crate::cancellation::CancellationToken;
-use crate::file_io;
+use crate::mapping::Mapping;
 
 use super::Error;
 
-pub(super) const DIGEST_BUFFER_SIZE: usize = 64 * 1024;
+pub(super) const DIGEST_BUFFER_SIZE: usize = 1024;
 
-pub(crate) fn digest(file: &File, byte_length: u64) -> Result<[u8; 64], Error> {
+pub(crate) fn digest(mapping: &Mapping, byte_length: u64) -> Result<[u8; 64], Error> {
     digest_with(byte_length, |offset, output| {
-        file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
+        if mapping.bytes(offset, output.len())?.copy_to(output) {
+            Ok(())
+        } else {
+            Err(Error::FinishedLengthChanged)
+        }
     })
 }
 
 pub(crate) fn digest_cancellable(
-    file: &File,
+    mapping: &Mapping,
     byte_length: u64,
     cancellation: &CancellationToken,
 ) -> Result<[u8; 64], Error> {
     let result = digest_with(byte_length, |offset, output| {
         cancellation.check().map_err(Error::Sdk)?;
-        file_io::read_exact_at(file, output, offset).map_err(Error::Sdk)
+        if mapping.bytes(offset, output.len())?.copy_to(output) {
+            Ok(())
+        } else {
+            Err(Error::FinishedLengthChanged)
+        }
     });
     cancellation.check().map_err(Error::Sdk)?;
     result

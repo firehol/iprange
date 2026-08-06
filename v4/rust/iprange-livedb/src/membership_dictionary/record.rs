@@ -3,7 +3,7 @@
 use crate::blob_tree;
 use crate::contract::u64_le;
 use crate::error::{Error, Result};
-use crate::fixed_tree::{self, LeafBuf, RetiredPages, RetiringStore, Store};
+use crate::fixed_tree::{self, LeafLocation, RetiredPages, RetiringStore, Store};
 
 use super::blob;
 use super::codec::{decode, IdCodec, Record, Storage, ID_BASE, MAX_ID_RECORD};
@@ -14,6 +14,12 @@ const MAX_INLINE_WORDS: u32 = ((MAX_ID_RECORD - ID_BASE) / 8) as u32;
 pub(super) struct Encoded {
     bytes: [u8; MAX_ID_RECORD],
     len: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Found {
+    location: LeafLocation,
+    pub(super) record: Record,
 }
 
 impl Encoded {
@@ -66,15 +72,17 @@ fn encode_inline<S: Store, W: Words<S>>(store: &S, words: &W, encoded: &mut Enco
     Ok(())
 }
 
-pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<LeafBuf>> {
+pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Found>> {
     if id == 0 || root == 0 {
         return Ok(None);
     }
-    let found = fixed_tree::predecessor::<IdCodec, S>(store, root, id)?;
-    match found {
-        Some(found) if decode(found.as_slice())?.id == id => Ok(Some(found)),
-        _ => Ok(None),
-    }
+    let Some(location) = fixed_tree::predecessor_location::<IdCodec, S>(store, root, id)? else {
+        return Ok(None);
+    };
+    fixed_tree::inspect_leaf::<IdCodec, S, _, _>(store, location, |cell| {
+        let record = decode(cell)?;
+        Ok((record.id == id).then_some(Found { location, record }))
+    })
 }
 
 pub(super) fn read_words<S: Store>(
@@ -85,32 +93,39 @@ pub(super) fn read_words<S: Store>(
     output: &mut [u64],
 ) -> Result<()> {
     let found = find(store, id_root, id)?.ok_or(Error::Corrupt("membership ID is missing"))?;
-    let record = decode(found.as_slice())?;
-    read_record_words(store, found.as_slice(), &record, start, output)
+    read_record_words(store, &found, start, output)
 }
 
 pub(super) fn read_record_words<S: Store>(
     store: &S,
-    cell: &[u8],
-    record: &Record,
+    found: &Found,
     start: u32,
     output: &mut [u64],
 ) -> Result<()> {
     let end = u64::from(start)
         .checked_add(output.len() as u64)
         .ok_or(Error::ArithmeticOverflow("membership word range"))?;
-    if end > u64::from(record.word_count) {
+    if end > u64::from(found.record.word_count) {
         return Err(Error::Corrupt("membership word range exceeds its bitmap"));
     }
-    match record.storage {
+    match found.record.storage {
         Storage::Inline => {
-            for (index, word) in output.iter_mut().enumerate() {
-                *word = u64_le(cell, ID_BASE + (start as usize + index) * 8);
-            }
-            Ok(())
+            fixed_tree::inspect_leaf::<IdCodec, S, _, _>(store, found.location, |cell| {
+                let current = decode(cell)?;
+                if current.id != found.record.id
+                    || current.word_count != found.record.word_count
+                    || current.storage != Storage::Inline
+                {
+                    return Err(Error::Corrupt("membership record changed during read"));
+                }
+                for (index, word) in output.iter_mut().enumerate() {
+                    *word = u64_le(cell, ID_BASE + (start as usize + index) * 8);
+                }
+                Ok(())
+            })
         }
         Storage::Blob(root) => {
-            blob_tree::read_words_from(store, root, record.word_count, start, output)
+            blob_tree::read_words_from(store, root, found.record.word_count, start, output)
         }
     }
 }
@@ -118,18 +133,10 @@ pub(super) fn read_record_words<S: Store>(
 pub(super) fn replace_refcount<S: RetiringStore>(
     store: &mut S,
     root: &mut u32,
-    source: &[u8],
+    id: u32,
     refcount: u64,
 ) -> Result<()> {
-    let mut encoded = Encoded {
-        bytes: [0; MAX_ID_RECORD],
-        len: source.len(),
-    };
-    encoded.bytes[..source.len()].copy_from_slice(source);
-    encoded.bytes[8..16].copy_from_slice(&refcount.to_le_bytes());
     let mut retired = RetiredPages::new();
-    if fixed_tree::insert::<IdCodec, S>(store, root, encoded.as_slice(), &mut retired)? {
-        return Err(Error::Corrupt("membership refcount ID disappeared"));
-    }
+    fixed_tree::replace_leaf_u64::<IdCodec, S>(store, root, id, 8, refcount, &mut retired)?;
     store.retire_pages(retired.as_slice())
 }

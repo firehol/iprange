@@ -1,12 +1,10 @@
 //! Complete CRC-checked recovery scan of one membership bitmap blob.
 
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::Result;
-use crate::file_io;
+use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
@@ -28,8 +26,8 @@ struct Span {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn scan<S, F>(
-    file: &File,
+pub(crate) fn scan<'m, S, F>(
+    mapping: &'m Mapping,
     meta: MetaV4,
     root: u32,
     word_count: u32,
@@ -40,7 +38,7 @@ pub(crate) fn scan<S, F>(
 ) -> Result<bool>
 where
     S: RecoverySink,
-    F: FnMut(&[u8]) -> Result<()>,
+    F: FnMut(ByteRange<PageView<'m>>) -> Result<()>,
 {
     let length = u64::from(word_count) * 8;
     if !valid_root(root, length) {
@@ -48,7 +46,7 @@ where
         return Ok(false);
     }
     let mut scanner = Scanner {
-        file,
+        mapping,
         meta,
         pages,
         cancellation,
@@ -74,8 +72,8 @@ fn complete_span(span: Span, length: u64) -> bool {
     span.complete && span.start == 0 && span.end == length
 }
 
-struct Scanner<'a, 'b, S, F> {
-    file: &'a File,
+struct Scanner<'m, 'a, 'b, S, F> {
+    mapping: &'m Mapping,
     meta: MetaV4,
     pages: &'a mut PageSet,
     cancellation: &'a CancellationToken,
@@ -83,10 +81,10 @@ struct Scanner<'a, 'b, S, F> {
     consume: F,
 }
 
-impl<S, F> Scanner<'_, '_, S, F>
+impl<'m, S, F> Scanner<'m, '_, '_, S, F>
 where
     S: RecoverySink,
-    F: FnMut(&[u8]) -> Result<()>,
+    F: FnMut(ByteRange<PageView<'m>>) -> Result<()>,
 {
     #[allow(clippy::too_many_arguments)]
     fn node(
@@ -105,11 +103,11 @@ where
         let Some(page) = self.load(page_number)? else {
             return Ok(None);
         };
-        match page[4] {
-            LEAF_TYPE => self.leaf(page_number, &page, expected_level, expected_start, length),
-            BRANCH_TYPE => self.branch(
+        match page.byte(4) {
+            Some(LEAF_TYPE) => self.leaf(page_number, page, expected_level, expected_start, length),
+            Some(BRANCH_TYPE) => self.branch(
                 page_number,
-                &page,
+                page,
                 expected_level,
                 expected_start,
                 length,
@@ -154,13 +152,15 @@ where
         Ok(true)
     }
 
-    fn load(&mut self, page_number: u32) -> Result<Option<[u8; PAGE_SIZE]>> {
-        let mut page = [0; PAGE_SIZE];
-        if file_io::read_page(self.file, page_number, self.meta.page_count, &mut page).is_err() {
-            self.reject(page_number, ValidationReason::IoError, true)?;
-            return Ok(None);
-        }
-        if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+    fn load(&mut self, page_number: u32) -> Result<Option<PageView<'m>>> {
+        let page = match self.mapping.page(page_number, self.meta.page_count) {
+            Ok(page) => page,
+            Err(_) => {
+                self.reject(page_number, ValidationReason::IoError, true)?;
+                return Ok(None);
+            }
+        };
+        if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
             self.reject(page_number, ValidationReason::PageCrcMismatch, false)?;
             return Ok(None);
         }
@@ -170,7 +170,7 @@ where
     fn leaf(
         &mut self,
         page_number: u32,
-        page: &[u8; PAGE_SIZE],
+        page: PageView<'m>,
         expected_level: Option<u16>,
         expected_start: u64,
         length: u64,
@@ -180,11 +180,13 @@ where
         else {
             return self.reject(page_number, ValidationReason::BlobInvalid, false);
         };
-        if page[LEAF_DATA + data_len..].iter().any(|&byte| byte != 0) {
+        if !page.all_zero(LEAF_DATA + data_len, PAGE_SIZE - LEAF_DATA - data_len) {
             return self.reject(page_number, ValidationReason::BlobInvalid, false);
         }
         self.reporter.page_accepted()?;
-        (self.consume)(&page[LEAF_DATA..LEAF_DATA + data_len])?;
+        let bytes = ByteRange::new(page, LEAF_DATA, data_len)
+            .expect("validated blob payload is inside its mapped page");
+        (self.consume)(bytes)?;
         Ok(Some(Span {
             start,
             end,
@@ -196,7 +198,7 @@ where
     fn branch(
         &mut self,
         page_number: u32,
-        page: &[u8; PAGE_SIZE],
+        page: PageView<'m>,
         expected_level: Option<u16>,
         expected_start: u64,
         length: u64,
@@ -233,7 +235,7 @@ where
     fn branch_children(
         &mut self,
         page_number: u32,
-        page: &[u8; PAGE_SIZE],
+        page: PageView<'m>,
         header: Header,
         length: u64,
         path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -303,8 +305,8 @@ fn repeated_reason(path: &[u32], page: u32) -> ValidationReason {
     }
 }
 
-fn leaf_geometry(
-    page: &[u8; PAGE_SIZE],
+fn leaf_geometry<P: ByteSource>(
+    page: P,
     meta: MetaV4,
     expected_level: Option<u16>,
     expected_start: u64,
@@ -319,24 +321,24 @@ fn leaf_geometry(
     valid.then_some((start, end, data_len))
 }
 
-fn leaf_identity_valid(page: &[u8; PAGE_SIZE], meta: MetaV4) -> bool {
+fn leaf_identity_valid<P: ByteSource>(page: P, meta: MetaV4) -> bool {
     let born = u64_le(page, 8);
-    page[..4] == PAGE_MAGIC
-        && page[4] == LEAF_TYPE
-        && page[5] == 0
+    page.equals(0, &PAGE_MAGIC)
+        && page.byte(4) == Some(LEAF_TYPE)
+        && page.byte(5) == Some(0)
         && u16_le(page, 6) == slotted_page::HEADER_SIZE as u16
         && born != 0
         && born <= meta.txn_id
 }
 
-fn leaf_header_valid(page: &[u8; PAGE_SIZE], expected_level: Option<u16>, data_len: usize) -> bool {
+fn leaf_header_valid<P: ByteSource>(page: P, expected_level: Option<u16>, data_len: usize) -> bool {
     expected_level.map_or(true, |level| level == 0)
         && u16_le(page, 16) == 1
         && u16_le(page, 18) == 0
         && usize::from(u16_le(page, 20)) == LEAF_DATA + data_len
         && usize::from(u16_le(page, 22)) == PAGE_SIZE
         && u32_le(page, 24) == MEMBERSHIP_KIND
-        && page[42..LEAF_DATA] == [0; 6]
+        && page.all_zero(42, LEAF_DATA - 42)
 }
 
 fn leaf_payload_valid(
@@ -353,8 +355,8 @@ fn leaf_payload_valid(
         && (end == length || data_len == LEAF_CAPACITY)
 }
 
-fn branch_records_valid(
-    page: &[u8; PAGE_SIZE],
+fn branch_records_valid<P: ByteSource>(
+    page: P,
     header: &Header,
     expected_start: u64,
     length: u64,
@@ -383,8 +385,8 @@ fn branch_records_valid(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn branch_record_valid(
-    cell: &[u8],
+fn branch_record_valid<P: ByteSource>(
+    cell: P,
     child: u32,
     offset: u64,
     previous: Option<u64>,

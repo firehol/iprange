@@ -14,6 +14,7 @@ use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::live_writer::CloseOutcome;
+use crate::mapping::Mapping;
 use crate::membership_view::MembershipView;
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
@@ -70,7 +71,7 @@ impl LiveReader {
         live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         live_sidecar::verify_path(&main_path, main_identity)?;
 
-        let initial = database::bootstrap_file(&file, OpenMode::LiveReader)?;
+        let (mut mapping, initial) = database::map_reader(file, OpenMode::LiveReader)?;
         crate::live_cleanup::require_main_available(
             &main_path,
             main_identity,
@@ -78,10 +79,16 @@ impl LiveReader {
         )?;
         let sidecar = Sidecar::open(&main_path, initial.meta.database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
-        let registration = register(&file, &main_path, main_identity, &sidecar, cancellation);
+        let registration = register(
+            &mut mapping,
+            &main_path,
+            main_identity,
+            &sidecar,
+            cancellation,
+        );
         let (bootstrap, slot) = finish_with_cleanup(registration, sidecar.unlock_gate())?;
         Ok(Self {
-            core: ReaderCore::new(file, bootstrap),
+            core: ReaderCore::new(mapping, bootstrap),
             main_path,
             main_identity,
             sidecar,
@@ -187,15 +194,15 @@ impl LiveReader {
         self.core.metadata_json()
     }
 
-    pub(crate) fn import_parts(&self) -> Result<(&std::fs::File, MetaV4)> {
+    pub(crate) fn import_parts(&self) -> Result<(&Mapping, MetaV4)> {
         self.require_open()?;
         Ok(self.core.import_parts())
     }
 
-    pub(crate) fn c_abi_parts(&self) -> Result<(&std::fs::File, MetaV4, Option<u32>)> {
+    pub(crate) fn c_abi_parts(&self) -> Result<(&Mapping, MetaV4, Option<u32>)> {
         self.require_open()?;
-        let (file, meta) = self.core.import_parts();
-        Ok((file, meta, Some(self.owner_pid)))
+        let (mapping, meta) = self.core.import_parts();
+        Ok((mapping, meta, Some(self.owner_pid)))
     }
 
     /// Clear this registration. An incomplete close retains retry authority.
@@ -299,14 +306,15 @@ fn reader_close_incomplete(cause: Error) -> ReaderCloseResult {
 }
 
 fn register(
-    file: &std::fs::File,
+    mapping: &mut Mapping,
     main_path: &Path,
     main_identity: Identity,
     sidecar: &Sidecar,
     cancellation: &CancellationToken,
 ) -> Result<(crate::bootstrap::Bootstrap, u32)> {
     let bootstrap =
-        select_registered_generation(file, main_path, main_identity, sidecar, cancellation)?;
+        select_registered_generation(mapping, main_path, main_identity, sidecar, cancellation)?;
+    mapping.remap(bootstrap.committed_bytes)?;
     let slot = sidecar.claim_reader_cancellable(bootstrap.meta.txn_id, cancellation)?;
     cancellation.check()?;
     live_sidecar::verify_path(main_path, main_identity)?;
@@ -315,7 +323,7 @@ fn register(
 }
 
 fn select_registered_generation(
-    file: &std::fs::File,
+    mapping: &Mapping,
     main_path: &Path,
     main_identity: Identity,
     sidecar: &Sidecar,
@@ -323,7 +331,8 @@ fn select_registered_generation(
 ) -> Result<crate::bootstrap::Bootstrap> {
     live_sidecar::verify_path(main_path, main_identity)?;
     sidecar.verify_path()?;
-    let bootstrap = database::bootstrap_file(file, OpenMode::LiveReader)?;
+    let physical_bytes = mapping.file().metadata()?.len();
+    let bootstrap = database::bootstrap_mapping(mapping, physical_bytes, OpenMode::LiveReader)?;
     if bootstrap.meta.database_id != sidecar.header.database_id {
         return Err(Error::WrongMode(
             "reader table belongs to a different database",

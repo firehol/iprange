@@ -5,11 +5,12 @@ use std::path::Path;
 
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{MetaV4, PAGE_SIZE};
+use crate::contract::MetaV4;
 use crate::immutable_output::Finished;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
-use crate::{file_io, random};
+use crate::mapping::Mapping;
+use crate::random;
 
 use super::namespace::{
     regular_identity, regular_identity_any_link, sync_file, Destination, Identity, Name,
@@ -223,10 +224,16 @@ impl OutputAttempt {
         match prepare_cancellable(&owner, cancellation) {
             Ok((byte_length, sha512)) => {
                 let UnpreparedOutput { attempt, finished } = owner;
+                let Finished {
+                    file,
+                    mapping,
+                    meta,
+                } = finished;
                 Ok(PreparedOutput {
                     attempt,
-                    file: finished.file,
-                    meta: finished.meta,
+                    file,
+                    mapping,
+                    meta,
                     byte_length,
                     sha512,
                     policy: Policy::FailIfExists,
@@ -273,6 +280,7 @@ pub(crate) struct UnpreparedOutput {
 pub(crate) struct PreparedOutput {
     pub(crate) attempt: OutputAttempt,
     pub(crate) file: File,
+    pub(crate) mapping: Mapping,
     pub(crate) meta: MetaV4,
     pub(crate) byte_length: u64,
     pub(crate) sha512: [u8; 64],
@@ -304,7 +312,13 @@ impl PreparedOutput {
     }
 
     fn verify(&self, location: Location) -> Result<(), Error> {
-        let length = inspect_exact(&self.attempt, &self.file, self.meta, location)?;
+        let length = inspect_exact(
+            &self.attempt,
+            &self.file,
+            &self.mapping,
+            self.meta,
+            location,
+        )?;
         if length != self.byte_length {
             return Err(Error::FinishedLengthChanged);
         }
@@ -350,7 +364,7 @@ fn prepare_cancellable(
     )
     .map_err(Error::Sdk)?;
     let byte_length = inspect_finished(owner)?;
-    let sha512 = digest_cancellable(&owner.finished.file, byte_length, cancellation)?;
+    let sha512 = digest_cancellable(&owner.finished.mapping, byte_length, cancellation)?;
     finish_cancellable(owner, byte_length, cancellation)?;
     Ok((byte_length, sha512))
 }
@@ -373,6 +387,7 @@ fn inspect_finished(owner: &UnpreparedOutput) -> Result<u64, Error> {
     inspect_exact(
         &owner.attempt,
         &owner.finished.file,
+        &owner.finished.mapping,
         owner.finished.meta,
         Location::Private,
     )
@@ -381,15 +396,14 @@ fn inspect_finished(owner: &UnpreparedOutput) -> Result<u64, Error> {
 fn inspect_exact(
     attempt: &OutputAttempt,
     file: &File,
+    mapping: &Mapping,
     expected: MetaV4,
     location: Location,
 ) -> Result<u64, Error> {
     verify_custody(attempt, file, location)?;
     let byte_length = file.metadata().map_err(crate::error::Error::from)?.len();
-    let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut pages, 0).map_err(Error::Sdk)?;
-    let page0 = (&pages[..PAGE_SIZE]).try_into().expect("fixed meta page");
-    let page1 = (&pages[PAGE_SIZE..]).try_into().expect("fixed meta page");
+    let page0 = mapping.page(0, 2).map_err(Error::Sdk)?;
+    let page1 = mapping.page(1, 2).map_err(Error::Sdk)?;
     let opened = bootstrap::open_meta_pages(page0, page1, byte_length, OpenMode::ImmutableReader)
         .map_err(|_| Error::Bootstrap)?;
     if opened.meta != expected {

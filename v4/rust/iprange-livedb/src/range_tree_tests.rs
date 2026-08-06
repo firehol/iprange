@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::bootstrap;
-use crate::contract::{AddressFamily, MetaV4, PAGE_MAGIC};
+use crate::contract::{AddressFamily, MetaV4, PAGE_MAGIC, PAGE_SIZE};
 use crate::database::ImmutableReader;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_cursor::{DirectRange, RangeDirection};

@@ -6,14 +6,16 @@ use super::super::direct_build::{construct, DirectConstruction};
 use super::*;
 use crate::cardinality::Cardinality129;
 use crate::contract::{ValueTag, PAGE_SIZE};
+use crate::crc32c;
 use crate::database::ImmutableReader;
 use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
+use crate::mapping::test_support as file_io;
+use crate::mapping::Mapping;
 use crate::range_cursor::RangeDirection;
 use crate::range_tree;
 use crate::recovery::{RecoverySinkControl, RecoveryUnknownEnvelope};
 use crate::slotted_page::{self, Header};
 use crate::validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl};
-use crate::{crc32c, file_io};
 
 pub(super) struct Paths {
     pub(super) source: PathBuf,
@@ -58,6 +60,7 @@ fn ordered_direct_recovery_streams_a_canonical_output() {
         &[(0, 9, 1), (10, 19, 2), (30, 39, 2), (100, 199, 3)],
     );
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let output = output_builder(&paths.output);
     let mut unknown = Vec::new();
 
@@ -101,11 +104,12 @@ fn crc_damaged_leaf_is_skipped_and_reported_as_unbounded() {
     }
     let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
-    let damaged = first_child(&finished.file, meta);
+    let damaged = first_child(&finished.mapping, meta);
     corrupt_crc(&finished.file, damaged);
     drop(finished.file);
 
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
     let DirectConstruction {
         finished, report, ..
@@ -143,6 +147,7 @@ fn an_overlap_component_is_rejected_whole() {
     );
     rewrite_second_start(&paths.source, meta, 5);
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
     let DirectConstruction {
         finished, report, ..
@@ -180,6 +185,7 @@ fn disordered_readable_records_are_sorted_with_bounded_heap() {
     );
     swap_first_two_records(&paths.source, meta);
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
     let DirectConstruction {
         finished, report, ..
@@ -217,6 +223,7 @@ fn disordered_recovery_refuses_insufficient_heap_before_output_mutation() {
     );
     swap_first_two_records(&paths.source, meta);
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let output = output_builder(&paths.output);
     let failure = construct(
         &source,
@@ -257,8 +264,9 @@ fn disordered_direct_recovery_uses_bounded_multi_pass_scratch() {
         scratch_directory: Some(paths.scratch.clone()),
     };
 
+    let source = source_mapping(&paths.source);
     let result = construct(
-        &File::open(&paths.source).unwrap(),
+        &source,
         meta,
         output_builder(&paths.output),
         &budget,
@@ -290,10 +298,11 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     let meta = finished.meta;
     drop(finished.file);
 
+    let source = source_mapping(&clean.source);
     let DirectConstruction {
         finished, report, ..
     } = construct(
-        &File::open(&clean.source).unwrap(),
+        &source,
         meta,
         output_builder(&clean.output),
         &budget(2 * 1024 * 1024),
@@ -323,10 +332,11 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
         meta.metadata_root,
     );
     let mut unknown = Vec::new();
+    let source = source_mapping(&damaged.source);
     let DirectConstruction {
         finished, report, ..
     } = construct(
-        &File::open(&damaged.source).unwrap(),
+        &source,
         meta,
         output_builder(&damaged.output),
         &budget(2 * 1024 * 1024),
@@ -398,12 +408,17 @@ pub(super) fn finish_ranges(mut builder: Builder, ranges: &[(u32, u32, u32)]) ->
     meta
 }
 
-fn first_child(file: &File, meta: MetaV4) -> u32 {
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_page(file, meta.range_root, meta.page_count, &mut page).unwrap();
-    let header = range_tree::parse_header::<Ipv4Key>(&page, meta.txn_id, None).unwrap();
+pub(super) fn source_mapping(path: &Path) -> Mapping {
+    let file = File::open(path).unwrap();
+    let len = file.metadata().unwrap().len();
+    Mapping::read_only(file, len).unwrap()
+}
+
+fn first_child(mapping: &Mapping, meta: MetaV4) -> u32 {
+    let page = mapping.page(meta.range_root, meta.page_count).unwrap();
+    let header = range_tree::parse_header::<Ipv4Key, _>(page, meta.txn_id, None).unwrap();
     assert!(header.level > 0);
-    range_tree::branch_child::<Ipv4Key>(&page, &header, 0).unwrap()
+    range_tree::branch_child::<Ipv4Key, _>(page, &header, 0).unwrap()
 }
 
 fn corrupt_crc(file: &File, page_number: u32) {
@@ -442,7 +457,7 @@ fn edit_root_leaf(path: &Path, meta: MetaV4, edit: impl FnOnce(&mut [u8; PAGE_SI
         .unwrap();
     let mut page = [0; PAGE_SIZE];
     file_io::read_page(&file, meta.range_root, meta.page_count, &mut page).unwrap();
-    let header = range_tree::parse_header::<Ipv4Key>(&page, meta.txn_id, None).unwrap();
+    let header = range_tree::parse_header::<Ipv4Key, _>(&page, meta.txn_id, None).unwrap();
     assert_eq!(header.level, 0);
     edit(&mut page, header);
     let checksum = crc32c::crc32c_with_zeroed(&page, 28, 4).unwrap();

@@ -135,8 +135,8 @@ pub(super) trait DirectKey: IpKey {
 
     fn decode_scratch(bytes: &[u8]) -> Record<Self> {
         Record {
-            from: Self::read_le(bytes),
-            to: Self::read_le(&bytes[Self::WIDTH..]),
+            from: Self::read_le(bytes, 0),
+            to: Self::read_le(bytes, Self::WIDTH),
             value: u32::from_le_bytes(
                 bytes[Self::WIDTH * 2..Self::SCRATCH_RECORD_SIZE]
                     .try_into()

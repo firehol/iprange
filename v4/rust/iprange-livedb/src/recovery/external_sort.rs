@@ -1,12 +1,12 @@
 //! Bounded two-file merge sort for recovery-readable direct ranges.
 
-use std::fs::File;
 use std::mem::size_of;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::key::IpKey;
+use crate::mapping::Mapping;
 use crate::range_tree::Record;
 use crate::validation::ValidationReason;
 
@@ -50,7 +50,7 @@ impl SortArea {
 // Exact scratch ownership must remain in the error without a failure-path box.
 #[allow(clippy::result_large_err)]
 pub(crate) fn sort_and_emit<K: DirectKey>(
-    file: &File,
+    mapping: &Mapping,
     request: SortRequest<'_>,
     mut pages: PageSet,
     mut emit: impl FnMut(Record<K>) -> Result<()>,
@@ -82,7 +82,7 @@ pub(crate) fn sort_and_emit<K: DirectKey>(
         }
     };
     let runs = scan_runs(
-        file,
+        mapping,
         request.meta,
         &mut pages,
         &mut records,
@@ -145,7 +145,7 @@ fn prepare_records<K: IpKey>(
 
 #[allow(clippy::too_many_arguments)]
 fn scan_runs<K: DirectKey>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     records: &mut Vec<Record<K>>,
@@ -165,7 +165,7 @@ fn scan_runs<K: DirectKey>(
             cancellation,
             seen: 0,
         };
-        range_scan::scan(file, meta, pages, cancellation, &mut events)?;
+        range_scan::scan(mapping, meta, pages, cancellation, &mut events)?;
         events.flush()?;
         if events.seen != readable_records {
             return Err(Error::RecoveryCandidateChanged);

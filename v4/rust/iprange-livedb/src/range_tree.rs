@@ -1,11 +1,9 @@
 //! Allocation-free point lookup in the range B+tree.
 
-use std::fs::File;
-
-use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::key::IpKey;
+use crate::mapping::{ByteSource, Mapping};
 use crate::slotted_page;
 
 pub(crate) use crate::slotted_page::Header;
@@ -19,7 +17,7 @@ pub(crate) struct Record<K> {
     pub(crate) value: u32,
 }
 
-pub(crate) fn lookup<K: IpKey>(file: &File, meta: &MetaV4, target: K) -> Result<Option<u32>> {
+pub(crate) fn lookup<K: IpKey>(mapping: &Mapping, meta: &MetaV4, target: K) -> Result<Option<u32>> {
     if meta.address_family != K::FAMILY {
         return Err(Error::WrongAddressFamily(
             "lookup address family does not match the database",
@@ -31,44 +29,42 @@ pub(crate) fn lookup<K: IpKey>(file: &File, meta: &MetaV4, target: K) -> Result<
 
     let mut page_number = meta.range_root;
     let mut expected_level = None;
-    let mut page = [0; PAGE_SIZE];
-
     for _ in 0..=MAX_TREE_LEVEL {
-        file_io::read_page(file, page_number, meta.page_count, &mut page)?;
-        let header = parse_header::<K>(&page, meta.txn_id, expected_level)?;
+        let page = mapping.page(page_number, meta.page_count)?;
+        let header = parse_header::<K, _>(page, meta.txn_id, expected_level)?;
         if header.level == 0 {
-            return lookup_leaf::<K>(&page, &header, target);
+            return lookup_leaf::<K, _>(page, &header, target);
         }
 
         let cell_len = K::WIDTH + 4;
-        let Some(index) = greatest_not_after::<K>(&page, &header, cell_len, target)? else {
+        let Some(index) = greatest_not_after::<K, _>(page, &header, cell_len, target)? else {
             return Ok(None);
         };
-        page_number = branch_child::<K>(&page, &header, index)?;
+        page_number = branch_child::<K, _>(page, &header, index)?;
         expected_level = Some(header.level - 1);
     }
 
     Err(Error::Corrupt("range tree exceeds its maximum height"))
 }
 
-fn lookup_leaf<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+fn lookup_leaf<K: IpKey, S: ByteSource>(
+    page: S,
     header: &Header,
     target: K,
 ) -> Result<Option<u32>> {
     let cell_len = K::WIDTH * 2 + 4;
-    let Some(index) = greatest_not_after::<K>(page, header, cell_len, target)? else {
+    let Some(index) = greatest_not_after::<K, _>(page, header, cell_len, target)? else {
         return Ok(None);
     };
-    let record = leaf_record::<K>(page, header, index)?;
+    let record = leaf_record::<K, _>(page, header, index)?;
     if target > record.to {
         return Ok(None);
     }
     Ok(Some(record.value))
 }
 
-pub(crate) fn parse_header<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn parse_header<K: IpKey, S: ByteSource>(
+    page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<Header> {
@@ -83,8 +79,8 @@ pub(crate) fn parse_header<K: IpKey>(
     )
 }
 
-pub(crate) fn greatest_not_after<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn greatest_not_after<K: IpKey, S: ByteSource>(
+    page: S,
     header: &Header,
     cell_len: usize,
     target: K,
@@ -93,7 +89,7 @@ pub(crate) fn greatest_not_after<K: IpKey>(
     let mut upper = header.item_count;
     while lower < upper {
         let middle = lower + (upper - lower) / 2;
-        let key = K::read_le(slotted_page::cell(page, header, middle, cell_len)?);
+        let key = K::read_le(slotted_page::cell(page, header, middle, cell_len)?, 0);
         if key <= target {
             lower = middle + 1;
         } else {
@@ -103,8 +99,8 @@ pub(crate) fn greatest_not_after<K: IpKey>(
     Ok(lower.checked_sub(1))
 }
 
-pub(crate) fn branch_child<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn branch_child<K: IpKey, S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
 ) -> Result<u32> {
@@ -112,14 +108,14 @@ pub(crate) fn branch_child<K: IpKey>(
     Ok(u32_le(cell, K::WIDTH))
 }
 
-pub(crate) fn leaf_record<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn leaf_record<K: IpKey, S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
 ) -> Result<Record<K>> {
     let cell = slotted_page::cell(page, header, index, K::WIDTH * 2 + 4)?;
-    let from = K::read_le(cell);
-    let to = K::read_le(&cell[K::WIDTH..]);
+    let from = K::read_le(cell, 0);
+    let to = K::read_le(cell, K::WIDTH);
     if from > to {
         return Err(Error::Corrupt("selected range has reversed endpoints"));
     }

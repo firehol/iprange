@@ -1,10 +1,10 @@
-use std::fs::{self, File};
+use std::fs;
 
 use super::super::direct_build::construct;
 use super::super::{RecoveryBudget, RecoverySinkControl, RecoveryUnknownEnvelope};
 use super::tests::{
     finish_ranges, output_builder, output_ranges, rewrite_second_start, source_builder,
-    swap_first_two_records, Paths,
+    source_mapping, swap_first_two_records, Paths,
 };
 use crate::validation::ValidationReason;
 use crate::{CancellationToken, Error};
@@ -23,8 +23,9 @@ fn ordered_recovery_uses_one_file_backed_page_table() {
         scratch_directory: Some(paths.scratch.clone()),
     };
 
+    let source = source_mapping(&paths.source);
     let result = construct(
-        &File::open(&paths.source).unwrap(),
+        &source,
         meta,
         output_builder(&paths.output),
         &budget,
@@ -61,8 +62,9 @@ fn sink_stop_during_external_output_cleans_every_scratch_file() {
     };
     let mut saw_order_damage = false;
 
+    let source = source_mapping(&paths.source);
     let failure = construct(
-        &File::open(&paths.source).unwrap(),
+        &source,
         meta,
         output_builder(&paths.output),
         &budget,

@@ -1,8 +1,9 @@
 use super::*;
+use crate::contract::PAGE_SIZE;
 
 struct MemoryStore {
     txn: u64,
-    pages: Vec<[u8; crate::contract::PAGE_SIZE]>,
+    pages: Vec<[u8; PAGE_SIZE]>,
     discarded: Vec<u32>,
     retired: Vec<u32>,
 }
@@ -11,7 +12,7 @@ impl MemoryStore {
     fn new() -> Self {
         Self {
             txn: 1,
-            pages: vec![[0; crate::contract::PAGE_SIZE]; 2],
+            pages: vec![[0; PAGE_SIZE]; 2],
             discarded: Vec::new(),
             retired: Vec::new(),
         }
@@ -19,6 +20,9 @@ impl MemoryStore {
 }
 
 impl Store for MemoryStore {
+    type ReadPage<'a> = &'a [u8; PAGE_SIZE];
+    type WritePage<'a> = [u8; PAGE_SIZE];
+
     fn target_txn(&self) -> u64 {
         self.txn
     }
@@ -27,26 +31,39 @@ impl Store for MemoryStore {
         self.pages.len() as u64
     }
 
-    fn read(&self, page_number: u32, output: &mut [u8; crate::contract::PAGE_SIZE]) -> Result<()> {
-        *output = *self
-            .pages
-            .get(page_number as usize)
-            .ok_or(Error::Corrupt("test membership page is out of bounds"))?;
-        Ok(())
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
+    {
+        inspect(
+            self.pages
+                .get(page_number as usize)
+                .ok_or(Error::Corrupt("test membership page is out of bounds"))?,
+        )
     }
 
     fn allocate(&mut self) -> Result<u32> {
         let page = self.pages.len() as u32;
-        self.pages.push([0; crate::contract::PAGE_SIZE]);
+        self.pages.push([0; PAGE_SIZE]);
         Ok(page)
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; crate::contract::PAGE_SIZE]) -> Result<()> {
-        *self
-            .pages
-            .get_mut(page_number as usize)
-            .ok_or(Error::Corrupt("test membership page is out of bounds"))? = *page;
-        Ok(())
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        update(
+            self.pages
+                .get_mut(page_number as usize)
+                .ok_or(Error::Corrupt("test membership page is out of bounds"))?,
+        )
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        crate::test_support_tests::copy_pages(&mut self.pages, source, destination, copy)
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {
@@ -113,25 +130,19 @@ fn inline_and_blob_values_deduplicate_reuse_ids_and_release_pages() {
     assert_ne!(first.id, blob.id);
     assert_eq!(intern(&mut store, &mut state, &large).unwrap().id, blob.id);
     assert!(matches!(
-        decode(
-            find_record(&store, state.id_root, first.id)
-                .unwrap()
-                .unwrap()
-                .as_slice()
-        )
-        .unwrap()
-        .storage,
+        find_record(&store, state.id_root, first.id)
+            .unwrap()
+            .unwrap()
+            .record
+            .storage,
         Storage::Inline
     ));
     assert!(matches!(
-        decode(
-            find_record(&store, state.id_root, blob.id)
-                .unwrap()
-                .unwrap()
-                .as_slice()
-        )
-        .unwrap()
-        .storage,
+        find_record(&store, state.id_root, blob.id)
+            .unwrap()
+            .unwrap()
+            .record
+            .storage,
         Storage::Blob(_)
     ));
 
@@ -161,7 +172,7 @@ fn inline_and_blob_values_deduplicate_reuse_ids_and_release_pages() {
     .unwrap();
     for id in [first.id, blob.id] {
         let found = find_record(&store, state.id_root, id).unwrap().unwrap();
-        assert_eq!(decode(found.as_slice()).unwrap().refcount, 1);
+        assert_eq!(found.record.refcount, 1);
     }
     apply_delta(
         &mut store,
@@ -274,7 +285,7 @@ fn committed_blob_pages_are_retired_without_being_overwritten() {
     let found = find_record(&store, state.id_root, interned.id)
         .unwrap()
         .unwrap();
-    let Storage::Blob(blob_root) = decode(found.as_slice()).unwrap().storage else {
+    let Storage::Blob(blob_root) = found.record.storage else {
         panic!("large membership was not stored as a blob");
     };
     let committed = store.pages.clone();

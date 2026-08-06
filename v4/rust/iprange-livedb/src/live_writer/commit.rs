@@ -6,7 +6,6 @@ use crate::contract::PAGE_SIZE;
 use crate::database;
 use crate::draft_store::DraftStore;
 use crate::error::{combine_errors, Error, Result};
-use crate::file_io;
 use crate::live_lock::Mode;
 use crate::publication::CoordinationCleanup;
 
@@ -143,7 +142,7 @@ impl LiveWriter {
     fn prepare_with(&mut self, cancellation: &CancellationToken) -> Result<()> {
         let draft = self.draft.as_mut().unwrap();
         let mut store = DraftStore::new(
-            &self.file,
+            &mut self.mapping,
             self.base.meta.page_count,
             self.budget.pages(),
             draft,
@@ -152,7 +151,7 @@ impl LiveWriter {
         store.prepare_with_checkpoint(&mut check)
     }
 
-    fn commit_locked(&self, cancellation: &CancellationToken) -> Phase {
+    fn commit_locked(&mut self, cancellation: &CancellationToken) -> Phase {
         if let Err(error) = cancellation.check() {
             return Phase::BeforePublication(error);
         }
@@ -164,36 +163,53 @@ impl LiveWriter {
             return Phase::BeforePublication(error);
         }
         crate::fault::crash("commit.before_private_sync");
-        if let Err(error) = self.file.sync_all() {
-            return Phase::BeforePublication(error.into());
+        let committed_bytes = self.draft.as_ref().unwrap().meta.page_count * PAGE_SIZE as u64;
+        if let Err(error) = self.mapping.resize(committed_bytes) {
+            return Phase::BeforePublication(error);
+        }
+        let data_offset = (2 * PAGE_SIZE) as u64;
+        if committed_bytes > data_offset {
+            if let Err(error) = self
+                .mapping
+                .flush_range(data_offset, committed_bytes - data_offset)
+            {
+                return Phase::BeforePublication(error);
+            }
+        }
+        if let Err(error) = self.mapping.sync_file() {
+            return Phase::BeforePublication(error);
         }
         crate::fault::crash("commit.after_private_sync");
         if let Err(error) = cancellation.check() {
             return Phase::BeforePublication(error);
         }
 
-        let draft = self.draft.as_ref().unwrap();
+        let meta = self.draft.as_ref().unwrap().meta;
         let target_page = 1 - self.base.selected_meta_page;
-        let mut meta_page = [0; PAGE_SIZE];
-        draft.meta.encode_into(&mut meta_page);
-        if let Err(error) = file_io::write_exact_at(
-            &self.file,
-            &meta_page,
-            u64::from(target_page) * PAGE_SIZE as u64,
-        ) {
+        let encoded = self
+            .mapping
+            .page_mut(u32::from(target_page), meta.page_count)
+            .and_then(|page| meta.encode_mapped(page));
+        if let Err(error) = encoded {
             return Phase::OutcomeUnknown(error);
         }
         crate::fault::crash("commit.after_meta_write");
-        if let Err(error) = self.file.sync_all() {
-            return Phase::OutcomeUnknown(error.into());
+        if let Err(error) = self
+            .mapping
+            .flush_page(u32::from(target_page), meta.page_count)
+        {
+            return Phase::OutcomeUnknown(error);
+        }
+        if let Err(error) = self.mapping.sync_file() {
+            return Phase::OutcomeUnknown(error);
         }
         crate::fault::crash("commit.after_meta_sync");
         Phase::Committed(Bootstrap {
-            meta: draft.meta,
+            meta,
             selection: MetaSelection::ProvenCurrent,
             selected_meta_page: target_page,
-            committed_bytes: draft.meta.page_count * PAGE_SIZE as u64,
-            physical_bytes: draft.meta.page_count * PAGE_SIZE as u64,
+            committed_bytes,
+            physical_bytes: committed_bytes,
         })
     }
 
@@ -207,7 +223,9 @@ impl LiveWriter {
     }
 
     pub(super) fn require_unchanged_base(&self) -> Result<()> {
-        let selected = database::bootstrap_file(&self.file, OpenMode::Writer)?;
+        let physical_bytes = self.mapping.file().metadata()?.len();
+        let selected =
+            database::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
         if selected.meta != self.base.meta {
             return Err(Error::WrongMode(
                 "committed generation changed under the writer",
@@ -225,7 +243,7 @@ impl LiveWriter {
             .page_count
             .checked_mul(PAGE_SIZE as u64)
             .ok_or(Error::ArithmeticOverflow("committed file length"))?;
-        if self.file.metadata()?.len() != expected {
+        if self.mapping.file().metadata()?.len() < expected || self.mapping.len() < expected {
             return Err(Error::Corrupt("draft file length is inconsistent"));
         }
         Ok(())

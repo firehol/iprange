@@ -17,13 +17,13 @@ pub(super) struct Failure {
 }
 
 pub(super) fn copy(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     mut builder: Builder,
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> std::result::Result<Finished, Box<Failure>> {
-    let result = copy_logical(file, meta, &mut builder, budget, cancellation);
+    let result = copy_logical(mapping, meta, &mut builder, budget, cancellation);
     if let Err(cause) = result {
         return Err(Box::new(Failure { builder, cause }));
     }
@@ -36,39 +36,39 @@ pub(super) fn copy(
 }
 
 fn copy_logical(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> Result<()> {
     if meta.value_kind == ValueKind::Membership {
-        copy_feeds(file, meta, builder, cancellation)?;
+        copy_feeds(mapping, meta, builder, cancellation)?;
     }
     match (meta.address_family, meta.value_kind) {
         (AddressFamily::Ipv4, ValueKind::Direct) => {
-            copy_direct_v4(file, meta, builder, cancellation)?
+            copy_direct_v4(mapping, meta, builder, cancellation)?
         }
         (AddressFamily::Ipv6, ValueKind::Direct) => {
-            copy_direct_v6(file, meta, builder, cancellation)?
+            copy_direct_v6(mapping, meta, builder, cancellation)?
         }
         (AddressFamily::Ipv4, ValueKind::Membership) => {
-            copy_membership_v4(file, meta, builder, cancellation)?
+            copy_membership_v4(mapping, meta, builder, cancellation)?
         }
         (AddressFamily::Ipv6, ValueKind::Membership) => {
-            copy_membership_v6(file, meta, builder, cancellation)?
+            copy_membership_v6(mapping, meta, builder, cancellation)?
         }
     }
-    copy_metadata(file, meta, builder, budget, cancellation)
+    copy_metadata(mapping, meta, builder, budget, cancellation)
 }
 
 fn copy_feeds(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = FeedCursor::new(file, &meta)?;
+    let mut cursor = FeedCursor::new(mapping, &meta)?;
     while let Some(feed) = next_feed(&mut cursor, cancellation)? {
         builder.push_feed(feed.name, feed.index)?;
     }
@@ -84,12 +84,12 @@ fn next_feed(
 }
 
 fn copy_direct_v4(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(file, &meta, RangeDirection::Forward, None)?;
+    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
     while let Some(range) = next_range(&mut cursor, cancellation)? {
         builder.push_direct_v4(range.from, range.to, range.value)?;
     }
@@ -97,12 +97,12 @@ fn copy_direct_v4(
 }
 
 fn copy_direct_v6(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(file, &meta, RangeDirection::Forward, None)?;
+    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
     while let Some(range) = next_range(&mut cursor, cancellation)? {
         builder.push_direct_v6(range.from, range.to, range.value)?;
     }
@@ -110,28 +110,28 @@ fn copy_direct_v6(
 }
 
 fn copy_membership_v4(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(file, &meta, RangeDirection::Forward, None)?;
+    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
     while let Some(range) = next_range(&mut cursor, cancellation)? {
-        let words = SnapshotWords::new(file, meta, range.value, cancellation)?;
+        let words = SnapshotWords::new(mapping, meta, range.value, cancellation)?;
         builder.push_membership_v4(range.from, range.to, &words)?;
     }
     Ok(())
 }
 
 fn copy_membership_v6(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(file, &meta, RangeDirection::Forward, None)?;
+    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
     while let Some(range) = next_range(&mut cursor, cancellation)? {
-        let words = SnapshotWords::new(file, meta, range.value, cancellation)?;
+        let words = SnapshotWords::new(mapping, meta, range.value, cancellation)?;
         builder.push_membership_v6(range.from, range.to, &words)?;
     }
     Ok(())
@@ -153,13 +153,13 @@ struct SnapshotWords<'a> {
 
 impl<'a> SnapshotWords<'a> {
     fn new(
-        file: &'a std::fs::File,
+        mapping: &'a crate::mapping::Mapping,
         meta: MetaV4,
         id: u32,
         cancellation: &'a CancellationToken,
     ) -> Result<Self> {
         cancellation.check()?;
-        let view = membership_view::by_id(file, &meta, id, None)?;
+        let view = membership_view::by_id(mapping, &meta, id, None)?;
         let word_count = view.word_count()?;
         Ok(Self {
             view,
@@ -185,7 +185,7 @@ impl MembershipWords for SnapshotWords<'_> {
 }
 
 fn copy_metadata(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: MetaV4,
     builder: &mut Builder,
     budget: &SnapshotBudget,
@@ -209,7 +209,7 @@ fn copy_metadata(
     if charged > budget.max_heap_bytes {
         return Err(Error::BudgetExceeded("snapshot metadata input heap"));
     }
-    if metadata::read(file, &meta, &mut input)? != Some(length) {
+    if metadata::read(mapping, &meta, &mut input)? != Some(length) {
         return Err(Error::Corrupt("metadata length changed while copying"));
     }
     cancellation.check()?;

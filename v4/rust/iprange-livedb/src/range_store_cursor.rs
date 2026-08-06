@@ -1,8 +1,8 @@
-//! Ordered range traversal through a mutable page store.
+//! Ordered range traversal through a mutable mapped-page store.
 
 use std::marker::PhantomData;
 
-use crate::contract::{u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{u64_le, MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::key::IpKey;
@@ -32,7 +32,7 @@ pub(crate) struct Cursor<K> {
     release_private: bool,
     path: [Frame; MAX_DEPTH],
     depth: usize,
-    page: [u8; PAGE_SIZE],
+    leaf_page: Option<u32>,
     leaf: Option<Header>,
     index: usize,
     finished: bool,
@@ -56,7 +56,7 @@ impl<K: IpKey> Cursor<K> {
             release_private,
             path: [EMPTY_FRAME; MAX_DEPTH],
             depth: 0,
-            page: [0; PAGE_SIZE],
+            leaf_page: None,
             leaf: None,
             index: 0,
             finished: meta.range_root == 0,
@@ -72,17 +72,26 @@ impl<K: IpKey> Cursor<K> {
         if self.finished {
             return Ok(None);
         }
-        let Some(header) = self.leaf else {
-            return Err(Error::Corrupt("stored range cursor has no leaf"));
-        };
-        let record = range_tree::leaf_record::<K>(&self.page, &header, self.index)?;
-        let result = DirectRange {
-            from: record.from,
-            to: record.to,
-            value: record.value,
-        };
+        let page_number = self
+            .leaf_page
+            .ok_or(Error::Corrupt("stored range cursor has no leaf"))?;
+        let header = self
+            .leaf
+            .ok_or(Error::Corrupt("stored range cursor has no leaf"))?;
+        let index = self.index;
+        let result = store.inspect_page(page_number, |page| {
+            let record = range_tree::leaf_record::<K, _>(page, &header, index)?;
+            Ok(DirectRange {
+                from: record.from,
+                to: record.to,
+                value: record.value,
+            })
+        })?;
         self.index += 1;
         if self.index == header.item_count {
+            if self.release_private {
+                store.discard_private(page_number)?;
+            }
             self.advance(store)?;
         }
         Ok(Some(result))
@@ -95,47 +104,52 @@ impl<K: IpKey> Cursor<K> {
         mut expected_level: Option<u16>,
     ) -> Result<()> {
         loop {
-            self.read(store, page_number)?;
-            let header =
-                range_tree::parse_header::<K>(&self.page, self.selected_txn, expected_level)?;
-            if self.release_private && u64_le(&self.page, 8) != self.selected_txn {
-                return Err(Error::Corrupt(
-                    "consumed range tree contains a committed page",
-                ));
-            }
-            if header.level == 0 {
-                if self.release_private {
-                    store.discard_private(page_number)?;
+            let selected_txn = self.selected_txn;
+            let page_limit = self.page_limit;
+            let (header, child) = store.inspect_page(page_number, |page| {
+                let header = range_tree::parse_header::<K, _>(page, selected_txn, expected_level)?;
+                if self.release_private && u64_le(page, 8) != selected_txn {
+                    return Err(Error::Corrupt(
+                        "consumed range tree contains a committed page",
+                    ));
                 }
+                let child = if header.level == 0 {
+                    None
+                } else {
+                    let child = range_tree::branch_child::<K, _>(page, &header, 0)?;
+                    if child < 2 || u64::from(child) >= page_limit {
+                        return Err(Error::Corrupt("stored range child is outside its source"));
+                    }
+                    Some(child)
+                };
+                Ok((header, child))
+            })?;
+            let Some(child) = child else {
+                self.leaf_page = Some(page_number);
                 self.leaf = Some(header);
                 self.index = 0;
                 self.finished = false;
                 return Ok(());
-            }
-
-            page_number = self.enter_branch(page_number, &header)?;
+            };
+            let frame = self
+                .path
+                .get_mut(self.depth)
+                .ok_or(Error::Corrupt("range tree exceeds its maximum height"))?;
+            *frame = Frame {
+                page_number,
+                next_child: 1,
+                child_count: header.item_count,
+                level: header.level,
+            };
+            self.depth += 1;
+            page_number = child;
             expected_level = Some(header.level - 1);
         }
     }
 
-    fn enter_branch(&mut self, page_number: u32, header: &Header) -> Result<u32> {
-        let child = self.child(header, 0)?;
-        let frame = self
-            .path
-            .get_mut(self.depth)
-            .ok_or(Error::Corrupt("range tree exceeds its maximum height"))?;
-        *frame = Frame {
-            page_number,
-            next_child: 1,
-            child_count: header.item_count,
-            level: header.level,
-        };
-        self.depth += 1;
-        Ok(child)
-    }
-
     fn advance<S: Store>(&mut self, store: &mut S) -> Result<()> {
         self.leaf = None;
+        self.leaf_page = None;
         loop {
             let Some(slot) = self.depth.checked_sub(1) else {
                 self.finished = true;
@@ -143,43 +157,31 @@ impl<K: IpKey> Cursor<K> {
             };
             let mut frame = self.path[slot];
             if frame.next_child < frame.child_count {
-                self.read(store, frame.page_number)?;
-                let header = range_tree::parse_header::<K>(
-                    &self.page,
-                    self.selected_txn,
-                    Some(frame.level),
-                )?;
-                if header.item_count != frame.child_count {
-                    return Err(Error::Corrupt(
-                        "range branch changed during stored traversal",
-                    ));
-                }
-                let child = self.child(&header, frame.next_child)?;
+                let selected_txn = self.selected_txn;
+                let page_limit = self.page_limit;
+                let child = store.inspect_page(frame.page_number, |page| {
+                    let header =
+                        range_tree::parse_header::<K, _>(page, selected_txn, Some(frame.level))?;
+                    if header.item_count != frame.child_count {
+                        return Err(Error::Corrupt(
+                            "range branch changed during stored traversal",
+                        ));
+                    }
+                    let child = range_tree::branch_child::<K, _>(page, &header, frame.next_child)?;
+                    if child < 2 || u64::from(child) >= page_limit {
+                        return Err(Error::Corrupt("stored range child is outside its source"));
+                    }
+                    Ok(child)
+                })?;
                 frame.next_child += 1;
                 self.path[slot] = frame;
                 self.depth = slot + 1;
                 return self.descend_left(store, child, Some(frame.level - 1));
             }
-
             self.depth = slot;
             if self.release_private {
                 store.discard_private(frame.page_number)?;
             }
         }
-    }
-
-    fn read<S: Store>(&mut self, store: &S, page_number: u32) -> Result<()> {
-        if page_number < 2 || u64::from(page_number) >= self.page_limit {
-            return Err(Error::Corrupt("stored range page is outside its source"));
-        }
-        store.read(page_number, &mut self.page)
-    }
-
-    fn child(&self, header: &Header, index: usize) -> Result<u32> {
-        let child = range_tree::branch_child::<K>(&self.page, header, index)?;
-        if child < 2 || u64::from(child) >= self.page_limit {
-            return Err(Error::Corrupt("stored range child is outside its source"));
-        }
-        Ok(child)
     }
 }

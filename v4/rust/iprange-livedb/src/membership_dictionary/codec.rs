@@ -3,6 +3,7 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Codec;
+use crate::mapping::{ByteRange, ByteSource};
 use crate::slotted_page::{self, Header};
 
 pub(crate) const ID_BRANCH: u8 = 7;
@@ -47,7 +48,7 @@ impl Codec for IdCodec {
     const LEAF_SIZE: usize = 0;
     const MAX_LEAF_SIZE: usize = MAX_ID_RECORD;
 
-    fn read_key(cell: &[u8], level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
         if level == 0 {
             decode(cell).map(|record| record.id)
         } else {
@@ -59,11 +60,11 @@ impl Codec for IdCodec {
         output[..4].copy_from_slice(&key.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode(cell).map(|_| ())
     }
 
-    fn leaf_cell<'a>(page: &'a [u8; PAGE_SIZE], header: &Header, index: usize) -> Result<&'a [u8]> {
+    fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
         slotted_page::record(page, header, index, ID_BASE, MAX_ID_RECORD)
     }
 }
@@ -79,7 +80,7 @@ impl Codec for HashCodec {
     const KEY_SIZE: usize = 40;
     const LEAF_SIZE: usize = 40;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         decode_hash(cell)
     }
 
@@ -89,12 +90,12 @@ impl Codec for HashCodec {
         output[36..40].copy_from_slice(&key.id.to_le_bytes());
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         decode_hash(cell).map(|_| ())
     }
 }
 
-pub(crate) fn decode(cell: &[u8]) -> Result<Record> {
+pub(crate) fn decode<S: ByteSource>(cell: S) -> Result<Record> {
     require_record_envelope(cell)?;
     let id = u32_le(cell, 4);
     let refcount = u64_le(cell, 8);
@@ -103,8 +104,9 @@ pub(crate) fn decode(cell: &[u8]) -> Result<Record> {
     let blob_root = u32_le(cell, 24);
     require_record_fields(cell, id, word_count, bitmap_len)?;
     let storage = decode_storage(cell, bitmap_len, blob_root)?;
-    let mut digest = [0; 32];
-    digest.copy_from_slice(&cell[32..64]);
+    let digest = cell
+        .array(32)
+        .ok_or(Error::Corrupt("membership dictionary record is malformed"))?;
     Ok(Record {
         id,
         refcount,
@@ -114,14 +116,20 @@ pub(crate) fn decode(cell: &[u8]) -> Result<Record> {
     })
 }
 
-fn require_record_envelope(cell: &[u8]) -> Result<()> {
-    if cell.len() < ID_BASE || usize::from(u16_le(cell, 0)) != cell.len() || cell[3] != 0 {
+fn require_record_envelope<S: ByteSource>(cell: S) -> Result<()> {
+    if cell.len() < ID_BASE || usize::from(u16_le(cell, 0)) != cell.len() || cell.byte(3) != Some(0)
+    {
         return Err(Error::Corrupt("membership dictionary record is malformed"));
     }
     Ok(())
 }
 
-fn require_record_fields(cell: &[u8], id: u32, word_count: u32, bitmap_len: u32) -> Result<()> {
+fn require_record_fields<S: ByteSource>(
+    cell: S,
+    id: u32,
+    word_count: u32,
+    bitmap_len: u32,
+) -> Result<()> {
     if id == 0
         || word_count == 0
         || word_count > MAX_WORD_COUNT
@@ -133,25 +141,26 @@ fn require_record_fields(cell: &[u8], id: u32, word_count: u32, bitmap_len: u32)
     Ok(())
 }
 
-fn decode_storage(cell: &[u8], bitmap_len: u32, blob_root: u32) -> Result<Storage> {
-    match cell[2] {
-        0 if blob_root == 0 && cell.len() == ID_BASE + bitmap_len as usize => {
+fn decode_storage<S: ByteSource>(cell: S, bitmap_len: u32, blob_root: u32) -> Result<Storage> {
+    match cell.byte(2) {
+        Some(0) if blob_root == 0 && cell.len() == ID_BASE + bitmap_len as usize => {
             if u64_le(cell, cell.len() - 8) == 0 {
                 return Err(Error::Corrupt("membership bitmap is not canonical"));
             }
             Ok(Storage::Inline)
         }
-        1 if blob_root >= 2 && cell.len() == ID_BASE => Ok(Storage::Blob(blob_root)),
+        Some(1) if blob_root >= 2 && cell.len() == ID_BASE => Ok(Storage::Blob(blob_root)),
         _ => Err(Error::Corrupt("membership dictionary storage is malformed")),
     }
 }
 
-pub(super) fn decode_hash(cell: &[u8]) -> Result<HashKey> {
+pub(super) fn decode_hash<S: ByteSource>(cell: S) -> Result<HashKey> {
     if cell.len() < 40 {
         return Err(Error::Corrupt("membership hash record is too short"));
     }
-    let mut digest = [0; 32];
-    digest.copy_from_slice(&cell[..32]);
+    let digest = cell
+        .array(0)
+        .ok_or(Error::Corrupt("membership hash record is too short"))?;
     let word_count = u32_le(cell, 32);
     let id = u32_le(cell, 36);
     if word_count == 0 || word_count > MAX_WORD_COUNT || id == 0 {

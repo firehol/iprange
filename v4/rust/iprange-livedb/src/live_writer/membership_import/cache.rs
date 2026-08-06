@@ -4,6 +4,7 @@ use crate::contract::{u32_le, u64_le};
 use crate::draft_store::DraftStore;
 use crate::error::{Error, Result};
 use crate::fixed_tree::{self, Codec, RetiredPages, RetiringStore, Store};
+use crate::mapping::ByteSource;
 use crate::membership_dictionary::Words;
 use crate::slotted_page::{put_u32, put_u64};
 
@@ -215,7 +216,7 @@ impl Codec for CacheCodec {
     const KEY_SIZE: usize = 8;
     const LEAF_SIZE: usize = 16;
 
-    fn read_key(cell: &[u8], _level: u16) -> Result<Self::Key> {
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
         Ok(u64_le(cell, 0))
     }
 
@@ -223,7 +224,7 @@ impl Codec for CacheCodec {
         put_u64(output, 0, key);
     }
 
-    fn validate_leaf(cell: &[u8]) -> Result<()> {
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
         Entry::decode(cell).map(|_| ())
     }
 }
@@ -241,7 +242,7 @@ impl Entry {
         u64::from(self.value) | (u64::from(self.words) << 32)
     }
 
-    fn decode(input: &[u8]) -> Result<Self> {
+    fn decode<S: ByteSource>(input: S) -> Result<Self> {
         if input.len() != 16 {
             return Err(Error::Corrupt("import cache record length is invalid"));
         }

@@ -1,7 +1,5 @@
 //! Allocation-free comparison of two canonical range maps.
 
-use std::fs::File;
-
 use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
@@ -10,17 +8,18 @@ use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_range_cursor::ProjectionCursor;
 use crate::key::IpKey;
+use crate::mapping::Mapping;
 use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 
 use super::Comparison;
 
 pub(crate) fn coverage<K: IpKey>(
-    file: &File,
+    mapping: &Mapping,
     meta: &MetaV4,
     cancellation: &CancellationToken,
 ) -> Result<Cardinality129> {
     cancellation.check()?;
-    let mut cursor = Cursor::<K>::new(file, meta, RangeDirection::Forward, None)?;
+    let mut cursor = Cursor::<K>::new(mapping, meta, RangeDirection::Forward, None)?;
     let mut total = Cardinality129::ZERO;
     while let Some(range) = cursor.next()? {
         cancellation.check()?;
@@ -30,28 +29,28 @@ pub(crate) fn coverage<K: IpKey>(
 }
 
 pub(crate) fn maps<K: IpKey>(
-    file: &File,
+    mapping: &Mapping,
     before: &Bootstrap,
     after: &MetaV4,
     cancellation: &CancellationToken,
 ) -> Result<Comparison> {
-    let old = MapStream::<K>::new(file, &before.meta)?;
-    let new = MapStream::<K>::new(file, after)?;
+    let old = MapStream::<K>::new(mapping, &before.meta)?;
+    let new = MapStream::<K>::new(mapping, after)?;
     Ok(Sweep::new(old, new, cancellation)?
         .run(cancellation)?
         .comparison)
 }
 
 pub(crate) fn feeds<K: IpKey>(
-    file: &File,
+    mapping: &Mapping,
     before: &MetaV4,
     before_feed: Option<FeedEntry>,
     after: &MetaV4,
     after_feed: FeedEntry,
     cancellation: &CancellationToken,
 ) -> Result<ScannedComparison> {
-    let old = FeedStream::<K>::new(file, before, before_feed)?;
-    let new = FeedStream::<K>::new(file, after, Some(after_feed))?;
+    let old = FeedStream::<K>::new(mapping, before, before_feed)?;
+    let new = FeedStream::<K>::new(mapping, after, Some(after_feed))?;
     Sweep::new(old, new, cancellation)?.run(cancellation)
 }
 
@@ -70,9 +69,9 @@ struct MapStream<'a, K> {
 }
 
 impl<'a, K: IpKey> MapStream<'a, K> {
-    fn new(file: &'a File, meta: &MetaV4) -> Result<Self> {
+    fn new(mapping: &'a Mapping, meta: &MetaV4) -> Result<Self> {
         Ok(Self {
-            cursor: Cursor::new(file, meta, RangeDirection::Forward, None)?,
+            cursor: Cursor::new(mapping, meta, RangeDirection::Forward, None)?,
         })
     }
 }
@@ -89,10 +88,10 @@ struct FeedStream<'a, K> {
 }
 
 impl<'a, K: IpKey> FeedStream<'a, K> {
-    fn new(file: &'a File, meta: &MetaV4, feed: Option<FeedEntry>) -> Result<Self> {
+    fn new(mapping: &'a Mapping, meta: &MetaV4, feed: Option<FeedEntry>) -> Result<Self> {
         let cursor = feed
             .map(|feed| {
-                ProjectionCursor::new(file, meta, feed.index, RangeDirection::Forward, None)
+                ProjectionCursor::new(mapping, meta, feed.index, RangeDirection::Forward, None)
             })
             .transpose()?;
         Ok(Self { cursor })

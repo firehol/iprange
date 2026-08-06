@@ -1,8 +1,7 @@
 //! Fixed-depth postorder release of one detached tree.
 
-use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
-use crate::slotted_page::Header;
 
 use super::page::{branch_child, parse};
 use super::{Codec, RetiringStore, Store};
@@ -71,6 +70,15 @@ where
 }
 
 impl Walker {
+    fn new(root: u32) -> Self {
+        Self {
+            stack: [EMPTY_FRAME; MAX_DEPTH],
+            depth: 0,
+            current: root,
+            expected_level: None,
+        }
+    }
+
     fn run<C, S, F, A>(&mut self, store: &mut S, checkpoint: &mut F, release: &mut A) -> Result<()>
     where
         C: Codec,
@@ -90,44 +98,35 @@ impl Walker {
     where
         A: FnMut(&mut S, u32) -> Result<()>,
     {
-        let (page, header) = read_current::<C, S>(store, self)?;
-        if header.level > 0 {
-            self.descend::<C, S>(store, &page, header)?;
+        let target_txn = store.target_txn();
+        let page_limit = store.page_limit();
+        let (header, first_child) = store.inspect_page(self.current, |page| {
+            let header = parse::<C, _>(page, target_txn, self.expected_level)?;
+            let child = if header.level == 0 {
+                None
+            } else {
+                Some(branch_child::<C, _>(page, &header, 0, page_limit)?)
+            };
+            Ok((header, child))
+        })?;
+        if let Some(child) = first_child {
+            let slot = self
+                .stack
+                .get_mut(self.depth)
+                .ok_or(Error::Corrupt("B+tree exceeds its maximum height"))?;
+            *slot = Frame {
+                page_number: self.current,
+                next_child: 1,
+                child_count: header.item_count,
+                level: header.level,
+            };
+            self.depth += 1;
+            self.current = child;
+            self.expected_level = Some(header.level - 1);
             return Ok(false);
         }
         release(store, self.current)?;
         Ok(!self.advance::<C, S, A>(store, release)?)
-    }
-
-    fn new(root: u32) -> Self {
-        Self {
-            stack: [EMPTY_FRAME; MAX_DEPTH],
-            depth: 0,
-            current: root,
-            expected_level: None,
-        }
-    }
-
-    fn descend<C: Codec, S: Store>(
-        &mut self,
-        store: &S,
-        page: &[u8; PAGE_SIZE],
-        header: Header,
-    ) -> Result<()> {
-        let slot = self
-            .stack
-            .get_mut(self.depth)
-            .ok_or(Error::Corrupt("B+tree exceeds its maximum height"))?;
-        *slot = Frame {
-            page_number: self.current,
-            next_child: 1,
-            child_count: header.item_count,
-            level: header.level,
-        };
-        self.depth += 1;
-        self.current = branch_child::<C>(page, &header, 0, store.page_limit())?;
-        self.expected_level = Some(header.level - 1);
-        Ok(())
     }
 
     fn advance<C: Codec, S: Store, A>(&mut self, store: &mut S, release: &mut A) -> Result<bool>
@@ -138,42 +137,25 @@ impl Walker {
             let Some(slot) = self.depth.checked_sub(1) else {
                 return Ok(false);
             };
-            let frame = self.stack[slot];
+            let mut frame = self.stack[slot];
             if frame.next_child < frame.child_count {
-                self.select_next_child::<C, S>(store, slot, frame)?;
+                let target_txn = store.target_txn();
+                let page_limit = store.page_limit();
+                let child = store.inspect_page(frame.page_number, |page| {
+                    let header = parse::<C, _>(page, target_txn, Some(frame.level))?;
+                    if header.item_count != frame.child_count {
+                        return Err(Error::Corrupt("B+tree changed during postorder release"));
+                    }
+                    branch_child::<C, _>(page, &header, frame.next_child, page_limit)
+                })?;
+                frame.next_child += 1;
+                self.stack[slot] = frame;
+                self.current = child;
+                self.expected_level = Some(frame.level - 1);
                 return Ok(true);
             }
             self.depth = slot;
             release(store, frame.page_number)?;
         }
     }
-
-    fn select_next_child<C: Codec, S: Store>(
-        &mut self,
-        store: &S,
-        slot: usize,
-        mut frame: Frame,
-    ) -> Result<()> {
-        let mut parent = [0; PAGE_SIZE];
-        store.read(frame.page_number, &mut parent)?;
-        let header = parse::<C>(&parent, store.target_txn(), Some(frame.level))?;
-        if header.item_count != frame.child_count {
-            return Err(Error::Corrupt("B+tree changed during postorder release"));
-        }
-        self.current = branch_child::<C>(&parent, &header, frame.next_child, store.page_limit())?;
-        frame.next_child += 1;
-        self.stack[slot] = frame;
-        self.expected_level = Some(frame.level - 1);
-        Ok(())
-    }
-}
-
-fn read_current<C: Codec, S: Store>(
-    store: &S,
-    walker: &Walker,
-) -> Result<([u8; PAGE_SIZE], Header)> {
-    let mut page = [0; PAGE_SIZE];
-    store.read(walker.current, &mut page)?;
-    let header = parse::<C>(&page, store.target_txn(), walker.expected_level)?;
-    Ok((page, header))
 }

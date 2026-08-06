@@ -176,6 +176,7 @@ fn arm(inspected: Inspected, output: &PreparedOutput) -> Result<ArmedReservation
             let private = PrivateReservation {
                 name: inspected.name,
                 file: inspected.file,
+                mapping: inspected.mapping,
                 identity: inspected.identity,
                 header: inspected.header,
             };
@@ -204,6 +205,7 @@ fn arm(inspected: Inspected, output: &PreparedOutput) -> Result<ArmedReservation
         Location::Canonical => CanonicalReservation {
             name: inspected.name,
             file: inspected.file,
+            mapping: inspected.mapping,
             identity: inspected.identity,
             header: inspected.header,
         },

@@ -90,6 +90,26 @@ The main file MUST be a regular file and MUST NOT be opened through a symbolic
 link by an OS-backed v4 API. Its physical size MUST be a multiple of
 `PAGE_SIZE` and MUST be at least two pages.
 
+Every persistent-content byte owned or consumed by the v4 SDK MUST be accessed
+through a file-backed mapping. This rule covers main files, `.readers`
+sidecars, immutable/private outputs, publication-control artifacts, recovery
+sources/outputs, and authorized recovery scratch. Production code MUST NOT use
+`read`, `readv`, `pread`, `preadv`, `write`, `writev`, `pwrite`, `pwritev`,
+language read/write/seek traits, Windows `ReadFile`/`WriteFile`, buffered file
+I/O, or an equivalent content-transfer API for those artifacts.
+
+File/handle open and close, identity/geometry inspection, sparse extension,
+preallocation, truncation, mapping/unmapping, locking, namespace operations,
+directory enumeration, mapped-view flush, file/directory synchronization, and
+explicit validation/recovery worker lifecycle are control/durability operations
+and remain required. They MUST NOT conceal an alternate content path.
+
+A complete database page MUST NOT exist in an owned stack/heap buffer,
+application cache, or anonymous mapping. Every writable page is allocated at
+its final file offset and constructed in a writable file-backed mapping. Scalar
+fields and bounded encoded records MAY be decoded into local values; COW bytes
+MAY be copied directly from a mapped source page to a mapped destination page.
+
 The final main basename is outside the engine-internal namespace. On every
 platform, compare ASCII case-insensitively and reject a basename beginning
 `.iprange-` or ending `.readers`; this conservative universal rule prevents
@@ -157,6 +177,12 @@ to a checked whole-page boundary. It never exposes a short page as its physical
 tail. A failed extension is cleaned back to the prior aligned committed length
 when provable; otherwise the writer is unusable and ordinary strict open rejects
 the malformed tail.
+
+An immutable/live reader maps exactly its selected committed extent. A writer
+preflights its checked transaction capacity, sparsely extends the file to the
+authorized aligned limit, and maps that capacity before hot-path mutation.
+Remap or unmap invalidates every internal page view; no page view may escape the
+operation or handle lifetime that owns its mapping.
 
 Main-file bootstrap is an O(1) operation. It MUST inspect and classify the two
 meta pages, file geometry, and static identity. It MUST NOT walk the range tree,
@@ -378,6 +404,14 @@ those CRC checks. The sole narrow
 ordinary-path exception is section 13's amortized verification of committed
 allocator metadata before it authorizes destructive page reuse; that check is
 not an implicit full `Validate`.
+
+Live page access MUST use a checked raw mapping view rather than creating an
+ordinary language slice/reference whose validity assumes the selected pointer
+cannot name a concurrently reused page. The view checks its mapped interval and
+all local lengths/offsets before access, copies only bounded scalar/record values
+or mapped-to-mapped bytes, and never escapes its operation. This rule preserves
+memory safety for locally detectable corruption without turning ordinary open
+into full validation.
 
 ### 5.1 Page types
 
@@ -899,6 +933,13 @@ At `MAX_PAGE_COUNT`, absence of an eligible bit returns
 `PageSpaceExhausted` before mutation. Checked page-number, byte-offset,
 `off_t`, and host-index conversions precede every access.
 
+Active readers do not by themselves change this allocation order. The external
+reader table protects retired transaction groups; `Reclaim` alone moves a
+complete reader-safe group into the free bitmap. Once its bit is committed free,
+the lowest eligible page is reusable even while unrelated readers of safe
+generations remain active. There is no zero-reader precondition and no
+reader-triggered append-only fallback.
+
 Before a committed free bit authorizes overwrite, the transaction verifies the
 normalized CRC and local invariants of that selected bitmap root-to-leaf path:
 page type/kind/level, bounds, reserved bytes, counts, summary/child
@@ -1273,6 +1314,10 @@ finalizers never start any part of this protocol.
 
 After fixed per-handle buffers and stacks are initialized:
 
+- persistent artifact content MUST be accessed only through file-backed
+  mappings; no content read/write/seek API is permitted;
+- no complete database page may be owned by a stack/heap buffer, cache, or
+  anonymous mapping;
 - warmed steady-state lookup and cursor movement MUST perform no heap
   allocation;
 - an advanced range mutation MUST perform no heap allocation when its COW pages fit in
@@ -1804,6 +1849,10 @@ Normal live open never creates, resizes, repairs, resets, or replaces a missing
 or malformed sidecar. Explicit creation and offline transition operations are
 the only writers of its header or length.
 
+The complete fixed-size sidecar is file-mapped. Header and slot bytes are read
+or changed only through that retained mapping while the required byte-range
+locks are held; sidecar content never uses a read/write/seek API.
+
 ### 15.1 Exact sidecar layout
 
 The exact sidecar length is checked as:
@@ -1951,8 +2000,9 @@ gate exclusively while it:
 6. synchronizes that meta page; and
 7. releases the gate.
 
-Existing readers continue through retained positional-read descriptors. New
-readers cannot select a generation until publication finishes. A failure before
+Existing readers continue through retained mappings limited to their pinned
+committed extent. New readers cannot select a generation until publication
+finishes. A failure before
 the first alternate-meta write is `NotCommitted`; a failure from that first
 write until its successful synchronization is `OutcomeUnknown`; success is
 `Committed`. Exact database ID, transaction ID, and commit nonce identify the
@@ -2614,12 +2664,57 @@ output inode is the prospective final database, not sorting scratch. Recovery
 supports only `FailIfExists`: both destination main and sidecar MUST be absent,
 and it never overwrites forensic evidence or an earlier output.
 
+Faultable recovery-candidate inspection, explicit validation, and recovery scans
+run in a version-matched SDK worker process. The SDK distribution supplies and
+locates that worker; a missing, incompatible, or unverifiable worker fails before
+source scanning or destination mutation. The worker, source, output, control
+state, and authorized scratch remain mmap-only.
+
+On POSIX, only the worker installs a `SIGBUS` handler. It uses `SA_SIGINFO` and
+an alternate signal stack, saves the complete previous `sigaction`, and arms one
+exact `(mapping_generation, mapping_role, base, length)` probe at a time. It may
+claim a signal only when all of these are true:
+
+- the signal is `SIGBUS` generated by the kernel rather than user delivery;
+- the worker probe is armed and not already handling a nested fault;
+- `si_addr` is non-null and lies in the exact half-open active mapping interval;
+  and
+- checked subtraction produces a relative offset within that interval.
+
+An owned fault writes only fixed facts to the mapped worker-control record and
+terminates the worker immediately with `_exit` or its exact platform equivalent.
+The handler MUST NOT allocate, lock, format, invoke a callback, touch persistent
+content through I/O, return to the faulting instruction, panic/unwind, or use
+`longjmp` across Rust frames.
+
+Every unarmed, user-generated, nested, stale-generation, null-address, or
+out-of-region `SIGBUS` chains to the exact saved disposition. A saved
+`SA_SIGINFO` handler receives the original three arguments; a saved one-argument
+handler receives the signal. Default or ignored dispositions are restored and
+redispatched rather than swallowed. If the worker cannot preserve the previous
+disposition or prove that its own handler remains installed, it fails closed.
+
+On Windows, only the worker installs a vectored exception handler. It claims
+only `EXCEPTION_IN_PAGE_ERROR` when the documented accessed-address parameter is
+inside the armed mapping and the remaining ownership checks agree. Every other
+exception returns `EXCEPTION_CONTINUE_SEARCH`.
+
+The parent classifies physical unreadability only when worker identity, protocol
+version, control generation, active mapping role/interval, relative fault
+offset, and exit status agree. An unrelated worker crash is a worker failure,
+not `IO_ERROR`. After an owned source fault, the parent marks the exact affected
+declared page/window unreadable and restarts only from the last sealed mapped
+scratch checkpoint. Partial scratch frames and partial output trees are
+discarded. No output can be published until scanning, diagnostic-sink delivery,
+final construction, and source/destination checks all complete.
+
 Recovery independently applies a weaker **recovery-readable meta**
 classification to both retained meta pages. The complete meta page, identity,
 static fields, CRC, transaction, declared page count, root numbers, counts, and
 internal arithmetic MUST be valid, but physical file alignment,
 declared-length availability, and host mapping-size checks may fail. Recovery
-uses checked windowed I/O rather than trusting a hostile mapping length. A root
+uses checked aligned mapped windows rather than trusting a hostile mapping
+length. A root
 beyond the complete physical pages becomes reported unknown coverage rather
 than invalidating an otherwise trustworthy meta. The two generations are never
 merged. If no meta is recovery-readable, candidate inspection returns a
@@ -2667,7 +2762,7 @@ other case requires explicit selection. Each selected candidate produces its
 own output and report.
 
 `InspectRecoveryCandidates(source, mode, resource_budget, cancellation)` returns candidate tokens plus that
-bootstrap/recovery diagnostic summary. It uses checked windowed I/O and the same
+bootstrap/recovery diagnostic summary. It uses checked aligned mapped windows and the same
 initial lifetime-lock and coordination preconditions as the requested recovery
 mode. `Live` returns exactly the proven, recovery-readable `Newest`; if current
 order cannot be proved it returns typed
@@ -2690,7 +2785,7 @@ may destroy further remnants during that scan.
 A damaged live source cannot use the strict normal-reader bootstrap. The
 explicit `RecoverLive` path first obtains the proven-current recovery-readable
 identity through
-checked windowed I/O, takes the shared main-file lifetime lock, strictly opens
+checked aligned mapped windows, takes the shared main-file lifetime lock, strictly opens
 the existing sidecar bound to that database and local inode, and takes the
 operation lock. It scans the complete table, reproves the current generation,
 reselects that exact meta from the retained main descriptor, and directly
@@ -2892,6 +2987,11 @@ An immutable source requires no sidecar and holds a shared main-file lifetime
 lock so a cooperating live transition cannot start during the copy. It rechecks
 canonical path identity and sidecar absence immediately after acquiring the
 lock, before reading source pages, and again after the copy.
+
+The source committed extent and private destination capacity are file-mapped.
+Snapshot construction allocates and builds every destination page directly at
+its mapped final offset and copies records mapped-to-mapped. It does not stage a
+complete page or transfer persistent content through read/write/seek APIs.
 
 After the private output is self-contained, live `SnapshotTo` takes the source
 operation lock and verifies the retained directory/main/sidecar identities,

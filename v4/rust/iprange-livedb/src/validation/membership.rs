@@ -2,6 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{u32_le, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::{ByteRange, ByteSource};
 use crate::membership_view;
 
 use super::bitmap::{self, Kind, WordCache};
@@ -34,15 +35,15 @@ impl Codec for IdCodec {
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipBitmapInvalid;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key> {
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         Some(u32_le(cell, 0))
     }
 
-    fn branch_child(cell: &[u8]) -> Option<u32> {
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
         Some(u32_le(cell, 4))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode_record(cell).map(|record| record.id)
     }
 }
@@ -60,15 +61,15 @@ impl Codec for HashCodec {
     const BRANCH_INVALID: ValidationReason = ValidationReason::MembershipHashInvalid;
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipHashInvalid;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key> {
-        decode_hash(cell.get(..40)?)
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
+        decode_hash(ByteRange::new(cell, 0, 40)?)
     }
 
-    fn branch_child(cell: &[u8]) -> Option<u32> {
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
         Some(u32_le(cell, 40))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         decode_hash(cell)
     }
 }
@@ -114,10 +115,10 @@ pub(crate) fn validate<S: ValidationSink>(context: &mut Context<'_, S>) -> Resul
     finish(context, id_result.records, used, maximum_id)
 }
 
-fn validate_record<S: ValidationSink>(
+fn validate_record<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    cell: &[u8],
+    cell: P,
     feeds: &mut WordCache,
     maximum_id: &mut u32,
 ) -> Result<()> {
@@ -140,10 +141,10 @@ fn validate_record<S: ValidationSink>(
     validate_record_bitmap(context, page_number, record, feeds)
 }
 
-fn validate_record_bitmap<S: ValidationSink>(
+fn validate_record_bitmap<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    record: Record<'_>,
+    record: Record<P>,
     feeds: &mut WordCache,
 ) -> Result<()> {
     let mut scan = BitmapScan::new(feeds);
@@ -243,10 +244,10 @@ impl<'a> BitmapScan<'a> {
         }
     }
 
-    fn consume<S: ValidationSink>(
+    fn consume<S: ValidationSink, P: ByteSource>(
         &mut self,
         context: &mut Context<'_, S>,
-        bytes: &[u8],
+        bytes: P,
     ) -> Result<()> {
         context.checkpoint()?;
         if bytes.len() % 8 != 0 {
@@ -254,9 +255,9 @@ impl<'a> BitmapScan<'a> {
                 "validated membership chunk is not word aligned",
             ));
         }
-        self.hasher.update(bytes);
-        for word in bytes.chunks_exact(8) {
-            let value = u64::from_le_bytes(word.try_into().expect("eight-byte word"));
+        for offset in (0..bytes.len()).step_by(8) {
+            let value = crate::contract::u64_le(bytes, offset);
+            self.hasher.update(value.to_le_bytes());
             self.check_active(context, value);
             self.last_word = value;
             self.words = self.words.checked_add(1).ok_or(Error::ArithmeticOverflow(
@@ -284,10 +285,10 @@ impl<'a> BitmapScan<'a> {
     }
 }
 
-fn validate_hash<S: ValidationSink>(
+fn validate_hash<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    cell: &[u8],
+    cell: P,
     previous: &mut Option<HashKey>,
 ) -> Result<()> {
     let Some(key) = decode_hash(cell) else {
@@ -351,7 +352,7 @@ fn open_membership<'a, S: ValidationSink>(
     context: &'a Context<'_, S>,
     id: u32,
 ) -> Result<membership_view::MembershipView<'a>> {
-    membership_view::by_id(context.file, &context.meta, id, None)
+    membership_view::by_id(context.mapping, &context.meta, id, None)
 }
 
 fn compare_words<S: ValidationSink>(

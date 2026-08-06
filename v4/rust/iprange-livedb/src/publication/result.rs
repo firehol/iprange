@@ -1,6 +1,5 @@
 //! Construction and validation of portable publication result facts.
 
-use crate::contract::PAGE_SIZE;
 use crate::error::ErrorCode;
 use crate::validation::LocalFileIdentity;
 
@@ -64,14 +63,6 @@ impl PublicationResult {
             security_commitment: self.attempt.creation_security.commitment,
             sequence: state as u64,
         };
-        let mut bytes = [0u8; 2 * PAGE_SIZE];
-        let block = usize::from(state == State::MainMayHaveBeenAttempted);
-        let encoded = (&mut bytes[block * PAGE_SIZE..(block + 1) * PAGE_SIZE])
-            .try_into()
-            .expect("fixed reservation block");
-        header.encode(encoded);
-        reservation::select(&bytes)
-            .map_err(|_| conflict("caller publication result is internally inconsistent"))?;
         Ok(header)
     }
 }

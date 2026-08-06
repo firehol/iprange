@@ -1,5 +1,5 @@
 use super::*;
-use crate::contract::u16_le;
+use crate::contract::{u16_le, PAGE_SIZE};
 use crate::fixed_tree::RetiringStore;
 
 struct MemoryStore {
@@ -28,6 +28,9 @@ impl RetiringStore for MemoryStore {
 }
 
 impl Store for MemoryStore {
+    type ReadPage<'a> = &'a [u8; PAGE_SIZE];
+    type WritePage<'a> = [u8; PAGE_SIZE];
+
     fn target_txn(&self) -> u64 {
         self.txn
     }
@@ -36,12 +39,15 @@ impl Store for MemoryStore {
         self.pages.len() as u64
     }
 
-    fn read(&self, page_number: u32, output: &mut [u8; PAGE_SIZE]) -> Result<()> {
-        *output = *self
-            .pages
-            .get(page_number as usize)
-            .ok_or(Error::Corrupt("test bitmap page is out of bounds"))?;
-        Ok(())
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
+    {
+        inspect(
+            self.pages
+                .get(page_number as usize)
+                .ok_or(Error::Corrupt("test bitmap page is out of bounds"))?,
+        )
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -50,12 +56,22 @@ impl Store for MemoryStore {
         Ok(page)
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        *self
-            .pages
-            .get_mut(page_number as usize)
-            .ok_or(Error::Corrupt("test bitmap page is out of bounds"))? = *page;
-        Ok(())
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        update(
+            self.pages
+                .get_mut(page_number as usize)
+                .ok_or(Error::Corrupt("test bitmap page is out of bounds"))?,
+        )
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        crate::test_support_tests::copy_pages(&mut self.pages, source, destination, copy)
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {

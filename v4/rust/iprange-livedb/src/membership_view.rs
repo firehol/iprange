@@ -1,18 +1,17 @@
 //! Lazy SDK-owned membership values.
 
-use std::fmt;
-use std::fs::File;
-
 use crate::blob_tree;
 use crate::contract::{AddressFamily, MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::membership_tree::{self, Record, Storage};
 use crate::range_tree;
+use std::fmt;
 
 /// One lazy membership bitmap tied to a pinned reader generation.
 pub struct MembershipView<'a> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     record: Record,
     owner_pid: Option<u32>,
@@ -75,14 +74,14 @@ impl MembershipView<'_> {
         }
         match self.record.storage {
             Storage::Inline => membership_tree::read_inline_words(
-                self.file,
+                self.mapping,
                 &self.meta,
                 self.record,
                 start,
                 output,
             ),
             Storage::Blob(root) => blob_tree::read_words(
-                self.file,
+                self.mapping,
                 &self.meta,
                 root,
                 self.record.word_count,
@@ -116,48 +115,48 @@ impl fmt::Debug for MembershipView<'_> {
 }
 
 pub(crate) fn lookup_v4<'a>(
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: &MetaV4,
     address: Ipv4Key,
     owner_pid: Option<u32>,
 ) -> Result<Option<MembershipView<'a>>> {
     require_kind(meta, AddressFamily::Ipv4)?;
     lookup(
-        file,
+        mapping,
         meta,
-        range_tree::lookup(file, meta, address)?,
+        range_tree::lookup(mapping, meta, address)?,
         owner_pid,
     )
 }
 
 pub(crate) fn lookup_v6<'a>(
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: &MetaV4,
     address: Ipv6Key,
     owner_pid: Option<u32>,
 ) -> Result<Option<MembershipView<'a>>> {
     require_kind(meta, AddressFamily::Ipv6)?;
     lookup(
-        file,
+        mapping,
         meta,
-        range_tree::lookup(file, meta, address)?,
+        range_tree::lookup(mapping, meta, address)?,
         owner_pid,
     )
 }
 
 pub(crate) fn id_contains_index(
-    file: &File,
+    mapping: &Mapping,
     meta: &MetaV4,
     id: u32,
     feed_index: u32,
 ) -> Result<bool> {
-    let view = lookup(file, meta, Some(id), None)?
+    let view = lookup(mapping, meta, Some(id), None)?
         .ok_or(Error::Corrupt("range names an absent membership"))?;
     view.contains_index(feed_index)
 }
 
 pub(crate) fn by_id<'a>(
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: &MetaV4,
     id: u32,
     owner_pid: Option<u32>,
@@ -165,12 +164,12 @@ pub(crate) fn by_id<'a>(
     if id == 0 {
         return Err(Error::Corrupt("range names the empty membership ID"));
     }
-    lookup(file, meta, Some(id), owner_pid)?
+    lookup(mapping, meta, Some(id), owner_pid)?
         .ok_or(Error::Corrupt("range names an absent membership ID"))
 }
 
 fn lookup<'a>(
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: &MetaV4,
     id: Option<u32>,
     owner_pid: Option<u32>,
@@ -178,10 +177,10 @@ fn lookup<'a>(
     let Some(id) = id else {
         return Ok(None);
     };
-    let record = membership_tree::find(file, meta, id)?
+    let record = membership_tree::find(mapping, meta, id)?
         .ok_or(Error::Corrupt("range names an absent membership ID"))?;
     Ok(Some(MembershipView {
-        file,
+        mapping,
         meta: *meta,
         record,
         owner_pid,

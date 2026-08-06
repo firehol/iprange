@@ -1,13 +1,11 @@
 //! Verified bitmap reads from recovered membership locators.
 
-use std::fs::File;
-
 use crate::blob_tree;
-use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
+use crate::contract::{u32_le, MetaV4};
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::immutable_output::MembershipWords;
+use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::membership_dictionary::codec::{self, Record as StoredRecord, Storage};
 use crate::slotted_page;
 
@@ -15,26 +13,18 @@ use super::membership_index::Locator;
 
 const WORD_BUFFER: usize = 64;
 
-pub(crate) struct InlineBytes {
-    bytes: [u8; PAGE_SIZE],
-    len: usize,
-}
-
-impl InlineBytes {
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len]
-    }
-}
-
-pub(crate) fn read_inline(file: &File, meta: MetaV4, locator: Locator) -> Result<InlineBytes> {
-    let mut page = [0; PAGE_SIZE];
-    file_io::read_page(file, locator.leaf_page, meta.page_count, &mut page)?;
-    if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+pub(crate) fn read_inline(
+    mapping: &Mapping,
+    meta: MetaV4,
+    locator: Locator,
+) -> Result<ByteRange<PageView<'_>>> {
+    let page = mapping.page(locator.leaf_page, meta.page_count)?;
+    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         return Err(Error::RecoveryCandidateChanged);
     }
-    let header = slotted_page::parse(&page, meta.txn_id, codec::ID_LEAF, 0, Some(0))?;
+    let header = slotted_page::parse(page, meta.txn_id, codec::ID_LEAF, 0, Some(0))?;
     let cell = slotted_page::record(
-        &page,
+        page,
         &header,
         usize::from(locator.leaf_index),
         codec::ID_BASE,
@@ -44,13 +34,12 @@ pub(crate) fn read_inline(file: &File, meta: MetaV4, locator: Locator) -> Result
     if !matches_inline(record, locator) {
         return Err(Error::RecoveryCandidateChanged);
     }
-    let source = &cell[codec::ID_BASE..];
-    let mut bytes = [0; PAGE_SIZE];
-    bytes[..source.len()].copy_from_slice(source);
-    Ok(InlineBytes {
-        bytes,
-        len: source.len(),
-    })
+    ByteRange::new(
+        page,
+        cell.source_offset() + codec::ID_BASE,
+        cell.len() - codec::ID_BASE,
+    )
+    .ok_or(Error::RecoveryCandidateChanged)
 }
 
 fn matches_inline(record: StoredRecord, locator: Locator) -> bool {
@@ -61,26 +50,26 @@ fn matches_inline(record: StoredRecord, locator: Locator) -> bool {
 }
 
 pub(crate) struct RecoveredWords<'a> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     locator: Locator,
 }
 
 impl Locator {
-    pub(crate) fn words<'a>(self, file: &'a File, meta: MetaV4) -> RecoveredWords<'a> {
+    pub(crate) fn words<'a>(self, mapping: &'a Mapping, meta: MetaV4) -> RecoveredWords<'a> {
         RecoveredWords {
-            file,
+            mapping,
             meta,
             locator: self,
         }
     }
 
-    pub(crate) fn equal(self, other: Self, file: &File, meta: MetaV4) -> Result<bool> {
+    pub(crate) fn equal(self, other: Self, mapping: &Mapping, meta: MetaV4) -> Result<bool> {
         if self.word_count != other.word_count || self.digest != other.digest {
             return Ok(false);
         }
-        let left = self.words(file, meta);
-        let right = other.words(file, meta);
+        let left = self.words(mapping, meta);
+        let right = other.words(mapping, meta);
         let mut left_words = [0; WORD_BUFFER];
         let mut right_words = [0; WORD_BUFFER];
         let mut start = 0;
@@ -112,9 +101,11 @@ impl MembershipWords for RecoveredWords<'_> {
             ));
         }
         match self.locator.storage {
-            Storage::Inline => read_inline_words(self.file, self.meta, self.locator, start, output),
+            Storage::Inline => {
+                read_inline_words(self.mapping, self.meta, self.locator, start, output)
+            }
             Storage::Blob(root) => blob_tree::read_words(
-                self.file,
+                self.mapping,
                 &self.meta,
                 root,
                 self.locator.word_count,
@@ -126,23 +117,22 @@ impl MembershipWords for RecoveredWords<'_> {
 }
 
 fn read_inline_words(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     locator: Locator,
     start: u32,
     output: &mut [u64],
 ) -> Result<()> {
-    let bytes = read_inline(file, meta, locator)?;
-    let bytes = bytes.as_slice();
+    let bytes = read_inline(mapping, meta, locator)?;
     let start = usize::try_from(start)
         .ok()
         .and_then(|word| word.checked_mul(8))
         .ok_or(Error::ArithmeticOverflow("recovery membership offset"))?;
     for (index, word) in output.iter_mut().enumerate() {
         *word = u64::from_le_bytes(
-            bytes[start + index * 8..start + (index + 1) * 8]
-                .try_into()
-                .expect("eight-byte word"),
+            bytes
+                .array(start + index * 8)
+                .ok_or(Error::RecoveryCandidateChanged)?,
         );
     }
     Ok(())

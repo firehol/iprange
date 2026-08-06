@@ -149,7 +149,7 @@ fn complete_restores_a_private_state2_reservation_before_publication() {
     run_child(&main, "publication.after_reservation_state2_selection");
     let artifacts = Artifacts::inspect(&directory.path, &main);
     let bytes = fs::read(&artifacts.coordination).unwrap();
-    let header = reservation::select(&bytes).unwrap().header;
+    let header = reservation::select(bytes.as_slice()).unwrap().header;
     let private = directory
         .path
         .join(private_reservation_name(header.attempt_id));
@@ -532,13 +532,15 @@ fn resolver_does_not_replace_explicit_structural_validation() {
     output.seek(SeekFrom::End(-1)).unwrap();
     output.write_all(&[0xa5]).unwrap();
     output.sync_all().unwrap();
-    let digest = crate::publication::output::digest(&output, byte_length).unwrap();
+    let mapping = crate::mapping::Mapping::read_only_view(&output, byte_length).unwrap();
+    let digest = crate::publication::output::digest(&mapping, byte_length).unwrap();
 
     let mut record = fs::read(&artifacts.private_reservations[0]).unwrap();
-    let mut header = reservation::select(&record).unwrap().header;
+    let mut header = reservation::select(record.as_slice()).unwrap().header;
     header.output_sha512 = digest;
     record.fill(0);
-    header.encode((&mut record[..4096]).try_into().unwrap());
+    let block: &mut [u8; 4096] = (&mut record[..4096]).try_into().unwrap();
+    header.encode(block).unwrap();
     fs::write(&artifacts.private_reservations[0], record).unwrap();
 
     let result = resolve(&main, None, Mode::Complete, &CancellationToken::new()).unwrap();

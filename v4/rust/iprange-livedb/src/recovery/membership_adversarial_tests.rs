@@ -1,6 +1,8 @@
 use sha2::{Digest, Sha256};
 
 use super::*;
+use crate::mapping::test_support as file_io;
+use crate::mapping::{ByteSource, Mapping};
 
 #[test]
 fn equal_membership_bytes_with_different_source_ids_coalesce_exactly() {
@@ -82,7 +84,7 @@ fn duplicate_membership_ids_are_not_selected_as_a_winner() {
         .unwrap();
     let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
-    let first = range_tree::lookup(&finished.file, &meta, Ipv4Key(5))
+    let first = range_tree::lookup(&finished.mapping, &meta, Ipv4Key(5))
         .unwrap()
         .unwrap();
     rewrite_membership_id(&finished.file, meta, Ipv4Key(25), first);
@@ -128,6 +130,7 @@ fn disordered_membership_ranges_use_the_bounded_shared_external_sort() {
         scratch_directory: Some(paths.scratch.clone()),
     };
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let result = construct(
         &source,
         meta,
@@ -153,8 +156,12 @@ fn disordered_membership_ranges_use_the_bounded_shared_external_sort() {
 }
 
 fn rewrite_inline_word(file: &File, meta: MetaV4, address: Ipv4Key, word: u64) {
-    let id = range_tree::lookup(file, &meta, address).unwrap().unwrap();
-    let record = membership_tree::find(file, &meta, id).unwrap().unwrap();
+    let mapping = Mapping::read_only_view(file, file.metadata().unwrap().len()).unwrap();
+    let id = range_tree::lookup(&mapping, &meta, address)
+        .unwrap()
+        .unwrap();
+    let record = membership_tree::find(&mapping, &meta, id).unwrap().unwrap();
+    drop(mapping);
     assert_eq!(record.storage, membership_tree::Storage::Inline);
     let mut page = read_page(file, record.leaf_page, meta.page_count);
     let start = cell_start(&page, record.leaf_index);
@@ -167,8 +174,14 @@ fn rewrite_inline_word(file: &File, meta: MetaV4, address: Ipv4Key, word: u64) {
 }
 
 fn rewrite_membership_id(file: &File, meta: MetaV4, address: Ipv4Key, id: u32) {
-    let old = range_tree::lookup(file, &meta, address).unwrap().unwrap();
-    let record = membership_tree::find(file, &meta, old).unwrap().unwrap();
+    let mapping = Mapping::read_only_view(file, file.metadata().unwrap().len()).unwrap();
+    let old = range_tree::lookup(&mapping, &meta, address)
+        .unwrap()
+        .unwrap();
+    let record = membership_tree::find(&mapping, &meta, old)
+        .unwrap()
+        .unwrap();
+    drop(mapping);
     let mut page = read_page(file, record.leaf_page, meta.page_count);
     let start = cell_start(&page, record.leaf_index);
     page[start + 4..start + 8].copy_from_slice(&id.to_le_bytes());
@@ -221,8 +234,9 @@ fn leftmost_range_leaf(file: &File, meta: MetaV4) -> u32 {
             return page_number;
         }
         page_number = u32::from_le_bytes(
-            slotted_page::cell(&page, &header, 0, 8).unwrap()[4..8]
-                .try_into()
+            slotted_page::cell(&page, &header, 0, 8)
+                .unwrap()
+                .array(4)
                 .unwrap(),
         );
         expected = Some(level - 1);

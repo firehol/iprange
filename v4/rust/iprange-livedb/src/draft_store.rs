@@ -6,8 +6,6 @@ mod catalog_ops;
 mod membership_ops;
 #[path = "draft_store/metadata.rs"]
 mod metadata_ops;
-#[path = "draft_store/page_cache.rs"]
-mod page_cache;
 #[path = "draft_store/retention.rs"]
 mod retention;
 #[path = "draft_store/storage.rs"]
@@ -15,14 +13,12 @@ mod storage;
 #[path = "draft_store/workflow.rs"]
 mod workflow_ops;
 
-use std::cell::RefCell;
-use std::fs::File;
-
 use crate::contract::{u32_le, MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
 use crate::free_bitmap;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::range_mutation;
 use crate::retirement;
 
@@ -50,7 +46,6 @@ pub(crate) struct Draft {
     membership_delta_root: u32,
     workflow: WorkflowState,
     operation_abandoned: bool,
-    page_cache: RefCell<Option<page_cache::PageCache>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +77,6 @@ impl Draft {
             membership_delta_root: 0,
             workflow: WorkflowState::None,
             operation_abandoned: false,
-            page_cache: RefCell::new(None),
         })
     }
 
@@ -145,7 +139,7 @@ impl Draft {
 }
 
 pub(crate) struct DraftStore<'a> {
-    file: &'a File,
+    mapping: &'a mut Mapping,
     committed_page_count: u64,
     budget: PageBudget,
     draft: &'a mut Draft,
@@ -153,13 +147,13 @@ pub(crate) struct DraftStore<'a> {
 
 impl<'a> DraftStore<'a> {
     pub(crate) fn new(
-        file: &'a File,
+        mapping: &'a mut Mapping,
         committed_page_count: u64,
         budget: PageBudget,
         draft: &'a mut Draft,
     ) -> Self {
         Self {
-            file,
+            mapping,
             committed_page_count,
             budget,
             draft,
@@ -167,25 +161,21 @@ impl<'a> DraftStore<'a> {
     }
 
     pub(crate) fn new_cached(
-        file: &'a File,
+        mapping: &'a mut Mapping,
         committed_page_count: u64,
         budget: PageBudget,
         draft: &'a mut Draft,
     ) -> Self {
-        draft.ensure_page_cache(budget.max_heap_bytes);
-        Self::new(file, committed_page_count, budget, draft)
+        Self::new(mapping, committed_page_count, budget, draft)
     }
 
     pub(crate) fn new_uncached(
-        file: &'a File,
+        mapping: &'a mut Mapping,
         committed_page_count: u64,
         budget: PageBudget,
         draft: &'a mut Draft,
     ) -> Result<Self> {
-        let store = Self::new(file, committed_page_count, budget, draft);
-        store.flush_page_cache()?;
-        store.draft.discard_page_cache();
-        Ok(store)
+        Ok(Self::new(mapping, committed_page_count, budget, draft))
     }
 
     pub(crate) fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
@@ -461,7 +451,10 @@ impl<'a> DraftStore<'a> {
                 self.pop_private()?
             } else {
                 let page = self.allocate_tail()?;
-                self.write(page, &[0; PAGE_SIZE])?;
+                self.update_page(page, |page| {
+                    page.fill(0);
+                    Ok(())
+                })?;
                 page
             };
             self.draft.meta.allocator_reserve[index] = page;
@@ -474,14 +467,13 @@ impl<'a> DraftStore<'a> {
         if page_number == 0 {
             return Err(Error::Corrupt("private page stack is empty"));
         }
-        let mut page = [0; PAGE_SIZE];
-        self.read(page_number, &mut page)?;
-        if u32_le(&page, 0) != PRIVATE_MAGIC
-            || crate::contract::u64_le(&page, 8) != self.draft.meta.txn_id
-        {
-            return Err(Error::Corrupt("private page stack link is invalid"));
-        }
-        let next = u32_le(&page, 4);
+        let txn = self.draft.meta.txn_id;
+        let next = self.inspect_page(page_number, |page| {
+            if u32_le(page, 0) != PRIVATE_MAGIC || crate::contract::u64_le(page, 8) != txn {
+                return Err(Error::Corrupt("private page stack link is invalid"));
+            }
+            Ok(u32_le(page, 4))
+        })?;
         if next == page_number
             || (next != 0 && (next < 2 || u64::from(next) >= self.draft.meta.page_count))
         {
@@ -511,23 +503,37 @@ impl<'a> DraftStore<'a> {
         if self.draft.meta.page_count >= MAX_PAGE_COUNT {
             return Err(Error::PageSpaceExhausted);
         }
+        self.ensure_tail_capacity()?;
         self.charge_private()?;
         let page_number = self.draft.meta.page_count as u32;
         self.draft.meta.page_count += 1;
         self.draft.growth_pages += 1;
+        self.claim_allocated(page_number)?;
         Ok(page_number)
     }
-}
 
-impl Draft {
-    fn ensure_page_cache(&mut self, heap_budget: u64) {
-        if self.page_cache.get_mut().is_none() {
-            *self.page_cache.get_mut() = Some(page_cache::PageCache::new(heap_budget));
+    fn ensure_tail_capacity(&mut self) -> Result<()> {
+        let required = self
+            .draft
+            .meta
+            .page_count
+            .checked_add(1)
+            .ok_or(Error::PageSpaceExhausted)?;
+        let mapped_pages = self.mapping.len() / PAGE_SIZE as u64;
+        if required <= mapped_pages {
+            return Ok(());
         }
-    }
-
-    fn discard_page_cache(&mut self) {
-        *self.page_cache.get_mut() = None;
+        let capacity = self
+            .committed_page_count
+            .saturating_add(self.budget.max_growth_pages)
+            .min(MAX_PAGE_COUNT);
+        if required > capacity {
+            return Err(Error::BudgetExceeded("file growth pages"));
+        }
+        let bytes = capacity
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(Error::ArithmeticOverflow("mapped transaction capacity"))?;
+        self.mapping.resize(bytes)
     }
 }
 

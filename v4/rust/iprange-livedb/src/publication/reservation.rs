@@ -2,7 +2,9 @@
 
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::crc32c;
-use crate::slotted_page::{put_u16, put_u32, put_u64};
+use crate::error::Result as SdkResult;
+use crate::mapping::{ByteRange, ByteSource};
+use crate::slotted_page::PageEdit;
 
 use super::namespace::{BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND};
 
@@ -83,38 +85,38 @@ pub(crate) struct Header {
 }
 
 impl Header {
-    pub(crate) fn encode(self, block: &mut [u8; PAGE_SIZE]) {
+    pub(crate) fn encode<P: PageEdit>(self, block: &mut P) -> SdkResult<()> {
         block.fill(0);
-        block[..8].copy_from_slice(&MAGIC);
-        put_u16(block, 8, RECORD_SIZE);
-        put_u16(block, 10, VERSION);
-        put_u32(block, 12, self.state as u32);
-        block[16..32].copy_from_slice(&self.database_id);
-        put_u64(block, 32, self.transaction_id);
-        block[40..56].copy_from_slice(&self.commit_nonce);
-        block[56..72].copy_from_slice(&self.attempt_id);
-        put_u16(block, 72, IDENTITY_KIND);
-        block[80..112].copy_from_slice(&self.reservation_identity);
-        put_u16(block, 112, self.policy as u16);
-        put_u16(block, 114, IDENTITY_KIND);
-        put_u64(block, 120, self.output_byte_length);
-        block[128..160].copy_from_slice(&self.output_identity);
-        block[160..224].copy_from_slice(&self.output_sha512);
+        block.write(0, &MAGIC)?;
+        block.put_u16(8, RECORD_SIZE)?;
+        block.put_u16(10, VERSION)?;
+        block.put_u32(12, self.state as u32)?;
+        block.write(16, &self.database_id)?;
+        block.put_u64(32, self.transaction_id)?;
+        block.write(40, &self.commit_nonce)?;
+        block.write(56, &self.attempt_id)?;
+        block.put_u16(72, IDENTITY_KIND)?;
+        block.write(80, &self.reservation_identity)?;
+        block.put_u16(112, self.policy as u16)?;
+        block.put_u16(114, IDENTITY_KIND)?;
+        block.put_u64(120, self.output_byte_length)?;
+        block.write(128, &self.output_identity)?;
+        block.write(160, &self.output_sha512)?;
         if let Some(previous) = self.previous {
-            put_u32(block, 116, PREVIOUS_PRESENT);
-            block[224..256].copy_from_slice(&previous.identity);
-            block[256..320].copy_from_slice(&previous.sha512);
-            put_u64(block, 452, previous.byte_length);
+            block.put_u32(116, PREVIOUS_PRESENT)?;
+            block.write(224, &previous.identity)?;
+            block.write(256, &previous.sha512)?;
+            block.put_u64(452, previous.byte_length)?;
         }
-        put_u16(block, 412, BASENAME_ENCODING_KIND);
-        put_u32(block, 416, self.basename_len);
-        block[420..452].copy_from_slice(&self.basename_commitment);
-        put_u16(block, 460, CREATION_SECURITY_KIND);
-        block[464..496].copy_from_slice(&self.security_commitment);
-        put_u64(block, 496, self.sequence);
-        let checksum =
-            crc32c::crc32c_with_zeroed(block, CRC_OFFSET, 4).expect("fixed reservation CRC field");
-        put_u32(block, CRC_OFFSET, checksum);
+        block.put_u16(412, BASENAME_ENCODING_KIND)?;
+        block.put_u32(416, self.basename_len)?;
+        block.write(420, &self.basename_commitment)?;
+        block.put_u16(460, CREATION_SECURITY_KIND)?;
+        block.write(464, &self.security_commitment)?;
+        block.put_u64(496, self.sequence)?;
+        let checksum = crc32c::crc32c_source_with_zeroed(block.view(), CRC_OFFSET, 4)
+            .expect("fixed reservation CRC field");
+        block.put_u32(CRC_OFFSET, checksum)
     }
 
     pub(crate) fn state2(self) -> Option<Self> {
@@ -198,12 +200,12 @@ struct CoreFields {
     output: OutputFields,
 }
 
-pub(crate) fn select(bytes: &[u8]) -> Result<Selected, SelectError> {
+pub(crate) fn select<S: ByteSource>(bytes: S) -> Result<Selected, SelectError> {
     if bytes.len() != FILE_SIZE {
         return Err(SelectError::WrongSize);
     }
-    let left: &[u8; PAGE_SIZE] = bytes[..PAGE_SIZE].try_into().expect("checked size");
-    let right: &[u8; PAGE_SIZE] = bytes[PAGE_SIZE..].try_into().expect("checked size");
+    let left = ByteRange::new(bytes, 0, PAGE_SIZE).expect("checked size");
+    let right = ByteRange::new(bytes, PAGE_SIZE, PAGE_SIZE).expect("checked size");
     match (decode(left), decode(right)) {
         (Err(block0), Err(block1)) => Err(SelectError::NoValidHeader { block0, block1 }),
         (Ok(header), Err(_)) => selected_at(header, 0),
@@ -212,12 +214,12 @@ pub(crate) fn select(bytes: &[u8]) -> Result<Selected, SelectError> {
     }
 }
 
-pub(crate) fn contains_selectable_header(bytes: &[u8]) -> bool {
+pub(crate) fn contains_selectable_header<S: ByteSource>(bytes: S) -> bool {
     if bytes.len() != FILE_SIZE {
         return false;
     }
-    let left: &[u8; PAGE_SIZE] = bytes[..PAGE_SIZE].try_into().expect("checked size");
-    let right: &[u8; PAGE_SIZE] = bytes[PAGE_SIZE..].try_into().expect("checked size");
+    let left = ByteRange::new(bytes, 0, PAGE_SIZE).expect("checked size");
+    let right = ByteRange::new(bytes, PAGE_SIZE, PAGE_SIZE).expect("checked size");
     decode(left).is_ok() || decode(right).is_ok()
 }
 
@@ -228,14 +230,14 @@ fn selected_at(header: Header, block: usize) -> Result<Selected, SelectError> {
     Ok(Selected { header, block })
 }
 
-fn select_pair(
-    left: &[u8; PAGE_SIZE],
+fn select_pair<P: ByteSource>(
+    left: P,
     left_header: Header,
-    right: &[u8; PAGE_SIZE],
+    right: P,
     right_header: Header,
 ) -> Result<Selected, SelectError> {
     if left_header.sequence == right_header.sequence {
-        return if left == right {
+        return if left.same(right, 0, PAGE_SIZE) {
             selected_at(left_header, 0)
         } else {
             Err(SelectError::EqualSequenceDisagreement)
@@ -263,7 +265,7 @@ fn select_pair(
     })
 }
 
-fn decode(block: &[u8; PAGE_SIZE]) -> Result<Header, Problem> {
+fn decode<P: ByteSource>(block: P) -> Result<Header, Problem> {
     let core = decode_core(block)?;
     let previous = decode_previous(
         block,
@@ -294,7 +296,7 @@ fn decode(block: &[u8; PAGE_SIZE]) -> Result<Header, Problem> {
     })
 }
 
-fn decode_security(block: &[u8; PAGE_SIZE]) -> Result<[u8; 32], Problem> {
+fn decode_security<P: ByteSource>(block: P) -> Result<[u8; 32], Problem> {
     let commitment = array(block, 464);
     if commitment == [0; 32] {
         Err(Problem::Security)
@@ -303,7 +305,7 @@ fn decode_security(block: &[u8; PAGE_SIZE]) -> Result<[u8; 32], Problem> {
     }
 }
 
-fn decode_core(block: &[u8; PAGE_SIZE]) -> Result<CoreFields, Problem> {
+fn decode_core<P: ByteSource>(block: P) -> Result<CoreFields, Problem> {
     require_fixed(block)?;
     require_zeroes(block)?;
     require_checksum(block)?;
@@ -322,7 +324,7 @@ fn decode_core(block: &[u8; PAGE_SIZE]) -> Result<CoreFields, Problem> {
     })
 }
 
-fn decode_attempt(block: &[u8; PAGE_SIZE]) -> Result<AttemptFields, Problem> {
+fn decode_attempt<P: ByteSource>(block: P) -> Result<AttemptFields, Problem> {
     let fields = AttemptFields {
         database_id: array(block, 16),
         transaction_id: u64_le(block, 32),
@@ -339,7 +341,7 @@ fn decode_attempt(block: &[u8; PAGE_SIZE]) -> Result<AttemptFields, Problem> {
     Ok(fields)
 }
 
-fn decode_reservation_identity(block: &[u8; PAGE_SIZE]) -> Result<[u8; 32], Problem> {
+fn decode_reservation_identity<P: ByteSource>(block: P) -> Result<[u8; 32], Problem> {
     let identity = array(block, 80);
     if valid_identity(&identity) {
         Ok(identity)
@@ -348,8 +350,8 @@ fn decode_reservation_identity(block: &[u8; PAGE_SIZE]) -> Result<[u8; 32], Prob
     }
 }
 
-fn decode_output(
-    block: &[u8; PAGE_SIZE],
+fn decode_output<P: ByteSource>(
+    block: P,
     reservation_identity: [u8; 32],
 ) -> Result<OutputFields, Problem> {
     let fields = OutputFields {
@@ -367,14 +369,14 @@ fn decode_output(
     Ok(fields)
 }
 
-fn decode_basename_len(block: &[u8; PAGE_SIZE]) -> Result<u32, Problem> {
+fn decode_basename_len<P: ByteSource>(block: P) -> Result<u32, Problem> {
     match u32_le(block, 416) {
         0 => Err(Problem::Basename),
         length => Ok(length),
     }
 }
 
-fn decode_sequence(block: &[u8; PAGE_SIZE], state: State) -> Result<u64, Problem> {
+fn decode_sequence<P: ByteSource>(block: P, state: State) -> Result<u64, Problem> {
     let sequence = u64_le(block, 496);
     match (state, sequence) {
         (State::Prepared, 1) | (State::MainMayHaveBeenAttempted, 2) => Ok(sequence),
@@ -382,8 +384,8 @@ fn decode_sequence(block: &[u8; PAGE_SIZE], state: State) -> Result<u64, Problem
     }
 }
 
-fn require_fixed(block: &[u8; PAGE_SIZE]) -> Result<(), Problem> {
-    if block[..8] != MAGIC {
+fn require_fixed<P: ByteSource>(block: P) -> Result<(), Problem> {
+    if !block.equals(0, &MAGIC) {
         return Err(Problem::Magic);
     }
     if u16_le(block, 8) != RECORD_SIZE
@@ -398,33 +400,33 @@ fn require_fixed(block: &[u8; PAGE_SIZE]) -> Result<(), Problem> {
     Ok(())
 }
 
-fn require_zeroes(block: &[u8; PAGE_SIZE]) -> Result<(), Problem> {
+fn require_zeroes<P: ByteSource>(block: P) -> Result<(), Problem> {
     let reserved = [
-        &block[74..80],
-        &block[320..412],
-        &block[414..416],
-        &block[462..464],
-        &block[504..508],
-        &block[512..],
+        (74, 6),
+        (320, 92),
+        (414, 2),
+        (462, 2),
+        (504, 4),
+        (512, PAGE_SIZE - 512),
     ];
     if reserved
         .into_iter()
-        .any(|bytes| bytes.iter().any(|&byte| byte != 0))
+        .any(|(at, len)| !block.all_zero(at, len))
     {
         return Err(Problem::Reserved);
     }
     Ok(())
 }
 
-fn require_checksum(block: &[u8; PAGE_SIZE]) -> Result<(), Problem> {
-    if crc32c::crc32c_with_zeroed(block, CRC_OFFSET, 4) != Some(u32_le(block, CRC_OFFSET)) {
+fn require_checksum<P: ByteSource>(block: P) -> Result<(), Problem> {
+    if crc32c::crc32c_source_with_zeroed(block, CRC_OFFSET, 4) != Some(u32_le(block, CRC_OFFSET)) {
         return Err(Problem::Checksum);
     }
     Ok(())
 }
 
-fn decode_previous(
-    block: &[u8; PAGE_SIZE],
+fn decode_previous<P: ByteSource>(
+    block: P,
     policy: Policy,
     reservation_identity: [u8; 32],
     output_identity: [u8; 32],
@@ -484,8 +486,8 @@ fn valid_identity(identity: &[u8; 32]) -> bool {
     identity != &[0; 32] && identity[16..].iter().all(|&byte| byte == 0)
 }
 
-fn array<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
-    bytes[offset..offset + N].try_into().expect("fixed field")
+fn array<const N: usize, P: ByteSource>(bytes: P, offset: usize) -> [u8; N] {
+    bytes.array(offset).expect("fixed field")
 }
 
 #[cfg(test)]

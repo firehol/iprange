@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::bootstrap::OpenMode;
+use crate::contract::PAGE_SIZE;
 
 impl LiveSource {
     pub(super) fn open(
@@ -290,6 +291,14 @@ fn claim_prepared(
     meta: MetaV4,
     cancellation: &CancellationToken,
 ) -> std::result::Result<LiveSource, ClaimFailure> {
+    let mapping_file = match file.try_clone() {
+        Ok(file) => file,
+        Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause.into())),
+    };
+    let mapping = match Mapping::read_only(mapping_file, meta.page_count * PAGE_SIZE as u64) {
+        Ok(mapping) => mapping,
+        Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause)),
+    };
     let slot = match sidecar
         .claim_reader_cancellable(meta.txn_id, cancellation)
         .map_err(live_coordination)
@@ -298,6 +307,7 @@ fn claim_prepared(
         Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause)),
     };
     let mut source = LiveSource {
+        mapping,
         file,
         path: path.to_path_buf(),
         identity,

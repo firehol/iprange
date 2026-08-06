@@ -1,6 +1,7 @@
-use crate::contract::{u32_le, AddressFamily, ValueKind, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{u32_le, AddressFamily, ValueKind, MAX_TREE_LEVEL};
 use crate::error::Result;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::mapping::{ByteSource, PageView};
 
 use super::context::Context;
 use super::membership_table::InsertResult;
@@ -53,24 +54,24 @@ fn validate_node<K: IpKey, S: ValidationSink>(
         return Ok(None);
     };
     let Some(header) =
-        validate_range_page::<K, S>(context, page_number, &page, expected_level, root)?
+        validate_range_page::<K, S>(context, page_number, page, expected_level, root)?
     else {
         state.previous = None;
         return Ok(None);
     };
     if header.level == 0 {
-        validate_leaf(context, page_number, &page, header, state)
+        validate_leaf(context, page_number, page, header, state)
     } else {
-        validate_branch(context, page_number, &page, header, path, depth, state)
+        validate_branch(context, page_number, page, header, path, depth, state)
     }
 }
 
-fn read_range_page<S: ValidationSink>(
-    context: &mut Context<'_, S>,
+fn read_range_page<'m, S: ValidationSink>(
+    context: &mut Context<'m, S>,
     page_number: u32,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
     depth: usize,
-) -> Result<Option<[u8; PAGE_SIZE]>> {
+) -> Result<Option<PageView<'m>>> {
     let Some(slot) = path.get_mut(depth) else {
         context.emit(
             ValidationReason::TreeLevelInvalid,
@@ -88,7 +89,7 @@ fn read_range_page<S: ValidationSink>(
 fn validate_range_page<K: IpKey, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     expected_level: Option<u16>,
     root: bool,
 ) -> Result<Option<page::SlottedHeader>> {
@@ -151,7 +152,7 @@ fn range_cell_len<K: IpKey>(level: u16) -> usize {
 fn validate_leaf<K: IpKey, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: page::SlottedHeader,
     state: &mut RangeState<K>,
 ) -> Result<Option<K>> {
@@ -200,16 +201,16 @@ impl<K: IpKey> LeafOrder<K> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_leaf_cell<K: IpKey, S: ValidationSink>(
+fn validate_leaf_cell<K: IpKey, S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     header: page::SlottedHeader,
     index: usize,
     order: &mut LeafOrder<K>,
     state: &mut RangeState<K>,
 ) -> Result<()> {
-    let current = read_range_cell::<K>(page, header, index)?;
+    let current = read_range_cell::<K, _>(page, header, index)?;
     order.observe(context, page_number, current.from)?;
     increment_count(state)?;
     if !range_shape_valid(context, page_number, current, state)? {
@@ -221,15 +222,15 @@ fn validate_leaf_cell<K: IpKey, S: ValidationSink>(
     Ok(())
 }
 
-fn read_range_cell<K: IpKey>(
-    page: &[u8; PAGE_SIZE],
+fn read_range_cell<K: IpKey, P: ByteSource>(
+    page: P,
     header: page::SlottedHeader,
     index: usize,
 ) -> Result<Range<K>> {
     let cell = page::fixed_cell(page, header, index, K::WIDTH * 2 + 4)?;
     Ok(Range {
-        from: K::read_le(cell),
-        to: K::read_le(&cell[K::WIDTH..]),
+        from: K::read_le(cell, 0),
+        to: K::read_le(cell, K::WIDTH),
         value: u32_le(cell, K::WIDTH * 2),
     })
 }
@@ -324,7 +325,7 @@ fn validate_neighbor<K: IpKey, S: ValidationSink>(
 fn validate_branch<K: IpKey, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: page::SlottedHeader,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
     depth: usize,
@@ -334,7 +335,7 @@ fn validate_branch<K: IpKey, S: ValidationSink>(
     let mut previous = None;
     for index in 0..header.item_count {
         let cell = page::fixed_cell(page, header, index, K::WIDTH + 4)?;
-        let key = K::read_le(cell);
+        let key = K::read_le(cell, 0);
         let child = u32_le(cell, K::WIDTH);
         first.get_or_insert(key);
         if previous.is_some_and(|prior| prior >= key) {

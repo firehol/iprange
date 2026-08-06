@@ -1,5 +1,6 @@
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::{ByteRange, ByteSource};
 
 use super::context::Context;
 use super::{ValidationObject, ValidationReason, ValidationSink};
@@ -21,10 +22,10 @@ pub(crate) struct TreePageSpec {
     pub(crate) expected_level: Option<u16>,
 }
 
-pub(crate) fn slotted_header<S: ValidationSink>(
+pub(crate) fn slotted_header<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     object: ValidationObject,
     spec: TreePageSpec,
 ) -> Result<Option<SlottedHeader>> {
@@ -53,8 +54,8 @@ pub(crate) fn slotted_header<S: ValidationSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn slotted_problem(
-    page: &[u8; PAGE_SIZE],
+fn slotted_problem<P: ByteSource>(
+    page: P,
     txn_id: u64,
     spec: &TreePageSpec,
     level: u16,
@@ -80,22 +81,22 @@ fn slotted_problem(
     None
 }
 
-fn common_header_valid(page: &[u8; PAGE_SIZE]) -> bool {
-    page[..4] == PAGE_MAGIC && page[5] == 0 && u16_le(page, 6) == HEADER_SIZE as u16
+fn common_header_valid<P: ByteSource>(page: P) -> bool {
+    page.equals(0, &PAGE_MAGIC) && page.byte(5) == Some(0) && u16_le(page, 6) == HEADER_SIZE as u16
 }
 
-fn born_valid(page: &[u8; PAGE_SIZE], txn_id: u64) -> bool {
+fn born_valid<P: ByteSource>(page: P, txn_id: u64) -> bool {
     let born = u64_le(page, 8);
     born != 0 && born <= txn_id
 }
 
-fn type_valid(page: &[u8; PAGE_SIZE], spec: &TreePageSpec, level: u16) -> bool {
+fn type_valid<P: ByteSource>(page: P, spec: &TreePageSpec, level: u16) -> bool {
     let expected = if level == 0 {
         spec.leaf_type
     } else {
         spec.branch_type
     };
-    page[4] == expected && u32_le(page, 24) == spec.aux
+    page.byte(4) == Some(expected) && u32_le(page, 24) == spec.aux
 }
 
 fn level_valid(level: u16, expected: Option<u16>) -> bool {
@@ -109,10 +110,10 @@ fn slot_bounds_valid(item_count: usize, lower: usize, upper: usize) -> bool {
     item_count != 0 && expected_lower == Some(lower) && lower <= upper && upper < PAGE_SIZE
 }
 
-pub(crate) fn validate_fixed_cells<S: ValidationSink>(
+pub(crate) fn validate_fixed_cells<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     object: ValidationObject,
     header: SlottedHeader,
     cell_len: usize,
@@ -122,27 +123,25 @@ pub(crate) fn validate_fixed_cells<S: ValidationSink>(
     })
 }
 
-pub(crate) fn validate_variable_cells<S: ValidationSink>(
+pub(crate) fn validate_variable_cells<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     object: ValidationObject,
     header: SlottedHeader,
     minimum: usize,
     maximum: usize,
 ) -> Result<bool> {
     validate_layout(context, page_number, page, object, header, |start| {
-        let length = page
-            .get(start..start + 2)
-            .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) as usize)?;
+        let length = usize::from(crate::contract::u16_source(page, start)?);
         (minimum..=maximum).contains(&length).then_some(length)
     })
 }
 
-fn validate_layout<S: ValidationSink>(
+fn validate_layout<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     object: ValidationObject,
     header: SlottedHeader,
     mut length_at: impl FnMut(usize) -> Option<usize>,
@@ -162,8 +161,8 @@ fn validate_layout<S: ValidationSink>(
     Ok(true)
 }
 
-fn mark_cells(
-    page: &[u8; PAGE_SIZE],
+fn mark_cells<P: ByteSource>(
+    page: P,
     header: SlottedHeader,
     length_at: &mut impl FnMut(usize) -> Option<usize>,
 ) -> Option<[u64; PAGE_SIZE / 64]> {
@@ -185,17 +184,14 @@ fn mark_cells(
     Some(used)
 }
 
-fn reserved_nonzero(
-    page: &[u8; PAGE_SIZE],
+fn reserved_nonzero<P: ByteSource>(
+    page: P,
     header: SlottedHeader,
     used: &[u64; PAGE_SIZE / 64],
 ) -> bool {
-    let mut reserved_nonzero = page[header.lower..header.upper]
-        .iter()
-        .any(|&byte| byte != 0);
-    for (offset, &byte) in page[header.upper..].iter().enumerate() {
-        let absolute = header.upper + offset;
-        if !marked(used, absolute) && byte != 0 {
+    let mut reserved_nonzero = !page.all_zero(header.lower, header.upper - header.lower);
+    for absolute in header.upper..PAGE_SIZE {
+        if !marked(used, absolute) && page.byte(absolute) != Some(0) {
             reserved_nonzero = true;
             break;
         }
@@ -203,12 +199,12 @@ fn reserved_nonzero(
     reserved_nonzero
 }
 
-pub(crate) fn fixed_cell(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn fixed_cell<P: ByteSource>(
+    page: P,
     header: SlottedHeader,
     index: usize,
     cell_len: usize,
-) -> Result<&[u8]> {
+) -> Result<ByteRange<P>> {
     if index >= header.item_count {
         return Err(Error::Corrupt("validation slot index is invalid"));
     }
@@ -216,29 +212,28 @@ pub(crate) fn fixed_cell(
     let end = start
         .checked_add(cell_len)
         .ok_or(Error::Corrupt("validation cell end overflows"))?;
-    page.get(start..end)
+    ByteRange::new(page, start, end - start)
         .ok_or(Error::Corrupt("validation cell is outside the page"))
 }
 
-pub(crate) fn variable_cell(
-    page: &[u8; PAGE_SIZE],
+pub(crate) fn variable_cell<P: ByteSource>(
+    page: P,
     header: SlottedHeader,
     index: usize,
-) -> Result<&[u8]> {
+) -> Result<ByteRange<P>> {
     if index >= header.item_count {
         return Err(Error::Corrupt("validation slot index is invalid"));
     }
     let start = usize::from(u16_le(page, HEADER_SIZE + index * 2));
-    let length = page
-        .get(start..start + 2)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) as usize)
-        .ok_or(Error::Corrupt(
+    let length = usize::from(
+        crate::contract::u16_source(page, start).ok_or(Error::Corrupt(
             "validation record length is outside the page",
-        ))?;
+        ))?,
+    );
     let end = start
         .checked_add(length)
         .ok_or(Error::Corrupt("validation record end overflows"))?;
-    page.get(start..end)
+    ByteRange::new(page, start, end - start)
         .ok_or(Error::Corrupt("validation record is outside the page"))
 }
 

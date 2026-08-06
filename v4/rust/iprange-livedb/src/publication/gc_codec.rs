@@ -4,8 +4,10 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::crc32c;
+use crate::error::Result as SdkResult;
+use crate::mapping::{ByteRange, ByteSource};
 use crate::name_binding::{basename_commitment, BasenameEncoding};
-use crate::slotted_page::{put_u16, put_u32, put_u64};
+use crate::slotted_page::PageEdit;
 
 use super::types::{ArtifactKind, DirectoryRole};
 
@@ -55,67 +57,54 @@ pub(crate) enum SelectError {
 }
 
 impl Header {
-    pub(crate) fn encode(&self, block: &mut [u8; PAGE_SIZE]) {
+    pub(crate) fn encode<P: PageEdit>(&self, block: &mut P) -> SdkResult<()> {
         assert!(
             !self.source_basename.is_empty() && self.source_basename.len() <= SOURCE_CAPACITY,
             "GC source filename exceeds its fixed block"
         );
         block.fill(0);
-        block[..8].copy_from_slice(&MAGIC);
-        put_u16(block, 8, RECORD_SIZE);
-        put_u16(block, 10, VERSION);
-        put_u16(block, 12, kind_code(self.kind));
-        put_u16(block, 14, self.basename_encoding);
-        block[16..32].copy_from_slice(&self.attempt_id);
-        put_u32(block, 32, self.ordinal);
-        put_u16(block, 36, self.directory_identity_kind);
-        put_u16(block, 38, self.artifact_identity_kind);
-        block[40..72].copy_from_slice(&self.directory_identity);
-        block[72..104].copy_from_slice(&self.source_commitment);
-        block[104..136].copy_from_slice(&self.inert_commitment);
-        block[144..176].copy_from_slice(&self.artifact_identity);
+        block.write(0, &MAGIC)?;
+        block.put_u16(8, RECORD_SIZE)?;
+        block.put_u16(10, VERSION)?;
+        block.put_u16(12, kind_code(self.kind))?;
+        block.put_u16(14, self.basename_encoding)?;
+        block.write(16, &self.attempt_id)?;
+        block.put_u32(32, self.ordinal)?;
+        block.put_u16(36, self.directory_identity_kind)?;
+        block.put_u16(38, self.artifact_identity_kind)?;
+        block.write(40, &self.directory_identity)?;
+        block.write(72, &self.source_commitment)?;
+        block.write(104, &self.inert_commitment)?;
+        block.write(144, &self.artifact_identity)?;
         if let Some(payload) = self.payload {
-            put_u16(block, 136, 1);
-            put_u64(block, 176, payload.byte_length);
-            block[184..248].copy_from_slice(&payload.sha512);
-            block[248..264].copy_from_slice(&payload.database_id);
-            put_u64(block, 264, payload.transaction_id);
-            block[272..288].copy_from_slice(&payload.commit_nonce);
+            block.put_u16(136, 1)?;
+            block.put_u64(176, payload.byte_length)?;
+            block.write(184, &payload.sha512)?;
+            block.write(248, &payload.database_id)?;
+            block.put_u64(264, payload.transaction_id)?;
+            block.write(272, &payload.commit_nonce)?;
         }
-        put_u16(block, 288, self.creation_security_kind);
-        put_u16(block, 290, directory_role_code(self.directory_role));
-        block[296..328].copy_from_slice(&self.creation_security_commitment);
-        put_u32(
-            block,
+        block.put_u16(288, self.creation_security_kind)?;
+        block.put_u16(290, directory_role_code(self.directory_role))?;
+        block.write(296, &self.creation_security_commitment)?;
+        block.put_u32(
             SOURCE_LENGTH_OFFSET,
             u32::try_from(self.source_basename.len()).expect("bounded GC source filename"),
-        );
-        put_u64(block, 496, self.sequence);
-        block[SOURCE_OFFSET..SOURCE_OFFSET + self.source_basename.len()]
-            .copy_from_slice(&self.source_basename);
-        let checksum =
-            crc32c::crc32c_with_zeroed(block, CRC_OFFSET, 4).expect("fixed GC CRC field");
-        put_u32(block, CRC_OFFSET, checksum);
-    }
-
-    pub(crate) fn file_bytes(&self) -> [u8; FILE_SIZE] {
-        let mut bytes = [0; FILE_SIZE];
-        let left = (&mut bytes[..PAGE_SIZE])
-            .try_into()
-            .expect("fixed GC block");
-        self.encode(left);
-        let (left, right) = bytes.split_at_mut(PAGE_SIZE);
-        right.copy_from_slice(left);
-        bytes
+        )?;
+        block.put_u64(496, self.sequence)?;
+        block.write(SOURCE_OFFSET, &self.source_basename)?;
+        let checksum = crc32c::crc32c_source_with_zeroed(block.view(), CRC_OFFSET, 4)
+            .expect("fixed GC CRC field");
+        block.put_u32(CRC_OFFSET, checksum)
     }
 }
 
-pub(crate) fn select(bytes: &[u8]) -> Result<Header, SelectError> {
+pub(crate) fn select<S: ByteSource>(bytes: S) -> Result<Header, SelectError> {
     if bytes.len() != FILE_SIZE {
         return Err(SelectError::WrongSize);
     }
-    let left = decode(bytes[..PAGE_SIZE].try_into().expect("checked GC block"));
-    let right = decode(bytes[PAGE_SIZE..].try_into().expect("checked GC block"));
+    let left = decode(ByteRange::new(bytes, 0, PAGE_SIZE).expect("checked GC block"));
+    let right = decode(ByteRange::new(bytes, PAGE_SIZE, PAGE_SIZE).expect("checked GC block"));
     match (left, right) {
         (None, None) => Err(SelectError::NoValidHeader),
         (Some(header), None) | (None, Some(header)) => Ok(header),
@@ -148,7 +137,7 @@ fn name_commitment(domain: &[u8], encoding: u16, name: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn decode(block: &[u8; PAGE_SIZE]) -> Option<Header> {
+fn decode<P: ByteSource>(block: P) -> Option<Header> {
     if !fixed_valid(block) || !reserved_zero(block) || !checksum_valid(block) {
         return None;
     }
@@ -176,25 +165,25 @@ fn decode(block: &[u8; PAGE_SIZE]) -> Option<Header> {
     valid(&header).then_some(header)
 }
 
-fn fixed_valid(block: &[u8; PAGE_SIZE]) -> bool {
-    block[..8] == MAGIC
+fn fixed_valid<P: ByteSource>(block: P) -> bool {
+    block.equals(0, &MAGIC)
         && u16_le(block, 8) == RECORD_SIZE
         && u16_le(block, 10) == VERSION
         && basename_encoding(u16_le(block, 14)).is_some()
 }
 
-fn reserved_zero(block: &[u8; PAGE_SIZE]) -> bool {
-    block[138..144].iter().all(|&byte| byte == 0)
-        && block[292..296].iter().all(|&byte| byte == 0)
-        && block[332..496].iter().all(|&byte| byte == 0)
-        && block[504..508].iter().all(|&byte| byte == 0)
+fn reserved_zero<P: ByteSource>(block: P) -> bool {
+    block.all_zero(138, 6)
+        && block.all_zero(292, 4)
+        && block.all_zero(332, 164)
+        && block.all_zero(504, 4)
 }
 
-fn checksum_valid(block: &[u8; PAGE_SIZE]) -> bool {
-    crc32c::crc32c_with_zeroed(block, CRC_OFFSET, 4) == Some(u32_le(block, CRC_OFFSET))
+fn checksum_valid<P: ByteSource>(block: P) -> bool {
+    crc32c::crc32c_source_with_zeroed(block, CRC_OFFSET, 4) == Some(u32_le(block, CRC_OFFSET))
 }
 
-fn decode_payload(block: &[u8; PAGE_SIZE]) -> Option<Option<Payload>> {
+fn decode_payload<P: ByteSource>(block: P) -> Option<Option<Payload>> {
     match u16_le(block, 136) {
         0 if payload_fields_zero(block) => Some(None),
         1 => Some(Some(Payload {
@@ -208,20 +197,23 @@ fn decode_payload(block: &[u8; PAGE_SIZE]) -> Option<Option<Payload>> {
     }
 }
 
-fn payload_fields_zero(block: &[u8; PAGE_SIZE]) -> bool {
-    block[176..288].iter().all(|&byte| byte == 0)
+fn payload_fields_zero<P: ByteSource>(block: P) -> bool {
+    block.all_zero(176, 112)
 }
 
-fn decode_source_basename(block: &[u8; PAGE_SIZE]) -> Option<Box<[u8]>> {
+fn decode_source_basename<P: ByteSource>(block: P) -> Option<Box<[u8]>> {
     let length = usize::try_from(u32_le(block, SOURCE_LENGTH_OFFSET)).ok()?;
     if length == 0 || length > SOURCE_CAPACITY {
         return None;
     }
     let end = SOURCE_OFFSET.checked_add(length)?;
-    if block[end..].iter().any(|&byte| byte != 0) {
+    if !block.all_zero(end, PAGE_SIZE - end) {
         return None;
     }
-    Some(block[SOURCE_OFFSET..end].into())
+    let mut name = vec![0; length];
+    block
+        .copy_range_to(SOURCE_OFFSET, &mut name)
+        .then(|| name.into_boxed_slice())
 }
 
 fn valid(header: &Header) -> bool {
@@ -316,15 +308,27 @@ const fn decode_kind(value: u16) -> Option<ArtifactKind> {
     }
 }
 
-fn array<const N: usize>(bytes: &[u8], offset: usize) -> [u8; N] {
-    bytes[offset..offset + N]
-        .try_into()
-        .expect("fixed GC field")
+fn array<const N: usize, P: ByteSource>(bytes: P, offset: usize) -> [u8; N] {
+    bytes.array(offset).expect("fixed GC field")
+}
+
+#[cfg(test)]
+impl Header {
+    fn file_bytes(&self) -> [u8; FILE_SIZE] {
+        let mut bytes = [0; FILE_SIZE];
+        let (left, right) = bytes.split_at_mut(PAGE_SIZE);
+        let left: &mut [u8; PAGE_SIZE] = left.try_into().expect("fixed GC block");
+        let right: &mut [u8; PAGE_SIZE] = right.try_into().expect("fixed GC block");
+        self.encode(left).unwrap();
+        self.encode(right).unwrap();
+        bytes
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slotted_page::put_u32;
 
     fn header() -> Header {
         let source_basename = b"s\0o\0u\0r\0c\0e\0".to_vec().into_boxed_slice();

@@ -13,7 +13,7 @@ use crate::membership_delta::Delta;
 use crate::used_bitmap::{self, Kind};
 
 use codec::{
-    decode, decode_hash, encode_hash, HashCodec, HashKey, IdCodec, Record, Storage, MAX_WORD_COUNT,
+    decode_hash, encode_hash, HashCodec, HashKey, IdCodec, Record, Storage, MAX_WORD_COUNT,
 };
 use record::{
     encode as encode_record, find as find_record, read_record_words, read_words, replace_refcount,
@@ -86,14 +86,14 @@ pub(crate) fn intern_added_bit<S: RetiringStore>(
     if base_id != 0 {
         let base = find_record(store, state.id_root, base_id)?
             .ok_or(Error::Corrupt("membership reference ID is missing"))?;
-        let record = decode(base.as_slice())?;
+        let record = base.record;
         if record.word_count != base_words {
             return Err(Error::Corrupt("membership reference length changed"));
         }
         let word_index = bit / 64;
         if word_index < base_words {
             let mut word = [0u64; 1];
-            read_record_words(store, base.as_slice(), &record, word_index, &mut word)?;
+            read_record_words(store, &base, word_index, &mut word)?;
             if word[0] & (1u64 << (bit % 64)) != 0 {
                 return Ok(Interned {
                     id: base_id,
@@ -119,10 +119,10 @@ pub(crate) fn apply_delta<S: RetiringStore>(
 ) -> Result<()> {
     let found = find_record(store, state.id_root, delta.id)?
         .ok_or(Error::Corrupt("membership delta ID is missing"))?;
-    let record = decode(found.as_slice())?;
+    let record = found.record;
     let refcount = changed_refcount(record.refcount, delta.change)?;
     if refcount != 0 {
-        return replace_refcount(store, &mut state.id_root, found.as_slice(), refcount);
+        return replace_refcount(store, &mut state.id_root, record.id, refcount);
     }
     remove_record(store, state, &record)
 }
@@ -139,7 +139,7 @@ pub(crate) fn reference_matches<S: Store>(
     let Some(found) = find_record(store, id_root, id)? else {
         return Ok(false);
     };
-    Ok(decode(found.as_slice())?.word_count == word_count)
+    Ok(found.record.word_count == word_count)
 }
 
 pub(super) fn intern<S: RetiringStore, W: Words<S>>(
@@ -238,7 +238,7 @@ fn equal_words<S: Store, W: Words<S>>(
     let Some(found) = find_record(store, id_root, id)? else {
         return Err(Error::Corrupt("membership hash points to a missing ID"));
     };
-    let record = decode(found.as_slice())?;
+    let record = found.record;
     if record.word_count != expected.word_count() {
         return Ok(false);
     }
@@ -247,13 +247,7 @@ fn equal_words<S: Store, W: Words<S>>(
     let mut start = 0u32;
     while start < record.word_count {
         let count = (record.word_count - start).min(HASH_WORDS as u32) as usize;
-        read_record_words(
-            store,
-            found.as_slice(),
-            &record,
-            start,
-            &mut actual[..count],
-        )?;
+        read_record_words(store, &found, start, &mut actual[..count])?;
         expected.read_words(store, start, &mut wanted[..count])?;
         if actual[..count] != wanted[..count] {
             return Ok(false);

@@ -12,6 +12,7 @@ use crate::database;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::mapping::Mapping;
 use crate::publication::PublicationProblem;
 use crate::validation::source::public_identity;
 
@@ -41,6 +42,7 @@ pub(crate) enum Source {
 #[derive(Debug)]
 pub(crate) struct BasicSource {
     file: File,
+    mapping: Mapping,
     path: PathBuf,
     sidecar: Option<PathBuf>,
     identity: Identity,
@@ -58,6 +60,7 @@ enum BasicSelection {
 #[derive(Debug)]
 pub(crate) struct LiveSource {
     file: File,
+    mapping: Mapping,
     path: PathBuf,
     identity: Identity,
     sidecar: Sidecar,
@@ -184,10 +187,10 @@ impl Source {
         }
     }
 
-    pub(crate) fn file(&self) -> &File {
+    pub(crate) fn mapping(&self) -> &Mapping {
         match self {
-            Self::Basic(source) => &source.file,
-            Self::Live(source) => &source.file,
+            Self::Basic(source) => &source.mapping,
+            Self::Live(source) => &source.mapping,
         }
     }
 

@@ -7,13 +7,15 @@ use crate::contract::{u16_le, ValueTag, PAGE_SIZE};
 use crate::database::ImmutableReader;
 use crate::feed::FeedName;
 use crate::immutable_output::{MembershipWords, OutputBudget, OutputSpec};
+use crate::mapping::test_support as file_io;
+use crate::mapping::Mapping;
 use crate::membership_tree;
 use crate::recovery::{RecoverySinkControl, RecoveryUnknownEnvelope};
 use crate::validation::{
     validate, ValidationBudget, ValidationMode, ValidationObject, ValidationReason,
     ValidationSinkControl,
 };
-use crate::{crc32c, file_io, range_tree, slotted_page};
+use crate::{crc32c, range_tree, slotted_page};
 
 struct Paths {
     source: PathBuf,
@@ -203,10 +205,10 @@ fn damaged_blob_rejects_its_membership_and_known_range() {
         .unwrap();
     let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
-    let id = range_tree::lookup(&finished.file, &meta, Ipv4Key(5))
+    let id = range_tree::lookup(&finished.mapping, &meta, Ipv4Key(5))
         .unwrap()
         .unwrap();
-    let record = membership_tree::find(&finished.file, &meta, id)
+    let record = membership_tree::find(&finished.mapping, &meta, id)
         .unwrap()
         .unwrap();
     let membership_tree::Storage::Blob(root) = record.storage else {
@@ -256,6 +258,7 @@ fn ordered_recovery_spills_all_tables_to_one_file() {
         scratch_directory: Some(paths.scratch.clone()),
     };
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let result = construct(
         &source,
         meta,
@@ -312,6 +315,7 @@ fn table_scratch_budget_failure_removes_its_partial_file() {
         scratch_directory: Some(paths.scratch.clone()),
     };
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let failure = construct(
         &source,
         meta,
@@ -380,6 +384,7 @@ fn builder(path: &Path, spec: OutputSpec) -> Builder {
 
 fn recover(paths: &Paths, meta: MetaV4) -> (RecoveryReport, Vec<RecoveryUnknownEnvelope>) {
     let source = File::open(&paths.source).unwrap();
+    let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
     let result = construct(
         &source,

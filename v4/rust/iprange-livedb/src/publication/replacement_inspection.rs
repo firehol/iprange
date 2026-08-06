@@ -8,7 +8,8 @@ use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
-use crate::{file_io, publication};
+use crate::mapping::Mapping;
+use crate::publication;
 
 use super::namespace::{Destination, Identity, Name, Regular};
 use super::output;
@@ -34,6 +35,7 @@ pub(super) enum Location {
 pub(super) struct Inspected {
     pub(super) name: Name,
     pub(super) file: File,
+    pub(super) mapping: Option<Mapping>,
     pub(super) identity: Identity,
     pub(super) meta: Option<MetaV4>,
     pub(super) byte_length: u64,
@@ -110,6 +112,7 @@ fn opened(name: Name, location: Location, attempt_id: [u8; 16], regular: Regular
     Inspected {
         name,
         file: regular.file,
+        mapping: None,
         identity: regular.identity,
         meta: None,
         byte_length: 0,
@@ -204,9 +207,12 @@ fn inspect_one(
         .map_err(crate::error::Error::from)
         .map_err(|error| Problem::sdk(&error))?
         .len();
-    entry.sha512 = output::digest_cancellable(&entry.file, entry.byte_length, cancellation)
+    let mapping = Mapping::read_only_view(&entry.file, entry.byte_length)
+        .map_err(|error| Problem::sdk(&error))?;
+    entry.sha512 = output::digest_cancellable(&mapping, entry.byte_length, cancellation)
         .map_err(|error| Problem::output(&error))?;
-    entry.meta = desired_meta(&entry.file, entry.byte_length, entry.sha512, header)?;
+    entry.meta = desired_meta(&mapping, entry.byte_length, entry.sha512, header)?;
+    entry.mapping = Some(mapping);
     entry.content = classify(&entry, header);
     entry.access = access(&entry, header);
     verify_stable(destination, &entry)?;
@@ -214,7 +220,7 @@ fn inspect_one(
 }
 
 fn desired_meta(
-    file: &File,
+    mapping: &Mapping,
     byte_length: u64,
     sha512: [u8; 64],
     header: Header,
@@ -225,10 +231,8 @@ fn desired_meta(
     if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
         return Ok(None);
     }
-    let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut pages, 0).map_err(|error| Problem::sdk(&error))?;
-    let left = (&pages[..PAGE_SIZE]).try_into().expect("fixed meta page");
-    let right = (&pages[PAGE_SIZE..]).try_into().expect("fixed meta page");
+    let left = mapping.page(0, 2).map_err(|error| Problem::sdk(&error))?;
+    let right = mapping.page(1, 2).map_err(|error| Problem::sdk(&error))?;
     let opened =
         match bootstrap::open_meta_pages(left, right, byte_length, OpenMode::ImmutableReader) {
             Ok(opened) => opened,
@@ -315,8 +319,14 @@ impl Inspected {
         cancellation: &CancellationToken,
     ) -> Result<(), Problem> {
         verify_stable(destination, self)?;
-        let digest = output::digest_cancellable(&self.file, self.byte_length, cancellation)
-            .map_err(|error| Problem::output(&error))?;
+        let digest = output::digest_cancellable(
+            self.mapping
+                .as_ref()
+                .expect("finished replacement inspection retains its mapping"),
+            self.byte_length,
+            cancellation,
+        )
+        .map_err(|error| Problem::output(&error))?;
         verify_stable(destination, self)?;
         if digest != self.sha512 {
             return Err(conflict("replacement content changed after inspection"));

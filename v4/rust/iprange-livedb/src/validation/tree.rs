@@ -1,5 +1,6 @@
-use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::MAX_TREE_LEVEL;
 use crate::error::Result;
+use crate::mapping::{ByteRange, ByteSource, PageView};
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
@@ -22,17 +23,17 @@ pub(crate) trait Codec {
     const BRANCH_INVALID: ValidationReason = ValidationReason::TreeOrderInvalid;
     const LEAF_INVALID: ValidationReason;
 
-    fn branch_key(cell: &[u8]) -> Option<Self::Key>;
-    fn branch_child(cell: &[u8]) -> Option<u32>;
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key>;
+    fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key>;
+    fn branch_child<P: ByteSource>(cell: P) -> Option<u32>;
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key>;
 }
 
 pub(crate) struct WalkResult {
     pub(crate) records: u64,
 }
 
-pub(crate) fn walk<C, S, F>(
-    context: &mut Context<'_, S>,
+pub(crate) fn walk<'m, C, S, F>(
+    context: &mut Context<'m, S>,
     root: u32,
     object: ValidationObject,
     mut leaf: F,
@@ -40,7 +41,7 @@ pub(crate) fn walk<C, S, F>(
 where
     C: Codec,
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, u32, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     if root == 0 {
         return Ok(WalkResult { records: 0 });
@@ -59,8 +60,8 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk_node<C, S, F>(
-    context: &mut Context<'_, S>,
+fn walk_node<'m, C, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
     object: ValidationObject,
     expected_level: Option<u16>,
@@ -73,31 +74,31 @@ fn walk_node<C, S, F>(
 where
     C: Codec,
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, u32, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     let Some(page) = read_node_page(context, page_number, object, path, depth)? else {
         state.previous = None;
         return Ok(None);
     };
     let Some(header) =
-        read_node_header::<C, S>(context, page_number, &page, object, expected_level)?
+        read_node_header::<C, S>(context, page_number, page, object, expected_level)?
     else {
         state.previous = None;
         return Ok(None);
     };
     validate_root_shape(context, page_number, object, root, header)?;
     let layout = node_layout::<C>(header.level);
-    if !validate_layout(context, page_number, &page, object, header, layout)? {
+    if !validate_layout(context, page_number, page, object, header, layout)? {
         state.previous = None;
         return Ok(None);
     }
     if header.level == 0 {
-        walk_leaf::<C, S, F>(context, page_number, &page, header, object, state, leaf)
+        walk_leaf::<C, S, F>(context, page_number, page, header, object, state, leaf)
     } else {
         walk_branch::<C, S, F>(
             context,
             page_number,
-            &page,
+            page,
             header,
             object,
             path,
@@ -108,13 +109,13 @@ where
     }
 }
 
-fn read_node_page<S: ValidationSink>(
-    context: &mut Context<'_, S>,
+fn read_node_page<'m, S: ValidationSink>(
+    context: &mut Context<'m, S>,
     page_number: u32,
     object: ValidationObject,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
     depth: usize,
-) -> Result<Option<[u8; PAGE_SIZE]>> {
+) -> Result<Option<PageView<'m>>> {
     let Some(slot) = path.get_mut(depth) else {
         context.emit(
             ValidationReason::TreeLevelInvalid,
@@ -132,7 +133,7 @@ fn read_node_page<S: ValidationSink>(
 fn read_node_header<C: Codec, S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     object: ValidationObject,
     expected_level: Option<u16>,
 ) -> Result<Option<page::SlottedHeader>> {
@@ -178,10 +179,10 @@ fn node_layout<C: Codec>(level: u16) -> CellLayout {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk_branch<C, S, F>(
-    context: &mut Context<'_, S>,
+fn walk_branch<'m, C, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'m>,
     header: page::SlottedHeader,
     object: ValidationObject,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -192,14 +193,15 @@ fn walk_branch<C, S, F>(
 where
     C: Codec,
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, u32, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     let mut first = None;
     let mut previous = None;
     for index in 0..header.item_count {
         context.checkpoint()?;
         let cell = cell(page, header, index, C::BRANCH_LAYOUT)?;
-        let Some((key, child)) = branch_entry::<C, S>(context, page_number, object, cell, state)?
+        let Some((key, child)) =
+            branch_entry::<C, S, _>(context, page_number, object, cell, state)?
         else {
             continue;
         };
@@ -220,11 +222,11 @@ where
     Ok(first)
 }
 
-fn branch_entry<C: Codec, S: ValidationSink>(
+fn branch_entry<C: Codec, S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
     object: ValidationObject,
-    cell: &[u8],
+    cell: P,
     state: &mut State<C::Key>,
 ) -> Result<Option<(C::Key, u32)>> {
     let entry = C::branch_key(cell).zip(C::branch_child(cell));
@@ -276,10 +278,10 @@ fn validate_fence<K: Copy + PartialEq, S: ValidationSink>(
     Ok(())
 }
 
-fn walk_leaf<C, S, F>(
-    context: &mut Context<'_, S>,
+fn walk_leaf<'m, C, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'m>,
     header: page::SlottedHeader,
     object: ValidationObject,
     state: &mut State<C::Key>,
@@ -288,7 +290,7 @@ fn walk_leaf<C, S, F>(
 where
     C: Codec,
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, u32, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     let mut first = None;
     for index in 0..header.item_count {
@@ -299,10 +301,10 @@ where
     Ok(first)
 }
 
-fn walk_leaf_cell<C, S, F>(
-    context: &mut Context<'_, S>,
+fn walk_leaf_cell<'m, C, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    cell: &[u8],
+    cell: ByteRange<PageView<'m>>,
     object: ValidationObject,
     state: &mut State<C::Key>,
     first: &mut Option<C::Key>,
@@ -311,7 +313,7 @@ fn walk_leaf_cell<C, S, F>(
 where
     C: Codec,
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, u32, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, u32, ByteRange<PageView<'m>>) -> Result<()>,
 {
     let Some(key) = C::leaf_key(cell) else {
         context.emit(C::LEAF_INVALID, object, Some(page_number), None, None)?;
@@ -343,10 +345,10 @@ struct State<K> {
     previous: Option<K>,
 }
 
-fn validate_layout<S: ValidationSink>(
+fn validate_layout<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     object: ValidationObject,
     header: page::SlottedHeader,
     layout: CellLayout,
@@ -367,12 +369,12 @@ fn validate_layout<S: ValidationSink>(
     }
 }
 
-fn cell(
-    page: &[u8; PAGE_SIZE],
+fn cell<'m>(
+    page: PageView<'m>,
     header: page::SlottedHeader,
     index: usize,
     layout: CellLayout,
-) -> Result<&[u8]> {
+) -> Result<ByteRange<PageView<'m>>> {
     match layout {
         CellLayout::Fixed(length) => page::fixed_cell(page, header, index, length),
         CellLayout::Variable { .. } => page::variable_cell(page, header, index),

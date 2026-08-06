@@ -9,7 +9,8 @@ use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
-use crate::slotted_page::{put_u16, put_u32, put_u64, HEADER_SIZE};
+use crate::mapping::ByteSource;
+use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
 
 const BITMAP_BRANCH: u8 = 14;
 const BITMAP_LEAF: u8 = 15;
@@ -22,10 +23,7 @@ const BRANCH_END: usize = HEADER_SIZE + 32 + BRANCH_CHILDREN * 4;
 const MAX_BITMAP_LEVEL: u16 = 3;
 
 pub(crate) trait BitmapStore: Store {
-    /// Allocate without consulting the free bitmap being changed.
     fn allocate_bitmap_page(&mut self) -> Result<u32>;
-
-    /// Reject allocator metadata and current roots if corruption marks them free.
     fn allocation_forbidden(&self, page_number: u32) -> bool;
 }
 
@@ -34,8 +32,8 @@ struct Header {
     level: u16,
 }
 
-fn parse(
-    page: &[u8; PAGE_SIZE],
+fn parse<S: ByteSource>(
+    page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
     verify_crc: bool,
@@ -46,72 +44,54 @@ fn parse(
     Ok(header)
 }
 
-fn parse_header(
-    page: &[u8; PAGE_SIZE],
+fn parse_header<S: ByteSource>(
+    page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<Header> {
-    validate_prefix(page)?;
+    if page.len() != PAGE_SIZE
+        || !page.equals(0, &PAGE_MAGIC)
+        || page.byte(5) != Some(0)
+        || u16_le(page, 6) != HEADER_SIZE as u16
+        || u32_le(page, 24) != FREE_AUX
+    {
+        return Err(Error::Corrupt("free bitmap header is invalid"));
+    }
     let born_txn = u64_le(page, 8);
     let level = u16_le(page, 18);
     if born_txn == 0
         || born_txn > selected_txn
         || level > MAX_BITMAP_LEVEL
         || expected_level.is_some_and(|expected| expected != level)
+        || u16_le(page, 16) == 0
     {
         return Err(Error::Corrupt("free bitmap ownership or level is invalid"));
-    }
-    let item_count = usize::from(u16_le(page, 16));
-    if item_count == 0 {
-        return Err(Error::Corrupt("reachable free bitmap page is empty"));
     }
     Ok(Header { level })
 }
 
-fn validate_prefix(page: &[u8; PAGE_SIZE]) -> Result<()> {
-    if page[..4] != PAGE_MAGIC
-        || page[5] != 0
-        || u16_le(page, 6) != HEADER_SIZE as u16
-        || u32_le(page, 24) != FREE_AUX
-    {
-        return Err(Error::Corrupt("free bitmap header is invalid"));
-    }
-    Ok(())
-}
-
-fn verify_checksum(page: &[u8; PAGE_SIZE], required: bool) -> Result<()> {
-    if required && crc32c::crc32c_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+fn verify_checksum<S: ByteSource>(page: S, required: bool) -> Result<()> {
+    if required && crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         return Err(Error::Corrupt("free bitmap checksum is invalid"));
     }
     Ok(())
 }
 
-fn validate_body(page: &[u8; PAGE_SIZE], header: &Header) -> Result<()> {
+fn validate_body<S: ByteSource>(page: S, header: &Header) -> Result<()> {
     if header.level == 0 {
-        validate_leaf(page)
-    } else {
-        validate_branch(page)
-    }
-}
-
-fn validate_leaf(page: &[u8; PAGE_SIZE]) -> Result<()> {
-    if page[4] != BITMAP_LEAF
-        || u16_le(page, 20) as usize != LEAF_END
-        || u16_le(page, 22) as usize != PAGE_SIZE
-        || page[LEAF_END..].iter().any(|&byte| byte != 0)
-        || first_leaf_word(page).is_none()
-        || nonzero_leaf_words(page) != usize::from(u16_le(page, 16))
-    {
-        return Err(Error::Corrupt("free bitmap leaf is invalid"));
-    }
-    Ok(())
-}
-
-fn validate_branch(page: &[u8; PAGE_SIZE]) -> Result<()> {
-    if page[4] != BITMAP_BRANCH
-        || u16_le(page, 20) as usize != BRANCH_END
-        || u16_le(page, 22) as usize != PAGE_SIZE
-        || page[BRANCH_END..].iter().any(|&byte| byte != 0)
+        if page.byte(4) != Some(BITMAP_LEAF)
+            || usize::from(u16_le(page, 20)) != LEAF_END
+            || usize::from(u16_le(page, 22)) != PAGE_SIZE
+            || !page.all_zero(LEAF_END, PAGE_SIZE - LEAF_END)
+            || first_leaf_word(page).is_none()
+            || nonzero_leaf_words(page) != usize::from(u16_le(page, 16))
+        {
+            return Err(Error::Corrupt("free bitmap leaf is invalid"));
+        }
+    } else if page.byte(4) != Some(BITMAP_BRANCH)
+        || usize::from(u16_le(page, 20)) != BRANCH_END
+        || usize::from(u16_le(page, 22)) != PAGE_SIZE
+        || !page.all_zero(BRANCH_END, PAGE_SIZE - BRANCH_END)
         || first_summary(page).is_none()
         || nonzero_children(page)? != usize::from(u16_le(page, 16))
     {
@@ -120,59 +100,53 @@ fn validate_branch(page: &[u8; PAGE_SIZE]) -> Result<()> {
     Ok(())
 }
 
-fn new_leaf(txn: u64) -> [u8; PAGE_SIZE] {
-    new_page(BITMAP_LEAF, txn, 0, LEAF_END)
+fn initialize<D: PageSink>(page: &mut D, page_type: u8, txn: u64, level: u16, lower: usize) {
+    page.fill(0);
+    page.write(0, &PAGE_MAGIC)
+        .expect("fixed bitmap header fits");
+    page.set_byte(4, page_type)
+        .expect("fixed bitmap header fits");
+    page.put_u16(6, HEADER_SIZE as u16)
+        .expect("fixed bitmap header fits");
+    page.put_u64(8, txn).expect("fixed bitmap header fits");
+    page.put_u16(18, level).expect("fixed bitmap header fits");
+    page.put_u16(20, lower as u16)
+        .expect("fixed bitmap header fits");
+    page.put_u16(22, PAGE_SIZE as u16)
+        .expect("fixed bitmap header fits");
+    page.put_u32(24, FREE_AUX)
+        .expect("fixed bitmap header fits");
 }
 
-fn new_branch(txn: u64, level: u16) -> [u8; PAGE_SIZE] {
-    new_page(BITMAP_BRANCH, txn, level, BRANCH_END)
-}
-
-fn new_page(page_type: u8, txn: u64, level: u16, lower: usize) -> [u8; PAGE_SIZE] {
-    let mut page = [0; PAGE_SIZE];
-    page[..4].copy_from_slice(&PAGE_MAGIC);
-    page[4] = page_type;
-    put_u16(&mut page, 6, HEADER_SIZE as u16);
-    put_u64(&mut page, 8, txn);
-    put_u16(&mut page, 18, level);
-    put_u16(&mut page, 20, lower as u16);
-    put_u16(&mut page, 22, PAGE_SIZE as u16);
-    put_u32(&mut page, 24, FREE_AUX);
-    page
-}
-
-fn stamp(page: &mut [u8; PAGE_SIZE]) -> Result<()> {
-    let count = if u16_le(page, 18) == 0 {
-        nonzero_leaf_words(page)
+fn stamp<D: PageEdit>(page: &mut D) -> Result<()> {
+    let count = if u16_le(page.view(), 18) == 0 {
+        nonzero_leaf_words(page.view())
     } else {
-        nonzero_children(page)?
+        nonzero_children(page.view())?
     };
-    put_u16(page, 16, count as u16);
-    Ok(())
+    page.put_u16(16, count as u16)
 }
 
-fn set_branch_child(page: &mut [u8; PAGE_SIZE], index: usize, child: u32) -> Result<()> {
+fn set_branch_child<D: PageEdit>(page: &mut D, index: usize, child: u32) -> Result<()> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("free bitmap child index is invalid"));
     }
-    put_u32(page, HEADER_SIZE + 32 + index * 4, child);
+    page.put_u32(HEADER_SIZE + 32 + index * 4, child)?;
     let summary_at = HEADER_SIZE + (index / 64) * 8;
     let mask = 1u64 << (index % 64);
-    let summary = u64_le(page, summary_at);
-    put_u64(
-        page,
+    let summary = u64_le(page.view(), summary_at);
+    page.put_u64(
         summary_at,
         if child == 0 {
             summary & !mask
         } else {
             summary | mask
         },
-    );
-    Ok(())
+    )
 }
 
-fn branch_child(
-    page: &[u8; PAGE_SIZE],
+fn branch_child<S: ByteSource>(
+    page: S,
     header: &Header,
     index: usize,
     page_limit: u64,
@@ -187,7 +161,7 @@ fn branch_child(
     Ok(child)
 }
 
-fn nonzero_children(page: &[u8; PAGE_SIZE]) -> Result<usize> {
+fn nonzero_children<S: ByteSource>(page: S) -> Result<usize> {
     let mut count = 0;
     for index in 0..BRANCH_CHILDREN {
         let child = u32_le(page, HEADER_SIZE + 32 + index * 4);
@@ -200,20 +174,20 @@ fn nonzero_children(page: &[u8; PAGE_SIZE]) -> Result<usize> {
     Ok(count)
 }
 
-fn nonzero_leaf_words(page: &[u8; PAGE_SIZE]) -> usize {
+fn nonzero_leaf_words<S: ByteSource>(page: S) -> usize {
     (0..LEAF_WORDS)
         .filter(|&index| u64_le(page, HEADER_SIZE + index * 8) != 0)
         .count()
 }
 
-fn first_summary(page: &[u8; PAGE_SIZE]) -> Option<usize> {
+fn first_summary<S: ByteSource>(page: S) -> Option<usize> {
     (0..4).find_map(|word| {
         let value = u64_le(page, HEADER_SIZE + word * 8);
         (value != 0).then(|| word * 64 + value.trailing_zeros() as usize)
     })
 }
 
-fn first_leaf_word(page: &[u8; PAGE_SIZE]) -> Option<(usize, u64)> {
+fn first_leaf_word<S: ByteSource>(page: S) -> Option<(usize, u64)> {
     (0..LEAF_WORDS).find_map(|index| {
         let value = u64_le(page, HEADER_SIZE + index * 8);
         (value != 0).then_some((index, value))

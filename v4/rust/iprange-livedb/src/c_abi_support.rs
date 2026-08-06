@@ -425,7 +425,7 @@ impl Reader {
         }
     }
 
-    fn parts(&self) -> Result<(&std::fs::File, MetaV4, Option<u32>)> {
+    fn parts(&self) -> Result<(&crate::mapping::Mapping, MetaV4, Option<u32>)> {
         match &self.inner {
             ReaderInner::Immutable(reader) => Ok(reader.c_abi_parts()),
             ReaderInner::Live(reader) => reader.c_abi_parts(),

@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::{self, FeedCursor};
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
-use crate::file_io;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::membership_view::{self, MembershipView};
 use crate::metadata;
 use crate::path;
@@ -67,7 +67,7 @@ pub struct ImmutableReader {
 
 #[derive(Debug)]
 pub(crate) struct ReaderCore {
-    file: File,
+    mapping: Mapping,
     bootstrap: Bootstrap,
 }
 
@@ -79,9 +79,9 @@ impl ImmutableReader {
         require_sidecar_absent(&sidecar)?;
 
         let (file, identity) = open_immutable_source(path, &sidecar)?;
-        let bootstrap = select_immutable_generation(path, &sidecar, &file, identity)?;
+        let (mapping, bootstrap) = select_immutable_generation(path, &sidecar, file, identity)?;
         Ok(Self {
-            core: ReaderCore { file, bootstrap },
+            core: ReaderCore { mapping, bootstrap },
         })
     }
 
@@ -163,13 +163,13 @@ impl ImmutableReader {
         self.core.metadata_json()
     }
 
-    pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
+    pub(crate) fn import_parts(&self) -> (&Mapping, MetaV4) {
         self.core.import_parts()
     }
 
-    pub(crate) fn c_abi_parts(&self) -> (&File, MetaV4, Option<u32>) {
-        let (file, meta) = self.core.import_parts();
-        (file, meta, None)
+    pub(crate) fn c_abi_parts(&self) -> (&Mapping, MetaV4, Option<u32>) {
+        let (mapping, meta) = self.core.import_parts();
+        (mapping, meta, None)
     }
 }
 
@@ -185,51 +185,51 @@ fn open_immutable_source(path: &Path, sidecar: &Path) -> Result<(File, live_side
 fn select_immutable_generation(
     path: &Path,
     sidecar: &Path,
-    file: &File,
+    file: File,
     identity: live_sidecar::Identity,
-) -> Result<Bootstrap> {
-    let bootstrap = bootstrap_file(file, OpenMode::ImmutableReader)?;
+) -> Result<(Mapping, Bootstrap)> {
+    let (mapping, bootstrap) = map_reader(file, OpenMode::ImmutableReader)?;
     crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
     live_sidecar::verify_path_any_link(path, identity)?;
     require_sidecar_absent(sidecar)?;
-    Ok(bootstrap)
+    Ok((mapping, bootstrap))
 }
 
 impl ReaderCore {
-    pub(crate) fn new(file: File, bootstrap: Bootstrap) -> Self {
-        Self { file, bootstrap }
+    pub(crate) fn new(mapping: Mapping, bootstrap: Bootstrap) -> Self {
+        Self { mapping, bootstrap }
     }
 
     pub(crate) fn info(&self) -> DatabaseInfo {
         DatabaseInfo::from_bootstrap(self.bootstrap)
     }
 
-    pub(crate) fn import_parts(&self) -> (&File, MetaV4) {
-        (&self.file, self.bootstrap.meta)
+    pub(crate) fn import_parts(&self) -> (&Mapping, MetaV4) {
+        (&self.mapping, self.bootstrap.meta)
     }
 
-    pub(crate) const fn file(&self) -> &File {
-        &self.file
+    pub(crate) fn file(&self) -> &File {
+        self.mapping.file()
     }
 
     pub(crate) fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
         self.require_direct(AddressFamily::Ipv4)?;
-        range_tree::lookup(&self.file, &self.bootstrap.meta, address)
+        range_tree::lookup(&self.mapping, &self.bootstrap.meta, address)
     }
 
     pub(crate) fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
         self.require_direct(AddressFamily::Ipv6)?;
-        range_tree::lookup(&self.file, &self.bootstrap.meta, address)
+        range_tree::lookup(&self.mapping, &self.bootstrap.meta, address)
     }
 
     pub(crate) fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
         self.require_direct(AddressFamily::Ipv4)?;
-        DirectCursorV4::new(&self.file, &self.bootstrap.meta, direction)
+        DirectCursorV4::new(&self.mapping, &self.bootstrap.meta, direction)
     }
 
     pub(crate) fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.require_direct(AddressFamily::Ipv6)?;
-        DirectCursorV6::new(&self.file, &self.bootstrap.meta, direction)
+        DirectCursorV6::new(&self.mapping, &self.bootstrap.meta, direction)
     }
 
     pub(crate) fn direct_cursor_v4_live(
@@ -238,7 +238,7 @@ impl ReaderCore {
         owner_pid: u32,
     ) -> Result<DirectCursorV4<'_>> {
         self.require_direct(AddressFamily::Ipv4)?;
-        DirectCursorV4::new_live(&self.file, &self.bootstrap.meta, direction, owner_pid)
+        DirectCursorV4::new_live(&self.mapping, &self.bootstrap.meta, direction, owner_pid)
     }
 
     pub(crate) fn direct_cursor_v6_live(
@@ -247,23 +247,23 @@ impl ReaderCore {
         owner_pid: u32,
     ) -> Result<DirectCursorV6<'_>> {
         self.require_direct(AddressFamily::Ipv6)?;
-        DirectCursorV6::new_live(&self.file, &self.bootstrap.meta, direction, owner_pid)
+        DirectCursorV6::new_live(&self.mapping, &self.bootstrap.meta, direction, owner_pid)
     }
 
     pub(crate) fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
         feed_catalog::require_membership(&self.bootstrap.meta)?;
         let name = crate::feed::FeedName::new(name)?;
-        feed_catalog::lookup(&self.file, &self.bootstrap.meta, &name)
+        feed_catalog::lookup(&self.mapping, &self.bootstrap.meta, &name)
     }
 
     pub(crate) fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         feed_catalog::require_membership(&self.bootstrap.meta)?;
-        FeedCursor::new(&self.file, &self.bootstrap.meta)
+        FeedCursor::new(&self.mapping, &self.bootstrap.meta)
     }
 
     pub(crate) fn feed_cursor_live(&self, owner_pid: u32) -> Result<FeedCursor<'_>> {
         feed_catalog::require_membership(&self.bootstrap.meta)?;
-        FeedCursor::new_live(&self.file, &self.bootstrap.meta, owner_pid)
+        FeedCursor::new_live(&self.mapping, &self.bootstrap.meta, owner_pid)
     }
 
     pub(crate) fn feed_range_cursor_v4(
@@ -273,7 +273,7 @@ impl ReaderCore {
     ) -> Result<FeedRangeCursorV4<'_>> {
         self.require_membership_family(AddressFamily::Ipv4)?;
         let feed = self.require_feed(name)?;
-        FeedRangeCursorV4::new(&self.file, &self.bootstrap.meta, feed.index, direction)
+        FeedRangeCursorV4::new(&self.mapping, &self.bootstrap.meta, feed.index, direction)
     }
 
     pub(crate) fn feed_range_cursor_v6(
@@ -283,7 +283,7 @@ impl ReaderCore {
     ) -> Result<FeedRangeCursorV6<'_>> {
         self.require_membership_family(AddressFamily::Ipv6)?;
         let feed = self.require_feed(name)?;
-        FeedRangeCursorV6::new(&self.file, &self.bootstrap.meta, feed.index, direction)
+        FeedRangeCursorV6::new(&self.mapping, &self.bootstrap.meta, feed.index, direction)
     }
 
     pub(crate) fn feed_range_cursor_v4_live(
@@ -295,7 +295,7 @@ impl ReaderCore {
         self.require_membership_family(AddressFamily::Ipv4)?;
         let feed = self.require_feed(name)?;
         FeedRangeCursorV4::new_live(
-            &self.file,
+            &self.mapping,
             &self.bootstrap.meta,
             feed.index,
             direction,
@@ -312,7 +312,7 @@ impl ReaderCore {
         self.require_membership_family(AddressFamily::Ipv6)?;
         let feed = self.require_feed(name)?;
         FeedRangeCursorV6::new_live(
-            &self.file,
+            &self.mapping,
             &self.bootstrap.meta,
             feed.index,
             direction,
@@ -325,7 +325,7 @@ impl ReaderCore {
         address: Ipv4Key,
         owner_pid: Option<u32>,
     ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v4(&self.file, &self.bootstrap.meta, address, owner_pid)
+        membership_view::lookup_v4(&self.mapping, &self.bootstrap.meta, address, owner_pid)
     }
 
     pub(crate) fn lookup_membership_v6(
@@ -333,7 +333,7 @@ impl ReaderCore {
         address: Ipv6Key,
         owner_pid: Option<u32>,
     ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v6(&self.file, &self.bootstrap.meta, address, owner_pid)
+        membership_view::lookup_v6(&self.mapping, &self.bootstrap.meta, address, owner_pid)
     }
 
     pub(crate) fn metadata_json_len(&self) -> Option<u64> {
@@ -342,11 +342,11 @@ impl ReaderCore {
     }
 
     pub(crate) fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
-        metadata::read(&self.file, &self.bootstrap.meta, output)
+        metadata::read(&self.mapping, &self.bootstrap.meta, output)
     }
 
     pub(crate) fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
-        metadata::read_vec(&self.file, &self.bootstrap.meta)
+        metadata::read_vec(&self.mapping, &self.bootstrap.meta)
     }
 
     fn require_direct(&self, family: AddressFamily) -> Result<()> {
@@ -375,8 +375,53 @@ impl ReaderCore {
 
     fn require_feed(&self, name: &str) -> Result<FeedEntry> {
         let name = crate::feed::FeedName::new(name)?;
-        feed_catalog::lookup(&self.file, &self.bootstrap.meta, &name)?.ok_or(Error::NameNotFound)
+        feed_catalog::lookup(&self.mapping, &self.bootstrap.meta, &name)?.ok_or(Error::NameNotFound)
     }
+}
+
+pub(crate) fn map_reader(file: File, mode: OpenMode) -> Result<(Mapping, Bootstrap)> {
+    require_regular_file(&file)?;
+    let physical_bytes = file.metadata()?.len();
+    if physical_bytes < (2 * PAGE_SIZE) as u64 {
+        return Err(bootstrap::BootstrapError::FileTooShort.into());
+    }
+    if physical_bytes % PAGE_SIZE as u64 != 0 {
+        return Err(bootstrap::BootstrapError::FileUnaligned.into());
+    }
+    let mut mapping = Mapping::read_only(file, (2 * PAGE_SIZE) as u64)?;
+    let bootstrap = bootstrap_mapping(&mapping, physical_bytes, mode)?;
+    mapping.remap(bootstrap.committed_bytes)?;
+    Ok((mapping, bootstrap))
+}
+
+pub(crate) fn map_writer(file: File) -> Result<(Mapping, Bootstrap)> {
+    require_regular_file(&file)?;
+    let physical_bytes = file.metadata()?.len();
+    if physical_bytes < (2 * PAGE_SIZE) as u64 {
+        return Err(bootstrap::BootstrapError::FileTooShort.into());
+    }
+    if physical_bytes % PAGE_SIZE as u64 != 0 {
+        return Err(bootstrap::BootstrapError::FileUnaligned.into());
+    }
+    let mut mapping = Mapping::read_write(file, (2 * PAGE_SIZE) as u64)?;
+    let bootstrap = bootstrap_mapping(&mapping, physical_bytes, OpenMode::Writer)?;
+    mapping.remap(bootstrap.committed_bytes)?;
+    Ok((mapping, bootstrap))
+}
+
+pub(crate) fn bootstrap_mapping(
+    mapping: &Mapping,
+    physical_bytes: u64,
+    mode: OpenMode,
+) -> Result<Bootstrap> {
+    let page0 = mapping.page(0, 2)?;
+    let page1 = mapping.page(1, 2)?;
+    Ok(bootstrap::open_meta_pages(
+        page0,
+        page1,
+        physical_bytes,
+        mode,
+    )?)
 }
 
 pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
@@ -388,16 +433,8 @@ pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
     if physical_bytes % PAGE_SIZE as u64 != 0 {
         return Err(bootstrap::BootstrapError::FileUnaligned.into());
     }
-    let mut metas = [0u8; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut metas, 0)?;
-    let meta0 = (&metas[..PAGE_SIZE]).try_into().unwrap();
-    let meta1 = (&metas[PAGE_SIZE..]).try_into().unwrap();
-    Ok(bootstrap::open_meta_pages(
-        meta0,
-        meta1,
-        physical_bytes,
-        mode,
-    )?)
+    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
+    bootstrap_mapping(&mapping, physical_bytes, mode)
 }
 
 pub(crate) fn require_regular_file(file: &File) -> Result<()> {

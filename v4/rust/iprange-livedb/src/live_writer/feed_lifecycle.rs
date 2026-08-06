@@ -51,7 +51,7 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<PreparedState> {
         let feed = self.require_existing_feed(old, cancellation)?;
-        if feed_catalog::lookup(&self.file, &self.base.meta, &new)?.is_some() {
+        if feed_catalog::lookup(&self.mapping, &self.base.meta, &new)?.is_some() {
             return Err(Error::NameExists);
         }
         cancellation.check()?;
@@ -71,8 +71,8 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<FeedEntry> {
         self.require_feed_workflow_ready()?;
-        let feed =
-            feed_catalog::lookup(&self.file, &self.base.meta, &name)?.ok_or(Error::NameNotFound)?;
+        let feed = feed_catalog::lookup(&self.mapping, &self.base.meta, &name)?
+            .ok_or(Error::NameNotFound)?;
         cancellation.check()?;
         Ok(feed)
     }

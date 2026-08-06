@@ -6,8 +6,8 @@ use std::path::Path;
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::live_lock::{self, Mode};
+use crate::mapping::Mapping;
 #[cfg(unix)]
 use crate::publication::namespace::regular_link_count;
 #[cfg(windows)]
@@ -310,9 +310,9 @@ fn read_header(file: &File) -> Option<Header> {
     if file.metadata().ok()?.len() != FILE_SIZE as u64 {
         return None;
     }
-    let mut bytes = [0; FILE_SIZE];
-    file_io::read_exact_at(file, &mut bytes, 0).ok()?;
-    codec::select(&bytes).ok().map(|selected| selected.header)
+    let mapping = Mapping::read_only_view(file, FILE_SIZE as u64).ok()?;
+    let bytes = mapping.bytes(0, FILE_SIZE).ok()?;
+    codec::select(bytes).ok().map(|selected| selected.header)
 }
 
 fn require_readable_binding(file: &File, attempt: [u8; 16], identity: Identity) -> Result<()> {

@@ -214,7 +214,7 @@ impl MembershipState {
         writer.flush_draft_pages()?;
         let meta = writer.draft.as_ref().unwrap().meta;
         Ok(TransactionFeedCursor {
-            cursor: FeedCursor::new_live(&writer.file, &meta, writer.owner_pid)?,
+            cursor: FeedCursor::new_live(&writer.mapping, &meta, writer.owner_pid)?,
             database_id: self.database_id,
             operation_nonce: self.operation_nonce,
         })
@@ -471,7 +471,7 @@ impl LiveWriter {
             .as_ref()
             .ok_or(Error::WrongState("membership transaction is not active"))?
             .meta;
-        Ok(crate::feed_catalog::lookup(&self.file, &meta, &entry.name)? == Some(entry))
+        Ok(crate::feed_catalog::lookup(&self.mapping, &meta, &entry.name)? == Some(entry))
     }
 
     fn membership_reference_current(&mut self, id: u32, word_count: u32) -> Result<bool> {
@@ -480,7 +480,7 @@ impl LiveWriter {
             .as_mut()
             .ok_or(Error::WrongState("membership transaction is not active"))?;
         let store = DraftStore::new(
-            &self.file,
+            &mut self.mapping,
             self.base.meta.page_count,
             self.budget.pages(),
             draft,

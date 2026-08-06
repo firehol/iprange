@@ -1,6 +1,5 @@
-use crate::contract::{u32_le, u64_le, PAGE_SIZE};
+use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
-use crate::file_io;
 
 use super::{
     coverage, require_query_header, required_level, Kind, BRANCH_CHILDREN, HEADER_SIZE, LEAF_BITS,
@@ -13,8 +12,8 @@ pub(crate) struct WordCache {
     limit: u64,
     kind: Kind,
     leaf_base: Option<u64>,
+    leaf_page: Option<u32>,
     present: bool,
-    page: [u8; PAGE_SIZE],
 }
 
 impl WordCache {
@@ -24,8 +23,8 @@ impl WordCache {
             limit,
             kind,
             leaf_base: None,
+            leaf_page: None,
             present: false,
-            page: [0; PAGE_SIZE],
         }
     }
 
@@ -49,7 +48,12 @@ impl WordCache {
         }
         let local_word = usize::try_from((bit - leaf_base) / 64)
             .map_err(|_| Error::ArithmeticOverflow("validation bitmap word"))?;
-        Ok(u64_le(&self.page, HEADER_SIZE + local_word * 8))
+        let page_number = self
+            .leaf_page
+            .ok_or(Error::Corrupt("validation bitmap leaf is missing"))?;
+        let page = context.mapping.page(page_number, context.meta.page_count)?;
+        require_query_header(page, context.meta.txn_id, self.kind, 0)?;
+        Ok(u64_le(page, HEADER_SIZE + local_word * 8))
     }
 
     fn load_leaf<S: ValidationSink>(
@@ -62,15 +66,18 @@ impl WordCache {
         let mut level = required_level(self.limit)?;
         let mut base = 0u64;
         loop {
-            self.read_page(context, page_number, level)?;
+            let page = context.mapping.page(page_number, context.meta.page_count)?;
+            require_query_header(page, context.meta.txn_id, self.kind, level)?;
             if level == 0 {
                 self.leaf_base = Some(base);
+                self.leaf_page = Some(page_number);
                 self.present = true;
                 return Ok(());
             }
-            let (child, child_base) = self.selected_child(bit, base, level)?;
+            let (child, child_base) = self.selected_child(page, bit, base, level)?;
             if child == 0 {
                 self.leaf_base = Some(leaf_base);
+                self.leaf_page = None;
                 self.present = false;
                 return Ok(());
             }
@@ -80,22 +87,13 @@ impl WordCache {
         }
     }
 
-    fn read_page<S: ValidationSink>(
-        &mut self,
-        context: &Context<'_, S>,
-        page_number: u32,
+    fn selected_child<P: crate::mapping::ByteSource>(
+        &self,
+        page: P,
+        bit: u64,
+        base: u64,
         level: u16,
-    ) -> Result<()> {
-        file_io::read_page(
-            context.file,
-            page_number,
-            context.meta.page_count,
-            &mut self.page,
-        )?;
-        require_query_header(&self.page, context.meta.txn_id, self.kind, level)
-    }
-
-    fn selected_child(&self, bit: u64, base: u64, level: u16) -> Result<(u32, u64)> {
+    ) -> Result<(u32, u64)> {
         let span = coverage(level - 1)?;
         let index = usize::try_from((bit - base) / span)
             .map_err(|_| Error::ArithmeticOverflow("validation bitmap word"))?;
@@ -104,7 +102,7 @@ impl WordCache {
                 "validated bitmap child is outside its branch",
             ));
         }
-        let child = u32_le(&self.page, HEADER_SIZE + 32 + index * 4);
+        let child = u32_le(page, HEADER_SIZE + 32 + index * 4);
         let child_base = base
             .checked_add(
                 span.checked_mul(index as u64)

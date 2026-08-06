@@ -80,6 +80,9 @@ fn complete_previous(
     require_output(&private, base.header)?;
     let previous = PreviousMain {
         file: main.file,
+        mapping: main
+            .mapping
+            .expect("finished replacement inspection retains its mapping"),
         identity: main.identity,
         byte_length: main.byte_length,
         sha512: main.sha512,
@@ -89,6 +92,9 @@ fn complete_previous(
         base.header.attempt_id,
         ResumedOutput {
             file: private.file,
+            mapping: private
+                .mapping
+                .expect("desired replacement output retains its mapping"),
             identity: private.identity,
             meta: private
                 .meta

@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
-use crate::file_io;
 
 use super::{ScratchSlot, SharedFile, HEADER_SIZE};
 
@@ -24,12 +23,12 @@ impl ScratchFile {
 
     pub(crate) fn read(&self, offset: u64, bytes: &mut [u8]) -> Result<()> {
         require_fixed_io(offset, bytes.len(), self.length())?;
-        file_io::read_exact_at(&self.shared.file, bytes, offset)
+        self.shared.read(offset, bytes)
     }
 
     pub(crate) fn write(&self, offset: u64, bytes: &[u8]) -> Result<()> {
         require_fixed_io(offset, bytes.len(), self.length())?;
-        file_io::write_exact_at(&self.shared.file, bytes, offset)
+        self.shared.write(offset, bytes)
     }
 }
 

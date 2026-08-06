@@ -42,6 +42,7 @@ calls it. Never delete a file without user approval and a preservation commit.
 Use these baseline gates:
 
 ```bash
+./v4/rust/check-mmap-storage.sh
 ./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
@@ -53,6 +54,15 @@ cargo fmt --manifest-path v4/rust/Cargo.toml --all -- --check
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --no-deps
 ```
+
+The storage gate is architectural, not stylistic. Production SDK code must use
+file-backed mappings for persistent content; it must not issue positional or
+buffered content-I/O calls, own complete database-page images, or retain an
+application page cache. Lifecycle calls such as open, metadata, resize,
+mapping, flush, file synchronization, locking, rename, and unlink remain
+necessary. During SOW-0019 the gate is intentionally red until every old
+storage path has been migrated; do not weaken it to make intermediate work
+green.
 
 Use a different `CARGO_TARGET_DIR` for each toolchain. Reusing one directory
 between current Rust and Rust 1.74.1 can produce incompatible cached metadata:

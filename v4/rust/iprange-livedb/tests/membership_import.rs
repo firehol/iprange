@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -515,12 +516,7 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
     let import = reusable
         .begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
         .unwrap();
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&source_files.main)
-        .unwrap()
-        .set_len(2 * 4096)
-        .unwrap();
+    corrupt_selected_range_root(&source_files.main);
     assert!(matches!(
         import.finish_input(),
         Err(Error::TransactionAborted(cause)) if matches!(*cause, Error::Corrupt(_))
@@ -531,4 +527,23 @@ fn import_preconditions_cancellation_source_failure_and_budget_failure_are_atomi
     changed(create.finish_input().unwrap()).commit().unwrap();
     reusable.close().unwrap();
     source.close().unwrap();
+}
+
+fn corrupt_selected_range_root(path: &std::path::Path) {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut metas = [[0u8; 4096]; 2];
+    file.read_exact(&mut metas[0]).unwrap();
+    file.read_exact(&mut metas[1]).unwrap();
+    let transaction = |page: &[u8; 4096]| u64::from_le_bytes(page[48..56].try_into().unwrap());
+    let selected = usize::from(transaction(&metas[1]) > transaction(&metas[0]));
+    let root = u32::from_le_bytes(metas[selected][144..148].try_into().unwrap());
+    assert_ne!(root, 0);
+    file.seek(SeekFrom::Start(u64::from(root) * 4096 + 4))
+        .unwrap();
+    file.write_all(&[0xff]).unwrap();
+    file.sync_all().unwrap();
 }

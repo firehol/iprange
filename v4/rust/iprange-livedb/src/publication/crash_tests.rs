@@ -332,7 +332,7 @@ fn assert_complete_output(path: &Path) {
     let file = File::open(path).unwrap();
     let length = file.metadata().unwrap().len();
     let mut pages = [0; 2 * PAGE_SIZE];
-    crate::file_io::read_exact_at(&file, &mut pages, 0).unwrap();
+    crate::mapping::test_support::read_exact_at(&file, &mut pages, 0).unwrap();
     let left: &[u8; PAGE_SIZE] = pages[..PAGE_SIZE].try_into().unwrap();
     let right: &[u8; PAGE_SIZE] = pages[PAGE_SIZE..].try_into().unwrap();
     let opened =
@@ -344,7 +344,7 @@ fn assert_complete_output(path: &Path) {
 
 fn selected_reservation(path: &Path) -> reservation::Header {
     let bytes = fs::read(path).unwrap();
-    let selected = reservation::select(&bytes).unwrap().header;
+    let selected = reservation::select(bytes.as_slice()).unwrap().header;
     assert_eq!(selected.database_id, [41; 16]);
     assert_eq!(selected.transaction_id, 42);
     assert_eq!(selected.commit_nonce, [43; 16]);

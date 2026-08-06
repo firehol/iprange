@@ -1,5 +1,6 @@
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::Result;
+use crate::mapping::{ByteSource, BytesView, PageView};
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
@@ -19,15 +20,15 @@ struct Span {
     complete: bool,
 }
 
-pub(crate) fn scan_membership<S, F>(
-    context: &mut Context<'_, S>,
+pub(crate) fn scan_membership<'m, S, F>(
+    context: &mut Context<'m, S>,
     root: u32,
     length: u64,
     mut consume: F,
 ) -> Result<bool>
 where
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
     if !request_valid(root, length) {
         finding(context, None)?;
@@ -62,8 +63,8 @@ fn finish_span<S: ValidationSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_node<S, F>(
-    context: &mut Context<'_, S>,
+fn scan_node<'m, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
     expected_level: Option<u16>,
     expected_start: u64,
@@ -74,7 +75,7 @@ fn scan_node<S, F>(
 ) -> Result<Option<Span>>
 where
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
     let Some(slot) = path.get_mut(depth) else {
         context.emit(
@@ -96,20 +97,20 @@ where
     else {
         return Ok(None);
     };
-    match page[4] {
-        LEAF_TYPE => scan_leaf(
+    match page.byte(4) {
+        Some(LEAF_TYPE) => scan_leaf(
             context,
             page_number,
-            &page,
+            page,
             expected_level,
             expected_start,
             length,
             consume,
         ),
-        BRANCH_TYPE => scan_branch(
+        Some(BRANCH_TYPE) => scan_branch(
             context,
             page_number,
-            &page,
+            page,
             expected_level,
             expected_start,
             length,
@@ -121,10 +122,10 @@ where
     }
 }
 
-fn scan_leaf<S, F>(
-    context: &mut Context<'_, S>,
+fn scan_leaf<'m, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'m>,
     expected_level: Option<u16>,
     expected_start: u64,
     length: u64,
@@ -132,7 +133,7 @@ fn scan_leaf<S, F>(
 ) -> Result<Option<Span>>
 where
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
     if !common_identity(context, page_number, page)? {
         return Ok(None);
@@ -142,10 +143,10 @@ where
         context.mark_untraversable(false)?;
         return Ok(None);
     };
-    if page[LEAF_DATA + geometry.data_len..]
-        .iter()
-        .any(|&byte| byte != 0)
-    {
+    if !page.all_zero(
+        LEAF_DATA + geometry.data_len,
+        PAGE_SIZE - LEAF_DATA - geometry.data_len,
+    ) {
         context.emit(
             ValidationReason::PageReservedNonzero,
             ValidationObject::MembershipBlob,
@@ -154,7 +155,12 @@ where
             None,
         )?;
     }
-    consume(context, &page[LEAF_DATA..LEAF_DATA + geometry.data_len])?;
+    let bytes = page
+        .range(LEAF_DATA, geometry.data_len)
+        .ok_or(crate::error::Error::Corrupt(
+            "membership blob bytes are invalid",
+        ))?;
+    consume(context, bytes)?;
     Ok(Some(Span {
         start: geometry.start,
         end: geometry.end,
@@ -168,8 +174,8 @@ struct LeafGeometry {
     data_len: usize,
 }
 
-fn leaf_geometry(
-    page: &[u8; PAGE_SIZE],
+fn leaf_geometry<P: ByteSource>(
+    page: P,
     expected_level: Option<u16>,
     expected_start: u64,
     length: u64,
@@ -190,14 +196,14 @@ fn leaf_geometry(
     })
 }
 
-fn leaf_header_valid(page: &[u8; PAGE_SIZE], expected_level: Option<u16>, data_len: usize) -> bool {
+fn leaf_header_valid<P: ByteSource>(page: P, expected_level: Option<u16>, data_len: usize) -> bool {
     expected_level.map_or(true, |level| level == 0)
         && u16_le(page, 16) == 1
         && u16_le(page, 18) == 0
         && usize::from(u16_le(page, 20)) == LEAF_DATA + data_len
         && usize::from(u16_le(page, 22)) == PAGE_SIZE
         && u32_le(page, 24) == MEMBERSHIP_KIND
-        && page[42..LEAF_DATA] == [0; 6]
+        && page.all_zero(42, LEAF_DATA - 42)
 }
 
 fn leaf_payload_valid(
@@ -215,10 +221,10 @@ fn leaf_payload_valid(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_branch<S, F>(
-    context: &mut Context<'_, S>,
+fn scan_branch<'m, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'m>,
     expected_level: Option<u16>,
     expected_start: u64,
     length: u64,
@@ -228,7 +234,7 @@ fn scan_branch<S, F>(
 ) -> Result<Option<Span>>
 where
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
     let Some(header) = branch_header(context, page_number, page, expected_level)? else {
         return Ok(None);
@@ -253,7 +259,7 @@ where
 fn branch_header<S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     expected_level: Option<u16>,
 ) -> Result<Option<page::SlottedHeader>> {
     let header = page::slotted_header(
@@ -288,10 +294,10 @@ fn branch_header<S: ValidationSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_branch_children<S, F>(
-    context: &mut Context<'_, S>,
+fn scan_branch_children<'m, S, F>(
+    context: &mut Context<'m, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'m>,
     header: page::SlottedHeader,
     length: u64,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -300,7 +306,7 @@ fn scan_branch_children<S, F>(
 ) -> Result<Option<Span>>
 where
     S: ValidationSink,
-    F: FnMut(&mut Context<'_, S>, &[u8]) -> Result<()>,
+    F: FnMut(&mut Context<'m, S>, BytesView<'m>) -> Result<()>,
 {
     let mut first = None;
     let mut previous_end = None;
@@ -342,7 +348,7 @@ where
 fn branch_records_valid<S: ValidationSink>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: page::SlottedHeader,
     expected_start: u64,
     length: u64,
@@ -371,9 +377,9 @@ fn branch_records_valid<S: ValidationSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn branch_record_valid<S: ValidationSink>(
+fn branch_record_valid<S: ValidationSink, P: ByteSource>(
     context: &Context<'_, S>,
-    cell: &[u8],
+    cell: P,
     offset: u64,
     child: u32,
     previous: Option<u64>,
@@ -389,12 +395,15 @@ fn branch_record_valid<S: ValidationSink>(
         && (index != 0 || offset == expected_start)
 }
 
-fn common_identity<S: ValidationSink>(
+fn common_identity<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
 ) -> Result<bool> {
-    if page[..4] != PAGE_MAGIC || page[5] != 0 || u16_le(page, 6) != HEADER_SIZE as u16 {
+    if !page.equals(0, &PAGE_MAGIC)
+        || page.byte(5) != Some(0)
+        || u16_le(page, 6) != HEADER_SIZE as u16
+    {
         invalid_page(context, page_number, ValidationReason::PageHeaderInvalid)?;
         return Ok(false);
     }

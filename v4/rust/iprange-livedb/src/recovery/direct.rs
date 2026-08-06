@@ -1,9 +1,8 @@
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::mapping::Mapping;
 use crate::range_tree::Record;
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
@@ -30,7 +29,7 @@ pub(crate) struct DirectAnalysisFailure {
 // A partial report must survive sink, I/O, and budget failures without allocating then.
 #[allow(clippy::result_large_err)]
 pub(crate) fn analyze<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     budget: &RecoveryBudget,
     cancellation: &CancellationToken,
@@ -46,16 +45,7 @@ pub(crate) fn analyze<S: RecoverySink>(
             None,
         ));
     }
-    let physical_pages = match file.metadata() {
-        Ok(metadata) => metadata.len() / PAGE_SIZE as u64,
-        Err(cause) => {
-            return Err(analysis_failure(
-                cause.into(),
-                RecoveryReport::default(),
-                None,
-            ))
-        }
-    };
+    let physical_pages = mapping.len() / PAGE_SIZE as u64;
     let mut reporter = Reporter::new(sink);
     let mut pages = match PageSet::for_recovery(
         budget.max_heap_bytes,
@@ -68,15 +58,15 @@ pub(crate) fn analyze<S: RecoverySink>(
     };
     let ranges = match meta.address_family {
         AddressFamily::Ipv4 => {
-            analyze_family::<Ipv4Key, S>(file, meta, &mut pages, cancellation, &mut reporter)
+            analyze_family::<Ipv4Key, S>(mapping, meta, &mut pages, cancellation, &mut reporter)
         }
         AddressFamily::Ipv6 => {
-            analyze_family::<Ipv6Key, S>(file, meta, &mut pages, cancellation, &mut reporter)
+            analyze_family::<Ipv6Key, S>(mapping, meta, &mut pages, cancellation, &mut reporter)
         }
     };
     let result = ranges.and_then(|(readable_records, ordered)| {
         recovery_metadata::read(
-            file,
+            mapping,
             meta,
             &mut pages,
             budget.max_heap_bytes,
@@ -99,7 +89,7 @@ pub(crate) fn analyze<S: RecoverySink>(
 }
 
 fn analyze_family<K: IpKey, S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     cancellation: &CancellationToken,
@@ -111,7 +101,7 @@ fn analyze_family<K: IpKey, S: RecoverySink>(
         readable_records: 0,
         ordered: true,
     };
-    range_scan::scan(file, meta, pages, cancellation, &mut events)?;
+    range_scan::scan(mapping, meta, pages, cancellation, &mut events)?;
     Ok((events.readable_records, events.ordered))
 }
 

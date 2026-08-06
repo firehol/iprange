@@ -6,9 +6,9 @@ use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::error::ErrorCode;
-use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
+use crate::mapping::Mapping;
 
 use super::namespace::{Destination, Identity, Name, Regular};
 use super::output;
@@ -33,6 +33,7 @@ enum Location {
 pub(super) struct Inspected {
     pub(super) name: Name,
     pub(super) file: File,
+    pub(super) mapping: Mapping,
     pub(super) identity: Identity,
     pub(super) meta: MetaV4,
     pub(super) byte_length: u64,
@@ -52,7 +53,7 @@ impl Inspected {
             &self.name,
             self.identity,
         )?;
-        let (meta, byte_length) = read_bootstrap(&self.file)?;
+        let (meta, byte_length) = read_bootstrap(&self.file, &self.mapping)?;
         if (meta, byte_length) != (self.meta, self.byte_length) {
             return Err(conflict("publication output changed after inspection"));
         }
@@ -177,10 +178,10 @@ fn inspect(
         .directory()
         .verify_name(&name, regular.identity)
         .map_err(|error| Problem::namespace(&error))?;
-    let (meta, byte_length) = read_bootstrap(&regular.file)?;
-    let sha512 = output::digest_cancellable(&regular.file, byte_length, cancellation)
+    let (mapping, meta, byte_length) = map_bootstrap(&regular.file)?;
+    let sha512 = output::digest_cancellable(&mapping, byte_length, cancellation)
         .map_err(|error| Problem::output(&error))?;
-    let (final_meta, final_length) = read_bootstrap(&regular.file)?;
+    let (final_meta, final_length) = read_bootstrap(&regular.file, &mapping)?;
     if (final_meta, final_length) != (meta, byte_length) {
         return Err(conflict("publication output changed while hashing"));
     }
@@ -194,6 +195,7 @@ fn inspect(
     Ok(Inspected {
         name,
         file: regular.file,
+        mapping,
         identity: regular.identity,
         meta,
         byte_length,
@@ -236,7 +238,7 @@ fn lock_output(
     cancellation.check().map_err(|error| Problem::sdk(&error))
 }
 
-fn read_bootstrap(file: &File) -> Result<(MetaV4, u64), Problem> {
+fn map_bootstrap(file: &File) -> Result<(Mapping, MetaV4, u64), Problem> {
     let byte_length = file
         .metadata()
         .map_err(crate::error::Error::from)
@@ -247,16 +249,25 @@ fn read_bootstrap(file: &File) -> Result<(MetaV4, u64), Problem> {
             "publication destination has invalid v4 file geometry",
         ));
     }
-    let mut pages = [0; 2 * PAGE_SIZE];
-    file_io::read_exact_at(file, &mut pages, 0).map_err(|error| {
-        if error.code() == ErrorCode::FormatInvalid {
-            conflict("publication destination changed while reading metadata")
-        } else {
-            Problem::sdk(&error)
-        }
-    })?;
-    let page0 = (&pages[..PAGE_SIZE]).try_into().expect("fixed meta page");
-    let page1 = (&pages[PAGE_SIZE..]).try_into().expect("fixed meta page");
+    let mapping =
+        Mapping::read_only_view(file, byte_length).map_err(|error| Problem::sdk(&error))?;
+    let (meta, _) = read_bootstrap(file, &mapping)?;
+    Ok((mapping, meta, byte_length))
+}
+
+fn read_bootstrap(file: &File, mapping: &Mapping) -> Result<(MetaV4, u64), Problem> {
+    let byte_length = file
+        .metadata()
+        .map_err(crate::error::Error::from)
+        .map_err(|error| Problem::sdk(&error))?
+        .len();
+    if byte_length != mapping.len() {
+        return Err(conflict(
+            "publication destination changed while reading metadata",
+        ));
+    }
+    let page0 = mapping.page(0, 2).map_err(|error| Problem::sdk(&error))?;
+    let page1 = mapping.page(1, 2).map_err(|error| Problem::sdk(&error))?;
     let opened = bootstrap::open_meta_pages(page0, page1, byte_length, OpenMode::ImmutableReader)
         .map_err(|_| conflict("publication destination is not a complete v4 file"))?;
     Ok((opened.meta, byte_length))

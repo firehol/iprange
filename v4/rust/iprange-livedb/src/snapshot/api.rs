@@ -175,7 +175,7 @@ mod platform {
             Ok(builder) => builder,
             Err(failure) => return Err(fail_attempt(source, attempt, failure.file, failure.cause)),
         };
-        let finished = match build::copy(source.file(), meta, builder, budget, cancellation) {
+        let finished = match build::copy(source.mapping(), meta, builder, budget, cancellation) {
             Ok(finished) => finished,
             Err(failure) => {
                 return Err(fail_attempt(

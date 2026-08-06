@@ -1,12 +1,11 @@
 //! Recovery of authoritative membership-ID records and bitmap bytes.
 
-use std::fs::File;
-
 use sha2::{Digest, Sha256};
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::{ByteSource, Mapping};
 use crate::membership_dictionary::codec::{self, Record as StoredRecord, Storage as StoredStorage};
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
@@ -32,14 +31,14 @@ pub(crate) struct Locator {
 }
 
 pub(crate) fn count(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     cancellation: &CancellationToken,
 ) -> Result<u64> {
     let mut events = CountEvents { meta, count: 0 };
     tree_scan::scan::<IdCodec, _>(
-        file,
+        mapping,
         meta,
         meta.membership_id_root,
         pages,
@@ -50,7 +49,7 @@ pub(crate) fn count(
 }
 
 pub(crate) fn recover<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     catalog: &Catalog,
     pages: &mut PageSet,
@@ -67,7 +66,7 @@ pub(crate) fn recover<S: RecoverySink>(
             tables,
         };
         tree_scan::scan::<IdCodec, _>(
-            file,
+            mapping,
             meta,
             meta.membership_id_root,
             pages,
@@ -76,7 +75,7 @@ pub(crate) fn recover<S: RecoverySink>(
         )?;
     }
     Validation {
-        file,
+        mapping,
         meta,
         catalog,
         pages,
@@ -113,7 +112,7 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, S> {
         emit(self.reporter, reason, object, page)
     }
 
-    fn leaf(&mut self, page: u32, index: usize, cell: Option<&[u8]>) -> Result<()> {
+    fn leaf<P: ByteSource>(&mut self, page: u32, index: usize, cell: Option<P>) -> Result<()> {
         self.reporter.membership_examined()?;
         let Some(record) = cell.and_then(|cell| codec::decode(cell).ok()) else {
             return self.reporter.membership_rejected(1);
@@ -177,7 +176,7 @@ impl TreeEvents for CountEvents {
         Ok(())
     }
 
-    fn leaf(&mut self, _page: u32, _index: usize, cell: Option<&[u8]>) -> Result<()> {
+    fn leaf<P: ByteSource>(&mut self, _page: u32, _index: usize, cell: Option<P>) -> Result<()> {
         let Some(record) = cell.and_then(|cell| codec::decode(cell).ok()) else {
             return Ok(());
         };
@@ -192,7 +191,7 @@ impl TreeEvents for CountEvents {
 }
 
 struct Validation<'a, 'b, S> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     catalog: &'a Catalog,
     pages: &'a mut PageSet,
@@ -249,12 +248,12 @@ impl<S: RecoverySink> Validation<'_, '_, S> {
         let mut bitmap = BitmapCheck::new(self.catalog, self.tables);
         let complete = match entry.storage {
             StoredStorage::Inline => {
-                let bytes = read_inline(self.file, self.meta, entry)?;
-                bitmap.consume(bytes.as_slice())?;
+                let bytes = read_inline(self.mapping, self.meta, entry)?;
+                bitmap.consume(bytes)?;
                 true
             }
             StoredStorage::Blob(root) => membership_blob::scan(
-                self.file,
+                self.mapping,
                 self.meta,
                 root,
                 entry.word_count,
@@ -289,15 +288,15 @@ impl<'a> BitmapCheck<'a> {
         }
     }
 
-    fn consume(&mut self, bytes: &[u8]) -> Result<()> {
+    fn consume<P: ByteSource>(&mut self, bytes: P) -> Result<()> {
         if bytes.len() % 8 != 0 {
             return Err(Error::Corrupt(
                 "recovery membership bytes are not word aligned",
             ));
         }
-        self.hasher.update(bytes);
-        for bytes in bytes.chunks_exact(8) {
-            let value = u64::from_le_bytes(bytes.try_into().expect("eight-byte word"));
+        for offset in (0..bytes.len()).step_by(8) {
+            let value = crate::contract::u64_le(bytes, offset);
+            self.hasher.update(value.to_le_bytes());
             let mut remaining = value;
             while remaining != 0 {
                 let bit = remaining.trailing_zeros();
@@ -355,11 +354,11 @@ impl Codec for IdCodec {
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipInvalid;
 
-    fn branch(cell: &[u8]) -> Option<(Self::Key, u32)> {
+    fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)> {
         Some((u32_le(cell, 0), u32_le(cell, 4)))
     }
 
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key> {
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         codec::decode(cell).ok().map(|record| record.id)
     }
 }

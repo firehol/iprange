@@ -13,7 +13,6 @@ mod reclaim;
 mod result;
 mod workflow;
 
-use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
@@ -25,6 +24,7 @@ use crate::error::{finish_with_cleanup, Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::mapping::Mapping;
 use crate::metadata;
 use crate::random;
 use crate::validation::LocalFileIdentity;
@@ -90,7 +90,7 @@ enum State {
 /// Exclusive writer for one live database.
 #[derive(Debug)]
 pub struct LiveWriter {
-    pub(super) file: File,
+    pub(super) mapping: Mapping,
     pub(super) main_path: PathBuf,
     pub(super) main_identity: Identity,
     pub(super) directory_identity: LocalFileIdentity,
@@ -107,7 +107,7 @@ pub struct LiveWriter {
 
 struct OpenedMain {
     path: PathBuf,
-    file: File,
+    mapping: Mapping,
     identity: Identity,
     directory_identity: LocalFileIdentity,
     public_identity: LocalFileIdentity,
@@ -127,8 +127,9 @@ impl LiveWriter {
         let main = open_main(path.as_ref(), cancellation)?;
         let sidecar = Sidecar::open(&main.path, main.initial.meta.database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
+        let mut mapping = main.mapping;
         let opened = open_locked(
-            &main.file,
+            &mut mapping,
             &main.path,
             main.identity,
             &sidecar,
@@ -137,7 +138,7 @@ impl LiveWriter {
         let base = finish_with_cleanup(opened, sidecar.unlock_gate())?;
 
         Ok(Self {
-            file: main.file,
+            mapping,
             main_path: main.path,
             main_identity: main.identity,
             directory_identity: main.directory_identity,
@@ -257,14 +258,14 @@ impl LiveWriter {
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        metadata::read(&self.file, &self.current_meta(), output)
+        metadata::read(&self.mapping, &self.current_meta(), output)
     }
 
     /// Return the complete committed or staged bounded metadata value.
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        metadata::read_vec(&self.file, &self.current_meta())
+        metadata::read_vec(&self.mapping, &self.current_meta())
     }
 
     /// Discard all unpublished changes.
@@ -297,16 +298,7 @@ impl LiveWriter {
     }
 
     pub(crate) fn flush_draft_pages(&mut self) -> Result<()> {
-        let Some(draft) = self.draft.as_mut() else {
-            return Ok(());
-        };
-        DraftStore::new(
-            &self.file,
-            self.base.meta.page_count,
-            self.budget.pages(),
-            draft,
-        )
-        .flush_page_cache()
+        Ok(())
     }
 
     fn mutate_with_cache<T>(
@@ -324,14 +316,14 @@ impl LiveWriter {
             let draft = self.draft.as_mut().unwrap();
             let mut store = if cache_pages {
                 DraftStore::new_cached(
-                    &self.file,
+                    &mut self.mapping,
                     self.base.meta.page_count,
                     self.budget.pages(),
                     draft,
                 )
             } else {
                 DraftStore::new_uncached(
-                    &self.file,
+                    &mut self.mapping,
                     self.base.meta.page_count,
                     self.budget.pages(),
                     draft,
@@ -448,7 +440,7 @@ impl LiveWriter {
     }
 
     fn trim_unpublished_tail(&mut self) -> Result<()> {
-        let length = self.file.metadata()?.len();
+        let length = self.mapping.file().metadata()?.len();
         if length < self.base.committed_bytes {
             return Err(Error::Corrupt(
                 "main file is shorter than its committed generation",
@@ -456,15 +448,15 @@ impl LiveWriter {
         }
         if length > self.base.committed_bytes {
             self.unproved_tail_end = Some(length);
-            self.file.set_len(self.base.committed_bytes)?;
-            self.file.sync_all()?;
+            self.mapping.resize(self.base.committed_bytes)?;
+            self.mapping.sync_file()?;
         }
         Ok(())
     }
 
     fn verify_discard_result(&self) -> Result<()> {
         self.require_unchanged_base()?;
-        if self.file.metadata()?.len() != self.base.committed_bytes {
+        if self.mapping.file().metadata()?.len() != self.base.committed_bytes {
             return Err(Error::Corrupt(
                 "unpublished tail cleanup changed file length",
             ));
@@ -496,7 +488,12 @@ impl LiveWriter {
         &self,
         cleanup_error: crate::error::ErrorCode,
     ) -> CommitCleanupArtifacts {
-        let current_end = self.file.metadata().ok().map(|metadata| metadata.len());
+        let current_end = self
+            .mapping
+            .file()
+            .metadata()
+            .ok()
+            .map(|metadata| metadata.len());
         let observed_tail_end_exclusive = [self.unproved_tail_end, current_end]
             .into_iter()
             .flatten()
@@ -520,18 +517,18 @@ impl LiveWriter {
 }
 
 fn open_locked(
-    file: &File,
+    mapping: &mut Mapping,
     main_path: &Path,
     main_identity: Identity,
     sidecar: &Sidecar,
     cancellation: &CancellationToken,
 ) -> Result<Bootstrap> {
     verify_pair(main_path, main_identity, sidecar)?;
-    let base = select_base(file, sidecar, cancellation)?;
+    let base = select_base(mapping, sidecar, cancellation)?;
     cancellation.check()?;
     sidecar.claim_writer()?;
     cancellation.check()?;
-    trim_tail(file, base)?;
+    trim_tail(mapping, base)?;
     cancellation.check()?;
     verify_pair(main_path, main_identity, sidecar)?;
     Ok(Bootstrap {
@@ -549,11 +546,11 @@ fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain
     let basename = LocalBasename::from_path(&path)?;
     live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(&path, identity)?;
-    let initial = database::bootstrap_file(&file, OpenMode::Writer)?;
+    let (mapping, initial) = database::map_writer(file)?;
     crate::live_cleanup::require_main_available(&path, identity, initial.meta.database_id)?;
     Ok(OpenedMain {
         path,
-        file,
+        mapping,
         identity,
         directory_identity,
         public_identity,
@@ -563,11 +560,12 @@ fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain
 }
 
 fn select_base(
-    file: &File,
+    mapping: &Mapping,
     sidecar: &Sidecar,
     cancellation: &CancellationToken,
 ) -> Result<Bootstrap> {
-    let base = database::bootstrap_file(file, OpenMode::Writer)?;
+    let physical_bytes = mapping.file().metadata()?.len();
+    let base = database::bootstrap_mapping(mapping, physical_bytes, OpenMode::Writer)?;
     if base.meta.database_id != sidecar.header.database_id {
         return Err(Error::WrongMode(
             "reader table belongs to a different database",
@@ -583,10 +581,10 @@ fn verify_pair(main_path: &Path, main_identity: Identity, sidecar: &Sidecar) -> 
     sidecar.verify_header()
 }
 
-fn trim_tail(file: &File, base: Bootstrap) -> Result<()> {
+fn trim_tail(mapping: &mut Mapping, base: Bootstrap) -> Result<()> {
     if base.physical_bytes != base.committed_bytes {
-        file.set_len(base.committed_bytes)?;
-        file.sync_all()?;
+        mapping.resize(base.committed_bytes)?;
+        mapping.sync_file()?;
     }
     Ok(())
 }

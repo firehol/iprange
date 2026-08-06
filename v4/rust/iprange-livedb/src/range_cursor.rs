@@ -1,13 +1,12 @@
 //! Allocation-free ordered range cursors.
 
 use std::fmt;
-use std::fs::File;
 use std::marker::PhantomData;
 
-use crate::contract::{MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
-use crate::file_io;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::mapping::{Mapping, PageView};
 use crate::range_tree::{self, Header};
 
 /// Direction of ordered cursor movement.
@@ -40,13 +39,18 @@ const EMPTY_FRAME: Frame = Frame {
     level: 0,
 };
 
+#[derive(Clone, Copy)]
+struct Leaf {
+    page_number: u32,
+    header: Header,
+}
+
 pub(crate) struct CursorState<K> {
     meta: MetaV4,
     direction: RangeDirection,
     path: [Frame; MAX_TREE_LEVEL as usize],
     depth: usize,
-    page: [u8; PAGE_SIZE],
-    leaf: Option<Header>,
+    leaf: Option<Leaf>,
     index: usize,
     needs_advance: bool,
     finished: bool,
@@ -56,7 +60,7 @@ pub(crate) struct CursorState<K> {
 
 impl<K: IpKey> CursorState<K> {
     pub(crate) fn new(
-        file: &File,
+        mapping: &Mapping,
         meta: &MetaV4,
         direction: RangeDirection,
         owner_pid: Option<u32>,
@@ -66,7 +70,6 @@ impl<K: IpKey> CursorState<K> {
             direction,
             path: [EMPTY_FRAME; MAX_TREE_LEVEL as usize],
             depth: 0,
-            page: [0; PAGE_SIZE],
             leaf: None,
             index: 0,
             needs_advance: false,
@@ -75,12 +78,12 @@ impl<K: IpKey> CursorState<K> {
             key: PhantomData,
         };
         if !cursor.finished {
-            cursor.descend_edge(file, meta.range_root, None)?;
+            cursor.descend_edge(mapping, meta.range_root, None)?;
         }
         Ok(cursor)
     }
 
-    pub(crate) fn seek(&mut self, file: &File, target: K) -> Result<()> {
+    pub(crate) fn seek(&mut self, mapping: &Mapping, target: K) -> Result<()> {
         self.require_owner()?;
         self.depth = 0;
         self.needs_advance = false;
@@ -88,23 +91,24 @@ impl<K: IpKey> CursorState<K> {
         if self.finished {
             return Ok(());
         }
-        if let Err(error) = self.seek_inner(file, target) {
+        if let Err(error) = self.seek_inner(mapping, target) {
             self.finished = true;
             return Err(error);
         }
         Ok(())
     }
 
-    fn seek_inner(&mut self, file: &File, target: K) -> Result<()> {
+    fn seek_inner(&mut self, mapping: &Mapping, target: K) -> Result<()> {
         let mut page_number = self.meta.range_root;
         let mut expected_level = None;
         loop {
-            let header = self.read(file, page_number, expected_level)?;
+            let page = mapping.page(page_number, self.meta.page_count)?;
+            let header = range_tree::parse_header::<K, _>(page, self.meta.txn_id, expected_level)?;
             if header.level == 0 {
-                return self.seek_leaf(file, &header, target);
+                return self.seek_leaf(mapping, page_number, page, header, target);
             }
             let found =
-                range_tree::greatest_not_after::<K>(&self.page, &header, K::WIDTH + 4, target)?;
+                range_tree::greatest_not_after::<K, _>(page, &header, K::WIDTH + 4, target)?;
             let index = match (found, self.direction) {
                 (Some(index), _) => index,
                 (None, RangeDirection::Forward) => 0,
@@ -113,48 +117,58 @@ impl<K: IpKey> CursorState<K> {
                     return Ok(());
                 }
             };
-            let child = range_tree::branch_child::<K>(&self.page, &header, index)?;
+            let child = range_tree::branch_child::<K, _>(page, &header, index)?;
             self.push(page_number, index, &header)?;
             page_number = child;
             expected_level = Some(header.level - 1);
         }
     }
 
-    fn seek_leaf(&mut self, file: &File, header: &Header, target: K) -> Result<()> {
+    fn seek_leaf(
+        &mut self,
+        mapping: &Mapping,
+        page_number: u32,
+        page: PageView<'_>,
+        header: Header,
+        target: K,
+    ) -> Result<()> {
         let found =
-            range_tree::greatest_not_after::<K>(&self.page, header, K::WIDTH * 2 + 4, target)?;
+            range_tree::greatest_not_after::<K, _>(page, &header, K::WIDTH * 2 + 4, target)?;
         match self.direction {
             RangeDirection::Backward => match found {
-                Some(index) => self.set_leaf(*header, index),
+                Some(index) => self.set_leaf(page_number, header, index),
                 None => self.finished = true,
             },
             RangeDirection::Forward => {
                 let index = match found {
                     None => 0,
                     Some(index) => {
-                        let record = range_tree::leaf_record::<K>(&self.page, header, index)?;
+                        let record = range_tree::leaf_record::<K, _>(page, &header, index)?;
                         usize::from(target > record.to) + index
                     }
                 };
                 if index < header.item_count {
-                    self.set_leaf(*header, index);
+                    self.set_leaf(page_number, header, index);
                 } else {
-                    self.leaf = Some(*header);
+                    self.leaf = Some(Leaf {
+                        page_number,
+                        header,
+                    });
                     self.index = header.item_count - 1;
-                    self.advance_leaf(file)?;
+                    self.advance_leaf(mapping)?;
                 }
             }
         }
         Ok(())
     }
 
-    pub(crate) fn next(&mut self, file: &File) -> Result<Option<DirectRange<K>>> {
+    pub(crate) fn next(&mut self, mapping: &Mapping) -> Result<Option<DirectRange<K>>> {
         self.require_owner()?;
         if self.finished {
             return Ok(None);
         }
         if self.needs_advance {
-            if let Err(error) = self.advance(file) {
+            if let Err(error) = self.advance(mapping) {
                 self.finished = true;
                 return Err(error);
             }
@@ -162,8 +176,9 @@ impl<K: IpKey> CursorState<K> {
                 return Ok(None);
             }
         }
-        let header = self.leaf.as_ref().expect("active cursor has a leaf");
-        let record = match range_tree::leaf_record::<K>(&self.page, header, self.index) {
+        let leaf = self.leaf.expect("active cursor has a leaf");
+        let page = mapping.page(leaf.page_number, self.meta.page_count)?;
+        let record = match range_tree::leaf_record::<K, _>(page, &leaf.header, self.index) {
             Ok(record) => record,
             Err(error) => {
                 self.finished = true;
@@ -178,11 +193,12 @@ impl<K: IpKey> CursorState<K> {
         }))
     }
 
-    fn advance(&mut self, file: &File) -> Result<()> {
+    fn advance(&mut self, mapping: &Mapping) -> Result<()> {
         let item_count = self
             .leaf
             .as_ref()
             .expect("active cursor has a leaf")
+            .header
             .item_count;
         let in_leaf = match self.direction {
             RangeDirection::Forward => self.index + 1 < item_count,
@@ -196,10 +212,10 @@ impl<K: IpKey> CursorState<K> {
             self.needs_advance = false;
             return Ok(());
         }
-        self.advance_leaf(file)
+        self.advance_leaf(mapping)
     }
 
-    fn advance_leaf(&mut self, file: &File) -> Result<()> {
+    fn advance_leaf(&mut self, mapping: &Mapping) -> Result<()> {
         while self.depth > 0 {
             let slot = self.depth - 1;
             let mut frame = self.path[slot];
@@ -217,14 +233,16 @@ impl<K: IpKey> CursorState<K> {
             }
             self.path[slot] = frame;
             self.depth = slot + 1;
-            let header = self.read(file, frame.page_number, Some(frame.level))?;
+            let page = mapping.page(frame.page_number, self.meta.page_count)?;
+            let header =
+                range_tree::parse_header::<K, _>(page, self.meta.txn_id, Some(frame.level))?;
             if header.item_count != frame.item_count {
                 return Err(crate::error::Error::Corrupt(
                     "range branch changed during cursor traversal",
                 ));
             }
-            let child = range_tree::branch_child::<K>(&self.page, &header, frame.index)?;
-            return self.descend_edge(file, child, Some(frame.level - 1));
+            let child = range_tree::branch_child::<K, _>(page, &header, frame.index)?;
+            return self.descend_edge(mapping, child, Some(frame.level - 1));
         }
         self.finished = true;
         Ok(())
@@ -232,39 +250,30 @@ impl<K: IpKey> CursorState<K> {
 
     fn descend_edge(
         &mut self,
-        file: &File,
+        mapping: &Mapping,
         mut page_number: u32,
         mut expected: Option<u16>,
     ) -> Result<()> {
         loop {
-            let header = self.read(file, page_number, expected)?;
+            let page = mapping.page(page_number, self.meta.page_count)?;
+            let header = range_tree::parse_header::<K, _>(page, self.meta.txn_id, expected)?;
             if header.level == 0 {
                 let index = match self.direction {
                     RangeDirection::Forward => 0,
                     RangeDirection::Backward => header.item_count - 1,
                 };
-                self.set_leaf(header, index);
+                self.set_leaf(page_number, header, index);
                 return Ok(());
             }
             let index = match self.direction {
                 RangeDirection::Forward => 0,
                 RangeDirection::Backward => header.item_count - 1,
             };
-            let child = range_tree::branch_child::<K>(&self.page, &header, index)?;
+            let child = range_tree::branch_child::<K, _>(page, &header, index)?;
             self.push(page_number, index, &header)?;
             page_number = child;
             expected = Some(header.level - 1);
         }
-    }
-
-    fn read(
-        &mut self,
-        file: &File,
-        page_number: u32,
-        expected_level: Option<u16>,
-    ) -> Result<Header> {
-        file_io::read_page(file, page_number, self.meta.page_count, &mut self.page)?;
-        range_tree::parse_header::<K>(&self.page, self.meta.txn_id, expected_level)
     }
 
     fn push(&mut self, page_number: u32, index: usize, header: &Header) -> Result<()> {
@@ -284,8 +293,11 @@ impl<K: IpKey> CursorState<K> {
         Ok(())
     }
 
-    fn set_leaf(&mut self, header: Header, index: usize) {
-        self.leaf = Some(header);
+    fn set_leaf(&mut self, page_number: u32, header: Header, index: usize) {
+        self.leaf = Some(Leaf {
+            page_number,
+            header,
+        });
         self.index = index;
         self.needs_advance = false;
         self.finished = false;
@@ -300,29 +312,29 @@ impl<K: IpKey> CursorState<K> {
 }
 
 pub(crate) struct Cursor<'a, K> {
-    file: &'a File,
+    mapping: &'a Mapping,
     state: CursorState<K>,
 }
 
 impl<'a, K: IpKey> Cursor<'a, K> {
     pub(crate) fn new(
-        file: &'a File,
+        mapping: &'a Mapping,
         meta: &MetaV4,
         direction: RangeDirection,
         owner_pid: Option<u32>,
     ) -> Result<Self> {
         Ok(Self {
-            file,
-            state: CursorState::new(file, meta, direction, owner_pid)?,
+            mapping,
+            state: CursorState::new(mapping, meta, direction, owner_pid)?,
         })
     }
 
     pub(crate) fn seek(&mut self, target: K) -> Result<()> {
-        self.state.seek(self.file, target)
+        self.state.seek(self.mapping, target)
     }
 
     pub(crate) fn next(&mut self) -> Result<Option<DirectRange<K>>> {
-        self.state.next(self.file)
+        self.state.next(self.mapping)
     }
 }
 
@@ -334,23 +346,23 @@ macro_rules! public_cursor {
 
         impl<'a> $name<'a> {
             pub(crate) fn new(
-                file: &'a File,
+                mapping: &'a Mapping,
                 meta: &MetaV4,
                 direction: RangeDirection,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: Cursor::new(file, meta, direction, None)?,
+                    inner: Cursor::new(mapping, meta, direction, None)?,
                 })
             }
 
             pub(crate) fn new_live(
-                file: &'a File,
+                mapping: &'a Mapping,
                 meta: &MetaV4,
                 direction: RangeDirection,
                 owner_pid: u32,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: Cursor::new(file, meta, direction, Some(owner_pid))?,
+                    inner: Cursor::new(mapping, meta, direction, Some(owner_pid))?,
                 })
             }
 

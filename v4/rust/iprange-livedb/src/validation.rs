@@ -18,9 +18,10 @@ use std::path::Path;
 
 use crate::bootstrap::{BootstrapError, MetaProblem, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::MetaV4;
+use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::database;
 use crate::error::{Error, Result};
+use crate::mapping::Mapping;
 use crate::publication::{CleanupArtifacts, CoordinationCleanup};
 use crate::recovery::RecoverySourceCleanupGuard;
 
@@ -92,7 +93,9 @@ fn validate_offline<S: ValidationSink>(
     source
         .require_available(meta.database_id)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-    let mut context = context::Context::new(&source.file, meta, budget, cancellation, sink)
+    let mapping = validation_mapping(&source.file, meta)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let mut context = context::Context::new(&mapping, meta, budget, cancellation, sink)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let scan = context
         .reserve_allocator_pages()
@@ -158,7 +161,18 @@ fn validate_live_selected<S: ValidationSink>(
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
     let meta = source.meta;
     let file_identity = source.public_identity();
-    let mut context = match context::Context::new(&source.file, meta, budget, cancellation, sink) {
+    let mapping = match validation_mapping(&source.file, meta) {
+        Ok(mapping) => mapping,
+        Err(cause) => {
+            let end = source.finish(Err(cause));
+            return Err(failure_with_guard(
+                end.cause.expect("failed validation retains its cause"),
+                ValidationProgress::new(),
+                end.guard,
+            ));
+        }
+    };
+    let mut context = match context::Context::new(&mapping, meta, budget, cancellation, sink) {
         Ok(context) => context,
         Err(cause) => {
             let end = source.finish(Err(cause));
@@ -226,9 +240,10 @@ fn validate_immutable<S: ValidationSink>(
     source
         .require_available(bootstrap.meta.database_id)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-    let mut context =
-        context::Context::new(&source.file, bootstrap.meta, budget, cancellation, sink)
-            .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let mapping = validation_mapping(&source.file, bootstrap.meta)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+    let mut context = context::Context::new(&mapping, bootstrap.meta, budget, cancellation, sink)
+        .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let scan = context
         .reserve_allocator_pages()
         .and_then(|()| validate_selected(&mut context));
@@ -246,6 +261,14 @@ fn validate_immutable<S: ValidationSink>(
         generation: Some(generation(bootstrap.meta)),
         progress,
     })
+}
+
+fn validation_mapping(file: &std::fs::File, meta: MetaV4) -> Result<Mapping> {
+    let len = meta
+        .page_count
+        .checked_mul(PAGE_SIZE as u64)
+        .ok_or(Error::ArithmeticOverflow("validation mapping length"))?;
+    Mapping::read_only_view(file, len)
 }
 
 fn require_bound_source_available(source: &ImmutableSource) -> Result<()> {

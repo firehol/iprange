@@ -3,6 +3,7 @@
 use std::fs::File;
 
 use crate::contract::MetaV4;
+use crate::mapping::Mapping;
 
 use crate::publication::file_inspection::Inspected;
 use crate::publication::namespace::{Destination, Identity};
@@ -14,6 +15,7 @@ use super::{Error, OutputAttempt, PreparedOutput};
 #[derive(Debug)]
 pub(in crate::publication) struct ResumedOutput {
     pub(in crate::publication) file: File,
+    pub(in crate::publication) mapping: Mapping,
     pub(in crate::publication) identity: Identity,
     pub(in crate::publication) meta: MetaV4,
     pub(in crate::publication) byte_length: u64,
@@ -31,6 +33,7 @@ impl PreparedOutput {
             attempt_id,
             ResumedOutput {
                 file: inspected.file,
+                mapping: inspected.mapping,
                 identity: inspected.identity,
                 meta: inspected.meta,
                 byte_length: inspected.byte_length,
@@ -70,6 +73,7 @@ impl PreparedOutput {
                 identity: output.identity,
             },
             file: output.file,
+            mapping: output.mapping,
             meta: output.meta,
             byte_length: output.byte_length,
             sha512: output.sha512,

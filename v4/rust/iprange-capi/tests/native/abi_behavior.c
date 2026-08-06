@@ -110,6 +110,7 @@ static void inject_sidecar_failure(cleanup_fault *fault)
         char *end = NULL;
         long parsed = strtol(entry->d_name, &end, 10);
         int fd;
+        int poison_fd;
         ssize_t length;
         if (end == entry->d_name || *end != '\0' || parsed < 0 ||
             parsed > 0x7fffffffL) {
@@ -131,11 +132,24 @@ static void inject_sidecar_failure(cleanup_fault *fault)
             continue;
         }
         fault->backup_fd = fcntl(fd, F_DUPFD_CLOEXEC, 64);
-        if (fault->backup_fd < 0 || close(fd) != 0) {
+        /* Keep the Rust-owned descriptor valid while making record locks fail. */
+        poison_fd = open("/dev/null", O_PATH | O_CLOEXEC);
+        if (fault->backup_fd < 0 || poison_fd < 0 ||
+            dup2(poison_fd, fd) != fd) {
+            if (poison_fd >= 0) {
+                close(poison_fd);
+            }
             if (fault->backup_fd >= 0) {
                 close(fault->backup_fd);
                 fault->backup_fd = -1;
             }
+            break;
+        }
+        close(poison_fd);
+        if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) {
+            (void)dup2(fault->backup_fd, fd);
+            close(fault->backup_fd);
+            fault->backup_fd = -1;
             break;
         }
         fault->target_fd = fd;

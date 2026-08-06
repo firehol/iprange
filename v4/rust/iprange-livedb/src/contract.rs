@@ -1,6 +1,8 @@
 //! Exact unsigned Phase-1 v4 wire constants and meta-page codec.
 
 use crate::crc32c;
+use crate::error::Result;
+use crate::mapping::{ByteSource, PageMut};
 
 pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_SHIFT: u8 = 12;
@@ -123,7 +125,96 @@ pub(crate) struct MetaV4 {
 }
 
 impl MetaV4 {
+    pub(crate) fn encode_mapped(&self, mut page: PageMut<'_>) -> Result<()> {
+        page.fill(0);
+        page.write(0, &META_MAGIC)?;
+        page.put_u16(8, META_SIZE)?;
+        page.set_byte(10, PAGE_SHIFT)?;
+        page.set_byte(11, self.address_family as u8)?;
+        page.set_byte(12, self.value_kind as u8)?;
+        page.write(16, self.value_tag.as_wire())?;
+        page.write(32, &self.database_id)?;
+        page.put_u64(48, self.txn_id)?;
+        page.write(56, &self.commit_nonce)?;
+        page.put_u64(72, self.page_count)?;
+        page.put_u64(80, self.range_record_count)?;
+        page.put_u64(88, self.active_feed_count)?;
+        page.put_u64(96, self.feed_index_limit)?;
+        page.put_u64(104, self.membership_entry_count)?;
+        page.put_u64(112, self.membership_id_limit)?;
+        page.put_u64(120, self.metadata_uncompressed_len)?;
+        page.put_u64(128, self.metadata_compressed_len)?;
+        page.put_u64(136, self.retired_extent_count)?;
+        page.put_u32(144, self.range_root)?;
+        page.put_u32(148, self.catalog_name_root)?;
+        page.put_u32(152, self.catalog_index_root)?;
+        page.put_u32(156, self.feed_used_root)?;
+        page.put_u32(160, self.membership_id_root)?;
+        page.put_u32(164, self.membership_hash_root)?;
+        page.put_u32(168, self.membership_used_root)?;
+        page.put_u32(172, self.metadata_root)?;
+        page.put_u32(176, self.free_bitmap_root)?;
+        page.put_u32(180, self.retirement_root)?;
+        for (index, page_number) in self.allocator_reserve.iter().enumerate() {
+            page.put_u32(184 + index * 4, *page_number)?;
+        }
+        let crc = crc32c::crc32c_page_mut_with_zeroed(&page, META_CRC_OFFSET, 4)
+            .expect("fixed meta CRC field");
+        page.put_u32(META_CRC_OFFSET, crc)
+    }
+
+    pub(crate) fn decode_unchecked<S: ByteSource>(page: S) -> Option<Self> {
+        let tag = page.array(16)?;
+        let database_id = page.array(32)?;
+        let commit_nonce = page.array(56)?;
+        Some(Self {
+            address_family: AddressFamily::from_wire(page.byte(11)?)?,
+            value_kind: ValueKind::from_wire(page.byte(12)?)?,
+            value_tag: ValueTag::from_wire(tag)?,
+            database_id,
+            txn_id: u64_source(page, 48)?,
+            commit_nonce,
+            page_count: u64_source(page, 72)?,
+            range_record_count: u64_source(page, 80)?,
+            active_feed_count: u64_source(page, 88)?,
+            feed_index_limit: u64_source(page, 96)?,
+            membership_entry_count: u64_source(page, 104)?,
+            membership_id_limit: u64_source(page, 112)?,
+            metadata_uncompressed_len: u64_source(page, 120)?,
+            metadata_compressed_len: u64_source(page, 128)?,
+            retired_extent_count: u64_source(page, 136)?,
+            range_root: u32_source(page, 144)?,
+            catalog_name_root: u32_source(page, 148)?,
+            catalog_index_root: u32_source(page, 152)?,
+            feed_used_root: u32_source(page, 156)?,
+            membership_id_root: u32_source(page, 160)?,
+            membership_hash_root: u32_source(page, 164)?,
+            membership_used_root: u32_source(page, 168)?,
+            metadata_root: u32_source(page, 172)?,
+            free_bitmap_root: u32_source(page, 176)?,
+            retirement_root: u32_source(page, 180)?,
+            allocator_reserve: [
+                u32_source(page, 184)?,
+                u32_source(page, 188)?,
+                u32_source(page, 192)?,
+                u32_source(page, 196)?,
+            ],
+        })
+    }
+
+    pub(crate) fn static_identity_eq(&self, other: &Self) -> bool {
+        self.address_family == other.address_family
+            && self.value_kind == other.value_kind
+            && self.value_tag == other.value_tag
+            && self.database_id == other.database_id
+    }
+}
+
+#[cfg(test)]
+impl MetaV4 {
     pub(crate) fn encode_into(&self, page: &mut [u8; PAGE_SIZE]) {
+        use crate::slotted_page::{put_u16, put_u32, put_u64};
+
         page.fill(0);
         page[0..8].copy_from_slice(&META_MAGIC);
         put_u16(page, 8, META_SIZE);
@@ -159,85 +250,36 @@ impl MetaV4 {
         let crc = crc32c::crc32c_with_zeroed(page, META_CRC_OFFSET, 4).unwrap();
         put_u32(page, META_CRC_OFFSET, crc);
     }
-
-    pub(crate) fn decode_unchecked(page: &[u8; PAGE_SIZE]) -> Option<Self> {
-        let mut tag = [0u8; 16];
-        tag.copy_from_slice(&page[16..32]);
-        let mut database_id = [0u8; 16];
-        database_id.copy_from_slice(&page[32..48]);
-        let mut commit_nonce = [0u8; 16];
-        commit_nonce.copy_from_slice(&page[56..72]);
-        Some(Self {
-            address_family: AddressFamily::from_wire(page[11])?,
-            value_kind: ValueKind::from_wire(page[12])?,
-            value_tag: ValueTag::from_wire(tag)?,
-            database_id,
-            txn_id: u64_le(page, 48),
-            commit_nonce,
-            page_count: u64_le(page, 72),
-            range_record_count: u64_le(page, 80),
-            active_feed_count: u64_le(page, 88),
-            feed_index_limit: u64_le(page, 96),
-            membership_entry_count: u64_le(page, 104),
-            membership_id_limit: u64_le(page, 112),
-            metadata_uncompressed_len: u64_le(page, 120),
-            metadata_compressed_len: u64_le(page, 128),
-            retired_extent_count: u64_le(page, 136),
-            range_root: u32_le(page, 144),
-            catalog_name_root: u32_le(page, 148),
-            catalog_index_root: u32_le(page, 152),
-            feed_used_root: u32_le(page, 156),
-            membership_id_root: u32_le(page, 160),
-            membership_hash_root: u32_le(page, 164),
-            membership_used_root: u32_le(page, 168),
-            metadata_root: u32_le(page, 172),
-            free_bitmap_root: u32_le(page, 176),
-            retirement_root: u32_le(page, 180),
-            allocator_reserve: [
-                u32_le(page, 184),
-                u32_le(page, 188),
-                u32_le(page, 192),
-                u32_le(page, 196),
-            ],
-        })
-    }
-
-    pub(crate) fn static_identity_eq(&self, other: &Self) -> bool {
-        self.address_family == other.address_family
-            && self.value_kind == other.value_kind
-            && self.value_tag == other.value_tag
-            && self.database_id == other.database_id
-    }
 }
 
 #[inline]
-pub(crate) fn u16_le(bytes: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([bytes[at], bytes[at + 1]])
+pub(crate) fn u16_source<S: ByteSource>(bytes: S, at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.array(at)?))
 }
 
 #[inline]
-pub(crate) fn u32_le(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+pub(crate) fn u32_source<S: ByteSource>(bytes: S, at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.array(at)?))
 }
 
 #[inline]
-pub(crate) fn u64_le(bytes: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
+pub(crate) fn u64_source<S: ByteSource>(bytes: S, at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(bytes.array(at)?))
 }
 
 #[inline]
-fn put_u16(bytes: &mut [u8], at: usize, value: u16) {
-    bytes[at..at + 2].copy_from_slice(&value.to_le_bytes());
+pub(crate) fn u16_le<S: ByteSource>(bytes: S, at: usize) -> u16 {
+    u16_source(bytes, at).expect("validated u16 field")
 }
 
 #[inline]
-fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
-    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+pub(crate) fn u32_le<S: ByteSource>(bytes: S, at: usize) -> u32 {
+    u32_source(bytes, at).expect("validated u32 field")
 }
 
 #[inline]
-fn put_u64(bytes: &mut [u8], at: usize, value: u64) {
-    bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+pub(crate) fn u64_le<S: ByteSource>(bytes: S, at: usize) -> u64 {
+    u64_source(bytes, at).expect("validated u64 field")
 }
 
 #[cfg(test)]

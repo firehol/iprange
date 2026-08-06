@@ -1,13 +1,12 @@
 //! Ordered range-page construction for one append-only immutable output.
 
-use std::fs::File;
-
-use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
+use crate::contract::{AddressFamily, MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::mapping::{Mapping, PageMut};
 use crate::range_bulk::{Builder, Sink};
 
-use super::{reserve_page, write_page, OutputBudget};
+use super::{reserve_page, OutputBudget};
 
 pub(super) use crate::range_bulk::Record;
 
@@ -30,13 +29,20 @@ impl Ranges {
 
     pub(super) fn push_v4(
         &mut self,
-        file: &File,
+        mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
         record: Record<Ipv4Key>,
     ) -> Result<()> {
         match self {
-            Self::V4(ranges) => ranges.push(&mut OutputSink { file, meta, budget }, record),
+            Self::V4(ranges) => ranges.push(
+                &mut OutputSink {
+                    mapping,
+                    meta,
+                    budget,
+                },
+                record,
+            ),
             Self::V6(_) => Err(Error::WrongAddressFamily(
                 "ordered range output is not IPv4",
             )),
@@ -45,13 +51,20 @@ impl Ranges {
 
     pub(super) fn push_v6(
         &mut self,
-        file: &File,
+        mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
         record: Record<Ipv6Key>,
     ) -> Result<()> {
         match self {
-            Self::V6(ranges) => ranges.push(&mut OutputSink { file, meta, budget }, record),
+            Self::V6(ranges) => ranges.push(
+                &mut OutputSink {
+                    mapping,
+                    meta,
+                    budget,
+                },
+                record,
+            ),
             Self::V4(_) => Err(Error::WrongAddressFamily(
                 "ordered range output is not IPv6",
             )),
@@ -60,29 +73,49 @@ impl Ranges {
 
     pub(super) fn finish(
         &mut self,
-        file: &File,
+        mapping: &mut Mapping,
         meta: &mut MetaV4,
         budget: OutputBudget,
     ) -> Result<(u32, u64)> {
         match self {
-            Self::V4(ranges) => ranges.finish(&mut OutputSink { file, meta, budget }),
-            Self::V6(ranges) => ranges.finish(&mut OutputSink { file, meta, budget }),
+            Self::V4(ranges) => ranges.finish(&mut OutputSink {
+                mapping,
+                meta,
+                budget,
+            }),
+            Self::V6(ranges) => ranges.finish(&mut OutputSink {
+                mapping,
+                meta,
+                budget,
+            }),
         }
     }
 }
 
 struct OutputSink<'a> {
-    file: &'a File,
+    mapping: &'a mut Mapping,
     meta: &'a mut MetaV4,
     budget: OutputBudget,
 }
 
 impl Sink for OutputSink<'_> {
+    type WritePage<'a>
+        = PageMut<'a>
+    where
+        Self: 'a;
+
     fn allocate(&mut self) -> Result<u32> {
         reserve_page(self.meta, self.budget)
     }
 
-    fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
-        write_page(self.file, self.meta, page_number, page)
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
+            return Err(Error::Corrupt("immutable range page is outside bounds"));
+        }
+        let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
+        update(&mut page)
     }
 }

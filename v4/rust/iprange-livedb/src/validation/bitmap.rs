@@ -1,5 +1,6 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::mapping::ByteSource;
 
 use super::context::Context;
 use super::{ValidationObject, ValidationReason, ValidationSink};
@@ -104,16 +105,16 @@ fn validate_node<S: ValidationSink>(
     let Some(page) = context.read_graph_page(page_number, kind.object(), &path[..depth])? else {
         return Ok(None);
     };
-    let Some(header) = parse_header(context, page_number, &page, expected_level, kind)? else {
+    let Some(header) = parse_header(context, page_number, page, expected_level, kind)? else {
         return Ok(None);
     };
     if header.level == 0 {
-        validate_leaf(context, page_number, &page, base, limit, kind, header)
+        validate_leaf(context, page_number, page, base, limit, kind, header)
     } else {
         validate_branch(
             context,
             page_number,
-            &page,
+            page,
             base,
             limit,
             kind,
@@ -124,10 +125,10 @@ fn validate_node<S: ValidationSink>(
     }
 }
 
-fn parse_header<S: ValidationSink>(
+fn parse_header<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     expected_level: u16,
     kind: Kind,
 ) -> Result<Option<Header>> {
@@ -137,7 +138,7 @@ fn parse_header<S: ValidationSink>(
         emit_header_problem(context, page_number, kind, problem)?;
         return Ok(None);
     }
-    if page[lower..].iter().any(|&byte| byte != 0) {
+    if !page.all_zero(lower, PAGE_SIZE - lower) {
         context.emit(
             ValidationReason::PageReservedNonzero,
             kind.object(),
@@ -160,8 +161,8 @@ enum HeaderProblem {
     Type,
 }
 
-fn header_problem(
-    page: &[u8; PAGE_SIZE],
+fn header_problem<P: ByteSource>(
+    page: P,
     txn_id: u64,
     expected_level: u16,
     kind: Kind,
@@ -183,22 +184,22 @@ fn header_problem(
     None
 }
 
-fn common_header_valid(page: &[u8; PAGE_SIZE], lower: usize) -> bool {
-    page[..4] == PAGE_MAGIC
-        && page[5] == 0
+fn common_header_valid<P: ByteSource>(page: P, lower: usize) -> bool {
+    page.equals(0, &PAGE_MAGIC)
+        && page.byte(5) == Some(0)
         && u16_le(page, 6) == HEADER_SIZE as u16
         && usize::from(u16_le(page, 20)) == lower
         && usize::from(u16_le(page, 22)) == PAGE_SIZE
 }
 
-fn born_valid(page: &[u8; PAGE_SIZE], txn_id: u64) -> bool {
+fn born_valid<P: ByteSource>(page: P, txn_id: u64) -> bool {
     let born = u64_le(page, 8);
     born != 0 && born <= txn_id
 }
 
-fn page_kind_valid(page: &[u8; PAGE_SIZE], level: u16, kind: Kind) -> bool {
+fn page_kind_valid<P: ByteSource>(page: P, level: u16, kind: Kind) -> bool {
     let expected_type = if level == 0 { LEAF_TYPE } else { BRANCH_TYPE };
-    page[4] == expected_type && u32_le(page, 24) == kind.aux()
+    page.byte(4) == Some(expected_type) && u32_le(page, 24) == kind.aux()
 }
 
 fn emit_header_problem<S: ValidationSink>(
@@ -216,10 +217,10 @@ fn emit_header_problem<S: ValidationSink>(
     context.emit(reason, kind.object(), Some(page_number), None, None)
 }
 
-fn validate_leaf<S: ValidationSink>(
+fn validate_leaf<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     base: u64,
     limit: u64,
     kind: Kind,
@@ -312,10 +313,10 @@ fn validate_leaf_word<S: ValidationSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_branch<S: ValidationSink>(
+fn validate_branch<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: P,
     base: u64,
     limit: u64,
     kind: Kind,
@@ -367,11 +368,11 @@ struct BranchTotals {
 }
 
 impl BranchTotals {
-    fn add<S: ValidationSink>(
+    fn add<S: ValidationSink, P: ByteSource>(
         &mut self,
         context: &mut Context<'_, S>,
         page_number: u32,
-        page: &[u8; PAGE_SIZE],
+        page: P,
         index: usize,
         kind: Kind,
         result: NodeResult,
@@ -490,7 +491,7 @@ fn in_range_mask(base: u64, limit: u64, kind: Kind) -> u64 {
     mask
 }
 
-fn summary_bit(page: &[u8; PAGE_SIZE], index: usize) -> bool {
+fn summary_bit<P: ByteSource>(page: P, index: usize) -> bool {
     u64_le(page, HEADER_SIZE + (index / 64) * 8) & (1u64 << (index % 64)) != 0
 }
 

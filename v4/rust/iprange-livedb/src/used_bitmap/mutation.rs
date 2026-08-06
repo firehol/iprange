@@ -1,9 +1,9 @@
 //! Copy-on-write sparse-bitmap mutation.
 
-use crate::contract::{u64_le, PAGE_SIZE};
+use crate::contract::u64_le;
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::{put_u64, HEADER_SIZE};
+use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
 
 use super::page::{branch_child, set_branch_child, set_pointer, stamp_leaf, Header, MAX_LEVEL};
 use super::search::{contains, find_lowest};
@@ -57,7 +57,6 @@ impl EditPath {
 
 struct Cursor {
     page_number: u32,
-    page: [u8; PAGE_SIZE],
     header: Header,
     base: u64,
 }
@@ -92,17 +91,24 @@ pub(crate) fn set<S: Store>(
 ) -> Result<()> {
     require_bit(limit, kind, bit)?;
     let level = required_level(limit)?;
-    if initialize_root(store, root, kind, level, limit, bit)? {
+    if *root == 0 {
+        *root = new_subtree(store, kind, level, 0, limit, bit)?;
         return Ok(());
     }
     grow_root(store, root, kind, level, limit)?;
-    let cursor = start(store, *root, kind, level, limit, retired)?;
+    let mut cursor = start(store, *root, kind, level, limit, retired)?;
     *root = cursor.page_number;
     let mut path = EditPath::new();
-    match descend_for_set(store, cursor, &mut path, limit, kind, bit, retired)? {
-        None => Ok(()),
-        Some(cursor) => set_leaf(store, cursor, &path, limit, kind, bit),
+    while cursor.header.level > 0 {
+        let step = branch_step(store, &cursor, bit)?;
+        path.push(frame(&cursor, &step))?;
+        if step.child == 0 {
+            insert_missing(store, &cursor, &path, step, limit, kind, bit)?;
+            return Ok(());
+        }
+        cursor = touch_child(store, &cursor, step, limit, kind, retired)?;
     }
+    set_leaf(store, &cursor, &path, limit, kind, bit)
 }
 
 pub(crate) fn clear<S: Store>(
@@ -113,48 +119,27 @@ pub(crate) fn clear<S: Store>(
     bit: u32,
     retired: &mut RetiredPages,
 ) -> Result<bool> {
-    if !clear_is_needed(store, *root, limit, kind, bit)? {
+    require_bit(limit, kind, bit)?;
+    if !contains(store, *root, limit, kind, bit)? {
         return Ok(false);
+    }
+    if *root == 0 {
+        return Err(Error::Corrupt("used bitmap root disappeared"));
     }
     let level = required_level(limit)?;
     let mut cursor = start(store, *root, kind, level, limit, retired)?;
     *root = cursor.page_number;
     let mut path = EditPath::new();
-    cursor = descend_existing(store, cursor, &mut path, limit, kind, bit, retired)?;
-    if clear_leaf(store, cursor, &path, limit, kind, bit)? {
+    while cursor.header.level > 0 {
+        let step = branch_step(store, &cursor, bit)?;
+        if step.child == 0 {
+            return Err(Error::Corrupt("used bitmap bit path disappeared"));
+        }
+        path.push(frame(&cursor, &step))?;
+        cursor = touch_child(store, &cursor, step, limit, kind, retired)?;
+    }
+    if clear_leaf(store, &cursor, &path, limit, kind, bit)? {
         remove_empty_path(store, root, &path, limit, kind)?;
-    }
-    Ok(true)
-}
-
-fn initialize_root<S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    kind: Kind,
-    level: u16,
-    limit: u64,
-    bit: u32,
-) -> Result<bool> {
-    if *root != 0 {
-        return Ok(false);
-    }
-    *root = new_subtree(store, kind, level, 0, limit, bit)?;
-    Ok(true)
-}
-
-fn clear_is_needed<S: Store>(
-    store: &S,
-    root: u32,
-    limit: u64,
-    kind: Kind,
-    bit: u32,
-) -> Result<bool> {
-    require_bit(limit, kind, bit)?;
-    if !contains(store, root, limit, kind, bit)? {
-        return Ok(false);
-    }
-    if root == 0 {
-        return Err(Error::Corrupt("used bitmap root disappeared"));
     }
     Ok(true)
 }
@@ -167,65 +152,26 @@ fn start<S: Store>(
     limit: u64,
     retired: &mut RetiredPages,
 ) -> Result<Cursor> {
-    let (page_number, page, header) = touch(store, root, kind, level, 0, limit, retired)?;
+    let (page_number, header) = touch(store, root, kind, level, 0, limit, retired)?;
     Ok(Cursor {
         page_number,
-        page,
         header,
         base: 0,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn descend_for_set<S: Store>(
-    store: &mut S,
-    mut cursor: Cursor,
-    path: &mut EditPath,
-    limit: u64,
-    kind: Kind,
-    bit: u32,
-    retired: &mut RetiredPages,
-) -> Result<Option<Cursor>> {
-    while cursor.header.level > 0 {
-        let step = branch_step(store, &cursor, bit)?;
-        path.push(frame(&cursor, &step))?;
-        if step.child == 0 {
-            insert_missing(store, &mut cursor, path, step, limit, kind, bit)?;
-            return Ok(None);
-        }
-        cursor = touch_child(store, &mut cursor, step, limit, kind, retired)?;
-    }
-    Ok(Some(cursor))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn descend_existing<S: Store>(
-    store: &mut S,
-    mut cursor: Cursor,
-    path: &mut EditPath,
-    limit: u64,
-    kind: Kind,
-    bit: u32,
-    retired: &mut RetiredPages,
-) -> Result<Cursor> {
-    while cursor.header.level > 0 {
-        let step = branch_step(store, &cursor, bit)?;
-        if step.child == 0 {
-            return Err(Error::Corrupt("used bitmap bit path disappeared"));
-        }
-        path.push(frame(&cursor, &step))?;
-        cursor = touch_child(store, &mut cursor, step, limit, kind, retired)?;
-    }
-    Ok(cursor)
-}
-
 fn branch_step<S: Store>(store: &S, cursor: &Cursor, bit: u32) -> Result<BranchStep> {
     let index = child_index(bit, cursor.header.level)?;
     let span = coverage(cursor.header.level - 1)?;
+    let child_base = add_child_base(cursor.base, span, index)?;
+    let limit = store.page_limit();
+    let child = store.inspect_page(cursor.page_number, |page| {
+        branch_child(page, &cursor.header, index, limit)
+    })?;
     Ok(BranchStep {
         index,
-        child: branch_child(&cursor.page, &cursor.header, index, store.page_limit())?,
-        child_base: add_child_base(cursor.base, span, index)?,
+        child,
+        child_base,
     })
 }
 
@@ -240,13 +186,13 @@ fn frame(cursor: &Cursor, step: &BranchStep) -> Frame {
 
 fn touch_child<S: Store>(
     store: &mut S,
-    parent: &mut Cursor,
+    parent: &Cursor,
     step: BranchStep,
     limit: u64,
     kind: Kind,
     retired: &mut RetiredPages,
 ) -> Result<Cursor> {
-    let (page_number, page, header) = touch(
+    let (page_number, header) = touch(
         store,
         step.child,
         kind,
@@ -256,12 +202,12 @@ fn touch_child<S: Store>(
         retired,
     )?;
     if page_number != step.child {
-        set_pointer(&mut parent.page, &parent.header, step.index, page_number)?;
-        store.write(parent.page_number, &parent.page)?;
+        store.update_page(parent.page_number, |page| {
+            set_pointer(page, &parent.header, step.index, page_number)
+        })?;
     }
     Ok(Cursor {
         page_number,
-        page,
         header,
         base: step.child_base,
     })
@@ -269,7 +215,7 @@ fn touch_child<S: Store>(
 
 fn insert_missing<S: Store>(
     store: &mut S,
-    cursor: &mut Cursor,
+    cursor: &Cursor,
     path: &EditPath,
     step: BranchStep,
     limit: u64,
@@ -285,19 +231,14 @@ fn insert_missing<S: Store>(
         bit,
     )?;
     let candidate = subtree_has_candidate(store, child, kind, step.child_base, limit)?;
-    set_branch_child(
-        &mut cursor.page,
-        &cursor.header,
-        step.index,
-        child,
-        candidate,
-    )?;
-    store.write(cursor.page_number, &cursor.page)?;
+    store.update_page(cursor.page_number, |page| {
+        set_branch_child(page, &cursor.header, step.index, child, candidate)
+    })?;
     propagate(
         store,
         &path.frames,
         path.depth - 1,
-        cursor.page,
+        cursor.page_number,
         cursor.base,
         limit,
         kind,
@@ -306,29 +247,27 @@ fn insert_missing<S: Store>(
 
 fn set_leaf<S: Store>(
     store: &mut S,
-    mut cursor: Cursor,
+    cursor: &Cursor,
     path: &EditPath,
     limit: u64,
     kind: Kind,
     bit: u32,
 ) -> Result<()> {
     let at = HEADER_SIZE + leaf_word_index(bit) * 8;
-    let word = u64_le(&cursor.page, at);
-    let mask = 1u64 << (u64::from(bit) % 64);
-    if word & mask != 0 {
-        return Err(Error::Corrupt("used bitmap bit is already set"));
-    }
-    put_u64(&mut cursor.page, at, word | mask);
-    stamp_leaf(
-        &mut cursor.page,
-        cursor.header.item_count + usize::from(word == 0),
-    )?;
-    store.write(cursor.page_number, &cursor.page)?;
+    store.update_page(cursor.page_number, |page| {
+        let word = u64_le(page.view(), at);
+        let mask = 1u64 << (u64::from(bit) % 64);
+        if word & mask != 0 {
+            return Err(Error::Corrupt("used bitmap bit is already set"));
+        }
+        page.put_u64(at, word | mask)?;
+        stamp_leaf(page, cursor.header.item_count + usize::from(word == 0))
+    })?;
     propagate(
         store,
         &path.frames,
         path.depth,
-        cursor.page,
+        cursor.page_number,
         cursor.base,
         limit,
         kind,
@@ -337,32 +276,33 @@ fn set_leaf<S: Store>(
 
 fn clear_leaf<S: Store>(
     store: &mut S,
-    mut cursor: Cursor,
+    cursor: &Cursor,
     path: &EditPath,
     limit: u64,
     kind: Kind,
     bit: u32,
 ) -> Result<bool> {
     let at = HEADER_SIZE + leaf_word_index(bit) * 8;
-    let word = u64_le(&cursor.page, at);
-    let mask = 1u64 << (u64::from(bit) % 64);
-    if word & mask == 0 {
-        return Err(Error::Corrupt("used bitmap bit disappeared"));
-    }
-    let next = word & !mask;
-    put_u64(&mut cursor.page, at, next);
-    let count = cursor.header.item_count - usize::from(next == 0);
+    let count = store.update_page(cursor.page_number, |page| {
+        let word = u64_le(page.view(), at);
+        let mask = 1u64 << (u64::from(bit) % 64);
+        if word & mask == 0 {
+            return Err(Error::Corrupt("used bitmap bit disappeared"));
+        }
+        let next = word & !mask;
+        page.put_u64(at, next)?;
+        Ok(cursor.header.item_count - usize::from(next == 0))
+    })?;
     if count == 0 {
         store.discard_private(cursor.page_number)?;
         return Ok(true);
     }
-    stamp_leaf(&mut cursor.page, count)?;
-    store.write(cursor.page_number, &cursor.page)?;
+    store.update_page(cursor.page_number, |page| stamp_leaf(page, count))?;
     propagate(
         store,
         &path.frames,
         path.depth,
-        cursor.page,
+        cursor.page_number,
         cursor.base,
         limit,
         kind,

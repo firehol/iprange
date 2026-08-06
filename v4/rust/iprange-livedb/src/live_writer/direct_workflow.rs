@@ -299,9 +299,9 @@ impl ExactDirectState {
         self.require_active(writer)?;
         writer.flush_draft_pages()?;
         let after = writer.draft.as_ref().unwrap().meta;
-        let input_addresses = coverage(&writer.file, &after, &self.cancellation)
+        let input_addresses = coverage(&writer.mapping, &after, &self.cancellation)
             .map_err(|error| writer.abort_after(error))?;
-        let comparison = compare_maps(&writer.file, base, &after, &self.cancellation)
+        let comparison = compare_maps(&writer.mapping, base, &after, &self.cancellation)
             .map_err(|error| writer.abort_after(error))?;
         let logical_change = classify(&comparison);
         Ok(WorkflowReport::replacement(
@@ -338,25 +338,25 @@ impl ExactDirectState {
 }
 
 fn coverage(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     meta: &crate::contract::MetaV4,
     cancellation: &CancellationToken,
 ) -> Result<Cardinality129> {
     match meta.address_family {
-        AddressFamily::Ipv4 => compare::coverage::<Ipv4Key>(file, meta, cancellation),
-        AddressFamily::Ipv6 => compare::coverage::<Ipv6Key>(file, meta, cancellation),
+        AddressFamily::Ipv4 => compare::coverage::<Ipv4Key>(mapping, meta, cancellation),
+        AddressFamily::Ipv6 => compare::coverage::<Ipv6Key>(mapping, meta, cancellation),
     }
 }
 
 fn compare_maps(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     before: &crate::bootstrap::Bootstrap,
     after: &crate::contract::MetaV4,
     cancellation: &CancellationToken,
 ) -> Result<crate::workflow::Comparison> {
     match after.address_family {
-        AddressFamily::Ipv4 => compare::maps::<Ipv4Key>(file, before, after, cancellation),
-        AddressFamily::Ipv6 => compare::maps::<Ipv6Key>(file, before, after, cancellation),
+        AddressFamily::Ipv4 => compare::maps::<Ipv4Key>(mapping, before, after, cancellation),
+        AddressFamily::Ipv6 => compare::maps::<Ipv6Key>(mapping, before, after, cancellation),
     }
 }
 

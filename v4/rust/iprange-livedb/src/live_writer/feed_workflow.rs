@@ -101,7 +101,7 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<Option<FeedEntry>> {
         self.require_feed_workflow_ready()?;
-        let existing = feed_catalog::lookup(&self.file, &self.base.meta, &name)?;
+        let existing = feed_catalog::lookup(&self.mapping, &self.base.meta, &name)?;
         require_feed_precondition(existing, create)?;
         cancellation.check()?;
         Ok(existing)
@@ -257,7 +257,7 @@ impl ExactFeedState {
         let after = writer.draft.as_ref().unwrap().meta;
         let before_feed = (self.workflow == WorkflowKind::ReplaceFeed).then_some(self.feed);
         let scanned = compare_feeds(
-            &writer.file,
+            &writer.mapping,
             &writer.base.meta,
             before_feed,
             &after,
@@ -377,7 +377,7 @@ fn require_feed_precondition(existing: Option<FeedEntry>, create: bool) -> Resul
 }
 
 fn compare_feeds(
-    file: &std::fs::File,
+    mapping: &crate::mapping::Mapping,
     before: &crate::contract::MetaV4,
     before_feed: Option<FeedEntry>,
     after: &crate::contract::MetaV4,
@@ -385,12 +385,22 @@ fn compare_feeds(
     cancellation: &CancellationToken,
 ) -> Result<compare::ScannedComparison> {
     match after.address_family {
-        AddressFamily::Ipv4 => {
-            compare::feeds::<Ipv4Key>(file, before, before_feed, after, after_feed, cancellation)
-        }
-        AddressFamily::Ipv6 => {
-            compare::feeds::<Ipv6Key>(file, before, before_feed, after, after_feed, cancellation)
-        }
+        AddressFamily::Ipv4 => compare::feeds::<Ipv4Key>(
+            mapping,
+            before,
+            before_feed,
+            after,
+            after_feed,
+            cancellation,
+        ),
+        AddressFamily::Ipv6 => compare::feeds::<Ipv6Key>(
+            mapping,
+            before,
+            before_feed,
+            after,
+            after_feed,
+            cancellation,
+        ),
     }
 }
 

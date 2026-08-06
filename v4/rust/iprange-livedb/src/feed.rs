@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::error::{Error, Result};
+use crate::mapping::ByteSource;
 
 pub(crate) const MAX_FEED_NAME: usize = 255;
 
@@ -38,6 +39,29 @@ impl FeedName {
         Some(Self {
             bytes,
             len: name.len() as u8,
+        })
+    }
+
+    pub(crate) fn from_source<S: ByteSource>(source: S, at: usize, len: usize) -> Option<Self> {
+        if len == 0 || len > MAX_FEED_NAME || at.checked_add(len)? > source.len() {
+            return None;
+        }
+        let first = source.byte(at)?;
+        let last = source.byte(at + len - 1)?;
+        if !alphanumeric(first) || !alphanumeric(last) {
+            return None;
+        }
+        let mut bytes = [0; MAX_FEED_NAME];
+        for (index, output) in bytes[..len].iter_mut().enumerate() {
+            let byte = source.byte(at + index)?;
+            if index != 0 && index + 1 != len && !allowed(byte) {
+                return None;
+            }
+            *output = byte;
+        }
+        Some(Self {
+            bytes,
+            len: len as u8,
         })
     }
 }

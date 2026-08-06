@@ -1,13 +1,14 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::bootstrap::classify_recovery_meta;
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::database;
 use crate::error::{combine_errors, Error, Result};
-use crate::file_io;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
+use crate::mapping::Mapping;
 use crate::validation::source::{public_identity, ImmutableSource};
 use crate::validation::ValidationBudget;
 
@@ -214,16 +215,24 @@ pub(crate) fn read_classified(
     file: &File,
     cancellation: &CancellationToken,
 ) -> Result<ClassifiedMetas> {
-    let mut pages = [None, None];
-    for (index, slot) in pages.iter_mut().enumerate() {
+    let physical_bytes = file.metadata()?.len();
+    let mapped_bytes = physical_bytes.min((2 * PAGE_SIZE) as u64);
+    let mapping = (mapped_bytes >= PAGE_SIZE as u64)
+        .then(|| Mapping::read_only_view(file, mapped_bytes))
+        .transpose()?;
+    let mut states = [None, None];
+    for (index, slot) in states.iter_mut().enumerate() {
         cancellation.check()?;
-        let mut page = [0; PAGE_SIZE];
-        let offset = (index * PAGE_SIZE) as u64;
-        if file_io::read_exact_at(file, &mut page, offset).is_ok() {
-            *slot = Some(page);
+        let page_end = ((index + 1) * PAGE_SIZE) as u64;
+        if page_end <= mapped_bytes {
+            let page = mapping
+                .as_ref()
+                .expect("a complete metadata page has a mapping")
+                .page(index as u32, 2)?;
+            *slot = Some(classify_recovery_meta(page));
         }
     }
-    Ok(ClassifiedMetas::new(pages))
+    Ok(ClassifiedMetas::new(states))
 }
 
 pub(crate) struct OfflineSource {

@@ -120,8 +120,8 @@ fn commit_resolution_uses_both_exact_meta_identities() {
     current.txn_id = 2;
     current.commit_nonce = [3; 16];
     let bytes = image(current, old);
-    let page0 = (&bytes[..PAGE_SIZE]).try_into().unwrap();
-    let page1 = (&bytes[PAGE_SIZE..]).try_into().unwrap();
+    let page0: &[u8; PAGE_SIZE] = (&bytes[..PAGE_SIZE]).try_into().unwrap();
+    let page1: &[u8; PAGE_SIZE] = (&bytes[PAGE_SIZE..]).try_into().unwrap();
 
     assert_eq!(
         resolve_commit_attempt(
@@ -160,8 +160,8 @@ fn commit_resolution_uses_both_exact_meta_identities() {
     later.txn_id = 3;
     later.commit_nonce = [4; 16];
     let advanced = image(current, later);
-    let advanced0 = (&advanced[..PAGE_SIZE]).try_into().unwrap();
-    let advanced1 = (&advanced[PAGE_SIZE..]).try_into().unwrap();
+    let advanced0: &[u8; PAGE_SIZE] = (&advanced[..PAGE_SIZE]).try_into().unwrap();
+    let advanced1: &[u8; PAGE_SIZE] = (&advanced[PAGE_SIZE..]).try_into().unwrap();
     assert_eq!(
         resolve_commit_attempt(
             advanced0,

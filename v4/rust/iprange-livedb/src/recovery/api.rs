@@ -248,7 +248,7 @@ mod platform {
                 ))
             }
         };
-        let built = match build(source.file(), meta, builder, budget, cancellation, sink) {
+        let built = match build(source.mapping(), meta, builder, budget, cancellation, sink) {
             Ok(built) => built,
             Err(failure) => {
                 let failure = *failure;
@@ -279,7 +279,7 @@ mod platform {
     }
 
     fn build<S: RecoverySink>(
-        file: &std::fs::File,
+        mapping: &crate::mapping::Mapping,
         meta: MetaV4,
         builder: Builder,
         budget: &RecoveryBudget,
@@ -288,7 +288,7 @@ mod platform {
     ) -> std::result::Result<Built, Box<BuildFailure>> {
         match meta.value_kind {
             ValueKind::Direct => {
-                direct_build::construct(file, meta, builder, budget, cancellation, sink)
+                direct_build::construct(mapping, meta, builder, budget, cancellation, sink)
                     .map(|built| Built {
                         finished: built.finished,
                         report: built.report,
@@ -304,7 +304,7 @@ mod platform {
                     })
             }
             ValueKind::Membership => {
-                membership_build::construct(file, meta, builder, budget, cancellation, sink)
+                membership_build::construct(mapping, meta, builder, budget, cancellation, sink)
                     .map(|built| Built {
                         finished: built.finished,
                         report: built.report,

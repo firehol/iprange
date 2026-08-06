@@ -5,9 +5,11 @@ use std::path::Path;
 
 use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
+use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
+use crate::mapping::Mapping;
 #[cfg(unix)]
 use crate::publication::namespace::regular_link_count;
 #[cfg(windows)]
@@ -352,14 +354,22 @@ fn content_evidence(
     cancellation: &CancellationToken,
 ) -> Result<Option<(PublicationTuple, PublicationDigest)>> {
     cancellation.check()?;
-    let bootstrap = match crate::database::bootstrap_file(file, OpenMode::ImmutableReader) {
+    let byte_length = file.metadata()?.len();
+    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
+        return Ok(None);
+    }
+    let mapping = Mapping::read_only_view(file, byte_length)?;
+    let bootstrap = match crate::database::bootstrap_mapping(
+        &mapping,
+        byte_length,
+        OpenMode::ImmutableReader,
+    ) {
         Ok(bootstrap) => bootstrap,
         Err(Error::Format(_) | Error::Corrupt(_)) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let byte_length = file.metadata()?.len();
     let sha512 =
-        output::digest_cancellable(file, byte_length, cancellation).map_err(output_error)?;
+        output::digest_cancellable(&mapping, byte_length, cancellation).map_err(output_error)?;
     let meta = bootstrap.meta;
     Ok(Some((
         PublicationTuple {

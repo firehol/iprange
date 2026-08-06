@@ -19,10 +19,10 @@ pub(super) fn prepare(
     let after = writer.draft.as_ref().unwrap().meta;
     let comparison = match after.address_family {
         AddressFamily::Ipv4 => {
-            compare::maps::<Ipv4Key>(&writer.file, &writer.base, &after, cancellation)
+            compare::maps::<Ipv4Key>(&writer.mapping, &writer.base, &after, cancellation)
         }
         AddressFamily::Ipv6 => {
-            compare::maps::<Ipv6Key>(&writer.file, &writer.base, &after, cancellation)
+            compare::maps::<Ipv6Key>(&writer.mapping, &writer.base, &after, cancellation)
         }
     }
     .map_err(|error| writer.abort_after(error))?;

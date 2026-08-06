@@ -5,8 +5,6 @@ mod cache;
 #[path = "membership_import/report.rs"]
 mod report;
 
-use std::fs::File;
-
 use cache::{ImportCache, WordMap};
 
 use crate::cancellation::CancellationToken;
@@ -18,6 +16,7 @@ use crate::feed_catalog::{self, FeedCursor};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::live_reader::LiveReader;
 use crate::live_sidecar::{self, Identity};
+use crate::mapping::Mapping;
 use crate::membership_view::{self, MembershipView};
 use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 use crate::workflow::LogicalChange;
@@ -45,7 +44,7 @@ pub struct MembershipImport<'writer, 'source> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Source<'a> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     identity: Identity,
     owner_pid: Option<u32>,
@@ -134,34 +133,34 @@ fn require_active(writer: &LiveWriter) -> Result<()> {
 
 impl<'a> Source<'a> {
     pub(crate) fn new(source: MembershipImportSource<'a>) -> Result<Self> {
-        let (file, meta, owner_pid) = match source {
+        let (mapping, meta, owner_pid) = match source {
             MembershipImportSource::Immutable(reader) => {
-                let (file, meta) = reader.import_parts();
-                (file, meta, None)
+                let (mapping, meta) = reader.import_parts();
+                (mapping, meta, None)
             }
             MembershipImportSource::Live(reader) => {
-                let (file, meta) = reader.import_parts()?;
-                (file, meta, Some(std::process::id()))
+                let (mapping, meta) = reader.import_parts()?;
+                (mapping, meta, Some(std::process::id()))
             }
         };
         Ok(Self {
-            file,
+            mapping,
             meta,
-            identity: live_sidecar::identity(file)?,
+            identity: live_sidecar::identity(mapping.file())?,
             owner_pid,
         })
     }
 
     fn feed_cursor(self) -> Result<FeedCursor<'a>> {
         match self.owner_pid {
-            Some(owner) => FeedCursor::new_live(self.file, &self.meta, owner),
-            None => FeedCursor::new(self.file, &self.meta),
+            Some(owner) => FeedCursor::new_live(self.mapping, &self.meta, owner),
+            None => FeedCursor::new(self.mapping, &self.meta),
         }
     }
 
     fn range_cursor<K: IpKey>(self) -> Result<Cursor<'a, K>> {
         Cursor::new(
-            self.file,
+            self.mapping,
             &self.meta,
             RangeDirection::Forward,
             self.owner_pid,
@@ -169,7 +168,7 @@ impl<'a> Source<'a> {
     }
 
     fn membership(self, id: u32) -> Result<MembershipView<'a>> {
-        membership_view::by_id(self.file, &self.meta, id, self.owner_pid)
+        membership_view::by_id(self.mapping, &self.meta, id, self.owner_pid)
     }
 }
 
@@ -266,7 +265,7 @@ fn record_feed(writer: &mut LiveWriter, stats: &mut ImportStats, created: bool) 
 fn require_source_feed(writer: &mut LiveWriter, source: Source<'_>, feed: FeedEntry) -> Result<()> {
     let by_name = external(
         writer,
-        feed_catalog::lookup(source.file, &source.meta, &feed.name),
+        feed_catalog::lookup(source.mapping, &source.meta, &feed.name),
     )?;
     if by_name == Some(feed) {
         Ok(())

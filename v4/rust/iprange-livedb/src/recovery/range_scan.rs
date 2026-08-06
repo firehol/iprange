@@ -1,11 +1,9 @@
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::Result;
-use crate::file_io;
 use crate::key::IpKey;
+use crate::mapping::{ByteSource, Mapping, PageView};
 use crate::range_tree::{self, Record};
 use crate::slotted_page::{self, Header};
 use crate::validation::ValidationReason;
@@ -25,7 +23,7 @@ pub(crate) trait RangeEvents<K> {
 }
 
 pub(crate) fn scan<K: IpKey, E: RangeEvents<K>>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     cancellation: &CancellationToken,
@@ -36,7 +34,7 @@ pub(crate) fn scan<K: IpKey, E: RangeEvents<K>>(
     }
     let mut path = [0; MAX_TREE_LEVEL as usize + 1];
     scan_node(
-        file,
+        mapping,
         meta,
         meta.range_root,
         None,
@@ -51,7 +49,7 @@ pub(crate) fn scan<K: IpKey, E: RangeEvents<K>>(
 
 #[allow(clippy::too_many_arguments)]
 fn scan_node<K: IpKey, E: RangeEvents<K>>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     page_number: u32,
     expected_level: Option<u16>,
@@ -67,18 +65,18 @@ fn scan_node<K: IpKey, E: RangeEvents<K>>(
     }
 
     let Some((page, header)) =
-        read_range_page::<K, E>(file, meta, page_number, expected_level, events)?
+        read_range_page::<K, E>(mapping, meta, page_number, expected_level, events)?
     else {
         return Ok(None);
     };
     if header.level == 0 {
-        scan_leaf(page_number, &page, header, events)
+        scan_leaf(page_number, page, header, events)
     } else {
         scan_branch(
-            file,
+            mapping,
             meta,
             page_number,
-            &page,
+            page,
             header,
             path,
             depth,
@@ -122,17 +120,17 @@ fn repeated_reason(path: &[u32], page_number: u32) -> ValidationReason {
     }
 }
 
-fn read_range_page<K: IpKey, E: RangeEvents<K>>(
-    file: &File,
+fn read_range_page<'m, K: IpKey, E: RangeEvents<K>>(
+    mapping: &'m Mapping,
     meta: MetaV4,
     page_number: u32,
     expected_level: Option<u16>,
     events: &mut E,
-) -> Result<Option<([u8; PAGE_SIZE], Header)>> {
-    let Some(page) = load_page(file, meta, page_number, events)? else {
+) -> Result<Option<(PageView<'m>, Header)>> {
+    let Some(page) = load_page(mapping, meta, page_number, events)? else {
         return Ok(None);
     };
-    let Some(header) = parse_range_page::<K, E>(&page, meta, page_number, expected_level, events)?
+    let Some(header) = parse_range_page::<K, E>(page, meta, page_number, expected_level, events)?
     else {
         return Ok(None);
     };
@@ -140,18 +138,20 @@ fn read_range_page<K: IpKey, E: RangeEvents<K>>(
     Ok(Some((page, header)))
 }
 
-fn load_page<K, E: RangeEvents<K>>(
-    file: &File,
+fn load_page<'m, K, E: RangeEvents<K>>(
+    mapping: &'m Mapping,
     meta: MetaV4,
     page_number: u32,
     events: &mut E,
-) -> Result<Option<[u8; PAGE_SIZE]>> {
-    let mut page = [0; PAGE_SIZE];
-    if file_io::read_page(file, page_number, meta.page_count, &mut page).is_err() {
-        reject_page(events, page_number, ValidationReason::IoError, true)?;
-        return Ok(None);
-    }
-    if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+) -> Result<Option<PageView<'m>>> {
+    let page = match mapping.page(page_number, meta.page_count) {
+        Ok(page) => page,
+        Err(_) => {
+            reject_page(events, page_number, ValidationReason::IoError, true)?;
+            return Ok(None);
+        }
+    };
+    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         reject_page(
             events,
             page_number,
@@ -164,7 +164,7 @@ fn load_page<K, E: RangeEvents<K>>(
 }
 
 fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     meta: MetaV4,
     page_number: u32,
     expected_level: Option<u16>,
@@ -176,7 +176,7 @@ fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
     } else {
         range_tree::RANGE_BRANCH
     };
-    if page[4] != expected_type {
+    if page.byte(4) != Some(expected_type) {
         reject_page(
             events,
             page_number,
@@ -185,7 +185,7 @@ fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
         )?;
         return Ok(None);
     }
-    let header = match range_tree::parse_header::<K>(page, meta.txn_id, expected_level) {
+    let header = match range_tree::parse_header::<K, _>(page, meta.txn_id, expected_level) {
         Ok(header) => header,
         Err(_) => {
             reject_page(
@@ -230,7 +230,7 @@ fn reject_page<K, E: RangeEvents<K>>(
 
 fn scan_leaf<K: IpKey, E: RangeEvents<K>>(
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: Header,
     events: &mut E,
 ) -> Result<Option<K>> {
@@ -238,8 +238,8 @@ fn scan_leaf<K: IpKey, E: RangeEvents<K>>(
     let mut previous = None;
     for index in 0..header.item_count {
         let cell = slotted_page::cell(page, &header, index, K::WIDTH * 2 + 4)?;
-        let from = K::read_le(cell);
-        let to = K::read_le(&cell[K::WIDTH..]);
+        let from = K::read_le(cell, 0);
+        let to = K::read_le(cell, K::WIDTH);
         first.get_or_insert(from);
         if previous.is_some_and(|value| value >= from) {
             events.unknown(ValidationReason::TreeOrderInvalid, Some(page_number), false)?;
@@ -260,10 +260,10 @@ fn scan_leaf<K: IpKey, E: RangeEvents<K>>(
 
 #[allow(clippy::too_many_arguments)]
 fn scan_branch<K: IpKey, E: RangeEvents<K>>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     page_number: u32,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: Header,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
     depth: usize,
@@ -276,7 +276,7 @@ fn scan_branch<K: IpKey, E: RangeEvents<K>>(
     for index in 0..header.item_count {
         cancellation.check()?;
         let cell = slotted_page::cell(page, &header, index, K::WIDTH + 4)?;
-        let key = K::read_le(cell);
+        let key = K::read_le(cell, 0);
         let child = u32_le(cell, K::WIDTH);
         first.get_or_insert(key);
         if previous.is_some_and(|value| value >= key) {
@@ -284,7 +284,7 @@ fn scan_branch<K: IpKey, E: RangeEvents<K>>(
         }
         previous = Some(key);
         let actual = scan_node(
-            file,
+            mapping,
             meta,
             child,
             Some(header.level - 1),
@@ -301,7 +301,7 @@ fn scan_branch<K: IpKey, E: RangeEvents<K>>(
     Ok(first)
 }
 
-fn fixed_layout_valid(page: &[u8; PAGE_SIZE], header: &Header, cell_len: usize) -> bool {
+fn fixed_layout_valid<S: ByteSource>(page: S, header: &Header, cell_len: usize) -> bool {
     let mut used = [0u64; PAGE_SIZE / 64];
     let mut minimum = PAGE_SIZE;
     for index in 0..header.item_count {
@@ -316,19 +316,12 @@ fn fixed_layout_valid(page: &[u8; PAGE_SIZE], header: &Header, cell_len: usize) 
         minimum = minimum.min(start);
     }
     if minimum != header.upper
-        || page[header.lower..header.upper]
-            .iter()
-            .any(|byte| *byte != 0)
+        || !(header.lower..header.upper).all(|position| page.byte(position) == Some(0))
     {
         return false;
     }
-    page[header.upper..]
-        .iter()
-        .enumerate()
-        .all(|(offset, byte)| {
-            let position = header.upper + offset;
-            marked(&used, position) || *byte == 0
-        })
+    (header.upper..PAGE_SIZE)
+        .all(|position| marked(&used, position) || page.byte(position) == Some(0))
 }
 
 fn mark(bits: &mut [u64; PAGE_SIZE / 64], start: usize, end: usize) -> bool {

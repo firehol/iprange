@@ -1,12 +1,10 @@
 //! CRC-checked salvage traversal for reachable slotted trees.
 
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::Result;
-use crate::file_io;
+use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
 
@@ -30,8 +28,8 @@ pub(crate) trait Codec {
     const BRANCH_INVALID: ValidationReason = ValidationReason::TreeOrderInvalid;
     const LEAF_INVALID: ValidationReason;
 
-    fn branch(cell: &[u8]) -> Option<(Self::Key, u32)>;
-    fn leaf_key(cell: &[u8]) -> Option<Self::Key>;
+    fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)>;
+    fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key>;
 }
 
 pub(crate) trait TreeEvents {
@@ -43,11 +41,11 @@ pub(crate) trait TreeEvents {
         object: ValidationObject,
         page: Option<u32>,
     ) -> Result<()>;
-    fn leaf(&mut self, page: u32, index: usize, cell: Option<&[u8]>) -> Result<()>;
+    fn leaf<P: ByteSource>(&mut self, page: u32, index: usize, cell: Option<P>) -> Result<()>;
 }
 
 pub(crate) fn scan<C: Codec, E: TreeEvents>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     root: u32,
     pages: &mut PageSet,
@@ -61,7 +59,7 @@ pub(crate) fn scan<C: Codec, E: TreeEvents>(
     let mut state = State::<C::Key> { previous: None };
     scan_node::<C, E>(
         ScanContext {
-            file,
+            mapping,
             meta,
             object: C::OBJECT,
             pages,
@@ -83,7 +81,7 @@ struct State<K> {
 }
 
 struct ScanContext<'a> {
-    file: &'a File,
+    mapping: &'a Mapping,
     meta: MetaV4,
     object: ValidationObject,
     pages: &'a mut PageSet,
@@ -119,11 +117,11 @@ fn scan_node<C: Codec, E: TreeEvents>(
         )?;
     }
     if header.level == 0 {
-        scan_leaf::<C, E>(&page, header, page_number, context.object, state, events)
+        scan_leaf::<C, E>(page, header, page_number, context.object, state, events)
     } else {
         scan_branch::<C, E>(
             context,
-            &page,
+            page,
             header,
             page_number,
             path,
@@ -181,46 +179,41 @@ fn repeated_reason(path: &[u32], page: u32) -> ValidationReason {
     }
 }
 
-fn read_page<C: Codec, E: TreeEvents>(
-    context: &ScanContext<'_>,
+fn read_page<'m, C: Codec, E: TreeEvents>(
+    context: &ScanContext<'m>,
     page_number: u32,
     expected_level: Option<u16>,
     events: &mut E,
-) -> Result<Option<([u8; PAGE_SIZE], Header)>> {
+) -> Result<Option<(PageView<'m>, Header)>> {
     let Some(page) = load_page(context, page_number, events)? else {
         return Ok(None);
     };
-    let level = u16_le(&page, 18);
+    let level = u16_le(page, 18);
     let page_type = if level == 0 {
         C::LEAF_TYPE
     } else {
         C::BRANCH_TYPE
     };
-    let header = match slotted_page::parse(
-        &page,
-        context.meta.txn_id,
-        page_type,
-        C::AUX,
-        expected_level,
-    ) {
-        Ok(header) => header,
-        Err(_) => {
-            reject_page(
-                events,
-                context.object,
-                page_number,
-                header_reason::<C>(&page),
-                false,
-            )?;
-            return Ok(None);
-        }
-    };
+    let header =
+        match slotted_page::parse(page, context.meta.txn_id, page_type, C::AUX, expected_level) {
+            Ok(header) => header,
+            Err(_) => {
+                reject_page(
+                    events,
+                    context.object,
+                    page_number,
+                    header_reason::<C, _>(page),
+                    false,
+                )?;
+                return Ok(None);
+            }
+        };
     let layout = if level == 0 {
         C::LEAF_LAYOUT
     } else {
         C::BRANCH_LAYOUT
     };
-    if !layout_valid(&page, &header, layout) {
+    if !layout_valid(page, &header, layout) {
         reject_page(
             events,
             context.object,
@@ -234,30 +227,25 @@ fn read_page<C: Codec, E: TreeEvents>(
     Ok(Some((page, header)))
 }
 
-fn load_page<E: TreeEvents>(
-    context: &ScanContext<'_>,
+fn load_page<'m, E: TreeEvents>(
+    context: &ScanContext<'m>,
     page_number: u32,
     events: &mut E,
-) -> Result<Option<[u8; PAGE_SIZE]>> {
-    let mut page = [0; PAGE_SIZE];
-    if file_io::read_page(
-        context.file,
-        page_number,
-        context.meta.page_count,
-        &mut page,
-    )
-    .is_err()
-    {
-        reject_page(
-            events,
-            context.object,
-            page_number,
-            ValidationReason::IoError,
-            true,
-        )?;
-        return Ok(None);
-    }
-    if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+) -> Result<Option<PageView<'m>>> {
+    let page = match context.mapping.page(page_number, context.meta.page_count) {
+        Ok(page) => page,
+        Err(_) => {
+            reject_page(
+                events,
+                context.object,
+                page_number,
+                ValidationReason::IoError,
+                true,
+            )?;
+            return Ok(None);
+        }
+    };
+    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         reject_page(
             events,
             context.object,
@@ -270,13 +258,13 @@ fn load_page<E: TreeEvents>(
     Ok(Some(page))
 }
 
-fn header_reason<C: Codec>(page: &[u8; PAGE_SIZE]) -> ValidationReason {
+fn header_reason<C: Codec, P: ByteSource>(page: P) -> ValidationReason {
     let expected = if u16_le(page, 18) == 0 {
         C::LEAF_TYPE
     } else {
         C::BRANCH_TYPE
     };
-    if page[4] != expected || u32_le(page, 24) != C::AUX {
+    if page.byte(4) != Some(expected) || u32_le(page, 24) != C::AUX {
         ValidationReason::PageTypeMismatch
     } else {
         ValidationReason::PageHeaderInvalid
@@ -295,7 +283,7 @@ fn reject_page<E: TreeEvents>(
 }
 
 fn scan_leaf<C: Codec, E: TreeEvents>(
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: Header,
     page_number: u32,
     object: ValidationObject,
@@ -307,7 +295,7 @@ fn scan_leaf<C: Codec, E: TreeEvents>(
         let cell = cell(page, &header, index, C::LEAF_LAYOUT)?;
         let Some(key) = C::leaf_key(cell) else {
             events.unknown(C::LEAF_INVALID, object, Some(page_number))?;
-            events.leaf(page_number, index, None)?;
+            events.leaf::<ByteRange<PageView<'_>>>(page_number, index, None)?;
             state.previous = None;
             continue;
         };
@@ -328,7 +316,7 @@ fn scan_leaf<C: Codec, E: TreeEvents>(
 #[allow(clippy::too_many_arguments)]
 fn scan_branch<C: Codec, E: TreeEvents>(
     context: ScanContext<'_>,
-    page: &[u8; PAGE_SIZE],
+    page: PageView<'_>,
     header: Header,
     page_number: u32,
     path: &mut [u32; MAX_TREE_LEVEL as usize + 1],
@@ -341,7 +329,7 @@ fn scan_branch<C: Codec, E: TreeEvents>(
     for index in 0..header.item_count {
         context.cancellation.check()?;
         let cell = cell(page, &header, index, C::BRANCH_LAYOUT)?;
-        let Some((key, child)) = branch_cell::<C, E>(
+        let Some((key, child)) = branch_cell::<C, E, _>(
             cell,
             page_number,
             context.object,
@@ -355,7 +343,7 @@ fn scan_branch<C: Codec, E: TreeEvents>(
         };
         let actual = scan_node::<C, E>(
             ScanContext {
-                file: context.file,
+                mapping: context.mapping,
                 meta: context.meta,
                 object: context.object,
                 pages: context.pages,
@@ -380,8 +368,8 @@ fn scan_branch<C: Codec, E: TreeEvents>(
     Ok(first)
 }
 
-fn branch_cell<C: Codec, E: TreeEvents>(
-    cell: &[u8],
+fn branch_cell<C: Codec, E: TreeEvents, P: ByteSource>(
+    cell: P,
     page_number: u32,
     object: ValidationObject,
     first: &mut Option<C::Key>,
@@ -405,11 +393,11 @@ fn branch_cell<C: Codec, E: TreeEvents>(
 }
 
 fn cell<'a>(
-    page: &'a [u8; PAGE_SIZE],
+    page: PageView<'a>,
     header: &Header,
     index: usize,
     layout: CellLayout,
-) -> Result<&'a [u8]> {
+) -> Result<ByteRange<PageView<'a>>> {
     match layout {
         CellLayout::Fixed(length) => slotted_page::cell(page, header, index, length),
         CellLayout::Variable { minimum, maximum } => {
@@ -418,7 +406,7 @@ fn cell<'a>(
     }
 }
 
-pub(crate) fn layout_valid(page: &[u8; PAGE_SIZE], header: &Header, layout: CellLayout) -> bool {
+pub(crate) fn layout_valid<P: ByteSource>(page: P, header: &Header, layout: CellLayout) -> bool {
     let mut used = [0u64; PAGE_SIZE / 64];
     let mut minimum = PAGE_SIZE;
     for index in 0..header.item_count {
@@ -436,25 +424,19 @@ pub(crate) fn layout_valid(page: &[u8; PAGE_SIZE], header: &Header, layout: Cell
         minimum = minimum.min(start);
     }
     if minimum != header.upper
-        || page[header.lower..header.upper]
-            .iter()
-            .any(|&byte| byte != 0)
+        || !(header.lower..header.upper).all(|position| page.byte(position) == Some(0))
     {
         return false;
     }
-    page[header.upper..]
-        .iter()
-        .enumerate()
-        .all(|(offset, &byte)| marked(&used, header.upper + offset) || byte == 0)
+    (header.upper..PAGE_SIZE)
+        .all(|position| marked(&used, position) || page.byte(position) == Some(0))
 }
 
-fn cell_length(page: &[u8; PAGE_SIZE], start: usize, layout: CellLayout) -> Option<usize> {
+fn cell_length<P: ByteSource>(page: P, start: usize, layout: CellLayout) -> Option<usize> {
     match layout {
         CellLayout::Fixed(length) => Some(length),
         CellLayout::Variable { minimum, maximum } => {
-            let length = page
-                .get(start..start + 2)
-                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) as usize)?;
+            let length = usize::from(u16_le(page, start));
             (minimum..=maximum).contains(&length).then_some(length)
         }
     }

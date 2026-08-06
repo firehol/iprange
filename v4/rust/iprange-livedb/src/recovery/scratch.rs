@@ -3,11 +3,11 @@
 use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::contract::MetaV4;
 use crate::error::{Error, ErrorCode, Result};
-use crate::file_io;
+use crate::mapping::Mapping;
 use crate::publication::namespace::{
     regular_identity, Directory, Identity, Name, NamespaceError, CREATION_SECURITY_KIND,
     IDENTITY_KIND,
@@ -33,6 +33,7 @@ pub(crate) use format::HEADER_SIZE;
 use format::{header, scratch_name};
 
 const MAX_OWNED: usize = 2;
+const MAPPING_WINDOW: u64 = 8 * 1024 * 1024;
 
 /// One retained scratch slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +100,9 @@ struct Owned {
 
 struct SharedFile {
     file: File,
+    mapping: Mutex<Option<Mapping>>,
     length: AtomicU64,
+    capacity: AtomicU64,
 }
 
 impl Scratch {
@@ -145,7 +148,7 @@ impl Scratch {
         let owned = self.owned[slot].as_ref().expect("scratch owner installed");
         let file = &owned.shared.file;
         security::secure_creator_only(file, &self.profile).map_err(namespace_error)?;
-        file_io::write_exact_at(file, &header, 0)?;
+        owned.shared.write(0, &header)?;
         Ok(ScratchSlot(slot))
     }
 
@@ -183,6 +186,7 @@ impl Scratch {
     }
 
     fn install(&mut self, slot: usize, ordinal: u32) -> Result<()> {
+        self.compact_mapping_slack(None)?;
         self.require_growth(0, HEADER_SIZE)?;
         let name = scratch_name(self.attempt_id, ordinal)?;
         let file = self
@@ -194,12 +198,19 @@ impl Scratch {
         self.owned[slot] = Some(Owned {
             shared: Arc::new(SharedFile {
                 file,
-                length: AtomicU64::new(HEADER_SIZE),
+                mapping: Mutex::new(None),
+                length: AtomicU64::new(0),
+                capacity: AtomicU64::new(0),
             }),
             name,
             identity,
             ordinal,
         });
+        let shared = &self.owned[slot]
+            .as_ref()
+            .expect("scratch owner installed")
+            .shared;
+        shared.remap(HEADER_SIZE, HEADER_SIZE)?;
         self.retained_bytes += HEADER_SIZE;
         Ok(())
     }
@@ -219,10 +230,10 @@ impl Scratch {
             .ok_or(Error::ArithmeticOverflow("recovery scratch write"))?;
         let old = self.length(slot);
         let new = old.max(end);
-        self.require_growth(old, new)?;
+        self.ensure_write_capacity(slot, end)?;
+        self.owner(slot).shared.write(offset, bytes)?;
         self.owner(slot).shared.length.store(new, Ordering::Relaxed);
-        self.retained_bytes = self.retained_bytes - old + new;
-        file_io::write_exact_at(self.file(slot), bytes, offset)
+        Ok(())
     }
 
     pub(crate) fn read(&self, slot: ScratchSlot, offset: u64, bytes: &mut [u8]) -> Result<()> {
@@ -232,7 +243,7 @@ impl Scratch {
         if offset < HEADER_SIZE || end > self.length(slot) {
             return Err(Error::Corrupt("scratch read exceeds its retained length"));
         }
-        file_io::read_exact_at(self.file(slot), bytes, offset)
+        self.owner(slot).shared.read(offset, bytes)
     }
 
     pub(crate) fn reset(&mut self, slot: ScratchSlot) -> Result<()> {
@@ -245,13 +256,9 @@ impl Scratch {
                 "scratch length cannot exclude its ownership header",
             ));
         }
-        let old = self.length(slot);
+        let old = self.capacity(slot);
         self.require_growth(old, length)?;
-        self.file(slot).set_len(length)?;
-        self.owner(slot)
-            .shared
-            .length
-            .store(length, Ordering::Relaxed);
+        self.owner(slot).shared.remap(length, length)?;
         self.retained_bytes = self.retained_bytes - old + length;
         Ok(())
     }
@@ -421,8 +428,58 @@ impl Scratch {
             .expect("scratch slot is owned")
     }
 
-    fn file(&self, slot: ScratchSlot) -> &File {
-        &self.owner(slot).shared.file
+    fn capacity(&self, slot: ScratchSlot) -> u64 {
+        self.owner(slot).shared.capacity.load(Ordering::Relaxed)
+    }
+
+    fn ensure_write_capacity(&mut self, slot: ScratchSlot, required: u64) -> Result<()> {
+        let old = self.capacity(slot);
+        if required <= old {
+            return Ok(());
+        }
+        let mut available = self.available_capacity(old)?;
+        if required > available {
+            self.compact_mapping_slack(Some(slot.0))?;
+            available = self.available_capacity(old)?;
+        }
+        if required > available {
+            return Err(Error::BudgetExceeded("recovery scratch bytes"));
+        }
+        let rounded = required
+            .checked_add(MAPPING_WINDOW - 1)
+            .map(|value| value / MAPPING_WINDOW * MAPPING_WINDOW)
+            .unwrap_or(u64::MAX);
+        let capacity = rounded.min(available).max(required);
+        let length = self.length(slot);
+        self.owner(slot).shared.remap(capacity, length)?;
+        self.retained_bytes = self.retained_bytes - old + capacity;
+        Ok(())
+    }
+
+    fn available_capacity(&self, replaced: u64) -> Result<u64> {
+        self.max_bytes
+            .checked_sub(
+                self.retained_bytes
+                    .checked_sub(replaced)
+                    .ok_or(Error::ArithmeticOverflow("recovery scratch bytes"))?,
+            )
+            .ok_or(Error::ArithmeticOverflow("recovery scratch bytes"))
+    }
+
+    fn compact_mapping_slack(&mut self, except: Option<usize>) -> Result<()> {
+        for index in 0..MAX_OWNED {
+            if except == Some(index) || self.owned[index].is_none() {
+                continue;
+            }
+            let slot = ScratchSlot(index);
+            let capacity = self.capacity(slot);
+            let length = self.length(slot);
+            if capacity != length {
+                self.owner(slot).shared.remap(length, length)?;
+                self.retained_bytes = self.retained_bytes - capacity + length;
+            }
+        }
+        Ok(())
     }
 
     fn require_growth(&self, old: u64, new: u64) -> Result<()> {
@@ -434,6 +491,51 @@ impl Scratch {
         if total > self.max_bytes {
             return Err(Error::BudgetExceeded("recovery scratch bytes"));
         }
+        Ok(())
+    }
+}
+
+impl SharedFile {
+    fn lock_mapping(&self) -> Result<MutexGuard<'_, Option<Mapping>>> {
+        self.mapping
+            .lock()
+            .map_err(|_| Error::WrongState("scratch mapping lock is poisoned"))
+    }
+
+    fn read(&self, offset: u64, output: &mut [u8]) -> Result<()> {
+        let mapping = self.lock_mapping()?;
+        let bytes = mapping
+            .as_ref()
+            .ok_or(Error::WrongState("scratch mapping is unavailable"))?
+            .bytes(offset, output.len())?;
+        if bytes.copy_to(output) {
+            Ok(())
+        } else {
+            Err(Error::Corrupt("scratch mapping changed while reading"))
+        }
+    }
+
+    fn write(&self, offset: u64, input: &[u8]) -> Result<()> {
+        let mut mapping = self.lock_mapping()?;
+        mapping
+            .as_mut()
+            .ok_or(Error::WrongState("scratch mapping is unavailable"))?
+            .bytes_mut(offset, input.len())?
+            .write(0, input)
+    }
+
+    fn remap(&self, capacity: u64, length: u64) -> Result<()> {
+        if length > capacity {
+            return Err(Error::InvalidArgument(
+                "scratch logical length exceeds mapped capacity",
+            ));
+        }
+        let mut mapping = self.lock_mapping()?;
+        *mapping = None;
+        self.file.set_len(capacity)?;
+        *mapping = Some(Mapping::read_write_view(&self.file, capacity)?);
+        self.length.store(length, Ordering::Relaxed);
+        self.capacity.store(capacity, Ordering::Relaxed);
         Ok(())
     }
 }

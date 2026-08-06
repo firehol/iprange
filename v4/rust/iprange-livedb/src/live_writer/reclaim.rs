@@ -110,7 +110,7 @@ impl LiveWriter {
 
         let mut checkpoint = || cancellation.check();
         let selection = DraftStore::new(
-            &self.file,
+            &mut self.mapping,
             self.base.meta.page_count,
             self.budget.pages(),
             &mut draft,
@@ -127,7 +127,7 @@ impl LiveWriter {
         );
         self.draft = Some(draft);
         DraftStore::new(
-            &self.file,
+            &mut self.mapping,
             self.base.meta.page_count,
             self.budget.pages(),
             self.draft.as_mut().unwrap(),

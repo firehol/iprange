@@ -518,10 +518,12 @@ pub(crate) fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8;
     match database::bootstrap_file(file, OpenMode::LiveReader) {
         Ok(bootstrap) => Ok(bootstrap.meta.database_id),
         Err(Error::Format(_)) => {
-            let mut metas = [0; 2 * crate::contract::PAGE_SIZE];
-            crate::file_io::read_exact_at(file, &mut metas, 0)?;
-            let meta0 = (&metas[..crate::contract::PAGE_SIZE]).try_into().unwrap();
-            let meta1 = (&metas[crate::contract::PAGE_SIZE..]).try_into().unwrap();
+            let mapping = crate::mapping::Mapping::read_only_view(
+                file,
+                (2 * crate::contract::PAGE_SIZE) as u64,
+            )?;
+            let meta0 = mapping.page(0, 2)?;
+            let meta1 = mapping.page(1, 2)?;
             Ok(crate::bootstrap::database_id_from_meta_pages(meta0, meta1)?)
         }
         Err(cause) => Err(cause),

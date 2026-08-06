@@ -5,6 +5,7 @@ use std::fs::File;
 use crate::cancellation::CancellationToken;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
+use crate::mapping::Mapping;
 
 use super::namespace::{
     regular_identity, regular_identity_any_link, regular_link_count, Destination, Identity, Name,
@@ -16,6 +17,7 @@ use super::reservation::Policy;
 #[derive(Debug)]
 pub(crate) struct PreviousMain {
     pub(crate) file: File,
+    pub(crate) mapping: Mapping,
     pub(crate) identity: Identity,
     pub(crate) byte_length: u64,
     pub(crate) sha512: [u8; 64],
@@ -94,8 +96,9 @@ fn open(output: &PreparedOutput, cancellation: &CancellationToken) -> Result<Pre
         .metadata()
         .map_err(crate::error::Error::from)?
         .len();
-    let sha512 = output::digest_cancellable(&regular.file, byte_length, cancellation)
-        .map_err(Error::Output)?;
+    let mapping = Mapping::read_only_view(&regular.file, byte_length).map_err(Error::Sdk)?;
+    let sha512 =
+        output::digest_cancellable(&mapping, byte_length, cancellation).map_err(Error::Output)?;
     verify_canonical(
         destination,
         &regular.file,
@@ -104,6 +107,7 @@ fn open(output: &PreparedOutput, cancellation: &CancellationToken) -> Result<Pre
     )?;
     Ok(PreviousMain {
         file: regular.file,
+        mapping,
         identity: regular.identity,
         byte_length,
         sha512,
@@ -174,9 +178,9 @@ impl PreviousMain {
         self.verify_canonical_namespace(destination)?;
         let digest = match cancellation {
             Some(cancellation) => {
-                output::digest_cancellable(&self.file, self.byte_length, cancellation)
+                output::digest_cancellable(&self.mapping, self.byte_length, cancellation)
             }
-            None => output::digest(&self.file, self.byte_length),
+            None => output::digest(&self.mapping, self.byte_length),
         }
         .map_err(Error::Output)?;
         self.verify_canonical_namespace(destination)?;

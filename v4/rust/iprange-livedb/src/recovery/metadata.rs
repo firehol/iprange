@@ -1,10 +1,8 @@
-use std::fs::File;
-
 use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::{Error, Result};
-use crate::file_io;
+use crate::mapping::{ByteSource, Mapping, PageView};
 use crate::metadata::{self, Inflater};
 use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
@@ -12,7 +10,7 @@ use super::page_set::PageSet;
 use super::report::{RecoverySink, Reporter, Unknown};
 
 pub(crate) fn read<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     max_heap_bytes: u64,
@@ -23,7 +21,7 @@ pub(crate) fn read<S: RecoverySink>(
         return Ok(None);
     }
     let mut output = output_buffer(meta, pages, max_heap_bytes)?;
-    let complete = scan(file, meta, pages, cancellation, reporter, &mut output)?;
+    let complete = scan(mapping, meta, pages, cancellation, reporter, &mut output)?;
     reporter.metadata_finished(complete)?;
     Ok(complete.then_some(output))
 }
@@ -53,7 +51,7 @@ fn output_buffer(meta: MetaV4, pages: &PageSet, max_heap_bytes: u64) -> Result<V
 }
 
 fn scan<S: RecoverySink>(
-    file: &File,
+    mapping: &Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     cancellation: &CancellationToken,
@@ -65,10 +63,10 @@ fn scan<S: RecoverySink>(
     while chain.remaining != 0 {
         cancellation.check()?;
         reporter.metadata_chunk_examined()?;
-        let Some(chunk) = read_chunk(file, meta, pages, &mut chain, reporter)? else {
+        let Some(chunk) = read_chunk(mapping, meta, pages, &mut chain, reporter)? else {
             return Ok(false);
         };
-        if inflater.feed(chunk.bytes()).is_err() {
+        if inflater.feed_source(chunk.bytes).is_err() {
             emit(
                 reporter,
                 ValidationReason::MetadataInvalid,
@@ -76,7 +74,7 @@ fn scan<S: RecoverySink>(
             )?;
             return Ok(false);
         }
-        chain.advance(chunk.next, chunk.length)?;
+        chain.advance(chunk.next, chunk.bytes.len())?;
     }
     finish_inflater(inflater, meta.metadata_compressed_len, reporter)
 }
@@ -123,29 +121,17 @@ impl Chain {
     }
 }
 
-struct Chunk {
-    page: [u8; PAGE_SIZE],
-    next: u32,
-    length: usize,
-}
-
-impl Chunk {
-    fn bytes(&self) -> &[u8] {
-        &self.page[metadata::DATA_OFFSET..metadata::DATA_OFFSET + self.length]
-    }
-}
-
-fn read_chunk<S: RecoverySink>(
-    file: &File,
+fn read_chunk<'m, S: RecoverySink>(
+    mapping: &'m Mapping,
     meta: MetaV4,
     pages: &mut PageSet,
     chain: &mut Chain,
     reporter: &mut Reporter<'_, S>,
-) -> Result<Option<Chunk>> {
+) -> Result<Option<metadata::ParsedPage<PageView<'m>>>> {
     if !claim_page(meta, pages, chain, reporter)? {
         return Ok(None);
     }
-    load_chunk(file, meta, chain, reporter)
+    load_chunk(mapping, meta, chain, reporter)
 }
 
 fn claim_page<S: RecoverySink>(
@@ -184,18 +170,20 @@ fn repeated_reason(chain: &[u32], page_number: u32) -> ValidationReason {
     }
 }
 
-fn load_chunk<S: RecoverySink>(
-    file: &File,
+fn load_chunk<'m, S: RecoverySink>(
+    mapping: &'m Mapping,
     meta: MetaV4,
     chain: &Chain,
     reporter: &mut Reporter<'_, S>,
-) -> Result<Option<Chunk>> {
-    let mut page = [0; PAGE_SIZE];
-    if file_io::read_page(file, chain.page_number, meta.page_count, &mut page).is_err() {
-        reject_page(reporter, chain.page_number, ValidationReason::IoError, true)?;
-        return Ok(None);
-    }
-    if crc32c::crc32c_with_zeroed(&page, 28, 4) != Some(u32_le(&page, 28)) {
+) -> Result<Option<metadata::ParsedPage<PageView<'m>>>> {
+    let page = match mapping.page(chain.page_number, meta.page_count) {
+        Ok(page) => page,
+        Err(_) => {
+            reject_page(reporter, chain.page_number, ValidationReason::IoError, true)?;
+            return Ok(None);
+        }
+    };
+    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
         reject_page(
             reporter,
             chain.page_number,
@@ -205,7 +193,7 @@ fn load_chunk<S: RecoverySink>(
         return Ok(None);
     }
     let parsed = match metadata::parse_page(
-        &page,
+        page,
         chain.page_number,
         &meta,
         chain.logical_offset,
@@ -222,13 +210,8 @@ fn load_chunk<S: RecoverySink>(
             return Ok(None);
         }
     };
-    let chunk = Chunk {
-        next: parsed.next,
-        length: parsed.bytes.len(),
-        page,
-    };
     reporter.page_accepted()?;
-    Ok(Some(chunk))
+    Ok(Some(parsed))
 }
 
 fn reject_page<S: RecoverySink>(

@@ -2,9 +2,15 @@
 
 ## Status
 
-Status: in-progress
+Status: paused
 
-Sub-state: the prior local-completion and Rust-acceptance claims are withdrawn.
+Sub-state: paused on 2026-08-06. SOW-0019 is now the sole in-progress work after
+the mmap-only gap analysis proved that this SOW's implementation uses the wrong
+positional-I/O and application-owned-page architecture. This SOW and its
+evidence are preserved; no further implementation executes here until the
+blocking storage rewrite is completed or explicitly returned.
+
+The prior local-completion and Rust-acceptance claims are withdrawn.
 A fresh compiled-path and release-profile audit found that ordinary range
 mutation checksums and rewrites complete pages repeatedly, the active CRC module
 is hidden behind a misleading path alias while the hardware implementation is

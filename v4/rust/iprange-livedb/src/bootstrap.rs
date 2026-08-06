@@ -1,10 +1,11 @@
 //! Constant-time v4 meta classification and selection.
 
 use crate::contract::{
-    u16_le, u32_le, AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED, MAX_PAGE_COUNT,
-    META_CRC_OFFSET, META_MAGIC, META_SIZE, PAGE_SHIFT, PAGE_SIZE,
+    u16_source, u32_source, AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED,
+    MAX_PAGE_COUNT, META_CRC_OFFSET, META_MAGIC, META_SIZE, PAGE_SHIFT, PAGE_SIZE,
 };
 use crate::crc32c;
+use crate::mapping::ByteSource;
 
 mod recovery_meta;
 
@@ -93,14 +94,17 @@ pub fn open(bytes: &[u8], mode: OpenMode) -> Result<Bootstrap, BootstrapError> {
 
     let physical_bytes =
         u64::try_from(bytes.len()).map_err(|_| BootstrapError::HostAddressability)?;
-    let page0: &[u8; PAGE_SIZE] = bytes[..PAGE_SIZE].try_into().unwrap();
-    let page1: &[u8; PAGE_SIZE] = bytes[PAGE_SIZE..2 * PAGE_SIZE].try_into().unwrap();
-    open_meta_pages(page0, page1, physical_bytes, mode)
+    open_meta_pages(
+        &bytes[..PAGE_SIZE],
+        &bytes[PAGE_SIZE..2 * PAGE_SIZE],
+        physical_bytes,
+        mode,
+    )
 }
 
-pub(crate) fn open_meta_pages(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
+pub(crate) fn open_meta_pages<S: ByteSource>(
+    page0: S,
+    page1: S,
     physical_bytes: u64,
     mode: OpenMode,
 ) -> Result<Bootstrap, BootstrapError> {
@@ -114,9 +118,9 @@ pub(crate) fn open_meta_pages(
     finish_open(meta, selection, selected_meta_page, physical_bytes, mode)
 }
 
-pub(crate) fn database_id_from_meta_pages(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
+pub(crate) fn database_id_from_meta_pages<S: ByteSource>(
+    page0: S,
+    page1: S,
 ) -> Result<[u8; 16], BootstrapError> {
     let identities = [identity_readable(page0), identity_readable(page1)];
     require_same_identity(identities)?;
@@ -126,9 +130,9 @@ pub(crate) fn database_id_from_meta_pages(
     }
 }
 
-pub(crate) fn resolve_commit_attempt(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
+pub(crate) fn resolve_commit_attempt<S: ByteSource>(
+    page0: S,
+    page1: S,
     physical_bytes: u64,
     database_id: [u8; 16],
     transaction_id: u64,
@@ -185,9 +189,9 @@ fn require_same_identity(
     Ok(())
 }
 
-fn select_candidates(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
+fn select_candidates<S: ByteSource>(
+    page0: S,
+    page1: S,
     candidate0: Result<MetaV4, MetaProblem>,
     candidate1: Result<MetaV4, MetaProblem>,
 ) -> Result<(MetaV4, MetaSelection, u8), BootstrapError> {
@@ -226,7 +230,7 @@ fn finish_open(
     })
 }
 
-fn identity_readable(page: &[u8; PAGE_SIZE]) -> Result<IdentityReadable, MetaProblem> {
+fn identity_readable<S: ByteSource>(page: S) -> Result<IdentityReadable, MetaProblem> {
     require_identity_header(page)?;
     require_identity_body(page)?;
     let meta = MetaV4::decode_unchecked(page).ok_or(MetaProblem::Tag)?;
@@ -236,29 +240,27 @@ fn identity_readable(page: &[u8; PAGE_SIZE]) -> Result<IdentityReadable, MetaPro
     Ok(IdentityReadable { meta })
 }
 
-fn require_identity_header(page: &[u8; PAGE_SIZE]) -> Result<(), MetaProblem> {
-    if page[0..8] != META_MAGIC {
+fn require_identity_header<S: ByteSource>(page: S) -> Result<(), MetaProblem> {
+    if page.len() != PAGE_SIZE || !page.equals(0, &META_MAGIC) {
         return Err(MetaProblem::Magic);
     }
-    if u16_le(page, 8) != META_SIZE || page[10] != PAGE_SHIFT {
+    if u16_source(page, 8) != Some(META_SIZE) || page.byte(10) != Some(PAGE_SHIFT) {
         return Err(MetaProblem::FixedValue);
     }
-    if AddressFamily::from_wire(page[11]).is_none() || ValueKind::from_wire(page[12]).is_none() {
+    if page.byte(11).and_then(AddressFamily::from_wire).is_none()
+        || page.byte(12).and_then(ValueKind::from_wire).is_none()
+    {
         return Err(MetaProblem::FixedValue);
     }
     Ok(())
 }
 
-fn require_identity_body(page: &[u8; PAGE_SIZE]) -> Result<(), MetaProblem> {
-    let reserved = [&page[13..16], &page[200..252], &page[256..]];
-    if reserved
-        .into_iter()
-        .any(|bytes| bytes.iter().any(|&byte| byte != 0))
-    {
+fn require_identity_body<S: ByteSource>(page: S) -> Result<(), MetaProblem> {
+    if !page.all_zero(13, 3) || !page.all_zero(200, 52) || !page.all_zero(256, PAGE_SIZE - 256) {
         return Err(MetaProblem::Reserved);
     }
-    let stored_crc = u32_le(page, META_CRC_OFFSET);
-    if crc32c::crc32c_with_zeroed(page, META_CRC_OFFSET, 4) != Some(stored_crc) {
+    let stored_crc = u32_source(page, META_CRC_OFFSET).ok_or(MetaProblem::FixedValue)?;
+    if crc32c::crc32c_source_with_zeroed(page, META_CRC_OFFSET, 4) != Some(stored_crc) {
         return Err(MetaProblem::Checksum);
     }
     Ok(())
@@ -503,14 +505,14 @@ fn roots(meta: &MetaV4) -> [u32; 10] {
     ]
 }
 
-fn select_pair(
-    page0: &[u8; PAGE_SIZE],
-    page1: &[u8; PAGE_SIZE],
+fn select_pair<S: ByteSource>(
+    page0: S,
+    page1: S,
     meta0: MetaV4,
     meta1: MetaV4,
 ) -> Result<(MetaV4, MetaSelection, u8), BootstrapError> {
     if meta0.txn_id == meta1.txn_id {
-        if page0[..META_SIZE as usize] != page1[..META_SIZE as usize] {
+        if !page0.same(page1, 0, META_SIZE as usize) {
             return Err(BootstrapError::EqualTransactionDisagreement);
         }
         let selected = (meta0.txn_id & 1) as u8;
