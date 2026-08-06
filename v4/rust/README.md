@@ -156,19 +156,34 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-The final local Linux scale run at commit `9a2311e` produced:
+The final local Linux scale run for this Rust milestone on 2026-08-06, pinned
+to one performance core, produced:
 
 | Scenario | Work | Time | Rate | Counted allocations | Peak RSS |
 |---|---:|---:|---:|---:|---:|
-| Direct replacement | 1,000,000 ranges | 14.72 s | 67,954/s | 22 | 7.2 MiB |
-| Retention refresh | 1,000,000 ranges | 56.99 s | 17,545/s | 22 | 7.6 MiB |
-| Compact snapshot | 1,000,000 ranges | 26.53 s | 37,690/s | 31 | 6.9 MiB |
-| Membership lookup, 421 feeds | 100,000 lookups | 0.54 s | 184,452/s | 0 | 7.6 MiB |
-| Feed scan, 421 feeds | 100,000 ranges | 0.19 s | 531,013/s | 0 | 7.6 MiB |
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.561 s | 1,783,860/s | 22 | 67.5 MiB |
+| Retention refresh | 1,000,000 ranges | 0.536 s | 1,865,200/s | 22 | 67.7 MiB |
+| Compact snapshot | 1,000,000 ranges | 0.061 s | 16,443,190/s | 31 | 67.5 MiB |
+| Direct point lookup | 100,000 lookups | 0.187 s | 533,399/s | 0 | 67.5 MiB |
+| Membership point check, 421 feeds | 100,000 checks | 0.338 s | 296,271/s | 0 | 67.6 MiB |
+| Direct ordered scan | 100,000 ranges | 0.0073 s | 13,757,452/s | 0 | 67.5 MiB |
+| Named-feed ordered scan, 421 feeds | 100,000 ranges | 0.0078 s | 12,831,571/s | 0 | 67.5 MiB |
 
 All scale cases kept file descriptors stable and left zero private artifacts.
-The million-range write workflows retained constant allocation counts. These
-are one-machine baselines, not portable timing guarantees.
+The million-range write workflows retained constant allocation counts. The
+benchmark deliberately authorizes a 64 MiB heap budget, which the optional page
+cache uses; this explains the roughly 67.5 MiB process peak. Smaller caller
+budgets reduce the cache rather than violating the bound. Every output is fully
+validated after timing. These are one-machine baselines, not portable timing
+guarantees.
+
+The point-lookup rows are independent queries: every call starts at the tree
+root and readers have no page cache. In this fixture, each direct lookup makes
+three positional page reads and each membership check makes five. Ordered
+cursors are the bulk-read path; they retain traversal state, and the named-feed
+cursor also reuses the result for consecutive ranges with the same membership.
+The read rows' peak RSS includes database construction before timing; the timed
+read operations themselves allocate nothing.
 
 The current flat update-ipsets set remains faster for simple lookup and scan,
 but it does not provide COW publication, live readers, direct values, named

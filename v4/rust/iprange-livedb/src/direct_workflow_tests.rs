@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::test_alloc::count_thread_allocations;
 use crate::{
-    create_live, AddressFamily, CancellationToken, DirectRange, FinishedWorkflow, Ipv4Key,
-    LiveWriter, TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, AddressRange, CancellationToken, DirectRange, FinishedWorkflow,
+    Ipv4Key, LiveWriter, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -75,6 +75,61 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
 
     let (finished, allocations) = count_thread_allocations(|| workflow.finish_input());
+    let finished = finished.unwrap();
+    assert_eq!(allocations, 0);
+    assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
+    finished.abort().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn retention_ingestion_and_merge_allocate_nothing_per_record() {
+    let files = TestPair::new();
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let budget = TransactionBudget {
+        max_heap_bytes: 1,
+        max_private_pages: 20_000,
+        max_file_growth_pages: 20_000,
+        max_open_files: 2,
+    };
+    let mut writer = LiveWriter::open(&files.main, budget, &CancellationToken::new()).unwrap();
+    let cancellation = CancellationToken::new();
+    let first: Vec<_> = (0..1_000)
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 4),
+            to: Ipv4Key(index * 4 + 1),
+        })
+        .collect();
+    let second: Vec<_> = (0..1_000)
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 4 + 1),
+            to: Ipv4Key(index * 4 + 2),
+        })
+        .collect();
+
+    let mut seed = writer.begin_retention_refresh(10, &cancellation).unwrap();
+    seed.add_ranges_v4_slice(&first).unwrap();
+    match seed.finish_input().unwrap() {
+        FinishedWorkflow::Changed(prepared) => {
+            prepared.commit().unwrap();
+        }
+        FinishedWorkflow::NoChange(_) => panic!("initial retention refresh changed nothing"),
+    }
+
+    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    let (result, allocations) = count_thread_allocations(|| refresh.add_ranges_v4_slice(&second));
+    result.unwrap();
+    assert_eq!(allocations, 0);
+
+    let (finished, allocations) = count_thread_allocations(|| refresh.finish_input());
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
     assert!(matches!(&finished, FinishedWorkflow::Changed(_)));

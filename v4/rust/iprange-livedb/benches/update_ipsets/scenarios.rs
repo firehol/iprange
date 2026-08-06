@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use iprange_livedb::{CloseOutcome, CommitDurability, CommitResult, LiveReader, LiveWriter};
+use iprange_livedb::{
+    validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl},
+    CloseOutcome, CommitDurability, CommitResult, LiveReader, LiveWriter,
+};
 
 use crate::measure::{self, FileSize, Measurement};
 use crate::model::TestDatabase;
@@ -53,6 +56,7 @@ pub(crate) fn result(
     measured: Measurement,
     file_path: &Path,
 ) -> Result<ScenarioResult, String> {
+    validate_output(file_path, file_path == database.main())?;
     let (range_records, feeds) = live_info(database)?;
     let private_artifacts = database.private_artifacts()?;
     if private_artifacts != 0 {
@@ -71,6 +75,31 @@ pub(crate) fn result(
         file: measure::file_size(file_path).map_err(|error| error.to_string())?,
         private_artifacts,
     })
+}
+
+fn validate_output(path: &Path, live: bool) -> Result<(), String> {
+    let mode = if live {
+        ValidationMode::LiveCurrent
+    } else {
+        ValidationMode::ImmutableCurrent
+    };
+    let mut sink =
+        |_: &iprange_livedb::validation::ValidationFinding| Ok(ValidationSinkControl::Continue);
+    let validated = validate(
+        path,
+        mode,
+        &ValidationBudget::heap_only(64 * 1024 * 1024, 2),
+        &iprange_livedb::CancellationToken::new(),
+        &mut sink,
+    )
+    .map_err(|failure| format!("benchmark output validation failed: {failure:?}"))?;
+    if !validated.valid {
+        return Err(format!(
+            "benchmark output has {} validation findings",
+            validated.progress.finding_count
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn require_committed(commit: CommitResult) -> Result<(), String> {

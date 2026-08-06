@@ -8,7 +8,10 @@ use super::page::{
     self, branch_child, build_edit, build_pair_edit, key_at, lower_bound, parse, require_codec,
     CellBuf, Edit, PairEdit,
 };
-use super::{private_path, Codec, Frame, Path, RetiredPages, Store};
+use super::{
+    private_path, private_path_select, Codec, Frame, LeafChoice, Path, PrivateLeaf, RetiredPages,
+    Store,
+};
 
 struct BranchSplit<K> {
     right_page: u32,
@@ -67,48 +70,155 @@ where
     }
 
     let key = C::read_key(leaf_cell, 0)?;
-    let target = locate_leaf::<C, S>(store, root, key, retired)?;
+    let leaf =
+        locate_local_gap::<C, S, F>(store, root, key, leaf_cell.len(), retired, &mut accepts)?;
+    apply_local_gap::<C, S>(store, root, leaf_cell, leaf)
+}
+
+fn locate_local_gap<C, S, F>(
+    store: &mut S,
+    root: &mut u32,
+    key: C::Key,
+    cell_len: usize,
+    retired: &mut RetiredPages,
+    accepts: &mut F,
+) -> Result<PrivateLeaf<GapDecision>>
+where
+    C: Codec,
+    S: Store,
+    F: FnMut(Option<&[u8]>, Option<&[u8]>) -> Result<bool>,
+{
+    let leaf = private_path_select::<C, S, GapDecision, _>(
+        store,
+        root,
+        key,
+        retired,
+        |page, header, path| {
+            Ok(LeafChoice::Return(gap_decision::<C, F>(
+                page, header, path, key, cell_len, accepts,
+            )?))
+        },
+    )?;
     if !retired.as_slice().is_empty() {
         return Err(Error::Corrupt("private B+tree contains a committed page"));
     }
-    if target.exists {
-        return Ok(LocalInsert::General);
-    }
+    Ok(leaf)
+}
 
-    let previous = if target.index > 0 {
-        Some(page::codec_cell::<C>(
-            &target.source,
-            &target.header,
-            target.index - 1,
-        )?)
-    } else if target.path.frames[..target.path.depth]
+fn apply_local_gap<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    leaf_cell: &[u8],
+    leaf: PrivateLeaf<GapDecision>,
+) -> Result<LocalInsert> {
+    let PrivateLeaf {
+        path,
+        page_number,
+        header,
+        selection,
+        ..
+    } = leaf;
+    let Some(selection) = selection else {
+        unreachable!("local-gap selector requested a copied leaf")
+    };
+    match selection {
+        GapDecision::General => Ok(LocalInsert::General),
+        GapDecision::Insert { index, fits } => {
+            if fits {
+                insert_fitting_local_leaf::<C, S>(
+                    store,
+                    root,
+                    leaf_cell,
+                    &path,
+                    page_number,
+                    header,
+                    index,
+                )?;
+            } else {
+                let mut source = [0; PAGE_SIZE];
+                store.read(page_number, &mut source)?;
+                insert_local_leaf::<C, S>(
+                    store,
+                    root,
+                    leaf_cell,
+                    LeafTarget {
+                        path,
+                        page_number,
+                        source,
+                        header,
+                        index,
+                        exists: false,
+                    },
+                )?;
+            }
+            Ok(LocalInsert::Inserted)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GapDecision {
+    General,
+    Insert { index: usize, fits: bool },
+}
+
+type GapNeighbors<'a> = (Option<&'a [u8]>, Option<&'a [u8]>);
+
+fn gap_decision<C, F>(
+    page: &[u8; PAGE_SIZE],
+    header: &crate::slotted_page::Header,
+    path: &Path,
+    key: C::Key,
+    cell_len: usize,
+    accepts: &mut F,
+) -> Result<GapDecision>
+where
+    C: Codec,
+    F: FnMut(Option<&[u8]>, Option<&[u8]>) -> Result<bool>,
+{
+    let (index, exists) = lower_bound::<C>(page, header, key, true)?;
+    if exists {
+        return Ok(GapDecision::General);
+    }
+    let Some((previous, next)) = local_gap_neighbors::<C>(page, header, path, index)? else {
+        return Ok(GapDecision::General);
+    };
+    if !accepts(previous, next)? {
+        return Ok(GapDecision::General);
+    }
+    Ok(GapDecision::Insert {
+        index,
+        fits: slotted_page::insert_fits(header, cell_len),
+    })
+}
+
+fn local_gap_neighbors<'a, C: Codec>(
+    page: &'a [u8; PAGE_SIZE],
+    header: &crate::slotted_page::Header,
+    path: &Path,
+    index: usize,
+) -> Result<Option<GapNeighbors<'a>>> {
+    let previous = if index > 0 {
+        Some(page::codec_cell::<C>(page, header, index - 1)?)
+    } else if path.frames[..path.depth]
         .iter()
         .all(|frame| frame.index == 0)
     {
         None
     } else {
-        return Ok(LocalInsert::General);
+        return Ok(None);
     };
-    let next = if target.index < target.header.item_count {
-        Some(page::codec_cell::<C>(
-            &target.source,
-            &target.header,
-            target.index,
-        )?)
-    } else if target.path.frames[..target.path.depth]
+    let next = if index < header.item_count {
+        Some(page::codec_cell::<C>(page, header, index)?)
+    } else if path.frames[..path.depth]
         .iter()
         .all(|frame| frame.index + 1 == frame.item_count)
     {
         None
     } else {
-        return Ok(LocalInsert::General);
+        return Ok(None);
     };
-    if !accepts(previous, next)? {
-        return Ok(LocalInsert::General);
-    }
-
-    insert_local_leaf::<C, S>(store, root, leaf_cell, target)?;
-    Ok(LocalInsert::Inserted)
+    Ok(Some((previous, next)))
 }
 
 fn insert_local_leaf<C: Codec, S: Store>(
@@ -121,17 +231,38 @@ fn insert_local_leaf<C: Codec, S: Store>(
         edit_leaf::<C, S>(store, root, leaf_cell, target)?;
         return Ok(());
     }
-    store.update_page(target.page_number, |page| {
-        if !slotted_page::insert(page, &target.header, target.index, leaf_cell)? {
+    insert_fitting_local_leaf::<C, S>(
+        store,
+        root,
+        leaf_cell,
+        &target.path,
+        target.page_number,
+        target.header,
+        target.index,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_fitting_local_leaf<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    leaf_cell: &[u8],
+    path: &Path,
+    page_number: u32,
+    header: crate::slotted_page::Header,
+    index: usize,
+) -> Result<()> {
+    store.update_page(page_number, |page| {
+        if !slotted_page::insert(page, &header, index, leaf_cell)? {
             return Err(Error::Corrupt(
                 "private B+tree leaf changed during insertion",
             ));
         }
         Ok(())
     })?;
-    if target.index == 0 {
+    if index == 0 {
         let key = C::read_key(leaf_cell, 0)?;
-        propagate_first::<C, S>(store, root, &target.path, key)?;
+        propagate_first::<C, S>(store, root, path, key)?;
     }
     Ok(())
 }

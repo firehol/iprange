@@ -850,8 +850,8 @@ impl Writer {
             } => state.finish_replacement_state(&mut self.inner),
             Operation::ExactDirect {
                 state,
-                retention_value: Some(_),
-            } => state.finish_retention_state(&mut self.inner),
+                retention_value: Some(value),
+            } => state.finish_retention_state(&mut self.inner, value),
             Operation::Import {
                 source,
                 cancellation,

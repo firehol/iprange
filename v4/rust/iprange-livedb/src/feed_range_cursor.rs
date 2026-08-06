@@ -16,6 +16,7 @@ pub(crate) struct ProjectionState<K> {
     direction: RangeDirection,
     inner: CursorState<K>,
     pending: Option<AddressRange<K>>,
+    membership: Option<(u32, bool)>,
     raw_finished: bool,
     finished: bool,
 }
@@ -35,6 +36,7 @@ impl<K: IpKey> ProjectionState<K> {
             direction,
             inner: CursorState::new(file, meta, direction, owner_pid)?,
             pending: None,
+            membership: None,
             raw_finished: false,
             finished: false,
         })
@@ -104,7 +106,10 @@ impl<K: IpKey> ProjectionState<K> {
                 self.raw_finished = true;
                 break;
             };
-            if membership_view::id_contains_index(file, &self.meta, range.value, self.feed_index)? {
+            let contains = cached_membership(&mut self.membership, range.value, || {
+                membership_view::id_contains_index(file, &self.meta, range.value, self.feed_index)
+            })?;
+            if contains {
                 return Ok(Some(AddressRange {
                     from: range.from,
                     to: range.to,
@@ -113,6 +118,20 @@ impl<K: IpKey> ProjectionState<K> {
         }
         Ok(None)
     }
+}
+
+fn cached_membership<F>(cache: &mut Option<(u32, bool)>, id: u32, load: F) -> Result<bool>
+where
+    F: FnOnce() -> Result<bool>,
+{
+    if let Some((cached_id, contains)) = *cache {
+        if cached_id == id {
+            return Ok(contains);
+        }
+    }
+    let contains = load()?;
+    *cache = Some((id, contains));
+    Ok(contains)
 }
 
 pub(crate) struct ProjectionCursor<'a, K> {
@@ -229,3 +248,30 @@ macro_rules! public_cursor {
 
 public_cursor!(FeedRangeCursorV4, Ipv4Key);
 public_cursor!(FeedRangeCursorV6, Ipv6Key);
+
+#[cfg(test)]
+mod tests {
+    use super::cached_membership;
+
+    #[test]
+    fn consecutive_membership_id_is_resolved_once() {
+        let mut cache = None;
+        let mut loads = 0;
+        assert!(cached_membership(&mut cache, 7, || {
+            loads += 1;
+            Ok(true)
+        })
+        .unwrap());
+        assert!(cached_membership(&mut cache, 7, || {
+            loads += 1;
+            Ok(false)
+        })
+        .unwrap());
+        assert!(!cached_membership(&mut cache, 8, || {
+            loads += 1;
+            Ok(false)
+        })
+        .unwrap());
+        assert_eq!(loads, 2);
+    }
+}

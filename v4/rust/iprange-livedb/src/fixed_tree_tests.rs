@@ -403,7 +403,7 @@ fn next_transaction_copies_only_its_selected_path() {
 }
 
 #[test]
-fn private_local_insert_copies_only_the_selected_leaf() {
+fn private_local_insert_inspects_and_updates_without_copying_the_leaf() {
     let mut store = MemoryStore::new();
     let mut root = 0;
     for key in (0..1_000).map(|key| key * 2) {
@@ -433,7 +433,7 @@ fn private_local_insert_copies_only_the_selected_leaf() {
     assert_eq!(result, LocalInsert::Inserted);
     assert!(retired.as_slice().is_empty());
     assert_eq!(store.inspections.get(), 2);
-    assert_eq!(store.reads.get(), 1);
+    assert_eq!(store.reads.get(), 0);
     assert_eq!(store.updates, 1);
     assert_eq!(store.writes, 0);
     assert_eq!(lookup(&store, root, 501).unwrap(), Some(7));

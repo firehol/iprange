@@ -184,7 +184,9 @@ impl<'a> RetentionRefresh<'a> {
 
     /// Preserve old values on retained coverage and finish the exact refresh.
     pub fn finish_input(self) -> Result<FinishedWorkflow<'a>> {
-        let finished = self.state.finish_retention_state(self.writer)?;
+        let finished = self
+            .state
+            .finish_retention_state(self.writer, self.refresh_value)?;
         Ok(finished.bind(self.writer))
     }
 }
@@ -243,48 +245,62 @@ impl ExactDirectState {
         })
     }
 
-    pub(crate) fn finish_replacement_state(self, writer: &mut LiveWriter) -> Result<FinishedState> {
-        self.finish_state(writer, false, None)
-    }
-
-    pub(crate) fn finish_retention_state(self, writer: &mut LiveWriter) -> Result<FinishedState> {
-        self.require_active(writer)?;
-        let base = writer.base;
-        let cancellation = self.cancellation.clone();
-        writer.flush_draft_pages()?;
-        let input_meta = writer.draft.as_ref().unwrap().meta;
-        let input_snapshot = (
-            input_meta.range_record_count,
-            coverage(&writer.file, &input_meta, &cancellation)
-                .map_err(|error| writer.abort_after(error))?,
-        );
-        writer.mutate(|store| store.preserve_retention_values(&base, &cancellation))?;
-        self.finish_state(writer, true, Some(input_snapshot))
-    }
-
-    fn finish_state(
+    pub(crate) fn finish_replacement_state(
         mut self,
         writer: &mut LiveWriter,
-        retention_prepared: bool,
-        input_snapshot: Option<(u64, Cardinality129)>,
     ) -> Result<FinishedState> {
+        if self.workflow == WorkflowKind::RetentionRefresh {
+            return Err(writer.abort_after(Error::WrongState(
+                "retention refresh requires its refresh value",
+            )));
+        }
         let base = writer.base;
-        let report = self.prepare_report(writer, &base, retention_prepared, input_snapshot)?;
+        let report = self.prepare_replacement_report(writer, &base)?;
         self.complete(writer, base, report)
     }
 
-    fn prepare_report(
+    pub(crate) fn finish_retention_state(
+        self,
+        writer: &mut LiveWriter,
+        refresh_value: u32,
+    ) -> Result<FinishedState> {
+        self.require_active(writer)?;
+        if self.workflow != WorkflowKind::RetentionRefresh {
+            return Err(writer.abort_after(Error::WrongState(
+                "direct replacement has no retention refresh value",
+            )));
+        }
+        let base = writer.base;
+        let cancellation = self.cancellation.clone();
+        let merged =
+            writer.mutate(|store| store.merge_retention(&base, refresh_value, &cancellation))?;
+        let after = writer.draft.as_ref().unwrap().meta;
+        let logical_change = classify(&merged.comparison);
+        let report = WorkflowReport::replacement(
+            ReplacementReportInput {
+                workflow: self.workflow,
+                logical_change,
+                input_record_count: self.input_records,
+                input_normalized_interval_count: merged.input_intervals,
+                before_range_record_count: base.meta.range_record_count,
+                after_range_record_count: after.range_record_count,
+                input_addresses: merged.input_addresses,
+            },
+            merged.comparison,
+        );
+        self.complete(writer, base, report)
+    }
+
+    fn prepare_replacement_report(
         &mut self,
         writer: &mut LiveWriter,
         base: &crate::bootstrap::Bootstrap,
-        retention_prepared: bool,
-        input_snapshot: Option<(u64, Cardinality129)>,
     ) -> Result<WorkflowReport> {
         self.require_active(writer)?;
-        self.require_retention_prepared(writer, retention_prepared)?;
         writer.flush_draft_pages()?;
-        let (input_intervals, input_addresses) = self.input_summary(writer, input_snapshot)?;
         let after = writer.draft.as_ref().unwrap().meta;
+        let input_addresses = coverage(&writer.file, &after, &self.cancellation)
+            .map_err(|error| writer.abort_after(error))?;
         let comparison = compare_maps(&writer.file, base, &after, &self.cancellation)
             .map_err(|error| writer.abort_after(error))?;
         let logical_change = classify(&comparison);
@@ -293,38 +309,13 @@ impl ExactDirectState {
                 workflow: self.workflow,
                 logical_change,
                 input_record_count: self.input_records,
-                input_normalized_interval_count: input_intervals,
+                input_normalized_interval_count: after.range_record_count,
                 before_range_record_count: base.meta.range_record_count,
                 after_range_record_count: after.range_record_count,
                 input_addresses,
             },
             comparison,
         ))
-    }
-
-    fn input_summary(
-        &mut self,
-        writer: &mut LiveWriter,
-        supplied: Option<(u64, Cardinality129)>,
-    ) -> Result<(u64, Cardinality129)> {
-        if let Some(snapshot) = supplied {
-            return Ok(snapshot);
-        }
-        let meta = writer.draft.as_ref().unwrap().meta;
-        let addresses = coverage(&writer.file, &meta, &self.cancellation)
-            .map_err(|error| writer.abort_after(error))?;
-        Ok((meta.range_record_count, addresses))
-    }
-
-    fn require_retention_prepared(
-        &mut self,
-        writer: &mut LiveWriter,
-        prepared: bool,
-    ) -> Result<()> {
-        if self.workflow != WorkflowKind::RetentionRefresh || prepared {
-            return Ok(());
-        }
-        Err(writer.abort_after(Error::WrongState("retention values were not prepared")))
     }
 
     fn complete(

@@ -8,6 +8,8 @@ mod membership_ops;
 mod metadata_ops;
 #[path = "draft_store/page_cache.rs"]
 mod page_cache;
+#[path = "draft_store/retention.rs"]
+mod retention;
 #[path = "draft_store/storage.rs"]
 mod storage;
 #[path = "draft_store/workflow.rs"]

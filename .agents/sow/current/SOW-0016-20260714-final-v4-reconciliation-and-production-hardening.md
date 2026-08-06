@@ -13613,9 +13613,11 @@ appender writes each cell once without parsing the page under construction
 (`v4/rust/iprange-livedb/src/slotted_page.rs:168-231`). The immutable builder
 holds one leaf and six branch levels, streams full pages to their final page
 numbers, propagates exact first keys, collapses a sole root child, and emits no
-scratch file (`v4/rust/iprange-livedb/src/immutable_output/ranges.rs:91-370`).
-The old random-mutation call path is no longer used by immutable snapshot or
-recovery output.
+scratch file. It is now shared by immutable output and retention through
+`v4/rust/iprange-livedb/src/range_bulk.rs:133-338`; the immutable wrapper is
+`v4/rust/iprange-livedb/src/immutable_output/ranges.rs:19-88`. The old
+random-mutation call path is no longer used by immutable snapshot or recovery
+output.
 
 Permanent tests cover explicit validation of the first IPv6 branch overflow
 with a legal one-child right edge and zero allocation on an IPv4 leaf rollover
@@ -13640,6 +13642,171 @@ default workspace suite pass on this slice. This implements the existing v4.3
 contract without changing the format, public API, C ABI, operator workflow, or
 documentation; therefore the active SOW is the only durable artifact that
 requires an update for this milestone.
+
+The final isolated hot-path slice is retention refresh. Three pinned exact
+one-million-record baselines measured 6,738,286,967; 6,785,719,462; and
+6,946,901,451 ns. A 174,000-sample user-cycle profile attributes visible work
+to repeated B+tree editing: `fixed_tree::page::build_edit` 8.24%, `edit_fits`
+6.22%, `lower_bound` 4.39%, `fixed_tree::read::descend` 2.08%, plus delete,
+remove-page rebuild, cache inspection, and tree-path work. The source confirms
+the cause: `preserve_retention_values` walks every committed range and calls a
+general tree transform on the already-normalized private coverage tree, then a
+separate complete comparison walk computes the report.
+
+The repair keeps unordered ingestion and its private canonical coverage tree.
+At `FinishInput`, one ordered merge will consume that coverage tree together
+with the committed tree, derive old values for intersections and the refresh
+value for new-only segments, compute all report counters during the same walk,
+and stream canonical result records through the same ordered bulk page packer
+used by immutable output. A consuming private-tree cursor will copy one leaf
+into fixed memory and immediately return that leaf page to the draft allocator;
+only the still-needed fixed-depth branch path remains protected. The bulk
+packer can therefore reuse consumed source pages instead of retaining a second
+complete tree. This has fixed workspace, no external file, no per-record heap,
+no survivor rewrite, no post-build equality scan, and peak private range pages
+equal to final output plus a bounded source branch path rather than input plus
+output.
+
+This is an implementation repair of the existing retention semantics and
+resource contract, not a format or public-API change. Permanent validation must
+cover partial old/new overlaps, removed-address reappearance, no-change cleanup,
+empty and full-space inputs, IPv4 and IPv6, a source leaf whose first interval
+expands across many old intervals, exact report counters, page reuse, source/
+cancellation failure atomicity, explicit validation after commit, zero warmed
+heap allocation, and five pinned one-million refreshes below one second.
+
+The first one-pass implementation measured 887,385,510 ns. In the next five
+pinned runs, four completed in 733-851 ms and one took 1,023,439,072 ns, so the
+five-run gate is not yet satisfied. A whole-process user-cycle profile, covering
+both the seed and measured refresh, assigns 40.02% of samples to libc page
+copies. The remaining normalizer still copies the selected 4 KiB private leaf
+out of the bounded cache on every local gap insertion even though the leaf is
+only inspected and then edited through the cache's bounded callback.
+
+The minimal follow-on is to let the existing private-path inspection callback
+return the leaf-local insertion decision. A fitting private insertion then
+updates the resident page without copying it; full/split and general semantic
+fallbacks keep their existing copied-page paths. This removes redundant hot-path
+work without weakening bounds checks, changing range semantics, adding heap
+state, or changing the format or public API. The fixed-tree work test must
+change from one selected-leaf copy to zero copies for the fitting private case
+before retention is measured again.
+
+The follow-on and the one-pass retention merge are now implemented. The
+private-path selector makes the complete leaf-local decision while borrowing
+the cache page and copies a leaf only for the general/split fallback
+(`v4/rust/iprange-livedb/src/fixed_tree.rs:254-435` and
+`fixed_tree/insert.rs:54-220`). The consuming cursor retains one fixed 4 KiB
+leaf buffer, returns each exhausted private source page to the draft allocator,
+and never releases a committed source page
+(`v4/rust/iprange-livedb/src/range_store_cursor.rs:29-184`). The merge walks
+old and coverage intervals once, preserves old values on intersections,
+assigns the refresh value only to new coverage, computes the exact comparison
+in the same walk, coalesces equal output, and streams through the shared ordered
+packer (`v4/rust/iprange-livedb/src/draft_store/retention.rs:22-338`). The old
+survivor rewrite and post-build comparison pass are deleted.
+
+Permanent tests prove partial overlap/full-delta semantics, removed-address
+reappearance, full-space IPv6 counters, randomized scalar equivalence, one
+coverage interval expanding across 100 old intervals, exact two-private-page
+reuse, one-page failure with complete abort, cancellation atomicity, explicit
+post-commit validation, and zero warmed per-record allocation
+(`v4/rust/iprange-livedb/tests/direct_workflows.rs:192-400`,
+`workflow_properties.rs:55-111`, and
+`src/direct_workflow_tests.rs:85-138`). The benchmark now explicitly performs
+full live/immutable validation after timing every output
+(`benches/update_ipsets/scenarios.rs:50-103`). Validation remains outside the
+measured operation and is never implicit in the SDK.
+
+After the redundant leaf copy was removed, five pinned P-core one-million-input
+runs measured direct replacement at 390,094,427-500,753,251 ns, retention
+refresh at 514,553,605-869,387,896 ns, and compact snapshot at
+59,031,104-62,234,065 ns. All 15 runs were below the accepted one-second
+ceiling. Direct and retention retained exactly 22 counted allocations and
+67,109,014/67,109,026 allocated bytes; snapshot retained 31 allocations and
+939 bytes. Every run kept four descriptors before and after and left zero
+private artifacts.
+
+The final fully validating scale matrix measured the one-million cases at
+398,475,510 ns direct, 490,773,876 ns retention, and 64,683,996 ns snapshot.
+The 10,000/100,000/1,000,000 direct and retention rows retain the expected
+near-linear shape; the complete feed/read/open/snapshot matrix passed with
+stable descriptors and zero residue. The benchmark grants an explicit 64 MiB
+heap budget, so its optional direct-mapped page cache explains the roughly
+67.6 MiB process peak. The earlier historical statement that the cache was
+independently capped at 4 MiB was superseded by commit `a352b4b`: the cache is
+now capped by the caller's transaction heap budget. A diagnostic 4 MiB
+retention run took about 2.45 seconds; the one-second evidence therefore applies
+to the documented 64 MiB benchmark budget, not to every legal smaller budget.
+
+The final responsibility split leaves all changed/new production and benchmark
+functions at cyclomatic complexity 9 or lower. The three new production files
+are 338, 185, and 338 physical lines; the touched fixed-tree files are 494 and
+658 lines. These are directional engineering signals, not claims that the
+pre-existing complete Rust graph has no complexity warnings.
+
+A final read-path challenge found one real scan defect and one misleading write
+fixture. The named-feed cursor resolved the same membership ID and reread its
+bitmap for every consecutive range (`feed_range_cursor.rs:99-120`), while the
+benchmark's purportedly unordered direct source advanced only 11 slots at a
+time and therefore formed a few long ascending runs. The cursor now retains the
+last `(membership_id, contains_feed)` result, with a permanent exact reuse test
+at `feed_range_cursor.rs:252-277`. The direct fixture now uses a deterministic
+large-stride permutation (`benches/update_ipsets/source.rs:5-36`), so it remains
+repeatable but is genuinely dispersed across the input space.
+
+Five pinned one-million dispersed direct replacements measured
+519,852,670-568,090,160 ns, all below one second. The final validating scale
+matrix measured direct replacement at 560,582,043 ns, retention at 536,135,669
+ns, and snapshot at 60,815,450 ns for one million inputs. Named-feed scan of
+100,000 ranges fell from 134,444,800 ns to 7,793,278 ns and now matches the
+7,268,788 ns direct scan; five isolated feed scans measured 7,622,551-9,145,374
+ns. Every row retained stable descriptors, zero private residue, and explicit
+post-timing validation.
+
+The remaining membership-check number is a stateless point-query cost, not a
+bulk scan. The public path performs a fresh range-tree lookup, membership-ID
+lookup, and inline bitmap read for every address
+(`membership_view.rs:118-156`, `membership_tree.rs:30-82`). A syscall count for
+the complete 100,000-check process recorded 504,138 positional page reads,
+versus 302,680 for direct point lookup and 5,521 for the complete named-feed
+scan process. The uninstrumented final matrix measured 337,528,473 ns for
+100,000 membership checks and 187,476,898 ns for direct point lookups. A hidden
+reader cache or full-file mapping was rejected for this milestone: it would
+change reader memory, concurrency, and truncation/corruption failure behavior,
+while ordered cursors are the existing allocation-free bulk-read contract and
+the update-ipsets publisher path. The README now states this distinction rather
+than comparing independent point queries with streamed writes.
+
+Final local release verification passes on this source. Both the all-feature
+and no-default-feature all-target workspace matrices pass; the database core
+contains 326 tests, with 324 active tests passing and two subprocess entry
+points intentionally ignored. All 15 Rust C-boundary tests and all native C
+behavior/header/conformance suites pass. Rust 1.74.1 passes the complete
+all-feature/all-target matrix. Formatting, warnings-denied Clippy, and
+warnings-denied rustdoc are clean.
+
+AddressSanitizer with leak detection passes all 324 active database-core tests
+and all 15 C-boundary tests. Valgrind, using a matching unstripped runtime
+loader because the host loader has no usable debug symbols, passes all seven
+native-behavior test groups with definite and indirect leaks configured as
+failures. The compiler-derived source graph accounts for 315 sources across
+four supported targets plus one runtime-compiled native fixture. The SOW audit,
+`git diff --check`, output validation, stable-descriptor/residue checks, and
+same-failure searches all pass. Complexity review found no changed or new
+function above cyclomatic complexity 9; three higher pre-existing functions in
+touched carrier files remain outside this slice and were not disguised as new
+work.
+
+No format, public API, C ABI, or default-validation behavior changed. The Rust
+README now records the corrected benchmark/read-path evidence. The normative
+specifications, `AGENTS.md`, and the runtime Rust project skill remain accurate
+and need no change for this implementation-only milestone. Native execution on
+Windows, macOS, and FreeBSD was not performed because access to those systems
+requires explicit user authorization; cross-target compilation is proven, but
+native cross-platform behavior is not claimed here. The SOW therefore remains
+in progress pending that separately authorized evidence and user acceptance of
+the Rust result; the Go port remains gated.
 
 1. Generate a canonical source inventory from compiler dependency manifests for
    production, tests, features, and supported targets. Classify every tracked

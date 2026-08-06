@@ -1,6 +1,7 @@
 use iprange_livedb::{AddressRange, DirectRange, Ipv4Key, RangeSource};
 
 const BATCH_CAPACITY: usize = 1024;
+const DISPERSED_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 const EMPTY_DIRECT: DirectRange<Ipv4Key> = DirectRange {
     from: Ipv4Key(0),
     to: Ipv4Key(0),
@@ -29,7 +30,7 @@ impl DirectSource {
         Ok(Self {
             count,
             next: 0,
-            pattern: DirectPattern::Unordered(Permutation::new(count, 11)),
+            pattern: DirectPattern::Unordered(Permutation::new(count, DISPERSED_SEED)),
             batch: [EMPTY_DIRECT; BATCH_CAPACITY],
         })
     }

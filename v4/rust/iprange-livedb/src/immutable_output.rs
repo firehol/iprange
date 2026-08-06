@@ -374,17 +374,6 @@ fn write_page(file: &File, meta: &MetaV4, page_number: u32, page: &[u8; PAGE_SIZ
     file_io::write_exact_at(file, page, offset)
 }
 
-fn append_page(
-    file: &File,
-    meta: &mut MetaV4,
-    budget: OutputBudget,
-    page: &[u8; PAGE_SIZE],
-) -> Result<u32> {
-    let page_number = reserve_page(meta, budget)?;
-    write_page(file, meta, page_number, page)?;
-    Ok(page_number)
-}
-
 fn seal_pages(output: &Builder) -> Result<()> {
     for page_number in 2..output.meta.page_count {
         let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;

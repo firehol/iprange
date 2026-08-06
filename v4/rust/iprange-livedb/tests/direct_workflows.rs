@@ -3,9 +3,11 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, AddressFamily, AddressRange, CancellationToken, Cardinality129, CommitDurability,
-    DirectRange, Error, FinishedWorkflow, Ipv4Key, Ipv6Key, LiveReader, LiveWriter, LogicalChange,
-    RangeSource, ReclaimResult, TransactionBudget, ValueKind, ValueTag, WorkflowKind,
+    create_live,
+    validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl},
+    AddressFamily, AddressRange, CancellationToken, Cardinality129, CommitDurability, DirectRange,
+    Error, FinishedWorkflow, Ipv4Key, Ipv6Key, LiveReader, LiveWriter, LogicalChange, RangeSource,
+    ReclaimResult, TransactionBudget, ValueKind, ValueTag, WorkflowKind,
 };
 
 struct TestPair {
@@ -71,6 +73,20 @@ fn changed(finished: FinishedWorkflow<'_>) -> iprange_livedb::PreparedWorkflow<'
             panic!("expected a changed workflow, got {report:?}")
         }
     }
+}
+
+fn validate_live(path: &std::path::Path) {
+    let mut sink =
+        |_: &iprange_livedb::validation::ValidationFinding| Ok(ValidationSinkControl::Continue);
+    let result = validate(
+        path,
+        ValidationMode::LiveCurrent,
+        &ValidationBudget::heap_only(2 * 1024 * 1024, 2),
+        &CancellationToken::new(),
+        &mut sink,
+    )
+    .unwrap();
+    assert!(result.valid);
 }
 
 #[test]
@@ -260,6 +276,126 @@ fn retention_refresh_keeps_old_values_removes_missing_and_marks_reappearance_new
     ] {
         assert_eq!(reader.lookup_direct_v4(Ipv4Key(at)).unwrap(), value);
     }
+    reader.close().unwrap();
+}
+
+#[test]
+fn retention_merge_reuses_coverage_page_before_expanding_it() {
+    let files = TestPair::new("retention-reuse");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let cancellation = CancellationToken::new();
+    let old: Vec<_> = (0..100)
+        .map(|index| address(index * 2, index * 2))
+        .collect();
+    let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
+    let mut seed = writer.begin_retention_refresh(10, &cancellation).unwrap();
+    seed.add_ranges_v4_slice(&old).unwrap();
+    changed(seed.finish_input().unwrap()).commit().unwrap();
+    writer.close().unwrap();
+    validate_live(&files.main);
+
+    let two_page_budget = TransactionBudget {
+        max_heap_bytes: 1,
+        max_private_pages: 2,
+        max_file_growth_pages: 2,
+        max_open_files: 2,
+    };
+    let mut writer = LiveWriter::open(&files.main, two_page_budget, &cancellation).unwrap();
+    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    refresh.add_ranges_v4_slice(&[address(0, 199)]).unwrap();
+    let prepared = changed(refresh.finish_input().unwrap());
+    let report = *prepared.report();
+    assert_eq!(report.input_normalized_interval_count, 1);
+    assert_eq!(report.before_range_record_count, 100);
+    assert_eq!(report.after_range_record_count, 200);
+    assert_eq!(
+        report.unchanged_value_addresses,
+        Cardinality129::from_u64(100)
+    );
+    assert_eq!(report.added_addresses, Cardinality129::from_u64(100));
+    prepared.abort().unwrap();
+    writer.close().unwrap();
+
+    let one_page_budget = TransactionBudget {
+        max_heap_bytes: 1,
+        max_private_pages: 1,
+        max_file_growth_pages: 1,
+        max_open_files: 2,
+    };
+    let mut writer = LiveWriter::open(&files.main, one_page_budget, &cancellation).unwrap();
+    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    refresh.add_ranges_v4_slice(&[address(0, 199)]).unwrap();
+    assert!(matches!(
+        refresh.finish_input(),
+        Err(Error::TransactionAborted(cause)) if matches!(*cause, Error::BudgetExceeded(_))
+    ));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
+    writer.close().unwrap();
+
+    let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
+    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    refresh.add_ranges_v4_slice(&[address(0, 199)]).unwrap();
+    changed(refresh.finish_input().unwrap()).commit().unwrap();
+    writer.close().unwrap();
+    validate_live(&files.main);
+
+    let mut reader = LiveReader::open(&files.main, &cancellation).unwrap();
+    for address in 0..200 {
+        let expected = if address % 2 == 0 { Some(10) } else { Some(20) };
+        assert_eq!(reader.lookup_direct_v4(Ipv4Key(address)).unwrap(), expected);
+    }
+    reader.close().unwrap();
+}
+
+#[test]
+fn retention_finish_cancellation_discards_the_complete_refresh() {
+    let files = TestPair::new("retention-cancel");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    let seed_cancellation = CancellationToken::new();
+    let mut seed = writer
+        .begin_retention_refresh(10, &seed_cancellation)
+        .unwrap();
+    seed.add_ranges_v4_slice(&[address(10, 20)]).unwrap();
+    changed(seed.finish_input().unwrap()).commit().unwrap();
+
+    let cancellation = CancellationToken::new();
+    let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
+    refresh.add_ranges_v4_slice(&[address(10, 30)]).unwrap();
+    cancellation.cancel();
+    assert!(matches!(
+        refresh.finish_input(),
+        Err(Error::TransactionAborted(cause)) if matches!(*cause, Error::Cancelled)
+    ));
+    assert!(matches!(
+        writer.commit(&CancellationToken::new()),
+        Err(Error::NoPendingTransaction)
+    ));
+    writer.close().unwrap();
+
+    let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), Some(10));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(20)).unwrap(), Some(10));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(21)).unwrap(), None);
     reader.close().unwrap();
 }
 
