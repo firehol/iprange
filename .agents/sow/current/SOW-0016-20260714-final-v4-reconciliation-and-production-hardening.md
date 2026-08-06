@@ -13574,6 +13574,17 @@ v4/rust/iprange-livedb/src/writer_transaction_contract.rs
 v4/rust/iprange-livedb/src/writer_transaction_core.rs
 ```
 
+User decision 75 was executed without data loss. Preservation commit `29206b3`
+records the complete audit state and the 893 previously uncommitted lines before
+deletion. The exact 40-file set above was then removed; 241 database source
+files remain, exactly matching the prior four-target library-test union. Fresh
+all-feature library-test compilation passes for Linux, Windows, macOS, and
+FreeBSD after deletion. Both complete current-toolchain Rust matrices
+(`--all-features --all-targets` and `--no-default-features --all-targets`), the
+Rust 1.74.1 all-feature matrix, warnings-denied Clippy and rustdoc, formatting,
+the generated/frozen C ABI checks, native C behavior programs, conformance, and
+the SOW audit also pass. Unrelated untracked build outputs remain untouched.
+
 #### Phase-1 compiled-path and proof map
 
 This map records whether the current public path reaches the compiled mechanism.
