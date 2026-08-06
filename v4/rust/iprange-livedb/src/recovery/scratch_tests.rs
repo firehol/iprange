@@ -37,7 +37,7 @@ impl Drop for TempDirectory {
 fn exact_names_headers_io_and_cleanup_round_trip() {
     let directory = TempDirectory::new("roundtrip");
     let mut scratch = Scratch::start(&directory.path, meta(), 4096, 2, 4).unwrap();
-    let attempt = scratch.attempt_id();
+    let attempt = scratch.attempt_id;
     let first = scratch.create().unwrap();
     let second = scratch.create().unwrap();
     let first_name = scratch_name(attempt, 0).unwrap();
@@ -146,7 +146,7 @@ fn byte_file_and_descriptor_budgets_fail_before_growth() {
 fn exclusive_creation_never_replaces_a_matching_lookalike() {
     let directory = TempDirectory::new("exclusive");
     let mut scratch = Scratch::start(&directory.path, meta(), 4096, 2, 4).unwrap();
-    let name = scratch_name(scratch.attempt_id(), 0).unwrap();
+    let name = scratch_name(scratch.attempt_id, 0).unwrap();
     let path = directory
         .path
         .join(std::ffi::OsStr::from_bytes(name.bytes()));
@@ -162,7 +162,7 @@ fn exclusive_creation_never_replaces_a_matching_lookalike() {
 fn changed_link_count_is_returned_as_exact_residue() {
     let directory = TempDirectory::new("links");
     let mut scratch = Scratch::start(&directory.path, meta(), 4096, 2, 4).unwrap();
-    let attempt = scratch.attempt_id();
+    let attempt = scratch.attempt_id;
     scratch.create().unwrap();
     let name = scratch_name(attempt, 0).unwrap();
     let path = directory

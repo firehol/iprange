@@ -14,7 +14,7 @@ fn equal_membership_bytes_with_different_source_ids_coalesce_exactly() {
     source
         .push_membership_v4(Ipv4Key(10), Ipv4Key(19), &Words(vec![1 << 5]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     rewrite_inline_word(&finished.file, meta, Ipv4Key(15), 1 << 1);
     drop(finished.file);
@@ -47,7 +47,7 @@ fn maximal_membership_overlap_component_is_rejected_whole() {
     source
         .push_membership_v4(Ipv4Key(10), Ipv4Key(19), &Words(vec![1 << 5]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     rewrite_second_range_start(&finished.file, meta, 5);
     drop(finished.file);
@@ -80,7 +80,7 @@ fn duplicate_membership_ids_are_not_selected_as_a_winner() {
     source
         .push_membership_v4(Ipv4Key(20), Ipv4Key(29), &Words(vec![1 << 5]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     let first = range_tree::lookup(&finished.file, &meta, Ipv4Key(5))
         .unwrap()
@@ -115,7 +115,7 @@ fn disordered_membership_ranges_use_the_bounded_shared_external_sort() {
             .push_membership_v4(Ipv4Key(index * 3), Ipv4Key(index * 3 + 1), &words)
             .unwrap();
     }
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     swap_first_two_ranges(&finished.file, meta);
     drop(finished.file);

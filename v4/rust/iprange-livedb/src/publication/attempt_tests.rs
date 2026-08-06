@@ -12,7 +12,8 @@ use crate::key::Ipv4Key;
 use crate::publication::output::CreatedOutput;
 use crate::publication::replacement;
 use crate::publication::reservation_file::ReservationDraft;
-use crate::publication::result::{CleanupState, PublicationStatus};
+use crate::publication::result::PublicationStatus;
+use crate::publication::CleanupState;
 use crate::test_alloc::count_thread_allocations;
 
 #[test]
@@ -24,7 +25,7 @@ fn success_returns_exact_published_facts_and_no_residue() {
     let expected_length = output.byte_length;
     let expected_digest = output.sha512;
 
-    let result = fail_if_exists(output).unwrap();
+    let result = fail_if_exists_cancellable(output, &crate::CancellationToken::new()).unwrap();
 
     assert_eq!(result.publication, PublicationStatus::Published);
     assert_eq!(result.destination_content, DestinationContent::Desired);
@@ -218,7 +219,7 @@ fn foreign_coordination_is_preserved_while_owned_artifacts_are_cleaned() {
     let (output, paths) = prepared_output(&directory.path);
     fs::write(&paths.coordination, b"foreign").unwrap();
 
-    let result = fail_if_exists(output).unwrap();
+    let result = fail_if_exists_cancellable(output, &crate::CancellationToken::new()).unwrap();
 
     assert_eq!(result.publication, PublicationStatus::NotPublished);
     assert_eq!(result.destination_content, DestinationContent::Absent);
@@ -235,7 +236,7 @@ fn existing_main_is_never_removed_or_classified_without_reading_it() {
     let (output, paths) = prepared_output(&directory.path);
     fs::write(&paths.main, b"existing").unwrap();
 
-    let result = fail_if_exists(output).unwrap();
+    let result = fail_if_exists_cancellable(output, &crate::CancellationToken::new()).unwrap();
 
     assert_eq!(result.publication, PublicationStatus::NotPublished);
     assert_eq!(result.destination_content, DestinationContent::Unclassified);
@@ -384,9 +385,14 @@ fn prepared_output(directory: &Path) -> (PreparedOutput, Paths) {
             .unwrap(),
     );
     let coordination = named_path(directory, attempt.destination().coordination());
-    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    let mut builder = Builder::new_owned(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 3).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(
+            builder.finish_owned().unwrap(),
+            &crate::CancellationToken::new(),
+        )
+        .unwrap();
     (
         output,
         Paths {
@@ -435,7 +441,6 @@ fn direct_spec() -> OutputSpec {
 
 fn output_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     }
 }

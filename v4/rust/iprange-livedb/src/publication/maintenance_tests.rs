@@ -413,7 +413,7 @@ fn complete_output(directory: &Path, _seed: [u8; 16]) -> Complete {
     let secured = CreatedOutput::create(&main).unwrap().secure().unwrap();
     let (attempt, file) = secured.into_parts();
     let path = directory.join(OsStr::from_bytes(attempt.name().bytes()));
-    let mut builder = Builder::new(
+    let mut builder = Builder::new_owned(
         file,
         OutputSpec {
             address_family: AddressFamily::Ipv4,
@@ -425,13 +425,17 @@ fn complete_output(directory: &Path, _seed: [u8; 16]) -> Complete {
             feed_index_limit: 0,
         },
         OutputBudget {
-            max_heap_bytes: 2 * 1024 * 1024,
             max_output_pages: 1_000,
         },
     )
     .unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(2), 3).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(
+            builder.finish_owned().unwrap(),
+            &crate::CancellationToken::new(),
+        )
+        .unwrap();
     let complete = Complete {
         attempt: output.attempt.attempt_id(),
         path,

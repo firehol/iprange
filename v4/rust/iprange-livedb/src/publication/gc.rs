@@ -220,7 +220,6 @@ pub(super) struct Envelope {
     pub(super) name: Name,
     pub(super) source_name: Name,
     pub(super) inert_name: Name,
-    pub(super) file: File,
     pub(super) identity: Identity,
     pub(super) header: Header,
 }
@@ -351,7 +350,6 @@ fn load(
         name: envelope_name,
         source_name,
         inert_name,
-        file,
         identity,
         header,
     })

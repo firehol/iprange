@@ -164,7 +164,7 @@ fn incomplete_source(path: &Path) {
         .create_new(true)
         .open(path)
         .unwrap();
-    let builder = Builder::new(
+    let builder = Builder::new_owned(
         file,
         OutputSpec {
             address_family: AddressFamily::Ipv4,
@@ -176,12 +176,11 @@ fn incomplete_source(path: &Path) {
             feed_index_limit: 0,
         },
         OutputBudget {
-            max_heap_bytes: 1024 * 1024,
             max_output_pages: 100,
         },
     )
     .unwrap();
-    let mut finished = builder.finish().unwrap();
+    let mut finished = builder.finish_owned().unwrap();
     finished.meta.page_count = 3;
     finished.meta.range_root = 2;
     finished.meta.range_record_count = 1;

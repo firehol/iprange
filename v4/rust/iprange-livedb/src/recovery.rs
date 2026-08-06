@@ -1,57 +1,33 @@
 //! Recovery candidate identity shared by inspection, validation, and recovery.
 
 mod api;
-#[allow(dead_code)]
-mod bounded_vec;
-#[allow(dead_code)]
 mod budget;
-#[allow(dead_code)]
 mod catalog;
-#[allow(dead_code)]
 mod catalog_table;
 mod classify;
-#[allow(dead_code)]
 mod direct;
-#[allow(dead_code)]
 mod direct_build;
-#[allow(dead_code)]
 mod direct_output;
 #[cfg(any(unix, windows))]
-#[allow(dead_code)]
 mod external_sort;
-#[allow(dead_code)]
 mod membership;
-#[allow(dead_code)]
 mod membership_blob;
-#[allow(dead_code)]
 mod membership_build;
-#[allow(dead_code)]
 mod membership_index;
-#[allow(dead_code)]
 mod membership_output;
-#[allow(dead_code)]
 mod membership_table;
-#[allow(dead_code)]
 mod membership_words;
-#[allow(dead_code)]
 mod metadata;
-#[allow(dead_code)]
 mod page_set;
-#[allow(dead_code)]
 mod range_build;
-#[allow(dead_code)]
 mod range_scan;
-#[allow(dead_code)]
 mod report;
 #[cfg(any(unix, windows))]
-#[allow(dead_code)]
 mod scratch;
 mod scratch_maintenance;
 pub(crate) mod source_guard;
-#[allow(dead_code)]
 mod tables;
 mod terminal;
-#[allow(dead_code)]
 mod tree_scan;
 
 use crate::validation::{LocalFileIdentity, ValidationProgress};

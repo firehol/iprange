@@ -25,13 +25,8 @@ enum Point {
     DesiredProven,
     CleanupOutput,
     CleanupReservation,
+    #[cfg(unix)]
     CleanupDirectorySync,
-}
-
-pub(crate) fn fail_if_exists(output: PreparedOutput) -> Result {
-    debug_assert!(output.previous.is_none());
-    debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
-    fail_if_exists_with(output, |_| Ok(()))
 }
 
 pub(crate) fn fail_if_exists_cancellable(
@@ -41,10 +36,7 @@ pub(crate) fn fail_if_exists_cancellable(
     debug_assert!(output.previous.is_none());
     debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
     publish_with(output, Some(cancellation), |point| {
-        if matches!(
-            point,
-            Point::CleanupOutput | Point::CleanupReservation | Point::CleanupDirectorySync
-        ) {
+        if cleanup_ignores_cancellation(point) {
             return Ok(());
         }
         cancellation.check().map_err(|error| Problem::sdk(&error))
@@ -58,10 +50,7 @@ pub(crate) fn replace_existing_cancellable(
     debug_assert!(output.previous.is_some());
     debug_assert!(output.policy.is_replacement());
     publish_with(output, Some(cancellation), |point| {
-        if matches!(
-            point,
-            Point::CleanupOutput | Point::CleanupReservation | Point::CleanupDirectorySync
-        ) {
+        if cleanup_ignores_cancellation(point) {
             return Ok(());
         }
         cancellation.check().map_err(|error| Problem::sdk(&error))
@@ -91,6 +80,7 @@ pub(super) fn resume_armed(
     }
 }
 
+#[cfg(all(test, unix))]
 fn fail_if_exists_with(
     output: PreparedOutput,
     checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
@@ -485,7 +475,17 @@ const fn cleanup_point(point: cleanup::Point) -> Point {
     match point {
         cleanup::Point::OutputRemoval => Point::CleanupOutput,
         cleanup::Point::ReservationRemoval => Point::CleanupReservation,
+        #[cfg(unix)]
         cleanup::Point::DirectorySync => Point::CleanupDirectorySync,
+    }
+}
+
+const fn cleanup_ignores_cancellation(point: Point) -> bool {
+    match point {
+        Point::CleanupOutput | Point::CleanupReservation => true,
+        #[cfg(unix)]
+        Point::CleanupDirectorySync => true,
+        _ => false,
     }
 }
 

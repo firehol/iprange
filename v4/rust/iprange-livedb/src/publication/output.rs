@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use crate::bootstrap::{self, BootstrapError, OpenMode};
+use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::immutable_output::Finished;
@@ -35,7 +35,7 @@ pub(super) use output_resume::ResumedOutput;
 pub(crate) enum Error {
     Namespace(NamespaceError),
     Sdk(crate::error::Error),
-    Bootstrap(BootstrapError),
+    Bootstrap,
     Gc(PublicationProblem),
     FinishedMetaChanged,
     FinishedLengthChanged,
@@ -100,6 +100,7 @@ impl CreatedOutput {
         &self.name
     }
 
+    #[cfg(windows)]
     pub(crate) fn attempt_id(&self) -> [u8; 16] {
         self.attempt_id
     }
@@ -209,33 +210,6 @@ pub(crate) struct OutputAttempt {
 }
 
 impl OutputAttempt {
-    // Boxing this failure would allocate on the publication path and obscure ownership.
-    #[allow(clippy::result_large_err)]
-    pub(crate) fn prepare(
-        self,
-        finished: Finished,
-    ) -> Result<PreparedOutput, Failure<UnpreparedOutput>> {
-        let owner = UnpreparedOutput {
-            attempt: self,
-            finished,
-        };
-        match prepare(&owner) {
-            Ok((byte_length, sha512)) => {
-                let UnpreparedOutput { attempt, finished } = owner;
-                Ok(PreparedOutput {
-                    attempt,
-                    file: finished.file,
-                    meta: finished.meta,
-                    byte_length,
-                    sha512,
-                    policy: Policy::FailIfExists,
-                    previous: None,
-                })
-            }
-            Err(cause) => Err(Failure { owner, cause }),
-        }
-    }
-
     #[allow(clippy::result_large_err)]
     pub(crate) fn prepare_cancellable(
         self,
@@ -362,20 +336,6 @@ fn secure_created(created: &CreatedOutput) -> Result<Identity, Error> {
     Ok(identity)
 }
 
-fn prepare(owner: &UnpreparedOutput) -> Result<(u64, [u8; 64]), Error> {
-    verify_custody(&owner.attempt, &owner.finished.file, Location::Private)?;
-    live_lock::lock(&owner.finished.file, MAIN_LIFETIME_LOCK, Mode::Exclusive)
-        .map_err(Error::Sdk)?;
-    let byte_length = inspect_finished(owner)?;
-    let sha512 = digest(&owner.finished.file, byte_length)?;
-    sync_file(&owner.finished.file).map_err(crate::error::Error::from)?;
-    let final_length = inspect_finished(owner)?;
-    if final_length != byte_length {
-        return Err(Error::FinishedLengthChanged);
-    }
-    Ok((byte_length, sha512))
-}
-
 fn prepare_cancellable(
     owner: &UnpreparedOutput,
     cancellation: &CancellationToken,
@@ -431,7 +391,7 @@ fn inspect_exact(
     let page0 = (&pages[..PAGE_SIZE]).try_into().expect("fixed meta page");
     let page1 = (&pages[PAGE_SIZE..]).try_into().expect("fixed meta page");
     let opened = bootstrap::open_meta_pages(page0, page1, byte_length, OpenMode::ImmutableReader)
-        .map_err(Error::Bootstrap)?;
+        .map_err(|_| Error::Bootstrap)?;
     if opened.meta != expected {
         return Err(Error::FinishedMetaChanged);
     }

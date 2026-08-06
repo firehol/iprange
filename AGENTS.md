@@ -385,6 +385,7 @@ Build (CMake): `cmake -S . -B build-cmake && cmake --build build-cmake` (see `CM
 Test (Rust v4):
 
 ```bash
+./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml
 cargo test --manifest-path v4/rust/Cargo.toml --all-features
 ```

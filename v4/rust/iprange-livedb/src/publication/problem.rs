@@ -10,6 +10,7 @@ use super::reservation_file;
 pub(crate) use super::types::PublicationProblem as Problem;
 
 impl Problem {
+    #[cfg(all(test, unix))]
     pub(crate) const fn injected() -> Self {
         Self::new(ErrorCode::Io, None, "injected publication failure")
     }
@@ -18,6 +19,7 @@ impl Problem {
         Self::new(ErrorCode::CleanupConflict, None, detail)
     }
 
+    #[cfg(windows)]
     pub(crate) const fn cleanup_in_progress(detail: &'static str) -> Self {
         Self::new(ErrorCode::CleanupInProgress, None, detail)
     }
@@ -43,6 +45,9 @@ impl Problem {
             NamespaceError::IdentityChanged => {
                 Self::plain(ErrorCode::Conflict, "publication inode identity changed")
             }
+            NamespaceError::LinkCount(links) if *links == 0 => {
+                Self::plain(ErrorCode::Conflict, "publication inode has no links")
+            }
             NamespaceError::LinkCount(_) => {
                 Self::plain(ErrorCode::Conflict, "publication inode link count changed")
             }
@@ -67,9 +72,7 @@ impl Problem {
             NamespaceError::IoAt { source, .. } if source.raw_os_error() == Some(libc::ELOOP) => {
                 Self::plain(ErrorCode::Conflict, "publication name is a symlink")
             }
-            NamespaceError::IoAt { source, .. } => {
-                Self::io(source, "publication filesystem operation failed")
-            }
+            NamespaceError::IoAt { operation, source } => Self::io(source, operation),
         }
     }
 
@@ -77,7 +80,7 @@ impl Problem {
         match error {
             output::Error::Namespace(cause) => Self::namespace(cause),
             output::Error::Sdk(cause) => Self::sdk(cause),
-            output::Error::Bootstrap(_) => {
+            output::Error::Bootstrap => {
                 Self::plain(ErrorCode::FormatInvalid, "output metadata is malformed")
             }
             output::Error::Gc(problem) => *problem,
@@ -96,7 +99,7 @@ impl Problem {
             reservation_file::Error::Sdk(cause) => Self::sdk(cause),
             reservation_file::Error::Output(cause) => Self::output(cause),
             reservation_file::Error::Gc(problem) => *problem,
-            reservation_file::Error::Codec(_) => {
+            reservation_file::Error::Codec => {
                 Self::plain(ErrorCode::FormatInvalid, "reservation record is malformed")
             }
             reservation_file::Error::HeaderChanged => {
@@ -134,15 +137,19 @@ impl Problem {
             main_file::Error::Sdk(cause) => Self::sdk(cause),
             main_file::Error::Output(cause) => Self::output(cause),
             main_file::Error::Reservation(cause) => Self::reservation(cause),
-            main_file::Error::PreviousLinkCount(_) => Self::plain(
+            #[cfg(unix)]
+            main_file::Error::PreviousLinkCount => Self::plain(
                 ErrorCode::CleanupConflict,
                 "retired previous destination still has a link",
             ),
-            main_file::Error::ReservationLinkCount(_) => Self::plain(
+            #[cfg(unix)]
+            main_file::Error::ReservationLinkCount => Self::plain(
                 ErrorCode::CleanupConflict,
                 "retired reservation still has a link",
             ),
+            #[cfg(windows)]
             main_file::Error::Gc(problem) => *problem,
+            #[cfg(all(test, unix))]
             main_file::Error::Injected => Self::injected(),
         }
     }
@@ -163,6 +170,7 @@ impl Problem {
         Self::new(error.code(), os_code, "publication SDK operation failed")
     }
 
+    #[cfg(windows)]
     pub(crate) fn into_sdk(self) -> SdkError {
         match (self.code, self.os_code) {
             (ErrorCode::Io, Some(code)) => SdkError::Io(std::io::Error::from_raw_os_error(code)),

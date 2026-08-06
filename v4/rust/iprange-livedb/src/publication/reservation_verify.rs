@@ -99,7 +99,7 @@ fn verify_contents(file: &File, header: Header, block: usize) -> Result<(), Erro
 pub(super) fn select_exact(file: &File, header: Header, block: usize) -> Result<(), Error> {
     let mut bytes = [0; FILE_SIZE];
     file_io::read_exact_at(file, &mut bytes, 0)?;
-    if reservation::select(&bytes).map_err(Error::Codec)? != (Selected { header, block }) {
+    if reservation::select(&bytes).map_err(|_| Error::Codec)? != (Selected { header, block }) {
         return Err(Error::HeaderChanged);
     }
     Ok(())

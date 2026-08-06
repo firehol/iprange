@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn sparse_maximum_page_does_not_size_the_heap_table() {
-    let mut set = PageSet::new(1024, u64::from(u32::MAX)).unwrap();
+    let mut set = PageSet::allocate(1024, u64::from(u32::MAX), None).unwrap();
     assert!(set.insert(u32::MAX).unwrap());
     assert!(!set.insert(u32::MAX).unwrap());
     assert!(set.slot_count() <= 128);
@@ -10,7 +10,7 @@ fn sparse_maximum_page_does_not_size_the_heap_table() {
 
 #[test]
 fn full_heap_table_fails_before_allocation_or_looping() {
-    let mut set = PageSet::new(64, 100).unwrap();
+    let mut set = PageSet::allocate(64, 100, None).unwrap();
     for page in 0..6 {
         assert!(set.insert(page).unwrap());
     }

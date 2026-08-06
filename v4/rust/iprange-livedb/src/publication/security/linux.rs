@@ -44,10 +44,3 @@ pub(super) fn require_trivial(file: &File) -> Result<(), NamespaceError> {
         }),
     }
 }
-
-fn last_error(operation: &'static str) -> NamespaceError {
-    NamespaceError::IoAt {
-        operation,
-        source: io::Error::last_os_error(),
-    }
-}

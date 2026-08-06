@@ -2,12 +2,14 @@
 
 use std::fs::File;
 
-use super::namespace::{
-    regular_identity, regular_link_count, Directory, Identity, Name, NamespaceError,
-};
+#[cfg(unix)]
+use super::namespace::{regular_identity, regular_link_count, Directory, NamespaceError};
+use super::namespace::{Identity, Name};
 use super::output::{CreatedOutput, OutputAttempt, PreparedOutput};
 use super::problem::Problem;
-use super::result::{ArtifactKind, CleanupArtifacts, NameSlot, Seed};
+#[cfg(unix)]
+use super::result::NameSlot;
+use super::result::{ArtifactKind, CleanupArtifacts, Seed};
 use super::{
     CleanupArtifact, DirectoryRole, Housekeeping, HousekeepingArtifact, PrivateOutputAttempt,
 };
@@ -57,15 +59,8 @@ pub(crate) struct EarlyDiscard {
 pub(super) enum Point {
     OutputRemoval,
     ReservationRemoval,
+    #[cfg(unix)]
     DirectorySync,
-}
-
-pub(super) fn discard(
-    seed: &mut Seed,
-    output: &PreparedOutput,
-    reservation: Option<ReservationOwner<'_>>,
-) -> Summary {
-    discard_with(seed, output, reservation, |_| Ok(()))
 }
 
 pub(crate) fn discard_created(created: &CreatedOutput) -> EarlyDiscard {
@@ -220,6 +215,7 @@ fn discard_owners_with(
     }
 }
 
+#[cfg(unix)]
 fn discard_one(
     directory: &Directory,
     name: &Name,
@@ -248,6 +244,7 @@ fn discard_one(
     finish_one(directory, removal)
 }
 
+#[cfg(unix)]
 fn finish_one(directory: &Directory, removal: Removal<'_>) -> Option<Problem> {
     match removal.state {
         RemovalState::Failed(problem) => Some(problem),
@@ -279,6 +276,7 @@ pub(super) fn early_artifact(facts: &PrivateOutputAttempt, error: Problem) -> Cl
     }
 }
 
+#[cfg(unix)]
 fn remove_output<'a>(
     directory: &Directory,
     output: OutputOwner<'a>,
@@ -292,6 +290,7 @@ fn remove_output<'a>(
     )
 }
 
+#[cfg(unix)]
 fn remove_reservation<'a>(
     directory: &Directory,
     canonical: &'a Name,
@@ -325,6 +324,7 @@ fn remove_reservation<'a>(
     )
 }
 
+#[cfg(unix)]
 fn remove<'a>(
     directory: &Directory,
     file: &'a File,
@@ -352,6 +352,7 @@ fn remove<'a>(
     }
 }
 
+#[cfg(unix)]
 fn unlink_names(
     directory: &Directory,
     identity: Identity,
@@ -376,6 +377,7 @@ fn unlink_names(
     }
 }
 
+#[cfg(unix)]
 fn require_unlinked<'a>(
     kind: ArtifactKind,
     name: NameSlot,
@@ -390,10 +392,12 @@ fn require_unlinked<'a>(
     Ok(Removal::awaiting_sync(kind, name, identity, file))
 }
 
+#[cfg(unix)]
 fn links(file: &File) -> Result<u64, Problem> {
     regular_link_count(file).map_err(|error| Problem::namespace(&error))
 }
 
+#[cfg(unix)]
 fn finish_removal(
     seed: &mut Seed,
     removal: Removal<'_>,
@@ -415,6 +419,7 @@ fn finish_removal(
     }
 }
 
+#[cfg(unix)]
 struct Removal<'a> {
     kind: ArtifactKind,
     name: NameSlot,
@@ -422,6 +427,7 @@ struct Removal<'a> {
     state: RemovalState<'a>,
 }
 
+#[cfg(unix)]
 impl<'a> Removal<'a> {
     fn awaiting_sync(
         kind: ArtifactKind,
@@ -456,11 +462,13 @@ impl<'a> Removal<'a> {
     }
 }
 
+#[cfg(unix)]
 enum RemovalState<'a> {
     NeedsSync(&'a File),
     Failed(Problem),
 }
 
+#[cfg(unix)]
 const fn default_slot(location: ReservationLocation) -> NameSlot {
     match location {
         ReservationLocation::Private | ReservationLocation::Either => NameSlot::PrivateReservation,

@@ -55,10 +55,6 @@ pub(crate) struct PageSetFailure {
 }
 
 impl PageSet {
-    pub(crate) fn new(max_heap_bytes: u64, expected_pages: u64) -> Result<Self> {
-        Self::allocate(max_heap_bytes, expected_pages, None)
-    }
-
     pub(crate) fn for_recovery(
         max_heap_bytes: u64,
         expected_pages: u64,

@@ -8,7 +8,7 @@ use crate::{error, file_io};
 
 use super::namespace::{regular_identity, sync_file, Identity, Name, NamespaceError};
 use super::output::{self, PreparedOutput};
-use super::reservation::{Header, SelectError, State};
+use super::reservation::{Header, State};
 
 #[path = "reservation_verify.rs"]
 mod verification;
@@ -23,7 +23,7 @@ pub(crate) enum Error {
     Sdk(error::Error),
     Output(output::Error),
     Gc(super::PublicationProblem),
-    Codec(SelectError),
+    Codec,
     HeaderChanged,
     HeaderInvariant,
     LengthChanged,

@@ -79,8 +79,10 @@ fn clean_membership_recovery_preserves_feeds_bitmaps_metadata_and_high_water() {
     source
         .push_membership_v4(Ipv4Key(40), Ipv4Key(49), &wide)
         .unwrap();
-    source.write_metadata(br#"{"kind":"membership"}"#).unwrap();
-    let finished = source.finish().unwrap();
+    source
+        .write_metadata_with_budget(br#"{"kind":"membership"}"#, 8 * 1024 * 1024)
+        .unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     drop(finished.file);
 
@@ -121,7 +123,7 @@ fn either_catalog_tree_is_sufficient_for_equal_conflict_free_pairs() {
     source
         .push_membership_v4(Ipv4Key(20), Ipv4Key(29), &Words(vec![1 << 5]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     corrupt_crc(&finished.file, meta.catalog_name_root);
     drop(finished.file);
@@ -158,7 +160,7 @@ fn catalog_conflicts_reject_only_dependent_memberships_and_ranges() {
     source
         .push_membership_v4(Ipv4Key(20), Ipv4Key(29), &Words(vec![1 << 5]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     rewrite_name_index(&finished.file, meta, "a", 7);
     drop(finished.file);
@@ -199,7 +201,7 @@ fn damaged_blob_rejects_its_membership_and_known_range() {
     source
         .push_membership_v4(Ipv4Key(0), Ipv4Key(9), &wide_words())
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     let id = range_tree::lookup(&finished.file, &meta, Ipv4Key(5))
         .unwrap()
@@ -241,7 +243,7 @@ fn ordered_recovery_spills_all_tables_to_one_file() {
     source
         .push_membership_v4(Ipv4Key(0), Ipv4Key(9), &Words(words))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     drop(finished.file);
 
@@ -297,7 +299,7 @@ fn table_scratch_budget_failure_removes_its_partial_file() {
     source
         .push_membership_v4(Ipv4Key(0), Ipv4Key(9), &Words(vec![1 << 1]))
         .unwrap();
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     drop(finished.file);
 
@@ -366,11 +368,10 @@ fn builder(path: &Path, spec: OutputSpec) -> Builder {
         .create_new(true)
         .open(path)
         .unwrap();
-    Builder::new(
+    Builder::new_owned(
         file,
         spec,
         OutputBudget {
-            max_heap_bytes: 8 * 1024 * 1024,
             max_output_pages: 100_000,
         },
     )

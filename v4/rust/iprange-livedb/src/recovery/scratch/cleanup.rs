@@ -1,14 +1,18 @@
+#[cfg(unix)]
 use std::fs::File;
 
 use crate::error::{Error, ErrorCode};
-use crate::publication::namespace::{
-    regular_link_count, Directory, NamespaceError, CREATION_SECURITY_KIND,
-};
+use crate::publication::namespace::CREATION_SECURITY_KIND;
+#[cfg(unix)]
+use crate::publication::namespace::{regular_link_count, Directory, NamespaceError};
 use crate::publication::security::Profile;
 use crate::validation::LocalFileIdentity;
 
-use super::{local, Owned, ScratchCleanup, ScratchProblem, ScratchResidue, MAX_OWNED};
+#[cfg(unix)]
+use super::MAX_OWNED;
+use super::{local, Owned, ScratchCleanup, ScratchProblem, ScratchResidue};
 
+#[cfg(unix)]
 pub(super) fn set_removed_problems(
     removed: &[bool; MAX_OWNED],
     problems: &mut [Option<ScratchProblem>; MAX_OWNED],
@@ -21,6 +25,7 @@ pub(super) fn set_removed_problems(
     }
 }
 
+#[cfg(unix)]
 pub(super) fn remove(
     directory: &Directory,
     owner: &Owned,
@@ -38,6 +43,7 @@ pub(super) fn remove(
     require_unlinked(file)
 }
 
+#[cfg(unix)]
 fn require_named_link(
     directory: &Directory,
     owner: &Owned,
@@ -56,6 +62,7 @@ fn require_named_link(
     Ok(true)
 }
 
+#[cfg(unix)]
 fn require_unlinked(file: &File) -> std::result::Result<(), ScratchProblem> {
     let links = regular_link_count(file).map_err(|error| scratch_problem(&error))?;
     if links != 0 {
@@ -66,6 +73,7 @@ fn require_unlinked(file: &File) -> std::result::Result<(), ScratchProblem> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn conflict(detail: &'static str) -> ScratchProblem {
     ScratchProblem {
         code: ErrorCode::CleanupConflict,
@@ -91,6 +99,7 @@ pub(super) fn residue(
     }
 }
 
+#[cfg(unix)]
 pub(super) fn scratch_problem(error: &NamespaceError) -> ScratchProblem {
     match error {
         NamespaceError::ForkedHandle => ScratchProblem {
@@ -117,6 +126,7 @@ pub(crate) fn residue_error(cleanup: &ScratchCleanup) -> Error {
     }
 }
 
+#[cfg(unix)]
 fn io_problem(error: &std::io::Error, detail: &'static str) -> ScratchProblem {
     ScratchProblem {
         code: ErrorCode::Io,

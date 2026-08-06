@@ -40,7 +40,6 @@ use windows_sys::Win32::System::Threading::{
 use crate::publication::namespace::NamespaceError;
 
 const DOMAIN: &[u8; 8] = b"IPR4PSEC";
-pub(crate) const CREATOR_MODE: u32 = 0;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {

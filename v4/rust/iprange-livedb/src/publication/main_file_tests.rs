@@ -46,8 +46,7 @@ fn exact_inode_is_published_locked_and_cleanly_retired() {
     let completed = published.retire().unwrap();
     assert!(!paths.coordination.exists());
     assert_eq!(completed.reservation_identity, reservation_identity);
-    assert_eq!(completed.reservation_header.output_sha512, output_digest);
-    completed.output.verify_main().unwrap();
+    completed._output_guard.verify_main().unwrap();
     assert!(!live_lock::try_lock(&main_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap());
 }
 
@@ -173,7 +172,7 @@ fn replacement_exchange_keeps_both_inodes_locked_until_retirement() {
     let completed = published.retire().unwrap();
     assert!(!paths.private_output.exists());
     assert!(!paths.coordination.exists());
-    completed.output.verify_main().unwrap();
+    completed._output_guard.verify_main().unwrap();
 }
 
 #[test]
@@ -204,9 +203,14 @@ fn armed_attempt(directory: &Path) -> (PreparedOutput, ArmedReservation, Paths) 
     let secured = CreatedOutput::create(&main).unwrap().secure().unwrap();
     let (attempt, file) = secured.into_parts();
     let private_output = named_path(directory, attempt.name());
-    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    let mut builder = Builder::new_owned(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 3).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(
+            builder.finish_owned().unwrap(),
+            &crate::CancellationToken::new(),
+        )
+        .unwrap();
     let reservation = ReservationDraft::create(&output)
         .unwrap()
         .initialize(&output)
@@ -232,9 +236,14 @@ fn armed_replacement_attempt(directory: &Path) -> (PreparedOutput, ArmedReservat
     let secured = CreatedOutput::create(&main).unwrap().secure().unwrap();
     let (attempt, file) = secured.into_parts();
     let private_output = named_path(directory, attempt.name());
-    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    let mut builder = Builder::new_owned(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 3).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(
+            builder.finish_owned().unwrap(),
+            &crate::CancellationToken::new(),
+        )
+        .unwrap();
     fs::write(&main, b"previous bytes").unwrap();
     let output = replacement::bind(output, &crate::CancellationToken::new()).unwrap();
     let reservation = ReservationDraft::create(&output)
@@ -283,7 +292,6 @@ fn direct_spec() -> OutputSpec {
 
 fn output_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     }
 }

@@ -22,25 +22,27 @@ files, historical SOW claims, or aspirational Phase-2 work.
 5. Keep validation explicit. Ordinary open and read paths must not perform a
    whole-file validation.
 
-## Measure the compiled implementation
+## Prove the compiled implementation
 
-Tracked `v4/rust` files include historical uncompiled sources. Derive the
-active core module graph from Cargo instead of counting or deleting every
-tracked Rust file:
+Every Rust source must belong to at least one supported Cargo compiler graph or
+the one exact native fixture compiled at test runtime. Run the repository gate:
 
 ```bash
-CARGO_TARGET_DIR=/tmp/iprange-v4-graph \
-  cargo check --manifest-path v4/rust/Cargo.toml -p iprange-livedb --lib
+./v4/rust/check-source-graph.sh
 ```
 
-Read the generated `iprange_livedb-*.d` dependency file. Measure
-`iprange-capi` separately. Never delete historical files without user approval.
+The gate uses fresh Cargo dependency files for Linux, Windows, macOS, and
+FreeBSD, denies compiler warnings and dead-code suppression, and compares the
+normalized union with the repository source inventory. Never treat a file's
+presence, a test name, or an old SOW claim as proof that production compiles or
+calls it. Never delete a file without user approval and a preservation commit.
 
 ## Run the Rust gates
 
 Use these baseline gates:
 
 ```bash
+./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
 cargo test --manifest-path v4/rust/Cargo.toml \

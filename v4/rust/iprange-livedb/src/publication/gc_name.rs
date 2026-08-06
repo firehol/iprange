@@ -115,6 +115,16 @@ mod tests {
             inert(attempt, 7).unwrap().bytes(),
             b".iprange-gc-0123456789abcdeffedcba9876543210-00000007.tmp"
         );
+        let inert = inert(attempt, 7).unwrap();
+        assert_eq!(decode_inert(inert.bytes()), Some((attempt, 7)));
+        assert_eq!(
+            candidate(name.bytes()),
+            Some(Candidate::Envelope(Some((attempt, 0x89ab_cdef))))
+        );
+        assert_eq!(
+            candidate(inert.bytes()),
+            Some(Candidate::Inert(Some((attempt, 7))))
+        );
     }
 
     #[test]

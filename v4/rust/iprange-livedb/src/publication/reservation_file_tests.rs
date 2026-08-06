@@ -230,9 +230,14 @@ fn prepared_output(directory: &Path) -> (PreparedOutput, PathBuf) {
         .unwrap();
     let (attempt, file) = secured.into_parts();
     let private_path = named_path(directory, attempt.name());
-    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    let mut builder = Builder::new_owned(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 3).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(
+            builder.finish_owned().unwrap(),
+            &crate::CancellationToken::new(),
+        )
+        .unwrap();
     (output, private_path)
 }
 
@@ -254,7 +259,6 @@ fn direct_spec() -> OutputSpec {
 
 fn output_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     }
 }

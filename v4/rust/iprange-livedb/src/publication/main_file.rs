@@ -6,8 +6,9 @@ use crate::error;
 use super::namespace::regular_link_count;
 use super::namespace::{sync_file, NamespaceError};
 use super::output::{self, PreparedOutput};
+#[cfg(windows)]
 use super::problem::Problem;
-use super::reservation::{Header, Policy};
+use super::reservation::Policy;
 use super::reservation_file::{self, ArmedReservation};
 use super::{Housekeeping, HousekeepingArtifact};
 
@@ -17,9 +18,13 @@ pub(crate) enum Error {
     Sdk(error::Error),
     Output(output::Error),
     Reservation(reservation_file::Error),
-    PreviousLinkCount(u64),
-    ReservationLinkCount(u64),
+    #[cfg(unix)]
+    PreviousLinkCount,
+    #[cfg(unix)]
+    ReservationLinkCount,
+    #[cfg(windows)]
     Gc(Problem),
+    #[cfg(all(test, unix))]
     Injected,
 }
 
@@ -58,9 +63,9 @@ pub(crate) struct RetiringMain {
 
 #[derive(Debug)]
 pub(crate) struct PublishedOutput {
-    pub(crate) output: PreparedOutput,
+    // Retain the main inode and its lifetime lock through result construction.
+    pub(crate) _output_guard: PreparedOutput,
     pub(crate) reservation_identity: super::namespace::Identity,
-    pub(crate) reservation_header: Header,
     pub(crate) housekeeping: Housekeeping,
     pub(crate) visible_housekeeping: Vec<HousekeepingArtifact>,
 }
@@ -223,8 +228,7 @@ impl PublishedMain {
                 } = owner;
                 Ok(PublishedOutput {
                     reservation_identity: published.reservation.identity,
-                    reservation_header: published.reservation.header,
-                    output: published.output,
+                    _output_guard: published.output,
                     housekeeping,
                     visible_housekeeping,
                 })
@@ -271,7 +275,7 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
     owner.previous_unlinked = true;
     let links = regular_link_count(&previous.file)?;
     if links != 0 {
-        return Err(Error::PreviousLinkCount(links));
+        return Err(Error::PreviousLinkCount);
     }
     crate::fault::crash("publication.after_previous_unlink");
     Ok(true)
@@ -341,7 +345,7 @@ fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
     owner.reservation_unlinked = true;
     let links = regular_link_count(&published.reservation.file)?;
     if links != 0 {
-        return Err(Error::ReservationLinkCount(links));
+        return Err(Error::ReservationLinkCount);
     }
     crate::fault::crash("publication.after_reservation_unlink");
     Ok(())

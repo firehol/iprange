@@ -12,7 +12,9 @@ pub(crate) struct DecodedHeader {
     pub(crate) owner_kind: u16,
     pub(crate) attempt_id: [u8; 16],
     pub(crate) ordinal: u32,
+    #[cfg(windows)]
     pub(crate) creation_security_kind: u16,
+    #[cfg(windows)]
     pub(crate) creation_security_commitment: [u8; 32],
 }
 
@@ -104,7 +106,9 @@ pub(crate) fn decode_header(bytes: &[u8; 128]) -> Option<DecodedHeader> {
         owner_kind,
         attempt_id,
         ordinal: u32_le(bytes, 72),
+        #[cfg(windows)]
         creation_security_kind: u16_le(bytes, 76),
+        #[cfg(windows)]
         creation_security_commitment: bytes[80..112].try_into().expect("fixed commitment"),
     })
 }

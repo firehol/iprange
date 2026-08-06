@@ -99,7 +99,7 @@ fn crc_damaged_leaf_is_skipped_and_reported_as_unbounded() {
             .push_direct_v4(Ipv4Key(from), Ipv4Key(from + 1), index)
             .unwrap();
     }
-    let finished = source.finish().unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     let damaged = first_child(&finished.file, meta);
     corrupt_crc(&finished.file, damaged);
@@ -283,8 +283,10 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     let payload = br#"{"source":"recovery"}"#;
     let mut source = source_builder(&clean.source);
     source.push_direct_v4(Ipv4Key(10), Ipv4Key(19), 7).unwrap();
-    source.write_metadata(payload).unwrap();
-    let finished = source.finish().unwrap();
+    source
+        .write_metadata_with_budget(payload, 2 * 1024 * 1024)
+        .unwrap();
+    let finished = source.finish_owned().unwrap();
     let meta = finished.meta;
     drop(finished.file);
 
@@ -351,7 +353,7 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
 }
 
 pub(super) fn source_builder(path: &Path) -> Builder {
-    Builder::new(
+    Builder::new_owned(
         create(path),
         OutputSpec {
             address_family: AddressFamily::Ipv4,
@@ -368,7 +370,7 @@ pub(super) fn source_builder(path: &Path) -> Builder {
 }
 
 pub(super) fn output_builder(path: &Path) -> Builder {
-    Builder::new(
+    Builder::new_owned(
         create(path),
         OutputSpec {
             address_family: AddressFamily::Ipv4,
@@ -390,7 +392,7 @@ pub(super) fn finish_ranges(mut builder: Builder, ranges: &[(u32, u32, u32)]) ->
             .push_direct_v4(Ipv4Key(from), Ipv4Key(to), value)
             .unwrap();
     }
-    let finished = builder.finish().unwrap();
+    let finished = builder.finish_owned().unwrap();
     let meta = finished.meta;
     drop(finished.file);
     meta
@@ -485,7 +487,6 @@ fn budget(max_heap_bytes: u64) -> RecoveryBudget {
 
 fn output_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 20_000,
     }
 }

@@ -11,8 +11,6 @@ use super::namespace::{
 use super::output::PreparedOutput;
 use super::problem::Problem;
 use super::reservation::{self, Header, Policy, State};
-#[allow(unused_imports)]
-pub(crate) use super::types::CleanupState;
 pub(crate) use super::types::{
     AccessPolicy, ArtifactKind, CleanupArtifact, CleanupArtifacts, CoordinationCleanup,
     CreationSecurity, DestinationContent, DirectoryRole, Housekeeping, LaterCanonical,
@@ -254,14 +252,6 @@ impl Seed {
             visible_housekeeping: visible_housekeeping.into_boxed_slice(),
             cause,
         }
-    }
-
-    pub(super) fn preparation(
-        self,
-        cleanup: CleanupArtifacts,
-        cause: Problem,
-    ) -> PreparationFailure {
-        self.preparation_with_housekeeping(cleanup, Housekeeping::None, Vec::new(), cause)
     }
 
     pub(super) fn preparation_with_housekeeping(

@@ -13526,8 +13526,8 @@ falsely reported as unreachable.
   user explicitly decides its disposition.
 - Removing broad `allow(dead_code)` attributes only in an isolated diagnostic
   copy exposes 26 additional unused items inside the active graph. This is
-  separate from the 40 wholly unreachable files and requires caller/invariant
-  mapping before removal.
+  separate from the 40 wholly unreachable files; the follow-on classification
+  and cleanup is recorded below.
 
 The exact wholly unreachable set is:
 
@@ -13585,6 +13585,28 @@ Rust 1.74.1 all-feature matrix, warnings-denied Clippy and rustdoc, formatting,
 the generated/frozen C ABI checks, native C behavior programs, conformance, and
 the SOW audit also pass. Unrelated untracked build outputs remain untouched.
 
+The follow-on active-graph audit is now implemented. All 25 broad
+`allow(dead_code)` module suppressions were removed. The 26 compiler diagnostics
+were resolved by deleting unused convenience paths, making OS/test ownership
+explicit with `cfg`, preserving the one intentional output lifetime guard, and
+removing the wholly unused 39-line `recovery/bounded_vec.rs` file. That file was
+already preserved by commit `29206b3` before deletion. The database `src/`
+graph now contains 240 files.
+
+`v4/rust/check-source-graph.sh` makes this permanent. It builds fresh
+all-feature/all-target dependency graphs for Linux, Windows, macOS, and
+FreeBSD with warnings denied; rejects dead-code suppression; normalizes path
+aliases; and compares the compiler union with all present tracked or untracked
+Rust sources. The current inventory is 310 sources: 309 are in a Cargo graph
+and `iprange-capi/tests/native/panic_shim.rs` is the sole exact exception,
+compiled directly by the native-behavior integration test. The gate passes on
+all four targets, and the 315-test library suite remains green after the cleanup
+(313 pass; two deliberate subprocess entry points remain ignored). The complete
+current-toolchain all-feature and no-default-feature workspace matrices, the
+Rust 1.74.1 all-feature workspace matrix, warnings-denied Clippy and rustdoc,
+formatting, shell checks, diff checks, and the SOW audit also pass after this
+cleanup.
+
 #### Phase-1 compiled-path and proof map
 
 This map records whether the current public path reaches the compiled mechanism.
@@ -13604,7 +13626,7 @@ It does not declare correctness merely because a test exists.
 | Advanced and high-level public operations (section 16) | `live_writer/direct.rs`, `direct_workflow.rs`, `feed_workflow.rs`, `membership.rs`, and `membership_import.rs`; `c_abi_support.rs` delegates to the same paths | randomized direct/feed/import models, lifecycle tests, source failures, cancellation, and exact reports | Public wiring exists. Direct replacement, retention, and snapshot fail the accepted one-million-input performance target; retention performs a second rewrite pass. |
 | Exact 129-bit cardinality (section 17) | `cardinality.rs:7-180` and workflow comparison/accounting | exhaustive edge/unit checks and full-IPv6 public workflows | Wired and currently has direct independent evidence; no gap found. |
 | Explicit bounded validation (section 18) | sole public entry `validation.rs:36`; graph walkers live under `validation/*` | public clean/corrupt/live/cancellation/sink tests | Explicit rather than implicit as required. Critical branch gaps remain for nonempty retirement and low-coverage blob/bitmap paths. |
-| Best-verifiable recovery (section 19) | `recovery/api.rs:18-77`, candidate inspection, guarded sources, scanners/builders, scratch, and terminal publication | public immutable/offline/live direct and membership recovery plus stale-identity/cancellation tests | Wired, but broad dead-code suppression hides unused helpers and diagnostic coverage leaves terminal/build branches weak. It is not yet trusted branch by branch. |
+| Best-verifiable recovery (section 19) | `recovery/api.rs:18-77`, candidate inspection, guarded sources, scanners/builders, scratch, and terminal publication | public immutable/offline/live direct and membership recovery plus stale-identity/cancellation tests | Wired. Broad dead-code suppression and the unused bounded-vector helper are removed; the source-graph gate now proves compilation ownership. Diagnostic coverage still leaves terminal/build branches weak, so recovery is not yet trusted branch by branch. |
 | Compact snapshot and namespace publication (section 20) | `snapshot/api.rs:12`, `snapshot/build.rs:19-208`, `immutable_output.rs`, and `publication/*` | public direct/membership/live/replacement/failure/residue tests | Semantics and publication are wired. Ordered records are fed back through random B+tree mutation (`immutable_output.rs:274-284`), causing measured read/write amplification and unacceptable performance. |
 | Shared conformance (section 21) | public readers open committed `v4/conformance` corpus | `conformance.rs:6` rejects manifest/file drift and opens Rust fixtures | Rust-first evidence only. Bidirectional Go production/cross-process proof is intentionally blocked until Rust acceptance. |
 | Normative algorithms and thin C binding (section 22/C ABI) | active core modules above; all 30 C-ABI source files are compiler-reachable and `c_abi_support.rs` delegates to Rust public behavior | generated-header/manifest and native C behavior gates previously pass | Wiring is established, but performance and any repaired semantics must be re-proved through both Rust and C surfaces. |

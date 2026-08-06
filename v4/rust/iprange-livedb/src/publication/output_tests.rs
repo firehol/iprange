@@ -21,7 +21,9 @@ fn preparation_hashes_exact_bytes_and_retains_the_lifetime_lock() {
     let expected_digest: [u8; 64] = Sha512::digest(&expected_bytes).into();
     let expected_meta = finished.meta;
 
-    let prepared = attempt.prepare(finished).unwrap();
+    let prepared = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap();
     assert_eq!(prepared.sha512, expected_digest);
     assert_eq!(prepared.byte_length, expected_bytes.len() as u64);
     assert_eq!(prepared.meta, expected_meta);
@@ -62,7 +64,9 @@ fn warmed_preparation_allocates_no_heap() {
     let directory = TempDirectory::new();
     let (attempt, finished, _) = built_output(&directory.path);
     let _ = count_thread_allocations(|| ());
-    let (result, allocations) = count_thread_allocations(|| attempt.prepare(finished));
+    let cancellation = crate::CancellationToken::new();
+    let (result, allocations) =
+        count_thread_allocations(|| attempt.prepare_cancellable(finished, &cancellation));
     let prepared = result.unwrap();
     assert_eq!(allocations, 0);
     drop(prepared);
@@ -78,7 +82,9 @@ fn non_meta_corruption_does_not_trigger_implicit_validation() {
     byte[0] ^= 1;
     file_io::write_exact_at(&finished.file, &byte, 2 * PAGE_SIZE as u64).unwrap();
 
-    let prepared = attempt.prepare(finished).unwrap();
+    let prepared = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap();
     drop(prepared);
 }
 
@@ -89,7 +95,9 @@ fn hard_link_failure_returns_the_exact_owned_output() {
     fs::hard_link(&private, directory.path.join("extra-link")).unwrap();
     let expected = attempt.identity();
 
-    let failure = attempt.prepare(finished).unwrap_err();
+    let failure = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap_err();
     assert!(matches!(
         failure.cause,
         Error::Namespace(NamespaceError::LinkCount(2))
@@ -107,7 +115,9 @@ fn private_name_replacement_returns_the_original_owned_inode() {
     fs::write(&private, b"foreign").unwrap();
     let expected = attempt.identity();
 
-    let failure = attempt.prepare(finished).unwrap_err();
+    let failure = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap_err();
     assert!(matches!(
         failure.cause,
         Error::Namespace(NamespaceError::IdentityChanged)
@@ -128,7 +138,9 @@ fn changed_access_policy_fails_before_digest() {
         .set_permissions(fs::Permissions::from_mode(0o640))
         .unwrap();
 
-    let failure = attempt.prepare(finished).unwrap_err();
+    let failure = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap_err();
     assert!(matches!(
         failure.cause,
         Error::Namespace(NamespaceError::AccessPolicy)
@@ -141,7 +153,9 @@ fn builder_meta_must_match_the_selected_file_meta() {
     let (attempt, mut finished, _) = built_output(&directory.path);
     finished.meta.txn_id += 1;
 
-    let failure = attempt.prepare(finished).unwrap_err();
+    let failure = attempt
+        .prepare_cancellable(finished, &crate::CancellationToken::new())
+        .unwrap_err();
     assert!(matches!(failure.cause, Error::FinishedMetaChanged));
 }
 
@@ -153,9 +167,9 @@ fn built_output(directory: &Path) -> (OutputAttempt, Finished, PathBuf) {
         .unwrap();
     let private = private_path(directory, secured.attempt.name());
     let (attempt, file) = secured.into_parts();
-    let mut builder = Builder::new(file, direct_spec(), output_budget()).unwrap();
+    let mut builder = Builder::new_owned(file, direct_spec(), output_budget()).unwrap();
     builder.push_direct_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
-    (attempt, builder.finish().unwrap(), private)
+    (attempt, builder.finish_owned().unwrap(), private)
 }
 
 fn private_path(directory: &Path, name: &Name) -> PathBuf {
@@ -176,7 +190,6 @@ fn direct_spec() -> OutputSpec {
 
 fn output_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     }
 }

@@ -264,7 +264,7 @@ fn listed(path: &Path) -> Result<(AbandonedScratchList, Vec<AbandonedScratchEntr
 
 fn active_scratch(path: &Path) -> (Scratch, [u8; 16], PathBuf) {
     let mut scratch = Scratch::start(path, meta(), 4096, 2, 4).unwrap();
-    let attempt = scratch.attempt_id();
+    let attempt = scratch.attempt_id;
     scratch.create().unwrap();
     let artifact = path_for(path, attempt, 0);
     (scratch, attempt, artifact)

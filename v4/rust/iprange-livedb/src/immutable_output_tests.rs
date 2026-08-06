@@ -60,8 +60,10 @@ fn direct_output_reopens_and_validates_with_exact_identity_and_metadata() {
         .push_direct_v4(Ipv4Key(1_000), Ipv4Key::MAX, 13)
         .unwrap();
     let metadata = br#"{"source":"immutable-output"}"#;
-    output.write_metadata(metadata).unwrap();
-    let finished = output.finish().unwrap();
+    output
+        .write_metadata_with_budget(metadata, 2 * 1024 * 1024)
+        .unwrap();
+    let finished = output.finish_owned().unwrap();
 
     assert_eq!(finished.meta.database_id, [3; 16]);
     assert_eq!(finished.meta.txn_id, 7);
@@ -104,7 +106,7 @@ fn full_space_ipv6_output_is_valid() {
     output
         .push_direct_v6(Ipv6Key::MIN, Ipv6Key::MAX, 42)
         .unwrap();
-    drop(output.finish().unwrap().file);
+    drop(output.finish_owned().unwrap().file);
 
     let reader = ImmutableReader::open(&path.0).unwrap();
     assert_eq!(reader.lookup_direct_v6(Ipv6Key::MIN).unwrap(), Some(42));
@@ -121,7 +123,7 @@ fn empty_direct_and_membership_outputs_preserve_valid_empty_state() {
             direct_spec(AddressFamily::Ipv4),
             generous_budget(),
         )
-        .finish()
+        .finish_owned()
         .unwrap()
         .file,
     );
@@ -136,7 +138,7 @@ fn empty_direct_and_membership_outputs_preserve_valid_empty_state() {
 
     let membership = TestPath::new("empty-membership");
     let finished = builder(&membership.0, membership_spec(1_000), generous_budget())
-        .finish()
+        .finish_owned()
         .unwrap();
     assert_eq!(finished.meta.feed_index_limit, 1_000);
     assert_eq!(finished.meta.membership_id_limit, 1);
@@ -157,7 +159,7 @@ fn multi_level_direct_output_has_no_unreachable_build_pages() {
             .push_direct_v4(Ipv4Key(from), Ipv4Key(from + 1), index % 3)
             .unwrap();
     }
-    let finished = output.finish().unwrap();
+    let finished = output.finish_owned().unwrap();
     assert_eq!(finished.meta.range_record_count, 2_000);
     drop(finished.file);
     validate_clean(&path.0);
@@ -202,7 +204,7 @@ fn membership_output_streams_sparse_words_and_rebuilds_derived_state() {
         count_thread_allocations(|| output.push_membership_v4(Ipv4Key(30), Ipv4Key(39), &wide));
     result.unwrap();
     assert_eq!(allocations, 0);
-    let finished = output.finish().unwrap();
+    let finished = output.finish_owned().unwrap();
 
     assert_eq!(finished.meta.feed_index_limit, 32_002);
     assert_eq!(finished.meta.active_feed_count, 3);
@@ -235,8 +237,10 @@ fn membership_output_streams_sparse_words_and_rebuilds_derived_state() {
 fn present_empty_metadata_is_distinct_from_absent_metadata() {
     let path = TestPath::new("empty-metadata");
     let mut output = builder(&path.0, direct_spec(AddressFamily::Ipv4), generous_budget());
-    output.write_metadata(b"").unwrap();
-    drop(output.finish().unwrap().file);
+    output
+        .write_metadata_with_budget(b"", 2 * 1024 * 1024)
+        .unwrap();
+    drop(output.finish_owned().unwrap().file);
 
     let reader = ImmutableReader::open(&path.0).unwrap();
     assert_eq!(reader.metadata_json_len(), Some(0));
@@ -248,7 +252,6 @@ fn present_empty_metadata_is_distinct_from_absent_metadata() {
 fn page_budget_refuses_growth_and_poisoned_output_cannot_finish() {
     let path = TestPath::new("page-budget");
     let budget = OutputBudget {
-        max_heap_bytes: 0,
         max_output_pages: 2,
     };
     let mut output = builder(&path.0, direct_spec(AddressFamily::Ipv4), budget);
@@ -257,7 +260,13 @@ fn page_budget_refuses_growth_and_poisoned_output_cannot_finish() {
         Err(Error::BudgetExceeded("immutable output pages"))
     ));
     assert_eq!(fs::metadata(&path.0).unwrap().len(), (2 * PAGE_SIZE) as u64);
-    assert!(matches!(output.finish(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        output.finish_owned(),
+        Err(FinishFailure {
+            cause: Error::WrongState(_),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -272,7 +281,13 @@ fn malformed_order_and_metadata_budget_are_rejected_permanently() {
         output.push_direct_v4(Ipv4Key(2), Ipv4Key(1), 1),
         Err(Error::InvalidArgument(_))
     ));
-    assert!(matches!(output.finish(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        output.finish_owned(),
+        Err(FinishFailure {
+            cause: Error::WrongState(_),
+            ..
+        })
+    ));
 
     let overlap = TestPath::new("overlap");
     let mut output = builder(
@@ -303,15 +318,20 @@ fn malformed_order_and_metadata_budget_are_rejected_permanently() {
         &metadata.0,
         direct_spec(AddressFamily::Ipv4),
         OutputBudget {
-            max_heap_bytes: 4,
             max_output_pages: 100,
         },
     );
     assert!(matches!(
-        output.write_metadata(b"metadata"),
+        output.write_metadata_with_budget(b"metadata", 4),
         Err(Error::BudgetExceeded("metadata compression heap"))
     ));
-    assert!(matches!(output.finish(), Err(Error::WrongState(_))));
+    assert!(matches!(
+        output.finish_owned(),
+        Err(FinishFailure {
+            cause: Error::WrongState(_),
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -346,7 +366,7 @@ fn warmed_ordered_range_push_allocates_no_heap() {
         count_thread_allocations(|| output.push_direct_v4(Ipv4Key(20), Ipv4Key(29), 2));
     result.unwrap();
     assert_eq!(allocations, 0);
-    drop(output.finish().unwrap().file);
+    drop(output.finish_owned().unwrap().file);
 }
 
 fn builder(path: &Path, spec: OutputSpec, budget: OutputBudget) -> Builder {
@@ -356,7 +376,7 @@ fn builder(path: &Path, spec: OutputSpec, budget: OutputBudget) -> Builder {
         .create_new(true)
         .open(path)
         .unwrap();
-    Builder::new(file, spec, budget).unwrap()
+    Builder::new_owned(file, spec, budget).unwrap()
 }
 
 fn direct_spec(address_family: AddressFamily) -> OutputSpec {
@@ -385,7 +405,6 @@ fn membership_spec(feed_index_limit: u64) -> OutputSpec {
 
 fn generous_budget() -> OutputBudget {
     OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     }
 }

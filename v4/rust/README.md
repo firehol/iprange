@@ -95,6 +95,7 @@ cleanup before discarding the obligation.
 The minimum supported Rust version is 1.74.
 
 ```bash
+./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
 cargo test --manifest-path v4/rust/Cargo.toml \
@@ -105,6 +106,12 @@ cargo fmt --manifest-path v4/rust/Cargo.toml --all -- --check
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --no-deps
 ```
+
+The source-graph gate cross-checks every Rust source against fresh Linux,
+Windows, macOS, and FreeBSD compiler dependency graphs. It also rejects
+compiler warnings and dead-code suppression. The native C panic shim is the
+one explicit exception because its integration test compiles it directly at
+runtime.
 
 Use a separate target directory for Rust 1.74.1 so Cargo does not reuse
 incompatible current-toolchain metadata:

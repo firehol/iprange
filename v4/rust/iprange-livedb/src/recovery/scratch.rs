@@ -80,7 +80,7 @@ impl ScratchCleanup {
 pub(crate) struct Scratch {
     directory: Directory,
     profile: Profile,
-    attempt_id: [u8; 16],
+    pub(super) attempt_id: [u8; 16],
     next_ordinal: u64,
     source: MetaV4,
     max_bytes: u64,
@@ -135,10 +135,6 @@ impl Scratch {
             retained_bytes: 0,
             owned: [None, None],
         })
-    }
-
-    pub(crate) fn attempt_id(&self) -> [u8; 16] {
-        self.attempt_id
     }
 
     pub(crate) fn create(&mut self) -> Result<ScratchSlot> {
@@ -280,21 +276,11 @@ impl Scratch {
     pub(crate) fn cleanup(mut self) -> ScratchCleanup {
         #[cfg(unix)]
         {
-            return self.cleanup_unix();
+            self.cleanup_unix()
         }
         #[cfg(windows)]
         {
-            return self.cleanup_windows();
-        }
-        #[allow(unreachable_code)]
-        ScratchCleanup {
-            attempt_id: self.attempt_id,
-            directory_identity: local(self.directory.identity()),
-            creation_security_kind: CREATION_SECURITY_KIND,
-            creation_security_commitment: self.profile.commitment(),
-            residues: Vec::new(),
-            housekeeping: crate::publication::Housekeeping::None,
-            visible_housekeeping: Vec::new(),
+            self.cleanup_windows()
         }
     }
 

@@ -11,10 +11,9 @@ use crate::publication::output::CreatedOutput;
 use crate::publication::replacement;
 use crate::publication::reservation;
 use crate::publication::result::{
-    AccessPolicy, CleanupArtifacts, CleanupState, DestinationContent, LaterCanonical,
-    PublicationStatus,
+    AccessPolicy, CleanupArtifacts, DestinationContent, LaterCanonical, PublicationStatus,
 };
-use crate::publication::Housekeeping;
+use crate::publication::{CleanupState, Housekeeping};
 use crate::validation::{self, ValidationBudget, ValidationMode, ValidationSinkControl};
 use crate::ImmutableReader;
 
@@ -658,13 +657,14 @@ fn publish(
         feed_index_limit: 0,
     };
     let budget = OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     };
-    let mut builder = Builder::new(file, spec, budget).unwrap();
+    let mut builder = Builder::new_owned(file, spec, budget).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 17).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
-    attempt::fail_if_exists(output).unwrap()
+    let output = attempt
+        .prepare_cancellable(builder.finish_owned().unwrap(), &CancellationToken::new())
+        .unwrap();
+    attempt::fail_if_exists_cancellable(output, &CancellationToken::new()).unwrap()
 }
 
 fn publish_replacement(main: &std::path::Path) -> PublicationResult {
@@ -680,12 +680,13 @@ fn publish_replacement(main: &std::path::Path) -> PublicationResult {
         feed_index_limit: 0,
     };
     let budget = OutputBudget {
-        max_heap_bytes: 2 * 1024 * 1024,
         max_output_pages: 100_000,
     };
-    let mut builder = Builder::new(file, spec, budget).unwrap();
+    let mut builder = Builder::new_owned(file, spec, budget).unwrap();
     builder.push_direct_v4(Ipv4Key(1), Ipv4Key(9), 17).unwrap();
-    let output = attempt.prepare(builder.finish().unwrap()).unwrap();
+    let output = attempt
+        .prepare_cancellable(builder.finish_owned().unwrap(), &CancellationToken::new())
+        .unwrap();
     let output = replacement::bind(output, &CancellationToken::new()).unwrap();
     attempt::replace_existing_cancellable(output, &CancellationToken::new()).unwrap()
 }

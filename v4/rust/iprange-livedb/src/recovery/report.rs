@@ -109,10 +109,6 @@ impl<'a, S: RecoverySink> Reporter<'a, S> {
         self.report
     }
 
-    pub(crate) fn report(&self) -> &RecoveryReport {
-        &self.report
-    }
-
     pub(crate) fn page_accepted(&mut self) -> Result<()> {
         increment(&mut self.report.pages.examined, "recovery pages examined")?;
         increment(&mut self.report.pages.accepted, "recovery pages accepted")

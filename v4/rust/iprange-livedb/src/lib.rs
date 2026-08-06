@@ -28,10 +28,8 @@ mod feed_range_cursor;
 mod file_io;
 mod fixed_tree;
 mod free_bitmap;
-pub mod key;
-// Recovery and compact snapshots wire this tested private builder in later slices.
-#[allow(dead_code)]
 mod immutable_output;
+pub mod key;
 mod live_cleanup;
 mod live_lifecycle;
 mod live_lock;
@@ -45,8 +43,6 @@ mod membership_view;
 mod metadata;
 mod name_binding;
 mod path;
-// The portable result contract is public; platform publication stays internal.
-#[allow(dead_code)]
 pub mod publication;
 mod random;
 mod range_cursor;

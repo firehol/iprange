@@ -33,7 +33,6 @@ pub(crate) struct OutputSpec {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OutputBudget {
-    pub(crate) max_heap_bytes: u64,
     pub(crate) max_output_pages: u64,
 }
 
@@ -73,10 +72,6 @@ pub(crate) struct Builder {
 }
 
 impl Builder {
-    pub(crate) fn new(file: File, spec: OutputSpec, budget: OutputBudget) -> Result<Self> {
-        Self::new_owned(file, spec, budget).map_err(|failure| failure.cause)
-    }
-
     #[allow(clippy::result_large_err)]
     pub(crate) fn new_owned(
         file: File,
@@ -129,20 +124,12 @@ impl Builder {
         self.mutate(|output| output.push_membership_v6_inner(from, to, words))
     }
 
-    pub(crate) fn write_metadata(&mut self, input: &[u8]) -> Result<()> {
-        self.write_metadata_with_budget(input, self.budget.max_heap_bytes)
-    }
-
     pub(crate) fn write_metadata_with_budget(
         &mut self,
         input: &[u8],
         max_heap_bytes: u64,
     ) -> Result<()> {
         self.mutate(|output| output.write_metadata_inner(input, max_heap_bytes))
-    }
-
-    pub(crate) fn finish(self) -> Result<Finished> {
-        self.finish_owned().map_err(|failure| failure.cause)
     }
 
     // The owner must remain available for exact cleanup without a failure-path allocation.

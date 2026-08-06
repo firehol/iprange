@@ -169,7 +169,6 @@ mod platform {
             file,
             output_spec(meta),
             OutputBudget {
-                max_heap_bytes: budget.max_heap_bytes,
                 max_output_pages: budget.max_output_pages,
             },
         ) {

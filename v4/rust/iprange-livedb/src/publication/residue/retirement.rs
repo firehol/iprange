@@ -152,6 +152,7 @@ fn retire_windows(
     })
 }
 
+#[cfg(unix)]
 const fn cleanup_conflict(detail: &'static str) -> Problem {
     Problem::cleanup_conflict(detail)
 }
