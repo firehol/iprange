@@ -48,10 +48,7 @@ fn locate<C: Codec, S: Store>(
     key: C::Key,
     retired: &mut RetiredPages,
 ) -> Result<Target> {
-    let (path, leaf_page) = private_path::<C, S>(store, root, key, retired)?;
-    let mut page = [0; PAGE_SIZE];
-    store.read(leaf_page, &mut page)?;
-    let header = parse::<C>(&page, store.target_txn(), Some(0))?;
+    let (path, leaf_page, page, header) = private_path::<C, S>(store, root, key, retired)?;
     let (index, exists) = lower_bound::<C>(&page, &header, key, true)?;
     if !exists {
         return Err(Error::Corrupt("B+tree key disappeared during deletion"));

@@ -1,5 +1,7 @@
 //! Generic fixed-tree mutation tests.
 
+use std::cell::Cell;
+
 use super::*;
 use crate::contract::{u32_le, PAGE_SIZE};
 use crate::slotted_page;
@@ -118,6 +120,10 @@ struct MemoryStore {
     target_txn: u64,
     pages: Vec<[u8; PAGE_SIZE]>,
     discarded: Vec<u32>,
+    reads: Cell<u64>,
+    inspections: Cell<u64>,
+    writes: u64,
+    updates: u64,
 }
 
 impl MemoryStore {
@@ -126,6 +132,10 @@ impl MemoryStore {
             target_txn: 1,
             pages: vec![[0; PAGE_SIZE]; 2],
             discarded: Vec::new(),
+            reads: Cell::new(0),
+            inspections: Cell::new(0),
+            writes: 0,
+            updates: 0,
         }
     }
 }
@@ -140,12 +150,25 @@ impl Store for MemoryStore {
     }
 
     fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()> {
+        self.reads.set(self.reads.get() + 1);
         let source = self
             .pages
             .get(page_number as usize)
             .ok_or(Error::Corrupt("test page is out of bounds"))?;
         *page = *source;
         Ok(())
+    }
+
+    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+    {
+        self.inspections.set(self.inspections.get() + 1);
+        inspect(
+            self.pages
+                .get(page_number as usize)
+                .ok_or(Error::Corrupt("test page is out of bounds"))?,
+        )
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -156,12 +179,25 @@ impl Store for MemoryStore {
     }
 
     fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()> {
+        self.writes += 1;
         let destination = self
             .pages
             .get_mut(page_number as usize)
             .ok_or(Error::Corrupt("test page is out of bounds"))?;
         *destination = *page;
         Ok(())
+    }
+
+    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    where
+        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+    {
+        self.updates += 1;
+        update(
+            self.pages
+                .get_mut(page_number as usize)
+                .ok_or(Error::Corrupt("test page is out of bounds"))?,
+        )
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {
@@ -364,6 +400,43 @@ fn next_transaction_copies_only_its_selected_path() {
     let mut same_path = RetiredPages::new();
     insert::<U32Codec, _>(&mut store, &mut root, &record(1_001, 100), &mut same_path).unwrap();
     assert!(same_path.as_slice().is_empty());
+}
+
+#[test]
+fn private_local_insert_copies_only_the_selected_leaf() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in (0..1_000).map(|key| key * 2) {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    store.reads.set(0);
+    store.inspections.set(0);
+    store.writes = 0;
+    store.updates = 0;
+
+    let mut retired = RetiredPages::new();
+    let result = insert_if_local_gap::<U32Codec, _, _>(
+        &mut store,
+        &mut root,
+        &record(501, 7),
+        &mut retired,
+        |_, _| Ok(true),
+    )
+    .unwrap();
+
+    assert_eq!(result, LocalInsert::Inserted);
+    assert!(retired.as_slice().is_empty());
+    assert_eq!(store.inspections.get(), 2);
+    assert_eq!(store.reads.get(), 1);
+    assert_eq!(store.updates, 1);
+    assert_eq!(store.writes, 0);
+    assert_eq!(lookup(&store, root, 501).unwrap(), Some(7));
 }
 
 #[test]

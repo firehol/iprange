@@ -129,6 +129,42 @@ fn slot_start(page: &[u8; PAGE_SIZE], header: &Header, index: usize) -> Result<u
     Ok(usize::from(u16_le(page, slot)))
 }
 
+pub(crate) fn insert(
+    page: &mut [u8; PAGE_SIZE],
+    header: &Header,
+    index: usize,
+    cell: &[u8],
+) -> Result<bool> {
+    if index > header.item_count {
+        return Err(Error::Corrupt("slotted-page insertion index is invalid"));
+    }
+    if cell.is_empty() {
+        return Err(Error::InvalidArgument("slotted-page record is empty"));
+    }
+    if !insert_fits(header, cell.len()) {
+        return Ok(false);
+    }
+    let upper = header.upper - cell.len();
+    let lower = header.lower + 2;
+
+    let slot = HEADER_SIZE + index * 2;
+    page.copy_within(slot..header.lower, slot + 2);
+    page[upper..header.upper].copy_from_slice(cell);
+    put_u16(page, slot, upper as u16);
+    put_u16(page, 16, (header.item_count + 1) as u16);
+    put_u16(page, 20, lower as u16);
+    put_u16(page, 22, upper as u16);
+    Ok(true)
+}
+
+pub(crate) fn insert_fits(header: &Header, cell_len: usize) -> bool {
+    cell_len != 0
+        && header
+            .upper
+            .checked_sub(cell_len)
+            .is_some_and(|upper| header.lower + 2 <= upper)
+}
+
 pub(crate) struct Builder<'a> {
     page: &'a mut [u8; PAGE_SIZE],
     item_count: usize,
@@ -235,5 +271,43 @@ mod tests {
         let mut page = [0; PAGE_SIZE];
         let mut builder = Builder::new(&mut page, 2, 1, 0, 4);
         assert!(builder.push(&[0; PAGE_SIZE]).is_err());
+    }
+
+    #[test]
+    fn in_place_insertion_changes_only_slots_and_free_space() {
+        let mut page = [0; PAGE_SIZE];
+        let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+        builder.push(b"aa").unwrap();
+        builder.push(b"cc").unwrap();
+        builder.finish().unwrap();
+
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(insert(&mut page, &header, 1, b"bb").unwrap());
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(insert(&mut page, &header, 0, b"00").unwrap());
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(insert(&mut page, &header, 4, b"zz").unwrap());
+
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        let records: Vec<&[u8]> = (0..header.item_count)
+            .map(|index| cell(&page, &header, index, 2).unwrap())
+            .collect();
+        assert_eq!(records, [b"00", b"aa", b"bb", b"cc", b"zz"]);
+        assert!(page[header.lower..header.upper]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn in_place_insertion_does_not_modify_a_full_page() {
+        let mut page = [0; PAGE_SIZE];
+        let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+        builder.push(&[1; PAGE_SIZE - HEADER_SIZE - 2]).unwrap();
+        builder.finish().unwrap();
+        let before = page;
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+
+        assert!(!insert(&mut page, &header, 1, b"x").unwrap());
+        assert_eq!(page, before);
     }
 }

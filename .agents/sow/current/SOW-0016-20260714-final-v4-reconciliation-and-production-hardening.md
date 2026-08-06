@@ -13533,6 +13533,61 @@ warnings-denied Clippy/rustdoc, formatting, and all native C/conformance tests
 pass. The target is still not met; eliminating full-page reconstruction remains
 required.
 
+The first in-place slice is deliberately narrower than a generic tree rewrite.
+`insert_if_local_gap` is called only by the exact direct-range workflow and has
+already proved that every page on the selected path belongs to the unpublished
+transaction. For a non-full leaf, the new record is written into the contiguous
+free bytes immediately below `upper`; only the slot-array tail moves by two
+bytes. Existing records do not move, all unused bytes stay zero, and the draft
+dirty-chain value at bytes 28-31 is preserved for commit-time sealing. A full
+leaf falls back to the existing split path without partial mutation. Generic
+insert, replacement, deletion, branch propagation, and variable-length catalog
+records keep their current behavior. Tests must cover first/middle/last slot
+insertion, exact no-fit nonmutation, format validation after publication, and
+the existing randomized range semantics before measuring the public workflow.
+
+After that leaf edit, five pinned runs took 1.263-1.307 seconds. A redundant
+post-descent leaf read was removed by returning the page and parsed header that
+`private_path` already owned; the result is correct but noisy at 1.145-1.303
+seconds because full-page copies still dominate 51.12% of the profile. The
+bounded write-back completion adds one internal `Store::update_page` operation.
+Its default is the existing read-edit-write sequence; `DraftStore` overrides it
+only when its caller-funded bounded cache owns the private page, editing that
+resident page directly while preserving the dirty-chain tag. The sole initial
+caller is the proven-private local range insertion. Cache miss/disabled paths
+retain the old behavior, and no page reference escapes the callback. This
+removes one 4 KiB copy per successful local insertion without changing the
+public API, heap bound, eviction/flush rule, format, or commit sealing order.
+
+Five direct-write-back runs still took 1.078-1.189 seconds, and `memcpy` remains
+52.32% of sampled cycles. The remaining dominant copies are private root and
+branch pages copied out of the same bounded cache merely to parse and descend.
+The same internal storage contract therefore gains a read-only `inspect_page`
+callback: the default keeps the current stack-copy behavior, while `DraftStore`
+borrows a resident cache slot only for the callback duration. `private_path`
+uses it for already-private branches, copies only the selected leaf required by
+existing edit/split callers, and retains the current COW touch path for committed
+pages. No borrowed page escapes, and cache miss, eviction, malformed-page, and
+committed-page behavior remain unchanged.
+
+The callback is now wired into the compiled tree descent. A permanent fixed-tree
+work test proves that a private two-level local insertion inspects its branch and
+leaf in place, copies exactly the selected leaf once, performs one direct update,
+and performs no full-page write. Existing fixed-tree, direct-workflow, and
+randomized direct/retention tests pass, and warnings-denied Clippy is clean.
+Five consecutive pinned P-core public-SDK runs of one million direct inputs on
+the final slice took 0.555, 0.888, 0.683, 0.545, and 0.559 seconds. Every run retained 22 allocations,
+67,109,014 allocated bytes, exactly 1,000,000 output records, four file
+descriptors before and after, and zero private artifacts. Direct replacement
+therefore meets the accepted one-second performance target; retention and
+snapshot remain open and must be repaired independently.
+
+The final review also moved the cache dirty transition after a successful edit;
+a rejected edit now leaves a clean cache page clean. Both complete current-Rust
+feature matrices, the Rust 1.74.1 matrix, native C callers, explicit validation,
+warnings-denied Clippy and rustdoc, formatting, the four-target 311-source graph,
+and the SOW audit pass on this exact slice.
+
 1. Generate a canonical source inventory from compiler dependency manifests for
    production, tests, features, and supported targets. Classify every tracked
    source as active, test-only, platform-specific, generated, or obsolete.

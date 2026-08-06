@@ -52,6 +52,47 @@ impl PageCache {
         true
     }
 
+    pub(super) fn enabled(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    pub(super) fn update<L, F, U>(
+        &mut self,
+        page_number: u32,
+        tag: u32,
+        load: &mut L,
+        flush: &mut F,
+        update: U,
+    ) -> Result<()>
+    where
+        L: FnMut(u32, &mut [u8; PAGE_SIZE]) -> Result<()>,
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+        U: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let index = self.load_slot(page_number, load, flush)?;
+        let slot = &mut self.slots[index];
+        update(&mut slot.bytes)?;
+        put_u32(&mut slot.bytes, 28, tag);
+        slot.dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn inspect<T, L, F, I>(
+        &mut self,
+        page_number: u32,
+        load: &mut L,
+        flush: &mut F,
+        inspect: I,
+    ) -> Result<T>
+    where
+        L: FnMut(u32, &mut [u8; PAGE_SIZE]) -> Result<()>,
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+        I: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+    {
+        let index = self.load_slot(page_number, load, flush)?;
+        inspect(&self.slots[index].bytes)
+    }
+
     #[cfg(test)]
     pub(super) fn store(&mut self, page_number: u32, bytes: &[u8; PAGE_SIZE]) {
         let Some(index) = self.index(page_number) else {
@@ -151,6 +192,23 @@ impl PageCache {
         Ok(Some(index))
     }
 
+    fn load_slot<L, F>(&mut self, page_number: u32, load: &mut L, flush: &mut F) -> Result<usize>
+    where
+        L: FnMut(u32, &mut [u8; PAGE_SIZE]) -> Result<()>,
+        F: FnMut(u32, &[u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let index = self
+            .prepare_slot(page_number, flush)?
+            .expect("enabled page cache has a direct slot");
+        let slot = &mut self.slots[index];
+        if !slot.valid || slot.page_number != page_number {
+            load(page_number, &mut slot.bytes)?;
+            slot.page_number = page_number;
+            slot.valid = true;
+        }
+        Ok(index)
+    }
+
     fn slot(&self, page_number: u32) -> Option<&Slot> {
         self.index(page_number).map(|index| &self.slots[index])
     }
@@ -200,5 +258,67 @@ mod tests {
         assert_eq!(PageCache::new(slot - 1).len(), 0);
         assert_eq!(PageCache::new(slot).len(), 1);
         assert_eq!(PageCache::new(slot * 3).len(), 3);
+    }
+
+    #[test]
+    fn resident_page_updates_without_copying_through_the_caller() {
+        let mut cache = PageCache::new(std::mem::size_of::<Slot>() as u64);
+        let mut page = [0; PAGE_SIZE];
+        page[100] = 1;
+        cache.store(5, &page);
+
+        cache
+            .update(
+                5,
+                77,
+                &mut |_, _| panic!("resident page must not be loaded"),
+                &mut |_, _| panic!("resident page must not be evicted"),
+                |bytes| {
+                    bytes[100] = 2;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        let mut actual = [0; PAGE_SIZE];
+        assert!(cache.read(5, &mut actual));
+        assert_eq!(actual[100], 2);
+        assert_eq!(u32::from_le_bytes(actual[28..32].try_into().unwrap()), 77);
+    }
+
+    #[test]
+    fn failed_resident_update_does_not_make_a_clean_page_dirty() {
+        let mut cache = PageCache::new(std::mem::size_of::<Slot>() as u64);
+        cache.store(5, &[0; PAGE_SIZE]);
+
+        let result = cache.update(
+            5,
+            77,
+            &mut |_, _| panic!("resident page must not be loaded"),
+            &mut |_, _| panic!("resident page must not be evicted"),
+            |_| Err(crate::error::Error::Corrupt("expected test failure")),
+        );
+        assert!(result.is_err());
+        cache
+            .flush(&mut |_, _| panic!("failed update must not dirty the page"))
+            .unwrap();
+    }
+
+    #[test]
+    fn resident_page_inspection_uses_the_cache_bytes() {
+        let mut cache = PageCache::new(std::mem::size_of::<Slot>() as u64);
+        let mut page = [0; PAGE_SIZE];
+        page[100] = 9;
+        cache.store(5, &page);
+
+        let value = cache
+            .inspect(
+                5,
+                &mut |_, _| panic!("resident page must not be loaded"),
+                &mut |_, _| panic!("resident page must not be evicted"),
+                |bytes| Ok(bytes[100]),
+            )
+            .unwrap();
+        assert_eq!(value, 9);
     }
 }

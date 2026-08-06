@@ -49,6 +49,40 @@ impl Store for DraftStore<'_> {
         Ok(())
     }
 
+    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+    {
+        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
+            return Err(Error::Corrupt("page number is outside committed bounds"));
+        }
+        let cache_enabled = self
+            .draft
+            .page_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|cache| cache.enabled());
+        if !cache_enabled {
+            let mut page = [0; PAGE_SIZE];
+            self.read(page_number, &mut page)?;
+            return inspect(&page);
+        }
+
+        let file = self.file;
+        let page_limit = self.draft.meta.page_count;
+        self.draft
+            .page_cache
+            .borrow_mut()
+            .as_mut()
+            .expect("enabled page cache is present")
+            .inspect(
+                page_number,
+                &mut |number, page| file_io::read_page(file, number, page_limit, page),
+                &mut |number, page| persist_unsealed(file, number, page),
+                inspect,
+            )
+    }
+
     fn allocate(&mut self) -> Result<u32> {
         if self.draft.private_head != 0 {
             return self.pop_private();
@@ -79,6 +113,49 @@ impl Store for DraftStore<'_> {
             u32_le(page, 28)
         };
         self.persist_tagged(page_number, page, tag)
+    }
+
+    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    where
+        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+    {
+        if page_number < 2 || u64::from(page_number) >= self.draft.meta.page_count {
+            return Err(Error::Corrupt("draft update is outside page bounds"));
+        }
+        let cache_enabled = self
+            .draft
+            .page_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|cache| cache.enabled());
+        if !cache_enabled {
+            let mut page = [0; PAGE_SIZE];
+            self.read(page_number, &mut page)?;
+            update(&mut page)?;
+            return self.write(page_number, &page);
+        }
+
+        let tag = self.dirty_tag(page_number)?;
+        let file = self.file;
+        let page_limit = self.draft.meta.page_count;
+        let target_txn = self.draft.meta.txn_id;
+        self.draft
+            .page_cache
+            .borrow_mut()
+            .as_mut()
+            .expect("enabled page cache is present")
+            .update(
+                page_number,
+                tag,
+                &mut |number, page| file_io::read_page(file, number, page_limit, page),
+                &mut |number, page| persist_unsealed(file, number, page),
+                |page| {
+                    if page[..4] != PAGE_MAGIC || u64_le(page, 8) != target_txn {
+                        return Err(Error::Corrupt("draft update has the wrong transaction"));
+                    }
+                    update(page)
+                },
+            )
     }
 
     fn discard_private(&mut self, page_number: u32) -> Result<()> {

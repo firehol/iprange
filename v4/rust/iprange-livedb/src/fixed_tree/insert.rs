@@ -2,7 +2,7 @@
 
 use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::slotted_page::Builder;
+use crate::slotted_page::{self, Builder};
 
 use super::page::{
     self, branch_child, build_edit, build_pair_edit, key_at, lower_bound, parse, require_codec,
@@ -107,8 +107,33 @@ where
         return Ok(LocalInsert::General);
     }
 
-    edit_leaf::<C, S>(store, root, leaf_cell, target)?;
+    insert_local_leaf::<C, S>(store, root, leaf_cell, target)?;
     Ok(LocalInsert::Inserted)
+}
+
+fn insert_local_leaf<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    leaf_cell: &[u8],
+    target: LeafTarget,
+) -> Result<()> {
+    if !slotted_page::insert_fits(&target.header, leaf_cell.len()) {
+        edit_leaf::<C, S>(store, root, leaf_cell, target)?;
+        return Ok(());
+    }
+    store.update_page(target.page_number, |page| {
+        if !slotted_page::insert(page, &target.header, target.index, leaf_cell)? {
+            return Err(Error::Corrupt(
+                "private B+tree leaf changed during insertion",
+            ));
+        }
+        Ok(())
+    })?;
+    if target.index == 0 {
+        let key = C::read_key(leaf_cell, 0)?;
+        propagate_first::<C, S>(store, root, &target.path, key)?;
+    }
+    Ok(())
 }
 
 fn require_leaf<C: Codec>(leaf_cell: &[u8]) -> Result<()> {
@@ -125,10 +150,7 @@ fn locate_leaf<C: Codec, S: Store>(
     key: C::Key,
     retired: &mut RetiredPages,
 ) -> Result<LeafTarget> {
-    let (path, leaf_page) = private_path::<C, S>(store, root, key, retired)?;
-    let mut source = [0; PAGE_SIZE];
-    store.read(leaf_page, &mut source)?;
-    let header = parse::<C>(&source, store.target_txn(), Some(0))?;
+    let (path, leaf_page, source, header) = private_path::<C, S>(store, root, key, retired)?;
     let (index, exists) = lower_bound::<C>(&source, &header, key, true)?;
     Ok(LeafTarget {
         path,

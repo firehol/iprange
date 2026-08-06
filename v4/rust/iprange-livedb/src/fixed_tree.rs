@@ -69,8 +69,25 @@ pub(crate) trait Store {
     fn target_txn(&self) -> u64;
     fn page_limit(&self) -> u64;
     fn read(&self, page_number: u32, page: &mut [u8; PAGE_SIZE]) -> Result<()>;
+    fn inspect_page<T, F>(&self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(&[u8; PAGE_SIZE]) -> Result<T>,
+    {
+        let mut page = [0; PAGE_SIZE];
+        self.read(page_number, &mut page)?;
+        inspect(&page)
+    }
     fn allocate(&mut self) -> Result<u32>;
     fn write(&mut self, page_number: u32, page: &[u8; PAGE_SIZE]) -> Result<()>;
+    fn update_page<F>(&mut self, page_number: u32, update: F) -> Result<()>
+    where
+        F: FnOnce(&mut [u8; PAGE_SIZE]) -> Result<()>,
+    {
+        let mut page = [0; PAGE_SIZE];
+        self.read(page_number, &mut page)?;
+        update(&mut page)?;
+        self.write(page_number, &page)
+    }
     fn discard_private(&mut self, page_number: u32) -> Result<()>;
 }
 
@@ -151,35 +168,101 @@ impl Path {
     }
 }
 
+enum InspectedPage {
+    Committed,
+    Branch {
+        level: u16,
+        index: usize,
+        item_count: usize,
+        child: u32,
+    },
+    Leaf(Header),
+}
+
 fn private_path<C: Codec, S: Store>(
     store: &mut S,
     root: &mut u32,
     key: C::Key,
     retired: &mut RetiredPages,
-) -> Result<(Path, u32)> {
-    let (mut page_number, mut page, mut header) = touch::<C, S>(store, *root, None, retired)?;
-    *root = page_number;
+) -> Result<(Path, u32, [u8; PAGE_SIZE], Header)> {
+    let mut page_number = *root;
+    let mut expected_level = None;
+    let mut parent = None;
     let mut path = Path::new();
 
-    while header.level > 0 {
-        let (index, _) = lower_bound::<C>(&page, &header, key, false)?;
-        let child = branch_child::<C>(&page, &header, index, store.page_limit())?;
-        path.push(Frame {
-            page_number,
+    loop {
+        match inspect_page::<C, S>(store, page_number, expected_level, key)? {
+            InspectedPage::Committed => {
+                let (private_page, page, header) =
+                    touch::<C, S>(store, page_number, expected_level, retired)?;
+                if let Some((parent_page, parent_index)) = parent {
+                    replace_branch::<C, S>(store, parent_page, parent_index, None, private_page)?;
+                } else {
+                    *root = private_page;
+                }
+                if header.level == 0 {
+                    return Ok((path, private_page, page, header));
+                }
+                let (index, _) = lower_bound::<C>(&page, &header, key, false)?;
+                let child = branch_child::<C>(&page, &header, index, store.page_limit())?;
+                path.push(Frame {
+                    page_number: private_page,
+                    index,
+                    item_count: header.item_count,
+                })?;
+                parent = Some((private_page, index));
+                page_number = child;
+                expected_level = Some(header.level - 1);
+            }
+            InspectedPage::Branch {
+                level,
+                index,
+                item_count,
+                child,
+            } => {
+                path.push(Frame {
+                    page_number,
+                    index,
+                    item_count,
+                })?;
+                parent = Some((page_number, index));
+                page_number = child;
+                expected_level = Some(level - 1);
+            }
+            InspectedPage::Leaf(header) => {
+                let mut page = [0; PAGE_SIZE];
+                store.read(page_number, &mut page)?;
+                return Ok((path, page_number, page, header));
+            }
+        }
+    }
+}
+
+fn inspect_page<C: Codec, S: Store>(
+    store: &S,
+    page_number: u32,
+    expected_level: Option<u16>,
+    key: C::Key,
+) -> Result<InspectedPage> {
+    let target_txn = store.target_txn();
+    let page_limit = store.page_limit();
+    store.inspect_page(page_number, |page| {
+        let header = parse::<C>(page, target_txn, expected_level)?;
+        if u64_le(page, 8) != target_txn {
+            return Ok(InspectedPage::Committed);
+        }
+        if header.level == 0 {
+            return Ok(InspectedPage::Leaf(header));
+        }
+        let (index, _) = lower_bound::<C>(page, &header, key, false)?;
+        let child = branch_child::<C>(page, &header, index, page_limit)?;
+        Ok(InspectedPage::Branch {
+            level: header.level,
             index,
             item_count: header.item_count,
-        })?;
-        let expected = Some(header.level - 1);
-        let (private_child, child_page, child_header) =
-            touch::<C, S>(store, child, expected, retired)?;
-        if private_child != child {
-            replace_branch::<C, S>(store, page_number, index, None, private_child)?;
-        }
-        page_number = private_child;
-        page = child_page;
-        header = child_header;
-    }
-    Ok((path, page_number))
+            child,
+        })
+    })
 }
 
 fn touch<C: Codec, S: Store>(
