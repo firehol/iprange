@@ -267,10 +267,10 @@ fn encoded_size<C: Codec>(
 ) -> Result<usize> {
     let count = end
         .checked_sub(start)
-        .ok_or(Error::Corrupt("B+tree page range is reversed"))?;
+        .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
     let payload = (start..end).try_fold(0usize, |used, index| {
         used.checked_add(virtual_cell::<C>(source, header, edit, index)?.len())
-            .ok_or(Error::ArithmeticOverflow("B+tree page size"))
+            .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
     })?;
     page_size(count, payload)
 }
@@ -280,7 +280,7 @@ fn page_size(count: usize, payload: usize) -> Result<usize> {
         .checked_mul(2)
         .and_then(|slots| slots.checked_add(slotted_page::HEADER_SIZE))
         .and_then(|base| base.checked_add(payload))
-        .ok_or(Error::ArithmeticOverflow("B+tree page size"))
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
 }
 
 fn pair_size<C: Codec>(
@@ -292,10 +292,10 @@ fn pair_size<C: Codec>(
 ) -> Result<usize> {
     let count = end
         .checked_sub(start)
-        .ok_or(Error::Corrupt("B+tree page range is reversed"))?;
+        .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
     let payload = (start..end).try_fold(0usize, |used, index| {
         used.checked_add(pair_cell::<C>(source, header, edit, index)?.len())
-            .ok_or(Error::ArithmeticOverflow("B+tree page size"))
+            .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
     })?;
     page_size(count, payload)
 }
@@ -309,7 +309,7 @@ where
     }
     let payload = payload_size(total, &mut cell_len)?;
     choose_split(total, payload, &mut cell_len)?
-        .ok_or(Error::InvalidArgument("B+tree record cannot be split"))
+        .ok_or_else(|| Error::invalid_argument("B+tree record cannot be split"))
 }
 
 fn payload_size<F>(total: usize, cell_len: &mut F) -> Result<usize>
@@ -318,7 +318,7 @@ where
 {
     (0..total).try_fold(0usize, |used, index| {
         used.checked_add(cell_len(index)?)
-            .ok_or(Error::ArithmeticOverflow("B+tree split size"))
+            .ok_or_else(|| Error::arithmetic_overflow("B+tree split size"))
     })
 }
 
@@ -331,7 +331,7 @@ where
     for middle in 1..total {
         left_payload = left_payload
             .checked_add(cell_len(middle - 1)?)
-            .ok_or(Error::ArithmeticOverflow("B+tree split size"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("B+tree split size"))?;
         let Some(difference) = split_difference(total, middle, payload, left_payload)? else {
             continue;
         };
@@ -351,7 +351,7 @@ fn split_difference(
     let left = page_size(middle, left_payload)?;
     let right_payload = payload
         .checked_sub(left_payload)
-        .ok_or(Error::Corrupt("B+tree split size changed"))?;
+        .ok_or_else(|| Error::corrupt("B+tree split size changed"))?;
     let right = page_size(total - middle, right_payload)?;
     if left > PAGE_SIZE || right > PAGE_SIZE {
         return Ok(None);

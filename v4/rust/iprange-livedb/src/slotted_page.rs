@@ -60,7 +60,7 @@ fn parse_shape(page: &[u8; PAGE_SIZE], expected_level: Option<u16>) -> Result<He
     let expected_lower = item_count
         .checked_mul(2)
         .and_then(|size| size.checked_add(HEADER_SIZE))
-        .ok_or(Error::Corrupt("slotted-page slot array overflows"))?;
+        .ok_or_else(|| Error::corrupt("slotted-page slot array overflows"))?;
     if lower != expected_lower || lower > upper || upper >= PAGE_SIZE {
         return Err(Error::Corrupt("slotted-page bounds are invalid"));
     }
@@ -81,7 +81,7 @@ pub(crate) fn cell<'a>(
     let start = slot_start(page, header, index)?;
     let end = start
         .checked_add(cell_len)
-        .ok_or(Error::Corrupt("slotted-page cell end overflows"))?;
+        .ok_or_else(|| Error::corrupt("slotted-page cell end overflows"))?;
     if start < header.upper || end > PAGE_SIZE {
         return Err(Error::Corrupt(
             "slotted-page cell is outside the record area",
@@ -109,7 +109,7 @@ pub(crate) fn record<'a>(
     }
     let end = start
         .checked_add(record_len)
-        .ok_or(Error::Corrupt("slotted-page record end overflows"))?;
+        .ok_or_else(|| Error::corrupt("slotted-page record end overflows"))?;
     if end > PAGE_SIZE {
         return Err(Error::Corrupt(
             "slotted-page record is outside the record area",
@@ -160,11 +160,11 @@ impl<'a> Builder<'a> {
     pub(crate) fn push(&mut self, cell: &[u8]) -> Result<()> {
         let lower = HEADER_SIZE
             .checked_add((self.item_count + 1) * 2)
-            .ok_or(Error::Corrupt("slotted-page slot array overflows"))?;
+            .ok_or_else(|| Error::corrupt("slotted-page slot array overflows"))?;
         let upper = self
             .upper
             .checked_sub(cell.len())
-            .ok_or(Error::Corrupt("slotted-page record area overflows"))?;
+            .ok_or_else(|| Error::corrupt("slotted-page record area overflows"))?;
         if lower > upper {
             return Err(Error::InvalidArgument("slotted page is full"));
         }

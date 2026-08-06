@@ -13498,6 +13498,41 @@ the one-million-range direct replacement took 4.192, 4.525, 4.435, 4.178, and
 from the measurable hot profile, but it does not materially improve the whole
 workflow because per-record page access and reconstruction now dominate.
 
+The post-CRC profile and optimized disassembly identify a separate avoidable
+success-path cost. `slotted_page::cell` eagerly constructs a 24-byte public
+`Error` for `Option::ok_or` and calls `drop_in_place<Error>` after every
+successful checked addition. On the one-million-range direct replacement,
+`cell` accounts for 26.07% of sampled P-core cycles and the error destructor for
+at least 19.25%. This is not heap allocation: `Error::Corrupt` carries only a
+static string. The cost is nevertheless real because the common destructor
+must support the enum's boxed and I/O-error variants.
+
+The minimal-complete repair keeps every checked operation and exact failure but
+uses lazy error construction on successful paths. It must first be measured as
+an isolated release A/B change; if retained, the same eager-error class must be
+searched in the active compiled tree, semantic tests and compiler gates must
+pass, and the optimized disassembly/profile must confirm that the destructor
+call disappeared. This is an implementation correction within the approved
+hot-path necessary-work rule, not a format or API decision.
+
+The isolated `cell` conversion reduced five pinned one-million-range runs to
+2.935-3.246 seconds. Converting all 14 eager sites in shared slotted-page access,
+page sizing, and page reconstruction reduced the next five runs to 1.966,
+1.974, 1.972, 2.274, and 2.073 seconds, with the exact same 1,000,000 records,
+22 allocations, 67,109,014 allocated bytes, and 20,652,032-byte logical output.
+The post-change profile has no `drop_in_place<Error>` sample above 0.5%; page
+reconstruction and fit calculation are now the named hot functions.
+
+Clippy's generic cheap-value rule recommends eager construction and reproduces
+the measured regression because it does not account for this enum's destructor.
+Three crate-private cold constructors retain lazy `ok_or_else` without a lint
+suppression or a change to public errors. Three final runs with those
+constructors took 2.025, 2.046, and 2.114 seconds. Both complete
+current-toolchain matrices, the Rust 1.74.1 all-feature matrix,
+warnings-denied Clippy/rustdoc, formatting, and all native C/conformance tests
+pass. The target is still not met; eliminating full-page reconstruction remains
+required.
+
 1. Generate a canonical source inventory from compiler dependency manifests for
    production, tests, features, and supported targets. Classify every tracked
    source as active, test-only, platform-specific, generated, or obsolete.

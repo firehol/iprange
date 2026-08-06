@@ -132,6 +132,21 @@ pub enum Error {
 }
 
 impl Error {
+    #[cold]
+    pub(crate) fn invalid_argument(detail: &'static str) -> Self {
+        Self::InvalidArgument(detail)
+    }
+
+    #[cold]
+    pub(crate) fn corrupt(detail: &'static str) -> Self {
+        Self::Corrupt(detail)
+    }
+
+    #[cold]
+    pub(crate) fn arithmetic_overflow(detail: &'static str) -> Self {
+        Self::ArithmeticOverflow(detail)
+    }
+
     pub const fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidArgument(_) => ErrorCode::InvalidArgument,
