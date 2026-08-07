@@ -65,6 +65,7 @@ pub fn create_live(
     reader_capacity: u32,
     cancellation: &CancellationToken,
 ) -> Result<CreateResult> {
+    crate::live_lock::require_live_supported()?;
     let path = path.as_ref();
     cancellation.check()?;
     validate_destination(path, reader_capacity)?;

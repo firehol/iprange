@@ -14,7 +14,7 @@ impl BasicSource {
         require_sidecar_absent(sidecar.as_deref())?;
         let file = open_file(path, immutable)?;
         let identity = live_sidecar::identity_any_link(&file)?;
-        live_lock::lock_cancellable(
+        live_lock::lock_file_cancellable(
             &file,
             MAIN_LIFETIME_LOCK,
             lifetime_mode(immutable),
@@ -28,7 +28,7 @@ impl BasicSource {
         require_sidecar_absent(Some(&sidecar))?;
         let file = database::open_read_only(path)?;
         let identity = live_sidecar::identity_any_link(&file)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         finish_current_open(file, path, sidecar, identity, cancellation)
     }
 
@@ -61,7 +61,7 @@ impl BasicSource {
 
     pub(super) fn release(&mut self) -> Result<()> {
         if self.lifetime_locked {
-            live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK)?;
+            live_lock::unlock_file(&self.file, MAIN_LIFETIME_LOCK)?;
             self.lifetime_locked = false;
         }
         Ok(())
@@ -96,7 +96,7 @@ fn finish_open(
         }),
         Err(cause) => Err(combine_errors(
             cause,
-            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+            live_lock::unlock_file(&file, MAIN_LIFETIME_LOCK),
         )),
     }
 }
@@ -121,7 +121,7 @@ fn finish_current_open(
         }),
         Err(cause) => Err(combine_errors(
             cause,
-            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+            live_lock::unlock_file(&file, MAIN_LIFETIME_LOCK),
         )),
     }
 }

@@ -168,7 +168,7 @@ fn lock_remaining(
 }
 
 fn lock(entry: &mut Inspected, cancellation: &CancellationToken) -> Result<(), Problem> {
-    live_lock::lock_cancellable(
+    live_lock::lock_file_cancellable(
         &entry.file,
         MAIN_LIFETIME_LOCK,
         Mode::Exclusive,

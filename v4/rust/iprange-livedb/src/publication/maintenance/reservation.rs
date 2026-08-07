@@ -109,7 +109,7 @@ pub(super) fn remove(
         .ok_or(Error::CleanupConflict(
             "reservation artifact lost its exact name",
         ))?;
-    live_lock::lock_cancellable(&regular.file, OPERATION_LOCK, Mode::Exclusive, cancellation)?;
+    live_lock::lock_file_cancellable(&regular.file, OPERATION_LOCK, Mode::Exclusive, cancellation)?;
     directory
         .verify_name(&name, expected_artifact)
         .map_err(cleanup_error)?;

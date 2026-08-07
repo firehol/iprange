@@ -32,6 +32,9 @@ pub fn inspect_recovery_candidates(
     budget: &ValidationBudget,
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
+    if mode == RecoveryInspectionMode::Live {
+        live_lock::require_live_supported()?;
+    }
     require_budget(budget, mode)?;
     cancellation.check()?;
     crate::worker::inspect_recovery_candidates(path.as_ref(), mode, budget, cancellation)
@@ -43,6 +46,9 @@ pub(crate) fn inspect_recovery_candidates_local(
     budget: &ValidationBudget,
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
+    if mode == RecoveryInspectionMode::Live {
+        live_lock::require_live_supported()?;
+    }
     require_budget(budget, mode)?;
     cancellation.check()?;
     match mode {
@@ -94,7 +100,7 @@ fn inspect_live(
 ) -> Result<RecoveryCandidateInspection> {
     let file = database::open_read_only(path)?;
     let identity = live_sidecar::identity(&file)?;
-    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(path, identity)?;
     let initial = read_classified(&file, cancellation)?;
     let current = require_live_current(&initial)?;
@@ -270,7 +276,7 @@ impl OfflineSource {
     pub(crate) fn open(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
         let file = live_sidecar::open_rw(path)?;
         let identity = live_sidecar::identity_any_link(&file)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
         live_sidecar::verify_path_any_link(path, identity)?;
         Ok(Self {
             file,

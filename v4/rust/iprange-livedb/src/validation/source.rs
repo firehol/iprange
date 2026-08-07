@@ -83,13 +83,13 @@ impl ImmutableSource {
         database::require_sidecar_absent(&sidecar)?;
         let file = database::open_read_only(path)?;
         let identity = live_sidecar::identity_any_link(&file)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         if let Err(cause) = live_sidecar::verify_path_any_link(path, identity)
             .and_then(|()| database::require_sidecar_absent(&sidecar))
         {
             return Err(combine_errors(
                 cause,
-                live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+                live_lock::unlock_file(&file, MAIN_LIFETIME_LOCK),
             ));
         }
         let source = Self {
@@ -102,7 +102,7 @@ impl ImmutableSource {
             Ok(()) => Ok(source),
             Err(cause) => Err(combine_errors(
                 cause,
-                live_lock::unlock(&source.file, MAIN_LIFETIME_LOCK),
+                live_lock::unlock_file(&source.file, MAIN_LIFETIME_LOCK),
             )),
         }
     }
@@ -128,7 +128,7 @@ impl LiveSource {
     ) -> std::result::Result<LiveOpened, LiveOpenFailure> {
         let file = database::open_read_only(path).map_err(open_failure)?;
         let identity = live_sidecar::identity(&file).map_err(open_failure)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
             .map_err(open_failure)?;
         finish_live_open(open_live_locked(file, path, identity, cancellation))
     }
@@ -315,7 +315,7 @@ impl LiveSource {
 
     fn release_lifetime(&mut self) -> Result<()> {
         if self.lifetime_locked {
-            live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK)?;
+            live_lock::unlock_file(&self.file, MAIN_LIFETIME_LOCK)?;
             self.lifetime_locked = false;
         }
         Ok(())
@@ -347,7 +347,7 @@ impl LiveBootstrapSource {
             self.gate_locked = false;
         }
         if self.lifetime_locked {
-            live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK)?;
+            live_lock::unlock_file(&self.file, MAIN_LIFETIME_LOCK)?;
             self.lifetime_locked = false;
         }
         Ok(())
@@ -407,7 +407,7 @@ fn finish_live_open(
         Ok(source) => Ok(source),
         Err(LiveOpenStageFailure::Unclaimed(file, cause)) => Err(open_failure(combine_errors(
             cause,
-            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+            live_lock::unlock_file(&file, MAIN_LIFETIME_LOCK),
         ))),
         Err(LiveOpenStageFailure::Claimed(source, cause)) => {
             let end = (*source).finish(Err(cause));

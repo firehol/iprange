@@ -67,7 +67,7 @@ impl Inspected {
     }
 
     pub(super) fn unlock_operation(&self) -> Result<(), Problem> {
-        live_lock::unlock(&self.file, OPERATION_LOCK).map_err(|error| Problem::sdk(&error))
+        live_lock::unlock_file(&self.file, OPERATION_LOCK).map_err(|error| Problem::sdk(&error))
     }
 
     pub(super) fn relock_operation(
@@ -364,7 +364,7 @@ fn lock_operation(regular: &Regular, cancellation: &CancellationToken) -> Result
 }
 
 fn lock_operation_file(file: &File, cancellation: &CancellationToken) -> Result<(), Problem> {
-    live_lock::lock_cancellable(file, OPERATION_LOCK, Mode::Exclusive, cancellation)
+    live_lock::lock_file_cancellable(file, OPERATION_LOCK, Mode::Exclusive, cancellation)
         .map_err(|error| Problem::sdk(&error))?;
     cancellation.check().map_err(|error| Problem::sdk(&error))
 }

@@ -494,7 +494,7 @@ fn contended_reservation_lock_wait_observes_cancellation() {
         .write(true)
         .open(&artifacts.private_reservations[0])
         .unwrap();
-    crate::live_lock::lock(&held, 0, crate::live_lock::Mode::Exclusive).unwrap();
+    crate::live_lock::lock_file(&held, 0, crate::live_lock::Mode::Exclusive).unwrap();
     let cancellation = CancellationToken::new();
     let canceller = cancellation.clone();
     let thread = std::thread::spawn(move || {

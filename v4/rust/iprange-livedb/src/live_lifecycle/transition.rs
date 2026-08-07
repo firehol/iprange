@@ -48,6 +48,7 @@ pub fn initialize_live(
     reader_capacity: u32,
     cancellation: &CancellationToken,
 ) -> Result<LiveTransitionResult> {
+    live_lock::require_live_supported()?;
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     let canonical = crate::path::canonical_sidecar(&main.path)?;
@@ -99,6 +100,7 @@ pub fn reset_live_coordination(
     policy: LiveResetPolicy,
     cancellation: &CancellationToken,
 ) -> Result<LiveTransitionResult> {
+    live_lock::require_live_supported()?;
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     let canonical = crate::path::canonical_sidecar(&main.path)?;
@@ -194,7 +196,7 @@ impl LockedMain {
         let directory_identity = live_sidecar::parent_identity(&path)?;
         let public_identity = live_sidecar::public_identity(identity);
         let basename = LocalBasename::from_path(&path)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
         cancellation.check()?;
         live_sidecar::verify_path(&path, identity)?;
         let bootstrap = database::bootstrap_file(&file, OpenMode::Writer)?;

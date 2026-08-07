@@ -81,7 +81,7 @@ fn open(output: &PreparedOutput, cancellation: &CancellationToken) -> Result<Pre
     if regular.identity == output.attempt.identity() {
         return Err(Error::SameIdentity);
     }
-    live_lock::lock_cancellable(
+    live_lock::lock_file_cancellable(
         &regular.file,
         MAIN_LIFETIME_LOCK,
         Mode::Exclusive,

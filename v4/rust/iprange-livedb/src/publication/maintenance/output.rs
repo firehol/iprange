@@ -117,7 +117,7 @@ pub(super) fn remove(
         .ok_or(Error::CleanupConflict(
             "publication temp lost its exact name",
         ))?;
-    live_lock::lock_cancellable(
+    live_lock::lock_file_cancellable(
         &regular.file,
         MAIN_LIFETIME_LOCK,
         Mode::Exclusive,

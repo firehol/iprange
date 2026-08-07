@@ -233,7 +233,7 @@ fn lock_output(
     mode: Mode,
     cancellation: &CancellationToken,
 ) -> Result<(), Problem> {
-    live_lock::lock_cancellable(&regular.file, MAIN_LIFETIME_LOCK, mode, cancellation)
+    live_lock::lock_file_cancellable(&regular.file, MAIN_LIFETIME_LOCK, mode, cancellation)
         .map_err(|error| Problem::sdk(&error))?;
     cancellation.check().map_err(|error| Problem::sdk(&error))
 }

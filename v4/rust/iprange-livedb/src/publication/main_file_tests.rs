@@ -40,14 +40,18 @@ fn exact_inode_is_published_locked_and_cleanly_retired() {
 
     let main_contender = read_write(&paths.main);
     let reservation_contender = read_write(&paths.coordination);
-    assert!(!live_lock::try_lock(&main_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap());
-    assert!(!live_lock::try_lock(&reservation_contender, 0, Mode::Exclusive).unwrap());
+    assert!(
+        !live_lock::try_lock_file(&main_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap()
+    );
+    assert!(!live_lock::try_lock_file(&reservation_contender, 0, Mode::Exclusive).unwrap());
 
     let completed = published.retire().unwrap();
     assert!(!paths.coordination.exists());
     assert_eq!(completed.reservation_identity, reservation_identity);
     completed._output_guard.verify_main().unwrap();
-    assert!(!live_lock::try_lock(&main_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap());
+    assert!(
+        !live_lock::try_lock_file(&main_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap()
+    );
 }
 
 #[test]
@@ -166,7 +170,8 @@ fn replacement_exchange_keeps_both_inodes_locked_until_retirement() {
     );
     let previous_contender = read_write(&paths.private_output);
     assert!(
-        !live_lock::try_lock(&previous_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap()
+        !live_lock::try_lock_file(&previous_contender, MAIN_LIFETIME_LOCK, Mode::Exclusive,)
+            .unwrap()
     );
 
     let completed = published.retire().unwrap();

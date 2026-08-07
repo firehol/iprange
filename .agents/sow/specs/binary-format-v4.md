@@ -169,8 +169,20 @@ An immutable snapshot open MUST require physical size exactly equal to
 `committed_bytes`. A live reader MUST accept an aligned physical tail beyond
 `committed_bytes`; that tail is unpublished growth and MUST NOT be mapped or
 read as committed data. After acquiring the single-writer lease, a live writer
-open MUST truncate such a tail to `committed_bytes` before permitting a new
-mutation. Failure to truncate makes that writer open fail.
+open attempts to truncate such a tail to `committed_bytes` before permitting a
+new mutation. On Windows, exact `ERROR_USER_MAPPED_FILE` means an existing mapped
+view prevents truncation; the writer MUST restore its committed-extent mapping
+and MAY retain the aligned unpublished tail without failing open. Every other
+truncate or remap failure makes writer open fail. On other live-writer platforms,
+failure to truncate remains an error.
+
+This is the **platform tail-cleanup rule** used by writer open, commit, abort,
+explicit writer close, and commit resolution. The operation first drops its own
+main-file view and attempts the exact shrink. On Windows only, exact
+`ERROR_USER_MAPPED_FILE` retains the unchanged aligned tail, restores a mapping
+of the committed extent, and is a successful clean outcome. Any failure to
+restore that mapping is fatal. No other error is converted to retained capacity,
+and other live-writer platforms require the shrink to succeed.
 
 Before writing any appended page, a writer MUST extend or preallocate the file
 to a checked whole-page boundary. It never exposes a short page as its physical
@@ -179,8 +191,9 @@ when provable; otherwise the writer is unusable and ordinary strict open rejects
 the malformed tail.
 
 An immutable/live reader maps exactly its selected committed extent. A writer
-preflights its checked transaction capacity, sparsely extends the file to the
-authorized aligned limit, and maps that capacity before hot-path mutation.
+preflights its checked transaction capacity, reuses an adequate retained aligned
+tail or sparsely extends the file to the authorized aligned limit, and maps only
+that checked capacity before hot-path mutation.
 Remap or unmap invalidates every internal page view; no page view may escape the
 operation or handle lifetime that owns its mapping.
 
@@ -319,7 +332,7 @@ it was damaged. A reader may select and expose that candidate factually, and a
 non-mutating compact snapshot or explicit immutable/offline recovery may use it
 under their documented trust/reporting rules. Writer open and every destructive
 or mutable transition return typed `CurrentGenerationUnprovable` before lease
-publication, tail truncation, mapping for mutation, reset, initialization,
+publication, tail cleanup, mapping for mutation, reset, initialization,
 reclamation, or any file change, regardless of the sole page's physical parity.
 They require the two-meta current-generation proof from steps 4-6. Ordinary
 writer/transition open never repairs or copies a meta. Thus transaction `T+1`
@@ -1142,8 +1155,9 @@ The durability phases are:
 3. Begin writing the complete target meta page.
 4. Synchronize the target meta page to durable storage.
 5. While still holding the operation lock, update the writer lease to the new
-   selected transaction, trim provably unpublished excess growth when needed,
-   and perform other non-publication cleanup.
+   selected transaction, apply the platform tail-cleanup rule to provably
+   unpublished excess growth when needed, and perform other non-publication
+   cleanup.
 
 A failure before phase 3 begins is `NotCommitted`; the previous meta remains
 authoritative. A storage failure still makes the handle unusable.
@@ -1156,10 +1170,10 @@ Every `OutcomeUnknown` writer is unconditionally close-only and returns
 `coordination_cleanup == RetainedWriterCloseRequired` with
 `cleanup_state == ResiduePossible`; it is never reusable or consumable merely
 because no separate artifact cleanup failed. `Close` reselects the main metas
-under the operation lock. It truncates an old-generation tail only when that old
-generation remains selected, or marks the obligation satisfied by supersession
-when the exact attempted or a valid later generation is selected, before
-clearing the retained lease.
+under the operation lock. It applies the platform tail-cleanup rule only when
+the old generation remains selected, or marks the obligation satisfied by
+supersession when the exact attempted or a valid later generation is selected,
+before clearing the retained lease.
 
 Successful phase 4 is `Committed`. A later cleanup failure remains `Committed`
 and the transaction MUST NOT be retried. Artifact residue is listed completely;
@@ -1261,11 +1275,12 @@ identities.
 
 After the stable classification and identity rechecks, aligned physical bytes
 beyond the selected generation's committed length are proved unpublished. The
-resolver truncates only that tail, synchronizes the main, reselects the same
-generation, and repeats the path/sidecar checks before reporting `Clean`.
-Failure or inability to prove that cleanup preserves the factual commit
-classification but returns one exact `UnpublishedMainTail` cleanup artifact and
-the typed cause. It never reports an observed unpublished tail as clean.
+resolver applies the platform tail-cleanup rule, synchronizes the main,
+reselects the same generation, and repeats the path/sidecar checks before
+reporting `Clean`. Exact Windows `ERROR_USER_MAPPED_FILE` retains the aligned
+tail and is itself clean; it is not a cleanup artifact. Any other failure or
+inability to prove cleanup preserves the factual commit classification but
+returns one exact `UnpublishedMainTail` cleanup artifact and the typed cause.
 
 Merely rereading an exact meta from the operating-system page cache does not
 prove crash durability; the resolution synchronization is mandatory. Failure
@@ -1292,8 +1307,10 @@ returns clean `Aborted`; it is not a clean writer until that termination. A
 pending advanced transaction or high-level draft
 immediately invalidates every transaction/feed/membership child handle, discards
 unpublished COW and operation-private index state, and proves the committed
-generation and physical tail. Once that proof succeeds the primary result is
-`Aborted`.
+generation and physical tail. It then applies the platform tail-cleanup rule.
+Once that proof succeeds the primary result is `Aborted`; exact Windows
+`ERROR_USER_MAPPED_FILE` may leave aligned retained capacity without making the
+abort incomplete.
 
 `Aborted` with no cleanup obligation keeps the writer lease and returns the
 writer clean and reusable. `Aborted` with independent exact private residue
@@ -1981,8 +1998,8 @@ its own commit.
 A live writer open follows the same main/sidecar validation and full slot scan,
 then claims the writer range. It returns `WriterBusy` when that range is
 owned. After the claim, an aligned physical tail beyond the selected committed
-length is unpublished growth and is truncated and synchronized before the
-writer is returned. A short or unaligned file fails bootstrap.
+length is unpublished growth and is handled by the platform tail-cleanup rule
+before the writer is returned. A short or unaligned file fails bootstrap.
 
 ### 15.4 Commit barrier
 
@@ -2111,10 +2128,13 @@ may use the same process-ID fallback. Both implementations have identical
 public ownership and error semantics.
 
 Explicit reader close takes the gate shared, clears its slot, and releases the
-slot lock. Explicit healthy writer close aborts unpublished growth before
-releasing its descriptors. Automatic destructors perform no file or namespace
-I/O. Dropping a reader without explicit close is still safe: descriptor close
-releases the slot lock, and the next exclusive scan clears its stale bytes.
+slot lock. On Windows it drops the main-file mapping before releasing that slot
+lock, so a released registration never leaves a hidden live mapping. Explicit
+healthy writer close aborts unpublished growth and applies the platform
+tail-cleanup rule before releasing its descriptors. Automatic destructors
+perform no file or namespace I/O. Dropping a reader without explicit close is
+still safe: descriptor close releases the slot lock, and the next exclusive scan
+clears its stale bytes.
 
 Engine-created main and sidecar files use creator-only access. POSIX mode is
 exactly `0600`, independent of umask; Windows uses a protected descriptor for

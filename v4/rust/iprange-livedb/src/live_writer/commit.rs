@@ -164,9 +164,10 @@ impl LiveWriter {
         }
         crate::fault::crash("commit.before_private_sync");
         let committed_bytes = self.draft.as_ref().unwrap().meta.page_count * PAGE_SIZE as u64;
-        if let Err(error) = self.mapping.resize(committed_bytes) {
-            return Phase::BeforePublication(error);
-        }
+        let physical_bytes = match self.mapping.shrink_or_retain(committed_bytes) {
+            Ok(physical_bytes) => physical_bytes,
+            Err(error) => return Phase::BeforePublication(error),
+        };
         let data_offset = (2 * PAGE_SIZE) as u64;
         if committed_bytes > data_offset {
             if let Err(error) = self
@@ -209,7 +210,7 @@ impl LiveWriter {
             selection: MetaSelection::ProvenCurrent,
             selected_meta_page: target_page,
             committed_bytes,
-            physical_bytes: committed_bytes,
+            physical_bytes,
         })
     }
 

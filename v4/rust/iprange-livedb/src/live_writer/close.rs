@@ -33,8 +33,9 @@ impl LiveWriter {
     fn close_locked(&mut self) -> Result<()> {
         let selected = self.close_base()?;
         self.sidecar.scan_at_most(selected.meta.txn_id)?;
-        self.trim_to(selected.committed_bytes)?;
-        self.verify_close_cleanup()?;
+        let physical_bytes = self.trim_to(selected.committed_bytes)?;
+        self.verify_close_cleanup(physical_bytes)?;
+        self.base.physical_bytes = physical_bytes;
         self.draft = None;
         self.unproved_tail_end = None;
         self.sidecar.release_writer()
@@ -56,15 +57,20 @@ impl LiveWriter {
         Ok(selected)
     }
 
-    fn verify_close_cleanup(&self) -> Result<()> {
+    fn verify_close_cleanup(&self, physical_bytes: u64) -> Result<()> {
         if self.draft.is_some() {
-            self.verify_discard_result()
+            self.verify_discard_result(physical_bytes)
         } else {
+            if self.mapping.file().metadata()?.len() != physical_bytes {
+                return Err(Error::Corrupt(
+                    "writer close changed the retained physical length",
+                ));
+            }
             verify_pair(&self.main_path, self.main_identity, &self.sidecar)
         }
     }
 
-    fn trim_to(&mut self, committed_bytes: u64) -> Result<()> {
+    fn trim_to(&mut self, committed_bytes: u64) -> Result<u64> {
         let length = self.mapping.file().metadata()?.len();
         if length < committed_bytes {
             return Err(Error::Corrupt(
@@ -74,19 +80,24 @@ impl LiveWriter {
         let has_tail = length > committed_bytes;
         if has_tail {
             self.unproved_tail_end = Some(length);
-            self.mapping.resize(committed_bytes)?;
+            let physical_bytes = self.mapping.shrink_or_retain(committed_bytes)?;
+            self.mapping.sync_file()?;
+            return Ok(physical_bytes);
         }
-        if has_tail || self.draft.is_some() {
+        if self.mapping.len() != committed_bytes {
+            self.mapping.remap(committed_bytes)?;
+        }
+        if self.draft.is_some() {
             self.mapping.sync_file()?;
         }
-        Ok(())
+        Ok(length)
     }
 
     fn finish_close(&mut self, had_pending: bool) -> Result<CloseResult> {
         if let Err(cause) = self.sidecar.unlock_gate() {
             return Ok(self.close_failure(had_pending, cause));
         }
-        if let Err(cause) = live_lock::unlock(self.mapping.file(), MAIN_LIFETIME_LOCK) {
+        if let Err(cause) = live_lock::unlock_file(self.mapping.file(), MAIN_LIFETIME_LOCK) {
             return Ok(self.close_failure(had_pending, cause));
         }
         self.state = State::Closed;

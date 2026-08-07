@@ -17,6 +17,11 @@ pub fn snapshot_to(
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> SnapshotOutcome {
+    if source_mode == SnapshotSourceMode::Live {
+        if let Err(cause) = crate::live_lock::require_live_supported() {
+            return Err(Box::new(SnapshotPreparationFailure::early(cause)));
+        }
+    }
     platform::snapshot(
         source_path.as_ref(),
         source_mode,

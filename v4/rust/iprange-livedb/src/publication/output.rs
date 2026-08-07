@@ -448,7 +448,7 @@ fn prepare_cancellable(
     cancellation.check().map_err(Error::Sdk)?;
     let _probe = crate::worker::enter_output(&owner.finished.mapping).map_err(Error::Sdk)?;
     verify_custody(&owner.attempt, &owner.finished.file, Location::Private)?;
-    live_lock::lock_cancellable(
+    live_lock::lock_file_cancellable(
         &owner.finished.file,
         MAIN_LIFETIME_LOCK,
         Mode::Exclusive,

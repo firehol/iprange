@@ -71,6 +71,7 @@ pub fn resolve_interrupted_live_transition(
     mode: LiveTransitionResolutionMode,
     cancellation: &CancellationToken,
 ) -> Result<LiveResidueResult> {
+    crate::live_lock::require_live_supported()?;
     let path = path.as_ref();
     cancellation.check()?;
     let directory_identity = live_sidecar::parent_identity(path)?;

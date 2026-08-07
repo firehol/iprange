@@ -515,7 +515,11 @@ impl<'a> DraftStore<'a> {
         let bytes = capacity
             .checked_mul(PAGE_SIZE as u64)
             .ok_or(Error::ArithmeticOverflow("mapped transaction capacity"))?;
-        self.mapping.resize(bytes)
+        if self.mapping.file().metadata()?.len() >= bytes {
+            self.mapping.remap(bytes)
+        } else {
+            self.mapping.resize(bytes)
+        }
     }
 }
 

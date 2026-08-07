@@ -478,7 +478,7 @@ fn load(
         .map_err(|error| Problem::sdk(&error))?;
     let header = gc_codec::select(bytes)
         .map_err(|_| Problem::cleanup_conflict("GC authority envelope is not selectable"))?;
-    let (attempt_id, ordinal) = gc_name::decode_envelope(envelope_name.bytes())
+    let (attempt_id, ordinal) = gc_name::decode_envelope_name(&envelope_name)
         .ok_or_else(|| Problem::cleanup_conflict("GC envelope name is not canonical"))?;
     let inert_name =
         gc_name::inert(attempt_id, ordinal).map_err(|error| Problem::namespace(&error))?;

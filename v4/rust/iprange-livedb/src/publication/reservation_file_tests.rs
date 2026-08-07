@@ -41,7 +41,7 @@ fn initialized_reservation_has_exact_header_security_and_lock() {
         .write(true)
         .open(private_path)
         .unwrap();
-    assert!(!live_lock::try_lock(&contender, OPERATION_LOCK, Mode::Exclusive).unwrap());
+    assert!(!live_lock::try_lock_file(&contender, OPERATION_LOCK, Mode::Exclusive).unwrap());
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn acquisition_and_arming_keep_one_inode_and_select_state2() {
         .write(true)
         .open(canonical_path)
         .unwrap();
-    assert!(!live_lock::try_lock(&contender, OPERATION_LOCK, Mode::Exclusive).unwrap());
+    assert!(!live_lock::try_lock_file(&contender, OPERATION_LOCK, Mode::Exclusive).unwrap());
 }
 
 #[test]

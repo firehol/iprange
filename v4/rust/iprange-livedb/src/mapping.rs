@@ -8,7 +8,7 @@ use std::ptr;
 use memmap2::{MmapOptions, MmapRaw};
 
 use crate::contract::PAGE_SIZE;
-use crate::error::{Error, Result};
+use crate::error::{combine_errors, Error, Result};
 
 /// Read-only bytes without requiring a Rust reference into mapped storage.
 pub(crate) trait ByteSource: Copy {
@@ -343,6 +343,11 @@ impl Mapping {
             .expect("owned database mapping retains its file")
     }
 
+    pub(crate) fn unmap(&mut self) {
+        self.map = None;
+        self.len = 0;
+    }
+
     pub(crate) fn len(&self) -> u64 {
         self.len as u64
     }
@@ -445,6 +450,25 @@ impl Mapping {
         let len = checked_len(len)?;
         self.map = None;
         self.file().set_len(len as u64)?;
+        self.replace_map(len)
+    }
+
+    /// Shrink to one committed extent, retaining an aligned Windows tail when
+    /// another mapped view makes truncation impossible.
+    pub(crate) fn shrink_or_retain(&mut self, len: u64) -> Result<u64> {
+        self.require_write()?;
+        let mapped_len = checked_len(len)?;
+        if self.len == mapped_len && self.file().metadata()?.len() == len {
+            return Ok(len);
+        }
+        self.map = None;
+        match shrink_file_or_retain(self.file(), len) {
+            Ok(physical_len) => self.replace_map(mapped_len).map(|()| physical_len),
+            Err(cause) => Err(combine_errors(cause, self.replace_map(mapped_len))),
+        }
+    }
+
+    fn replace_map(&mut self, len: usize) -> Result<()> {
         match map_nonempty(self.file(), len, self.access) {
             Ok(map) => {
                 self.map = map;
@@ -463,17 +487,7 @@ impl Mapping {
         let len = checked_len(len)?;
         require_file_extent(self.file(), len)?;
         self.map = None;
-        match map_nonempty(self.file(), len, self.access) {
-            Ok(map) => {
-                self.map = map;
-                self.len = len;
-                Ok(())
-            }
-            Err(error) => {
-                self.len = 0;
-                Err(error)
-            }
-        }
+        self.replace_map(len)
     }
 
     fn raw(&self) -> Result<&MmapRaw> {
@@ -498,6 +512,35 @@ impl Mapping {
             Err(Error::WrongMode("file mapping is read-only"))
         }
     }
+}
+
+pub(crate) fn shrink_file_or_retain(file: &File, len: u64) -> Result<u64> {
+    let physical_len = file.metadata()?.len();
+    if physical_len < len {
+        return Err(Error::Corrupt(
+            "main file is shorter than its committed generation",
+        ));
+    }
+    if physical_len == len {
+        return Ok(len);
+    }
+    match file.set_len(len) {
+        Ok(()) => Ok(len),
+        Err(source) if mapped_view_prevents_shrink(&source) => Ok(physical_len),
+        Err(source) => Err(source.into()),
+    }
+}
+
+#[cfg(windows)]
+fn mapped_view_prevents_shrink(source: &std::io::Error) -> bool {
+    use windows_sys::Win32::Foundation::ERROR_USER_MAPPED_FILE;
+
+    source.raw_os_error().map(|code| code as u32) == Some(ERROR_USER_MAPPED_FILE)
+}
+
+#[cfg(not(windows))]
+fn mapped_view_prevents_shrink(_source: &std::io::Error) -> bool {
+    false
 }
 
 /// Raw read-only bytes tied to one live mapping borrow.
@@ -1025,6 +1068,36 @@ mod tests {
         mapping.resize((3 * PAGE_SIZE) as u64).unwrap();
         assert_eq!(
             mapping.file().metadata().unwrap().len(),
+            (3 * PAGE_SIZE) as u64
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_shrink_retains_capacity_until_other_views_close() {
+        let (_path, file) = TestFile::new();
+        file.set_len((4 * PAGE_SIZE) as u64).unwrap();
+        let mut writer = Mapping::read_write(file, (4 * PAGE_SIZE) as u64).unwrap();
+        let reader_file = writer.file().try_clone().unwrap();
+        let reader = Mapping::read_only(reader_file, (2 * PAGE_SIZE) as u64).unwrap();
+
+        assert_eq!(
+            writer.shrink_or_retain((3 * PAGE_SIZE) as u64).unwrap(),
+            (4 * PAGE_SIZE) as u64
+        );
+        assert_eq!(writer.len(), (3 * PAGE_SIZE) as u64);
+        assert_eq!(
+            writer.file().metadata().unwrap().len(),
+            (4 * PAGE_SIZE) as u64
+        );
+
+        drop(reader);
+        assert_eq!(
+            writer.shrink_or_retain((3 * PAGE_SIZE) as u64).unwrap(),
+            (3 * PAGE_SIZE) as u64
+        );
+        assert_eq!(
+            writer.file().metadata().unwrap().len(),
             (3 * PAGE_SIZE) as u64
         );
     }

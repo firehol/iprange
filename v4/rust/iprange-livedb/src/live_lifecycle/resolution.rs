@@ -47,6 +47,7 @@ pub fn resolve_live_transition(
     mode: LiveTransitionResolutionMode,
     cancellation: &CancellationToken,
 ) -> Result<LiveTransitionResult> {
+    crate::live_lock::require_live_supported()?;
     require_supplied(supplied)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     require_main(&main, supplied)?;

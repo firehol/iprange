@@ -13,6 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use super::{file_identity, final_path, open_directory, Directory, NamespaceError};
 
 const BUFFER_SIZE: usize = 64 * 1024;
+const MAX_COMPONENT_UNITS: usize = 255;
 
 #[derive(Debug)]
 pub(crate) enum ScanError<E> {
@@ -92,9 +93,10 @@ fn visit_buffer<E>(
         let units = unsafe {
             std::slice::from_raw_parts((entry.FileName.as_ptr()).cast::<u16>(), units_len)
         };
-        if let Some(ascii) = ascii_name(units) {
+        let mut ascii = [0; MAX_COMPONENT_UNITS];
+        if let Some(ascii) = ascii_name(units, &mut ascii) {
             if ascii != b"." && ascii != b".." {
-                visitor(&ascii).map_err(ScanError::Visitor)?;
+                visitor(ascii).map_err(ScanError::Visitor)?;
             }
         }
         if entry.NextEntryOffset == 0 {
@@ -109,12 +111,16 @@ fn visit_buffer<E>(
     }
 }
 
-fn ascii_name(units: &[u16]) -> Option<Vec<u8>> {
-    units
-        .iter()
-        .copied()
-        .map(u8::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()
-        .filter(|bytes| bytes.iter().all(u8::is_ascii))
+fn ascii_name<'a>(units: &[u16], output: &'a mut [u8; MAX_COMPONENT_UNITS]) -> Option<&'a [u8]> {
+    if units.len() > output.len() {
+        return None;
+    }
+    for (destination, &unit) in output.iter_mut().zip(units) {
+        let byte = u8::try_from(unit).ok()?;
+        if !byte.is_ascii() {
+            return None;
+        }
+        *destination = byte;
+    }
+    Some(&output[..units.len()])
 }

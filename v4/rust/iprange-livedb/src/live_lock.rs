@@ -13,6 +13,18 @@ pub(crate) enum Mode {
     Exclusive,
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
+pub(crate) const fn require_live_supported() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+pub(crate) fn require_live_supported() -> Result<()> {
+    Err(Error::Unsupported(
+        "live coordination is not implemented on this platform",
+    ))
+}
+
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 mod platform {
     use std::io;
@@ -190,6 +202,77 @@ mod platform {
 
 pub(crate) use platform::{lock, try_lock, unlock};
 
+/// Automatic-release lock for an artifact that has one logical lock.
+///
+/// `offset` preserves the established byte-range on Linux, macOS, and Windows.
+/// FreeBSD uses an open-file-table `flock` because the complete artifact has no
+/// independent lock ranges.
+#[cfg(not(target_os = "freebsd"))]
+pub(crate) fn lock_file(file: &File, offset: u64, mode: Mode) -> Result<()> {
+    lock(file, offset, mode)
+}
+
+#[cfg(not(target_os = "freebsd"))]
+pub(crate) fn try_lock_file(file: &File, offset: u64, mode: Mode) -> Result<bool> {
+    try_lock(file, offset, mode)
+}
+
+#[cfg(not(target_os = "freebsd"))]
+pub(crate) fn unlock_file(file: &File, offset: u64) -> Result<()> {
+    unlock(file, offset)
+}
+
+#[cfg(target_os = "freebsd")]
+pub(crate) fn lock_file(file: &File, _offset: u64, mode: Mode) -> Result<()> {
+    freebsd_file_lock(file, mode, true).map(|_| ())
+}
+
+#[cfg(target_os = "freebsd")]
+pub(crate) fn try_lock_file(file: &File, _offset: u64, mode: Mode) -> Result<bool> {
+    freebsd_file_lock(file, mode, false)
+}
+
+#[cfg(target_os = "freebsd")]
+pub(crate) fn unlock_file(file: &File, _offset: u64) -> Result<()> {
+    use std::os::fd::AsRawFd;
+
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error.into());
+        }
+    }
+}
+
+#[cfg(target_os = "freebsd")]
+fn freebsd_file_lock(file: &File, mode: Mode, wait: bool) -> Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let mut operation = match mode {
+        Mode::Shared => libc::LOCK_SH,
+        Mode::Exclusive => libc::LOCK_EX,
+    };
+    if !wait {
+        operation |= libc::LOCK_NB;
+    }
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if !wait && error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Ok(false);
+        }
+        return Err(error.into());
+    }
+}
+
 pub(crate) fn lock_cancellable(
     file: &File,
     offset: u64,
@@ -199,6 +282,21 @@ pub(crate) fn lock_cancellable(
     loop {
         cancellation.check()?;
         if try_lock(file, offset, mode)? {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+pub(crate) fn lock_file_cancellable(
+    file: &File,
+    offset: u64,
+    mode: Mode,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    loop {
+        cancellation.check()?;
+        if try_lock_file(file, offset, mode)? {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(1));

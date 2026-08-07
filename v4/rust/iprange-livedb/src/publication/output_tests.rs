@@ -34,10 +34,10 @@ fn preparation_hashes_exact_bytes_and_retains_the_lifetime_lock() {
         .write(true)
         .open(&private)
         .unwrap();
-    assert!(!live_lock::try_lock(&contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap());
+    assert!(!live_lock::try_lock_file(&contender, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap());
     drop(prepared);
     wait_for_exclusive_lock(&contender);
-    live_lock::unlock(&contender, MAIN_LIFETIME_LOCK).unwrap();
+    live_lock::unlock_file(&contender, MAIN_LIFETIME_LOCK).unwrap();
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn output_budget() -> OutputBudget {
 
 fn wait_for_exclusive_lock(file: &File) {
     for _ in 0..100 {
-        if live_lock::try_lock(file, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap() {
+        if live_lock::try_lock_file(file, MAIN_LIFETIME_LOCK, Mode::Exclusive).unwrap() {
             return;
         }
         // A parallel crash test can briefly inherit a close-on-exec descriptor at fork.

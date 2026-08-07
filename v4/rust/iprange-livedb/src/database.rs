@@ -177,7 +177,7 @@ impl ImmutableReader {
 fn open_immutable_source(path: &Path, sidecar: &Path) -> Result<(File, live_sidecar::Identity)> {
     let file = open_read_only(path)?;
     let identity = live_sidecar::identity_any_link(&file)?;
-    live_lock::lock(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+    live_lock::lock_file(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
     live_sidecar::verify_path_any_link(path, identity)?;
     require_sidecar_absent(sidecar)?;
     Ok((file, identity))
@@ -211,6 +211,10 @@ impl ReaderCore {
 
     pub(crate) fn file(&self) -> &File {
         self.mapping.file()
+    }
+
+    pub(crate) fn unmap(&mut self) {
+        self.mapping.unmap();
     }
 
     pub(crate) fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {

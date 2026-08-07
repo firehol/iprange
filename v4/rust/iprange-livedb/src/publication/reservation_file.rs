@@ -349,7 +349,7 @@ fn lock_state1_with(
     verify_private(draft, output, header, 0)?;
     draft.state1_selected = true;
     after_selection(draft.identity.ok_or(Error::HeaderInvariant)?)?;
-    live_lock::lock(&draft.file, OPERATION_LOCK, Mode::Exclusive)?;
+    live_lock::lock_file(&draft.file, OPERATION_LOCK, Mode::Exclusive)?;
     verify_private(draft, output, header, 0)
 }
 

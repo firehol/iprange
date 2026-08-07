@@ -39,7 +39,7 @@ pub(super) fn inspect(
     else {
         return Ok(None);
     };
-    live_lock::lock_cancellable(
+    live_lock::lock_file_cancellable(
         &regular.file,
         MAIN_LIFETIME_LOCK,
         Mode::Exclusive,

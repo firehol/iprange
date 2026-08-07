@@ -109,7 +109,7 @@ impl LiveSource {
 
     fn release_lifetime(&mut self) -> Result<()> {
         if self.lifetime_locked {
-            live_lock::unlock(&self.file, MAIN_LIFETIME_LOCK)?;
+            live_lock::unlock_file(&self.file, MAIN_LIFETIME_LOCK)?;
             self.lifetime_locked = false;
         }
         Ok(())
@@ -131,7 +131,7 @@ fn open_file(
 ) -> std::result::Result<Source, SourceOpenFailure> {
     let file = database::open_read_only(path).map_err(open_problem)?;
     let identity = live_sidecar::identity(&file).map_err(open_problem)?;
-    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
         .map_err(open_problem)?;
     finish_open(open_locked(file, identity))
 }
@@ -143,7 +143,7 @@ fn finish_open(
         Ok(source) => Ok(Source::Live(source)),
         Err(LiveOpenFailure::Unclaimed(file, cause)) => Err(open_problem(combine_errors(
             cause,
-            live_lock::unlock(&file, MAIN_LIFETIME_LOCK),
+            live_lock::unlock_file(&file, MAIN_LIFETIME_LOCK),
         ))),
         Err(LiveOpenFailure::Claimed(source, cause)) => {
             let end = Source::Live(*source).abandon(cause);

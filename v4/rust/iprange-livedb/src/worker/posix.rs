@@ -167,9 +167,8 @@ fn owned_fault(control: *mut u8, signal: c_int, info: *mut libc::siginfo_t) -> b
     if signal != libc::SIGBUS || info.is_null() {
         return false;
     }
-    // Positive BUS_* values identify synchronous kernel faults on the supported POSIX targets.
     let code = unsafe { (*info).si_code };
-    if code <= 0 {
+    if !kernel_bus_fault(code) {
         return false;
     }
     let fields = Control::fault_fields();
@@ -212,7 +211,7 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
         if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-        let kernel_generated = !info.is_null() && unsafe { (*info).si_code } > 0;
+        let kernel_generated = !info.is_null() && kernel_bus_fault(unsafe { (*info).si_code });
         if !kernel_generated && unsafe { libc::kill(libc::getpid(), signal) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
@@ -244,6 +243,23 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
         let handler: extern "C" fn(c_int) = unsafe { mem::transmute(disposition) };
         handler(signal);
     }
+}
+
+fn kernel_bus_fault(code: c_int) -> bool {
+    code == libc::BUS_ADRALN
+        || code == libc::BUS_ADRERR
+        || code == libc::BUS_OBJERR
+        || linux_machine_check(code)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_machine_check(code: c_int) -> bool {
+    code == libc::BUS_MCEERR_AR || code == libc::BUS_MCEERR_AO
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn linux_machine_check(_code: c_int) -> bool {
+    false
 }
 
 fn apply_mask(previous: &libc::sigaction, signal: c_int) -> bool {
@@ -384,8 +400,9 @@ mod tests {
         assert_eq!(status.code(), Some(OWNED_FAULT_EXIT));
         let fault = control.fault_record().unwrap();
         assert_eq!(fault.role, super::super::control::MappingRole::Scratch);
-        assert_eq!(fault.relative, PAGE_SIZE as u64);
-        assert_eq!(fault.mapping_len, (2 * PAGE_SIZE) as u64);
+        let native_page = native_page_size();
+        assert_eq!(fault.relative, native_page as u64);
+        assert_eq!(fault.mapping_len, (2 * native_page) as u64);
     }
 
     #[test]
@@ -521,7 +538,7 @@ mod tests {
     extern "C" fn siginfo(signal: c_int, info: *mut libc::siginfo_t, _context: *mut c_void) {
         let code = if signal != libc::SIGBUS || info.is_null() {
             86
-        } else if unsafe { (*info).si_code } <= 0 {
+        } else if !kernel_bus_fault(unsafe { (*info).si_code }) {
             82
         } else {
             83
@@ -587,17 +604,30 @@ mod tests {
             .open(&path)
             .unwrap();
         std::fs::remove_file(path).unwrap();
-        file.set_len((2 * PAGE_SIZE) as u64).unwrap();
-        let mapping = Mapping::read_only(file, (2 * PAGE_SIZE) as u64).unwrap();
+        let native_page = native_page_size();
+        assert_eq!(native_page % PAGE_SIZE, 0);
+        file.set_len((2 * native_page) as u64).unwrap();
+        let mapping = Mapping::read_only(file, (2 * native_page) as u64).unwrap();
         if truncate {
-            mapping.file().set_len(PAGE_SIZE as u64).unwrap();
+            mapping.file().set_len(native_page as u64).unwrap();
         }
         mapping
     }
 
     fn fault(mapping: &Mapping) -> ! {
-        let page = mapping.page(1, 2).unwrap();
+        let native_page = native_page_size();
+        let page = mapping
+            .page(
+                (native_page / PAGE_SIZE) as u32,
+                (2 * native_page / PAGE_SIZE) as u64,
+            )
+            .unwrap();
         let _ = page.byte(0);
         unsafe { libc::_exit(87) }
+    }
+
+    fn native_page_size() -> usize {
+        let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        usize::try_from(size).ok().filter(|size| *size > 0).unwrap()
     }
 }

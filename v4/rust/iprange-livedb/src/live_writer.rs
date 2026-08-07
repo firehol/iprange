@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED};
+use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED, PAGE_SIZE};
 use crate::database;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
 use crate::error::{finish_with_cleanup, Error, Result};
@@ -123,6 +123,7 @@ impl LiveWriter {
         budget: TransactionBudget,
         cancellation: &CancellationToken,
     ) -> Result<Self> {
+        live_lock::require_live_supported()?;
         cancellation.check()?;
         let budget = budget.validate()?;
         let main = open_main(path.as_ref(), cancellation)?;
@@ -402,8 +403,10 @@ impl LiveWriter {
 
     fn discard_draft_inner(&mut self) -> Result<()> {
         self.verify_discard_base()?;
-        self.trim_unpublished_tail()?;
-        self.verify_discard_result()
+        let physical_bytes = self.trim_unpublished_tail()?;
+        self.verify_discard_result(physical_bytes)?;
+        self.base.physical_bytes = physical_bytes;
+        Ok(())
     }
 
     fn verify_discard_base(&self) -> Result<()> {
@@ -412,7 +415,7 @@ impl LiveWriter {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)
     }
 
-    fn trim_unpublished_tail(&mut self) -> Result<()> {
+    fn trim_unpublished_tail(&mut self) -> Result<u64> {
         let length = self.mapping.file().metadata()?.len();
         if length < self.base.committed_bytes {
             return Err(Error::Corrupt(
@@ -421,17 +424,25 @@ impl LiveWriter {
         }
         if length > self.base.committed_bytes {
             self.unproved_tail_end = Some(length);
-            self.mapping.resize(self.base.committed_bytes)?;
+            let physical_bytes = self.mapping.shrink_or_retain(self.base.committed_bytes)?;
             self.mapping.sync_file()?;
+            return Ok(physical_bytes);
         }
-        Ok(())
+        if self.mapping.len() != self.base.committed_bytes {
+            self.mapping.remap(self.base.committed_bytes)?;
+        }
+        Ok(length)
     }
 
-    fn verify_discard_result(&self) -> Result<()> {
+    fn verify_discard_result(&self, physical_bytes: u64) -> Result<()> {
         self.require_unchanged_base()?;
-        if self.mapping.file().metadata()?.len() != self.base.committed_bytes {
+        if physical_bytes < self.base.committed_bytes
+            || physical_bytes % PAGE_SIZE as u64 != 0
+            || self.mapping.file().metadata()?.len() != physical_bytes
+            || self.mapping.len() != self.base.committed_bytes
+        {
             return Err(Error::Corrupt(
-                "unpublished tail cleanup changed file length",
+                "unpublished tail cleanup left inconsistent geometry",
             ));
         }
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)
@@ -501,11 +512,11 @@ fn open_locked(
     cancellation.check()?;
     sidecar.claim_writer()?;
     cancellation.check()?;
-    trim_tail(mapping, base)?;
+    let physical_bytes = trim_tail(mapping, base)?;
     cancellation.check()?;
     verify_pair(main_path, main_identity, sidecar)?;
     Ok(Bootstrap {
-        physical_bytes: base.committed_bytes,
+        physical_bytes,
         ..base
     })
 }
@@ -517,7 +528,7 @@ fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain
     let directory_identity = live_sidecar::parent_identity(&path)?;
     let public_identity = live_sidecar::public_identity(identity);
     let basename = LocalBasename::from_path(&path)?;
-    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     live_sidecar::verify_path(&path, identity)?;
     let (mapping, initial) = database::map_writer(file)?;
     crate::live_cleanup::require_main_available(&path, identity, initial.meta.database_id)?;
@@ -554,10 +565,12 @@ fn verify_pair(main_path: &Path, main_identity: Identity, sidecar: &Sidecar) -> 
     sidecar.verify_header()
 }
 
-fn trim_tail(mapping: &mut Mapping, base: Bootstrap) -> Result<()> {
+fn trim_tail(mapping: &mut Mapping, base: Bootstrap) -> Result<u64> {
     if base.physical_bytes != base.committed_bytes {
-        mapping.resize(base.committed_bytes)?;
+        let physical_bytes = mapping.shrink_or_retain(base.committed_bytes)?;
         mapping.sync_file()?;
+        Ok(physical_bytes)
+    } else {
+        Ok(base.physical_bytes)
     }
-    Ok(())
 }

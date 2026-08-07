@@ -188,14 +188,14 @@ fn immutable_reader_holds_the_shared_lifetime_lock() {
     let reader = ImmutableReader::open(&path.0).unwrap();
     let competing = crate::live_sidecar::open_rw(&path.0).unwrap();
 
-    assert!(!crate::live_lock::try_lock(
+    assert!(!crate::live_lock::try_lock_file(
         &competing,
         crate::live_sidecar::MAIN_LIFETIME_LOCK,
         crate::live_lock::Mode::Exclusive,
     )
     .unwrap());
     drop(reader);
-    assert!(crate::live_lock::try_lock(
+    assert!(crate::live_lock::try_lock_file(
         &competing,
         crate::live_sidecar::MAIN_LIFETIME_LOCK,
         crate::live_lock::Mode::Exclusive,

@@ -65,11 +65,12 @@ pub struct LiveReader {
 impl LiveReader {
     /// Open and register a live reader without validating either page graph.
     pub fn open(path: impl AsRef<Path>, cancellation: &CancellationToken) -> Result<Self> {
+        live_lock::require_live_supported()?;
         cancellation.check()?;
         let main_path = path.as_ref().to_path_buf();
         let file = database::open_read_only(&main_path)?;
         let main_identity = live_sidecar::identity(&file)?;
-        live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+        live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         live_sidecar::verify_path(&main_path, main_identity)?;
 
         let (mut mapping, initial) = database::map_reader(file, OpenMode::LiveReader)?;
@@ -225,6 +226,7 @@ impl LiveReader {
             if let Err(cause) = self.verify_registration() {
                 return Ok(self.release_gate_after_failure(cause));
             }
+            self.core.unmap();
             self.state = State::GateHeldSlotClearing;
         }
         if self.state == State::GateHeldSlotClearing {
@@ -246,7 +248,7 @@ impl LiveReader {
             self.state = State::MainLockOnly;
         }
         if self.state == State::MainLockOnly {
-            if let Err(cause) = live_lock::unlock(self.core.file(), MAIN_LIFETIME_LOCK) {
+            if let Err(cause) = live_lock::unlock_file(self.core.file(), MAIN_LIFETIME_LOCK) {
                 return Ok(reader_close_incomplete(cause));
             }
             self.state = State::Closed;

@@ -7,6 +7,8 @@ const INERT_PREFIX: &[u8] = b".iprange-gc-";
 const SUFFIX: &[u8] = b".tmp";
 const ATTEMPT_HEX: usize = 32;
 const ORDINAL_HEX: usize = 8;
+#[cfg(windows)]
+const MAX_ASCII_NAME: usize = ENVELOPE_PREFIX.len() + ATTEMPT_HEX + 1 + ORDINAL_HEX + SUFFIX.len();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Candidate {
@@ -24,6 +26,10 @@ pub(crate) fn inert(attempt: [u8; 16], ordinal: u32) -> Result<Name, NamespaceEr
 
 pub(crate) fn decode_envelope(bytes: &[u8]) -> Option<([u8; 16], u32)> {
     decode(bytes, ENVELOPE_PREFIX)
+}
+
+pub(crate) fn decode_envelope_name(name: &Name) -> Option<([u8; 16], u32)> {
+    decode_name(name, ENVELOPE_PREFIX)
 }
 
 pub(crate) fn decode_inert(bytes: &[u8]) -> Option<([u8; 16], u32)> {
@@ -80,6 +86,27 @@ fn decode(bytes: &[u8], prefix: &[u8]) -> Option<([u8; 16], u32)> {
     Some((attempt, ordinal))
 }
 
+#[cfg(unix)]
+fn decode_name(name: &Name, prefix: &[u8]) -> Option<([u8; 16], u32)> {
+    decode(name.bytes(), prefix)
+}
+
+#[cfg(windows)]
+fn decode_name(name: &Name, prefix: &[u8]) -> Option<([u8; 16], u32)> {
+    let encoded = name.bytes();
+    if encoded.len() % 2 != 0 || encoded.len() / 2 > MAX_ASCII_NAME {
+        return None;
+    }
+    let mut ascii = [0u8; MAX_ASCII_NAME];
+    for (output, unit) in ascii.iter_mut().zip(encoded.chunks_exact(2)) {
+        if unit[1] != 0 || !unit[0].is_ascii() {
+            return None;
+        }
+        *output = unit[0];
+    }
+    decode(&ascii[..encoded.len() / 2], prefix)
+}
+
 const fn hex(value: u8) -> u8 {
     match value {
         0..=9 => b'0' + value,
@@ -107,22 +134,24 @@ mod tests {
         ];
         let name = envelope(attempt, 0x89ab_cdef).unwrap();
         assert_eq!(
-            name.bytes(),
-            b".iprange-gcauth-0123456789abcdeffedcba9876543210-89abcdef.tmp"
+            name,
+            Name::new(b".iprange-gcauth-0123456789abcdeffedcba9876543210-89abcdef.tmp").unwrap()
         );
-        assert_eq!(decode_envelope(name.bytes()), Some((attempt, 0x89ab_cdef)));
+        assert_eq!(decode_envelope_name(&name), Some((attempt, 0x89ab_cdef)));
         assert_eq!(
-            inert(attempt, 7).unwrap().bytes(),
-            b".iprange-gc-0123456789abcdeffedcba9876543210-00000007.tmp"
+            inert(attempt, 7).unwrap(),
+            Name::new(b".iprange-gc-0123456789abcdeffedcba9876543210-00000007.tmp").unwrap()
         );
-        let inert = inert(attempt, 7).unwrap();
-        assert_eq!(decode_inert(inert.bytes()), Some((attempt, 7)));
         assert_eq!(
-            candidate(name.bytes()),
+            decode_inert(b".iprange-gc-0123456789abcdeffedcba9876543210-00000007.tmp"),
+            Some((attempt, 7))
+        );
+        assert_eq!(
+            candidate(b".iprange-gcauth-0123456789abcdeffedcba9876543210-89abcdef.tmp"),
             Some(Candidate::Envelope(Some((attempt, 0x89ab_cdef))))
         );
         assert_eq!(
-            candidate(inert.bytes()),
+            candidate(b".iprange-gc-0123456789abcdeffedcba9876543210-00000007.tmp"),
             Some(Candidate::Inert(Some((attempt, 7))))
         );
     }

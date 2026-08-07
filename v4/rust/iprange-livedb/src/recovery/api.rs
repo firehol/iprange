@@ -63,6 +63,9 @@ pub fn recover_live<S: RecoverySink>(
     sink: &mut S,
     cancellation: &CancellationToken,
 ) -> RecoveryOutcome {
+    if let Err(cause) = crate::live_lock::require_live_supported() {
+        return Err(Box::new(RecoveryPreparationFailure::early(cause)));
+    }
     crate::worker::recover(
         source_path.as_ref(),
         candidate,

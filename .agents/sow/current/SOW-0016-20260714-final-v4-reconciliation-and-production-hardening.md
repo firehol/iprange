@@ -4,12 +4,11 @@
 
 Status: in-progress
 
-Sub-state: resumed on 2026-08-07 after completed SOW-0019 replaced persistent
-content I/O and application-owned pages with the approved mmap-only storage
-architecture. Current work removes measured live-reader fork-detection syscalls
-without weakening inherited-handle rejection, adds separate live/immutable
-reader evidence, and then returns to the independently measured mapped-writer
-instruction regression.
+Sub-state: native Windows, macOS, and FreeBSD execution was authorized and began
+on 2026-08-08 after the mmap-only reader/writer and mapped-writer performance
+repairs. Native execution found platform-specific test and implementation gaps;
+the repair boundary and validation matrix are recorded in the 2026-08-08 gate
+at the end of this SOW.
 
 The prior local-completion and Rust-acceptance claims are withdrawn.
 A fresh compiled-path and release-profile audit found that ordinary range
@@ -21,7 +20,7 @@ outside the Linux all-feature build. Passing semantic tests does not prove that
 the intended mechanism is compiled or that the hot path performs only necessary
 work.
 
-User decision 74A starts a trust reset before further optimization: establish
+User decision 74A started a trust reset before further optimization: establish
 one exact compiled implementation, remove obsolete alternatives only after an
 explicit deletion-set approval, map every Phase-1 invariant to compiled public
 paths and executable evidence, add work-accounting gates, and then repair the
@@ -514,7 +513,7 @@ Risks:
 
 ## Pre-Implementation Gate
 
-Status: open. All user/product decisions through decision 70 are resolved, the
+Status: open. All user/product decisions through decision 76 are resolved, the
 normative specification is synchronized and independently contradiction-audited,
 and the decision-45 unsigned/signing phase split is resolved. Implementation is
 in progress under this gate.
@@ -2207,6 +2206,19 @@ Open decisions:
     housekeeping, and an optional typed cause. POSIX behavior is the same
     contract with no housekeeping. This is error-reporting completion, not a new
     product choice; the user explicitly delegated exact error presentation.
+76. User decision (2026-08-08): live files should release unused mapped tail
+    capacity whenever the platform can do so without disrupting readers. Linux,
+    macOS, and other supported shrink paths retain the mandatory exact-length
+    cleanup. Windows first attempts the same shrink after dropping its own view.
+    If the kernel returns exactly `ERROR_USER_MAPPED_FILE` because another mapped
+    view prevents truncation, the SDK remaps the committed extent, treats the
+    aligned unpublished tail as normal retained capacity, and continues without
+    delaying or closing readers. Every other resize or remap error remains a
+    typed failure. The same rule governs writer open, commit, abort, close, and
+    commit resolution. Reader-table state is not used as sole authority because
+    a reader maps the selected extent before it publishes its slot; the Windows
+    truncate result closes that race. Compact immutable snapshots remain exact
+    length on every platform.
 
 ## Plan
 
@@ -13803,7 +13815,8 @@ four supported targets plus one runtime-compiled native fixture. The SOW audit,
 same-failure searches all pass. Complexity review found no changed or new
 function above cyclomatic complexity 9; three higher pre-existing functions in
 touched carrier files remain outside this slice and were not disguised as new
-work.
+work. User decisions 75 and 76 respectively removed the preserved unreachable
+implementation set and selected opportunistic Windows live-tail shrinking.
 
 No format, public API, C ABI, or default-validation behavior changed. The Rust
 README now records the corrected benchmark/read-path evidence. The normative
@@ -14404,3 +14417,157 @@ C CLI docs, and end-user/operator skills remain accurate and unaffected. This
 closes the local mapped writer regression. The active SOW remains in progress
 only for permission-gated native platform execution and final user acceptance
 of the Rust SDK; the Go port remains blocked on that acceptance.
+
+## 2026-08-08 - native-platform runtime repair gate
+
+### Problem and root-cause model
+
+Native execution on the authorized Phase-1 systems disproved the prior
+compile-only portability claim:
+
+- macOS uses a 16 KiB hardware page on the tested Apple system. The SIGBUS
+  subprocess fixture truncated a two-4-KiB-format-page mapping to one format
+  page, so its supposed fault address remained in the same hardware page and no
+  signal occurred. The production mapping rule is not implicated by that result.
+- FreeBSD immutable open and publication incorrectly pass through the live
+  byte-range-lock adapter, whose unsupported fallback rejects the platform.
+  FreeBSD provides automatic-release whole-file `flock` lifetime locks suitable
+  for immutable/publication coordination, but not the independent byte ranges
+  required by the live sidecar. The promised immutable surface is therefore
+  accidentally disabled while live operation must remain explicitly unsupported.
+- Windows native execution found that generated GC names are stored as UTF-16LE
+  but decoded as POSIX bytes, so authenticated housekeeping cannot recognize its
+  own names. Successful live-reader close also releases its slot before dropping
+  the main mapping. Finally, transaction capacity is extended successfully while
+  readers are mapped, but shrinking it at commit fails with native error 1224.
+  The current exact-tail rule therefore turns a valid concurrent read into a
+  writer failure.
+
+The physical-tail root cause is overstrict cleanup, not a format or mmap
+limitation. Committed reachability is bounded by the selected meta
+`page_count`; aligned bytes above it are unpublished and readers already map
+only the committed extent. Windows permits extension beyond existing mapped
+views but can reject truncation while a user-mapped section exists.
+
+### Evidence reviewed
+
+- `.agents/sow/specs/binary-format-v4.md`, especially sections 3, 14, 15, 18,
+  and 20; `.agents/sow/specs/design-iprange-engine.md`; and
+  `.agents/sow/specs/c-abi-v4.md`.
+- `mapping.rs`, `draft_store.rs`, `live_writer.rs`, `live_writer/commit.rs`,
+  `live_writer/close.rs`, `live_reader.rs`, `live_lock.rs`, `database.rs`,
+  `commit_resolution.rs`, `publication/gc_name.rs`, `worker/posix.rs`, and the
+  corresponding platform/integration tests.
+- Native all-feature/all-target Rust execution on Apple ARM64, Windows NTFS
+  with the GNU Rust target, and FreeBSD 14. Native Windows separately proved
+  extension succeeds with an existing mapped view and the database test proved
+  the later shrink fails with error 1224.
+- Microsoft `MmCanFileBeTruncated` documentation: a mapped data section can
+  prevent truncation at or below current file size. FreeBSD 14 `flock(2)`
+  documentation: whole-file locks are associated with the open file table entry
+  and released with its final close.
+
+### Affected contracts and surfaces
+
+- Live-file physical-tail handling at writer open, commit, abort, close, and
+  commit resolution; mapped-reader close ordering; crash-result cleanup truth.
+- Windows native filename decoding and authenticated housekeeping.
+- FreeBSD immutable reading, explicit validation/recovery source guards,
+  snapshot/publication lifetime coordination, and the explicit live-unsupported
+  boundary.
+- POSIX worker SIGBUS ownership/chaining tests and exact kernel fault-code
+  classification.
+- Rust, C ABI, conformance, native C/C++ behavior, crash/process, source-graph,
+  mmap-only, portability, and performance evidence. Go remains blocked until
+  the user accepts the complete Rust result.
+
+### Existing patterns to reuse
+
+- Keep one `Mapping` owner and the existing map-drop/resize/remap sequence; add
+  no page buffer, content I/O fallback, second storage engine, or extra file.
+- Reuse the existing committed `page_count`, aligned-tail bootstrap acceptance,
+  transaction budget, reader registration gate, typed OS errors, retained file
+  identities, and exact cleanup-result model.
+- Keep the live byte-range lock adapter strict. Add a separate FreeBSD
+  whole-file lifetime-lock implementation only for operations that do not own a
+  live sidecar.
+- Keep one native signal path; classify exact `BUS_*` fault codes rather than
+  assuming every positive `si_code` is kernel-generated.
+
+### Risk and blast radius
+
+- Treating an arbitrary Windows resize failure as reader contention could hide
+  real storage failure. Only exact `ERROR_USER_MAPPED_FILE` may retain a proven
+  aligned tail; all other resize/remap failures remain errors.
+- A failed Windows shrink drops the writer's own mapping first. Failure to
+  restore the committed mapping must fail the operation; no unmapped writer may
+  continue.
+- Retained aborted tail pages contain unpublished bytes. Every later tail-page
+  allocation must initialize the page before any root can publish it, and native
+  tests must cover abort-retain-reuse plus explicit validation.
+- Using FreeBSD `flock` for live reader slots would collapse independent locks
+  and be unsafe. It is restricted to whole-file lifetime/publication locks;
+  every live constructor/open/reset remains unsupported before mutation.
+- Incorrect SIGBUS classification can steal an unrelated process signal. Tests
+  must prove owned faults, user-raised signals, default redispatch, ignored
+  signals, and custom-handler chaining on each supported POSIX target.
+
+### Sensitive-data handling plan
+
+All inputs, filenames, mappings, crashes, and benchmarks are synthetic. Durable
+artifacts record only repository paths, public operating-system documentation,
+aggregate results, and typed errors; they contain no credentials, personal or
+customer data, private endpoints, or operational infrastructure details.
+
+### Approved implementation plan
+
+User decision 76 selects opportunistic Windows tail shrinking:
+
+1. Add one mapped resize primitive that attempts Windows shrink, remaps the
+   committed extent after exact error 1224, and reports whether capacity was
+   trimmed or retained. Other targets and other errors keep strict behavior.
+2. Apply it consistently to writer open, commit, abort, close, and commit
+   resolution. Make bootstrap/result physical length factual and preserve exact
+   immutable output length.
+3. Drop a successfully closed live reader's main mapping before releasing the
+   slot lock and lifetime lock.
+4. Decode Windows GC basenames as canonical UTF-16LE without per-entry heap
+   allocation; keep POSIX byte decoding unchanged.
+5. Add FreeBSD whole-file lifetime locking for immutable/publication paths and
+   fail every live path before it creates, maps, or mutates live artifacts.
+6. Make POSIX fault fixtures use native hardware-page geometry and classify only
+   exact kernel `BUS_*` codes.
+7. Add permanent native platform and C-boundary tests, then run the full release
+   matrix on every authorized system.
+
+### Validation plan
+
+- macOS: both workspace feature matrices, native SIGBUS chain/crash matrix,
+  live reader/writer lifecycle, strict replacement, conformance, explicit
+  validation, and native C/C++ ABI behavior.
+- Windows local NTFS: both workspace feature matrices, mapped-reader commit and
+  abort with opportunistic shrink/retention/reuse, crash/lifecycle resolution,
+  canonical UTF-16 GC enumeration/removal, strict replacement rejection,
+  no-rollback publication, conformance, and native C/C++ ABI behavior.
+- FreeBSD 14: both workspace feature matrices for the supported graph;
+  immutable open/query/explicit validation/recovery, fail-if-exists and
+  no-rollback publication, strict replacement rejection, and permanent proof
+  that every live entry point fails before mutation or artifact creation.
+- Linux reference system: both complete workspace matrices, Rust 1.74.1,
+  Clippy/rustdoc/formatting, source-graph and mmap source/runtime gates, C ABI
+  manifest/generated header/native behavior, conformance, crash/fault/property
+  suites, allocation/resource checks, and representative release benchmarks.
+- Same-failure searches cover every raw basename decoder, every live main-file
+  mapping lifetime, every main-tail shrink, every platform lock fallback, and
+  every positive-`si_code` assumption.
+
+### Artifact impact and open decisions
+
+- Update the binary-format specification and Rust SDK documentation for decision
+  76 and the exact platform matrix. Update the project Rust skill if the final
+  native workflow or portability boundary changes its reusable instructions.
+- `AGENTS.md` already defines mmap-only storage, Rust-first acceptance, and the
+  thin/lean philosophy. The released C CLI and end-user/operator skills are
+  unaffected because v4 is unreleased and no output skill exists.
+- No design decision remains open for this repair. New caller-visible behavior,
+  durability, format, or risk forks still require user approval before code.

@@ -12,7 +12,7 @@ use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
 use crate::live_writer::{
     CommitCleanupArtifact, CommitCleanupArtifacts, CommitResult, LocalBasename,
 };
-use crate::mapping::Mapping;
+use crate::mapping::{self, Mapping};
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::validation::LocalFileIdentity;
 
@@ -90,6 +90,9 @@ pub fn resolve_commit(
     mode: CommitResolutionMode,
     cancellation: &CancellationToken,
 ) -> Result<CommitResolutionResult> {
+    if mode == CommitResolutionMode::Live {
+        live_lock::require_live_supported()?;
+    }
     validate_attempt(attempt)?;
     cancellation.check()?;
     let path = path.as_ref();
@@ -101,7 +104,7 @@ pub fn resolve_commit(
             let sidecar = crate::path::canonical_sidecar(path)?;
             database::require_sidecar_absent(&sidecar)?;
             let mut result = resolve_locked(path, attempt, &opened, None, cancellation, relation)?;
-            if let Err(cause) = live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK) {
+            if let Err(cause) = live_lock::unlock_file(&opened.file, MAIN_LIFETIME_LOCK) {
                 record_postcondition_failure(&mut result, cause);
             }
             Ok(result)
@@ -123,7 +126,7 @@ pub fn resolve_commit(
             for release in [
                 sidecar.release_writer(),
                 sidecar.unlock_gate(),
-                live_lock::unlock(&opened.file, MAIN_LIFETIME_LOCK),
+                live_lock::unlock_file(&opened.file, MAIN_LIFETIME_LOCK),
             ] {
                 if let Err(cause) = release {
                     record_postcondition_failure(&mut result, cause);
@@ -157,7 +160,7 @@ fn open(
         CommitResolutionMode::Live => live_sidecar::identity(&file)?,
         CommitResolutionMode::Immutable => live_sidecar::identity_any_link(&file)?,
     };
-    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     verify_main(path, identity, mode)?;
     Ok(Opened {
         directory_identity: live_sidecar::parent_identity(path)?,
@@ -284,11 +287,11 @@ fn trim_tail(
     sidecar: Option<&live_sidecar::Sidecar>,
     selected: Classification,
 ) -> Result<()> {
-    opened.file.set_len(selected.committed_bytes)?;
+    let physical_bytes = mapping::shrink_file_or_retain(&opened.file, selected.committed_bytes)?;
     opened.file.sync_all()?;
     let current = classify_selected(&opened.file, selected.resolution)?;
     let expected = Classification {
-        physical_bytes: selected.committed_bytes,
+        physical_bytes,
         ..selected
     };
     if current != expected {

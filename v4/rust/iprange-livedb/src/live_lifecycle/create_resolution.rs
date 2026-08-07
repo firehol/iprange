@@ -48,6 +48,7 @@ pub fn resolve_create_live(
     mode: LiveTransitionResolutionMode,
     cancellation: &CancellationToken,
 ) -> Result<CreateResult> {
+    crate::live_lock::require_live_supported()?;
     let path = path.as_ref();
     require_supplied(path, supplied)?;
     cancellation.check()?;
@@ -295,7 +296,7 @@ fn observe_main(
     {
         return Err(Error::Conflict("creation main identity changed"));
     }
-    live_lock::lock_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
     live_sidecar::verify_path(path, identity)?;
     match database::bootstrap_file(&file, OpenMode::Writer) {
         Ok(opened)

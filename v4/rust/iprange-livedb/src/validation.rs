@@ -44,6 +44,11 @@ pub fn validate<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
+    if mode == ValidationMode::LiveCurrent {
+        if let Err(cause) = crate::live_lock::require_live_supported() {
+            return Err(failure(cause, ValidationProgress::new()));
+        }
+    }
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(failure(cause, ValidationProgress::new()));
     }
@@ -57,6 +62,11 @@ pub(crate) fn validate_local<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
+    if mode == ValidationMode::LiveCurrent {
+        if let Err(cause) = crate::live_lock::require_live_supported() {
+            return Err(failure(cause, ValidationProgress::new()));
+        }
+    }
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(failure(cause, ValidationProgress::new()));
     }
