@@ -85,6 +85,9 @@ enum State {
     Healthy,
     OutcomeUnknown,
     Unusable,
+    ClosingWriter(bool),
+    ClosingGate(bool),
+    ClosingMain(bool),
     Closed,
 }
 
@@ -376,6 +379,9 @@ impl LiveWriter {
                 Err(Error::WrongMode("writer has an unresolved commit outcome"))
             }
             State::Unusable => Err(Error::WrongMode("writer is unusable")),
+            State::ClosingWriter(_) | State::ClosingGate(_) | State::ClosingMain(_) => {
+                Err(Error::WrongState("writer is closing"))
+            }
             State::Closed => Err(Error::WrongState("writer is closed")),
         }
     }

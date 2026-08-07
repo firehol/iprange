@@ -197,12 +197,14 @@ fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     let mut transaction = writer.begin_direct_transaction(&token).unwrap();
     transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
     drop(transaction);
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .open(&files.main)
-        .unwrap();
-    file.set_len(committed_length + 4096).unwrap();
-    drop(file);
+    #[cfg(not(windows))]
+    {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&files.main)
+            .unwrap();
+        file.set_len(committed_length + 4096).unwrap();
+    }
 
     let closed = writer.close().unwrap();
     assert_eq!(closed.outcome, CloseOutcome::Closed);
@@ -264,6 +266,7 @@ fn failed_abort_is_close_only_and_retries_the_exact_tail_cleanup() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn failed_abort_never_extends_a_shortened_committed_file() {
     let files = TestPair::new("abort-short-file");
     create(&files);

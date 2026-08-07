@@ -15,6 +15,12 @@ impl LiveWriter {
         if self.state == State::Closed {
             return Ok(CloseResult::closed(None));
         }
+        if matches!(
+            self.state,
+            State::ClosingWriter(_) | State::ClosingGate(_) | State::ClosingMain(_)
+        ) {
+            return Ok(self.finish_close());
+        }
 
         let had_pending = self.draft.is_some();
         if let Err(cause) = self.sidecar.lock_gate(Mode::Exclusive) {
@@ -22,7 +28,11 @@ impl LiveWriter {
         }
         let operation = self.close_locked();
         match operation {
-            Ok(()) => self.finish_close(had_pending),
+            Ok(()) => {
+                self.mapping.unmap();
+                self.state = State::ClosingWriter(had_pending);
+                Ok(self.finish_close())
+            }
             Err(cause) => {
                 let cause = combine_errors(cause, self.sidecar.unlock_gate());
                 Ok(self.close_failure(had_pending, cause))
@@ -38,7 +48,7 @@ impl LiveWriter {
         self.base.physical_bytes = physical_bytes;
         self.draft = None;
         self.unproved_tail_end = None;
-        self.sidecar.release_writer()
+        Ok(())
     }
 
     fn close_base(&self) -> Result<Bootstrap> {
@@ -93,17 +103,40 @@ impl LiveWriter {
         Ok(length)
     }
 
-    fn finish_close(&mut self, had_pending: bool) -> Result<CloseResult> {
-        if let Err(cause) = self.sidecar.unlock_gate() {
-            return Ok(self.close_failure(had_pending, cause));
+    fn finish_close(&mut self) -> CloseResult {
+        let had_pending = match self.state {
+            State::ClosingWriter(had_pending)
+            | State::ClosingGate(had_pending)
+            | State::ClosingMain(had_pending) => had_pending,
+            _ => return self.close_failure(false, Error::WrongState("writer is not closing")),
+        };
+        if let State::ClosingWriter(_) = self.state {
+            if let Err(cause) = self.sidecar.release_writer() {
+                return self.closing_failure(had_pending, cause);
+            }
+            self.state = State::ClosingGate(had_pending);
         }
-        if let Err(cause) = live_lock::unlock_file(self.mapping.file(), MAIN_LIFETIME_LOCK) {
-            return Ok(self.close_failure(had_pending, cause));
+        if let State::ClosingGate(_) = self.state {
+            if let Err(cause) = self.sidecar.unlock_gate() {
+                return self.closing_failure(had_pending, cause);
+            }
+            self.state = State::ClosingMain(had_pending);
         }
-        self.state = State::Closed;
-        Ok(CloseResult::closed(
+        if let State::ClosingMain(_) = self.state {
+            if let Err(cause) = live_lock::unlock_file(self.mapping.file(), MAIN_LIFETIME_LOCK) {
+                return self.closing_failure(had_pending, cause);
+            }
+            self.state = State::Closed;
+        }
+        CloseResult::closed(had_pending.then_some(AbortOutcome::Aborted))
+    }
+
+    fn closing_failure(&self, had_pending: bool, cause: Error) -> CloseResult {
+        CloseResult::incomplete(
             had_pending.then_some(AbortOutcome::Aborted),
-        ))
+            CommitCleanupArtifacts::clean(),
+            cause,
+        )
     }
 
     fn close_failure(&mut self, had_pending: bool, cause: Error) -> CloseResult {
