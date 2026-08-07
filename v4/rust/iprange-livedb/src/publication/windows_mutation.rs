@@ -9,9 +9,9 @@ use windows_sys::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FileDispositionInfoEx, FileRenameInfoEx, SetFileInformationByHandle,
+    FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle,
     FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX,
-    FILE_RENAME_INFO,
+    FILE_INFO_BY_HANDLE_CLASS, FILE_RENAME_INFO,
 };
 
 use super::{sync_file, Directory, Identity, Name, NamespaceError};
@@ -23,7 +23,7 @@ impl Directory {
         source_file: &File,
         destination: &Name,
     ) -> Result<(), NamespaceError> {
-        self.rename(source, source_file, destination, 0)
+        self.rename(source, source_file, destination, FileRenameInfo, 0)
     }
 
     pub(crate) fn exchange(
@@ -41,7 +41,13 @@ impl Directory {
         source_file: &File,
         destination: &Name,
     ) -> Result<(), NamespaceError> {
-        self.rename(source, source_file, destination, 0x1 | 0x2)
+        self.rename(
+            source,
+            source_file,
+            destination,
+            FileRenameInfoEx,
+            0x1 | 0x2,
+        )
     }
 
     fn rename(
@@ -49,6 +55,7 @@ impl Directory {
         source: &Name,
         source_file: &File,
         destination: &Name,
+        information_class: FILE_INFO_BY_HANDLE_CLASS,
         flags: u32,
     ) -> Result<(), NamespaceError> {
         self.check_creator()?;
@@ -58,7 +65,7 @@ impl Directory {
         if unsafe {
             SetFileInformationByHandle(
                 source_file.as_raw_handle(),
-                FileRenameInfoEx,
+                information_class,
                 buffer.as_ptr().cast(),
                 buffer.byte_len,
             )

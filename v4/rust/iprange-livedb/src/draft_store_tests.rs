@@ -95,6 +95,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), Some(5));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(30)).unwrap(), Some(99));
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(41)).unwrap(), None);
+    drop(reader);
 
     let committed = draft.meta;
     let old_reader = ImmutableReader::open(&test.path).unwrap();
@@ -109,6 +110,7 @@ fn direct_drafts_publish_readable_cow_generations() {
     assert_ne!(next.meta.retirement_root, 0);
     assert_eq!(old_reader.lookup_direct_v4(Ipv4Key(10)).unwrap(), Some(5));
     assert_eq!(old_reader.lookup_direct_v4(Ipv4Key(9_050)).unwrap(), None);
+    drop(old_reader);
     publish(&mut test.mapping, next.meta, 1);
 
     let reader = ImmutableReader::open(&test.path).unwrap();

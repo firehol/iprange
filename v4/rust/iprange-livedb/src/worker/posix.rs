@@ -220,13 +220,15 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
 
     let reset = previous.sa_flags as libc::c_int & libc::SA_RESETHAND != 0;
     if reset {
-        let mut default_action = unsafe { mem::zeroed::<libc::sigaction>() };
-        default_action.sa_sigaction = libc::SIG_DFL;
-        unsafe { libc::sigemptyset(&mut default_action.sa_mask) };
-        if unsafe { libc::sigaction(signal, &default_action, ptr::null_mut()) } != 0 {
+        if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-    } else if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
+        if !synchronous_bus_fault(info) && unsafe { libc::kill(libc::getpid(), signal) } != 0 {
+            unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
+        }
+        return;
+    }
+    if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
         unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
     }
     if !apply_mask(previous, signal) {
