@@ -14,7 +14,7 @@ struct Files {
 }
 
 impl Files {
-    fn new(label: &str, attempt_byte: u8) -> Self {
+    fn new(label: &str) -> Self {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -24,7 +24,7 @@ impl Files {
                 "iprange-v4-resolution-{label}-{}-{unique}",
                 std::process::id()
             )),
-            attempt_id: [attempt_byte; 16],
+            attempt_id: crate::random::nonzero_128().unwrap(),
         }
     }
 
@@ -59,7 +59,7 @@ impl Drop for Files {
 
 #[test]
 fn creating_initialize_can_be_completed_exactly() {
-    let files = Files::new("initialize-complete", 0x41);
+    let files = Files::new("initialize-complete");
     let supplied = prepare_initialize(&files);
 
     let resolved = resolve_live_transition(
@@ -76,7 +76,7 @@ fn creating_initialize_can_be_completed_exactly() {
 
 #[test]
 fn creating_initialize_can_be_rolled_back_exactly() {
-    let files = Files::new("initialize-rollback", 0x42);
+    let files = Files::new("initialize-rollback");
     let supplied = prepare_initialize(&files);
 
     let resolved = resolve_live_transition(
@@ -99,7 +99,7 @@ fn creating_initialize_can_be_rolled_back_exactly() {
 
 #[test]
 fn prepared_reset_over_corrupt_coordination_can_be_completed() {
-    let files = Files::new("reset-complete", 0x43);
+    let files = Files::new("reset-complete");
     files.create();
     fs::write(files.sidecar(), b"corrupt").unwrap();
     let token = CancellationToken::new();
@@ -123,6 +123,7 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
         Some(live_sidecar::public_identity(previous)),
         sidecar.local_identity(),
         LiveCoordinationLocation::Private,
+        Some(LiveResetPolicy::DiscardPrevious),
     );
     drop(sidecar);
     drop(main);
@@ -142,8 +143,9 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn exchanged_reset_cleans_the_exact_previous_sidecar() {
-    let files = Files::new("reset-exchanged", 0x44);
+    let files = Files::new("reset-exchanged");
     files.create();
     fs::write(files.sidecar(), b"corrupt").unwrap();
     let token = CancellationToken::new();
@@ -166,6 +168,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
         Some(live_sidecar::public_identity(previous)),
         sidecar.local_identity(),
         LiveCoordinationLocation::Canonical,
+        Some(LiveResetPolicy::RollbackSafe),
     );
     crate::live_lifecycle::namespace::install(
         &files.private(),
@@ -214,6 +217,7 @@ fn prepare_initialize(files: &Files) -> LiveTransitionResult {
         None,
         sidecar.local_identity(),
         LiveCoordinationLocation::Canonical,
+        None,
     );
     drop(sidecar);
     drop(main);
@@ -228,11 +232,11 @@ fn supplied(
     previous_sidecar_identity: Option<LocalFileIdentity>,
     sidecar_identity: live_sidecar::Identity,
     location: LiveCoordinationLocation,
+    reset_policy: Option<LiveResetPolicy>,
 ) -> LiveTransitionResult {
     LiveTransitionResult {
         operation,
-        reset_policy: (operation == LiveTransitionOperation::Reset)
-            .then_some(LiveResetPolicy::RollbackSafe),
+        reset_policy,
         status: LiveTransitionStatus::OutcomeUnknown,
         database_id: main.bootstrap.meta.database_id,
         transaction_id: main.bootstrap.meta.txn_id,

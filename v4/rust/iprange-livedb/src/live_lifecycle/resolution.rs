@@ -158,8 +158,15 @@ fn resolve_reset(
                 ));
             }
             match private {
-                Some(ResetPrivate::Previous(identity)) => {
+                Some(ResetPrivate::Previous(identity))
+                    if supplied.reset_policy == Some(LiveResetPolicy::RollbackSafe) =>
+                {
                     remove_previous(&private_path, identity)?;
+                }
+                Some(ResetPrivate::Previous(_)) => {
+                    return Err(Error::Conflict(
+                        "discarding reset retained the previous sidecar",
+                    ))
                 }
                 Some(ResetPrivate::Attempt(_)) => {
                     return Err(Error::Conflict(
@@ -234,8 +241,14 @@ fn resolve_reset(
             main.verify()?;
             live_sidecar::verify_path(&canonical_path, private.sidecar.local_identity())?;
             private.sidecar.verify_header()?;
-            if let Some(previous) = previous {
+            if let (Some(previous), Some(LiveResetPolicy::RollbackSafe)) =
+                (previous, supplied.reset_policy)
+            {
                 remove_previous(&private_path, previous)?;
+            } else if existing_identity(&private_path)?.is_some() {
+                return Err(Error::Conflict(
+                    "discarding reset retained an unexpected private sidecar",
+                ));
             }
             Ok(resolved(
                 supplied,

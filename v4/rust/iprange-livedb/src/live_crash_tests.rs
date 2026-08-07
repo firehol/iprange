@@ -61,6 +61,14 @@ fn budget() -> TransactionBudget {
     }
 }
 
+fn reset_policy() -> crate::LiveResetPolicy {
+    if cfg!(windows) {
+        crate::LiveResetPolicy::DiscardPrevious
+    } else {
+        crate::LiveResetPolicy::RollbackSafe
+    }
+}
+
 fn create(path: &Path, capacity: u32) {
     let result = create_live(
         path,
@@ -203,13 +211,7 @@ fn reset_crashes_leave_a_retryable_or_ready_database() {
         .unwrap();
         assert_eq!(recovered.status, LiveResidueStatus::Removed);
         assert!(!files.reset_temp().exists());
-        reset_live_coordination(
-            &files.0,
-            2,
-            crate::LiveResetPolicy::RollbackSafe,
-            &CancellationToken::new(),
-        )
-        .unwrap();
+        reset_live_coordination(&files.0, 2, reset_policy(), &CancellationToken::new()).unwrap();
         let mut reader = LiveReader::open(&files.0, &CancellationToken::new()).unwrap();
         reader.close().unwrap();
     }
@@ -383,12 +385,7 @@ fn crash_child() {
             let _ = initialize_live(&path, 1, &CancellationToken::new());
         }
         "reset" => {
-            let _ = reset_live_coordination(
-                &path,
-                2,
-                crate::LiveResetPolicy::RollbackSafe,
-                &CancellationToken::new(),
-            );
+            let _ = reset_live_coordination(&path, 2, reset_policy(), &CancellationToken::new());
         }
         _ => panic!("unknown child action"),
     }
