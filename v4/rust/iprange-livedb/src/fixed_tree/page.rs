@@ -86,6 +86,15 @@ impl<S: ByteSource> ByteSource for Cell<'_, S> {
         }
     }
 
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        match self {
+            // SAFETY: Forwarded with the same caller contract.
+            Self::Edit(bytes) => unsafe { bytes.array_unchecked(at) },
+            // SAFETY: Forwarded with the same caller contract.
+            Self::Existing(bytes) => unsafe { bytes.array_unchecked(at) },
+        }
+    }
+
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         match self {
             Self::Edit(bytes) => bytes.copy_range_to(at, output),

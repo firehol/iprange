@@ -130,6 +130,61 @@ fn in_place_insertion_changes_only_slots_and_free_space() {
 }
 
 #[test]
+fn edits_preserve_logical_order_with_physically_unordered_records() {
+    let mut page = [0; PAGE_SIZE];
+    let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+    builder.push(b"aa").unwrap();
+    builder.push(b"dd").unwrap();
+    builder.finish().unwrap();
+
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    assert!(insert(&mut page, &header, 1, b"bb").unwrap());
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    assert!(insert(&mut page, &header, 2, b"cc").unwrap());
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    assert!(insert(&mut page, &header, 4, b"zz").unwrap());
+
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    assert!(replace(&mut page, &header, 1, 2, b"bbb").unwrap());
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    remove(&mut page, &header, 3, 2).unwrap();
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    truncate(&mut page, &header, 3).unwrap();
+
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+    let records: Vec<&[u8]> = [2, 3, 2]
+        .into_iter()
+        .enumerate()
+        .map(|(index, len)| cell(&page, &header, index, len).unwrap().as_slice())
+        .collect();
+    assert_eq!(
+        records,
+        [b"aa".as_slice(), b"bbb".as_slice(), b"cc".as_slice()]
+    );
+    assert!(page[header.lower..header.upper]
+        .iter()
+        .all(|byte| *byte == 0));
+}
+
+#[test]
+fn edit_rejects_a_duplicate_physical_record_offset_before_mutation() {
+    let mut page = [0; PAGE_SIZE];
+    let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+    builder.push(b"aa").unwrap();
+    builder.push(b"bb").unwrap();
+    builder.finish().unwrap();
+    let duplicate = u16_le(&page, HEADER_SIZE);
+    put_u16(&mut page, HEADER_SIZE + 2, duplicate);
+    let before = page;
+    let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+
+    assert!(replace(&mut page, &header, 0, 2, b"cc").is_err());
+    assert_eq!(page, before);
+    assert!(truncate(&mut page, &header, 1).is_err());
+    assert_eq!(page, before);
+}
+
+#[test]
 fn in_place_insertion_does_not_modify_a_full_page() {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, 2, 7, 0, 4);

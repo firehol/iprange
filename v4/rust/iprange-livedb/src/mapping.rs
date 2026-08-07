@@ -15,6 +15,21 @@ pub(crate) trait ByteSource: Copy {
     fn len(self) -> usize;
     fn byte(self, at: usize) -> Option<u8>;
 
+    /// Read an array whose complete range the caller already checked.
+    ///
+    /// # Safety
+    ///
+    /// `at..at + N` must be inside this source.
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        let mut output = [0; N];
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = self
+                .byte(at + index)
+                .expect("caller checked the byte-source range");
+        }
+        output
+    }
+
     fn is_empty(self) -> bool {
         self.len() == 0
     }
@@ -24,11 +39,8 @@ pub(crate) trait ByteSource: Copy {
         if end > self.len() {
             return None;
         }
-        let mut output = [0; N];
-        for (index, byte) in output.iter_mut().enumerate() {
-            *byte = self.byte(at + index)?;
-        }
-        Some(output)
+        // SAFETY: The complete range was checked above.
+        Some(unsafe { self.array_unchecked(at) })
     }
 
     fn equals(self, at: usize, expected: &[u8]) -> bool {
@@ -104,6 +116,13 @@ impl ByteSource for &[u8] {
         self.get(at..at.checked_add(N)?)?.try_into().ok()
     }
 
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        let mut output = [0; N];
+        // SAFETY: The caller guarantees that the complete source range exists.
+        unsafe { ptr::copy_nonoverlapping(self.as_ptr().add(at), output.as_mut_ptr(), N) };
+        output
+    }
+
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         self.get(at..at.saturating_add(output.len()))
             .is_some_and(|bytes| {
@@ -136,6 +155,11 @@ impl<const N: usize> ByteSource for &[u8; N] {
         self.get(at..at.checked_add(M)?)?.try_into().ok()
     }
 
+    unsafe fn array_unchecked<const M: usize>(self, at: usize) -> [u8; M] {
+        // SAFETY: Forwarded with the same caller contract.
+        unsafe { self.as_slice().array_unchecked(at) }
+    }
+
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         self.as_slice().copy_range_to(at, output)
     }
@@ -150,62 +174,78 @@ impl<const N: usize> ByteSource for &[u8; N] {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ByteRange<S> {
     source: S,
-    at: usize,
-    len: usize,
+    at: u32,
+    len: u32,
 }
 
 impl<S: ByteSource> ByteRange<S> {
     pub(crate) fn new(source: S, at: usize, len: usize) -> Option<Self> {
-        at.checked_add(len)
-            .is_some_and(|end| end <= source.len())
-            .then_some(Self { source, at, len })
+        let end = at.checked_add(len)?;
+        if end > source.len() {
+            return None;
+        }
+        Some(Self {
+            source,
+            at: u32::try_from(at).ok()?,
+            len: u32::try_from(len).ok()?,
+        })
     }
 
     pub(crate) const fn source_offset(self) -> usize {
-        self.at
+        self.at as usize
     }
 }
 
 #[cfg(test)]
 impl<'a, const N: usize> ByteRange<&'a [u8; N]> {
     pub(crate) fn as_slice(self) -> &'a [u8] {
-        &self.source[self.at..self.at + self.len]
+        let at = self.at as usize;
+        &self.source[at..at + self.len as usize]
     }
 }
 
 impl<S: ByteSource> ByteSource for ByteRange<S> {
     fn len(self) -> usize {
-        self.len
+        self.len as usize
     }
 
     fn byte(self, at: usize) -> Option<u8> {
-        (at < self.len)
-            .then(|| self.at.checked_add(at))
+        (at < self.len())
+            .then(|| self.source_offset().checked_add(at))
             .flatten()
             .and_then(|index| self.source.byte(index))
     }
 
     fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {
         let end = at.checked_add(N)?;
-        (end <= self.len)
-            .then(|| self.source.array(self.at + at))
-            .flatten()
+        if end > self.len() {
+            return None;
+        }
+        // SAFETY: Construction checked this subrange inside `source`, and the
+        // relative range was checked above.
+        Some(unsafe { self.source.array_unchecked(self.source_offset() + at) })
+    }
+
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        // SAFETY: Construction checked this subrange inside `source`, and the
+        // caller guarantees that the relative range is inside this subrange.
+        unsafe { self.source.array_unchecked(self.source_offset() + at) }
     }
 
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         at.checked_add(output.len())
-            .is_some_and(|end| end <= self.len)
-            && self.source.copy_range_to(self.at + at, output)
+            .is_some_and(|end| end <= self.len())
+            && self.source.copy_range_to(self.source_offset() + at, output)
     }
 
     unsafe fn copy_range_to_ptr(self, at: usize, destination: *mut u8, len: usize) -> bool {
-        if !at.checked_add(len).is_some_and(|end| end <= self.len) {
+        if !at.checked_add(len).is_some_and(|end| end <= self.len()) {
             return false;
         }
         // SAFETY: The subrange was checked and the caller owns the destination.
         unsafe {
             self.source
-                .copy_range_to_ptr(self.at + at, destination, len)
+                .copy_range_to_ptr(self.source_offset() + at, destination, len)
         }
     }
 }
@@ -545,6 +585,13 @@ impl ByteSource for BytesView<'_> {
         self.array(at)
     }
 
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        let mut output = [0; N];
+        // SAFETY: The caller guarantees that the complete source range exists.
+        unsafe { ptr::copy_nonoverlapping(self.pointer.add(at), output.as_mut_ptr(), N) };
+        output
+    }
+
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         self.bytes(at, output.len())
             .is_some_and(|bytes| bytes.copy_to(output))
@@ -562,23 +609,44 @@ impl ByteSource for BytesView<'_> {
 
 /// Raw read-only access to exactly one mapped database page.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct PageView<'a>(BytesView<'a>);
+pub(crate) struct PageView<'a> {
+    pointer: *const u8,
+    _mapping: PhantomData<&'a Mapping>,
+}
 
 impl<'a> PageView<'a> {
     fn new(pointer: *const u8) -> Self {
-        Self(BytesView::new(pointer, PAGE_SIZE))
+        Self {
+            pointer,
+            _mapping: PhantomData,
+        }
     }
 
     pub(crate) fn byte(self, at: usize) -> Option<u8> {
-        self.0.byte(at)
+        (at < PAGE_SIZE).then(|| {
+            // SAFETY: The index was checked inside the live mapped page.
+            unsafe { ptr::read(self.pointer.add(at)) }
+        })
     }
 
     pub(crate) fn array<const N: usize>(self, at: usize) -> Option<[u8; N]> {
-        self.0.array(at)
+        let end = at.checked_add(N)?;
+        if end > PAGE_SIZE {
+            return None;
+        }
+        let mut output = [0; N];
+        // SAFETY: Source and destination are valid, disjoint ranges of `N` bytes.
+        unsafe { ptr::copy_nonoverlapping(self.pointer.add(at), output.as_mut_ptr(), N) };
+        Some(output)
     }
 
     pub(crate) fn range(self, at: usize, len: usize) -> Option<BytesView<'a>> {
-        self.0.bytes(at, len)
+        let end = at.checked_add(len)?;
+        if end > PAGE_SIZE {
+            return None;
+        }
+        // SAFETY: `at` is within the live mapped page.
+        Some(BytesView::new(unsafe { self.pointer.add(at) }, len))
     }
 }
 
@@ -595,14 +663,25 @@ impl ByteSource for PageView<'_> {
         self.array(at)
     }
 
+    unsafe fn array_unchecked<const N: usize>(self, at: usize) -> [u8; N] {
+        let mut output = [0; N];
+        // SAFETY: The caller guarantees that the complete source range exists.
+        unsafe { ptr::copy_nonoverlapping(self.pointer.add(at), output.as_mut_ptr(), N) };
+        output
+    }
+
     fn copy_range_to(self, at: usize, output: &mut [u8]) -> bool {
         self.range(at, output.len())
             .is_some_and(|bytes| bytes.copy_to(output))
     }
 
     unsafe fn copy_range_to_ptr(self, at: usize, destination: *mut u8, len: usize) -> bool {
-        // SAFETY: Forwarded with the same caller contract.
-        unsafe { self.0.copy_range_to_ptr(at, destination, len) }
+        let Some(source) = self.range(at, len) else {
+            return false;
+        };
+        // SAFETY: Both ranges are valid. `copy` permits mapped overlap.
+        unsafe { ptr::copy(source.as_ptr(), destination, len) };
+        true
     }
 }
 
@@ -823,6 +902,21 @@ mod tests {
 
     static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(target_pointer_width = "64")]
+    #[derive(Clone, Copy)]
+    struct LargeSource;
+
+    #[cfg(target_pointer_width = "64")]
+    impl ByteSource for LargeSource {
+        fn len(self) -> usize {
+            usize::try_from(u64::from(u32::MAX) + 2).unwrap()
+        }
+
+        fn byte(self, _at: usize) -> Option<u8> {
+            None
+        }
+    }
+
     struct TestFile(PathBuf);
 
     impl TestFile {
@@ -844,6 +938,32 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.0);
         }
+    }
+
+    #[test]
+    fn exact_page_and_subrange_views_carry_no_redundant_extent() {
+        assert_eq!(
+            std::mem::size_of::<PageView<'static>>(),
+            std::mem::size_of::<usize>()
+        );
+        assert_eq!(
+            std::mem::size_of::<ByteRange<PageView<'static>>>(),
+            std::mem::size_of::<usize>() + 2 * std::mem::size_of::<u32>()
+        );
+
+        let bytes = [1, 2, 3, 4];
+        let range = ByteRange::new(&bytes, 1, 2).unwrap();
+        assert_eq!(range.array::<2>(0), Some([2, 3]));
+        assert_eq!(range.array::<2>(1), None);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn compact_subrange_rejects_unrepresentable_offsets_and_lengths() {
+        let beyond_u32 = u32::MAX as usize + 1;
+        assert!(ByteRange::new(LargeSource, beyond_u32, 0).is_none());
+        assert!(ByteRange::new(LargeSource, 0, beyond_u32).is_none());
+        assert!(ByteRange::new(LargeSource, u32::MAX as usize, 1).is_some());
     }
 
     #[test]

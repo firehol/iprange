@@ -14226,3 +14226,181 @@ the governing mmap/hot-path philosophy and needs no new rule. The released C
 CLI and end-user/operator skills are unaffected because v4 is unreleased and no
 such output skill exists. The SOW remains in progress for the separate mapped
 writer performance work and the permission-gated native platform matrix.
+
+## 2026-08-07 - mapped writer performance parity
+
+### Problem and fresh evidence
+
+The mmap-only rewrite removed the forbidden page cache and all persistent-
+content I/O, but it regressed the already optimized writer. Seven alternating
+CPU-14-pinned runs compare positional commit `a5c676c` with mapped commit
+`0a51d3e` using the same one-million-input public benchmark:
+
+| Workflow | Positional median | Mapped median | Mapped regression |
+| --- | ---: | ---: | ---: |
+| Dispersed direct replacement | 565.2 ms | 634.2 ms | 12.2% |
+| Retention refresh | 584.8 ms | 747.2 ms | 27.8% |
+
+Both remain below the approximate one-second ceiling in most runs, but that is
+not sufficient: direct mapped access should not pay more CPU than copying pages
+through positional I/O and a 64 MiB heap cache. The mapped process peak is about
+20 MiB and performs 21 constant allocations/402-414 bytes, versus about 69 MiB
+and 22 allocations/67.1 MiB for the old cache. That architectural improvement
+must be retained.
+
+Whole-process hardware counters on matched direct runs measured about 7.98
+billion mapped instructions and 1.69 billion branches, versus 4.74 billion and
+0.92 billion for the positional implementation. The mapped version therefore
+executes about 68% more instructions and 83% more branches despite avoiding the
+heap page cache and almost all of its page faults. This identifies software
+overhead, not mmap itself, as the regression.
+
+A fresh frame-pointer profile supersedes the earlier pre-optimization report.
+On direct replacement, `fixed_tree::page::lower_bound` accounts for 32.9% of
+sampled cycles, mapped `DraftStore::inspect_page` 11.7%, in-place
+`slotted_page::insert` 9.5%, and `slotted_page::cell` 7.8%. On retention the
+same functions account for 18.9%, 10.1%, 14.1%, and 11.0%. Full-page
+`build_edit` is only 0.7% on direct replacement, and the former
+`drop_in_place<Error>` cost is absent above the 0.3% reporting floor. The old
+claim that every record still rebuilds a full page is false for the current
+source.
+
+The first isolated repair removed the redundant length from exact-page views,
+made page-bounded subranges compact, and let a checked subrange reuse its
+already-proven source bound. Whole-process direct work fell from about 7.98 to
+6.48 billion instructions without adding a page slice, page copy, cache, or I/O.
+The compiler now inlines fixed-cell access into `lower_bound`; the earlier
+out-of-line `slotted_page::cell` diagnosis no longer describes the retained
+source.
+
+A parent-only profile now isolates the timed writer from its validation worker.
+The mapped parent executes about 5.78 billion instructions versus 4.77 billion
+at the positional baseline. Current direct cycles are led by `lower_bound`
+(28.4%), mapped `inspect_page` (13.6%), and `slotted_page::insert` (13.5%). At
+the positional baseline, `lower_bound` is 24.5%, page-cache inspection plus
+store inspection is 13.3%, and insertion is only 0.6%. Disassembly shows the
+remaining search loop is already direct mapped scalar access with the required
+slot/record checks. The material regression is the later in-place insertion
+algorithm: every random insertion moves existing record bytes and rewrites a
+logical suffix of slot offsets solely to keep physical record order equal to
+logical key order.
+
+That physical-order invariant is not part of v4. Section 7 requires only that
+slots are in logical key order, records are non-overlapping and uniquely
+referenced, and gaps are zero. The smallest conforming insertion writes the new
+record once at the free edge and shifts only the logical slot array. Replacement
+and removal can compact the physical prefix and adjust slots selected by their
+physical offset; the rarer split truncation can sort bounded record-offset
+metadata and compact the retained records once, so no page image or external
+workspace exists.
+
+### Approved boundary and implementation plan
+
+This is an implementation repair under user decision 74A and the user's
+instruction to proceed autonomously on implementation details. It changes no
+format, public API, C ABI, semantics, validation default, durability order, or
+resource contract.
+
+1. Keep checked raw mapped views; never create a Rust page slice/reference,
+   heap/stack page image, page cache, anonymous database page, or persistent-
+   content I/O fallback.
+2. Make exact-page and checked-subrange representations carry only the state
+   they need and reuse a source bound only after the subrange proves it.
+3. Remove the unrequired physical-key-order work from insertion. Keep the
+   record area dense; before replacement/removal, prove the target's exact
+   physical extent from the mapped slot offsets, compact only the affected
+   prefix, and update offsets by physical position. Truncation uses a bounded
+   stack table of record offsets to compact retained records once. No operation
+   copies or materializes a page.
+4. Re-profile and retain a slice only when isolated alternating release runs
+   reduce instructions and elapsed time. Then inspect the next named cost;
+   avoid speculative tree or format changes.
+5. Add permanent representation/check tests where the optimized invariant is
+   not already covered. Run randomized direct/retention semantics, explicit
+   validation, mmap source/runtime gates, current/MSRV/four-target compiler
+   gates, Clippy/rustdoc/formatting, allocation/resource checks, and at least
+   five pinned one-million direct and retention runs.
+
+Risk: removing a real bounds check could turn malformed bytes into an invalid
+raw access. The repair may consolidate or prove redundant checks only after the
+page shape, slot index, and record interval are checked; it must not use
+unchecked caller-controlled offsets. Code-size growth from forced inlining is
+also a measured risk and must be limited to the fixed-cell search path.
+
+Sensitive-data impact: none. Benchmarks use synthetic ranges and temporary
+local files. `AGENTS.md`, the binary/C-ABI/design specs, released C CLI docs,
+and end-user/operator skills are unaffected unless implementation evidence
+finds a contract discrepancy; benchmark evidence and this SOW will be updated
+with the measured result.
+
+### Implemented result and verification
+
+- Exact mapped-page views now store only their pointer. Checked subranges store
+  one pointer and two `u32` bounds, and fixed-width reads reuse the already
+  proven subrange bound. Every unchecked internal read is dominated by that
+  construction/range proof; public and malformed-page paths remain checked.
+- Random insertion no longer moves existing record bytes or rewrites a logical
+  suffix of record offsets. It writes the new record once at the free edge and
+  shifts only the logical slot array. Replacement and removal first prove the
+  target's exact physical extent, then compact only the affected physical
+  prefix. Split truncation sorts at most 2,031 `(offset, slot)` pairs in about
+  8 KiB of bounded stack metadata and compacts retained records once. It owns
+  no page image and performs no heap allocation, file I/O, or page copy outside
+  the mapping.
+- Permanent tests cover compact view geometry and overflow rejection,
+  physically unordered fixed records across insertion/growth/removal/truncate,
+  zeroed free space, duplicate physical offsets rejected before mutation, and
+  the existing 3,000-record reverse variable-record insertion/deletion tree.
+  Randomized direct, retention, and named-feed models all pass.
+
+Rejected measured experiments were not retained: forced inlining did not
+improve elapsed time; caching the final binary-search key increased instructions
+by about 1.7%; a specialized direct-key reader also regressed; and implementing
+truncate as repeated removal became quadratic. These results are evidence
+against adding more special cases to the mapped search path.
+
+Parent-only hardware counters for dispersed direct replacement fell from about
+5.79 to 4.25 billion instructions and from 1.22 to 0.81 billion branches, a 27%
+instruction and 34% branch reduction. In the final frame-pointer profile,
+insertion is 1.05% of direct samples and 1.17% of retention samples; truncation
+is 0.52% and 0.58%. The remaining dominant work is mapped B+tree search, not
+page transfer, checksum maintenance, record movement, allocation, or error
+destruction.
+
+Five final CPU-14-pinned release runs produced:
+
+| Workflow | Median | Observed range | Constant allocation |
+| --- | ---: | ---: | ---: |
+| Dispersed direct replacement, 1,000,000 inputs | 480.7 ms | 448.0-762.3 ms | 21 calls / 402 bytes |
+| Retention refresh, 1,000,000 inputs | 474.7 ms | 449.3-548.7 ms | 21 calls / 414 bytes |
+| Compact snapshot, 1,000,000 records | 66.5 ms | 55.1-80.6 ms | 31 calls / 935 bytes |
+
+Every run produced exactly 1,000,000 records, reopened and explicitly
+validated its output, kept descriptors stable, and left zero private artifacts.
+All fifteen runs are below the accepted one-second ceiling. The final public
+reader matrix over 100,000 ranges and 421 feeds measures 7.15-7.81 million
+membership checks/s, 12.48-15.59 million direct lookups/s, and 107.80-198.19
+million scanned ranges/s, with zero timed allocations. Reading is therefore
+materially faster than writing; the earlier contrary numbers were debug-test
+measurements, not release evidence.
+
+Verification on the retained source is green:
+
+- both current-toolchain complete workspace matrices, including 340 active
+  database-core tests, all Rust/C integration tests, native C/C++ behavior,
+  current conformance fixtures, crash/fault paths, and benchmark targets;
+- Rust 1.74.1 complete all-feature/all-target workspace matrix;
+- warnings-denied Clippy and rustdoc, formatting, and `git diff --check`;
+- exact 339-source compiler graph across Linux, Windows, macOS, and FreeBSD;
+- the 246-file mmap source gate and Linux runtime trace, with no persistent-
+  content transfer syscall or owned database-page image;
+- nightly AddressSanitizer with leak detection for all 340 active database-core
+  tests and all 15 C-boundary tests.
+
+The binary format, public Rust API, frozen C ABI, validation policy, durability
+order, and recovery contract did not change. The Rust SDK performance table and
+this SOW are updated; the normative specs, `AGENTS.md`, project skill, released
+C CLI docs, and end-user/operator skills remain accurate and unaffected. This
+closes the local mapped writer regression. The active SOW remains in progress
+only for permission-gated native platform execution and final user acceptance
+of the Rust SDK; the Go port remains blocked on that acceptance.

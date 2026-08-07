@@ -172,31 +172,31 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-Four local Linux writer/snapshot scale runs on 2026-08-06 and seven reader runs
-on 2026-08-07, each pinned to one performance core, produced these medians and
-observed ranges. Each reader case times at least one million operations; setup,
-snapshot construction, open, close, and explicit validation are outside the
-timer.
+Five local Linux runs on 2026-08-07, each pinned to one performance core,
+produced these medians and observed ranges. Each case processes at least one
+million inputs or timed reader operations; setup, snapshot construction, open,
+close, and explicit validation are outside the reader timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
-| Direct replacement, dispersed input | 1,000,000 ranges | 0.636 s | 0.582-0.818 s | 1.57 million/s |
-| Retention refresh | 1,000,000 ranges | 0.646 s | 0.563-0.734 s | 1.55 million/s |
-| Compact snapshot | 1,000,000 ranges | 0.0777 s | 0.0568-0.0957 s | 12.87 million/s |
-| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0963 s | 0.0914-0.1342 s | 10.38 million/s |
-| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0738 s | 0.0728-0.0743 s | 13.55 million/s |
-| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1568 s | 0.1554-0.1732 s | 6.38 million/s |
-| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1417 s | 0.1395-0.1973 s | 7.06 million/s |
-| Live direct ordered scan | 1,000,000 ranges | 0.00760 s | 0.00750-0.00875 s | 131.66 million/s |
-| Immutable direct ordered scan | 1,000,000 ranges | 0.00705 s | 0.00657-0.00833 s | 141.89 million/s |
-| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00955 s | 0.00935-0.01131 s | 104.67 million/s |
-| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00905 s | 0.00842-0.01035 s | 110.51 million/s |
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.481 s | 0.448-0.762 s | 2.08 million/s |
+| Retention refresh | 1,000,000 ranges | 0.475 s | 0.449-0.549 s | 2.11 million/s |
+| Compact snapshot | 1,000,000 ranges | 0.0665 s | 0.0551-0.0806 s | 15.03 million/s |
+| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0801 s | 0.0797-0.0822 s | 12.48 million/s |
+| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0641 s | 0.0618-0.0960 s | 15.59 million/s |
+| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1398 s | 0.1385-0.1509 s | 7.15 million/s |
+| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1280 s | 0.1270-0.1449 s | 7.81 million/s |
+| Live direct ordered scan | 1,000,000 ranges | 0.00928 s | 0.00595-0.01152 s | 107.80 million/s |
+| Immutable direct ordered scan | 1,000,000 ranges | 0.00505 s | 0.00480-0.00650 s | 198.19 million/s |
+| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00793 s | 0.00782-0.01575 s | 126.05 million/s |
+| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00667 s | 0.00622-0.00830 s | 149.99 million/s |
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
 explicitly validated every output after timing. The final complete run counted
-21 allocations totalling 398 bytes for direct replacement and 21 allocations
-totalling 410 bytes for retention; those counts are constant rather than per
-range. The timed lookup and scan paths allocate nothing.
+21 allocations totalling 402 bytes for direct replacement, 21 allocations
+totalling 414 bytes for retention, and 31 allocations totalling 935 bytes for
+snapshot construction; those counts are constant rather than per range. The
+timed lookup and scan paths allocate nothing.
 
 Readers access mapped tree pages directly. Independent point queries restart at
 the mapped root, while ordered cursors retain their bounded traversal state.

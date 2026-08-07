@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource, PageMut};
 
 pub(crate) const HEADER_SIZE: usize = 32;
+const MAX_SLOT_COUNT: usize = (PAGE_SIZE - HEADER_SIZE) / 2;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Header {
@@ -153,28 +154,10 @@ pub(crate) fn insert<D: PageEdit, S: ByteSource>(
     }
     let upper = header.upper - cell.len();
     let lower = header.lower + 2;
-    let boundary = if index == 0 {
-        PAGE_SIZE
-    } else {
-        slot_start(page.view(), header, index - 1)?
-    };
-    let moved = boundary
-        .checked_sub(header.upper)
-        .ok_or_else(|| Error::corrupt("slotted-page record order is invalid"))?;
-    page.copy_within(header.upper, upper, moved)?;
     let slot = HEADER_SIZE + index * 2;
     page.copy_within(slot, slot + 2, header.lower - slot)?;
-    for shifted in index + 1..=header.item_count {
-        let at = HEADER_SIZE + shifted * 2;
-        let old = usize::from(u16_le(page.view(), at));
-        let adjusted = old
-            .checked_sub(cell.len())
-            .ok_or_else(|| Error::corrupt("slotted-page slot underflows"))?;
-        page.put_u16(at, adjusted as u16)?;
-    }
-    let inserted = boundary - cell.len();
-    page.write_source(inserted, cell)?;
-    page.put_u16(slot, inserted as u16)?;
+    page.write_source(upper, cell)?;
+    page.put_u16(slot, upper as u16)?;
     page.put_u16(16, (header.item_count + 1) as u16)?;
     page.put_u16(20, lower as u16)?;
     page.put_u16(22, upper as u16)?;
@@ -191,18 +174,7 @@ pub(crate) fn replace<D: PageEdit, S: ByteSource>(
     if index >= header.item_count || old_len == 0 || cell.is_empty() {
         return Err(Error::Corrupt("slotted-page replacement is invalid"));
     }
-    let start = slot_start(page.view(), header, index)?;
-    let boundary = if index == 0 {
-        PAGE_SIZE
-    } else {
-        slot_start(page.view(), header, index - 1)?
-    };
-    if match start.checked_add(old_len) {
-        Some(end) => end != boundary,
-        None => true,
-    } {
-        return Err(Error::Corrupt("slotted-page records are not canonical"));
-    }
+    let start = record_start(page.view(), header, index, old_len)?;
 
     if cell.len() > old_len {
         let growth = cell.len() - old_len;
@@ -210,7 +182,7 @@ pub(crate) fn replace<D: PageEdit, S: ByteSource>(
             return Ok(false);
         }
         page.copy_within(header.upper, header.upper - growth, start - header.upper)?;
-        adjust_slots(page, header, index + 1, false, growth)?;
+        adjust_slots_before(page, header, index, start, false, growth)?;
         let new_start = start - growth;
         page.write_source(new_start, cell)?;
         page.put_u16(HEADER_SIZE + index * 2, new_start as u16)?;
@@ -220,7 +192,7 @@ pub(crate) fn replace<D: PageEdit, S: ByteSource>(
         if shrink != 0 {
             page.copy_within(header.upper, header.upper + shrink, start - header.upper)?;
             page.zero(header.upper, shrink)?;
-            adjust_slots(page, header, index + 1, true, shrink)?;
+            adjust_slots_before(page, header, index, start, true, shrink)?;
         }
         let new_start = start + shrink;
         page.write_source(new_start, cell)?;
@@ -239,22 +211,11 @@ pub(crate) fn remove<D: PageEdit>(
     if index >= header.item_count || header.item_count <= 1 || old_len == 0 {
         return Err(Error::Corrupt("slotted-page removal is invalid"));
     }
-    let start = slot_start(page.view(), header, index)?;
-    let boundary = if index == 0 {
-        PAGE_SIZE
-    } else {
-        slot_start(page.view(), header, index - 1)?
-    };
-    if match start.checked_add(old_len) {
-        Some(end) => end != boundary,
-        None => true,
-    } {
-        return Err(Error::Corrupt("slotted-page records are not canonical"));
-    }
+    let start = record_start(page.view(), header, index, old_len)?;
 
     page.copy_within(header.upper, header.upper + old_len, start - header.upper)?;
     page.zero(header.upper, old_len)?;
-    adjust_slots(page, header, index + 1, true, old_len)?;
+    adjust_slots_before(page, header, index, start, true, old_len)?;
     let slot = HEADER_SIZE + index * 2;
     page.copy_within(slot + 2, slot, header.lower - slot - 2)?;
     page.put_u16(header.lower - 2, 0)?;
@@ -271,31 +232,128 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
     if keep == header.item_count {
         return Ok(*header);
     }
-    let upper = slot_start(page.view(), header, keep - 1)?;
+    let mut storage = [PhysicalRecord::EMPTY; MAX_SLOT_COUNT];
+    let records = storage
+        .get_mut(..header.item_count)
+        .ok_or(Error::Corrupt("slotted-page slot count is invalid"))?;
+    for (index, record) in records.iter_mut().enumerate() {
+        let start = slot_start(page.view(), header, index)?;
+        if start < header.upper || start >= PAGE_SIZE {
+            return Err(Error::Corrupt("slotted-page record offset is invalid"));
+        }
+        *record = PhysicalRecord {
+            start: start as u16,
+            index: index as u16,
+        };
+    }
+    records.sort_unstable_by_key(|record| record.start);
+    if usize::from(records[0].start) != header.upper
+        || records
+            .windows(2)
+            .any(|pair| pair[0].start == pair[1].start)
+    {
+        return Err(Error::Corrupt("slotted-page record offsets are invalid"));
+    }
+
+    let mut destination = PAGE_SIZE;
+    for physical in (0..records.len()).rev() {
+        let record = records[physical];
+        let start = usize::from(record.start);
+        let end = records
+            .get(physical + 1)
+            .map_or(PAGE_SIZE, |next| usize::from(next.start));
+        if usize::from(record.index) < keep {
+            let len = end - start;
+            let new_start = destination - len;
+            page.copy_within(start, new_start, len)?;
+            page.put_u16(
+                HEADER_SIZE + usize::from(record.index) * 2,
+                new_start as u16,
+            )?;
+            destination = new_start;
+        }
+    }
+
     let lower = HEADER_SIZE + keep * 2;
     page.zero(lower, header.lower - lower)?;
-    page.zero(header.upper, upper - header.upper)?;
+    page.zero(header.upper, destination - header.upper)?;
     page.put_u16(16, keep as u16)?;
     page.put_u16(20, lower as u16)?;
-    page.put_u16(22, upper as u16)?;
+    page.put_u16(22, destination as u16)?;
     Ok(Header {
         item_count: keep,
         level: header.level,
         lower,
-        upper,
+        upper: destination,
     })
 }
 
-fn adjust_slots<D: PageEdit>(
+#[derive(Clone, Copy)]
+struct PhysicalRecord {
+    start: u16,
+    index: u16,
+}
+
+impl PhysicalRecord {
+    const EMPTY: Self = Self { start: 0, index: 0 };
+}
+
+fn record_start<S: ByteSource>(
+    page: S,
+    header: &Header,
+    index: usize,
+    cell_len: usize,
+) -> Result<usize> {
+    let start = slot_start(page, header, index)?;
+    let end = record_end(page, header, index, start)?;
+    if start < header.upper || start.checked_add(cell_len) != Some(end) {
+        return Err(Error::Corrupt("slotted-page record extent is invalid"));
+    }
+    Ok(start)
+}
+
+fn record_end<S: ByteSource>(
+    page: S,
+    header: &Header,
+    index: usize,
+    start: usize,
+) -> Result<usize> {
+    if start < header.upper || start >= PAGE_SIZE {
+        return Err(Error::Corrupt("slotted-page record offset is invalid"));
+    }
+    let mut end = PAGE_SIZE;
+    for other in 0..header.item_count {
+        if other == index {
+            continue;
+        }
+        let offset = slot_start(page, header, other)?;
+        if offset < header.upper || offset >= PAGE_SIZE || offset == start {
+            return Err(Error::Corrupt("slotted-page record offset is invalid"));
+        }
+        if offset > start {
+            end = end.min(offset);
+        }
+    }
+    Ok(end)
+}
+
+fn adjust_slots_before<D: PageEdit>(
     page: &mut D,
     header: &Header,
-    start: usize,
+    target: usize,
+    before: usize,
     add: bool,
     amount: usize,
 ) -> Result<()> {
-    for index in start..header.item_count {
+    for index in 0..header.item_count {
+        if index == target {
+            continue;
+        }
         let at = HEADER_SIZE + index * 2;
         let old = usize::from(u16_le(page.view(), at));
+        if old >= before {
+            continue;
+        }
         let adjusted = if add {
             old.checked_add(amount)
         } else {
