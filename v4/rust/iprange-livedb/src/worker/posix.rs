@@ -354,13 +354,16 @@ mod tests {
 
     #[test]
     fn signal_chain_subprocess_matrix() {
+        let native_reset = child_status("native-reset");
+        let native_reset_code = native_reset.code().unwrap();
+        assert!(matches!(native_reset_code, 86 | 90));
         for (case, expected) in [
             ("owned", Expected::Exit(OWNED_FAULT_EXIT)),
             ("user-one", Expected::Exit(81)),
             ("user-siginfo", Expected::Exit(82)),
             ("user-mask", Expected::Exit(88)),
             ("user-nodefer", Expected::Exit(89)),
-            ("user-reset", Expected::Exit(90)),
+            ("user-reset", Expected::Exit(native_reset_code)),
             ("unarmed", Expected::Exit(83)),
             ("out-of-region", Expected::Exit(83)),
             ("stale-region", Expected::Exit(83)),
@@ -370,13 +373,7 @@ mod tests {
             ("default", Expected::Signal(libc::SIGBUS)),
             ("ignore", Expected::Exit(84)),
         ] {
-            let status = Command::new(std::env::current_exe().unwrap())
-                .arg("--exact")
-                .arg("worker::posix::tests::signal_chain_child")
-                .arg("--nocapture")
-                .env(CASE_ENV, case)
-                .status()
-                .unwrap();
+            let status = child_status(case);
             match expected {
                 Expected::Exit(code) => assert_eq!(status.code(), Some(code), "case {case}"),
                 Expected::Signal(signal) => {
@@ -385,6 +382,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn child_status(case: &str) -> std::process::ExitStatus {
+        Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("worker::posix::tests::signal_chain_child")
+            .arg("--nocapture")
+            .env(CASE_ENV, case)
+            .status()
+            .unwrap()
     }
 
     #[test]
@@ -435,6 +442,10 @@ mod tests {
 
     fn run_child(case: &str) -> ! {
         install_previous(case);
+        if case == "native-reset" {
+            unsafe { libc::raise(libc::SIGBUS) };
+            unsafe { libc::_exit(84) }
+        }
         let mut control = super::super::control::Control::create_parent().unwrap();
         control.remove_path().unwrap();
         let handler = Handler::install(&control).unwrap();
@@ -521,7 +532,7 @@ mod tests {
                 action.sa_sigaction = nodefer_siginfo as *const () as usize;
                 action.sa_flags = (libc::SA_SIGINFO | libc::SA_NODEFER) as _;
             }
-            "user-reset" => {
+            "user-reset" | "native-reset" => {
                 action.sa_sigaction = reset_siginfo as *const () as usize;
                 action.sa_flags = (libc::SA_SIGINFO | libc::SA_RESETHAND) as _;
             }
