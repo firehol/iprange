@@ -14477,6 +14477,18 @@ views but can reject truncation while a user-mapped section exists.
   retained-handle semantics and changes only the Windows API used to request
   them; using a null root plus a re-resolved pathname would reintroduce a path
   replacement race and is not acceptable.
+- Native macOS execution also proved a kernel visibility limit, not an SDK
+  capture race. Darwin executes an installed `SA_RESETHAND` action correctly,
+  but `sigaction` omits that bit when returning the old/current action. This is
+  visible in `apple-oss-distributions/xnu @
+  f6217f891ac0bb64f3d375211650a4c1ff8ca1ea`,
+  `bsd/kern/kern_sig.c:487`: the returned flags reconstruct `SA_ONSTACK`,
+  `SA_RESTART`, `SA_SIGINFO`, `SA_NODEFER`, and child-only flags, but not the
+  separately stored reset bit. The native test independently observed the same
+  omission. Atomic replacement cannot recover information the kernel does not
+  return. The worker therefore preserves every disposition field Darwin
+  exposes and invokes a hidden-reset predecessor with the correct ABI and mask,
+  but cannot reproduce that unobservable one-shot bit.
 
 ### Affected contracts and surfaces
 
@@ -14552,7 +14564,9 @@ User decision 76 selects opportunistic Windows tail shrinking:
 6. Add FreeBSD whole-file lifetime locking for immutable/publication paths and
    fail every live path before it creates, maps, or mutates live artifacts.
 7. Make POSIX fault fixtures use native hardware-page geometry and classify only
-   exact kernel `BUS_*` codes.
+   exact kernel `BUS_*` codes. Preserve every prior action field exposed by the
+   platform; record and test Darwin's kernel-level omission of
+   `SA_RESETHAND` rather than guessing whether an arbitrary handler is one-shot.
 8. Add permanent native platform and C-boundary tests, then run the full release
    matrix on every authorized system.
 

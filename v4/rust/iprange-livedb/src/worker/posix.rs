@@ -357,14 +357,26 @@ mod tests {
         let native_reset = child_status("native-reset");
         let native_reset_code = native_reset.code().unwrap();
         assert!(matches!(native_reset_code, 86 | 90));
+        // Darwin records SA_RESETHAND internally but omits it from the old
+        // action returned by sigaction, so no chaining handler can recover it.
+        let reset_chain_code = if cfg!(target_vendor = "apple") {
+            86
+        } else {
+            native_reset_code
+        };
+        let captured_reset_code = if cfg!(target_vendor = "apple") {
+            93
+        } else {
+            92
+        };
         for (case, expected) in [
             ("owned", Expected::Exit(OWNED_FAULT_EXIT)),
             ("user-one", Expected::Exit(81)),
             ("user-siginfo", Expected::Exit(82)),
             ("user-mask", Expected::Exit(88)),
             ("user-nodefer", Expected::Exit(89)),
-            ("user-reset", Expected::Exit(native_reset_code)),
-            ("captured-reset", Expected::Exit(92)),
+            ("user-reset", Expected::Exit(reset_chain_code)),
+            ("captured-reset", Expected::Exit(captured_reset_code)),
             ("unarmed", Expected::Exit(83)),
             ("out-of-region", Expected::Exit(83)),
             ("stale-region", Expected::Exit(83)),
