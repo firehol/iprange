@@ -24,10 +24,12 @@ User decision 74A started a trust reset before further optimization: establish
 one exact compiled implementation, remove obsolete alternatives only after an
 explicit deletion-set approval, map every Phase-1 invariant to compiled public
 paths and executable evidence, add work-accounting gates, and then repair the
-measured hot paths in small proven slices. Rust is neither performance-complete
-nor accepted. Native Windows, macOS, and FreeBSD runtime/crash execution remains
-unauthorized and unperformed. The Go port remains blocked. Snapshot signing and
-high-level multi-file algebra remain isolated in pending SOW-0017 and SOW-0018.
+measured hot paths in small proven slices. The compiled-path, mmap-only storage,
+mapped-writer performance, and authorized native Windows, macOS, and FreeBSD
+gates are now complete. Rust remains unaccepted until this SOW's final evidence
+is reconciled and presented to the user. The Go port remains blocked. Snapshot
+signing and high-level multi-file algebra remain isolated in pending SOW-0017
+and SOW-0018.
 
 2026-07-24 restart execution: the Rust coordinator now uses three
 caller-provided fixed journals of prebound `Cell` writes instead of heap
@@ -14601,3 +14603,72 @@ User decision 76 selects opportunistic Windows tail shrinking:
   unaffected because v4 is unreleased and no output skill exists.
 - No design decision remains open for this repair. New caller-visible behavior,
   durability, format, or risk forks still require user approval before code.
+
+### Implemented result and native evidence
+
+The approved platform boundary is implemented without a second storage path or
+content-I/O fallback:
+
+- Windows attempts to shrink every unpublished mapped tail. Exact
+  `ERROR_USER_MAPPED_FILE` retains the aligned capacity, remaps the committed
+  extent, and permits later allocation to reuse that capacity. The permanent
+  mapped-reader test proves the file shrinks after the blocking reader closes.
+  No other resize error is treated as contention. Successful reader close drops
+  the main mapping before releasing coordination, and authenticated housekeeping
+  uses canonical UTF-16LE basenames and retained-handle namespace operations.
+- macOS fault fixtures use native hardware-page geometry. The worker handles
+  only faults inside its own mapping and exact kernel `BUS_*` codes; unrelated
+  signals are chained or redispatched. Native tests cover custom, ignored,
+  default, user-raised, owned-fault, and Darwin hidden-reset behavior.
+- FreeBSD uses whole-file `flock` only for immutable/publication lifetime
+  coordination. All live constructors, opens, transitions, result resolvers,
+  validation/recovery live modes, and live snapshot sources return frozen error
+  code 44 (`LiveCoordinationUnsupported`) before path access or mutation. The
+  permanent boundary test proves immutable query, explicit validation, offline
+  recovery, fail-if-exists publication, and no-rollback replacement; strict
+  replacement rejects without changing the destination.
+- FreeBSD `open(2)` reports a final-component `O_NOFOLLOW` symlink as `EMLINK`,
+  while Linux/macOS use `ELOOP`. One shared classifier now covers every retained
+  open, publication problem, and reservation-inspection path. Both retained-open
+  variants have a permanent symlink test. This matches the official FreeBSD
+  `open(2)` contract: <https://man.freebsd.org/cgi/man.cgi?query=open&sektion=2>.
+
+Native verification on the final source passed with warnings denied:
+
+- Linux: both feature matrices and all targets; Rust 1.74.1; Clippy, rustdoc,
+  formatting, the exact four-target source graph, static/runtime mmap-only
+  storage gates, C ABI manifest/header/native tests, conformance, crash/property
+  tests, and release smoke/scale benchmarks.
+- Apple ARM64 macOS: both feature matrices and all targets, including native
+  signal, live lifecycle, publication, conformance, validation/recovery, and C
+  boundary/header tests.
+- Windows NTFS with the GNU Rust target: both feature matrices and all targets,
+  including mapped-tail retention/reuse/shrink, lifecycle/crash resolution,
+  publication/housekeeping, conformance, and validation/recovery. C11/C++17
+  header checks and an external C caller prove the Windows calling convention,
+  live handles, and a non-ASCII UTF-16 path against the real DLL.
+- FreeBSD 14: both feature matrices and all supported targets. The library ran
+  267 passing tests with one deliberate subprocess-entry ignore; both permanent
+  boundary tests and the C ABI's pre-artifact error-44 test passed. The live-only
+  update-ipsets benchmark is deliberately a no-op on this unsupported platform.
+
+The representative Linux release-scale run remains inside the user-selected
+one-second targets: one million direct replacements completed in 0.923 seconds,
+one million retention refreshes in 0.570 seconds, and a one-million-range
+snapshot in 0.058 seconds. Lookup and scan paths performed zero measured heap
+allocations; persistent descriptor counts were stable and no private publication
+residue remained.
+
+Same-failure searches covered every live entry point, platform-lock fallback,
+retained no-follow open, mapped-tail shrink, main-mapping close, basename
+decoder, and positive signal-code assumption. Synthetic fixtures only were
+used; durable artifacts contain no credentials, personal/customer data, private
+endpoints, or operational details.
+
+Artifact maintenance: the binary-format, engine-design, and C-ABI specs now
+state the exact platform/error boundary; the Rust README records native proof;
+the Rust project skill records the reusable FreeBSD test workflow. `AGENTS.md`
+already states the mmap-only and Rust-first rules. The released C CLI docs and
+end-user/operator skills are unaffected because v4 remains unreleased and no
+output skill exists. This repair leaves no deferred platform item; final Rust
+acceptance and the explicitly blocked Go port remain SOW-level gates.

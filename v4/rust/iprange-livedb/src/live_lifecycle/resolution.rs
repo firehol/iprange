@@ -504,6 +504,6 @@ const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekee
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "resolution_tests.rs"]
 mod tests;

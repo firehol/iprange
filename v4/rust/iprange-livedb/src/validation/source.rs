@@ -529,6 +529,6 @@ pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "source_tests.rs"]
 mod tests;

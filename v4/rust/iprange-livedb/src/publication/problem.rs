@@ -3,7 +3,7 @@
 use crate::error::{Error as SdkError, ErrorCode};
 
 use super::main_file;
-use super::namespace::NamespaceError;
+use super::namespace::{is_nofollow_symlink, NamespaceError};
 use super::output;
 use super::replacement;
 use super::reservation_file;
@@ -69,7 +69,7 @@ impl Problem {
             NamespaceError::Io(source) => {
                 Self::io(source, "publication filesystem operation failed")
             }
-            NamespaceError::IoAt { source, .. } if source.raw_os_error() == Some(libc::ELOOP) => {
+            NamespaceError::IoAt { source, .. } if is_nofollow_symlink(source) => {
                 Self::plain(ErrorCode::Conflict, "publication name is a symlink")
             }
             NamespaceError::IoAt { operation, source } => Self::io(source, operation),

@@ -118,12 +118,14 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
     let supplied = supplied(
         LiveTransitionOperation::Reset,
         &main,
-        files.attempt_id,
-        2,
-        Some(live_sidecar::public_identity(previous)),
-        sidecar.local_identity(),
-        LiveCoordinationLocation::Private,
         Some(LiveResetPolicy::DiscardPrevious),
+        SidecarFacts {
+            id: files.attempt_id,
+            capacity: 2,
+            previous: Some(live_sidecar::public_identity(previous)),
+            identity: sidecar.local_identity(),
+            location: LiveCoordinationLocation::Private,
+        },
     );
     drop(sidecar);
     drop(main);
@@ -163,12 +165,14 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
     let supplied = supplied(
         LiveTransitionOperation::Reset,
         &main,
-        files.attempt_id,
-        2,
-        Some(live_sidecar::public_identity(previous)),
-        sidecar.local_identity(),
-        LiveCoordinationLocation::Canonical,
         Some(LiveResetPolicy::RollbackSafe),
+        SidecarFacts {
+            id: files.attempt_id,
+            capacity: 2,
+            previous: Some(live_sidecar::public_identity(previous)),
+            identity: sidecar.local_identity(),
+            location: LiveCoordinationLocation::Canonical,
+        },
     );
     crate::live_lifecycle::namespace::install(
         &files.private(),
@@ -212,27 +216,33 @@ fn prepare_initialize(files: &Files) -> LiveTransitionResult {
     let result = supplied(
         LiveTransitionOperation::Initialize,
         &main,
-        files.attempt_id,
-        2,
         None,
-        sidecar.local_identity(),
-        LiveCoordinationLocation::Canonical,
-        None,
+        SidecarFacts {
+            id: files.attempt_id,
+            capacity: 2,
+            previous: None,
+            identity: sidecar.local_identity(),
+            location: LiveCoordinationLocation::Canonical,
+        },
     );
     drop(sidecar);
     drop(main);
     result
 }
 
+struct SidecarFacts {
+    id: [u8; 16],
+    capacity: u32,
+    previous: Option<LocalFileIdentity>,
+    identity: live_sidecar::Identity,
+    location: LiveCoordinationLocation,
+}
+
 fn supplied(
     operation: LiveTransitionOperation,
     main: &LockedMain,
-    sidecar_id: [u8; 16],
-    reader_capacity: u32,
-    previous_sidecar_identity: Option<LocalFileIdentity>,
-    sidecar_identity: live_sidecar::Identity,
-    location: LiveCoordinationLocation,
     reset_policy: Option<LiveResetPolicy>,
+    sidecar: SidecarFacts,
 ) -> LiveTransitionResult {
     LiveTransitionResult {
         operation,
@@ -244,11 +254,11 @@ fn supplied(
         directory_identity: main.directory_identity,
         main_identity: main.public_identity,
         main_basename: main.basename,
-        reader_capacity,
-        sidecar_id,
-        previous_sidecar_identity,
-        new_sidecar_identity: Some(live_sidecar::public_identity(sidecar_identity)),
-        new_sidecar_location: location,
+        reader_capacity: sidecar.capacity,
+        sidecar_id: sidecar.id,
+        previous_sidecar_identity: sidecar.previous,
+        new_sidecar_identity: Some(live_sidecar::public_identity(sidecar.identity)),
+        new_sidecar_location: sidecar.location,
         residue_possible: true,
         housekeeping: crate::publication::Housekeeping::None,
         visible_housekeeping: Box::default(),

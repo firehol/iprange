@@ -66,7 +66,7 @@ pub(crate) struct PrivateCreationFailure {
 }
 
 impl PrivateCreationFailure {
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
     pub(crate) fn into_error(self) -> Error {
         match self.cleanup.cause {
             Some(cleanup) => Error::CleanupIncomplete {
@@ -163,7 +163,7 @@ impl Sidecar {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
     pub(crate) fn create(
         main: &Path,
         database_id: [u8; 16],
@@ -302,7 +302,7 @@ impl Sidecar {
         live_lock::unlock(&self.file, WRITER_LOCK)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
     pub(crate) fn claim_reader(&self, txn: u64) -> Result<u32> {
         self.claim_reader_inner(txn, None)
     }
@@ -371,7 +371,7 @@ impl Sidecar {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
     pub(crate) fn scan_readers(&self, mut observe: impl FnMut(u64) -> Result<()>) -> Result<()> {
         self.scan_readers_inner(None, &mut observe)
     }
@@ -645,7 +645,7 @@ pub(crate) fn create_private(
     Ok(CreatedPrivate { file, identity })
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 pub(crate) fn create_private_for_test(path: &Path) -> Result<File> {
     create_private(
         path,
@@ -826,6 +826,6 @@ fn slot_offset_checked(slot: u32, capacity: u32) -> Result<u64> {
     slot_offset(slot)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "live_sidecar_tests.rs"]
 mod tests;

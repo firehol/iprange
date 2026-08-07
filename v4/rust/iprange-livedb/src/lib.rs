@@ -109,7 +109,7 @@ pub use snapshot::{
 pub use source::{RangeSource, SliceSource};
 pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 mod live_crash_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod mmap_runtime_tests;

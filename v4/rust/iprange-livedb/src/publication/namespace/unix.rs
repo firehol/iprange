@@ -13,7 +13,7 @@ use crate::path;
 
 use crate::publication::security;
 
-use super::NamespaceError;
+use super::{is_nofollow_symlink, NamespaceError};
 
 pub(crate) const IDENTITY_KIND: u16 = 1;
 pub(crate) const BASENAME_ENCODING_KIND: u16 = 1;
@@ -245,6 +245,9 @@ impl Directory {
             let source = io::Error::last_os_error();
             if source.raw_os_error() == Some(libc::ENOENT) {
                 return Ok(None);
+            }
+            if is_nofollow_symlink(&source) {
+                return Err(NamespaceError::NotRegular);
             }
             return Err(NamespaceError::IoAt {
                 operation: "open retained file",

@@ -41,6 +41,7 @@ impl Drop for TestFile {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
 fn failed_live_release_returns_one_retryable_cleanup_guard() {
     let file = TestFile::new();
     let cancellation = CancellationToken::new();

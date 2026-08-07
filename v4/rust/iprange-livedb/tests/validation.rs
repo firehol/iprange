@@ -1,3 +1,5 @@
+#![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
+
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};

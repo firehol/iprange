@@ -121,6 +121,14 @@ result; acquiring a writer is a separate open. Direct live rename/relink is not
 a Phase-1 operation: relocation uses snapshot, explicit live initialization,
 and an application-controlled switch.
 
+Linux, macOS, and Windows support the live sidecar protocol. FreeBSD 14 supports
+immutable reading, explicit immutable/offline validation and recovery, and
+durable immutable publication, but not live reader/writer coordination. On
+FreeBSD every live constructor, open, transition, resolver, validation,
+recovery, and snapshot source mode returns `LiveCoordinationUnsupported` before
+accessing or changing the supplied paths. This boundary does not change the
+portable main-file bytes.
+
 The compact `SnapshotTo` operation streams one pinned committed generation into an
 ordinary v4 file, excluding free, retired, unreachable, unpublished, and deleted
 bytes. Phase 1 uses these unsigned artifacts for SDK conformance, durability,

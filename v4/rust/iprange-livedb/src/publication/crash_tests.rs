@@ -235,6 +235,7 @@ fn retirement_crashes_leave_a_normally_openable_complete_main() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_crashes_preserve_exact_previous_or_desired_state() {
     for point in [
         "publication.after_reservation_state1_sync",

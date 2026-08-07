@@ -13,6 +13,7 @@ use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::publication::namespace::Name;
 use crate::publication::output::CreatedOutput;
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use crate::publication::replacement;
 use crate::publication::reservation_file::ReservationDraft;
 
@@ -155,6 +156,7 @@ fn retirement_failure_preserves_published_and_exact_cleanup_facts() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_exchange_keeps_both_inodes_locked_until_retirement() {
     let directory = TempDirectory::new();
     let (output, reservation, paths) = armed_replacement_attempt(&directory.path);
@@ -181,6 +183,7 @@ fn replacement_exchange_keeps_both_inodes_locked_until_retirement() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_retirement_failure_records_exact_previous_phase() {
     let directory = TempDirectory::new();
     let (output, reservation, paths) = armed_replacement_attempt(&directory.path);
@@ -236,6 +239,7 @@ fn armed_attempt(directory: &Path) -> (PreparedOutput, ArmedReservation, Paths) 
     )
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn armed_replacement_attempt(directory: &Path) -> (PreparedOutput, ArmedReservation, Paths) {
     let main = directory.join("result.v4");
     let secured = CreatedOutput::create(&main).unwrap().secure().unwrap();

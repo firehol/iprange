@@ -396,6 +396,6 @@ fn compare_feeds(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "../feed_workflow_tests.rs"]
 mod tests;

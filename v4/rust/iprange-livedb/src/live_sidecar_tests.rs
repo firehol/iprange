@@ -218,7 +218,7 @@ fn symlinks_are_not_followed() {
         symlink(&target, files.sidecar()).unwrap();
 
         let result = Sidecar::open(&files.main, [1; 16]);
-        assert!(matches!(result, Err(Error::Io(_))));
+        assert!(matches!(result, Err(Error::WrongMode(_))));
     }
 }
 

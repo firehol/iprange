@@ -195,7 +195,14 @@ fn symlinks_and_hard_links_fail_closed() {
     std::fs::write(directory.path.join("target"), b"x").unwrap();
     symlink("target", directory.path.join("link")).unwrap();
     let link = Name::new(b"link").unwrap();
-    assert!(destination.directory().open_regular(&link, false).is_err());
+    assert!(matches!(
+        destination.directory().open_regular(&link, false),
+        Err(NamespaceError::NotRegular)
+    ));
+    assert!(matches!(
+        destination.directory().open_regular_any_link(&link, false),
+        Err(NamespaceError::NotRegular)
+    ));
 
     let source = Name::new(b"target").unwrap();
     std::fs::hard_link(

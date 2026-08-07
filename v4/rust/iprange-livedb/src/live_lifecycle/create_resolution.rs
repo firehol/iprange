@@ -625,6 +625,6 @@ const fn merge_housekeeping(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "create_resolution_tests.rs"]
 mod tests;

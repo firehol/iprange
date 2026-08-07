@@ -12,6 +12,19 @@ mod platform;
 
 pub(crate) use platform::*;
 
+pub(crate) fn is_nofollow_symlink(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        let code = error.raw_os_error();
+        code == Some(libc::ELOOP) || cfg!(target_os = "freebsd") && code == Some(libc::EMLINK)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
+
 pub(crate) const fn require_exchange_available() -> Result<(), NamespaceError> {
     if cfg!(any(target_os = "linux", target_vendor = "apple")) {
         Ok(())

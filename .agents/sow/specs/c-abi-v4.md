@@ -88,6 +88,12 @@ zero on success. A function may also return one owned opaque typed-error handle
 through an explicit output pointer. There is no thread-local or process-global
 "last error".
 
+On a platform without the live sidecar protocol, every live constructor, open,
+transition, resolver, validation, recovery, and snapshot source mode returns
+typed error `LIVE_COORDINATION_UNSUPPORTED` (44) before path access or artifact
+mutation. `OS_UNSUPPORTED` (58) remains the generic classifier for unrelated
+unsupported operating-system operations.
+
 The error handle exposes stable numeric category/code, optional OS code, cause
 chain inspection, and two-call UTF-8 diagnostic copying. Diagnostic text is not
 a stable classifier. Error/report destroy accepts null as success. If the handle

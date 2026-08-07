@@ -20,9 +20,7 @@ pub(crate) const fn require_live_supported() -> Result<()> {
 
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 pub(crate) fn require_live_supported() -> Result<()> {
-    Err(Error::Unsupported(
-        "live coordination is not implemented on this platform",
-    ))
+    Err(Error::LiveCoordinationUnsupported)
 }
 
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]

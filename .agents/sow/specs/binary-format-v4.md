@@ -2180,9 +2180,15 @@ current owner, mode, and absent extended access ACL. A mismatch reports
 `ChangedOrUnproven`; it never silently changes existing access.
 
 Linux and macOS use native open-file-description byte-range locks. Windows uses
-equivalent per-handle byte-range locks. FreeBSD and any other target remain
-unsupported until an equivalent automatic-release primitive is proven and
-tested; implementations must not substitute process-associated record locks.
+equivalent per-handle byte-range locks. FreeBSD 14 has no proven equivalent for
+the independent automatic-release byte ranges required by the live sidecar, so
+live coordination is unsupported there; implementations must not substitute
+process-associated record locks or whole-file `flock` for sidecar slots. Every
+FreeBSD live constructor, open, transition, resolver, validation, recovery, and
+snapshot source mode returns `LiveCoordinationUnsupported` before path access or
+artifact mutation. FreeBSD immutable reading, explicit immutable/offline
+validation and recovery, and section-20 durable immutable publication remain
+supported and use a separate whole-file lifetime lock where required.
 
 Phase-1 constructors are explicit:
 

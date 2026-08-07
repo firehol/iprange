@@ -298,6 +298,6 @@ impl OfflineSource {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "inspection_tests.rs"]
 mod tests;

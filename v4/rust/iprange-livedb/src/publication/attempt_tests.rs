@@ -381,6 +381,7 @@ fn mapped_housekeeping_checkpoint_reports_the_new_envelope_and_owned_sources() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_publishes_exact_output_and_retires_the_previous_inode() {
     let directory = TempDirectory::new();
     let (output, paths, previous) = prepared_replacement_output(&directory.path);

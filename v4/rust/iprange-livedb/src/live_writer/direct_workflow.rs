@@ -354,6 +354,6 @@ fn compare_maps(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "../direct_workflow_tests.rs"]
 mod tests;

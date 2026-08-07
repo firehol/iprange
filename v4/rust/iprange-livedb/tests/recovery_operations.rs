@@ -1,3 +1,5 @@
+#![cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
+
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::fs::OpenOptions;

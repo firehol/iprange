@@ -35,6 +35,7 @@ impl Drop for TestFile {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
 fn live_inspection_reports_unprovable_current_order() {
     let source = create_source("unprovable");
     rewrite_meta(&source.0, 0, |meta| meta.commit_nonce = [0x55; 16]);
@@ -54,6 +55,7 @@ fn live_inspection_reports_unprovable_current_order() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple", windows))]
 fn live_inspection_reports_unreadable_proven_current() {
     let source = create_source("unreadable");
     let mut writer = LiveWriter::open(

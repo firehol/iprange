@@ -163,6 +163,7 @@ pub enum Error {
     WrongAddressFamily(&'static str),
     WrongValueKind(&'static str),
     WrongValueTag(&'static str),
+    LiveCoordinationUnsupported,
     Unsupported(&'static str),
     DurabilityUnsupported(&'static str),
     Io(io::Error),
@@ -237,6 +238,7 @@ impl Error {
             Self::WrongAddressFamily(_) => ErrorCode::WrongAddressFamily,
             Self::WrongValueKind(_) => ErrorCode::WrongValueKind,
             Self::WrongValueTag(_) => ErrorCode::WrongValueTag,
+            Self::LiveCoordinationUnsupported => ErrorCode::LiveCoordinationUnsupported,
             Self::Unsupported(_) => ErrorCode::OsUnsupported,
             Self::DurabilityUnsupported(_) => ErrorCode::DurabilityUnsupported,
             Self::Io(_) => ErrorCode::Io,
@@ -318,6 +320,9 @@ impl fmt::Display for Error {
             }
             Self::WrongValueKind(detail) => write!(output, "wrong value kind: {detail}"),
             Self::WrongValueTag(detail) => write!(output, "wrong value tag: {detail}"),
+            Self::LiveCoordinationUnsupported => {
+                output.write_str("live coordination is unsupported on this platform")
+            }
             Self::Unsupported(detail) => write!(output, "unsupported operation: {detail}"),
             Self::DurabilityUnsupported(detail) => {
                 write!(output, "durability is unsupported: {detail}")
@@ -410,6 +415,7 @@ impl std::error::Error for Error {
             | Self::WrongAddressFamily(_)
             | Self::WrongValueKind(_)
             | Self::WrongValueTag(_)
+            | Self::LiveCoordinationUnsupported
             | Self::Unsupported(_)
             | Self::DurabilityUnsupported(_)
             | Self::Format(_)

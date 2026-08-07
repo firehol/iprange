@@ -1,17 +1,24 @@
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use std::ffi::c_void;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use iprange_livedb::{create_live, AddressFamily, CancellationToken, ValueKind, ValueTag};
 
-use crate::abi::{
-    CallbackFailure, Cancellation, DirectRange, FinishInputReport, Ip, Path, TransactionBudget,
-};
+#[cfg(target_os = "freebsd")]
+use crate::abi::ByteSlice;
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+use crate::abi::{CallbackFailure, DirectRange, FinishInputReport, TransactionBudget};
+use crate::abi::{Cancellation, Ip, Path};
 use crate::error::{BoundaryError, ErrorHandle};
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use crate::handle::{ReaderHandle, WriterHandle};
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use crate::ip::{self, Key};
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use crate::report::ReportHandle;
 
 const GENERATED_HEADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/iprange_v4.h"));
@@ -59,10 +66,12 @@ impl Drop for Files {
 }
 
 #[derive(Default)]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 struct DirectSource {
     emitted: bool,
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 unsafe extern "C" fn direct_source(
     context: *mut c_void,
     records: *mut DirectRange,
@@ -99,6 +108,7 @@ unsafe extern "C" fn direct_source(
     1
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 struct ReentrantSource {
     writer: *const WriterHandle,
     status: u32,
@@ -108,6 +118,7 @@ struct ReentrantSource {
     destroy_status: u32,
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 unsafe extern "C" fn reentrant_source(
     context: *mut c_void,
     _records: *mut DirectRange,
@@ -144,6 +155,7 @@ unsafe extern "C" fn reentrant_source(
     2
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn assert_ok(status: u32, error: *mut ErrorHandle) {
     if status == 0 {
         assert!(error.is_null());
@@ -178,6 +190,7 @@ unsafe fn destroy_error(error: *mut ErrorHandle) {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn exported_direct_workflow_round_trips_through_c_shapes() {
     let files = Files::new();
     create_live(
@@ -302,7 +315,40 @@ fn fixed_cardinality_layout_and_version_are_exact() {
     assert_eq!(std::mem::size_of::<Ip>(), 20);
 }
 
+#[cfg(target_os = "freebsd")]
 #[test]
+fn live_creation_is_rejected_before_c_artifacts() {
+    let files = Files::new();
+    let tag = b"asn";
+    let mut report = std::ptr::null_mut();
+    let mut error = std::ptr::null_mut();
+    let status = unsafe {
+        crate::lifecycle_ops::iprange_v4_abi1_create_live(
+            files.abi_path(),
+            4,
+            1,
+            ByteSlice {
+                pointer: tag.as_ptr(),
+                length: tag.len() as u64,
+            },
+            1,
+            Cancellation::default(),
+            &mut report,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, 1);
+    assert!(report.is_null());
+    assert!(!error.is_null());
+    assert_eq!(unsafe { error_code(error) }, 44);
+    unsafe { destroy_error(error) };
+    assert!(!files.main.exists());
+    assert!(!files.sidecar().exists());
+}
+
+#[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn reader_close_failure_keeps_the_c_handle_retryable() {
     let files = Files::new();
     create_live(
@@ -435,6 +481,7 @@ fn overlapping_outputs_fail_before_handle_access() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn callbacks_cannot_reenter_the_same_writer() {
     let files = Files::new();
     create_live(

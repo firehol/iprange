@@ -133,8 +133,12 @@ ownership checks.
 
 - Cross-compilation proves compilation only. Run native platform tests only
   with explicit authorization.
+- Native Windows C-boundary proof includes `tests/native_header.rs` and
+  `tests/native_windows.rs`; neither test may be replaced by cross-compilation.
 - State the exact FreeBSD boundary: immutable reading and publication can be
-  supported while live reader/writer coordination remains unsupported.
+  supported while live reader/writer coordination remains unsupported. The
+  permanent native proof is `tests/freebsd_boundary.rs`; the live-only
+  update-ipsets benchmark is intentionally a no-op on FreeBSD.
 - Search for the same failure class before declaring a repair complete.
 - Update the active SOW and every affected spec, SDK document, project skill,
   and `AGENTS.md` entry.

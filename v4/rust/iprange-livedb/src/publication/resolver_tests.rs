@@ -8,6 +8,7 @@ use crate::key::Ipv4Key;
 use crate::publication::attempt;
 use crate::publication::crash_tests::{run_child, run_replacement_child, Artifacts, TempDirectory};
 use crate::publication::output::CreatedOutput;
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use crate::publication::replacement;
 use crate::publication::reservation;
 use crate::publication::result::{
@@ -35,6 +36,7 @@ const POST_MAIN: &[&str] = &[
     "publication.after_main_proof",
 ];
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 const REPLACEMENT_POST_MAIN: &[&str] = &[
     "publication.after_main_rename",
     "publication.after_main_sync",
@@ -87,6 +89,7 @@ fn remove_discards_every_pre_main_crash_state() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_complete_resumes_every_pre_main_crash_state() {
     for point in PRE_MAIN {
         let directory = TempDirectory::new(point);
@@ -126,6 +129,7 @@ fn replacement_remove_preserves_previous_for_every_pre_main_crash_state() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_both_modes_finish_every_post_exchange_crash_state() {
     for point in REPLACEMENT_POST_MAIN {
         for mode in [Mode::Complete, Mode::Remove] {
@@ -234,6 +238,7 @@ fn supplied_result_resolves_after_reservation_retirement() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn supplied_replacement_result_resolves_after_reservation_retirement() {
     for mode in [Mode::Complete, Mode::Remove] {
         let directory = TempDirectory::new("supplied-replacement-result");
@@ -669,6 +674,7 @@ fn publish(
     attempt::fail_if_exists_cancellable(output, &CancellationToken::new()).unwrap()
 }
 
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn publish_replacement(main: &std::path::Path) -> PublicationResult {
     let secured = CreatedOutput::create(main).unwrap().secure().unwrap();
     let (attempt, file) = secured.into_parts();

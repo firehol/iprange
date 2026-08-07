@@ -9,7 +9,9 @@ use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
 use crate::mapping::Mapping;
 
-use super::namespace::{Destination, Identity, Name, NamespaceError, Regular, ScanError};
+use super::namespace::{
+    is_nofollow_symlink, Destination, Identity, Name, NamespaceError, Regular, ScanError,
+};
 use super::problem::Problem;
 use super::reservation::{self, Header, Selected};
 use super::result::AccessPolicy;
@@ -440,7 +442,7 @@ fn invalid_private_entry(error: &NamespaceError) -> bool {
         NamespaceError::NotRegular
         | NamespaceError::LinkCount(_)
         | NamespaceError::CrossFilesystem => true,
-        NamespaceError::IoAt { source, .. } => source.raw_os_error() == Some(libc::ELOOP),
+        NamespaceError::IoAt { source, .. } => is_nofollow_symlink(source),
         _ => false,
     }
 }

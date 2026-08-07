@@ -8,7 +8,7 @@ use std::os::fd::FromRawFd;
 
 use super::{errno, Directory, Identity, Name, NamespaceError};
 #[cfg(any(target_os = "freebsd", test))]
-use super::{regular_identity_any_link, Entry, Regular};
+use super::{is_nofollow_symlink, regular_identity_any_link, Entry, Regular};
 
 #[cfg(any(target_os = "freebsd", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,6 +241,9 @@ impl Directory {
             let source = io::Error::last_os_error();
             if source.raw_os_error() == Some(libc::ENOENT) {
                 return Ok(None);
+            }
+            if is_nofollow_symlink(&source) {
+                return Err(NamespaceError::NotRegular);
             }
             return Err(NamespaceError::IoAt {
                 operation: "open retained transition file",

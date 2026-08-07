@@ -489,6 +489,6 @@ fn external<T>(writer: &mut LiveWriter, result: Result<T>) -> Result<T> {
     result.map_err(|error| writer.abort_after_source(error))
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]
 #[path = "membership_import/tests.rs"]
 mod tests;
