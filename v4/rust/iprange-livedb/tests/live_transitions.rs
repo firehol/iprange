@@ -113,6 +113,7 @@ fn initialization_never_repairs_existing_coordination() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn reset_replaces_corrupt_coordination_without_changing_the_main() {
     let files = TestPair::new("reset");
     create(&files, 1);
@@ -160,6 +161,31 @@ fn reset_replaces_corrupt_coordination_without_changing_the_main() {
     ));
     first.close().unwrap();
     second.close().unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn rollback_safe_reset_fails_before_changing_either_file() {
+    let files = TestPair::new("reset-strict-unsupported");
+    create(&files, 1);
+    fs::write(files.sidecar(), b"corrupt").unwrap();
+    let main = fs::read(&files.main).unwrap();
+    let sidecar = fs::read(files.sidecar()).unwrap();
+
+    let error = reset_live_coordination(
+        &files.main,
+        2,
+        LiveResetPolicy::RollbackSafe,
+        &CancellationToken::new(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, Error::DurabilityUnsupported(_)));
+    assert_eq!(fs::read(&files.main).unwrap(), main);
+    assert_eq!(fs::read(files.sidecar()).unwrap(), sidecar);
+    let mut private = files.sidecar().as_os_str().to_os_string();
+    private.push(".reset");
+    assert!(!PathBuf::from(private).exists());
 }
 
 #[test]
