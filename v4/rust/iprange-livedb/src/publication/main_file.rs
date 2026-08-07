@@ -2,7 +2,7 @@
 
 use crate::error;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use super::namespace::regular_link_count;
 use super::namespace::{sync_file, NamespaceError};
 use super::output::{self, PreparedOutput};
@@ -345,6 +345,10 @@ fn unlink_previous(
     };
     let destination = published.output.attempt.destination();
     previous.verify_private_or_retired(destination, published.output.attempt.name())?;
+    if regular_link_count(&previous.file)? == 0 {
+        owner.previous_unlinked = true;
+        return Ok(false);
+    }
     let authority = Authority {
         attempt_id: published.output.attempt.attempt_id(),
         ordinal: 0,

@@ -329,6 +329,8 @@ fn no_rollback_replacement_is_explicit_and_cannot_be_removed_after_publication()
         PublicationPolicy::ReplaceExistingNoRollback
     );
     assert!(result.publication.attempt.previous_destination.is_some());
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert!(!sidecar(&files.output).exists());
     let published = fs::read(&files.output).unwrap();
     let error = resolve_publication(
         &files.output,
@@ -370,6 +372,8 @@ fn immutable_snapshot_can_compact_its_own_path_by_replacement() {
             .identity,
         result.publication.attempt.output_identity
     );
+    assert_eq!(result.cleanup_state(), CleanupState::Clean);
+    assert!(!sidecar(&files.source).exists());
     let after = ImmutableReader::open(&files.source).unwrap();
     assert_eq!(after.info().database_id, before.database_id);
     assert_eq!(after.info().transaction_id, before.transaction_id);
