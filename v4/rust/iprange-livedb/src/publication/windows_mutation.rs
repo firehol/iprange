@@ -11,6 +11,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     FileDispositionInfoEx, FileRenameInfoEx, SetFileInformationByHandle,
     FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX,
+    FILE_RENAME_INFO,
 };
 
 use super::{sync_file, Directory, Identity, Name, NamespaceError};
@@ -134,7 +135,9 @@ fn rename_buffer(flags: u32, root: HANDLE, name: &[u16]) -> Result<RenameBuffer,
         .len()
         .checked_mul(size_of::<u16>())
         .ok_or(NamespaceError::InvalidName)?;
-    let byte_len = name_offset
+    // Windows requires the supplied buffer to include the complete fixed
+    // structure in addition to the variable filename bytes.
+    let byte_len = size_of::<FILE_RENAME_INFO>()
         .checked_add(name_bytes)
         .ok_or(NamespaceError::InvalidName)?;
     let words = byte_len

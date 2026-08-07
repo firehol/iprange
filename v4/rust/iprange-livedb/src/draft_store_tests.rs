@@ -44,7 +44,12 @@ impl Drop for TestFile {
 }
 
 fn publish(mapping: &mut Mapping, meta: MetaV4, meta_page: u8) {
-    mapping.resize(meta.page_count * PAGE_SIZE as u64).unwrap();
+    let committed_bytes = meta.page_count * PAGE_SIZE as u64;
+    if committed_bytes <= mapping.len() {
+        mapping.shrink_or_retain(committed_bytes).unwrap();
+    } else {
+        mapping.resize(committed_bytes).unwrap();
+    }
     meta.encode_mapped(
         mapping
             .page_mut(u32::from(meta_page), meta.page_count)

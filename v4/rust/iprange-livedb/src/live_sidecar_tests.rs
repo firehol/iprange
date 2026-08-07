@@ -90,7 +90,9 @@ fn creating_and_malformed_sidecars_are_rejected() {
     ));
 
     sidecar.publish_ready().unwrap();
-    sidecar.file.set_len(PAGE_SIZE as u64).unwrap();
+    let file = sidecar.file.try_clone().unwrap();
+    drop(sidecar);
+    file.set_len(PAGE_SIZE as u64).unwrap();
     assert!(matches!(
         Sidecar::open(&files.main, [1; 16]),
         Err(Error::Corrupt(_))

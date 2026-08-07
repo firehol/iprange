@@ -168,7 +168,7 @@ fn owned_fault(control: *mut u8, signal: c_int, info: *mut libc::siginfo_t) -> b
         return false;
     }
     let code = unsafe { (*info).si_code };
-    if !kernel_bus_fault(code) {
+    if !kernel_bus_code(code) {
         return false;
     }
     let fields = Control::fault_fields();
@@ -211,7 +211,7 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
         if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-        let kernel_generated = !info.is_null() && kernel_bus_fault(unsafe { (*info).si_code });
+        let kernel_generated = synchronous_bus_fault(info);
         if !kernel_generated && unsafe { libc::kill(libc::getpid(), signal) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
@@ -245,7 +245,13 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
     }
 }
 
-fn kernel_bus_fault(code: c_int) -> bool {
+fn synchronous_bus_fault(info: *mut libc::siginfo_t) -> bool {
+    !info.is_null()
+        && !unsafe { (*info).si_addr() }.is_null()
+        && kernel_bus_code(unsafe { (*info).si_code })
+}
+
+fn kernel_bus_code(code: c_int) -> bool {
     code == libc::BUS_ADRALN
         || code == libc::BUS_ADRERR
         || code == libc::BUS_OBJERR
@@ -538,7 +544,7 @@ mod tests {
     extern "C" fn siginfo(signal: c_int, info: *mut libc::siginfo_t, _context: *mut c_void) {
         let code = if signal != libc::SIGBUS || info.is_null() {
             86
-        } else if !kernel_bus_fault(unsafe { (*info).si_code }) {
+        } else if !synchronous_bus_fault(info) {
             82
         } else {
             83
