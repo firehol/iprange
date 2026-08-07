@@ -364,6 +364,7 @@ mod tests {
             ("user-mask", Expected::Exit(88)),
             ("user-nodefer", Expected::Exit(89)),
             ("user-reset", Expected::Exit(native_reset_code)),
+            ("captured-reset", Expected::Exit(92)),
             ("unarmed", Expected::Exit(83)),
             ("out-of-region", Expected::Exit(83)),
             ("stale-region", Expected::Exit(83)),
@@ -449,6 +450,11 @@ mod tests {
         let mut control = super::super::control::Control::create_parent().unwrap();
         control.remove_path().unwrap();
         let handler = Handler::install(&control).unwrap();
+        if case == "captured-reset" {
+            let captured =
+                handler.previous_action.sa_flags as libc::c_int & libc::SA_RESETHAND != 0;
+            unsafe { libc::_exit(if captured { 92 } else { 93 }) }
+        }
         match case {
             "owned" => {
                 let mapping = fault_mapping("owned");
@@ -532,7 +538,7 @@ mod tests {
                 action.sa_sigaction = nodefer_siginfo as *const () as usize;
                 action.sa_flags = (libc::SA_SIGINFO | libc::SA_NODEFER) as _;
             }
-            "user-reset" | "native-reset" => {
+            "user-reset" | "native-reset" | "captured-reset" => {
                 action.sa_sigaction = reset_siginfo as *const () as usize;
                 action.sa_flags = (libc::SA_SIGINFO | libc::SA_RESETHAND) as _;
             }
