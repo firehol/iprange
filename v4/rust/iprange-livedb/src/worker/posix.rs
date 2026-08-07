@@ -212,7 +212,7 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
         let kernel_generated = synchronous_bus_fault(info);
-        if !kernel_generated && unsafe { libc::kill(libc::getpid(), signal) } != 0 {
+        if !kernel_generated && !redispatch_user_signal(signal) {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
         return;
@@ -223,7 +223,7 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
         if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-        if !synchronous_bus_fault(info) && unsafe { libc::kill(libc::getpid(), signal) } != 0 {
+        if !synchronous_bus_fault(info) && !redispatch_user_signal(signal) {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
         return;
@@ -251,6 +251,16 @@ fn synchronous_bus_fault(info: *mut libc::siginfo_t) -> bool {
     !info.is_null()
         && !unsafe { (*info).si_addr() }.is_null()
         && kernel_bus_code(unsafe { (*info).si_code })
+}
+
+fn redispatch_user_signal(signal: c_int) -> bool {
+    if unsafe { libc::kill(libc::getpid(), signal) } != 0 {
+        return false;
+    }
+    let mut selected = unsafe { mem::zeroed::<libc::sigset_t>() };
+    (unsafe { libc::sigemptyset(&mut selected) }) == 0
+        && (unsafe { libc::sigaddset(&mut selected, signal) }) == 0
+        && (unsafe { libc::sigprocmask(libc::SIG_UNBLOCK, &selected, ptr::null_mut()) }) == 0
 }
 
 fn kernel_bus_code(code: c_int) -> bool {
