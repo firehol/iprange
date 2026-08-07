@@ -2,6 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use iprange_livedb::validation::{
+    validate, ValidationBudget, ValidationMode, ValidationSinkControl,
+};
 use iprange_livedb::{
     create_live, resolve_commit, AbortOutcome, AddressFamily, CancellationToken, CloseOutcome,
     CommitCleanupArtifacts, CommitDurability, CommitResolution, CommitResolutionMode, CommitResult,
@@ -220,6 +224,85 @@ fn pending_close_aborts_and_releases_the_lease_without_consuming_the_handle() {
     let mut reader = LiveReader::open(&files.main, &CancellationToken::new()).unwrap();
     assert_eq!(reader.info().unwrap().transaction_id, 1);
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), None);
+    reader.close().unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn mapped_reader_retains_abort_capacity_for_reuse_then_allows_shrink() {
+    let files = TestPair::new("mapped-tail");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"asn").unwrap(),
+        2,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let initial_length = fs::metadata(&files.main).unwrap().len();
+    let cancellation = CancellationToken::new();
+    let mut pinned = LiveReader::open(&files.main, &cancellation).unwrap();
+
+    let mut bounded = budget();
+    bounded.max_private_pages = 128;
+    bounded.max_file_growth_pages = 128;
+    let mut writer = LiveWriter::open(&files.main, bounded, &cancellation).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    let retained_capacity = fs::metadata(&files.main).unwrap().len();
+    assert!(retained_capacity > initial_length);
+    assert_eq!(transaction.abort().unwrap().outcome, AbortOutcome::Aborted);
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), retained_capacity);
+
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(30), Ipv4Key(40), 9).unwrap();
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), retained_capacity);
+    let committed = transaction.commit().unwrap();
+    assert_eq!(committed.durability, CommitDurability::Committed);
+    let mut current = LiveReader::open(&files.main, &cancellation).unwrap();
+    let committed_length = current.info().unwrap().page_count * 4096;
+    current.close().unwrap();
+    assert!(committed_length < retained_capacity);
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), retained_capacity);
+    assert_eq!(writer.close().unwrap().outcome, CloseOutcome::Closed);
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), retained_capacity);
+
+    let mut findings = Vec::new();
+    let validated = validate(
+        &files.main,
+        ValidationMode::LiveCurrent,
+        &ValidationBudget::heap_only(1024 * 1024, 2),
+        &cancellation,
+        &mut |finding: &iprange_livedb::validation::ValidationFinding| {
+            findings.push(*finding);
+            Ok(ValidationSinkControl::Continue)
+        },
+    )
+    .unwrap();
+    assert!(validated.valid);
+    assert!(findings.is_empty());
+    assert_eq!(
+        validated.generation.unwrap().page_count * 4096,
+        committed_length
+    );
+
+    pinned.close().unwrap();
+    let mut writer = LiveWriter::open(&files.main, bounded, &cancellation).unwrap();
+    assert_eq!(fs::metadata(&files.main).unwrap().len(), committed_length);
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.assign_v4(Ipv4Key(50), Ipv4Key(60), 11).unwrap();
+    assert_eq!(
+        transaction.commit().unwrap().durability,
+        CommitDurability::Committed
+    );
+    writer.close().unwrap();
+
+    let physical_length = fs::metadata(&files.main).unwrap().len();
+    let mut reader = LiveReader::open(&files.main, &cancellation).unwrap();
+    assert_eq!(physical_length, reader.info().unwrap().page_count * 4096);
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(35)).unwrap(), Some(9));
+    assert_eq!(reader.lookup_direct_v4(Ipv4Key(55)).unwrap(), Some(11));
     reader.close().unwrap();
 }
 
