@@ -5,14 +5,18 @@ use std::io;
 use std::mem::{align_of, size_of};
 use std::os::windows::io::AsRawHandle;
 
+use windows_sys::Wdk::Storage::FileSystem::{
+    FileRenameInformationEx, NtSetInformationFile, FILE_RENAME_INFORMATION,
+};
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE,
+    RtlNtStatusToDosError, ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, ERROR_FILE_NOT_FOUND,
+    ERROR_PATH_NOT_FOUND, HANDLE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle,
-    FILE_DISPOSITION_FLAG_DELETE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_RENAME_INFO,
+    FileDispositionInfoEx, SetFileInformationByHandle, FILE_DISPOSITION_FLAG_DELETE,
+    FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO_EX,
 };
+use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
 use super::{sync_file, Directory, Identity, Name, NamespaceError};
 
@@ -23,7 +27,7 @@ impl Directory {
         source_file: &File,
         destination: &Name,
     ) -> Result<(), NamespaceError> {
-        self.rename(source, source_file, destination, FileRenameInfo, 0)
+        self.rename(source, source_file, destination, 0)
     }
 
     pub(crate) fn exchange(
@@ -41,13 +45,7 @@ impl Directory {
         source_file: &File,
         destination: &Name,
     ) -> Result<(), NamespaceError> {
-        self.rename(
-            source,
-            source_file,
-            destination,
-            FileRenameInfoEx,
-            0x1 | 0x2,
-        )
+        self.rename(source, source_file, destination, 0x1 | 0x2)
     }
 
     fn rename(
@@ -55,23 +53,25 @@ impl Directory {
         source: &Name,
         source_file: &File,
         destination: &Name,
-        information_class: FILE_INFO_BY_HANDLE_CLASS,
         flags: u32,
     ) -> Result<(), NamespaceError> {
         self.check_creator()?;
         let identity = super::regular_identity(source_file, self.identity)?;
         self.verify_name(source, identity)?;
         let buffer = rename_buffer(flags, self.file.as_raw_handle(), destination.units())?;
-        if unsafe {
-            SetFileInformationByHandle(
+        let mut io_status = IO_STATUS_BLOCK::default();
+        let status = unsafe {
+            NtSetInformationFile(
                 source_file.as_raw_handle(),
-                information_class,
+                &mut io_status,
                 buffer.as_ptr().cast(),
                 buffer.byte_len,
+                FileRenameInformationEx,
             )
-        } == 0
-        {
-            let source = io::Error::last_os_error();
+        };
+        if status < 0 {
+            let source =
+                io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32);
             return match source.raw_os_error().map(|code| code as u32) {
                 Some(ERROR_ALREADY_EXISTS | ERROR_FILE_EXISTS) => Err(NamespaceError::Exists),
                 Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Err(NamespaceError::Missing),
@@ -144,7 +144,7 @@ fn rename_buffer(flags: u32, root: HANDLE, name: &[u16]) -> Result<RenameBuffer,
         .ok_or(NamespaceError::InvalidName)?;
     // Windows requires the supplied buffer to include the complete fixed
     // structure in addition to the variable filename bytes.
-    let byte_len = size_of::<FILE_RENAME_INFO>()
+    let byte_len = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(name_bytes)
         .ok_or(NamespaceError::InvalidName)?;
     let words = byte_len

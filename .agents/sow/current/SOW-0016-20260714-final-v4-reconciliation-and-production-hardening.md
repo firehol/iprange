@@ -14466,6 +14466,17 @@ views but can reject truncation while a user-mapped section exists.
   prevent truncation at or below current file size. FreeBSD 14 `flock(2)`
   documentation: whole-file locks are associated with the open file table entry
   and released with its final close.
+- Native Windows execution disproved one untested API assumption in the current
+  specification: `SetFileInformationByHandle` returns
+  `ERROR_INVALID_PARAMETER` when the required retained destination-directory
+  handle is supplied in `FILE_RENAME_INFO.RootDirectory`, for both
+  `FileRenameInfo` and `FileRenameInfoEx`. Microsoft's kernel
+  `FILE_RENAME_INFORMATION` contract assigns that handle-relative form to
+  `NtSetInformationFile`/`FileRenameInformationEx`, and `windows-sys` exposes
+  that user-mode `ntdll.dll` call. The repair therefore keeps the approved
+  retained-handle semantics and changes only the Windows API used to request
+  them; using a null root plus a re-resolved pathname would reintroduce a path
+  replacement race and is not acceptable.
 
 ### Affected contracts and surfaces
 
@@ -14533,11 +14544,16 @@ User decision 76 selects opportunistic Windows tail shrinking:
    slot lock and lifetime lock.
 4. Decode Windows GC basenames as canonical UTF-16LE without per-entry heap
    allocation; keep POSIX byte decoding unchanged.
-5. Add FreeBSD whole-file lifetime locking for immutable/publication paths and
+5. Issue retained-directory Windows namespace changes through
+   `NtSetInformationFile(FileRenameInformationEx)`, preserving the exact flags,
+   source handle, relative basename, and postcondition checks already approved.
+   Convert a failing `NTSTATUS` to the existing typed OS error; do not fall back
+   to pathname rename.
+6. Add FreeBSD whole-file lifetime locking for immutable/publication paths and
    fail every live path before it creates, maps, or mutates live artifacts.
-6. Make POSIX fault fixtures use native hardware-page geometry and classify only
+7. Make POSIX fault fixtures use native hardware-page geometry and classify only
    exact kernel `BUS_*` codes.
-7. Add permanent native platform and C-boundary tests, then run the full release
+8. Add permanent native platform and C-boundary tests, then run the full release
    matrix on every authorized system.
 
 ### Validation plan
