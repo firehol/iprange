@@ -62,7 +62,11 @@ fn successful_close_is_idempotent_and_releases_all_locks() {
     let reset = reset_live_coordination(
         &files.main,
         2,
-        LiveResetPolicy::RollbackSafe,
+        if cfg!(windows) {
+            LiveResetPolicy::DiscardPrevious
+        } else {
+            LiveResetPolicy::RollbackSafe
+        },
         &CancellationToken::new(),
     )
     .unwrap();
