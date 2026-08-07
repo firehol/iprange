@@ -332,7 +332,7 @@ fn maximum_word_count_is_a_constant_size_view() {
             leaf_index: 0,
             storage: Storage::Blob(2),
         },
-        owner_pid: None,
+        owner_identity: None,
     };
     let (count, allocations) = count_thread_allocations(|| view.word_count());
     assert_eq!(count.unwrap(), 67_108_864);
@@ -448,7 +448,7 @@ fn live_view_rejects_a_foreign_process_owner() {
     let file = File::open(&path.0).unwrap();
     let mapping = Mapping::read_only(file, fs::metadata(&path.0).unwrap().len()).unwrap();
     let meta = membership_meta(9, 3, 131, 5, 6, 7, 8);
-    let foreign = std::process::id().checked_add(1).unwrap();
+    let foreign = crate::process_identity::ProcessIdentity::foreign();
     let view = lookup_v4(&mapping, &meta, Ipv4Key(10), Some(foreign))
         .unwrap()
         .unwrap();

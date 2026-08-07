@@ -425,7 +425,13 @@ impl Reader {
         }
     }
 
-    fn parts(&self) -> Result<(&crate::mapping::Mapping, MetaV4, Option<u32>)> {
+    fn parts(
+        &self,
+    ) -> Result<(
+        &crate::mapping::Mapping,
+        MetaV4,
+        Option<crate::process_identity::ProcessIdentity>,
+    )> {
         match &self.inner {
             ReaderInner::Immutable(reader) => Ok(reader.c_abi_parts()),
             ReaderInner::Live(reader) => reader.c_abi_parts(),

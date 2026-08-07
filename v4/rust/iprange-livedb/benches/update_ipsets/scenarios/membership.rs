@@ -1,13 +1,14 @@
-use std::hint::black_box;
-
 use iprange_livedb::{
-    create_live, AddressFamily, CancellationToken, FeedName, FinishedWorkflow, Ipv4Key, LiveReader,
-    LiveWriter, MembershipOperation, RangeDirection, ValueKind, ValueTag,
+    create_live, AddressFamily, CancellationToken, FeedName, FinishedWorkflow, ImmutableReader,
+    Ipv4Key, LiveReader, LiveWriter, MembershipOperation, RangeDirection, ValueKind, ValueTag,
 };
 
 use crate::measure;
 use crate::model::{transaction_budget, TestDatabase};
-use crate::scenarios::{close_reader, close_writer, require_committed, result, ScenarioResult};
+use crate::scenarios::{
+    close_reader, close_writer, count_cursor, count_points, immutable_snapshot, reader_work,
+    require_committed, require_count, result, ScenarioResult,
+};
 use crate::source::AddressSource;
 
 pub(super) fn replace_feed(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
@@ -50,70 +51,127 @@ pub(super) fn replace_feed(size: usize, feeds: usize) -> Result<ScenarioResult, 
     )
 }
 
-pub(super) fn lookup(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+pub(super) fn live_lookup(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
     let feeds = feeds.max(1);
-    let database = populated("membership-lookup", size, feeds)?;
+    let database = populated("live-membership-lookup", size, feeds)?;
     let mut reader =
         LiveReader::open(database.main(), &CancellationToken::new()).map_err(display)?;
-    let target = reader
-        .lookup_feed(feed_name(feeds - 1)?.as_str())
-        .map_err(display)?
-        .ok_or_else(|| "target feed is absent".to_owned())?;
-    let (operation, measured) = measure::operation(|| -> Result<u64, String> {
-        let mut hits = 0u64;
-        for index in 0..size {
-            let address = Ipv4Key((index as u32).saturating_mul(4));
-            if let Some(membership) = reader.lookup_membership_v4(address).map_err(display)? {
-                hits += u64::from(membership.contains_index(target.index).map_err(display)?);
-            }
-        }
-        Ok(black_box(hits))
+    let (target, repetitions, work_units) =
+        membership_reader_work(size, feeds, |name| reader.lookup_feed(name))?;
+    let (operation, measured) = measure::operation(|| {
+        count_points(size, repetitions, |address| {
+            membership_contains(reader.lookup_membership_v4(address), target)
+        })
     });
     let hits = operation?;
-    if hits != size as u64 {
-        return Err(format!("membership lookup found {hits} of {size}"));
-    }
+    require_count("live membership lookup", hits, work_units, "addresses")?;
     close_reader(&mut reader)?;
     result(
-        "membership-lookup",
+        "live-membership-lookup",
         size,
         feeds,
-        size as u64,
+        work_units,
         &database,
         measured,
         database.main(),
     )
 }
 
-pub(super) fn scan(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+pub(super) fn immutable_lookup(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
     let feeds = feeds.max(1);
-    let database = populated("feed-scan", size, feeds)?;
-    let mut reader =
-        LiveReader::open(database.main(), &CancellationToken::new()).map_err(display)?;
-    let name = feed_name(feeds - 1)?;
-    let (operation, measured) = measure::operation(|| -> Result<u64, String> {
-        let mut cursor = reader
-            .feed_range_cursor_v4(name.as_str(), RangeDirection::Forward)
-            .map_err(display)?;
-        let mut records = 0u64;
-        while cursor.next_range().map_err(display)?.is_some() {
-            records += 1;
-        }
-        Ok(black_box(records))
+    let database = populated("immutable-membership-lookup", size, feeds)?;
+    let snapshot = immutable_snapshot(&database, size)?;
+    let reader = ImmutableReader::open(&snapshot).map_err(display)?;
+    let (target, repetitions, work_units) =
+        membership_reader_work(size, feeds, |name| reader.lookup_feed(name))?;
+    let (operation, measured) = measure::operation(|| {
+        count_points(size, repetitions, |address| {
+            membership_contains(reader.lookup_membership_v4(address), target)
+        })
     });
-    let records = operation?;
-    if records != size as u64 {
-        return Err(format!("feed scan returned {records} of {size} ranges"));
-    }
-    close_reader(&mut reader)?;
+    let hits = operation?;
+    require_count("immutable membership lookup", hits, work_units, "addresses")?;
+    drop(reader);
     result(
-        "feed-scan",
+        "immutable-membership-lookup",
         size,
         feeds,
-        size as u64,
+        work_units,
+        &database,
+        measured,
+        &snapshot,
+    )
+}
+
+pub(super) fn live_scan(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let database = populated("live-feed-scan", size, feeds)?;
+    let mut reader =
+        LiveReader::open(database.main(), &CancellationToken::new()).map_err(display)?;
+    let (name, repetitions, work_units) = membership_scan_work(size, feeds)?;
+    let (operation, measured) = measure::operation(|| {
+        count_cursor(
+            repetitions,
+            || {
+                reader
+                    .feed_range_cursor_v4(name.as_str(), RangeDirection::Forward)
+                    .map_err(display)
+            },
+            |cursor| {
+                cursor
+                    .next_range()
+                    .map(|range| range.is_some())
+                    .map_err(display)
+            },
+        )
+    });
+    let records = operation?;
+    require_count("live feed scan", records, work_units, "ranges")?;
+    close_reader(&mut reader)?;
+    result(
+        "live-feed-scan",
+        size,
+        feeds,
+        work_units,
         &database,
         measured,
         database.main(),
+    )
+}
+
+pub(super) fn immutable_scan(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let database = populated("immutable-feed-scan", size, feeds)?;
+    let snapshot = immutable_snapshot(&database, size)?;
+    let reader = ImmutableReader::open(&snapshot).map_err(display)?;
+    let (name, repetitions, work_units) = membership_scan_work(size, feeds)?;
+    let (operation, measured) = measure::operation(|| {
+        count_cursor(
+            repetitions,
+            || {
+                reader
+                    .feed_range_cursor_v4(name.as_str(), RangeDirection::Forward)
+                    .map_err(display)
+            },
+            |cursor| {
+                cursor
+                    .next_range()
+                    .map(|range| range.is_some())
+                    .map_err(display)
+            },
+        )
+    });
+    let records = operation?;
+    require_count("immutable feed scan", records, work_units, "ranges")?;
+    drop(reader);
+    result(
+        "immutable-feed-scan",
+        size,
+        feeds,
+        work_units,
+        &database,
+        measured,
+        &snapshot,
     )
 }
 
@@ -163,6 +221,35 @@ fn populated(label: &str, ranges: usize, feeds: usize) -> Result<TestDatabase, S
 
 fn feed_name(index: usize) -> Result<FeedName, String> {
     FeedName::new(&format!("feed-{index:06}")).map_err(display)
+}
+
+fn membership_reader_work(
+    size: usize,
+    feeds: usize,
+    lookup: impl FnOnce(&str) -> iprange_livedb::Result<Option<iprange_livedb::FeedEntry>>,
+) -> Result<(u32, usize, u64), String> {
+    let name = feed_name(feeds - 1)?;
+    let target = lookup(name.as_str())
+        .map_err(display)?
+        .ok_or_else(|| "target feed is absent".to_owned())?;
+    let (repetitions, work_units) = reader_work(size)?;
+    Ok((target.index, repetitions, work_units))
+}
+
+fn membership_scan_work(size: usize, feeds: usize) -> Result<(FeedName, usize, u64), String> {
+    let name = feed_name(feeds - 1)?;
+    let (repetitions, work_units) = reader_work(size)?;
+    Ok((name, repetitions, work_units))
+}
+
+fn membership_contains(
+    result: iprange_livedb::Result<Option<iprange_livedb::MembershipView<'_>>>,
+    feed_index: u32,
+) -> Result<bool, String> {
+    let Some(membership) = result.map_err(display)? else {
+        return Ok(false);
+    };
+    membership.contains_index(feed_index).map_err(display)
 }
 
 fn display(error: impl std::fmt::Display) -> String {

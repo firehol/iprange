@@ -19,6 +19,7 @@ use crate::mapping::Mapping;
 use crate::membership_view::{self, MembershipView};
 use crate::metadata;
 use crate::path;
+use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::range_tree;
 use crate::{
@@ -167,7 +168,7 @@ impl ImmutableReader {
         self.core.import_parts()
     }
 
-    pub(crate) fn c_abi_parts(&self) -> (&Mapping, MetaV4, Option<u32>) {
+    pub(crate) fn c_abi_parts(&self) -> (&Mapping, MetaV4, Option<ProcessIdentity>) {
         let (mapping, meta) = self.core.import_parts();
         (mapping, meta, None)
     }
@@ -235,19 +236,29 @@ impl ReaderCore {
     pub(crate) fn direct_cursor_v4_live(
         &self,
         direction: RangeDirection,
-        owner_pid: u32,
+        owner_identity: ProcessIdentity,
     ) -> Result<DirectCursorV4<'_>> {
         self.require_direct(AddressFamily::Ipv4)?;
-        DirectCursorV4::new_live(&self.mapping, &self.bootstrap.meta, direction, owner_pid)
+        DirectCursorV4::new_live(
+            &self.mapping,
+            &self.bootstrap.meta,
+            direction,
+            owner_identity,
+        )
     }
 
     pub(crate) fn direct_cursor_v6_live(
         &self,
         direction: RangeDirection,
-        owner_pid: u32,
+        owner_identity: ProcessIdentity,
     ) -> Result<DirectCursorV6<'_>> {
         self.require_direct(AddressFamily::Ipv6)?;
-        DirectCursorV6::new_live(&self.mapping, &self.bootstrap.meta, direction, owner_pid)
+        DirectCursorV6::new_live(
+            &self.mapping,
+            &self.bootstrap.meta,
+            direction,
+            owner_identity,
+        )
     }
 
     pub(crate) fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
@@ -261,9 +272,12 @@ impl ReaderCore {
         FeedCursor::new(&self.mapping, &self.bootstrap.meta)
     }
 
-    pub(crate) fn feed_cursor_live(&self, owner_pid: u32) -> Result<FeedCursor<'_>> {
+    pub(crate) fn feed_cursor_live(
+        &self,
+        owner_identity: ProcessIdentity,
+    ) -> Result<FeedCursor<'_>> {
         feed_catalog::require_membership(&self.bootstrap.meta)?;
-        FeedCursor::new_live(&self.mapping, &self.bootstrap.meta, owner_pid)
+        FeedCursor::new_live(&self.mapping, &self.bootstrap.meta, owner_identity)
     }
 
     pub(crate) fn feed_range_cursor_v4(
@@ -290,7 +304,7 @@ impl ReaderCore {
         &self,
         name: &str,
         direction: RangeDirection,
-        owner_pid: u32,
+        owner_identity: ProcessIdentity,
     ) -> Result<FeedRangeCursorV4<'_>> {
         self.require_membership_family(AddressFamily::Ipv4)?;
         let feed = self.require_feed(name)?;
@@ -299,7 +313,7 @@ impl ReaderCore {
             &self.bootstrap.meta,
             feed.index,
             direction,
-            owner_pid,
+            owner_identity,
         )
     }
 
@@ -307,7 +321,7 @@ impl ReaderCore {
         &self,
         name: &str,
         direction: RangeDirection,
-        owner_pid: u32,
+        owner_identity: ProcessIdentity,
     ) -> Result<FeedRangeCursorV6<'_>> {
         self.require_membership_family(AddressFamily::Ipv6)?;
         let feed = self.require_feed(name)?;
@@ -316,24 +330,24 @@ impl ReaderCore {
             &self.bootstrap.meta,
             feed.index,
             direction,
-            owner_pid,
+            owner_identity,
         )
     }
 
     pub(crate) fn lookup_membership_v4(
         &self,
         address: Ipv4Key,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v4(&self.mapping, &self.bootstrap.meta, address, owner_pid)
+        membership_view::lookup_v4(&self.mapping, &self.bootstrap.meta, address, owner_identity)
     }
 
     pub(crate) fn lookup_membership_v6(
         &self,
         address: Ipv6Key,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v6(&self.mapping, &self.bootstrap.meta, address, owner_pid)
+        membership_view::lookup_v6(&self.mapping, &self.bootstrap.meta, address, owner_identity)
     }
 
     pub(crate) fn metadata_json_len(&self) -> Option<u64> {

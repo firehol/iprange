@@ -18,6 +18,7 @@ use crate::live_reader::LiveReader;
 use crate::live_sidecar::{self, Identity};
 use crate::mapping::Mapping;
 use crate::membership_view::{self, MembershipView};
+use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 use crate::workflow::LogicalChange;
 use crate::ImmutableReader;
@@ -47,7 +48,7 @@ pub(crate) struct Source<'a> {
     mapping: &'a Mapping,
     meta: MetaV4,
     identity: Identity,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 }
 
 #[derive(Default)]
@@ -133,26 +134,26 @@ fn require_active(writer: &LiveWriter) -> Result<()> {
 
 impl<'a> Source<'a> {
     pub(crate) fn new(source: MembershipImportSource<'a>) -> Result<Self> {
-        let (mapping, meta, owner_pid) = match source {
+        let (mapping, meta, owner_identity) = match source {
             MembershipImportSource::Immutable(reader) => {
                 let (mapping, meta) = reader.import_parts();
                 (mapping, meta, None)
             }
             MembershipImportSource::Live(reader) => {
                 let (mapping, meta) = reader.import_parts()?;
-                (mapping, meta, Some(std::process::id()))
+                (mapping, meta, Some(ProcessIdentity::capture()))
             }
         };
         Ok(Self {
             mapping,
             meta,
             identity: live_sidecar::identity(mapping.file())?,
-            owner_pid,
+            owner_identity,
         })
     }
 
     fn feed_cursor(self) -> Result<FeedCursor<'a>> {
-        match self.owner_pid {
+        match self.owner_identity {
             Some(owner) => FeedCursor::new_live(self.mapping, &self.meta, owner),
             None => FeedCursor::new(self.mapping, &self.meta),
         }
@@ -163,12 +164,12 @@ impl<'a> Source<'a> {
             self.mapping,
             &self.meta,
             RangeDirection::Forward,
-            self.owner_pid,
+            self.owner_identity,
         )
     }
 
     fn membership(self, id: u32) -> Result<MembershipView<'a>> {
-        membership_view::by_id(self.mapping, &self.meta, id, self.owner_pid)
+        membership_view::by_id(self.mapping, &self.meta, id, self.owner_identity)
     }
 }
 

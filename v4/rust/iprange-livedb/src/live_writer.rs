@@ -26,6 +26,7 @@ use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::mapping::Mapping;
 use crate::metadata;
+use crate::process_identity::ProcessIdentity;
 use crate::random;
 use crate::validation::LocalFileIdentity;
 
@@ -102,7 +103,7 @@ pub struct LiveWriter {
     pub(super) draft: Option<Draft>,
     unproved_tail_end: Option<u64>,
     state: State,
-    owner_pid: u32,
+    owner_identity: ProcessIdentity,
 }
 
 struct OpenedMain {
@@ -150,7 +151,7 @@ impl LiveWriter {
             draft: None,
             unproved_tail_end: None,
             state: State::Healthy,
-            owner_pid: std::process::id(),
+            owner_identity: ProcessIdentity::capture(),
         })
     }
 
@@ -379,7 +380,7 @@ impl LiveWriter {
     }
 
     fn require_owner(&self) -> Result<()> {
-        if self.owner_pid != std::process::id() {
+        if !self.owner_identity.is_current() {
             return Err(Error::ForkedHandle);
         }
         Ok(())

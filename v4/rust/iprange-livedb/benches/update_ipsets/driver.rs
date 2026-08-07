@@ -116,10 +116,14 @@ fn smoke_cases() -> Vec<Case> {
         case("retention-refresh", 4_000, 0),
         case("feed-replace", 1_000, 8),
         case("feed-replace", 1_000, 64),
-        case("membership-lookup", 4_000, 64),
-        case("feed-scan", 4_000, 64),
-        case("direct-lookup", 4_000, 0),
-        case("direct-scan", 4_000, 0),
+        case("live-membership-lookup", 4_000, 64),
+        case("immutable-membership-lookup", 4_000, 64),
+        case("live-feed-scan", 4_000, 64),
+        case("immutable-feed-scan", 4_000, 64),
+        case("live-direct-lookup", 4_000, 0),
+        case("immutable-direct-lookup", 4_000, 0),
+        case("live-direct-scan", 4_000, 0),
+        case("immutable-direct-scan", 4_000, 0),
         case("live-open", 4_000, 1),
         case("live-open", 4_000, 256),
         case("snapshot", 4_000, 0),
@@ -137,11 +141,15 @@ fn scale_cases() -> Vec<Case> {
     }
     for feeds in [64, 256, 421] {
         cases.push(case("feed-replace", 10_000, feeds));
-        cases.push(case("membership-lookup", 100_000, feeds));
+        cases.push(case("live-membership-lookup", 100_000, feeds));
+        cases.push(case("immutable-membership-lookup", 100_000, feeds));
     }
-    cases.push(case("feed-scan", 100_000, 421));
-    cases.push(case("direct-lookup", 100_000, 0));
-    cases.push(case("direct-scan", 100_000, 0));
+    cases.push(case("live-feed-scan", 100_000, 421));
+    cases.push(case("immutable-feed-scan", 100_000, 421));
+    cases.push(case("live-direct-lookup", 100_000, 0));
+    cases.push(case("immutable-direct-lookup", 100_000, 0));
+    cases.push(case("live-direct-scan", 100_000, 0));
+    cases.push(case("immutable-direct-scan", 100_000, 0));
     cases.push(case("live-open", 100_000, 1));
     cases.push(case("live-open", 100_000, 256));
     cases.push(case("snapshot", 100_000, 0));

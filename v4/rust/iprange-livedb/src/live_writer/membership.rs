@@ -213,7 +213,7 @@ impl MembershipState {
         self.check_or_abort(writer)?;
         let meta = writer.draft.as_ref().unwrap().meta;
         Ok(TransactionFeedCursor {
-            cursor: FeedCursor::new_live(&writer.mapping, &meta, writer.owner_pid)?,
+            cursor: FeedCursor::new_live(&writer.mapping, &meta, writer.owner_identity)?,
             database_id: self.database_id,
             operation_nonce: self.operation_nonce,
         })

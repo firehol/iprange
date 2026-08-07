@@ -307,7 +307,7 @@ fn live_cursor_rejects_a_foreign_process_owner() {
     let (_reader, path, meta) = two_feed_fixture(2);
     let file = File::open(&path.0).unwrap();
     let mapping = Mapping::read_only(file, fs::metadata(&path.0).unwrap().len()).unwrap();
-    let foreign = std::process::id().checked_add(1).unwrap();
+    let foreign = crate::process_identity::ProcessIdentity::foreign();
     let mut cursor = FeedCursor::new_live(&mapping, &meta, foreign).unwrap();
     assert!(matches!(cursor.next_feed(), Err(Error::ForkedHandle)));
 }

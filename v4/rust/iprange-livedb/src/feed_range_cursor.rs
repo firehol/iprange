@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 use crate::membership_view;
+use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{CursorState, RangeDirection};
 use crate::workflow::AddressRange;
 
@@ -27,14 +28,14 @@ impl<K: IpKey> ProjectionState<K> {
         meta: &MetaV4,
         feed_index: u32,
         direction: RangeDirection,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Self> {
         require_feed(meta, feed_index)?;
         Ok(Self {
             meta: *meta,
             feed_index,
             direction,
-            inner: CursorState::new(mapping, meta, direction, owner_pid)?,
+            inner: CursorState::new(mapping, meta, direction, owner_identity)?,
             pending: None,
             membership: None,
             raw_finished: false,
@@ -158,11 +159,11 @@ impl<'a, K: IpKey> ProjectionCursor<'a, K> {
         meta: &MetaV4,
         feed_index: u32,
         direction: RangeDirection,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Self> {
         Ok(Self {
             mapping,
-            state: ProjectionState::new(mapping, meta, feed_index, direction, owner_pid)?,
+            state: ProjectionState::new(mapping, meta, feed_index, direction, owner_identity)?,
         })
     }
 
@@ -228,7 +229,7 @@ macro_rules! public_cursor {
                 meta: &MetaV4,
                 feed_index: u32,
                 direction: RangeDirection,
-                owner_pid: u32,
+                owner_identity: ProcessIdentity,
             ) -> Result<Self> {
                 Ok(Self {
                     inner: ProjectionCursor::new(
@@ -236,7 +237,7 @@ macro_rules! public_cursor {
                         meta,
                         feed_index,
                         direction,
-                        Some(owner_pid),
+                        Some(owner_identity),
                     )?,
                 })
             }

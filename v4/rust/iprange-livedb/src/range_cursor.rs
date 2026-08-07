@@ -7,6 +7,7 @@ use crate::contract::{MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::mapping::{Mapping, PageView};
+use crate::process_identity::ProcessIdentity;
 use crate::range_tree::{self, Header};
 
 /// Direction of ordered cursor movement.
@@ -54,7 +55,7 @@ pub(crate) struct CursorState<K> {
     index: usize,
     needs_advance: bool,
     finished: bool,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
     key: PhantomData<K>,
 }
 
@@ -63,7 +64,7 @@ impl<K: IpKey> CursorState<K> {
         mapping: &Mapping,
         meta: &MetaV4,
         direction: RangeDirection,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Self> {
         let mut cursor = Self {
             meta: *meta,
@@ -74,7 +75,7 @@ impl<K: IpKey> CursorState<K> {
             index: 0,
             needs_advance: false,
             finished: meta.range_root == 0,
-            owner_pid,
+            owner_identity,
             key: PhantomData,
         };
         if !cursor.finished {
@@ -304,7 +305,7 @@ impl<K: IpKey> CursorState<K> {
     }
 
     fn require_owner(&self) -> Result<()> {
-        if self.owner_pid.is_some_and(|pid| pid != std::process::id()) {
+        if self.owner_identity.is_some_and(|owner| !owner.is_current()) {
             return Err(Error::ForkedHandle);
         }
         Ok(())
@@ -321,11 +322,11 @@ impl<'a, K: IpKey> Cursor<'a, K> {
         mapping: &'a Mapping,
         meta: &MetaV4,
         direction: RangeDirection,
-        owner_pid: Option<u32>,
+        owner_identity: Option<ProcessIdentity>,
     ) -> Result<Self> {
         Ok(Self {
             mapping,
-            state: CursorState::new(mapping, meta, direction, owner_pid)?,
+            state: CursorState::new(mapping, meta, direction, owner_identity)?,
         })
     }
 
@@ -359,10 +360,10 @@ macro_rules! public_cursor {
                 mapping: &'a Mapping,
                 meta: &MetaV4,
                 direction: RangeDirection,
-                owner_pid: u32,
+                owner_identity: ProcessIdentity,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: Cursor::new(mapping, meta, direction, Some(owner_pid))?,
+                    inner: Cursor::new(mapping, meta, direction, Some(owner_identity))?,
                 })
             }
 

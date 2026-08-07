@@ -2092,11 +2092,23 @@ counter. The caller must not race handle close with another method. A cursor
 borrows its reader, so Rust prevents closing the parent first. Mutable writer
 methods and each cursor are caller-serialized.
 
-Every live handle caches its creator process ID. A forked copy rejects public
-operations with `ForkedHandle`. Its destructor only closes the child's
-descriptors. It never clears a slot, unlocks explicitly, truncates, aborts,
-commits, or changes a namespace. The parent remains the owner of the inherited
-open-description locks.
+Every live handle caches a process-local ownership identity. Every public
+operation on that handle or on a cursor or view borrowed from it compares the
+cached identity with the current process and rejects a forked copy with
+`ForkedHandle`. Its destructor only closes the child's descriptors. It never
+clears a slot, unlocks explicitly, truncates, aborts, commits, or changes a
+namespace. The parent remains the owner of the inherited open-description
+locks.
+
+On Linux, the ownership identity may use one process-lifetime private anonymous
+mapping marked `MADV_WIPEONFORK` plus a process-local generation. The normal
+ownership check must then use memory only; observing the kernel-cleared marker
+advances the generation before a new child-owned identity is returned. The
+mapping is process control state, never a database page, persistent artifact,
+or caller-managed value. A kernel or emulator that does not prove
+`MADV_WIPEONFORK` support falls back to comparing process IDs. Other platforms
+may use the same process-ID fallback. Both implementations have identical
+public ownership and error semantics.
 
 Explicit reader close takes the gate shared, clears its slot, and releases the
 slot lock. Explicit healthy writer close aborts unpublished growth before

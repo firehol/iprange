@@ -44,6 +44,7 @@ mod metadata;
 mod name_binding;
 mod page_checksum;
 mod path;
+mod process_identity;
 pub mod publication;
 mod random;
 mod range_bulk;

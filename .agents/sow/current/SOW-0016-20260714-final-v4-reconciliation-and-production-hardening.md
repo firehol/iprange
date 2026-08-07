@@ -2,13 +2,14 @@
 
 ## Status
 
-Status: paused
+Status: in-progress
 
-Sub-state: paused on 2026-08-06. SOW-0019 is now the sole in-progress work after
-the mmap-only gap analysis proved that this SOW's implementation uses the wrong
-positional-I/O and application-owned-page architecture. This SOW and its
-evidence are preserved; no further implementation executes here until the
-blocking storage rewrite is completed or explicitly returned.
+Sub-state: resumed on 2026-08-07 after completed SOW-0019 replaced persistent
+content I/O and application-owned pages with the approved mmap-only storage
+architecture. Current work removes measured live-reader fork-detection syscalls
+without weakening inherited-handle rejection, adds separate live/immutable
+reader evidence, and then returns to the independently measured mapped-writer
+instruction regression.
 
 The prior local-completion and Rust-acceptance claims are withdrawn.
 A fresh compiled-path and release-profile audit found that ordinary range
@@ -14050,3 +14051,178 @@ work under the repository follow-up discipline before closing this SOW.
 ## Regression Log
 
 None yet.
+
+## 2026-08-07 - mmap reader performance and fork identity
+
+### Problem and root-cause evidence
+
+- CPU-pinned, alternating measurements compared unchanged public benchmark
+  sources at positional-I/O commit `a5c676c` and mmap commit `2391e0a`. For
+  100,000 warm live-reader operations, mmap reduced direct lookup from 182.5 ms
+  to 14.9 ms and 421-feed membership lookup from 311.0 ms to 33.3 ms. Ordered
+  scans improved only from 7.33/7.79 ms to 6.70/7.04 ms.
+- `LiveReader::require_open`, `MembershipView`, `FeedCursor`, and every
+  `CursorState::next` compare the cached owner PID with
+  `std::process::id()`. Direct lookup therefore performs one `getpid` syscall,
+  membership lookup plus `contains_index` performs three, and ordered cursors
+  perform one per returned range. A diagnostic build that removed only these
+  checks improved direct/membership lookup about 1.8x/2.2x and direct/feed scan
+  about 7.6x/8.2x.
+- Current immutable readers carry no process owner and therefore avoid these
+  syscalls. Directly measured immutable snapshot rates are about 13.4 million
+  direct lookups/s, 7.35 million 421-feed membership checks/s, 155 million
+  direct ranges/s, and 112 million named-feed ranges/s. The permanent benchmark
+  currently measures only live readers, so it hides this distinction.
+- The binary-format contract still requires every inherited live handle,
+  cursor, and view to reject operations after `fork`. Removing the checks or
+  checking only when a cursor is created is unsafe: after the parent releases a
+  reader claim, a writer may reclaim pages while the child still holds the
+  inherited mapping.
+
+### Evidence reviewed
+
+- Local public paths: `live_reader.rs:101-205,275-289`,
+  `membership_view.rs:25-105`, `range_cursor.rs:165-180,306-310`,
+  `feed_catalog.rs:82-109,219-228`, and the update-ipsets benchmark scenarios.
+- Normative contract: `binary-format-v4.md:2088-2105`.
+- Linux documents `MADV_WIPEONFORK` as zeroing a private anonymous mapping in
+  the child while retaining the setting across later forks.
+- Established implementation:
+
+  ```text
+  aws/aws-lc @ 1ab8a2ca2715
+  crypto/ube/fork_ube_detect.c:17-29
+  crypto/ube/fork_ube_detect.c:69-95
+  crypto/ube/fork_ube_detect.c:171-258
+  ```
+
+  AWS-LC uses one anonymous page plus a process-local fork generation, probes
+  that the advice is genuinely supported, and falls back on unsupported
+  platforms. It deliberately avoids `pthread_atfork`, which can miss clone-like
+  duplication and has no safe unregister path for an unloadable library.
+
+### Approved design and affected surfaces
+
+The user approved the long-term-best recommendation: preserve automatic fork
+rejection, retain mmap, remove Linux PID syscalls from the hot path, and add
+separate live/immutable benchmark evidence.
+
+1. Add one private process-identity owner. On Linux it lazily establishes one
+   process-lifetime private anonymous page marked `MADV_WIPEONFORK`. A byte in
+   that page is the common-case memory check; when the kernel clears it, one
+   atomic transition advances a process-local generation before publishing the
+   ready byte. Handles cache the generation, not an arbitrary caller value.
+2. Initialization is lock-free: concurrent first callers may prepare private
+   candidates, one atomic pointer publication wins, and losers unmap only their
+   unpublished candidate. No `Once`, mutex, callback, heap allocation, database
+   page, persistent artifact, content copy, or file I/O is introduced.
+3. If Linux does not genuinely support `MADV_WIPEONFORK`, retain the existing
+   PID comparison. Other Unix targets retain PID comparison; Windows retains
+   the existing behavior in this slice. This is a performance optimization with
+   identical public errors and ownership semantics.
+4. Apply the owner generation consistently to live readers, live writers, and
+   the cursor/view/import helpers that receive their ownership token. Remove
+   the mechanically redundant second ownership check inside
+   `MembershipView::contains_index` by using a checked outer method and an
+   unchecked private word reader.
+5. Extend the public-SDK benchmark with explicit immutable direct lookup/scan
+   and immutable membership lookup/feed scan. Repeat timed reader work to at
+   least one million operations and report the actual work-unit count; all
+   database creation, snapshot construction, open, validation, and close remain
+   outside the operation timer.
+
+Affected private surfaces are the process identity helper, live reader/writer
+ownership fields, range/feed cursors, membership views/import, internal reader
+parts passed to the C ABI, benchmark dispatch/scenarios, and fork tests. The
+binary format, database bytes, sidecar protocol, public Rust API, frozen C ABI,
+error code, reclamation rules, validation defaults, and durability order do not
+change.
+
+### Risks and validation plan
+
+- A false fork-negative could let a child read reclaimed pages or mutate the
+  parent's coordination state. Prove a pre-fork reader, cursor, membership view,
+  and writer reject in an isolated Linux fork subprocess while new child-owned
+  identities remain distinguishable.
+- A false fork-positive would break ordinary readers. Prove stable identity
+  across threads and all existing reader/writer/C-ABI behavior.
+- Unsupported kernels, emulators that falsely accept unknown advice, mapping
+  failure, and non-Linux targets must use the PID fallback. Probe an invalid
+  advice value before trusting `MADV_WIPEONFORK`; keep cross-target builds green.
+- The anonymous control page is process state, never a database page or SDK
+  artifact. The mmap-only source/runtime gates must continue to observe zero
+  persistent-content transfer I/O.
+- Benchmark live and immutable paths independently, profile/trace the repaired
+  live paths, and confirm no `getpid` occurs inside the supported Linux timed
+  loops. Then rerun the complete Rust/C/conformance/source-graph/mmap gates and
+  update the specification, Rust README, project skill, and this SOW with the
+  proven result.
+
+Sensitive-data impact: none. All inputs and measurements are synthetic; durable
+artifacts contain only source paths, public upstream identity, and aggregate
+timings.
+
+### Implemented result and verification
+
+- Added one private `ProcessIdentity` owner used by live readers, writers,
+  cursors, membership views, imports, and the Rust-backed C bridge. Supported
+  Linux now uses the approved `MADV_WIPEONFORK` marker and process generation;
+  unsupported Linux and non-Linux builds retain the process-ID fallback.
+- Removed the duplicate ownership check inside
+  `MembershipView::contains_index`. No binary-format byte, main-file or sidecar
+  protocol, public Rust API, C ABI symbol, error code, validation default, or
+  durability order changed.
+- Added a real isolated-fork integration test. An inherited live reader, live
+  writer, feed cursor, range cursor, and membership view all return
+  `ForkedHandle` in the child; the parent handles remain usable and close
+  cleanly. A focused 100,000-check unit test proves that the supported Linux
+  ownership fast path makes zero calls to the process-ID helper.
+- Replaced the ambiguous reader benchmark cases with explicit live and
+  immutable variants. Every timed case performs at least 1,000,000 real
+  lookups, checks, or returned ranges. Fixture creation, snapshot construction,
+  open, close, and explicit validation remain outside the timer; timed reader
+  work allocates zero bytes.
+
+Seven alternating CPU-14-pinned scale runs over 100,000 ranges and 421 feeds
+produced these medians and observed ranges:
+
+| Reader operation | Live | Immutable |
+| --- | ---: | ---: |
+| Direct point lookup | 10.38 million/s (91.4-134.2 ms) | 13.55 million/s (72.8-74.3 ms) |
+| Membership point check | 6.38 million/s (155.4-173.2 ms) | 7.06 million/s (139.5-197.3 ms) |
+| Direct ordered scan | 131.66 million ranges/s (7.50-8.75 ms) | 141.89 million ranges/s (6.57-8.33 ms) |
+| Named-feed ordered scan | 104.67 million ranges/s (9.35-11.31 ms) | 110.51 million ranges/s (8.42-10.35 ms) |
+
+Whole-process `strace` observed 84 `getpid` calls in both the one-million live
+direct and membership benchmark processes, a constant process-level count
+rather than one call per operation. The focused fast-path test above proves
+none occurs in repeated supported ownership checks. A post-repair profile
+attributes only 0.58% of the complete direct benchmark process to
+`process_identity`; mapped range-tree lookup is again the dominant timed work.
+The evidence rules out an extra SDK page cache or positional-I/O path. The
+working theory for the remaining live/immutable difference is the larger,
+non-compacted live tree.
+
+Verification after the final benchmark refactor:
+
+- current-toolchain `cargo test --workspace --all-features --all-targets`:
+  green, including 336 passing livedb unit tests with four deliberate ignored
+  subprocess/runtime entry points and every public integration, native C, C++
+  header, C-ABI, conformance, and benchmark target;
+- warnings-denied Clippy, formatting, diff checks, benchmark smoke, and Rust
+  1.74.1 all-feature/all-target compilation: green;
+- source graph: green for 339 sources on Linux, Windows, macOS, and FreeBSD,
+  with the one exact runtime-compiled native fixture;
+- mmap source gate: green across 246 production source files; mmap runtime
+  trace: no persistent-content transfer syscall;
+- nightly AddressSanitizer with leak detection: green for the complete livedb
+  library, fork integration, and C boundary; Valgrind: zero definite/indirect
+  leaks and zero errors in the isolated raw-fork test using the repository's
+  known-compatible glibc loader.
+
+Artifact impact: the binary-format specification, Rust SDK README, Rust project
+skill, benchmark evidence, and this SOW are updated. `AGENTS.md` already states
+the governing mmap/hot-path philosophy and needs no new rule. The released C
+CLI and end-user/operator skills are unaffected because v4 is unreleased and no
+such output skill exists. The SOW remains in progress for the separate mapped
+writer performance work and the permission-gated native platform matrix.

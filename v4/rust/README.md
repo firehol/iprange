@@ -172,18 +172,25 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-Four local Linux scale runs on 2026-08-06, each pinned to one performance core,
-produced these medians and observed ranges:
+Four local Linux writer/snapshot scale runs on 2026-08-06 and seven reader runs
+on 2026-08-07, each pinned to one performance core, produced these medians and
+observed ranges. Each reader case times at least one million operations; setup,
+snapshot construction, open, close, and explicit validation are outside the
+timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
 | Direct replacement, dispersed input | 1,000,000 ranges | 0.636 s | 0.582-0.818 s | 1.57 million/s |
 | Retention refresh | 1,000,000 ranges | 0.646 s | 0.563-0.734 s | 1.55 million/s |
 | Compact snapshot | 1,000,000 ranges | 0.0777 s | 0.0568-0.0957 s | 12.87 million/s |
-| Direct point lookup | 100,000 lookups | 0.0155 s | 0.0148-0.0158 s | 6.44 million/s |
-| Membership point check, 421 feeds | 100,000 checks | 0.0339 s | 0.0335-0.0376 s | 2.95 million/s |
-| Direct ordered scan | 100,000 ranges | 0.0069 s | 0.0067-0.0072 s | 14.42 million/s |
-| Named-feed ordered scan, 421 feeds | 100,000 ranges | 0.0072 s | 0.0068-0.0076 s | 13.90 million/s |
+| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0963 s | 0.0914-0.1342 s | 10.38 million/s |
+| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0738 s | 0.0728-0.0743 s | 13.55 million/s |
+| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1568 s | 0.1554-0.1732 s | 6.38 million/s |
+| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1417 s | 0.1395-0.1973 s | 7.06 million/s |
+| Live direct ordered scan | 1,000,000 ranges | 0.00760 s | 0.00750-0.00875 s | 131.66 million/s |
+| Immutable direct ordered scan | 1,000,000 ranges | 0.00705 s | 0.00657-0.00833 s | 141.89 million/s |
+| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00955 s | 0.00935-0.01131 s | 104.67 million/s |
+| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00905 s | 0.00842-0.01035 s | 110.51 million/s |
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
 explicitly validated every output after timing. The final complete run counted
@@ -197,6 +204,11 @@ There is no application page cache and no positional page transfer. Peak RSS
 includes mapped pages faulted into the process and fixture construction; it is
 not an engine-owned heap measurement. These are one-machine baselines, not
 portable timing guarantees.
+
+Live handles automatically reject inherited use after `fork`. On supported
+Linux kernels this ownership check reads a private `MADV_WIPEONFORK` control
+mapping and performs no per-operation process-ID syscall. Unsupported kernels
+and other platforms retain the process-ID fallback.
 
 The current flat update-ipsets set remains faster for simple lookup and scan,
 but it does not provide COW publication, live readers, direct values, named

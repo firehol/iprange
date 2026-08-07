@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 use crate::membership_tree::{self, Record, Storage};
+use crate::process_identity::ProcessIdentity;
 use crate::range_tree;
 use std::fmt;
 
@@ -14,7 +15,7 @@ pub struct MembershipView<'a> {
     mapping: &'a Mapping,
     meta: MetaV4,
     record: Record,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 }
 
 impl MembershipView<'_> {
@@ -31,6 +32,10 @@ impl MembershipView<'_> {
     /// Read one word, or `None` when the index is beyond the canonical bitmap.
     pub fn word(&self, index: u32) -> Result<Option<u64>> {
         self.require_owner()?;
+        self.word_inner(index)
+    }
+
+    fn word_inner(&self, index: u32) -> Result<Option<u64>> {
         if index >= self.record.word_count {
             return Ok(None);
         }
@@ -62,7 +67,7 @@ impl MembershipView<'_> {
             ));
         }
         let word_index = feed_index / 64;
-        let Some(word) = self.word(word_index)? else {
+        let Some(word) = self.word_inner(word_index)? else {
             return Ok(false);
         };
         Ok(word & (1u64 << (feed_index % 64)) != 0)
@@ -98,7 +103,7 @@ impl MembershipView<'_> {
     }
 
     fn require_owner(&self) -> Result<()> {
-        if self.owner_pid.is_some_and(|pid| pid != std::process::id()) {
+        if self.owner_identity.is_some_and(|owner| !owner.is_current()) {
             return Err(Error::ForkedHandle);
         }
         Ok(())
@@ -118,14 +123,14 @@ pub(crate) fn lookup_v4<'a>(
     mapping: &'a Mapping,
     meta: &MetaV4,
     address: Ipv4Key,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 ) -> Result<Option<MembershipView<'a>>> {
     require_kind(meta, AddressFamily::Ipv4)?;
     lookup(
         mapping,
         meta,
         range_tree::lookup(mapping, meta, address)?,
-        owner_pid,
+        owner_identity,
     )
 }
 
@@ -133,14 +138,14 @@ pub(crate) fn lookup_v6<'a>(
     mapping: &'a Mapping,
     meta: &MetaV4,
     address: Ipv6Key,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 ) -> Result<Option<MembershipView<'a>>> {
     require_kind(meta, AddressFamily::Ipv6)?;
     lookup(
         mapping,
         meta,
         range_tree::lookup(mapping, meta, address)?,
-        owner_pid,
+        owner_identity,
     )
 }
 
@@ -159,12 +164,12 @@ pub(crate) fn by_id<'a>(
     mapping: &'a Mapping,
     meta: &MetaV4,
     id: u32,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 ) -> Result<MembershipView<'a>> {
     if id == 0 {
         return Err(Error::Corrupt("range names the empty membership ID"));
     }
-    lookup(mapping, meta, Some(id), owner_pid)?
+    lookup(mapping, meta, Some(id), owner_identity)?
         .ok_or(Error::Corrupt("range names an absent membership ID"))
 }
 
@@ -172,7 +177,7 @@ fn lookup<'a>(
     mapping: &'a Mapping,
     meta: &MetaV4,
     id: Option<u32>,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 ) -> Result<Option<MembershipView<'a>>> {
     let Some(id) = id else {
         return Ok(None);
@@ -183,7 +188,7 @@ fn lookup<'a>(
         mapping,
         meta: *meta,
         record,
-        owner_pid,
+        owner_identity,
     }))
 }
 

@@ -16,6 +16,7 @@ use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
 use crate::live_writer::CloseOutcome;
 use crate::mapping::Mapping;
 use crate::membership_view::MembershipView;
+use crate::process_identity::ProcessIdentity;
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 
@@ -58,7 +59,7 @@ pub struct LiveReader {
     sidecar: Sidecar,
     slot: u32,
     state: State,
-    owner_pid: u32,
+    owner_identity: ProcessIdentity,
 }
 
 impl LiveReader {
@@ -94,7 +95,7 @@ impl LiveReader {
             sidecar,
             slot,
             state: State::Open,
-            owner_pid: std::process::id(),
+            owner_identity: ProcessIdentity::capture(),
         })
     }
 
@@ -119,13 +120,15 @@ impl LiveReader {
     /// Open an ordered cursor over an IPv4 direct-value database.
     pub fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
         self.require_open()?;
-        self.core.direct_cursor_v4_live(direction, self.owner_pid)
+        self.core
+            .direct_cursor_v4_live(direction, self.owner_identity)
     }
 
     /// Open an ordered cursor over an IPv6 direct-value database.
     pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.require_open()?;
-        self.core.direct_cursor_v6_live(direction, self.owner_pid)
+        self.core
+            .direct_cursor_v6_live(direction, self.owner_identity)
     }
 
     /// Look up one exact feed name in this pinned membership generation.
@@ -137,7 +140,7 @@ impl LiveReader {
     /// Enumerate this generation's feeds in ascending feed-index order.
     pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         self.require_open()?;
-        self.core.feed_cursor_live(self.owner_pid)
+        self.core.feed_cursor_live(self.owner_identity)
     }
 
     /// Open an ordered cursor over one exact IPv4 named feed.
@@ -148,7 +151,7 @@ impl LiveReader {
     ) -> Result<FeedRangeCursorV4<'_>> {
         self.require_open()?;
         self.core
-            .feed_range_cursor_v4_live(name, direction, self.owner_pid)
+            .feed_range_cursor_v4_live(name, direction, self.owner_identity)
     }
 
     /// Open an ordered cursor over one exact IPv6 named feed.
@@ -159,21 +162,21 @@ impl LiveReader {
     ) -> Result<FeedRangeCursorV6<'_>> {
         self.require_open()?;
         self.core
-            .feed_range_cursor_v6_live(name, direction, self.owner_pid)
+            .feed_range_cursor_v6_live(name, direction, self.owner_identity)
     }
 
     /// Look up one address in this pinned IPv4 membership generation.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
         self.core
-            .lookup_membership_v4(address, Some(self.owner_pid))
+            .lookup_membership_v4(address, Some(self.owner_identity))
     }
 
     /// Look up one address in this pinned IPv6 membership generation.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
         self.core
-            .lookup_membership_v6(address, Some(self.owner_pid))
+            .lookup_membership_v6(address, Some(self.owner_identity))
     }
 
     /// Exact decompressed metadata length, or absence.
@@ -199,10 +202,10 @@ impl LiveReader {
         Ok(self.core.import_parts())
     }
 
-    pub(crate) fn c_abi_parts(&self) -> Result<(&Mapping, MetaV4, Option<u32>)> {
+    pub(crate) fn c_abi_parts(&self) -> Result<(&Mapping, MetaV4, Option<ProcessIdentity>)> {
         self.require_open()?;
         let (mapping, meta) = self.core.import_parts();
-        Ok((mapping, meta, Some(self.owner_pid)))
+        Ok((mapping, meta, Some(self.owner_identity)))
     }
 
     /// Clear this registration. An incomplete close retains retry authority.
@@ -282,7 +285,7 @@ impl LiveReader {
     }
 
     fn require_owner(&self) -> Result<()> {
-        if self.owner_pid != std::process::id() {
+        if !self.owner_identity.is_current() {
             return Err(Error::ForkedHandle);
         }
         Ok(())

@@ -121,6 +121,13 @@ Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and
 temporary residue. Check scaling, not only one result. Ordinary unordered
 ingestion and snapshot construction must not use an external sorting file.
+Reader evidence must name live and immutable readers separately and time at
+least one million actual operations. Keep database construction, compact
+snapshot construction, open, close, and explicit validation outside the timed
+operation. A Linux reader-performance change must also preserve inherited
+handle rejection with the real fork subprocess test and prove that the
+supported `MADV_WIPEONFORK` path performs no process-ID call in repeated
+ownership checks.
 
 ## Report proof precisely
 

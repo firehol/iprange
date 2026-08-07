@@ -6,6 +6,7 @@ use crate::contract::{u16_le, u32_le, MetaV4, ValueKind, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
 use crate::mapping::{ByteSource, Mapping};
+use crate::process_identity::ProcessIdentity;
 use crate::slotted_page::{self, Header};
 
 mod mutation;
@@ -57,7 +58,7 @@ pub struct FeedCursor<'a> {
     emitted: u64,
     previous: Option<u32>,
     finished: bool,
-    owner_pid: Option<u32>,
+    owner_identity: Option<ProcessIdentity>,
 }
 
 #[derive(Clone, Copy)]
@@ -86,11 +87,19 @@ impl<'a> FeedCursor<'a> {
         Self::with_owner(mapping, meta, None)
     }
 
-    pub(crate) fn new_live(mapping: &'a Mapping, meta: &MetaV4, owner_pid: u32) -> Result<Self> {
-        Self::with_owner(mapping, meta, Some(owner_pid))
+    pub(crate) fn new_live(
+        mapping: &'a Mapping,
+        meta: &MetaV4,
+        owner_identity: ProcessIdentity,
+    ) -> Result<Self> {
+        Self::with_owner(mapping, meta, Some(owner_identity))
     }
 
-    fn with_owner(mapping: &'a Mapping, meta: &MetaV4, owner_pid: Option<u32>) -> Result<Self> {
+    fn with_owner(
+        mapping: &'a Mapping,
+        meta: &MetaV4,
+        owner_identity: Option<ProcessIdentity>,
+    ) -> Result<Self> {
         let mut cursor = Self {
             mapping,
             meta: *meta,
@@ -101,7 +110,7 @@ impl<'a> FeedCursor<'a> {
             emitted: 0,
             previous: None,
             finished: meta.catalog_index_root == 0,
-            owner_pid,
+            owner_identity,
         };
         if !cursor.finished {
             cursor.descend_left(meta.catalog_index_root, None)?;
@@ -221,7 +230,7 @@ impl<'a> FeedCursor<'a> {
     }
 
     fn require_owner(&self) -> Result<()> {
-        if self.owner_pid.is_some_and(|pid| pid != std::process::id()) {
+        if self.owner_identity.is_some_and(|owner| !owner.is_current()) {
             return Err(Error::ForkedHandle);
         }
         Ok(())
