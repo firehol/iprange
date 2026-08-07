@@ -5,7 +5,6 @@ use crate::mapping::{ByteSource, Mapping, PageMut, PageView};
 use crate::slotted_page::{put_u16, put_u32, put_u64};
 use crate::test_alloc::measure_thread_allocations;
 use std::fs::File;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestStore {
     mapping: Mapping,
@@ -15,13 +14,10 @@ struct TestStore {
 
 impl TestStore {
     fn new() -> Self {
+        let unique = u128::from_le_bytes(crate::random::nonzero_128().unwrap());
         let path = std::env::temp_dir().join(format!(
-            "iprange-v4-metadata-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "iprange-v4-metadata-{}-{unique:032x}",
+            std::process::id()
         ));
         let file = File::options()
             .read(true)

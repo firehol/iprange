@@ -6,7 +6,6 @@ use crate::database::ImmutableReader;
 use crate::mapping::{ByteSource, Mapping};
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestFile {
     path: PathBuf,
@@ -15,13 +14,10 @@ struct TestFile {
 
 impl TestFile {
     fn new() -> Self {
+        let unique = u128::from_le_bytes(crate::random::nonzero_128().unwrap());
         let path = std::env::temp_dir().join(format!(
-            "iprange-v4-draft-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "iprange-v4-draft-{}-{unique:032x}",
+            std::process::id()
         ));
         let file = OpenOptions::new()
             .read(true)
