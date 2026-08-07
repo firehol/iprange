@@ -17,6 +17,7 @@ use iprange_livedb::{
 };
 #[cfg(target_os = "linux")]
 use iprange_livedb::{DirectRange, FinishedWorkflow};
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use sha2::{Digest, Sha512};
 
 struct TestFiles {
@@ -261,6 +262,7 @@ fn live_snapshot_requires_the_sidecar_descriptor_budget() {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn replacement_accepts_arbitrary_previous_bytes_and_reports_exact_evidence() {
     let files = populated_direct(TestFiles::new("replace-arbitrary"));
     fs::copy(&files.live, &files.source).unwrap();
@@ -271,7 +273,7 @@ fn replacement_accepts_arbitrary_previous_bytes_and_reports_exact_evidence() {
         &files.source,
         SnapshotSourceMode::Immutable,
         &files.output,
-        SnapshotPublicationPolicy::ReplaceExisting,
+        supported_replacement(),
         &budget(3),
         &CancellationToken::new(),
     )
@@ -350,7 +352,7 @@ fn immutable_snapshot_can_compact_its_own_path_by_replacement() {
         &files.source,
         SnapshotSourceMode::Immutable,
         &files.source,
-        SnapshotPublicationPolicy::ReplaceExisting,
+        supported_replacement(),
         &budget(3),
         &CancellationToken::new(),
     )
@@ -384,7 +386,7 @@ fn replacement_requires_an_existing_destination_and_rejects_live_self() {
         &files.source,
         SnapshotSourceMode::Immutable,
         &files.output,
-        SnapshotPublicationPolicy::ReplaceExisting,
+        supported_replacement(),
         &budget(3),
         &CancellationToken::new(),
     )
@@ -398,13 +400,35 @@ fn replacement_requires_an_existing_destination_and_rejects_live_self() {
         &files.live,
         SnapshotSourceMode::Live,
         &files.live,
-        SnapshotPublicationPolicy::ReplaceExisting,
+        supported_replacement(),
         &budget(3),
         &CancellationToken::new(),
     )
     .unwrap_err();
     assert_eq!(self_failure.cause.code, ErrorCode::InvalidArgument);
     assert_eq!(fs::read(&files.live).unwrap(), live_bytes);
+    assert_no_private_artifacts(&files.directory);
+}
+
+#[test]
+#[cfg(any(windows, target_os = "freebsd"))]
+fn strict_replacement_fails_before_changing_the_destination() {
+    let files = populated_direct(TestFiles::new("replace-strict-unsupported"));
+    fs::copy(&files.live, &files.source).unwrap();
+    fs::write(&files.output, b"previous").unwrap();
+
+    let failure = snapshot_to(
+        &files.source,
+        SnapshotSourceMode::Immutable,
+        &files.output,
+        SnapshotPublicationPolicy::ReplaceExisting,
+        &budget(3),
+        &CancellationToken::new(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.cause.code, ErrorCode::DurabilityUnsupported);
+    assert_eq!(fs::read(&files.output).unwrap(), b"previous");
     assert_no_private_artifacts(&files.directory);
 }
 
@@ -706,6 +730,14 @@ fn populated_large_direct(files: TestFiles, count: u32) -> TestFiles {
 
 fn budget(open_files: u32) -> SnapshotBudget {
     SnapshotBudget::new(16 * 1024 * 1024, 100_000, open_files)
+}
+
+fn supported_replacement() -> SnapshotPublicationPolicy {
+    if cfg!(any(windows, target_os = "freebsd")) {
+        SnapshotPublicationPolicy::ReplaceExistingNoRollback
+    } else {
+        SnapshotPublicationPolicy::ReplaceExisting
+    }
 }
 
 fn transaction_budget() -> TransactionBudget {
