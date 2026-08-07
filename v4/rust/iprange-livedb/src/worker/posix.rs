@@ -207,12 +207,17 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
     let previous = previous_action();
     ACTIVE_CONTROL.store(ptr::null_mut(), Ordering::Release);
     let disposition = previous.sa_sigaction;
-    if disposition == libc::SIG_DFL || disposition == libc::SIG_IGN {
+    if disposition == libc::SIG_DFL {
         if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-        let kernel_generated = synchronous_bus_fault(info);
-        if !kernel_generated && !redispatch_user_signal(signal) {
+        if !synchronous_bus_fault(info) {
+            redispatch_default(signal);
+        }
+        return;
+    }
+    if disposition == libc::SIG_IGN {
+        if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
         return;
@@ -220,12 +225,16 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
 
     let reset = previous.sa_flags as libc::c_int & libc::SA_RESETHAND != 0;
     if reset {
-        if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
+        let mut default_action = unsafe { mem::zeroed::<libc::sigaction>() };
+        default_action.sa_sigaction = libc::SIG_DFL;
+        unsafe { libc::sigemptyset(&mut default_action.sa_mask) };
+        if unsafe { libc::sigaction(signal, &default_action, ptr::null_mut()) } != 0 {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
-        if !synchronous_bus_fault(info) && !redispatch_user_signal(signal) {
+        if !apply_mask(previous, signal) {
             unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
         }
+        call_action(previous, signal, info, context);
         return;
     }
     if unsafe { libc::sigaction(signal, previous, ptr::null_mut()) } != 0 {
@@ -235,14 +244,23 @@ fn chain(signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
         unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
     }
 
+    call_action(previous, signal, info, context);
+}
+
+fn call_action(
+    previous: &libc::sigaction,
+    signal: c_int,
+    info: *mut libc::siginfo_t,
+    context: *mut c_void,
+) {
     if previous.sa_flags as libc::c_int & libc::SA_SIGINFO != 0 {
         // SAFETY: SA_SIGINFO selects the three-argument handler ABI.
         let handler: extern "C" fn(c_int, *mut libc::siginfo_t, *mut c_void) =
-            unsafe { mem::transmute(disposition) };
+            unsafe { mem::transmute(previous.sa_sigaction) };
         handler(signal, info, context);
     } else {
         // SAFETY: The saved action uses the one-argument handler ABI.
-        let handler: extern "C" fn(c_int) = unsafe { mem::transmute(disposition) };
+        let handler: extern "C" fn(c_int) = unsafe { mem::transmute(previous.sa_sigaction) };
         handler(signal);
     }
 }
@@ -253,14 +271,19 @@ fn synchronous_bus_fault(info: *mut libc::siginfo_t) -> bool {
         && kernel_bus_code(unsafe { (*info).si_code })
 }
 
-fn redispatch_user_signal(signal: c_int) -> bool {
+fn redispatch_default(signal: c_int) -> ! {
     if unsafe { libc::kill(libc::getpid(), signal) } != 0 {
-        return false;
+        unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
     }
     let mut selected = unsafe { mem::zeroed::<libc::sigset_t>() };
-    (unsafe { libc::sigemptyset(&mut selected) }) == 0
-        && (unsafe { libc::sigaddset(&mut selected, signal) }) == 0
-        && (unsafe { libc::sigprocmask(libc::SIG_UNBLOCK, &selected, ptr::null_mut()) }) == 0
+    if unsafe { libc::sigprocmask(libc::SIG_SETMASK, ptr::null(), &mut selected) } != 0
+        || unsafe { libc::sigdelset(&mut selected, signal) } != 0
+    {
+        unsafe { libc::_exit(UNOWNED_REDISPATCH_FAILED) };
+    }
+    loop {
+        unsafe { libc::sigsuspend(&selected) };
+    }
 }
 
 fn kernel_bus_code(code: c_int) -> bool {
