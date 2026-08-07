@@ -74,6 +74,9 @@ pub fn create_live(
         Ok(identity) => Some(identity),
         Err(cause) => return Ok(attempt.not_created(cause)),
     };
+    if let Err(cause) = attempt.bind_cleanup_ids(path) {
+        return Ok(attempt.not_created(cause));
+    }
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.not_created(cause));
     }
@@ -142,13 +145,22 @@ impl Attempt {
             address_family,
             value_kind,
             value_tag,
-            database_id: live_cleanup::unique_attempt_id(path, 0)?,
+            database_id: random::nonzero_128()?,
             commit_nonce: random::nonzero_128()?,
-            sidecar_id: live_cleanup::unique_attempt_id(&crate::path::canonical_sidecar(path)?, 1)?,
+            sidecar_id: random::nonzero_128()?,
             directory_identity: None,
             main_basename: LocalBasename::from_path(path)?,
             reader_capacity,
         })
+    }
+
+    fn bind_cleanup_ids(&mut self, path: &Path) -> Result<()> {
+        let database_id = live_cleanup::unique_attempt_id(path, 0)?;
+        let sidecar_id =
+            live_cleanup::unique_attempt_id(&crate::path::canonical_sidecar(path)?, 1)?;
+        self.database_id = database_id;
+        self.sidecar_id = sidecar_id;
+        Ok(())
     }
 
     fn created(self, main: Identity, sidecar: Identity) -> CreateResult {
