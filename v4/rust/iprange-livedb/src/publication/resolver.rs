@@ -261,7 +261,7 @@ fn resolve_desired(
                 ArtifactKind::PrivateOutput,
                 NameSlot::PrivateOutput,
                 Identity::decode(header.output_identity),
-                problem,
+                problem.clone(),
             ));
             let later =
                 match final_later(&destination, header, reservation.as_ref(), later, &summary) {
@@ -330,7 +330,7 @@ fn abandon(
     let cause = verification
         .as_ref()
         .err()
-        .copied()
+        .cloned()
         .or_else(|| first_problem(&summary.artifacts));
     let publication = if verification.is_ok() {
         PublicationStatus::NotPublished

@@ -1,5 +1,7 @@
 //! Portable public facts returned by namespace publication.
 
+use std::borrow::Cow;
+
 use crate::error::ErrorCode;
 use crate::validation::LocalFileIdentity;
 
@@ -110,11 +112,11 @@ pub struct CreationSecurity {
     pub commitment: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicationProblem {
     pub code: ErrorCode,
     pub os_code: Option<i32>,
-    pub detail: &'static str,
+    pub detail: Cow<'static, str>,
 }
 
 impl PublicationProblem {
@@ -122,7 +124,15 @@ impl PublicationProblem {
         Self {
             code,
             os_code,
-            detail,
+            detail: Cow::Borrowed(detail),
+        }
+    }
+
+    pub(crate) fn with_owned_detail(code: ErrorCode, os_code: Option<i32>, detail: String) -> Self {
+        Self {
+            code,
+            os_code,
+            detail: Cow::Owned(detail),
         }
     }
 }

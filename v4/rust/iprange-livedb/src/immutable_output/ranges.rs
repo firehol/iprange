@@ -115,7 +115,10 @@ impl Sink for OutputSink<'_> {
         if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
             return Err(Error::Corrupt("immutable range page is outside bounds"));
         }
-        let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
-        update(&mut page)
+        let region = self.mapping.region()?;
+        crate::worker::probe_output_region(region, || {
+            let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
+            update(&mut page)
+        })
     }
 }

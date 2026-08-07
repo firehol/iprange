@@ -1,4 +1,8 @@
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::fs::OpenOptions;
+#[cfg(target_os = "linux")]
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -124,6 +128,68 @@ fn live_recovery_pins_and_releases_the_exact_current_generation() {
     let mut reader = LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
     assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(7));
     reader.close().unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_recovery_sink_result_wins_over_a_later_sidecar_sigbus() {
+    for sink_error in [false, true] {
+        let files = populated_direct(TestFiles::new("live-terminal-sidecar-fault"), 1);
+        let candidate = inspect(&files.live, RecoveryInspectionMode::Live, 2);
+        let root = selected_range_root(&files.live);
+        let mut main = OpenOptions::new().write(true).open(&files.live).unwrap();
+        main.seek(SeekFrom::Start(u64::from(root) * 4096 + 100))
+            .unwrap();
+        main.write_all(&[0x5a]).unwrap();
+        main.sync_all().unwrap();
+
+        let sidecar = sidecar(&files.live);
+        let sidecar_len = fs::metadata(&sidecar).unwrap().len();
+        let failure = recover_live(
+            &files.live,
+            candidate,
+            &files.output,
+            &recovery_budget(3),
+            &mut |_: &iprange_livedb::recovery::RecoveryUnknownEnvelope| {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&sidecar)
+                    .unwrap()
+                    .set_len(4096)
+                    .unwrap();
+                if sink_error {
+                    Err(iprange_livedb::Error::InvalidArgument(
+                        "injected recovery sink failure",
+                    ))
+                } else {
+                    Ok(RecoverySinkControl::Stop)
+                }
+            },
+            &CancellationToken::new(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            failure.cause.code,
+            if sink_error {
+                ErrorCode::SinkFailed
+            } else {
+                ErrorCode::StoppedBySink
+            }
+        );
+        assert_eq!(failure.report.unknown_envelopes, 1);
+        assert!(failure.cleanup.is_empty(), "{failure:#?}");
+        assert!(!files.output.exists());
+        assert_no_private_artifacts(&files.directory);
+
+        OpenOptions::new()
+            .write(true)
+            .open(&sidecar)
+            .unwrap()
+            .set_len(sidecar_len)
+            .unwrap();
+        let mut reader = LiveReader::open(&files.live, &CancellationToken::new()).unwrap();
+        reader.close().unwrap();
+    }
 }
 
 #[test]
@@ -294,6 +360,17 @@ fn inspect(
     )
     .unwrap();
     *inspection.candidate(0).unwrap()
+}
+
+#[cfg(target_os = "linux")]
+fn selected_range_root(path: &Path) -> u32 {
+    let mut file = OpenOptions::new().read(true).open(path).unwrap();
+    let mut metas = [[0u8; 4096]; 2];
+    file.read_exact(&mut metas[0]).unwrap();
+    file.read_exact(&mut metas[1]).unwrap();
+    let transaction = |page: &[u8; 4096]| u64::from_le_bytes(page[48..56].try_into().unwrap());
+    let selected = usize::from(transaction(&metas[1]) > transaction(&metas[0]));
+    u32::from_le_bytes(metas[selected][144..148].try_into().unwrap())
 }
 
 fn recovery_budget(open_files: u32) -> RecoveryBudget {

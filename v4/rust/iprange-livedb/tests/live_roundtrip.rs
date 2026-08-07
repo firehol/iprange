@@ -246,6 +246,66 @@ fn reclamation_waits_for_old_readers_then_auto_publishes() {
 }
 
 #[test]
+fn safe_reclaimed_pages_are_reused_while_a_newer_reader_is_pinned() {
+    let files = TestPair::new("reclaim-with-reader");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::RETENTION,
+        2,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
+
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    for address in (0..1_024).step_by(2) {
+        transaction
+            .assign_v4(Ipv4Key(address), Ipv4Key(address), 1)
+            .unwrap();
+    }
+    transaction.commit().unwrap();
+
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    transaction.clear_v4(Ipv4Key(0), Ipv4Key(1_023)).unwrap();
+    transaction.commit().unwrap();
+
+    let mut pinned = LiveReader::open(&files.main, &cancellation).unwrap();
+    assert_eq!(pinned.info().unwrap().transaction_id, 3);
+    let reclaimed = writer.reclaim(10, 10_000, &cancellation).unwrap();
+    assert!(matches!(
+        reclaimed,
+        ReclaimResult::Commit {
+            transaction_count: 1,
+            page_count: 2..,
+            ..
+        }
+    ));
+    writer.close().unwrap();
+
+    let mut reuse_only = budget();
+    reuse_only.max_file_growth_pages = 1;
+    let mut writer = LiveWriter::open(&files.main, reuse_only, &cancellation).unwrap();
+    let mut transaction = writer.begin_direct_transaction(&cancellation).unwrap();
+    for address in (2_000..3_024).step_by(2) {
+        transaction
+            .assign_v4(Ipv4Key(address), Ipv4Key(address), 9)
+            .unwrap();
+    }
+    let commit = transaction.commit().unwrap();
+    assert_eq!(commit.durability, CommitDurability::Committed, "{commit:?}");
+    writer.close().unwrap();
+
+    assert_eq!(pinned.lookup_direct_v4(Ipv4Key(2_150)).unwrap(), None);
+    pinned.close().unwrap();
+    let mut current = LiveReader::open(&files.main, &cancellation).unwrap();
+    assert_eq!(current.lookup_direct_v4(Ipv4Key(2_150)).unwrap(), Some(9));
+    current.close().unwrap();
+}
+
+#[test]
 fn failed_reclamation_discards_its_complete_private_draft() {
     let files = TestPair::new("reclaim-abort");
     create_live(

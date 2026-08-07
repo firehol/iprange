@@ -243,6 +243,7 @@ impl<'a, S: RecoverySink> Reporter<'a, S> {
             contributes_to_possible_span: unknown.contributes_to_possible_span,
             has_unbounded_extent: unknown.has_unbounded_extent,
         };
+        crate::worker::checkpoint_recovery_progress(&self.report)?;
         match self.sink.unknown(&envelope) {
             Ok(RecoverySinkControl::Continue) => Ok(()),
             Ok(RecoverySinkControl::Stop) => Err(Error::StoppedBySink),

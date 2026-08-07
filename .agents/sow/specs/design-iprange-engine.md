@@ -280,6 +280,14 @@ restarts from the last sealed mapped-scratch checkpoint, never from partial tree
 mutation, and never publishes partial output. Ordinary lookup and mutation do
 not install a process-global fault handler or pay worker-process overhead.
 
+The SDK distribution includes the exact platform executable name
+`iprange-v4-worker` and applications install it beside the consuming process
+executable. It does not search `PATH` or accept an environment override. The
+only secondary candidate is the parent of a directory literally named `deps`,
+which supports Cargo's integration-test layout and is not an application
+deployment contract. A build-ID and protocol handshake rejects a missing or
+different worker before source scanning or destination mutation.
+
 Validation mode is explicit: current live, current immutable, or a selected
 offline recovery candidate. When bootstrap damage prevents selecting a normal
 generation, validation reports the trustworthy bootstrap findings and unknown

@@ -166,6 +166,8 @@ fn compile_c_fixture(files: &TestFiles, source_name: &str, extra_inputs: &[PathB
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    fs::copy(worker_binary(), files.directory.join("iprange-v4-worker"))
+        .expect("install native fixture worker");
     executable
 }
 
@@ -276,4 +278,15 @@ fn shared_library() -> PathBuf {
         library.display()
     );
     library
+}
+
+fn worker_binary() -> PathBuf {
+    let worker = shared_library()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("iprange-v4-worker");
+    assert!(worker.is_file(), "cargo did not build {}", worker.display());
+    worker
 }

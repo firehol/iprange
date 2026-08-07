@@ -1,5 +1,6 @@
 //! Exact ownership and bounded I/O for authorized recovery scratch files.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -40,11 +41,11 @@ const MAPPING_WINDOW: u64 = 8 * 1024 * 1024;
 pub(crate) struct ScratchSlot(usize);
 
 /// Exact cleanup problem retained for one possible scratch residue.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScratchProblem {
     pub(crate) code: ErrorCode,
     pub(crate) os_code: Option<i32>,
-    pub(crate) detail: &'static str,
+    pub(crate) detail: Cow<'static, str>,
 }
 
 /// One authorized scratch artifact whose durable absence was not proved.
@@ -57,6 +58,10 @@ pub(crate) struct ScratchResidue {
     pub(crate) creation_security_kind: u16,
     pub(crate) creation_security_commitment: [u8; 32],
     pub(crate) problem: ScratchProblem,
+}
+
+pub(crate) fn checkpoint_basename(attempt_id: [u8; 16], ordinal: u32) -> Result<Box<[u8]>> {
+    Ok(scratch_name(attempt_id, ordinal)?.bytes().into())
 }
 
 /// Terminal facts from one scratch attempt.
@@ -124,7 +129,7 @@ impl Scratch {
         let directory = Directory::open(directory).map_err(namespace_error)?;
         let profile = Profile::capture().map_err(namespace_error)?;
         let attempt_id = new_attempt(&directory)?;
-        Ok(Self {
+        let scratch = Self {
             directory,
             profile,
             attempt_id,
@@ -137,7 +142,16 @@ impl Scratch {
             max_open_files,
             retained_bytes: 0,
             owned: [None, None],
-        })
+        };
+        crate::worker::start_scratch_checkpoint(
+            scratch.attempt_id,
+            local(scratch.directory.identity()),
+            &crate::publication::CreationSecurity {
+                kind: CREATION_SECURITY_KIND,
+                commitment: scratch.profile.commitment(),
+            },
+        )?;
+        Ok(scratch)
     }
 
     pub(crate) fn create(&mut self) -> Result<ScratchSlot> {
@@ -206,6 +220,8 @@ impl Scratch {
             identity,
             ordinal,
         });
+        let owner = self.owned[slot].as_ref().expect("scratch owner installed");
+        crate::worker::add_scratch_checkpoint(ordinal, local(owner.identity))?;
         let shared = &self.owned[slot]
             .as_ref()
             .expect("scratch owner installed")
@@ -366,7 +382,7 @@ impl Scratch {
     #[cfg(unix)]
     fn remove_all(&self) -> ([bool; MAX_OWNED], [Option<ScratchProblem>; MAX_OWNED]) {
         let mut removed = [false; MAX_OWNED];
-        let mut problems = [None; MAX_OWNED];
+        let mut problems = std::array::from_fn(|_| None);
         for index in 0..MAX_OWNED {
             let Some(owner) = self.owned[index].as_ref() else {
                 continue;
@@ -504,24 +520,28 @@ impl SharedFile {
 
     fn read(&self, offset: u64, output: &mut [u8]) -> Result<()> {
         let mapping = self.lock_mapping()?;
-        let bytes = mapping
+        let mapping = mapping
             .as_ref()
-            .ok_or(Error::WrongState("scratch mapping is unavailable"))?
-            .bytes(offset, output.len())?;
-        if bytes.copy_to(output) {
-            Ok(())
-        } else {
-            Err(Error::Corrupt("scratch mapping changed while reading"))
-        }
+            .ok_or(Error::WrongState("scratch mapping is unavailable"))?;
+        crate::worker::probe_scratch(mapping, || {
+            let bytes = mapping.bytes(offset, output.len())?;
+            if bytes.copy_to(output) {
+                Ok(())
+            } else {
+                Err(Error::Corrupt("scratch mapping changed while reading"))
+            }
+        })
     }
 
     fn write(&self, offset: u64, input: &[u8]) -> Result<()> {
         let mut mapping = self.lock_mapping()?;
-        mapping
+        let mapping = mapping
             .as_mut()
-            .ok_or(Error::WrongState("scratch mapping is unavailable"))?
-            .bytes_mut(offset, input.len())?
-            .write(0, input)
+            .ok_or(Error::WrongState("scratch mapping is unavailable"))?;
+        let region = mapping.region()?;
+        crate::worker::probe_scratch_region(region, || {
+            mapping.bytes_mut(offset, input.len())?.write(0, input)
+        })
     }
 
     fn remap(&self, capacity: u64, length: u64) -> Result<()> {

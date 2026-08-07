@@ -113,7 +113,7 @@ impl Walker {
             let slot = self
                 .stack
                 .get_mut(self.depth)
-                .ok_or(Error::Corrupt("B+tree exceeds its maximum height"))?;
+                .ok_or_else(|| Error::corrupt("B+tree exceeds its maximum height"))?;
             *slot = Frame {
                 page_number: self.current,
                 next_child: 1,

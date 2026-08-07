@@ -1,6 +1,7 @@
 //! Fixed live-reader table bound to one database identity.
 
 use std::fs::File;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -86,6 +87,25 @@ pub(crate) struct Sidecar {
     mapping: Mutex<Option<Mapping>>,
 }
 
+struct SidecarMappingGuard<'a> {
+    guard: MutexGuard<'a, Option<Mapping>>,
+    _probe: crate::worker::Probe<'static>,
+}
+
+impl Deref for SidecarMappingGuard<'_> {
+    type Target = Option<Mapping>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for SidecarMappingGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
 impl Sidecar {
     pub(crate) fn reserve(
         main: &Path,
@@ -159,8 +179,11 @@ impl Sidecar {
     pub(crate) fn initialize_creating(&self) -> Result<()> {
         let length = sidecar_length(self.header.capacity)?;
         self.file.set_len(length)?;
+        {
+            let mut guard = self.raw_mapping_guard()?;
+            *guard = Some(Mapping::read_write_view(&self.file, length)?);
+        }
         let mut guard = self.mapping_guard()?;
-        *guard = Some(Mapping::read_write_view(&self.file, length)?);
         let mapping = guard
             .as_mut()
             .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
@@ -204,7 +227,7 @@ impl Sidecar {
     pub(crate) fn open_any(path: PathBuf) -> Result<(Self, State)> {
         let file = open_rw(&path)?;
         let identity = identity(&file)?;
-        let (state, header) = read_header(&file)?;
+        let (state, header) = read_source_header(&file)?;
         let length = sidecar_length(header.capacity)?;
         if file.metadata()?.len() != length {
             return Err(Error::Corrupt("reader table length is invalid"));
@@ -501,11 +524,29 @@ impl Sidecar {
         finish_with_cleanup(cleared, live_lock::unlock(&self.file, offset))
     }
 
-    fn mapping_guard(&self) -> Result<MutexGuard<'_, Option<Mapping>>> {
+    fn mapping_guard(&self) -> Result<SidecarMappingGuard<'_>> {
+        let guard = self.raw_mapping_guard()?;
+        let mapping = guard
+            .as_ref()
+            .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
+        let probe = crate::worker::enter_coordination(mapping)?;
+        Ok(SidecarMappingGuard {
+            guard,
+            _probe: probe,
+        })
+    }
+
+    fn raw_mapping_guard(&self) -> Result<MutexGuard<'_, Option<Mapping>>> {
         self.mapping
             .lock()
             .map_err(|_| Error::WrongState("reader table mapping lock is poisoned"))
     }
+}
+
+fn read_source_header(file: &File) -> Result<(State, Header)> {
+    let mapping = Mapping::read_only_view(file, PAGE_SIZE as u64)?;
+    let _probe = crate::worker::enter_coordination(&mapping)?;
+    read_header_mapping(&mapping)
 }
 
 fn check(cancellation: Option<&CancellationToken>) -> Result<()> {

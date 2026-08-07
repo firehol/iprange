@@ -203,13 +203,13 @@ impl ExactFeedState {
         let id = self.member.id;
         let words = self.member.word_count;
         let cancellation = self.cancellation.clone();
-        let result = drain_source(
-            source,
-            &self.cancellation,
-            &mut self.input_records,
-            |range| {
-                require_ordered(range.from, range.to)?;
-                writer.mutate(|store| {
+        writer.mutate(|store| {
+            drain_source(
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                |range| {
+                    require_ordered(range.from, range.to)?;
                     store.apply_membership_cancellable(
                         range.from,
                         range.to,
@@ -217,17 +217,10 @@ impl ExactFeedState {
                         words,
                         MembershipOperation::Union,
                         &mut || cancellation.check(),
-                    )
-                })?;
-                Ok(())
-            },
-        );
-        result.map_err(|error| {
-            if writer.draft.is_some() {
-                writer.abort_after(error)
-            } else {
-                error
-            }
+                    )?;
+                    Ok(())
+                },
+            )
         })
     }
 
@@ -240,7 +233,6 @@ impl ExactFeedState {
         self.require_active(writer)?;
         let cancellation = self.cancellation.clone();
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
-        writer.flush_draft_pages()?;
         let report = self.prepare_report(writer)?;
         if report.logical_change == LogicalChange::NoChange {
             writer.discard_draft()?;

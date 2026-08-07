@@ -132,7 +132,7 @@ fn remove_previous(
         cleanup::discard_recovered(&mut base.seed, &base.destination, output, reservation);
     let verified = main.verify(&base.destination, &CancellationToken::new());
     let cleanup_problem = first_problem(&summary.artifacts);
-    let cause = verified.as_ref().err().copied().or(cleanup_problem);
+    let cause = verified.as_ref().err().cloned().or(cleanup_problem);
     let publication = if verified.is_ok() {
         PublicationStatus::NotPublished
     } else {
@@ -198,7 +198,7 @@ fn resolve_desired(
     let cause = verified
         .as_ref()
         .err()
-        .copied()
+        .cloned()
         .or_else(|| first_problem(&summary.artifacts));
     let publication = if verified.is_ok() {
         PublicationStatus::Published
@@ -252,7 +252,7 @@ fn resolve_other(
     let cause = verified
         .as_ref()
         .err()
-        .copied()
+        .cloned()
         .or_else(|| first_problem(&summary.artifacts));
     let publication = if verified.is_ok() {
         PublicationStatus::NotPublished

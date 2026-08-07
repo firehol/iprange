@@ -16,6 +16,11 @@ use crate::cancellation::CancellationToken;
 
 pub(crate) type Result = std::result::Result<PublicationResult, Box<PreparationFailure>>;
 
+pub(crate) enum PublicationCheckpoint<'a> {
+    Preparation(&'a PreparationFailure),
+    Result(&'a PublicationResult),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Point {
     ReservationCreated,
@@ -35,12 +40,39 @@ pub(crate) fn fail_if_exists_cancellable(
 ) -> Result {
     debug_assert!(output.previous.is_none());
     debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
-    publish_with(output, Some(cancellation), |point| {
-        if cleanup_ignores_cancellation(point) {
-            return Ok(());
-        }
-        cancellation.check().map_err(|error| Problem::sdk(&error))
-    })
+    publish_with_observer(
+        output,
+        Some(cancellation),
+        |point| {
+            if cleanup_ignores_cancellation(point) {
+                return Ok(());
+            }
+            cancellation.check().map_err(|error| Problem::sdk(&error))
+        },
+        false,
+        |_| Ok(()),
+    )
+}
+
+pub(crate) fn fail_if_exists_cancellable_observed(
+    output: PreparedOutput,
+    cancellation: &CancellationToken,
+    observer: impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> Result {
+    debug_assert!(output.previous.is_none());
+    debug_assert_eq!(output.policy, super::reservation::Policy::FailIfExists);
+    publish_with_observer(
+        output,
+        Some(cancellation),
+        |point| {
+            if cleanup_ignores_cancellation(point) {
+                return Ok(());
+            }
+            cancellation.check().map_err(|error| Problem::sdk(&error))
+        },
+        true,
+        observer,
+    )
 }
 
 pub(crate) fn replace_existing_cancellable(
@@ -49,12 +81,18 @@ pub(crate) fn replace_existing_cancellable(
 ) -> Result {
     debug_assert!(output.previous.is_some());
     debug_assert!(output.policy.is_replacement());
-    publish_with(output, Some(cancellation), |point| {
-        if cleanup_ignores_cancellation(point) {
-            return Ok(());
-        }
-        cancellation.check().map_err(|error| Problem::sdk(&error))
-    })
+    publish_with_observer(
+        output,
+        Some(cancellation),
+        |point| {
+            if cleanup_ignores_cancellation(point) {
+                return Ok(());
+            }
+            cancellation.check().map_err(|error| Problem::sdk(&error))
+        },
+        false,
+        |_| Ok(()),
+    )
 }
 
 pub(super) fn resume_armed(
@@ -88,10 +126,21 @@ fn fail_if_exists_with(
     publish_with(output, None, checkpoint)
 }
 
+#[cfg(all(test, unix))]
 fn publish_with(
     output: PreparedOutput,
     cancellation: Option<&CancellationToken>,
+    checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
+) -> Result {
+    publish_with_observer(output, cancellation, checkpoint, false, |_| Ok(()))
+}
+
+fn publish_with_observer(
+    output: PreparedOutput,
+    cancellation: Option<&CancellationToken>,
     mut checkpoint: impl FnMut(Point) -> std::result::Result<(), Problem>,
+    observe: bool,
+    mut observer: impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
 ) -> Result {
     let seed = Seed::capture(&output);
     let draft = match ReservationDraft::create(&output) {
@@ -106,7 +155,16 @@ fn publish_with(
             )
         }
     };
-    if let Err(cause) = checkpoint(Point::ReservationCreated) {
+    if let Err(cause) = observe_preparation(
+        &seed,
+        &output,
+        draft.identity,
+        NameSlot::PrivateReservation,
+        observe,
+        &mut observer,
+    )
+    .and_then(|()| checkpoint(Point::ReservationCreated))
+    {
         return preparation(
             seed,
             output,
@@ -116,7 +174,18 @@ fn publish_with(
         );
     }
 
-    let reservation = match draft.initialize(&output) {
+    let reservation = match draft.initialize_observed(&output, |identity| {
+        observe_not_published(
+            &seed,
+            output.attempt.identity(),
+            identity,
+            NameSlot::PrivateReservation,
+            AccessPolicy::Unclassified,
+            observe,
+            &mut observer,
+        )?;
+        checkpoint(Point::State1Selected)
+    }) {
         Ok(reservation) => reservation,
         Err(failure) => {
             let cause = Problem::reservation(&failure.cause);
@@ -142,7 +211,15 @@ fn publish_with(
             );
         }
     };
-    from_private(seed, output, reservation, cancellation, &mut checkpoint)
+    from_private(
+        seed,
+        output,
+        reservation,
+        cancellation,
+        &mut checkpoint,
+        observe,
+        &mut observer,
+    )
 }
 
 fn from_private(
@@ -151,19 +228,20 @@ fn from_private(
     reservation: PrivateReservation,
     cancellation: Option<&CancellationToken>,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
+    observe: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
 ) -> Result {
-    if let Err(cause) = checkpoint(Point::State1Selected) {
-        return Ok(not_published(
-            seed,
-            output,
-            private_owner(&reservation),
-            reservation.identity,
-            cause,
-            checkpoint,
-        ));
-    }
-
-    let reservation = match reservation.acquire(&output) {
+    let reservation = match reservation.acquire_observed(&output, |identity| {
+        observe_not_published(
+            &seed,
+            output.attempt.identity(),
+            identity,
+            NameSlot::Coordination,
+            AccessPolicy::CreatorOnly,
+            observe,
+            observer,
+        )
+    }) {
         Ok(reservation) => reservation,
         Err(failure) => {
             return Ok(not_published(
@@ -176,7 +254,15 @@ fn from_private(
             ))
         }
     };
-    from_canonical(seed, output, reservation, cancellation, checkpoint)
+    from_canonical(
+        seed,
+        output,
+        reservation,
+        cancellation,
+        checkpoint,
+        observe,
+        observer,
+    )
 }
 
 fn from_canonical(
@@ -185,6 +271,8 @@ fn from_canonical(
     reservation: CanonicalReservation,
     cancellation: Option<&CancellationToken>,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
+    observe: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
 ) -> Result {
     if let Err(cause) = checkpoint(Point::ReservationAcquired) {
         return Ok(not_published(
@@ -209,7 +297,10 @@ fn from_canonical(
         }
     }
 
-    let reservation = match reservation.arm(&output) {
+    let reservation = match reservation.arm_observed(&output, |identity| {
+        observe_outcome_unknown(&seed, identity, observe, observer)?;
+        checkpoint(Point::State2Selected)
+    }) {
         Ok(reservation) => reservation,
         Err(failure) => {
             let cause = Problem::reservation(&failure.cause);
@@ -230,7 +321,7 @@ fn from_canonical(
             ));
         }
     };
-    from_armed(seed, output, reservation, checkpoint)
+    from_armed(seed, output, reservation, checkpoint, observe, observer)
 }
 
 fn from_armed(
@@ -238,26 +329,33 @@ fn from_armed(
     output: PreparedOutput,
     reservation: ArmedReservation,
     checkpoint: &mut impl FnMut(Point) -> std::result::Result<(), Problem>,
+    observe: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
 ) -> Result {
-    if let Err(cause) = checkpoint(Point::State2Selected) {
-        return Ok(outcome_unknown(seed, reservation.identity, cause));
-    }
-
-    match main_file::publish(output, reservation) {
-        Ok(published) => {
-            let cause = checkpoint(Point::DesiredProven).err();
-            Ok(finish_published(seed, published, cause))
+    let reservation_identity = reservation.identity;
+    match main_file::publish_observed(output, reservation, |point| {
+        if point == main_file::Point::DesiredProven {
+            observe_published(&seed, reservation_identity, observe, observer)
+                .map_err(main_file::Error::Checkpoint)?;
+            checkpoint(Point::DesiredProven).map_err(main_file::Error::Checkpoint)?;
         }
+        Ok(())
+    }) {
+        Ok(published) => Ok(finish_published_observed(
+            seed, published, None, observe, observer,
+        )),
         Err(failure) => {
             let cause = Problem::main(&failure.cause);
             if failure.owner.desired_proven {
-                Ok(finish_published(
+                Ok(finish_published_observed(
                     seed,
                     PublishedMain {
                         output: failure.owner.output,
                         reservation: failure.owner.reservation,
                     },
                     Some(cause),
+                    observe,
+                    observer,
                 ))
             } else {
                 Ok(outcome_unknown(
@@ -268,6 +366,137 @@ fn from_armed(
             }
         }
     }
+}
+
+fn observe_preparation(
+    seed: &Seed,
+    output: &PreparedOutput,
+    reservation_identity: Option<super::namespace::Identity>,
+    reservation_slot: NameSlot,
+    enabled: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> std::result::Result<(), Problem> {
+    if !enabled {
+        return Ok(());
+    }
+    let problem = interrupted_problem();
+    let mut checkpoint_seed = seed.clone();
+    let mut cleanup = CleanupArtifacts::new();
+    cleanup.push(checkpoint_seed.artifact(
+        ArtifactKind::PrivateOutput,
+        NameSlot::PrivateOutput,
+        Some(output.attempt.identity()),
+        problem.clone(),
+    ));
+    cleanup.push(checkpoint_seed.artifact(
+        ArtifactKind::PrivateReservation,
+        reservation_slot,
+        reservation_identity,
+        problem.clone(),
+    ));
+    let failure = checkpoint_seed.preparation_with_housekeeping(
+        cleanup,
+        super::Housekeeping::None,
+        Vec::new(),
+        problem,
+    );
+    observer(PublicationCheckpoint::Preparation(&failure))
+}
+
+fn observe_not_published(
+    seed: &Seed,
+    output_identity: super::namespace::Identity,
+    reservation_identity: super::namespace::Identity,
+    reservation_slot: NameSlot,
+    coordination_access_policy: AccessPolicy,
+    enabled: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> std::result::Result<(), Problem> {
+    if !enabled {
+        return Ok(());
+    }
+    let problem = interrupted_problem();
+    let mut checkpoint_seed = seed.clone();
+    let mut cleanup = CleanupArtifacts::new();
+    cleanup.push(checkpoint_seed.artifact(
+        ArtifactKind::PrivateOutput,
+        NameSlot::PrivateOutput,
+        Some(output_identity),
+        problem.clone(),
+    ));
+    cleanup.push(checkpoint_seed.artifact(
+        ArtifactKind::PrivateReservation,
+        reservation_slot,
+        Some(reservation_identity),
+        problem.clone(),
+    ));
+    let result = checkpoint_seed.result(
+        FinalState {
+            reservation_identity,
+            main_namespace_may_have_been_attempted: false,
+            publication: PublicationStatus::NotPublished,
+            destination_content: DestinationContent::Unclassified,
+            main_access_policy: AccessPolicy::Unclassified,
+            coordination_access_policy,
+        },
+        cleanup,
+        Some(problem),
+    );
+    observer(PublicationCheckpoint::Result(&result))
+}
+
+fn observe_outcome_unknown(
+    seed: &Seed,
+    reservation_identity: super::namespace::Identity,
+    enabled: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> std::result::Result<(), Problem> {
+    if !enabled {
+        return Ok(());
+    }
+    let result = outcome_unknown(seed.clone(), reservation_identity, interrupted_problem());
+    observer(PublicationCheckpoint::Result(&result))
+}
+
+fn observe_published(
+    seed: &Seed,
+    reservation_identity: super::namespace::Identity,
+    enabled: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> std::result::Result<(), Problem> {
+    if !enabled {
+        return Ok(());
+    }
+    let problem = interrupted_problem();
+    let mut checkpoint_seed = seed.clone();
+    let mut cleanup = CleanupArtifacts::new();
+    cleanup.push(checkpoint_seed.artifact(
+        ArtifactKind::PrivateReservation,
+        NameSlot::Coordination,
+        Some(reservation_identity),
+        problem.clone(),
+    ));
+    let result = checkpoint_seed.result(
+        FinalState {
+            reservation_identity,
+            main_namespace_may_have_been_attempted: true,
+            publication: PublicationStatus::Published,
+            destination_content: DestinationContent::Desired,
+            main_access_policy: AccessPolicy::CreatorOnly,
+            coordination_access_policy: AccessPolicy::ChangedOrUnproven,
+        },
+        cleanup,
+        Some(problem),
+    );
+    observer(PublicationCheckpoint::Result(&result))
+}
+
+fn interrupted_problem() -> Problem {
+    Problem::new(
+        crate::ErrorCode::Io,
+        None,
+        "mapped output fault interrupted publication",
+    )
 }
 
 fn preparation(
@@ -352,12 +581,29 @@ pub(super) fn outcome_unknown(
 }
 
 pub(super) fn finish_published(
-    mut seed: Seed,
+    seed: Seed,
     published: PublishedMain,
     cause: Option<Problem>,
 ) -> PublicationResult {
+    finish_published_observed(seed, published, cause, false, &mut |_| Ok(()))
+}
+
+fn finish_published_observed(
+    mut seed: Seed,
+    published: PublishedMain,
+    cause: Option<Problem>,
+    observe: bool,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> PublicationResult {
     let reservation_identity = published.reservation.identity;
-    match published.retire() {
+    let retirement = if observe {
+        published.retire_observed(|artifact| {
+            observe_published_housekeeping(&seed, reservation_identity, artifact, observer)
+        })
+    } else {
+        published.retire()
+    };
+    match retirement {
         Ok(completed) => seed.result_with_housekeeping(
             FinalState {
                 reservation_identity: completed.reservation_identity,
@@ -399,7 +645,7 @@ pub(super) fn finish_published(
                         ArtifactKind::PrivateOutput,
                         NameSlot::PrivateOutput,
                         Some(previous.identity),
-                        retirement,
+                        retirement.clone(),
                     ));
                 }
             }
@@ -408,7 +654,7 @@ pub(super) fn finish_published(
                     ArtifactKind::PrivateReservation,
                     NameSlot::Coordination,
                     Some(reservation_identity),
-                    retirement,
+                    retirement.clone(),
                 ));
             }
             let housekeeping = failure.owner.housekeeping;
@@ -431,20 +677,56 @@ pub(super) fn finish_published(
     }
 }
 
+fn observe_published_housekeeping(
+    seed: &Seed,
+    reservation_identity: super::namespace::Identity,
+    artifact: &super::HousekeepingArtifact,
+    observer: &mut impl FnMut(PublicationCheckpoint<'_>) -> std::result::Result<(), Problem>,
+) -> std::result::Result<(), Problem> {
+    let problem = interrupted_problem();
+    let mut checkpoint_seed = seed.clone();
+    let mut cleanup = CleanupArtifacts::new();
+    cleanup.push(super::CleanupArtifact {
+        kind: artifact.kind,
+        directory_role: artifact.directory_role,
+        directory_identity: artifact.directory_identity,
+        basename_encoding: artifact.basename_encoding,
+        basename: artifact.source_basename.clone(),
+        identity: artifact.source_identity,
+        creation_security: Some(artifact.creation_security.clone()),
+        unpublished_tail: None,
+        error: problem.clone(),
+    });
+    if artifact.kind == ArtifactKind::PrivateOutput {
+        cleanup.push(checkpoint_seed.artifact(
+            ArtifactKind::PrivateReservation,
+            NameSlot::Coordination,
+            Some(reservation_identity),
+            problem.clone(),
+        ));
+    }
+    let result = checkpoint_seed.result_with_housekeeping(
+        FinalState {
+            reservation_identity,
+            main_namespace_may_have_been_attempted: true,
+            publication: PublicationStatus::Published,
+            destination_content: DestinationContent::Desired,
+            main_access_policy: AccessPolicy::CreatorOnly,
+            coordination_access_policy: AccessPolicy::ChangedOrUnproven,
+        },
+        cleanup,
+        super::Housekeeping::Visible,
+        vec![artifact.clone()],
+        Some(problem),
+    );
+    observer(PublicationCheckpoint::Result(&result))
+}
+
 fn draft_owner(draft: &ReservationDraft) -> ReservationOwner<'_> {
     ReservationOwner {
         file: &draft.file,
         identity: draft.identity,
         private_name: &draft.name,
-        location: ReservationLocation::Private,
-    }
-}
-
-fn private_owner(reservation: &PrivateReservation) -> ReservationOwner<'_> {
-    ReservationOwner {
-        file: &reservation.file,
-        identity: Some(reservation.identity),
-        private_name: &reservation.name,
         location: ReservationLocation::Private,
     }
 }

@@ -222,6 +222,7 @@ pub(crate) struct Mapping {
     map: Option<MmapRaw>,
     len: usize,
     access: Access,
+    unreadable_pages: Option<Box<[u32]>>,
 }
 
 impl fmt::Debug for Mapping {
@@ -231,6 +232,13 @@ impl fmt::Debug for Mapping {
             .field("retains_file", &self.file.is_some())
             .field("len", &self.len)
             .field("access", &self.access)
+            .field(
+                "unreadable_pages",
+                &self
+                    .unreadable_pages
+                    .as_ref()
+                    .map_or(0, |pages| pages.len()),
+            )
             .finish()
     }
 }
@@ -253,6 +261,7 @@ impl Mapping {
             map,
             len,
             access,
+            unreadable_pages: None,
         })
     }
 
@@ -277,6 +286,7 @@ impl Mapping {
             map,
             len,
             access,
+            unreadable_pages: None,
         })
     }
 
@@ -297,7 +307,28 @@ impl Mapping {
         self.len as u64
     }
 
+    pub(crate) fn region(&self) -> Result<(*const u8, usize)> {
+        Ok((self.base()?, self.len))
+    }
+
+    pub(crate) fn set_unreadable_pages(&mut self, pages: &[u32]) -> Result<()> {
+        if pages.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(Error::InvalidArgument(
+                "unreadable mapped pages must be sorted and unique",
+            ));
+        }
+        self.unreadable_pages = (!pages.is_empty()).then(|| pages.into());
+        Ok(())
+    }
+
     pub(crate) fn page(&self, page_number: u32, page_limit: u64) -> Result<PageView<'_>> {
+        if self
+            .unreadable_pages
+            .as_deref()
+            .is_some_and(|pages| pages.binary_search(&page_number).is_ok())
+        {
+            return Err(Error::Io(std::io::Error::from_raw_os_error(libc::EIO)));
+        }
         let offset = page_offset(page_number, page_limit, self.len)?;
         let base = self.base()?;
         // SAFETY: `offset..offset + PAGE_SIZE` was checked inside this live map.
@@ -406,9 +437,10 @@ impl Mapping {
     }
 
     fn raw(&self) -> Result<&MmapRaw> {
-        self.map
-            .as_ref()
-            .ok_or(Error::WrongState("file mapping is unavailable"))
+        match self.map.as_ref() {
+            Some(map) => Ok(map),
+            None => Err(Error::WrongState("file mapping is unavailable")),
+        }
     }
 
     fn base(&self) -> Result<*const u8> {
@@ -735,7 +767,7 @@ fn page_offset(page_number: u32, page_limit: u64, map_len: usize) -> Result<usiz
     }
     let offset = (page_number as usize)
         .checked_mul(PAGE_SIZE)
-        .ok_or(Error::ArithmeticOverflow("mapped page offset"))?;
+        .ok_or_else(|| Error::arithmetic_overflow("mapped page offset"))?;
     checked_subrange(offset, PAGE_SIZE, map_len)?;
     Ok(offset)
 }
@@ -776,44 +808,8 @@ fn sync_file(file: &File) -> Result<()> {
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-
-    pub(crate) fn map(file: &File) -> Result<Mapping> {
-        Mapping::read_only_view(file, file.metadata()?.len())
-    }
-
-    pub(crate) fn read_exact_at(file: &File, output: &mut [u8], offset: u64) -> Result<()> {
-        let mapping = map(file)?;
-        if mapping.bytes(offset, output.len())?.copy_to(output) {
-            Ok(())
-        } else {
-            Err(Error::Corrupt("test mapping changed while copying"))
-        }
-    }
-
-    pub(crate) fn write_exact_at(file: &File, input: &[u8], offset: u64) -> Result<()> {
-        let mut mapping = Mapping::read_write_view(file, file.metadata()?.len())?;
-        mapping.bytes_mut(offset, input.len())?.write(0, input)
-    }
-
-    pub(crate) fn read_page(
-        file: &File,
-        page_number: u32,
-        page_limit: u64,
-        output: &mut [u8; PAGE_SIZE],
-    ) -> Result<()> {
-        let mapping = map(file)?;
-        if mapping
-            .page(page_number, page_limit)?
-            .copy_range_to(0, output)
-        {
-            Ok(())
-        } else {
-            Err(Error::Corrupt("test page changed while copying"))
-        }
-    }
-}
+#[path = "mapping_test.rs"]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests {

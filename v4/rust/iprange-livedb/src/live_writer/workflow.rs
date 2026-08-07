@@ -234,7 +234,7 @@ where
             cancellation.check()?;
             let next = input_records
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("workflow input record count"))?;
+                .ok_or_else(|| Error::arithmetic_overflow("workflow input record count"))?;
             apply(record)?;
             *input_records = next;
         }

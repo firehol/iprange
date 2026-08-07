@@ -76,6 +76,78 @@ pub enum ErrorCode {
     CleanupInProgress = 64,
 }
 
+impl ErrorCode {
+    pub(crate) const fn from_wire(value: u32) -> Option<Self> {
+        Some(match value {
+            1 => Self::InvalidArgument,
+            2 => Self::NullPointer,
+            3 => Self::MisalignedPointer,
+            4 => Self::InvalidLength,
+            5 => Self::InvalidEnum,
+            6 => Self::ReservedNonzero,
+            7 => Self::BufferTooSmall,
+            8 => Self::WrongHandleKind,
+            9 => Self::HandleClosed,
+            10 => Self::HandleBusy,
+            11 => Self::WrongState,
+            12 => Self::WrongAddressFamily,
+            13 => Self::WrongValueKind,
+            14 => Self::WrongValueTag,
+            15 => Self::RangeReversed,
+            16 => Self::NameInvalid,
+            17 => Self::NameExists,
+            18 => Self::NameNotFound,
+            19 => Self::StaleReference,
+            20 => Self::ForeignReference,
+            21 => Self::NoPendingTransaction,
+            22 => Self::TransactionAborted,
+            23 => Self::AbortIncomplete,
+            24 => Self::InsufficientResourceBudget,
+            25 => Self::PageSpaceExhausted,
+            26 => Self::WorkLimitTooSmall,
+            27 => Self::Cancelled,
+            28 => Self::SourceFailed,
+            29 => Self::SinkFailed,
+            30 => Self::StoppedBySink,
+            31 => Self::Io,
+            32 => Self::FormatInvalid,
+            33 => Self::NotV4,
+            34 => Self::DurabilityUnsupported,
+            35 => Self::PublicationUnsupported,
+            36 => Self::AccessPolicyUnsupported,
+            37 => Self::Conflict,
+            38 => Self::Unresolvable,
+            39 => Self::WriterBusy,
+            40 => Self::DirectoryIdentityMismatch,
+            41 => Self::DestinationNameMismatch,
+            42 => Self::CleanupConflict,
+            43 => Self::CoordinationSequenceExhausted,
+            44 => Self::LiveCoordinationUnsupported,
+            45 => Self::LiveCoordinationCleanupRequired,
+            46 => Self::LiveCoordinationMalformedRequiresReset,
+            47 => Self::LiveOpenCleanupRequired,
+            48 => Self::LiveRecoveryCoordinationUnavailable,
+            49 => Self::LiveRecoveryCurrentGenerationUnprovable,
+            50 => Self::LiveRecoveryCurrentGenerationUnreadable,
+            51 => Self::RecoveryCandidateChanged,
+            52 => Self::RecoveryPreparationFailed,
+            53 => Self::SnapshotPreparationFailed,
+            54 => Self::TransitionSuperseded,
+            55 => Self::CurrentGenerationUnprovable,
+            56 => Self::ForkedHandle,
+            57 => Self::Panic,
+            58 => Self::OsUnsupported,
+            59 => Self::TransactionIdExhausted,
+            60 => Self::ArithmeticOverflow,
+            61 => Self::FeedIndexExhausted,
+            62 => Self::MembershipIdExhausted,
+            63 => Self::ReaderCapacityExhausted,
+            64 => Self::CleanupInProgress,
+            _ => return None,
+        })
+    }
+}
+
 /// One SDK failure with its original cause where one exists.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -129,6 +201,11 @@ pub enum Error {
     CleanupConflict(&'static str),
     CleanupInProgress(&'static str),
     ForkedHandle,
+    /// A version-matched worker reported this stable error class.
+    WorkerOperation {
+        code: ErrorCode,
+        os_code: Option<i32>,
+    },
 }
 
 impl Error {
@@ -197,6 +274,7 @@ impl Error {
             Self::CleanupConflict(_) => ErrorCode::CleanupConflict,
             Self::CleanupInProgress(_) => ErrorCode::CleanupInProgress,
             Self::ForkedHandle => ErrorCode::ForkedHandle,
+            Self::WorkerOperation { code, .. } => *code,
         }
     }
 
@@ -301,6 +379,13 @@ impl fmt::Display for Error {
                 write!(output, "cleanup is in progress: {detail}")
             }
             Self::ForkedHandle => output.write_str("the live handle belongs to another process"),
+            Self::WorkerOperation { code, os_code } => match os_code {
+                Some(os_code) => write!(
+                    output,
+                    "isolated worker operation failed ({code:?}, OS error {os_code})"
+                ),
+                None => write!(output, "isolated worker operation failed ({code:?})"),
+            },
         }
     }
 }
@@ -349,7 +434,8 @@ impl std::error::Error for Error {
             | Self::Unresolvable(_)
             | Self::CleanupConflict(_)
             | Self::CleanupInProgress(_)
-            | Self::ForkedHandle => None,
+            | Self::ForkedHandle
+            | Self::WorkerOperation { .. } => None,
         }
     }
 }

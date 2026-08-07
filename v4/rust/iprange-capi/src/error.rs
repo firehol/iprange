@@ -195,7 +195,7 @@ impl ErrorHandle {
             code: problem.code as u32,
             caller_code: None,
             os_code: problem.os_code.map(i64::from),
-            message: problem.detail.to_owned(),
+            message: problem.detail.into_owned(),
             cause: None,
             cleanup: Vec::new(),
             cleanup_guard: None,

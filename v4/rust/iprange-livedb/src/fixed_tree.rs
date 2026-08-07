@@ -59,7 +59,7 @@ pub(crate) trait Codec {
     fn read_branch_child<S: ByteSource>(cell: S) -> Result<u32> {
         cell.array(Self::KEY_SIZE)
             .map(u32::from_le_bytes)
-            .ok_or(Error::Corrupt("B+tree branch record is too short"))
+            .ok_or_else(|| Error::corrupt("B+tree branch record is too short"))
     }
 }
 
@@ -108,7 +108,7 @@ impl RetiredPages {
         let slot = self
             .pages
             .get_mut(self.len)
-            .ok_or(Error::Corrupt("COW path exceeds the maximum tree height"))?;
+            .ok_or_else(|| Error::corrupt("COW path exceeds the maximum tree height"))?;
         *slot = page_number;
         self.len += 1;
         Ok(())
@@ -156,7 +156,7 @@ impl Path {
         let slot = self
             .frames
             .get_mut(self.depth)
-            .ok_or(Error::Corrupt("B+tree exceeds its maximum height"))?;
+            .ok_or_else(|| Error::corrupt("B+tree exceeds its maximum height"))?;
         *slot = frame;
         self.depth += 1;
         Ok(())

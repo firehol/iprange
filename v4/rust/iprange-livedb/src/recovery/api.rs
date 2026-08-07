@@ -23,11 +23,11 @@ pub fn recover_immutable<S: RecoverySink>(
     sink: &mut S,
     cancellation: &CancellationToken,
 ) -> RecoveryOutcome {
-    platform::recover(
+    crate::worker::recover(
         source_path.as_ref(),
         candidate,
         destination_path.as_ref(),
-        platform::Mode::Immutable,
+        WorkerMode::Immutable,
         budget,
         sink,
         cancellation,
@@ -44,11 +44,11 @@ pub fn recover_offline<S: RecoverySink>(
     cancellation: &CancellationToken,
 ) -> RecoveryOutcome {
     let _ = certification;
-    platform::recover(
+    crate::worker::recover(
         source_path.as_ref(),
         candidate,
         destination_path.as_ref(),
-        platform::Mode::Offline,
+        WorkerMode::Offline,
         budget,
         sink,
         cancellation,
@@ -63,11 +63,11 @@ pub fn recover_live<S: RecoverySink>(
     sink: &mut S,
     cancellation: &CancellationToken,
 ) -> RecoveryOutcome {
-    platform::recover(
+    crate::worker::recover(
         source_path.as_ref(),
         candidate,
         destination_path.as_ref(),
-        platform::Mode::Live,
+        WorkerMode::Live,
         budget,
         sink,
         cancellation,
@@ -80,7 +80,7 @@ mod platform {
     use crate::error::Error;
     use crate::immutable_output::{Builder, Finished, OutputBudget, OutputSpec};
     use crate::publication::cleanup;
-    use crate::publication::output::{CreatedOutput, OutputAttempt};
+    use crate::publication::output::OutputAttempt;
     use crate::publication::problem::Problem;
     use crate::publication::{self, PublicationProblem};
     use crate::random;
@@ -92,8 +92,8 @@ mod platform {
     use crate::recovery::terminal;
     use crate::recovery::{RecoveryReport, ScratchCleanup};
 
-    #[derive(Clone, Copy)]
-    pub(super) enum Mode {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Mode {
         Immutable,
         Offline,
         Live,
@@ -112,42 +112,31 @@ mod platform {
         scratch: Option<ScratchCleanup>,
     }
 
-    pub(super) fn recover<S: RecoverySink>(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn recover_precreated<S: RecoverySink>(
         source_path: &Path,
         candidate: RecoveryCandidate,
-        destination_path: &Path,
         mode: Mode,
         budget: &RecoveryBudget,
         sink: &mut S,
         cancellation: &CancellationToken,
+        attempt: OutputAttempt,
+        file: std::fs::File,
     ) -> RecoveryOutcome {
         let effective = validate_budget(budget, mode)?;
-        let source = open_source(source_path, candidate, mode, cancellation)?;
-        let created = match CreatedOutput::create_absent(destination_path) {
-            Ok(created) => created,
-            Err(cause) => {
-                return Err(fail_source(
-                    source,
-                    Problem::output(&cause),
-                    RecoveryReport::default(),
-                    None,
-                    None,
-                ))
+        let source = match open_source(source_path, candidate, mode, cancellation) {
+            Ok(source) => source,
+            Err(mut failure) => {
+                let discarded = cleanup::discard_attempt(&attempt, &file);
+                failure.output = Some(discarded.output);
+                if let Some(artifact) = discarded.artifact {
+                    failure.cleanup.push(artifact);
+                }
+                failure.housekeeping = discarded.housekeeping;
+                failure.visible_housekeeping = discarded.visible_housekeeping;
+                return Err(failure);
             }
         };
-        let secured = match created.secure() {
-            Ok(secured) => secured,
-            Err(failure) => {
-                return Err(fail_source(
-                    source,
-                    Problem::output(&failure.cause),
-                    RecoveryReport::default(),
-                    Some(cleanup::discard_created(&failure.owner)),
-                    None,
-                ));
-            }
-        };
-        let (attempt, file) = secured.into_parts();
         if source.identity().bytes == attempt.identity().encode() {
             return Err(fail_attempt(
                 source,
@@ -161,7 +150,7 @@ mod platform {
         construct(source, attempt, file, &effective, sink, cancellation)
     }
 
-    fn validate_budget(
+    pub(crate) fn validate_budget(
         budget: &RecoveryBudget,
         mode: Mode,
     ) -> std::result::Result<RecoveryBudget, Box<RecoveryPreparationFailure>> {
@@ -248,6 +237,19 @@ mod platform {
                 ))
             }
         };
+        let source_probe = match crate::worker::enter_source(source.mapping()) {
+            Ok(probe) => probe,
+            Err(cause) => {
+                return Err(fail_attempt(
+                    source,
+                    attempt,
+                    builder.into_file(),
+                    cause,
+                    RecoveryReport::default(),
+                    None,
+                ))
+            }
+        };
         let built = match build(source.mapping(), meta, builder, budget, cancellation, sink) {
             Ok(built) => built,
             Err(failure) => {
@@ -263,6 +265,7 @@ mod platform {
                 ));
             }
         };
+        drop(source_probe);
         finish(source, attempt, meta, built, cancellation)
     }
 
@@ -329,7 +332,31 @@ mod platform {
         built: Built,
         cancellation: &CancellationToken,
     ) -> RecoveryOutcome {
+        if let Err(cause) = crate::worker::checkpoint_recovery_progress(&built.report) {
+            let discarded = cleanup::discard_attempt(&attempt, &built.finished.file);
+            return Err(fail_source(
+                source,
+                problem(&cause),
+                built.report,
+                Some(discarded),
+                built.scratch,
+            ));
+        }
+        let source_probe = match crate::worker::enter_source(source.mapping()) {
+            Ok(probe) => probe,
+            Err(cause) => {
+                let discarded = cleanup::discard_attempt(&attempt, &built.finished.file);
+                return Err(fail_source(
+                    source,
+                    problem(&cause),
+                    built.report,
+                    Some(discarded),
+                    built.scratch,
+                ));
+            }
+        };
         let end = source.finish(source_meta, cancellation);
+        drop(source_probe);
         if let Some(cause) = end.cause {
             let discarded = cleanup::discard_attempt(&attempt, &built.finished.file);
             return Err(Box::new(RecoveryPreparationFailure::discarded(
@@ -355,7 +382,31 @@ mod platform {
                 )));
             }
         };
-        match publication::attempt::fail_if_exists_cancellable(prepared, cancellation) {
+        let checkpoint_report = &built.report;
+        let checkpoint_scratch = &built.scratch;
+        match publication::attempt::fail_if_exists_cancellable_observed(
+            prepared,
+            cancellation,
+            |checkpoint| {
+                let outcome = match checkpoint {
+                    publication::attempt::PublicationCheckpoint::Preparation(failure) => {
+                        Err(Box::new(RecoveryPreparationFailure::from_publication(
+                            failure.clone(),
+                            checkpoint_report.clone(),
+                            checkpoint_scratch.clone(),
+                        )))
+                    }
+                    publication::attempt::PublicationCheckpoint::Result(result) => {
+                        Ok(terminal::completed(
+                            checkpoint_report.clone(),
+                            checkpoint_scratch.clone(),
+                            result.clone(),
+                        ))
+                    }
+                };
+                crate::worker::checkpoint_recovery(&outcome).map_err(|cause| Problem::sdk(&cause))
+            },
+        ) {
             Ok(result) => Ok(terminal::completed(built.report, built.scratch, result)),
             Err(failure) => Err(Box::new(RecoveryPreparationFailure::from_publication(
                 *failure,
@@ -373,6 +424,10 @@ mod platform {
         report: RecoveryReport,
         scratch: Option<ScratchCleanup>,
     ) -> Box<RecoveryPreparationFailure> {
+        let cause = match crate::worker::checkpoint_recovery_progress(&report) {
+            Ok(()) => cause,
+            Err(checkpoint) => checkpoint,
+        };
         let discarded = cleanup::discard_attempt(&attempt, &file);
         fail_source(source, problem(&cause), report, Some(discarded), scratch)
     }
@@ -403,23 +458,65 @@ mod platform {
     use super::*;
 
     #[derive(Clone, Copy)]
-    pub(super) enum Mode {
+    pub(crate) enum Mode {
         Immutable,
         Offline,
         Live,
     }
 
-    pub(super) fn recover<S: RecoverySink>(
+    pub(crate) fn recover_precreated<S: RecoverySink>(
         _source_path: &Path,
         _candidate: RecoveryCandidate,
-        _destination_path: &Path,
         _mode: Mode,
         _budget: &RecoveryBudget,
         _sink: &mut S,
         _cancellation: &CancellationToken,
+        _attempt: crate::publication::output::OutputAttempt,
+        _file: std::fs::File,
     ) -> RecoveryOutcome {
         Err(Box::new(RecoveryPreparationFailure::early(
             Error::Unsupported("recovery publication is not implemented on this platform"),
         )))
     }
+
+    pub(crate) fn validate_budget(
+        _budget: &RecoveryBudget,
+        _mode: Mode,
+    ) -> std::result::Result<RecoveryBudget, Box<RecoveryPreparationFailure>> {
+        Err(Box::new(RecoveryPreparationFailure::early(
+            Error::Unsupported("recovery publication is not implemented on this platform"),
+        )))
+    }
+}
+
+pub(crate) use platform::Mode as WorkerMode;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn recover_precreated_local<S: RecoverySink>(
+    source_path: &Path,
+    candidate: RecoveryCandidate,
+    mode: WorkerMode,
+    budget: &RecoveryBudget,
+    sink: &mut S,
+    cancellation: &CancellationToken,
+    attempt: crate::publication::output::OutputAttempt,
+    file: std::fs::File,
+) -> RecoveryOutcome {
+    platform::recover_precreated(
+        source_path,
+        candidate,
+        mode,
+        budget,
+        sink,
+        cancellation,
+        attempt,
+        file,
+    )
+}
+
+pub(crate) fn validate_worker_budget(
+    budget: &RecoveryBudget,
+    mode: WorkerMode,
+) -> std::result::Result<(), Box<RecoveryPreparationFailure>> {
+    platform::validate_budget(budget, mode).map(|_| ())
 }

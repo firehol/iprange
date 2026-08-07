@@ -34,10 +34,21 @@ pub fn inspect_recovery_candidates(
 ) -> Result<RecoveryCandidateInspection> {
     require_budget(budget, mode)?;
     cancellation.check()?;
+    crate::worker::inspect_recovery_candidates(path.as_ref(), mode, budget, cancellation)
+}
+
+pub(crate) fn inspect_recovery_candidates_local(
+    path: &Path,
+    mode: RecoveryInspectionMode,
+    budget: &ValidationBudget,
+    cancellation: &CancellationToken,
+) -> Result<RecoveryCandidateInspection> {
+    require_budget(budget, mode)?;
+    cancellation.check()?;
     match mode {
-        RecoveryInspectionMode::Immutable => inspect_immutable(path.as_ref(), cancellation),
-        RecoveryInspectionMode::Live => inspect_live(path.as_ref(), cancellation),
-        RecoveryInspectionMode::Offline => inspect_offline(path.as_ref(), cancellation),
+        RecoveryInspectionMode::Immutable => inspect_immutable(path, cancellation),
+        RecoveryInspectionMode::Live => inspect_live(path, cancellation),
+        RecoveryInspectionMode::Offline => inspect_offline(path, cancellation),
     }
 }
 
@@ -221,18 +232,32 @@ pub(crate) fn read_classified(
         .then(|| Mapping::read_only_view(file, mapped_bytes))
         .transpose()?;
     let mut states = [None, None];
+    if let Some(mapping) = mapping.as_ref() {
+        crate::worker::probe_source(mapping, || {
+            classify_mapped(mapping, mapped_bytes, cancellation, &mut states)
+        })?;
+    }
+    Ok(ClassifiedMetas::new(states))
+}
+
+fn classify_mapped(
+    mapping: &Mapping,
+    mapped_bytes: u64,
+    cancellation: &CancellationToken,
+    states: &mut [Option<crate::bootstrap::RecoveryMetaState>; 2],
+) -> Result<()> {
     for (index, slot) in states.iter_mut().enumerate() {
         cancellation.check()?;
         let page_end = ((index + 1) * PAGE_SIZE) as u64;
         if page_end <= mapped_bytes {
-            let page = mapping
-                .as_ref()
-                .expect("a complete metadata page has a mapping")
-                .page(index as u32, 2)?;
+            if crate::worker::source_page_unreadable(index as u32) {
+                continue;
+            }
+            let page = mapping.page(index as u32, 2)?;
             *slot = Some(classify_recovery_meta(page));
         }
     }
-    Ok(ClassifiedMetas::new(states))
+    Ok(())
 }
 
 pub(crate) struct OfflineSource {

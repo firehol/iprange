@@ -458,7 +458,7 @@ fn register_live(
     sidecar
         .verify_header()
         .map_err(RegistrationFailure::Unclaimed)?;
-    let bootstrap = match database::bootstrap_file(file, OpenMode::LiveReader) {
+    let bootstrap = match database::bootstrap_file_faultable(file, OpenMode::LiveReader) {
         Ok(bootstrap) => bootstrap,
         Err(Error::Format(problem)) => {
             return register_bootstrap(file, path, identity, sidecar, problem, cancellation)
@@ -515,17 +515,9 @@ fn register_bootstrap(
 }
 
 pub(crate) fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8; 16]> {
-    match database::bootstrap_file(file, OpenMode::LiveReader) {
+    match database::bootstrap_file_faultable(file, OpenMode::LiveReader) {
         Ok(bootstrap) => Ok(bootstrap.meta.database_id),
-        Err(Error::Format(_)) => {
-            let mapping = crate::mapping::Mapping::read_only_view(
-                file,
-                (2 * crate::contract::PAGE_SIZE) as u64,
-            )?;
-            let meta0 = mapping.page(0, 2)?;
-            let meta1 = mapping.page(1, 2)?;
-            Ok(crate::bootstrap::database_id_from_meta_pages(meta0, meta1)?)
-        }
+        Err(Error::Format(_)) => database::database_id_from_file_faultable(file),
         Err(cause) => Err(cause),
     }
 }

@@ -24,7 +24,7 @@ pub(super) fn record_cancellation(
     mut result: PublicationResult,
     cancellation: &CancellationToken,
 ) -> PublicationResult {
-    let cleanup_cause = result.cleanup.get(0).map(|artifact| artifact.error);
+    let cleanup_cause = result.cleanup.get(0).map(|artifact| artifact.error.clone());
     if cancellation.is_cancelled() && (result.cause.is_none() || result.cause == cleanup_cause) {
         result.cause = Some(Problem::new(
             ErrorCode::Cancelled,
@@ -53,7 +53,7 @@ pub(super) fn desired_result(
     let cause = verification
         .as_ref()
         .err()
-        .copied()
+        .cloned()
         .or_else(|| first_problem(&summary.artifacts));
     let publication = if verification.is_ok() {
         PublicationStatus::Published
@@ -181,7 +181,7 @@ pub(super) fn coordination_access(
 }
 
 pub(super) fn first_problem(cleanup: &CleanupArtifacts) -> Option<Problem> {
-    cleanup.get(0).map(|artifact| artifact.error)
+    cleanup.get(0).map(|artifact| artifact.error.clone())
 }
 
 pub(super) trait LaterResult {

@@ -116,6 +116,41 @@ pub fn remove_abandoned_scratch(
     }
 }
 
+pub(crate) fn remove_checkpointed_scratch(
+    directory: &Path,
+    expected_directory_identity: LocalFileIdentity,
+    attempt_id: [u8; 16],
+    ordinal: u32,
+    expected_artifact_identity: LocalFileIdentity,
+    creation_security: crate::publication::CreationSecurity,
+) -> Result<crate::publication::AbandonedArtifactRemoval> {
+    #[cfg(any(unix, windows))]
+    {
+        platform::remove_checkpointed(
+            directory,
+            expected_directory_identity,
+            attempt_id,
+            ordinal,
+            expected_artifact_identity,
+            creation_security,
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (
+            directory,
+            expected_directory_identity,
+            attempt_id,
+            ordinal,
+            expected_artifact_identity,
+            creation_security,
+        );
+        Err(crate::Error::Unsupported(
+            "checkpointed scratch cleanup is not implemented on this platform",
+        ))
+    }
+}
+
 #[cfg(any(unix, windows))]
 #[path = "scratch_maintenance/support.rs"]
 mod support;
@@ -223,6 +258,29 @@ mod platform {
         .run(cancellation)
     }
 
+    pub(super) fn remove_checkpointed(
+        path: &Path,
+        expected_directory: LocalFileIdentity,
+        attempt: [u8; 16],
+        ordinal: u32,
+        expected_artifact: LocalFileIdentity,
+        creation_security: crate::publication::CreationSecurity,
+    ) -> Result<AbandonedArtifactRemoval> {
+        let expected_directory = identity(expected_directory)?;
+        let expected_artifact = identity(expected_artifact)?;
+        let directory = Directory::open(path).map_err(namespace_error)?;
+        require_directory(&directory, expected_directory)?;
+        let name = scratch_name(attempt, ordinal)?;
+        Removal {
+            directory,
+            name,
+            expected_artifact,
+            attempt,
+            ordinal,
+        }
+        .run_checkpointed(creation_security)
+    }
+
     fn inspect(
         directory: &Directory,
         bytes: &[u8],
@@ -299,6 +357,23 @@ mod platform {
             self.retire(file, header, cancellation)
         }
 
+        fn run_checkpointed(
+            self,
+            creation_security: crate::publication::CreationSecurity,
+        ) -> Result<AbandonedArtifactRemoval> {
+            let present = self.present()?;
+            #[cfg(windows)]
+            if let Some(result) = self.resume(present) {
+                return Ok(result);
+            }
+            if !present {
+                durable_absence(&self.directory, &self.name)?;
+                return Ok(removal(false, None, Housekeeping::None, Box::default()));
+            }
+            let file = self.open_exact_checkpointed()?;
+            self.retire_checkpointed(file, creation_security)
+        }
+
         fn present(&self) -> Result<bool> {
             let Some(found) = self.directory.entry(&self.name).map_err(namespace_error)? else {
                 return Ok(false);
@@ -326,6 +401,21 @@ mod platform {
                 .verify_name(&self.name, self.expected_artifact)
                 .map_err(cleanup_error)?;
             Ok((regular.file, header))
+        }
+
+        fn open_exact_checkpointed(&self) -> Result<File> {
+            let regular = self
+                .directory
+                .open_regular(&self.name, false)
+                .map_err(namespace_error)?
+                .ok_or(Error::CleanupConflict(
+                    "checkpointed scratch lost its exact name",
+                ))?;
+            require_owned(true, 1, regular.identity, self.expected_artifact)?;
+            self.directory
+                .verify_name(&self.name, self.expected_artifact)
+                .map_err(cleanup_error)?;
+            Ok(regular.file)
         }
 
         #[cfg(windows)]
@@ -372,6 +462,21 @@ mod platform {
             cancellation: &CancellationToken,
         ) -> Result<AbandonedArtifactRemoval> {
             cancellation.check()?;
+            self.retire_checkpointed(
+                file,
+                crate::publication::CreationSecurity {
+                    kind: 0,
+                    commitment: [0; 32],
+                },
+            )
+        }
+
+        #[cfg(unix)]
+        fn retire_checkpointed(
+            &self,
+            file: File,
+            _creation_security: crate::publication::CreationSecurity,
+        ) -> Result<AbandonedArtifactRemoval> {
             let removed = self
                 .directory
                 .unlink_exact(&self.name, self.expected_artifact)
@@ -420,9 +525,24 @@ mod platform {
             header: DecodedHeader,
             cancellation: &CancellationToken,
         ) -> Result<AbandonedArtifactRemoval> {
+            cancellation.check()?;
+            self.retire_checkpointed(
+                file,
+                CreationSecurity {
+                    kind: header.creation_security_kind,
+                    commitment: header.creation_security_commitment,
+                },
+            )
+        }
+
+        #[cfg(windows)]
+        fn retire_checkpointed(
+            &self,
+            file: File,
+            creation_security: CreationSecurity,
+        ) -> Result<AbandonedArtifactRemoval> {
             use crate::publication::gc::{self, Authority};
 
-            cancellation.check()?;
             let retired = gc::retire(
                 &self.directory,
                 Authority {
@@ -433,10 +553,7 @@ mod platform {
                     source_name: &self.name,
                     source_file: &file,
                     identity: self.expected_artifact,
-                    creation_security: CreationSecurity {
-                        kind: header.creation_security_kind,
-                        commitment: header.creation_security_commitment,
-                    },
+                    creation_security,
                     payload: None,
                 },
             );

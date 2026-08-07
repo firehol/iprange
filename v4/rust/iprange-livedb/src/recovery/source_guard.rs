@@ -1,5 +1,8 @@
 //! Exact source-generation protection for one recovery operation.
 
+// Cleanup failures retain exact source ownership inline for a retry.
+#![allow(clippy::result_large_err)]
+
 mod basic;
 mod live;
 
@@ -101,11 +104,12 @@ pub struct RecoverySourceCleanupGuard {
 enum GuardSource {
     Recovery(Box<Source>),
     Validation(Box<crate::validation::source::ValidationCleanupSource>),
+    Worker(crate::worker::WorkerCleanup),
 }
 
 impl RecoverySourceCleanupGuard {
     pub fn last_problem(&self) -> PublicationProblem {
-        self.last_problem
+        self.last_problem.clone()
     }
 
     pub fn cleanup_pending(&self) -> bool {
@@ -121,7 +125,7 @@ impl RecoverySourceCleanupGuard {
             Err(cause) => {
                 self.last_problem = source.problem(&cause);
                 self.source = Some(source);
-                Err(self.last_problem)
+                Err(self.last_problem.clone())
             }
         }
     }
@@ -135,6 +139,16 @@ impl RecoverySourceCleanupGuard {
             last_problem: validation_problem(cause),
         }
     }
+
+    pub(crate) fn from_worker(
+        source: crate::worker::WorkerCleanup,
+        last_problem: PublicationProblem,
+    ) -> Self {
+        Self {
+            source: Some(GuardSource::Worker(source)),
+            last_problem,
+        }
+    }
 }
 
 impl GuardSource {
@@ -142,6 +156,7 @@ impl GuardSource {
         match self {
             Self::Recovery(source) => source.release(),
             Self::Validation(source) => source.release(),
+            Self::Worker(source) => source.release(),
         }
     }
 
@@ -149,6 +164,7 @@ impl GuardSource {
         match self {
             Self::Recovery(_) => problem(error),
             Self::Validation(_) => validation_problem(error),
+            Self::Worker(source) => source.last_problem(),
         }
     }
 }

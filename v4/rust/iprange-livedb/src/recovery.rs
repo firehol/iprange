@@ -33,7 +33,11 @@ mod tree_scan;
 use crate::validation::{LocalFileIdentity, ValidationProgress};
 
 #[cfg(any(unix, windows))]
-pub(crate) use scratch::ScratchCleanup;
+pub(crate) use scratch::{checkpoint_basename, ScratchCleanup, ScratchProblem, ScratchResidue};
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use scratch::{
+    Scratch as RuntimeProbeScratch, HEADER_SIZE as RUNTIME_PROBE_HEADER_SIZE,
+};
 #[cfg(not(any(unix, windows)))]
 #[derive(Clone, Debug)]
 pub(crate) struct ScratchCleanup;
@@ -42,12 +46,14 @@ pub use api::{
     recover_immutable, recover_live, recover_offline, OfflineQuiescenceCertification,
     RecoveryOutcome,
 };
+pub(crate) use api::{recover_precreated_local, validate_worker_budget, WorkerMode};
 pub use budget::RecoveryBudget;
 pub use inspection::{inspect_recovery_candidates, RecoveryInspectionMode};
 pub use report::{
     RecoveryLogicalCounts, RecoveryPageCounts, RecoveryReport, RecoverySink, RecoverySinkControl,
     RecoveryUnknownEnvelope,
 };
+pub(crate) use scratch_maintenance::remove_checkpointed_scratch;
 pub use scratch_maintenance::{
     list_abandoned_scratch, remove_abandoned_scratch, AbandonedScratchAuthentication,
     AbandonedScratchEntry, AbandonedScratchList, AbandonedScratchSink, AbandonedScratchSinkControl,

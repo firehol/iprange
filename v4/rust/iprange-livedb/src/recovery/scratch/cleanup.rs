@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 #[cfg(unix)]
 use std::fs::File;
 
@@ -20,7 +21,7 @@ pub(super) fn set_removed_problems(
 ) {
     for index in 0..MAX_OWNED {
         if removed[index] {
-            problems[index] = Some(problem);
+            problems[index] = Some(problem.clone());
         }
     }
 }
@@ -78,7 +79,7 @@ fn conflict(detail: &'static str) -> ScratchProblem {
     ScratchProblem {
         code: ErrorCode::CleanupConflict,
         os_code: None,
-        detail,
+        detail: Cow::Borrowed(detail),
     }
 }
 
@@ -105,7 +106,7 @@ pub(super) fn scratch_problem(error: &NamespaceError) -> ScratchProblem {
         NamespaceError::ForkedHandle => ScratchProblem {
             code: ErrorCode::ForkedHandle,
             os_code: None,
-            detail: "scratch owner crossed fork",
+            detail: Cow::Borrowed("scratch owner crossed fork"),
         },
         NamespaceError::Io(source) | NamespaceError::IoAt { source, .. } => {
             io_problem(source, "recovery scratch cleanup failed")
@@ -115,14 +116,20 @@ pub(super) fn scratch_problem(error: &NamespaceError) -> ScratchProblem {
 }
 
 pub(crate) fn residue_error(cleanup: &ScratchCleanup) -> Error {
-    let problem = cleanup
+    let problem = &cleanup
         .residues
         .first()
         .expect("unclean scratch has at least one residue")
         .problem;
     match (problem.code, problem.os_code) {
         (ErrorCode::Io, Some(code)) => Error::Io(std::io::Error::from_raw_os_error(code)),
-        _ => Error::Corrupt(problem.detail),
+        _ => match &problem.detail {
+            Cow::Borrowed(detail) => Error::Corrupt(detail),
+            Cow::Owned(_) => Error::WorkerOperation {
+                code: problem.code,
+                os_code: problem.os_code,
+            },
+        },
     }
 }
 
@@ -131,6 +138,6 @@ fn io_problem(error: &std::io::Error, detail: &'static str) -> ScratchProblem {
     ScratchProblem {
         code: ErrorCode::Io,
         os_code: error.raw_os_error(),
-        detail,
+        detail: Cow::Borrowed(detail),
     }
 }

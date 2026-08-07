@@ -270,6 +270,96 @@ impl OutputAttempt {
     }
 }
 
+pub(crate) fn resume_secured_output(
+    destination_path: &Path,
+    facts: &PrivateOutputAttempt,
+) -> Result<(OutputAttempt, File), Error> {
+    open_secured_output(destination_path, facts)?.ok_or(Error::Namespace(NamespaceError::Missing))
+}
+
+pub(crate) fn resume_secured_output_for_cleanup(
+    destination_path: &Path,
+    facts: &PrivateOutputAttempt,
+) -> Result<Option<(OutputAttempt, File)>, Error> {
+    let resumed = open_secured_output(destination_path, facts)?;
+    if resumed.is_some() {
+        return Ok(resumed);
+    }
+
+    let (destination, name, _) = bind_secured_output(destination_path, facts)?;
+    #[cfg(unix)]
+    destination.directory().sync().map_err(Error::Namespace)?;
+    destination.directory().verify().map_err(Error::Namespace)?;
+    destination
+        .directory()
+        .require_absent(&name)
+        .map_err(Error::Namespace)?;
+    Ok(None)
+}
+
+fn open_secured_output(
+    destination_path: &Path,
+    facts: &PrivateOutputAttempt,
+) -> Result<Option<(OutputAttempt, File)>, Error> {
+    let (destination, name, identity) = bind_secured_output(destination_path, facts)?;
+    let Some(regular) = destination
+        .directory()
+        .open_regular(&name, true)
+        .map_err(Error::Namespace)?
+    else {
+        return Ok(None);
+    };
+    if regular.identity != identity {
+        return Err(Error::Namespace(NamespaceError::IdentityChanged));
+    }
+    destination
+        .directory()
+        .verify_name(&name, identity)
+        .map_err(Error::Namespace)?;
+    destination
+        .verify_created(&regular.file)
+        .map_err(Error::Namespace)?;
+    Ok(Some((
+        OutputAttempt {
+            destination,
+            attempt_id: facts.publication_attempt_id,
+            name,
+            identity,
+        },
+        regular.file,
+    )))
+}
+
+fn bind_secured_output(
+    destination_path: &Path,
+    facts: &PrivateOutputAttempt,
+) -> Result<(Destination, Name, Identity), Error> {
+    if facts.basename_encoding != BASENAME_ENCODING_KIND
+        || facts.creation_security.kind != CREATION_SECURITY_KIND
+    {
+        return Err(Error::Sdk(crate::Error::InvalidArgument(
+            "worker output facts use an unsupported encoding",
+        )));
+    }
+    let identity = facts
+        .identity
+        .and_then(|identity| Identity::decode(identity.bytes))
+        .ok_or(Error::Sdk(crate::Error::InvalidArgument(
+            "worker output identity is invalid",
+        )))?;
+    let destination = Destination::bind(destination_path).map_err(Error::Namespace)?;
+    let name = destination
+        .output_name(facts.publication_attempt_id)
+        .map_err(Error::Namespace)?;
+    if local(destination.directory().identity()) != facts.directory_identity
+        || name.bytes() != facts.basename.as_ref()
+        || destination.security_commitment() != facts.creation_security.commitment
+    {
+        return Err(Error::Namespace(NamespaceError::IdentityChanged));
+    }
+    Ok((destination, name, identity))
+}
+
 #[derive(Debug)]
 pub(crate) struct UnpreparedOutput {
     pub(crate) attempt: OutputAttempt,
@@ -312,6 +402,7 @@ impl PreparedOutput {
     }
 
     fn verify(&self, location: Location) -> Result<(), Error> {
+        let _probe = crate::worker::enter_output(&self.mapping).map_err(Error::Sdk)?;
         let length = inspect_exact(
             &self.attempt,
             &self.file,
@@ -355,6 +446,7 @@ fn prepare_cancellable(
     cancellation: &CancellationToken,
 ) -> Result<(u64, [u8; 64]), Error> {
     cancellation.check().map_err(Error::Sdk)?;
+    let _probe = crate::worker::enter_output(&owner.finished.mapping).map_err(Error::Sdk)?;
     verify_custody(&owner.attempt, &owner.finished.file, Location::Private)?;
     live_lock::lock_cancellable(
         &owner.finished.file,

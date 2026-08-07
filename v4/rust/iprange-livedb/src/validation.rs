@@ -1,5 +1,8 @@
 //! Explicit bounded full-file validation.
 
+// A validation failure returns its factual progress and cleanup authority inline.
+#![allow(clippy::result_large_err)]
+
 mod bitmap;
 mod blob;
 mod catalog;
@@ -44,6 +47,19 @@ pub fn validate<S: ValidationSink>(
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
         return Err(failure(cause, ValidationProgress::new()));
     }
+    crate::worker::validate(path.as_ref(), &mode, budget, cancellation, sink)
+}
+
+pub(crate) fn validate_local<S: ValidationSink>(
+    path: &Path,
+    mode: ValidationMode,
+    budget: &ValidationBudget,
+    cancellation: &CancellationToken,
+    sink: &mut S,
+) -> std::result::Result<ValidationResult, ValidationFailure> {
+    if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
+        return Err(failure(cause, ValidationProgress::new()));
+    }
     match mode {
         ValidationMode::ImmutableCurrent => {
             if budget.max_open_files < 1 {
@@ -52,7 +68,7 @@ pub fn validate<S: ValidationSink>(
                     ValidationProgress::new(),
                 ));
             }
-            validate_immutable(path.as_ref(), budget, cancellation, sink)
+            validate_immutable(path, budget, cancellation, sink)
         }
         ValidationMode::LiveCurrent => {
             if budget.max_open_files < 2 {
@@ -61,10 +77,10 @@ pub fn validate<S: ValidationSink>(
                     ValidationProgress::new(),
                 ));
             }
-            validate_live(path.as_ref(), budget, cancellation, sink)
+            validate_live(path, budget, cancellation, sink)
         }
         ValidationMode::OfflineCandidate(candidate) => {
-            validate_offline(path.as_ref(), &candidate, budget, cancellation, sink)
+            validate_offline(path, &candidate, budget, cancellation, sink)
         }
     }
 }
@@ -97,9 +113,11 @@ fn validate_offline<S: ValidationSink>(
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let mut context = context::Context::new(&mapping, meta, budget, cancellation, sink)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-    let scan = context
-        .reserve_allocator_pages()
-        .and_then(|()| validate_selected(&mut context));
+    let scan = crate::worker::probe_source(&mapping, || {
+        context
+            .reserve_allocator_pages()
+            .and_then(|()| validate_selected(&mut context))
+    });
     let verification = verify_offline_candidate(&source, candidate, cancellation);
     let progress = context.finish();
     if let Err(cause) = scan {
@@ -183,10 +201,13 @@ fn validate_live_selected<S: ValidationSink>(
             ));
         }
     };
-    let scan = context
-        .reserve_allocator_pages()
-        .and_then(|()| validate_selected(&mut context));
+    let scan = crate::worker::probe_source(&mapping, || {
+        context
+            .reserve_allocator_pages()
+            .and_then(|()| validate_selected(&mut context))
+    });
     let progress = context.finish();
+    let scan = scan.and_then(|()| crate::worker::checkpoint_validation_progress(&progress));
     let end = source.finish(scan);
     if let Some(cause) = end.cause {
         return Err(failure_with_guard(cause, progress, end.guard));
@@ -228,15 +249,16 @@ fn validate_immutable<S: ValidationSink>(
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
     let source = ImmutableSource::open(path, cancellation)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-    let bootstrap = match database::bootstrap_file(&source.file, OpenMode::ImmutableReader) {
-        Ok(bootstrap) => bootstrap,
-        Err(Error::Format(problem)) => {
-            require_bound_source_available(&source)
-                .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-            return bootstrap_report(&source, problem, sink);
-        }
-        Err(cause) => return Err(failure(cause, ValidationProgress::new())),
-    };
+    let bootstrap =
+        match database::bootstrap_file_faultable(&source.file, OpenMode::ImmutableReader) {
+            Ok(bootstrap) => bootstrap,
+            Err(Error::Format(problem)) => {
+                require_bound_source_available(&source)
+                    .map_err(|cause| failure(cause, ValidationProgress::new()))?;
+                return bootstrap_report(&source, problem, sink);
+            }
+            Err(cause) => return Err(failure(cause, ValidationProgress::new())),
+        };
     source
         .require_available(bootstrap.meta.database_id)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
@@ -244,9 +266,11 @@ fn validate_immutable<S: ValidationSink>(
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let mut context = context::Context::new(&mapping, bootstrap.meta, budget, cancellation, sink)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
-    let scan = context
-        .reserve_allocator_pages()
-        .and_then(|()| validate_selected(&mut context));
+    let scan = crate::worker::probe_source(&mapping, || {
+        context
+            .reserve_allocator_pages()
+            .and_then(|()| validate_selected(&mut context))
+    });
     let verification = source.verify();
     let progress = context.finish();
     if let Err(cause) = scan {
@@ -268,7 +292,9 @@ fn validation_mapping(file: &std::fs::File, meta: MetaV4) -> Result<Mapping> {
         .page_count
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(Error::ArithmeticOverflow("validation mapping length"))?;
-    Mapping::read_only_view(file, len)
+    let mut mapping = Mapping::read_only_view(file, len)?;
+    mapping.set_unreadable_pages(&crate::worker::unreadable_source_pages())?;
+    Ok(mapping)
 }
 
 fn require_bound_source_available(source: &ImmutableSource) -> Result<()> {
@@ -349,7 +375,9 @@ fn report_meta_problem<S: ValidationSink>(
     page_number: u32,
     problem: MetaProblem,
 ) -> Result<()> {
-    let reason = if problem == MetaProblem::Magic {
+    let reason = if crate::worker::source_page_unreadable(page_number) {
+        ValidationReason::IoError
+    } else if problem == MetaProblem::Magic {
         ValidationReason::MetaUnavailable
     } else {
         ValidationReason::MetaInvalid
@@ -383,6 +411,7 @@ fn report_bootstrap_finding<S: ValidationSink>(
         related_page_number: None,
         address_fence: None,
     };
+    crate::worker::checkpoint_validation_progress(progress)?;
     match sink.finding(&finding) {
         Ok(ValidationSinkControl::Continue) => Ok(()),
         Ok(ValidationSinkControl::Stop) => Err(Error::StoppedBySink),
@@ -390,7 +419,7 @@ fn report_bootstrap_finding<S: ValidationSink>(
     }
 }
 
-fn failure(cause: Error, progress: ValidationProgress) -> ValidationFailure {
+pub(crate) fn failure(cause: Error, progress: ValidationProgress) -> ValidationFailure {
     failure_with_guard(cause, progress, None)
 }
 

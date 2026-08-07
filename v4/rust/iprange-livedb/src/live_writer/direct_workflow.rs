@@ -107,9 +107,9 @@ impl<'a> DirectReplacement<'a> {
     {
         self.state
             .require_family(self.writer, AddressFamily::Ipv4)?;
-        self.state.drain(self.writer, source, |writer, range| {
+        self.state.drain(self.writer, source, |store, range| {
             require_ordered(range.from, range.to)?;
-            writer.mutate(|store| store.assign_v4(range.from, range.to, range.value))?;
+            store.assign_v4(range.from, range.to, range.value)?;
             Ok(())
         })
     }
@@ -121,9 +121,9 @@ impl<'a> DirectReplacement<'a> {
     {
         self.state
             .require_family(self.writer, AddressFamily::Ipv6)?;
-        self.state.drain(self.writer, source, |writer, range| {
+        self.state.drain(self.writer, source, |store, range| {
             require_ordered(range.from, range.to)?;
-            writer.mutate(|store| store.assign_v6(range.from, range.to, range.value))?;
+            store.assign_v6(range.from, range.to, range.value)?;
             Ok(())
         })
     }
@@ -152,9 +152,9 @@ impl<'a> RetentionRefresh<'a> {
         self.state
             .require_family(self.writer, AddressFamily::Ipv4)?;
         let value = self.refresh_value;
-        self.state.drain(self.writer, source, move |writer, range| {
+        self.state.drain(self.writer, source, move |store, range| {
             require_ordered(range.from, range.to)?;
-            writer.mutate(|store| store.assign_v4(range.from, range.to, value))?;
+            store.assign_v4(range.from, range.to, value)?;
             Ok(())
         })
     }
@@ -167,9 +167,9 @@ impl<'a> RetentionRefresh<'a> {
         self.state
             .require_family(self.writer, AddressFamily::Ipv6)?;
         let value = self.refresh_value;
-        self.state.drain(self.writer, source, move |writer, range| {
+        self.state.drain(self.writer, source, move |store, range| {
             require_ordered(range.from, range.to)?;
-            writer.mutate(|store| store.assign_v6(range.from, range.to, value))?;
+            store.assign_v6(range.from, range.to, value)?;
             Ok(())
         })
     }
@@ -227,21 +227,16 @@ impl ExactDirectState {
     where
         R: Copy,
         S: RangeSource<R>,
-        F: FnMut(&mut LiveWriter, R) -> Result<()>,
+        F: FnMut(&mut crate::draft_store::DraftStore<'_>, R) -> Result<()>,
     {
         self.require_active(writer)?;
-        let result = drain_source(
-            source,
-            &self.cancellation,
-            &mut self.input_records,
-            |record| apply(writer, record),
-        );
-        result.map_err(|error| {
-            if writer.draft.is_some() {
-                writer.abort_after(error)
-            } else {
-                error
-            }
+        writer.mutate(|store| {
+            drain_source(
+                source,
+                &self.cancellation,
+                &mut self.input_records,
+                |record| apply(store, record),
+            )
         })
     }
 
@@ -297,7 +292,6 @@ impl ExactDirectState {
         base: &crate::bootstrap::Bootstrap,
     ) -> Result<WorkflowReport> {
         self.require_active(writer)?;
-        writer.flush_draft_pages()?;
         let after = writer.draft.as_ref().unwrap().meta;
         let input_addresses = coverage(&writer.mapping, &after, &self.cancellation)
             .map_err(|error| writer.abort_after(error))?;

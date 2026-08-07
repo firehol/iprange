@@ -115,7 +115,7 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
             }
             *record_count = record_count
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("range record count"))?;
+                .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
             store.range_record_added(value)?;
             Ok(true)
         }
@@ -175,7 +175,7 @@ where
         cursor = segment
             .to
             .checked_next()
-            .ok_or(Error::ArithmeticOverflow("membership range cursor"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("membership range cursor"))?;
     }
 }
 
@@ -197,7 +197,7 @@ fn segment_at<K: IpKey, S: Store>(store: &S, root: u32, from: K, to: K) -> Resul
         Some(next) if next.from <= to => next
             .from
             .checked_previous()
-            .ok_or(Error::Corrupt("range gap does not advance"))?,
+            .ok_or_else(|| Error::corrupt("range gap does not advance"))?,
         _ => to,
     };
     Ok(Segment {
@@ -375,7 +375,7 @@ fn insert<K: IpKey, S: RangeStore>(
     if inserted {
         *record_count = record_count
             .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("range record count"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
         store.range_record_added(range.value)?;
     }
     Ok(())
@@ -395,7 +395,7 @@ fn remove<K: IpKey, S: RangeStore>(
     }
     *record_count = record_count
         .checked_sub(1)
-        .ok_or(Error::ArithmeticOverflow("range record count"))?;
+        .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
     store.range_record_removed(range.value)
 }
 

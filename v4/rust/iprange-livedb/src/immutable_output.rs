@@ -376,12 +376,15 @@ fn finish(output: &mut Builder) -> Result<()> {
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(Error::ArithmeticOverflow("immutable output length"))?;
     output.mapping.resize(bytes)?;
-    output
-        .meta
-        .encode_mapped(output.mapping.page_mut(0, output.meta.page_count)?)?;
-    output
-        .meta
-        .encode_mapped(output.mapping.page_mut(1, output.meta.page_count)?)?;
+    let region = output.mapping.region()?;
+    crate::worker::probe_output_region(region, || {
+        output
+            .meta
+            .encode_mapped(output.mapping.page_mut(0, output.meta.page_count)?)?;
+        output
+            .meta
+            .encode_mapped(output.mapping.page_mut(1, output.meta.page_count)?)
+    })?;
     output.mapping.flush_range(0, bytes)?;
     output.mapping.sync_file()
 }
@@ -401,14 +404,17 @@ fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
 fn seal_pages(output: &mut Builder) -> Result<()> {
     for page_number in 2..output.meta.page_count {
         let page_number = u32::try_from(page_number).map_err(|_| Error::PageSpaceExhausted)?;
-        let mut page = output
-            .mapping
-            .page_mut(page_number, output.meta.page_count)?;
-        let view = page.view();
-        if !view.equals(0, &PAGE_MAGIC) || u64_le(view, 8) != output.meta.txn_id {
-            return Err(Error::Corrupt("immutable output page ownership is invalid"));
-        }
-        page_checksum::seal_mapped(&mut page)?;
+        let region = output.mapping.region()?;
+        crate::worker::probe_output_region(region, || {
+            let mut page = output
+                .mapping
+                .page_mut(page_number, output.meta.page_count)?;
+            let view = page.view();
+            if !view.equals(0, &PAGE_MAGIC) || u64_le(view, 8) != output.meta.txn_id {
+                return Err(Error::Corrupt("immutable output page ownership is invalid"));
+            }
+            page_checksum::seal_mapped(&mut page)
+        })?;
     }
     Ok(())
 }
@@ -436,7 +442,9 @@ impl Store for Builder {
         F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
     {
         require_output_page(page_number, self.meta.page_count)?;
-        inspect(self.mapping.page(page_number, self.meta.page_count)?)
+        crate::worker::probe_output(&self.mapping, || {
+            inspect(self.mapping.page(page_number, self.meta.page_count)?)
+        })
     }
 
     fn allocate(&mut self) -> Result<u32> {
@@ -448,10 +456,13 @@ impl Store for Builder {
         F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
     {
         require_output_page(page_number, self.meta.page_count)?;
-        let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
-        let result = update(&mut page)?;
-        require_output_owner(page.view(), self.meta.txn_id)?;
-        Ok(result)
+        let region = self.mapping.region()?;
+        crate::worker::probe_output_region(region, || {
+            let mut page = self.mapping.page_mut(page_number, self.meta.page_count)?;
+            let result = update(&mut page)?;
+            require_output_owner(page.view(), self.meta.txn_id)?;
+            Ok(result)
+        })
     }
 
     fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
@@ -460,12 +471,15 @@ impl Store for Builder {
     {
         require_output_page(source, self.meta.page_count)?;
         require_output_page(destination, self.meta.page_count)?;
-        let (source, mut destination) =
-            self.mapping
-                .page_pair(source, destination, self.meta.page_count)?;
-        let result = copy(source, &mut destination)?;
-        require_output_owner(destination.view(), self.meta.txn_id)?;
-        Ok(result)
+        let region = self.mapping.region()?;
+        crate::worker::probe_output_region(region, || {
+            let (source, mut destination) =
+                self.mapping
+                    .page_pair(source, destination, self.meta.page_count)?;
+            let result = copy(source, &mut destination)?;
+            require_output_owner(destination.view(), self.meta.txn_id)?;
+            Ok(result)
+        })
     }
 
     fn discard_private(&mut self, _page_number: u32) -> Result<()> {

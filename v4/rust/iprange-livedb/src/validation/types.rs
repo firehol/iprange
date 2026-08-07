@@ -114,6 +114,52 @@ impl ValidationReason {
     pub(crate) const fn index(self) -> usize {
         self as usize
     }
+
+    pub(crate) const fn from_wire(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => Self::MetaUnavailable,
+            1 => Self::MetaInvalid,
+            2 => Self::MetaStaticMismatch,
+            3 => Self::FileGeometryInvalid,
+            4 => Self::RootCountInvalid,
+            5 => Self::IoError,
+            6 => Self::ArithmeticOverflow,
+            7 => Self::PageOutOfBounds,
+            8 => Self::PageHeaderInvalid,
+            9 => Self::PageCrcMismatch,
+            10 => Self::PageTypeMismatch,
+            11 => Self::PageBornTxnInvalid,
+            12 => Self::PageReservedNonzero,
+            13 => Self::TreeCycle,
+            14 => Self::PageAlias,
+            15 => Self::TreeLevelInvalid,
+            16 => Self::TreeOrderInvalid,
+            17 => Self::TreeFenceInvalid,
+            18 => Self::RangeReversed,
+            19 => Self::RangeOverlap,
+            20 => Self::RangeNotCoalesced,
+            21 => Self::CatalogNameInvalid,
+            22 => Self::CatalogBijectionInvalid,
+            23 => Self::CatalogBitmapInvalid,
+            24 => Self::MembershipBitmapInvalid,
+            25 => Self::MembershipHashInvalid,
+            26 => Self::MembershipReverseIndexInvalid,
+            27 => Self::MembershipRefcountInvalid,
+            28 => Self::MembershipActiveFeedInvalid,
+            29 => Self::BlobInvalid,
+            30 => Self::MetadataZlibInvalid,
+            31 => Self::MetadataLengthInvalid,
+            32 => Self::BitmapSummaryInvalid,
+            33 => Self::AllocationPartitionInvalid,
+            34 => Self::RetirementOrderInvalid,
+            35 => Self::RetirementListInvalid,
+            36 => Self::CatalogInvalid,
+            37 => Self::MembershipMissing,
+            38 => Self::MembershipInvalid,
+            39 => Self::MetadataInvalid,
+            _ => return None,
+        })
+    }
 }
 
 /// Stable owning graph or object classes.
@@ -142,6 +188,26 @@ impl ValidationObject {
     #[inline]
     pub(crate) const fn index(self) -> usize {
         self as usize
+    }
+
+    pub(crate) const fn from_wire(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => Self::FileGeometry,
+            1 => Self::Meta,
+            2 => Self::RangeTree,
+            3 => Self::CatalogNameTree,
+            4 => Self::CatalogIndexTree,
+            5 => Self::MembershipDictionary,
+            6 => Self::MembershipReverseIndex,
+            7 => Self::MembershipBlob,
+            8 => Self::Metadata,
+            9 => Self::FreeBitmap,
+            10 => Self::FeedUsedBitmap,
+            11 => Self::MembershipUsedBitmap,
+            12 => Self::RetirementTree,
+            13 => Self::RetirementBlob,
+            _ => return None,
+        })
     }
 }
 
@@ -280,6 +346,35 @@ impl ValidationProgress {
                 ))?;
         self.has_unbounded_unknown |= unbounded;
         Ok(())
+    }
+
+    pub(crate) fn wire_counts(
+        &self,
+    ) -> (
+        &[u64; ValidationReason::COUNT],
+        &[u64; ValidationObject::COUNT],
+    ) {
+        (&self.reason_counts, &self.object_counts)
+    }
+
+    pub(crate) fn from_wire(
+        checked_unique_pages: u64,
+        finding_count: u64,
+        untraversable_subgraphs: u64,
+        bounded_possible_span_addresses: Cardinality129,
+        has_unbounded_unknown: bool,
+        reason_counts: [u64; ValidationReason::COUNT],
+        object_counts: [u64; ValidationObject::COUNT],
+    ) -> Self {
+        Self {
+            checked_unique_pages,
+            finding_count,
+            untraversable_subgraphs,
+            bounded_possible_span_addresses,
+            has_unbounded_unknown,
+            reason_counts,
+            object_counts,
+        }
     }
 }
 

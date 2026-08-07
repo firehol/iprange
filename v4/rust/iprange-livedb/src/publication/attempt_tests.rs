@@ -15,6 +15,7 @@ use crate::publication::reservation_file::ReservationDraft;
 use crate::publication::result::PublicationStatus;
 use crate::publication::CleanupState;
 use crate::test_alloc::count_thread_allocations;
+use crate::validation::LocalFileIdentity;
 
 #[test]
 fn success_returns_exact_published_facts_and_no_residue() {
@@ -302,11 +303,81 @@ fn post_boundary_success_allocates_no_heap() {
         .initialize(&output)
         .unwrap();
 
-    let (result, allocations) =
-        count_thread_allocations(|| from_private(seed, output, reservation, None, &mut |_| Ok(())));
+    let (result, allocations) = count_thread_allocations(|| {
+        from_private(
+            seed,
+            output,
+            reservation,
+            None,
+            &mut |_| Ok(()),
+            false,
+            &mut |_| Ok(()),
+        )
+    });
 
     assert_eq!(allocations, 0);
     assert_eq!(result.unwrap().publication, PublicationStatus::Published);
+}
+
+#[test]
+fn mapped_housekeeping_checkpoint_reports_the_new_envelope_and_owned_sources() {
+    for (kind, expected_cleanup) in [
+        (ArtifactKind::OwnedCoordination, 1),
+        (ArtifactKind::PrivateOutput, 2),
+    ] {
+        let directory = TempDirectory::new();
+        let (output, _) = prepared_output(&directory.path);
+        let reservation_identity = output.attempt.identity();
+        let seed = Seed::capture(&output);
+        let artifact = crate::publication::HousekeepingArtifact {
+            state: crate::publication::HousekeepingState::MovePending,
+            directory_role: crate::publication::DirectoryRole::Destination,
+            directory_identity: local_identity(41),
+            basename_encoding: 1,
+            attempt_id: [42; 16],
+            ordinal: u32::from(kind == ArtifactKind::OwnedCoordination),
+            envelope_basename: b".iprange-gcauth-test.tmp".as_slice().into(),
+            envelope_identity: local_identity(43),
+            source_basename: b"source.tmp".as_slice().into(),
+            inert_basename: b".iprange-gc-test.tmp".as_slice().into(),
+            source_presence: crate::publication::ArtifactPresence::Present,
+            source_identity: Some(local_identity(44)),
+            inert_presence: crate::publication::ArtifactPresence::Absent,
+            inert_identity: None,
+            kind,
+            creation_security: crate::publication::CreationSecurity {
+                kind: 1,
+                commitment: [45; 32],
+            },
+            selected_envelope_sequence: 0,
+        };
+        let mut observed = None;
+
+        observe_published_housekeeping(&seed, reservation_identity, &artifact, &mut |checkpoint| {
+            let PublicationCheckpoint::Result(result) = checkpoint else {
+                panic!("housekeeping checkpoint must be a publication result");
+            };
+            observed = Some(result.clone());
+            Ok(())
+        })
+        .unwrap();
+
+        let result = observed.unwrap();
+        assert_eq!(result.publication, PublicationStatus::Published);
+        assert_eq!(result.destination_content, DestinationContent::Desired);
+        assert_eq!(
+            result.housekeeping,
+            crate::publication::Housekeeping::Visible
+        );
+        assert_eq!(&*result.visible_housekeeping, &[artifact]);
+        assert_eq!(result.cleanup.len(), expected_cleanup);
+        assert_eq!(result.cleanup.get(0).unwrap().kind, kind);
+        assert_eq!(
+            result.coordination_access_policy,
+            AccessPolicy::ChangedOrUnproven
+        );
+        assert_eq!(result.cause.as_ref().unwrap().code, ErrorCode::Io);
+    }
 }
 
 #[test]
@@ -442,6 +513,13 @@ fn direct_spec() -> OutputSpec {
 fn output_budget() -> OutputBudget {
     OutputBudget {
         max_output_pages: 100_000,
+    }
+}
+
+fn local_identity(byte: u8) -> LocalFileIdentity {
+    LocalFileIdentity {
+        kind: 1,
+        bytes: [byte; 32],
     }
 }
 

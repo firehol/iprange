@@ -129,10 +129,20 @@ pub(crate) fn housekeeping(value: &publication::WindowsHousekeepingEntry) -> Hou
             .artifact
             .as_ref()
             .map_or_else(Default::default, facts::housekeeping_artifact),
-        problem_code: value.problem.map_or(0, |value| value.code as u32),
-        problem_os_code_present: u8::from(value.problem.and_then(|value| value.os_code).is_some()),
+        problem_code: value.problem.as_ref().map_or(0, |value| value.code as u32),
+        problem_os_code_present: u8::from(
+            value
+                .problem
+                .as_ref()
+                .and_then(|value| value.os_code)
+                .is_some(),
+        ),
         reserved1: [0; 3],
-        problem_os_code: value.problem.and_then(|value| value.os_code).unwrap_or(0),
+        problem_os_code: value
+            .problem
+            .as_ref()
+            .and_then(|value| value.os_code)
+            .unwrap_or(0),
         reserved2: 0,
     }
 }

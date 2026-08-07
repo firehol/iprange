@@ -2670,6 +2670,14 @@ locates that worker; a missing, incompatible, or unverifiable worker fails befor
 source scanning or destination mutation. The worker, source, output, control
 state, and authorized scratch remain mmap-only.
 
+The SDK package names the helper `iprange-v4-worker` with the platform's normal
+executable suffix. Applications install it beside the consuming process
+executable. Lookup neither searches `PATH` nor accepts an environment override.
+The only secondary candidate is the parent of a directory literally named
+`deps`, which supports Cargo's integration-test layout and is not an application
+deployment contract. Parent and worker must complete the exact build-ID and
+protocol handshake before any source scan or destination mutation.
+
 On POSIX, only the worker installs a `SIGBUS` handler. It uses `SA_SIGINFO` and
 an alternate signal stack, saves the complete previous `sigaction`, and arms one
 exact `(mapping_generation, mapping_role, base, length)` probe at a time. It may

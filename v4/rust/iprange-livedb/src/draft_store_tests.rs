@@ -197,8 +197,7 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
     crate::page_checksum::work::reset();
     {
-        let mut store =
-            DraftStore::new_cached(&mut test.mapping, creation.page_count, budget, &mut draft);
+        let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
         for key in 0..2_000_u32 {
             store
                 .assign_v4(Ipv4Key(key * 2), Ipv4Key(key * 2), key)

@@ -221,6 +221,11 @@ physical mapped-source fault is recovery/validation damage (`IO_ERROR` in the
 report), while an unclassified worker failure is never relabeled as source
 damage.
 
+The native SDK distribution includes `iprange-v4-worker` with the platform's
+normal executable suffix. The embedding application installs it beside its own
+executable; the library does not search `PATH` or accept an environment
+override. This helper is an installation requirement, not a public ABI handle.
+
 ## Metadata and variable output
 
 Metadata follows the stable two-call contract: query presence and exact

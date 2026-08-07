@@ -67,6 +67,7 @@ impl PublicationResult {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Seed {
     database_id: [u8; 16],
     transaction_id: u64,
@@ -93,6 +94,7 @@ pub(super) struct FinalState {
     pub(super) coordination_access_policy: AccessPolicy,
 }
 
+#[derive(Clone)]
 struct Names {
     private_output: Option<Box<[u8]>>,
     private_reservation: Option<Box<[u8]>>,

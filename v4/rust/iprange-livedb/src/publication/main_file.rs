@@ -18,6 +18,7 @@ pub(crate) enum Error {
     Sdk(error::Error),
     Output(output::Error),
     Reservation(reservation_file::Error),
+    Checkpoint(super::PublicationProblem),
     #[cfg(unix)]
     PreviousLinkCount,
     #[cfg(unix)]
@@ -71,7 +72,7 @@ pub(crate) struct PublishedOutput {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Point {
+pub(crate) enum Point {
     MainRenamed,
     MainSynced,
     DirectorySynced,
@@ -88,6 +89,15 @@ pub(crate) fn publish(
     reservation: ArmedReservation,
 ) -> Result<PublishedMain, Failure<MainAttempt>> {
     publish_with(output, reservation, |_| Ok(()))
+}
+
+#[allow(clippy::result_large_err)]
+pub(crate) fn publish_observed(
+    output: PreparedOutput,
+    reservation: ArmedReservation,
+    checkpoint: impl FnMut(Point) -> Result<(), Error>,
+) -> Result<PublishedMain, Failure<MainAttempt>> {
+    publish_with(output, reservation, checkpoint)
 }
 
 #[allow(clippy::result_large_err)]
@@ -204,9 +214,29 @@ impl PublishedMain {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(crate) fn retire_observed(
+        self,
+        observer: impl FnMut(&HousekeepingArtifact) -> Result<(), super::PublicationProblem>,
+    ) -> Result<PublishedOutput, Failure<RetiringMain>> {
+        self.retire_with_observer(|_| Ok(()), true, observer)
+    }
+
+    #[allow(clippy::result_large_err)]
     fn retire_with(
         self,
+        checkpoint: impl FnMut(Point) -> Result<(), Error>,
+    ) -> Result<PublishedOutput, Failure<RetiringMain>> {
+        self.retire_with_observer(checkpoint, false, |_| Ok(()))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn retire_with_observer(
+        self,
         mut checkpoint: impl FnMut(Point) -> Result<(), Error>,
+        observe_housekeeping: bool,
+        mut housekeeping_observer: impl FnMut(
+            &HousekeepingArtifact,
+        ) -> Result<(), super::PublicationProblem>,
     ) -> Result<PublishedOutput, Failure<RetiringMain>> {
         let mut owner = RetiringMain {
             published: self,
@@ -218,7 +248,12 @@ impl PublishedMain {
             housekeeping: Housekeeping::None,
             visible_housekeeping: Vec::new(),
         };
-        match retire_steps(&mut owner, &mut checkpoint) {
+        match retire_steps(
+            &mut owner,
+            &mut checkpoint,
+            observe_housekeeping,
+            &mut housekeeping_observer,
+        ) {
             Ok(()) => {
                 let RetiringMain {
                     published,
@@ -241,12 +276,16 @@ impl PublishedMain {
 fn retire_steps(
     owner: &mut RetiringMain,
     checkpoint: &mut impl FnMut(Point) -> Result<(), Error>,
+    observe_housekeeping: bool,
+    housekeeping_observer: &mut impl FnMut(
+        &HousekeepingArtifact,
+    ) -> Result<(), super::PublicationProblem>,
 ) -> Result<(), Error> {
     verify_published(&owner.published)?;
-    if unlink_previous(owner)? {
+    if unlink_previous(owner, observe_housekeeping, housekeeping_observer)? {
         checkpoint(Point::PreviousUnlinked)?;
     }
-    unlink_reservation(owner)?;
+    unlink_reservation(owner, observe_housekeeping, housekeeping_observer)?;
     checkpoint(Point::ReservationUnlinked)?;
     sync_retirement(owner)?;
     checkpoint(Point::RetirementSynced)?;
@@ -254,7 +293,13 @@ fn retire_steps(
 }
 
 #[cfg(unix)]
-fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
+fn unlink_previous(
+    owner: &mut RetiringMain,
+    _observe_housekeeping: bool,
+    _housekeeping_observer: &mut impl FnMut(
+        &HousekeepingArtifact,
+    ) -> Result<(), super::PublicationProblem>,
+) -> Result<bool, Error> {
     let published = &owner.published;
     let Some(previous) = &published.output.previous else {
         owner.previous_retired_proven = true;
@@ -282,7 +327,13 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
 }
 
 #[cfg(windows)]
-fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
+fn unlink_previous(
+    owner: &mut RetiringMain,
+    observe_housekeeping: bool,
+    housekeeping_observer: &mut impl FnMut(
+        &HousekeepingArtifact,
+    ) -> Result<(), super::PublicationProblem>,
+) -> Result<bool, Error> {
     use super::gc::{self, Authority};
     use super::gc_codec::Payload;
     use super::{ArtifactKind, CreationSecurity, DirectoryRole};
@@ -294,29 +345,31 @@ fn unlink_previous(owner: &mut RetiringMain) -> Result<bool, Error> {
     };
     let destination = published.output.attempt.destination();
     previous.verify_private_or_retired(destination, published.output.attempt.name())?;
-    let retirement = gc::retire(
-        destination.directory(),
-        Authority {
-            attempt_id: published.output.attempt.attempt_id(),
-            ordinal: 0,
-            kind: ArtifactKind::PrivateOutput,
-            directory_role: DirectoryRole::Destination,
-            source_name: published.output.attempt.name(),
-            source_file: &previous.file,
-            identity: previous.identity,
-            creation_security: CreationSecurity {
-                kind: super::namespace::CREATION_SECURITY_KIND,
-                commitment: destination.security_commitment(),
-            },
-            payload: Some(Payload {
-                byte_length: previous.byte_length,
-                sha512: previous.sha512,
-                database_id: [0; 16],
-                transaction_id: 0,
-                commit_nonce: [0; 16],
-            }),
+    let authority = Authority {
+        attempt_id: published.output.attempt.attempt_id(),
+        ordinal: 0,
+        kind: ArtifactKind::PrivateOutput,
+        directory_role: DirectoryRole::Destination,
+        source_name: published.output.attempt.name(),
+        source_file: &previous.file,
+        identity: previous.identity,
+        creation_security: CreationSecurity {
+            kind: super::namespace::CREATION_SECURITY_KIND,
+            commitment: destination.security_commitment(),
         },
-    );
+        payload: Some(Payload {
+            byte_length: previous.byte_length,
+            sha512: previous.sha512,
+            database_id: [0; 16],
+            transaction_id: 0,
+            commit_nonce: [0; 16],
+        }),
+    };
+    let retirement = if observe_housekeeping {
+        gc::retire_observed(destination.directory(), authority, housekeeping_observer)
+    } else {
+        gc::retire(destination.directory(), authority)
+    };
     absorb_gc(owner, retirement)?;
     owner.previous_unlinked = true;
     owner.previous_retired_proven = true;
@@ -333,7 +386,13 @@ fn verify_published(published: &PublishedMain) -> Result<(), Error> {
 }
 
 #[cfg(unix)]
-fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
+fn unlink_reservation(
+    owner: &mut RetiringMain,
+    _observe_housekeeping: bool,
+    _housekeeping_observer: &mut impl FnMut(
+        &HousekeepingArtifact,
+    ) -> Result<(), super::PublicationProblem>,
+) -> Result<(), Error> {
     let published = &owner.published;
     let destination = published.output.attempt.destination();
     if !destination
@@ -352,29 +411,37 @@ fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
 }
 
 #[cfg(windows)]
-fn unlink_reservation(owner: &mut RetiringMain) -> Result<(), Error> {
+fn unlink_reservation(
+    owner: &mut RetiringMain,
+    observe_housekeeping: bool,
+    housekeeping_observer: &mut impl FnMut(
+        &HousekeepingArtifact,
+    ) -> Result<(), super::PublicationProblem>,
+) -> Result<(), Error> {
     use super::gc::{self, Authority};
     use super::{ArtifactKind, CreationSecurity, DirectoryRole};
 
     let published = &owner.published;
     let destination = published.output.attempt.destination();
-    let retirement = gc::retire(
-        destination.directory(),
-        Authority {
-            attempt_id: published.output.attempt.attempt_id(),
-            ordinal: 1,
-            kind: ArtifactKind::OwnedCoordination,
-            directory_role: DirectoryRole::Destination,
-            source_name: destination.coordination(),
-            source_file: &published.reservation.file,
-            identity: published.reservation.identity,
-            creation_security: CreationSecurity {
-                kind: super::namespace::CREATION_SECURITY_KIND,
-                commitment: destination.security_commitment(),
-            },
-            payload: None,
+    let authority = Authority {
+        attempt_id: published.output.attempt.attempt_id(),
+        ordinal: 1,
+        kind: ArtifactKind::OwnedCoordination,
+        directory_role: DirectoryRole::Destination,
+        source_name: destination.coordination(),
+        source_file: &published.reservation.file,
+        identity: published.reservation.identity,
+        creation_security: CreationSecurity {
+            kind: super::namespace::CREATION_SECURITY_KIND,
+            commitment: destination.security_commitment(),
         },
-    );
+        payload: None,
+    };
+    let retirement = if observe_housekeeping {
+        gc::retire_observed(destination.directory(), authority, housekeeping_observer)
+    } else {
+        gc::retire(destination.directory(), authority)
+    };
     absorb_gc(owner, retirement)?;
     owner.reservation_unlinked = true;
     owner.reservation_retired_proven = true;

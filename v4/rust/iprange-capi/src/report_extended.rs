@@ -126,7 +126,7 @@ impl ReportHandle {
         report
     }
 
-    pub(crate) fn publication(result: publication::PublicationResult) -> Self {
+    pub(crate) fn publication(mut result: publication::PublicationResult) -> Self {
         let body = facts::publication(&result);
         let cleanup = result.cleanup.iter().map(facts::cleanup).collect();
         let housekeeping = result
@@ -136,6 +136,7 @@ impl ReportHandle {
             .collect();
         let cause = result
             .cause
+            .take()
             .map(ErrorHandle::from_publication_problem)
             .map(Box::new);
         let mut report = Self::new(Body::Publication(body));
@@ -185,7 +186,7 @@ impl ReportHandle {
         report
     }
 
-    pub(crate) fn recovery(result: recovery::RecoveryResult) -> Self {
+    pub(crate) fn recovery(mut result: recovery::RecoveryResult) -> Self {
         let body = encode_recovery(&result);
         let cleanup = result
             .publication
@@ -202,6 +203,7 @@ impl ReportHandle {
         let cause = result
             .publication
             .cause
+            .take()
             .map(ErrorHandle::from_publication_problem)
             .map(Box::new);
         let mut report = Self::new(Body::Recovery(body));
@@ -231,7 +233,7 @@ impl ReportHandle {
         };
         let mut report = Self::new(Body::Recovery(body));
         report.cause = Some(Box::new(ErrorHandle::from_publication_problem(
-            failure.cause,
+            failure.cause.clone(),
         )));
         report.housekeeping = failure
             .visible_housekeeping
@@ -254,7 +256,7 @@ impl ReportHandle {
             ..ResidueReport::default()
         }));
         report.cause = Some(Box::new(ErrorHandle::from_publication_problem(
-            failure.cause,
+            failure.cause.clone(),
         )));
         report.housekeeping = failure
             .visible_housekeeping
@@ -308,6 +310,7 @@ impl ReportHandle {
             .collect();
         let cause = result
             .cause
+            .take()
             .map(ErrorHandle::from_publication_problem)
             .map(Box::new);
         let mut report = Self::new(Body::Residue(ResidueReport {

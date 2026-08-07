@@ -24,6 +24,7 @@ pub(crate) enum Error {
     Sdk(error::Error),
     Output(output::Error),
     Gc(super::PublicationProblem),
+    Checkpoint(super::PublicationProblem),
     Codec,
     HeaderChanged,
     HeaderInvariant,
@@ -66,11 +67,33 @@ impl ReservationDraft {
 
     // The inline owner preserves all cleanup facts without allocating.
     #[allow(clippy::result_large_err)]
+    #[cfg(all(test, unix))]
     pub(crate) fn initialize(
         mut self,
         output: &PreparedOutput,
     ) -> Result<PrivateReservation, Failure<Self>> {
-        match initialize(&mut self, output) {
+        match initialize(&mut self, output, |_| Ok(())) {
+            Ok(()) => Ok(PrivateReservation {
+                name: self.name,
+                file: self.file,
+                mapping: self.mapping.expect("initialized reservation mapping"),
+                identity: self.identity.expect("initialized reservation identity"),
+                header: self.header.expect("initialized reservation header"),
+            }),
+            Err(cause) => Err(Failure { owner: self, cause }),
+        }
+    }
+
+    // Failure retains the mapped reservation owner for exact cleanup.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn initialize_observed(
+        mut self,
+        output: &PreparedOutput,
+        after_selection: impl FnOnce(Identity) -> Result<(), super::PublicationProblem>,
+    ) -> Result<PrivateReservation, Failure<Self>> {
+        match initialize(&mut self, output, |identity| {
+            after_selection(identity).map_err(Error::Checkpoint)
+        }) {
             Ok(()) => Ok(PrivateReservation {
                 name: self.name,
                 file: self.file,
@@ -99,11 +122,23 @@ impl PrivateReservation {
         self,
         output: &PreparedOutput,
     ) -> Result<CanonicalReservation, Failure<AcquiringReservation>> {
+        self.acquire_observed(output, |_| Ok(()))
+    }
+
+    // Failure retains the mapped reservation owner for exact cleanup.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn acquire_observed(
+        self,
+        output: &PreparedOutput,
+        after_rename: impl FnOnce(Identity) -> Result<(), super::PublicationProblem>,
+    ) -> Result<CanonicalReservation, Failure<AcquiringReservation>> {
         let mut owner = AcquiringReservation {
             reservation: self,
             namespace_call_started: false,
         };
-        match acquire(&mut owner, output) {
+        match acquire(&mut owner, output, |identity| {
+            after_rename(identity).map_err(Error::Checkpoint)
+        }) {
             Ok(()) => Ok(CanonicalReservation {
                 name: owner.reservation.name,
                 file: owner.reservation.file,
@@ -138,6 +173,16 @@ impl CanonicalReservation {
         self,
         output: &PreparedOutput,
     ) -> Result<ArmedReservation, Failure<ArmingReservation>> {
+        self.arm_observed(output, |_| Ok(()))
+    }
+
+    // Failure retains the mapped reservation owner for exact cleanup.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn arm_observed(
+        self,
+        output: &PreparedOutput,
+        after_selection: impl FnOnce(Identity) -> Result<(), super::PublicationProblem>,
+    ) -> Result<ArmedReservation, Failure<ArmingReservation>> {
         let Some(target) = self.header.state2() else {
             return Err(Failure {
                 owner: ArmingReservation {
@@ -153,7 +198,9 @@ impl CanonicalReservation {
             target: Some(target),
             state2_selected: false,
         };
-        match arm(&mut owner, output) {
+        match arm_with(&mut owner, output, |identity| {
+            after_selection(identity).map_err(Error::Checkpoint)
+        }) {
             Ok(()) => Ok(ArmedReservation {
                 name: owner.reservation.name,
                 file: owner.reservation.file,
@@ -176,6 +223,15 @@ impl CanonicalReservation {
                 cause: Error::HeaderInvariant,
             });
         }
+        let _probe = match crate::worker::enter_output(&self.mapping) {
+            Ok(probe) => probe,
+            Err(cause) => {
+                return Err(Failure {
+                    owner: self,
+                    cause: Error::Sdk(cause),
+                })
+            }
+        };
         if let Err(cause) = verify_canonical_reservation(&self, output) {
             return Err(Failure { owner: self, cause });
         }
@@ -207,6 +263,7 @@ pub(crate) struct ArmedReservation {
 
 impl ArmedReservation {
     pub(crate) fn verify_before_main(&self, output: &PreparedOutput) -> Result<(), Error> {
+        let _probe = crate::worker::enter_output(&self.mapping).map_err(Error::Sdk)?;
         verify_canonical(
             &self.file,
             &self.mapping,
@@ -222,6 +279,7 @@ impl ArmedReservation {
     }
 
     pub(crate) fn verify_after_main(&self, output: &PreparedOutput) -> Result<(), Error> {
+        let _probe = crate::worker::enter_output(&self.mapping).map_err(Error::Sdk)?;
         verify_canonical(
             &self.file,
             &self.mapping,
@@ -237,10 +295,14 @@ impl ArmedReservation {
     }
 }
 
-fn initialize(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
+fn initialize(
+    draft: &mut ReservationDraft,
+    output: &PreparedOutput,
+    after_selection: impl FnOnce(Identity) -> Result<(), Error>,
+) -> Result<(), Error> {
     prepare_header(draft, output)?;
     write_state1(draft)?;
-    lock_state1(draft, output)
+    lock_state1_with(draft, output, after_selection)
 }
 
 fn prepare_header(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
@@ -268,6 +330,7 @@ fn prepare_header(draft: &mut ReservationDraft, output: &PreparedOutput) -> Resu
 fn write_state1(draft: &mut ReservationDraft) -> Result<(), Error> {
     let header = draft.header.ok_or(Error::HeaderInvariant)?;
     let mapping = draft.mapping.as_mut().ok_or(Error::HeaderInvariant)?;
+    let _probe = crate::worker::enter_output(mapping).map_err(Error::Sdk)?;
     header.encode(&mut mapping.page_mut(0, 2)?)?;
     mapping.flush_page(0, 2)?;
     sync_file(&draft.file).map_err(error::Error::from)?;
@@ -275,24 +338,27 @@ fn write_state1(draft: &mut ReservationDraft) -> Result<(), Error> {
     Ok(())
 }
 
-fn lock_state1(draft: &mut ReservationDraft, output: &PreparedOutput) -> Result<(), Error> {
-    lock_state1_with(draft, output, || Ok(()))
-}
-
 fn lock_state1_with(
     draft: &mut ReservationDraft,
     output: &PreparedOutput,
-    after_selection: impl FnOnce() -> Result<(), Error>,
+    after_selection: impl FnOnce(Identity) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let mapping = draft.mapping.as_ref().ok_or(Error::HeaderInvariant)?;
+    let _probe = crate::worker::enter_output(mapping).map_err(Error::Sdk)?;
     let header = draft.header.ok_or(Error::HeaderInvariant)?;
     verify_private(draft, output, header, 0)?;
     draft.state1_selected = true;
-    after_selection()?;
+    after_selection(draft.identity.ok_or(Error::HeaderInvariant)?)?;
     live_lock::lock(&draft.file, OPERATION_LOCK, Mode::Exclusive)?;
     verify_private(draft, output, header, 0)
 }
 
-fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<(), Error> {
+fn acquire(
+    owner: &mut AcquiringReservation,
+    output: &PreparedOutput,
+    after_rename: impl FnOnce(Identity) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let _probe = crate::worker::enter_output(&owner.reservation.mapping).map_err(Error::Sdk)?;
     verify_private_reservation(&owner.reservation, output)?;
     let destination = output.attempt.destination();
     destination.directory().verify()?;
@@ -302,6 +368,7 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
         &owner.reservation.file,
         destination.coordination(),
     )?;
+    after_rename(owner.reservation.identity)?;
     crate::fault::crash("publication.after_reservation_rename");
     destination.directory().sync()?;
     crate::fault::crash("publication.after_reservation_directory_sync");
@@ -319,15 +386,12 @@ fn acquire(owner: &mut AcquiringReservation, output: &PreparedOutput) -> Result<
     )
 }
 
-fn arm(owner: &mut ArmingReservation, output: &PreparedOutput) -> Result<(), Error> {
-    arm_with(owner, output, || Ok(()))
-}
-
 fn arm_with(
     owner: &mut ArmingReservation,
     output: &PreparedOutput,
-    after_selection: impl FnOnce() -> Result<(), Error>,
+    after_selection: impl FnOnce(Identity) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let _probe = crate::worker::enter_output(&owner.reservation.mapping).map_err(Error::Sdk)?;
     let target = owner.target.ok_or(Error::HeaderInvariant)?;
     verify_canonical_reservation(&owner.reservation, output)?;
     if output.previous.is_some() {
@@ -346,7 +410,7 @@ fn arm_with(
     select_exact(&owner.reservation.mapping, target, 1)?;
     owner.state2_selected = true;
     crate::fault::crash("publication.after_reservation_state2_selection");
-    after_selection()?;
+    after_selection(owner.reservation.identity)?;
     verify_canonical(
         &owner.reservation.file,
         &owner.reservation.mapping,

@@ -114,6 +114,28 @@ pub(crate) fn discard_attempt(attempt: &OutputAttempt, file: &File) -> EarlyDisc
     }
 }
 
+pub(crate) fn failed_attempt(
+    facts: PrivateOutputAttempt,
+    problem: super::PublicationProblem,
+) -> EarlyDiscard {
+    let artifact = Some(early_artifact(&facts, problem));
+    EarlyDiscard {
+        output: facts,
+        artifact,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+    }
+}
+
+pub(crate) fn confirmed_absent(facts: PrivateOutputAttempt) -> EarlyDiscard {
+    EarlyDiscard {
+        output: facts,
+        artifact: None,
+        housekeeping: Housekeeping::None,
+        visible_housekeeping: Box::default(),
+    }
+}
+
 pub(super) fn discard_with(
     seed: &mut Seed,
     output: &PreparedOutput,
@@ -200,7 +222,7 @@ fn discard_owners_with(
 
         let mut artifacts = CleanupArtifacts::new();
         if let Some(removal) = output_removal {
-            finish_removal(seed, removal, sync, &mut artifacts);
+            finish_removal(seed, removal, sync.clone(), &mut artifacts);
         }
         if let Some(removal) = reservation_removal {
             finish_removal(seed, removal, sync, &mut artifacts);

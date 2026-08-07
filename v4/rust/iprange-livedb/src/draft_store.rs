@@ -160,24 +160,6 @@ impl<'a> DraftStore<'a> {
         }
     }
 
-    pub(crate) fn new_cached(
-        mapping: &'a mut Mapping,
-        committed_page_count: u64,
-        budget: PageBudget,
-        draft: &'a mut Draft,
-    ) -> Self {
-        Self::new(mapping, committed_page_count, budget, draft)
-    }
-
-    pub(crate) fn new_uncached(
-        mapping: &'a mut Mapping,
-        committed_page_count: u64,
-        budget: PageBudget,
-        draft: &'a mut Draft,
-    ) -> Result<Self> {
-        Ok(Self::new(mapping, committed_page_count, budget, draft))
-    }
-
     pub(crate) fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;

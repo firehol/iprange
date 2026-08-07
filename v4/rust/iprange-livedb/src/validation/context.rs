@@ -362,6 +362,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
             related_page_number: None,
             address_fence,
         };
+        crate::worker::checkpoint_validation_progress(&self.progress)?;
         match self.sink.finding(&finding) {
             Ok(ValidationSinkControl::Continue) => Ok(()),
             Ok(ValidationSinkControl::Stop) => Err(Error::StoppedBySink),

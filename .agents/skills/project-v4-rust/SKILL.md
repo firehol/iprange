@@ -43,6 +43,7 @@ Use these baseline gates:
 
 ```bash
 ./v4/rust/check-mmap-storage.sh
+./v4/rust/check-mmap-runtime.sh
 ./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
@@ -60,9 +61,20 @@ file-backed mappings for persistent content; it must not issue positional or
 buffered content-I/O calls, own complete database-page images, or retain an
 application page cache. Lifecycle calls such as open, metadata, resize,
 mapping, flush, file synchronization, locking, rename, and unlink remain
-necessary. During SOW-0019 the gate is intentionally red until every old
-storage path has been migrated; do not weaken it to make intermediate work
-green.
+necessary. The Linux runtime gate must also prove representative database,
+sidecar, snapshot, recovery, publication, reservation, and scratch paths use
+mappings without persistent-content transfer syscalls. Do not weaken either
+gate to make a failure green.
+
+Explicit validation, candidate inspection, recovery, and retained-cleanup retry
+require the exact `iprange-v4-worker` executable beside the consuming process
+executable. There is no `PATH` search or environment override. The one exact
+secondary candidate supports Cargo integration tests whose executable is under
+a directory literally named `deps`; it is the worker in that directory's
+parent and remains build-ID checked. Verify that the Cargo package contains the
+worker, application packaging installs it adjacent to the application, the
+build-ID handshake rejects mismatches, and missing/mismatched workers fail
+before source scanning or destination mutation.
 
 Use a different `CARGO_TARGET_DIR` for each toolchain. Reusing one directory
 between current Rust and Rust 1.74.1 can produce incompatible cached metadata:

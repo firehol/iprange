@@ -202,7 +202,7 @@ fn failure_after_state2_selection_retains_the_durable_phase() {
         state2_selected: false,
     };
 
-    let result = arm_with(&mut owner, &output, || Err(Error::HeaderInvariant));
+    let result = arm_with(&mut owner, &output, |_| Err(Error::HeaderInvariant));
     assert!(matches!(result, Err(Error::HeaderInvariant)));
     assert!(owner.state2_selected);
     select_exact(&owner.reservation.mapping, target, 1).unwrap();
@@ -216,7 +216,7 @@ fn failure_after_state1_selection_retains_the_result_boundary() {
     prepare_header(&mut draft, &output).unwrap();
     write_state1(&mut draft).unwrap();
 
-    let result = lock_state1_with(&mut draft, &output, || Err(Error::HeaderInvariant));
+    let result = lock_state1_with(&mut draft, &output, |_| Err(Error::HeaderInvariant));
     assert!(matches!(result, Err(Error::HeaderInvariant)));
     assert!(draft.state1_selected);
     select_exact(draft.mapping.as_ref().unwrap(), draft.header.unwrap(), 0).unwrap();

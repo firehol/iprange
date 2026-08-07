@@ -85,6 +85,17 @@ inspects bounded candidates and returns typed evidence so the caller can choose
 whether and how to revive data. Ordinary readers and writers do not repair,
 reset, initialize, validate, or switch modes automatically.
 
+Validation, candidate inspection, recovery, and retained-cleanup retry use the
+SDK's isolated fault worker. Install the exact platform executable name
+`iprange-v4-worker` beside the final application executable. The SDK does not
+search `PATH` or accept an environment override. A build-ID handshake rejects a
+missing or different worker before source scanning or destination mutation.
+The worker is built and included by the `iprange-livedb` Cargo package; an
+application installer must install both executables together. The only
+secondary lookup is Cargo's exact integration-test layout: a process under a
+directory literally named `deps` may use the worker in that directory's parent.
+Applications must not depend on that test convention.
+
 Invalid content is a completed `ValidationResult`; an operational failure is a
 `ValidationFailure` with partial progress, cleanup facts, and any retained
 source-cleanup guard. When that guard is present, the caller must retry its
@@ -95,6 +106,8 @@ cleanup before discarding the obligation.
 The minimum supported Rust version is 1.74.
 
 ```bash
+./v4/rust/check-mmap-storage.sh
+./v4/rust/check-mmap-runtime.sh
 ./v4/rust/check-source-graph.sh
 cargo test --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --all-targets
@@ -107,11 +120,14 @@ RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --no-deps
 ```
 
-The source-graph gate cross-checks every Rust source against fresh Linux,
-Windows, macOS, and FreeBSD compiler dependency graphs. It also rejects
-compiler warnings and dead-code suppression. The native C panic shim is the
-one explicit exception because its integration test compiles it directly at
-runtime.
+The static storage gate rejects persistent-content I/O and owned production
+page images. The Linux runtime gate traces representative database, sidecar,
+snapshot, recovery, publication, reservation, and scratch paths and requires
+mapped access with zero persistent-content transfer syscalls. The source-graph
+gate cross-checks every Rust source against fresh Linux, Windows, macOS, and
+FreeBSD compiler dependency graphs. It also rejects compiler warnings and
+dead-code suppression. The native C panic shim is the one explicit exception
+because its integration test compiles it directly at runtime.
 
 Use a separate target directory for Rust 1.74.1 so Cargo does not reuse
 incompatible current-toolchain metadata:
@@ -156,34 +172,31 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-The final local Linux scale run for this Rust milestone on 2026-08-06, pinned
-to one performance core, produced:
+Four local Linux scale runs on 2026-08-06, each pinned to one performance core,
+produced these medians and observed ranges:
 
-| Scenario | Work | Time | Rate | Counted allocations | Peak RSS |
-|---|---:|---:|---:|---:|---:|
-| Direct replacement, dispersed input | 1,000,000 ranges | 0.561 s | 1,783,860/s | 22 | 67.5 MiB |
-| Retention refresh | 1,000,000 ranges | 0.536 s | 1,865,200/s | 22 | 67.7 MiB |
-| Compact snapshot | 1,000,000 ranges | 0.061 s | 16,443,190/s | 31 | 67.5 MiB |
-| Direct point lookup | 100,000 lookups | 0.187 s | 533,399/s | 0 | 67.5 MiB |
-| Membership point check, 421 feeds | 100,000 checks | 0.338 s | 296,271/s | 0 | 67.6 MiB |
-| Direct ordered scan | 100,000 ranges | 0.0073 s | 13,757,452/s | 0 | 67.5 MiB |
-| Named-feed ordered scan, 421 feeds | 100,000 ranges | 0.0078 s | 12,831,571/s | 0 | 67.5 MiB |
+| Scenario | Work | Median | Observed range | Median rate |
+|---|---:|---:|---:|---:|
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.636 s | 0.582-0.818 s | 1.57 million/s |
+| Retention refresh | 1,000,000 ranges | 0.646 s | 0.563-0.734 s | 1.55 million/s |
+| Compact snapshot | 1,000,000 ranges | 0.0777 s | 0.0568-0.0957 s | 12.87 million/s |
+| Direct point lookup | 100,000 lookups | 0.0155 s | 0.0148-0.0158 s | 6.44 million/s |
+| Membership point check, 421 feeds | 100,000 checks | 0.0339 s | 0.0335-0.0376 s | 2.95 million/s |
+| Direct ordered scan | 100,000 ranges | 0.0069 s | 0.0067-0.0072 s | 14.42 million/s |
+| Named-feed ordered scan, 421 feeds | 100,000 ranges | 0.0072 s | 0.0068-0.0076 s | 13.90 million/s |
 
-All scale cases kept file descriptors stable and left zero private artifacts.
-The million-range write workflows retained constant allocation counts. The
-benchmark deliberately authorizes a 64 MiB heap budget, which the optional page
-cache uses; this explains the roughly 67.5 MiB process peak. Smaller caller
-budgets reduce the cache rather than violating the bound. Every output is fully
-validated after timing. These are one-machine baselines, not portable timing
-guarantees.
+All scale cases kept file descriptors stable, left zero private artifacts, and
+explicitly validated every output after timing. The final complete run counted
+21 allocations totalling 398 bytes for direct replacement and 21 allocations
+totalling 410 bytes for retention; those counts are constant rather than per
+range. The timed lookup and scan paths allocate nothing.
 
-The point-lookup rows are independent queries: every call starts at the tree
-root and readers have no page cache. In this fixture, each direct lookup makes
-three positional page reads and each membership check makes five. Ordered
-cursors are the bulk-read path; they retain traversal state, and the named-feed
-cursor also reuses the result for consecutive ranges with the same membership.
-The read rows' peak RSS includes database construction before timing; the timed
-read operations themselves allocate nothing.
+Readers access mapped tree pages directly. Independent point queries restart at
+the mapped root, while ordered cursors retain their bounded traversal state.
+There is no application page cache and no positional page transfer. Peak RSS
+includes mapped pages faulted into the process and fixture construction; it is
+not an engine-owned heap measurement. These are one-machine baselines, not
+portable timing guarantees.
 
 The current flat update-ipsets set remains faster for simple lookup and scan,
 but it does not provide COW publication, live readers, direct values, named

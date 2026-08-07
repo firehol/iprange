@@ -344,6 +344,94 @@ fn stopped_sink_returns_truthful_partial_progress() {
     assert_eq!(failure.progress.finding_count, 1);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_sink_result_wins_over_a_later_sidecar_sigbus() {
+    for sink_error in [false, true] {
+        let paths = Paths::new("terminal-sidecar-fault");
+        create_live(
+            &paths.live,
+            AddressFamily::Ipv4,
+            ValueKind::Direct,
+            ValueTag::RETENTION,
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let mut writer =
+            LiveWriter::open(&paths.live, transaction_budget(), &CancellationToken::new()).unwrap();
+        let mut transaction = writer
+            .begin_direct_transaction(&CancellationToken::new())
+            .unwrap();
+        transaction.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+
+        let root = selected_range_root(&paths.live);
+        let mut main = OpenOptions::new().write(true).open(&paths.live).unwrap();
+        main.seek(SeekFrom::Start(u64::from(root) * 4096 + 100))
+            .unwrap();
+        main.write_all(&[0x5a]).unwrap();
+        main.sync_all().unwrap();
+
+        let mut sidecar_name = paths.live.as_os_str().to_os_string();
+        sidecar_name.push(".readers");
+        let sidecar = PathBuf::from(sidecar_name);
+        let sidecar_len = fs::metadata(&sidecar).unwrap().len();
+        let failure = validate(
+            &paths.live,
+            ValidationMode::LiveCurrent,
+            &ValidationBudget::heap_only(1024 * 1024, 2),
+            &CancellationToken::new(),
+            &mut |finding: &iprange_livedb::validation::ValidationFinding| {
+                assert_eq!(finding.reason, ValidationReason::PageCrcMismatch);
+                OpenOptions::new()
+                    .write(true)
+                    .open(&sidecar)
+                    .unwrap()
+                    .set_len(4096)
+                    .unwrap();
+                if sink_error {
+                    Err(iprange_livedb::Error::InvalidArgument(
+                        "injected sink failure",
+                    ))
+                } else {
+                    Ok(ValidationSinkControl::Stop)
+                }
+            },
+        )
+        .unwrap_err();
+        if sink_error {
+            assert!(matches!(
+                failure.cause,
+                iprange_livedb::Error::SinkFailed(cause)
+                    if matches!(*cause, iprange_livedb::Error::InvalidArgument("injected sink failure"))
+            ));
+        } else {
+            assert!(matches!(
+                failure.cause,
+                iprange_livedb::Error::StoppedBySink
+            ));
+        }
+        assert_eq!(failure.progress.finding_count, 1);
+        assert_eq!(
+            failure
+                .progress
+                .findings_for(ValidationReason::PageCrcMismatch),
+            1
+        );
+
+        OpenOptions::new()
+            .write(true)
+            .open(&sidecar)
+            .unwrap()
+            .set_len(sidecar_len)
+            .unwrap();
+        let mut reader = LiveReader::open(&paths.live, &CancellationToken::new()).unwrap();
+        reader.close().unwrap();
+    }
+}
+
 #[test]
 fn bound_live_database_can_report_an_unselectable_bootstrap() {
     let paths = Paths::new("live-bootstrap");

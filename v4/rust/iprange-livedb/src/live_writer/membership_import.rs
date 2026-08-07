@@ -106,13 +106,13 @@ pub(crate) fn finish_import_state(
     require_active(writer)?;
     let stats = import_all(writer, source, cancellation)?;
     let cancellation = cancellation.clone();
-    writer.mutate_uncached(|store| store.finalize_membership_workflow(&cancellation))?;
+    writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
     let report = report::prepare(writer, stats, &cancellation)?;
     if report.logical_change == LogicalChange::NoChange {
         writer.discard_draft()?;
         return Ok(FinishedState::NoChange(report));
     }
-    writer.mutate_uncached(|store| store.finish_membership_workflow(&cancellation))?;
+    writer.mutate(|store| store.finish_membership_workflow(&cancellation))?;
     Ok(FinishedState::Changed {
         report,
         state: PreparedState::new(cancellation),
@@ -215,7 +215,7 @@ fn import_all(
     verify_source_counts(writer, source.meta, &cache, &stats)?;
     stats.source_memberships = cache.source_memberships();
     stats.translated_memberships = cache.translated_memberships();
-    writer.mutate_uncached(|store| cache.release(store, &mut || cancellation.check()))?;
+    writer.mutate(|store| cache.release(store, &mut || cancellation.check()))?;
     Ok(stats)
 }
 
@@ -244,7 +244,7 @@ fn import_feed(
     feed: FeedEntry,
 ) -> Result<bool> {
     require_source_feed(writer, source, feed)?;
-    writer.mutate_uncached(|store| {
+    writer.mutate(|store| {
         let (destination, created) = store.ensure_feed(feed.name)?;
         cache.map_feed(store, feed.index, destination.index)?;
         Ok(created)
@@ -290,7 +290,7 @@ fn import_ranges<K: IpKey>(
         };
         require_canonical_source_range(writer, previous, range)?;
         let membership = translate_membership(writer, source, cache, range.value, cancellation)?;
-        writer.mutate_uncached(|store| {
+        writer.mutate(|store| {
             store.apply_membership_cancellable(
                 range.from,
                 range.to,
@@ -312,12 +312,12 @@ fn translate_membership(
     source_id: u32,
     cancellation: &CancellationToken,
 ) -> Result<(u32, u32)> {
-    if let Some(translated) = writer.mutate_uncached(|store| cache.membership(store, source_id))? {
+    if let Some(translated) = writer.mutate(|store| cache.membership(store, source_id))? {
         return Ok(translated);
     }
     let view = external(writer, source.membership(source_id))?;
     let mut words = translate_words(writer, cache, &view, cancellation)?;
-    writer.mutate_uncached(|store| {
+    writer.mutate(|store| {
         let interned = store.intern_membership(&words)?;
         words.release(store, &mut || cancellation.check())?;
         cache.record_membership(store, source_id, interned.id, interned.word_count)?;
@@ -367,7 +367,7 @@ fn translate_word_batch(
     if read != buffer.len() {
         return Err(writer.abort_after_source(Error::Corrupt("source membership read ended early")));
     }
-    let missing = writer.mutate_uncached(|store| {
+    let missing = writer.mutate(|store| {
         map_word_batch(store, cache, words, start, &buffer[..read], cancellation)
     })?;
     if missing.is_some() {

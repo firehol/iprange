@@ -64,6 +64,12 @@ typedef struct cleanup_fault {
     int injected;
 } cleanup_fault;
 
+typedef struct rename_fault {
+    const char *sidecar;
+    const char *saved;
+    int injected;
+} rename_fault;
+
 static uint64_t load_u64_le(const uint8_t *bytes)
 {
     uint64_t value = 0;
@@ -164,6 +170,16 @@ static uint8_t fail_source_cleanup_once(void *context)
     cleanup_fault *fault = context;
     if (!fault->injected && sidecar_has_active_reader(fault->sidecar)) {
         inject_sidecar_failure(fault);
+    }
+    return 0;
+}
+
+static uint8_t fail_worker_source_cleanup_once(void *context)
+{
+    rename_fault *fault = context;
+    if (!fault->injected && sidecar_has_active_reader(fault->sidecar) &&
+        rename(fault->sidecar, fault->saved) == 0) {
+        fault->injected = 1;
     }
     return 0;
 }
@@ -561,19 +577,22 @@ int main(int argc, char **argv)
 
     {
         size_t sidecar_length = strlen(argv[1]) + sizeof(".readers");
+        size_t saved_length = sidecar_length + sizeof(".saved") - 1;
         char *sidecar = malloc(sidecar_length);
-        cleanup_fault fault;
+        char *saved = malloc(saved_length);
+        rename_fault fault;
         iprange_v4_abi1_cancellation cancellation = {0};
         iprange_v4_abi1_validation_budget validation = {0};
         iprange_v4_abi1_cleanup_guard *guard = NULL;
         uint8_t changed = 0xff;
         CHECK(sidecar != NULL);
+        CHECK(saved != NULL);
         CHECK(snprintf(sidecar, sidecar_length, "%s.readers", argv[1]) > 0);
+        CHECK(snprintf(saved, saved_length, "%s.saved", sidecar) > 0);
         fault.sidecar = sidecar;
-        fault.target_fd = -1;
-        fault.backup_fd = -1;
+        fault.saved = saved;
         fault.injected = 0;
-        cancellation.callback = fail_source_cleanup_once;
+        cancellation.callback = fail_worker_source_cleanup_once;
         cancellation.context = &fault;
         validation.abi_version = IPRANGE_V4_ABI1_ABI_VERSION;
         validation.struct_size = sizeof(validation);
@@ -609,7 +628,7 @@ int main(int argc, char **argv)
         CHECK(destroy_report(report) == 0);
         report = NULL;
 
-        CHECK(restore_sidecar(&fault) == 0);
+        CHECK(rename(saved, sidecar) == 0);
         CHECK(iprange_v4_abi1_cleanup_guard_retry(guard, &changed, &error) ==
               IPRANGE_V4_ABI1_STATUS_OK);
         CHECK(changed == 1);
@@ -617,6 +636,7 @@ int main(int argc, char **argv)
               IPRANGE_V4_ABI1_STATUS_OK);
         CHECK(iprange_v4_abi1_cleanup_guard_destroy(guard, &error) ==
               IPRANGE_V4_ABI1_STATUS_OK);
+        free(saved);
         free(sidecar);
     }
 

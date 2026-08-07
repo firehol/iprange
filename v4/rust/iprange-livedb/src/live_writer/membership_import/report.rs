@@ -15,7 +15,6 @@ pub(super) fn prepare(
     stats: ImportStats,
     cancellation: &CancellationToken,
 ) -> Result<WorkflowReport> {
-    writer.flush_draft_pages()?;
     let after = writer.draft.as_ref().unwrap().meta;
     let comparison = match after.address_family {
         AddressFamily::Ipv4 => {

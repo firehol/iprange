@@ -50,6 +50,23 @@ pub(crate) struct ResumeAuthority<'a> {
 }
 
 pub(crate) fn retire(directory: &Directory, authority: Authority<'_>) -> Retirement {
+    retire_with(directory, authority, false, |_| Ok(()))
+}
+
+pub(crate) fn retire_observed(
+    directory: &Directory,
+    authority: Authority<'_>,
+    observer: impl FnMut(&HousekeepingArtifact) -> Result<(), Problem>,
+) -> Retirement {
+    retire_with(directory, authority, true, observer)
+}
+
+fn retire_with(
+    directory: &Directory,
+    authority: Authority<'_>,
+    observe: bool,
+    mut observer: impl FnMut(&HousekeepingArtifact) -> Result<(), Problem>,
+) -> Retirement {
     let envelope_name = match gc_name::envelope(authority.attempt_id, authority.ordinal) {
         Ok(name) => name,
         Err(error) => {
@@ -74,7 +91,14 @@ pub(crate) fn retire(directory: &Directory, authority: Authority<'_>) -> Retirem
             )
         }
     };
-    let envelope = match load_or_create(directory, &authority, envelope_name, inert_name) {
+    let envelope = match load_or_create(
+        directory,
+        &authority,
+        envelope_name,
+        inert_name,
+        observe,
+        &mut observer,
+    ) {
         Ok(envelope) => envelope,
         Err(failure) => {
             return failed(
@@ -95,7 +119,7 @@ pub(crate) fn resume(
 ) -> Result<Option<Retirement>, Problem> {
     let envelope_name = gc_name::envelope(expected.attempt_id, expected.ordinal)
         .map_err(|error| Problem::namespace(&error))?;
-    let Some(envelope) = open(directory, envelope_name, true)? else {
+    let Some(envelope) = open_as(directory, envelope_name, true, expected.kind)? else {
         return Ok(None);
     };
     let header = &envelope.header;
@@ -125,7 +149,7 @@ pub(crate) fn require_source_available(
 ) -> Result<(), Problem> {
     let envelope_name =
         gc_name::envelope(attempt_id, ordinal).map_err(|error| Problem::namespace(&error))?;
-    let Some(envelope) = open(directory, envelope_name, false)? else {
+    let Some(envelope) = open_as(directory, envelope_name, false, kind)? else {
         return Ok(());
     };
     let header = &envelope.header;
@@ -186,7 +210,7 @@ fn require_unclaimed_source(
         };
         let name =
             gc_name::envelope(attempt, ordinal).map_err(|error| Problem::namespace(&error))?;
-        let Some(envelope) = open(directory, name, false)? else {
+        let Some(envelope) = open_as(directory, name, false, kind)? else {
             return Ok(());
         };
         if envelope.source_name != *source_name {
@@ -235,14 +259,39 @@ fn load_or_create(
     authority: &Authority<'_>,
     envelope_name: Name,
     inert_name: Name,
+    observe: bool,
+    observer: &mut impl FnMut(&HousekeepingArtifact) -> Result<(), Problem>,
 ) -> Result<Envelope, EnvelopeFailure> {
-    let result = match open(directory, envelope_name.clone(), true) {
-        Ok(Some(envelope)) => verify_authority(directory, authority, &envelope).map(|()| envelope),
+    let opened = directory
+        .open_regular(&envelope_name, true)
+        .map_err(|error| Problem::namespace(&error));
+    let result = match opened {
+        Ok(Some(regular)) => checkpoint_envelope(
+            directory,
+            authority,
+            &envelope_name,
+            regular.identity,
+            &inert_name,
+            observe,
+            observer,
+        )
+        .and_then(|()| {
+            load(
+                directory,
+                envelope_name.clone(),
+                regular.file,
+                regular.identity,
+                Some(authority.kind),
+            )
+        })
+        .and_then(|envelope| verify_authority(directory, authority, &envelope).map(|()| envelope)),
         Ok(None) => create(
             directory,
             authority,
             envelope_name.clone(),
             inert_name.clone(),
+            observe,
+            observer,
         ),
         Err(problem) => Err(problem),
     };
@@ -258,6 +307,8 @@ fn create(
     authority: &Authority<'_>,
     envelope_name: Name,
     inert_name: Name,
+    observe: bool,
+    observer: &mut impl FnMut(&HousekeepingArtifact) -> Result<(), Problem>,
 ) -> Result<Envelope, Problem> {
     verify_source(directory, authority)?;
     directory
@@ -277,11 +328,22 @@ fn create(
     let identity = regular_identity(&file, directory.identity())
         .map_err(|error| Problem::namespace(&error))?;
     security::secure_creator_only(&file, &profile).map_err(|error| Problem::namespace(&error))?;
+    checkpoint_envelope(
+        directory,
+        authority,
+        &envelope_name,
+        identity,
+        &inert_name,
+        observe,
+        observer,
+    )?;
     let header = header(directory, authority, &inert_name);
     file.set_len(gc_codec::FILE_SIZE as u64)
         .map_err(crate::error::Error::from)
         .map_err(|error| Problem::sdk(&error))?;
     let mut mapping = Mapping::read_write_view(&file, gc_codec::FILE_SIZE as u64)
+        .map_err(|error| Problem::sdk(&error))?;
+    let _probe = crate::worker::enter_artifact(&mapping, authority.kind)
         .map_err(|error| Problem::sdk(&error))?;
     header
         .encode(
@@ -305,7 +367,13 @@ fn create(
         .sync()
         .and_then(|()| directory.verify())
         .map_err(|error| Problem::namespace(&error))?;
-    let envelope = load(directory, envelope_name, file, identity)?;
+    let envelope = load(
+        directory,
+        envelope_name,
+        file,
+        identity,
+        Some(authority.kind),
+    )?;
     verify_authority(directory, authority, &envelope)?;
     if envelope.inert_name != inert_name {
         return Err(Problem::cleanup_conflict(
@@ -313,6 +381,28 @@ fn create(
         ));
     }
     Ok(envelope)
+}
+
+fn checkpoint_envelope(
+    directory: &Directory,
+    authority: &Authority<'_>,
+    envelope_name: &Name,
+    envelope_identity: Identity,
+    inert_name: &Name,
+    enabled: bool,
+    observer: &mut impl FnMut(&HousekeepingArtifact) -> Result<(), Problem>,
+) -> Result<(), Problem> {
+    if !enabled {
+        return Ok(());
+    }
+    let artifact = resolver::pending_artifact(
+        directory,
+        authority,
+        envelope_name,
+        envelope_identity,
+        inert_name,
+    );
+    observer(&artifact)
 }
 
 pub(super) fn open(
@@ -326,7 +416,36 @@ pub(super) fn open(
     else {
         return Ok(None);
     };
-    load(directory, envelope_name, regular.file, regular.identity).map(Some)
+    load(
+        directory,
+        envelope_name,
+        regular.file,
+        regular.identity,
+        None,
+    )
+    .map(Some)
+}
+
+fn open_as(
+    directory: &Directory,
+    envelope_name: Name,
+    writable: bool,
+    kind: ArtifactKind,
+) -> Result<Option<Envelope>, Problem> {
+    let Some(regular) = directory
+        .open_regular(&envelope_name, writable)
+        .map_err(|error| Problem::namespace(&error))?
+    else {
+        return Ok(None);
+    };
+    load(
+        directory,
+        envelope_name,
+        regular.file,
+        regular.identity,
+        Some(kind),
+    )
+    .map(Some)
 }
 
 fn load(
@@ -334,6 +453,7 @@ fn load(
     envelope_name: Name,
     file: File,
     identity: Identity,
+    kind: Option<ArtifactKind>,
 ) -> Result<Envelope, Problem> {
     directory
         .verify_name(&envelope_name, identity)
@@ -348,6 +468,10 @@ fn load(
         ));
     }
     let mapping = Mapping::read_only_view(&file, gc_codec::FILE_SIZE as u64)
+        .map_err(|error| Problem::sdk(&error))?;
+    let _probe = kind
+        .map(|kind| crate::worker::enter_artifact(&mapping, kind))
+        .transpose()
         .map_err(|error| Problem::sdk(&error))?;
     let bytes = mapping
         .bytes(0, gc_codec::FILE_SIZE)

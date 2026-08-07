@@ -252,6 +252,26 @@ pub(super) fn failed(
         };
     };
     let inert_name = inert_name.unwrap_or(envelope_name);
+    Retirement {
+        problem: Some(problem),
+        housekeeping: Housekeeping::Visible,
+        visible: Some(pending_artifact(
+            directory,
+            authority,
+            envelope_name,
+            envelope_identity,
+            inert_name,
+        )),
+    }
+}
+
+pub(super) fn pending_artifact(
+    directory: &Directory,
+    authority: &Authority<'_>,
+    envelope_name: &Name,
+    envelope_identity: Identity,
+    inert_name: &Name,
+) -> HousekeepingArtifact {
     let source = observe(
         directory,
         authority.source_name,
@@ -264,19 +284,14 @@ pub(super) fn failed(
         authority.identity,
         authority.creation_security.commitment,
     );
-    let observed = classify(source, inert);
-    Retirement {
-        problem: Some(problem),
-        housekeeping: Housekeeping::Visible,
-        visible: Some(failed_artifact(
-            directory.identity(),
-            authority,
-            envelope_name,
-            envelope_identity,
-            inert_name,
-            observed,
-        )),
-    }
+    failed_artifact(
+        directory.identity(),
+        authority,
+        envelope_name,
+        envelope_identity,
+        inert_name,
+        classify(source, inert),
+    )
 }
 
 pub(in crate::publication) fn artifact(

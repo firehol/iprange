@@ -211,7 +211,6 @@ impl MembershipState {
     ) -> Result<TransactionFeedCursor<'a>> {
         self.require_active(writer)?;
         self.check_or_abort(writer)?;
-        writer.flush_draft_pages()?;
         let meta = writer.draft.as_ref().unwrap().meta;
         Ok(TransactionFeedCursor {
             cursor: FeedCursor::new_live(&writer.mapping, &meta, writer.owner_pid)?,
@@ -465,7 +464,6 @@ impl MembershipState {
 
 impl LiveWriter {
     fn feed_reference_current(&mut self, entry: FeedEntry) -> Result<bool> {
-        self.flush_draft_pages()?;
         let meta = self
             .draft
             .as_ref()

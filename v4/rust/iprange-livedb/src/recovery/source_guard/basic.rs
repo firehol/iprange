@@ -161,7 +161,9 @@ fn map_available(file: &File, meta: MetaV4) -> Result<Mapping> {
         .checked_mul(PAGE_SIZE as u64)
         .ok_or(Error::ArithmeticOverflow("recovery source mapping length"))?;
     let available = file.metadata()?.len().min(declared);
-    Mapping::read_only(file.try_clone()?, available)
+    let mut mapping = Mapping::read_only_view(file, available)?;
+    mapping.set_unreadable_pages(&crate::worker::unreadable_source_pages())?;
+    Ok(mapping)
 }
 
 fn bind(

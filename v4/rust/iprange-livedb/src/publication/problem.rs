@@ -83,7 +83,7 @@ impl Problem {
             output::Error::Bootstrap => {
                 Self::plain(ErrorCode::FormatInvalid, "output metadata is malformed")
             }
-            output::Error::Gc(problem) => *problem,
+            output::Error::Gc(problem) => problem.clone(),
             output::Error::FinishedMetaChanged => {
                 Self::plain(ErrorCode::Conflict, "finished output metadata changed")
             }
@@ -98,7 +98,8 @@ impl Problem {
             reservation_file::Error::Namespace(cause) => Self::namespace(cause),
             reservation_file::Error::Sdk(cause) => Self::sdk(cause),
             reservation_file::Error::Output(cause) => Self::output(cause),
-            reservation_file::Error::Gc(problem) => *problem,
+            reservation_file::Error::Gc(problem) => problem.clone(),
+            reservation_file::Error::Checkpoint(problem) => problem.clone(),
             reservation_file::Error::Codec => {
                 Self::plain(ErrorCode::FormatInvalid, "reservation record is malformed")
             }
@@ -137,6 +138,7 @@ impl Problem {
             main_file::Error::Sdk(cause) => Self::sdk(cause),
             main_file::Error::Output(cause) => Self::output(cause),
             main_file::Error::Reservation(cause) => Self::reservation(cause),
+            main_file::Error::Checkpoint(problem) => problem.clone(),
             #[cfg(unix)]
             main_file::Error::PreviousLinkCount => Self::plain(
                 ErrorCode::CleanupConflict,
@@ -148,7 +150,7 @@ impl Problem {
                 "retired reservation still has a link",
             ),
             #[cfg(windows)]
-            main_file::Error::Gc(problem) => *problem,
+            main_file::Error::Gc(problem) => problem.clone(),
             #[cfg(all(test, unix))]
             main_file::Error::Injected => Self::injected(),
         }
@@ -172,17 +174,26 @@ impl Problem {
 
     #[cfg(windows)]
     pub(crate) fn into_sdk(self) -> SdkError {
-        match (self.code, self.os_code) {
-            (ErrorCode::Io, Some(code)) => SdkError::Io(std::io::Error::from_raw_os_error(code)),
-            (ErrorCode::NameInvalid, _) => SdkError::NameInvalid,
-            (ErrorCode::NameExists, _) => SdkError::NameExists,
-            (ErrorCode::NameNotFound, _) => SdkError::NameNotFound,
-            (ErrorCode::DurabilityUnsupported, _) => SdkError::DurabilityUnsupported(self.detail),
-            (ErrorCode::CleanupInProgress, _) => SdkError::CleanupInProgress(self.detail),
-            (ErrorCode::CleanupConflict, _) => SdkError::CleanupConflict(self.detail),
-            (ErrorCode::DirectoryIdentityMismatch, _) => SdkError::DirectoryIdentityMismatch,
-            (ErrorCode::ForkedHandle, _) => SdkError::ForkedHandle,
-            _ => SdkError::Conflict(self.detail),
+        let code = self.code;
+        let os_code = self.os_code;
+        let detail = match self.detail {
+            std::borrow::Cow::Borrowed(detail) => Some(detail),
+            std::borrow::Cow::Owned(_) => None,
+        };
+        match (code, os_code, detail) {
+            (ErrorCode::Io, Some(code), _) => SdkError::Io(std::io::Error::from_raw_os_error(code)),
+            (ErrorCode::NameInvalid, _, _) => SdkError::NameInvalid,
+            (ErrorCode::NameExists, _, _) => SdkError::NameExists,
+            (ErrorCode::NameNotFound, _, _) => SdkError::NameNotFound,
+            (ErrorCode::DurabilityUnsupported, _, Some(detail)) => {
+                SdkError::DurabilityUnsupported(detail)
+            }
+            (ErrorCode::CleanupInProgress, _, Some(detail)) => SdkError::CleanupInProgress(detail),
+            (ErrorCode::CleanupConflict, _, Some(detail)) => SdkError::CleanupConflict(detail),
+            (ErrorCode::DirectoryIdentityMismatch, _, _) => SdkError::DirectoryIdentityMismatch,
+            (ErrorCode::ForkedHandle, _, _) => SdkError::ForkedHandle,
+            (_, _, Some(detail)) => SdkError::Conflict(detail),
+            _ => SdkError::WorkerOperation { code, os_code },
         }
     }
 }

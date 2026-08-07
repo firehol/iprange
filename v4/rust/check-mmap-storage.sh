@@ -59,17 +59,11 @@ scan() {
     local label=$1
     local pattern=$2
     local found=0
-    local source relative cutoff matches
+    local source relative matches
 
     for source in "${sources[@]}"; do
         relative=${source#"$repo_root/"}
-        cutoff=$(rg -n --no-heading '^#\[cfg\(test\)\]$' "$source" |
-            head -n 1 |
-            cut -d: -f1 || true)
-        [[ -n "$cutoff" ]] || cutoff=2147483647
-
-        matches=$(rg -n --no-heading --color never -e "$pattern" "$source" |
-            awk -F: -v cutoff="$cutoff" '$1 < cutoff' || true)
+        matches=$(rg -n --no-heading --color never -e "$pattern" "$source" || true)
         if [[ -n "$matches" ]]; then
             if ((found == 0)); then
                 printf >&2 '%b%s%b\n' "$RED" "$label" "$NC"
@@ -84,8 +78,8 @@ scan() {
     ((found == 0)) || return 1
 }
 
-content_io='\b(read_at|write_at|seek_read|seek_write|read_exact_at|write_exact_at|ReadFile|WriteFile|copy_file_range|sendfile|pread|pwrite|preadv|pwritev|readv|writev|BufReader|BufWriter)\b|std::os::(unix|windows)::fs::FileExt|std::io::(Read|Write|Seek)\b'
-owned_page='\[u8;[[:space:]]*PAGE_SIZE\]|\[[^]]*;[[:space:]]*PAGE_SIZE\]|vec!\[[^]]*;[[:space:]]*PAGE_SIZE\]|Vec<[[:space:]]*\[[^]]*PAGE_SIZE|Box<[[:space:]]*\[[^]]*PAGE_SIZE'
+content_io='\b(read_at|write_at|seek_read|seek_write|read_exact_at|write_exact_at|ReadFile|WriteFile|copy_file_range|sendfile|pread|pwrite|preadv|pwritev|readv|writev|BufReader|BufWriter)\b|std::os::(unix|windows)::fs::(FileExt|\{[^}]*FileExt)|std::io::(Read|Write|Seek)\b|std::io::\{[^}]*(Read|Write|Seek)\b|\b(std::)?fs::(read|read_to_string|write|copy)\b|std::io::copy\b|libc::(read|readv|pread|preadv|write|writev|pwrite|pwritev|sendfile|copy_file_range)\b'
+owned_page='\[[^];]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|4096)[[:space:]]*\]|vec!\[[^]]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|4096)[[:space:]]*\]'
 
 status=0
 run scan 'Forbidden persistent-content I/O symbols:' "$content_io" || status=1

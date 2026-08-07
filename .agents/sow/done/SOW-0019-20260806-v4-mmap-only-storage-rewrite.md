@@ -2,11 +2,12 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: Full gap analysis and product decisions complete. SOW-0016 is paused;
-this is the sole in-progress SOW. Implementation begins with the frozen
-mmap-only, isolated-fault-worker, and unchanged reader/reclamation contracts.
+Sub-state: The mmap-only storage rewrite, isolated fault worker, unchanged
+reader/reclamation contract, validation, documentation, and performance proof
+are complete. SOW-0016 remains paused for final Rust reconciliation and user
+acceptance.
 
 ## Requirements
 
@@ -1032,44 +1033,127 @@ Risk control:
   denied all-target Clippy passes, and the source graph cross-compiles 315
   sources for Linux, Windows, macOS, and FreeBSD. The worker, syscall evidence,
   and performance measurements remain pending.
+- Added the version-matched isolated worker for validation, candidate
+  inspection, recovery, and retained-cleanup retry. Its POSIX handler records
+  only exact in-region kernel faults and chains every other `SIGBUS` to the
+  saved disposition. The subprocess matrix covers owned, unarmed,
+  out-of-region, stale-region, nested, user-generated, null-info, replaced,
+  one-argument, `SA_SIGINFO`, mask, `SA_NODEFER`, `SA_RESETHAND`, default, and
+  ignored cases.
+- The worker uses one mapped control region and sealed mapped checkpoints. The
+  parent verifies protocol/build identity, worker PID, mapping generation,
+  role, interval, relative offset, and exit status before classifying physical
+  unreadability. Partial output and scratch are discarded before retry.
+- Preserved the external reader table, transaction-group retirement, explicit
+  bounded reclamation, and lowest-free-page-first allocation. Permanent tests
+  prove a safe reclaimed group is reused while an unrelated newer reader stays
+  pinned; there is no reader-triggered tail fallback.
+- Added `check-mmap-runtime.sh`. Its Linux `strace -yy` workload requires mappings
+  for the main file, sidecar, snapshot, recovered database, publication,
+  reservation, and scratch artifacts and rejects every content-transfer syscall
+  against them.
+- Corrected the static mmap gate so it scans every production source rather
+  than stopping when a file later contains `#[cfg(test)]`. Test-only page images
+  moved to explicit test modules; 245 production sources now pass the gate.
+- Added the worker to the Cargo package and documented the adjacent installation
+  contract, exact Cargo `deps` test-layout exception, and build-ID handshake.
+  Native C tests install the exact built worker beside their fixtures.
+- Repaired C-ABI ownership exposed by cross-process validation/recovery: report
+  details now retain owned data where required, borrowed preparation failures
+  are not moved, and retained cleanup causes remain inspectable.
+- Re-ran four pinned scale measurements. All observed million-range direct
+  replacements, retention refreshes, and snapshots completed below one second;
+  warm mapped reads remained materially faster than writes.
+- Audited physical source size against preservation milestone `a63f323`. The
+  four-target production union grew from 231 files/67,808 physical lines to 244
+  files/74,292 lines. The 13 required worker/build modules account for 5,722
+  lines; the net SOW delta is 6,484 lines. The directional 5,000-line total and
+  500-line file goals are not met: 42 production files exceed 500 lines and the
+  new parent worker client is 1,301 lines. This is recorded as a design-size
+  warning, not hidden as a successful lean-code claim.
 
 ## Validation
 
 Acceptance criteria evidence:
 
-- Core mmap-only storage migration is implemented and source-gated. The isolated
-  fault worker and final resource/performance/portability evidence remain
-  pending.
+- Persistent SDK artifacts are accessed through checked file-backed mappings.
+  The static and traced runtime gates find no persistent-content transfer path
+  and no complete owned production page image.
+- Mapped COW pages are created at final file offsets. Dirty page checksums are
+  sealed once during preparation; commit performs mapped flush and retained-file
+  synchronization in the specified order.
+- Normal open remains non-validating. Explicit validation and recovery use the
+  isolated worker; ordinary lookup and mutation install no process-global fault
+  handler and incur no worker process.
+- POSIX fault ownership/chaining and parent classification are covered by the
+  permanent subprocess matrix and physical truncation/restart tests. Windows
+  compiles warning-free with the exact `EXCEPTION_IN_PAGE_ERROR` address rule;
+  native Windows execution remains unauthorized and is not claimed.
+- Reader coordination/reclamation behavior is unchanged and permanently proves
+  safe lowest-page reuse with an unrelated live reader.
+- Four pinned scale runs meet the approximate one-second target for every
+  observed one-million direct-replacement, retention, and snapshot case. Warm
+  point reads and scans are between roughly 2.95 and 14.42 million operations
+  per second at the recorded medians.
 
 Tests or equivalent validation:
 
-- `cargo test --manifest-path v4/rust/Cargo.toml` passes the complete default
-  workspace: 321 Rust library tests pass with two intentional subprocess entry
-  points ignored, and every integration, conformance, Rust-provided C ABI, and
-  native C test passes.
-- `cargo test --manifest-path v4/rust/Cargo.toml --all-features` passes the same
-  complete workspace.
-- Warnings-denied workspace/all-feature/all-target Clippy passes.
-- `./v4/rust/check-source-graph.sh` passes: 315 sources compile across the four
-  supported target families, including the runtime-built native fixture.
-- `./v4/rust/check-mmap-storage.sh` passes across 233 production Rust files.
-- Rust formatting, `git diff --check`, and the SOW audit pass.
+- Current-toolchain workspace/all-feature/all-target and
+  no-default-feature/all-target matrices pass. The engine library reports 333
+  passes and three intentional subprocess/explicit-gate ignores; every
+  integration, conformance, C-ABI, C11/C++17 header, and native C behavior test
+  passes.
+- Rust 1.74.1 passes the complete all-feature/all-target matrix in a separate
+  target directory.
+- Warnings-denied Clippy and rustdoc, formatting, and shell syntax pass.
+- `check-source-graph.sh` passes 337 sources across Linux, Windows, macOS, and
+  FreeBSD, with one exact runtime-compiled native fixture.
+- `check-mmap-storage.sh` passes 245 production sources.
+- `check-mmap-runtime.sh` observes required mappings and zero forbidden
+  persistent-content transfer syscalls.
+- AddressSanitizer with leak detection passes 333 active engine tests and all 15
+  C-ABI library tests.
+- Valgrind Memcheck passes all seven native C behavior/export tests with full
+  definite/indirect leak checking. The host's stripped loader could not start
+  Valgrind; the successful run used signature-verified Arch glibc 2.44 bytes and
+  their exact matching debug package from `/tmp`, without changing the host or
+  repository.
+- `cargo package --list` includes `build.rs`, the complete worker source, and
+  `src/bin/iprange-v4-worker.rs`.
 
 Real-use evidence:
 
-- Existing benchmark traces prove the former positional-read storm. Corrected
-  mmap performance has not yet been remeasured, so no speed claim is made here.
+- Four one-core Linux scale runs produced these medians: direct replacement
+  0.636 s/1M ranges, retention 0.646 s/1M, snapshot 0.0777 s/1M, direct point
+  lookup 0.0155 s/100k, 421-feed membership lookup 0.0339 s/100k, direct scan
+  0.0069 s/100k, and named-feed scan 0.0072 s/100k. The observed worst times for
+  the three one-million workflows were 0.818 s, 0.734 s, and 0.0957 s.
+- The final run counted 21 allocations/398 bytes for direct replacement and 21
+  allocations/410 bytes for retention, constant rather than per range. Lookup
+  and scan rows allocate nothing. Every timed output validated, file descriptors
+  stayed stable, and private-artifact count remained zero.
 
 Reviewer findings:
 
 - External review is intentionally not used. The user requested autonomous work
   without subagents or external reviewers.
+- Self-review found and repaired: a false-green static source scan; stale C-ABI
+  ownership assumptions after moving work across a process; non-idempotent
+  recovery cleanup; a Windows publication checkpoint hole; and native test
+  packaging that had not installed the helper beside the consuming executable.
 
 Same-failure scan:
 
-- Completed across the Rust v4 database source. The issue affects ordinary I/O,
-  copied page ownership, sidecar/publication artifacts, validation, recovery,
-  and scratch—not only point lookup.
+- The static gate scans every production engine/C-ABI source for buffered,
+  positional, vectored, and platform content-I/O APIs and complete page images.
+- Runtime tracing covers main, sidecar, snapshot, recovery output, publication,
+  reservation, and scratch paths rather than only point lookup.
+- The repository contains one production `SIGBUS` handler, only in the isolated
+  worker. Source and subprocess searches cover every unowned-signal class.
+- Allocation source search and the public live-roundtrip test prove free-bitmap
+  selection precedes tail growth and remains independent of unrelated readers.
+- Worker lookup has no `PATH` or environment override; its only candidates are
+  adjacent and Cargo's exact `deps` parent convention, both build-ID checked.
 
 Sensitive data gate:
 
@@ -1082,29 +1166,31 @@ Artifact maintenance gate:
 
 - AGENTS.md: updated with the exact mmap-only and page-ownership invariant.
 - Runtime project skills: updated with the mmap-only verification gate and
-  physical-fault boundary.
+  physical-fault/worker packaging boundary plus both static and runtime gates.
 - Specs: format, engine, and C-ABI contracts now record the approved mmap-only,
-  worker-fault, and unchanged reader/reclamation architecture.
-- End-user/operator docs: affected claims identified; correction awaits
-  implementation evidence.
-- End-user/operator skills: none currently exist; recheck at closure.
-- SOW lifecycle: in progress under `current/`; SOW-0016 is paused and this SOW
-  is the sole executing work.
+  worker-fault, packaging, and unchanged reader/reclamation architecture.
+- End-user/operator docs: the Rust README now documents mmap-only behavior,
+  worker installation, verification commands, and the corrected measurements;
+  stale positional-I/O/page-cache claims are removed.
+- End-user/operator skills: none exist, confirmed at closure.
+- SOW lifecycle: this SOW is completed and moves to `done/` with the
+  implementation commit. SOW-0016 remains the real paused umbrella SOW for
+  post-rewrite reconciliation/user acceptance; SOW-0017 and SOW-0018 remain
+  pending Phase 2.
 
 Specs update:
 
-- Updated before implementation with the approved architecture. Final evidence
-  corrections remain part of SOW closure.
+- Updated with the approved architecture, exact worker packaging, fault
+  ownership, mmap-only storage boundary, and final verification contract.
 
 Project skills update:
 
-- Updated with the current source gate; final runtime verification commands will
-  be added after worker and syscall gates are complete.
+- Updated with static/runtime mmap gates, exact worker packaging, source-graph,
+  MSRV, C-ABI, conformance, and benchmark verification.
 
 End-user/operator docs update:
 
-- Required for current resource, performance, and recovery claims after measured
-  corrected behavior exists.
+- Completed in `v4/rust/README.md`.
 
 End-user/operator skills update:
 
@@ -1116,23 +1202,48 @@ Lessons:
 - Heap-allocation counting does not prove zero-copy page access.
 - A safety conflict must be resolved as a coordination invariant, not by silently
   changing the user's format architecture.
+- Static source checks must scan the complete production file; treating the
+  first `#[cfg(test)]` as end-of-production creates false proof.
+- A fault handler may classify only the exact registered mapped interval. Every
+  other signal must retain the prior process semantics.
+- Cross-process work changes ownership: callbacks, errors, cleanup guards, and
+  partial reports must all survive explicit encoding and restart boundaries.
+- The rewrite meets its behavior and performance purpose, but the implementation
+  remains far above the project's directional size goals. Passing tests do not
+  turn that size warning into a lean-code claim.
 
 Follow-up mapping:
 
-- No work is deferred from this SOW. Signing remains tracked by SOW-0017 and
-  high-level feed algebra by SOW-0018; both remain Phase 2.
+- The mmap-only rewrite itself has no deferred item.
+- Paused SOW-0016 tracks final Rust reconciliation, user acceptance, and any
+  separately authorized native cross-platform execution after this blocking
+  rewrite.
+- Signing remains tracked by SOW-0017 and high-level feed algebra by SOW-0018;
+  both remain Phase 2.
 
 ## Outcome
 
-Pending.
+The Rust v4 storage architecture is now mmap-only for persistent SDK artifacts.
+Pages stay in file-backed mappings, normal hot paths perform no persistent
+content-transfer I/O, and physical validation/recovery faults are isolated in a
+version-matched worker that claims only its exact active region. Existing
+reader-aware retirement/reclamation and lowest-free-page reuse remain intact.
+
+Correctness, syscall, sanitizer, C-ABI, conformance, MSRV, cross-compile, and
+performance gates pass locally. This completes the blocking storage rewrite; it
+does not claim native Windows/macOS/FreeBSD runtime proof or user acceptance of
+the full Rust SDK.
 
 ## Lessons Extracted
 
-Pending implementation completion.
+Recorded above and in the Rust project skill, specifications, README, and
+repository engineering rules.
 
 ## Followup
 
-None yet.
+Resume paused SOW-0016 only after this completed rewrite is committed and the
+user decides the Rust acceptance/cross-platform next step. SOW-0017 and
+SOW-0018 remain Phase-2 work.
 
 ## Regression Log
 

@@ -48,6 +48,10 @@ impl CancellationToken {
             Ok(())
         }
     }
+
+    pub(crate) fn requires_external_poll(&self) -> bool {
+        self.poll.is_some()
+    }
 }
 
 impl fmt::Debug for CancellationToken {

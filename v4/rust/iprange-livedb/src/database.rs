@@ -437,6 +437,68 @@ pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
     bootstrap_mapping(&mapping, physical_bytes, mode)
 }
 
+pub(crate) fn bootstrap_file_faultable(file: &File, mode: OpenMode) -> Result<Bootstrap> {
+    require_regular_file(file)?;
+    let physical_bytes = file.metadata()?.len();
+    if physical_bytes < (2 * PAGE_SIZE) as u64 {
+        return Err(bootstrap::BootstrapError::FileTooShort.into());
+    }
+    if physical_bytes % PAGE_SIZE as u64 != 0 {
+        return Err(bootstrap::BootstrapError::FileUnaligned.into());
+    }
+    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
+    crate::worker::probe_source(&mapping, || {
+        let pages = faultable_meta_pages(&mapping)?;
+        Ok(bootstrap::open_meta_pages(
+            pages[0],
+            pages[1],
+            physical_bytes,
+            mode,
+        )?)
+    })
+}
+
+pub(crate) fn database_id_from_file_faultable(file: &File) -> Result<[u8; 16]> {
+    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
+    crate::worker::probe_source(&mapping, || {
+        let pages = faultable_meta_pages(&mapping)?;
+        Ok(bootstrap::database_id_from_meta_pages(pages[0], pages[1])?)
+    })
+}
+
+#[derive(Clone, Copy)]
+enum FaultableMetaPage<'a> {
+    Mapped(crate::mapping::PageView<'a>),
+    Unreadable,
+}
+
+impl crate::mapping::ByteSource for FaultableMetaPage<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Mapped(_) => PAGE_SIZE,
+            Self::Unreadable => 0,
+        }
+    }
+
+    fn byte(self, at: usize) -> Option<u8> {
+        match self {
+            Self::Mapped(page) => page.byte(at),
+            Self::Unreadable => None,
+        }
+    }
+}
+
+fn faultable_meta_pages(mapping: &Mapping) -> Result<[FaultableMetaPage<'_>; 2]> {
+    let page = |number| {
+        if crate::worker::source_page_unreadable(number) {
+            Ok(FaultableMetaPage::Unreadable)
+        } else {
+            mapping.page(number, 2).map(FaultableMetaPage::Mapped)
+        }
+    };
+    Ok([page(0)?, page(1)?])
+}
+
 pub(crate) fn require_regular_file(file: &File) -> Result<()> {
     if !file.metadata()?.file_type().is_file() {
         return Err(Error::InvalidArgument(

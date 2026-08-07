@@ -768,8 +768,8 @@ impl Writer {
             } => {
                 let value = *value;
                 state.require_family(&mut self.inner, AddressFamily::Ipv4)?;
-                state.drain(&mut self.inner, &mut source, move |writer, range| {
-                    writer.mutate(|store| store.assign_v4(range.from, range.to, value))?;
+                state.drain(&mut self.inner, &mut source, move |store, range| {
+                    store.assign_v4(range.from, range.to, value)?;
                     Ok(())
                 })
             }
@@ -791,8 +791,8 @@ impl Writer {
             } => {
                 let value = *value;
                 state.require_family(&mut self.inner, AddressFamily::Ipv6)?;
-                state.drain(&mut self.inner, &mut source, move |writer, range| {
-                    writer.mutate(|store| store.assign_v6(range.from, range.to, value))?;
+                state.drain(&mut self.inner, &mut source, move |store, range| {
+                    store.assign_v6(range.from, range.to, value)?;
                     Ok(())
                 })
             }
@@ -810,8 +810,8 @@ impl Writer {
                 retention_value: None,
             } => {
                 state.require_family(&mut self.inner, AddressFamily::Ipv4)?;
-                state.drain(&mut self.inner, &mut source, |writer, range| {
-                    writer.mutate(|store| store.assign_v4(range.from, range.to, range.value))?;
+                state.drain(&mut self.inner, &mut source, |store, range| {
+                    store.assign_v4(range.from, range.to, range.value)?;
                     Ok(())
                 })
             }
@@ -829,8 +829,8 @@ impl Writer {
                 retention_value: None,
             } => {
                 state.require_family(&mut self.inner, AddressFamily::Ipv6)?;
-                state.drain(&mut self.inner, &mut source, |writer, range| {
-                    writer.mutate(|store| store.assign_v6(range.from, range.to, range.value))?;
+                state.drain(&mut self.inner, &mut source, |store, range| {
+                    store.assign_v6(range.from, range.to, range.value)?;
                     Ok(())
                 })
             }
@@ -955,4 +955,9 @@ impl Writer {
             Err(Error::WrongState("a writer operation is already active"))
         }
     }
+}
+/// Entry point used only by the version-matched SDK worker executable.
+#[doc(hidden)]
+pub fn worker_main() -> i32 {
+    crate::worker::main()
 }

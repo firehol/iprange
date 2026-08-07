@@ -58,6 +58,7 @@ pub mod snapshot;
 mod source;
 mod used_bitmap;
 pub mod validation;
+mod worker;
 mod workflow;
 
 pub use bootstrap::MetaSelection;
@@ -109,6 +110,8 @@ pub use workflow::{AddressRange, LogicalChange, WorkflowKind, WorkflowReport};
 
 #[cfg(test)]
 mod live_crash_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod mmap_runtime_tests;
 #[cfg(test)]
 mod test_alloc;
 #[cfg(test)]

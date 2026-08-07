@@ -291,11 +291,12 @@ fn claim_prepared(
     meta: MetaV4,
     cancellation: &CancellationToken,
 ) -> std::result::Result<LiveSource, ClaimFailure> {
-    let mapping_file = match file.try_clone() {
-        Ok(file) => file,
-        Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause.into())),
-    };
-    let mapping = match Mapping::read_only(mapping_file, meta.page_count * PAGE_SIZE as u64) {
+    let mapping = match Mapping::read_only_view(&file, meta.page_count * PAGE_SIZE as u64).and_then(
+        |mut mapping| {
+            mapping.set_unreadable_pages(&crate::worker::unreadable_source_pages())?;
+            Ok(mapping)
+        },
+    ) {
         Ok(mapping) => mapping,
         Err(cause) => return Err(ClaimFailure::Unclaimed(file, sidecar, cause)),
     };

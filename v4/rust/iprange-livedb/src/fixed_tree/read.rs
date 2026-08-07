@@ -202,7 +202,7 @@ fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Opti
         };
         let frame = path
             .get_mut(depth)
-            .ok_or(Error::Corrupt("B+tree exceeds its maximum height"))?;
+            .ok_or_else(|| Error::corrupt("B+tree exceeds its maximum height"))?;
         *frame = Frame {
             page_number,
             index,
