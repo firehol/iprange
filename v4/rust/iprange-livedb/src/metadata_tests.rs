@@ -200,6 +200,15 @@ fn compression_checks_input_and_heap_bounds_before_allocation() {
 }
 
 #[test]
+fn big_endian_portable_stored_zlib_matches_literal_bytes() {
+    let compressed = compress(b"abc", compressed_bound(3) as u64).unwrap();
+    assert_eq!(
+        compressed,
+        [0x78, 0x01, 0x01, 0x03, 0x00, 0xfc, 0xff, b'a', b'b', b'c', 0x02, 0x4d, 0x01, 0x27,]
+    );
+}
+
+#[test]
 fn stored_zlib_matches_every_block_boundary() {
     for length in [0, 1, 65_534, 65_535, 65_536, 131_070, 1_048_576] {
         let input = pseudo_random(length);

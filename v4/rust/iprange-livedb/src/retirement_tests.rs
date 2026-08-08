@@ -89,6 +89,23 @@ fn extents(store: &MemoryStore, root: u32) -> Vec<(u64, u32, u32)> {
 }
 
 #[test]
+fn big_endian_portable_retirement_extent_matches_literal_bytes() {
+    let extent = Extent {
+        key: Key {
+            txn: 0x0807_0605_0403_0201,
+            first: 0x0c0b_0a09,
+        },
+        count: 0x100f_0e0d,
+    };
+    let encoded = Encoded::new(extent);
+    assert_eq!(
+        encoded.0,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10]
+    );
+    assert_eq!(decode_slice(&encoded.0).unwrap(), extent);
+}
+
+#[test]
 fn arbitrary_page_order_coalesces_within_each_transaction() {
     let mut store = MemoryStore::new(9);
     let mut root = 0;

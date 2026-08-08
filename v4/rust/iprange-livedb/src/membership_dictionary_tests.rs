@@ -111,6 +111,45 @@ fn empty_state() -> State {
     }
 }
 
+struct LiteralWords;
+
+impl Words<MemoryStore> for LiteralWords {
+    fn word_count(&self) -> u32 {
+        2
+    }
+
+    fn read_words(&self, _store: &MemoryStore, start: u32, output: &mut [u64]) -> Result<()> {
+        let words = [0x0102_0304_0506_0708, 0x1112_1314_1516_1718];
+        let start = start as usize;
+        output.copy_from_slice(&words[start..start + output.len()]);
+        Ok(())
+    }
+}
+
+#[test]
+fn big_endian_portable_membership_record_matches_literal_bytes() {
+    let mut store = MemoryStore::new();
+    let digest = [0xa5; 32];
+    let encoded = encode_record(&mut store, &LiteralWords, 0x2122_2324, digest).unwrap();
+    let bytes = encoded.as_slice();
+
+    assert_eq!(&bytes[0..8], &[80, 0, 0, 0, 0x24, 0x23, 0x22, 0x21]);
+    assert_eq!(&bytes[8..16], &[0; 8]);
+    assert_eq!(&bytes[16..24], &[2, 0, 0, 0, 16, 0, 0, 0]);
+    assert_eq!(&bytes[24..32], &[0; 8]);
+    assert_eq!(&bytes[32..64], &digest);
+    assert_eq!(
+        &bytes[64..80],
+        &[8, 7, 6, 5, 4, 3, 2, 1, 0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
+    );
+
+    let decoded = codec::decode(bytes).unwrap();
+    assert_eq!(decoded.id, 0x2122_2324);
+    assert_eq!(decoded.word_count, 2);
+    assert_eq!(decoded.digest, digest);
+    assert_eq!(decoded.storage, Storage::Inline);
+}
+
 #[test]
 fn inline_and_blob_values_deduplicate_reuse_ids_and_release_pages() {
     let mut store = MemoryStore::new();

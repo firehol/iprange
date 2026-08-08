@@ -15279,3 +15279,70 @@ sensitive-data heuristic reported seven `credential-assignment` matches; exact
 inspection showed only typed `MembershipToken`/`CancellationToken` parameters
 and local variables, with no credential value or secret material. Renaming
 those domain terms solely to silence the heuristic would reduce clarity.
+
+### 2026-08-08 - big-endian CI gate correction
+
+The first post-push big-endian run for commit `121bce2a49a` failed before it
+executed a Rust test. `.github/workflows/big-endian.yml` requested the nonexistent
+`iprange-livedb/std` feature. Repository history establishes the root cause:
+commit `238b3698` created the command for the old `iprange-format` crate, which
+had that feature; commit `93ea0ff` mechanically changed the path and package to
+v4 without redesigning the command for the new live SDK.
+
+Removing only the stale feature flag exposed a second boundary. Miri can execute
+pure s390x code, but the complete live SDK test set reaches wall-clock and file-
+locking operations. Disabling Miri isolation permits the clock but still fails
+at the unsupported `fcntl` operation. A real s390x run under QEMU executed 137
+tests before the remaining live-file tests correctly rejected Docker overlayfs
+as an unsupported durability namespace; child-process tests also require host
+binary-format registration. Changing v4 durability policy or constructing a
+special privileged CI filesystem merely to run those OS tests under emulation
+would be outside this SOW and would weaken the meaning of the native gates.
+
+The minimal-complete correction is test-focused. Rust Miri will execute focused
+literal vectors for the portable main-file codecs: integer and IP keys, meta and
+common page headers, slotted-page offsets, range records, feed-catalog records,
+membership records, bitmap words, retirement extents, and stored-zlib framing.
+These tests compare encoder output with fixed bytes and decode those bytes on
+emulated s390x; they do not rely on an encode/decode round trip alone. Review of
+the existing meta vector found that it used a second test-only implementation of
+the complete meta field layout. That duplicate must be deleted: tests will use
+the same generic field encoder as the mapped production path, while production
+retains its hardware-dispatched mapped-page checksum calculation. This is the
+only production-source refactor in the correction and removes, rather than adds,
+a second persistent operation owner. The job description will say exactly that
+it proves portable codec parity. Native OS, mmap, locking, process, and
+durability behavior remains owned by the native platform matrix. No format byte,
+API, durability rule, resource bound, platform support decision, or hot-path
+work changes.
+
+Validation for this correction requires the focused s390x Miri command, both
+normal Rust feature matrices, formatting, Clippy, source-graph and architecture
+gates, and the actual GitHub big-endian job after push. The existing Go qemu
+step is retained unchanged; executing its existing proof is not Go development.
+
+The implemented correction deletes the duplicated 35-line meta field encoder
+from `contract_tests.rs`. `MetaV4::encode_mapped` and test fixtures now call one
+private generic `encode_fields` implementation; the mapped path still computes
+CRC through `crc32c_page_mut_with_zeroed` and writes it once. Ten literal vectors
+then passed under Miri's s390x target in 7.59 seconds. They cover IPv4 and IPv6
+keys, meta fields, common/slotted page headers, range records, feed records,
+membership records and bitmap words, used-bitmap pages, retirement extents, and
+stored-zlib framing.
+
+Both workspace feature matrices pass with 352 library tests, four deliberate
+library ignores, all integrations and properties, the conformance corpus, all
+136 C symbols, seven native C programs, and C11/C++17 header compilation. Rust
+1.74.1, Clippy and rustdoc with warnings denied, formatting, the architecture
+gate, static and runtime mmap-only gates, and the four-target 352-source graph
+all pass. Runtime syscall tracing again observed no persistent-content transfer
+calls. The GitHub big-endian job remains pending until this correction is pushed;
+the current Windows, macOS, and FreeBSD native rerun remains separately pending
+user authorization.
+
+Artifact maintenance for this correction updates the active SOW and the Rust
+runtime project skill with the exact proof command and its honest boundary. The
+binary-format, engine-design, and C-ABI specs do not change because neither bytes
+nor behavior changed. `AGENTS.md`, the Rust README, released C CLI/operator docs,
+and output skills are unaffected: this repairs internal proof and removes a test
+duplicate, without changing a product or operator contract.

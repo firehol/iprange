@@ -81,6 +81,28 @@ impl Store for MemoryStore {
 }
 
 #[test]
+fn big_endian_portable_bitmap_leaf_matches_literal_bytes() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    set(
+        &mut store,
+        &mut root,
+        512,
+        Kind::Feed,
+        8,
+        &mut RetiredPages::new(),
+    )
+    .unwrap();
+
+    let page = &store.pages[root as usize];
+    assert_eq!(&page[0..8], b"IP4P\x0f\x00\x20\x00");
+    assert_eq!(&page[8..16], &[1, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(&page[16..24], &[1, 0, 0, 0, 0xc0, 0x0f, 0, 0x10]);
+    assert_eq!(&page[24..28], &[2, 0, 0, 0]);
+    assert_eq!(&page[32..40], &[0, 1, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
 fn lowest_zero_crosses_leaf_boundary_and_reuses_cleared_bit() {
     let mut store = MemoryStore::new();
     let mut root = 0;

@@ -3,6 +3,7 @@
 use crate::crc32c;
 use crate::error::Result;
 use crate::mapping::{ByteSource, PageMut};
+use crate::slotted_page::PageSink;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_SHIFT: u8 = 12;
@@ -126,6 +127,13 @@ pub(crate) struct MetaV4 {
 
 impl MetaV4 {
     pub(crate) fn encode_mapped(&self, mut page: PageMut<'_>) -> Result<()> {
+        self.encode_fields(&mut page)?;
+        let crc = crc32c::crc32c_page_mut_with_zeroed(&page, META_CRC_OFFSET, 4)
+            .expect("fixed meta CRC field");
+        page.put_u32(META_CRC_OFFSET, crc)
+    }
+
+    fn encode_fields<D: PageSink + ?Sized>(&self, page: &mut D) -> Result<()> {
         page.fill(0);
         page.write(0, &META_MAGIC)?;
         page.put_u16(8, META_SIZE)?;
@@ -158,9 +166,7 @@ impl MetaV4 {
         for (index, page_number) in self.allocator_reserve.iter().enumerate() {
             page.put_u32(184 + index * 4, *page_number)?;
         }
-        let crc = crc32c::crc32c_page_mut_with_zeroed(&page, META_CRC_OFFSET, 4)
-            .expect("fixed meta CRC field");
-        page.put_u32(META_CRC_OFFSET, crc)
+        Ok(())
     }
 
     pub(crate) fn decode_unchecked<S: ByteSource>(page: S) -> Option<Self> {

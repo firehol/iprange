@@ -197,3 +197,23 @@ fn encode(name: FeedName, value: u32, output: &mut [u8]) -> Result<usize> {
     output[NAME_RECORD_BASE..len].copy_from_slice(name.as_bytes());
     Ok(len)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn big_endian_portable_feed_record_matches_literal_bytes() {
+        let name = FeedName::new("feed-x").unwrap();
+        let mut bytes = [0xa5; MAX_NAME_RECORD];
+        let len = encode(name, 0x0102_0304, &mut bytes).unwrap();
+        assert_eq!(
+            &bytes[..len],
+            &[18, 0, 0, 0, 4, 3, 2, 1, 6, 0, 0, 0, b'f', b'e', b'e', b'd', b'-', b'x',]
+        );
+
+        let record = decode_record(&bytes[..len]).unwrap();
+        assert_eq!(record.name, name);
+        assert_eq!(record.value, 0x0102_0304);
+    }
+}

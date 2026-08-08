@@ -197,15 +197,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ipv6_worked_example_2001_db8_1() {
+    fn big_endian_portable_ipv6_key_matches_literal_bytes() {
         // 2001:db8::1 as one little-endian u128: low limb, then high limb.
         let k = Ipv6Key {
             hi: 0x2001_0db8_0000_0000,
             lo: 0x1,
         };
         let mut buf = [0u8; 16];
-        buf[..8].copy_from_slice(&k.lo.to_le_bytes());
-        buf[8..].copy_from_slice(&k.hi.to_le_bytes());
+        k.write_le(&mut buf);
         let expected: [u8; 16] = [
             0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // lo, little-endian
             0x00, 0x00, 0x00, 0x00, 0xb8, 0x0d, 0x01, 0x20, // hi, little-endian
@@ -219,10 +218,11 @@ mod tests {
     }
 
     #[test]
-    fn ipv4_worked_example_192_0_2_1() {
+    fn big_endian_portable_ipv4_key_matches_literal_bytes() {
         // 192.0.2.1 = 0xC000_0201 -> LE bytes 01 02 00 c0.
         let k = Ipv4Key(0xC000_0201);
-        let buf = k.0.to_le_bytes();
+        let mut buf = [0; 4];
+        k.write_le(&mut buf);
         assert_eq!(buf, [0x01, 0x02, 0x00, 0xc0]);
         assert_eq!(Ipv4Key::read_le(&buf, 0), k);
     }

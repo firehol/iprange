@@ -130,6 +130,25 @@ fn ranges_v6(store: &MemoryStore, root: u32) -> Vec<(u128, u128, u32)> {
 }
 
 #[test]
+fn big_endian_portable_range_record_matches_literal_bytes() {
+    let range = Range {
+        from: Ipv4Key(0x0102_0304),
+        to: Ipv4Key(0x0506_0708),
+        value: 0x090a_0b0c,
+    };
+    let encoded = EncodedRange::new(range);
+    assert_eq!(
+        encoded.as_slice(),
+        &[4, 3, 2, 1, 8, 7, 6, 5, 0x0c, 0x0b, 0x0a, 9]
+    );
+
+    let decoded = decode_cell::<Ipv4Key>(encoded.as_slice()).unwrap();
+    assert_eq!(decoded.from, range.from);
+    assert_eq!(decoded.to, range.to);
+    assert_eq!(decoded.value, range.value);
+}
+
+#[test]
 fn overlapping_ranges_apply_in_arrival_order() {
     let mut store = MemoryStore::new();
     let mut root = 0;

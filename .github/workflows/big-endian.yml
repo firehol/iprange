@@ -1,8 +1,7 @@
-# Guards the iprange v4 format libraries against any host-endian regression. The
-# on-disk format is always little-endian; both libraries use
-# explicit little-endian (de)serialization that must byte-swap correctly on a
-# big-endian host. We prove that on s390x (big-endian): Rust under Miri (which
-# emulates target endianness) and Go cross-compiled and run under qemu-s390x.
+# Guards the portable v4 codecs against host-endian regressions. The on-disk
+# format is always little-endian. Rust literal wire vectors run under Miri's
+# s390x emulation; native OS, mmap, locking, and durability behavior belongs to
+# the native platform matrix. Go runs its existing full suite under qemu-s390x.
 name: Big-endian
 
 on:
@@ -26,7 +25,7 @@ permissions: {}
 
 jobs:
   big-endian:
-    name: s390x reader/writer parity
+    name: s390x portable codec parity
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -44,11 +43,11 @@ jobs:
           rustup toolchain install nightly --profile minimal --component miri,rust-src
           rustup default nightly
 
-      - name: Rust — Miri on big-endian (s390x)
+      - name: Rust — portable codec vectors under Miri (s390x)
         working-directory: v4/rust
         run: |
           cargo miri test --target s390x-unknown-linux-gnu \
-            -p iprange-livedb --no-default-features --features std --lib
+            -p iprange-livedb --no-default-features --lib big_endian_portable_
 
       - name: Go — full suite under qemu-s390x (big-endian)
         working-directory: v4/go

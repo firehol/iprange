@@ -75,12 +75,18 @@ impl PageEdit for [u8; PAGE_SIZE] {
 }
 
 #[test]
-fn builder_and_parser_round_trip_fixed_cells() {
+fn big_endian_portable_slotted_page_matches_literal_bytes() {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
     builder.push(&[1; 12]).unwrap();
     builder.push(&[2; 12]).unwrap();
     builder.finish().unwrap();
+
+    assert_eq!(&page[0..8], b"IP4P\x02\x00\x20\x00");
+    assert_eq!(&page[8..16], &[7, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(&page[16..24], &[2, 0, 0, 0, 36, 0, 0xe8, 0x0f]);
+    assert_eq!(&page[24..28], &[4, 0, 0, 0]);
+    assert_eq!(&page[32..36], &[0xf4, 0x0f, 0xe8, 0x0f]);
 
     let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
     assert_eq!(header.item_count, 2);

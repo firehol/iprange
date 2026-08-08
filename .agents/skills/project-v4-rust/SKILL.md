@@ -74,6 +74,23 @@ sidecar, snapshot, recovery, publication, reservation, and scratch paths use
 mappings without persistent-content transfer syscalls. Do not weaken either
 gate to make a failure green.
 
+## Prove portable byte order
+
+Run the focused Rust codec vectors under Miri's s390x target:
+
+```bash
+cargo +nightly miri test --manifest-path v4/rust/Cargo.toml \
+  --target s390x-unknown-linux-gnu -p iprange-livedb \
+  --no-default-features --lib big_endian_portable_
+```
+
+Each selected test must drive the authoritative production field or record
+encoder and compare with fixed literal bytes; a second test-only encoder or a
+symmetric round trip is not evidence. This gate proves the portable byte
+codecs only. Miri cannot prove the SDK's wall-clock, file-locking, mmap,
+process, or durability behavior; keep those claims on the native platform
+matrix and do not describe this gate as full reader/writer parity.
+
 Explicit validation, candidate inspection, recovery, and retained-cleanup retry
 require the exact `iprange-v4-worker` executable beside the consuming process
 executable. There is no `PATH` search or environment override. The one exact
