@@ -1,21 +1,19 @@
 //! Complete direct replacement and retention refresh workflows.
 
 use crate::cancellation::CancellationToken;
-use crate::cardinality::Cardinality129;
 use crate::contract::{AddressFamily, ValueKind, ValueTag};
-use crate::draft_store::Draft;
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::random;
 use crate::range_cursor::DirectRange;
 use crate::source::{RangeSource, SliceSource};
-use crate::workflow::compare;
 use crate::workflow::{
     AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
 
 use super::workflow::FinishedState;
-use super::workflow::{classify, drain_source, require_ordered};
+use super::workflow::{
+    classify, drain_source, require_input_active, require_input_family, require_ordered,
+};
 use super::{FinishedWorkflow, LiveWriter, PreparedState};
 
 /// Complete unordered direct-map replacement.
@@ -60,17 +58,24 @@ impl LiveWriter {
         refresh_value: u32,
         cancellation: &CancellationToken,
     ) -> Result<RetentionRefresh<'_>> {
-        if self.base.meta.value_tag != ValueTag::RETENTION {
-            return Err(Error::WrongValueTag(
-                "retention refresh requires the retention value tag",
-            ));
-        }
-        let state = self.begin_exact_direct_state(WorkflowKind::RetentionRefresh, cancellation)?;
+        let state = self.begin_retention_state(cancellation)?;
         Ok(RetentionRefresh {
             writer: self,
             state,
             refresh_value,
         })
+    }
+
+    pub(crate) fn begin_retention_state(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<ExactDirectState> {
+        if self.core.base_info().value_tag != ValueTag::RETENTION {
+            return Err(Error::WrongValueTag(
+                "retention refresh requires the retention value tag",
+            ));
+        }
+        self.begin_exact_direct_state(WorkflowKind::RetentionRefresh, cancellation)
     }
 
     pub(crate) fn begin_exact_direct_state(
@@ -79,18 +84,13 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<ExactDirectState> {
         self.require_healthy()?;
-        if self.base.meta.value_kind != ValueKind::Direct {
+        if self.core.base_info().value_kind != ValueKind::Direct {
             return Err(Error::WrongValueKind(
                 "exact direct workflow requires a direct database",
             ));
         }
-        if self.draft.is_some() {
-            return Err(Error::WrongState("a writer transaction is already pending"));
-        }
         cancellation.check()?;
-        let mut draft = Draft::new(self.base.meta, random::nonzero_128()?)?;
-        draft.begin_range_workflow()?;
-        self.draft = Some(draft);
+        self.core.begin_range_workflow()?;
         Ok(ExactDirectState {
             cancellation: cancellation.clone(),
             workflow,
@@ -105,13 +105,7 @@ impl<'a> DirectReplacement<'a> {
     where
         S: RangeSource<DirectRange<Ipv4Key>>,
     {
-        self.state
-            .require_family(self.writer, AddressFamily::Ipv4)?;
-        self.state.drain(self.writer, source, |store, range| {
-            require_ordered(range.from, range.to)?;
-            store.assign_v4(range.from, range.to, range.value)?;
-            Ok(())
-        })
+        self.state.add_direct_v4(self.writer, source)
     }
 
     /// Drain one finite IPv6 source in exact callback order.
@@ -119,13 +113,7 @@ impl<'a> DirectReplacement<'a> {
     where
         S: RangeSource<DirectRange<Ipv6Key>>,
     {
-        self.state
-            .require_family(self.writer, AddressFamily::Ipv6)?;
-        self.state.drain(self.writer, source, |store, range| {
-            require_ordered(range.from, range.to)?;
-            store.assign_v6(range.from, range.to, range.value)?;
-            Ok(())
-        })
+        self.state.add_direct_v6(self.writer, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[DirectRange<Ipv4Key>]) -> Result<()> {
@@ -150,13 +138,7 @@ impl<'a> RetentionRefresh<'a> {
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
         self.state
-            .require_family(self.writer, AddressFamily::Ipv4)?;
-        let value = self.refresh_value;
-        self.state.drain(self.writer, source, move |store, range| {
-            require_ordered(range.from, range.to)?;
-            store.assign_v4(range.from, range.to, value)?;
-            Ok(())
-        })
+            .add_retention_v4(self.writer, self.refresh_value, source)
     }
 
     /// Drain one finite unordered IPv6 address source.
@@ -165,13 +147,7 @@ impl<'a> RetentionRefresh<'a> {
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
         self.state
-            .require_family(self.writer, AddressFamily::Ipv6)?;
-        let value = self.refresh_value;
-        self.state.drain(self.writer, source, move |store, range| {
-            require_ordered(range.from, range.to)?;
-            store.assign_v6(range.from, range.to, value)?;
-            Ok(())
-        })
+            .add_retention_v6(self.writer, self.refresh_value, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
@@ -192,30 +168,74 @@ impl<'a> RetentionRefresh<'a> {
 }
 
 impl ExactDirectState {
+    pub(crate) fn add_direct_v4<S>(&mut self, writer: &mut LiveWriter, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<DirectRange<Ipv4Key>>,
+    {
+        self.require_family(writer, AddressFamily::Ipv4)?;
+        self.drain(writer, source, |edit, range| {
+            require_ordered(range.from, range.to)?;
+            edit.assign_v4(range.from, range.to, range.value)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn add_direct_v6<S>(&mut self, writer: &mut LiveWriter, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<DirectRange<Ipv6Key>>,
+    {
+        self.require_family(writer, AddressFamily::Ipv6)?;
+        self.drain(writer, source, |edit, range| {
+            require_ordered(range.from, range.to)?;
+            edit.assign_v6(range.from, range.to, range.value)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn add_retention_v4<S>(
+        &mut self,
+        writer: &mut LiveWriter,
+        value: u32,
+        source: &mut S,
+    ) -> Result<()>
+    where
+        S: RangeSource<AddressRange<Ipv4Key>>,
+    {
+        self.require_family(writer, AddressFamily::Ipv4)?;
+        self.drain(writer, source, move |edit, range| {
+            require_ordered(range.from, range.to)?;
+            edit.assign_v4(range.from, range.to, value)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn add_retention_v6<S>(
+        &mut self,
+        writer: &mut LiveWriter,
+        value: u32,
+        source: &mut S,
+    ) -> Result<()>
+    where
+        S: RangeSource<AddressRange<Ipv6Key>>,
+    {
+        self.require_family(writer, AddressFamily::Ipv6)?;
+        self.drain(writer, source, move |edit, range| {
+            require_ordered(range.from, range.to)?;
+            edit.assign_v6(range.from, range.to, value)?;
+            Ok(())
+        })
+    }
+
     pub(crate) fn require_family(
         &mut self,
         writer: &mut LiveWriter,
         family: AddressFamily,
     ) -> Result<()> {
-        self.require_active(writer)?;
-        if writer.base.meta.address_family != family {
-            return Err(writer.abort_after(Error::WrongAddressFamily(
-                "range family does not match the database",
-            )));
-        }
-        Ok(())
+        require_input_family(writer, family)
     }
 
     pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
-        writer.require_healthy()?;
-        if !writer
-            .draft
-            .as_ref()
-            .is_some_and(Draft::workflow_input_open)
-        {
-            return Err(Error::WrongState("workflow input is not active"));
-        }
-        Ok(())
+        require_input_active(writer)
     }
 
     pub(crate) fn drain<R, S, F>(
@@ -227,7 +247,7 @@ impl ExactDirectState {
     where
         R: Copy,
         S: RangeSource<R>,
-        F: FnMut(&mut crate::draft_store::DraftStore<'_>, R) -> Result<()>,
+        F: FnMut(&mut crate::writer_core::WriterEdit<'_>, R) -> Result<()>,
     {
         self.require_active(writer)?;
         writer.mutate(|store| {
@@ -249,9 +269,8 @@ impl ExactDirectState {
                 "retention refresh requires its refresh value",
             )));
         }
-        let base = writer.base;
-        let report = self.prepare_replacement_report(writer, &base)?;
-        self.complete(writer, base, report)
+        let report = self.prepare_replacement_report(writer)?;
+        self.complete(writer, report)
     }
 
     pub(crate) fn finish_retention_state(
@@ -265,11 +284,10 @@ impl ExactDirectState {
                 "direct replacement has no retention refresh value",
             )));
         }
-        let base = writer.base;
+        let before = writer.core.base_info();
         let cancellation = self.cancellation.clone();
-        let merged =
-            writer.mutate(|store| store.merge_retention(&base, refresh_value, &cancellation))?;
-        let after = writer.draft.as_ref().unwrap().meta;
+        let merged = writer.mutate(|edit| edit.merge_retention(refresh_value, &cancellation))?;
+        let after = writer.core.current_info();
         let logical_change = classify(&merged.comparison);
         let report = WorkflowReport::replacement(
             ReplacementReportInput {
@@ -277,25 +295,26 @@ impl ExactDirectState {
                 logical_change,
                 input_record_count: self.input_records,
                 input_normalized_interval_count: merged.input_intervals,
-                before_range_record_count: base.meta.range_record_count,
+                before_range_record_count: before.range_record_count,
                 after_range_record_count: after.range_record_count,
                 input_addresses: merged.input_addresses,
             },
             merged.comparison,
         );
-        self.complete(writer, base, report)
+        self.complete(writer, report)
     }
 
-    fn prepare_replacement_report(
-        &mut self,
-        writer: &mut LiveWriter,
-        base: &crate::bootstrap::Bootstrap,
-    ) -> Result<WorkflowReport> {
+    fn prepare_replacement_report(&mut self, writer: &mut LiveWriter) -> Result<WorkflowReport> {
         self.require_active(writer)?;
-        let after = writer.draft.as_ref().unwrap().meta;
-        let input_addresses = coverage(&writer.mapping, &after, &self.cancellation)
+        let before = writer.core.base_info();
+        let after = writer.core.current_info();
+        let input_addresses = writer
+            .core
+            .current_coverage(&self.cancellation)
             .map_err(|error| writer.abort_after(error))?;
-        let comparison = compare_maps(&writer.mapping, base, &after, &self.cancellation)
+        let comparison = writer
+            .core
+            .compare_maps(&self.cancellation)
             .map_err(|error| writer.abort_after(error))?;
         let logical_change = classify(&comparison);
         Ok(WorkflowReport::replacement(
@@ -304,7 +323,7 @@ impl ExactDirectState {
                 logical_change,
                 input_record_count: self.input_records,
                 input_normalized_interval_count: after.range_record_count,
-                before_range_record_count: base.meta.range_record_count,
+                before_range_record_count: before.range_record_count,
                 after_range_record_count: after.range_record_count,
                 input_addresses,
             },
@@ -312,45 +331,17 @@ impl ExactDirectState {
         ))
     }
 
-    fn complete(
-        self,
-        writer: &mut LiveWriter,
-        base: crate::bootstrap::Bootstrap,
-        report: WorkflowReport,
-    ) -> Result<FinishedState> {
+    fn complete(self, writer: &mut LiveWriter, report: WorkflowReport) -> Result<FinishedState> {
         if report.logical_change == LogicalChange::NoChange {
             writer.discard_draft()?;
             return Ok(FinishedState::NoChange(report));
         }
         let cancellation = self.cancellation;
-        writer.mutate(|store| store.finish_direct_workflow(&base, &cancellation))?;
+        writer.mutate(|edit| edit.finish_direct_workflow(&cancellation))?;
         Ok(FinishedState::Changed {
             report,
             state: PreparedState::new(cancellation),
         })
-    }
-}
-
-fn coverage(
-    mapping: &crate::mapping::Mapping,
-    meta: &crate::contract::MetaV4,
-    cancellation: &CancellationToken,
-) -> Result<Cardinality129> {
-    match meta.address_family {
-        AddressFamily::Ipv4 => compare::coverage::<Ipv4Key>(mapping, meta, cancellation),
-        AddressFamily::Ipv6 => compare::coverage::<Ipv6Key>(mapping, meta, cancellation),
-    }
-}
-
-fn compare_maps(
-    mapping: &crate::mapping::Mapping,
-    before: &crate::bootstrap::Bootstrap,
-    after: &crate::contract::MetaV4,
-    cancellation: &CancellationToken,
-) -> Result<crate::workflow::Comparison> {
-    match after.address_family {
-        AddressFamily::Ipv4 => compare::maps::<Ipv4Key>(mapping, before, after, cancellation),
-        AddressFamily::Ipv6 => compare::maps::<Ipv6Key>(mapping, before, after, cancellation),
     }
 }
 

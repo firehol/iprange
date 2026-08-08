@@ -100,6 +100,7 @@ fn find_mapped_leaf(
     total_bytes: u64,
     target: u64,
 ) -> Result<MappedLeaf> {
+    crate::work::tree_lookup(1);
     if target >= total_bytes {
         return Err(Error::Corrupt("membership blob request exceeds its length"));
     }
@@ -136,6 +137,7 @@ fn find_mapped_leaf(
         page_number = record.child;
         expected_offset = record.offset;
         expected = Some(header.level - 1);
+        crate::work::tree_descent(1);
     }
     Err(Error::Corrupt(
         "membership blob tree exceeds its maximum height",
@@ -148,6 +150,7 @@ fn find_store_leaf<S: Store>(
     total_bytes: u64,
     target: u64,
 ) -> Result<StoreLeaf> {
+    crate::work::tree_lookup(1);
     if target >= total_bytes {
         return Err(Error::Corrupt("membership blob request exceeds its length"));
     }
@@ -203,6 +206,7 @@ fn find_store_leaf<S: Store>(
                 page_number = child;
                 expected_offset = offset;
                 expected = Some(level - 1);
+                crate::work::tree_descent(1);
             }
         }
     }

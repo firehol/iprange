@@ -398,6 +398,7 @@ fn reserve_page(meta: &mut MetaV4, budget: OutputBudget) -> Result<u32> {
     }
     let page = u32::try_from(meta.page_count).map_err(|_| Error::PageSpaceExhausted)?;
     meta.page_count += 1;
+    crate::work::page_created(1);
     Ok(page)
 }
 
@@ -478,6 +479,7 @@ impl Store for Builder {
                     .page_pair(source, destination, self.meta.page_count)?;
             let result = copy(source, &mut destination)?;
             require_output_owner(destination.view(), self.meta.txn_id)?;
+            crate::work::page_copied(1);
             Ok(result)
         })
     }

@@ -6,7 +6,8 @@ use crate::cancellation::CancellationToken;
 use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::Mode;
-use crate::live_sidecar::{self, Identity, Sidecar, State};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{Sidecar, State};
 use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 use crate::validation::LocalFileIdentity;
 
@@ -74,7 +75,7 @@ pub fn resolve_interrupted_live_transition(
     crate::live_lock::require_live_supported()?;
     let path = path.as_ref();
     cancellation.check()?;
-    let directory_identity = live_sidecar::parent_identity(path)?;
+    let directory_identity = crate::live_namespace::parent_identity(path)?;
     let main = open_main(path, cancellation)?;
     let canonical_path = crate::path::canonical_sidecar(path)?;
     let private_path = crate::path::live_transition_temp(path)?;
@@ -122,12 +123,12 @@ fn resolve_without_main(
     }
 
     cancellation.check()?;
-    if live_sidecar::parent_identity(path)? != directory_identity {
+    if crate::live_namespace::parent_identity(path)? != directory_identity {
         return Err(Error::DirectoryIdentityMismatch);
     }
     let facts = facts(kind, None, &residue);
     let mut cleanup = retire_observed(&residue_path, &residue);
-    match live_sidecar::parent_identity(path) {
+    match crate::live_namespace::parent_identity(path) {
         Ok(found) if found == directory_identity => {}
         Ok(_) => cleanup.absorb(live_cleanup::Outcome::failed(
             Error::DirectoryIdentityMismatch,
@@ -244,9 +245,9 @@ fn complete_canonical(
         main.verify()?;
         require_state(sidecar, State::Creating)?;
         main.file.sync_all()?;
-        live_sidecar::sync_parent(&main.path)?;
+        crate::live_namespace::sync_parent(&main.path)?;
         sidecar.publish_ready()?;
-        live_sidecar::sync_parent(&sidecar.path)?;
+        crate::live_namespace::sync_parent(&sidecar.path)?;
         main.verify()?;
         sidecar.verify_path()?;
         sidecar.verify_header()
@@ -276,9 +277,9 @@ fn complete_private_reset(
             None,
             LiveResetPolicy::RollbackSafe,
         )?;
-        live_sidecar::sync_parent(canonical_path)?;
+        crate::live_namespace::sync_parent(canonical_path)?;
         main.verify()?;
-        live_sidecar::verify_path(canonical_path, sidecar.local_identity())?;
+        crate::live_namespace::verify_path(canonical_path, sidecar.local_identity())?;
         sidecar.verify_header()
     })();
     finish_with_cleanup(completed, sidecar.unlock_gate())?;
@@ -365,21 +366,21 @@ fn remove_private_residue(
 }
 
 fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<Option<LockedMain>> {
-    if live_sidecar::path_identity(path)?.is_none() {
+    if crate::live_namespace::path_identity(path)?.is_none() {
         return Ok(None);
     }
     LockedMain::open(path, cancellation).map(Some)
 }
 
 fn observe(path: &Path) -> Result<Observed> {
-    if live_sidecar::path_identity(path)?.is_none() {
+    if crate::live_namespace::path_identity(path)?.is_none() {
         return Ok(Observed::Absent);
     }
     match Sidecar::open_any(path.to_path_buf()) {
         Ok((sidecar, state)) => Ok(Observed::Valid(sidecar, state)),
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => {
-            let file = live_sidecar::open_rw(path)?;
-            let identity = live_sidecar::identity(&file)?;
+            let file = crate::live_namespace::open_rw(path)?;
+            let identity = crate::live_namespace::identity(&file)?;
             Ok(Observed::Malformed { file, identity })
         }
         Err(cause) => Err(cause),
@@ -432,7 +433,7 @@ fn require_database(main: &LockedMain, sidecar: &Sidecar) -> Result<()> {
 }
 
 fn require_state(sidecar: &Sidecar, state: State) -> Result<()> {
-    let (current, header) = live_sidecar::read_header(&sidecar.file)?;
+    let (current, header) = sidecar.current_header()?;
     if current != state || header != sidecar.header {
         return Err(Error::Conflict("live residue changed during resolution"));
     }
@@ -440,7 +441,7 @@ fn require_state(sidecar: &Sidecar, state: State) -> Result<()> {
 }
 
 fn require_absent(path: &Path) -> Result<()> {
-    match live_sidecar::path_identity(path)? {
+    match crate::live_namespace::path_identity(path)? {
         None => Ok(()),
         Some(_) => Err(Error::Conflict(
             "canonical coordination appeared during resolution",
@@ -480,7 +481,9 @@ fn ready(main: &LockedMain, kind: LiveResidueKind, sidecar: &Sidecar) -> LiveRes
         sidecar_id: Some(sidecar.header.sidecar_id),
         reader_capacity: Some(sidecar.header.capacity),
         main_identity: Some(main.public_identity),
-        sidecar_identity: Some(live_sidecar::public_identity(sidecar.local_identity())),
+        sidecar_identity: Some(crate::live_namespace::public_identity(
+            sidecar.local_identity(),
+        )),
         residue_possible: false,
         housekeeping: Housekeeping::None,
         visible_housekeeping: Box::default(),
@@ -500,7 +503,9 @@ fn completed_result(
         sidecar_id: Some(sidecar.header.sidecar_id),
         reader_capacity: Some(sidecar.header.capacity),
         main_identity: Some(main.public_identity),
-        sidecar_identity: Some(live_sidecar::public_identity(sidecar.local_identity())),
+        sidecar_identity: Some(crate::live_namespace::public_identity(
+            sidecar.local_identity(),
+        )),
         residue_possible: false,
         housekeeping: Housekeeping::None,
         visible_housekeeping: Box::default(),
@@ -519,13 +524,15 @@ fn facts(
             Some(sidecar.header.database_id),
             Some(sidecar.header.sidecar_id),
             Some(sidecar.header.capacity),
-            Some(live_sidecar::public_identity(sidecar.local_identity())),
+            Some(crate::live_namespace::public_identity(
+                sidecar.local_identity(),
+            )),
         ),
         Observed::Malformed { identity, .. } => (
             None,
             None,
             None,
-            Some(live_sidecar::public_identity(*identity)),
+            Some(crate::live_namespace::public_identity(*identity)),
         ),
     };
     LiveResidueResult {

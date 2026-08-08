@@ -1,13 +1,13 @@
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
+use crate::contract::{u32_le, MetaV4};
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, Mapping, PageView};
 use crate::metadata::{self, Inflater};
-use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
+use crate::validation::{ValidationObject, ValidationReason};
 
 use super::page_set::PageSet;
-use super::report::{RecoverySink, Reporter, Unknown};
+use super::report::{emit_page_unknown, RecoverySink, Reporter};
 
 pub(crate) fn read<S: RecoverySink>(
     mapping: &Mapping,
@@ -229,21 +229,5 @@ fn emit<S: RecoverySink>(
     reason: ValidationReason,
     page: Option<u32>,
 ) -> Result<()> {
-    reporter.unknown(Unknown {
-        reason,
-        object: ValidationObject::Metadata,
-        page_number: page,
-        physical_bytes: page.map(page_interval),
-        address_fence: None,
-        contributes_to_possible_span: false,
-        has_unbounded_extent: false,
-    })
-}
-
-fn page_interval(page: u32) -> PhysicalByteInterval {
-    let start = u64::from(page) * PAGE_SIZE as u64;
-    PhysicalByteInterval {
-        start,
-        end_exclusive: start + PAGE_SIZE as u64,
-    }
+    emit_page_unknown(reporter, reason, ValidationObject::Metadata, page)
 }

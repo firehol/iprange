@@ -15,20 +15,16 @@ mod workflow;
 
 use std::path::{Path, PathBuf};
 
-use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED, PAGE_SIZE};
-use crate::database;
-use crate::draft_store::{Draft, DraftStore, PageBudget};
+use crate::contract::{AddressFamily, ValueKind, MAX_METADATA_UNCOMPRESSED};
+use crate::draft_store::PageBudget;
 use crate::error::{finish_with_cleanup, Error, Result};
-use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
-use crate::mapping::Mapping;
-use crate::metadata;
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{Sidecar, MAIN_LIFETIME_LOCK};
 use crate::process_identity::ProcessIdentity;
-use crate::random;
 use crate::validation::LocalFileIdentity;
+use crate::writer_core::{WriterCore, WriterEdit};
 
 pub use create::{create_live, CreateResult, CreationState};
 pub(crate) use create::{empty_meta, write_empty_main};
@@ -94,29 +90,24 @@ enum State {
 /// Exclusive writer for one live database.
 #[derive(Debug)]
 pub struct LiveWriter {
-    pub(super) mapping: Mapping,
+    pub(super) core: WriterCore,
     pub(super) main_path: PathBuf,
     pub(super) main_identity: Identity,
     pub(super) directory_identity: LocalFileIdentity,
     pub(super) main_public_identity: LocalFileIdentity,
     pub(super) main_basename: LocalBasename,
     pub(super) sidecar: Sidecar,
-    pub(super) base: Bootstrap,
-    pub(super) budget: TransactionBudget,
-    pub(super) draft: Option<Draft>,
-    unproved_tail_end: Option<u64>,
     state: State,
     owner_identity: ProcessIdentity,
 }
 
 struct OpenedMain {
     path: PathBuf,
-    mapping: Mapping,
+    core: WriterCore,
     identity: Identity,
     directory_identity: LocalFileIdentity,
     public_identity: LocalFileIdentity,
     basename: LocalBasename,
-    initial: Bootstrap,
 }
 
 impl LiveWriter {
@@ -129,58 +120,24 @@ impl LiveWriter {
         live_lock::require_live_supported()?;
         cancellation.check()?;
         let budget = budget.validate()?;
-        let main = open_main(path.as_ref(), cancellation)?;
-        let sidecar = Sidecar::open(&main.path, main.initial.meta.database_id)?;
+        let main = open_main(path.as_ref(), budget.pages(), cancellation)?;
+        let sidecar = Sidecar::open(&main.path, main.core.base_info().database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
-        let mut mapping = main.mapping;
-        let opened = open_locked(
-            &mut mapping,
-            &main.path,
-            main.identity,
-            &sidecar,
-            cancellation,
-        );
-        let base = finish_with_cleanup(opened, sidecar.unlock_gate())?;
+        let mut core = main.core;
+        let opened = open_locked(&mut core, &main.path, main.identity, &sidecar, cancellation);
+        finish_with_cleanup(opened, sidecar.unlock_gate())?;
 
         Ok(Self {
-            mapping,
+            core,
             main_path: main.path,
             main_identity: main.identity,
             directory_identity: main.directory_identity,
             main_public_identity: main.public_identity,
             main_basename: main.basename,
             sidecar,
-            base,
-            budget,
-            draft: None,
-            unproved_tail_end: None,
             state: State::Healthy,
             owner_identity: ProcessIdentity::capture(),
         })
-    }
-
-    /// Assign one inclusive IPv4 interval in exact call order.
-    fn assign_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
-        self.require_direct(AddressFamily::Ipv4, from <= to)?;
-        self.mutate(|store| store.assign_v4(from, to, value))
-    }
-
-    /// Assign one inclusive IPv6 interval in exact call order.
-    fn assign_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
-        self.require_direct(AddressFamily::Ipv6, from <= to)?;
-        self.mutate(|store| store.assign_v6(from, to, value))
-    }
-
-    /// Remove values from one inclusive IPv4 interval.
-    fn clear_direct_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
-        self.require_direct(AddressFamily::Ipv4, from <= to)?;
-        self.mutate(|store| store.clear_v4(from, to))
-    }
-
-    /// Remove values from one inclusive IPv6 interval.
-    fn clear_direct_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
-        self.require_direct(AddressFamily::Ipv6, from <= to)?;
-        self.mutate(|store| store.clear_v6(from, to))
     }
 
     /// Compress and stage one exact opaque metadata replacement.
@@ -194,7 +151,7 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<bool> {
         self.require_healthy()?;
-        if self.draft.is_some() {
+        if self.core.has_draft() {
             return Err(Error::WrongState(
                 "metadata-only mutation requires a clean writer",
             ));
@@ -213,13 +170,13 @@ impl LiveWriter {
         if input.len() as u64 > MAX_METADATA_UNCOMPRESSED {
             return Err(Error::InvalidArgument("metadata exceeds 1 MiB"));
         }
-        self.mutate(|store| store.set_metadata(input))
+        self.mutate(|edit| edit.set_metadata(input))
     }
 
     /// Stage metadata absence, or report an already-absent no-op.
     pub fn clear_metadata_json(&mut self, cancellation: &CancellationToken) -> Result<bool> {
         self.require_healthy()?;
-        if self.draft.is_some() {
+        if self.core.has_draft() {
             return Err(Error::WrongState(
                 "metadata-only mutation requires a clean writer",
             ));
@@ -235,15 +192,15 @@ impl LiveWriter {
     pub(super) fn stage_clear_metadata_json(&mut self) -> Result<bool> {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
-        if self.current_meta().metadata_root == 0 {
+        if self.core.metadata_json_len().is_none() {
             return Ok(false);
         }
-        self.mutate(|store| store.clear_metadata())
+        self.mutate(|edit| edit.clear_metadata())
     }
 
     fn check_metadata_cancellation(&mut self, cancellation: &CancellationToken) -> Result<()> {
         cancellation.check().map_err(|cause| {
-            if self.draft.is_some() {
+            if self.core.has_draft() {
                 self.abort_after(cause)
             } else {
                 cause
@@ -255,28 +212,27 @@ impl LiveWriter {
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        let meta = self.current_meta();
-        Ok((meta.metadata_root != 0).then_some(meta.metadata_uncompressed_len))
+        Ok(self.core.metadata_json_len())
     }
 
     /// Fill caller storage from the committed or staged metadata.
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        metadata::read(&self.mapping, &self.current_meta(), output)
+        self.core.read_metadata_json(output)
     }
 
     /// Return the complete committed or staged bounded metadata value.
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        metadata::read_vec(&self.mapping, &self.current_meta())
+        self.core.metadata_json()
     }
 
     /// Discard all unpublished changes.
     pub fn abort(&mut self) -> Result<AbortResult> {
         self.require_healthy()?;
-        if self.draft.is_none() {
+        if !self.core.has_draft() {
             return Err(Error::NoPendingTransaction);
         }
         match self.discard_draft() {
@@ -290,27 +246,14 @@ impl LiveWriter {
 
     pub(crate) fn mutate<T>(
         &mut self,
-        operation: impl FnOnce(&mut DraftStore<'_>) -> Result<T>,
+        operation: impl FnOnce(&mut WriterEdit<'_>) -> Result<T>,
     ) -> Result<T> {
         self.require_healthy()?;
-        let started = self.draft.is_none();
-        if started {
-            self.draft = Some(Draft::new(self.base.meta, random::nonzero_128()?)?);
-        }
-
-        let result = {
-            let draft = self.draft.as_mut().unwrap();
-            let mut store = DraftStore::new(
-                &mut self.mapping,
-                self.base.meta.page_count,
-                self.budget.pages(),
-                draft,
-            );
-            operation(&mut store)
-        };
+        let started = !self.core.has_draft();
+        let result = self.core.edit(operation);
         match result {
             Ok(changed) => {
-                if started && !self.draft.as_ref().unwrap().changed() {
+                if started && !self.core.draft_changed() {
                     self.discard_draft()?;
                 }
                 Ok(changed)
@@ -322,7 +265,7 @@ impl LiveWriter {
     fn require_direct(&self, family: AddressFamily, ordered: bool) -> Result<()> {
         self.require_healthy()?;
         self.require_metadata_stage_available()?;
-        if self.draft.as_ref().is_some_and(Draft::workflow_active) {
+        if self.core.workflow_active() {
             return Err(Error::WrongState(
                 "an exact workflow owns the pending transaction",
             ));
@@ -330,12 +273,12 @@ impl LiveWriter {
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
-        if self.base.meta.value_kind != ValueKind::Direct {
+        if self.core.base_info().value_kind != ValueKind::Direct {
             return Err(Error::WrongValueKind(
                 "direct mutation requires a direct database",
             ));
         }
-        if self.base.meta.address_family != family {
+        if self.core.base_info().address_family != family {
             return Err(Error::WrongAddressFamily(
                 "direct mutation does not match the database family",
             ));
@@ -345,10 +288,10 @@ impl LiveWriter {
 
     fn require_metadata_stage_available(&self) -> Result<()> {
         self.require_operation_owned()?;
-        if self.draft.as_ref().is_some_and(Draft::workflow_input_open) {
+        if self.core.workflow_input_open() {
             return Err(Error::WrongState("workflow input is not finished"));
         }
-        if self.draft.as_ref().is_some_and(Draft::metadata_staged) {
+        if self.core.metadata_staged() {
             return Err(Error::WrongState(
                 "this transaction already staged metadata",
             ));
@@ -357,18 +300,11 @@ impl LiveWriter {
     }
 
     fn require_operation_owned(&self) -> Result<()> {
-        if self.draft.as_ref().is_some_and(Draft::operation_abandoned) {
+        if self.core.operation_abandoned() {
             Err(Error::WrongState("operation handle was dropped"))
         } else {
             Ok(())
         }
-    }
-
-    fn current_meta(&self) -> MetaV4 {
-        self.draft
-            .as_ref()
-            .map(Draft::metadata_meta)
-            .unwrap_or(self.base.meta)
     }
 
     fn require_healthy(&self) -> Result<()> {
@@ -395,11 +331,7 @@ impl LiveWriter {
 
     fn discard_draft(&mut self) -> Result<()> {
         match self.discard_draft_inner() {
-            Ok(()) => {
-                self.draft = None;
-                self.unproved_tail_end = None;
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(error) => {
                 self.state = State::Unusable;
                 Err(error)
@@ -408,50 +340,10 @@ impl LiveWriter {
     }
 
     fn discard_draft_inner(&mut self) -> Result<()> {
-        self.verify_discard_base()?;
-        let physical_bytes = self.trim_unpublished_tail()?;
-        self.verify_discard_result(physical_bytes)?;
-        self.base.physical_bytes = physical_bytes;
-        Ok(())
-    }
-
-    fn verify_discard_base(&self) -> Result<()> {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
-        self.require_unchanged_base()?;
-        verify_pair(&self.main_path, self.main_identity, &self.sidecar)
-    }
-
-    fn trim_unpublished_tail(&mut self) -> Result<u64> {
-        let length = self.mapping.file().metadata()?.len();
-        if length < self.base.committed_bytes {
-            return Err(Error::Corrupt(
-                "main file is shorter than its committed generation",
-            ));
-        }
-        if length > self.base.committed_bytes {
-            self.unproved_tail_end = Some(length);
-            let physical_bytes = self.mapping.shrink_or_retain(self.base.committed_bytes)?;
-            self.mapping.sync_file()?;
-            return Ok(physical_bytes);
-        }
-        if self.mapping.len() != self.base.committed_bytes {
-            self.mapping.remap(self.base.committed_bytes)?;
-        }
-        Ok(length)
-    }
-
-    fn verify_discard_result(&self, physical_bytes: u64) -> Result<()> {
-        self.require_unchanged_base()?;
-        if physical_bytes < self.base.committed_bytes
-            || physical_bytes % PAGE_SIZE as u64 != 0
-            || self.mapping.file().metadata()?.len() != physical_bytes
-            || self.mapping.len() != self.base.committed_bytes
-        {
-            return Err(Error::Corrupt(
-                "unpublished tail cleanup left inconsistent geometry",
-            ));
-        }
-        verify_pair(&self.main_path, self.main_identity, &self.sidecar)
+        self.core.discard_unpublished()?;
+        verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
+        Ok(())
     }
 
     pub(crate) fn abort_after(&mut self, cause: Error) -> Error {
@@ -478,17 +370,8 @@ impl LiveWriter {
         &self,
         cleanup_error: crate::error::ErrorCode,
     ) -> CommitCleanupArtifacts {
-        let current_end = self
-            .mapping
-            .file()
-            .metadata()
-            .ok()
-            .map(|metadata| metadata.len());
-        let observed_tail_end_exclusive = [self.unproved_tail_end, current_end]
-            .into_iter()
-            .flatten()
-            .filter(|&length| length > self.base.committed_bytes)
-            .max();
+        let tail = self.core.tail_cleanup_state();
+        let observed_tail_end_exclusive = tail.observed_tail_end_exclusive;
         let Some(observed_tail_end_exclusive) = observed_tail_end_exclusive else {
             return CommitCleanupArtifacts::clean();
         };
@@ -496,10 +379,10 @@ impl LiveWriter {
             directory_identity: self.directory_identity,
             main_basename: self.main_basename,
             main_identity: self.main_public_identity,
-            expected_database_id: self.base.meta.database_id,
-            target_transaction_id: self.base.meta.txn_id,
-            target_commit_nonce: self.base.meta.commit_nonce,
-            committed_target_length: self.base.committed_bytes,
+            expected_database_id: tail.database_id,
+            target_transaction_id: tail.transaction_id,
+            target_commit_nonce: tail.commit_nonce,
+            committed_target_length: tail.committed_length,
             observed_tail_end_exclusive: Some(observed_tail_end_exclusive),
             cleanup_error,
         })
@@ -507,76 +390,56 @@ impl LiveWriter {
 }
 
 fn open_locked(
-    mapping: &mut Mapping,
+    core: &mut WriterCore,
     main_path: &Path,
     main_identity: Identity,
     sidecar: &Sidecar,
     cancellation: &CancellationToken,
-) -> Result<Bootstrap> {
+) -> Result<()> {
     verify_pair(main_path, main_identity, sidecar)?;
-    let base = select_base(mapping, sidecar, cancellation)?;
-    cancellation.check()?;
-    sidecar.claim_writer()?;
-    cancellation.check()?;
-    let physical_bytes = trim_tail(mapping, base)?;
-    cancellation.check()?;
-    verify_pair(main_path, main_identity, sidecar)?;
-    Ok(Bootstrap {
-        physical_bytes,
-        ..base
-    })
-}
-
-fn open_main(path: &Path, cancellation: &CancellationToken) -> Result<OpenedMain> {
-    let path = path.to_path_buf();
-    let file = live_sidecar::open_rw(&path)?;
-    let identity = live_sidecar::identity(&file)?;
-    let directory_identity = live_sidecar::parent_identity(&path)?;
-    let public_identity = live_sidecar::public_identity(identity);
-    let basename = LocalBasename::from_path(&path)?;
-    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
-    live_sidecar::verify_path(&path, identity)?;
-    let (mapping, initial) = database::map_writer(file)?;
-    crate::live_cleanup::require_main_available(&path, identity, initial.meta.database_id)?;
-    Ok(OpenedMain {
-        path,
-        mapping,
-        identity,
-        directory_identity,
-        public_identity,
-        basename,
-        initial,
-    })
-}
-
-fn select_base(
-    mapping: &Mapping,
-    sidecar: &Sidecar,
-    cancellation: &CancellationToken,
-) -> Result<Bootstrap> {
-    let physical_bytes = mapping.file().metadata()?.len();
-    let base = database::bootstrap_mapping(mapping, physical_bytes, OpenMode::Writer)?;
-    if base.meta.database_id != sidecar.header.database_id {
+    let selected = core.select_committed()?;
+    if selected.database_id != sidecar.header.database_id {
         return Err(Error::WrongMode(
             "reader table belongs to a different database",
         ));
     }
-    sidecar.scan_at_most_cancellable(base.meta.txn_id, cancellation)?;
-    Ok(base)
+    sidecar.scan_at_most_cancellable(selected.transaction_id, cancellation)?;
+    cancellation.check()?;
+    sidecar.claim_writer()?;
+    cancellation.check()?;
+    core.trim_committed_tail()?;
+    cancellation.check()?;
+    verify_pair(main_path, main_identity, sidecar)?;
+    Ok(())
+}
+
+fn open_main(
+    path: &Path,
+    budget: PageBudget,
+    cancellation: &CancellationToken,
+) -> Result<OpenedMain> {
+    let path = path.to_path_buf();
+    let file = crate::live_namespace::open_rw(&path)?;
+    let identity = crate::live_namespace::identity(&file)?;
+    let directory_identity = crate::live_namespace::parent_identity(&path)?;
+    let public_identity = crate::live_namespace::public_identity(identity);
+    let basename = LocalBasename::from_path(&path)?;
+    live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
+    crate::live_namespace::verify_path(&path, identity)?;
+    let core = WriterCore::map_writer(file, budget)?;
+    crate::live_cleanup::require_main_available(&path, identity, core.base_info().database_id)?;
+    Ok(OpenedMain {
+        path,
+        core,
+        identity,
+        directory_identity,
+        public_identity,
+        basename,
+    })
 }
 
 fn verify_pair(main_path: &Path, main_identity: Identity, sidecar: &Sidecar) -> Result<()> {
-    live_sidecar::verify_path(main_path, main_identity)?;
+    crate::live_namespace::verify_path(main_path, main_identity)?;
     sidecar.verify_path()?;
     sidecar.verify_header()
-}
-
-fn trim_tail(mapping: &mut Mapping, base: Bootstrap) -> Result<u64> {
-    if base.physical_bytes != base.committed_bytes {
-        let physical_bytes = mapping.shrink_or_retain(base.committed_bytes)?;
-        mapping.sync_file()?;
-        Ok(physical_bytes)
-    } else {
-        Ok(base.physical_bytes)
-    }
 }

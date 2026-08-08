@@ -3,11 +3,11 @@
 use sha2::{Digest, Sha256};
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4, PAGE_SIZE};
+use crate::contract::{u32_le, MetaV4};
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, Mapping};
 use crate::membership_dictionary::codec::{self, Record as StoredRecord, Storage as StoredStorage};
-use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
+use crate::validation::{ValidationObject, ValidationReason};
 
 use super::catalog::Catalog;
 use super::membership_blob;
@@ -15,7 +15,7 @@ use super::membership_table::Insert;
 pub(crate) use super::membership_table::MembershipIndex;
 use super::membership_words::read_inline;
 use super::page_set::PageSet;
-use super::report::{RecoverySink, Reporter, Unknown};
+use super::report::{emit_page_unknown as emit, RecoverySink, Reporter};
 use super::tables::Tables;
 use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
 
@@ -360,30 +360,5 @@ impl Codec for IdCodec {
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
         codec::decode(cell).ok().map(|record| record.id)
-    }
-}
-
-fn emit<S: RecoverySink>(
-    reporter: &mut Reporter<'_, S>,
-    reason: ValidationReason,
-    object: ValidationObject,
-    page: Option<u32>,
-) -> Result<()> {
-    reporter.unknown(Unknown {
-        reason,
-        object,
-        page_number: page,
-        physical_bytes: page.map(page_interval),
-        address_fence: None,
-        contributes_to_possible_span: false,
-        has_unbounded_extent: false,
-    })
-}
-
-fn page_interval(page: u32) -> PhysicalByteInterval {
-    let start = u64::from(page) * PAGE_SIZE as u64;
-    PhysicalByteInterval {
-        start,
-        end_exclusive: start + PAGE_SIZE as u64,
     }
 }

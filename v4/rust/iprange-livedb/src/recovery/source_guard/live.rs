@@ -92,7 +92,8 @@ impl LiveSource {
 
     fn ensure_gate_cancellable(&mut self, cancellation: &CancellationToken) -> Result<()> {
         if !self.gate_locked {
-            live_lock::lock_cancellable(&self.sidecar.file, 0, Mode::Exclusive, cancellation)
+            self.sidecar
+                .lock_gate_cancellable(Mode::Exclusive, cancellation)
                 .map_err(live_coordination)?;
             self.gate_locked = true;
         }
@@ -130,7 +131,7 @@ fn open_file(
     open_locked: impl FnOnce(File, Identity) -> std::result::Result<LiveSource, LiveOpenFailure>,
 ) -> std::result::Result<Source, SourceOpenFailure> {
     let file = database::open_read_only(path).map_err(open_problem)?;
-    let identity = live_sidecar::identity(&file).map_err(open_problem)?;
+    let identity = crate::live_namespace::identity(&file).map_err(open_problem)?;
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
         .map_err(open_problem)?;
     finish_open(open_locked(file, identity))
@@ -194,7 +195,8 @@ fn open_sidecar_locked(
         Ok(sidecar) => sidecar,
         Err(cause) => return Err(LiveOpenFailure::Unclaimed(file, live_coordination(cause))),
     };
-    if let Err(cause) = live_lock::lock_cancellable(&sidecar.file, 0, Mode::Exclusive, cancellation)
+    if let Err(cause) = sidecar
+        .lock_gate_cancellable(Mode::Exclusive, cancellation)
         .map_err(live_coordination)
     {
         return Err(LiveOpenFailure::Unclaimed(file, cause));
@@ -338,7 +340,7 @@ fn bind_candidate(
     candidate: RecoveryCandidate,
     cancellation: &CancellationToken,
 ) -> Result<MetaV4> {
-    live_sidecar::verify_path(path, identity).map_err(candidate_changed)?;
+    crate::live_namespace::verify_path(path, identity).map_err(candidate_changed)?;
     let classified = read_classified(file, cancellation)?;
     if classified.order == GenerationOrder::Unproven {
         return Err(Error::RecoveryCandidateChanged);
@@ -350,7 +352,7 @@ fn bind_candidate(
         return Err(Error::RecoveryCandidateChanged);
     }
     crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
-    live_sidecar::verify_path(path, identity).map_err(candidate_changed)?;
+    crate::live_namespace::verify_path(path, identity).map_err(candidate_changed)?;
     Ok(meta)
 }
 
@@ -360,11 +362,11 @@ fn bind_current(
     identity: Identity,
     cancellation: &CancellationToken,
 ) -> Result<MetaV4> {
-    live_sidecar::verify_path(path, identity).map_err(live_coordination)?;
+    crate::live_namespace::verify_path(path, identity).map_err(live_coordination)?;
     cancellation.check()?;
     let meta = database::bootstrap_file(file, OpenMode::LiveReader)?.meta;
     crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
-    live_sidecar::verify_path(path, identity).map_err(live_coordination)?;
+    crate::live_namespace::verify_path(path, identity).map_err(live_coordination)?;
     Ok(meta)
 }
 
@@ -377,7 +379,7 @@ fn verify_live_claim(source: &LiveSource) -> Result<()> {
 }
 
 fn verify_live_paths(path: &Path, identity: Identity, sidecar: &Sidecar) -> Result<()> {
-    live_sidecar::verify_path(path, identity)
+    crate::live_namespace::verify_path(path, identity)
         .and_then(|()| sidecar.verify_path())
         .and_then(|()| sidecar.verify_header())
         .map_err(live_coordination)

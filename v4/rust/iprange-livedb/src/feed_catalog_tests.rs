@@ -170,6 +170,17 @@ fn exact_lookup_and_numeric_cursor_cross_leaf_boundaries() {
 }
 
 #[test]
+fn catalog_lookup_counts_one_root_to_leaf_path() {
+    let (reader, _path, _meta) = two_feed_fixture(2);
+    let (entry, work) = crate::work::measure(|| reader.lookup_feed("alpha"));
+    assert_eq!(entry.unwrap().unwrap().index, 9);
+    assert_eq!(work.catalog_lookups, 1);
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(work.tree_descents, 1);
+    assert_eq!(work.pages_visited, 2);
+}
+
+#[test]
 fn empty_catalog_and_maximum_name_are_supported() {
     let empty = meta(2, 0, 0, 0, 0, 0);
     let (reader, _path) = fixture(empty, &[]);
@@ -308,6 +319,6 @@ fn live_cursor_rejects_a_foreign_process_owner() {
     let file = File::open(&path.0).unwrap();
     let mapping = Mapping::read_only(file, fs::metadata(&path.0).unwrap().len()).unwrap();
     let foreign = crate::process_identity::ProcessIdentity::foreign();
-    let mut cursor = FeedCursor::new_live(&mapping, &meta, foreign).unwrap();
+    let mut cursor = FeedCursor::new(&mapping, &meta, Some(foreign)).unwrap();
     assert!(matches!(cursor.next_feed(), Err(Error::ForkedHandle)));
 }

@@ -1,4 +1,5 @@
 use crate::cardinality::Cardinality129;
+use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::validation::{
@@ -76,6 +77,31 @@ pub(crate) struct Reporter<'a, S> {
     report: RecoveryReport,
     sequence: u64,
     sink: &'a mut S,
+}
+
+pub(crate) fn page_interval(page: u32) -> PhysicalByteInterval {
+    let start = u64::from(page) * PAGE_SIZE as u64;
+    PhysicalByteInterval {
+        start,
+        end_exclusive: start + PAGE_SIZE as u64,
+    }
+}
+
+pub(crate) fn emit_page_unknown<S: RecoverySink>(
+    reporter: &mut Reporter<'_, S>,
+    reason: ValidationReason,
+    object: ValidationObject,
+    page: Option<u32>,
+) -> Result<()> {
+    reporter.unknown(Unknown {
+        reason,
+        object,
+        page_number: page,
+        physical_bytes: page.map(page_interval),
+        address_fence: None,
+        contributes_to_possible_span: false,
+        has_unbounded_extent: false,
+    })
 }
 
 pub(crate) struct Unknown {

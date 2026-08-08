@@ -4,21 +4,22 @@ use std::path::{Path, PathBuf};
 
 use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
-use crate::contract::MetaV4;
-use crate::database::{self, DatabaseInfo, ReaderCore};
+use crate::database::{self, DatabaseInfo};
 use crate::error::{finish_with_cleanup, Error, Result};
 use crate::feed::FeedEntry;
 use crate::feed_catalog::FeedCursor;
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{Sidecar, MAIN_LIFETIME_LOCK};
 use crate::live_writer::CloseOutcome;
 use crate::mapping::Mapping;
 use crate::membership_view::MembershipView;
 use crate::process_identity::ProcessIdentity;
 use crate::publication::{CleanupState, CoordinationCleanup};
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
+use crate::reader_core::ReaderCore;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
@@ -69,9 +70,9 @@ impl LiveReader {
         cancellation.check()?;
         let main_path = path.as_ref().to_path_buf();
         let file = database::open_read_only(&main_path)?;
-        let main_identity = live_sidecar::identity(&file)?;
+        let main_identity = crate::live_namespace::identity(&file)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
-        live_sidecar::verify_path(&main_path, main_identity)?;
+        crate::live_namespace::verify_path(&main_path, main_identity)?;
 
         let (mut mapping, initial) = database::map_reader(file, OpenMode::LiveReader)?;
         crate::live_cleanup::require_main_available(
@@ -89,14 +90,15 @@ impl LiveReader {
             cancellation,
         );
         let (bootstrap, slot) = finish_with_cleanup(registration, sidecar.unlock_gate())?;
+        let owner_identity = ProcessIdentity::capture();
         Ok(Self {
-            core: ReaderCore::new(mapping, bootstrap),
+            core: ReaderCore::new(mapping, bootstrap, Some(owner_identity)),
             main_path,
             main_identity,
             sidecar,
             slot,
             state: State::Open,
-            owner_identity: ProcessIdentity::capture(),
+            owner_identity,
         })
     }
 
@@ -121,15 +123,13 @@ impl LiveReader {
     /// Open an ordered cursor over an IPv4 direct-value database.
     pub fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
         self.require_open()?;
-        self.core
-            .direct_cursor_v4_live(direction, self.owner_identity)
+        self.core.direct_cursor_v4(direction)
     }
 
     /// Open an ordered cursor over an IPv6 direct-value database.
     pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.require_open()?;
-        self.core
-            .direct_cursor_v6_live(direction, self.owner_identity)
+        self.core.direct_cursor_v6(direction)
     }
 
     /// Look up one exact feed name in this pinned membership generation.
@@ -141,7 +141,7 @@ impl LiveReader {
     /// Enumerate this generation's feeds in ascending feed-index order.
     pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         self.require_open()?;
-        self.core.feed_cursor_live(self.owner_identity)
+        self.core.feed_cursor()
     }
 
     /// Open an ordered cursor over one exact IPv4 named feed.
@@ -151,8 +151,7 @@ impl LiveReader {
         direction: RangeDirection,
     ) -> Result<FeedRangeCursorV4<'_>> {
         self.require_open()?;
-        self.core
-            .feed_range_cursor_v4_live(name, direction, self.owner_identity)
+        self.core.feed_range_cursor_v4(name, direction)
     }
 
     /// Open an ordered cursor over one exact IPv6 named feed.
@@ -162,22 +161,19 @@ impl LiveReader {
         direction: RangeDirection,
     ) -> Result<FeedRangeCursorV6<'_>> {
         self.require_open()?;
-        self.core
-            .feed_range_cursor_v6_live(name, direction, self.owner_identity)
+        self.core.feed_range_cursor_v6(name, direction)
     }
 
     /// Look up one address in this pinned IPv4 membership generation.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
-        self.core
-            .lookup_membership_v4(address, Some(self.owner_identity))
+        self.core.lookup_membership_v4(address)
     }
 
     /// Look up one address in this pinned IPv6 membership generation.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
-        self.core
-            .lookup_membership_v6(address, Some(self.owner_identity))
+        self.core.lookup_membership_v6(address)
     }
 
     /// Exact decompressed metadata length, or absence.
@@ -198,15 +194,9 @@ impl LiveReader {
         self.core.metadata_json()
     }
 
-    pub(crate) fn import_parts(&self) -> Result<(&Mapping, MetaV4)> {
+    pub(crate) fn core(&self) -> Result<&ReaderCore> {
         self.require_open()?;
-        Ok(self.core.import_parts())
-    }
-
-    pub(crate) fn c_abi_parts(&self) -> Result<(&Mapping, MetaV4, Option<ProcessIdentity>)> {
-        self.require_open()?;
-        let (mapping, meta) = self.core.import_parts();
-        Ok((mapping, meta, Some(self.owner_identity)))
+        Ok(&self.core)
     }
 
     /// Clear this registration. An incomplete close retains retry authority.
@@ -257,7 +247,7 @@ impl LiveReader {
     }
 
     fn verify_registration(&self) -> Result<()> {
-        live_sidecar::verify_path(&self.main_path, self.main_identity)?;
+        crate::live_namespace::verify_path(&self.main_path, self.main_identity)?;
         self.sidecar.verify_path()?;
         self.sidecar.verify_header()?;
         self.sidecar
@@ -322,7 +312,7 @@ fn register(
     mapping.remap(bootstrap.committed_bytes)?;
     let slot = sidecar.claim_reader_cancellable(bootstrap.meta.txn_id, cancellation)?;
     cancellation.check()?;
-    live_sidecar::verify_path(main_path, main_identity)?;
+    crate::live_namespace::verify_path(main_path, main_identity)?;
     sidecar.verify_path()?;
     Ok((bootstrap, slot))
 }
@@ -334,7 +324,7 @@ fn select_registered_generation(
     sidecar: &Sidecar,
     cancellation: &CancellationToken,
 ) -> Result<crate::bootstrap::Bootstrap> {
-    live_sidecar::verify_path(main_path, main_identity)?;
+    crate::live_namespace::verify_path(main_path, main_identity)?;
     sidecar.verify_path()?;
     let physical_bytes = mapping.file().metadata()?.len();
     let bootstrap = database::bootstrap_mapping(mapping, physical_bytes, OpenMode::LiveReader)?;

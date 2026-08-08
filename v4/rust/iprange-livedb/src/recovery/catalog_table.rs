@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::validation::{ValidationObject, ValidationReason};
 
-use super::catalog::emit;
+use super::report::emit_page_unknown as emit;
 use super::report::{RecoverySink, Reporter};
 use super::tables::{
     Layout, Region, Tables, CATALOG_INDEX_SLOT_SIZE, CATALOG_NAME_SLOT_SIZE, CATALOG_RECORD_SIZE,

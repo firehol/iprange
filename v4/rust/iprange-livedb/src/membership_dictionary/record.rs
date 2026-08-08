@@ -73,6 +73,7 @@ fn encode_inline<S: Store, W: Words<S>>(store: &S, words: &W, encoded: &mut Enco
 }
 
 pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Found>> {
+    crate::work::membership_lookup(1);
     if id == 0 || root == 0 {
         return Ok(None);
     }

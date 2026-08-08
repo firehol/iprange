@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::error::Error;
-use crate::live_sidecar::{self, Identity};
+use crate::live_namespace::Identity;
 use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 
 #[derive(Debug)]
@@ -107,7 +107,7 @@ pub(crate) fn unique_attempt_id(source: &Path, ordinal: u32) -> crate::error::Re
         use crate::publication::gc_name;
         use crate::publication::namespace::NamespaceError;
 
-        let (directory, _) = live_sidecar::bind_path(source)?;
+        let (directory, _) = crate::live_namespace::bind_path(source)?;
         loop {
             let attempt = crate::random::nonzero_128()?;
             let envelope = gc_name::envelope(attempt, ordinal).map_err(|error| {
@@ -144,7 +144,7 @@ pub(crate) fn fresh_cleanup_attempt(
 ) -> crate::error::Result<[u8; 16]> {
     #[cfg(windows)]
     {
-        let (directory, name) = live_sidecar::bind_path(source)?;
+        let (directory, name) = crate::live_namespace::bind_path(source)?;
         crate::publication::gc::fresh_attempt(
             &directory,
             &name,
@@ -177,7 +177,7 @@ pub(crate) fn remove(
             authority.kind,
             authority.directory_role,
         );
-        match live_sidecar::remove_exact(path, identity) {
+        match crate::live_namespace::remove_exact(path, identity) {
             Ok(()) => Outcome::clean(),
             Err(cause) => Outcome::failed(cause),
         }
@@ -202,7 +202,7 @@ pub(crate) fn require_available(
 ) -> crate::error::Result<()> {
     #[cfg(windows)]
     {
-        let (directory, name) = live_sidecar::bind_path(path)?;
+        let (directory, name) = crate::live_namespace::bind_path(path)?;
         crate::publication::gc::require_source_available(
             &directory,
             authority.attempt_id,
@@ -252,7 +252,7 @@ fn remove_windows(path: &Path, file: &File, identity: Identity, authority: Autho
     use crate::publication::security;
     use crate::publication::CreationSecurity;
 
-    let (directory, name) = match live_sidecar::bind_path(path) {
+    let (directory, name) = match crate::live_namespace::bind_path(path) {
         Ok(bound) => bound,
         Err(cause) => return Outcome::failed(cause),
     };

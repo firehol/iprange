@@ -218,18 +218,7 @@ macro_rules! public_cursor {
                 meta: &MetaV4,
                 feed_index: u32,
                 direction: RangeDirection,
-            ) -> Result<Self> {
-                Ok(Self {
-                    inner: ProjectionCursor::new(mapping, meta, feed_index, direction, None)?,
-                })
-            }
-
-            pub(crate) fn new_live(
-                mapping: &'a Mapping,
-                meta: &MetaV4,
-                feed_index: u32,
-                direction: RangeDirection,
-                owner_identity: ProcessIdentity,
+                owner_identity: Option<ProcessIdentity>,
             ) -> Result<Self> {
                 Ok(Self {
                     inner: ProjectionCursor::new(
@@ -237,7 +226,7 @@ macro_rules! public_cursor {
                         meta,
                         feed_index,
                         direction,
-                        Some(owner_identity),
+                        owner_identity,
                     )?,
                 })
             }

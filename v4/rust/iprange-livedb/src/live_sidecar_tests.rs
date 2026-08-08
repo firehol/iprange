@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
+use crate::live_namespace::{create_private_for_test, sync_parent};
 use crate::mapping::test_support as file_io;
 
 struct TestFiles {

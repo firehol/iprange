@@ -5,18 +5,17 @@ use std::mem::size_of;
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 use crate::metadata;
 use crate::range_tree::Record;
-use crate::validation::{PhysicalByteInterval, ValidationObject, ValidationReason};
 
 use super::catalog::{self, Catalog};
 use super::membership_index::{self, MembershipIndex};
 use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
-use super::range_scan::{self, RangeEvents};
-use super::report::{RecoveryReport, RecoverySink, Reporter, Unknown};
+use super::range_build::analyze_ranges;
+use super::report::{RecoveryReport, RecoverySink, Reporter};
 use super::tables::{Counts, Tables};
 use super::{RecoveryBudget, ScratchCleanup};
 
@@ -194,93 +193,6 @@ fn required_table_heap_reserve(meta: MetaV4) -> Result<u64> {
     metadata
         .checked_add(range)
         .ok_or(Error::ArithmeticOverflow("recovery table heap reserve"))
-}
-
-fn analyze_ranges<K: IpKey, S: RecoverySink>(
-    mapping: &Mapping,
-    meta: MetaV4,
-    pages: &mut PageSet,
-    cancellation: &CancellationToken,
-    reporter: &mut Reporter<'_, S>,
-) -> Result<(u64, bool)> {
-    let mut events = AnalysisEvents::<S, K> {
-        reporter,
-        previous_from: None,
-        readable_records: 0,
-        ordered: true,
-    };
-    range_scan::scan(mapping, meta, pages, cancellation, &mut events)?;
-    Ok((events.readable_records, events.ordered))
-}
-
-struct AnalysisEvents<'a, 'b, S, K> {
-    reporter: &'a mut Reporter<'b, S>,
-    previous_from: Option<K>,
-    readable_records: u64,
-    ordered: bool,
-}
-
-impl<K: IpKey, S: RecoverySink> RangeEvents<K> for AnalysisEvents<'_, '_, S, K> {
-    fn page_accepted(&mut self) -> Result<()> {
-        self.reporter.page_accepted()
-    }
-
-    fn page_rejected(&mut self, io_unreadable: bool) -> Result<()> {
-        self.reporter.page_rejected(io_unreadable)
-    }
-
-    fn unknown(
-        &mut self,
-        reason: ValidationReason,
-        page: Option<u32>,
-        unbounded: bool,
-    ) -> Result<()> {
-        emit(self.reporter, reason, page, unbounded)
-    }
-
-    fn range(&mut self, _page: u32, record: Option<Record<K>>) -> Result<()> {
-        self.reporter.range_examined()?;
-        let Some(record) = record else {
-            return self.reporter.range_rejected_without_bounds();
-        };
-        if self
-            .previous_from
-            .is_some_and(|previous| previous >= record.from)
-        {
-            self.ordered = false;
-        }
-        self.previous_from = Some(record.from);
-        self.readable_records = self
-            .readable_records
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("recovery readable ranges"))?;
-        Ok(())
-    }
-}
-
-fn emit<S: RecoverySink>(
-    reporter: &mut Reporter<'_, S>,
-    reason: ValidationReason,
-    page: Option<u32>,
-    unbounded: bool,
-) -> Result<()> {
-    reporter.unknown(Unknown {
-        reason,
-        object: ValidationObject::RangeTree,
-        page_number: page,
-        physical_bytes: page.map(page_interval),
-        address_fence: None,
-        contributes_to_possible_span: false,
-        has_unbounded_extent: unbounded,
-    })
-}
-
-fn page_interval(page: u32) -> PhysicalByteInterval {
-    let start = u64::from(page) * PAGE_SIZE as u64;
-    PhysicalByteInterval {
-        start,
-        end_exclusive: start + PAGE_SIZE as u64,
-    }
 }
 
 fn failure(

@@ -2,6 +2,7 @@
 
 use std::fs::File;
 
+use super::{PublicationResidueMain, PublicationResidueMainContent};
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
@@ -9,15 +10,12 @@ use crate::error::Error;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::mapping::Mapping;
-use crate::publication::namespace::{Destination, Identity, IDENTITY_KIND};
+use crate::publication::namespace::{local_identity as local, Destination, Identity};
 use crate::publication::output;
 use crate::publication::problem::Problem;
 use crate::publication::{
     AccessPolicy, ArtifactKind, DirectoryRole, PublicationDigest, PublicationTuple,
 };
-use crate::validation::LocalFileIdentity;
-
-use super::{PublicationResidueMain, PublicationResidueMainContent};
 
 #[derive(Debug)]
 pub(super) struct Guard {
@@ -137,11 +135,4 @@ fn read_tuple(mapping: &Mapping, byte_length: u64) -> Result<Option<PublicationT
         transaction_id: opened.meta.txn_id,
         commit_nonce: opened.meta.commit_nonce,
     }))
-}
-
-fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
 }

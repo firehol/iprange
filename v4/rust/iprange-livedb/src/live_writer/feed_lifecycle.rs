@@ -3,7 +3,6 @@
 use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
-use crate::feed_catalog;
 
 use super::{LiveWriter, PreparedFeedChange, PreparedState};
 
@@ -27,7 +26,7 @@ impl LiveWriter {
         self.start_feed_workflow_draft()?;
         let token = cancellation.clone();
         self.mutate(|store| {
-            store.delete_feed_membership_cancellable(feed, &mut || token.check())?;
+            store.delete_current_feed_membership_cancellable(feed, &mut || token.check())?;
             store.finish_membership_workflow(&token)
         })?;
         Ok(PreparedState::new(cancellation.clone()))
@@ -51,7 +50,7 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<PreparedState> {
         let feed = self.require_existing_feed(old, cancellation)?;
-        if feed_catalog::lookup(&self.mapping, &self.base.meta, &new)?.is_some() {
+        if self.core.lookup_base_feed(&new)?.is_some() {
             return Err(Error::NameExists);
         }
         cancellation.check()?;
@@ -59,7 +58,7 @@ impl LiveWriter {
         let token = cancellation.clone();
         self.mutate(|store| {
             token.check()?;
-            store.rename_feed_ref(feed, new)?;
+            store.rename_current_feed_known_available(feed, new)?;
             store.finish_membership_workflow(&token)
         })?;
         Ok(PreparedState::new(cancellation.clone()))
@@ -71,7 +70,9 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<FeedEntry> {
         self.require_feed_workflow_ready()?;
-        let feed = feed_catalog::lookup(&self.mapping, &self.base.meta, &name)?
+        let feed = self
+            .core
+            .lookup_base_feed(&name)?
             .ok_or(Error::NameNotFound)?;
         cancellation.check()?;
         Ok(feed)

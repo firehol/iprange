@@ -95,6 +95,30 @@ defines and proves the semantics first. The later Go port may use idiomatic
 names, while the Rust-provided C ABI freezes its exact symbol and layout
 manifest only after the Rust API is stable.
 
+### Authoritative internal ownership
+
+Every operation that reads or changes persistent state has one authoritative
+low-level implementation. Healthy selected-generation reads go through one
+reader core. Healthy COW mutations, allocation, retirement, page sealing, and
+main-file generation publication go through one writer core over the shared
+mapped tree and page codecs. Advanced transactions, exact workflows, public
+Rust handles, and the C adapter contain only logical sequencing,
+reference/lifetime handling, and contract translation; they do not inspect
+mappings, roots, page numbers, allocators, or physical dictionary state.
+
+Untrusted validation and recovery remain a separate mapped-inspection boundary
+because damaged input cannot assume a healthy selected generation. They reuse
+the canonical byte codecs and final mapped-output builders without adding
+recovery checks to ordinary reads. The external reader table and filesystem
+namespace/publication artifacts likewise have separate owners. This is one
+owner per persistent concern, not one object combining unrelated files and OS
+state.
+
+The dependency direction is enforced by a source gate. Test-only necessary-work
+accounting pins deterministic tree, page, range, mapping, and durability costs;
+it must compile out of release binaries. Representative release profiles must
+show that every retained dominant hot-path cost maps to required format work.
+
 ### One v4 format, two operating modes
 
 There is one exact v4 main-file format:

@@ -100,7 +100,7 @@ fn create_source(label: &str) -> TestFile {
 }
 
 fn rewrite_meta(path: &Path, page_index: u64, change: impl FnOnce(&mut MetaV4)) {
-    let file = live_sidecar::open_rw(path).unwrap();
+    let file = crate::live_namespace::open_rw(path).unwrap();
     let mut page = [0; PAGE_SIZE];
     file_io::read_exact_at(&file, &mut page, page_index * PAGE_SIZE as u64).unwrap();
     let mut meta = MetaV4::decode_unchecked(&page).unwrap();

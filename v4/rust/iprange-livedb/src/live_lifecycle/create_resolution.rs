@@ -8,7 +8,8 @@ use crate::database;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, Sidecar, State, MAIN_LIFETIME_LOCK};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{Sidecar, State, MAIN_LIFETIME_LOCK};
 use crate::live_writer::{
     empty_meta, write_empty_main, CreateResult, CreationState, LocalBasename,
 };
@@ -135,7 +136,8 @@ fn complete(
             ) {
                 Ok(sidecar) => sidecar,
                 Err(failure) => {
-                    let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+                    let sidecar_identity =
+                        failure.identity.map(crate::live_namespace::public_identity);
                     return Ok(unknown_after_private_failure(
                         supplied,
                         main_identity(&main),
@@ -144,10 +146,10 @@ fn complete(
                     ));
                 }
             };
-            let identity = live_sidecar::public_identity(sidecar.local_identity());
+            let identity = crate::live_namespace::public_identity(sidecar.local_identity());
             if let Err(cause) = sidecar
                 .initialize_creating()
-                .and_then(|()| live_sidecar::sync_parent(&sidecar.path))
+                .and_then(|()| crate::live_namespace::sync_parent(&sidecar.path))
             {
                 return Ok(unknown(
                     supplied,
@@ -160,12 +162,12 @@ fn complete(
         }
         Coordination::Malformed { .. } => unreachable!("checked above"),
     };
-    let sidecar_identity = live_sidecar::public_identity(sidecar.local_identity());
+    let sidecar_identity = crate::live_namespace::public_identity(sidecar.local_identity());
 
     let (main_file, main_identity) = match main {
-        Main::Exact { file, identity } => (file, live_sidecar::public_identity(identity)),
+        Main::Exact { file, identity } => (file, crate::live_namespace::public_identity(identity)),
         Main::Absent => {
-            let created = match live_sidecar::create_private(
+            let created = match crate::live_namespace::create_private(
                 path,
                 CleanupAuthority {
                     attempt_id: supplied.database_id,
@@ -176,7 +178,8 @@ fn complete(
             ) {
                 Ok(created) => created,
                 Err(failure) => {
-                    let main_identity = failure.identity.map(live_sidecar::public_identity);
+                    let main_identity =
+                        failure.identity.map(crate::live_namespace::public_identity);
                     return Ok(unknown_after_private_failure(
                         supplied,
                         main_identity,
@@ -185,10 +188,10 @@ fn complete(
                     ));
                 }
             };
-            let public = live_sidecar::public_identity(created.identity);
+            let public = crate::live_namespace::public_identity(created.identity);
             let meta = expected_meta(supplied);
-            if let Err(cause) =
-                write_empty_main(&created.file, meta).and_then(|()| live_sidecar::sync_parent(path))
+            if let Err(cause) = write_empty_main(&created.file, meta)
+                .and_then(|()| crate::live_namespace::sync_parent(path))
             {
                 return Ok(unknown(
                     supplied,
@@ -205,7 +208,7 @@ fn complete(
     let finished = main_file
         .sync_all()
         .map_err(Error::from)
-        .and_then(|()| live_sidecar::sync_parent(path))
+        .and_then(|()| crate::live_namespace::sync_parent(path))
         .and_then(|()| {
             if state == State::Creating {
                 sidecar.publish_ready()
@@ -213,7 +216,7 @@ fn complete(
                 Ok(())
             }
         })
-        .and_then(|()| live_sidecar::sync_parent(&sidecar.path))
+        .and_then(|()| crate::live_namespace::sync_parent(&sidecar.path))
         .and_then(|()| verify_created(path, &main_file, &sidecar, supplied));
     match finished {
         Ok(()) => Ok(created(supplied, main_identity, sidecar_identity)),
@@ -283,13 +286,13 @@ fn observe_main(
     supplied: &CreateResult,
     cancellation: &CancellationToken,
 ) -> Result<Main> {
-    if live_sidecar::path_identity(path)?.is_none() {
+    if crate::live_namespace::path_identity(path)?.is_none() {
         return Ok(Main::Absent);
     }
-    let file = live_sidecar::open_rw(path)?;
-    let identity = live_sidecar::identity(&file)?;
+    let file = crate::live_namespace::open_rw(path)?;
+    let identity = crate::live_namespace::identity(&file)?;
     live_cleanup::require_main_available(path, identity, supplied.database_id)?;
-    let public = live_sidecar::public_identity(identity);
+    let public = crate::live_namespace::public_identity(identity);
     if supplied
         .main_identity
         .is_some_and(|expected| expected != public)
@@ -297,7 +300,7 @@ fn observe_main(
         return Err(Error::Conflict("creation main identity changed"));
     }
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
-    live_sidecar::verify_path(path, identity)?;
+    crate::live_namespace::verify_path(path, identity)?;
     match database::bootstrap_file(&file, OpenMode::Writer) {
         Ok(opened)
             if opened.physical_bytes == opened.committed_bytes
@@ -322,7 +325,7 @@ fn observe_coordination(path: &Path, supplied: &CreateResult) -> Result<Coordina
     let Some(identity) = super::transition::existing_identity(path)? else {
         return Ok(Coordination::Absent);
     };
-    let public = live_sidecar::public_identity(identity);
+    let public = crate::live_namespace::public_identity(identity);
     live_cleanup::require_available(
         path,
         identity,
@@ -352,14 +355,14 @@ fn observe_coordination(path: &Path, supplied: &CreateResult) -> Result<Coordina
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_))
             if supplied.sidecar_identity == Some(public) =>
         {
-            let file = live_sidecar::open_rw(path)?;
-            let reopened = live_sidecar::identity(&file)?;
+            let file = crate::live_namespace::open_rw(path)?;
+            let reopened = crate::live_namespace::identity(&file)?;
             if reopened != identity {
                 return Err(Error::Conflict(
                     "creation sidecar changed while it was reopened",
                 ));
             }
-            live_sidecar::verify_path(path, identity)?;
+            crate::live_namespace::verify_path(path, identity)?;
             Ok(Coordination::Malformed { file, identity })
         }
         Err(Error::Format(_) | Error::Corrupt(_) | Error::WrongState(_)) => Err(Error::Conflict(
@@ -375,8 +378,8 @@ fn verify_created(
     sidecar: &Sidecar,
     supplied: &CreateResult,
 ) -> Result<()> {
-    let main_identity = live_sidecar::identity(main)?;
-    live_sidecar::verify_path(path, main_identity)?;
+    let main_identity = crate::live_namespace::identity(main)?;
+    crate::live_namespace::verify_path(path, main_identity)?;
     sidecar.verify_path()?;
     sidecar.verify_header()?;
     let opened = database::bootstrap_file(main, OpenMode::Writer)?;
@@ -400,7 +403,7 @@ fn require_supplied(path: &Path, supplied: &CreateResult) -> Result<()> {
     let expected_directory = supplied.directory_identity.ok_or(Error::Unresolvable(
         "creation never proved its parent directory identity",
     ))?;
-    if live_sidecar::parent_identity(path)? != expected_directory {
+    if crate::live_namespace::parent_identity(path)? != expected_directory {
         return Err(Error::DirectoryIdentityMismatch);
     }
     Ok(())
@@ -433,7 +436,7 @@ fn raw_main(main: &Main) -> Option<(&std::fs::File, Identity)> {
 }
 
 fn main_identity(main: &Main) -> Option<LocalFileIdentity> {
-    raw_main_identity(main).map(live_sidecar::public_identity)
+    raw_main_identity(main).map(crate::live_namespace::public_identity)
 }
 
 fn raw_coordination_identity(coordination: &Coordination) -> Option<Identity> {
@@ -453,7 +456,7 @@ fn raw_coordination(coordination: &Coordination) -> Option<(&std::fs::File, Iden
 }
 
 fn coordination_identity(coordination: &Coordination) -> Option<LocalFileIdentity> {
-    raw_coordination_identity(coordination).map(live_sidecar::public_identity)
+    raw_coordination_identity(coordination).map(crate::live_namespace::public_identity)
 }
 
 fn created(
@@ -506,7 +509,7 @@ fn unknown_after_private_failure(
     supplied: &CreateResult,
     main_identity: Option<LocalFileIdentity>,
     sidecar_identity: Option<LocalFileIdentity>,
-    failure: live_sidecar::PrivateCreationFailure,
+    failure: crate::live_namespace::PrivateCreationFailure,
 ) -> CreateResult {
     let housekeeping = merge_housekeeping(supplied.housekeeping, failure.cleanup.housekeeping);
     let mut visible = supplied.visible_housekeeping.clone().into_vec();

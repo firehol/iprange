@@ -11,9 +11,14 @@ use crate::range_tree::Record;
 use super::direct::{analyze, DirectAnalysis};
 use super::direct_output::{Components, DirectKey};
 #[cfg(any(unix, windows))]
-use super::external_sort::{self, ExternalSortFailure};
+use super::external_sort;
 use super::page_set::PageSet;
-use super::range_build::{buffer_fits, events, require_count, reserve};
+#[cfg(any(unix, windows))]
+use super::range_build::external_failure;
+use super::range_build::{
+    after_cleanup, buffer_fits, events, finish_pages, require_count, reserve,
+    retained_metadata_bytes, write_metadata, BuildFailure, BuildResult,
+};
 use super::range_scan;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
 use super::{RecoveryBudget, ScratchCleanup};
@@ -129,13 +134,6 @@ fn build<K: DirectKey, S: RecoverySink>(
     }
 }
 
-type BuildResult = std::result::Result<Option<ScratchCleanup>, BuildFailure>;
-
-struct BuildFailure {
-    cause: Error,
-    scratch: Option<ScratchCleanup>,
-}
-
 #[derive(Clone, Copy)]
 struct BuildContext<'a> {
     mapping: &'a Mapping,
@@ -153,7 +151,7 @@ fn build_ordered<K: DirectKey, S: RecoverySink>(
     metadata: &Option<Vec<u8>>,
     mut pages: PageSet,
 ) -> BuildResult {
-    let metadata_bytes = retained_bytes(metadata);
+    let metadata_bytes = retained_metadata_bytes(metadata);
     let scan = (|| {
         pages.reset()?;
         let mut components = Components::<S, K>::new(builder, reporter, context.cancellation);
@@ -190,7 +188,7 @@ fn build_sorted<K: DirectKey, S: RecoverySink>(
     metadata: &Option<Vec<u8>>,
     pages: PageSet,
 ) -> BuildResult {
-    let metadata_bytes = retained_bytes(metadata);
+    let metadata_bytes = retained_metadata_bytes(metadata);
     let retained = match metadata_bytes.checked_add(pages.retained_bytes()) {
         Some(retained) => retained,
         None => {
@@ -233,7 +231,7 @@ fn build_in_memory<K: DirectKey, S: RecoverySink>(
     retained: u64,
     mut pages: PageSet,
 ) -> BuildResult {
-    let metadata_bytes = retained_bytes(metadata);
+    let metadata_bytes = retained_metadata_bytes(metadata);
     let available = context
         .budget
         .max_heap_bytes
@@ -347,14 +345,6 @@ fn build_external<K: DirectKey, S: RecoverySink>(
     )
 }
 
-#[cfg(any(unix, windows))]
-fn external_failure(error: ExternalSortFailure) -> BuildFailure {
-    BuildFailure {
-        cause: error.cause,
-        scratch: error.cleanup,
-    }
-}
-
 fn emit_sorted<K: DirectKey, S: RecoverySink>(
     cancellation: &CancellationToken,
     builder: &mut Builder,
@@ -367,40 +357,6 @@ fn emit_sorted<K: DirectKey, S: RecoverySink>(
         components.push(record)?;
     }
     components.finish()
-}
-
-fn retained_bytes(metadata: &Option<Vec<u8>>) -> u64 {
-    metadata.as_ref().map_or(0, |value| value.capacity() as u64)
-}
-
-fn write_metadata(
-    builder: &mut Builder,
-    metadata: Option<&[u8]>,
-    max_heap_bytes: u64,
-    retained_bytes: u64,
-) -> Result<()> {
-    let Some(metadata) = metadata else {
-        return Ok(());
-    };
-    let available = max_heap_bytes
-        .checked_sub(retained_bytes)
-        .ok_or(Error::BudgetExceeded("recovery metadata compression"))?;
-    builder.write_metadata_with_budget(metadata, available)
-}
-
-#[allow(clippy::result_large_err)]
-fn finish_pages(pages: PageSet, result: Result<()>) -> BuildResult {
-    pages.finish(result).map_err(|failure| BuildFailure {
-        cause: failure.cause,
-        scratch: failure.cleanup,
-    })
-}
-
-fn after_cleanup(cause: Error, scratch: &Option<ScratchCleanup>) -> BuildFailure {
-    BuildFailure {
-        cause,
-        scratch: scratch.clone(),
-    }
 }
 
 fn require_builder(builder: &Builder, source: MetaV4) -> Result<()> {

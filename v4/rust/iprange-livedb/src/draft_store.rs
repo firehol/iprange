@@ -24,12 +24,14 @@ use crate::retirement;
 
 const PRIVATE_MAGIC: u32 = 0x5046_5245;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct PageBudget {
     pub(crate) max_heap_bytes: u64,
     pub(crate) max_private_pages: u64,
     pub(crate) max_growth_pages: u64,
 }
+
+pub(crate) use retention::RetentionMerge;
 
 #[derive(Debug)]
 pub(crate) struct Draft {
@@ -86,14 +88,6 @@ impl Draft {
 
     pub(crate) fn metadata_staged(&self) -> bool {
         self.metadata_staged
-    }
-
-    pub(crate) fn metadata_meta(&self) -> MetaV4 {
-        if self.metadata_staged {
-            self.meta
-        } else {
-            self.base
-        }
     }
 
     pub(crate) fn begin_range_workflow(&mut self) -> Result<()> {
@@ -373,7 +367,9 @@ impl<'a> DraftStore<'a> {
             if !nested.as_slice().is_empty() {
                 return Err(Error::Corrupt("retirement COW path did not become private"));
             }
+            crate::work::page_retired(1);
         }
+        crate::work::page_retired(1);
         Ok(())
     }
 
@@ -386,6 +382,7 @@ impl<'a> DraftStore<'a> {
             let page = u32::try_from(page)
                 .map_err(|_| Error::Corrupt("reclaimed page exceeds page-number space"))?;
             self.free_one(page)?;
+            crate::work::page_reclaimed(1);
         }
 
         let mut root = self.draft.meta.retirement_root;

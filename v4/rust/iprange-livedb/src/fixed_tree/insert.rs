@@ -302,7 +302,9 @@ fn split_leaf<C: Codec, S: Store>(
         right_page,
         right_first,
         0,
-    )
+    )?;
+    crate::work::page_split(1);
+    Ok(())
 }
 
 fn keep_left_edit<C: Codec, S: Store>(
@@ -475,6 +477,7 @@ fn split_pair_edit<C: Codec, S: Store>(
         build_pair_edit::<C, _, _>(source, header, edit, middle, total, output)
     })?;
     keep_left_pair::<C, S>(store, page_number, header, edit, middle)?;
+    crate::work::page_split(1);
     Ok(Some(BranchSplit {
         right_page,
         right_first: first_key::<C, S>(store, right_page, header.level)?,
@@ -606,6 +609,7 @@ fn replace_first_branch<C: Codec, S: Store>(
         build_edit::<C, _, _>(source, &header, edit, middle, header.item_count, output)
     })?;
     keep_left_edit::<C, S>(store, frame.page_number, &header, edit, middle)?;
+    crate::work::page_split(1);
     Ok(Some(BranchSplit {
         right_page,
         right_first: first_key::<C, S>(store, right_page, header.level)?,

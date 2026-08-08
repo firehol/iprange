@@ -98,6 +98,7 @@ pub(crate) fn insert<S: RetiringStore>(
     if !mutate_insert::<IndexCodec, S>(store, index_root, record.as_slice())? {
         return Err(Error::Corrupt("feed index already exists"));
     }
+    crate::work::catalog_intern(1);
     Ok(())
 }
 

@@ -1,6 +1,6 @@
-use crate::contract::{u16_le, u32_le, ValueKind};
+use crate::contract::{u32_le, ValueKind};
 use crate::error::Result;
-use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
+use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog::{self, FeedCursor};
 use crate::mapping::ByteSource;
 
@@ -9,40 +9,38 @@ use super::context::Context;
 use super::tree::{self, CellLayout, Codec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
 
-const NAME_BRANCH: u8 = 3;
-const NAME_LEAF: u8 = 4;
-const INDEX_BRANCH: u8 = 5;
-const INDEX_LEAF: u8 = 6;
-const RECORD_BASE: usize = 12;
-const MIN_RECORD: usize = RECORD_BASE + 1;
-const MAX_RECORD: usize = RECORD_BASE + MAX_FEED_NAME;
-
 struct NameCodec;
 
 impl Codec for NameCodec {
     type Key = FeedName;
 
-    const BRANCH_TYPE: u8 = NAME_BRANCH;
-    const LEAF_TYPE: u8 = NAME_LEAF;
+    const BRANCH_TYPE: u8 = feed_catalog::NAME_BRANCH;
+    const LEAF_TYPE: u8 = feed_catalog::NAME_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: MIN_RECORD,
-        maximum: MAX_RECORD,
+        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_LAYOUT: CellLayout = Self::BRANCH_LAYOUT;
     const BRANCH_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
 
     fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        decode(cell).map(|entry| entry.name)
+        feed_catalog::decode_entry(cell)
+            .ok()
+            .map(|entry| entry.name)
     }
 
     fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
-        decode(cell).map(|entry| entry.index)
+        feed_catalog::decode_entry(cell)
+            .ok()
+            .map(|entry| entry.index)
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        decode(cell).map(|entry| entry.name)
+        feed_catalog::decode_entry(cell)
+            .ok()
+            .map(|entry| entry.name)
     }
 }
 
@@ -51,13 +49,13 @@ struct IndexCodec;
 impl Codec for IndexCodec {
     type Key = u32;
 
-    const BRANCH_TYPE: u8 = INDEX_BRANCH;
-    const LEAF_TYPE: u8 = INDEX_LEAF;
+    const BRANCH_TYPE: u8 = feed_catalog::INDEX_BRANCH;
+    const LEAF_TYPE: u8 = feed_catalog::INDEX_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: MIN_RECORD,
-        maximum: MAX_RECORD,
+        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
 
@@ -70,7 +68,9 @@ impl Codec for IndexCodec {
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        decode(cell).map(|entry| entry.index)
+        feed_catalog::decode_entry(cell)
+            .ok()
+            .map(|entry| entry.index)
     }
 }
 
@@ -127,7 +127,7 @@ fn validate_record<S: ValidationSink, P: ByteSource>(
     page_number: u32,
     cell: P,
 ) -> Result<()> {
-    let Some(entry) = decode(cell) else {
+    let Ok(entry) = feed_catalog::decode_entry(cell) else {
         return Ok(());
     };
     if u64::from(entry.index) >= context.meta.feed_index_limit {
@@ -143,7 +143,7 @@ fn validate_record<S: ValidationSink, P: ByteSource>(
 }
 
 fn cross_check<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {
-    let mut cursor = match FeedCursor::new(context.mapping, &context.meta) {
+    let mut cursor = match FeedCursor::new(context.mapping, &context.meta, None) {
         Ok(cursor) => cursor,
         Err(_) => return bijection_finding(context),
     };
@@ -176,21 +176,6 @@ fn pair_matches<S: ValidationSink>(context: &Context<'_, S>, entry: FeedEntry) -
         entry.index,
     )
     .or(Ok(false))
-}
-
-fn decode<P: ByteSource>(cell: P) -> Option<FeedEntry> {
-    let name_len = usize::from(cell.byte(8)?);
-    if cell.len() != RECORD_BASE + name_len
-        || usize::from(u16_le(cell, 0)) != cell.len()
-        || u16_le(cell, 2) != 0
-        || !cell.all_zero(9, 3)
-    {
-        return None;
-    }
-    Some(FeedEntry {
-        index: u32_le(cell, 4),
-        name: FeedName::from_source(cell, RECORD_BASE, name_len)?,
-    })
 }
 
 fn count_mismatch<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {

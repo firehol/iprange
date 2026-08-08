@@ -3,63 +3,23 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::contract::{MetaV4, ValueKind};
 use crate::error::{Error, Result};
-use crate::feed_range_cursor::ProjectionState;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::live_writer::{
     finish_import_state, DirectState, ExactDirectState, ExactFeedState, FinishedState,
     MembershipImportStateSource, MembershipState, PreparedState,
 };
-use crate::range_cursor::{CursorState, DirectRange, RangeDirection};
+use crate::range_cursor::{DirectRange, RangeDirection};
+use crate::reader_core::ReaderCore;
 use crate::source::SliceSource;
 use crate::workflow::{AddressRange, WorkflowKind, WorkflowReport};
 use crate::{
     AbortResult, AddressFamily, CancellationToken, CloseOutcome, CommitResult, DatabaseInfo,
     FeedEntry, FeedName, FeedRef, ImmutableReader, LiveReader, LiveWriter, MembershipImportSource,
-    MembershipOperation, MembershipRef, ReclaimResult, TransactionBudget, ValueTag,
+    MembershipOperation, MembershipRef, ReclaimResult, TransactionBudget,
 };
 
-/// Opaque membership identity retained only inside the binding.
-#[derive(Clone, Copy, Debug)]
-pub struct MembershipToken(u32);
-
-/// Borrow-free reader cursor state retained by a C child handle.
-pub struct ReaderCursor {
-    inner: ReaderCursorInner,
-}
-
-enum ReaderCursorInner {
-    DirectV4(CursorState<Ipv4Key>),
-    DirectV6(CursorState<Ipv6Key>),
-    MembershipV4(CursorState<Ipv4Key>),
-    MembershipV6(CursorState<Ipv6Key>),
-    FeedV4(ProjectionState<Ipv4Key>),
-    FeedV6(ProjectionState<Ipv6Key>),
-}
-
-/// One logical item returned by a binding reader cursor.
-#[derive(Clone, Copy, Debug)]
-pub enum ReaderCursorItem {
-    DirectV4(DirectRange<Ipv4Key>),
-    DirectV6(DirectRange<Ipv6Key>),
-    MembershipV4 {
-        range: AddressRange<Ipv4Key>,
-        membership: MembershipToken,
-    },
-    MembershipV6 {
-        range: AddressRange<Ipv6Key>,
-        membership: MembershipToken,
-    },
-    FeedV4(AddressRange<Ipv4Key>),
-    FeedV6(AddressRange<Ipv6Key>),
-}
-
-impl std::fmt::Debug for ReaderCursor {
-    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        output.write_str("ReaderCursor { .. }")
-    }
-}
+pub use crate::reader_core::{MembershipToken, ReaderCursor, ReaderCursorItem};
 
 /// Reader ownership that can be retained by C child handles.
 #[derive(Debug)]
@@ -88,171 +48,55 @@ impl Reader {
     }
 
     pub fn info(&self) -> Result<DatabaseInfo> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => Ok(reader.info()),
-            ReaderInner::Live(reader) => reader.info(),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        Ok(self.core()?.info())
     }
 
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => Ok(reader.metadata_json_len()),
-            ReaderInner::Live(reader) => reader.metadata_json_len(),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        Ok(self.core()?.metadata_json_len())
     }
 
     pub fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => reader.lookup_direct_v4(address),
-            ReaderInner::Live(reader) => reader.lookup_direct_v4(address),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        self.core()?.lookup_direct_v4(address)
     }
 
     pub fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => reader.lookup_direct_v6(address),
-            ReaderInner::Live(reader) => reader.lookup_direct_v6(address),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        self.core()?.lookup_direct_v6(address)
     }
 
     pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => reader.lookup_feed(name),
-            ReaderInner::Live(reader) => reader.lookup_feed(name),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        self.core()?.lookup_feed(name)
     }
 
     pub fn open_direct_cursor(&self, direction: RangeDirection) -> Result<ReaderCursor> {
-        let (file, meta, owner) = self.parts()?;
-        if meta.value_kind != ValueKind::Direct {
-            return Err(Error::WrongValueKind(
-                "direct cursor requires a direct-value database",
-            ));
-        }
-        let inner = match meta.address_family {
-            AddressFamily::Ipv4 => {
-                ReaderCursorInner::DirectV4(CursorState::new(file, &meta, direction, owner)?)
-            }
-            AddressFamily::Ipv6 => {
-                ReaderCursorInner::DirectV6(CursorState::new(file, &meta, direction, owner)?)
-            }
-        };
-        Ok(ReaderCursor { inner })
+        self.core()?.open_direct_state(direction)
     }
 
     pub fn open_membership_cursor(&self, direction: RangeDirection) -> Result<ReaderCursor> {
-        let (file, meta, owner) = self.parts()?;
-        if meta.value_kind != ValueKind::Membership {
-            return Err(Error::WrongValueKind(
-                "membership cursor requires a membership database",
-            ));
-        }
-        let inner = match meta.address_family {
-            AddressFamily::Ipv4 => {
-                ReaderCursorInner::MembershipV4(CursorState::new(file, &meta, direction, owner)?)
-            }
-            AddressFamily::Ipv6 => {
-                ReaderCursorInner::MembershipV6(CursorState::new(file, &meta, direction, owner)?)
-            }
-        };
-        Ok(ReaderCursor { inner })
+        self.core()?.open_membership_state(direction)
     }
 
     pub fn open_feed_cursor(&self, name: &str, direction: RangeDirection) -> Result<ReaderCursor> {
-        let feed = self.lookup_feed(name)?.ok_or(Error::NameNotFound)?;
-        let (file, meta, owner) = self.parts()?;
-        let inner = match meta.address_family {
-            AddressFamily::Ipv4 => ReaderCursorInner::FeedV4(ProjectionState::new(
-                file, &meta, feed.index, direction, owner,
-            )?),
-            AddressFamily::Ipv6 => ReaderCursorInner::FeedV6(ProjectionState::new(
-                file, &meta, feed.index, direction, owner,
-            )?),
-        };
-        Ok(ReaderCursor { inner })
+        self.core()?.open_feed_state(name, direction)
     }
 
     pub fn cursor_next(&self, cursor: &mut ReaderCursor) -> Result<Option<ReaderCursorItem>> {
-        let (file, _, _) = self.parts()?;
-        Ok(match &mut cursor.inner {
-            ReaderCursorInner::DirectV4(cursor) => {
-                cursor.next(file)?.map(ReaderCursorItem::DirectV4)
-            }
-            ReaderCursorInner::DirectV6(cursor) => {
-                cursor.next(file)?.map(ReaderCursorItem::DirectV6)
-            }
-            ReaderCursorInner::MembershipV4(cursor) => {
-                cursor
-                    .next(file)?
-                    .map(|range| ReaderCursorItem::MembershipV4 {
-                        range: AddressRange {
-                            from: range.from,
-                            to: range.to,
-                        },
-                        membership: MembershipToken(range.value),
-                    })
-            }
-            ReaderCursorInner::MembershipV6(cursor) => {
-                cursor
-                    .next(file)?
-                    .map(|range| ReaderCursorItem::MembershipV6 {
-                        range: AddressRange {
-                            from: range.from,
-                            to: range.to,
-                        },
-                        membership: MembershipToken(range.value),
-                    })
-            }
-            ReaderCursorInner::FeedV4(cursor) => cursor
-                .next_with(file, &mut || Ok(()))?
-                .map(ReaderCursorItem::FeedV4),
-            ReaderCursorInner::FeedV6(cursor) => cursor
-                .next_with(file, &mut || Ok(()))?
-                .map(ReaderCursorItem::FeedV6),
-        })
+        self.core()?.cursor_next(cursor)
     }
 
     pub fn cursor_seek_v4(&self, cursor: &mut ReaderCursor, target: Ipv4Key) -> Result<()> {
-        let (file, _, _) = self.parts()?;
-        match &mut cursor.inner {
-            ReaderCursorInner::DirectV4(cursor) | ReaderCursorInner::MembershipV4(cursor) => {
-                cursor.seek(file, target)
-            }
-            ReaderCursorInner::FeedV4(cursor) => cursor.seek(file, target),
-            _ => Err(Error::WrongAddressFamily(
-                "cursor address family does not match the bound",
-            )),
-        }
+        self.core()?.cursor_seek_v4(cursor, target)
     }
 
     pub fn cursor_seek_v6(&self, cursor: &mut ReaderCursor, target: Ipv6Key) -> Result<()> {
-        let (file, _, _) = self.parts()?;
-        match &mut cursor.inner {
-            ReaderCursorInner::DirectV6(cursor) | ReaderCursorInner::MembershipV6(cursor) => {
-                cursor.seek(file, target)
-            }
-            ReaderCursorInner::FeedV6(cursor) => cursor.seek(file, target),
-            _ => Err(Error::WrongAddressFamily(
-                "cursor address family does not match the bound",
-            )),
-        }
+        self.core()?.cursor_seek_v6(cursor, target)
     }
 
     pub fn lookup_membership_token_v4(&self, address: Ipv4Key) -> Result<Option<MembershipToken>> {
-        self.with_membership_v4(address, |membership| {
-            Ok(membership.map(|view| MembershipToken(view.id())))
-        })
+        self.core()?.membership_token_v4(address)
     }
 
     pub fn lookup_membership_token_v6(&self, address: Ipv6Key) -> Result<Option<MembershipToken>> {
-        self.with_membership_v6(address, |membership| {
-            Ok(membership.map(|view| MembershipToken(view.id())))
-        })
+        self.core()?.membership_token_v6(address)
     }
 
     pub fn membership_word_count(&self, token: MembershipToken) -> Result<u32> {
@@ -277,11 +121,7 @@ impl Reader {
     }
 
     pub fn enumerate_feeds(&self, mut sink: impl FnMut(FeedEntry) -> Result<bool>) -> Result<u64> {
-        let mut cursor = match &self.inner {
-            ReaderInner::Immutable(reader) => reader.feed_cursor()?,
-            ReaderInner::Live(reader) => reader.feed_cursor()?,
-            ReaderInner::Closed => return Err(Error::WrongState("reader is closed")),
-        };
+        let mut cursor = self.core()?.feed_cursor()?;
         let mut count = 0u64;
         while let Some(feed) = cursor.next_feed()? {
             if !sink(feed)? {
@@ -369,11 +209,7 @@ impl Reader {
     }
 
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => reader.read_metadata_json(output),
-            ReaderInner::Live(reader) => reader.read_metadata_json(output),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        self.core()?.read_metadata_json(output)
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -406,11 +242,7 @@ impl Reader {
         address: Ipv4Key,
         operation: impl FnOnce(Option<crate::MembershipView<'_>>) -> Result<T>,
     ) -> Result<T> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => operation(reader.lookup_membership_v4(address)?),
-            ReaderInner::Live(reader) => operation(reader.lookup_membership_v4(address)?),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        operation(self.core()?.lookup_membership_v4(address)?)
     }
 
     fn with_membership_v6<T>(
@@ -418,23 +250,13 @@ impl Reader {
         address: Ipv6Key,
         operation: impl FnOnce(Option<crate::MembershipView<'_>>) -> Result<T>,
     ) -> Result<T> {
-        match &self.inner {
-            ReaderInner::Immutable(reader) => operation(reader.lookup_membership_v6(address)?),
-            ReaderInner::Live(reader) => operation(reader.lookup_membership_v6(address)?),
-            ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
-        }
+        operation(self.core()?.lookup_membership_v6(address)?)
     }
 
-    fn parts(
-        &self,
-    ) -> Result<(
-        &crate::mapping::Mapping,
-        MetaV4,
-        Option<crate::process_identity::ProcessIdentity>,
-    )> {
+    fn core(&self) -> Result<&ReaderCore> {
         match &self.inner {
-            ReaderInner::Immutable(reader) => Ok(reader.c_abi_parts()),
-            ReaderInner::Live(reader) => reader.c_abi_parts(),
+            ReaderInner::Immutable(reader) => Ok(reader.core()),
+            ReaderInner::Live(reader) => reader.core(),
             ReaderInner::Closed => Err(Error::WrongState("reader is closed")),
         }
     }
@@ -444,8 +266,7 @@ impl Reader {
         token: MembershipToken,
         operation: impl FnOnce(crate::MembershipView<'_>) -> Result<T>,
     ) -> Result<T> {
-        let (file, meta, owner) = self.parts()?;
-        operation(crate::membership_view::by_id(file, &meta, token.0, owner)?)
+        operation(self.core()?.membership(token)?)
     }
 }
 
@@ -731,7 +552,14 @@ impl Writer {
     }
 
     pub fn begin_direct_replacement(&mut self, cancellation: &CancellationToken) -> Result<()> {
-        self.begin_direct_workflow(None, cancellation)
+        self.require_clean()?;
+        self.operation = Operation::ExactDirect {
+            state: self
+                .inner
+                .begin_exact_direct_state(WorkflowKind::DirectReplacement, cancellation)?,
+            retention_value: None,
+        };
+        Ok(())
     }
 
     pub fn begin_retention_refresh(
@@ -739,12 +567,12 @@ impl Writer {
         value: u32,
         cancellation: &CancellationToken,
     ) -> Result<()> {
-        if self.inner.base.meta.value_tag != ValueTag::RETENTION {
-            return Err(Error::WrongValueTag(
-                "retention refresh requires the retention value tag",
-            ));
-        }
-        self.begin_direct_workflow(Some(value), cancellation)
+        self.require_clean()?;
+        self.operation = Operation::ExactDirect {
+            state: self.inner.begin_retention_state(cancellation)?,
+            retention_value: Some(value),
+        };
+        Ok(())
     }
 
     pub fn begin_membership_import(
@@ -771,14 +599,7 @@ impl Writer {
             Operation::ExactDirect {
                 state,
                 retention_value: Some(value),
-            } => {
-                let value = *value;
-                state.require_family(&mut self.inner, AddressFamily::Ipv4)?;
-                state.drain(&mut self.inner, &mut source, move |store, range| {
-                    store.assign_v4(range.from, range.to, value)?;
-                    Ok(())
-                })
-            }
+            } => state.add_retention_v4(&mut self.inner, *value, &mut source),
             _ => Err(Error::WrongState(
                 "coverage input does not match the active workflow",
             )),
@@ -794,14 +615,7 @@ impl Writer {
             Operation::ExactDirect {
                 state,
                 retention_value: Some(value),
-            } => {
-                let value = *value;
-                state.require_family(&mut self.inner, AddressFamily::Ipv6)?;
-                state.drain(&mut self.inner, &mut source, move |store, range| {
-                    store.assign_v6(range.from, range.to, value)?;
-                    Ok(())
-                })
-            }
+            } => state.add_retention_v6(&mut self.inner, *value, &mut source),
             _ => Err(Error::WrongState(
                 "coverage input does not match the active workflow",
             )),
@@ -814,13 +628,7 @@ impl Writer {
             Operation::ExactDirect {
                 state,
                 retention_value: None,
-            } => {
-                state.require_family(&mut self.inner, AddressFamily::Ipv4)?;
-                state.drain(&mut self.inner, &mut source, |store, range| {
-                    store.assign_v4(range.from, range.to, range.value)?;
-                    Ok(())
-                })
-            }
+            } => state.add_direct_v4(&mut self.inner, &mut source),
             _ => Err(Error::WrongState(
                 "direct input does not match the active workflow",
             )),
@@ -833,13 +641,7 @@ impl Writer {
             Operation::ExactDirect {
                 state,
                 retention_value: None,
-            } => {
-                state.require_family(&mut self.inner, AddressFamily::Ipv6)?;
-                state.drain(&mut self.inner, &mut source, |store, range| {
-                    store.assign_v6(range.from, range.to, range.value)?;
-                    Ok(())
-                })
-            }
+            } => state.add_direct_v6(&mut self.inner, &mut source),
             _ => Err(Error::WrongState(
                 "direct input does not match the active workflow",
             )),
@@ -933,24 +735,6 @@ impl Writer {
             create,
             cancellation,
         )?);
-        Ok(())
-    }
-
-    fn begin_direct_workflow(
-        &mut self,
-        retention_value: Option<u32>,
-        cancellation: &CancellationToken,
-    ) -> Result<()> {
-        self.require_clean()?;
-        let kind = if retention_value.is_some() {
-            WorkflowKind::RetentionRefresh
-        } else {
-            WorkflowKind::DirectReplacement
-        };
-        self.operation = Operation::ExactDirect {
-            state: self.inner.begin_exact_direct_state(kind, cancellation)?,
-            retention_value,
-        };
         Ok(())
     }
 

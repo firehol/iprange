@@ -378,6 +378,7 @@ impl Mapping {
         let base = self.base()?;
         // SAFETY: `offset..offset + PAGE_SIZE` was checked inside this live map.
         let pointer = unsafe { base.add(offset) };
+        crate::work::page_visited(1);
         Ok(PageView::new(pointer))
     }
 
@@ -403,6 +404,7 @@ impl Mapping {
         // SAFETY: `offset..offset + PAGE_SIZE` was checked inside this live map,
         // and the exclusive mapping borrow owns mutation for the returned view.
         let pointer = unsafe { base.add(offset) };
+        crate::work::page_visited(1);
         Ok(PageMut::new(pointer))
     }
 
@@ -425,32 +427,42 @@ impl Mapping {
         let source = unsafe { base.add(source_offset).cast_const() };
         // SAFETY: See above; distinct page numbers make the ranges disjoint.
         let destination = unsafe { base.add(destination_offset) };
+        crate::work::page_visited(2);
         Ok((PageView::new(source), PageMut::new(destination)))
     }
 
     pub(crate) fn flush_range(&self, offset: u64, len: u64) -> Result<()> {
         let (offset, len) = checked_range(offset, len, self.len)?;
         self.raw()?.flush_range(offset, len)?;
+        crate::work::mapping_flush(1);
         Ok(())
     }
 
     pub(crate) fn flush_page(&self, page_number: u32, page_limit: u64) -> Result<()> {
         let offset = page_offset(page_number, page_limit, self.len)?;
         self.raw()?.flush_range(offset, PAGE_SIZE)?;
+        crate::work::mapping_flush(1);
         Ok(())
     }
 
     pub(crate) fn sync_file(&self) -> Result<()> {
-        sync_file(self.file())
+        sync_file(self.file())?;
+        crate::work::file_sync(1);
+        Ok(())
     }
 
     /// Drop the current map, resize the file, and establish a replacement map.
     pub(crate) fn resize(&mut self, len: u64) -> Result<()> {
         self.require_write()?;
         let len = checked_len(len)?;
+        let previous = self.len;
         self.map = None;
         self.file().set_len(len as u64)?;
-        self.replace_map(len)
+        self.replace_map(len)?;
+        if len > previous {
+            crate::work::mapping_growth(1);
+        }
+        Ok(())
     }
 
     /// Shrink to one committed extent, retaining an aligned Windows tail when
@@ -473,6 +485,7 @@ impl Mapping {
             Ok(map) => {
                 self.map = map;
                 self.len = len;
+                crate::work::mapping_remap(1);
                 Ok(())
             }
             Err(error) => {

@@ -83,6 +83,7 @@ pub(crate) fn intern_added_bit<S: RetiringStore>(
     base_words: u32,
     bit: u32,
 ) -> Result<Interned> {
+    crate::work::membership_intern(1);
     if base_id != 0 {
         let base = find_record(store, state.id_root, base_id)?
             .ok_or(Error::Corrupt("membership reference ID is missing"))?;
@@ -109,7 +110,7 @@ pub(crate) fn intern_added_bit<S: RetiringStore>(
         base_words,
         bit,
     };
-    intern(store, state, &source)
+    intern_inner(store, state, &source)
 }
 
 pub(crate) fn apply_delta<S: RetiringStore>(
@@ -143,6 +144,15 @@ pub(crate) fn reference_matches<S: Store>(
 }
 
 pub(super) fn intern<S: RetiringStore, W: Words<S>>(
+    store: &mut S,
+    state: &mut State,
+    words: &W,
+) -> Result<Interned> {
+    crate::work::membership_intern(1);
+    intern_inner(store, state, words)
+}
+
+fn intern_inner<S: RetiringStore, W: Words<S>>(
     store: &mut S,
     state: &mut State,
     words: &W,

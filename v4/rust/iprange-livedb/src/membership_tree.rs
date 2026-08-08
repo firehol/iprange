@@ -26,6 +26,8 @@ pub(crate) struct Record {
 }
 
 pub(crate) fn find(mapping: &Mapping, meta: &MetaV4, id: u32) -> Result<Option<Record>> {
+    crate::work::membership_lookup(1);
+    crate::work::tree_lookup(1);
     if id == 0 {
         return Err(Error::Corrupt("stored membership ID is zero"));
     }
@@ -46,6 +48,7 @@ pub(crate) fn find(mapping: &Mapping, meta: &MetaV4, id: u32) -> Result<Option<R
         };
         page_number = branch_child(page, &header, position, meta.page_count)?;
         expected = Some(header.level - 1);
+        crate::work::tree_descent(1);
     }
     Err(Error::Corrupt(
         "membership ID tree exceeds its maximum height",

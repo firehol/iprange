@@ -17,6 +17,10 @@ impl DraftStore<'_> {
         if let Some(entry) = self.lookup_feed(&name)? {
             return Ok((entry, false));
         }
+        Ok((self.insert_feed(name)?, true))
+    }
+
+    pub(crate) fn insert_feed(&mut self, name: FeedName) -> Result<FeedEntry> {
         let index = self.allocate_feed_index()?;
         let entry = FeedEntry { name, index };
         let mut name_root = self.draft.meta.catalog_name_root;
@@ -31,14 +35,25 @@ impl DraftStore<'_> {
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow("active feed count"))?;
         self.draft.changed = true;
-        Ok((entry, true))
+        Ok(entry)
     }
 
-    pub(crate) fn rename_feed(&mut self, old: FeedName, new: FeedName) -> Result<FeedEntry> {
-        let entry = self.lookup_feed(&old)?.ok_or(Error::NameNotFound)?;
+    pub(crate) fn rename_current_feed(
+        &mut self,
+        entry: FeedEntry,
+        new: FeedName,
+    ) -> Result<FeedEntry> {
         if self.lookup_feed(&new)?.is_some() {
             return Err(Error::NameExists);
         }
+        self.rename_current_feed_known_available(entry, new)
+    }
+
+    pub(crate) fn rename_current_feed_known_available(
+        &mut self,
+        entry: FeedEntry,
+        new: FeedName,
+    ) -> Result<FeedEntry> {
         let mut name_root = self.draft.meta.catalog_name_root;
         let mut index_root = self.draft.meta.catalog_index_root;
         feed_catalog::rename(self, &mut name_root, &mut index_root, entry, new)?;
@@ -51,21 +66,7 @@ impl DraftStore<'_> {
         })
     }
 
-    pub(crate) fn rename_feed_ref(
-        &mut self,
-        expected: FeedEntry,
-        new: FeedName,
-    ) -> Result<FeedEntry> {
-        if self.lookup_feed(&expected.name)? != Some(expected) {
-            return Err(Error::StaleReference);
-        }
-        self.rename_feed(expected.name, new)
-    }
-
-    pub(crate) fn remove_feed(&mut self, expected: FeedEntry) -> Result<()> {
-        if self.lookup_feed(&expected.name)? != Some(expected) {
-            return Err(Error::StaleReference);
-        }
+    pub(crate) fn remove_current_feed(&mut self, expected: FeedEntry) -> Result<()> {
         let mut name_root = self.draft.meta.catalog_name_root;
         let mut index_root = self.draft.meta.catalog_index_root;
         feed_catalog::delete(self, &mut name_root, &mut index_root, expected)?;

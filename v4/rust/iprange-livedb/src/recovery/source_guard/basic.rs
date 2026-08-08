@@ -13,7 +13,7 @@ impl BasicSource {
         let sidecar = sidecar_path(path, immutable)?;
         require_sidecar_absent(sidecar.as_deref())?;
         let file = open_file(path, immutable)?;
-        let identity = live_sidecar::identity_any_link(&file)?;
+        let identity = crate::live_namespace::identity_any_link(&file)?;
         live_lock::lock_file_cancellable(
             &file,
             MAIN_LIFETIME_LOCK,
@@ -27,7 +27,7 @@ impl BasicSource {
         let sidecar = crate::path::canonical_sidecar(path)?;
         require_sidecar_absent(Some(&sidecar))?;
         let file = database::open_read_only(path)?;
-        let identity = live_sidecar::identity_any_link(&file)?;
+        let identity = crate::live_namespace::identity_any_link(&file)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         finish_current_open(file, path, sidecar, identity, cancellation)
     }
@@ -143,7 +143,7 @@ fn open_file(path: &Path, immutable: bool) -> Result<File> {
     if immutable {
         database::open_read_only(path)
     } else {
-        live_sidecar::open_rw(path)
+        crate::live_namespace::open_rw(path)
     }
 }
 
@@ -197,7 +197,7 @@ fn bind_current(
 }
 
 fn verify_path(path: &Path, sidecar: Option<&Path>, identity: Identity) -> Result<()> {
-    live_sidecar::verify_path_any_link(path, identity).map_err(candidate_changed)?;
+    crate::live_namespace::verify_path_any_link(path, identity).map_err(candidate_changed)?;
     if let Some(path) = sidecar {
         database::require_sidecar_absent(path).map_err(candidate_changed)?;
     }

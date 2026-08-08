@@ -15,7 +15,8 @@ use super::maintenance::{
     WindowsHousekeepingSinkControl,
 };
 use super::namespace::{
-    Directory, Identity, Name, NamespaceError, ScanError, BASENAME_ENCODING_KIND, IDENTITY_KIND,
+    identity_from_local, local_identity as local, Directory, Identity, Name, NamespaceError,
+    ScanError, BASENAME_ENCODING_KIND, IDENTITY_KIND,
 };
 use super::problem::Problem;
 use super::{Housekeeping, HousekeepingState};
@@ -269,16 +270,9 @@ fn identity(value: LocalFileIdentity) -> Result<Identity> {
             "unsupported Windows housekeeping identity kind",
         ));
     }
-    Identity::decode(value.bytes).ok_or(Error::InvalidArgument(
+    identity_from_local(value).ok_or(Error::InvalidArgument(
         "invalid Windows housekeeping identity",
     ))
-}
-
-fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
 }
 
 fn problem_error(problem: Problem) -> Error {

@@ -1,16 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::key::{Ipv4Key, Ipv6Key};
 use crate::publication::{CreationSecurity, PublicationProblem};
 use crate::recovery::{
     RecoveryBudget, RecoveryCandidate, RecoveryLogicalCounts, RecoveryOutcome, RecoveryPageCounts,
     RecoveryPreparationFailure, RecoveryReport, RecoveryResult, RecoveryScratchAttempt,
     RecoveryUnknownEnvelope,
 };
-use crate::validation::{
-    PhysicalByteInterval, ValidationAddressFence, ValidationObject, ValidationReason,
-};
+use crate::validation::{ValidationObject, ValidationReason};
 
 use super::control::Control;
 use super::wire::{self, Reader, Writer};
@@ -46,13 +43,11 @@ pub(super) fn write_request(
     output.byte(mode_tag(mode))?;
     write_budget(&mut output, budget)?;
     wire_publication::private_output(&mut output, output_attempt)?;
-    output.u32(
-        u32::try_from(unreadable_pages.len())
-            .map_err(|_| Error::BudgetExceeded("unreadable source-page list"))?,
+    wire::u32_list(
+        &mut output,
+        unreadable_pages,
+        Error::BudgetExceeded("unreadable source-page list"),
     )?;
-    for page in unreadable_pages {
-        output.u32(*page)?;
-    }
     output.u64(delivered_unknowns)?;
     output.finish()
 }
@@ -65,22 +60,7 @@ pub(super) fn read_request(control: &Control) -> Result<Request> {
     let mode = read_mode(input.byte()?)?;
     let mut budget = read_budget(&mut input)?;
     let output = wire_publication::read_private_output(&mut input)?;
-    let count = input.u32()? as usize;
-    let unreadable_bytes = count
-        .checked_mul(std::mem::size_of::<u32>())
-        .ok_or(Error::ArithmeticOverflow("unreadable source-page list"))?
-        as u64;
-    budget.max_heap_bytes = budget
-        .max_heap_bytes
-        .checked_sub(unreadable_bytes)
-        .ok_or(Error::BudgetExceeded("unreadable source-page list"))?;
-    let mut unreadable_pages = Vec::new();
-    unreadable_pages
-        .try_reserve_exact(count)
-        .map_err(|_| Error::BudgetExceeded("unreadable source-page list"))?;
-    for _ in 0..count {
-        unreadable_pages.push(input.u32()?);
-    }
+    let unreadable_pages = wire::read_u32_list(&mut input, &mut budget.max_heap_bytes)?;
     let delivered_unknowns = input.u64()?;
     input.finish()?;
     Ok(Request {
@@ -143,9 +123,9 @@ pub(super) fn write_unknown(control: &Control, value: &RecoveryUnknownEnvelope) 
     output.u64(value.sequence)?;
     output.byte(value.reason as u8)?;
     output.byte(value.object as u8)?;
-    optional_u32(&mut output, value.page_number)?;
-    optional_interval(&mut output, value.physical_bytes)?;
-    optional_fence(&mut output, value.address_fence)?;
+    wire::optional_u32(&mut output, value.page_number)?;
+    wire::optional_interval(&mut output, value.physical_bytes)?;
+    wire::optional_fence(&mut output, value.address_fence)?;
     output.bool(value.contributes_to_possible_span)?;
     output.bool(value.has_unbounded_extent)?;
     output.finish()
@@ -159,27 +139,14 @@ pub(super) fn read_unknown(control: &Control) -> Result<RecoveryUnknownEnvelope>
             .ok_or(Error::Corrupt("worker recovery reason is invalid"))?,
         object: ValidationObject::from_wire(input.byte()?)
             .ok_or(Error::Corrupt("worker recovery object is invalid"))?,
-        page_number: read_optional_u32(&mut input)?,
-        physical_bytes: read_optional_interval(&mut input)?,
-        address_fence: read_optional_fence(&mut input)?,
+        page_number: wire::read_optional_u32(&mut input)?,
+        physical_bytes: wire::read_optional_interval(&mut input)?,
+        address_fence: wire::read_optional_fence(&mut input, "worker recovery fence is invalid")?,
         contributes_to_possible_span: input.bool()?,
         has_unbounded_extent: input.bool()?,
     };
     input.finish()?;
     Ok(value)
-}
-
-pub(super) fn write_callback_error(control: &Control, error: &Error) -> Result<()> {
-    let mut output = Writer::new(control);
-    wire::encode_error(&mut output, error)?;
-    output.finish()
-}
-
-pub(super) fn read_callback_error(control: &Control) -> Result<Error> {
-    let mut input = Reader::new(control)?;
-    let error = wire::read_error(&mut input)?;
-    input.finish()?;
-    Ok(error)
 }
 
 fn write_result(output: &mut Writer<'_>, value: &RecoveryResult) -> Result<()> {
@@ -350,77 +317,5 @@ fn read_mode(value: u8) -> Result<crate::recovery::WorkerMode> {
         2 => Ok(WorkerMode::Offline),
         3 => Ok(WorkerMode::Live),
         _ => Err(Error::Corrupt("worker recovery mode is invalid")),
-    }
-}
-
-fn optional_u32(output: &mut Writer<'_>, value: Option<u32>) -> Result<()> {
-    output.bool(value.is_some())?;
-    if let Some(value) = value {
-        output.u32(value)?;
-    }
-    Ok(())
-}
-
-fn read_optional_u32(input: &mut Reader<'_>) -> Result<Option<u32>> {
-    input.bool()?.then(|| input.u32()).transpose()
-}
-
-fn optional_interval(output: &mut Writer<'_>, value: Option<PhysicalByteInterval>) -> Result<()> {
-    output.bool(value.is_some())?;
-    if let Some(value) = value {
-        output.u64(value.start)?;
-        output.u64(value.end_exclusive)?;
-    }
-    Ok(())
-}
-
-fn read_optional_interval(input: &mut Reader<'_>) -> Result<Option<PhysicalByteInterval>> {
-    input
-        .bool()?
-        .then(|| {
-            Ok(PhysicalByteInterval {
-                start: input.u64()?,
-                end_exclusive: input.u64()?,
-            })
-        })
-        .transpose()
-}
-
-fn optional_fence(output: &mut Writer<'_>, value: Option<ValidationAddressFence>) -> Result<()> {
-    match value {
-        None => output.byte(0),
-        Some(ValidationAddressFence::Ipv4 { from, to }) => {
-            output.byte(1)?;
-            output.u32(from.0)?;
-            output.u32(to.0)
-        }
-        Some(ValidationAddressFence::Ipv6 { from, to }) => {
-            output.byte(2)?;
-            output.u64(from.hi)?;
-            output.u64(from.lo)?;
-            output.u64(to.hi)?;
-            output.u64(to.lo)
-        }
-    }
-}
-
-fn read_optional_fence(input: &mut Reader<'_>) -> Result<Option<ValidationAddressFence>> {
-    match input.byte()? {
-        0 => Ok(None),
-        1 => Ok(Some(ValidationAddressFence::Ipv4 {
-            from: Ipv4Key(input.u32()?),
-            to: Ipv4Key(input.u32()?),
-        })),
-        2 => Ok(Some(ValidationAddressFence::Ipv6 {
-            from: Ipv6Key {
-                hi: input.u64()?,
-                lo: input.u64()?,
-            },
-            to: Ipv6Key {
-                hi: input.u64()?,
-                lo: input.u64()?,
-            },
-        })),
-        _ => Err(Error::Corrupt("worker recovery fence is invalid")),
     }
 }

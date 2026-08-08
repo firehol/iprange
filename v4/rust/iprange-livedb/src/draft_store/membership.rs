@@ -11,18 +11,15 @@ use crate::range_mutation;
 use super::DraftStore;
 
 impl DraftStore<'_> {
-    pub(crate) fn add_feed_to_membership(
+    pub(crate) fn add_feed_index_to_membership(
         &mut self,
         base_id: u32,
         base_words: u32,
-        feed: FeedEntry,
+        feed_index: u32,
     ) -> Result<Interned> {
-        if self.lookup_feed(&feed.name)? != Some(feed) {
-            return Err(Error::StaleReference);
-        }
         let mut state = self.membership_state();
         let interned = membership_dictionary::intern_added_bit(
-            self, &mut state, base_id, base_words, feed.index,
+            self, &mut state, base_id, base_words, feed_index,
         )?;
         self.track_new_membership(&interned)?;
         self.store_membership_state(state);
@@ -81,11 +78,11 @@ impl DraftStore<'_> {
         self.apply_membership(from, to, membership_id, word_count, operation, checkpoint)
     }
 
-    pub(crate) fn delete_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
-        self.delete_feed_membership_cancellable(feed, &mut || Ok(()))
+    pub(crate) fn delete_current_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
+        self.delete_current_feed_membership_cancellable(feed, &mut || Ok(()))
     }
 
-    pub(crate) fn delete_feed_membership_cancellable<F>(
+    pub(crate) fn delete_current_feed_membership_cancellable<F>(
         &mut self,
         feed: FeedEntry,
         checkpoint: &mut F,
@@ -94,7 +91,7 @@ impl DraftStore<'_> {
         F: FnMut() -> Result<()>,
     {
         checkpoint()?;
-        let member = self.add_feed_to_membership(0, 0, feed)?;
+        let member = self.add_feed_index_to_membership(0, 0, feed.index)?;
         match self.draft.meta.address_family {
             crate::contract::AddressFamily::Ipv4 => {
                 self.apply_membership(
@@ -118,7 +115,7 @@ impl DraftStore<'_> {
             }
         }
         checkpoint()?;
-        self.remove_feed(feed)
+        self.remove_current_feed(feed)
     }
 
     pub(crate) fn membership_reference_matches(&self, id: u32, word_count: u32) -> Result<bool> {

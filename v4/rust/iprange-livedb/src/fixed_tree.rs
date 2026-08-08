@@ -238,6 +238,7 @@ where
     S: Store,
     L: LeafSelector<C, S>,
 {
+    crate::work::tree_lookup(1);
     let mut path = Path::new();
     let mut page_number = *root;
     let mut expected_level = None;
@@ -284,6 +285,7 @@ where
                 parent = Some((active_page, index));
                 page_number = child;
                 expected_level = Some(header.level - 1);
+                crate::work::tree_descent(1);
             }
         }
     }

@@ -11,7 +11,7 @@ pub(crate) fn seal_mapped(page: &mut PageMut<'_>) -> Result<()> {
     let checksum = crc32c::crc32c_page_mut_with_zeroed(page, CRC_OFFSET, 4)
         .ok_or(Error::Corrupt("page checksum field is invalid"))?;
     page.put_u32(CRC_OFFSET, checksum)?;
-    work::sealed();
+    crate::work::page_sealed(1);
     Ok(())
 }
 
@@ -20,29 +20,3 @@ pub(crate) fn seal_mapped(page: &mut PageMut<'_>) -> Result<()> {
 mod test_support;
 #[cfg(test)]
 pub(crate) use test_support::seal;
-
-#[cfg(test)]
-pub(crate) mod work {
-    use std::cell::Cell;
-
-    thread_local! {
-        static SEALED: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub(super) fn sealed() {
-        SEALED.set(SEALED.get() + 1);
-    }
-
-    pub(crate) fn reset() {
-        SEALED.set(0);
-    }
-
-    pub(crate) fn count() -> u64 {
-        SEALED.get()
-    }
-}
-
-#[cfg(not(test))]
-mod work {
-    pub(super) fn sealed() {}
-}

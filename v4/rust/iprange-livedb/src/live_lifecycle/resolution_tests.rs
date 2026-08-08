@@ -114,7 +114,7 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
     .unwrap();
     sidecar.initialize_creating().unwrap();
     sidecar.publish_ready().unwrap();
-    live_sidecar::sync_parent(&sidecar.path).unwrap();
+    crate::live_namespace::sync_parent(&sidecar.path).unwrap();
     let supplied = supplied(
         LiveTransitionOperation::Reset,
         &main,
@@ -122,7 +122,7 @@ fn prepared_reset_over_corrupt_coordination_can_be_completed() {
         SidecarFacts {
             id: files.attempt_id,
             capacity: 2,
-            previous: Some(live_sidecar::public_identity(previous)),
+            previous: Some(crate::live_namespace::public_identity(previous)),
             identity: sidecar.local_identity(),
             location: LiveCoordinationLocation::Private,
         },
@@ -169,7 +169,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
         SidecarFacts {
             id: files.attempt_id,
             capacity: 2,
-            previous: Some(live_sidecar::public_identity(previous)),
+            previous: Some(crate::live_namespace::public_identity(previous)),
             identity: sidecar.local_identity(),
             location: LiveCoordinationLocation::Canonical,
         },
@@ -183,7 +183,7 @@ fn exchanged_reset_cleans_the_exact_previous_sidecar() {
         LiveResetPolicy::RollbackSafe,
     )
     .unwrap();
-    live_sidecar::sync_parent(&files.sidecar()).unwrap();
+    crate::live_namespace::sync_parent(&files.sidecar()).unwrap();
     drop(sidecar);
     drop(main);
 
@@ -212,7 +212,7 @@ fn prepare_initialize(files: &Files) -> LiveTransitionResult {
     )
     .unwrap();
     sidecar.initialize_creating().unwrap();
-    live_sidecar::sync_parent(&sidecar.path).unwrap();
+    crate::live_namespace::sync_parent(&sidecar.path).unwrap();
     let result = supplied(
         LiveTransitionOperation::Initialize,
         &main,
@@ -234,7 +234,7 @@ struct SidecarFacts {
     id: [u8; 16],
     capacity: u32,
     previous: Option<LocalFileIdentity>,
-    identity: live_sidecar::Identity,
+    identity: crate::live_namespace::Identity,
     location: LiveCoordinationLocation,
 }
 
@@ -257,7 +257,7 @@ fn supplied(
         reader_capacity: sidecar.capacity,
         sidecar_id: sidecar.id,
         previous_sidecar_identity: sidecar.previous,
-        new_sidecar_identity: Some(live_sidecar::public_identity(sidecar.identity)),
+        new_sidecar_identity: Some(crate::live_namespace::public_identity(sidecar.identity)),
         new_sidecar_location: sidecar.location,
         residue_possible: true,
         housekeeping: crate::publication::Housekeeping::None,

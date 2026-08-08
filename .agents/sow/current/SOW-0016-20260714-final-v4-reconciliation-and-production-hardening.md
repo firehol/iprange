@@ -4,11 +4,11 @@
 
 Status: in-progress
 
-Sub-state: native Windows, macOS, and FreeBSD execution was authorized and began
-on 2026-08-08 after the mmap-only reader/writer and mapped-writer performance
-repairs. Native execution found platform-specific test and implementation gaps;
-the repair boundary and validation matrix are recorded in the 2026-08-08 gate
-at the end of this SOW.
+Sub-state: the 2026-08-08 authoritative low-level ownership refactor and local
+performance proof are complete. The current source passes the complete local,
+MSRV, C, conformance, sanitizer, mmap-only, architecture, and cross-compiled
+platform gates. It has not been rerun natively on Windows, macOS, and FreeBSD
+after this refactor, so Rust remains unaccepted and Go remains blocked.
 
 The prior local-completion and Rust-acceptance claims are withdrawn.
 A fresh compiled-path and release-profile audit found that ordinary range
@@ -14672,3 +14672,610 @@ already states the mmap-only and Rust-first rules. The released C CLI docs and
 end-user/operator skills are unaffected because v4 remains unreleased and no
 output skill exists. This repair leaves no deferred platform item; final Rust
 acceptance and the explicitly blocked Go port remain SOW-level gates.
+
+## 2026-08-08 - authoritative low-level API and necessary-work gate
+
+### Problem and root-cause model
+
+The Rust implementation is functionally, natively, and locally performance
+proven, but the user has not accepted its architecture or size. The governing
+new acceptance rule is stronger than textual deduplication: every operation
+that reads or changes persistent format state must have exactly one
+authoritative low-level owner. Variations may be distinct entry points, but
+they must share the same owning helpers and invariants. Higher-level workflows,
+the public Rust API, and the C adapter may request logical operations; they must
+not reproduce physical operations or access their state directly.
+
+The current source follows this rule only partially:
+
+- `ReaderCore` already centralizes immutable/live logical reads;
+- `DraftStore`, the generic fixed tree, slotted-page codecs, page checksum, and
+  ordered range builder already own substantial shared physical behavior; but
+- exact workflows still inspect `Mapping`, committed/draft `MetaV4`, and the
+  physical feed catalog directly; membership reference checks also bypass the
+  draft facade; and the C ownership bridge reaches internal mapping/workflow
+  state rather than depending only on one stable logical operation surface.
+
+A fresh physical source-gate count over the same 246 files checked by
+`check-mmap-storage.sh` is 75,936 lines. This is a size signal, not executable
+production LOC: it excludes the gate's conventional separate test-file names
+but retains inline test text and any nonconventional test module. The same
+files group approximately as follows: 18,091 remaining database core, 14,286
+publication, 10,726 C adapter, 10,371 recovery, 6,268 writer/draft, 5,773 fault
+worker, 5,660 validation, 3,197 live lifecycle, and 1,564 snapshot/output.
+
+A current `jscpd` mild scan (`min-lines=8`, `min-tokens=50`) parsed 245 files and
+75,688 lines, finding 231 exact clones covering 3,246 lines (4.29%). The largest
+clones are in recovery/validation worker wire encoding, publication platform
+and artifact handling, recovery direct/membership construction, and repeated
+workflow family dispatch. Therefore literal copy/paste does not explain tens
+of thousands of lines. The working root-cause model is incomplete ownership
+boundaries plus a broad outer durability/recovery/C contract. This refactor
+must measure both; it must not promise a line reduction that evidence does not
+support.
+
+### Approved requirements and acceptance criteria
+
+The user approved an iterative long-term-best refactor with these binding
+criteria:
+
+1. Every persistent operation has one authoritative implementation. This
+   includes mapping and geometry, page creation and initialization, page
+   access, tree insert/replace/delete/split/build, allocation and retirement,
+   checksums and meta publication, metadata, catalog and membership storage,
+   sidecar state, private-output construction, and namespace artifacts.
+2. The internal healthy-file API exclusively exposes the logical reads and
+   mutations needed by advanced operations and exact workflows. Code above it
+   cannot name mappings, physical metadata, roots, page numbers, physical feed
+   indexes as authority, membership IDs, dictionary storage, or allocators.
+3. Damaged-input validation/recovery has a separate untrusted mapped-inspection
+   boundary because it cannot assume a healthy selected generation. It reuses
+   the exact byte codecs and final-output builders; it does not duplicate the
+   healthy hot path or weaken it with recovery checks.
+4. Sidecar coordination and namespace/publication artifacts each have their own
+   single low-level owner. The rule means one owner per concern, not one giant
+   object that combines unrelated files and operating-system state.
+5. The advanced Rust API, exact workflows, and C ABI are thin logical adapters
+   over the same internal operation state. A high-level algorithm may merge or
+   translate logical streams, but it may not create, split, edit, seal, or
+   publish database pages itself.
+6. Work proceeds in cohesive iterations. Each iteration removes every replaced
+   path before it ends; no compatibility shim, parallel implementation, or
+   permanent old/new path is allowed. Whole-file deletions still require an
+   exact user-approved deletion set under repository policy.
+7. Existing v4 bytes, semantics, durability, explicit-validation policy,
+   mmap-only storage, resource bounds, public behavior, C ABI, and platform
+   boundary remain unchanged. A need to change any of them stops for a user
+   decision.
+8. Reader and writer performance must reach the maximum practical result that
+   can be proved. Absolute global optimality across every CPU/compiler/filesystem
+   is not a testable claim. Acceptance instead requires a necessary-work model,
+   test-only work counters, representative release profiles, scaling evidence,
+   and no identified removable traversal, copy, page materialization,
+   allocation, syscall, checksum, synchronization, or unrelated maintenance in
+   a hot path. Retained dominant costs must map to required format work, with
+   measured rejected alternatives where a plausible cheaper design exists.
+
+### Evidence reviewed
+
+- `.agents/sow/specs/binary-format-v4.md`, especially mapped storage, COW,
+  allocation/retirement, public operations, explicit validation/recovery, and
+  snapshot publication.
+- `.agents/sow/specs/design-iprange-engine.md`, especially the two public
+  semantic layers, private physical ownership, Rust-first gate, and measured
+  update-ipsets workloads.
+- `.agents/sow/specs/c-abi-v4.md`, including its 136-function frozen surface,
+  ownership, callbacks, error truth, and complete Phase-1 operation coverage.
+- `draft_store*`, `fixed_tree*`, `slotted_page.rs`, `database.rs`,
+  `live_writer*`, `c_abi_support.rs`, `iprange-capi/src`, `range_bulk.rs`,
+  `immutable_output*`, `validation*`, `recovery*`, `worker*`, `publication*`,
+  and the current source/mmap gates.
+- Current clone, line, dependency-leak, and mutable-mapped-access searches. In
+  particular, `live_writer/direct_workflow.rs:289-354`,
+  `live_writer/feed_workflow.rs:97-127,248-299,371-401`,
+  `live_writer/membership.rs:465-487`, and `c_abi_support.rs:428-449,452-969`
+  demonstrate incomplete ownership boundaries.
+- The completed release benchmark, native-platform, crash, sanitizer,
+  conformance, source-graph, and mmap-only evidence immediately above. These
+  results are the no-regression baseline, not proof that the architecture is
+  accepted.
+- Existing external references already recorded in this SOW:
+  `LMDB/lmdb @ 567292b5d489` and `cberner/redb @ beb7c8ec7af5` demonstrate one
+  mapped/COW storage owner beneath logical table operations while also showing
+  that their different caching, generic-value, and durability choices are not
+  requirements to copy.
+
+### Affected contracts and surfaces
+
+- All Rust v4 main-file readers/writers, exact workflows, mapped page codecs,
+  trees, allocation/retirement, metadata, feeds/memberships, snapshots,
+  validation, recovery, worker protocol, sidecar coordination, publication,
+  live lifecycle, and the Rust-provided C boundary.
+- Internal module visibility and dependency direction, test-only work
+  instrumentation, source/architecture gates, tests, benchmarks, README,
+  specifications, project skill, `AGENTS.md`, and this SOW.
+- Go remains blocked. Phase-2 signing and general multi-file algebra remain out
+  of scope.
+
+### Existing patterns to reuse
+
+- Keep `Mapping` as the only mapped-byte owner and preserve the mmap source and
+  runtime gates.
+- Keep one generic fixed tree and one slotted-page codec. Preserve specialized
+  bitmap/blob layouts only where the v4 bytes require them.
+- Build on `ReaderCore`, `DraftStore`, `range_bulk`, `immutable_output`, and the
+  shared prepared-operation state rather than introducing another implementation.
+- Keep release instrumentation out of hot paths: necessary-work counters are
+  test/benchmark-only unless a later public observability decision is approved.
+- Use Rust module privacy plus an explicit source/dependency gate so ownership
+  is enforced, not merely documented.
+
+### Risk and blast radius
+
+- Moving a check to the wrong layer can weaken malformed-input memory safety or
+  accidentally make full validation implicit. Required bounds, type, and
+  arithmetic checks remain in the owning low-level operation.
+- A generic facade can become a large flag-driven abstraction and add branches
+  to hot paths. Prefer narrow entry points sharing private helpers; measure every
+  added dispatch.
+- High-level retention/import/snapshot algorithms need ordered bulk operations;
+  forcing them through per-range random mutation would preserve layering while
+  destroying performance. The low-level API must expose both canonical random
+  mutation and ordered final-tree construction as distinct authoritative paths.
+- Refactoring working durability/cleanup state machines can lose factual result
+  truth. Each iteration is limited to one responsibility family and must pass
+  its crash/fault tests before proceeding.
+- Mechanical line reduction can hide complexity behind indirection or macros.
+  Net physical lines, dependency edges, function complexity, hot-path work, and
+  readability are reviewed together.
+
+### Sensitive-data handling plan
+
+All inventories, profiles, fixtures, tests, and benchmarks use repository code
+and synthetic databases. Durable artifacts will contain no credentials,
+personal/customer data, private endpoints, non-public operational details, or
+workstation-specific external-source paths.
+
+### Approved iterative implementation plan
+
+1. Freeze and record the current line/clone/dependency/work/performance baseline.
+   Build a complete persistent-operation ownership inventory with the current
+   owner, every caller, every bypass, required variants, and target owner.
+2. Define the four enforced internal boundaries: healthy main-file operations,
+   untrusted mapped inspection, sidecar coordination, and namespace/publication
+   artifacts. Add an architecture gate that rejects forbidden dependency edges
+   and physical-type use above each boundary.
+3. Consolidate healthy read and mutation operations. Make physical fields private
+   to their owners and move logical comparison/statistics/cursor entry points
+   behind the low-level API without adding hot-path dispatch.
+4. Refactor advanced and exact writer workflows to compose only logical
+   operations and ordered streams. Preserve the measured one-pass retention and
+   bulk snapshot paths; delete each superseded bypass in the same iteration.
+5. Make the public Rust wrappers and C ownership adapter use the same internal
+   operation states. Consolidate duplicated family/state/error/report handling
+   where the frozen contract permits, without teaching the C layer physical
+   storage.
+6. Consolidate validation/recovery decoders, wire framing, direct/membership
+   policy helpers, and output construction under the separate untrusted boundary.
+   Then consolidate repeated sidecar/publication artifact operations under their
+   exact owners.
+7. After every slice, run focused semantic/property/corruption/crash tests,
+   explicit output validation, the architecture and mmap gates, and alternating
+   release benchmarks. Retain only changes that preserve correctness and improve
+   ownership while preserving or improving necessary work.
+8. Finish with complete current/MSRV/native/C/conformance/sanitizer/resource
+   verification, final profiles and work counters, line/clone/dependency deltas,
+   artifact maintenance, and user acceptance. Do not begin Go before that
+   acceptance.
+
+### Validation plan
+
+- One checked ownership inventory covers every main, sidecar, snapshot,
+  publication, recovery, and scratch byte mutation and every physical read path.
+- The architecture gate fails a fixture or exact forbidden import/access for
+  each boundary and is part of the standard Rust verification workflow.
+- Public semantic/property tests and explicit validation prove byte/behavior
+  equivalence after each migration. Crash/fault tests cover every moved durable
+  boundary and complete-abort rule.
+- Test-only work counters cover tree lookups/descents, pages visited/created/
+  copied/split/merged/retired/reclaimed/sealed, ranges consumed/emitted/split/
+  coalesced, membership/catalog lookups/interns, mapped growth/remap/sync, and
+  source/output passes. CI assertions target exact invariants where deterministic
+  and bounded/monotonic work where tree shape varies.
+- Release profiles must time at least one million actual reader operations and
+  the existing one-million direct, retention, and snapshot workloads. Reader
+  and writer operations retain zero per-item allocation, stable descriptors,
+  no persistent-content I/O, no ordinary scratch files, explicit validation
+  outside timers, and near-linear scaling.
+- Complete close gates remain those in the project Rust skill, including source
+  graph, mmap source/runtime, current and Rust 1.74.1 matrices, C ABI/header/
+  native behavior, conformance, Clippy/rustdoc/formatting, crash/fault tests,
+  sanitizers, and the already authorized native platform matrix.
+
+### Artifact impact and open decisions
+
+- Update `AGENTS.md` and `design-iprange-engine.md` with the permanent single-
+  owner/internal-boundary rule. Update `binary-format-v4.md` or `c-abi-v4.md`
+  only if clarification is needed; no behavioral change is authorized.
+- Update `.agents/skills/project-v4-rust/SKILL.md` with the architecture gate,
+  ownership inventory, necessary-work counters, and final verification commands.
+- Update the Rust README with final size/architecture/performance evidence.
+  Released C CLI docs and end-user/operator skills remain unaffected unless the
+  implementation changes a caller-visible workflow, which is not authorized.
+- No product/design decision is open. Exact Rust module names, private helper
+  shapes, iteration order within dependency constraints, and test-only counter
+  representation are implementation details. Any required format, public API,
+  C ABI, semantic, durability, validation-default, resource, or platform change
+  stops for a numbered user decision.
+
+### Persistent-operation ownership inventory
+
+The baseline inventory below records one target owner per concern. A row marked
+`enforced` has a source gate preventing the removed bypass from returning. A
+row marked `migration` still has a known caller above the target boundary and
+must be completed before architectural acceptance.
+
+| Persistent concern | Authoritative low-level owner | Baseline bypass / status |
+| --- | --- | --- |
+| mapped extent, page/subrange views, resize, remap, sync, shrink | `mapping.rs` | one owner; retain |
+| metadata-page byte contract and generation selection | `contract.rs`, `bootstrap.rs` | shared correctly by healthy and inspection paths; retain |
+| page checksum encode/seal/check | `page_checksum.rs` and CRC backend | one owner; retain and count sealing work |
+| slotted-page layout and edits | `slotted_page.rs` | one owner; retain |
+| generic fixed-tree lookup/insert/delete/split/walk | `fixed_tree*` | one implementation with codecs; retain |
+| healthy direct lookup, cursors, feed lookup/projection, membership lookup, metadata read | `ReaderCore` in `reader_core*` | raw mapping/meta escaped to C and membership import; first iteration removes and enforces this bypass |
+| random interval assignment/clear and canonical coalescing | `range_mutation.rs` through `DraftStore` | one physical algorithm; writer workflow entry paths still need the writer-core boundary |
+| ordered canonical range-tree construction | `range_bulk.rs` through a mapped `Store` | shared by immutable output/recovery; retain as a distinct required fast path |
+| page allocation, lowest-free reuse, tail growth, private/dirty ownership | `DraftStore` plus `free_bitmap*` | physical ownership exists; `LiveWriter` constructs stores directly in many methods; migration |
+| page retirement and bounded reclamation | `retirement.rs` through `DraftStore` | physical ownership exists; lifecycle/orchestration remains mixed in `LiveWriter`; migration |
+| metadata compression/read and staged root replacement | `metadata.rs`, `DraftStore` metadata operations | one codec and one staged writer; expose only through writer core during migration |
+| feed catalog storage and mutation | `feed_catalog*`, called through `ReaderCore`/`DraftStore` | healthy reads enforced; writer workflows still inspect catalog/meta directly; migration |
+| membership bitmap, dictionary, interning, and used-ID bitmap | `membership_*`, `used_bitmap*`, called through `ReaderCore`/`DraftStore` | reference checks and import cache still construct/use physical stores above the target boundary; migration |
+| transaction preparation, page sealing, alternate-meta publication | target `WriterCore` over `DraftStore` | currently split across `LiveWriter`, `commit.rs`, and direct workflow access to mapping/meta; migration |
+| immutable canonical output construction | `immutable_output*` | one mapped builder reused by snapshot/recovery; retain and remove duplicate policy glue only |
+| external reader-table coordination | target `live_sidecar` coordination owner | slot/lock logic has one owner, but namespace helpers share the same module; migration |
+| live main/sidecar creation, reset, and interrupted-transition resolution | `live_lifecycle*` over coordination and namespace owners | state machines are distinct but call mixed namespace helpers; migration |
+| private output/reservation/main namespace operations | target `publication::namespace*` owner | repeated inspection/removal/identity glue and old helpers in `live_sidecar`; migration |
+| explicit validation of untrusted selected bytes | `validation*` inspector using shared codecs | deliberately separate from healthy reads; consolidate repeated traversal/wire glue, not policies |
+| best-effort recovery input inspection and canonical output | `recovery*` inspector plus `immutable_output` | deliberately separate input boundary; direct/membership builders and worker wire glue duplicate structure; migration |
+| mapped-fault containment and worker framing | `worker*` | one process boundary; validation/recovery message encoders duplicate framing; migration |
+| public Rust handles and Rust-provided C adapter | public wrappers and `c_abi_support.rs` | must contain state/lifetime adaptation only; reader side is enforced, writer side still mirrors operation dispatch; migration |
+
+### Iteration 1 - healthy reader ownership
+
+The first completed slice moves the healthy selected-generation state into
+`ReaderCore`, including immutable/live ownership, typed cursors, the borrow-free
+C cursor, opaque membership tokens, and the logical membership-import source.
+`c_abi_support.rs` and membership import no longer receive `Mapping`, `MetaV4`,
+raw cursor state, or direct feed/membership lookup modules. The public immutable
+and live readers expose only a crate-private `ReaderCore` reference instead of
+`import_parts`/`c_abi_parts` tuples.
+
+`check-architecture.sh` now fails if either adapter restores those physical
+dependencies or if a public reader restores the raw-parts escape hatch. The
+source also removes separate immutable/live cursor constructors: one
+compile-time-specialized constructor takes the already-required optional process
+owner, so the boundary adds no dynamic dispatch, allocation, or per-record work.
+
+Focused import, reader, fork-ownership, Rust C-adapter, native C, and full
+workspace all-feature/all-target tests pass. Five pinned release runs over one
+million operations produced these medians after the change: live membership
+lookup 151.96 ms, immutable membership lookup 127.94 ms, live feed scan 7.95 ms,
+immutable feed scan 6.88 ms, live direct lookup 80.83 ms, immutable direct lookup
+63.09 ms, live direct scan 6.73 ms, and immutable direct scan 4.45 ms. Every
+timed reader path retained zero allocations. These results show no regression
+against the frozen baseline; they are not yet the final maximum-performance
+claim.
+
+This slice currently adds about 80 physical production lines overall: it removes
+the adapter bypasses and duplicated owner variants but adds the explicit core
+and opaque logical state. It is accepted as an ownership improvement, not
+reported as a size reduction. Later iterations must reduce broader writer and
+policy duplication; hiding it behind this boundary would not satisfy the goal.
+
+### Iteration 2 - healthy writer ownership
+
+The second completed slice makes `WriterCore` the sole owner of the healthy
+writer's mapping, selected committed generation, page budget, unpublished
+draft, and unproved tail geometry. `LiveWriter` now retains only path identity,
+the external reader table, public cleanup identity, handle state, and process
+ownership. Direct, retention, named-feed, advanced-membership, membership-
+import, commit, reclaim, and close code request logical operations through
+`WriterCore` and its statically dispatched `WriterEdit`; none can construct a
+`DraftStore` or inspect `Mapping`, `MetaV4`, `Bootstrap`, roots, pages, or draft
+fields.
+
+The mapped import translation cache remains in its existing file, but module
+ownership moved under `WriterCore`. Its fixed-tree operations are therefore
+inside the low-level boundary while membership import sees only `ImportCache`,
+`WordMap`, and logical edit calls. Main-file mapping/selection, draft creation,
+comparison, metadata reads, reclamation preparation, page sealing, physical
+publication, abort-tail cleanup, and close cleanup are likewise owned by the
+core. Sidecar locks and path-pair verification deliberately remain in
+`LiveWriter`; they are coordination operations over a different persistent
+file, not main-file page operations.
+
+`check-architecture.sh` now fails if any writer adapter restores a mapping,
+physical metadata/bootstrap type, draft/store constructor, physical comparison,
+or raw physical field access. It also fails if membership import reclaims module
+ownership of its fixed-tree cache. The boundary uses generic closures and
+ordinary Rust inlining; it adds no trait objects, virtual dispatch, per-record
+allocation, or extra per-record store construction.
+
+The complete workspace all-feature/all-target matrix passes after the move:
+340 library tests with four deliberate ignores, every integration/property/
+crash suite, all 136 frozen C symbols, seven native C behavior programs, and
+the C11/C++17 header check. A release scale run measured one million direct
+replacements at 450.78 ms, one million retention inputs at 465.52 ms, and the
+one-million-range snapshot at 56.52 ms. One million live/immutable membership
+lookups measured 137.64/163.56 ms for the 421-feed case; live/immutable direct
+lookups measured 82.22/68.58 ms, and scans measured 5.25/3.99 ms. Timed reader
+paths retained zero allocations. These are single-run no-regression checks,
+not the final performance proof.
+
+Across the reader and writer ownership slices together, existing compiled
+source removes 1,266 lines and adds 353, while the new core modules add 1,357
+lines: a current net increase of 444 physical source lines. This is an honest
+boundary cost, not a size win. The next workflow/public-adapter and policy
+iterations must demonstrate actual deletion and reduced dependency/state
+duplication; merely adding more facades would violate the approved goal.
+
+### Iteration 3 - adapters, untrusted inspection, and external artifacts
+
+The third completed ownership slice removes the remaining physical-state
+knowledge from the advanced/exact writer workflows and the Rust-provided C
+adapter. Shared operation-input and terminal-state handling now compose the same
+`ReaderCore` and `WriterCore` operations as the public Rust handles. The C crate
+cannot import physical main-file modules, and the Rust bridge no longer owns a
+second reader or writer implementation.
+
+Validation and recovery remain deliberately separate from the healthy-file
+cores. Their common worker wire layer now owns optional integers, intervals,
+address fences, budgets, bounded page lists, callback errors, sequence checks,
+and callback acknowledgement. Recovery direct and membership construction share
+one range-analysis/build-failure/page-cleanup implementation while retaining
+their different semantic evidence. Candidate unreadable-page reporting is now
+charged consistently against the caller's heap budget. The architecture gate
+rejects any future import from the untrusted inspectors into `ReaderCore`,
+`WriterCore`, or the healthy live adapters.
+
+External persistent concerns are now separated by ownership. Publication
+maintenance has one implementation for private-artifact naming, stable scan,
+identity/link verification, exact locked removal, durable absence, POSIX
+retirement, and Windows retirement/resume; output and reservation adapters
+supply only their distinct evidence rule and artifact kind. `live_sidecar.rs`
+owns only the mapped reader table, slot records, and coordination locks, while
+`live_namespace.rs` owns exact local identity, open, path verification,
+creation, installation, removal, and parent-directory durability. Recovery no
+longer locks the sidecar file directly, and live residue checks reuse the
+retained sidecar mapping instead of creating a second header mapping.
+
+`check-architecture.sh` now enforces the healthy reader/writer boundary, C
+boundary, untrusted-inspection boundary, private-publication owner, and the
+sidecar/namespace split. `check-mmap-storage.sh` passes over 256 production
+sources. `check-source-graph.sh` passes with warnings denied over 351 compiled
+sources on Linux, Windows, macOS, and FreeBSD. The complete workspace
+all-feature/all-target test matrix passes: 340 library tests with four deliberate
+ignores, all integration/property/crash suites, all frozen C symbols, seven
+native C behavior programs, and the C11/C++17 header check.
+
+The comparable production-source count is now 75,927 physical lines across 256
+files, versus the 75,936-line baseline across 246 files. The boundary modules
+therefore no longer hide net source growth: the current change is nine lines
+smaller overall despite adding ten cohesive files. The same mild `jscpd` scan
+now finds 211 exact clones covering 2,580 of 75,916 parsed lines (3.40%), down
+from 231 clones covering 3,246 of 75,688 lines (4.29%). Literal duplication is
+materially lower, but total size remains large; the final size audit still must
+classify the retained outer durability/recovery/C surface rather than claiming
+that 75,927 lines are inherently necessary.
+
+### Iteration 4 - necessary-work proof and measured hot paths
+
+The fourth slice adds test-only necessary-work accounting at the authoritative
+low-level owners. The snapshot covers tree lookups and descents, pages visited,
+created, copied, split, retired, reclaimed, and sealed, range input/output and
+split/coalescing work, catalog and membership lookup/intern work, mapping
+growth/remap/flush work, file synchronization, and source/output passes. Page
+merge remains an asserted zero because the approved fixed-tree deletion
+algorithm removes empty children and collapses a root but does not rebalance
+underfull pages. Every counter now has a permanent deterministic or bounded
+test assertion.
+
+The counter implementation is compiled only under `cfg(test)`. A release
+benchmark build followed by exact `nm -C` and string scans found no
+`iprange_livedb::work` symbols, counter field names, storage, or call sites in
+the benchmark executable. The production event functions inline to an unused
+argument, so this proof machinery adds no release hot-path work.
+
+The first exact-feed assertion failed usefully: beginning one feed creation
+performed three catalog searches. The public precondition checked the committed
+catalog, then `ensure_feed` repeated the absence check in the draft, and
+membership construction revalidated the same feed. The writer already owns the
+exclusive writer lease for its entire lifetime, so those repeated searches
+could not observe another writer. The low-level API now has narrow
+known-current/known-absent operations after the public boundary validates the
+name or reference. Permanent assertions prove one lookup for create, replace,
+and delete, two for rename (old-name existence plus new-name collision), and no
+per-range membership interning after workflow setup. The same authoritative
+catalog/membership helpers serve exact and advanced workflows; no unchecked
+public operation or parallel implementation was introduced.
+
+Fresh frame-pointer profiles over the release benchmark identify the retained
+dominant writer work. Direct replacement spends 32.41% in fixed-tree page
+binary search and 14.35% inspecting the selected mapped page; retention spends
+21.34% in the same binary search. Checksums, allocation, page copying, sync,
+error construction, and unrelated maintenance are no longer dominant. Direct
+reader lookup spends approximately 52-54% in the required range-tree lookup,
+followed by fixed-tree descent, slotted-page parsing, and leaf decoding.
+Membership lookup likewise resolves the range and then lazily reads the exact
+membership record; it does not materialize or cache the bitmap. These costs map
+to the approved checked mapped-view contract. Prior measured attempts to force
+inlining, cache the final binary-search key, or specialize direct-key reading
+did not improve elapsed work and are not repeated without new evidence.
+
+One current release run over the unchanged one-million-item benchmark measured
+423.05 ms direct replacement, 442.06 ms retention refresh, and 53.69 ms
+snapshot construction. One million live/immutable membership checks measured
+138.01/121.83 ms; live/immutable direct lookups measured 83.24/69.37 ms; and
+live/immutable direct scans measured 5.71/5.36 ms. Reader timers performed zero
+allocations, descriptors remained stable, and private residue remained zero.
+These are current single-run evidence; the final acceptance table still requires
+the specified repeated pinned runs.
+
+The matched-worker library suite passes 346 tests with four deliberate ignores.
+`check-architecture.sh`, `check-mmap-storage.sh` over 257 production sources,
+`check-mmap-runtime.sh`, and `check-source-graph.sh` over 352 compiled sources
+and all four supported targets pass. The remaining work is final repeated
+performance/resource evidence, full release/MSRV/C/conformance verification,
+final size and dependency accounting, and durable artifact updates. No format,
+public API, semantic, durability, validation-default, resource, or platform
+decision changed in this slice.
+
+### Iteration 5 - final local architecture and performance audit
+
+The ownership inventory is now reconciled. Healthy selected-generation reads
+are owned by `ReaderCore`. Healthy COW mutation, allocation, retirement,
+reclamation, page sealing, and main-file generation publication are owned by
+`WriterCore` over `DraftStore` and the canonical mapped tree/page codecs.
+Advanced and exact workflows, public Rust handles, and the Rust-provided C
+adapter sequence logical operations over those cores and do not inspect
+mappings, roots, page numbers, allocators, or physical dictionaries.
+
+The separate persistent concerns also have one owner each:
+
+| Concern | Final owner and enforced boundary |
+| --- | --- |
+| untrusted validation and recovery input | `validation*` and `recovery*`; they reuse byte codecs and mapped output builders but cannot import healthy-file cores |
+| immutable canonical output | `immutable_output*`; snapshot and recovery call the same mapped builders |
+| external reader table and locks | `live_sidecar*`; callers cannot lock or read the sidecar header directly |
+| live main/sidecar namespace | `live_namespace.rs`; the mapped sidecar owner cannot implement namespace operations |
+| private publication maintenance | `publication::maintenance::common`; output and reservation adapters supply only distinct evidence |
+| publication namespace and lifecycle | `publication::namespace*` and its state machines; maintenance adapters cannot reimplement directory operations |
+| mapped-fault worker and framing | `worker*`; validation and recovery share the common wire primitives |
+| public C ABI | `iprange-capi` over `c_abi_support`; it cannot import physical Rust modules |
+
+Rust visibility makes the core fields private. `check-architecture.sh` adds an
+exact source/dependency gate for every high-level bypass identified by the
+baseline inventory. Its negative fixtures now prove every detector rejects its
+representative forbidden dependency before the real source tree is scanned.
+This is one owner per physical concern, not one object combining the main file,
+external reader table, publication files, damaged input, and OS coordination.
+
+The final necessary-work proof retains every Iteration-4 counter and assertion.
+The exact-feed same-failure search covered live writer creation, replacement,
+deletion, rename, advanced transactions, exact workflows, membership import,
+and the draft catalog/membership helpers. Only the proven duplicate current-name
+lookups were removed; reference validation and destination-collision checks that
+protect distinct facts remain. An optimized release benchmark executable has
+zero `iprange_livedb::work` symbols and zero counter-field strings, proving the
+counter storage and calls compile out.
+
+Five final CPU-pinned release runs of the unchanged one-million-operation
+matrix produced:
+
+| Scenario | Median | Observed range | Median rate |
+| --- | ---: | ---: | ---: |
+| direct replacement | 461.509 ms | 436.182-506.286 ms | 2.17 million/s |
+| retention refresh | 480.964 ms | 462.742-587.256 ms | 2.08 million/s |
+| compact snapshot | 60.906 ms | 54.468-85.367 ms | 16.42 million/s |
+| live membership lookup | 156.272 ms | 144.126-220.086 ms | 6.40 million/s |
+| immutable membership lookup | 121.019 ms | 118.688-138.917 ms | 8.26 million/s |
+| live direct lookup | 83.464 ms | 81.131-88.381 ms | 11.98 million/s |
+| immutable direct lookup | 69.332 ms | 68.081-73.274 ms | 14.42 million/s |
+| live direct scan | 5.704 ms | 5.619-7.519 ms | 175.33 million/s |
+| immutable direct scan | 4.296 ms | 4.195-5.128 ms | 232.75 million/s |
+| live named-feed scan | 6.417 ms | 6.376-8.098 ms | 155.84 million/s |
+| immutable named-feed scan | 5.335 ms | 5.259-6.467 ms | 187.46 million/s |
+
+All five runs retained stable descriptors, zero private artifacts, and zero
+timed-reader allocations. Direct replacement used 21 allocations totalling 406
+bytes, retention 21 totalling 418 bytes, and snapshot construction 31 totalling
+939 bytes; each is a constant setup cost, not per item. Every output was
+explicitly validated after its timer.
+
+Fresh frame-pointer profiles show the remaining dominant costs are required
+tree work. Direct replacement spends 32.41% in mapped fixed-tree page binary
+search and 14.35% inspecting the selected mapped page. Retention spends 21.34%
+in the same search. Direct reader lookup spends approximately 52-54% resolving
+the containing range and the balance in fixed-tree descent, checked slotted-page
+parsing, and leaf decoding. Checksum sealing, heap allocation, page copying,
+sync, error construction, and unrelated maintenance are not dominant. The
+profiles and exact work counters identify no further removable hot-path work.
+This is evidence for the maximum practical implementation currently known, not
+a mathematical claim that no future algorithm or hardware can improve it.
+
+The final size/duplication audit used the same physical-source method and exact
+`jscpd 4.0.5` parameters on the baseline commit and working tree:
+
+| Signal | Baseline | Final local tree | Delta |
+| --- | ---: | ---: | ---: |
+| production Rust source | 75,936 lines / 246 files | 76,092 lines / 257 files | +156 lines / +11 files |
+| high-level adapter set | 5,400 lines | 4,527 lines | -873 lines (-16.2%) |
+| exact clone lines | 3,246 (4.29%) | 2,476 (3.27%) | -770 lines |
+| exact clone groups | 231 | 193 | -38 |
+| files above 500 lines | 46 | 42 | -4 |
+| files above 1,000 lines | 2 | 2 | unchanged |
+| functions with measured CCN above 9 | 171 | 164 | -7 |
+| maximum measured CCN | 33 | 33 | unchanged |
+| functions above 100 measured NLOC | 5 | 5 | unchanged |
+
+The two files above 1,000 physical lines are `worker/client.rs` at 1,262 and
+`mapping.rs` at 1,117. `mapping.rs` begins its inline test module at line 950;
+its production portion remains below 1,000 lines. `worker/client.rs` owns one
+cohesive parent-side isolated-worker request, state, and cleanup protocol.
+Splitting it now would add visibility and module glue without removing an owner,
+duplicate implementation, or measured hot-path cost, so the audit rejects that
+mechanical split.
+
+The 76,092 production-source lines classify as 16,984 database core, 14,353
+publication, 10,726 frozen C adapter, 10,323 recovery, 6,563 writer/draft,
+5,643 validation, 5,637 fault worker, 4,297 live lifecycle, and 1,566
+snapshot/output. The evidence does not support the original working theory that
+tens of thousands of lines were duplicate file operations. The refactor did
+remove material adapter and exact-clone duplication, but total source grew by
+0.21% because the explicit boundaries and 96-line test-only work proof replaced
+implicit access. This audit does not claim that 76,092 lines are intrinsically
+required forever; it finds no further safe deletion justified by current
+ownership, clone, complexity, or profile evidence.
+
+Final local verification on the current source is green:
+
+- workspace all-features/all-targets and no-default-features/all-targets;
+- all 136 frozen C symbols, seven native C behavior programs, the C11/C++17
+  header checks, conformance, integrations, properties, crash tests, and
+  benchmark compilation;
+- Rust 1.74.1 all-features/all-targets;
+- Clippy and rustdoc with warnings denied, and formatting;
+- the matched worker library suite with 346 passes and four deliberate ignores;
+- the valid ASan split: livedb library, C-adapter library, and real-fork
+  integration, all with leak detection enabled;
+- architecture, static/runtime mmap-only storage, and four-target source-graph
+  gates.
+
+The whole-workspace ASan `--tests` command is not a valid gate because ordinary
+native C fixture binaries cannot link an ASan-instrumented shared library without
+the ASan runtime. The established split instruments and executes the Rust
+libraries and real fork path without weakening the normal native C tests.
+
+The previously authorized native Windows, macOS, and FreeBSD matrix passed
+before this ownership refactor. The current refactor passes their exact
+cross-compiled source graphs, but it has not yet been rerun natively on those
+systems. Because this slice changed platform-adjacent publication, sidecar, and
+worker composition, final Rust acceptance must not reuse the older native result
+as proof of the current tree. Go remains blocked until that rerun and explicit
+user acceptance.
+
+Artifact maintenance for this slice is complete locally: `AGENTS.md` records
+the permanent ownership/performance philosophy; the engine-design spec records
+the internal contract; the Rust project skill records the architecture and
+work-counter gates; and the Rust README records the measured architecture,
+size, and performance result. The binary-format and C-ABI specs are unchanged
+because bytes, behavior, and the frozen public boundary did not change. Released
+C CLI/operator docs and output skills are unaffected because v4 remains
+unreleased and no output skill exists. The SOW remains in progress pending the
+current-source native rerun and user acceptance. Synthetic fixtures only were
+used, and the changed durable artifacts contain no credentials, personal or
+customer data, private endpoints, or operational details. The changed-file
+sensitive-data heuristic reported seven `credential-assignment` matches; exact
+inspection showed only typed `MembershipToken`/`CancellationToken` parameters
+and local variables, with no credential value or secret material. Renaming
+those domain terms solely to silence the heuristic would reduce clarity.

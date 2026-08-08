@@ -1,23 +1,14 @@
 //! Durable alternate-meta publication.
 
-use crate::bootstrap::{Bootstrap, MetaSelection, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
-use crate::database;
-use crate::draft_store::DraftStore;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::Mode;
 use crate::publication::CoordinationCleanup;
+use crate::writer_core::{CommitAttempt, PublishOutcome};
 
 use super::{
     verify_pair, CommitCleanupArtifacts, CommitDurability, CommitResult, LiveWriter, State,
 };
-
-enum Phase {
-    BeforePublication(Error),
-    OutcomeUnknown(Error),
-    Committed(Bootstrap),
-}
 
 impl LiveWriter {
     /// Publish all pending changes through the alternate metadata page.
@@ -43,31 +34,14 @@ impl LiveWriter {
         Ok(result)
     }
 
-    fn commit_attempt(&mut self) -> Result<([u8; 16], u64, [u8; 16])> {
+    fn commit_attempt(&mut self) -> Result<CommitAttempt> {
         self.require_healthy()?;
         self.require_operation_owned()?;
-        if self
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.workflow_input_open())
-        {
-            return Err(Error::WrongState("workflow input is not finished"));
-        }
-        if self.draft.as_ref().is_some_and(|draft| !draft.changed()) {
+        if self.core.has_draft() && !self.core.draft_changed() {
             self.discard_draft()?;
             return Err(Error::NoPendingTransaction);
         }
-        self.draft
-            .as_ref()
-            .filter(|draft| draft.changed())
-            .map(|draft| {
-                (
-                    draft.meta.database_id,
-                    draft.meta.txn_id,
-                    draft.meta.commit_nonce,
-                )
-            })
-            .ok_or(Error::NoPendingTransaction)
+        self.core.commit_attempt()
     }
 
     fn prepare_and_lock(&mut self, cancellation: &CancellationToken) -> Result<()> {
@@ -80,7 +54,7 @@ impl LiveWriter {
 
     pub(super) fn finish_commit_locked(
         &mut self,
-        attempt: ([u8; 16], u64, [u8; 16]),
+        attempt: CommitAttempt,
         cancellation: &CancellationToken,
     ) -> CommitResult {
         self.finish_commit_locked_with(attempt, cancellation)
@@ -88,36 +62,29 @@ impl LiveWriter {
 
     fn finish_commit_locked_with(
         &mut self,
-        attempt: ([u8; 16], u64, [u8; 16]),
+        attempt: CommitAttempt,
         cancellation: &CancellationToken,
     ) -> CommitResult {
         match self.commit_locked(cancellation) {
-            Phase::BeforePublication(cause) => {
+            PublishOutcome::BeforePublication(cause) => {
                 let cause = self.abort_after(cause);
                 self.failed_result(attempt, CommitDurability::NotCommitted, cause)
             }
-            Phase::OutcomeUnknown(cause) => {
-                self.draft = None;
-                self.unproved_tail_end = None;
+            PublishOutcome::OutcomeUnknown(cause) => {
                 self.state = State::OutcomeUnknown;
                 self.failed_result(attempt, CommitDurability::OutcomeUnknown, cause)
             }
-            Phase::Committed(base) => {
-                self.base = base;
-                self.draft = None;
-                self.unproved_tail_end = None;
-                CommitResult {
-                    attempted_database_id: attempt.0,
-                    directory_identity: self.directory_identity,
-                    main_identity: self.main_public_identity,
-                    attempted_transaction_id: attempt.1,
-                    attempted_commit_nonce: attempt.2,
-                    durability: CommitDurability::Committed,
-                    cleanup: CommitCleanupArtifacts::clean(),
-                    coordination_cleanup: CoordinationCleanup::None,
-                    cause: None,
-                }
-            }
+            PublishOutcome::Committed => CommitResult {
+                attempted_database_id: attempt.database_id,
+                directory_identity: self.directory_identity,
+                main_identity: self.main_public_identity,
+                attempted_transaction_id: attempt.transaction_id,
+                attempted_commit_nonce: attempt.commit_nonce,
+                durability: CommitDurability::Committed,
+                cleanup: CommitCleanupArtifacts::clean(),
+                coordination_cleanup: CoordinationCleanup::None,
+                cause: None,
+            },
         }
     }
 
@@ -132,131 +99,40 @@ impl LiveWriter {
         }
     }
 
-    pub(super) fn prepare_with_cancellation(
-        &mut self,
-        cancellation: &CancellationToken,
-    ) -> Result<()> {
-        self.prepare_with(cancellation)
-    }
-
     fn prepare_with(&mut self, cancellation: &CancellationToken) -> Result<()> {
-        let draft = self.draft.as_mut().unwrap();
-        let mut store = DraftStore::new(
-            &mut self.mapping,
-            self.base.meta.page_count,
-            self.budget.pages(),
-            draft,
-        );
-        let mut check = || cancellation.check();
-        store.prepare_with_checkpoint(&mut check)
+        self.core.prepare(cancellation)
     }
 
-    fn commit_locked(&mut self, cancellation: &CancellationToken) -> Phase {
+    fn commit_locked(&mut self, cancellation: &CancellationToken) -> PublishOutcome {
         if let Err(error) = cancellation.check() {
-            return Phase::BeforePublication(error);
+            return PublishOutcome::BeforePublication(error);
         }
         match self.prepublication_checks(cancellation) {
             Ok(()) => {}
-            Err(error) => return Phase::BeforePublication(error),
+            Err(error) => return PublishOutcome::BeforePublication(error),
         }
         if let Err(error) = cancellation.check() {
-            return Phase::BeforePublication(error);
+            return PublishOutcome::BeforePublication(error);
         }
-        crate::fault::crash("commit.before_private_sync");
-        let committed_bytes = self.draft.as_ref().unwrap().meta.page_count * PAGE_SIZE as u64;
-        let physical_bytes = match self.mapping.shrink_or_retain(committed_bytes) {
-            Ok(physical_bytes) => physical_bytes,
-            Err(error) => return Phase::BeforePublication(error),
-        };
-        let data_offset = (2 * PAGE_SIZE) as u64;
-        if committed_bytes > data_offset {
-            if let Err(error) = self
-                .mapping
-                .flush_range(data_offset, committed_bytes - data_offset)
-            {
-                return Phase::BeforePublication(error);
-            }
-        }
-        if let Err(error) = self.mapping.sync_file() {
-            return Phase::BeforePublication(error);
-        }
-        crate::fault::crash("commit.after_private_sync");
-        if let Err(error) = cancellation.check() {
-            return Phase::BeforePublication(error);
-        }
-
-        let meta = self.draft.as_ref().unwrap().meta;
-        let target_page = 1 - self.base.selected_meta_page;
-        let encoded = self
-            .mapping
-            .page_mut(u32::from(target_page), meta.page_count)
-            .and_then(|page| meta.encode_mapped(page));
-        if let Err(error) = encoded {
-            return Phase::OutcomeUnknown(error);
-        }
-        crate::fault::crash("commit.after_meta_write");
-        if let Err(error) = self
-            .mapping
-            .flush_page(u32::from(target_page), meta.page_count)
-        {
-            return Phase::OutcomeUnknown(error);
-        }
-        if let Err(error) = self.mapping.sync_file() {
-            return Phase::OutcomeUnknown(error);
-        }
-        crate::fault::crash("commit.after_meta_sync");
-        Phase::Committed(Bootstrap {
-            meta,
-            selection: MetaSelection::ProvenCurrent,
-            selected_meta_page: target_page,
-            committed_bytes,
-            physical_bytes,
-        })
+        self.core.publish(cancellation)
     }
 
     fn prepublication_checks(&self, cancellation: &CancellationToken) -> Result<()> {
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
-        self.require_unchanged_base()?;
+        self.core.require_unchanged_base()?;
         self.sidecar
-            .scan_at_most_cancellable(self.base.meta.txn_id, cancellation)?;
-        self.require_draft_length()?;
+            .scan_at_most_cancellable(self.core.base_info().transaction_id, cancellation)?;
+        self.core.require_draft_length()?;
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)
-    }
-
-    pub(super) fn require_unchanged_base(&self) -> Result<()> {
-        let physical_bytes = self.mapping.file().metadata()?.len();
-        let selected =
-            database::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
-        if selected.meta != self.base.meta {
-            return Err(Error::WrongMode(
-                "committed generation changed under the writer",
-            ));
-        }
-        Ok(())
-    }
-
-    fn require_draft_length(&self) -> Result<()> {
-        let expected = self
-            .draft
-            .as_ref()
-            .unwrap()
-            .meta
-            .page_count
-            .checked_mul(PAGE_SIZE as u64)
-            .ok_or(Error::ArithmeticOverflow("committed file length"))?;
-        if self.mapping.file().metadata()?.len() < expected || self.mapping.len() < expected {
-            return Err(Error::Corrupt("draft file length is inconsistent"));
-        }
-        Ok(())
     }
 
     fn failed_result(
         &self,
-        attempt: ([u8; 16], u64, [u8; 16]),
+        attempt: CommitAttempt,
         durability: CommitDurability,
         cause: Error,
     ) -> CommitResult {
-        let cleanup = if self.draft.is_some() {
+        let cleanup = if self.core.has_draft() {
             self.unpublished_tail_cleanup(cause.code())
         } else {
             CommitCleanupArtifacts::clean()
@@ -270,11 +146,11 @@ impl LiveWriter {
             CoordinationCleanup::None
         };
         CommitResult {
-            attempted_database_id: attempt.0,
+            attempted_database_id: attempt.database_id,
             directory_identity: self.directory_identity,
             main_identity: self.main_public_identity,
-            attempted_transaction_id: attempt.1,
-            attempted_commit_nonce: attempt.2,
+            attempted_transaction_id: attempt.transaction_id,
+            attempted_commit_nonce: attempt.commit_nonce,
             durability,
             cleanup,
             coordination_cleanup,

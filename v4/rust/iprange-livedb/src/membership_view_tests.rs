@@ -284,6 +284,17 @@ fn inline_lookup_reads_words_batches_and_named_bits() {
 }
 
 #[test]
+fn membership_lookup_counts_range_and_dictionary_paths_once() {
+    let (reader, _path) = inline_fixture(&[1, 2, 4]);
+    let (view, work) = crate::work::measure(|| reader.lookup_membership_v4(Ipv4Key(10)));
+    assert_eq!(view.unwrap().unwrap().word_count().unwrap(), 3);
+    assert_eq!(work.membership_lookups, 1);
+    assert_eq!(work.tree_lookups, 2);
+    assert_eq!(work.tree_descents, 0);
+    assert_eq!(work.pages_visited, 2);
+}
+
+#[test]
 fn blob_batches_cross_leaf_boundaries_without_materializing() {
     let (reader, _path, _meta) = blob_fixture();
     let view = reader.lookup_membership_v4(Ipv4Key(20)).unwrap().unwrap();

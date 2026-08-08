@@ -67,7 +67,7 @@ impl CommitResolutionResult {
 
 struct Opened {
     file: std::fs::File,
-    identity: live_sidecar::Identity,
+    identity: crate::live_namespace::Identity,
     directory_identity: LocalFileIdentity,
     main_identity: LocalFileIdentity,
     main_basename: LocalBasename,
@@ -153,18 +153,18 @@ fn open(
     cancellation: &CancellationToken,
 ) -> Result<Opened> {
     let file = match mode {
-        CommitResolutionMode::Live => live_sidecar::open_rw(path)?,
-        CommitResolutionMode::Immutable => live_sidecar::open_rw(path)?,
+        CommitResolutionMode::Live => crate::live_namespace::open_rw(path)?,
+        CommitResolutionMode::Immutable => crate::live_namespace::open_rw(path)?,
     };
     let identity = match mode {
-        CommitResolutionMode::Live => live_sidecar::identity(&file)?,
-        CommitResolutionMode::Immutable => live_sidecar::identity_any_link(&file)?,
+        CommitResolutionMode::Live => crate::live_namespace::identity(&file)?,
+        CommitResolutionMode::Immutable => crate::live_namespace::identity_any_link(&file)?,
     };
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     verify_main(path, identity, mode)?;
     Ok(Opened {
-        directory_identity: live_sidecar::parent_identity(path)?,
-        main_identity: live_sidecar::public_identity(identity),
+        directory_identity: crate::live_namespace::parent_identity(path)?,
+        main_identity: crate::live_namespace::public_identity(identity),
         main_basename: LocalBasename::from_path(path)?,
         file,
         identity,
@@ -207,7 +207,7 @@ fn resolve_locked(
     }
 
     verify_main(path, opened.identity, sidecar_mode(sidecar))?;
-    if live_sidecar::parent_identity(path)? != opened.directory_identity {
+    if crate::live_namespace::parent_identity(path)? != opened.directory_identity {
         return Ok(unresolvable(
             attempt,
             opened,
@@ -300,7 +300,7 @@ fn trim_tail(
         ));
     }
     verify_main(path, opened.identity, sidecar_mode(sidecar))?;
-    if live_sidecar::parent_identity(path)? != opened.directory_identity {
+    if crate::live_namespace::parent_identity(path)? != opened.directory_identity {
         return Err(Error::DirectoryIdentityMismatch);
     }
     match sidecar {
@@ -392,12 +392,14 @@ fn unresolvable(
 
 fn verify_main(
     path: &Path,
-    identity: live_sidecar::Identity,
+    identity: crate::live_namespace::Identity,
     mode: CommitResolutionMode,
 ) -> Result<()> {
     match mode {
-        CommitResolutionMode::Live => live_sidecar::verify_path(path, identity),
-        CommitResolutionMode::Immutable => live_sidecar::verify_path_any_link(path, identity),
+        CommitResolutionMode::Live => crate::live_namespace::verify_path(path, identity),
+        CommitResolutionMode::Immutable => {
+            crate::live_namespace::verify_path_any_link(path, identity)
+        }
     }
 }
 

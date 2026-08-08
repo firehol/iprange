@@ -147,7 +147,7 @@ impl crate::recovery::RecoverySink for RecoveryProxy<'_> {
         match self.control.response() {
             0 => Ok(crate::recovery::RecoverySinkControl::Continue),
             1 => Ok(crate::recovery::RecoverySinkControl::Stop),
-            2 => Err(wire_recovery::read_callback_error(self.control)?),
+            2 => Err(wire::read_worker_error(self.control)?),
             _ => Err(crate::Error::Conflict(
                 "worker recovery callback response is invalid",
             )),
@@ -406,7 +406,7 @@ impl crate::validation::ValidationSink for ValidationProxy<'_> {
         match self.control.response() {
             0 => Ok(crate::validation::ValidationSinkControl::Continue),
             1 => Ok(crate::validation::ValidationSinkControl::Stop),
-            2 => Err(wire_validation::read_callback_error(self.control)?),
+            2 => Err(wire::read_worker_error(self.control)?),
             _ => Err(crate::Error::Conflict(
                 "worker validation callback response is invalid",
             )),

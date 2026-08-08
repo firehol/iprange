@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 
 use crate::cardinality::Cardinality129;
 use crate::error::{Error, ErrorCode, Result};
+use crate::key::{Ipv4Key, Ipv6Key};
 use crate::recovery::{
     RecoveryCandidate, RecoveryCandidateInspection, RecoveryCandidateLabel, RecoveryInspectionMode,
 };
 use crate::validation::{
-    LocalFileIdentity, ValidationBudget, ValidationObject, ValidationProgress, ValidationReason,
+    LocalFileIdentity, PhysicalByteInterval, ValidationAddressFence, ValidationBudget,
+    ValidationObject, ValidationProgress, ValidationReason,
 };
 
 use super::control::Control;
@@ -220,6 +222,50 @@ impl<'a> Reader<'a> {
     }
 }
 
+pub(super) fn validation_budget(output: &mut Writer<'_>, value: &ValidationBudget) -> Result<()> {
+    output.u64(value.max_heap_bytes)?;
+    output.u32(value.max_open_files)?;
+    output.u64(value.max_scratch_bytes)?;
+    output.u32(value.max_scratch_files)?;
+    output.optional_path(value.scratch_directory.as_deref())
+}
+
+pub(super) fn read_validation_budget(input: &mut Reader<'_>) -> Result<ValidationBudget> {
+    Ok(ValidationBudget {
+        max_heap_bytes: input.u64()?,
+        max_open_files: input.u32()?,
+        max_scratch_bytes: input.u64()?,
+        max_scratch_files: input.u32()?,
+        scratch_directory: input.optional_path()?,
+    })
+}
+
+pub(super) fn u32_list(output: &mut Writer<'_>, values: &[u32], overflow: Error) -> Result<()> {
+    output.u32(u32::try_from(values.len()).map_err(|_| overflow)?)?;
+    for value in values {
+        output.u32(*value)?;
+    }
+    Ok(())
+}
+
+pub(super) fn read_u32_list(input: &mut Reader<'_>, heap_bytes: &mut u64) -> Result<Vec<u32>> {
+    let count = input.u32()? as usize;
+    let bytes = count
+        .checked_mul(std::mem::size_of::<u32>())
+        .ok_or(Error::ArithmeticOverflow("unreadable source-page list"))? as u64;
+    *heap_bytes = heap_bytes
+        .checked_sub(bytes)
+        .ok_or(Error::BudgetExceeded("unreadable source-page list"))?;
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(count)
+        .map_err(|_| Error::BudgetExceeded("unreadable source-page list"))?;
+    for _ in 0..count {
+        values.push(input.u32()?);
+    }
+    Ok(values)
+}
+
 pub(super) fn write_inspection_request(
     control: &Control,
     path: &Path,
@@ -234,18 +280,12 @@ pub(super) fn write_inspection_request(
         RecoveryInspectionMode::Live => 2,
         RecoveryInspectionMode::Offline => 3,
     })?;
-    output.u64(budget.max_heap_bytes)?;
-    output.u32(budget.max_open_files)?;
-    output.u64(budget.max_scratch_bytes)?;
-    output.u32(budget.max_scratch_files)?;
-    output.optional_path(budget.scratch_directory.as_deref())?;
-    output.u32(
-        u32::try_from(unreadable_pages.len())
-            .map_err(|_| Error::InvalidArgument("too many unreadable source pages"))?,
+    validation_budget(&mut output, budget)?;
+    u32_list(
+        &mut output,
+        unreadable_pages,
+        Error::InvalidArgument("too many unreadable source pages"),
     )?;
-    for page in unreadable_pages {
-        output.u32(*page)?;
-    }
     output.finish()
 }
 
@@ -260,21 +300,8 @@ pub(super) fn read_inspection_request(
         3 => RecoveryInspectionMode::Offline,
         _ => return Err(Error::Corrupt("worker inspection mode is invalid")),
     };
-    let budget = ValidationBudget {
-        max_heap_bytes: input.u64()?,
-        max_open_files: input.u32()?,
-        max_scratch_bytes: input.u64()?,
-        max_scratch_files: input.u32()?,
-        scratch_directory: input.optional_path()?,
-    };
-    let unreadable_count = input.u32()? as usize;
-    let mut unreadable_pages = Vec::new();
-    unreadable_pages
-        .try_reserve_exact(unreadable_count)
-        .map_err(|_| Error::BudgetExceeded("unreadable source-page list"))?;
-    for _ in 0..unreadable_count {
-        unreadable_pages.push(input.u32()?);
-    }
+    let mut budget = read_validation_budget(&mut input)?;
+    let unreadable_pages = read_u32_list(&mut input, &mut budget.max_heap_bytes)?;
     input.finish()?;
     Ok((path, mode, budget, unreadable_pages))
 }
@@ -383,6 +410,89 @@ pub(super) fn cardinality(output: &mut Writer<'_>, value: Cardinality129) -> Res
 pub(super) fn read_cardinality(input: &mut Reader<'_>) -> Result<Cardinality129> {
     Cardinality129::try_new(input.byte()?, input.u64()?, input.u64()?)
         .ok_or(Error::Corrupt("worker cardinality is invalid"))
+}
+
+pub(super) fn optional_u32(output: &mut Writer<'_>, value: Option<u32>) -> Result<()> {
+    output.bool(value.is_some())?;
+    if let Some(value) = value {
+        output.u32(value)?;
+    }
+    Ok(())
+}
+
+pub(super) fn read_optional_u32(input: &mut Reader<'_>) -> Result<Option<u32>> {
+    input.bool()?.then(|| input.u32()).transpose()
+}
+
+pub(super) fn optional_interval(
+    output: &mut Writer<'_>,
+    value: Option<PhysicalByteInterval>,
+) -> Result<()> {
+    output.bool(value.is_some())?;
+    if let Some(value) = value {
+        output.u64(value.start)?;
+        output.u64(value.end_exclusive)?;
+    }
+    Ok(())
+}
+
+pub(super) fn read_optional_interval(
+    input: &mut Reader<'_>,
+) -> Result<Option<PhysicalByteInterval>> {
+    input
+        .bool()?
+        .then(|| {
+            Ok(PhysicalByteInterval {
+                start: input.u64()?,
+                end_exclusive: input.u64()?,
+            })
+        })
+        .transpose()
+}
+
+pub(super) fn optional_fence(
+    output: &mut Writer<'_>,
+    value: Option<ValidationAddressFence>,
+) -> Result<()> {
+    match value {
+        None => output.byte(0),
+        Some(ValidationAddressFence::Ipv4 { from, to }) => {
+            output.byte(1)?;
+            output.u32(from.0)?;
+            output.u32(to.0)
+        }
+        Some(ValidationAddressFence::Ipv6 { from, to }) => {
+            output.byte(2)?;
+            output.u64(from.hi)?;
+            output.u64(from.lo)?;
+            output.u64(to.hi)?;
+            output.u64(to.lo)
+        }
+    }
+}
+
+pub(super) fn read_optional_fence(
+    input: &mut Reader<'_>,
+    invalid: &'static str,
+) -> Result<Option<ValidationAddressFence>> {
+    match input.byte()? {
+        0 => Ok(None),
+        1 => Ok(Some(ValidationAddressFence::Ipv4 {
+            from: Ipv4Key(input.u32()?),
+            to: Ipv4Key(input.u32()?),
+        })),
+        2 => Ok(Some(ValidationAddressFence::Ipv6 {
+            from: Ipv6Key {
+                hi: input.u64()?,
+                lo: input.u64()?,
+            },
+            to: Ipv6Key {
+                hi: input.u64()?,
+                lo: input.u64()?,
+            },
+        })),
+        _ => Err(Error::Corrupt(invalid)),
+    }
 }
 
 pub(super) fn recovery_candidate(output: &mut Writer<'_>, value: &RecoveryCandidate) -> Result<()> {

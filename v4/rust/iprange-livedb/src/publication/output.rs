@@ -13,8 +13,8 @@ use crate::mapping::Mapping;
 use crate::random;
 
 use super::namespace::{
-    regular_identity, regular_identity_any_link, sync_file, Destination, Identity, Name,
-    NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND,
+    local_identity as local, regular_identity, regular_identity_any_link, sync_file, Destination,
+    Identity, Name, NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND,
 };
 use super::replacement::PreviousMain;
 use super::reservation::Policy;
@@ -548,13 +548,6 @@ fn facts(
             kind: CREATION_SECURITY_KIND,
             commitment: destination.security_commitment(),
         },
-    }
-}
-
-fn local(identity: Identity) -> crate::validation::LocalFileIdentity {
-    crate::validation::LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
     }
 }
 

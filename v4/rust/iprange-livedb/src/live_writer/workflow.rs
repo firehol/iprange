@@ -2,6 +2,7 @@
 
 use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
+use crate::contract::AddressFamily;
 use crate::error::{Error, Result};
 use crate::source::RangeSource;
 use crate::workflow::{Comparison, WorkflowReport};
@@ -174,7 +175,7 @@ impl PreparedState {
         operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
     ) -> Result<T> {
         operation(writer).map_err(|error| {
-            if writer.draft.is_some() {
+            if writer.core.has_draft() {
                 writer.abort_after(error)
             } else {
                 error
@@ -203,9 +204,7 @@ impl FinishedState {
 
 impl Drop for PreparedOperation<'_> {
     fn drop(&mut self) {
-        if let Some(draft) = self.writer.draft.as_mut() {
-            draft.abandon_operation();
-        }
+        self.writer.core.abandon_operation();
     }
 }
 
@@ -220,6 +219,7 @@ where
     S: RangeSource<R>,
     F: FnMut(R) -> Result<()>,
 {
+    crate::work::source_pass(1);
     loop {
         cancellation.check()?;
         let Some(batch) = source.next_batch()? else {
@@ -236,6 +236,7 @@ where
                 .checked_add(1)
                 .ok_or_else(|| Error::arithmetic_overflow("workflow input record count"))?;
             apply(record)?;
+            crate::work::range_consumed(1);
             *input_records = next;
         }
     }
@@ -257,5 +258,63 @@ pub(super) fn require_ordered<K: Ord>(from: K, to: K) -> Result<()> {
         Err(Error::InvalidArgument("range start exceeds range end"))
     } else {
         Ok(())
+    }
+}
+
+pub(super) fn require_transaction(
+    writer: &LiveWriter,
+    nonce: [u8; 16],
+    inactive: &'static str,
+) -> Result<()> {
+    if !writer.core.operation_is(nonce) {
+        return Err(Error::WrongState(inactive));
+    }
+    writer.require_healthy()
+}
+
+pub(super) fn check_transaction(
+    writer: &mut LiveWriter,
+    nonce: [u8; 16],
+    cancellation: &CancellationToken,
+    inactive: &'static str,
+) -> Result<()> {
+    require_transaction(writer, nonce, inactive)?;
+    cancellation
+        .check()
+        .map_err(|cause| writer.abort_after(cause))
+}
+
+pub(super) fn run_transaction<T>(
+    writer: &mut LiveWriter,
+    nonce: [u8; 16],
+    cancellation: &CancellationToken,
+    inactive: &'static str,
+    operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
+) -> Result<T> {
+    check_transaction(writer, nonce, cancellation, inactive)?;
+    let result = operation(writer);
+    if result.is_ok() {
+        check_transaction(writer, nonce, cancellation, inactive)?;
+    }
+    result
+}
+
+pub(super) fn require_input_active(writer: &LiveWriter) -> Result<()> {
+    writer.require_healthy()?;
+    if writer.core.workflow_input_open() {
+        Ok(())
+    } else {
+        Err(Error::WrongState("workflow input is not active"))
+    }
+}
+
+pub(super) fn require_input_family(writer: &mut LiveWriter, family: AddressFamily) -> Result<()> {
+    require_input_active(writer)?;
+    if writer.core.base_info().address_family == family {
+        Ok(())
+    } else {
+        Err(writer.abort_after(Error::WrongAddressFamily(
+            "range family does not match the database",
+        )))
     }
 }

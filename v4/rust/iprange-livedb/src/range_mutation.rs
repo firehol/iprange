@@ -117,6 +117,7 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
                 .checked_add(1)
                 .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
             store.range_record_added(value)?;
+            crate::work::range_emitted(1);
             Ok(true)
         }
         fixed_tree::LocalInsert::General => {
@@ -266,6 +267,9 @@ fn trim_predecessor<K: IpKey, S: RangeStore>(
             value: old.value,
         });
     }
+    if rewrite.left.is_some() && rewrite.right.is_some() {
+        crate::work::range_split(1);
+    }
     Ok(rewrite)
 }
 
@@ -341,6 +345,7 @@ fn merge_previous<K: IpKey, S: RangeStore>(
     if previous.value == range.value && previous.to.checked_next() == Some(range.from) {
         remove::<K, S>(store, root, record_count, previous)?;
         range.from = previous.from;
+        crate::work::range_coalesced(1);
     }
     Ok(())
 }
@@ -357,6 +362,7 @@ fn merge_next<K: IpKey, S: RangeStore>(
     if next.value == range.value && range.to.checked_next() == Some(next.from) {
         remove::<K, S>(store, root, record_count, next)?;
         range.to = next.to;
+        crate::work::range_coalesced(1);
     }
     Ok(())
 }
@@ -377,6 +383,7 @@ fn insert<K: IpKey, S: RangeStore>(
             .checked_add(1)
             .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
         store.range_record_added(range.value)?;
+        crate::work::range_emitted(1);
     }
     Ok(())
 }

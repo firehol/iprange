@@ -2,12 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::contract::{AddressFamily, ValueKind, ValueTag};
 use crate::error::{Error, Result};
-use crate::key::{Ipv4Key, Ipv6Key};
 use crate::publication::{CleanupArtifacts, CoordinationCleanup, PublicationProblem};
 use crate::validation::{
-    PhysicalByteInterval, ValidatedGeneration, ValidationAddressFence, ValidationBudget,
-    ValidationFailure, ValidationFinding, ValidationMode, ValidationObject, ValidationReason,
-    ValidationResult,
+    ValidatedGeneration, ValidationBudget, ValidationFailure, ValidationFinding, ValidationMode,
+    ValidationObject, ValidationReason, ValidationResult,
 };
 
 use super::control::Control;
@@ -40,18 +38,12 @@ pub(super) fn write_request(
             wire::recovery_candidate(&mut output, candidate)?;
         }
     }
-    output.u64(budget.max_heap_bytes)?;
-    output.u32(budget.max_open_files)?;
-    output.u64(budget.max_scratch_bytes)?;
-    output.u32(budget.max_scratch_files)?;
-    output.optional_path(budget.scratch_directory.as_deref())?;
-    output.u32(
-        u32::try_from(unreadable_pages.len())
-            .map_err(|_| Error::InvalidArgument("too many unreadable source pages"))?,
+    wire::validation_budget(&mut output, budget)?;
+    wire::u32_list(
+        &mut output,
+        unreadable_pages,
+        Error::InvalidArgument("too many unreadable source pages"),
     )?;
-    for page in unreadable_pages {
-        output.u32(*page)?;
-    }
     output.u64(delivered_findings)?;
     output.finish()
 }
@@ -65,29 +57,8 @@ pub(super) fn read_request(control: &Control) -> Result<Request> {
         3 => ValidationMode::OfflineCandidate(wire::read_recovery_candidate(&mut input)?),
         _ => return Err(Error::Corrupt("worker validation mode is invalid")),
     };
-    let mut budget = ValidationBudget {
-        max_heap_bytes: input.u64()?,
-        max_open_files: input.u32()?,
-        max_scratch_bytes: input.u64()?,
-        max_scratch_files: input.u32()?,
-        scratch_directory: input.optional_path()?,
-    };
-    let count = input.u32()? as usize;
-    let unreadable_bytes = count
-        .checked_mul(std::mem::size_of::<u32>())
-        .ok_or(Error::ArithmeticOverflow("unreadable source-page list"))?
-        as u64;
-    budget.max_heap_bytes = budget
-        .max_heap_bytes
-        .checked_sub(unreadable_bytes)
-        .ok_or(Error::BudgetExceeded("unreadable source-page list"))?;
-    let mut unreadable_pages = Vec::new();
-    unreadable_pages
-        .try_reserve_exact(count)
-        .map_err(|_| Error::BudgetExceeded("unreadable source-page list"))?;
-    for _ in 0..count {
-        unreadable_pages.push(input.u32()?);
-    }
+    let mut budget = wire::read_validation_budget(&mut input)?;
+    let unreadable_pages = wire::read_u32_list(&mut input, &mut budget.max_heap_bytes)?;
     let delivered_findings = input.u64()?;
     input.finish()?;
     Ok(Request {
@@ -237,10 +208,10 @@ pub(super) fn write_finding(control: &Control, finding: &ValidationFinding) -> R
     output.u64(finding.sequence)?;
     output.byte(finding.reason as u8)?;
     output.byte(finding.object as u8)?;
-    optional_u32(&mut output, finding.page_number)?;
-    optional_interval(&mut output, finding.physical_bytes)?;
-    optional_u32(&mut output, finding.related_page_number)?;
-    optional_fence(&mut output, finding.address_fence)?;
+    wire::optional_u32(&mut output, finding.page_number)?;
+    wire::optional_interval(&mut output, finding.physical_bytes)?;
+    wire::optional_u32(&mut output, finding.related_page_number)?;
+    wire::optional_fence(&mut output, finding.address_fence)?;
     output.finish()
 }
 
@@ -252,26 +223,13 @@ pub(super) fn read_finding(control: &Control) -> Result<ValidationFinding> {
             .ok_or(Error::Corrupt("worker validation reason is invalid"))?,
         object: ValidationObject::from_wire(input.byte()?)
             .ok_or(Error::Corrupt("worker validation object is invalid"))?,
-        page_number: read_optional_u32(&mut input)?,
-        physical_bytes: read_optional_interval(&mut input)?,
-        related_page_number: read_optional_u32(&mut input)?,
-        address_fence: read_optional_fence(&mut input)?,
+        page_number: wire::read_optional_u32(&mut input)?,
+        physical_bytes: wire::read_optional_interval(&mut input)?,
+        related_page_number: wire::read_optional_u32(&mut input)?,
+        address_fence: wire::read_optional_fence(&mut input, "worker validation fence is invalid")?,
     };
     input.finish()?;
     Ok(finding)
-}
-
-pub(super) fn write_callback_error(control: &Control, error: &Error) -> Result<()> {
-    let mut output = Writer::new(control);
-    wire::encode_error(&mut output, error)?;
-    output.finish()
-}
-
-pub(super) fn read_callback_error(control: &Control) -> Result<Error> {
-    let mut input = Reader::new(control)?;
-    let error = wire::read_error(&mut input)?;
-    input.finish()?;
-    Ok(error)
 }
 
 fn write_generation(output: &mut Writer<'_>, value: ValidatedGeneration) -> Result<()> {
@@ -313,76 +271,4 @@ fn read_generation(input: &mut Reader<'_>) -> Result<ValidatedGeneration> {
         page_count,
         roots,
     })
-}
-
-fn optional_u32(output: &mut Writer<'_>, value: Option<u32>) -> Result<()> {
-    output.bool(value.is_some())?;
-    if let Some(value) = value {
-        output.u32(value)?;
-    }
-    Ok(())
-}
-
-fn read_optional_u32(input: &mut Reader<'_>) -> Result<Option<u32>> {
-    input.bool()?.then(|| input.u32()).transpose()
-}
-
-fn optional_interval(output: &mut Writer<'_>, value: Option<PhysicalByteInterval>) -> Result<()> {
-    output.bool(value.is_some())?;
-    if let Some(value) = value {
-        output.u64(value.start)?;
-        output.u64(value.end_exclusive)?;
-    }
-    Ok(())
-}
-
-fn read_optional_interval(input: &mut Reader<'_>) -> Result<Option<PhysicalByteInterval>> {
-    input
-        .bool()?
-        .then(|| {
-            Ok(PhysicalByteInterval {
-                start: input.u64()?,
-                end_exclusive: input.u64()?,
-            })
-        })
-        .transpose()
-}
-
-fn optional_fence(output: &mut Writer<'_>, value: Option<ValidationAddressFence>) -> Result<()> {
-    match value {
-        None => output.byte(0),
-        Some(ValidationAddressFence::Ipv4 { from, to }) => {
-            output.byte(1)?;
-            output.u32(from.0)?;
-            output.u32(to.0)
-        }
-        Some(ValidationAddressFence::Ipv6 { from, to }) => {
-            output.byte(2)?;
-            output.u64(from.hi)?;
-            output.u64(from.lo)?;
-            output.u64(to.hi)?;
-            output.u64(to.lo)
-        }
-    }
-}
-
-fn read_optional_fence(input: &mut Reader<'_>) -> Result<Option<ValidationAddressFence>> {
-    match input.byte()? {
-        0 => Ok(None),
-        1 => Ok(Some(ValidationAddressFence::Ipv4 {
-            from: Ipv4Key(input.u32()?),
-            to: Ipv4Key(input.u32()?),
-        })),
-        2 => Ok(Some(ValidationAddressFence::Ipv6 {
-            from: Ipv6Key {
-                hi: input.u64()?,
-                lo: input.u64()?,
-            },
-            to: Ipv6Key {
-                hi: input.u64()?,
-                lo: input.u64()?,
-            },
-        })),
-        _ => Err(Error::Corrupt("worker validation fence is invalid")),
-    }
 }

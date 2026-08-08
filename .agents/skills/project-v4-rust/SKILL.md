@@ -42,6 +42,7 @@ calls it. Never delete a file without user approval and a preservation commit.
 Use these baseline gates:
 
 ```bash
+./v4/rust/check-architecture.sh
 ./v4/rust/check-mmap-storage.sh
 ./v4/rust/check-mmap-runtime.sh
 ./v4/rust/check-source-graph.sh
@@ -55,6 +56,13 @@ cargo fmt --manifest-path v4/rust/Cargo.toml --all -- --check
 RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path v4/rust/Cargo.toml \
   --workspace --all-features --no-deps
 ```
+
+The architecture gate enforces one healthy-reader owner, one healthy-writer
+owner, a separate untrusted validation/recovery boundary, the Rust-owned C
+adapter, one publication namespace owner, and a separate mapped sidecar owner.
+Do not weaken its patterns to permit a new physical-state bypass. When adding a
+persistent operation, put it in the existing owning layer or update the active
+SOW's ownership inventory before implementation.
 
 The storage gate is architectural, not stylistic. Production SDK code must use
 file-backed mappings for persistent content; it must not issue positional or
@@ -128,6 +136,13 @@ operation. A Linux reader-performance change must also preserve inherited
 handle rejection with the real fork subprocess test and prove that the
 supported `MADV_WIPEONFORK` path performs no process-ID call in repeated
 ownership checks.
+
+Use the test-only necessary-work snapshot to assert deterministic tree lookups,
+page visits/copies/splits/sealing, range input/output passes, catalog and
+membership work, mapping changes, and durability calls. These counters are
+proof machinery, not a public observability API. A final release build must have
+no `iprange_livedb::work` symbol, counter field string, counter storage, or
+counter call left in the benchmark executable.
 
 ## Report proof precisely
 

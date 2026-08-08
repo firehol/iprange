@@ -48,11 +48,15 @@ complexity is not evidence of either.
 - Prefer the smallest coherent design over speculative flexibility. Do not keep
   dead code, compatibility for unreleased formats, test-only production
   machinery, or abstractions without a current caller.
-- Keep one owner for each invariant. Separate byte encoding, mapped storage,
-  range
-  semantics, explicit validation/recovery, operating-system coordination, and
-  user workflows where those responsibilities are genuinely distinct. Do not
-  split code merely to satisfy a metric.
+- Every persistent operation has one authoritative low-level implementation.
+  Healthy-file readers and writers own mapped bytes, pages, roots, allocation,
+  retirement, checksums, and committed-generation publication in the main
+  file; public workflows and language adapters compose only logical operations
+  over those owners. Keep untrusted validation/recovery, external reader
+  coordination, and filesystem namespace/publication artifacts behind their
+  separate boundaries. Variants may have narrow entry points, but must share
+  the same invariant-owning helpers. Do not split code merely to satisfy a
+  metric.
 - Persistent SDK content is mmap-only. Production code must not transfer main,
   sidecar, snapshot, publication, recovery, or scratch bytes through
   read/write/seek APIs, and a complete database page must never exist in a stack
@@ -80,8 +84,11 @@ complexity is not evidence of either.
   satisfy a metric are defects.
 - Hot paths must make their costs visible: no hidden whole-file validation,
   temporary sorting files, file-sized heap state, or per-item allocation where
-  reusable bounded workspace is sufficient. Performance claims require
-  benchmarks on representative workloads.
+  reusable bounded workspace is sufficient. Test-only necessary-work counters
+  should pin deterministic lookups, page visits/copies, range passes, and
+  durability work without surviving in release binaries. Performance claims
+  require representative release benchmarks and profiles of retained dominant
+  costs.
 - Build Rust first. Complete it, prove correctness and durability, benchmark
   realistic `update-ipsets` workflows, and demonstrate that it materially
   improves that architecture. Start the pure-Go port only after the user accepts

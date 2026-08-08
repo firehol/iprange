@@ -81,11 +81,13 @@ impl<K: IpKey> CursorState<K> {
         if !cursor.finished {
             cursor.descend_edge(mapping, meta.range_root, None)?;
         }
+        crate::work::source_pass(1);
         Ok(cursor)
     }
 
     pub(crate) fn seek(&mut self, mapping: &Mapping, target: K) -> Result<()> {
         self.require_owner()?;
+        crate::work::tree_lookup(1);
         self.depth = 0;
         self.needs_advance = false;
         self.finished = self.meta.range_root == 0;
@@ -122,6 +124,7 @@ impl<K: IpKey> CursorState<K> {
             self.push(page_number, index, &header)?;
             page_number = child;
             expected_level = Some(header.level - 1);
+            crate::work::tree_descent(1);
         }
     }
 
@@ -187,6 +190,7 @@ impl<K: IpKey> CursorState<K> {
             }
         };
         self.needs_advance = true;
+        crate::work::range_consumed(1);
         Ok(Some(DirectRange {
             from: record.from,
             to: record.to,
@@ -243,6 +247,7 @@ impl<K: IpKey> CursorState<K> {
                 ));
             }
             let child = range_tree::branch_child::<K, _>(page, &header, frame.index)?;
+            crate::work::tree_descent(1);
             return self.descend_edge(mapping, child, Some(frame.level - 1));
         }
         self.finished = true;
@@ -274,6 +279,7 @@ impl<K: IpKey> CursorState<K> {
             self.push(page_number, index, &header)?;
             page_number = child;
             expected = Some(header.level - 1);
+            crate::work::tree_descent(1);
         }
     }
 
@@ -350,20 +356,10 @@ macro_rules! public_cursor {
                 mapping: &'a Mapping,
                 meta: &MetaV4,
                 direction: RangeDirection,
+                owner_identity: Option<ProcessIdentity>,
             ) -> Result<Self> {
                 Ok(Self {
-                    inner: Cursor::new(mapping, meta, direction, None)?,
-                })
-            }
-
-            pub(crate) fn new_live(
-                mapping: &'a Mapping,
-                meta: &MetaV4,
-                direction: RangeDirection,
-                owner_identity: ProcessIdentity,
-            ) -> Result<Self> {
-                Ok(Self {
-                    inner: Cursor::new(mapping, meta, direction, Some(owner_identity))?,
+                    inner: Cursor::new(mapping, meta, direction, owner_identity)?,
                 })
             }
 

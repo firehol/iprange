@@ -83,6 +83,7 @@ impl Store for DraftStore<'_> {
         let result = copy(source, &mut destination)?;
         require_private_output(destination.view(), self.draft.meta.txn_id)?;
         destination.put_u32(28, tag)?;
+        crate::work::page_copied(1);
         Ok(result)
     }
 
@@ -190,6 +191,7 @@ impl DraftStore<'_> {
         page.put_u64(8, txn)?;
         page.put_u32(28, tag)?;
         self.draft.dirty_head = page_number;
+        crate::work::page_created(1);
         Ok(())
     }
 }

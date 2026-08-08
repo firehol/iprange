@@ -2,6 +2,8 @@
 
 use std::io;
 
+use crate::validation::LocalFileIdentity;
+
 #[cfg(unix)]
 #[path = "namespace/unix.rs"]
 mod platform;
@@ -11,6 +13,19 @@ mod platform;
 mod platform;
 
 pub(crate) use platform::*;
+
+pub(crate) fn local_identity(identity: Identity) -> LocalFileIdentity {
+    LocalFileIdentity {
+        kind: IDENTITY_KIND,
+        bytes: identity.encode(),
+    }
+}
+
+pub(crate) fn identity_from_local(value: LocalFileIdentity) -> Option<Identity> {
+    (value.kind == IDENTITY_KIND)
+        .then(|| Identity::decode(value.bytes))
+        .flatten()
+}
 
 pub(crate) fn is_nofollow_symlink(error: &io::Error) -> bool {
     #[cfg(unix)]

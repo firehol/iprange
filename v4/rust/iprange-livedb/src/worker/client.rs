@@ -570,12 +570,17 @@ pub(super) fn inspect_recovery_candidates(
                 }
                 let page = u32::try_from(fault.relative / crate::contract::PAGE_SIZE as u64)
                     .map_err(|_| Error::ArithmeticOverflow("worker fault page"))?;
-                if page >= 2 || unreadable_pages.contains(&page) {
+                if page >= 2 {
                     return Err(Error::Conflict(
                         "candidate inspection fault did not advance",
                     ));
                 }
-                unreadable_pages.push(page);
+                record_unreadable_page(
+                    &mut unreadable_pages,
+                    page,
+                    budget.max_heap_bytes,
+                    "candidate inspection fault did not advance",
+                )?;
             }
         }
     }
@@ -907,71 +912,29 @@ fn drive_recovery<S: RecoverySink>(
     delivered_unknowns: &mut u64,
     callback: &mut Option<CallbackDecision>,
 ) -> Result<Drive> {
-    loop {
-        match control.state() {
-            Some(State::CancelPoll) => acknowledge_poll(control, cancellation),
-            Some(State::Unknown) => {
-                let unknown = wire_recovery::read_unknown(control)?;
-                if unknown.sequence != delivered_unknowns.saturating_add(1) {
-                    child.abort();
-                    return Err(Error::Conflict(
-                        "worker recovery envelope sequence is invalid",
-                    ));
-                }
-                *delivered_unknowns = unknown.sequence;
-                match sink.unknown(&unknown) {
-                    Ok(RecoverySinkControl::Continue) => control.set_response(0),
-                    Ok(RecoverySinkControl::Stop) => {
-                        *callback = Some(CallbackDecision::Stop);
-                        control.set_response(1);
-                    }
-                    Err(cause) => {
-                        let written = wire_recovery::write_callback_error(control, &cause);
-                        *callback = Some(CallbackDecision::Error(cause));
-                        written?;
-                        control.set_response(2);
-                    }
-                }
-                control.set_state(State::Running);
+    drive_loop(
+        child,
+        control,
+        cancellation,
+        "SDK worker emitted an unexpected event",
+        |state, child, control| {
+            if state != State::Unknown {
+                return Ok(false);
             }
-            Some(State::Complete) => {
-                let guard_pending = control.guard_pending();
-                if guard_pending {
-                    return Ok(Drive::Complete { guard_pending });
-                }
-                let status = child.wait()?;
-                return status
-                    .success()
-                    .then_some(Drive::Complete { guard_pending })
-                    .ok_or(Error::Conflict("SDK worker completion status is invalid"));
-            }
-            Some(State::Fault) => {
-                let status = child.wait()?;
-                if status.code() == Some(OWNED_FAULT_EXIT) {
-                    return Ok(Drive::Fault(control.fault_record()?));
-                }
-                return Err(Error::Conflict("SDK worker fault record is untrusted"));
-            }
-            Some(State::Failed) => {
-                return Err(worker_failure(child, control)?);
-            }
-            Some(State::Finding) | Some(State::CleanupRequest) | Some(State::CleanupResult) => {
-                child.abort();
-                return Err(Error::Conflict("SDK worker emitted an unexpected event"));
-            }
-            Some(State::Running) | Some(State::WorkerReady) | Some(State::Request) | None => {
-                if !control.external_poll() && cancellation.is_cancelled() {
-                    control.request_cancel();
-                }
-                if child.try_wait()?.is_some() {
-                    return Err(Error::Conflict(
-                        "SDK worker exited without a terminal record",
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
-    }
+            let unknown = wire_recovery::read_unknown(control)?;
+            advance_sequence(
+                child,
+                delivered_unknowns,
+                unknown.sequence,
+                "worker recovery envelope sequence is invalid",
+            )?;
+            let result = sink
+                .unknown(&unknown)
+                .map(|value| value == RecoverySinkControl::Stop);
+            acknowledge_callback(control, result, callback)?;
+            Ok(true)
+        },
+    )
 }
 
 pub(super) enum Drive {
@@ -984,57 +947,13 @@ pub(super) fn drive(
     control: &Control,
     cancellation: &CancellationToken,
 ) -> Result<Drive> {
-    loop {
-        match control.state() {
-            Some(State::CancelPoll) => {
-                let cancelled = cancellation.is_cancelled();
-                control.set_response(u32::from(cancelled));
-                if cancelled {
-                    control.request_cancel();
-                }
-                control.set_state(State::Running);
-            }
-            Some(State::Complete) => {
-                let guard_pending = control.guard_pending();
-                if guard_pending {
-                    return Ok(Drive::Complete { guard_pending });
-                }
-                let status = child.wait()?;
-                return status
-                    .success()
-                    .then_some(Drive::Complete { guard_pending })
-                    .ok_or(Error::Conflict("SDK worker completion status is invalid"));
-            }
-            Some(State::Fault) => {
-                let status = child.wait()?;
-                if status.code() == Some(OWNED_FAULT_EXIT) {
-                    return Ok(Drive::Fault(control.fault_record()?));
-                }
-                return Err(Error::Conflict("SDK worker fault record is untrusted"));
-            }
-            Some(State::Failed) => {
-                return Err(worker_failure(child, control)?);
-            }
-            Some(State::Finding)
-            | Some(State::Unknown)
-            | Some(State::CleanupRequest)
-            | Some(State::CleanupResult) => {
-                child.abort();
-                return Err(Error::Conflict("SDK worker emitted an unexpected event"));
-            }
-            Some(State::Running) | Some(State::WorkerReady) | Some(State::Request) | None => {
-                if !control.external_poll() && cancellation.is_cancelled() {
-                    control.request_cancel();
-                }
-                if child.try_wait()?.is_some() {
-                    return Err(Error::Conflict(
-                        "SDK worker exited without a terminal record",
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
-        }
-    }
+    drive_loop(
+        child,
+        control,
+        cancellation,
+        "SDK worker emitted an unexpected event",
+        |_state, _child, _control| Ok(false),
+    )
 }
 
 fn drive_validation<S: ValidationSink>(
@@ -1045,33 +964,42 @@ fn drive_validation<S: ValidationSink>(
     delivered_findings: &mut u64,
     callback: &mut Option<CallbackDecision>,
 ) -> Result<Drive> {
-    loop {
-        match control.state() {
-            Some(State::CancelPoll) => acknowledge_poll(control, cancellation),
-            Some(State::Finding) => {
-                let finding = wire_validation::read_finding(control)?;
-                if finding.sequence != delivered_findings.saturating_add(1) {
-                    child.abort();
-                    return Err(Error::Conflict(
-                        "worker validation finding sequence is invalid",
-                    ));
-                }
-                *delivered_findings = finding.sequence;
-                match sink.finding(&finding) {
-                    Ok(ValidationSinkControl::Continue) => control.set_response(0),
-                    Ok(ValidationSinkControl::Stop) => {
-                        *callback = Some(CallbackDecision::Stop);
-                        control.set_response(1);
-                    }
-                    Err(cause) => {
-                        let written = wire_validation::write_callback_error(control, &cause);
-                        *callback = Some(CallbackDecision::Error(cause));
-                        written?;
-                        control.set_response(2);
-                    }
-                }
-                control.set_state(State::Running);
+    drive_loop(
+        child,
+        control,
+        cancellation,
+        "SDK worker emitted an unexpected recovery event",
+        |state, child, control| {
+            if state != State::Finding {
+                return Ok(false);
             }
+            let finding = wire_validation::read_finding(control)?;
+            advance_sequence(
+                child,
+                delivered_findings,
+                finding.sequence,
+                "worker validation finding sequence is invalid",
+            )?;
+            let result = sink
+                .finding(&finding)
+                .map(|value| value == ValidationSinkControl::Stop);
+            acknowledge_callback(control, result, callback)?;
+            Ok(true)
+        },
+    )
+}
+
+fn drive_loop(
+    child: &mut Process,
+    control: &Control,
+    cancellation: &CancellationToken,
+    unexpected: &'static str,
+    mut event: impl FnMut(State, &mut Process, &Control) -> Result<bool>,
+) -> Result<Drive> {
+    loop {
+        let state = control.state();
+        match state {
+            Some(State::CancelPoll) => acknowledge_poll(control, cancellation),
             Some(State::Complete) => {
                 let guard_pending = control.guard_pending();
                 if guard_pending {
@@ -1090,15 +1018,8 @@ fn drive_validation<S: ValidationSink>(
                 }
                 return Err(Error::Conflict("SDK worker fault record is untrusted"));
             }
-            Some(State::Failed) => {
-                return Err(worker_failure(child, control)?);
-            }
-            Some(State::Unknown) | Some(State::CleanupRequest) | Some(State::CleanupResult) => {
-                child.abort();
-                return Err(Error::Conflict(
-                    "SDK worker emitted an unexpected recovery event",
-                ));
-            }
+            Some(State::Failed) => return Err(worker_failure(child, control)?),
+            Some(state) if event(state, child, control)? => {}
             Some(State::Running) | Some(State::WorkerReady) | Some(State::Request) | None => {
                 if !control.external_poll() && cancellation.is_cancelled() {
                     control.request_cancel();
@@ -1110,8 +1031,48 @@ fn drive_validation<S: ValidationSink>(
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
+            Some(_) => {
+                child.abort();
+                return Err(Error::Conflict(unexpected));
+            }
         }
     }
+}
+
+fn advance_sequence(
+    child: &mut Process,
+    delivered: &mut u64,
+    sequence: u64,
+    invalid: &'static str,
+) -> Result<()> {
+    if sequence != delivered.saturating_add(1) {
+        child.abort();
+        return Err(Error::Conflict(invalid));
+    }
+    *delivered = sequence;
+    Ok(())
+}
+
+fn acknowledge_callback(
+    control: &Control,
+    result: Result<bool>,
+    callback: &mut Option<CallbackDecision>,
+) -> Result<()> {
+    match result {
+        Ok(false) => control.set_response(0),
+        Ok(true) => {
+            *callback = Some(CallbackDecision::Stop);
+            control.set_response(1);
+        }
+        Err(cause) => {
+            let written = wire::write_worker_error(control, &cause);
+            *callback = Some(CallbackDecision::Error(cause));
+            written?;
+            control.set_response(2);
+        }
+    }
+    control.set_state(State::Running);
+    Ok(())
 }
 
 enum CallbackDecision {

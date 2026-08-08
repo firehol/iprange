@@ -269,6 +269,7 @@ impl<K: IpKey> Output<K> {
         if let Some(pending) = self.pending.as_mut() {
             if pending.value == record.value && pending.to.checked_next() == Some(record.from) {
                 pending.to = record.to;
+                crate::work::range_coalesced(1);
                 return Ok(());
             }
         }

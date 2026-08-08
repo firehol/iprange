@@ -7,7 +7,8 @@ use crate::contract::{MetaV4, PAGE_SIZE};
 use crate::database;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
 use crate::mapping::Mapping;
 use crate::validation::source::{public_identity, ImmutableSource};
 use crate::validation::ValidationBudget;
@@ -99,9 +100,9 @@ fn inspect_live(
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
     let file = database::open_read_only(path)?;
-    let identity = live_sidecar::identity(&file)?;
+    let identity = crate::live_namespace::identity(&file)?;
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
-    live_sidecar::verify_path(path, identity)?;
+    crate::live_namespace::verify_path(path, identity)?;
     let initial = read_classified(&file, cancellation)?;
     let current = require_live_current(&initial)?;
     crate::live_cleanup::require_main_available(path, identity, current.database_id)?;
@@ -152,7 +153,7 @@ fn inspect_live_locked(
 }
 
 fn verify_live(path: &Path, identity: Identity, sidecar: &live_sidecar::Sidecar) -> Result<()> {
-    live_sidecar::verify_path(path, identity)
+    crate::live_namespace::verify_path(path, identity)
         .and_then(|()| sidecar.verify_path())
         .and_then(|()| sidecar.verify_header())
         .map_err(live_coordination_error)
@@ -274,10 +275,10 @@ pub(crate) struct OfflineSource {
 
 impl OfflineSource {
     pub(crate) fn open(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
-        let file = live_sidecar::open_rw(path)?;
-        let identity = live_sidecar::identity_any_link(&file)?;
+        let file = crate::live_namespace::open_rw(path)?;
+        let identity = crate::live_namespace::identity_any_link(&file)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
-        live_sidecar::verify_path_any_link(path, identity)?;
+        crate::live_namespace::verify_path_any_link(path, identity)?;
         Ok(Self {
             file,
             path: path.to_path_buf(),
@@ -286,7 +287,7 @@ impl OfflineSource {
     }
 
     pub(crate) fn verify(&self) -> Result<()> {
-        live_sidecar::verify_path_any_link(&self.path, self.identity)
+        crate::live_namespace::verify_path_any_link(&self.path, self.identity)
     }
 
     pub(crate) fn public_identity(&self) -> crate::validation::LocalFileIdentity {

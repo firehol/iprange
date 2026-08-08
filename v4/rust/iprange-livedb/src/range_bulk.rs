@@ -187,6 +187,7 @@ impl<K: IpKey> Builder<K> {
         self.push_leaf_cell(sink, record.from, &cell[..cell_len])?;
         self.previous = Some(record);
         self.record_count = next_count;
+        crate::work::range_emitted(1);
         Ok(())
     }
 
@@ -290,6 +291,7 @@ impl<K: IpKey> Builder<K> {
     }
 
     pub(crate) fn finish<S: Sink>(&mut self, sink: &mut S) -> Result<(u32, u64)> {
+        crate::work::output_pass(1);
         if self.record_count == 0 {
             return Ok((0, 0));
         }

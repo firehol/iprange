@@ -1,27 +1,21 @@
 //! Name-based import from one pinned membership generation.
 
-#[path = "membership_import/cache.rs"]
-mod cache;
 #[path = "membership_import/report.rs"]
 mod report;
 
-use cache::{ImportCache, WordMap};
-
 use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
-use crate::contract::{AddressFamily, MetaV4, ValueKind};
+use crate::contract::{AddressFamily, ValueKind};
+use crate::database::DatabaseInfo;
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
-use crate::feed_catalog::{self, FeedCursor};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
+use crate::live_namespace::Identity;
 use crate::live_reader::LiveReader;
-use crate::live_sidecar::{self, Identity};
-use crate::mapping::Mapping;
-use crate::membership_view::{self, MembershipView};
-use crate::process_identity::ProcessIdentity;
-use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
+use crate::reader_core::{MembershipRange, MembershipRangeCursor, MembershipToken, ReaderCore};
 use crate::workflow::LogicalChange;
-use crate::ImmutableReader;
+use crate::writer_core::{ImportCache, WordMap, WriterEdit};
+use crate::{FeedCursor, ImmutableReader, MembershipView};
 
 use super::workflow::FinishedState;
 use super::{FinishedWorkflow, LiveWriter, PreparedState};
@@ -45,10 +39,10 @@ pub struct MembershipImport<'writer, 'source> {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Source<'a> {
-    mapping: &'a Mapping,
-    meta: MetaV4,
+    core: &'a ReaderCore,
+    info: DatabaseInfo,
+    membership_entry_count: u64,
     identity: Identity,
-    owner_identity: Option<ProcessIdentity>,
 }
 
 #[derive(Default)]
@@ -121,11 +115,7 @@ pub(crate) fn finish_import_state(
 }
 
 fn require_active(writer: &LiveWriter) -> Result<()> {
-    if writer
-        .draft
-        .as_ref()
-        .is_some_and(|draft| draft.workflow_input_open())
-    {
+    if writer.core.workflow_input_open() {
         writer.require_healthy()
     } else {
         Err(Error::WrongState("membership import is not active"))
@@ -134,57 +124,44 @@ fn require_active(writer: &LiveWriter) -> Result<()> {
 
 impl<'a> Source<'a> {
     pub(crate) fn new(source: MembershipImportSource<'a>) -> Result<Self> {
-        let (mapping, meta, owner_identity) = match source {
-            MembershipImportSource::Immutable(reader) => {
-                let (mapping, meta) = reader.import_parts();
-                (mapping, meta, None)
-            }
-            MembershipImportSource::Live(reader) => {
-                let (mapping, meta) = reader.import_parts()?;
-                (mapping, meta, Some(ProcessIdentity::capture()))
-            }
+        let core = match source {
+            MembershipImportSource::Immutable(reader) => reader.core(),
+            MembershipImportSource::Live(reader) => reader.core()?,
         };
         Ok(Self {
-            mapping,
-            meta,
-            identity: live_sidecar::identity(mapping.file())?,
-            owner_identity,
+            core,
+            info: core.info(),
+            membership_entry_count: core.membership_entry_count(),
+            identity: core.file_identity()?,
         })
     }
 
     fn feed_cursor(self) -> Result<FeedCursor<'a>> {
-        match self.owner_identity {
-            Some(owner) => FeedCursor::new_live(self.mapping, &self.meta, owner),
-            None => FeedCursor::new(self.mapping, &self.meta),
-        }
+        self.core.feed_cursor()
     }
 
-    fn range_cursor<K: IpKey>(self) -> Result<Cursor<'a, K>> {
-        Cursor::new(
-            self.mapping,
-            &self.meta,
-            RangeDirection::Forward,
-            self.owner_identity,
-        )
+    fn range_cursor<K: IpKey>(self) -> Result<MembershipRangeCursor<'a, K>> {
+        self.core.membership_ranges()
     }
 
-    fn membership(self, id: u32) -> Result<MembershipView<'a>> {
-        membership_view::by_id(self.mapping, &self.meta, id, self.owner_identity)
+    fn membership(self, token: MembershipToken) -> Result<MembershipView<'a>> {
+        self.core.membership(token)
     }
 }
 
 fn require_compatible_source(writer: &LiveWriter, source: &Source<'_>) -> Result<()> {
-    if source.meta.value_kind != ValueKind::Membership {
+    if source.info.value_kind != ValueKind::Membership {
         return Err(Error::WrongValueKind(
             "membership import requires a membership source",
         ));
     }
-    if source.meta.address_family != writer.base.meta.address_family {
+    let destination = writer.core.base_info();
+    if source.info.address_family != destination.address_family {
         return Err(Error::WrongAddressFamily(
             "membership import source family differs",
         ));
     }
-    if source.meta.value_tag != writer.base.meta.value_tag {
+    if source.info.value_tag != destination.value_tag {
         return Err(Error::WrongValueTag(
             "membership import source value tag differs",
         ));
@@ -205,7 +182,7 @@ fn import_all(
     let mut cache = ImportCache::new();
     let mut stats = ImportStats::default();
     import_catalog(writer, source, &mut cache, &mut stats, cancellation)?;
-    match source.meta.address_family {
+    match source.info.address_family {
         AddressFamily::Ipv4 => {
             import_ranges::<Ipv4Key>(writer, source, &mut cache, &mut stats, cancellation)?
         }
@@ -213,7 +190,7 @@ fn import_all(
             import_ranges::<Ipv6Key>(writer, source, &mut cache, &mut stats, cancellation)?
         }
     }
-    verify_source_counts(writer, source.meta, &cache, &stats)?;
+    verify_source_counts(writer, source, &cache, &stats)?;
     stats.source_memberships = cache.source_memberships();
     stats.translated_memberships = cache.translated_memberships();
     writer.mutate(|store| cache.release(store, &mut || cancellation.check()))?;
@@ -264,10 +241,7 @@ fn record_feed(writer: &mut LiveWriter, stats: &mut ImportStats, created: bool) 
 }
 
 fn require_source_feed(writer: &mut LiveWriter, source: Source<'_>, feed: FeedEntry) -> Result<()> {
-    let by_name = external(
-        writer,
-        feed_catalog::lookup(source.mapping, &source.meta, &feed.name),
-    )?;
+    let by_name = external(writer, source.core.lookup_feed_name(&feed.name))?;
     if by_name == Some(feed) {
         Ok(())
     } else {
@@ -290,7 +264,8 @@ fn import_ranges<K: IpKey>(
             return Ok(());
         };
         require_canonical_source_range(writer, previous, range)?;
-        let membership = translate_membership(writer, source, cache, range.value, cancellation)?;
+        let membership =
+            translate_membership(writer, source, cache, range.membership, cancellation)?;
         writer.mutate(|store| {
             store.apply_membership_cancellable(
                 range.from,
@@ -310,18 +285,17 @@ fn translate_membership(
     writer: &mut LiveWriter,
     source: Source<'_>,
     cache: &mut ImportCache,
-    source_id: u32,
+    source_membership: MembershipToken,
     cancellation: &CancellationToken,
 ) -> Result<(u32, u32)> {
-    if let Some(translated) = writer.mutate(|store| cache.membership(store, source_id))? {
+    if let Some(translated) = writer.mutate(|store| cache.membership(store, source_membership))? {
         return Ok(translated);
     }
-    let view = external(writer, source.membership(source_id))?;
+    let view = external(writer, source.membership(source_membership))?;
     let mut words = translate_words(writer, cache, &view, cancellation)?;
     writer.mutate(|store| {
-        let interned = store.intern_membership(&words)?;
-        words.release(store, &mut || cancellation.check())?;
-        cache.record_membership(store, source_id, interned.id, interned.word_count)?;
+        let interned = words.intern_and_release(store, &mut || cancellation.check())?;
+        cache.record_membership(store, source_membership, interned.id, interned.word_count)?;
         Ok((interned.id, interned.word_count))
     })
 }
@@ -382,7 +356,7 @@ fn translate_word_batch(
 }
 
 fn map_word_batch(
-    store: &mut crate::draft_store::DraftStore<'_>,
+    store: &mut WriterEdit<'_>,
     cache: &ImportCache,
     words: &mut WordMap,
     start: u32,
@@ -403,7 +377,7 @@ fn map_word_batch(
 }
 
 fn map_source_word(
-    store: &mut crate::draft_store::DraftStore<'_>,
+    store: &mut WriterEdit<'_>,
     cache: &ImportCache,
     words: &mut WordMap,
     word_index: u32,
@@ -428,14 +402,15 @@ fn map_source_word(
 
 fn require_canonical_source_range<K: IpKey>(
     writer: &mut LiveWriter,
-    previous: Option<DirectRange<K>>,
-    current: DirectRange<K>,
+    previous: Option<MembershipRange<K>>,
+    current: MembershipRange<K>,
 ) -> Result<()> {
     let invalid = current.from > current.to
         || previous.is_some_and(|prior| {
             prior.from >= current.from
                 || prior.to >= current.from
-                || (prior.value == current.value && prior.to.checked_next() == Some(current.from))
+                || (prior.membership == current.membership
+                    && prior.to.checked_next() == Some(current.from))
         });
     if invalid {
         Err(writer.abort_after_source(Error::Corrupt("source membership ranges are not canonical")))
@@ -447,7 +422,7 @@ fn require_canonical_source_range<K: IpKey>(
 fn record_input_range<K: IpKey>(
     writer: &mut LiveWriter,
     stats: &mut ImportStats,
-    range: DirectRange<K>,
+    range: MembershipRange<K>,
 ) -> Result<()> {
     stats.input_records = increment(writer, stats.input_records, "source range record count")?;
     let length = external(writer, range.from.inclusive_cardinality(range.to))?;
@@ -460,7 +435,7 @@ fn record_input_range<K: IpKey>(
 
 fn verify_source_counts(
     writer: &mut LiveWriter,
-    source: MetaV4,
+    source: Source<'_>,
     cache: &ImportCache,
     stats: &ImportStats,
 ) -> Result<()> {
@@ -468,9 +443,9 @@ fn verify_source_counts(
         .matched_feeds
         .checked_add(stats.created_feeds)
         .ok_or_else(|| writer.abort_after_source(Error::ArithmeticOverflow("source feeds")))?;
-    let valid = stats.source_feeds == source.active_feed_count
+    let valid = stats.source_feeds == source.info.active_feed_count
         && feed_sum == stats.source_feeds
-        && stats.input_records == source.range_record_count
+        && stats.input_records == source.info.range_record_count
         && cache.source_memberships() == source.membership_entry_count;
     if valid {
         Ok(())

@@ -382,6 +382,9 @@ pub fn remove_abandoned_reservation_artifact(
 }
 
 #[cfg(any(unix, windows))]
+#[path = "maintenance/common.rs"]
+mod common;
+#[cfg(any(unix, windows))]
 #[path = "maintenance/output.rs"]
 mod output;
 #[cfg(any(unix, windows))]

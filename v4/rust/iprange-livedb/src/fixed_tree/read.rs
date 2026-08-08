@@ -169,6 +169,7 @@ fn first_in_right_subtree<C: Codec, S: Store>(store: &S, frame: Frame) -> Result
         let header = parse::<C, _>(page, target_txn, Some(frame.level))?;
         branch_child::<C, _>(page, &header, frame.index + 1, page_limit)
     })?;
+    crate::work::tree_descent(1);
     let (page_number, header) = descend_left::<C, S>(store, child, frame.level - 1)?;
     store.inspect_page(page_number, |page| copy_leaf::<C, _>(page, &header, 0))
 }
@@ -176,6 +177,7 @@ fn first_in_right_subtree<C: Codec, S: Store>(store: &S, frame: Frame) -> Result
 type Descent = ([Frame; MAX_PATH], usize, u32, slotted_page::Header);
 
 fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Option<Descent>> {
+    crate::work::tree_lookup(1);
     if root == 0 {
         return Ok(None);
     }
@@ -212,6 +214,7 @@ fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Opti
         depth += 1;
         page_number = child;
         expected = Some(header.level - 1);
+        crate::work::tree_descent(1);
     }
 }
 
@@ -237,6 +240,7 @@ fn descend_left<C: Codec, S: Store>(
         };
         page_number = child;
         level -= 1;
+        crate::work::tree_descent(1);
     }
 }
 

@@ -2,21 +2,19 @@
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MembershipOperation, ValueKind};
-use crate::draft_store::{Draft, DraftStore};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
-use crate::feed_catalog;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::membership_dictionary::Interned;
-use crate::random;
 use crate::source::{RangeSource, SliceSource};
-use crate::workflow::compare;
 use crate::workflow::{
     AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
 
 use super::workflow::FinishedState;
-use super::workflow::{classify, drain_source, require_ordered};
+use super::workflow::{
+    classify, drain_source, require_input_active, require_input_family, require_ordered,
+};
 use super::{FinishedWorkflow, LiveWriter, PreparedState};
 
 /// Complete creation of one exact named feed.
@@ -78,7 +76,7 @@ impl LiveWriter {
     ) -> Result<ExactFeedState> {
         let existing = self.check_feed_precondition(name, create, cancellation)?;
         self.start_feed_workflow_draft()?;
-        let family = self.base.meta.address_family;
+        let family = self.core.base_info().address_family;
         let setup =
             self.mutate(|store| setup_feed(store, name, existing, create, family, cancellation))?;
         Ok(ExactFeedState {
@@ -101,27 +99,24 @@ impl LiveWriter {
         cancellation: &CancellationToken,
     ) -> Result<Option<FeedEntry>> {
         self.require_feed_workflow_ready()?;
-        let existing = feed_catalog::lookup(&self.mapping, &self.base.meta, &name)?;
+        let existing = self.core.lookup_base_feed(&name)?;
         require_feed_precondition(existing, create)?;
         cancellation.check()?;
         Ok(existing)
     }
 
     pub(super) fn start_feed_workflow_draft(&mut self) -> Result<()> {
-        let mut draft = Draft::new(self.base.meta, random::nonzero_128()?)?;
-        draft.begin_membership_workflow()?;
-        self.draft = Some(draft);
-        Ok(())
+        self.core.begin_membership_workflow()
     }
 
     pub(super) fn require_feed_workflow_ready(&self) -> Result<()> {
         self.require_healthy()?;
-        if self.base.meta.value_kind != ValueKind::Membership {
+        if self.core.base_info().value_kind != ValueKind::Membership {
             return Err(Error::WrongValueKind(
                 "named-feed workflow requires a membership database",
             ));
         }
-        if self.draft.is_some() {
+        if self.core.has_draft() {
             return Err(Error::WrongState("a writer transaction is already pending"));
         }
         Ok(())
@@ -246,17 +241,11 @@ impl ExactFeedState {
     }
 
     fn prepare_report(&mut self, writer: &mut LiveWriter) -> Result<WorkflowReport> {
-        let after = writer.draft.as_ref().unwrap().meta;
         let before_feed = (self.workflow == WorkflowKind::ReplaceFeed).then_some(self.feed);
-        let scanned = compare_feeds(
-            &writer.mapping,
-            &writer.base.meta,
-            before_feed,
-            &after,
-            self.feed,
-            &self.cancellation,
-        )
-        .map_err(|error| writer.abort_after(error))?;
+        let scanned = writer
+            .core
+            .compare_feed(before_feed, self.feed, &self.cancellation)
+            .map_err(|error| writer.abort_after(error))?;
         let logical_change = if self.workflow == WorkflowKind::CreateFeed {
             LogicalChange::Changed
         } else {
@@ -277,30 +266,16 @@ impl ExactFeedState {
     }
 
     fn require_family(&mut self, writer: &mut LiveWriter, family: AddressFamily) -> Result<()> {
-        self.require_active(writer)?;
-        if writer.base.meta.address_family != family {
-            return Err(writer.abort_after(Error::WrongAddressFamily(
-                "range family does not match the database",
-            )));
-        }
-        Ok(())
+        require_input_family(writer, family)
     }
 
     pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
-        writer.require_healthy()?;
-        if !writer
-            .draft
-            .as_ref()
-            .is_some_and(Draft::workflow_input_open)
-        {
-            return Err(Error::WrongState("workflow input is not active"));
-        }
-        Ok(())
+        require_input_active(writer)
     }
 }
 
 fn setup_feed(
-    store: &mut DraftStore<'_>,
+    store: &mut crate::writer_core::WriterEdit<'_>,
     name: FeedName,
     existing: Option<FeedEntry>,
     create: bool,
@@ -309,7 +284,7 @@ fn setup_feed(
 ) -> Result<(FeedEntry, Interned)> {
     cancellation.check()?;
     let feed = select_feed(store, name, existing, create)?;
-    let member = store.add_feed_to_membership(0, 0, feed)?;
+    let member = store.add_feed_index_to_membership(0, 0, feed.index)?;
     if !create {
         clear_feed(store, family, &member, cancellation)?;
     }
@@ -318,7 +293,7 @@ fn setup_feed(
 }
 
 fn select_feed(
-    store: &mut DraftStore<'_>,
+    store: &mut crate::writer_core::WriterEdit<'_>,
     name: FeedName,
     existing: Option<FeedEntry>,
     create: bool,
@@ -326,15 +301,11 @@ fn select_feed(
     if !create {
         return existing.ok_or(Error::Corrupt("replacement feed disappeared"));
     }
-    let (feed, created) = store.ensure_feed(name)?;
-    if !created {
-        return Err(Error::Corrupt("absent feed appeared during creation"));
-    }
-    Ok(feed)
+    store.insert_feed(name)
 }
 
 fn clear_feed(
-    store: &mut DraftStore<'_>,
+    store: &mut crate::writer_core::WriterEdit<'_>,
     family: AddressFamily,
     member: &Interned,
     cancellation: &CancellationToken,
@@ -365,34 +336,6 @@ fn require_feed_precondition(existing: Option<FeedEntry>, create: bool) -> Resul
         (Some(_), true) => Err(Error::NameExists),
         (None, false) => Err(Error::NameNotFound),
         _ => Ok(()),
-    }
-}
-
-fn compare_feeds(
-    mapping: &crate::mapping::Mapping,
-    before: &crate::contract::MetaV4,
-    before_feed: Option<FeedEntry>,
-    after: &crate::contract::MetaV4,
-    after_feed: FeedEntry,
-    cancellation: &CancellationToken,
-) -> Result<compare::ScannedComparison> {
-    match after.address_family {
-        AddressFamily::Ipv4 => compare::feeds::<Ipv4Key>(
-            mapping,
-            before,
-            before_feed,
-            after,
-            after_feed,
-            cancellation,
-        ),
-        AddressFamily::Ipv6 => compare::feeds::<Ipv6Key>(
-            mapping,
-            before,
-            before_feed,
-            after,
-            after_feed,
-            cancellation,
-        ),
     }
 }
 

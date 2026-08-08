@@ -65,6 +65,7 @@ impl<K: IpKey> Cursor<K> {
         if !cursor.finished {
             cursor.descend_left(store, meta.range_root, None)?;
         }
+        crate::work::source_pass(1);
         Ok(cursor)
     }
 
@@ -94,6 +95,7 @@ impl<K: IpKey> Cursor<K> {
             }
             self.advance(store)?;
         }
+        crate::work::range_consumed(1);
         Ok(Some(result))
     }
 
@@ -144,6 +146,7 @@ impl<K: IpKey> Cursor<K> {
             self.depth += 1;
             page_number = child;
             expected_level = Some(header.level - 1);
+            crate::work::tree_descent(1);
         }
     }
 
@@ -176,6 +179,7 @@ impl<K: IpKey> Cursor<K> {
                 frame.next_child += 1;
                 self.path[slot] = frame;
                 self.depth = slot + 1;
+                crate::work::tree_descent(1);
                 return self.descend_left(store, child, Some(frame.level - 1));
             }
             self.depth = slot;

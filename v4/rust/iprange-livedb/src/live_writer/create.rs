@@ -6,7 +6,8 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
-use crate::live_sidecar::{self, Identity, Sidecar};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::Sidecar;
 use crate::mapping::Mapping;
 use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping, HousekeepingArtifact};
 use crate::random;
@@ -70,7 +71,7 @@ pub fn create_live(
     cancellation.check()?;
     validate_destination(path, reader_capacity)?;
     let mut attempt = Attempt::new(path, address_family, value_kind, value_tag, reader_capacity)?;
-    attempt.directory_identity = match live_sidecar::parent_identity(path) {
+    attempt.directory_identity = match crate::live_namespace::parent_identity(path) {
         Ok(identity) => Some(identity),
         Err(cause) => return Ok(attempt.not_created(cause)),
     };
@@ -94,7 +95,7 @@ pub fn create_live(
         return Ok(attempt.failed(path, &sidecar, None, cause));
     }
 
-    let created_main = match live_sidecar::create_private(
+    let created_main = match crate::live_namespace::create_private(
         path,
         CleanupAuthority {
             attempt_id: attempt.database_id,
@@ -124,7 +125,7 @@ pub fn create_live(
 fn reserve_sidecar(
     path: &Path,
     attempt: Attempt,
-) -> core::result::Result<Sidecar, live_sidecar::PrivateCreationFailure> {
+) -> core::result::Result<Sidecar, crate::live_namespace::PrivateCreationFailure> {
     Sidecar::reserve(
         path,
         attempt.database_id,
@@ -166,8 +167,8 @@ impl Attempt {
     fn created(self, main: Identity, sidecar: Identity) -> CreateResult {
         self.result(
             CreationState::Created,
-            Some(live_sidecar::public_identity(main)),
-            Some(live_sidecar::public_identity(sidecar)),
+            Some(crate::live_namespace::public_identity(main)),
+            Some(crate::live_namespace::public_identity(sidecar)),
             live_cleanup::TerminalFacts::clean(),
         )
     }
@@ -181,18 +182,23 @@ impl Attempt {
         )
     }
 
-    fn reservation_failure(self, failure: live_sidecar::PrivateCreationFailure) -> CreateResult {
-        let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+    fn reservation_failure(
+        self,
+        failure: crate::live_namespace::PrivateCreationFailure,
+    ) -> CreateResult {
+        let sidecar_identity = failure.identity.map(crate::live_namespace::public_identity);
         self.failure_result(None, sidecar_identity, failure.cause, failure.cleanup)
     }
 
     fn private_failure(
         self,
         sidecar: &Sidecar,
-        failure: live_sidecar::PrivateCreationFailure,
+        failure: crate::live_namespace::PrivateCreationFailure,
     ) -> CreateResult {
-        let main_identity = failure.identity.map(live_sidecar::public_identity);
-        let sidecar_identity = Some(live_sidecar::public_identity(sidecar.local_identity()));
+        let main_identity = failure.identity.map(crate::live_namespace::public_identity);
+        let sidecar_identity = Some(crate::live_namespace::public_identity(
+            sidecar.local_identity(),
+        ));
         let mut cleanup = failure.cleanup;
         if cleanup.is_clean() {
             cleanup.absorb(live_cleanup::remove(
@@ -217,8 +223,11 @@ impl Attempt {
         main: Option<(&std::fs::File, Identity)>,
         cause: Error,
     ) -> CreateResult {
-        let public_main = main.map(|(_, identity)| live_sidecar::public_identity(identity));
-        let public_sidecar = Some(live_sidecar::public_identity(sidecar.local_identity()));
+        let public_main =
+            main.map(|(_, identity)| crate::live_namespace::public_identity(identity));
+        let public_sidecar = Some(crate::live_namespace::public_identity(
+            sidecar.local_identity(),
+        ));
         let cleanup = cleanup(path, sidecar, main, self.database_id, self.sidecar_id);
         self.failure_result(public_main, public_sidecar, cause, cleanup)
     }
@@ -325,7 +334,7 @@ fn validate_destination(path: &Path, reader_capacity: u32) -> Result<()> {
 
 fn prepare_sidecar(path: &Path, sidecar: &Sidecar, cancellation: &CancellationToken) -> Result<()> {
     cancellation.check()?;
-    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::live_namespace::sync_parent(&sidecar.path)?;
     crate::fault::crash("create.after_sidecar_parent_sync");
     cancellation.check()?;
     require_absent(path)
@@ -342,12 +351,12 @@ fn initialize_pair(
     write_empty_main(main, meta)?;
     crate::fault::crash("create.after_main_sync");
     cancellation.check()?;
-    live_sidecar::sync_parent(path)?;
+    crate::live_namespace::sync_parent(path)?;
     crate::fault::crash("create.after_main_parent_sync");
     cancellation.check()?;
     sidecar.publish_ready()?;
     crate::fault::crash("create.after_ready_sync");
-    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::live_namespace::sync_parent(&sidecar.path)?;
     crate::fault::crash("create.after_ready_parent_sync");
     Ok(())
 }
@@ -401,7 +410,7 @@ fn cleanup(
 }
 
 fn require_absent(path: &Path) -> Result<()> {
-    match live_sidecar::path_identity(path)? {
+    match crate::live_namespace::path_identity(path)? {
         None => Ok(()),
         Some(_) => Err(Error::InvalidArgument("destination already exists")),
     }

@@ -15,7 +15,9 @@ use crate::range_cursor::RangeDirection;
 use crate::range_tree;
 use crate::recovery::{RecoverySinkControl, RecoveryUnknownEnvelope};
 use crate::slotted_page::{self, Header};
-use crate::validation::{validate, ValidationBudget, ValidationMode, ValidationSinkControl};
+use crate::validation::{
+    validate, ValidationBudget, ValidationMode, ValidationReason, ValidationSinkControl,
+};
 
 pub(super) struct Paths {
     pub(super) source: PathBuf,

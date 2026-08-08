@@ -10,8 +10,8 @@ use crate::contract::MetaV4;
 use crate::error::{Error, ErrorCode, Result};
 use crate::mapping::Mapping;
 use crate::publication::namespace::{
-    regular_identity, Directory, Identity, Name, NamespaceError, CREATION_SECURITY_KIND,
-    IDENTITY_KIND,
+    local_identity, regular_identity, Directory, Identity, Name, NamespaceError,
+    CREATION_SECURITY_KIND,
 };
 use crate::publication::security::{self, Profile};
 use crate::random;
@@ -615,10 +615,7 @@ fn merge_housekeeping(
 }
 
 pub(super) fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
+    local_identity(identity)
 }
 
 fn namespace_error(error: NamespaceError) -> Error {

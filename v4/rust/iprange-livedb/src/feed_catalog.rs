@@ -25,6 +25,8 @@ pub(crate) fn lookup(
     meta: &MetaV4,
     name: &FeedName,
 ) -> Result<Option<FeedEntry>> {
+    crate::work::catalog_lookup(1);
+    crate::work::tree_lookup(1);
     if meta.catalog_name_root == 0 {
         return Ok(None);
     }
@@ -43,6 +45,7 @@ pub(crate) fn lookup(
         let record = decode_name_record(page, &header, position)?;
         page_number = require_child(record.value, meta.page_count)?;
         expected = Some(header.level - 1);
+        crate::work::tree_descent(1);
     }
     Err(Error::Corrupt("feed name tree exceeds its maximum height"))
 }
@@ -83,19 +86,7 @@ struct Leaf {
 }
 
 impl<'a> FeedCursor<'a> {
-    pub(crate) fn new(mapping: &'a Mapping, meta: &MetaV4) -> Result<Self> {
-        Self::with_owner(mapping, meta, None)
-    }
-
-    pub(crate) fn new_live(
-        mapping: &'a Mapping,
-        meta: &MetaV4,
-        owner_identity: ProcessIdentity,
-    ) -> Result<Self> {
-        Self::with_owner(mapping, meta, Some(owner_identity))
-    }
-
-    fn with_owner(
+    pub(crate) fn new(
         mapping: &'a Mapping,
         meta: &MetaV4,
         owner_identity: Option<ProcessIdentity>,
@@ -115,6 +106,7 @@ impl<'a> FeedCursor<'a> {
         if !cursor.finished {
             cursor.descend_left(meta.catalog_index_root, None)?;
         }
+        crate::work::source_pass(1);
         Ok(cursor)
     }
 
@@ -187,6 +179,7 @@ impl<'a> FeedCursor<'a> {
                 return Err(Error::Corrupt("feed branch changed during traversal"));
             }
             let child = index_child(page, &header, frame.index, self.meta.page_count)?;
+            crate::work::tree_descent(1);
             return self.descend_left(child, Some(frame.level - 1));
         }
         self.finished = true;
@@ -211,6 +204,7 @@ impl<'a> FeedCursor<'a> {
             self.push(page_number, &header)?;
             page_number = index_child(page, &header, 0, self.meta.page_count)?;
             expected = Some(header.level - 1);
+            crate::work::tree_descent(1);
         }
     }
 

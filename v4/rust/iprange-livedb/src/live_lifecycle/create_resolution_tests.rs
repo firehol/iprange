@@ -48,11 +48,13 @@ impl Files {
         )
         .unwrap();
         sidecar.initialize_creating().unwrap();
-        live_sidecar::sync_parent(&sidecar.path).unwrap();
+        crate::live_namespace::sync_parent(&sidecar.path).unwrap();
         result.state = CreationState::OutcomeUnknown;
         result.residue_possible = true;
         result.main_identity = None;
-        result.sidecar_identity = Some(live_sidecar::public_identity(sidecar.local_identity()));
+        result.sidecar_identity = Some(crate::live_namespace::public_identity(
+            sidecar.local_identity(),
+        ));
         result
     }
 }

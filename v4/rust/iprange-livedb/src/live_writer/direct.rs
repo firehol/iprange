@@ -4,9 +4,11 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, ValueKind};
 use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::random;
 
+use super::workflow::{require_transaction, run_transaction};
 use super::{AbortResult, CommitResult, LiveWriter};
+
+const INACTIVE: &str = "direct transaction is no longer active";
 
 /// One ordered advanced direct transaction and its cancellation token.
 #[derive(Debug)]
@@ -41,19 +43,12 @@ impl LiveWriter {
     ) -> Result<DirectState> {
         cancellation.check()?;
         self.require_healthy()?;
-        if self.base.meta.value_kind != ValueKind::Direct {
+        if self.core.base_info().value_kind != ValueKind::Direct {
             return Err(Error::WrongValueKind(
                 "direct transaction requires a direct database",
             ));
         }
-        if self.draft.is_some() {
-            return Err(Error::WrongState("a writer transaction is already pending"));
-        }
-        let operation_nonce = random::nonzero_128()?;
-        self.draft = Some(crate::draft_store::Draft::new(
-            self.base.meta,
-            operation_nonce,
-        )?);
+        let operation_nonce = self.core.begin_transaction()?;
         Ok(DirectState {
             operation_nonce,
             cancellation: cancellation.clone(),
@@ -129,8 +124,10 @@ impl DirectState {
         to: Ipv4Key,
         value: u32,
     ) -> Result<bool> {
-        self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
-        self.run(writer, |writer| writer.assign_direct_v4(from, to, value))
+        self.require_mutation(writer, AddressFamily::Ipv4, from <= to)?;
+        self.run(writer, |writer| {
+            writer.mutate(|edit| edit.assign_v4(from, to, value))
+        })
     }
 
     pub(crate) fn assign_v6(
@@ -140,8 +137,10 @@ impl DirectState {
         to: Ipv6Key,
         value: u32,
     ) -> Result<bool> {
-        self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
-        self.run(writer, |writer| writer.assign_direct_v6(from, to, value))
+        self.require_mutation(writer, AddressFamily::Ipv6, from <= to)?;
+        self.run(writer, |writer| {
+            writer.mutate(|edit| edit.assign_v6(from, to, value))
+        })
     }
 
     pub(crate) fn clear_v4(
@@ -150,8 +149,10 @@ impl DirectState {
         from: Ipv4Key,
         to: Ipv4Key,
     ) -> Result<bool> {
-        self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
-        self.run(writer, |writer| writer.clear_direct_v4(from, to))
+        self.require_mutation(writer, AddressFamily::Ipv4, from <= to)?;
+        self.run(writer, |writer| {
+            writer.mutate(|edit| edit.clear_v4(from, to))
+        })
     }
 
     pub(crate) fn clear_v6(
@@ -160,8 +161,10 @@ impl DirectState {
         from: Ipv6Key,
         to: Ipv6Key,
     ) -> Result<bool> {
-        self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
-        self.run(writer, |writer| writer.clear_direct_v6(from, to))
+        self.require_mutation(writer, AddressFamily::Ipv6, from <= to)?;
+        self.run(writer, |writer| {
+            writer.mutate(|edit| edit.clear_v6(from, to))
+        })
     }
 
     pub(crate) fn set_metadata_json(
@@ -185,55 +188,32 @@ impl DirectState {
         writer: &mut LiveWriter,
         operation: impl FnOnce(&mut LiveWriter) -> Result<T>,
     ) -> Result<T> {
-        self.check_or_abort(writer)?;
-        let result = operation(writer);
-        if result.is_ok() {
-            self.check_or_abort(writer)?;
-        }
-        result
+        run_transaction(
+            writer,
+            self.operation_nonce,
+            &self.cancellation,
+            INACTIVE,
+            operation,
+        )
     }
 
-    fn require_family(
+    fn require_mutation(
         &self,
         writer: &LiveWriter,
         family: AddressFamily,
         ordered: bool,
     ) -> Result<()> {
         self.require_active(writer)?;
-        if !ordered {
-            return Err(Error::InvalidArgument("range start exceeds range end"));
-        }
-        if writer.base.meta.address_family != family {
-            return Err(Error::WrongAddressFamily(
-                "direct mutation does not match the database family",
-            ));
-        }
-        Ok(())
+        writer.require_direct(family, ordered)
     }
 
     pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
-        let active = writer
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.meta.commit_nonce == self.operation_nonce);
-        if !active {
-            return Err(Error::WrongState("direct transaction is no longer active"));
-        }
-        writer.require_healthy()
-    }
-
-    fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
-        self.require_active(writer)?;
-        self.cancellation
-            .check()
-            .map_err(|cause| writer.abort_after(cause))
+        require_transaction(writer, self.operation_nonce, INACTIVE)
     }
 }
 
 impl Drop for DirectTransaction<'_> {
     fn drop(&mut self) {
-        if let Some(draft) = self.writer.draft.as_mut() {
-            draft.abandon_operation();
-        }
+        self.writer.core.abandon_operation();
     }
 }

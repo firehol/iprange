@@ -9,10 +9,7 @@ use crate::error::{Error, ErrorCode};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar;
 use crate::mapping::Mapping;
-use crate::validation::LocalFileIdentity;
-
-use crate::publication::namespace::IDENTITY_KIND;
-use crate::publication::namespace::{Destination, Identity, Regular};
+use crate::publication::namespace::{local_identity as local, Destination, Identity, Regular};
 use crate::publication::problem::Problem;
 use crate::publication::reservation::{self, Header, State as ReservationState};
 use crate::publication::reservation_inspection;
@@ -442,13 +439,6 @@ const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekee
 struct FinalCoordination {
     kind: PublicationResidueCoordination,
     access: AccessPolicy,
-}
-
-fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
 }
 
 fn require_coordination_available(

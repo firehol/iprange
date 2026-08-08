@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::test_alloc::count_thread_allocations;
 use crate::{
     create_live, AddressFamily, AddressRange, CancellationToken, DirectRange, FinishedWorkflow,
-    Ipv4Key, LiveWriter, TransactionBudget, ValueKind, ValueTag,
+    Ipv4Key, LiveWriter, ReclaimResult, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -40,6 +40,15 @@ impl Drop for TestPair {
     }
 }
 
+fn changed(finished: FinishedWorkflow<'_>) -> crate::PreparedWorkflow<'_> {
+    match finished {
+        FinishedWorkflow::Changed(prepared) => prepared,
+        FinishedWorkflow::NoChange(report) => {
+            panic!("expected a changed workflow, got {report:?}")
+        }
+    }
+}
+
 #[test]
 fn slice_ingestion_and_finish_allocate_nothing_per_record() {
     let files = TestPair::new();
@@ -70,15 +79,32 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
         .collect();
     let mut workflow = writer.begin_direct_replacement(&cancellation).unwrap();
 
-    let (result, allocations) = count_thread_allocations(|| workflow.add_ranges_v4_slice(&ranges));
+    let ((result, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| workflow.add_ranges_v4_slice(&ranges)));
     result.unwrap();
     assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 1);
+    assert_eq!(work.ranges_consumed, ranges.len() as u64);
+    assert_eq!(work.ranges_emitted, ranges.len() as u64);
+    assert_eq!(work.mapping_growths, 1);
+    assert_eq!(work.mapping_remaps, 1);
+    assert!(work.pages_created > 0);
+    assert!(work.pages_split > 0);
+    assert_eq!(work.pages_sealed, 0);
 
-    let (finished, allocations) = count_thread_allocations(|| workflow.finish_input());
+    let ((finished, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| workflow.finish_input()));
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
-    assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
-    finished.abort().unwrap();
+    assert_eq!(work.source_passes, 3);
+    assert_eq!(work.ranges_consumed, (ranges.len() * 2) as u64);
+    assert_eq!(work.output_passes, 0);
+    let prepared = changed(finished);
+    let (commit, work) = crate::work::measure(|| prepared.commit());
+    commit.unwrap();
+    assert!(work.pages_sealed > 0);
+    assert_eq!(work.mapping_flushes, 2);
+    assert_eq!(work.file_syncs, 2);
     writer.close().unwrap();
 }
 
@@ -125,14 +151,63 @@ fn retention_ingestion_and_merge_allocate_nothing_per_record() {
     }
 
     let mut refresh = writer.begin_retention_refresh(20, &cancellation).unwrap();
-    let (result, allocations) = count_thread_allocations(|| refresh.add_ranges_v4_slice(&second));
+    let ((result, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| refresh.add_ranges_v4_slice(&second)));
     result.unwrap();
     assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 1);
+    assert_eq!(work.ranges_consumed, second.len() as u64);
 
-    let (finished, allocations) = count_thread_allocations(|| refresh.finish_input());
+    let ((finished, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| refresh.finish_input()));
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 2);
+    assert_eq!(work.output_passes, 1);
+    assert_eq!(work.ranges_consumed, (first.len() + second.len()) as u64);
+    assert!(work.ranges_emitted > 0);
+    assert!(work.pages_retired > 0);
     assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
     finished.abort().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn reclamation_counts_each_released_page_once() {
+    let files = TestPair::new();
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"direct").unwrap(),
+        2,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let budget = TransactionBudget {
+        max_heap_bytes: 1,
+        max_private_pages: 10_000,
+        max_file_growth_pages: 10_000,
+        max_open_files: 2,
+    };
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget, &cancellation).unwrap();
+
+    let mut first = writer.begin_direct_transaction(&cancellation).unwrap();
+    first.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    first.commit().unwrap();
+    let mut second = writer.begin_direct_transaction(&cancellation).unwrap();
+    let (result, work) = crate::work::measure(|| second.assign_v4(Ipv4Key(12), Ipv4Key(18), 2));
+    result.unwrap();
+    assert_eq!(work.pages_copied, 1);
+    second.commit().unwrap();
+
+    let (result, work) = crate::work::measure(|| writer.reclaim(10, 10_000, &cancellation));
+    let ReclaimResult::Commit { page_count, .. } = result.unwrap() else {
+        panic!("committed retirement was not reclaimed");
+    };
+    assert!(page_count > 0);
+    assert_eq!(work.pages_reclaimed, page_count);
+    assert!(work.pages_sealed > 0);
     writer.close().unwrap();
 }

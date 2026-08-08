@@ -18,6 +18,7 @@ pub(crate) struct Record<K> {
 }
 
 pub(crate) fn lookup<K: IpKey>(mapping: &Mapping, meta: &MetaV4, target: K) -> Result<Option<u32>> {
+    crate::work::tree_lookup(1);
     if meta.address_family != K::FAMILY {
         return Err(Error::WrongAddressFamily(
             "lookup address family does not match the database",
@@ -42,6 +43,7 @@ pub(crate) fn lookup<K: IpKey>(mapping: &Mapping, meta: &MetaV4, target: K) -> R
         };
         page_number = branch_child::<K, _>(page, &header, index)?;
         expected_level = Some(header.level - 1);
+        crate::work::tree_descent(1);
     }
 
     Err(Error::Corrupt("range tree exceeds its maximum height"))

@@ -8,7 +8,8 @@ use crate::database;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, Sidecar, MAIN_LIFETIME_LOCK};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{Sidecar, MAIN_LIFETIME_LOCK};
 use crate::live_writer::LocalBasename;
 use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
@@ -73,7 +74,7 @@ pub fn initialize_live(
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };
     let identity = sidecar.local_identity();
-    let new_identity = live_sidecar::public_identity(identity);
+    let new_identity = crate::live_namespace::public_identity(identity);
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.cleanup_created(
             &sidecar,
@@ -117,7 +118,7 @@ pub fn reset_live_coordination(
         &main,
         &private,
         reader_capacity,
-        previous.map(live_sidecar::public_identity),
+        previous.map(crate::live_namespace::public_identity),
     )?;
     cancellation.check()?;
 
@@ -131,7 +132,7 @@ pub fn reset_live_coordination(
         Err(cause) => return Ok(attempt.reservation_failure(cause)),
     };
     let identity = sidecar.local_identity();
-    let new_identity = live_sidecar::public_identity(identity);
+    let new_identity = crate::live_namespace::public_identity(identity);
     if let Err(cause) = cancellation.check() {
         return Ok(attempt.cleanup_created(
             &sidecar,
@@ -191,14 +192,14 @@ pub fn reset_live_coordination(
 impl LockedMain {
     pub(super) fn open(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
         let path = path.to_path_buf();
-        let file = live_sidecar::open_rw(&path)?;
-        let identity = live_sidecar::identity(&file)?;
-        let directory_identity = live_sidecar::parent_identity(&path)?;
-        let public_identity = live_sidecar::public_identity(identity);
+        let file = crate::live_namespace::open_rw(&path)?;
+        let identity = crate::live_namespace::identity(&file)?;
+        let directory_identity = crate::live_namespace::parent_identity(&path)?;
+        let public_identity = crate::live_namespace::public_identity(identity);
         let basename = LocalBasename::from_path(&path)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
         cancellation.check()?;
-        live_sidecar::verify_path(&path, identity)?;
+        crate::live_namespace::verify_path(&path, identity)?;
         let bootstrap = database::bootstrap_file(&file, OpenMode::Writer)?;
         live_cleanup::require_main_available(&path, identity, bootstrap.meta.database_id)?;
         if bootstrap.physical_bytes != bootstrap.committed_bytes {
@@ -218,7 +219,7 @@ impl LockedMain {
     }
 
     pub(super) fn verify(&self) -> Result<()> {
-        live_sidecar::verify_path(&self.path, self.identity)?;
+        crate::live_namespace::verify_path(&self.path, self.identity)?;
         let current = database::bootstrap_file(&self.file, OpenMode::Writer)?;
         if current.meta != self.bootstrap.meta
             || current.committed_bytes != self.bootstrap.committed_bytes
@@ -258,9 +259,9 @@ impl Attempt {
 
     fn reservation_failure(
         self,
-        failure: live_sidecar::PrivateCreationFailure,
+        failure: crate::live_namespace::PrivateCreationFailure,
     ) -> LiveTransitionResult {
-        let sidecar_identity = failure.identity.map(live_sidecar::public_identity);
+        let sidecar_identity = failure.identity.map(crate::live_namespace::public_identity);
         let facts = live_cleanup::TerminalFacts::failed(failure.cause, failure.cleanup);
         let (status, location) = if facts.residue_possible {
             (
@@ -387,14 +388,14 @@ fn initialize_sidecar(
     sidecar.initialize_creating()?;
     crate::fault::crash("live_initialize.after_creating_sync");
     cancellation.check()?;
-    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::live_namespace::sync_parent(&sidecar.path)?;
     crate::fault::crash("live_initialize.after_creating_parent_sync");
     cancellation.check()?;
     main.verify()?;
     cancellation.check()?;
     sidecar.publish_ready()?;
     crate::fault::crash("live_initialize.after_ready_sync");
-    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::live_namespace::sync_parent(&sidecar.path)?;
     crate::fault::crash("live_initialize.after_ready_parent_sync");
     Ok(())
 }
@@ -411,7 +412,7 @@ fn prepare_reset_sidecar(
     sidecar.publish_ready()?;
     crate::fault::crash("live_reset.after_ready_sync");
     cancellation.check()?;
-    live_sidecar::sync_parent(&sidecar.path)?;
+    crate::live_namespace::sync_parent(&sidecar.path)?;
     crate::fault::crash("live_reset.after_private_parent_sync");
     cancellation.check()?;
     main.verify()
@@ -425,16 +426,16 @@ fn finish_reset(
     previous: Option<Identity>,
     policy: LiveResetPolicy,
 ) -> Result<Option<Error>> {
-    live_sidecar::sync_parent(canonical)?;
+    crate::live_namespace::sync_parent(canonical)?;
     crate::fault::crash("live_reset.after_directory_sync");
     main.verify()?;
-    live_sidecar::verify_path(canonical, identity)?;
+    crate::live_namespace::verify_path(canonical, identity)?;
     sidecar.verify_header()?;
     if let (Some(previous), LiveResetPolicy::RollbackSafe) = (previous, policy) {
         if let Err(cause) = remove_exact(&sidecar.path, previous) {
             return Ok(Some(cause));
         }
-    } else if live_sidecar::path_identity(&sidecar.path)?.is_some() {
+    } else if crate::live_namespace::path_identity(&sidecar.path)?.is_some() {
         return Err(Error::CleanupConflict(
             "discarding reset retained an unexpected private sidecar",
         ));
@@ -443,13 +444,13 @@ fn finish_reset(
 }
 
 pub(super) fn existing_identity(path: &Path) -> Result<Option<Identity>> {
-    live_sidecar::path_identity(path)
+    crate::live_namespace::path_identity(path)
 }
 
 pub(super) fn verify_previous(path: &Path, previous: Option<Identity>) -> Result<()> {
     match previous {
-        Some(identity) => live_sidecar::verify_path(path, identity),
-        None => match live_sidecar::path_identity(path)? {
+        Some(identity) => crate::live_namespace::verify_path(path, identity),
+        None => match crate::live_namespace::path_identity(path)? {
             None => Ok(()),
             Some(_) => Err(Error::CleanupConflict(
                 "canonical sidecar appeared during reset",
@@ -459,7 +460,7 @@ pub(super) fn verify_previous(path: &Path, previous: Option<Identity>) -> Result
 }
 
 pub(super) fn remove_exact(path: &Path, identity: Identity) -> Result<()> {
-    live_sidecar::remove_exact(path, identity)
+    crate::live_namespace::remove_exact(path, identity)
 }
 
 fn require_capacity(capacity: u32) -> Result<()> {

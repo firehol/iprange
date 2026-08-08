@@ -22,6 +22,28 @@ Phase-2 work.
 - [`c-abi-v4.md`](../../.agents/sow/specs/c-abi-v4.md) defines the frozen C
   boundary.
 
+## Internal ownership
+
+Healthy selected-generation reads have one owner (`ReaderCore`). Healthy COW
+mutation, allocation, retirement, page sealing, and committed-generation
+publication in the main file have one owner (`WriterCore` over `DraftStore`).
+Exact workflows, advanced transactions, and the C adapter sequence logical
+operations over those owners; they cannot access mappings, roots, pages, or
+allocators directly. Validation and recovery retain a separate untrusted
+mapped-inspection boundary and reuse the canonical codecs and mapped output
+builders. Sidecar coordination and filesystem namespace/publication are
+separate persistent concerns with separate owners.
+
+[`check-architecture.sh`](check-architecture.sh) enforces those dependency
+directions. The 2026-08-08 audit reduced the measured high-level Rust adapter
+set from 5,400 to 4,527 physical lines and exact duplicated source from 3,246
+lines (4.29%) to 2,476 (3.27%). The complete source-gate inventory is 76,092
+physical lines across 257 files, versus 75,936 before the refactor. That count
+includes the frozen 136-function C ABI, separate validation/recovery and
+cross-platform publication contracts, co-located cfg-gated test text, and 96
+lines of release-elided necessary-work proof machinery; it is not a claim that
+76,092 lines are intrinsically required.
+
 ## Database model
 
 There is one main-file format with two explicit operating modes:
@@ -106,6 +128,7 @@ cleanup before discarding the obligation.
 The minimum supported Rust version is 1.74.
 
 ```bash
+./v4/rust/check-architecture.sh
 ./v4/rust/check-mmap-storage.sh
 ./v4/rust/check-mmap-runtime.sh
 ./v4/rust/check-source-graph.sh
@@ -158,7 +181,7 @@ artifacts are:
 - [`iprange_v4_abi1_manifest.json`](iprange-capi/include/iprange_v4_abi1_manifest.json)
 
 The Rust tests regenerate and compare both artifacts, inspect exact shared
-library exports, compile all layouts as C11 and C++17, and run five native C
+library exports, compile all layouts as C11 and C++17, and run seven native C
 behavior programs.
 
 ## Measured publisher workloads
@@ -172,29 +195,29 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-Five local Linux runs on 2026-08-07, each pinned to one performance core,
+Five local Linux runs on 2026-08-08, each pinned to one performance core,
 produced these medians and observed ranges. Each case processes at least one
 million inputs or timed reader operations; setup, snapshot construction, open,
 close, and explicit validation are outside the reader timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
-| Direct replacement, dispersed input | 1,000,000 ranges | 0.481 s | 0.448-0.762 s | 2.08 million/s |
-| Retention refresh | 1,000,000 ranges | 0.475 s | 0.449-0.549 s | 2.11 million/s |
-| Compact snapshot | 1,000,000 ranges | 0.0665 s | 0.0551-0.0806 s | 15.03 million/s |
-| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0801 s | 0.0797-0.0822 s | 12.48 million/s |
-| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0641 s | 0.0618-0.0960 s | 15.59 million/s |
-| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1398 s | 0.1385-0.1509 s | 7.15 million/s |
-| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1280 s | 0.1270-0.1449 s | 7.81 million/s |
-| Live direct ordered scan | 1,000,000 ranges | 0.00928 s | 0.00595-0.01152 s | 107.80 million/s |
-| Immutable direct ordered scan | 1,000,000 ranges | 0.00505 s | 0.00480-0.00650 s | 198.19 million/s |
-| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00793 s | 0.00782-0.01575 s | 126.05 million/s |
-| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00667 s | 0.00622-0.00830 s | 149.99 million/s |
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.4615 s | 0.4362-0.5063 s | 2.17 million/s |
+| Retention refresh | 1,000,000 ranges | 0.4810 s | 0.4627-0.5873 s | 2.08 million/s |
+| Compact snapshot | 1,000,000 ranges | 0.0609 s | 0.0545-0.0854 s | 16.42 million/s |
+| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0835 s | 0.0811-0.0884 s | 11.98 million/s |
+| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0693 s | 0.0681-0.0733 s | 14.42 million/s |
+| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1563 s | 0.1441-0.2201 s | 6.40 million/s |
+| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1210 s | 0.1187-0.1389 s | 8.26 million/s |
+| Live direct ordered scan | 1,000,000 ranges | 0.00570 s | 0.00562-0.00752 s | 175.33 million/s |
+| Immutable direct ordered scan | 1,000,000 ranges | 0.00430 s | 0.00420-0.00513 s | 232.75 million/s |
+| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00642 s | 0.00638-0.00810 s | 155.84 million/s |
+| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00533 s | 0.00526-0.00647 s | 187.46 million/s |
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
 explicitly validated every output after timing. The final complete run counted
-21 allocations totalling 402 bytes for direct replacement, 21 allocations
-totalling 414 bytes for retention, and 31 allocations totalling 935 bytes for
+21 allocations totalling 406 bytes for direct replacement, 21 allocations
+totalling 418 bytes for retention, and 31 allocations totalling 939 bytes for
 snapshot construction; those counts are constant rather than per range. The
 timed lookup and scan paths allocate nothing.
 

@@ -169,6 +169,23 @@ fn branch_descent_uses_real_first_keys() {
 }
 
 #[test]
+fn point_lookup_visits_exactly_one_root_to_leaf_path() {
+    let branch = v4_branch(&[(10, 3), (100, 4)]);
+    let first = v4_leaf(&[(10, 20, 1)]);
+    let second = v4_leaf(&[(100, 110, 2)]);
+    let (reader, _path) = fixture(
+        meta(AddressFamily::Ipv4, 5, 2, 2),
+        &[(2, branch), (3, first), (4, second)],
+    );
+
+    let (result, work) = crate::work::measure(|| reader.lookup_direct_v4(Ipv4Key(105)));
+    assert_eq!(result.unwrap(), Some(2));
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(work.tree_descents, 1);
+    assert_eq!(work.pages_visited, 2);
+}
+
+#[test]
 fn successful_lookup_allocates_nothing() {
     let leaf = v4_leaf(&[(10, 20, 42)]);
     let (reader, _path) = fixture(meta(AddressFamily::Ipv4, 3, 2, 1), &[(2, leaf)]);
@@ -234,6 +251,31 @@ fn cursors_cross_leaf_boundaries_in_both_directions() {
         assert_eq!(backward.next_range().unwrap(), Some(range));
     }
     assert_eq!(backward.next_range().unwrap(), None);
+}
+
+#[test]
+fn forward_scan_counts_only_necessary_page_visits() {
+    let branch = v4_branch(&[(10, 3), (100, 4)]);
+    let first = v4_leaf(&[(10, 20, 1), (30, 40, 2)]);
+    let second = v4_leaf(&[(100, 110, 3)]);
+    let (reader, _path) = fixture(
+        meta(AddressFamily::Ipv4, 5, 2, 3),
+        &[(2, branch), (3, first), (4, second)],
+    );
+
+    let (values, work) = crate::work::measure(|| {
+        let mut cursor = reader.direct_cursor_v4(RangeDirection::Forward).unwrap();
+        let mut values = Vec::new();
+        while let Some(range) = cursor.next_range().unwrap() {
+            values.push(range.value);
+        }
+        values
+    });
+    assert_eq!(values, vec![1, 2, 3]);
+    assert_eq!(work.source_passes, 1);
+    assert_eq!(work.ranges_consumed, 3);
+    assert_eq!(work.tree_descents, 2);
+    assert_eq!(work.pages_visited, 7);
 }
 
 #[test]

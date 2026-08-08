@@ -4,14 +4,15 @@ use std::fmt;
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MembershipOperation, ValueKind};
-use crate::draft_store::{Draft, DraftStore};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog::FeedCursor;
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::random;
 
+use super::workflow::{check_transaction, require_transaction};
 use super::{CommitResult, LiveWriter};
+
+const INACTIVE: &str = "membership transaction is no longer active";
 
 /// One SDK-owned feed reference valid only in its creating transaction.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -104,18 +105,15 @@ impl LiveWriter {
     ) -> Result<MembershipState> {
         cancellation.check()?;
         self.require_healthy()?;
-        if self.base.meta.value_kind != ValueKind::Membership {
+        if self.core.base_info().value_kind != ValueKind::Membership {
             return Err(Error::WrongValueKind(
                 "membership transaction requires a membership database",
             ));
         }
-        if self.draft.is_some() {
-            return Err(Error::WrongState("a writer transaction is already pending"));
-        }
-        let operation_nonce = random::nonzero_128()?;
-        self.draft = Some(Draft::new(self.base.meta, operation_nonce)?);
+        let database_id = self.core.base_info().database_id;
+        let operation_nonce = self.core.begin_transaction()?;
         Ok(MembershipState {
-            database_id: self.base.meta.database_id,
+            database_id,
             operation_nonce,
             membership_epoch: 0,
             cancellation: cancellation.clone(),
@@ -211,9 +209,8 @@ impl MembershipState {
     ) -> Result<TransactionFeedCursor<'a>> {
         self.require_active(writer)?;
         self.check_or_abort(writer)?;
-        let meta = writer.draft.as_ref().unwrap().meta;
         Ok(TransactionFeedCursor {
-            cursor: FeedCursor::new_live(&writer.mapping, &meta, writer.owner_identity)?,
+            cursor: writer.core.current_feed_cursor(writer.owner_identity)?,
             database_id: self.database_id,
             operation_nonce: self.operation_nonce,
         })
@@ -235,7 +232,11 @@ impl MembershipState {
         self.require_current_feed(writer, feed)?;
         self.check_or_abort(writer)?;
         let interned = writer.mutate(|store| {
-            store.add_feed_to_membership(membership.id, membership.word_count, feed.entry)
+            store.add_feed_index_to_membership(
+                membership.id,
+                membership.word_count,
+                feed.entry.index,
+            )
         })?;
         self.check_or_abort(writer)?;
         Ok(self.membership_reference(interned.id, interned.word_count))
@@ -309,7 +310,7 @@ impl MembershipState {
     ) -> Result<FeedRef> {
         self.require_current_feed(writer, feed)?;
         self.check_or_abort(writer)?;
-        let entry = writer.mutate(|store| store.rename_feed_ref(feed.entry, new_name))?;
+        let entry = writer.mutate(|store| store.rename_current_feed(feed.entry, new_name))?;
         self.check_or_abort(writer)?;
         Ok(self.reference(entry))
     }
@@ -321,7 +322,7 @@ impl MembershipState {
             .membership_epoch
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow("membership reference epoch"))?;
-        writer.mutate(|store| store.delete_feed_membership(feed.entry))?;
+        writer.mutate(|store| store.delete_current_feed_membership(feed.entry))?;
         self.check_or_abort(writer)?;
         self.membership_epoch = next_epoch;
         Ok(())
@@ -433,7 +434,7 @@ impl MembershipState {
         if !ordered {
             return Err(Error::InvalidArgument("range start exceeds range end"));
         }
-        if writer.base.meta.address_family != family {
+        if writer.core.base_info().address_family != family {
             return Err(Error::WrongAddressFamily(
                 "membership mutation does not match the database family",
             ));
@@ -442,56 +443,27 @@ impl MembershipState {
     }
 
     pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
-        let active = writer
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.meta.commit_nonce == self.operation_nonce);
-        if !active {
-            return Err(Error::WrongState(
-                "membership transaction is no longer active",
-            ));
-        }
-        writer.require_healthy()
+        require_transaction(writer, self.operation_nonce, INACTIVE)
     }
 
     fn check_or_abort(&mut self, writer: &mut LiveWriter) -> Result<()> {
-        self.require_active(writer)?;
-        self.cancellation
-            .check()
-            .map_err(|cause| writer.abort_after(cause))
+        check_transaction(writer, self.operation_nonce, &self.cancellation, INACTIVE)
     }
 }
 
 impl LiveWriter {
     fn feed_reference_current(&mut self, entry: FeedEntry) -> Result<bool> {
-        let meta = self
-            .draft
-            .as_ref()
-            .ok_or(Error::WrongState("membership transaction is not active"))?
-            .meta;
-        Ok(crate::feed_catalog::lookup(&self.mapping, &meta, &entry.name)? == Some(entry))
+        Ok(self.core.lookup_current_feed(&entry.name)? == Some(entry))
     }
 
     fn membership_reference_current(&mut self, id: u32, word_count: u32) -> Result<bool> {
-        let draft = self
-            .draft
-            .as_mut()
-            .ok_or(Error::WrongState("membership transaction is not active"))?;
-        let store = DraftStore::new(
-            &mut self.mapping,
-            self.base.meta.page_count,
-            self.budget.pages(),
-            draft,
-        );
-        store.membership_reference_matches(id, word_count)
+        self.core.membership_reference_matches(id, word_count)
     }
 }
 
 impl Drop for MembershipTransaction<'_> {
     fn drop(&mut self) {
-        if let Some(draft) = self.writer.draft.as_mut() {
-            draft.abandon_operation();
-        }
+        self.writer.core.abandon_operation();
     }
 }
 

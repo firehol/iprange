@@ -4,8 +4,8 @@ use crate::error::ErrorCode;
 use crate::validation::LocalFileIdentity;
 
 use super::namespace::{
-    Destination, Identity, NamespaceError, BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND,
-    IDENTITY_KIND,
+    local_identity as local, Destination, Identity, NamespaceError, BASENAME_ENCODING_KIND,
+    CREATION_SECURITY_KIND, IDENTITY_KIND,
 };
 use super::output::PreparedOutput;
 use super::problem::Problem;
@@ -305,10 +305,6 @@ const fn public_policy(policy: Policy) -> PublicationPolicy {
         Policy::ReplaceExisting => PublicationPolicy::ReplaceExisting,
         Policy::ReplaceExistingNoRollback => PublicationPolicy::ReplaceExistingNoRollback,
     }
-}
-
-fn local(identity: Identity) -> LocalFileIdentity {
-    local_raw(identity.encode())
 }
 
 fn local_raw(bytes: [u8; 32]) -> LocalFileIdentity {

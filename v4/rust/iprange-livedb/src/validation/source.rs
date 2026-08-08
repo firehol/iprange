@@ -6,7 +6,8 @@ use crate::contract::MetaV4;
 use crate::database;
 use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::live_lock::{self, Mode};
-use crate::live_sidecar::{self, Identity, MAIN_LIFETIME_LOCK};
+use crate::live_namespace::Identity;
+use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
 use crate::recovery::RecoverySourceCleanupGuard;
 
 use super::LocalFileIdentity;
@@ -82,9 +83,9 @@ impl ImmutableSource {
         let sidecar = crate::path::canonical_sidecar(path)?;
         database::require_sidecar_absent(&sidecar)?;
         let file = database::open_read_only(path)?;
-        let identity = live_sidecar::identity_any_link(&file)?;
+        let identity = crate::live_namespace::identity_any_link(&file)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
-        if let Err(cause) = live_sidecar::verify_path_any_link(path, identity)
+        if let Err(cause) = crate::live_namespace::verify_path_any_link(path, identity)
             .and_then(|()| database::require_sidecar_absent(&sidecar))
         {
             return Err(combine_errors(
@@ -108,7 +109,7 @@ impl ImmutableSource {
     }
 
     pub(crate) fn verify(&self) -> Result<()> {
-        live_sidecar::verify_path_any_link(&self.path, self.identity)?;
+        crate::live_namespace::verify_path_any_link(&self.path, self.identity)?;
         database::require_sidecar_absent(&self.sidecar)
     }
 
@@ -127,7 +128,7 @@ impl LiveSource {
         cancellation: &CancellationToken,
     ) -> std::result::Result<LiveOpened, LiveOpenFailure> {
         let file = database::open_read_only(path).map_err(open_failure)?;
-        let identity = live_sidecar::identity(&file).map_err(open_failure)?;
+        let identity = crate::live_namespace::identity(&file).map_err(open_failure)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
             .map_err(open_failure)?;
         finish_live_open(open_live_locked(file, path, identity, cancellation))
@@ -208,7 +209,7 @@ impl LiveBootstrapSource {
     }
 
     fn verify(&self) -> Result<()> {
-        live_sidecar::verify_path(&self.path, self.identity)?;
+        crate::live_namespace::verify_path(&self.path, self.identity)?;
         self.sidecar.verify_path()?;
         self.sidecar.verify_header()?;
         selected_or_bound_database_id(&self.file).and_then(|database_id| {
@@ -322,7 +323,7 @@ impl LiveSource {
     }
 
     fn verify_registration(&self) -> Result<()> {
-        live_sidecar::verify_path(&self.path, self.identity)?;
+        crate::live_namespace::verify_path(&self.path, self.identity)?;
         self.sidecar.verify_path()?;
         self.sidecar.verify_header()?;
         self.sidecar.verify_reader(self.slot, self.meta.txn_id)
@@ -355,7 +356,7 @@ impl LiveBootstrapSource {
 }
 
 fn bind_live_main(file: &std::fs::File, path: &Path, identity: Identity) -> Result<[u8; 16]> {
-    live_sidecar::verify_path(path, identity)?;
+    crate::live_namespace::verify_path(path, identity)?;
     let database_id = selected_or_bound_database_id(file)?;
     crate::live_cleanup::require_main_available(path, identity, database_id)?;
     Ok(database_id)
@@ -451,7 +452,7 @@ fn register_live(
     sidecar: &live_sidecar::Sidecar,
     cancellation: &CancellationToken,
 ) -> std::result::Result<LiveRegistration, RegistrationFailure> {
-    live_sidecar::verify_path(path, identity).map_err(RegistrationFailure::Unclaimed)?;
+    crate::live_namespace::verify_path(path, identity).map_err(RegistrationFailure::Unclaimed)?;
     sidecar
         .verify_path()
         .map_err(RegistrationFailure::Unclaimed)?;
@@ -479,7 +480,7 @@ fn register_live(
         .map_err(RegistrationFailure::Unclaimed)?;
     let verified = cancellation
         .check()
-        .and_then(|()| live_sidecar::verify_path(path, identity))
+        .and_then(|()| crate::live_namespace::verify_path(path, identity))
         .and_then(|()| sidecar.verify_path())
         .and_then(|()| sidecar.verify_header());
     if let Err(cause) = verified {
@@ -508,7 +509,7 @@ fn register_bootstrap(
         ));
     }
     sidecar.scan_readers_cancellable(cancellation, |_| Ok(()))?;
-    live_sidecar::verify_path(path, identity)?;
+    crate::live_namespace::verify_path(path, identity)?;
     sidecar.verify_path()?;
     sidecar.verify_header()?;
     Ok(LiveRegistration::Bootstrap(problem))
@@ -523,10 +524,7 @@ pub(crate) fn selected_or_bound_database_id(file: &std::fs::File) -> Result<[u8;
 }
 
 pub(crate) fn public_identity(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: crate::publication::namespace::IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
+    crate::publication::namespace::local_identity(identity)
 }
 
 #[cfg(all(test, any(target_os = "linux", target_vendor = "apple", windows)))]

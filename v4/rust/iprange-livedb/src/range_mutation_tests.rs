@@ -209,7 +209,13 @@ fn clear_splits_and_coalesces_without_touching_absent_space() {
     )
     .unwrap();
 
-    assert!(clear(&mut store, &mut root, &mut count, Ipv4Key(40), Ipv4Key(60),).unwrap());
+    let (cleared, work) =
+        crate::work::measure(|| clear(&mut store, &mut root, &mut count, Ipv4Key(40), Ipv4Key(60)));
+    assert!(cleared.unwrap());
+    assert_eq!(work.ranges_split, 1);
+    assert_eq!(work.ranges_coalesced, 0);
+    assert_eq!(work.ranges_emitted, 2);
+    assert_eq!(work.pages_merged, 0);
     assert_eq!(ranges_v4(&store, root), vec![(0, 39, 7), (61, 100, 7)]);
     assert_eq!(count, 2);
 
@@ -217,15 +223,21 @@ fn clear_splits_and_coalesces_without_touching_absent_space() {
     assert_eq!(ranges_v4(&store, root), vec![(0, 39, 7), (61, 100, 7)]);
     assert_eq!(count, 2);
 
-    assign(
-        &mut store,
-        &mut root,
-        &mut count,
-        Ipv4Key(40),
-        Ipv4Key(60),
-        7,
-    )
-    .unwrap();
+    let (assigned, work) = crate::work::measure(|| {
+        assign(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(40),
+            Ipv4Key(60),
+            7,
+        )
+    });
+    assert!(assigned.unwrap());
+    assert_eq!(work.ranges_split, 0);
+    assert_eq!(work.ranges_coalesced, 2);
+    assert_eq!(work.ranges_emitted, 1);
+    assert_eq!(work.pages_merged, 0);
     assert_eq!(ranges_v4(&store, root), vec![(0, 100, 7)]);
     assert_eq!(count, 1);
 }
@@ -399,17 +411,21 @@ fn many_disjoint_ranges_split_leaves_and_cow_only_once_per_path() {
     let mut store = MemoryStore::new();
     let mut root = 0;
     let mut count = 0;
-    for key in (0..2_000_u32).rev() {
-        assign(
-            &mut store,
-            &mut root,
-            &mut count,
-            Ipv4Key(key * 2),
-            Ipv4Key(key * 2),
-            key,
-        )
-        .unwrap();
-    }
+    let (_, work) = crate::work::measure(|| {
+        for key in (0..2_000_u32).rev() {
+            assign(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key * 2),
+                Ipv4Key(key * 2),
+                key,
+            )
+            .unwrap();
+        }
+    });
+    assert!(work.pages_split > 0);
+    assert_eq!(work.pages_merged, 0);
     assert_eq!(count, 2_000);
     let committed = store.pages.clone();
     store.target_txn = 2;

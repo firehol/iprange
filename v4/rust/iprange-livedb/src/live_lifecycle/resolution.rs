@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
-use crate::live_sidecar::{self, Sidecar, State};
+use crate::live_sidecar::{Sidecar, State};
 use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping};
 use crate::validation::LocalFileIdentity;
 
@@ -36,7 +36,7 @@ enum ResetCanonical {
 }
 
 enum ResetPrivate {
-    Previous(live_sidecar::Identity),
+    Previous(crate::live_namespace::Identity),
     Attempt(Observed),
 }
 
@@ -106,9 +106,9 @@ fn resolve_initialize(
         (State::Creating, LiveTransitionResolutionMode::Complete) => {
             main.verify()?;
             main.file.sync_all()?;
-            live_sidecar::sync_parent(&canonical.sidecar.path)?;
+            crate::live_namespace::sync_parent(&canonical.sidecar.path)?;
             canonical.sidecar.publish_ready()?;
-            live_sidecar::sync_parent(&canonical.sidecar.path)?;
+            crate::live_namespace::sync_parent(&canonical.sidecar.path)?;
             main.verify()?;
             Ok(resolved(
                 supplied,
@@ -175,7 +175,7 @@ fn resolve_reset(
                 }
                 None => {}
             }
-            live_sidecar::sync_parent(&canonical_path)?;
+            crate::live_namespace::sync_parent(&canonical_path)?;
             main.verify()?;
             return Ok(resolved(
                 supplied,
@@ -237,9 +237,9 @@ fn resolve_reset(
                     .reset_policy
                     .expect("validated reset result has a reset policy"),
             )?;
-            live_sidecar::sync_parent(&canonical_path)?;
+            crate::live_namespace::sync_parent(&canonical_path)?;
             main.verify()?;
-            live_sidecar::verify_path(&canonical_path, private.sidecar.local_identity())?;
+            crate::live_namespace::verify_path(&canonical_path, private.sidecar.local_identity())?;
             private.sidecar.verify_header()?;
             if let (Some(previous), Some(LiveResetPolicy::RollbackSafe)) =
                 (previous, supplied.reset_policy)
@@ -261,11 +261,11 @@ fn resolve_reset(
 }
 
 fn observe(path: &Path, database_id: [u8; 16]) -> Result<Option<Observed>> {
-    if live_sidecar::path_identity(path)?.is_none() {
+    if crate::live_namespace::path_identity(path)?.is_none() {
         return Ok(None);
     }
     let (sidecar, state) = Sidecar::open_at(path.to_path_buf(), database_id)?;
-    let identity = live_sidecar::public_identity(sidecar.local_identity());
+    let identity = crate::live_namespace::public_identity(sidecar.local_identity());
     Ok(Some(Observed {
         sidecar,
         state,
@@ -280,7 +280,7 @@ fn observe_reset_canonical(
     let Some(identity) = existing_identity(path)? else {
         return Ok(None);
     };
-    let public_identity = live_sidecar::public_identity(identity);
+    let public_identity = crate::live_namespace::public_identity(identity);
     if Some(public_identity) == supplied.previous_sidecar_identity {
         return Ok(Some(ResetCanonical::Previous));
     }
@@ -302,7 +302,8 @@ fn observe_reset_private(
     let Some(identity) = existing_identity(path)? else {
         return Ok(None);
     };
-    if Some(live_sidecar::public_identity(identity)) == supplied.previous_sidecar_identity {
+    if Some(crate::live_namespace::public_identity(identity)) == supplied.previous_sidecar_identity
+    {
         return Ok(Some(ResetPrivate::Previous(identity)));
     }
     let observed = observe(path, supplied.database_id)?.ok_or(Error::Conflict(
@@ -394,10 +395,10 @@ fn is_attempt(observed: &Observed, supplied: &LiveTransitionResult) -> bool {
 }
 
 fn require_previous_identity(
-    observed: Option<live_sidecar::Identity>,
+    observed: Option<crate::live_namespace::Identity>,
     supplied: &LiveTransitionResult,
 ) -> Result<()> {
-    if observed.map(live_sidecar::public_identity) != supplied.previous_sidecar_identity {
+    if observed.map(crate::live_namespace::public_identity) != supplied.previous_sidecar_identity {
         return Err(Error::Conflict(
             "previous coordination identity changed before reset",
         ));
@@ -478,7 +479,7 @@ fn resolved_after_cleanup(
     result
 }
 
-fn remove_previous(path: &Path, identity: live_sidecar::Identity) -> Result<()> {
+fn remove_previous(path: &Path, identity: crate::live_namespace::Identity) -> Result<()> {
     #[cfg(unix)]
     {
         remove_exact(path, identity)

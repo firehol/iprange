@@ -198,7 +198,7 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
         max_growth_pages: 20_000,
     };
     let mut draft = Draft::new(creation, [3; 16]).unwrap();
-    crate::page_checksum::work::reset();
+    crate::work::reset();
     {
         let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
         for key in 0..2_000_u32 {
@@ -206,7 +206,7 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
                 .assign_v4(Ipv4Key(key * 2), Ipv4Key(key * 2), key)
                 .unwrap();
         }
-        assert_eq!(crate::page_checksum::work::count(), 0);
+        assert_eq!(crate::work::snapshot().pages_sealed, 0);
         store.prepare().unwrap();
     }
 
@@ -226,5 +226,5 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
             );
         }
     }
-    assert_eq!(crate::page_checksum::work::count(), current_pages);
+    assert_eq!(crate::work::snapshot().pages_sealed, current_pages);
 }

@@ -9,22 +9,20 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 
 use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
-use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
+use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
-use crate::feed_catalog::{self, FeedCursor};
+use crate::feed_catalog::FeedCursor;
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
-use crate::membership_view::{self, MembershipView};
-use crate::metadata;
+use crate::membership_view::MembershipView;
 use crate::path;
-use crate::process_identity::ProcessIdentity;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
-use crate::range_tree;
+use crate::reader_core::ReaderCore;
 use crate::{
     live_lock::{self, Mode},
-    live_sidecar::{self, MAIN_LIFETIME_LOCK},
+    live_sidecar::MAIN_LIFETIME_LOCK,
 };
 
 /// Public logical identity and selected generation.
@@ -42,34 +40,10 @@ pub struct DatabaseInfo {
     pub meta_selection: MetaSelection,
 }
 
-impl DatabaseInfo {
-    fn from_bootstrap(bootstrap: Bootstrap) -> Self {
-        let meta = bootstrap.meta;
-        Self {
-            address_family: meta.address_family,
-            value_kind: meta.value_kind,
-            value_tag: meta.value_tag,
-            database_id: meta.database_id,
-            transaction_id: meta.txn_id,
-            commit_nonce: meta.commit_nonce,
-            page_count: meta.page_count,
-            range_record_count: meta.range_record_count,
-            active_feed_count: meta.active_feed_count,
-            meta_selection: bootstrap.selection,
-        }
-    }
-}
-
 /// Reader pinned to one immutable file generation.
 #[derive(Debug)]
 pub struct ImmutableReader {
     core: ReaderCore,
-}
-
-#[derive(Debug)]
-pub(crate) struct ReaderCore {
-    mapping: Mapping,
-    bootstrap: Bootstrap,
 }
 
 impl ImmutableReader {
@@ -82,7 +56,7 @@ impl ImmutableReader {
         let (file, identity) = open_immutable_source(path, &sidecar)?;
         let (mapping, bootstrap) = select_immutable_generation(path, &sidecar, file, identity)?;
         Ok(Self {
-            core: ReaderCore { mapping, bootstrap },
+            core: ReaderCore::new(mapping, bootstrap, None),
         })
     }
 
@@ -141,12 +115,12 @@ impl ImmutableReader {
 
     /// Look up one address in an IPv4 membership database.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
-        self.core.lookup_membership_v4(address, None)
+        self.core.lookup_membership_v4(address)
     }
 
     /// Look up one address in an IPv6 membership database.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
-        self.core.lookup_membership_v6(address, None)
+        self.core.lookup_membership_v6(address)
     }
 
     /// Exact decompressed metadata length, or absence.
@@ -164,21 +138,19 @@ impl ImmutableReader {
         self.core.metadata_json()
     }
 
-    pub(crate) fn import_parts(&self) -> (&Mapping, MetaV4) {
-        self.core.import_parts()
-    }
-
-    pub(crate) fn c_abi_parts(&self) -> (&Mapping, MetaV4, Option<ProcessIdentity>) {
-        let (mapping, meta) = self.core.import_parts();
-        (mapping, meta, None)
+    pub(crate) fn core(&self) -> &ReaderCore {
+        &self.core
     }
 }
 
-fn open_immutable_source(path: &Path, sidecar: &Path) -> Result<(File, live_sidecar::Identity)> {
+fn open_immutable_source(
+    path: &Path,
+    sidecar: &Path,
+) -> Result<(File, crate::live_namespace::Identity)> {
     let file = open_read_only(path)?;
-    let identity = live_sidecar::identity_any_link(&file)?;
+    let identity = crate::live_namespace::identity_any_link(&file)?;
     live_lock::lock_file(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
-    live_sidecar::verify_path_any_link(path, identity)?;
+    crate::live_namespace::verify_path_any_link(path, identity)?;
     require_sidecar_absent(sidecar)?;
     Ok((file, identity))
 }
@@ -187,214 +159,13 @@ fn select_immutable_generation(
     path: &Path,
     sidecar: &Path,
     file: File,
-    identity: live_sidecar::Identity,
+    identity: crate::live_namespace::Identity,
 ) -> Result<(Mapping, Bootstrap)> {
     let (mapping, bootstrap) = map_reader(file, OpenMode::ImmutableReader)?;
     crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
-    live_sidecar::verify_path_any_link(path, identity)?;
+    crate::live_namespace::verify_path_any_link(path, identity)?;
     require_sidecar_absent(sidecar)?;
     Ok((mapping, bootstrap))
-}
-
-impl ReaderCore {
-    pub(crate) fn new(mapping: Mapping, bootstrap: Bootstrap) -> Self {
-        Self { mapping, bootstrap }
-    }
-
-    pub(crate) fn info(&self) -> DatabaseInfo {
-        DatabaseInfo::from_bootstrap(self.bootstrap)
-    }
-
-    pub(crate) fn import_parts(&self) -> (&Mapping, MetaV4) {
-        (&self.mapping, self.bootstrap.meta)
-    }
-
-    pub(crate) fn file(&self) -> &File {
-        self.mapping.file()
-    }
-
-    pub(crate) fn unmap(&mut self) {
-        self.mapping.unmap();
-    }
-
-    pub(crate) fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
-        self.require_direct(AddressFamily::Ipv4)?;
-        range_tree::lookup(&self.mapping, &self.bootstrap.meta, address)
-    }
-
-    pub(crate) fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
-        self.require_direct(AddressFamily::Ipv6)?;
-        range_tree::lookup(&self.mapping, &self.bootstrap.meta, address)
-    }
-
-    pub(crate) fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
-        self.require_direct(AddressFamily::Ipv4)?;
-        DirectCursorV4::new(&self.mapping, &self.bootstrap.meta, direction)
-    }
-
-    pub(crate) fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
-        self.require_direct(AddressFamily::Ipv6)?;
-        DirectCursorV6::new(&self.mapping, &self.bootstrap.meta, direction)
-    }
-
-    pub(crate) fn direct_cursor_v4_live(
-        &self,
-        direction: RangeDirection,
-        owner_identity: ProcessIdentity,
-    ) -> Result<DirectCursorV4<'_>> {
-        self.require_direct(AddressFamily::Ipv4)?;
-        DirectCursorV4::new_live(
-            &self.mapping,
-            &self.bootstrap.meta,
-            direction,
-            owner_identity,
-        )
-    }
-
-    pub(crate) fn direct_cursor_v6_live(
-        &self,
-        direction: RangeDirection,
-        owner_identity: ProcessIdentity,
-    ) -> Result<DirectCursorV6<'_>> {
-        self.require_direct(AddressFamily::Ipv6)?;
-        DirectCursorV6::new_live(
-            &self.mapping,
-            &self.bootstrap.meta,
-            direction,
-            owner_identity,
-        )
-    }
-
-    pub(crate) fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
-        feed_catalog::require_membership(&self.bootstrap.meta)?;
-        let name = crate::feed::FeedName::new(name)?;
-        feed_catalog::lookup(&self.mapping, &self.bootstrap.meta, &name)
-    }
-
-    pub(crate) fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
-        feed_catalog::require_membership(&self.bootstrap.meta)?;
-        FeedCursor::new(&self.mapping, &self.bootstrap.meta)
-    }
-
-    pub(crate) fn feed_cursor_live(
-        &self,
-        owner_identity: ProcessIdentity,
-    ) -> Result<FeedCursor<'_>> {
-        feed_catalog::require_membership(&self.bootstrap.meta)?;
-        FeedCursor::new_live(&self.mapping, &self.bootstrap.meta, owner_identity)
-    }
-
-    pub(crate) fn feed_range_cursor_v4(
-        &self,
-        name: &str,
-        direction: RangeDirection,
-    ) -> Result<FeedRangeCursorV4<'_>> {
-        self.require_membership_family(AddressFamily::Ipv4)?;
-        let feed = self.require_feed(name)?;
-        FeedRangeCursorV4::new(&self.mapping, &self.bootstrap.meta, feed.index, direction)
-    }
-
-    pub(crate) fn feed_range_cursor_v6(
-        &self,
-        name: &str,
-        direction: RangeDirection,
-    ) -> Result<FeedRangeCursorV6<'_>> {
-        self.require_membership_family(AddressFamily::Ipv6)?;
-        let feed = self.require_feed(name)?;
-        FeedRangeCursorV6::new(&self.mapping, &self.bootstrap.meta, feed.index, direction)
-    }
-
-    pub(crate) fn feed_range_cursor_v4_live(
-        &self,
-        name: &str,
-        direction: RangeDirection,
-        owner_identity: ProcessIdentity,
-    ) -> Result<FeedRangeCursorV4<'_>> {
-        self.require_membership_family(AddressFamily::Ipv4)?;
-        let feed = self.require_feed(name)?;
-        FeedRangeCursorV4::new_live(
-            &self.mapping,
-            &self.bootstrap.meta,
-            feed.index,
-            direction,
-            owner_identity,
-        )
-    }
-
-    pub(crate) fn feed_range_cursor_v6_live(
-        &self,
-        name: &str,
-        direction: RangeDirection,
-        owner_identity: ProcessIdentity,
-    ) -> Result<FeedRangeCursorV6<'_>> {
-        self.require_membership_family(AddressFamily::Ipv6)?;
-        let feed = self.require_feed(name)?;
-        FeedRangeCursorV6::new_live(
-            &self.mapping,
-            &self.bootstrap.meta,
-            feed.index,
-            direction,
-            owner_identity,
-        )
-    }
-
-    pub(crate) fn lookup_membership_v4(
-        &self,
-        address: Ipv4Key,
-        owner_identity: Option<ProcessIdentity>,
-    ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v4(&self.mapping, &self.bootstrap.meta, address, owner_identity)
-    }
-
-    pub(crate) fn lookup_membership_v6(
-        &self,
-        address: Ipv6Key,
-        owner_identity: Option<ProcessIdentity>,
-    ) -> Result<Option<MembershipView<'_>>> {
-        membership_view::lookup_v6(&self.mapping, &self.bootstrap.meta, address, owner_identity)
-    }
-
-    pub(crate) fn metadata_json_len(&self) -> Option<u64> {
-        (self.bootstrap.meta.metadata_root != 0)
-            .then_some(self.bootstrap.meta.metadata_uncompressed_len)
-    }
-
-    pub(crate) fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
-        metadata::read(&self.mapping, &self.bootstrap.meta, output)
-    }
-
-    pub(crate) fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
-        metadata::read_vec(&self.mapping, &self.bootstrap.meta)
-    }
-
-    fn require_direct(&self, family: AddressFamily) -> Result<()> {
-        if self.bootstrap.meta.value_kind != ValueKind::Direct {
-            return Err(Error::WrongValueKind(
-                "direct lookup requires a direct-value database",
-            ));
-        }
-        if self.bootstrap.meta.address_family != family {
-            return Err(Error::WrongAddressFamily(
-                "lookup address family does not match the database",
-            ));
-        }
-        Ok(())
-    }
-
-    fn require_membership_family(&self, family: AddressFamily) -> Result<()> {
-        feed_catalog::require_membership(&self.bootstrap.meta)?;
-        if self.bootstrap.meta.address_family != family {
-            return Err(Error::WrongAddressFamily(
-                "feed cursor address family does not match the database",
-            ));
-        }
-        Ok(())
-    }
-
-    fn require_feed(&self, name: &str) -> Result<FeedEntry> {
-        let name = crate::feed::FeedName::new(name)?;
-        feed_catalog::lookup(&self.mapping, &self.bootstrap.meta, &name)?.ok_or(Error::NameNotFound)
-    }
 }
 
 pub(crate) fn map_reader(file: File, mode: OpenMode) -> Result<(Mapping, Bootstrap)> {

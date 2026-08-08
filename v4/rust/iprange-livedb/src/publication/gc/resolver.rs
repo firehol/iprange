@@ -3,9 +3,8 @@
 use std::fs::File;
 
 use crate::error::ErrorCode;
-use crate::validation::LocalFileIdentity;
 
-use super::super::namespace::{Directory, Identity, Name, IDENTITY_KIND};
+use super::super::namespace::{local_identity as local, Directory, Identity, Name};
 use super::super::problem::Problem;
 use super::super::security;
 use super::super::{
@@ -355,11 +354,4 @@ fn failed_artifact(
 fn envelope_identity(envelope: &Envelope) -> Result<Identity, Problem> {
     Identity::decode(envelope.header.artifact_identity)
         .ok_or_else(|| Problem::cleanup_conflict("GC artifact identity is malformed"))
-}
-
-fn local(identity: Identity) -> LocalFileIdentity {
-    LocalFileIdentity {
-        kind: IDENTITY_KIND,
-        bytes: identity.encode(),
-    }
 }

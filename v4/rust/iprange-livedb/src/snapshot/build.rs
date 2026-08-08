@@ -68,7 +68,7 @@ fn copy_feeds(
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = FeedCursor::new(mapping, &meta)?;
+    let mut cursor = FeedCursor::new(mapping, &meta, None)?;
     while let Some(feed) = next_feed(&mut cursor, cancellation)? {
         builder.push_feed(feed.name, feed.index)?;
     }
