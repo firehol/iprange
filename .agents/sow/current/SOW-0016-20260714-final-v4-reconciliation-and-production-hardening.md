@@ -15336,9 +15336,10 @@ library ignores, all integrations and properties, the conformance corpus, all
 1.74.1, Clippy and rustdoc with warnings denied, formatting, the architecture
 gate, static and runtime mmap-only gates, and the four-target 352-source graph
 all pass. Runtime syscall tracing again observed no persistent-content transfer
-calls. The GitHub big-endian job remains pending until this correction is pushed;
-the current Windows, macOS, and FreeBSD native rerun remains separately pending
-user authorization.
+calls. GitHub Big-endian run `31262574949` passed in 1 minute 47 seconds: all ten
+Rust vectors passed under Miri/s390x and the unchanged complete Go suite passed
+under qemu-s390x. The current Windows, macOS, and FreeBSD native rerun remains
+separately pending user authorization.
 
 Artifact maintenance for this correction updates the active SOW and the Rust
 runtime project skill with the exact proof command and its honest boundary. The
