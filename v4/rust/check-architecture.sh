@@ -92,19 +92,12 @@ readers=(
     "$source_root/database.rs"
     "$source_root/live_reader.rs"
 )
-writer_adapters=(
-    "$source_root/live_writer.rs"
-    "$source_root/live_writer/close.rs"
-    "$source_root/live_writer/commit.rs"
-    "$source_root/live_writer/direct.rs"
-    "$source_root/live_writer/direct_workflow.rs"
-    "$source_root/live_writer/feed_lifecycle.rs"
-    "$source_root/live_writer/feed_workflow.rs"
-    "$source_root/live_writer/membership.rs"
-    "$source_root/live_writer/membership_import.rs"
-    "$source_root/live_writer/membership_import/report.rs"
-    "$source_root/live_writer/reclaim.rs"
-    "$source_root/live_writer/workflow.rs"
+mapfile -t writer_adapters < <(
+    find "$source_root/live_writer" -type f -name '*.rs' \
+        ! -path "$source_root/live_writer/create.rs" \
+        ! -path "$source_root/live_writer/membership_import/cache.rs" \
+        ! -name '*_test.rs' ! -name '*_tests.rs' ! -name 'tests.rs' -print
+    printf '%s\n' "$source_root/live_writer.rs"
 )
 mapfile -t untrusted_inspectors < <(
     find \
@@ -122,9 +115,10 @@ mapfile -t production_sources < <(
     find "$source_root" -type f -name '*.rs' \
         ! -name '*_test.rs' ! -name '*_tests.rs' -print
 )
-publication_maintenance=(
-    "$source_root/publication/maintenance/output.rs"
-    "$source_root/publication/maintenance/reservation.rs"
+mapfile -t publication_maintenance < <(
+    find "$source_root/publication/maintenance" -type f -name '*.rs' \
+        ! -name 'common.rs' ! -name '*_test.rs' ! -name '*_tests.rs' -print
+    printf '%s\n' "$source_root/publication/maintenance.rs"
 )
 
 status=0

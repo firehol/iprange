@@ -15347,3 +15347,60 @@ binary-format, engine-design, and C-ABI specs do not change because neither byte
 nor behavior changed. `AGENTS.md`, the Rust README, released C CLI/operator docs,
 and output skills are unaffected: this repairs internal proof and removes a test
 duplicate, without changing a product or operator contract.
+
+### 2026-08-08 - current-source native rerun authorization
+
+The user explicitly authorized native validation on the available Windows,
+macOS, and FreeBSD systems. Each system must test the exact pushed commit
+`b8d81fcde7ebea94c35b51df66267cc027ea8007`; local or remote runtime-source
+edits are not acceptable proof. This authorization closes only the native-
+validation permission gate. It does not authorize format, API, platform-
+boundary, Go, or unrelated cleanup work.
+
+### 2026-08-08 - strict local ownership-proof audit
+
+The post-refactor audit found no current physical-state bypass, but it found one
+false breadth claim in `check-architecture.sh`. The writer-adapter gate used a
+manual file list which omitted the existing logical `live_writer/result.rs`;
+the publication-maintenance adapter list was also manual. Both omitted/current
+files are clean, so this is a proof-maintenance defect rather than a runtime or
+format defect: a later bypass in an unlisted adapter would evade the claimed
+layer-wide gate.
+
+The minimal repair is to discover both adapter sets from their directories.
+Writer discovery excludes only `live_writer/create.rs`, the authoritative empty
+live-pair creator, and `live_writer/membership_import/cache.rs`, which is
+compiled as a private `WriterCore` module; test modules remain excluded.
+Publication discovery excludes only the authoritative `maintenance/common.rs`.
+No Rust behavior, format byte, API, durability rule, platform boundary,
+resource bound, or hot path changes. Validation requires the architecture
+gate, both full local feature matrices, source/mmap gates, and the current-
+source native matrix. Synthetic repository paths only are involved; no
+sensitive data is exposed.
+
+The repaired gate now discovers and scans every current writer adapter,
+including `live_writer/result.rs`, and every publication-maintenance adapter;
+its existing negative fixtures and the real source scan pass. The necessary-
+work audit also found all 23 event functions wired to production call sites and
+permanently referenced by deterministic tests. `pages_merged` remains the
+documented asserted-zero invariant because fixed-tree deletion removes empty
+children and collapses the root rather than rebalancing underfull pages.
+
+Native execution of the exact pushed runtime source passes both complete
+feature matrices on Apple ARM64 macOS, FreeBSD 14.1, and Windows local NTFS with
+Rust 1.97.1's GNU target. The Windows host initially selected its unsupported
+default MSVC toolchain, which produced `.dll.lib` while the approved GNU C
+caller requires `.dll.a`; selecting the documented GNU graph made the external
+C caller and both matrices pass. This was a validation-command mismatch, not a
+runtime failure. The final local proof-only changes touch the architecture
+script, this SOW, the Rust README, and the project skill; `git diff` confirms
+that the native-tested Rust/C runtime sources and Cargo manifests remain
+identical to commit `b8d81fcde7ebea94c35b51df66267cc027ea8007`.
+
+Final local reruns are green: both full feature matrices with warnings denied,
+the architecture gate, the 257-source mmap-only gate, the runtime syscall gate,
+the 352-source/four-target compiler graph, formatting, ShellCheck, diff checks,
+and the SOW audit. The architecture repair changes no hot-path instruction or
+performance result. Durable artifacts use generic platform descriptions only
+and contain no credentials, personal/customer data, private endpoints, or
+operational host details.

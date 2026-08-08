@@ -246,10 +246,11 @@ acceptance and consumer integration remain separate gates.
 - macOS: both native feature matrices, process/crash tests, SIGBUS chaining,
   live lifecycle, publication, conformance, validation/recovery, Rust C-boundary
   tests, and C11/C++17 header checks pass on Apple ARM64.
-- Windows: both native feature matrices, mapped-reader tail retention/reuse,
-  live lifecycle/crash resolution, publication/housekeeping, conformance,
-  validation/recovery, C11/C++17 header checks, and an external C caller using
-  the Windows calling convention and a non-ASCII UTF-16 path pass on local NTFS.
+- Windows with the GNU Rust target: both native feature matrices, mapped-reader
+  tail retention/reuse, live lifecycle/crash resolution,
+  publication/housekeeping, conformance, validation/recovery, C11/C++17 header
+  checks, and an external C caller using the Windows calling convention and a
+  non-ASCII UTF-16 path pass on local NTFS.
 - FreeBSD 14: both native feature matrices pass for immutable reading,
   validation/recovery, and durable fail-if-exists/no-rollback publication.
   Strict replacement rejects before destination mutation. Live coordination is

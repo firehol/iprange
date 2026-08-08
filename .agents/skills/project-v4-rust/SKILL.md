@@ -167,6 +167,9 @@ counter call left in the benchmark executable.
   with explicit authorization.
 - Native Windows C-boundary proof includes `tests/native_header.rs` and
   `tests/native_windows.rs`; neither test may be replaced by cross-compilation.
+  The supported Windows compiler graph is `x86_64-pc-windows-gnu`; select that
+  toolchain explicitly rather than relying on a host's default MSVC toolchain,
+  and use a separate Cargo target directory so their artifacts cannot mix.
 - State the exact FreeBSD boundary: immutable reading and publication can be
   supported while live reader/writer coordination remains unsupported. The
   permanent native proof is `tests/freebsd_boundary.rs`; the live-only
