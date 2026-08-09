@@ -7,7 +7,7 @@ use crate::crc32c;
 use crate::error::Result as SdkResult;
 use crate::mapping::{ByteRange, ByteSource};
 use crate::name_binding::{basename_commitment, BasenameEncoding};
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 use super::types::{ArtifactKind, DirectoryRole};
 

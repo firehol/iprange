@@ -21,10 +21,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use crate::name_binding::{basename_commitment, BasenameEncoding};
-use crate::path;
 use crate::publication::security;
 
-use super::NamespaceError;
+use super::{Entry, NamespaceError, Regular};
 
 pub(crate) const IDENTITY_KIND: u16 = 2;
 pub(crate) const BASENAME_ENCODING_KIND: u16 = 2;
@@ -92,6 +91,10 @@ impl Name {
         &self.bytes
     }
 
+    pub(super) fn component_len(&self) -> usize {
+        self.units.len()
+    }
+
     pub(crate) fn from_component(component: &std::ffi::OsStr) -> Result<Self, NamespaceError> {
         Self::from_units(component.encode_wide().collect())
     }
@@ -112,108 +115,25 @@ impl Name {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Destination {
-    directory: Directory,
-    main: Name,
-    coordination: Name,
-    basename_commitment: [u8; 32],
-    security: security::Profile,
-}
-
-impl Destination {
-    pub(crate) fn bind(path: &Path) -> Result<Self, NamespaceError> {
-        let component = path.file_name().ok_or(NamespaceError::InvalidName)?;
-        path::validate_main_name(component).map_err(|_| NamespaceError::InvalidName)?;
-        let main = Name::from_units(component.encode_wide().collect())?;
-        let mut coordination = main.units().to_vec();
-        coordination.extend(".readers".encode_utf16());
-        let coordination = Name::from_units(coordination)?;
-        let directory = Directory::open(parent(path))?;
-        directory.require_name_lengths(&[&main, &coordination])?;
-        let basename_commitment =
-            basename_commitment(BasenameEncoding::WindowsUtf16Le, main.bytes())
-                .map_err(|_| NamespaceError::InvalidName)?;
-        Ok(Self {
-            directory,
-            main,
-            coordination,
-            basename_commitment,
-            security: security::Profile::capture()?,
-        })
-    }
-
-    pub(crate) fn directory(&self) -> &Directory {
-        &self.directory
-    }
-
-    pub(crate) fn main(&self) -> &Name {
-        &self.main
-    }
-
-    pub(crate) fn coordination(&self) -> &Name {
-        &self.coordination
-    }
-
-    pub(crate) fn basename_commitment(&self) -> [u8; 32] {
-        self.basename_commitment
-    }
-
-    pub(crate) fn security_commitment(&self) -> [u8; 32] {
-        self.security.commitment()
-    }
-
-    pub(crate) fn create(&self, name: &Name) -> Result<File, NamespaceError> {
-        self.directory.create(name, &self.security)
-    }
-
-    pub(crate) fn secure_created(&self, file: &File) -> Result<(), NamespaceError> {
-        security::secure_creator_only(file, &self.security)
-    }
-
-    pub(crate) fn verify_created(&self, file: &File) -> Result<(), NamespaceError> {
-        if security::creator_only_commitment(file)? != self.security.commitment() {
-            return Err(NamespaceError::AccessPolicy);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn require_fail_if_exists_available(&self) -> Result<(), NamespaceError> {
-        self.directory.require_absent(&self.main)?;
-        self.directory.require_absent(&self.coordination)
-    }
-
-    pub(crate) fn output_name(&self, attempt: [u8; 16]) -> Result<Name, NamespaceError> {
-        self.attempt_name(b".iprange-publish-", attempt)
-    }
-
-    pub(crate) fn reservation_name(&self, attempt: [u8; 16]) -> Result<Name, NamespaceError> {
-        self.attempt_name(b".iprange-reservation-", attempt)
-    }
-
-    fn attempt_name(&self, prefix: &[u8], attempt: [u8; 16]) -> Result<Name, NamespaceError> {
-        if attempt == [0; 16] {
-            return Err(NamespaceError::InvalidName);
-        }
-        let mut bytes = Vec::with_capacity(prefix.len() + 36);
-        bytes.extend_from_slice(prefix);
-        for byte in attempt {
-            bytes.push(hex(byte >> 4));
-            bytes.push(hex(byte & 0x0f));
-        }
-        bytes.extend_from_slice(b".tmp");
-        let name = Name::new(&bytes)?;
-        self.directory.require_name_lengths(&[&name])?;
-        Ok(name)
-    }
+pub(super) fn destination_names(
+    component: &std::ffi::OsStr,
+) -> Result<(Name, Name, BasenameEncoding), NamespaceError> {
+    let main = Name::from_units(component.encode_wide().collect())?;
+    let mut coordination = main.units().to_vec();
+    coordination.extend(".readers".encode_utf16());
+    Ok((
+        main,
+        Name::from_units(coordination)?,
+        BasenameEncoding::WindowsUtf16Le,
+    ))
 }
 
 #[derive(Debug)]
 pub(crate) struct Directory {
     file: File,
     identity: Identity,
-    name_max: usize,
-    creator_pid: u32,
+    pub(super) name_max: usize,
+    pub(super) creator_pid: u32,
 }
 
 impl Directory {
@@ -278,31 +198,6 @@ impl Directory {
         Ok(Some(Regular { file, identity }))
     }
 
-    pub(crate) fn verify_name(
-        &self,
-        name: &Name,
-        expected: Identity,
-    ) -> Result<(), NamespaceError> {
-        let found = self.entry(name)?.ok_or(NamespaceError::Missing)?;
-        if !found.regular {
-            return Err(NamespaceError::NotRegular);
-        }
-        if found.identity != expected {
-            return Err(NamespaceError::IdentityChanged);
-        }
-        if found.links != 1 {
-            return Err(NamespaceError::LinkCount(found.links));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn require_absent(&self, name: &Name) -> Result<(), NamespaceError> {
-        if self.entry(name)?.is_some() {
-            return Err(NamespaceError::Exists);
-        }
-        Ok(())
-    }
-
     pub(crate) fn verify(&self) -> Result<(), NamespaceError> {
         self.check_creator()?;
         let info = handle_info(&self.file)?;
@@ -363,39 +258,6 @@ impl Directory {
             &units,
         )))
     }
-
-    fn require_name_lengths(&self, names: &[&Name]) -> Result<(), NamespaceError> {
-        if names.iter().any(|name| name.units().len() > self.name_max) {
-            return Err(NamespaceError::InvalidName);
-        }
-        Ok(())
-    }
-
-    fn check_creator(&self) -> Result<(), NamespaceError> {
-        if std::process::id() != self.creator_pid {
-            return Err(NamespaceError::ForkedHandle);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Regular {
-    pub(crate) file: File,
-    pub(crate) identity: Identity,
-}
-
-impl Regular {
-    pub(crate) fn creator_only_commitment(&self) -> Result<[u8; 32], NamespaceError> {
-        security::creator_only_commitment(&self.file)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Entry {
-    pub(crate) identity: Identity,
-    pub(crate) links: u64,
-    pub(crate) regular: bool,
 }
 
 pub(crate) fn regular_identity(
@@ -582,24 +444,10 @@ fn final_path(file: &File) -> Result<Vec<u16>, NamespaceError> {
     Ok(units)
 }
 
-fn parent(path: &Path) -> &Path {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    }
-}
-
 fn last_error(operation: &'static str) -> NamespaceError {
     NamespaceError::IoAt {
         operation,
         source: io::Error::last_os_error(),
-    }
-}
-
-fn hex(value: u8) -> u8 {
-    match value {
-        0..=9 => b'0' + value,
-        _ => b'a' + value - 10,
     }
 }
 

@@ -35,6 +35,24 @@ impl Codec for U32Codec {
     }
 }
 
+struct AcceptGap;
+
+impl LocalGap<U32Codec> for AcceptGap {
+    type Reject = ();
+
+    fn previous<B: ByteSource>(
+        &mut self,
+        _exact: bool,
+        _cell: Option<B>,
+    ) -> Result<LocalPrevious<Self::Reject>> {
+        Ok(LocalPrevious::Accept)
+    }
+
+    fn next<B: ByteSource>(&mut self, _cell: Option<B>) -> Result<bool> {
+        Ok(true)
+    }
+}
+
 struct WideCodec;
 
 impl Codec for WideCodec {
@@ -471,11 +489,11 @@ fn private_local_insert_inspects_and_updates_without_copying_the_leaf() {
         &mut root,
         &record(501, 7),
         &mut retired,
-        |_, _| Ok(true),
+        &mut AcceptGap,
     )
     .unwrap();
 
-    assert_eq!(result, LocalInsert::Inserted);
+    assert!(matches!(result, LocalInsert::Inserted));
     assert!(retired.as_slice().is_empty());
     assert_eq!(store.inspections.get(), 2);
     assert_eq!(store.reads.get(), 0);

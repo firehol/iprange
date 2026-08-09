@@ -1,4 +1,4 @@
-use crate::slotted_page::PageSink;
+use crate::page_io::PageSink;
 
 use super::*;
 

@@ -2,10 +2,12 @@
 
 use std::fmt;
 
-use crate::contract::{u64_le, MAX_TREE_LEVEL};
+use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource};
-use crate::slotted_page::{self, Header, PageEdit, PageSink};
+use crate::page_header;
+use crate::page_io::{PageEdit, PageSink};
+use crate::slotted_page::{self, Header};
 
 mod delete;
 mod insert;
@@ -14,7 +16,10 @@ mod read;
 mod walk;
 
 pub(crate) use delete::delete;
-pub(crate) use insert::{insert, insert_if_local_gap, LocalInsert};
+pub(crate) use insert::{
+    insert, insert_if_local_gap, replace_leaf_with, replace_local_predecessor_with, LocalGap,
+    LocalInsert, LocalPrevious, LocalReject,
+};
 use page::{branch_child, codec_cell, copy_page, key_at, lower_bound, parse, CellBuf};
 pub(crate) use read::{
     at_or_after, inspect_leaf, predecessor, predecessor_location, LeafBuf, LeafLocation,
@@ -37,6 +42,15 @@ pub(crate) trait Codec {
     fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key>;
     fn write_key(key: Self::Key, output: &mut [u8]);
     fn validate_leaf<S: ByteSource>(cell: S) -> Result<()>;
+
+    fn fixed_cell_size(level: u16) -> Option<usize> {
+        if level == 0 {
+            (Self::LEAF_SIZE != 0).then_some(Self::LEAF_SIZE)
+        } else {
+            (Self::KEY_SIZE != 0 && Self::MAX_BRANCH_SIZE == Self::KEY_SIZE + 4)
+                .then_some(Self::KEY_SIZE + 4)
+        }
+    }
 
     fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
         slotted_page::cell(page, header, index, Self::LEAF_SIZE)
@@ -372,7 +386,7 @@ where
     let page_limit = store.page_limit();
     store.inspect_page(page_number, |page| {
         let header = parse::<C, _>(page, target_txn, expected_level)?;
-        let private = u64_le(page, 8) == target_txn;
+        let private = page_header::born_txn(page) == target_txn;
         if header.level == 0 {
             let selection = selector.select(page, &header, path)?;
             return Ok(InspectedPage::Leaf {

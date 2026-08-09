@@ -9,7 +9,7 @@ use crate::bitmap_page::{self, Kind};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::mapping::ByteSource;
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 use bitmap_page::{Header, BRANCH_CHILDREN};
 

@@ -3,7 +3,7 @@
 use crate::bitmap_page::{self, MAX_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::RetiredPages;
-use crate::slotted_page::{PageEdit, PageSink};
+use crate::page_io::{PageEdit, PageSink};
 
 use super::{
     branch_child, first_leaf_word, first_summary, parse, require_bit, required_level,

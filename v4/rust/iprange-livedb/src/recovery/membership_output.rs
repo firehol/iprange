@@ -11,6 +11,7 @@ use crate::validation::{ValidationObject, ValidationReason};
 
 use super::direct_output::DirectKey;
 use super::membership_index::{Locator, MembershipIndex};
+use super::range_build::RangeOutput;
 use super::report::{RecoverySink, Reporter, Unknown};
 use super::tables::Tables;
 
@@ -88,7 +89,7 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> Result<()> {
+    fn finish(&mut self) -> Result<()> {
         if let Some(component) = self.component.take() {
             self.finish_component(component)?;
         }
@@ -171,6 +172,16 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
     fn push_output(&mut self, output: OutputRange<K>) -> Result<()> {
         let words = output.membership.words(self.mapping, self.meta);
         K::push_membership(self.builder, output.from, output.to, &words)
+    }
+}
+
+impl<S: RecoverySink, K: MembershipKey> RangeOutput<K> for Components<'_, '_, S, K> {
+    fn push(&mut self, record: Record<K>) -> Result<()> {
+        Components::push(self, record)
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        Components::finish(self)
     }
 }
 

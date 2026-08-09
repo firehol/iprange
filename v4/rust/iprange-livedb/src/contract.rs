@@ -3,7 +3,7 @@
 use crate::crc32c;
 use crate::error::Result;
 use crate::mapping::{ByteSource, PageMut};
-use crate::slotted_page::PageSink;
+use crate::page_io::PageSink;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_SHIFT: u8 = 12;

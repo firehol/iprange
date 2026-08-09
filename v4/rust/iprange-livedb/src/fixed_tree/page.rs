@@ -1,9 +1,11 @@
 //! Codec-driven page encoding and search.
 
-use crate::contract::{u64_le, PAGE_SIZE};
+use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource};
-use crate::slotted_page::{self, Builder, Header, PageSink};
+use crate::page_header;
+use crate::page_io::{PageEdit, PageSink};
+use crate::slotted_page::{self, Builder, Header};
 
 use super::Codec;
 
@@ -46,15 +48,14 @@ impl Edit<'_> {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct PairEdit<'a> {
+pub(super) struct Replacement<'a> {
     pub(super) index: usize,
-    pub(super) left: &'a [u8],
-    pub(super) right: &'a [u8],
+    pub(super) cells: &'a [&'a [u8]],
 }
 
-impl PairEdit<'_> {
+impl Replacement<'_> {
     pub(super) fn total(&self, source_count: usize) -> usize {
-        source_count + 1
+        source_count + self.cells.len() - 1
     }
 }
 
@@ -112,7 +113,13 @@ pub(super) fn build_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
     output: &mut D,
 ) -> Result<()> {
     let page_type = page_type::<C>(header.level);
-    let mut builder = Builder::new(output, page_type, u64_le(source, 8), header.level, C::AUX);
+    let mut builder = Builder::new(
+        output,
+        page_type,
+        page_header::born_txn(source),
+        header.level,
+        C::AUX,
+    );
     for virtual_index in start..end {
         builder.push(virtual_cell::<C, _>(source, header, edit, virtual_index)?)?;
     }
@@ -235,15 +242,18 @@ pub(super) fn split_index<C: Codec, S: ByteSource>(
     edit: Edit<'_>,
 ) -> Result<usize> {
     let total = edit.total(header.item_count);
+    if let Some(cell_len) = C::fixed_cell_size(header.level) {
+        return fixed_split_index(total, cell_len);
+    }
     split_by_size(total, |index| {
         Ok(virtual_cell::<C, _>(source, header, edit, index)?.len())
     })
 }
 
-pub(super) fn build_pair_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
+pub(super) fn build_replacement<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
     source: S,
     header: &Header,
-    edit: PairEdit<'_>,
+    edit: Replacement<'_>,
     start: usize,
     end: usize,
     output: &mut D,
@@ -251,47 +261,68 @@ pub(super) fn build_pair_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
     let mut builder = Builder::new(
         output,
         page_type::<C>(header.level),
-        u64_le(source, 8),
+        page_header::born_txn(source),
         header.level,
         C::AUX,
     );
     for index in start..end {
-        builder.push(pair_cell::<C, _>(source, header, edit, index)?)?;
+        builder.push(replacement_cell::<C, _>(source, header, edit, index)?)?;
     }
     builder.finish()
 }
 
-pub(super) fn pair_fits<C: Codec, S: ByteSource>(
+pub(super) fn replacement_fits<C: Codec, S: ByteSource>(
     source: S,
     header: &Header,
-    edit: PairEdit<'_>,
+    edit: Replacement<'_>,
 ) -> Result<bool> {
     crate::work::edit_fit_probe(1);
-    if edit.index >= header.item_count {
-        return Err(Error::Corrupt("B+tree pair index is invalid"));
+    if edit.index >= header.item_count || edit.cells.is_empty() {
+        return Err(Error::Corrupt("B+tree replacement is invalid"));
     }
     let old_len = codec_cell::<C, _>(source, header, edit.index)?.len();
     let available = old_len
         .checked_add(header.upper - header.lower)
-        .ok_or_else(|| Error::arithmetic_overflow("B+tree pair capacity"))?;
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree replacement capacity"))?;
+    let payload = edit.cells.iter().try_fold(0usize, |total, cell| {
+        total
+            .checked_add(cell.len())
+            .ok_or_else(|| Error::arithmetic_overflow("B+tree replacement size"))
+    })?;
     let required = edit
-        .left
+        .cells
         .len()
-        .checked_add(edit.right.len())
-        .and_then(|size| size.checked_add(2))
-        .ok_or_else(|| Error::arithmetic_overflow("B+tree pair size"))?;
+        .checked_sub(1)
+        .and_then(|extra| extra.checked_mul(2))
+        .and_then(|slots| payload.checked_add(slots))
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree replacement size"))?;
     Ok(required <= available)
 }
 
-pub(super) fn pair_split_index<C: Codec, S: ByteSource>(
+pub(super) fn replacement_split_index<C: Codec, S: ByteSource>(
     source: S,
     header: &Header,
-    edit: PairEdit<'_>,
+    edit: Replacement<'_>,
 ) -> Result<usize> {
     let total = edit.total(header.item_count);
+    if let Some(cell_len) = C::fixed_cell_size(header.level) {
+        return fixed_split_index(total, cell_len);
+    }
     split_by_size(total, |index| {
-        Ok(pair_cell::<C, _>(source, header, edit, index)?.len())
+        Ok(replacement_cell::<C, _>(source, header, edit, index)?.len())
     })
+}
+
+pub(super) fn truncate<C: Codec, D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    keep: usize,
+) -> Result<Header> {
+    if let Some(cell_len) = C::fixed_cell_size(header.level) {
+        slotted_page::truncate_fixed(page, header, keep, cell_len)
+    } else {
+        slotted_page::truncate(page, header, keep)
+    }
 }
 
 pub(super) fn require_codec<C: Codec>() -> Result<()> {
@@ -324,6 +355,25 @@ where
     let payload = payload_size(total, &mut cell_len)?;
     choose_split(total, payload, &mut cell_len)?
         .ok_or_else(|| Error::invalid_argument("B+tree record cannot be split"))
+}
+
+fn fixed_split_index(total: usize, cell_len: usize) -> Result<usize> {
+    if total < 2 {
+        return Err(Error::Corrupt("B+tree split has fewer than two records"));
+    }
+    let middle = total / 2;
+    let left_payload = middle
+        .checked_mul(cell_len)
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree split size"))?;
+    let right_payload = (total - middle)
+        .checked_mul(cell_len)
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree split size"))?;
+    if page_size(middle, left_payload)? > PAGE_SIZE
+        || page_size(total - middle, right_payload)? > PAGE_SIZE
+    {
+        return Err(Error::InvalidArgument("B+tree record cannot be split"));
+    }
+    Ok(middle)
 }
 
 fn payload_size<F>(total: usize, cell_len: &mut F) -> Result<usize>
@@ -390,20 +440,20 @@ fn virtual_cell<'a, C: Codec, S: ByteSource>(
     codec_cell::<C, S>(source, header, source_index).map(Cell::Existing)
 }
 
-fn pair_cell<'a, C: Codec, S: ByteSource>(
+fn replacement_cell<'a, C: Codec, S: ByteSource>(
     source: S,
     header: &Header,
-    edit: PairEdit<'a>,
+    edit: Replacement<'a>,
     index: usize,
 ) -> Result<Cell<'a, S>> {
-    if index == edit.index {
-        return Ok(Cell::Edit(edit.left));
+    if let Some(cell) = index
+        .checked_sub(edit.index)
+        .and_then(|offset| edit.cells.get(offset))
+    {
+        return Ok(Cell::Edit(cell));
     }
-    if index == edit.index + 1 {
-        return Ok(Cell::Edit(edit.right));
-    }
-    let source_index = if index > edit.index + 1 {
-        index - 1
+    let source_index = if index >= edit.index + edit.cells.len() {
+        index - edit.cells.len() + 1
     } else {
         index
     };

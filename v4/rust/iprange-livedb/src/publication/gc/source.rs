@@ -4,7 +4,9 @@ use std::os::windows::ffi::OsStringExt;
 
 use crate::path;
 
-use super::super::namespace::Name;
+use super::super::namespace::{
+    private_name, Name, OUTPUT_PREFIX, PRIVATE_SUFFIX, RESERVATION_PREFIX,
+};
 use super::super::{ArtifactKind, DirectoryRole};
 
 pub(super) const fn role_matches(kind: ArtifactKind, role: DirectoryRole) -> bool {
@@ -29,11 +31,10 @@ pub(super) fn name_matches(
 ) -> bool {
     match kind {
         ArtifactKind::PrivateOutput => {
-            source.bytes() == attempt_name(b".iprange-publish-", attempt_id).bytes()
+            private_name(OUTPUT_PREFIX, attempt_id).is_ok_and(|name| source.bytes() == name.bytes())
         }
-        ArtifactKind::PrivateReservation => {
-            source.bytes() == attempt_name(b".iprange-reservation-", attempt_id).bytes()
-        }
+        ArtifactKind::PrivateReservation => private_name(RESERVATION_PREFIX, attempt_id)
+            .is_ok_and(|name| source.bytes() == name.bytes()),
         ArtifactKind::OwnedCoordination => coordination_source(source),
         ArtifactKind::AuthorizedScratch => {
             source.bytes() == scratch_name(attempt_id, ordinal).bytes()
@@ -41,14 +42,6 @@ pub(super) fn name_matches(
         ArtifactKind::OwnedMain => main_source(source),
         ArtifactKind::UnpublishedMainTail => false,
     }
-}
-
-fn attempt_name(prefix: &[u8], attempt_id: [u8; 16]) -> Name {
-    let mut bytes = Vec::with_capacity(prefix.len() + 36);
-    bytes.extend_from_slice(prefix);
-    push_attempt(&mut bytes, attempt_id);
-    bytes.extend_from_slice(b".tmp");
-    Name::new(&bytes).expect("fixed GC-bound attempt name")
 }
 
 fn scratch_name(attempt_id: [u8; 16], ordinal: u32) -> Name {
@@ -59,7 +52,7 @@ fn scratch_name(attempt_id: [u8; 16], ordinal: u32) -> Name {
     for shift in (0..8).rev() {
         bytes.push(hex(((ordinal >> (shift * 4)) & 0x0f) as u8));
     }
-    bytes.extend_from_slice(b".tmp");
+    bytes.extend_from_slice(PRIVATE_SUFFIX);
     Name::new(&bytes).expect("fixed GC-bound scratch name")
 }
 

@@ -171,12 +171,7 @@ fn select_immutable_generation(
 pub(crate) fn map_reader(file: File, mode: OpenMode) -> Result<(Mapping, Bootstrap)> {
     require_regular_file(&file)?;
     let physical_bytes = file.metadata()?.len();
-    if physical_bytes < (2 * PAGE_SIZE) as u64 {
-        return Err(bootstrap::BootstrapError::FileTooShort.into());
-    }
-    if physical_bytes % PAGE_SIZE as u64 != 0 {
-        return Err(bootstrap::BootstrapError::FileUnaligned.into());
-    }
+    bootstrap::require_geometry(physical_bytes)?;
     let mut mapping = Mapping::read_only(file, (2 * PAGE_SIZE) as u64)?;
     let bootstrap = bootstrap_mapping(&mapping, physical_bytes, mode)?;
     mapping.remap(bootstrap.committed_bytes)?;
@@ -186,12 +181,7 @@ pub(crate) fn map_reader(file: File, mode: OpenMode) -> Result<(Mapping, Bootstr
 pub(crate) fn map_writer(file: File) -> Result<(Mapping, Bootstrap)> {
     require_regular_file(&file)?;
     let physical_bytes = file.metadata()?.len();
-    if physical_bytes < (2 * PAGE_SIZE) as u64 {
-        return Err(bootstrap::BootstrapError::FileTooShort.into());
-    }
-    if physical_bytes % PAGE_SIZE as u64 != 0 {
-        return Err(bootstrap::BootstrapError::FileUnaligned.into());
-    }
+    bootstrap::require_geometry(physical_bytes)?;
     let mut mapping = Mapping::read_write(file, (2 * PAGE_SIZE) as u64)?;
     let bootstrap = bootstrap_mapping(&mapping, physical_bytes, OpenMode::Writer)?;
     mapping.remap(bootstrap.committed_bytes)?;
@@ -216,12 +206,7 @@ pub(crate) fn bootstrap_mapping(
 pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
     require_regular_file(file)?;
     let physical_bytes = file.metadata()?.len();
-    if physical_bytes < (2 * PAGE_SIZE) as u64 {
-        return Err(bootstrap::BootstrapError::FileTooShort.into());
-    }
-    if physical_bytes % PAGE_SIZE as u64 != 0 {
-        return Err(bootstrap::BootstrapError::FileUnaligned.into());
-    }
+    bootstrap::require_geometry(physical_bytes)?;
     let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
     bootstrap_mapping(&mapping, physical_bytes, mode)
 }
@@ -229,12 +214,7 @@ pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
 pub(crate) fn bootstrap_file_faultable(file: &File, mode: OpenMode) -> Result<Bootstrap> {
     require_regular_file(file)?;
     let physical_bytes = file.metadata()?.len();
-    if physical_bytes < (2 * PAGE_SIZE) as u64 {
-        return Err(bootstrap::BootstrapError::FileTooShort.into());
-    }
-    if physical_bytes % PAGE_SIZE as u64 != 0 {
-        return Err(bootstrap::BootstrapError::FileUnaligned.into());
-    }
+    bootstrap::require_geometry(physical_bytes)?;
     let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
     crate::worker::probe_source(&mapping, || {
         let pages = faultable_meta_pages(&mapping)?;

@@ -4,14 +4,15 @@ use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::Result as SdkResult;
 use crate::mapping::{ByteRange, ByteSource};
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 use super::namespace::{BASENAME_ENCODING_KIND, CREATION_SECURITY_KIND, IDENTITY_KIND};
 
 const MAGIC: [u8; 8] = *b"IPR4RSV1";
 const RECORD_SIZE: u16 = 512;
 const VERSION: u16 = 1;
-const FILE_SIZE: usize = 2 * PAGE_SIZE;
+pub(super) const FILE_SIZE: usize = 2 * PAGE_SIZE;
+pub(super) const OPERATION_LOCK: u64 = 0;
 const CRC_OFFSET: usize = 508;
 const PREVIOUS_PRESENT: u32 = 1;
 
@@ -359,8 +360,7 @@ fn decode_output<P: ByteSource>(
         identity: array(block, 128),
         sha512: array(block, 160),
     };
-    if fields.byte_length < FILE_SIZE as u64
-        || fields.byte_length % PAGE_SIZE as u64 != 0
+    if !crate::bootstrap::geometry_valid(fields.byte_length)
         || !valid_identity(&fields.identity)
         || fields.identity == reservation_identity
     {

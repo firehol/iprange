@@ -5,13 +5,12 @@ use std::path::Path;
 
 use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::mapping::Mapping;
 #[cfg(windows)]
 use crate::publication::gc_codec::Payload;
-use crate::publication::namespace::{local_identity as local, Directory};
+use crate::publication::namespace::{local_identity as local, Directory, OUTPUT_PREFIX};
 use crate::publication::output;
 use crate::publication::ArtifactKind;
 use crate::validation::LocalFileIdentity;
@@ -24,7 +23,7 @@ use super::{
 };
 
 const ARTIFACT: Artifact = Artifact::new(
-    b".iprange-publish-",
+    OUTPUT_PREFIX,
     "invalid publication temp name",
     "unsupported publication identity kind",
     "invalid publication identity",
@@ -134,7 +133,7 @@ fn content_evidence(
 ) -> Result<Option<(PublicationTuple, PublicationDigest)>> {
     cancellation.check()?;
     let byte_length = file.metadata()?.len();
-    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
+    if !crate::bootstrap::geometry_valid(byte_length) {
         return Ok(None);
     }
     let mapping = Mapping::read_only_view(file, byte_length)?;

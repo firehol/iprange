@@ -47,6 +47,7 @@ mod metadata;
 mod name_binding;
 mod page_checksum;
 mod page_header;
+mod page_io;
 mod path;
 mod process_identity;
 pub mod publication;

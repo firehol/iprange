@@ -1,11 +1,12 @@
 //! Mapped page storage and allocator integration.
 
-use crate::contract::{u32_le, u64_le, MetaV4, PAGE_MAGIC};
+use crate::contract::{u32_le, u64_le, MetaV4};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::free_bitmap::{self, BitmapStore};
 use crate::mapping::{ByteSource, PageMut, PageView};
 use crate::page_checksum;
+use crate::page_header;
 
 use super::{DraftStore, PRIVATE_MAGIC};
 
@@ -92,7 +93,7 @@ impl Store for DraftStore<'_> {
         }
         let txn = self.draft.meta.txn_id;
         let dirty_tag = self.inspect_page(page_number, |page| {
-            if u64_le(page, 8) != txn {
+            if page_header::born_txn(page) != txn {
                 return Err(Error::Corrupt(
                     "committed page cannot enter the private stack",
                 ));
@@ -136,10 +137,10 @@ impl DraftStore<'_> {
             let limit = self.draft.meta.page_count;
             let (next, data_page) = self.inspect_page(page_number, |page| {
                 let next = dirty_next(u32_le(page, page_checksum::OFFSET), page_number, limit)?;
-                if page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) != txn {
+                if page_header::has_magic(page) && page_header::born_txn(page) != txn {
                     return Err(Error::Corrupt("dirty page has the wrong transaction"));
                 }
-                Ok((next, page.equals(0, &PAGE_MAGIC)))
+                Ok((next, page_header::has_magic(page)))
             })?;
             if data_page {
                 let mut page = self.mapping.page_mut(page_number, limit)?;
@@ -167,7 +168,7 @@ impl DraftStore<'_> {
     fn existing_dirty_tag(&self, page_number: u32) -> Result<Option<u32>> {
         require_page(page_number, self.draft.meta.page_count)?;
         let page = self.mapping.page(page_number, self.draft.meta.page_count)?;
-        let owned_data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == self.draft.meta.txn_id;
+        let owned_data = page_header::owned_by(page, self.draft.meta.txn_id);
         let private_stack =
             u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == self.draft.meta.txn_id;
         let tag = u32_le(page, page_checksum::OFFSET);
@@ -202,7 +203,7 @@ impl DraftStore<'_> {
 }
 
 fn require_private_output(page: PageView<'_>, target_txn: u64) -> Result<()> {
-    let data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == target_txn;
+    let data = page_header::owned_by(page, target_txn);
     let private = u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == target_txn;
     let reserve = page.all_zero(0, page_checksum::OFFSET);
     if data || private || reserve {

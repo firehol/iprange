@@ -4,14 +4,15 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
 use crate::error::{Error, ErrorCode};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar;
 use crate::mapping::Mapping;
 use crate::publication::namespace::{local_identity as local, Destination, Identity, Regular};
 use crate::publication::problem::Problem;
-use crate::publication::reservation::{self, Header, State as ReservationState};
+use crate::publication::reservation::{
+    self, Header, State as ReservationState, FILE_SIZE, OPERATION_LOCK,
+};
 use crate::publication::reservation_inspection;
 use crate::publication::result::{FinalState, Seed};
 use crate::publication::types::{
@@ -23,9 +24,6 @@ use super::{
     PublicationResidueCoordination, PublicationResidueHandle, PublicationResidueInspection,
     PublicationResidueRemoval,
 };
-
-const OPERATION_LOCK: u64 = 0;
-const RESERVATION_SIZE: usize = 2 * PAGE_SIZE;
 
 #[derive(Debug)]
 pub(super) struct Handle {
@@ -242,7 +240,7 @@ fn selected_bound_header(
         return Ok(None);
     };
     let bytes = mapping
-        .bytes(0, RESERVATION_SIZE)
+        .bytes(0, FILE_SIZE)
         .map_err(|error| Problem::sdk(&error))?;
     let Ok(selected) = reservation::select(bytes) else {
         return Ok(None);
@@ -307,7 +305,7 @@ fn verify_coordination(handle: &Handle) -> Result<(), Problem> {
 fn reject_selectable(file: &File) -> Result<(), Problem> {
     if reservation_mapping(file)?.is_some_and(|mapping| {
         mapping
-            .bytes(0, RESERVATION_SIZE)
+            .bytes(0, FILE_SIZE)
             .ok()
             .is_some_and(reservation::contains_selectable_header)
     }) || live_sidecar::has_selectable_header(file).map_err(|error| Problem::sdk(&error))?
@@ -325,11 +323,11 @@ fn reservation_mapping(file: &File) -> Result<Option<Mapping>, Problem> {
         .map_err(Error::from)
         .map_err(|error| Problem::sdk(&error))?
         .len()
-        != RESERVATION_SIZE as u64
+        != FILE_SIZE as u64
     {
         return Ok(None);
     }
-    Mapping::read_only_view(file, RESERVATION_SIZE as u64)
+    Mapping::read_only_view(file, FILE_SIZE as u64)
         .map(Some)
         .map_err(|error| Problem::sdk(&error))
 }

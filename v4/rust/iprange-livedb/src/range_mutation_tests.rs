@@ -474,29 +474,32 @@ fn many_disjoint_ranges_split_leaves_and_cow_only_once_per_path() {
 
 #[test]
 fn nested_assignment_page_work_is_not_quadratic() {
-    let small = nested_assignment_page_work(512);
-    let large = nested_assignment_page_work(1_024);
+    let (small, _) = nested_assignment_work(512);
+    let (large, work) = nested_assignment_work(1_024);
     assert!(
         large <= small * 3,
         "doubling input grew deterministic page work from {small} to {large}"
     );
+    assert_eq!(work.tree_lookups, 1_023);
 }
 
-fn nested_assignment_page_work(count: u32) -> u64 {
+fn nested_assignment_work(count: u32) -> (u64, crate::work::Snapshot) {
     let mut store = MemoryStore::new();
     let mut root = 0;
     let mut records = 0;
     let end = count * 4 + 1;
-    for index in 0..count {
-        assign(
-            &mut store,
-            &mut root,
-            &mut records,
-            Ipv4Key(index),
-            Ipv4Key(end - index),
-            index % 2 + 1,
-        )
-        .unwrap();
-    }
-    store.reads.get() + store.writes
+    let (_, work) = crate::work::measure(|| {
+        for index in 0..count {
+            assign_private(
+                &mut store,
+                &mut root,
+                &mut records,
+                Ipv4Key(index),
+                Ipv4Key(end - index),
+                index % 2 + 1,
+            )
+            .unwrap();
+        }
+    });
+    (store.reads.get() + store.writes, work)
 }

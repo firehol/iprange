@@ -2,7 +2,8 @@
 
 use crate::error::{Error, Result};
 use crate::mapping::ByteSource;
-use crate::slotted_page::{self, PageEdit};
+use crate::page_io::PageEdit;
+use crate::slotted_page;
 
 use super::insert::{propagate_first, propagate_first_from};
 use super::page::{branch_child, key_at, parse};

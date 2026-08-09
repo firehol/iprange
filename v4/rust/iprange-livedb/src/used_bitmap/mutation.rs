@@ -3,7 +3,7 @@
 use crate::bitmap_page::{leaf_word, set_leaf_word, MAX_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 use super::page::{branch_child, set_branch_child, set_pointer, stamp_leaf, Header};
 use super::search::{contains, find_lowest};

@@ -2,21 +2,17 @@
 
 use std::fs::File;
 
-use crate::contract::PAGE_SIZE;
 use crate::error;
 use crate::live_lock::{self, Mode};
 use crate::mapping::Mapping;
 
 use super::namespace::{regular_identity, sync_file, Identity, Name, NamespaceError};
 use super::output::{self, PreparedOutput};
-use super::reservation::{Header, State};
+use super::reservation::{Header, State, FILE_SIZE, OPERATION_LOCK};
 
 #[path = "reservation_verify.rs"]
 mod verification;
 use verification::{select_exact, Expected, OutputLocation, ReservationLocation};
-
-const FILE_SIZE: usize = 2 * PAGE_SIZE;
-const OPERATION_LOCK: u64 = 0;
 
 #[derive(Debug)]
 pub(crate) enum Error {

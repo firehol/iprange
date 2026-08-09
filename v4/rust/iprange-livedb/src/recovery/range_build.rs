@@ -9,8 +9,9 @@ use crate::mapping::Mapping;
 use crate::range_tree::Record;
 use crate::validation::{ValidationObject, ValidationReason};
 
+use super::direct_output::DirectKey;
 #[cfg(any(unix, windows))]
-use super::external_sort::ExternalSortFailure;
+use super::external_sort::{self, ExternalSortFailure, SortArea};
 use super::page_set::PageSet;
 use super::range_scan::RangeEvents;
 use super::report::{page_interval, RecoverySink, Reporter, Unknown};
@@ -21,6 +22,199 @@ pub(super) type BuildResult = std::result::Result<Option<ScratchCleanup>, BuildF
 pub(super) struct BuildFailure {
     pub(super) cause: Error,
     pub(super) scratch: Option<ScratchCleanup>,
+}
+
+pub(super) trait RangeOutput<K> {
+    fn push(&mut self, record: Record<K>) -> Result<()>;
+    fn finish(&mut self) -> Result<()>;
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SortReuse {
+    #[cfg(any(unix, windows))]
+    area: Option<SortArea>,
+}
+
+impl SortReuse {
+    pub(super) const fn none() -> Self {
+        Self {
+            #[cfg(any(unix, windows))]
+            area: None,
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    pub(super) fn area(value: Option<(super::scratch::ScratchSlot, u64)>) -> Self {
+        Self {
+            area: value.map(|(slot, base)| SortArea::new(slot, base)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RangeBuild<'a> {
+    pub(super) mapping: &'a Mapping,
+    pub(super) meta: MetaV4,
+    pub(super) budget: &'a RecoveryBudget,
+    pub(super) cancellation: &'a CancellationToken,
+    pub(super) readable_records: u64,
+    pub(super) ordered: bool,
+    pub(super) retained_heap_bytes: u64,
+    pub(super) sort_reuse: SortReuse,
+}
+
+#[allow(clippy::result_large_err)]
+pub(super) fn build_ranges<K: DirectKey, O: RangeOutput<K>>(
+    request: RangeBuild<'_>,
+    pages: PageSet,
+    output: &mut O,
+) -> BuildResult {
+    if request.ordered {
+        build_ordered(request, pages, output)
+    } else {
+        build_sorted(request, pages, output)
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn build_ordered<K: DirectKey, O: RangeOutput<K>>(
+    request: RangeBuild<'_>,
+    mut pages: PageSet,
+    output: &mut O,
+) -> BuildResult {
+    let scan = (|| {
+        pages.reset()?;
+        let mut events = events(true, |record| output.push(record));
+        super::range_scan::scan(
+            request.mapping,
+            request.meta,
+            &mut pages,
+            request.cancellation,
+            &mut events,
+        )?;
+        require_count(events.readable_records(), request.readable_records)?;
+        output.finish()
+    })();
+    finish_pages(pages, scan)
+}
+
+#[allow(clippy::result_large_err)]
+fn build_sorted<K: DirectKey, O: RangeOutput<K>>(
+    request: RangeBuild<'_>,
+    pages: PageSet,
+    output: &mut O,
+) -> BuildResult {
+    let retained = match request
+        .retained_heap_bytes
+        .checked_add(pages.retained_bytes())
+    {
+        Some(retained) => retained,
+        None => {
+            return finish_pages(
+                pages,
+                Err(Error::ArithmeticOverflow("recovery retained heap")),
+            )
+        }
+    };
+    match buffer_fits::<K>(request.readable_records, retained, request.budget) {
+        Ok(_) => build_in_memory(request, retained, pages, output),
+        Err(Error::BudgetExceeded(_)) => build_external(request, pages, output),
+        Err(cause) => finish_pages(pages, Err(cause)),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn build_in_memory<K: DirectKey, O: RangeOutput<K>>(
+    request: RangeBuild<'_>,
+    retained: u64,
+    mut pages: PageSet,
+    output: &mut O,
+) -> BuildResult {
+    let available = request
+        .budget
+        .max_heap_bytes
+        .checked_sub(retained)
+        .ok_or(Error::BudgetExceeded("recovery unordered ranges"));
+    let mut records =
+        match available.and_then(|bytes| reserve::<K>(request.readable_records, bytes)) {
+            Ok(records) => records,
+            Err(cause) => return finish_pages(pages, Err(cause)),
+        };
+    let scan = (|| {
+        pages.reset()?;
+        let mut events = events(false, |record| {
+            records.push(record);
+            Ok(())
+        });
+        super::range_scan::scan(
+            request.mapping,
+            request.meta,
+            &mut pages,
+            request.cancellation,
+            &mut events,
+        )?;
+        require_count(events.readable_records(), request.readable_records)?;
+        records.sort_unstable_by(|left, right| {
+            (left.from, left.to, left.value).cmp(&(right.from, right.to, right.value))
+        });
+        Ok(())
+    })();
+    if let Err(cause) = scan {
+        drop(records);
+        return finish_pages(pages, Err(cause));
+    }
+    let scratch = finish_pages(pages, Ok(()))?;
+    for record in records {
+        output
+            .push(record)
+            .map_err(|cause| after_cleanup(cause, &scratch))?;
+    }
+    output
+        .finish()
+        .map_err(|cause| after_cleanup(cause, &scratch))?;
+    Ok(scratch)
+}
+
+#[cfg(any(unix, windows))]
+#[allow(clippy::result_large_err)]
+fn build_external<K: DirectKey, O: RangeOutput<K>>(
+    request: RangeBuild<'_>,
+    pages: PageSet,
+    output: &mut O,
+) -> BuildResult {
+    let cleanup = external_sort::sort_and_emit::<K>(
+        request.mapping,
+        external_sort::SortRequest {
+            meta: request.meta,
+            budget: request.budget,
+            retained_heap_bytes: request.retained_heap_bytes,
+            readable_records: request.readable_records,
+            cancellation: request.cancellation,
+            initial_area: request.sort_reuse.area,
+        },
+        pages,
+        |record| output.push(record),
+    )
+    .map_err(external_failure)?;
+    output.finish().map_err(|cause| BuildFailure {
+        cause,
+        scratch: Some(cleanup.clone()),
+    })?;
+    Ok(Some(cleanup))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn build_external<K: DirectKey, O: RangeOutput<K>>(
+    _request: RangeBuild<'_>,
+    pages: PageSet,
+    _output: &mut O,
+) -> BuildResult {
+    finish_pages(
+        pages,
+        Err(Error::Unsupported(
+            "external recovery sorting is not implemented on this platform",
+        )),
+    )
 }
 
 pub(super) fn buffer_fits<K: IpKey>(

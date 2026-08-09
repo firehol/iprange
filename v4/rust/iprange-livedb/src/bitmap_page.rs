@@ -1,19 +1,19 @@
 //! Canonical hierarchical-bitmap page layout and scalar access.
 
-use crate::contract::{u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u32_le, u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::format::page_type;
 use crate::mapping::ByteSource;
 use crate::page_header;
-use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
+use crate::page_io::{PageEdit, PageSink};
 
 pub(crate) const BRANCH_TYPE: u8 = page_type::USED_BITMAP_BRANCH;
 pub(crate) const LEAF_TYPE: u8 = page_type::USED_BITMAP_LEAF;
 pub(crate) const LEAF_WORDS: usize = 500;
 pub(crate) const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;
 pub(crate) const BRANCH_CHILDREN: usize = 256;
-pub(crate) const LEAF_END: usize = HEADER_SIZE + LEAF_WORDS * 8;
-pub(crate) const BRANCH_END: usize = HEADER_SIZE + 32 + BRANCH_CHILDREN * 4;
+pub(crate) const LEAF_END: usize = page_header::SIZE + LEAF_WORDS * 8;
+pub(crate) const BRANCH_END: usize = page_header::SIZE + 32 + BRANCH_CHILDREN * 4;
 pub(crate) const MAX_LEVEL: u16 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,68 +122,61 @@ pub(crate) fn reserved_zero<S: ByteSource>(page: S, level: u16) -> bool {
 }
 
 pub(crate) fn initialize<D: PageSink>(page: &mut D, txn: u64, level: u16, kind: Kind) {
-    page.fill(0);
-    page.write(0, &PAGE_MAGIC)
-        .expect("fixed bitmap header fits");
-    page.set_byte(
-        page_header::TYPE,
-        if level == 0 { LEAF_TYPE } else { BRANCH_TYPE },
+    page_header::initialize(
+        page,
+        page_header::Fields {
+            page_type: if level == 0 { LEAF_TYPE } else { BRANCH_TYPE },
+            born_txn: txn,
+            item_count: 0,
+            level,
+            lower: page_lower(level) as u16,
+            upper: PAGE_SIZE as u16,
+            aux: kind as u32,
+        },
     )
     .expect("fixed bitmap header fits");
-    page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)
-        .expect("fixed bitmap header fits");
-    page.put_u64(page_header::BORN_TXN, txn)
-        .expect("fixed bitmap header fits");
-    page.put_u16(page_header::LEVEL, level)
-        .expect("fixed bitmap header fits");
-    page.put_u16(page_header::LOWER, page_lower(level) as u16)
-        .expect("fixed bitmap header fits");
-    page.put_u16(page_header::UPPER, PAGE_SIZE as u16)
-        .expect("fixed bitmap header fits");
-    page.put_u32(page_header::AUX, kind as u32)
-        .expect("fixed bitmap header fits");
 }
 
 pub(crate) fn leaf_word<S: ByteSource>(page: S, index: usize) -> Result<u64> {
     if index >= LEAF_WORDS {
         return Err(Error::Corrupt("bitmap word index is invalid"));
     }
-    Ok(u64_le(page, HEADER_SIZE + index * 8))
+    Ok(u64_le(page, page_header::SIZE + index * 8))
 }
 
 pub(crate) fn set_leaf_word<D: PageEdit>(page: &mut D, index: usize, word: u64) -> Result<()> {
     if index >= LEAF_WORDS {
         return Err(Error::Corrupt("bitmap word index is invalid"));
     }
-    page.put_u64(HEADER_SIZE + index * 8, word)
+    page.put_u64(page_header::SIZE + index * 8, word)
 }
 
 pub(crate) fn branch_child<S: ByteSource>(page: S, index: usize) -> Result<u32> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap child index is invalid"));
     }
-    Ok(u32_le(page, HEADER_SIZE + 32 + index * 4))
+    Ok(u32_le(page, page_header::SIZE + 32 + index * 4))
 }
 
 pub(crate) fn set_branch_child<D: PageEdit>(page: &mut D, index: usize, child: u32) -> Result<()> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap child index is invalid"));
     }
-    page.put_u32(HEADER_SIZE + 32 + index * 4, child)
+    page.put_u32(page_header::SIZE + 32 + index * 4, child)
 }
 
 pub(crate) fn summary_bit<S: ByteSource>(page: S, index: usize) -> Result<bool> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap summary index is invalid"));
     }
-    Ok(u64_le(page, HEADER_SIZE + (index / 64) * 8) & (1u64 << (index % 64)) != 0)
+    Ok(u64_le(page, page_header::SIZE + (index / 64) * 8) & (1u64 << (index % 64)) != 0)
 }
 
 pub(crate) fn set_summary<D: PageEdit>(page: &mut D, index: usize, value: bool) -> Result<()> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap summary index is invalid"));
     }
-    let at = HEADER_SIZE + (index / 64) * 8;
+    let at = page_header::SIZE + (index / 64) * 8;
     let mask = 1u64 << (index % 64);
     let word = u64_le(page.view(), at);
     page.put_u64(at, if value { word | mask } else { word & !mask })
@@ -194,7 +187,7 @@ pub(crate) fn first_summary<S: ByteSource>(page: S, start: usize) -> Option<usiz
         return None;
     }
     let mut word_index = start / 64;
-    let mut word = u64_le(page, HEADER_SIZE + word_index * 8) & (u64::MAX << (start % 64));
+    let mut word = u64_le(page, page_header::SIZE + word_index * 8) & (u64::MAX << (start % 64));
     loop {
         if word != 0 {
             return Some(word_index * 64 + word.trailing_zeros() as usize);
@@ -203,7 +196,7 @@ pub(crate) fn first_summary<S: ByteSource>(page: S, start: usize) -> Option<usiz
         if word_index == 4 {
             return None;
         }
-        word = u64_le(page, HEADER_SIZE + word_index * 8);
+        word = u64_le(page, page_header::SIZE + word_index * 8);
     }
 }
 

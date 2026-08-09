@@ -6,8 +6,9 @@ use crate::contract::ValueKind;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::key::IpKey;
+use crate::page_io::PageSink;
 use crate::range_tree;
-use crate::slotted_page::{Appender, PageSink};
+use crate::slotted_page::Appender;
 
 pub(crate) use crate::range_tree::Record;
 

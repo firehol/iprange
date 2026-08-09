@@ -1,12 +1,13 @@
 //! Selected membership-blob word reads.
 
-use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::page_header;
-use crate::slotted_page::{self, Header, PageSink, HEADER_SIZE};
+use crate::page_io::PageSink;
+use crate::slotted_page::{self, Header};
 
 pub(crate) const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
 pub(crate) const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
@@ -364,16 +365,18 @@ pub(crate) fn initialize_leaf<D: PageSink>(
             "membership blob leaf geometry is invalid",
         ));
     }
-    page.fill(0);
-    page.write(0, &PAGE_MAGIC)?;
-    page.set_byte(page_header::TYPE, LEAF_TYPE)?;
-    page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)?;
-    page.put_u64(page_header::BORN_TXN, born_txn)?;
-    page.put_u16(page_header::ITEM_COUNT, 1)?;
-    page.put_u16(page_header::LEVEL, 0)?;
-    page.put_u16(page_header::LOWER, (LEAF_DATA + data_len) as u16)?;
-    page.put_u16(page_header::UPPER, PAGE_SIZE as u16)?;
-    page.put_u32(page_header::AUX, MEMBERSHIP_KIND)?;
+    page_header::initialize(
+        page,
+        page_header::Fields {
+            page_type: LEAF_TYPE,
+            born_txn,
+            item_count: 1,
+            level: 0,
+            lower: (LEAF_DATA + data_len) as u16,
+            upper: PAGE_SIZE as u16,
+            aux: MEMBERSHIP_KIND,
+        },
+    )?;
     page.put_u64(32, start)?;
     page.put_u16(40, data_len as u16)
 }

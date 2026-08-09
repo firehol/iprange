@@ -4,7 +4,7 @@ use std::fs::File;
 
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{MetaV4, PAGE_SIZE};
+use crate::contract::MetaV4;
 use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
@@ -244,7 +244,7 @@ fn map_bootstrap(file: &File) -> Result<(Mapping, MetaV4, u64), Problem> {
         .map_err(crate::error::Error::from)
         .map_err(|error| Problem::sdk(&error))?
         .len();
-    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
+    if !bootstrap::geometry_valid(byte_length) {
         return Err(conflict(
             "publication destination has invalid v4 file geometry",
         ));

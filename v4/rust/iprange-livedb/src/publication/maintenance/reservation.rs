@@ -4,11 +4,14 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::mapping::Mapping;
-use crate::publication::namespace::{local_identity as local, Directory, Identity};
-use crate::publication::reservation::{self as codec, Header, Policy, State};
+use crate::publication::namespace::{
+    local_identity as local, Directory, Identity, RESERVATION_PREFIX,
+};
+use crate::publication::reservation::{
+    self as codec, Header, Policy, State, FILE_SIZE, OPERATION_LOCK,
+};
 use crate::publication::ArtifactKind;
 use crate::validation::LocalFileIdentity;
 
@@ -21,7 +24,7 @@ use super::{
 };
 
 const ARTIFACT: Artifact = Artifact::new(
-    b".iprange-reservation-",
+    RESERVATION_PREFIX,
     "invalid reservation artifact name",
     "unsupported reservation identity kind",
     "invalid reservation identity",
@@ -30,9 +33,6 @@ const ARTIFACT: Artifact = Artifact::new(
     "reservation artifact lost its exact name",
     "reservation artifact remained linked after removal",
 );
-const OPERATION_LOCK: u64 = 0;
-const FILE_SIZE: usize = 2 * PAGE_SIZE;
-
 pub(super) fn list<S: AbandonedReservationSink>(
     path: &Path,
     cancellation: &CancellationToken,

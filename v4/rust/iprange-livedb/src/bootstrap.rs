@@ -168,7 +168,7 @@ pub(crate) fn resolve_commit_attempt<S: ByteSource>(
     Err(BootstrapError::CurrentGenerationUnprovable)
 }
 
-fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {
+pub(crate) fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {
     if physical_bytes < (2 * PAGE_SIZE) as u64 {
         return Err(BootstrapError::FileTooShort);
     }
@@ -176,6 +176,10 @@ fn require_geometry(physical_bytes: u64) -> Result<(), BootstrapError> {
         return Err(BootstrapError::FileUnaligned);
     }
     Ok(())
+}
+
+pub(crate) fn geometry_valid(physical_bytes: u64) -> bool {
+    require_geometry(physical_bytes).is_ok()
 }
 
 fn require_same_identity(

@@ -4,7 +4,7 @@ use crate::contract::u32_le;
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, PageMut};
-use crate::slotted_page::PageSink;
+use crate::page_io::PageSink;
 
 pub(crate) const OFFSET: usize = 28;
 const LENGTH: usize = 4;

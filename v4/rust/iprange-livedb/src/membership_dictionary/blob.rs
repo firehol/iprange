@@ -5,7 +5,8 @@ use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiringStore, Store};
 use crate::mapping::ByteSource;
-use crate::slotted_page::{self, put_u32, put_u64, Builder, PageSink, HEADER_SIZE};
+use crate::page_io::PageSink;
+use crate::slotted_page::{self, put_u32, put_u64, Builder, HEADER_SIZE};
 
 use super::Words;
 

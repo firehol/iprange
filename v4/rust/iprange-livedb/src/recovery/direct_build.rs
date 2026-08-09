@@ -6,20 +6,12 @@ use crate::error::{Error, Result};
 use crate::immutable_output::{Builder, Finished};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
-use crate::range_tree::Record;
 
 use super::direct::{analyze, DirectAnalysis};
 use super::direct_output::{Components, DirectKey};
-#[cfg(any(unix, windows))]
-use super::external_sort;
-use super::page_set::PageSet;
-#[cfg(any(unix, windows))]
-use super::range_build::external_failure;
 use super::range_build::{
-    after_cleanup, buffer_fits, events, finish_pages, require_count, reserve,
-    retained_metadata_bytes, write_metadata, BuildFailure, BuildResult,
+    build_ranges, retained_metadata_bytes, write_metadata, RangeBuild, SortReuse,
 };
-use super::range_scan;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
 use super::{RecoveryBudget, ScratchCleanup};
 
@@ -93,30 +85,23 @@ fn build<K: DirectKey, S: RecoverySink>(
         metadata,
         pages,
     } = analysis;
-    let context = BuildContext {
-        mapping,
-        meta: source_meta,
-        budget,
-        cancellation,
-    };
+    let retained = retained_metadata_bytes(&metadata);
     let mut reporter = Reporter::resume(report, sink);
-    let result: BuildResult = if ordered {
-        build_ordered::<K, S>(
-            context,
-            &mut builder,
-            &mut reporter,
-            readable_records,
-            &metadata,
+    let result = {
+        let mut output = Components::<S, K>::new(&mut builder, &mut reporter, cancellation);
+        build_ranges(
+            RangeBuild {
+                mapping,
+                meta: source_meta,
+                budget,
+                cancellation,
+                readable_records,
+                ordered,
+                retained_heap_bytes: retained,
+                sort_reuse: SortReuse::none(),
+            },
             pages,
-        )
-    } else {
-        build_sorted::<K, S>(
-            context,
-            &mut builder,
-            &mut reporter,
-            readable_records,
-            &metadata,
-            pages,
+            &mut output,
         )
     };
     let report = reporter.finish();
@@ -124,6 +109,14 @@ fn build<K: DirectKey, S: RecoverySink>(
         Ok(scratch) => scratch,
         Err(error) => return Err(failure(builder, error.cause, report, error.scratch)),
     };
+    if let Err(cause) = write_metadata(
+        &mut builder,
+        metadata.as_deref(),
+        budget.max_heap_bytes,
+        retained,
+    ) {
+        return Err(failure(builder, cause, report, scratch));
+    }
     match builder.finish_owned() {
         Ok(finished) => Ok(DirectConstruction {
             finished,
@@ -132,231 +125,6 @@ fn build<K: DirectKey, S: RecoverySink>(
         }),
         Err(error) => Err(failure(error.builder, error.cause, report, scratch)),
     }
-}
-
-#[derive(Clone, Copy)]
-struct BuildContext<'a> {
-    mapping: &'a Mapping,
-    meta: MetaV4,
-    budget: &'a RecoveryBudget,
-    cancellation: &'a CancellationToken,
-}
-
-#[allow(clippy::result_large_err)]
-fn build_ordered<K: DirectKey, S: RecoverySink>(
-    context: BuildContext<'_>,
-    builder: &mut Builder,
-    reporter: &mut Reporter<'_, S>,
-    readable_records: u64,
-    metadata: &Option<Vec<u8>>,
-    mut pages: PageSet,
-) -> BuildResult {
-    let metadata_bytes = retained_metadata_bytes(metadata);
-    let scan = (|| {
-        pages.reset()?;
-        let mut components = Components::<S, K>::new(builder, reporter, context.cancellation);
-        {
-            let mut events = events(true, |record| components.push(record));
-            range_scan::scan(
-                context.mapping,
-                context.meta,
-                &mut pages,
-                context.cancellation,
-                &mut events,
-            )?;
-            require_count(events.readable_records(), readable_records)?;
-        }
-        components.finish()
-    })();
-    let scratch = finish_pages(pages, scan)?;
-    write_metadata(
-        builder,
-        metadata.as_deref(),
-        context.budget.max_heap_bytes,
-        metadata_bytes,
-    )
-    .map_err(|cause| after_cleanup(cause, &scratch))?;
-    Ok(scratch)
-}
-
-#[allow(clippy::result_large_err)]
-fn build_sorted<K: DirectKey, S: RecoverySink>(
-    context: BuildContext<'_>,
-    builder: &mut Builder,
-    reporter: &mut Reporter<'_, S>,
-    readable_records: u64,
-    metadata: &Option<Vec<u8>>,
-    pages: PageSet,
-) -> BuildResult {
-    let metadata_bytes = retained_metadata_bytes(metadata);
-    let retained = match metadata_bytes.checked_add(pages.retained_bytes()) {
-        Some(retained) => retained,
-        None => {
-            return finish_pages(
-                pages,
-                Err(Error::ArithmeticOverflow("recovery retained heap")),
-            )
-        }
-    };
-    match buffer_fits::<K>(readable_records, retained, context.budget) {
-        Ok(_) => build_in_memory::<K, S>(
-            context,
-            builder,
-            reporter,
-            readable_records,
-            metadata,
-            retained,
-            pages,
-        ),
-        Err(Error::BudgetExceeded(_)) => build_external::<K, S>(
-            context,
-            builder,
-            reporter,
-            readable_records,
-            metadata,
-            metadata_bytes,
-            pages,
-        ),
-        Err(cause) => finish_pages(pages, Err(cause)),
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn build_in_memory<K: DirectKey, S: RecoverySink>(
-    context: BuildContext<'_>,
-    builder: &mut Builder,
-    reporter: &mut Reporter<'_, S>,
-    readable_records: u64,
-    metadata: &Option<Vec<u8>>,
-    retained: u64,
-    mut pages: PageSet,
-) -> BuildResult {
-    let metadata_bytes = retained_metadata_bytes(metadata);
-    let available = context
-        .budget
-        .max_heap_bytes
-        .checked_sub(retained)
-        .ok_or(Error::BudgetExceeded("recovery unordered ranges"));
-    let mut records = match available.and_then(|bytes| reserve::<K>(readable_records, bytes)) {
-        Ok(records) => records,
-        Err(cause) => return finish_pages(pages, Err(cause)),
-    };
-    let scan = collect_ranges(context, readable_records, &mut pages, &mut records);
-    if let Err(cause) = scan {
-        drop(records);
-        return finish_pages(pages, Err(cause));
-    }
-    let scratch = finish_pages(pages, Ok(()))?;
-    emit_sorted(context.cancellation, builder, reporter, records)
-        .map_err(|cause| after_cleanup(cause, &scratch))?;
-    write_metadata(
-        builder,
-        metadata.as_deref(),
-        context.budget.max_heap_bytes,
-        metadata_bytes,
-    )
-    .map_err(|cause| after_cleanup(cause, &scratch))?;
-    Ok(scratch)
-}
-
-fn collect_ranges<K: DirectKey>(
-    context: BuildContext<'_>,
-    readable_records: u64,
-    pages: &mut PageSet,
-    records: &mut Vec<Record<K>>,
-) -> Result<()> {
-    pages.reset()?;
-    let mut events = events(false, |record| {
-        records.push(record);
-        Ok(())
-    });
-    range_scan::scan(
-        context.mapping,
-        context.meta,
-        pages,
-        context.cancellation,
-        &mut events,
-    )?;
-    require_count(events.readable_records(), readable_records)?;
-    records.sort_unstable_by(|left, right| {
-        (left.from, left.to, left.value).cmp(&(right.from, right.to, right.value))
-    });
-    Ok(())
-}
-
-#[cfg(any(unix, windows))]
-#[allow(clippy::result_large_err)]
-fn build_external<K: DirectKey, S: RecoverySink>(
-    context: BuildContext<'_>,
-    builder: &mut Builder,
-    reporter: &mut Reporter<'_, S>,
-    readable_records: u64,
-    metadata: &Option<Vec<u8>>,
-    metadata_bytes: u64,
-    pages: PageSet,
-) -> BuildResult {
-    let mut components = Components::<S, K>::new(builder, reporter, context.cancellation);
-    let cleanup = external_sort::sort_and_emit::<K>(
-        context.mapping,
-        external_sort::SortRequest {
-            meta: context.meta,
-            budget: context.budget,
-            retained_heap_bytes: metadata_bytes,
-            readable_records,
-            cancellation: context.cancellation,
-            initial_area: None,
-        },
-        pages,
-        |record| components.push(record),
-    )
-    .map_err(external_failure)?;
-    components.finish().map_err(|cause| BuildFailure {
-        cause,
-        scratch: Some(cleanup.clone()),
-    })?;
-    write_metadata(
-        builder,
-        metadata.as_deref(),
-        context.budget.max_heap_bytes,
-        metadata_bytes,
-    )
-    .map_err(|cause| BuildFailure {
-        cause,
-        scratch: Some(cleanup.clone()),
-    })?;
-    Ok(Some(cleanup))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn build_external<K: DirectKey, S: RecoverySink>(
-    _context: BuildContext<'_>,
-    _builder: &mut Builder,
-    _reporter: &mut Reporter<'_, S>,
-    _readable_records: u64,
-    _metadata: &Option<Vec<u8>>,
-    _metadata_bytes: u64,
-    pages: PageSet,
-) -> BuildResult {
-    finish_pages(
-        pages,
-        Err(Error::Unsupported(
-            "external recovery sorting is not implemented on this platform",
-        )),
-    )
-}
-
-fn emit_sorted<K: DirectKey, S: RecoverySink>(
-    cancellation: &CancellationToken,
-    builder: &mut Builder,
-    reporter: &mut Reporter<'_, S>,
-    records: Vec<Record<K>>,
-) -> Result<()> {
-    let mut components = Components::<S, K>::new(builder, reporter, cancellation);
-    for record in records {
-        cancellation.check()?;
-        components.push(record)?;
-    }
-    components.finish()
 }
 
 fn require_builder(builder: &Builder, source: MetaV4) -> Result<()> {

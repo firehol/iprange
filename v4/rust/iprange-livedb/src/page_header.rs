@@ -1,7 +1,9 @@
 //! Canonical common header fields for mapped v4 database pages.
 
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
+use crate::error::Result;
 use crate::mapping::ByteSource;
+use crate::page_io::PageSink;
 
 pub(crate) const SIZE: usize = 32;
 pub(crate) const TYPE: usize = 4;
@@ -20,6 +22,30 @@ pub(crate) enum CommonProblem {
     Born,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Fields {
+    pub(crate) page_type: u8,
+    pub(crate) born_txn: u64,
+    pub(crate) item_count: u16,
+    pub(crate) level: u16,
+    pub(crate) lower: u16,
+    pub(crate) upper: u16,
+    pub(crate) aux: u32,
+}
+
+pub(crate) fn initialize<D: PageSink + ?Sized>(page: &mut D, fields: Fields) -> Result<()> {
+    page.fill(0);
+    page.write(0, &PAGE_MAGIC)?;
+    page.set_byte(TYPE, fields.page_type)?;
+    page.put_u16(HEADER_BYTES, SIZE as u16)?;
+    page.put_u64(BORN_TXN, fields.born_txn)?;
+    page.put_u16(ITEM_COUNT, fields.item_count)?;
+    page.put_u16(LEVEL, fields.level)?;
+    page.put_u16(LOWER, fields.lower)?;
+    page.put_u16(UPPER, fields.upper)?;
+    page.put_u32(AUX, fields.aux)
+}
+
 pub(crate) fn common_problem<S: ByteSource>(page: S, selected_txn: u64) -> Option<CommonProblem> {
     if !common_valid(page) {
         Some(CommonProblem::Header)
@@ -32,9 +58,17 @@ pub(crate) fn common_problem<S: ByteSource>(page: S, selected_txn: u64) -> Optio
 
 pub(crate) fn common_valid<S: ByteSource>(page: S) -> bool {
     page.len() == PAGE_SIZE
-        && page.equals(0, &PAGE_MAGIC)
+        && has_magic(page)
         && page.byte(FLAGS) == Some(0)
         && u16_le(page, HEADER_BYTES) == SIZE as u16
+}
+
+pub(crate) fn has_magic<S: ByteSource>(page: S) -> bool {
+    page.equals(0, &PAGE_MAGIC)
+}
+
+pub(crate) fn owned_by<S: ByteSource>(page: S, txn: u64) -> bool {
+    has_magic(page) && born_txn(page) == txn
 }
 
 pub(crate) fn born_valid<S: ByteSource>(page: S, selected_txn: u64) -> bool {

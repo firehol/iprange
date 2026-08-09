@@ -3,7 +3,7 @@
 use crate::bitmap_page::{self, Kind};
 use crate::error::{Error, Result};
 use crate::mapping::ByteSource;
-use crate::slotted_page::{PageEdit, PageSink};
+use crate::page_io::{PageEdit, PageSink};
 
 pub(super) use crate::bitmap_page::{Header, BRANCH_CHILDREN, LEAF_WORDS};
 

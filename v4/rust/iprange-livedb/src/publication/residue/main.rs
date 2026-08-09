@@ -5,7 +5,6 @@ use std::fs::File;
 use super::{PublicationResidueMain, PublicationResidueMainContent};
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
 use crate::error::Error;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
@@ -120,7 +119,7 @@ impl Guard {
 }
 
 fn read_tuple(mapping: &Mapping, byte_length: u64) -> Result<Option<PublicationTuple>, Problem> {
-    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
+    if !bootstrap::geometry_valid(byte_length) {
         return Ok(None);
     }
     let left = mapping.page(0, 2).map_err(|error| Problem::sdk(&error))?;

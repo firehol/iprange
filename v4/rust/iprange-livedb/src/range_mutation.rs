@@ -3,6 +3,7 @@
 use crate::error::{Error, Result};
 use crate::fixed_tree::{self, LeafBuf, RetiredPages, RetiringStore, Store};
 use crate::key::IpKey;
+use crate::mapping::ByteSource;
 use crate::range_tree::{self, RangeCodec, Record as Range};
 
 pub(crate) trait RangeStore: RetiringStore {
@@ -96,6 +97,41 @@ impl EncodedRange {
     }
 }
 
+struct PrivateGap<K> {
+    range: Range<K>,
+}
+
+impl<K: IpKey> fixed_tree::LocalGap<RangeCodec<K>> for PrivateGap<K> {
+    type Reject = Range<K>;
+
+    fn previous<B: ByteSource>(
+        &mut self,
+        exact: bool,
+        cell: Option<B>,
+    ) -> Result<fixed_tree::LocalPrevious<Self::Reject>> {
+        if let Some(cell) = cell {
+            let previous = range_tree::decode_cell::<K, _>(cell)?;
+            if exact
+                || previous.to >= self.range.from
+                || (previous.value == self.range.value
+                    && previous.to.checked_next() == Some(self.range.from))
+            {
+                return Ok(fixed_tree::LocalPrevious::Reject(previous));
+            }
+        }
+        Ok(fixed_tree::LocalPrevious::Accept)
+    }
+
+    fn next<B: ByteSource>(&mut self, cell: Option<B>) -> Result<bool> {
+        let Some(cell) = cell else {
+            return Ok(true);
+        };
+        let next = range_tree::decode_cell::<K, _>(cell)?;
+        Ok(next.from > self.range.to
+            && (next.value != self.range.value || self.range.to.checked_next() != Some(next.from)))
+    }
+}
+
 pub(crate) fn assign<K: IpKey, S: RangeStore>(
     store: &mut S,
     root: &mut u32,
@@ -121,12 +157,13 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
     let range = Range { from, to, value };
     let encoded = EncodedRange::new(range)?;
     let mut retired = RetiredPages::new();
+    let mut gap = PrivateGap { range };
     match fixed_tree::insert_if_local_gap::<RangeCodec<K>, S, _>(
         store,
         root,
         encoded.as_slice(),
         &mut retired,
-        |previous, next| local_gap_accepts::<K>(previous, next, range),
+        &mut gap,
     )? {
         fixed_tree::LocalInsert::Inserted => {
             if !retired.as_slice().is_empty() {
@@ -139,9 +176,17 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
             crate::work::range_emitted(1);
             Ok(true)
         }
-        fixed_tree::LocalInsert::General => {
-            replace(store, root, record_count, from, to, Some(value))
-        }
+        fixed_tree::LocalInsert::General(rejected) => replace_with_hint(
+            store,
+            root,
+            record_count,
+            Change {
+                from,
+                to,
+                value: Some(value),
+            },
+            Some(rejected),
+        ),
     }
 }
 
@@ -245,18 +290,105 @@ fn replace<K: IpKey, S: RangeStore>(
     to: K,
     value: Option<u32>,
 ) -> Result<bool> {
+    replace_with_hint(store, root, record_count, Change { from, to, value }, None)
+}
+
+#[derive(Clone, Copy)]
+struct Change<K> {
+    from: K,
+    to: K,
+    value: Option<u32>,
+}
+
+fn replace_with_hint<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    change: Change<K>,
+    hint: Option<fixed_tree::LocalReject<Range<K>>>,
+) -> Result<bool> {
+    let Change { from, to, value } = change;
     if from > to {
         return Err(Error::InvalidArgument("range start is after its end"));
     }
-    let predecessor = read_predecessor::<K, S>(store, *root, from)?;
+    let (predecessor, hint) = match hint {
+        Some(hint) => match hint.predecessor().copied() {
+            Some(predecessor) => (Some(predecessor), Some(hint)),
+            None => (read_predecessor::<K, S>(store, *root, from)?, None),
+        },
+        None => (read_predecessor::<K, S>(store, *root, from)?, None),
+    };
     if value.is_some_and(|new_value| {
         predecessor.is_some_and(|old| old.to >= to && old.value == new_value)
     }) {
         return Ok(false);
     }
+    if let Some(old) = predecessor.filter(|old| old.from < from && old.to > to) {
+        return replace_strictly_inside(store, root, record_count, old, change, hint);
+    }
     let mut rewrite = trim_predecessor(store, root, record_count, predecessor, from, to)?;
     trim_following(store, root, record_count, from, to, &mut rewrite)?;
     write_replacement(store, root, record_count, from, to, value, rewrite)
+}
+
+fn replace_strictly_inside<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    old: Range<K>,
+    change: Change<K>,
+    hint: Option<fixed_tree::LocalReject<Range<K>>>,
+) -> Result<bool> {
+    let Change { from, to, value } = change;
+    let left = EncodedRange::new(Range {
+        from: old.from,
+        to: from.checked_previous().expect("from is above old.from"),
+        value: old.value,
+    })?;
+    let right = EncodedRange::new(Range {
+        from: to.checked_next().expect("to is below old.to"),
+        to: old.to,
+        value: old.value,
+    })?;
+    let middle = value
+        .map(|value| EncodedRange::new(Range { from, to, value }))
+        .transpose()?;
+    let mut retired = RetiredPages::new();
+    if let Some(middle) = middle.as_ref() {
+        let cells = [left.as_slice(), middle.as_slice(), right.as_slice()];
+        replace_strict_cells::<K, S>(store, root, old.from, &cells, hint, &mut retired)?;
+    } else {
+        let cells = [left.as_slice(), right.as_slice()];
+        replace_strict_cells::<K, S>(store, root, old.from, &cells, hint, &mut retired)?;
+    }
+    store.retire_pages(retired.as_slice())?;
+    *record_count = record_count
+        .checked_add(if middle.is_some() { 2 } else { 1 })
+        .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
+    store.range_record_added(value.unwrap_or(old.value))?;
+    if middle.is_some() {
+        store.range_record_added(old.value)?;
+    }
+    crate::work::range_emitted(if middle.is_some() { 3 } else { 2 });
+    crate::work::range_split(1);
+    Ok(true)
+}
+
+fn replace_strict_cells<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    old_key: K,
+    cells: &[&[u8]],
+    hint: Option<fixed_tree::LocalReject<Range<K>>>,
+    retired: &mut RetiredPages,
+) -> Result<()> {
+    if let Some(hint) = hint {
+        fixed_tree::replace_local_predecessor_with::<RangeCodec<K>, S, _>(
+            store, root, hint, old_key, cells,
+        )
+    } else {
+        fixed_tree::replace_leaf_with::<RangeCodec<K>, S>(store, root, old_key, cells, retired)
+    }
 }
 
 struct Rewrite<K> {
@@ -446,30 +578,6 @@ fn read_at_or_after<K: IpKey, S: Store>(store: &S, root: u32, key: K) -> Result<
     fixed_tree::at_or_after::<RangeCodec<K>, S>(store, root, key)?
         .map(decode::<K>)
         .transpose()
-}
-
-fn local_gap_accepts<K: IpKey>(
-    previous: Option<&[u8]>,
-    next: Option<&[u8]>,
-    range: Range<K>,
-) -> Result<bool> {
-    if let Some(previous) = previous {
-        let previous = decode_cell::<K>(previous)?;
-        if previous.to >= range.from
-            || (previous.value == range.value && previous.to.checked_next() == Some(range.from))
-        {
-            return Ok(false);
-        }
-    }
-    if let Some(next) = next {
-        let next = decode_cell::<K>(next)?;
-        if next.from <= range.to
-            || (next.value == range.value && range.to.checked_next() == Some(next.from))
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 fn decode<K: IpKey>(cell: LeafBuf) -> Result<Range<K>> {

@@ -3,7 +3,7 @@
 use crate::bitmap_page;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 use super::super::page::{
     coverage_intersects, initialize, initialize_summary, parse, set_branch_child, stamp_leaf,

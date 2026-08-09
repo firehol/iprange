@@ -5,6 +5,7 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::range_tree::Record;
 use crate::validation::{ValidationAddressFence, ValidationObject, ValidationReason};
 
+use super::range_build::RangeOutput;
 use super::report::{RecoverySink, Reporter, Unknown};
 
 pub(super) struct Components<'a, 'b, S, K> {
@@ -60,7 +61,7 @@ impl<'a, 'b, S: RecoverySink, K: DirectKey> Components<'a, 'b, S, K> {
         Ok(())
     }
 
-    pub(super) fn finish(mut self) -> Result<()> {
+    fn finish(&mut self) -> Result<()> {
         if let Some(component) = self.component.take() {
             self.finish_component(component)?;
         }
@@ -105,6 +106,16 @@ impl<'a, 'b, S: RecoverySink, K: DirectKey> Components<'a, 'b, S, K> {
             self.output = Some(record);
         }
         Ok(())
+    }
+}
+
+impl<S: RecoverySink, K: DirectKey> RangeOutput<K> for Components<'_, '_, S, K> {
+    fn push(&mut self, record: Record<K>) -> Result<()> {
+        Components::push(self, record)
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        Components::finish(self)
     }
 }
 

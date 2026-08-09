@@ -609,6 +609,40 @@ Open decisions:
   integration, C ABI, conformance, crash, recovery, snapshot, and workflow
   suite. Warnings-denied Clippy, the architecture gate, four-target source
   graph, and mmap-only source gate also pass.
+- Moved mapped page source/sink/edit capability into `page_io`, leaving slotted
+  pages responsible only for their format and edits. Common page-header
+  geometry now has one owner used by bootstrap, codecs, checksums, validation,
+  recovery, and builders.
+- Consolidated duplicated POSIX/Windows publication namespace policy above the
+  syscall-specific implementations. Both platforms now share name validation,
+  absence checks, creator checks, and stable directory-entry representation.
+- Replaced the separate direct and membership recovery tree builders with one
+  policy-driven range builder. Best-effort source selection remains separate;
+  final mapped range-page construction and normalization now have one owner.
+- The million-range nested-overwrite audit found repeated predecessor searches,
+  separate mutation searches, generic leaf copies, variable-size split scans,
+  and slot sorting on fixed-size range pages. The private-ingestion path now
+  carries its already selected mapped path and typed predecessor into one
+  replacement, and fixed codecs use arithmetic split selection plus linear
+  packed-page truncation.
+- The permanent nested-work test requires exactly 1,023 tree lookups for 1,024
+  nested inputs: none for the first insertion and one for each later input.
+  Arrival-order property tests continue to prove that each smaller later range
+  overwrites only its covered portion.
+- Five pinned release runs place one million nested overwrites at 0.307-0.328
+  seconds, down from the 4.041-second SOW baseline. The same pinned build
+  measured direct replacement at 0.427 seconds, retention at 0.568 seconds,
+  421-feed replacement at 0.934 seconds, and 421-feed import at 0.449 seconds.
+  Each timed writer path performs only 20-22 fixed setup allocations.
+- Pinned one-million-operation readers measured 0.142 seconds for live and
+  immutable 421-feed membership lookup, 0.073 seconds for direct lookup,
+  0.007-0.013 seconds for direct scans, and 0.007-0.008 seconds for named-feed
+  scans. All timed reader paths allocate zero bytes. A one-million-range
+  snapshot measured 0.057 seconds.
+- The complete supported workspace test graph, warnings-denied Clippy,
+  architecture gate, 266-file mmap source scan, syscall-traced mmap runtime
+  gate, and 361-source Linux/Windows/macOS/FreeBSD compile graph pass after this
+  slice. The final clean-audit loop and native target runs remain pending.
 
 ## Validation
 
@@ -628,10 +662,18 @@ Tests or equivalent validation:
 - Focused fixed-tree, slotted-page, direct-workflow, and membership-view tests
   prove the removed scans/passes and retain structural-damage rejection where
   the operation depends on the complete structure.
+- The current candidate passes
+  `cargo test --manifest-path v4/rust/Cargo.toml --workspace --all-features
+  --all-targets`, warnings-denied workspace Clippy, `check-architecture.sh`,
+  `check-mmap-storage.sh`, `check-mmap-runtime.sh`, and
+  `check-source-graph.sh` on the local Linux host.
 
 Real-use evidence:
 
-- Pending update-ipsets-shaped final benchmark.
+- The update-ipsets-shaped release benchmark covers one million direct,
+  retention, nested, exact-feed, import, lookup, scan, and snapshot operations.
+  Final repeated measurements and authorized native-target evidence remain
+  pending.
 
 Reviewer findings:
 

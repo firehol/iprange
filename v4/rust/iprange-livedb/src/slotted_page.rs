@@ -1,9 +1,10 @@
 //! Shared fixed-record slotted-page primitives.
 
-use crate::contract::{u16_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u16_le, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::mapping::{ByteRange, ByteSource, PageMut};
+use crate::mapping::{ByteRange, ByteSource};
 use crate::page_header;
+use crate::page_io::{PageEdit, PageSink};
 
 pub(crate) const HEADER_SIZE: usize = page_header::SIZE;
 const MAX_SLOT_COUNT: usize = (PAGE_SIZE - HEADER_SIZE) / 2;
@@ -433,6 +434,77 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
     })
 }
 
+pub(crate) fn truncate_fixed<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    keep: usize,
+    cell_len: usize,
+) -> Result<Header> {
+    if keep == 0 || keep > header.item_count || cell_len == 0 {
+        return Err(Error::Corrupt("fixed slotted-page truncation is invalid"));
+    }
+    if keep == header.item_count {
+        return Ok(*header);
+    }
+    let payload = header
+        .item_count
+        .checked_mul(cell_len)
+        .and_then(|bytes| header.upper.checked_add(bytes))
+        .ok_or_else(|| Error::corrupt("fixed slotted-page payload overflows"))?;
+    if payload != PAGE_SIZE {
+        return Err(Error::Corrupt("fixed slotted-page payload is not packed"));
+    }
+    let mut physical_to_logical = [u16::MAX; MAX_SLOT_COUNT];
+    let positions = physical_to_logical
+        .get_mut(..header.item_count)
+        .ok_or(Error::Corrupt("slotted-page slot count is invalid"))?;
+    for logical in 0..header.item_count {
+        crate::work::slot_scan_step(1);
+        let start = slot_start(page.view(), header, logical)?;
+        let offset = start.checked_sub(header.upper).ok_or(Error::Corrupt(
+            "fixed slotted-page record is outside payload",
+        ))?;
+        if offset % cell_len != 0 {
+            return Err(Error::Corrupt("fixed slotted-page record is misaligned"));
+        }
+        let physical = offset / cell_len;
+        let slot = positions.get_mut(physical).ok_or(Error::Corrupt(
+            "fixed slotted-page record is outside payload",
+        ))?;
+        if *slot != u16::MAX {
+            return Err(Error::Corrupt("fixed slotted-page records overlap"));
+        }
+        *slot = logical as u16;
+    }
+    if positions.contains(&u16::MAX) {
+        return Err(Error::Corrupt("fixed slotted-page payload has a gap"));
+    }
+
+    let mut destination = PAGE_SIZE;
+    for physical in (0..positions.len()).rev() {
+        let logical = usize::from(positions[physical]);
+        if logical < keep {
+            let start = header.upper + physical * cell_len;
+            destination -= cell_len;
+            page.copy_within(start, destination, cell_len)?;
+            page.put_u16(HEADER_SIZE + logical * 2, destination as u16)?;
+        }
+    }
+
+    let lower = HEADER_SIZE + keep * 2;
+    page.zero(lower, header.lower - lower)?;
+    page.zero(header.upper, destination - header.upper)?;
+    page.put_u16(page_header::ITEM_COUNT, keep as u16)?;
+    page.put_u16(page_header::LOWER, lower as u16)?;
+    page.put_u16(page_header::UPPER, destination as u16)?;
+    Ok(Header {
+        item_count: keep,
+        level: header.level,
+        lower,
+        upper: destination,
+    })
+}
+
 #[derive(Clone, Copy)]
 struct PhysicalRecord {
     start: u16,
@@ -517,19 +589,19 @@ impl Appender {
         level: u16,
         aux: u32,
     ) -> Self {
-        page.fill(0);
-        page.write(0, &PAGE_MAGIC)
-            .expect("fixed mapped header fits");
-        page.set_byte(page_header::TYPE, page_type)
-            .expect("fixed mapped header fits");
-        page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)
-            .expect("fixed mapped header fits");
-        page.put_u64(page_header::BORN_TXN, born_txn)
-            .expect("fixed mapped header fits");
-        page.put_u16(page_header::LEVEL, level)
-            .expect("fixed mapped header fits");
-        page.put_u32(page_header::AUX, aux)
-            .expect("fixed mapped header fits");
+        page_header::initialize(
+            page,
+            page_header::Fields {
+                page_type,
+                born_txn,
+                item_count: 0,
+                level,
+                lower: HEADER_SIZE as u16,
+                upper: PAGE_SIZE as u16,
+                aux,
+            },
+        )
+        .expect("fixed mapped header fits");
         Self {
             item_count: 0,
             upper: PAGE_SIZE,
@@ -598,75 +670,6 @@ impl<'a, D: PageSink + ?Sized> Builder<'a, D> {
 
     pub(crate) fn finish(self) -> Result<()> {
         self.appender.finish(self.page)
-    }
-}
-
-pub(crate) trait PageSink {
-    fn fill(&mut self, value: u8);
-    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()>;
-    fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()>;
-    fn copy_within(&mut self, source_at: usize, destination_at: usize, len: usize) -> Result<()>;
-    fn set_byte(&mut self, at: usize, value: u8) -> Result<()>;
-    fn put_u16(&mut self, at: usize, value: u16) -> Result<()>;
-    fn put_u32(&mut self, at: usize, value: u32) -> Result<()>;
-    fn put_u64(&mut self, at: usize, value: u64) -> Result<()>;
-}
-
-pub(crate) trait PageEdit: PageSink {
-    type View<'a>: ByteSource
-    where
-        Self: 'a;
-
-    fn view(&self) -> Self::View<'_>;
-    fn zero(&mut self, at: usize, len: usize) -> Result<()>;
-}
-
-impl PageSink for PageMut<'_> {
-    fn fill(&mut self, value: u8) {
-        PageMut::fill(self, value);
-    }
-
-    fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
-        PageMut::write(self, at, bytes)
-    }
-
-    fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()> {
-        PageMut::write_source(self, at, bytes)
-    }
-
-    fn copy_within(&mut self, source_at: usize, destination_at: usize, len: usize) -> Result<()> {
-        PageMut::copy_within(self, source_at, destination_at, len)
-    }
-
-    fn set_byte(&mut self, at: usize, value: u8) -> Result<()> {
-        PageMut::set_byte(self, at, value)
-    }
-
-    fn put_u16(&mut self, at: usize, value: u16) -> Result<()> {
-        PageMut::put_u16(self, at, value)
-    }
-
-    fn put_u32(&mut self, at: usize, value: u32) -> Result<()> {
-        PageMut::put_u32(self, at, value)
-    }
-
-    fn put_u64(&mut self, at: usize, value: u64) -> Result<()> {
-        PageMut::put_u64(self, at, value)
-    }
-}
-
-impl PageEdit for PageMut<'_> {
-    type View<'a>
-        = crate::mapping::PageView<'a>
-    where
-        Self: 'a;
-
-    fn view(&self) -> Self::View<'_> {
-        PageMut::view(self)
-    }
-
-    fn zero(&mut self, at: usize, len: usize) -> Result<()> {
-        PageMut::zero(self, at, len)
     }
 }
 

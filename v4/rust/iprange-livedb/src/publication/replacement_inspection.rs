@@ -4,7 +4,7 @@ use std::fs::File;
 
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::contract::{MetaV4, PAGE_SIZE};
+use crate::contract::MetaV4;
 use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::MAIN_LIFETIME_LOCK;
@@ -228,7 +228,7 @@ fn desired_meta(
     if byte_length != header.output_byte_length || sha512 != header.output_sha512 {
         return Ok(None);
     }
-    if byte_length < (2 * PAGE_SIZE) as u64 || byte_length % PAGE_SIZE as u64 != 0 {
+    if !bootstrap::geometry_valid(byte_length) {
         return Ok(None);
     }
     let left = mapping.page(0, 2).map_err(|error| Problem::sdk(&error))?;

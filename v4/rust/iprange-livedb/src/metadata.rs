@@ -2,18 +2,15 @@
 
 use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, Status};
 
-use crate::contract::{
-    u16_le, u32_le, u64_le, MetaV4, MAX_METADATA_UNCOMPRESSED, PAGE_MAGIC, PAGE_SIZE,
-};
+use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_METADATA_UNCOMPRESSED, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::page_header;
-use crate::slotted_page::PageEdit;
+use crate::page_io::PageEdit;
 
 pub(crate) const PAGE_TYPE: u8 = page_type::METADATA;
-pub(crate) const HEADER_SIZE: usize = 32;
 pub(crate) const DATA_OFFSET: usize = 48;
 pub(crate) const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
 pub(crate) const MAX_PAGES: usize = 260;
@@ -360,15 +357,18 @@ fn encode_page<P: PageEdit>(
     logical_offset: u64,
     bytes: &[u8],
 ) -> Result<()> {
-    page.fill(0);
-    page.write(0, &PAGE_MAGIC)?;
-    page.set_byte(page_header::TYPE, PAGE_TYPE)?;
-    page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)?;
-    page.put_u64(page_header::BORN_TXN, born_txn)?;
-    page.put_u16(page_header::ITEM_COUNT, 1)?;
-    page.put_u16(page_header::LEVEL, 0)?;
-    page.put_u16(page_header::LOWER, (DATA_OFFSET + bytes.len()) as u16)?;
-    page.put_u16(page_header::UPPER, PAGE_SIZE as u16)?;
+    page_header::initialize(
+        page,
+        page_header::Fields {
+            page_type: PAGE_TYPE,
+            born_txn,
+            item_count: 1,
+            level: 0,
+            lower: (DATA_OFFSET + bytes.len()) as u16,
+            upper: PAGE_SIZE as u16,
+            aux: 0,
+        },
+    )?;
     page.put_u32(32, next)?;
     page.put_u16(36, bytes.len() as u16)?;
     page.put_u64(40, logical_offset)?;

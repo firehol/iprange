@@ -2,19 +2,18 @@
 
 use std::fs::File;
 
-use crate::contract::{
-    u64_le, AddressFamily, MetaV4, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_MAGIC, PAGE_SIZE,
-};
+use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog;
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::mapping::{ByteSource, Mapping, PageMut, PageView};
+use crate::mapping::{Mapping, PageMut, PageView};
 use crate::membership_delta::Delta;
 use crate::membership_dictionary::{self, State};
 use crate::metadata;
 use crate::page_checksum;
+use crate::page_header;
 use crate::used_bitmap::{self, Kind};
 
 mod membership;
@@ -411,7 +410,7 @@ fn seal_pages(output: &mut Builder) -> Result<()> {
                 .mapping
                 .page_mut(page_number, output.meta.page_count)?;
             let view = page.view();
-            if !view.equals(0, &PAGE_MAGIC) || u64_le(view, 8) != output.meta.txn_id {
+            if !page_header::owned_by(view, output.meta.txn_id) {
                 return Err(Error::Corrupt("immutable output page ownership is invalid"));
             }
             page_checksum::seal_mapped(&mut page)
@@ -500,7 +499,7 @@ fn require_output_page(page_number: u32, page_limit: u64) -> Result<()> {
 }
 
 fn require_output_owner(page: PageView<'_>, txn: u64) -> Result<()> {
-    if page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == txn {
+    if page_header::owned_by(page, txn) {
         Ok(())
     } else {
         Err(Error::Corrupt("immutable output page ownership is invalid"))

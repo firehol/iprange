@@ -3,7 +3,7 @@
 use crate::bitmap_page::{child_index, coverage, leaf_word_index, required_level, LEAF_BITS};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::PageSink;
+use crate::page_io::PageSink;
 
 mod mutation;
 mod page;

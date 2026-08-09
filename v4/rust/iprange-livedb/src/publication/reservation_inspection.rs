@@ -3,7 +3,6 @@
 use std::fs::File;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::PAGE_SIZE;
 use crate::error;
 use crate::error::ErrorCode;
 use crate::live_lock::{self, Mode};
@@ -13,15 +12,11 @@ use super::namespace::{
     is_nofollow_symlink, Destination, Identity, Name, NamespaceError, Regular, ScanError,
 };
 use super::problem::Problem;
-use super::reservation::{self, Header, Selected};
+use super::reservation::{self, Header, Selected, FILE_SIZE, OPERATION_LOCK};
 use super::result::AccessPolicy;
 use super::{ArtifactKind, DirectoryRole};
 
-const FILE_SIZE: u64 = (2 * PAGE_SIZE) as u64;
-const OPERATION_LOCK: u64 = 0;
-const PREFIX: &[u8] = b".iprange-reservation-";
-const SUFFIX: &[u8] = b".tmp";
-const ENCODED_ATTEMPT_LEN: usize = 32;
+use super::namespace::{private_attempt, RESERVATION_PREFIX};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Location {
@@ -401,40 +396,20 @@ fn map_reservation(file: &File) -> Result<Mapping, ReadError> {
         .map_err(error::Error::from)
         .map_err(ReadError::Sdk)?
         .len()
-        != FILE_SIZE
+        != FILE_SIZE as u64
     {
         return Err(ReadError::Invalid);
     }
-    Mapping::read_write_view(file, FILE_SIZE).map_err(ReadError::Sdk)
+    Mapping::read_write_view(file, FILE_SIZE as u64).map_err(ReadError::Sdk)
 }
 
 fn read_selected(mapping: &Mapping) -> Result<Selected, ReadError> {
-    reservation::select(
-        mapping
-            .bytes(0, FILE_SIZE as usize)
-            .map_err(ReadError::Sdk)?,
-    )
-    .map_err(|_| ReadError::Invalid)
+    reservation::select(mapping.bytes(0, FILE_SIZE).map_err(ReadError::Sdk)?)
+        .map_err(|_| ReadError::Invalid)
 }
 
 fn parse_private_name(bytes: &[u8]) -> Option<[u8; 16]> {
-    let encoded = bytes.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
-    if encoded.len() != ENCODED_ATTEMPT_LEN {
-        return None;
-    }
-    let mut attempt = [0; 16];
-    for (slot, pair) in attempt.iter_mut().zip(encoded.chunks_exact(2)) {
-        *slot = decode_hex(pair[0])?.checked_mul(16)? + decode_hex(pair[1])?;
-    }
-    (attempt != [0; 16]).then_some(attempt)
-}
-
-fn decode_hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
+    private_attempt(RESERVATION_PREFIX, bytes)
 }
 
 fn invalid_private_entry(error: &NamespaceError) -> bool {

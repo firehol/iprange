@@ -2,10 +2,11 @@
 
 use std::marker::PhantomData;
 
-use crate::contract::{u64_le, MetaV4, MAX_TREE_LEVEL};
+use crate::contract::{MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::key::IpKey;
+use crate::page_header;
 use crate::range_cursor::DirectRange;
 use crate::range_tree::{self, Header};
 
@@ -110,7 +111,7 @@ impl<K: IpKey> Cursor<K> {
             let page_limit = self.page_limit;
             let (header, child) = store.inspect_page(page_number, |page| {
                 let header = range_tree::parse_header::<K, _>(page, selected_txn, expected_level)?;
-                if self.release_private && u64_le(page, 8) != selected_txn {
+                if self.release_private && page_header::born_txn(page) != selected_txn {
                     return Err(Error::Corrupt(
                         "consumed range tree contains a committed page",
                     ));

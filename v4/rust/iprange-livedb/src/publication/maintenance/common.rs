@@ -9,17 +9,14 @@ use crate::live_lock::{self, Mode};
 #[cfg(windows)]
 use crate::publication::gc_codec::Payload;
 use crate::publication::namespace::{
-    identity_from_local, Directory, Entry, Identity, Name, NamespaceError, Regular, ScanError,
-    IDENTITY_KIND,
+    identity_from_local, private_attempt, private_name, Directory, Entry, Identity, Name,
+    NamespaceError, Regular, ScanError, IDENTITY_KIND,
 };
 use crate::publication::ArtifactKind;
 use crate::publication::{
     AbandonedArtifactRemoval, CleanupState, Housekeeping, HousekeepingArtifact, PublicationProblem,
 };
 use crate::validation::LocalFileIdentity;
-
-const SUFFIX: &[u8] = b".tmp";
-const ENCODED_ID_LEN: usize = 32;
 
 #[cfg(windows)]
 type RetirementPayload = Option<Payload>;
@@ -71,26 +68,11 @@ impl Artifact {
                 "publication attempt id must be nonzero",
             ));
         }
-        let mut bytes = Vec::with_capacity(self.prefix.len() + ENCODED_ID_LEN + SUFFIX.len());
-        bytes.extend_from_slice(self.prefix);
-        for byte in attempt {
-            bytes.push(hex(byte >> 4));
-            bytes.push(hex(byte & 0x0f));
-        }
-        bytes.extend_from_slice(SUFFIX);
-        Name::new(&bytes).map_err(|error| self.namespace_error(error))
+        private_name(self.prefix, attempt).map_err(|error| self.namespace_error(error))
     }
 
     pub(super) fn decode_name(&self, bytes: &[u8]) -> Option<[u8; 16]> {
-        let encoded = bytes.strip_prefix(self.prefix)?.strip_suffix(SUFFIX)?;
-        if encoded.len() != ENCODED_ID_LEN {
-            return None;
-        }
-        let mut attempt = [0; 16];
-        for (slot, pair) in attempt.iter_mut().zip(encoded.chunks_exact(2)) {
-            *slot = unhex(pair[0])?.checked_mul(16)? + unhex(pair[1])?;
-        }
-        (attempt != [0; 16]).then_some(attempt)
+        private_attempt(self.prefix, bytes)
     }
 
     pub(super) fn scan(
@@ -471,20 +453,4 @@ fn retirement(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     )
-}
-
-fn hex(value: u8) -> u8 {
-    if value < 10 {
-        b'0' + value
-    } else {
-        b'a' + value - 10
-    }
-}
-
-fn unhex(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
-    }
 }
