@@ -821,6 +821,26 @@ Open decisions:
   live-reader timing/identity condition and makes the fixtures abort before
   cleanup; their complete code paths pass under AddressSanitizer and the normal
   native-C suite.
+- Native execution of pushed candidate `c4662dc` passed both feature matrices
+  on FreeBSD, including the exact immutable/publication-supported and
+  live-unsupported boundary. macOS exposed concurrent feed-catalog test files
+  colliding because their names used only process ID and wall-clock nanoseconds;
+  a per-process atomic suffix makes those fixtures distinct. Windows GNU passed
+  the native C header and caller boundary but found a committed range page with
+  a stale CRC after abort-retain-reuse.
+- The Windows root cause was page ownership inferred from bytes alone. A tail
+  retained from an aborted draft carries the same next transaction ID as its
+  retry, so generic allocation mistook it for a page already linked into the
+  retry's dirty chain. Monotonic tail allocation now always charges and links
+  the page as new; only pages recycled inside the active draft may preserve an
+  existing dirty link. The repair adds no lookup, scan, bulk clear, allocation,
+  or I/O. A platform-independent regression constructs the retained stale tail
+  and proves the retry seals it at prepare time.
+- After the retained-tail repair, both local workspace feature matrices pass,
+  including the new regression and the complete native-C suite. Formatting,
+  warnings-denied Clippy and rustdoc, architecture, static and runtime mmap,
+  and the 379-source/four-target compiler-graph gates also pass. Native proof
+  remains pending on the exact repaired commit.
 
 ## Pre-Native Candidate Audit - 2026-08-09
 

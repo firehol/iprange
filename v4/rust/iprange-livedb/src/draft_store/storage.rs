@@ -180,6 +180,15 @@ impl DraftStore<'_> {
     pub(super) fn claim_allocated(&mut self, page_number: u32) -> Result<()> {
         require_page(page_number, self.draft.meta.page_count)?;
         let existing = self.existing_dirty_tag(page_number)?;
+        self.claim_page(page_number, existing)
+    }
+
+    pub(super) fn claim_new_tail(&mut self, page_number: u32) -> Result<()> {
+        require_page(page_number, self.draft.meta.page_count)?;
+        self.claim_page(page_number, None)
+    }
+
+    fn claim_page(&mut self, page_number: u32, existing: Option<u32>) -> Result<()> {
         let tag = existing.unwrap_or(if self.draft.dirty_head == 0 {
             DIRTY_END
         } else {

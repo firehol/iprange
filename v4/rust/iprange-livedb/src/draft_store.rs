@@ -492,7 +492,7 @@ impl<'a> DraftStore<'a> {
         let page_number = self.draft.meta.page_count as u32;
         self.draft.meta.page_count += 1;
         self.draft.growth_pages += 1;
-        self.claim_allocated(page_number)?;
+        self.claim_new_tail(page_number)?;
         Ok(page_number)
     }
 

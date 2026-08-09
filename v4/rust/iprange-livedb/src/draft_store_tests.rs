@@ -188,6 +188,40 @@ fn mapped_page_cannot_bypass_the_current_page_limit() {
 }
 
 #[test]
+fn retained_aborted_tail_is_linked_into_the_retry_dirty_chain() {
+    let mut test = TestFile::new();
+    let creation = empty_direct_meta(1);
+    let budget = PageBudget {
+        max_heap_bytes: 0,
+        max_private_pages: 8,
+        max_growth_pages: 8,
+    };
+
+    let mut aborted = Draft::new(creation, [3; 16]).unwrap();
+    {
+        let mut store =
+            DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut aborted);
+        store.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+    }
+    assert_eq!(aborted.meta.txn_id, 2);
+    assert_eq!(aborted.meta.range_root, 2);
+
+    let mut retry = Draft::new(creation, [4; 16]).unwrap();
+    {
+        let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut retry);
+        store.assign_v4(Ipv4Key(30), Ipv4Key(40), 9).unwrap();
+        store.prepare().unwrap();
+    }
+    assert_eq!(retry.meta.txn_id, 2);
+    assert_eq!(retry.meta.range_root, 2);
+    assert!(crate::page_checksum::valid(
+        test.mapping
+            .page(retry.meta.range_root, retry.meta.page_count)
+            .unwrap()
+    ));
+}
+
+#[test]
 fn mutation_defers_each_data_page_checksum_until_prepare() {
     let mut test = TestFile::new();
     let creation = empty_direct_meta(1);
