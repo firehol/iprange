@@ -4,10 +4,16 @@
 mod catalog_ops;
 #[path = "draft_store/feed_merge.rs"]
 mod feed_merge;
+#[path = "draft_store/import_cache.rs"]
+mod import_cache;
+#[path = "draft_store/import_merge.rs"]
+mod import_merge;
 #[path = "draft_store/membership.rs"]
 mod membership_ops;
 #[path = "draft_store/metadata.rs"]
 mod metadata_ops;
+#[path = "draft_store/range_merge.rs"]
+mod range_merge;
 #[path = "draft_store/retention.rs"]
 mod retention;
 #[path = "draft_store/storage.rs"]
@@ -34,6 +40,8 @@ pub(crate) struct PageBudget {
 }
 
 pub(crate) use feed_merge::FeedMerge;
+pub(crate) use import_cache::{ImportCache, ImportWords};
+pub(crate) use import_merge::{ImportMerge, TranslatedMembership};
 pub(crate) use retention::RetentionMerge;
 
 #[derive(Debug)]
@@ -48,6 +56,7 @@ pub(crate) struct Draft {
     changed: bool,
     metadata_staged: bool,
     range_tree_private: bool,
+    base_range_tree_retired: bool,
     membership_delta_root: u32,
     workflow_range_root: u32,
     workflow_range_count: u64,
@@ -81,6 +90,7 @@ impl Draft {
             changed: false,
             metadata_staged: false,
             range_tree_private: false,
+            base_range_tree_retired: false,
             membership_delta_root: 0,
             workflow_range_root: 0,
             workflow_range_count: 0,

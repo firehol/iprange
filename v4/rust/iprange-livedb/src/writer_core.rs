@@ -2,8 +2,6 @@
 
 mod close;
 mod edit;
-#[path = "live_writer/membership_import/cache.rs"]
-mod import_cache;
 mod open;
 mod publication;
 mod reclaim;
@@ -25,8 +23,8 @@ use crate::process_identity::ProcessIdentity;
 use crate::random;
 use crate::workflow::{compare, Comparison};
 
+pub(crate) use crate::draft_store::{ImportCache, ImportWords, TranslatedMembership};
 pub(crate) use edit::WriterEdit;
-pub(crate) use import_cache::{ImportCache, WordMap};
 pub(crate) use publication::{CommitAttempt, PublishOutcome};
 
 /// Logical generation facts needed by writer workflows.

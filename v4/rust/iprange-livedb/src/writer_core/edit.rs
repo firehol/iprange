@@ -3,11 +3,15 @@
 use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::contract::MembershipOperation;
-use crate::draft_store::{DraftStore, FeedMerge, RetentionMerge};
+use crate::draft_store::{
+    DraftStore, FeedMerge, ImportCache, ImportMerge, ImportWords, RetentionMerge,
+    TranslatedMembership,
+};
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::membership_dictionary::Interned;
+use crate::reader_core::MembershipToken;
 
 pub(crate) struct WriterEdit<'a> {
     pub(super) store: DraftStore<'a>,
@@ -109,22 +113,6 @@ impl<'a> WriterEdit<'a> {
             .apply_membership_v6(from, to, id, words, operation)
     }
 
-    pub(crate) fn apply_membership_cancellable<K: IpKey, F>(
-        &mut self,
-        from: K,
-        to: K,
-        id: u32,
-        words: u32,
-        operation: MembershipOperation,
-        checkpoint: &mut F,
-    ) -> Result<bool>
-    where
-        F: FnMut() -> Result<()>,
-    {
-        self.store
-            .apply_membership_cancellable(from, to, id, words, operation, checkpoint)
-    }
-
     pub(crate) fn add_feed_coverage<K: IpKey>(&mut self, from: K, to: K) -> Result<()> {
         self.store.add_feed_coverage(from, to)
     }
@@ -137,6 +125,78 @@ impl<'a> WriterEdit<'a> {
     ) -> Result<FeedMerge> {
         self.store
             .merge_feed(&self.base, member, create, cancellation)
+    }
+
+    pub(crate) fn begin_import_merge<K: IpKey>(
+        &mut self,
+        cancellation: &CancellationToken,
+    ) -> Result<ImportMerge<K>> {
+        ImportMerge::new(&mut self.store, &self.base, cancellation)
+    }
+
+    pub(crate) fn map_import_feed(
+        &mut self,
+        cache: &mut ImportCache,
+        source: FeedEntry,
+        destination: FeedEntry,
+    ) -> Result<()> {
+        cache.map_feed(&mut self.store, source, destination)
+    }
+
+    pub(crate) fn cached_import_membership(
+        &self,
+        cache: &ImportCache,
+        source: MembershipToken,
+    ) -> Result<Option<TranslatedMembership>> {
+        cache.membership(&self.store, source)
+    }
+
+    pub(crate) fn map_import_word_batch(
+        &mut self,
+        cache: &ImportCache,
+        words: &mut ImportWords,
+        start: u32,
+        source_words: &[u64],
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        cache.map_word_batch(&mut self.store, words, start, source_words, cancellation)
+    }
+
+    pub(crate) fn finish_import_membership(
+        &mut self,
+        cache: &mut ImportCache,
+        source: MembershipToken,
+        words: &mut ImportWords,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslatedMembership> {
+        cache.finish_membership(&mut self.store, source, words, cancellation)
+    }
+
+    pub(crate) fn release_import_cache(
+        &mut self,
+        cache: &mut ImportCache,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        cache.release(&mut self.store, cancellation)
+    }
+
+    pub(crate) fn push_import_range<K: IpKey>(
+        &mut self,
+        merge: &mut ImportMerge<K>,
+        from: K,
+        to: K,
+        membership: TranslatedMembership,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        merge.push(&mut self.store, from, to, membership, cancellation)
+    }
+
+    pub(crate) fn finish_import_merge<K: IpKey>(
+        &mut self,
+        merge: ImportMerge<K>,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::workflow::Comparison> {
+        merge.finish(&mut self.store, cancellation)
     }
 
     pub(crate) fn delete_current_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {

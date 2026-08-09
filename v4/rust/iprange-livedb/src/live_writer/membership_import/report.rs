@@ -15,10 +15,10 @@ pub(super) fn prepare(
 ) -> Result<WorkflowReport> {
     let before = writer.core.base_info();
     let after = writer.core.current_info();
-    let comparison = writer
-        .core
-        .compare_maps(cancellation)
+    cancellation
+        .check()
         .map_err(|error| writer.abort_after(error))?;
+    let comparison = stats.comparison;
     let map_change = classify(&comparison);
     let logical_change = if stats.created_feeds != 0 || map_change == LogicalChange::Changed {
         LogicalChange::Changed

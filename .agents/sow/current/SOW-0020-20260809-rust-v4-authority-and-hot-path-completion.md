@@ -537,6 +537,30 @@ Open decisions:
   one million unordered ranges with 421 feeds on the pinned reference P-core,
   down from the 2.50-second baseline. The complete all-feature/all-target Rust
   workspace graph and the four-target source graph pass after this slice.
+- Replaced the separate feed and retention sweeps plus membership import's
+  per-range general mutation with one authoritative ordered old/input merge.
+  Policies now contain only the feed, retention, or import value rule and exact
+  report accounting; mapped output construction, range alignment, coalescing,
+  membership refcounts, old-tree retirement, and empty-input preservation have
+  one implementation.
+- Membership import now consumes its already ordered source incrementally,
+  translates names through mapped operation-private state owned by the draft
+  layer, and calculates the complete old/new comparison during the same sweep.
+  The high-level importer no longer handles destination membership IDs, bitmap
+  lengths, destination feed indexes, physical cache pages, or a final
+  `compare_maps` pass.
+- Permanent necessary-work evidence now requires exactly the source feed scan,
+  source range scan, destination range scan, and one output pass for a
+  representative import. The measured import path remains heap-allocation-free.
+- Pinned release measurements after this consolidation are 0.804 seconds for
+  one million exact-feed inputs with 421 feeds, 0.567 seconds for one million
+  imported membership ranges with 421 feeds, and 0.440 seconds for one million
+  retention inputs. The respective prior measurements were about 2.50, 1.49,
+  and 0.42 seconds.
+- The supported all-feature/all-target workspace graph passes with 354 Rust
+  engine unit tests plus all integration, C ABI, conformance, crash, recovery,
+  snapshot, and workflow tests. The four-target source graph, architecture
+  boundary gate, mmap-only source gate, and warnings-denied Clippy also pass.
 
 ## Validation
 

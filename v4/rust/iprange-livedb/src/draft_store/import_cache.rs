@@ -1,13 +1,16 @@
-//! Operation-private import translation indexes.
+//! Mapped operation-private state for name-based membership import.
 
+use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
+use crate::feed::FeedEntry;
 use crate::fixed_tree::{self, Codec, RetiredPages, RetiringStore, Store};
 use crate::mapping::ByteSource;
-use crate::membership_dictionary::Words;
+use crate::membership_dictionary::{Interned, Words};
 use crate::reader_core::MembershipToken;
 use crate::slotted_page::{put_u32, put_u64};
-use crate::writer_core::WriterEdit;
+
+use super::{DraftStore, TranslatedMembership};
 
 const CACHE_BRANCH: u8 = 240;
 const CACHE_LEAF: u8 = 241;
@@ -22,7 +25,7 @@ pub(crate) struct ImportCache {
     translated_memberships: u64,
 }
 
-pub(crate) struct WordMap {
+pub(crate) struct ImportWords {
     root: u32,
     word_count: u32,
 }
@@ -47,50 +50,55 @@ impl ImportCache {
 
     pub(crate) fn map_feed(
         &mut self,
-        edit: &mut WriterEdit<'_>,
-        source_index: u32,
-        destination_index: u32,
+        store: &mut DraftStore<'_>,
+        source: FeedEntry,
+        destination: FeedEntry,
     ) -> Result<()> {
         insert_new(
-            &mut edit.store,
+            store,
             &mut self.root,
             Entry {
-                key: namespaced(FEED_KEY, source_index),
-                value: destination_index,
+                key: namespaced(FEED_KEY, source.index),
+                value: destination.index,
                 words: 0,
             },
         )
     }
 
-    pub(crate) fn feed(&self, edit: &WriterEdit<'_>, source_index: u32) -> Result<Option<u32>> {
-        Ok(
-            lookup(&edit.store, self.root, namespaced(FEED_KEY, source_index))?
-                .map(|entry| entry.value),
-        )
-    }
-
     pub(crate) fn membership(
         &self,
-        edit: &WriterEdit<'_>,
+        store: &DraftStore<'_>,
         source: MembershipToken,
-    ) -> Result<Option<(u32, u32)>> {
+    ) -> Result<Option<TranslatedMembership>> {
         Ok(lookup(
-            &edit.store,
+            store,
             self.root,
             namespaced(MEMBERSHIP_KEY, source.cache_key()),
         )?
-        .map(|entry| (entry.value, entry.words)))
+        .map(|entry| TranslatedMembership::new(entry.value, entry.words)))
     }
 
-    pub(crate) fn record_membership(
+    pub(crate) fn finish_membership(
         &mut self,
-        edit: &mut WriterEdit<'_>,
+        store: &mut DraftStore<'_>,
         source: MembershipToken,
-        destination_id: u32,
-        destination_words: u32,
-    ) -> Result<()> {
+        words: &mut ImportWords,
+        cancellation: &CancellationToken,
+    ) -> Result<TranslatedMembership> {
+        let destination = words.intern_and_release(store, &mut || cancellation.check())?;
+        self.record_membership(store, source, destination)
+    }
+
+    fn record_membership(
+        &mut self,
+        store: &mut DraftStore<'_>,
+        source: MembershipToken,
+        destination: Interned,
+    ) -> Result<TranslatedMembership> {
+        let destination_id = destination.id;
+        let destination_words = destination.word_count;
         insert_new(
-            &mut edit.store,
+            store,
             &mut self.root,
             Entry {
                 key: namespaced(MEMBERSHIP_KEY, source.cache_key()),
@@ -102,9 +110,9 @@ impl ImportCache {
             checked_increment(self.source_memberships, "source distinct membership count")?;
 
         let translated_key = namespaced(TRANSLATED_KEY, destination_id);
-        if lookup(&edit.store, self.root, translated_key)?.is_none() {
+        if lookup(store, self.root, translated_key)?.is_none() {
             insert_new(
-                &mut edit.store,
+                store,
                 &mut self.root,
                 Entry {
                     key: translated_key,
@@ -115,7 +123,51 @@ impl ImportCache {
             self.translated_memberships =
                 checked_increment(self.translated_memberships, "translated membership count")?;
         }
-        Ok(())
+        Ok(TranslatedMembership::new(destination_id, destination_words))
+    }
+
+    pub(crate) fn map_word_batch(
+        &self,
+        store: &mut DraftStore<'_>,
+        words: &mut ImportWords,
+        start: u32,
+        source_words: &[u64],
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        for (offset, &source_word) in source_words.iter().enumerate() {
+            let word_index = start
+                .checked_add(offset as u32)
+                .ok_or(Error::ArithmeticOverflow("source membership word index"))?;
+            if self.map_source_word(store, words, word_index, source_word, cancellation)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn map_source_word(
+        &self,
+        store: &mut DraftStore<'_>,
+        words: &mut ImportWords,
+        word_index: u32,
+        mut source_word: u64,
+        cancellation: &CancellationToken,
+    ) -> Result<bool> {
+        while source_word != 0 {
+            cancellation.check()?;
+            let bit = source_word.trailing_zeros();
+            let source_index = word_index
+                .checked_mul(64)
+                .and_then(|base| base.checked_add(bit))
+                .ok_or(Error::ArithmeticOverflow("source feed index"))?;
+            let Some(destination) = lookup(store, self.root, namespaced(FEED_KEY, source_index))?
+            else {
+                return Ok(true);
+            };
+            words.set_bit(store, destination.value)?;
+            source_word &= source_word - 1;
+        }
+        Ok(false)
     }
 
     pub(crate) const fn source_memberships(&self) -> u64 {
@@ -126,21 +178,20 @@ impl ImportCache {
         self.translated_memberships
     }
 
-    pub(crate) fn release<F>(&mut self, edit: &mut WriterEdit<'_>, checkpoint: &mut F) -> Result<()>
-    where
-        F: FnMut() -> Result<()>,
-    {
-        fixed_tree::discard_private_tree::<CacheCodec, _, _>(
-            &mut edit.store,
-            self.root,
-            checkpoint,
-        )?;
+    pub(crate) fn release(
+        &mut self,
+        store: &mut DraftStore<'_>,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        fixed_tree::discard_private_tree::<CacheCodec, _, _>(store, self.root, &mut || {
+            cancellation.check()
+        })?;
         self.root = 0;
         Ok(())
     }
 }
 
-impl WordMap {
+impl ImportWords {
     pub(crate) const fn new() -> Self {
         Self {
             root: 0,
@@ -148,18 +199,18 @@ impl WordMap {
         }
     }
 
-    pub(crate) fn set_bit(
-        &mut self,
-        edit: &mut WriterEdit<'_>,
-        destination_index: u32,
-    ) -> Result<()> {
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.word_count == 0
+    }
+
+    fn set_bit(&mut self, store: &mut DraftStore<'_>, destination_index: u32) -> Result<()> {
         let word_index = destination_index / 64;
-        let current = lookup(&edit.store, self.root, u64::from(word_index))?
+        let current = lookup(store, self.root, u64::from(word_index))?
             .map(Entry::joined)
             .unwrap_or(0);
         let word = current | (1u64 << (destination_index % 64));
         insert(
-            &mut edit.store,
+            store,
             &mut self.root,
             Entry::split(u64::from(word_index), word),
         )?;
@@ -171,43 +222,35 @@ impl WordMap {
         Ok(())
     }
 
-    pub(crate) const fn word_count(&self) -> u32 {
-        self.word_count
-    }
-
-    pub(crate) fn release<F>(&mut self, edit: &mut WriterEdit<'_>, checkpoint: &mut F) -> Result<()>
+    fn release<F>(&mut self, store: &mut DraftStore<'_>, checkpoint: &mut F) -> Result<()>
     where
         F: FnMut() -> Result<()>,
     {
-        fixed_tree::discard_private_tree::<CacheCodec, _, _>(
-            &mut edit.store,
-            self.root,
-            checkpoint,
-        )?;
+        fixed_tree::discard_private_tree::<CacheCodec, _, _>(store, self.root, checkpoint)?;
         self.root = 0;
         Ok(())
     }
 
-    pub(crate) fn intern_and_release<F>(
+    fn intern_and_release<F>(
         &mut self,
-        edit: &mut WriterEdit<'_>,
+        store: &mut DraftStore<'_>,
         checkpoint: &mut F,
-    ) -> Result<crate::membership_dictionary::Interned>
+    ) -> Result<Interned>
     where
         F: FnMut() -> Result<()>,
     {
-        let interned = edit.store.intern_membership(self)?;
-        self.release(edit, checkpoint)?;
+        let interned = store.intern_membership(self)?;
+        self.release(store, checkpoint)?;
         Ok(interned)
     }
 }
 
-impl<S: Store> Words<S> for WordMap {
+impl Words<DraftStore<'_>> for ImportWords {
     fn word_count(&self) -> u32 {
         self.word_count
     }
 
-    fn read_words(&self, store: &S, start: u32, output: &mut [u64]) -> Result<()> {
+    fn read_words(&self, store: &DraftStore<'_>, start: u32, output: &mut [u64]) -> Result<()> {
         output.fill(0);
         for (offset, word) in output.iter_mut().enumerate() {
             let index = start

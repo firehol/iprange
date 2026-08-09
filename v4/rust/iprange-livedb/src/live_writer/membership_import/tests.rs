@@ -98,6 +98,7 @@ fn open_import_processing_allocates_no_heap() {
 
     let mut source =
         LiveReader::open(&source_files.main, &crate::CancellationToken::new()).unwrap();
+    let source_records = source.info().unwrap().range_record_count;
     let cancellation = CancellationToken::new();
     let mut writer = LiveWriter::open(
         &destination_files.main,
@@ -109,9 +110,13 @@ fn open_import_processing_allocates_no_heap() {
         writer.begin_membership_import(MembershipImportSource::Live(&source), &cancellation)
     });
     assert_eq!(begin_allocations, 0);
-    let (finished, finish_allocations) =
-        count_thread_allocations(|| import.unwrap().finish_input());
+    let ((finished, work), finish_allocations) =
+        count_thread_allocations(|| crate::work::measure(|| import.unwrap().finish_input()));
     assert_eq!(finish_allocations, 0);
+    assert_eq!(work.source_passes, 3);
+    assert_eq!(work.output_passes, 1);
+    assert_eq!(work.ranges_consumed, source_records);
+    assert_eq!(work.ranges_emitted, source_records);
     match finished.unwrap() {
         FinishedWorkflow::Changed(prepared) => {
             prepared.commit().unwrap();

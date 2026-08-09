@@ -13,8 +13,8 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::live_namespace::Identity;
 use crate::live_reader::LiveReader;
 use crate::reader_core::{MembershipRange, MembershipRangeCursor, MembershipToken, ReaderCore};
-use crate::workflow::LogicalChange;
-use crate::writer_core::{ImportCache, WordMap, WriterEdit};
+use crate::workflow::{Comparison, LogicalChange};
+use crate::writer_core::{ImportCache, ImportWords, TranslatedMembership};
 use crate::{FeedCursor, ImmutableReader, MembershipView};
 
 use super::workflow::FinishedState;
@@ -54,6 +54,7 @@ struct ImportStats {
     created_feeds: u64,
     source_memberships: u64,
     translated_memberships: u64,
+    comparison: Comparison,
 }
 
 impl LiveWriter {
@@ -193,7 +194,7 @@ fn import_all(
     verify_source_counts(writer, source, &cache, &stats)?;
     stats.source_memberships = cache.source_memberships();
     stats.translated_memberships = cache.translated_memberships();
-    writer.mutate(|store| cache.release(store, &mut || cancellation.check()))?;
+    writer.mutate(|edit| edit.release_import_cache(&mut cache, cancellation))?;
     Ok(stats)
 }
 
@@ -224,7 +225,7 @@ fn import_feed(
     require_source_feed(writer, source, feed)?;
     writer.mutate(|store| {
         let (destination, created) = store.ensure_feed(feed.name)?;
-        cache.map_feed(store, feed.index, destination.index)?;
+        store.map_import_feed(cache, feed, destination)?;
         Ok(created)
     })
 }
@@ -257,24 +258,20 @@ fn import_ranges<K: IpKey>(
     cancellation: &CancellationToken,
 ) -> Result<()> {
     let mut cursor = external(writer, source.range_cursor::<K>())?;
+    let mut merge = writer.mutate(|edit| edit.begin_import_merge::<K>(cancellation))?;
     let mut previous = None;
     loop {
         external(writer, cancellation.check())?;
         let Some(range) = external(writer, cursor.next())? else {
+            stats.comparison =
+                writer.mutate(|edit| edit.finish_import_merge(merge, cancellation))?;
             return Ok(());
         };
         require_canonical_source_range(writer, previous, range)?;
         let membership =
             translate_membership(writer, source, cache, range.membership, cancellation)?;
-        writer.mutate(|store| {
-            store.apply_membership_cancellable(
-                range.from,
-                range.to,
-                membership.0,
-                membership.1,
-                crate::MembershipOperation::Union,
-                &mut || cancellation.check(),
-            )
+        writer.mutate(|edit| {
+            edit.push_import_range(&mut merge, range.from, range.to, membership, cancellation)
         })?;
         record_input_range(writer, stats, range)?;
         previous = Some(range);
@@ -287,16 +284,16 @@ fn translate_membership(
     cache: &mut ImportCache,
     source_membership: MembershipToken,
     cancellation: &CancellationToken,
-) -> Result<(u32, u32)> {
-    if let Some(translated) = writer.mutate(|store| cache.membership(store, source_membership))? {
+) -> Result<TranslatedMembership> {
+    if let Some(translated) =
+        writer.mutate(|edit| edit.cached_import_membership(cache, source_membership))?
+    {
         return Ok(translated);
     }
     let view = external(writer, source.membership(source_membership))?;
     let mut words = translate_words(writer, cache, &view, cancellation)?;
-    writer.mutate(|store| {
-        let interned = words.intern_and_release(store, &mut || cancellation.check())?;
-        cache.record_membership(store, source_membership, interned.id, interned.word_count)?;
-        Ok((interned.id, interned.word_count))
+    writer.mutate(|edit| {
+        edit.finish_import_membership(cache, source_membership, &mut words, cancellation)
     })
 }
 
@@ -305,9 +302,9 @@ fn translate_words(
     cache: &ImportCache,
     view: &MembershipView<'_>,
     cancellation: &CancellationToken,
-) -> Result<WordMap> {
+) -> Result<ImportWords> {
     let source_words = external(writer, view.word_count())?;
-    let mut words = WordMap::new();
+    let mut words = ImportWords::new();
     let mut start = 0u32;
     let mut buffer = [0u64; WORD_BATCH];
     while start < source_words {
@@ -322,7 +319,7 @@ fn translate_words(
             cancellation,
         )?;
     }
-    if words.word_count() == 0 {
+    if words.is_empty() {
         return Err(writer.abort_after_source(Error::Corrupt("source membership is empty")));
     }
     Ok(words)
@@ -332,7 +329,7 @@ fn translate_word_batch(
     writer: &mut LiveWriter,
     cache: &ImportCache,
     view: &MembershipView<'_>,
-    words: &mut WordMap,
+    words: &mut ImportWords,
     start: u32,
     buffer: &mut [u64],
     cancellation: &CancellationToken,
@@ -342,10 +339,10 @@ fn translate_word_batch(
     if read != buffer.len() {
         return Err(writer.abort_after_source(Error::Corrupt("source membership read ended early")));
     }
-    let missing = writer.mutate(|store| {
-        map_word_batch(store, cache, words, start, &buffer[..read], cancellation)
+    let missing = writer.mutate(|edit| {
+        edit.map_import_word_batch(cache, words, start, &buffer[..read], cancellation)
     })?;
-    if missing.is_some() {
+    if missing {
         return Err(writer.abort_after_source(Error::Corrupt(
             "source membership names an inactive feed index",
         )));
@@ -353,51 +350,6 @@ fn translate_word_batch(
     start
         .checked_add(read as u32)
         .ok_or_else(|| writer.abort_after_source(Error::ArithmeticOverflow("word index")))
-}
-
-fn map_word_batch(
-    store: &mut WriterEdit<'_>,
-    cache: &ImportCache,
-    words: &mut WordMap,
-    start: u32,
-    source_words: &[u64],
-    cancellation: &CancellationToken,
-) -> Result<Option<u32>> {
-    for (offset, &source_word) in source_words.iter().enumerate() {
-        let word_index = start
-            .checked_add(offset as u32)
-            .ok_or(Error::ArithmeticOverflow("source membership word index"))?;
-        if let Some(missing) =
-            map_source_word(store, cache, words, word_index, source_word, cancellation)?
-        {
-            return Ok(Some(missing));
-        }
-    }
-    Ok(None)
-}
-
-fn map_source_word(
-    store: &mut WriterEdit<'_>,
-    cache: &ImportCache,
-    words: &mut WordMap,
-    word_index: u32,
-    mut source_word: u64,
-    cancellation: &CancellationToken,
-) -> Result<Option<u32>> {
-    while source_word != 0 {
-        cancellation.check()?;
-        let bit = source_word.trailing_zeros();
-        let source_index = word_index
-            .checked_mul(64)
-            .and_then(|base| base.checked_add(bit))
-            .ok_or(Error::ArithmeticOverflow("source feed index"))?;
-        let Some(destination_index) = cache.feed(store, source_index)? else {
-            return Ok(Some(source_index));
-        };
-        words.set_bit(store, destination_index)?;
-        source_word &= source_word - 1;
-    }
-    Ok(None)
 }
 
 fn require_canonical_source_range<K: IpKey>(

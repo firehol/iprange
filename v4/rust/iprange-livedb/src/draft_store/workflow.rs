@@ -16,16 +16,22 @@ impl DraftStore<'_> {
         cancellation: &CancellationToken,
     ) -> Result<()> {
         cancellation.check()?;
-        match base.meta.address_family {
-            AddressFamily::Ipv4 => {
-                range_mutation::retire_tree::<Ipv4Key, _, _>(self, base.meta.range_root, || {
-                    cancellation.check()
-                })?;
-            }
-            AddressFamily::Ipv6 => {
-                range_mutation::retire_tree::<Ipv6Key, _, _>(self, base.meta.range_root, || {
-                    cancellation.check()
-                })?;
+        if !self.draft.base_range_tree_retired {
+            match base.meta.address_family {
+                AddressFamily::Ipv4 => {
+                    range_mutation::retire_tree::<Ipv4Key, _, _>(
+                        self,
+                        base.meta.range_root,
+                        || cancellation.check(),
+                    )?;
+                }
+                AddressFamily::Ipv6 => {
+                    range_mutation::retire_tree::<Ipv6Key, _, _>(
+                        self,
+                        base.meta.range_root,
+                        || cancellation.check(),
+                    )?;
+                }
             }
         }
         self.draft.finish_workflow();

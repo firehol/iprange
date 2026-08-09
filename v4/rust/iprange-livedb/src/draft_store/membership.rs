@@ -63,21 +63,6 @@ impl DraftStore<'_> {
         })
     }
 
-    pub(crate) fn apply_membership_cancellable<K: IpKey, F>(
-        &mut self,
-        from: K,
-        to: K,
-        membership_id: u32,
-        word_count: u32,
-        operation: MembershipOperation,
-        checkpoint: &mut F,
-    ) -> Result<bool>
-    where
-        F: FnMut() -> Result<()>,
-    {
-        self.apply_membership(from, to, membership_id, word_count, operation, checkpoint)
-    }
-
     pub(crate) fn delete_current_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {
         self.delete_current_feed_membership_cancellable(feed, &mut || Ok(()))
     }

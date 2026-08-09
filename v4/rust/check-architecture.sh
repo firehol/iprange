@@ -95,7 +95,6 @@ readers=(
 mapfile -t writer_adapters < <(
     find "$source_root/live_writer" -type f -name '*.rs' \
         ! -path "$source_root/live_writer/create.rs" \
-        ! -path "$source_root/live_writer/membership_import/cache.rs" \
         ! -name '*_test.rs' ! -name '*_tests.rs' ! -name 'tests.rs' -print
     printf '%s\n' "$source_root/live_writer.rs"
 )
