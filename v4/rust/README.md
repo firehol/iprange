@@ -35,14 +35,24 @@ builders. Sidecar coordination and filesystem namespace/publication are
 separate persistent concerns with separate owners.
 
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
-directions. The 2026-08-08 audit reduced the measured high-level Rust adapter
-set from 5,400 to 4,527 physical lines and exact duplicated source from 3,246
-lines (4.29%) to 2,476 (3.27%). The complete source-gate inventory is 76,092
-physical lines across 257 files, versus 75,936 before the refactor. That count
-includes the frozen 136-function C ABI, separate validation/recovery and
-cross-platform publication contracts, co-located cfg-gated test text, and 96
-lines of release-elided necessary-work proof machinery; it is not a claim that
-76,092 lines are intrinsically required.
+directions. The 2026-08-09 production-only audit counts 74,375 physical lines
+and 67,949 code lines across 282 inventoried Rust files. Of those physical
+lines, 13,870 implement cross-platform namespace/publication, 10,012 the frozen
+C ABI, 9,762 explicit recovery, 5,303 the isolated fault worker, and 5,089
+explicit validation. The public Rust writer/workflow adapters account for
+3,691 lines and the public reader adapters for 262; mapped storage, trees,
+codecs, reader/writer cores, output construction, and shared logical types make
+up the remainder.
+
+At a 15-line/100-token threshold, exact clone detection finds eight small
+shapes totaling 154 lines (0.21%). They are C entry-point forms, public
+typestate wrappers, and separate direct/membership recovery policies—not
+duplicate persistent-format operations. Across 4,117 production functions,
+the averages are 13.6 lines and cyclomatic complexity 3.39. The largest is a
+191-line recovery-attempt state machine whose branches retain distinct cleanup
+and factual-outcome obligations. These measurements do not prove every line is
+intrinsically required; they make the remaining size and review boundary
+explicit.
 
 ## Database model
 
@@ -195,31 +205,34 @@ cargo bench --manifest-path v4/rust/Cargo.toml \
   --bench update_ipsets -- scale
 ```
 
-Five local Linux runs on 2026-08-08, each pinned to one performance core,
+Five local Linux runs on 2026-08-09, each pinned to one performance core,
 produced these medians and observed ranges. Each case processes at least one
 million inputs or timed reader operations; setup, snapshot construction, open,
 close, and explicit validation are outside the reader timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
-| Direct replacement, dispersed input | 1,000,000 ranges | 0.4615 s | 0.4362-0.5063 s | 2.17 million/s |
-| Retention refresh | 1,000,000 ranges | 0.4810 s | 0.4627-0.5873 s | 2.08 million/s |
-| Compact snapshot | 1,000,000 ranges | 0.0609 s | 0.0545-0.0854 s | 16.42 million/s |
-| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0835 s | 0.0811-0.0884 s | 11.98 million/s |
-| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0693 s | 0.0681-0.0733 s | 14.42 million/s |
-| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1563 s | 0.1441-0.2201 s | 6.40 million/s |
-| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1210 s | 0.1187-0.1389 s | 8.26 million/s |
-| Live direct ordered scan | 1,000,000 ranges | 0.00570 s | 0.00562-0.00752 s | 175.33 million/s |
-| Immutable direct ordered scan | 1,000,000 ranges | 0.00430 s | 0.00420-0.00513 s | 232.75 million/s |
-| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00642 s | 0.00638-0.00810 s | 155.84 million/s |
-| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00533 s | 0.00526-0.00647 s | 187.46 million/s |
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.3464 s | 0.3356-0.6895 s | 2.89 million/s |
+| Retention refresh | 1,000,000 ranges | 0.4769 s | 0.4738-0.5337 s | 2.10 million/s |
+| Nested arrival-order overwrite | 1,000,000 ranges | 0.3026 s | 0.2977-0.4333 s | 3.30 million/s |
+| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.4315 s | 0.3462-0.7210 s | 2.32 million/s |
+| Membership import, 421 feeds | 1,000,000 ranges | 0.0575 s | 0.0538-0.0769 s | 17.38 million/s |
+| Compact snapshot | 1,000,000 ranges | 0.0588 s | 0.0560-0.0853 s | 17.02 million/s |
+| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0832 s | 0.0709-0.0875 s | 12.02 million/s |
+| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0629 s | 0.0589-0.0798 s | 15.89 million/s |
+| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1172 s | 0.1157-0.1283 s | 8.53 million/s |
+| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1141 s | 0.0951-0.1268 s | 8.76 million/s |
+| Live direct ordered scan | 1,000,000 ranges | 0.00835 s | 0.00821-0.00866 s | 119.76 million/s |
+| Immutable direct ordered scan | 1,000,000 ranges | 0.00682 s | 0.00652-0.00834 s | 146.71 million/s |
+| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01174 s | 0.00844-0.01483 s | 85.14 million/s |
+| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00892 s | 0.00847-0.01340 s | 112.12 million/s |
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
-explicitly validated every output after timing. The final complete run counted
-21 allocations totalling 406 bytes for direct replacement, 21 allocations
-totalling 418 bytes for retention, and 31 allocations totalling 939 bytes for
-snapshot construction; those counts are constant rather than per range. The
-timed lookup and scan paths allocate nothing.
+explicitly validated every output after timing. Direct, retention, nested,
+feed-replacement, import, and snapshot construction respectively made
+21/21/21/22/20/31 fixed setup allocations totaling
+406/418/406/436/474/939 bytes. Those counts are constant rather than per
+range. The timed lookup and scan paths allocate nothing.
 
 Readers access mapped tree pages directly. Independent point queries restart at
 the mapped root, while ordered cursors retain their bounded traversal state.

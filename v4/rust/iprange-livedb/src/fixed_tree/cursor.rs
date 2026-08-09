@@ -117,11 +117,7 @@ impl<C: Codec> Cursor<C> {
     {
         let mut access = Shared(source);
         let mut cursor = Self::unpositioned(&access, root, direction)?;
-        let result = cursor.seek_read_inner(&mut access, key, policy, item);
-        if result.is_err() {
-            cursor.finished = true;
-        }
-        result
+        cursor.seek_read_inner(&mut access, key, policy, item)
     }
 
     fn open<A: Access>(access: &mut A, root: u32, direction: Direction) -> Result<Self> {
@@ -652,7 +648,7 @@ struct Consuming<'a, S> {
 }
 
 impl<'a, S> Consuming<'a, S> {
-    const fn new(store: &'a mut S, selected_txn: u64, page_limit: u64) -> Self {
+    fn new(store: &'a mut S, selected_txn: u64, page_limit: u64) -> Self {
         Self {
             store,
             selected_txn,

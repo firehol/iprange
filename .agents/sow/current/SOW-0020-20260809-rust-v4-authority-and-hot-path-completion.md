@@ -778,6 +778,176 @@ Open decisions:
   format operation. The largest function remains the 191-line recovery worker
   state machine; the next is the 122-line live-reset resolution state machine.
   Both are cohesive terminal-outcome coordinators, not duplicate format logic.
+- The Rust 1.74.1 matrix exposed one unnecessary `const` on the consuming
+  fixed-tree cursor constructor. Removing it preserves runtime behavior and
+  restores the declared MSRV. Big-endian Miri then exposed one write to a
+  cursor that was immediately dropped; deleting that dead assignment left all
+  ten portable codec vectors clean without warnings.
+- The exact current production inventory is 74,375 physical lines and 67,949
+  code lines in the same 282 files. Exact-clone results remain eight shapes and
+  154 lines (0.21%). Lizard reports 4,117 functions averaging 13.6 NLOC and
+  cyclomatic complexity 3.39; the largest function is the 191-line recovery
+  attempt state machine. The higher reported complexities are flat exact-field
+  codecs or cohesive tree/publication/recovery state machines; splitting them
+  would hide branches or add state transfer without removing a responsibility.
+- Local Codacy Analysis CLI execution of Lizard and Semgrep over the
+  production-only inventory found no additional actionable defect. The Rust
+  security rules classify every required unsafe mapped/C/syscall boundary and
+  flag the worker's argument, adjacent-executable, and temporary-directory
+  bootstrap APIs generically. Manual inspection confirmed the worker treats
+  arguments as untrusted protocol input, creates the random control file
+  exclusively with creator-only access, verifies parent/child/control state,
+  and performs the version handshake before scanning or destination mutation.
+- Five current-source pinned runs place the million-range medians at 0.346 s
+  direct replacement, 0.477 s retention, 0.303 s nested overwrite, 0.431 s
+  421-feed replacement, 0.058 s membership import, and 0.059 s snapshot. The
+  slowest observed writer sample was 0.721 s. One million live/immutable direct
+  lookups measured 0.083/0.063 s, membership lookups 0.117/0.114 s, direct
+  scans 0.0084/0.0068 s, and named-feed scans 0.0117/0.0089 s. Reader
+  allocations remain zero; writer allocations remain the 20-31 fixed setup
+  calls; descriptors remain stable and private residue zero.
+- After those last repairs, both exact workspace feature matrices, all
+  integration and C ABI tests, warnings-denied Clippy and rustdoc, formatting,
+  architecture and static mmap gates, the 379-source/four-target compiler
+  graph, and the syscall-traced runtime mmap gate pass. The Rust 1.74.1 full
+  matrix and s390x Miri codec gate also pass.
+- Nightly AddressSanitizer with leak detection passes all 361 active livedb
+  library tests and all 15 C-boundary unit tests. Valgrind, using the preserved
+  matching glibc runtime and debug symbols because the host loader is stripped,
+  passes the dedicated raw-fork ownership test with zero memory errors and zero
+  definite/indirect leaks. Three worker-free native C programs also pass under
+  Valgrind. The two C programs that intentionally observe a concurrent
+  validation worker are not Valgrind evidence: instrumentation changes their
+  live-reader timing/identity condition and makes the fixtures abort before
+  cleanup; their complete code paths pass under AddressSanitizer and the normal
+  native-C suite.
+
+## Pre-Native Candidate Audit - 2026-08-09
+
+### TL;DR
+
+The repeated local audit finds no remaining avoidable hot-path work, duplicate
+persistent-format operation, or physical-format access above the internal
+engine. The implementation candidate is ready for exact-commit native testing;
+this is not the final audit or completion claim because Windows, macOS, and
+FreeBSD execution is still pending.
+
+### Verdict
+
+The implementation audit is clean on the local candidate. Profiles,
+necessary-work counters, architecture/storage gates, source/clone/complexity
+review, complete tests, sanitizers, MSRV, and big-endian interpretation do not
+identify another justified repair. The remaining work is acceptance proof on
+the exact pushed commit, followed by the exact same audit on that commit.
+
+### Current performance
+
+Five CPU-pinned one-million-operation runs measured these medians:
+
+| Operation | Median |
+| --- | ---: |
+| direct replacement | 0.346 s |
+| retention refresh | 0.477 s |
+| nested arrival-order overwrite | 0.303 s |
+| exact feed replacement, 421 feeds | 0.431 s |
+| membership import, 421 feeds | 0.058 s |
+| compact snapshot | 0.059 s |
+| live / immutable direct lookup | 0.083 / 0.063 s |
+| live / immutable membership lookup | 0.117 / 0.114 s |
+| live / immutable direct scan | 0.0084 / 0.0068 s |
+| live / immutable named-feed scan | 0.0117 / 0.0089 s |
+
+The slowest observed writer sample was 0.721 seconds. Readers allocate zero
+bytes in the timed path; writers use 20-31 fixed setup allocations, not
+per-record allocation. Descriptors remain stable and private residue is zero.
+
+### Ranked findings
+
+None.
+
+### The two-level architecture
+
+- Public semantic adapters are `database.rs`, `live_reader.rs`, `live_writer`
+  and its workflow modules, public Rust handles, and `iprange-capi`. They own
+  typed requests, sequencing, cancellation, handles, and result translation.
+- The private engine is `ReaderCore` for selected-generation reads and
+  `WriterCore` over `DraftStore` for COW mutation. `database_file` owns mapped
+  file bootstrap/creation; mapped-access and typed codec modules own bytes;
+  `immutable_output` owns canonical mapped output construction.
+- The compiled architecture gate rejects mapped files, metadata pages, roots,
+  page numbers, allocators, retirement records, raw membership representation,
+  and persistent codecs in public adapters. The complete adapter sources are
+  checked, not a hand-picked import list.
+
+### Physical-format authority
+
+Every retained database page header, checksum field, page type, bitmap
+geometry, tree record, membership record, feed record, metadata record, and
+retirement record has one canonical codec/definition. Healthy query, cursor,
+mutation, allocation, retirement, sealing, and mapped output each have one
+implementation. Explicit validation and recovery consume those definitions but
+retain separate strict/best-effort traversal policy because damaged pages
+cannot satisfy healthy-reader assumptions.
+
+### Where the production lines are
+
+The production-only inventory is 74,375 physical lines and 67,949 code lines in
+282 files. The largest areas are 13,870 lines of cross-platform namespace and
+publication, 10,012 frozen C-ABI lines, 9,762 recovery lines, 5,303 isolated
+fault-worker lines, and 5,089 validation lines. Public Rust writer/workflow
+adapters are 3,691 lines and public reader adapters are 262 lines; the remainder
+is the internal mapped engine, logical types, and output construction.
+
+Exact-clone detection finds eight small shapes totaling 154 lines (0.21%): C
+entry-point forms, public typestate wrappers, and distinct recovery policy
+forms. None implements a persistent-format operation twice. The 4,117
+production functions average 13.6 code lines and cyclomatic complexity 3.39;
+the largest is a cohesive 191-line recovery-attempt state machine. These
+measurements expose and bound the remaining size; they do not claim that a line
+count can prove necessity.
+
+### Retention
+
+The public `RetentionRefresh` workflow is a typed semantic wrapper. The 106-line
+retention policy supplies only the value rule to the shared ordered range merge:
+coverage still present keeps its original timestamp, newly present coverage
+gets the refresh timestamp, and missing coverage is removed. Normalization,
+COW output, coalescing, statistics, and retirement are the same authoritative
+engine operations used by the other ordered workflows.
+
+### Recovery
+
+Recovery remains large because it must safely interpret corrupted mappings in
+the version-matched fault worker, select candidates, contain mapped faults, use
+bounded mapped scratch/external sorting, preserve partial evidence, report exact
+loss, and construct either direct or membership output. It reuses canonical v4
+codecs, the shared overlap-component engine, the shared range builder, and
+`immutable_output`. Its remaining direct/membership differences are value and
+reporting policies, not second page/tree implementations.
+
+### Implementation result
+
+The refactor removed repeated fit/slot scans, repeated page reconstruction,
+extra direct and workflow passes, repeated membership-leaf decode, per-range
+membership-delta lookup/delete, raw membership state above the engine, and
+duplicate codecs/traversals/builders. The baseline 4.041-second nested and
+2.499-second feed workflows now measure 0.303 and 0.431 seconds. Final profiles
+contain mapped page access, required tree search/edit, ordered merge, output
+construction, and commit-time sealing/durability—not implicit validation,
+pre-commit checksums, per-record allocation, persistent-content I/O, temporary
+sorting, or cache/delta churn.
+
+### Acceptance gates
+
+- Local all-feature and no-default-feature workspace matrices: pass.
+- Formatting, warnings-denied Clippy/rustdoc, architecture, mmap source/runtime,
+  source graph, C header/manifest/export/native behavior, crash, conformance,
+  Rust 1.74.1, and s390x Miri gates: pass.
+- AddressSanitizer: 361 active engine tests and 15 C-boundary tests pass.
+- Valid raw-fork Valgrind gate: zero errors and zero definite/indirect leaks.
+- Release necessary-work proof and absence of counter symbols/state: pass.
+- Native Windows, macOS, and FreeBSD on the exact pushed commit: pending and
+  therefore completion remains blocked.
 
 ## Validation
 
@@ -792,8 +962,11 @@ Tests or equivalent validation:
   local candidate passes both all-target workspace feature matrices, 361 engine
   tests with four intentional subprocess/runtime-gate ignores, every integration
   and C ABI suite, warnings-denied Clippy, warnings-denied rustdoc, formatting,
-  the four-target source graph, architecture boundary gate, mmap-only source
-  gate, and syscall-traced mmap runtime gate.
+  Rust 1.74.1, the s390x Miri codec gate, the four-target source graph,
+  architecture boundary gate, mmap-only source gate, and syscall-traced mmap
+  runtime gate. Nightly AddressSanitizer passes all 361 active engine tests and
+  all 15 C-boundary tests; the valid raw-fork Valgrind gate reports zero errors
+  and zero definite/indirect leaks.
 - The first hot-path slice passes the complete all-features/all-targets workspace
   test graph when the exact matched worker target is built. A narrower library-
   only invocation failed validation/recovery tests solely because it did not
@@ -838,9 +1011,13 @@ Sensitive data gate:
 Artifact maintenance gate:
 
 - AGENTS.md: pending final review.
-- Runtime project skills: pending final architecture/proof update.
-- Specs: pending final consistency review.
-- End-user/operator docs: pending Rust README update.
+- Runtime project skills: updated with the canonical two-level ownership and
+  complete performance-audit workflow; final consistency check pending.
+- Specs: consistency review found the current two-level ownership and
+  performance contract already exact; final closure check pending.
+- End-user/operator docs: Rust README updated with the current architecture,
+  production-size breakdown, clone/complexity evidence, and complete measured
+  workload matrix; final native-platform evidence pending.
 - End-user/operator skills: none exist; confirm again at closure.
 - SOW lifecycle: SOW-0016 superseded closure and SOW-0020 activation are part of
   the first implementation milestone.

@@ -64,6 +64,26 @@ Do not weaken its patterns to permit a new physical-state bypass. When adding a
 persistent operation, put it in the existing owning layer or update the active
 SOW's ownership inventory before implementation.
 
+Treat the implementation as two levels:
+
+- Public semantic adapters own Rust/C handles, typed workflows, logical
+  sequencing, cancellation, and result translation. They must not inspect a
+  mapping, metadata page, root, page number, allocator, raw membership ID,
+  bitmap width, dictionary hash/refcount, or persistent record.
+- The private engine owns mapped byte access, canonical codecs, fixed-tree
+  query/cursor/mutation, ordered range construction, COW allocation,
+  retirement, sealing, and selected-generation read/write cores.
+
+`ReaderCore::read()` is the healthy selected-generation read capability.
+`WriterCore` over `DraftStore` is the healthy mapped mutation capability.
+`database_file` owns main-file mapping/bootstrap/empty construction;
+`mapped_bytes`, `page_io`, and the typed codec modules own physical access;
+`immutable_output` owns canonical mapped snapshot/recovery construction.
+Validation and recovery may inspect damaged mappings independently, but they
+must consume those codecs and builders rather than redefine v4 bytes. A new
+high-level physical import or a second field offset/record encoder is an
+architecture defect even when tests pass.
+
 The storage gate is architectural, not stylistic. Production SDK code must use
 file-backed mappings for persistent content; it must not issue positional or
 buffered content-I/O calls, own complete database-page images, or retain an
@@ -146,6 +166,11 @@ Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and
 temporary residue. Check scaling, not only one result. Ordinary unordered
 ingestion and snapshot construction must not use an external sorting file.
+The acceptance matrix includes one million direct replacements, retention
+inputs, nested arrival-order overwrites, exact feed inputs with 421 feeds,
+membership imports with 421 feeds, and snapshot ranges. It also includes one
+million real live and immutable direct lookups, membership lookups, direct
+cursor outputs, and named-feed cursor outputs.
 Reader evidence must name live and immutable readers separately and time at
 least one million actual operations. Keep database construction, compact
 snapshot construction, open, close, and explicit validation outside the timed
@@ -160,6 +185,24 @@ membership work, mapping changes, and durability calls. These counters are
 proof machinery, not a public observability API. A final release build must have
 no `iprange_livedb::work` symbol, counter field string, counter storage, or
 counter call left in the benchmark executable.
+
+For a candidate-complete performance claim, profile the exact timed region of
+feed replacement, nested overwrite, membership import, membership lookup, and
+named-feed scan with frame pointers. Classify every dominant cost against a
+required semantic, mapped-page access, tree descent, COW edit, output build,
+commit seal, or durability action. Implicit validation, pre-commit checksum,
+per-record allocation, repeated lookup/delete, page reconstruction, cache
+churn, and an extra comparison/source pass are findings, not acceptable
+overhead.
+
+Audit production source separately from tests. Review file/function size and
+cyclomatic complexity as signals; do not create helper chains merely to lower a
+metric. Run exact-clone detection at a meaningful threshold and inspect every
+clone manually. Public ABI/typestate shapes and distinct damaged-input policies
+may legitimately resemble each other; duplicated persistent layout, traversal,
+mutation, allocation, retirement, or construction may not. Warning-denied
+four-target compilation plus the source graph is the dead-code gate—never hide
+an unwired source with `allow(dead_code)`.
 
 ## Report proof precisely
 

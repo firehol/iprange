@@ -176,8 +176,7 @@ type PlainSinkFn<T> = Option<
     ) -> u32,
 >;
 
-type PlainEmitFn<T> =
-    fn(PlainSinkFn<T>, *mut c_void, &[T]) -> Result<Control, CallError>;
+type PlainEmitFn<T> = fn(PlainSinkFn<T>, *mut c_void, &[T]) -> Result<Control, CallError>;
 
 fn scan_plain<T: Copy + Default>(
     cursor_handle: &CursorHandle,
