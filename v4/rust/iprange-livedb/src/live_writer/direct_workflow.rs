@@ -308,10 +308,6 @@ impl ExactDirectState {
         self.require_active(writer)?;
         let before = writer.core.base_info();
         let after = writer.core.current_info();
-        let input_addresses = writer
-            .core
-            .current_coverage(&self.cancellation)
-            .map_err(|error| writer.abort_after(error))?;
         let comparison = writer
             .core
             .compare_maps(&self.cancellation)
@@ -325,7 +321,7 @@ impl ExactDirectState {
                 input_normalized_interval_count: after.range_record_count,
                 before_range_record_count: before.range_record_count,
                 after_range_record_count: after.range_record_count,
-                input_addresses,
+                input_addresses: comparison.after,
             },
             comparison,
         ))

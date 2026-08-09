@@ -176,6 +176,7 @@ pub(super) fn lower_bound<C: Codec, S: ByteSource>(
     let mut upper = header.item_count;
     while lower < upper {
         let middle = lower + (upper - lower) / 2;
+        crate::work::key_probe(1);
         if key_at::<C, _>(page, header, middle)? < key {
             lower = middle + 1;
         } else {
@@ -183,6 +184,7 @@ pub(super) fn lower_bound<C: Codec, S: ByteSource>(
         }
     }
     let exists = lower < header.item_count && key_at::<C, _>(page, header, lower)? == key;
+    crate::work::key_probe(u64::from(lower < header.item_count));
     if insertion || exists || lower == 0 {
         Ok((lower, exists))
     } else {
@@ -212,10 +214,19 @@ pub(super) fn edit_fits<C: Codec, S: ByteSource>(
     source: S,
     header: &Header,
     edit: Edit<'_>,
-    start: usize,
-    end: usize,
 ) -> Result<bool> {
-    Ok(encoded_size::<C, _>(source, header, edit, start, end)? <= PAGE_SIZE)
+    crate::work::edit_fit_probe(1);
+    if edit.replace {
+        if edit.index >= header.item_count {
+            return Err(Error::Corrupt("B+tree replacement index is invalid"));
+        }
+        let old_len = codec_cell::<C, _>(source, header, edit.index)?.len();
+        return Ok(slotted_page::replace_fits(header, old_len, edit.cell.len()));
+    }
+    if edit.index > header.item_count {
+        return Err(Error::Corrupt("B+tree insertion index is invalid"));
+    }
+    Ok(slotted_page::insert_fits(header, edit.cell.len()))
 }
 
 pub(super) fn split_index<C: Codec, S: ByteSource>(
@@ -255,7 +266,21 @@ pub(super) fn pair_fits<C: Codec, S: ByteSource>(
     header: &Header,
     edit: PairEdit<'_>,
 ) -> Result<bool> {
-    Ok(pair_size::<C, _>(source, header, edit, 0, edit.total(header.item_count))? <= PAGE_SIZE)
+    crate::work::edit_fit_probe(1);
+    if edit.index >= header.item_count {
+        return Err(Error::Corrupt("B+tree pair index is invalid"));
+    }
+    let old_len = codec_cell::<C, _>(source, header, edit.index)?.len();
+    let available = old_len
+        .checked_add(header.upper - header.lower)
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree pair capacity"))?;
+    let required = edit
+        .left
+        .len()
+        .checked_add(edit.right.len())
+        .and_then(|size| size.checked_add(2))
+        .ok_or_else(|| Error::arithmetic_overflow("B+tree pair size"))?;
+    Ok(required <= available)
 }
 
 pub(super) fn pair_split_index<C: Codec, S: ByteSource>(
@@ -281,46 +306,12 @@ pub(super) fn require_codec<C: Codec>() -> Result<()> {
     Ok(())
 }
 
-fn encoded_size<C: Codec, S: ByteSource>(
-    source: S,
-    header: &Header,
-    edit: Edit<'_>,
-    start: usize,
-    end: usize,
-) -> Result<usize> {
-    let count = end
-        .checked_sub(start)
-        .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
-    let payload = (start..end).try_fold(0usize, |used, index| {
-        used.checked_add(virtual_cell::<C, _>(source, header, edit, index)?.len())
-            .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
-    })?;
-    page_size(count, payload)
-}
-
 fn page_size(count: usize, payload: usize) -> Result<usize> {
     count
         .checked_mul(2)
         .and_then(|slots| slots.checked_add(slotted_page::HEADER_SIZE))
         .and_then(|base| base.checked_add(payload))
         .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
-}
-
-fn pair_size<C: Codec, S: ByteSource>(
-    source: S,
-    header: &Header,
-    edit: PairEdit<'_>,
-    start: usize,
-    end: usize,
-) -> Result<usize> {
-    let count = end
-        .checked_sub(start)
-        .ok_or_else(|| Error::corrupt("B+tree page range is reversed"))?;
-    let payload = (start..end).try_fold(0usize, |used, index| {
-        used.checked_add(pair_cell::<C, _>(source, header, edit, index)?.len())
-            .ok_or_else(|| Error::arithmetic_overflow("B+tree page size"))
-    })?;
-    page_size(count, payload)
 }
 
 fn split_by_size<F>(total: usize, mut cell_len: F) -> Result<usize>

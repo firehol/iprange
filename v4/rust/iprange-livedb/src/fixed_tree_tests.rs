@@ -390,6 +390,34 @@ fn inserts_replace_and_split_without_losing_order() {
 }
 
 #[test]
+fn fixed_replacement_uses_one_capacity_probe_and_no_slot_scan() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in 0..1_000 {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+
+    let (changed, work) = crate::work::measure(|| {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(500, 7),
+            &mut RetiredPages::new(),
+        )
+    });
+    assert!(!changed.unwrap());
+    assert_eq!(work.edit_fit_probes, 1);
+    assert_eq!(work.slot_scan_steps, 0);
+    assert_eq!(lookup(&store, root, 500).unwrap(), Some(7));
+}
+
+#[test]
 fn next_transaction_copies_only_its_selected_path() {
     let mut store = MemoryStore::new();
     let mut root = 0;

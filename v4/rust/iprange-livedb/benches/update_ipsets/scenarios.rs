@@ -40,6 +40,7 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "nested-overwrite" => direct::nested(size),
         "retention-refresh" => direct::retention(size),
         "feed-replace" => membership::replace_feed(size, auxiliary),
+        "membership-import" => membership::import(size, auxiliary),
         "live-membership-lookup" => membership::live_lookup(size, auxiliary),
         "immutable-membership-lookup" => membership::immutable_lookup(size, auxiliary),
         "live-feed-scan" => membership::live_scan(size, auxiliary),

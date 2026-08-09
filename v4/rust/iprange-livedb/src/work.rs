@@ -9,10 +9,15 @@ pub(crate) struct Snapshot {
     pub(crate) tree_lookups: u64,
     pub(crate) tree_descents: u64,
     pub(crate) pages_visited: u64,
+    pub(crate) page_parses: u64,
+    pub(crate) key_probes: u64,
+    pub(crate) cell_probes: u64,
+    pub(crate) slot_reads: u64,
+    pub(crate) slot_scan_steps: u64,
+    pub(crate) edit_fit_probes: u64,
     pub(crate) pages_created: u64,
     pub(crate) pages_copied: u64,
     pub(crate) pages_split: u64,
-    pub(crate) pages_merged: u64,
     pub(crate) pages_retired: u64,
     pub(crate) pages_reclaimed: u64,
     pub(crate) pages_sealed: u64,
@@ -28,6 +33,9 @@ pub(crate) struct Snapshot {
     pub(crate) mapping_remaps: u64,
     pub(crate) mapping_flushes: u64,
     pub(crate) file_syncs: u64,
+    pub(crate) bytes_moved: u64,
+    pub(crate) bytes_zeroed: u64,
+    pub(crate) membership_leaf_reads: u64,
     pub(crate) source_passes: u64,
     pub(crate) output_passes: u64,
 }
@@ -57,6 +65,12 @@ macro_rules! event {
 event!(tree_lookup, tree_lookups);
 event!(tree_descent, tree_descents);
 event!(page_visited, pages_visited);
+event!(page_parse, page_parses);
+event!(key_probe, key_probes);
+event!(cell_probe, cell_probes);
+event!(slot_read, slot_reads);
+event!(slot_scan_step, slot_scan_steps);
+event!(edit_fit_probe, edit_fit_probes);
 event!(page_created, pages_created);
 event!(page_copied, pages_copied);
 event!(page_split, pages_split);
@@ -75,6 +89,9 @@ event!(mapping_growth, mapping_growths);
 event!(mapping_remap, mapping_remaps);
 event!(mapping_flush, mapping_flushes);
 event!(file_sync, file_syncs);
+event!(bytes_moved, bytes_moved);
+event!(bytes_zeroed, bytes_zeroed);
+event!(membership_leaf_read, membership_leaf_reads);
 event!(source_pass, source_passes);
 event!(output_pass, output_passes);
 

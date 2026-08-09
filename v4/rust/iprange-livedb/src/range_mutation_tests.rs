@@ -234,7 +234,6 @@ fn clear_splits_and_coalesces_without_touching_absent_space() {
     assert_eq!(work.ranges_split, 1);
     assert_eq!(work.ranges_coalesced, 0);
     assert_eq!(work.ranges_emitted, 2);
-    assert_eq!(work.pages_merged, 0);
     assert_eq!(ranges_v4(&store, root), vec![(0, 39, 7), (61, 100, 7)]);
     assert_eq!(count, 2);
 
@@ -256,7 +255,6 @@ fn clear_splits_and_coalesces_without_touching_absent_space() {
     assert_eq!(work.ranges_split, 0);
     assert_eq!(work.ranges_coalesced, 2);
     assert_eq!(work.ranges_emitted, 1);
-    assert_eq!(work.pages_merged, 0);
     assert_eq!(ranges_v4(&store, root), vec![(0, 100, 7)]);
     assert_eq!(count, 1);
 }
@@ -444,7 +442,6 @@ fn many_disjoint_ranges_split_leaves_and_cow_only_once_per_path() {
         }
     });
     assert!(work.pages_split > 0);
-    assert_eq!(work.pages_merged, 0);
     assert_eq!(count, 2_000);
     let committed = store.pages.clone();
     store.target_txn = 2;

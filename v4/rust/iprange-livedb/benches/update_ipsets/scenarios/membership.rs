@@ -1,6 +1,7 @@
 use iprange_livedb::{
     create_live, AddressFamily, CancellationToken, FeedName, FinishedWorkflow, ImmutableReader,
-    Ipv4Key, LiveReader, LiveWriter, MembershipOperation, RangeDirection, ValueKind, ValueTag,
+    Ipv4Key, LiveReader, LiveWriter, MembershipImportSource, MembershipOperation, RangeDirection,
+    ValueKind, ValueTag,
 };
 
 use crate::measure;
@@ -48,6 +49,49 @@ pub(super) fn replace_feed(size: usize, feeds: usize) -> Result<ScenarioResult, 
         &database,
         measured,
         database.main(),
+    )
+}
+
+pub(super) fn import(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let source = populated("membership-import-source", size, feeds)?;
+    let destination = populated(
+        "membership-import-destination",
+        size.min(128),
+        feeds.div_ceil(2),
+    )?;
+    let cancellation = CancellationToken::new();
+    let mut source_reader = LiveReader::open(source.main(), &cancellation).map_err(display)?;
+    let (operation, measured) = measure::operation(|| -> Result<(), String> {
+        let mut writer = LiveWriter::open(
+            destination.main(),
+            transaction_budget(size, feeds),
+            &cancellation,
+        )
+        .map_err(display)?;
+        let workflow = writer
+            .begin_membership_import(MembershipImportSource::Live(&source_reader), &cancellation)
+            .map_err(display)?;
+        match workflow.finish_input().map_err(display)? {
+            FinishedWorkflow::Changed(prepared) => {
+                require_committed(prepared.commit().map_err(display)?)?;
+            }
+            FinishedWorkflow::NoChange(report) => {
+                return Err(format!("membership import changed nothing: {report:?}"));
+            }
+        }
+        close_writer(&mut writer)
+    });
+    operation?;
+    close_reader(&mut source_reader)?;
+    result(
+        "membership-import",
+        size,
+        feeds,
+        size as u64,
+        &destination,
+        measured,
+        destination.main(),
     )
 }
 

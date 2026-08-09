@@ -96,8 +96,8 @@ fn slice_ingestion_and_finish_allocate_nothing_per_record() {
         count_thread_allocations(|| crate::work::measure(|| workflow.finish_input()));
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
-    assert_eq!(work.source_passes, 3);
-    assert_eq!(work.ranges_consumed, (ranges.len() * 2) as u64);
+    assert_eq!(work.source_passes, 2);
+    assert_eq!(work.ranges_consumed, ranges.len() as u64);
     assert_eq!(work.output_passes, 0);
     let prepared = changed(finished);
     let (commit, work) = crate::work::measure(|| prepared.commit());

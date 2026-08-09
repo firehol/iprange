@@ -2,7 +2,7 @@
 
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::mapping::{ByteSource, Mapping};
+use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::slotted_page::{self, Header};
 
 const ID_BRANCH: u8 = 7;
@@ -21,7 +21,9 @@ pub(crate) struct Record {
     pub(crate) id: u32,
     pub(crate) word_count: u32,
     pub(crate) leaf_page: u32,
+    #[cfg(test)]
     pub(crate) leaf_index: usize,
+    pub(crate) inline_data_offset: usize,
     pub(crate) storage: Storage,
 }
 
@@ -41,6 +43,7 @@ pub(crate) fn find(mapping: &Mapping, meta: &MetaV4, id: u32) -> Result<Option<R
         let header = parse_header(page, meta.txn_id, expected)?;
         let (position, exact) = lower_bound(page, &header, id, meta)?;
         if header.level == 0 {
+            crate::work::membership_leaf_read(1);
             return leaf_result(page, &header, page_number, position, exact, meta);
         }
         let Some(position) = position.checked_sub(usize::from(!exact)) else {
@@ -62,24 +65,29 @@ pub(crate) fn read_inline_words(
     start: u32,
     output: &mut [u64],
 ) -> Result<()> {
-    let page = mapping.page(selected.leaf_page, meta.page_count)?;
-    let header = parse_header(page, meta.txn_id, Some(0))?;
-    let record = decode_record(page, &header, selected.leaf_page, selected.leaf_index, meta)?;
-    require_same_inline(record, selected)?;
-    let bytes = slotted_page::record(page, &header, selected.leaf_index, RECORD_BASE, PAGE_SIZE)?;
-    let start = inline_offset(start)?;
-    for (index, word) in output.iter_mut().enumerate() {
-        *word = u64_le(bytes, start + index * 8);
+    if selected.storage != Storage::Inline {
+        return Err(Error::Corrupt("membership dictionary entry is not inline"));
     }
-    Ok(())
-}
-
-fn require_same_inline(record: Record, selected: Record) -> Result<()> {
-    if record.id != selected.id
-        || record.word_count != selected.word_count
-        || record.storage != Storage::Inline
-    {
-        return Err(Error::Corrupt("membership dictionary entry changed"));
+    let end = start
+        .checked_add(output.len() as u32)
+        .ok_or(Error::ArithmeticOverflow("membership word range"))?;
+    if end > selected.word_count {
+        return Err(Error::Corrupt("membership word range exceeds its length"));
+    }
+    let page = mapping.page(selected.leaf_page, meta.page_count)?;
+    let start = selected
+        .inline_data_offset
+        .checked_add(inline_offset(start)?)
+        .ok_or(Error::ArithmeticOverflow("membership word offset"))?;
+    let length = output
+        .len()
+        .checked_mul(8)
+        .ok_or(Error::ArithmeticOverflow("membership word length"))?;
+    let bytes = ByteRange::new(page, start, length).ok_or(Error::Corrupt(
+        "membership inline bitmap is outside its page",
+    ))?;
+    for (index, word) in output.iter_mut().enumerate() {
+        *word = u64_le(bytes, index * 8);
     }
     Ok(())
 }
@@ -88,7 +96,6 @@ fn inline_offset(word: u32) -> Result<usize> {
     usize::try_from(word)
         .ok()
         .and_then(|word| word.checked_mul(8))
-        .and_then(|offset| offset.checked_add(RECORD_BASE))
         .ok_or(Error::ArithmeticOverflow("membership word offset"))
 }
 
@@ -149,11 +156,21 @@ fn decode_record<S: ByteSource>(
     let blob_root = u32_le(bytes, 24);
     require_record_fields(bytes, id, word_count, bitmap_len, meta)?;
     let storage = storage(bytes, bitmap_len, blob_root, meta.page_count)?;
+    let inline_data_offset = if storage == Storage::Inline {
+        bytes
+            .source_offset()
+            .checked_add(RECORD_BASE)
+            .ok_or(Error::ArithmeticOverflow("membership inline offset"))?
+    } else {
+        0
+    };
     Ok(Record {
         id,
         word_count,
         leaf_page: page_number,
+        #[cfg(test)]
         leaf_index: index,
+        inline_data_offset,
         storage,
     })
 }

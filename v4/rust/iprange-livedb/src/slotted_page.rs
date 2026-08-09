@@ -22,6 +22,7 @@ pub(crate) fn parse<S: ByteSource>(
     aux: u32,
     expected_level: Option<u16>,
 ) -> Result<Header> {
+    crate::work::page_parse(1);
     validate_identity(page, selected_txn, page_type, aux)?;
     parse_shape(page, expected_level)
 }
@@ -84,6 +85,7 @@ pub(crate) fn cell<S: ByteSource>(
     index: usize,
     cell_len: usize,
 ) -> Result<ByteRange<S>> {
+    crate::work::cell_probe(1);
     let start = slot_start(page, header, index)?;
     let end = start
         .checked_add(cell_len)
@@ -104,6 +106,7 @@ pub(crate) fn record<S: ByteSource>(
     minimum_len: usize,
     maximum_len: usize,
 ) -> Result<ByteRange<S>> {
+    crate::work::cell_probe(1);
     let start = slot_start(page, header, index)?;
     if start < header.upper || start + 2 > PAGE_SIZE {
         return Err(Error::Corrupt(
@@ -127,6 +130,7 @@ pub(crate) fn record<S: ByteSource>(
 }
 
 fn slot_start<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<usize> {
+    crate::work::slot_read(1);
     if index >= header.item_count {
         return Err(Error::Corrupt("slotted-page slot index is invalid"));
     }
@@ -237,6 +241,7 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
         .get_mut(..header.item_count)
         .ok_or(Error::Corrupt("slotted-page slot count is invalid"))?;
     for (index, record) in records.iter_mut().enumerate() {
+        crate::work::slot_scan_step(1);
         let start = slot_start(page.view(), header, index)?;
         if start < header.upper || start >= PAGE_SIZE {
             return Err(Error::Corrupt("slotted-page record offset is invalid"));
@@ -305,36 +310,13 @@ fn record_start<S: ByteSource>(
     cell_len: usize,
 ) -> Result<usize> {
     let start = slot_start(page, header, index)?;
-    let end = record_end(page, header, index, start)?;
-    if start < header.upper || start.checked_add(cell_len) != Some(end) {
+    let Some(end) = start.checked_add(cell_len) else {
+        return Err(Error::Corrupt("slotted-page record extent is invalid"));
+    };
+    if start < header.upper || end > PAGE_SIZE {
         return Err(Error::Corrupt("slotted-page record extent is invalid"));
     }
     Ok(start)
-}
-
-fn record_end<S: ByteSource>(
-    page: S,
-    header: &Header,
-    index: usize,
-    start: usize,
-) -> Result<usize> {
-    if start < header.upper || start >= PAGE_SIZE {
-        return Err(Error::Corrupt("slotted-page record offset is invalid"));
-    }
-    let mut end = PAGE_SIZE;
-    for other in 0..header.item_count {
-        if other == index {
-            continue;
-        }
-        let offset = slot_start(page, header, other)?;
-        if offset < header.upper || offset >= PAGE_SIZE || offset == start {
-            return Err(Error::Corrupt("slotted-page record offset is invalid"));
-        }
-        if offset > start {
-            end = end.min(offset);
-        }
-    }
-    Ok(end)
 }
 
 fn adjust_slots_before<D: PageEdit>(
@@ -346,6 +328,7 @@ fn adjust_slots_before<D: PageEdit>(
     amount: usize,
 ) -> Result<()> {
     for index in 0..header.item_count {
+        crate::work::slot_scan_step(1);
         if index == target {
             continue;
         }
@@ -374,6 +357,10 @@ pub(crate) fn insert_fits(header: &Header, cell_len: usize) -> bool {
             .upper
             .checked_sub(cell_len)
             .is_some_and(|upper| header.lower + 2 <= upper)
+}
+
+pub(crate) fn replace_fits(header: &Header, old_len: usize, new_len: usize) -> bool {
+    old_len != 0 && new_len != 0 && new_len <= old_len.saturating_add(header.upper - header.lower)
 }
 
 #[derive(Clone, Copy, Debug)]

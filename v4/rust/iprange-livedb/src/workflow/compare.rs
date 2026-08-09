@@ -13,21 +13,6 @@ use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
 
 use super::Comparison;
 
-pub(crate) fn coverage<K: IpKey>(
-    mapping: &Mapping,
-    meta: &MetaV4,
-    cancellation: &CancellationToken,
-) -> Result<Cardinality129> {
-    cancellation.check()?;
-    let mut cursor = Cursor::<K>::new(mapping, meta, RangeDirection::Forward, None)?;
-    let mut total = Cardinality129::ZERO;
-    while let Some(range) = cursor.next()? {
-        cancellation.check()?;
-        total = add(total, length(range)?)?;
-    }
-    Ok(total)
-}
-
 pub(crate) fn maps<K: IpKey>(
     mapping: &Mapping,
     before: &Bootstrap,

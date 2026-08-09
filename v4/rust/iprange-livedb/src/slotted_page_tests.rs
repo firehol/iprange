@@ -173,7 +173,7 @@ fn edits_preserve_logical_order_with_physically_unordered_records() {
 }
 
 #[test]
-fn edit_rejects_a_duplicate_physical_record_offset_before_mutation() {
+fn local_edit_avoids_structural_scan_while_truncate_validates_offsets() {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
     builder.push(b"aa").unwrap();
@@ -181,13 +181,14 @@ fn edit_rejects_a_duplicate_physical_record_offset_before_mutation() {
     builder.finish().unwrap();
     let duplicate = u16_le(&page, HEADER_SIZE);
     put_u16(&mut page, HEADER_SIZE + 2, duplicate);
-    let before = page;
     let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
 
-    assert!(replace(&mut page, &header, 0, 2, b"cc").is_err());
-    assert_eq!(page, before);
+    let (changed, work) = crate::work::measure(|| replace(&mut page, &header, 0, 2, b"cc"));
+    assert!(changed.unwrap());
+    assert_eq!(work.slot_scan_steps, 0);
+    let before_truncate = page;
     assert!(truncate(&mut page, &header, 1).is_err());
-    assert_eq!(page, before);
+    assert_eq!(page, before_truncate);
 }
 
 #[test]

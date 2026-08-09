@@ -764,12 +764,18 @@ impl<'a> BytesMut<'a> {
     }
 
     pub(crate) fn fill(&mut self, value: u8) {
+        if value == 0 {
+            crate::work::bytes_zeroed(self.len as u64);
+        } else {
+            crate::work::bytes_moved(self.len as u64);
+        }
         // SAFETY: This view exclusively owns the checked mapped range.
         unsafe { ptr::write_bytes(self.pointer, value, self.len) };
     }
 
     pub(crate) fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
         let len = checked_subrange(at, bytes.len(), self.len)?;
+        crate::work::bytes_moved(len as u64);
         // SAFETY: The destination was checked and safe slices cannot alias it.
         unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), self.pointer.add(at), len) };
         Ok(())
@@ -799,12 +805,18 @@ impl<'a> PageMut<'a> {
     }
 
     pub(crate) fn fill(&mut self, value: u8) {
+        if value == 0 {
+            crate::work::bytes_zeroed(PAGE_SIZE as u64);
+        } else {
+            crate::work::bytes_moved(PAGE_SIZE as u64);
+        }
         // SAFETY: This view exclusively owns the mapped page range.
         unsafe { ptr::write_bytes(self.pointer, value, PAGE_SIZE) };
     }
 
     pub(crate) fn write(&mut self, at: usize, bytes: &[u8]) -> Result<()> {
         let len = checked_subrange(at, bytes.len(), PAGE_SIZE)?;
+        crate::work::bytes_moved(len as u64);
         // SAFETY: The destination range was checked and the input cannot alias
         // the raw mapping through a safe Rust slice.
         unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), self.pointer.add(at), len) };
@@ -813,6 +825,7 @@ impl<'a> PageMut<'a> {
 
     pub(crate) fn write_source<S: ByteSource>(&mut self, at: usize, bytes: S) -> Result<()> {
         let len = checked_subrange(at, bytes.len(), PAGE_SIZE)?;
+        crate::work::bytes_moved(len as u64);
         // SAFETY: The destination was checked inside this exclusive mapped
         // page. `ByteSource` permits overlap for mapped sources.
         if unsafe { bytes.copy_range_to_ptr(0, self.pointer.add(at), len) } {
@@ -824,6 +837,7 @@ impl<'a> PageMut<'a> {
 
     pub(crate) fn zero(&mut self, at: usize, len: usize) -> Result<()> {
         let len = checked_subrange(at, len, PAGE_SIZE)?;
+        crate::work::bytes_zeroed(len as u64);
         // SAFETY: The destination range was checked inside the exclusive page.
         unsafe { ptr::write_bytes(self.pointer.add(at), 0, len) };
         Ok(())
@@ -837,6 +851,7 @@ impl<'a> PageMut<'a> {
     ) -> Result<()> {
         checked_subrange(source_at, len, PAGE_SIZE)?;
         checked_subrange(destination_at, len, PAGE_SIZE)?;
+        crate::work::bytes_moved(len as u64);
         // SAFETY: Both ranges were checked; `ptr::copy` permits overlap.
         unsafe {
             ptr::copy(
@@ -850,6 +865,7 @@ impl<'a> PageMut<'a> {
 
     pub(crate) fn set_byte(&mut self, at: usize, value: u8) -> Result<()> {
         checked_subrange(at, 1, PAGE_SIZE)?;
+        crate::work::bytes_moved(1);
         // SAFETY: The one-byte destination was checked.
         unsafe { ptr::write(self.pointer.add(at), value) };
         Ok(())

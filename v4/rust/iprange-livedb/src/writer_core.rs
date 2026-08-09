@@ -12,7 +12,6 @@ use std::fs::File;
 
 use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::cardinality::Cardinality129;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::database;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
@@ -223,17 +222,6 @@ impl WriterCore {
 
     pub(crate) fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         metadata::read_vec(&self.mapping, &self.current_meta())
-    }
-
-    pub(crate) fn current_coverage(
-        &self,
-        cancellation: &CancellationToken,
-    ) -> Result<Cardinality129> {
-        let meta = self.current_meta();
-        match meta.address_family {
-            AddressFamily::Ipv4 => compare::coverage::<Ipv4Key>(&self.mapping, &meta, cancellation),
-            AddressFamily::Ipv6 => compare::coverage::<Ipv6Key>(&self.mapping, &meta, cancellation),
-        }
     }
 
     pub(crate) fn compare_maps(&self, cancellation: &CancellationToken) -> Result<Comparison> {

@@ -292,6 +292,16 @@ fn membership_lookup_counts_range_and_dictionary_paths_once() {
     assert_eq!(work.tree_lookups, 2);
     assert_eq!(work.tree_descents, 0);
     assert_eq!(work.pages_visited, 2);
+    assert_eq!(work.membership_leaf_reads, 1);
+
+    let (contains, work) = crate::work::measure(|| {
+        reader
+            .lookup_membership_v4(Ipv4Key(10))?
+            .ok_or(Error::Corrupt("test membership disappeared"))?
+            .contains_index(65)
+    });
+    assert!(contains.unwrap());
+    assert_eq!(work.membership_leaf_reads, 1);
 }
 
 #[test]
@@ -341,6 +351,7 @@ fn maximum_word_count_is_a_constant_size_view() {
             word_count: 67_108_864,
             leaf_page: 2,
             leaf_index: 0,
+            inline_data_offset: 0,
             storage: Storage::Blob(2),
         },
         owner_identity: None,

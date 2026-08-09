@@ -489,6 +489,32 @@ Open decisions:
 - Created SOW-0020 with the unchanged product boundary, concrete root-cause
   model, ordered implementation, and mandatory clean-audit loop.
 - No Rust implementation file changed in this setup slice.
+- Extended the public scale benchmark to one million nested writes, exact feed
+  replacement with 421 feeds, and membership import with 421 feeds. The new
+  import case constructs both source and destination outside its timer.
+- Added test-only necessary-work counters for page parses, key/cell/slot probes,
+  structural slot scans, edit-fit probes, mapped bytes moved/zeroed, and
+  membership-leaf reads. An exact release-symbol/string scan proved that this
+  state compiles out of the benchmark binary.
+- Replaced fixed-tree whole-page fit calculations with constant-time free-space
+  arithmetic and removed the ordinary-edit scan of every slot offset. Full
+  structural slot validation remains in operations that actually consume the
+  complete slot structure and in explicit validation.
+- Removed the direct-replacement coverage pass already computed by its old/new
+  comparison. The permanent test now proves two source passes rather than
+  accepting the old three-pass behavior.
+- Stored the checked inline membership byte offset in the short-lived lookup
+  token, so reading inline words no longer reparses and redecodes the selected
+  dictionary leaf. No mapped reference or page cache is retained.
+- Pinned release measurements after the fixed-tree repair were approximately
+  2.23 seconds for one million nested overwrites and 2.00 seconds for one
+  million exact-feed inputs with 421 feeds, down from 4.04 and 2.50 seconds.
+  Membership import measured 1.49 seconds for one million source ranges with
+  421 feeds. These are intermediate results, not acceptance claims.
+- A frame-pointer profile after the repair moved the dominant nested/feed cost
+  from whole-page fit scans to repeated fixed-tree lower-bound searches. This
+  confirms that exact workflows still need the planned ordered merge/build and
+  that arbitrary nested mutation still needs another hot-path audit.
 
 ## Validation
 
@@ -500,6 +526,14 @@ Tests or equivalent validation:
 
 - Baseline benchmark and profile evidence is recorded above.
 - Full post-change validation pending.
+- The first hot-path slice passes the complete all-features/all-targets workspace
+  test graph when the exact matched worker target is built. A narrower library-
+  only invocation failed validation/recovery tests solely because it did not
+  build that required adjacent worker; repeating through the supported
+  workspace graph passed those tests.
+- Focused fixed-tree, slotted-page, direct-workflow, and membership-view tests
+  prove the removed scans/passes and retain structural-damage rejection where
+  the operation depends on the complete structure.
 
 Real-use evidence:
 

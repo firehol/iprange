@@ -221,9 +221,8 @@ fn edit_leaf<C: Codec, S: Store>(
         replace: target.exists,
         cell: leaf_cell,
     };
-    let total = edit.total(target.header.item_count);
     let fits = store.inspect_page(target.page_number, |page| {
-        page::edit_fits::<C, _>(page, &target.header, edit, 0, total)
+        page::edit_fits::<C, _>(page, &target.header, edit)
     })?;
     if !fits {
         split_leaf::<C, S>(store, root, target, edit)?;
@@ -594,7 +593,7 @@ fn replace_first_branch<C: Codec, S: Store>(
         cell: replacement.as_slice(),
     };
     let fits = store.inspect_page(frame.page_number, |source| {
-        page::edit_fits::<C, _>(source, &header, edit, 0, header.item_count)
+        page::edit_fits::<C, _>(source, &header, edit)
     })?;
     if fits {
         apply_leaf_edit::<C, S>(store, frame.page_number, &header, edit)?;

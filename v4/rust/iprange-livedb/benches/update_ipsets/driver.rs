@@ -116,6 +116,7 @@ fn smoke_cases() -> Vec<Case> {
         case("retention-refresh", 4_000, 0),
         case("feed-replace", 1_000, 8),
         case("feed-replace", 1_000, 64),
+        case("membership-import", 1_000, 64),
         case("live-membership-lookup", 4_000, 64),
         case("immutable-membership-lookup", 4_000, 64),
         case("live-feed-scan", 4_000, 64),
@@ -136,7 +137,7 @@ fn scale_cases() -> Vec<Case> {
         cases.push(case("direct-replace", size, 0));
         cases.push(case("retention-refresh", size, 0));
     }
-    for size in [10_000, 100_000] {
+    for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("nested-overwrite", size, 0));
     }
     for feeds in [64, 256, 421] {
@@ -144,6 +145,11 @@ fn scale_cases() -> Vec<Case> {
         cases.push(case("live-membership-lookup", 100_000, feeds));
         cases.push(case("immutable-membership-lookup", 100_000, feeds));
     }
+    cases.push(case("feed-replace", 100_000, 421));
+    cases.push(case("feed-replace", 1_000_000, 421));
+    cases.push(case("membership-import", 10_000, 421));
+    cases.push(case("membership-import", 100_000, 421));
+    cases.push(case("membership-import", 1_000_000, 421));
     cases.push(case("live-feed-scan", 100_000, 421));
     cases.push(case("immutable-feed-scan", 100_000, 421));
     cases.push(case("live-direct-lookup", 100_000, 0));
