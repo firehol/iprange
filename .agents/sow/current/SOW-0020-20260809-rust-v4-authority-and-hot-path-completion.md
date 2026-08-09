@@ -834,11 +834,8 @@ FreeBSD execution is still pending.
 
 ### Verdict
 
-The implementation audit is clean on the local candidate. Profiles,
-necessary-work counters, architecture/storage gates, source/clone/complexity
-review, complete tests, sanitizers, MSRV, and big-endian interpretation do not
-identify another justified repair. The remaining work is acceptance proof on
-the exact pushed commit, followed by the exact same audit on that commit.
+The local implementation audit was clean, but native execution disproved the
+candidate. SOW-0020 remains in progress and the audit/repair loop has resumed.
 
 ### Current performance
 
@@ -863,7 +860,16 @@ per-record allocation. Descriptors remain stable and private residue is zero.
 
 ### Ranked findings
 
-None.
+1. Windows correctness: after an aborted transaction retains mapped tail
+   capacity for an active reader and a later transaction reuses that capacity,
+   explicit live validation reports the committed generation invalid. The
+   native C header/caller boundary passes; the failure is in live mapped-tail
+   lifecycle or validation and is under investigation.
+2. macOS test isolation: concurrent feed-catalog fixtures use only process ID
+   and wall-clock nanoseconds for the same filename. macOS produced collisions,
+   causing one test to overwrite another test's mapped database. The focused
+   suite passes serially and fails immediately in parallel, proving a test-path
+   collision rather than a feed-catalog format failure.
 
 ### The two-level architecture
 

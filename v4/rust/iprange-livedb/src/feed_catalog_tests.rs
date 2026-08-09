@@ -11,7 +11,10 @@ use crate::slotted_page::{put_u16, put_u32, put_u64, Builder, HEADER_SIZE};
 use crate::test_alloc::count_thread_allocations;
 use std::fs::{self, File};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
 
 struct TestPath(PathBuf);
 
@@ -21,8 +24,9 @@ impl TestPath {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let sequence = NEXT_PATH.fetch_add(1, Ordering::Relaxed);
         Self(std::env::temp_dir().join(format!(
-            "iprange-v4-feed-{label}-{}-{unique}",
+            "iprange-v4-feed-{label}-{}-{unique}-{sequence}",
             std::process::id()
         )))
     }

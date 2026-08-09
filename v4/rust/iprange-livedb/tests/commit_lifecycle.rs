@@ -282,7 +282,7 @@ fn mapped_reader_retains_abort_capacity_for_reuse_then_allows_shrink() {
         },
     )
     .unwrap();
-    assert!(validated.valid);
+    assert!(validated.valid, "validation findings: {findings:?}");
     assert!(findings.is_empty());
     assert_eq!(
         validated.generation.unwrap().page_count * 4096,
