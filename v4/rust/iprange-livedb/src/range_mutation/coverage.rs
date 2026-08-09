@@ -80,7 +80,7 @@ impl<S: RetiringStore> RangeStore for Untracked<'_, S> {
 pub(crate) struct UnionState<K> {
     last_from: Option<K>,
     order: UnionOrder,
-    position: Option<fixed_tree::PrivatePosition>,
+    edge: Option<fixed_tree::PrivateEdge<K>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,7 +96,7 @@ impl<K> Default for UnionState<K> {
         Self {
             last_from: None,
             order: UnionOrder::Unknown,
-            position: None,
+            edge: None,
         }
     }
 }
@@ -125,18 +125,13 @@ impl<K: IpKey> UnionState<K> {
         }
     }
 
-    fn finish(
-        &mut self,
-        from: K,
-        order: UnionOrder,
-        position: Option<fixed_tree::PrivatePosition>,
-    ) {
+    fn finish(&mut self, from: K, order: UnionOrder, edge: Option<fixed_tree::PrivateEdge<K>>) {
         self.last_from = Some(from);
         self.order = order;
-        self.position = if order == UnionOrder::General {
+        self.edge = if order == UnionOrder::General {
             None
         } else {
-            position
+            edge
         };
     }
 }
@@ -146,9 +141,9 @@ fn insert_private_edge<K: IpKey, S: RangeStore>(
     root: &mut u32,
     record_count: &mut u64,
     range: Range<K>,
-    position: fixed_tree::PrivatePosition,
+    position: fixed_tree::PrivateEdge<K>,
     edge: fixed_tree::Edge,
-) -> Result<fixed_tree::EdgeInsert<Range<K>>> {
+) -> Result<fixed_tree::EdgeInsert<K, Range<K>>> {
     let encoded = EncodedRange::new(range)?;
     let mut gap = PrivateGap { range };
     let result = fixed_tree::insert_if_edge_gap::<RangeCodec<K>, S, _>(
@@ -176,6 +171,25 @@ pub(crate) fn union_private_untracked<K: IpKey, S: RetiringStore>(
     union_private(&mut Untracked(store), root, record_count, from, to, state)
 }
 
+pub(crate) fn finish_private_untracked<K: IpKey, S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    state: &mut UnionState<K>,
+) -> Result<()> {
+    finish_private(&mut Untracked(store), root, state)
+}
+
+pub(super) fn finish_private<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    state: &mut UnionState<K>,
+) -> Result<()> {
+    match state.edge.as_mut() {
+        Some(edge) => fixed_tree::flush_edge::<RangeCodec<K>, _>(store, root, edge),
+        None => Ok(()),
+    }
+}
+
 pub(super) fn union_private<K: IpKey, S: RangeStore>(
     store: &mut S,
     root: &mut u32,
@@ -196,13 +210,19 @@ pub(super) fn union_private<K: IpKey, S: RangeStore>(
         return merge_rejected(store, root, record_count, incoming, rejected)
             .map(|(changed, _)| changed);
     }
-    let (order, edge) = state.plan(from);
-    let cached = edge.and_then(|edge| state.position.take().map(|position| (position, edge)));
+    let (order, direction) = state.plan(from);
+    if direction.is_none() {
+        if let Some(edge) = state.edge.as_mut() {
+            fixed_tree::flush_edge::<RangeCodec<K>, _>(store, root, edge)?;
+        }
+    }
+    let cached =
+        direction.and_then(|direction| state.edge.take().map(|position| (position, direction)));
     let was_empty = *root == 0;
     let rejected = if let Some((position, edge)) = cached {
         match insert_private_edge(store, root, record_count, incoming, position, edge)? {
-            fixed_tree::EdgeInsert::Inserted(position) => {
-                state.finish(from, order, Some(position));
+            fixed_tree::EdgeInsert::Inserted(edge) => {
+                state.finish(from, order, Some(edge));
                 return Ok(true);
             }
             fixed_tree::EdgeInsert::General(rejected) => rejected,
@@ -210,15 +230,19 @@ pub(super) fn union_private<K: IpKey, S: RangeStore>(
     } else {
         match insert_private_gap(store, root, record_count, incoming)? {
             fixed_tree::LocalInsert::Inserted => {
-                let position = was_empty.then(|| fixed_tree::root_position(*root));
-                state.finish(from, order, position);
+                let edge = was_empty.then(|| fixed_tree::root_edge(*root));
+                state.finish(from, order, edge);
                 return Ok(true);
             }
             fixed_tree::LocalInsert::General(rejected) => rejected,
         }
     };
     let (changed, position) = merge_rejected(store, root, record_count, incoming, rejected)?;
-    state.finish(from, order, position);
+    state.finish(
+        from,
+        order,
+        position.map(fixed_tree::PrivateEdge::consistent),
+    );
     Ok(changed)
 }
 

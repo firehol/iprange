@@ -12,11 +12,29 @@ const AUX: u32 = 0x4d44_454c;
 const ID_OFFSET: usize = 0;
 const CHANGE_OFFSET: usize = 4;
 const RECORD_SIZE: usize = 12;
+const PENDING_SLOTS: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Delta {
     pub(crate) id: u32,
     pub(crate) change: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Pending {
+    slots: [Option<Delta>; PENDING_SLOTS],
+}
+
+impl Pending {
+    pub(crate) const fn new() -> Self {
+        Self {
+            slots: [None; PENDING_SLOTS],
+        }
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
 }
 
 struct DeltaCodec;
@@ -50,45 +68,56 @@ impl Codec for DeltaCodec {
     }
 }
 
+#[inline(always)]
 pub(crate) fn track_buffered<S: Store>(
     store: &mut S,
     root: &mut u32,
-    pending: &mut Option<Delta>,
+    pending: &mut Pending,
     id: u32,
     change: i64,
 ) -> Result<()> {
     if id == 0 {
         return Ok(());
     }
-    if let Some(mut current) = *pending {
-        if current.id == id {
+    for slot in &mut pending.slots {
+        if let Some(mut current) = *slot {
+            if current.id != id {
+                continue;
+            }
             current.change = current
                 .change
                 .checked_add(change)
                 .ok_or_else(|| Error::arithmetic_overflow("membership refcount delta"))?;
-            *pending = Some(current);
+            *slot = Some(current);
             return Ok(());
         }
-        flush(store, root, pending)?;
     }
-    *pending = Some(Delta { id, change });
+    if let Some(slot) = pending.slots.iter_mut().find(|slot| slot.is_none()) {
+        *slot = Some(Delta { id, change });
+        return Ok(());
+    }
+
+    let oldest =
+        pending.slots[0].ok_or_else(|| Error::corrupt("membership delta pending slot is empty"))?;
+    track(store, root, oldest.id, oldest.change)?;
+    pending.slots[0] = pending.slots[1];
+    pending.slots[1] = Some(Delta { id, change });
     Ok(())
 }
 
-pub(crate) fn flush<S: Store>(
-    store: &mut S,
-    root: &mut u32,
-    pending: &mut Option<Delta>,
-) -> Result<()> {
-    let Some(delta) = *pending else {
-        return Ok(());
-    };
-    track(store, root, delta.id, delta.change)?;
-    *pending = None;
+pub(crate) fn flush<S: Store>(store: &mut S, root: &mut u32, pending: &mut Pending) -> Result<()> {
+    for slot in &mut pending.slots {
+        let Some(delta) = *slot else {
+            continue;
+        };
+        track(store, root, delta.id, delta.change)?;
+        *slot = None;
+    }
     Ok(())
 }
 
 fn track<S: Store>(store: &mut S, root: &mut u32, id: u32, change: i64) -> Result<()> {
+    crate::work::membership_delta_spill(1);
     let current = find(store, *root, id)?;
     if let Some(current) = current {
         if change == 0 {

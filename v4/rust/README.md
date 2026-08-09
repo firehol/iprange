@@ -215,8 +215,8 @@ close, and explicit validation are outside the reader timer.
 | Direct replacement, dispersed input | 1,000,000 ranges | 0.4951 s | 0.3443-0.6565 s | 2.02 million/s |
 | Retention refresh | 1,000,000 ranges | 0.3606 s | 0.3433-0.4737 s | 2.77 million/s |
 | Nested arrival-order overwrite | 1,000,000 ranges | 0.3010 s | 0.2749-0.3666 s | 3.32 million/s |
-| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.3486 s | 0.3295-0.4398 s | 2.87 million/s |
-| Membership import, 421 feeds | 1,000,000 ranges | 0.0668 s | 0.0456-0.0934 s | 14.97 million/s |
+| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.3515 s | 0.3407-0.4075 s | 2.85 million/s |
+| Membership import, 421 feeds | 1,000,000 ranges | 0.0441 s | 0.0408-0.0545 s | 22.66 million/s |
 | Compact snapshot | 1,000,000 ranges | 0.0816 s | 0.0663-0.0946 s | 12.26 million/s |
 | Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0968 s | 0.0866-0.1330 s | 10.33 million/s |
 | Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0815 s | 0.0740-0.1100 s | 12.28 million/s |
@@ -237,10 +237,10 @@ timers.
 
 | One-million-range input | First feed median | First range | Second feed median | Second range | Final ranges |
 |---|---:|---:|---:|---:|---:|
-| Ascending disjoint | 0.159 s | 0.128-0.220 s | 0.265 s | 0.218-0.319 s | 1,000,000 |
-| Descending disjoint | 0.261 s | 0.192-0.324 s | 0.341 s | 0.311-0.423 s | 1,000,000 |
-| Deterministic random disjoint | 0.356 s | 0.345-0.679 s | 0.474 s | 0.460-0.766 s | 1,000,000 |
-| Deterministic random overlap chain | 0.298 s | 0.282-0.392 s | 0.342 s | 0.285-0.411 s | 1 |
+| Ascending disjoint | 0.136 s | 0.133-0.143 s | 0.144 s | 0.139-0.148 s | 1,000,000 |
+| Descending disjoint | 0.146 s | 0.144-0.168 s | 0.160 s | 0.150-0.213 s | 1,000,000 |
+| Deterministic random disjoint | 0.363 s | 0.351-0.620 s | 0.388 s | 0.360-0.472 s | 1,000,000 |
+| Deterministic random overlap chain | 0.258 s | 0.258-0.263 s | 0.252 s | 0.250-0.323 s | 1 |
 
 The overlap chain deterministically permutes intervals whose neighbors overlap
 by half; it is one defined stress shape, not a claim about every random overlap

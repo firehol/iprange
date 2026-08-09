@@ -1714,3 +1714,150 @@ Repaired-tree evidence before commit:
 The SOW remains in progress. The repaired commit must pass both complete
 feature matrices on Windows GNU, macOS ARM64, and FreeBSD 14 before the final
 11-section audit may begin.
+
+## Post-Native Audit Iteration - 2026-08-09
+
+Exact commit `6266b8dc97392c680ab7d5d20fb018a0455cbba9` passed both complete
+feature matrices on Windows GNU, macOS ARM64, and FreeBSD 14. The required
+post-native audit then found one remaining writer-hot-path defect, so the SOW
+remains in progress.
+
+### Finding: reverse-edge fence write amplification
+
+The exact timed-stack profile for one million descending disjoint ranges places
+`fixed_tree::insert::propagate_first_from` at 7.71% of the measured first-feed
+operation. `fixed_tree/gap.rs` calls it whenever an insertion lands at leaf
+slot zero, so after the first split nearly every descending input rewrites the
+same ancestor first-key cells. The unpublished coverage workflow already owns
+and reuses the exact left-edge path; it performs no root search until that
+state is discarded. Rewriting the ancestor fence after every leaf insertion is
+therefore avoidable maintenance, not required range work.
+
+The minimal-complete repair will:
+
+1. keep a pending first-key fence only inside the private coverage-union state;
+2. update the leaf immediately but defer ancestor propagation while the cached
+   left edge remains authoritative;
+3. flush the fence before any general tree search, overlap fallback, workflow
+   merge, or publication; a leaf/branch split continues to publish the new
+   fence immediately because it changes tree structure; and
+4. add a test-only fence-update counter proving descending ingestion performs
+   updates proportional to structural splits, not input records. The counter
+   remains absent from release code.
+
+This changes no bytes, public API, durability point, reader behavior, recovery
+policy, resource bound, or platform contract. A failure while flushing aborts
+the unpublished draft through the existing workflow error path. The repair
+must repeat local semantics/necessary-work/performance/profile gates and the
+exact native matrices before the final 11-section audit can restart.
+
+### Finding: alternating membership-delta spills
+
+The deferred-fence repair removed `propagate_first_from` from the descending
+profiles and reduced the same-load first-feed descending median from 0.205 to
+0.157 seconds and the second-feed median from 0.319 to 0.269 seconds. The next
+exact timed-stack audit exposed `fixed_tree::mutate_leaf_u64` at 5-7% of the
+second-feed operations.
+
+The ordered merge accounts each old range immediately before emitting its new
+range. For a uniform replacement this produces `old,-1; new,+1` repeatedly.
+The operation-private membership-delta buffer retains only one ID, so that
+two-ID sequence spills to the mapped delta tree on nearly every range even
+though only two aggregate changes are needed. This is avoidable mapped-tree
+maintenance, not required format work.
+
+The minimal-complete repair will replace the single pending delta with two
+fixed pending slots. Matching IDs aggregate with checked arithmetic; the oldest
+slot spills through the existing authoritative delta tree only when a third ID
+arrives; finish flushes both slots before the existing consuming drain. A new
+test-only spill counter will prove that a one-million-range two-ID merge does
+constant delta-tree work rather than range-proportional work. The buffer is
+fixed, heap-free, private to one unpublished draft, and preserves the existing
+fallback for arbitrary membership diversity.
+
+This changes no persistent bytes, public API, membership semantics, refcount
+validation, resource authority, or durability point. The repaired candidate
+must repeat the local correctness, necessary-work, performance, profile,
+sanitizer, and exact native gates before the final audit restarts.
+
+The first repair iteration removed delta-tree mutation from every two-ID hot
+profile and reduced the five-run second-feed medians from 0.252 to 0.170
+seconds ascending, 0.267 to 0.184 seconds descending, and 0.571 to 0.394
+seconds random. Reprofiling then placed `OrderedMerge::account_old` at 4.96%
+of second-feed ascending creation: the mapped-tree spill was gone, but the
+merge still submitted and checked one identical refcount change per range.
+
+The same minimal repair therefore also keeps one consecutive-ID record counter
+for the old stream and one for the output stream inside the ordered merge.
+Each counter submits one checked aggregate when its ID changes or the merge
+finishes. Test-only counters must prove both the delta-tree spills and the
+submitted refcount batches are constant for the uniform two-ID workload.
+
+## Final Local Candidate After Audit Repairs - 2026-08-09
+
+The two post-native hot-path findings are repaired. Descending coverage now
+defers only the non-structural ancestor-fence rewrite until the cached edge is
+flushed. Membership accounting keeps two fixed pending IDs and submits one
+checked refcount change per consecutive ID run. Permanent tests prove one edge
+path check, fence work bounded by structural splits, one first-feed refcount
+batch/spill, and three second-feed batches/spills; release symbol inspection
+proves the counters are absent from production.
+
+Five final Linux runs pinned to one Intel i9-12900K performance core produced:
+
+| One-million-range input | First feed median | First range | Second feed median | Second range | Final ranges |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ascending disjoint | 0.136 s | 0.133-0.143 s | 0.144 s | 0.139-0.148 s | 1,000,000 |
+| descending disjoint | 0.146 s | 0.144-0.168 s | 0.160 s | 0.150-0.213 s | 1,000,000 |
+| deterministic random disjoint | 0.363 s | 0.351-0.620 s | 0.388 s | 0.360-0.472 s | 1,000,000 |
+| deterministic random overlap chain | 0.258 s | 0.258-0.263 s | 0.252 s | 0.250-0.323 s | 1 |
+
+First-feed cases retain 39 fixed setup allocations totaling 1,096-1,148
+bytes; second-feed cases retain 21 totaling 450-466 bytes. File descriptors
+remain four, private residue remains zero, and every result count plus explicit
+validation passes. The complete 41-case scale matrix also passes; its slowest
+writer sample is 0.438 seconds. Five exact-feed replacement runs have a 0.3515
+second median, and five membership-import runs have a 0.0441 second median.
+
+Final frame-pointer profiles contain edge insertion and mapped page edits for
+monotonic input, and the required mapped lower-bound plus local overlap check
+for random and overlap input. No material sample belongs to repeated ancestor
+fence propagation, per-record membership-delta tree mutation, per-record
+refcount submission, validation, checksum sealing, persistent-content I/O, or
+temporary sorting. Commit-time sealing remains outside ingestion.
+
+Local static analysis initially found that the extended cached-edge insertion
+function had grown to 102 code lines and mixed cache verification with page
+mutation. The final code separates forced-inline verification and in-page edit
+helpers; the decision is 74 code lines. The remaining branches encode one
+cohesive selected-edge decision, so further splitting would only transfer the
+same state through helper calls.
+
+The final production-only inventory is 77,487 physical lines and 70,262 parsed
+code lines in 286 files and 4,273 functions. Functions average 13.7 code lines
+and cyclomatic complexity 3.4; the largest remains the existing cohesive
+191-line recovery attempt. Exact clone detection reports eight reviewed shapes,
+152 lines, and 0.20% duplication, with no persistent-format operation among
+them. Codacy Lizard and Semgrep repeat the existing reviewed complexity and
+unsafe-boundary pattern classes; the changed cached-edge file has no Semgrep
+finding, and no new actionable dead-code, security, duplicate-authority, or
+maintainability defect remains.
+
+Final local exact-source gates after the maintainability repair:
+
+- both complete workspace feature matrices: pass, including 369 active engine
+  tests and every integration, C ABI, conformance, crash, recovery, snapshot,
+  workflow, and benchmark target;
+- warnings-denied Clippy and rustdoc, formatting, and diff hygiene: pass;
+- architecture, mmap-only source, syscall-traced mmap runtime, and the
+  382-source/four-target compiler graph: pass;
+- Rust 1.74.1 complete workspace matrix and ten s390x Miri codec vectors: pass;
+- AddressSanitizer with leak detection: 369 active engine tests and all 15
+  C-boundary tests pass; and
+- raw-fork Valgrind with the matching preserved glibc: zero memory errors and
+  zero definite/indirect leaks.
+
+The SOW remains in progress. The exact candidate must be committed, pushed,
+and pass both complete feature matrices on native Windows GNU, macOS ARM64,
+and FreeBSD 14. The required 11-section audit then restarts on that exact
+revision; any finding triggers another repair iteration.

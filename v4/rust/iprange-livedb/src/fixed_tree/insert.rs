@@ -413,7 +413,9 @@ fn insert_branch<C: Codec, S: Store>(
         index: frame.index,
         cells: &cells,
     };
-    apply_replacement::<C, S>(store, frame.page_number, &header, edit)
+    let split = apply_replacement::<C, S>(store, frame.page_number, &header, edit)?;
+    crate::work::first_fence_update(1);
+    Ok(split)
 }
 
 fn apply_replacement<C: Codec, S: Store>(
@@ -588,5 +590,7 @@ fn replace_first_branch<C: Codec, S: Store>(
         index: frame.index,
         cells: &cells,
     };
-    apply_replacement::<C, S>(store, frame.page_number, &header, edit)
+    let split = apply_replacement::<C, S>(store, frame.page_number, &header, edit)?;
+    crate::work::first_fence_update(1);
+    Ok(split)
 }

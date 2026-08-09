@@ -20,8 +20,8 @@ pub(crate) enum LocalInsert<R> {
     General(LocalReject<R>),
 }
 
-pub(crate) enum EdgeInsert<R> {
-    Inserted(PrivatePosition),
+pub(crate) enum EdgeInsert<K, R> {
+    Inserted(PrivateEdge<K>),
     General(LocalReject<R>),
 }
 
@@ -37,11 +37,40 @@ pub(crate) struct PrivatePosition {
     pub(super) page_number: u32,
 }
 
-pub(crate) fn root_position(page_number: u32) -> PrivatePosition {
-    PrivatePosition {
+#[derive(Debug)]
+pub(crate) struct PrivateEdge<K> {
+    position: PrivatePosition,
+    direction: Option<Edge>,
+    pending_first: Option<K>,
+}
+
+impl<K> PrivateEdge<K> {
+    pub(crate) fn consistent(position: PrivatePosition) -> Self {
+        Self {
+            position,
+            direction: None,
+            pending_first: None,
+        }
+    }
+}
+
+pub(crate) fn root_edge<K>(page_number: u32) -> PrivateEdge<K> {
+    PrivateEdge::consistent(PrivatePosition {
         path: Path::new(),
         page_number,
+    })
+}
+
+pub(crate) fn flush_edge<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    edge: &mut PrivateEdge<C::Key>,
+) -> Result<()> {
+    if let Some(key) = edge.pending_first {
+        propagate_first::<C, S>(store, root, &edge.position.path, key)?;
+        edge.pending_first = None;
     }
+    Ok(())
 }
 
 pub(crate) struct LocalReject<R> {
@@ -217,10 +246,10 @@ pub(crate) fn insert_if_edge_gap<C, S, G>(
     store: &mut S,
     root: &mut u32,
     leaf_cell: &[u8],
-    position: PrivatePosition,
+    mut cached: PrivateEdge<C::Key>,
     edge: Edge,
     gap: &mut G,
-) -> Result<EdgeInsert<G::Reject>>
+) -> Result<EdgeInsert<C::Key, G::Reject>>
 where
     C: Codec,
     S: Store,
@@ -230,15 +259,9 @@ where
     if *root == 0 {
         return Err(Error::Corrupt("cached B+tree edge has an empty root"));
     }
-    if !path_is_edge(&position.path, edge)
-        || (position.path.depth == 0 && position.page_number != *root)
-    {
-        return Err(Error::Corrupt(
-            "cached B+tree position is not its claimed edge",
-        ));
-    }
+    verify_cached_edge(&mut cached, *root, edge)?;
     let key = C::read_key(leaf_cell, 0)?;
-    let (header, decision) = store.inspect_page(position.page_number, |page| {
+    let (header, decision) = store.inspect_page(cached.position.page_number, |page| {
         let header = parse::<C, _>(page, store.target_txn(), Some(0))?;
         if crate::page_header::born_txn(page) != store.target_txn() {
             return Err(Error::Corrupt("cached B+tree edge is not private"));
@@ -258,50 +281,84 @@ where
         let mut selector = GapSelector::<C, G>::new(key, leaf_cell.len(), gap);
         Ok((
             header,
-            selector.select_at(page, &header, &position.path, index, exists)?,
+            selector.select_at(page, &header, &cached.position.path, index, exists)?,
         ))
     })?;
     let (index, fits) = match decision {
         GapDecision::Insert { index, fits } => (index, fits),
         decision => {
+            flush_edge::<C, S>(store, root, &mut cached)?;
             return Ok(EdgeInsert::General(rejection(
-                position.path,
-                position.page_number,
+                cached.position.path,
+                cached.position.page_number,
                 header,
                 decision,
             )?));
         }
     };
     let target = LeafTarget {
-        path: position.path,
-        page_number: position.page_number,
+        path: cached.position.path,
+        page_number: cached.position.page_number,
         header,
         index,
         exists: false,
     };
-    let position = if fits {
-        apply_leaf_edit::<C, S>(
-            store,
-            target.page_number,
-            &target.header,
-            Edit {
-                index: target.index,
-                replace: false,
-                cell: leaf_cell,
-            },
-        )?;
-        if target.index == 0 {
-            propagate_first::<C, S>(store, root, &target.path, key)?;
-        }
-        PrivatePosition {
-            path: target.path,
-            page_number: target.page_number,
+    if fits {
+        let pending_first = (target.index == 0).then_some((target.path.depth != 0).then_some(key));
+        cached.position = apply_fitting_edge_insert::<C, S>(store, target, leaf_cell)?;
+        if let Some(pending_first) = pending_first {
+            cached.pending_first = pending_first;
         }
     } else {
         split_leaf_at_edge::<C, S>(store, root, target, leaf_cell, edge)?;
-        locate_private_position::<C, S>(store, root, key)?
-    };
-    Ok(EdgeInsert::Inserted(position))
+        cached.pending_first = None;
+        cached.position = locate_private_position::<C, S>(store, root, key)?;
+    }
+    Ok(EdgeInsert::Inserted(cached))
+}
+
+#[inline(always)]
+fn verify_cached_edge<K>(cached: &mut PrivateEdge<K>, root: u32, edge: Edge) -> Result<()> {
+    match cached.direction {
+        Some(direction) if direction != edge => {
+            Err(Error::Corrupt("cached B+tree edge direction changed"))
+        }
+        Some(_) => Ok(()),
+        None => {
+            crate::work::edge_path_check(1);
+            if !path_is_edge(&cached.position.path, edge)
+                || (cached.position.path.depth == 0 && cached.position.page_number != root)
+            {
+                return Err(Error::Corrupt(
+                    "cached B+tree position is not its claimed edge",
+                ));
+            }
+            cached.direction = Some(edge);
+            Ok(())
+        }
+    }
+}
+
+#[inline(always)]
+fn apply_fitting_edge_insert<C: Codec, S: Store>(
+    store: &mut S,
+    target: LeafTarget,
+    leaf_cell: &[u8],
+) -> Result<PrivatePosition> {
+    apply_leaf_edit::<C, S>(
+        store,
+        target.page_number,
+        &target.header,
+        Edit {
+            index: target.index,
+            replace: false,
+            cell: leaf_cell,
+        },
+    )?;
+    Ok(PrivatePosition {
+        path: target.path,
+        page_number: target.page_number,
+    })
 }
 
 fn rejection<R>(

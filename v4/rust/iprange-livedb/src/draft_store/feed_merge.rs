@@ -33,6 +33,16 @@ impl DraftStore<'_> {
         Ok(())
     }
 
+    pub(crate) fn finish_feed_coverage<K: IpKey>(
+        &mut self,
+        state: &mut range_mutation::UnionState<K>,
+    ) -> Result<()> {
+        let mut root = self.draft.workflow_range_root;
+        range_mutation::finish_private_untracked(self, &mut root, state)?;
+        self.draft.workflow_range_root = root;
+        Ok(())
+    }
+
     pub(crate) fn merge_feed(
         &mut self,
         base: &Bootstrap,

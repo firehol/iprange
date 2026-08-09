@@ -27,7 +27,7 @@ use crate::fixed_tree::{RetiredPages, Store};
 use crate::free_bitmap;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
-use crate::membership_delta::Delta;
+use crate::membership_delta::Pending;
 use crate::range_mutation;
 use crate::retirement;
 
@@ -58,7 +58,7 @@ pub(crate) struct Draft {
     range_tree_private: bool,
     base_range_tree_retired: bool,
     membership_delta_root: u32,
-    membership_delta_pending: Option<Delta>,
+    membership_delta_pending: Pending,
     workflow_range_root: u32,
     workflow_range_count: u64,
     workflow: WorkflowState,
@@ -93,7 +93,7 @@ impl Draft {
             range_tree_private: false,
             base_range_tree_retired: false,
             membership_delta_root: 0,
-            membership_delta_pending: None,
+            membership_delta_pending: Pending::new(),
             workflow_range_root: 0,
             workflow_range_count: 0,
             workflow: WorkflowState::None,

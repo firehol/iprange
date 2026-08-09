@@ -59,6 +59,7 @@ pub(crate) struct OrderedMerge<K, V, P> {
     base_root: u32,
     base_count: u64,
     input_seen: bool,
+    old_refcounts: Option<RefcountRun>,
     value: std::marker::PhantomData<V>,
 }
 
@@ -115,6 +116,8 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
             base_root: base.meta.range_root,
             base_count: base.meta.range_record_count,
             input_seen: false,
+            old_refcounts: (base.meta.value_kind == ValueKind::Membership)
+                .then(RefcountRun::default),
             value: std::marker::PhantomData,
         })
     }
@@ -198,6 +201,9 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
             self.emit(store, old.from, old.to, Some(old.value), None)?;
             self.advance_old(store)?;
         }
+        if let Some(refcounts) = self.old_refcounts.as_mut() {
+            refcounts.flush(store, -1)?;
+        }
         let (root, record_count) = self.output.finish(store)?;
         range_mutation::retire_tree::<K, _, _>(store, self.base_root, || cancellation.check())?;
         store.draft.base_range_tree_retired = true;
@@ -248,7 +254,9 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
                 .old
                 .ok_or_else(|| Error::corrupt("ordered merge lost its old range"))?
                 .value;
-            store.track_membership_refcount(value, -1)?;
+            if let Some(refcounts) = self.old_refcounts.as_mut() {
+                refcounts.add(store, value, -1)?;
+            }
             self.old_accounted = true;
         }
         Ok(())
@@ -279,7 +287,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
 struct Output<K> {
     builder: Builder<K>,
     pending: Option<Record<K>>,
-    membership: bool,
+    refcounts: Option<RefcountRun>,
 }
 
 impl<K: IpKey> Output<K> {
@@ -287,7 +295,7 @@ impl<K: IpKey> Output<K> {
         Self {
             builder: Builder::new(transaction, value_kind),
             pending: None,
-            membership: value_kind == ValueKind::Membership,
+            refcounts: (value_kind == ValueKind::Membership).then(RefcountRun::default),
         }
     }
 
@@ -309,14 +317,52 @@ impl<K: IpKey> Output<K> {
         if let Some(pending) = self.pending.take() {
             self.push(store, pending)?;
         }
+        if let Some(refcounts) = self.refcounts.as_mut() {
+            refcounts.flush(store, 1)?;
+        }
         self.builder.finish(store)
     }
 
     fn push(&mut self, store: &mut DraftStore<'_>, record: Record<K>) -> Result<()> {
-        if self.membership {
-            store.track_membership_refcount(record.value, 1)?;
+        if let Some(refcounts) = self.refcounts.as_mut() {
+            refcounts.add(store, record.value, 1)?;
         }
         self.builder.push(store, record)
+    }
+}
+
+#[derive(Default)]
+struct RefcountRun {
+    current: Option<(u32, u64)>,
+}
+
+impl RefcountRun {
+    fn add(&mut self, store: &mut DraftStore<'_>, id: u32, sign: i64) -> Result<()> {
+        if let Some((current, count)) = self.current.as_mut() {
+            if *current == id {
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(|| Error::arithmetic_overflow("membership refcount run"))?;
+                return Ok(());
+            }
+            self.flush(store, sign)?;
+        }
+        self.current = Some((id, 1));
+        Ok(())
+    }
+
+    fn flush(&mut self, store: &mut DraftStore<'_>, sign: i64) -> Result<()> {
+        let Some((id, count)) = self.current else {
+            return Ok(());
+        };
+        let count = i64::try_from(count)
+            .map_err(|_| Error::arithmetic_overflow("membership refcount run"))?;
+        let change = count
+            .checked_mul(sign)
+            .ok_or_else(|| Error::arithmetic_overflow("membership refcount run"))?;
+        store.track_membership_refcount(id, change)?;
+        self.current = None;
+        Ok(())
     }
 }
 

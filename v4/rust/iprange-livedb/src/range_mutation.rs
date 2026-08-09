@@ -11,8 +11,8 @@ mod coverage;
 
 pub(crate) use assign::{assign, assign_private, clear, retire_tree, transform};
 #[cfg(test)]
-use coverage::union_private;
-pub(crate) use coverage::{union_private_untracked, UnionState};
+use coverage::{finish_private, union_private};
+pub(crate) use coverage::{finish_private_untracked, union_private_untracked, UnionState};
 
 pub(crate) trait RangeStore: RetiringStore {
     fn range_record_added(&mut self, value: u32) -> Result<()>;

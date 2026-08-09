@@ -27,9 +27,9 @@ pub(crate) use delete::delete;
 pub(crate) use delete::delete_existing;
 pub(crate) use delete::remove_leaf_run;
 pub(crate) use gap::{
-    insert_if_edge_gap, insert_if_local_gap, insert_rejected_gap, replace_local_predecessor_with,
-    replace_local_run, root_position, Edge, EdgeInsert, LocalGap, LocalInsert, LocalNext,
-    LocalPrevious, LocalReject, LocalRun, PrivatePosition,
+    flush_edge, insert_if_edge_gap, insert_if_local_gap, insert_rejected_gap,
+    replace_local_predecessor_with, replace_local_run, root_edge, Edge, EdgeInsert, LocalGap,
+    LocalInsert, LocalNext, LocalPrevious, LocalReject, LocalRun, PrivateEdge, PrivatePosition,
 };
 pub(crate) use insert::{insert, replace_leaf_with};
 use page::{branch_child, codec_cell, key_at, lower_bound, parse, CellBuf};

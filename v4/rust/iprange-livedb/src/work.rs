@@ -20,6 +20,8 @@ pub(crate) struct Snapshot {
     pub(crate) pages_created: u64,
     pub(crate) pages_copied: u64,
     pub(crate) pages_split: u64,
+    pub(crate) first_fence_updates: u64,
+    pub(crate) edge_path_checks: u64,
     pub(crate) pages_retired: u64,
     pub(crate) pages_reclaimed: u64,
     pub(crate) pages_sealed: u64,
@@ -38,6 +40,8 @@ pub(crate) struct Snapshot {
     pub(crate) bytes_moved: u64,
     pub(crate) bytes_zeroed: u64,
     pub(crate) membership_leaf_reads: u64,
+    pub(crate) membership_refcount_batches: u64,
+    pub(crate) membership_delta_spills: u64,
     pub(crate) source_passes: u64,
     pub(crate) output_passes: u64,
 }
@@ -78,6 +82,8 @@ event!(edit_fit_probe, edit_fit_probes);
 event!(page_created, pages_created);
 event!(page_copied, pages_copied);
 event!(page_split, pages_split);
+event!(first_fence_update, first_fence_updates);
+event!(edge_path_check, edge_path_checks);
 event!(page_retired, pages_retired);
 event!(page_reclaimed, pages_reclaimed);
 event!(page_sealed, pages_sealed);
@@ -96,6 +102,8 @@ event!(file_sync, file_syncs);
 event!(bytes_moved, bytes_moved);
 event!(bytes_zeroed, bytes_zeroed);
 event!(membership_leaf_read, membership_leaf_reads);
+event!(membership_refcount_batch, membership_refcount_batches);
+event!(membership_delta_spill, membership_delta_spills);
 event!(source_pass, source_passes);
 event!(output_pass, output_passes);
 

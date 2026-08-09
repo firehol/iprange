@@ -172,14 +172,19 @@ fn private_coverage_union_matches_a_scalar_reference() {
 
 #[test]
 fn private_coverage_union_reuses_monotonic_edges() {
+    const INPUTS: u32 = 2_000;
     for descending in [false, true] {
         let mut store = MemoryStore::new();
         let mut root = 0;
         let mut count = 0;
         let mut state = UnionState::default();
         let (_, work) = crate::work::measure(|| {
-            for ordinal in 0..2_000_u32 {
-                let key = if descending { 1_999 - ordinal } else { ordinal } * 4;
+            for ordinal in 0..INPUTS {
+                let key = if descending {
+                    INPUTS - 1 - ordinal
+                } else {
+                    ordinal
+                } * 4;
                 union_private(
                     &mut store,
                     &mut root,
@@ -190,12 +195,31 @@ fn private_coverage_union_reuses_monotonic_edges() {
                 )
                 .unwrap();
             }
+            finish_private(&mut store, &mut root, &mut state).unwrap();
         });
-        assert_eq!(count, 2_000);
+        assert_eq!(count, u64::from(INPUTS));
         assert!(work.pages_split > 0);
         assert_eq!(
             work.tree_lookups, work.pages_split,
             "only split refreshes may descend a monotonic tree"
+        );
+        assert!(
+            work.first_fence_updates > 0,
+            "the fence-work counter did not observe structural writes: {work:?}"
+        );
+        let structural_bound =
+            (work.pages_split + 1).saturating_mul(u64::from(crate::contract::MAX_TREE_LEVEL) + 1);
+        assert!(
+            work.first_fence_updates <= structural_bound,
+            "monotonic input rewrote first-key fences independently of structural splits: {work:?}"
+        );
+        assert!(
+            work.first_fence_updates < u64::from(INPUTS / 10),
+            "monotonic input performed range-proportional fence writes: {work:?}"
+        );
+        assert_eq!(
+            work.edge_path_checks, 1,
+            "a proven monotonic edge was revalidated: {work:?}"
         );
     }
 }

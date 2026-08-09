@@ -91,8 +91,63 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
     assert_eq!(work.ranges_emitted, ranges.len() as u64);
     assert_eq!(work.membership_lookups, 1);
     assert_eq!(work.membership_interns, 0);
+    assert_eq!(work.membership_refcount_batches, 1);
+    assert_eq!(work.membership_delta_spills, 1);
     assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
     finished.abort().unwrap();
+    writer.close().unwrap();
+}
+
+#[test]
+fn second_feed_aggregates_alternating_membership_deltas() {
+    let files = TestPair::new();
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Membership,
+        ValueTag::new(b"membership").unwrap(),
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let ranges: Vec<_> = (0..1_000)
+        .map(|index| AddressRange {
+            from: Ipv4Key(index * 2),
+            to: Ipv4Key(index * 2),
+        })
+        .collect();
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &cancellation).unwrap();
+
+    let mut first = writer
+        .begin_create_feed(FeedName::new("first").unwrap(), &cancellation)
+        .unwrap();
+    first.add_ranges_v4_slice(&ranges).unwrap();
+    match first.finish_input().unwrap() {
+        FinishedWorkflow::Changed(prepared) => {
+            assert_eq!(
+                prepared.commit().unwrap().durability,
+                CommitDurability::Committed
+            );
+        }
+        FinishedWorkflow::NoChange(_) => panic!("feed creation cannot be a no-op"),
+    }
+
+    let mut second = writer
+        .begin_create_feed(FeedName::new("second").unwrap(), &cancellation)
+        .unwrap();
+    second.add_ranges_v4_slice(&ranges).unwrap();
+    let (finished, work) = crate::work::measure(|| second.finish_input());
+    assert_eq!(work.output_passes, 1);
+    assert_eq!(
+        work.membership_refcount_batches, 3,
+        "a uniform merge submitted range-proportional refcount changes: {work:?}"
+    );
+    assert_eq!(
+        work.membership_delta_spills, 3,
+        "a two-ID merge performed range-proportional delta-tree work: {work:?}"
+    );
+    finished.unwrap().abort().unwrap();
     writer.close().unwrap();
 }
 

@@ -159,8 +159,10 @@ impl DraftStore<'_> {
         )
     }
 
+    #[inline(always)]
     pub(super) fn track_membership_refcount(&mut self, id: u32, change: i64) -> Result<()> {
         if self.draft.meta.value_kind == ValueKind::Membership {
+            crate::work::membership_refcount_batch(u64::from(id != 0));
             let mut root = self.draft.membership_delta_root;
             let mut pending = self.draft.membership_delta_pending;
             let result =
@@ -202,7 +204,7 @@ impl DraftStore<'_> {
             membership_dictionary::apply_delta(self, &mut state, delta)?;
         }
         self.draft.membership_delta_root = 0;
-        self.draft.membership_delta_pending = None;
+        self.draft.membership_delta_pending = membership_delta::Pending::new();
         self.store_membership_state(state);
         if self.draft.meta.membership_entry_count > self.draft.meta.range_record_count {
             return Err(Error::Corrupt(
@@ -302,8 +304,8 @@ impl range_mutation::RangeStore for DraftStore<'_> {
     }
 }
 
-fn require_empty_delta(root: u32, pending: Option<membership_delta::Delta>) -> Result<()> {
-    if root == 0 && pending.is_none() {
+fn require_empty_delta(root: u32, pending: membership_delta::Pending) -> Result<()> {
+    if root == 0 && pending.is_empty() {
         Ok(())
     } else {
         Err(Error::Corrupt(

@@ -234,9 +234,13 @@ impl ExactFeedState {
         Ok(finished.bind(writer))
     }
 
-    pub(crate) fn finish_state(self, writer: &mut LiveWriter) -> Result<FinishedState> {
+    pub(crate) fn finish_state(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
         self.require_active(writer)?;
         let cancellation = self.cancellation.clone();
+        writer.mutate(|store| match &mut self.coverage {
+            FeedCoverageState::V4(state) => store.finish_feed_coverage(state),
+            FeedCoverageState::V6(state) => store.finish_feed_coverage(state),
+        })?;
         let merged =
             writer.mutate(|store| store.merge_feed(self.member, self.create, &cancellation))?;
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
