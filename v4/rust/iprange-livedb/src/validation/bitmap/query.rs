@@ -1,10 +1,10 @@
-use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC};
+use crate::bitmap_page;
 use crate::error::{Error, Result};
 use crate::mapping::ByteSource;
 
 use super::super::context::Context;
 use super::super::ValidationSink;
-use super::{coverage, required_level, Kind, BRANCH_TYPE, HEADER_SIZE, LEAF_TYPE};
+use super::{coverage, required_level, Kind};
 
 pub(crate) fn contains<S: ValidationSink>(
     context: &Context<'_, S>,
@@ -74,7 +74,8 @@ fn bit_in_range(kind: Kind, bit: u32, limit: u64) -> bool {
 
 fn query_leaf<P: ByteSource>(page: P, bit: u32, base: u64) -> bool {
     let local = u64::from(bit) - base;
-    let word = u64_le(page, HEADER_SIZE + (local / 64) as usize * 8);
+    let word =
+        bitmap_page::leaf_word(page, (local / 64) as usize).expect("validated bitmap leaf index");
     word & (1u64 << (local % 64)) != 0
 }
 
@@ -85,8 +86,8 @@ fn query_child<P: ByteSource>(
     level: u16,
 ) -> Result<Option<(u32, u64)>> {
     let span = coverage(level - 1)?;
-    let index = ((u64::from(bit) - base) / span) as usize;
-    let child = u32_le(page, HEADER_SIZE + 32 + index * 4);
+    let index = bitmap_page::child_index(bit, level)?;
+    let child = bitmap_page::branch_child(page, index)?;
     if child == 0 {
         return Ok(None);
     }
@@ -107,32 +108,7 @@ pub(super) fn require_header(
     kind: Kind,
     expected_level: u16,
 ) -> Result<()> {
-    if !header_valid(page, selected_txn, kind, expected_level) {
-        return Err(Error::Corrupt(
-            "validated bitmap changed during cross-check",
-        ));
-    }
-    Ok(())
-}
-
-fn header_valid<P: ByteSource>(
-    page: P,
-    selected_txn: u64,
-    kind: Kind,
-    expected_level: u16,
-) -> bool {
-    let born = u64_le(page, 8);
-    let expected_type = if expected_level == 0 {
-        LEAF_TYPE
-    } else {
-        BRANCH_TYPE
-    };
-    page.equals(0, &PAGE_MAGIC)
-        && page.byte(4) == Some(expected_type)
-        && page.byte(5) == Some(0)
-        && u16_le(page, 6) == HEADER_SIZE as u16
-        && born != 0
-        && born <= selected_txn
-        && u16_le(page, 18) == expected_level
-        && u32_le(page, 24) == kind.aux()
+    bitmap_page::inspect_header(page, selected_txn, kind, Some(expected_level))
+        .map(|_| ())
+        .map_err(|_| Error::Corrupt("validated bitmap changed during cross-check"))
 }

@@ -6,10 +6,22 @@ use crate::fixed_tree::{self, Codec, LeafBuf, RetiredPages, Store};
 use crate::format::page_type;
 use crate::mapping::ByteSource;
 
+pub(crate) const BRANCH_TYPE: u8 = page_type::RETIREMENT_BRANCH;
+pub(crate) const LEAF_TYPE: u8 = page_type::RETIREMENT_LEAF;
+pub(crate) const AUX: u32 = 0;
+pub(crate) const KEY_SIZE: usize = 12;
+pub(crate) const CELL_SIZE: usize = 16;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Key {
+pub(crate) struct Key {
     txn: u64,
     first: u32,
+}
+
+impl Key {
+    pub(crate) fn first_page(self) -> u32 {
+        self.first
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +31,10 @@ pub(crate) struct Extent {
 }
 
 impl Extent {
+    pub(crate) fn key(self) -> Key {
+        self.key
+    }
+
     pub(crate) fn transaction(self) -> u64 {
         self.key.txn
     }
@@ -57,17 +73,14 @@ struct RetirementCodec;
 impl Codec for RetirementCodec {
     type Key = Key;
 
-    const BRANCH_TYPE: u8 = page_type::RETIREMENT_BRANCH;
-    const LEAF_TYPE: u8 = page_type::RETIREMENT_LEAF;
-    const AUX: u32 = 0;
-    const KEY_SIZE: usize = 12;
-    const LEAF_SIZE: usize = 16;
+    const BRANCH_TYPE: u8 = BRANCH_TYPE;
+    const LEAF_TYPE: u8 = LEAF_TYPE;
+    const AUX: u32 = AUX;
+    const KEY_SIZE: usize = KEY_SIZE;
+    const LEAF_SIZE: usize = CELL_SIZE;
 
     fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
-        Ok(Key {
-            txn: u64_le(cell, 0),
-            first: u32_le(cell, 8),
-        })
+        decode_key(cell)
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
@@ -88,11 +101,11 @@ impl Codec for RetirementCodec {
     }
 }
 
-struct Encoded([u8; 16]);
+struct Encoded([u8; CELL_SIZE]);
 
 impl Encoded {
     fn new(extent: Extent) -> Self {
-        let mut bytes = [0; 16];
+        let mut bytes = [0; CELL_SIZE];
         bytes[..8].copy_from_slice(&extent.key.txn.to_le_bytes());
         bytes[8..12].copy_from_slice(&extent.key.first.to_le_bytes());
         bytes[12..].copy_from_slice(&extent.count.to_le_bytes());
@@ -494,10 +507,25 @@ fn decode(cell: LeafBuf) -> Result<Extent> {
 }
 
 fn decode_slice<S: ByteSource>(cell: S) -> Result<Extent> {
-    if cell.len() != 16 {
-        return Err(Error::Corrupt("retirement leaf has the wrong record size"));
+    decode_raw(cell).ok_or(Error::Corrupt("retirement leaf has the wrong record size"))
+}
+
+pub(crate) fn decode_key<S: ByteSource>(cell: S) -> Result<Key> {
+    if cell.len() < KEY_SIZE {
+        return Err(Error::Corrupt("retirement key is truncated"));
     }
-    Ok(Extent {
+    Ok(Key {
+        txn: u64_le(cell, 0),
+        first: u32_le(cell, 8),
+    })
+}
+
+pub(crate) fn decode_branch_child<S: ByteSource>(cell: S) -> Option<u32> {
+    (cell.len() == CELL_SIZE).then(|| u32_le(cell, KEY_SIZE))
+}
+
+pub(crate) fn decode_raw<S: ByteSource>(cell: S) -> Option<Extent> {
+    (cell.len() == CELL_SIZE).then(|| Extent {
         key: Key {
             txn: u64_le(cell, 0),
             first: u32_le(cell, 8),

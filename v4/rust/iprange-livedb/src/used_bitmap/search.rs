@@ -1,10 +1,9 @@
 //! Read-only lowest-zero and exact-bit searches.
 
-use crate::contract::u64_le;
+use crate::bitmap_page::leaf_word;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::mapping::ByteSource;
-use crate::slotted_page::HEADER_SIZE;
 
 use super::page::{branch_child, first_summary, lowest_leaf, parse};
 use super::{
@@ -29,16 +28,16 @@ pub(super) fn find_lowest<S: Store>(
     limit: u64,
     kind: Kind,
 ) -> Result<Option<u32>> {
-    if kind.first() >= limit {
+    if kind.first_candidate() >= limit {
         return Ok(None);
     }
     if root == 0 {
-        return Ok(Some(kind.first() as u32));
+        return Ok(Some(kind.first_candidate() as u32));
     }
     let mut page_number = root;
     let mut level = required_level(limit)?;
     let mut base = 0u64;
-    let mut start = kind.first();
+    let mut start = kind.first_candidate();
     let mut selected = false;
     loop {
         let target_txn = store.target_txn();
@@ -112,7 +111,7 @@ pub(super) fn contains<S: Store>(
         let next = store.inspect_page(page_number, |page| {
             let header = parse(page, target_txn, kind, Some(level), base, limit)?;
             if level == 0 {
-                let word = u64_le(page, HEADER_SIZE + leaf_word_index(bit) * 8);
+                let word = leaf_word(page, leaf_word_index(bit))?;
                 return Ok(ExactStep::Found(
                     word & (1u64 << (u64::from(bit) % 64)) != 0,
                 ));
@@ -166,7 +165,7 @@ pub(crate) fn read_words<S: Store>(
         if let Some(page_number) = find_leaf(store, root, limit, kind, base, leaf_base)? {
             store.inspect_page(page_number, |page| {
                 for (index, word) in output[offset..][..count].iter_mut().enumerate() {
-                    *word = u64_le(page, HEADER_SIZE + (within + index) * 8);
+                    *word = leaf_word(page, within + index)?;
                 }
                 Ok(())
             })?;
@@ -293,7 +292,7 @@ fn greatest_leaf<S: ByteSource>(page: S, base: u64, limit: u64) -> Result<Option
         if word_base >= limit {
             continue;
         }
-        let mut word = u64_le(page, HEADER_SIZE + index * 8);
+        let mut word = leaf_word(page, index)?;
         if limit - word_base < 64 {
             word &= (1u64 << (limit - word_base)) - 1;
         }

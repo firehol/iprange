@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL};
+use crate::contract::{u32_le, MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{Codec, PageSource};
 use crate::format::{page_type, Generation};
@@ -185,12 +185,11 @@ pub(crate) fn parse_header<K: IpKey, S: ByteSource>(
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<Header> {
-    let level = u16_le(page, 18);
-    let expected_type = if level == 0 { RANGE_LEAF } else { RANGE_BRANCH };
-    slotted_page::parse(
+    slotted_page::parse_tree(
         page,
         selected_txn,
-        expected_type,
+        RANGE_BRANCH,
+        RANGE_LEAF,
         K::FAMILY as u32,
         expected_level,
     )

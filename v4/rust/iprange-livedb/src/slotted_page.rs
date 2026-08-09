@@ -1,10 +1,11 @@
 //! Shared fixed-record slotted-page primitives.
 
-use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
+use crate::contract::{u16_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource, PageMut};
+use crate::page_header;
 
-pub(crate) const HEADER_SIZE: usize = 32;
+pub(crate) const HEADER_SIZE: usize = page_header::SIZE;
 const MAX_SLOT_COUNT: usize = (PAGE_SIZE - HEADER_SIZE) / 2;
 
 #[derive(Clone, Copy)]
@@ -13,6 +14,69 @@ pub(crate) struct Header {
     pub(crate) level: u16,
     pub(crate) lower: usize,
     pub(crate) upper: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HeaderProblem {
+    Header,
+    Born,
+    Type,
+    Level,
+    Shape,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CellLayout {
+    Fixed(usize),
+    Variable { minimum: usize, maximum: usize },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutInspection {
+    pub(crate) reserved_nonzero: bool,
+}
+
+pub(crate) fn inspect_tree_header<S: ByteSource>(
+    page: S,
+    selected_txn: u64,
+    branch_type: u8,
+    leaf_type: u8,
+    aux: u32,
+    expected_level: Option<u16>,
+) -> std::result::Result<Header, HeaderProblem> {
+    let header = raw_header(page);
+    if !page_header::common_valid(page) {
+        return Err(HeaderProblem::Header);
+    }
+    if !page_header::born_valid(page, selected_txn) {
+        return Err(HeaderProblem::Born);
+    }
+    if !tree_kind_valid(page, branch_type, leaf_type, aux) {
+        return Err(HeaderProblem::Type);
+    }
+    if header.level > MAX_TREE_LEVEL
+        || expected_level.is_some_and(|expected| expected != header.level)
+    {
+        return Err(HeaderProblem::Level);
+    }
+    if !shape_valid(header) {
+        return Err(HeaderProblem::Shape);
+    }
+    Ok(header)
+}
+
+pub(crate) fn tree_kind_valid<S: ByteSource>(
+    page: S,
+    branch_type: u8,
+    leaf_type: u8,
+    aux: u32,
+) -> bool {
+    let expected_type = if page_header::level(page) == 0 {
+        leaf_type
+    } else {
+        branch_type
+    };
+    page_header::kind_valid(page, expected_type, aux)
 }
 
 pub(crate) fn parse<S: ByteSource>(
@@ -27,24 +91,45 @@ pub(crate) fn parse<S: ByteSource>(
     parse_shape(page, expected_level)
 }
 
+pub(crate) fn parse_tree<S: ByteSource>(
+    page: S,
+    selected_txn: u64,
+    branch_type: u8,
+    leaf_type: u8,
+    aux: u32,
+    expected_level: Option<u16>,
+) -> Result<Header> {
+    crate::work::page_parse(1);
+    inspect_tree_header(
+        page,
+        selected_txn,
+        branch_type,
+        leaf_type,
+        aux,
+        expected_level,
+    )
+    .map_err(|problem| match problem {
+        HeaderProblem::Header => Error::Corrupt("slotted-page header is invalid"),
+        HeaderProblem::Born => Error::Corrupt("slotted-page transaction is invalid"),
+        HeaderProblem::Type => Error::Corrupt("slotted-page type or discriminator is invalid"),
+        HeaderProblem::Level => Error::Corrupt("slotted-page child level is invalid"),
+        HeaderProblem::Shape => Error::Corrupt("slotted-page bounds are invalid"),
+    })
+}
+
 fn validate_identity<S: ByteSource>(
     page: S,
     selected_txn: u64,
     page_type: u8,
     aux: u32,
 ) -> Result<()> {
-    if page.len() != PAGE_SIZE
-        || !page.equals(0, &PAGE_MAGIC)
-        || page.byte(5) != Some(0)
-        || u16_le(page, 6) != HEADER_SIZE as u16
-    {
+    if !page_header::common_valid(page) {
         return Err(Error::Corrupt("slotted-page header is invalid"));
     }
-    let born_txn = u64_le(page, 8);
-    if born_txn == 0 || born_txn > selected_txn {
+    if !page_header::born_valid(page, selected_txn) {
         return Err(Error::Corrupt("slotted-page transaction is invalid"));
     }
-    if page.byte(4) != Some(page_type) || u32_le(page, 24) != aux {
+    if !page_header::kind_valid(page, page_type, aux) {
         return Err(Error::Corrupt(
             "slotted-page type or discriminator is invalid",
         ));
@@ -53,30 +138,37 @@ fn validate_identity<S: ByteSource>(
 }
 
 fn parse_shape<S: ByteSource>(page: S, expected_level: Option<u16>) -> Result<Header> {
-    let item_count = usize::from(u16_le(page, 16));
-    let level = u16_le(page, 18);
-    if item_count == 0 || level > MAX_TREE_LEVEL {
+    let header = raw_header(page);
+    if header.item_count == 0 || header.level > MAX_TREE_LEVEL {
         return Err(Error::Corrupt("slotted-page count or level is invalid"));
     }
-    if expected_level.is_some_and(|expected| expected != level) {
+    if expected_level.is_some_and(|expected| expected != header.level) {
         return Err(Error::Corrupt("slotted-page child level is invalid"));
     }
-
-    let lower = usize::from(u16_le(page, 20));
-    let upper = usize::from(u16_le(page, 22));
-    let expected_lower = item_count
-        .checked_mul(2)
-        .and_then(|size| size.checked_add(HEADER_SIZE))
-        .ok_or_else(|| Error::corrupt("slotted-page slot array overflows"))?;
-    if lower != expected_lower || lower > upper || upper >= PAGE_SIZE {
+    if !shape_valid(header) {
         return Err(Error::Corrupt("slotted-page bounds are invalid"));
     }
-    Ok(Header {
-        item_count,
-        level,
-        lower,
-        upper,
-    })
+    Ok(header)
+}
+
+fn raw_header<S: ByteSource>(page: S) -> Header {
+    Header {
+        item_count: page_header::item_count(page),
+        level: page_header::level(page),
+        lower: page_header::lower(page),
+        upper: page_header::upper(page),
+    }
+}
+
+fn shape_valid(header: Header) -> bool {
+    let expected_lower = header
+        .item_count
+        .checked_mul(2)
+        .and_then(|size| size.checked_add(HEADER_SIZE));
+    header.item_count != 0
+        && expected_lower == Some(header.lower)
+        && header.lower <= header.upper
+        && header.upper < PAGE_SIZE
 }
 
 pub(crate) fn cell<S: ByteSource>(
@@ -129,6 +221,54 @@ pub(crate) fn record<S: ByteSource>(
         .ok_or_else(|| Error::corrupt("slotted-page record is outside the record area"))
 }
 
+pub(crate) fn inspect_layout<S: ByteSource>(
+    page: S,
+    header: &Header,
+    layout: CellLayout,
+) -> Option<LayoutInspection> {
+    let mut used = [0u64; PAGE_SIZE / 64];
+    let mut minimum = PAGE_SIZE;
+    for index in 0..header.item_count {
+        let record = match layout {
+            CellLayout::Fixed(length) => cell(page, header, index, length).ok()?,
+            CellLayout::Variable { minimum, maximum } => {
+                record(page, header, index, minimum, maximum).ok()?
+            }
+        };
+        let start = record.source_offset();
+        let end = start.checked_add(record.len())?;
+        if !mark_extent(&mut used, start, end) {
+            return None;
+        }
+        minimum = minimum.min(start);
+    }
+    if minimum != header.upper {
+        return None;
+    }
+    let mut reserved_nonzero = !page.all_zero(header.lower, header.upper - header.lower);
+    if !reserved_nonzero {
+        reserved_nonzero = (header.upper..PAGE_SIZE)
+            .any(|offset| !extent_marked(&used, offset) && page.byte(offset) != Some(0));
+    }
+    Some(LayoutInspection { reserved_nonzero })
+}
+
+fn mark_extent(bits: &mut [u64; PAGE_SIZE / 64], start: usize, end: usize) -> bool {
+    for offset in start..end {
+        let word = offset / 64;
+        let mask = 1u64 << (offset % 64);
+        if bits[word] & mask != 0 {
+            return false;
+        }
+        bits[word] |= mask;
+    }
+    true
+}
+
+fn extent_marked(bits: &[u64; PAGE_SIZE / 64], offset: usize) -> bool {
+    bits[offset / 64] & (1u64 << (offset % 64)) != 0
+}
+
 fn slot_start<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<usize> {
     crate::work::slot_read(1);
     if index >= header.item_count {
@@ -162,9 +302,9 @@ pub(crate) fn insert<D: PageEdit, S: ByteSource>(
     page.copy_within(slot, slot + 2, header.lower - slot)?;
     page.write_source(upper, cell)?;
     page.put_u16(slot, upper as u16)?;
-    page.put_u16(16, (header.item_count + 1) as u16)?;
-    page.put_u16(20, lower as u16)?;
-    page.put_u16(22, upper as u16)?;
+    page.put_u16(page_header::ITEM_COUNT, (header.item_count + 1) as u16)?;
+    page.put_u16(page_header::LOWER, lower as u16)?;
+    page.put_u16(page_header::UPPER, upper as u16)?;
     Ok(true)
 }
 
@@ -190,7 +330,7 @@ pub(crate) fn replace<D: PageEdit, S: ByteSource>(
         let new_start = start - growth;
         page.write_source(new_start, cell)?;
         page.put_u16(HEADER_SIZE + index * 2, new_start as u16)?;
-        page.put_u16(22, (header.upper - growth) as u16)?;
+        page.put_u16(page_header::UPPER, (header.upper - growth) as u16)?;
     } else {
         let shrink = old_len - cell.len();
         if shrink != 0 {
@@ -201,7 +341,7 @@ pub(crate) fn replace<D: PageEdit, S: ByteSource>(
         let new_start = start + shrink;
         page.write_source(new_start, cell)?;
         page.put_u16(HEADER_SIZE + index * 2, new_start as u16)?;
-        page.put_u16(22, (header.upper + shrink) as u16)?;
+        page.put_u16(page_header::UPPER, (header.upper + shrink) as u16)?;
     }
     Ok(true)
 }
@@ -223,9 +363,9 @@ pub(crate) fn remove<D: PageEdit>(
     let slot = HEADER_SIZE + index * 2;
     page.copy_within(slot + 2, slot, header.lower - slot - 2)?;
     page.put_u16(header.lower - 2, 0)?;
-    page.put_u16(16, (header.item_count - 1) as u16)?;
-    page.put_u16(20, (header.lower - 2) as u16)?;
-    page.put_u16(22, (header.upper + old_len) as u16)?;
+    page.put_u16(page_header::ITEM_COUNT, (header.item_count - 1) as u16)?;
+    page.put_u16(page_header::LOWER, (header.lower - 2) as u16)?;
+    page.put_u16(page_header::UPPER, (header.upper + old_len) as u16)?;
     Ok(())
 }
 
@@ -282,9 +422,9 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
     let lower = HEADER_SIZE + keep * 2;
     page.zero(lower, header.lower - lower)?;
     page.zero(header.upper, destination - header.upper)?;
-    page.put_u16(16, keep as u16)?;
-    page.put_u16(20, lower as u16)?;
-    page.put_u16(22, destination as u16)?;
+    page.put_u16(page_header::ITEM_COUNT, keep as u16)?;
+    page.put_u16(page_header::LOWER, lower as u16)?;
+    page.put_u16(page_header::UPPER, destination as u16)?;
     Ok(Header {
         item_count: keep,
         level: header.level,
@@ -380,13 +520,16 @@ impl Appender {
         page.fill(0);
         page.write(0, &PAGE_MAGIC)
             .expect("fixed mapped header fits");
-        page.set_byte(4, page_type)
+        page.set_byte(page_header::TYPE, page_type)
             .expect("fixed mapped header fits");
-        page.put_u16(6, HEADER_SIZE as u16)
+        page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)
             .expect("fixed mapped header fits");
-        page.put_u64(8, born_txn).expect("fixed mapped header fits");
-        page.put_u16(18, level).expect("fixed mapped header fits");
-        page.put_u32(24, aux).expect("fixed mapped header fits");
+        page.put_u64(page_header::BORN_TXN, born_txn)
+            .expect("fixed mapped header fits");
+        page.put_u16(page_header::LEVEL, level)
+            .expect("fixed mapped header fits");
+        page.put_u32(page_header::AUX, aux)
+            .expect("fixed mapped header fits");
         Self {
             item_count: 0,
             upper: PAGE_SIZE,
@@ -424,9 +567,12 @@ impl Appender {
                 "reachable slotted page cannot be empty",
             ));
         }
-        page.put_u16(16, self.item_count as u16)?;
-        page.put_u16(20, (HEADER_SIZE + self.item_count * 2) as u16)?;
-        page.put_u16(22, self.upper as u16)?;
+        page.put_u16(page_header::ITEM_COUNT, self.item_count as u16)?;
+        page.put_u16(
+            page_header::LOWER,
+            (HEADER_SIZE + self.item_count * 2) as u16,
+        )?;
+        page.put_u16(page_header::UPPER, self.upper as u16)?;
         Ok(())
     }
 }

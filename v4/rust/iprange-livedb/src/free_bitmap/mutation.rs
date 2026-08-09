@@ -1,14 +1,13 @@
 //! Copy-on-write free-page bitmap mutation.
 
-use crate::contract::u64_le;
+use crate::bitmap_page::{self, MAX_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::RetiredPages;
-use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
+use crate::slotted_page::{PageEdit, PageSink};
 
 use super::{
-    branch_child, child_index, coverage, first_leaf_word, first_summary, initialize,
-    leaf_word_index, parse, require_bit, required_level, set_branch_child, stamp, BitmapStore,
-    Header, BITMAP_BRANCH, BITMAP_LEAF, LEAF_END, MAX_BITMAP_LEVEL,
+    branch_child, first_leaf_word, first_summary, parse, require_bit, required_level,
+    set_branch_child, stamp, BitmapStore, Header,
 };
 
 #[derive(Clone, Copy)]
@@ -69,7 +68,7 @@ fn descend_for_insert<S: BitmapStore>(
     bit: u32,
     retired: &mut RetiredPages,
 ) -> Result<Option<Cursor>> {
-    let index = child_index(bit, cursor.header.level)?;
+    let index = bitmap_page::child_index(bit, cursor.header.level)?;
     let limit = store.page_limit();
     let child = store.inspect_page(cursor.page_number, |page| {
         branch_child(page, &cursor.header, index, limit)
@@ -99,15 +98,14 @@ fn replace_child<S: BitmapStore>(
 }
 
 fn mark_leaf_free<S: BitmapStore>(store: &mut S, cursor: Cursor, bit: u32) -> Result<()> {
-    let word_index = leaf_word_index(bit);
+    let word_index = bitmap_page::leaf_word_index(bit);
     let mask = 1u64 << (u64::from(bit) % 64);
-    let at = HEADER_SIZE + word_index * 8;
     store.update_page(cursor.page_number, |page| {
-        let word = u64_le(page.view(), at);
+        let word = bitmap_page::leaf_word(page.view(), word_index)?;
         if word & mask != 0 {
             return Err(Error::Corrupt("page is already free"));
         }
-        page.put_u64(at, word | mask)?;
+        bitmap_page::set_leaf_word(page, word_index, word | mask)?;
         stamp(page)
     })
 }
@@ -133,7 +131,7 @@ fn take_from_nonempty<S: BitmapStore>(
     let required = required_level(limit)?;
     let cursor = touch_cursor(store, *root, required, retired)?;
     *root = cursor.page_number;
-    let mut path = [EMPTY_FRAME; (MAX_BITMAP_LEVEL + 1) as usize];
+    let mut path = [EMPTY_FRAME; (MAX_LEVEL + 1) as usize];
     let (leaf, depth, base) = descend_lowest(store, cursor, retired, &mut path)?;
     let (selected, word_index, word, bit_in_word) =
         select_leaf(store, &leaf, &path[..depth], base, limit)?;
@@ -180,7 +178,7 @@ fn descend_lowest<S: BitmapStore>(
 }
 
 fn add_child_base(base: u64, level: u16, index: usize) -> Result<u64> {
-    let offset = coverage(level - 1)?
+    let offset = bitmap_page::coverage(level - 1)?
         .checked_mul(index as u64)
         .ok_or(Error::Corrupt("free bitmap coverage overflow"))?;
     base.checked_add(offset)
@@ -232,9 +230,8 @@ fn clear_leaf_bit<S: BitmapStore>(
     word: u64,
     bit_in_word: u64,
 ) -> Result<bool> {
-    let at = HEADER_SIZE + word_index * 8;
     let nonempty = store.update_page(leaf.page_number, |page| {
-        page.put_u64(at, word & !(1u64 << bit_in_word))?;
+        bitmap_page::set_leaf_word(page, word_index, word & !(1u64 << bit_in_word))?;
         if first_leaf_word(page.view()).is_some() {
             stamp(page)?;
             Ok(true)
@@ -308,7 +305,7 @@ fn touch_cursor<S: BitmapStore>(
 ) -> Result<Cursor> {
     let target_txn = store.target_txn();
     let (header, private) = store.inspect_page(page_number, |page| {
-        let born_txn = u64_le(page, 8);
+        let born_txn = crate::page_header::born_txn(page);
         let header = parse(
             page,
             target_txn,
@@ -327,8 +324,8 @@ fn touch_cursor<S: BitmapStore>(
     let private_page = store.allocate_bitmap_page()?;
     store.copy_page(page_number, private_page, |source, output| {
         output.write_source(0, source)?;
-        output.put_u64(8, target_txn)?;
-        output.put_u32(28, 0)?;
+        output.put_u64(crate::page_header::BORN_TXN, target_txn)?;
+        crate::page_checksum::clear(output)?;
         stamp(output)
     })?;
     retired.push(page_number)?;
@@ -353,13 +350,7 @@ fn grow_root<S: BitmapStore>(store: &mut S, root: &mut u32, required: u16) -> Re
         let child = *root;
         let next_level = level + 1;
         store.update_page(parent, |page| {
-            initialize(
-                page,
-                BITMAP_BRANCH,
-                target_txn,
-                next_level,
-                super::BRANCH_END,
-            );
+            bitmap_page::initialize(page, target_txn, next_level, bitmap_page::Kind::Free);
             set_branch_child(page, 0, child)?;
             stamp(page)
         })?;
@@ -373,10 +364,10 @@ fn new_subtree<S: BitmapStore>(store: &mut S, level: u16, bit: u32) -> Result<u3
     if level == 0 {
         let page_number = store.allocate_bitmap_page()?;
         let txn = store.target_txn();
-        let word = leaf_word_index(bit);
+        let word = bitmap_page::leaf_word_index(bit);
         store.update_page(page_number, |page| {
-            initialize(page, BITMAP_LEAF, txn, 0, LEAF_END);
-            page.put_u64(HEADER_SIZE + word * 8, 1u64 << (u64::from(bit) % 64))?;
+            bitmap_page::initialize(page, txn, 0, bitmap_page::Kind::Free);
+            bitmap_page::set_leaf_word(page, word, 1u64 << (u64::from(bit) % 64))?;
             stamp(page)
         })?;
         return Ok(page_number);
@@ -385,9 +376,9 @@ fn new_subtree<S: BitmapStore>(store: &mut S, level: u16, bit: u32) -> Result<u3
     let child = new_subtree(store, level - 1, bit)?;
     let page_number = store.allocate_bitmap_page()?;
     let txn = store.target_txn();
-    let index = child_index(bit, level)?;
+    let index = bitmap_page::child_index(bit, level)?;
     store.update_page(page_number, |page| {
-        initialize(page, BITMAP_BRANCH, txn, level, super::BRANCH_END);
+        bitmap_page::initialize(page, txn, level, bitmap_page::Kind::Free);
         set_branch_child(page, index, child)?;
         stamp(page)
     })?;

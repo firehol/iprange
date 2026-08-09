@@ -65,7 +65,7 @@ impl Store for DraftStore<'_> {
             .page_mut(page_number, self.draft.meta.page_count)?;
         let result = update(&mut page)?;
         require_private_output(page.view(), self.draft.meta.txn_id)?;
-        page.put_u32(28, tag)?;
+        page.put_u32(page_checksum::OFFSET, tag)?;
         Ok(result)
     }
 
@@ -81,7 +81,7 @@ impl Store for DraftStore<'_> {
                 .page_pair(source, destination, self.draft.meta.page_count)?;
         let result = copy(source, &mut destination)?;
         require_private_output(destination.view(), self.draft.meta.txn_id)?;
-        destination.put_u32(28, tag)?;
+        destination.put_u32(page_checksum::OFFSET, tag)?;
         crate::work::page_copied(1);
         Ok(result)
     }
@@ -97,7 +97,7 @@ impl Store for DraftStore<'_> {
                     "committed page cannot enter the private stack",
                 ));
             }
-            let tag = u32_le(page, 28);
+            let tag = u32_le(page, page_checksum::OFFSET);
             if tag == 0 {
                 return Err(Error::Corrupt(
                     "private page is absent from the dirty chain",
@@ -111,7 +111,7 @@ impl Store for DraftStore<'_> {
             page.put_u32(0, PRIVATE_MAGIC)?;
             page.put_u32(4, next)?;
             page.put_u64(8, txn)?;
-            page.put_u32(28, dirty_tag)
+            page.put_u32(page_checksum::OFFSET, dirty_tag)
         })?;
         self.draft.private_head = page_number;
         Ok(())
@@ -135,7 +135,7 @@ impl DraftStore<'_> {
             let txn = self.draft.meta.txn_id;
             let limit = self.draft.meta.page_count;
             let (next, data_page) = self.inspect_page(page_number, |page| {
-                let next = dirty_next(u32_le(page, 28), page_number, limit)?;
+                let next = dirty_next(u32_le(page, page_checksum::OFFSET), page_number, limit)?;
                 if page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) != txn {
                     return Err(Error::Corrupt("dirty page has the wrong transaction"));
                 }
@@ -170,7 +170,7 @@ impl DraftStore<'_> {
         let owned_data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == self.draft.meta.txn_id;
         let private_stack =
             u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == self.draft.meta.txn_id;
-        let tag = u32_le(page, 28);
+        let tag = u32_le(page, page_checksum::OFFSET);
         Ok(((owned_data || private_stack) && tag != 0).then_some(tag))
     }
 
@@ -192,7 +192,7 @@ impl DraftStore<'_> {
         page.zero(0, 32)?;
         page.put_u32(0, PRIVATE_MAGIC)?;
         page.put_u64(8, txn)?;
-        page.put_u32(28, tag)?;
+        page.put_u32(page_checksum::OFFSET, tag)?;
         if existing.is_none() {
             self.draft.dirty_head = page_number;
             crate::work::page_created(1);
@@ -204,7 +204,7 @@ impl DraftStore<'_> {
 fn require_private_output(page: PageView<'_>, target_txn: u64) -> Result<()> {
     let data = page.equals(0, &PAGE_MAGIC) && u64_le(page, 8) == target_txn;
     let private = u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == target_txn;
-    let reserve = page.all_zero(0, 28);
+    let reserve = page.all_zero(0, page_checksum::OFFSET);
     if data || private || reserve {
         Ok(())
     } else {

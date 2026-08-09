@@ -7,6 +7,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
+mod bitmap_page;
 mod blob_tree;
 mod bootstrap;
 #[doc(hidden)]
@@ -45,6 +46,7 @@ mod membership_view;
 mod metadata;
 mod name_binding;
 mod page_checksum;
+mod page_header;
 mod path;
 mod process_identity;
 pub mod publication;

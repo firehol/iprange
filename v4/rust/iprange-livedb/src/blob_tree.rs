@@ -4,14 +4,16 @@ use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::format::page_type;
-use crate::mapping::{ByteSource, Mapping};
-use crate::slotted_page::{self, Header, HEADER_SIZE};
+use crate::mapping::{ByteRange, ByteSource, Mapping};
+use crate::page_header;
+use crate::slotted_page::{self, Header, PageSink, HEADER_SIZE};
 
-const BLOB_BRANCH: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
-const BLOB_LEAF: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
-const MEMBERSHIP_BLOB: u32 = 1;
-const LEAF_DATA: usize = 48;
-const MAX_DATA: usize = PAGE_SIZE - LEAF_DATA;
+pub(crate) const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
+pub(crate) const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
+pub(crate) const MEMBERSHIP_KIND: u32 = 1;
+pub(crate) const BRANCH_RECORD_SIZE: usize = 16;
+pub(crate) const LEAF_DATA: usize = 48;
+pub(crate) const LEAF_CAPACITY: usize = PAGE_SIZE - LEAF_DATA;
 
 pub(crate) fn read_words(
     mapping: &Mapping,
@@ -111,7 +113,7 @@ fn find_mapped_leaf(
 
     for _ in 0..=MAX_TREE_LEVEL {
         let page = mapping.page(page_number, meta.page_count)?;
-        let level = u16_le(page, 18);
+        let level = page_header::level(page);
         if level == 0 {
             let info = parse_leaf_info(
                 page,
@@ -123,7 +125,7 @@ fn find_mapped_leaf(
             )?;
             return Ok(MappedLeaf {
                 page_number,
-                offset: info.offset,
+                offset: info.start,
                 data_len: info.data_len,
             });
         }
@@ -161,11 +163,11 @@ fn find_store_leaf<S: Store>(
 
     for _ in 0..=MAX_TREE_LEVEL {
         enum Step {
-            Leaf(LeafInfo),
+            Leaf(LeafGeometry),
             Branch { child: u32, offset: u64, level: u16 },
         }
         let step = store.inspect_page(page_number, |page| {
-            let level = u16_le(page, 18);
+            let level = page_header::level(page);
             if level == 0 {
                 return parse_leaf_info(
                     page,
@@ -195,7 +197,7 @@ fn find_store_leaf<S: Store>(
             Step::Leaf(info) => {
                 return Ok(StoreLeaf {
                     page_number,
-                    offset: info.offset,
+                    offset: info.start,
                     data_len: info.data_len,
                 });
             }
@@ -216,9 +218,10 @@ fn find_store_leaf<S: Store>(
     ))
 }
 
-struct BranchRecord {
-    offset: u64,
-    child: u32,
+#[derive(Clone, Copy)]
+pub(crate) struct BranchRecord {
+    pub(crate) offset: u64,
+    pub(crate) child: u32,
 }
 
 fn select_branch<S: ByteSource>(
@@ -249,14 +252,21 @@ fn branch_record<S: ByteSource>(
     index: usize,
     page_count: u64,
 ) -> Result<BranchRecord> {
-    let bytes = slotted_page::cell(page, header, index, 16)?;
-    let child = u32_le(bytes, 8);
-    if u32_le(bytes, 12) != 0 || child < 2 || u64::from(child) >= page_count {
+    let bytes = slotted_page::cell(page, header, index, BRANCH_RECORD_SIZE)?;
+    let record = decode_branch_record(bytes)?;
+    if record.child < 2 || u64::from(record.child) >= page_count {
+        return Err(Error::Corrupt("membership blob branch record is malformed"));
+    }
+    Ok(record)
+}
+
+pub(crate) fn decode_branch_record<S: ByteSource>(cell: S) -> Result<BranchRecord> {
+    if cell.len() != BRANCH_RECORD_SIZE || u32_le(cell, 12) != 0 {
         return Err(Error::Corrupt("membership blob branch record is malformed"));
     }
     Ok(BranchRecord {
-        offset: u64_le(bytes, 0),
-        child,
+        offset: u64_le(cell, 0),
+        child: u32_le(cell, 8),
     })
 }
 
@@ -265,12 +275,14 @@ fn parse_branch<S: ByteSource>(
     selected_txn: u64,
     expected: Option<u16>,
 ) -> Result<Header> {
-    slotted_page::parse(page, selected_txn, BLOB_BRANCH, MEMBERSHIP_BLOB, expected)
+    slotted_page::parse(page, selected_txn, BRANCH_TYPE, MEMBERSHIP_KIND, expected)
 }
 
-struct LeafInfo {
-    offset: u64,
-    data_len: usize,
+#[derive(Clone, Copy)]
+pub(crate) struct LeafGeometry {
+    pub(crate) start: u64,
+    pub(crate) end: u64,
+    pub(crate) data_len: usize,
 }
 
 fn parse_leaf_info<S: ByteSource>(
@@ -280,33 +292,26 @@ fn parse_leaf_info<S: ByteSource>(
     expected_offset: u64,
     total_bytes: u64,
     target: u64,
-) -> Result<LeafInfo> {
-    let offset = u64_le(page, 32);
-    let data_len = usize::from(u16_le(page, 40));
+) -> Result<LeafGeometry> {
     require_leaf_identity(page, selected_txn, expected_level)?;
-    require_leaf_layout(page, data_len)?;
-    if offset != expected_offset || offset % 8 != 0 {
-        return Err(Error::Corrupt("membership blob leaf offset is malformed"));
+    let geometry = leaf_geometry(page, expected_level, expected_offset, total_bytes)?;
+    if target < geometry.start || target >= geometry.end {
+        return Err(Error::Corrupt(
+            "membership blob leaf does not cover the requested bytes",
+        ));
     }
-    let end = offset
-        .checked_add(data_len as u64)
-        .ok_or(Error::Corrupt("membership blob leaf end overflows"))?;
-    require_leaf_coverage(offset, end, data_len, total_bytes, target)?;
-    Ok(LeafInfo { offset, data_len })
+    Ok(geometry)
 }
 
-fn require_leaf_identity<S: ByteSource>(
+pub(crate) fn require_leaf_identity<S: ByteSource>(
     page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<()> {
-    let born_txn = u64_le(page, 8);
-    if !page.equals(0, &PAGE_MAGIC)
-        || page.byte(4) != Some(BLOB_LEAF)
-        || page.byte(5) != Some(0)
-        || u16_le(page, 6) as usize != HEADER_SIZE
-        || born_txn == 0
-        || born_txn > selected_txn
+    if !page_header::common_valid(page)
+        || !page_header::kind_valid(page, LEAF_TYPE, MEMBERSHIP_KIND)
+        || !page_header::born_valid(page, selected_txn)
+        || page_header::level(page) != 0
         || expected_level.is_some_and(|level| level != 0)
     {
         return Err(Error::Corrupt("membership blob leaf identity is malformed"));
@@ -314,52 +319,67 @@ fn require_leaf_identity<S: ByteSource>(
     Ok(())
 }
 
-fn require_leaf_layout<S: ByteSource>(page: S, data_len: usize) -> Result<()> {
-    require_leaf_fixed_layout(page)?;
-    require_leaf_data_layout(page, data_len)
-}
-
-fn require_leaf_fixed_layout<S: ByteSource>(page: S) -> Result<()> {
-    if u16_le(page, 16) != 1
-        || u16_le(page, 18) != 0
-        || u16_le(page, 22) as usize != PAGE_SIZE
-        || u32_le(page, 24) != MEMBERSHIP_BLOB
-        || !page.all_zero(42, 6)
+pub(crate) fn leaf_geometry<S: ByteSource>(
+    page: S,
+    expected_level: Option<u16>,
+    expected_start: u64,
+    total_bytes: u64,
+) -> Result<LeafGeometry> {
+    let data_len = usize::from(u16_le(page, 40));
+    let start = u64_le(page, 32);
+    let end = start
+        .checked_add(data_len as u64)
+        .ok_or(Error::Corrupt("membership blob leaf end overflows"))?;
+    if expected_level.is_some_and(|level| level != 0)
+        || page_header::item_count(page) != 1
+        || page_header::level(page) != 0
+        || page_header::lower(page) != LEAF_DATA + data_len
+        || page_header::upper(page) != PAGE_SIZE
+        || !page_header::kind_valid(page, LEAF_TYPE, MEMBERSHIP_KIND)
+        || !page.all_zero(42, LEAF_DATA - 42)
+        || !(1..=LEAF_CAPACITY).contains(&data_len)
+        || data_len % 8 != 0
+        || start != expected_start
+        || start % 8 != 0
+        || end > total_bytes
+        || (end < total_bytes && data_len != LEAF_CAPACITY)
     {
         return Err(Error::Corrupt("membership blob leaf layout is malformed"));
     }
-    Ok(())
+    Ok(LeafGeometry {
+        start,
+        end,
+        data_len,
+    })
 }
 
-fn require_leaf_data_layout<S: ByteSource>(page: S, data_len: usize) -> Result<()> {
-    if data_len == 0
-        || data_len > MAX_DATA
-        || data_len % 8 != 0
-        || u16_le(page, 20) as usize != LEAF_DATA + data_len
-    {
-        return Err(Error::Corrupt(
-            "membership blob leaf data geometry is malformed",
-        ));
-    }
-    Ok(())
-}
-
-fn require_leaf_coverage(
-    offset: u64,
-    end: u64,
+pub(crate) fn initialize_leaf<D: PageSink>(
+    page: &mut D,
+    born_txn: u64,
+    start: u64,
     data_len: usize,
-    total_bytes: u64,
-    target: u64,
 ) -> Result<()> {
-    if end > total_bytes
-        || target < offset
-        || target >= end
-        || (end < total_bytes && data_len != MAX_DATA)
-        || (end == total_bytes && total_bytes - offset != data_len as u64)
-    {
-        return Err(Error::Corrupt(
-            "membership blob leaf does not cover the requested bytes",
+    if !(1..=LEAF_CAPACITY).contains(&data_len) || data_len % 8 != 0 || start % 8 != 0 {
+        return Err(Error::InvalidArgument(
+            "membership blob leaf geometry is invalid",
         ));
     }
-    Ok(())
+    page.fill(0);
+    page.write(0, &PAGE_MAGIC)?;
+    page.set_byte(page_header::TYPE, LEAF_TYPE)?;
+    page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)?;
+    page.put_u64(page_header::BORN_TXN, born_txn)?;
+    page.put_u16(page_header::ITEM_COUNT, 1)?;
+    page.put_u16(page_header::LEVEL, 0)?;
+    page.put_u16(page_header::LOWER, (LEAF_DATA + data_len) as u16)?;
+    page.put_u16(page_header::UPPER, PAGE_SIZE as u16)?;
+    page.put_u32(page_header::AUX, MEMBERSHIP_KIND)?;
+    page.put_u64(32, start)?;
+    page.put_u16(40, data_len as u16)
+}
+
+pub(crate) fn leaf_bytes<S: ByteSource>(page: S, geometry: LeafGeometry) -> Result<ByteRange<S>> {
+    ByteRange::new(page, LEAF_DATA, geometry.data_len).ok_or(Error::Corrupt(
+        "membership blob payload is outside its page",
+    ))
 }

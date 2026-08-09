@@ -1,6 +1,6 @@
 //! Codec-driven page encoding and search.
 
-use crate::contract::{u16_le, u64_le, PAGE_SIZE};
+use crate::contract::{u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource};
 use crate::slotted_page::{self, Builder, Header, PageSink};
@@ -156,11 +156,11 @@ pub(super) fn parse<C: Codec, S: ByteSource>(
     selected_txn: u64,
     expected_level: Option<u16>,
 ) -> Result<Header> {
-    let level = u16_le(page, 18);
-    slotted_page::parse(
+    slotted_page::parse_tree(
         page,
         selected_txn,
-        page_type::<C>(level),
+        C::BRANCH_TYPE,
+        C::LEAF_TYPE,
         C::AUX,
         expected_level,
     )

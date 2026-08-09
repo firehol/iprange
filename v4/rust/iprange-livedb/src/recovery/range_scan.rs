@@ -1,9 +1,8 @@
 use crate::cancellation::CancellationToken;
-use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
-use crate::crc32c;
+use crate::contract::{MetaV4, MAX_TREE_LEVEL};
 use crate::error::Result;
 use crate::key::IpKey;
-use crate::mapping::{ByteSource, Mapping, PageView};
+use crate::mapping::{Mapping, PageView};
 use crate::range_tree::{self, Record};
 use crate::slotted_page::{self, Header};
 use crate::validation::ValidationReason;
@@ -151,7 +150,7 @@ fn load_page<'m, K, E: RangeEvents<K>>(
             return Ok(None);
         }
     };
-    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+    if !crate::page_checksum::valid(page) {
         reject_page(
             events,
             page_number,
@@ -170,13 +169,12 @@ fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
     expected_level: Option<u16>,
     events: &mut E,
 ) -> Result<Option<Header>> {
-    let level = u16_le(page, 18);
-    let expected_type = if level == 0 {
-        range_tree::RANGE_LEAF
-    } else {
-        range_tree::RANGE_BRANCH
-    };
-    if page.byte(4) != Some(expected_type) {
+    if !slotted_page::tree_kind_valid(
+        page,
+        range_tree::RANGE_BRANCH,
+        range_tree::RANGE_LEAF,
+        K::FAMILY as u32,
+    ) {
         reject_page(
             events,
             page_number,
@@ -198,7 +196,9 @@ fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
         }
     };
     let cell_len = range_cell_len::<K>(header.level);
-    if !fixed_layout_valid(page, &header, cell_len) {
+    if !slotted_page::inspect_layout(page, &header, slotted_page::CellLayout::Fixed(cell_len))
+        .is_some_and(|inspection| !inspection.reserved_nonzero)
+    {
         reject_page(
             events,
             page_number,
@@ -295,43 +295,4 @@ fn scan_branch<K: IpKey, E: RangeEvents<K>>(
         }
     }
     Ok(first)
-}
-
-fn fixed_layout_valid<S: ByteSource>(page: S, header: &Header, cell_len: usize) -> bool {
-    let mut used = [0u64; PAGE_SIZE / 64];
-    let mut minimum = PAGE_SIZE;
-    for index in 0..header.item_count {
-        let slot = 32 + index * 2;
-        let start = usize::from(u16_le(page, slot));
-        let Some(end) = start.checked_add(cell_len) else {
-            return false;
-        };
-        if start < header.upper || end > PAGE_SIZE || !mark(&mut used, start, end) {
-            return false;
-        }
-        minimum = minimum.min(start);
-    }
-    if minimum != header.upper
-        || !(header.lower..header.upper).all(|position| page.byte(position) == Some(0))
-    {
-        return false;
-    }
-    (header.upper..PAGE_SIZE)
-        .all(|position| marked(&used, position) || page.byte(position) == Some(0))
-}
-
-fn mark(bits: &mut [u64; PAGE_SIZE / 64], start: usize, end: usize) -> bool {
-    for position in start..end {
-        let word = position / 64;
-        let mask = 1u64 << (position % 64);
-        if bits[word] & mask != 0 {
-            return false;
-        }
-        bits[word] |= mask;
-    }
-    true
-}
-
-fn marked(bits: &[u64; PAGE_SIZE / 64], position: usize) -> bool {
-    bits[position / 64] & (1u64 << (position % 64)) != 0
 }

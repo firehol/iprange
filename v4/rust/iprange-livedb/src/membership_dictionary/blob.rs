@@ -1,21 +1,16 @@
 //! Fixed-memory construction of immutable membership blobs.
 
-use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
+use crate::blob_tree;
+use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiringStore, Store};
-use crate::format::page_type;
 use crate::mapping::ByteSource;
 use crate::slotted_page::{self, put_u32, put_u64, Builder, PageSink, HEADER_SIZE};
 
 use super::Words;
 
-const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
-const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
-const MEMBERSHIP_KIND: u32 = 1;
-const LEAF_DATA: usize = 48;
-const LEAF_BYTES: usize = PAGE_SIZE - LEAF_DATA;
-const LEAF_WORDS: usize = LEAF_BYTES / 8;
-const BRANCH_ITEMS: usize = (PAGE_SIZE - HEADER_SIZE) / 18;
+const LEAF_WORDS: usize = blob_tree::LEAF_CAPACITY / 8;
+const BRANCH_ITEMS: usize = (PAGE_SIZE - HEADER_SIZE) / (blob_tree::BRANCH_RECORD_SIZE + 2);
 const BUILD_LEVELS: usize = 5;
 
 #[derive(Clone, Copy)]
@@ -82,8 +77,12 @@ fn release_page<S: RetiringStore>(
     if depth > MAX_TREE_LEVEL {
         return Err(Error::Corrupt("membership blob exceeds its maximum height"));
     }
-    let (level, born_txn) =
-        store.inspect_page(page_number, |page| Ok((u16_le(page, 18), u64_le(page, 8))))?;
+    let (level, born_txn) = store.inspect_page(page_number, |page| {
+        Ok((
+            crate::page_header::level(page),
+            crate::page_header::born_txn(page),
+        ))
+    })?;
     if level == 0 {
         store.inspect_page(page_number, |page| {
             release_leaf(page, store.target_txn(), expected_level, total, next)
@@ -111,35 +110,26 @@ fn release_branch<S: RetiringStore>(
     next: &mut u64,
     depth: u16,
 ) -> Result<()> {
-    let item_count = store.inspect_page(page_number, |page| {
+    let header = store.inspect_page(page_number, |page| {
         slotted_page::parse(
             page,
             store.target_txn(),
-            BRANCH_TYPE,
-            MEMBERSHIP_KIND,
+            blob_tree::BRANCH_TYPE,
+            blob_tree::MEMBERSHIP_KIND,
             expected_level,
         )
-        .map(|header| header.item_count)
     })?;
-    for index in 0..item_count {
+    for index in 0..header.item_count {
         let child = store.inspect_page(page_number, |page| {
-            let header = slotted_page::parse(
-                page,
-                store.target_txn(),
-                BRANCH_TYPE,
-                MEMBERSHIP_KIND,
-                expected_level,
-            )?;
-            let cell = slotted_page::cell(page, &header, index, 16)?;
-            let child = u32_le(cell, 8);
-            if u64_le(cell, 0) != *next
-                || u32_le(cell, 12) != 0
-                || child < 2
-                || u64::from(child) >= store.page_limit()
+            let cell = slotted_page::cell(page, &header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+            let record = blob_tree::decode_branch_record(cell)?;
+            if record.offset != *next
+                || record.child < 2
+                || u64::from(record.child) >= store.page_limit()
             {
                 return Err(Error::Corrupt("membership blob branch record is malformed"));
             }
-            Ok(child)
+            Ok(record.child)
         })?;
         release_page(store, child, Some(level - 1), total, next, depth + 1)?;
     }
@@ -153,61 +143,8 @@ fn release_leaf<P: ByteSource>(
     total: u64,
     next: &mut u64,
 ) -> Result<()> {
-    let data_len = u64::from(u16_le(page, 40));
-    let end = next
-        .checked_add(data_len)
-        .ok_or(Error::Corrupt("membership blob length overflows"))?;
-    require_release_leaf_identity(page, selected_txn, expected_level)?;
-    require_release_leaf_layout(page, data_len)?;
-    require_release_leaf_coverage(page, *next, end, data_len, total)?;
-    *next = end;
-    Ok(())
-}
-
-fn require_release_leaf_identity<P: ByteSource>(
-    page: P,
-    selected_txn: u64,
-    expected_level: Option<u16>,
-) -> Result<()> {
-    if !page.equals(0, &PAGE_MAGIC)
-        || page.byte(4) != Some(LEAF_TYPE)
-        || page.byte(5) != Some(0)
-        || u16_le(page, 6) != HEADER_SIZE as u16
-        || u64_le(page, 8) == 0
-        || u64_le(page, 8) > selected_txn
-        || u16_le(page, 18) != 0
-        || expected_level.is_some_and(|level| level != 0)
-    {
-        return Err(Error::Corrupt("membership blob leaf identity is malformed"));
-    }
-    Ok(())
-}
-
-fn require_release_leaf_layout<P: ByteSource>(page: P, data_len: u64) -> Result<()> {
-    if u16_le(page, 16) != 1
-        || u16_le(page, 20) as usize != LEAF_DATA + data_len as usize
-        || u16_le(page, 22) as usize != PAGE_SIZE
-        || u32_le(page, 24) != MEMBERSHIP_KIND
-        || data_len == 0
-        || data_len > LEAF_BYTES as u64
-        || data_len % 8 != 0
-        || !page.all_zero(42, 6)
-    {
-        return Err(Error::Corrupt("membership blob leaf layout is malformed"));
-    }
-    Ok(())
-}
-
-fn require_release_leaf_coverage<P: ByteSource>(
-    page: P,
-    next: u64,
-    end: u64,
-    data_len: u64,
-    total: u64,
-) -> Result<()> {
-    if u64_le(page, 32) != next || end > total || (end < total && data_len != LEAF_BYTES as u64) {
-        return Err(Error::Corrupt("membership blob leaf coverage is malformed"));
-    }
+    blob_tree::require_leaf_identity(page, selected_txn, expected_level)?;
+    *next = blob_tree::leaf_geometry(page, expected_level, *next, total)?.end;
     Ok(())
 }
 
@@ -232,17 +169,12 @@ fn write_leaf<S: Store, W: Words<S>>(
     let page_number = store.allocate()?;
     let target_txn = store.target_txn();
     store.update_page(page_number, |page| {
-        page.fill(0);
-        page.write(0, &PAGE_MAGIC)?;
-        page.set_byte(4, LEAF_TYPE)?;
-        page.put_u16(6, HEADER_SIZE as u16)?;
-        page.put_u64(8, target_txn)?;
-        page.put_u16(16, 1)?;
-        page.put_u16(20, (LEAF_DATA + count as usize * 8) as u16)?;
-        page.put_u16(22, PAGE_SIZE as u16)?;
-        page.put_u32(24, MEMBERSHIP_KIND)?;
-        page.put_u64(32, u64::from(offset_words) * 8)?;
-        page.put_u16(40, (count * 8) as u16)
+        blob_tree::initialize_leaf(
+            page,
+            target_txn,
+            u64::from(offset_words) * 8,
+            count as usize * 8,
+        )
     })?;
     const WORD_CHUNK: usize = 64;
     let mut values = [0u64; WORD_CHUNK];
@@ -252,7 +184,10 @@ fn write_leaf<S: Store, W: Words<S>>(
         words.read_words(store, offset_words + written, &mut values[..chunk])?;
         store.update_page(page_number, |page| {
             for (index, value) in values[..chunk].iter().enumerate() {
-                page.put_u64(LEAF_DATA + (written as usize + index) * 8, *value)?;
+                page.put_u64(
+                    blob_tree::LEAF_DATA + (written as usize + index) * 8,
+                    *value,
+                )?;
             }
             Ok(())
         })?;
@@ -323,10 +258,10 @@ fn flush<S: Store>(store: &mut S, level: &mut Level) -> Result<Node> {
     store.update_page(page_number, |page| {
         let mut builder = Builder::new(
             page,
-            BRANCH_TYPE,
+            blob_tree::BRANCH_TYPE,
             target_txn,
             child_level + 1,
-            MEMBERSHIP_KIND,
+            blob_tree::MEMBERSHIP_KIND,
         );
         for node in &level.nodes[..level.len] {
             let mut record = [0; 16];

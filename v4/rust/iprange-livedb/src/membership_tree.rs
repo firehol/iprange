@@ -1,21 +1,12 @@
 //! Selected membership-dictionary record reads.
 
-use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
+use crate::contract::{u64_le, MetaV4, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
-use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
+use crate::membership_dictionary::codec;
 use crate::slotted_page::{self, Header};
 
-const ID_BRANCH: u8 = page_type::MEMBERSHIP_ID_BRANCH;
-const ID_LEAF: u8 = page_type::MEMBERSHIP_ID_LEAF;
-const RECORD_BASE: usize = 64;
-const MAX_WORD_COUNT: u32 = 67_108_864;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Storage {
-    Inline,
-    Blob(u32),
-}
+pub(crate) use codec::Storage;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Record {
@@ -124,7 +115,8 @@ fn key_at<S: ByteSource>(page: S, header: &Header, index: usize, meta: &MetaV4) 
     if header.level == 0 {
         return Ok(decode_record(page, header, 0, index, meta)?.id);
     }
-    let id = u32_le(slotted_page::cell(page, header, index, 8)?, 0);
+    let cell = slotted_page::cell(page, header, index, codec::ID_BRANCH_SIZE)?;
+    let (id, _) = codec::decode_id_branch(cell)?;
     require_id(id, meta.membership_id_limit)?;
     Ok(id)
 }
@@ -150,24 +142,18 @@ fn decode_record<S: ByteSource>(
     index: usize,
     meta: &MetaV4,
 ) -> Result<Record> {
-    let bytes = slotted_page::record(page, header, index, RECORD_BASE, PAGE_SIZE)?;
-    let id = u32_le(bytes, 4);
-    let word_count = u32_le(bytes, 16);
-    let bitmap_len = u32_le(bytes, 20);
-    let blob_root = u32_le(bytes, 24);
-    require_record_fields(bytes, id, word_count, bitmap_len, meta)?;
-    let storage = storage(bytes, bitmap_len, blob_root, meta.page_count)?;
+    let bytes = slotted_page::record(page, header, index, codec::ID_BASE, codec::MAX_ID_RECORD)?;
+    let decoded = codec::decode(bytes)?;
+    require_record_fields(decoded, meta)?;
+    let storage = decoded.storage;
     let inline_data_offset = if storage == Storage::Inline {
-        bytes
-            .source_offset()
-            .checked_add(RECORD_BASE)
-            .ok_or(Error::ArithmeticOverflow("membership inline offset"))?
+        codec::inline_page_offset(bytes, decoded)?
     } else {
         0
     };
     Ok(Record {
-        id,
-        word_count,
+        id: decoded.id,
+        word_count: decoded.word_count,
         leaf_page: page_number,
         #[cfg(test)]
         leaf_index: index,
@@ -176,21 +162,11 @@ fn decode_record<S: ByteSource>(
     })
 }
 
-fn require_record_fields<S: ByteSource>(
-    bytes: S,
-    id: u32,
-    word_count: u32,
-    bitmap_len: u32,
-    meta: &MetaV4,
-) -> Result<()> {
-    require_id(id, meta.membership_id_limit)?;
-    if u64_le(bytes, 8) == 0
-        || word_count == 0
-        || word_count > MAX_WORD_COUNT
-        || u64::from(word_count) > maximum_words(meta.feed_index_limit)
-        || bitmap_len != word_count.checked_mul(8).unwrap()
-        || bytes.byte(3) != Some(0)
-        || u32_le(bytes, 28) != 0
+fn require_record_fields(record: codec::Record, meta: &MetaV4) -> Result<()> {
+    require_id(record.id, meta.membership_id_limit)?;
+    if record.refcount == 0
+        || u64::from(record.word_count) > maximum_words(meta.feed_index_limit)
+        || matches!(record.storage, Storage::Blob(root) if u64::from(root) >= meta.page_count)
     {
         return Err(Error::Corrupt("membership dictionary record is malformed"));
     }
@@ -206,26 +182,6 @@ fn require_id(id: u32, limit: u64) -> Result<()> {
     Ok(())
 }
 
-fn storage<S: ByteSource>(
-    bytes: S,
-    bitmap_len: u32,
-    blob_root: u32,
-    page_count: u64,
-) -> Result<Storage> {
-    match bytes.byte(2) {
-        Some(0) if blob_root == 0 && bytes.len() == RECORD_BASE + bitmap_len as usize => {
-            Ok(Storage::Inline)
-        }
-        Some(1) if bytes.len() == RECORD_BASE => {
-            if blob_root < 2 || u64::from(blob_root) >= page_count {
-                return Err(Error::Corrupt("membership blob root is invalid"));
-            }
-            Ok(Storage::Blob(blob_root))
-        }
-        _ => Err(Error::Corrupt("membership dictionary storage is malformed")),
-    }
-}
-
 fn maximum_words(feed_index_limit: u64) -> u64 {
     feed_index_limit.saturating_add(63) / 64
 }
@@ -236,7 +192,8 @@ fn branch_child<S: ByteSource>(
     index: usize,
     page_count: u64,
 ) -> Result<u32> {
-    let child = u32_le(slotted_page::cell(page, header, index, 8)?, 4);
+    let cell = slotted_page::cell(page, header, index, codec::ID_BRANCH_SIZE)?;
+    let (_, child) = codec::decode_id_branch(cell)?;
     if child < 2 || u64::from(child) >= page_count {
         return Err(Error::Corrupt(
             "membership dictionary child is outside page bounds",
@@ -250,7 +207,12 @@ fn parse_header<S: ByteSource>(
     selected_txn: u64,
     expected: Option<u16>,
 ) -> Result<Header> {
-    let level = u16_le(page, 18);
-    let page_type = if level == 0 { ID_LEAF } else { ID_BRANCH };
-    slotted_page::parse(page, selected_txn, page_type, 0, expected)
+    slotted_page::parse_tree(
+        page,
+        selected_txn,
+        codec::ID_BRANCH,
+        codec::ID_LEAF,
+        0,
+        expected,
+    )
 }

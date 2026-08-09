@@ -1,6 +1,5 @@
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4};
-use crate::crc32c;
+use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, Mapping, PageView};
 use crate::metadata::{self, Inflater};
@@ -183,7 +182,7 @@ fn load_chunk<'m, S: RecoverySink>(
             return Ok(None);
         }
     };
-    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+    if !crate::page_checksum::valid(page) {
         reject_page(
             reporter,
             chain.page_number,

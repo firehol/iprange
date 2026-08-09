@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::fixed_tree::{self, LeafLocation, RetiredPages, RetiringStore, Store};
 
 use super::blob;
-use super::codec::{decode, IdCodec, Record, Storage, ID_BASE, MAX_ID_RECORD};
+use super::codec::{self, decode_canonical, IdCodec, Record, Storage, ID_BASE, MAX_ID_RECORD};
 use super::Words;
 
 const MAX_INLINE_WORDS: u32 = ((MAX_ID_RECORD - ID_BASE) / 8) as u32;
@@ -81,7 +81,7 @@ pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Fou
         return Ok(None);
     };
     fixed_tree::inspect_leaf::<IdCodec, S, _, _>(store, location, |cell| {
-        let record = decode(cell)?;
+        let record = decode_canonical(cell)?;
         Ok((record.id == id).then_some(Found { location, record }))
     })
 }
@@ -112,15 +112,16 @@ pub(super) fn read_record_words<S: Store>(
     match found.record.storage {
         Storage::Inline => {
             fixed_tree::inspect_leaf::<IdCodec, S, _, _>(store, found.location, |cell| {
-                let current = decode(cell)?;
+                let current = decode_canonical(cell)?;
                 if current.id != found.record.id
                     || current.word_count != found.record.word_count
                     || current.storage != Storage::Inline
                 {
                     return Err(Error::Corrupt("membership record changed during read"));
                 }
+                let bytes = codec::inline_bytes(cell, current)?;
                 for (index, word) in output.iter_mut().enumerate() {
-                    *word = u64_le(cell, ID_BASE + (start as usize + index) * 8);
+                    *word = u64_le(bytes, (start as usize + index) * 8);
                 }
                 Ok(())
             })

@@ -1,6 +1,5 @@
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4, ValueKind, PAGE_SIZE};
-use crate::crc32c;
+use crate::contract::{MetaV4, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::mapping::{Mapping, PageView};
 
@@ -254,7 +253,7 @@ impl<'a, S: ValidationSink> Context<'a, S> {
                 return Ok(None);
             }
         };
-        if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+        if !crate::page_checksum::valid(page) {
             self.emit(
                 ValidationReason::PageCrcMismatch,
                 object,

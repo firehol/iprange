@@ -1,6 +1,5 @@
-use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
+use crate::bitmap_page::{self, Header, HeaderProblem, BRANCH_CHILDREN, LEAF_WORDS, MAX_LEVEL};
 use crate::error::{Error, Result};
-use crate::format::page_type;
 use crate::mapping::ByteSource;
 
 use super::context::Context;
@@ -13,44 +12,18 @@ pub(crate) use query::contains;
 use query::require_header as require_query_header;
 pub(crate) use word_cache::WordCache;
 
-const BRANCH_TYPE: u8 = page_type::USED_BITMAP_BRANCH;
-const LEAF_TYPE: u8 = page_type::USED_BITMAP_LEAF;
-const HEADER_SIZE: usize = 32;
-const LEAF_WORDS: usize = 500;
-const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;
-const BRANCH_CHILDREN: usize = 256;
-const LEAF_END: usize = HEADER_SIZE + LEAF_WORDS * 8;
-const BRANCH_END: usize = HEADER_SIZE + 32 + BRANCH_CHILDREN * 4;
-const MAX_LEVEL: u16 = 3;
+pub(crate) use crate::bitmap_page::Kind;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Free,
-    Feed,
-    Membership,
+trait ValidationKind {
+    fn object(self) -> ValidationObject;
 }
 
-impl Kind {
-    fn aux(self) -> u32 {
-        match self {
-            Self::Free => 1,
-            Self::Feed => 2,
-            Self::Membership => 3,
-        }
-    }
-
-    fn first_candidate(self) -> u64 {
-        match self {
-            Self::Membership => 1,
-            Self::Free | Self::Feed => 0,
-        }
-    }
-
+impl ValidationKind for Kind {
     fn object(self) -> ValidationObject {
         match self {
-            Self::Free => ValidationObject::FreeBitmap,
-            Self::Feed => ValidationObject::FeedUsedBitmap,
-            Self::Membership => ValidationObject::MembershipUsedBitmap,
+            Kind::Free => ValidationObject::FreeBitmap,
+            Kind::Feed => ValidationObject::FeedUsedBitmap,
+            Kind::Membership => ValidationObject::MembershipUsedBitmap,
         }
     }
 }
@@ -133,13 +106,15 @@ fn parse_header<S: ValidationSink, P: ByteSource>(
     expected_level: u16,
     kind: Kind,
 ) -> Result<Option<Header>> {
-    let level = u16_le(page, 18);
-    let lower = if level == 0 { LEAF_END } else { BRANCH_END };
-    if let Some(problem) = header_problem(page, context.meta.txn_id, expected_level, kind, lower) {
-        emit_header_problem(context, page_number, kind, problem)?;
-        return Ok(None);
-    }
-    if !page.all_zero(lower, PAGE_SIZE - lower) {
+    let header =
+        match bitmap_page::checked_header(page, context.meta.txn_id, kind, Some(expected_level)) {
+            Ok(header) => header,
+            Err(problem) => {
+                emit_header_problem(context, page_number, kind, problem)?;
+                return Ok(None);
+            }
+        };
+    if !bitmap_page::reserved_zero(page, header.level) {
         context.emit(
             ValidationReason::PageReservedNonzero,
             kind.object(),
@@ -148,59 +123,7 @@ fn parse_header<S: ValidationSink, P: ByteSource>(
             None,
         )?;
     }
-    Ok(Some(Header {
-        level,
-        item_count: usize::from(u16_le(page, 16)),
-    }))
-}
-
-#[derive(Clone, Copy)]
-enum HeaderProblem {
-    Header,
-    Born,
-    Level,
-    Type,
-}
-
-fn header_problem<P: ByteSource>(
-    page: P,
-    txn_id: u64,
-    expected_level: u16,
-    kind: Kind,
-    lower: usize,
-) -> Option<HeaderProblem> {
-    if !common_header_valid(page, lower) {
-        return Some(HeaderProblem::Header);
-    }
-    if !born_valid(page, txn_id) {
-        return Some(HeaderProblem::Born);
-    }
-    let level = u16_le(page, 18);
-    if level > MAX_LEVEL || level != expected_level {
-        return Some(HeaderProblem::Level);
-    }
-    if !page_kind_valid(page, level, kind) {
-        return Some(HeaderProblem::Type);
-    }
-    None
-}
-
-fn common_header_valid<P: ByteSource>(page: P, lower: usize) -> bool {
-    page.equals(0, &PAGE_MAGIC)
-        && page.byte(5) == Some(0)
-        && u16_le(page, 6) == HEADER_SIZE as u16
-        && usize::from(u16_le(page, 20)) == lower
-        && usize::from(u16_le(page, 22)) == PAGE_SIZE
-}
-
-fn born_valid<P: ByteSource>(page: P, txn_id: u64) -> bool {
-    let born = u64_le(page, 8);
-    born != 0 && born <= txn_id
-}
-
-fn page_kind_valid<P: ByteSource>(page: P, level: u16, kind: Kind) -> bool {
-    let expected_type = if level == 0 { LEAF_TYPE } else { BRANCH_TYPE };
-    page.byte(4) == Some(expected_type) && u32_le(page, 24) == kind.aux()
+    Ok(Some(header))
 }
 
 fn emit_header_problem<S: ValidationSink>(
@@ -230,7 +153,7 @@ fn validate_leaf<S: ValidationSink, P: ByteSource>(
     let mut totals = LeafTotals::default();
     for index in 0..LEAF_WORDS {
         context.checkpoint()?;
-        let word = u64_le(page, HEADER_SIZE + index * 8);
+        let word = bitmap_page::leaf_word(page, index)?;
         let (word_base, valid, valid_mask) =
             validate_leaf_word(context, page_number, base, limit, kind, index, word)?;
         totals.add(context, word_base, word, valid, valid_mask, kind)?;
@@ -329,7 +252,7 @@ fn validate_branch<S: ValidationSink, P: ByteSource>(
     let mut totals = BranchTotals::default();
     for index in 0..BRANCH_CHILDREN {
         context.checkpoint()?;
-        let child = u32_le(page, HEADER_SIZE + 32 + index * 4);
+        let child = bitmap_page::branch_child(page, index)?;
         totals.child_count += usize::from(child != 0);
         let result = validate_branch_child(
             context,
@@ -382,7 +305,7 @@ impl BranchTotals {
             Kind::Free => result.has_one,
             Kind::Feed | Kind::Membership => result.has_candidate,
         };
-        if summary_bit(page, index) != expected {
+        if bitmap_page::summary_bit(page, index)? != expected {
             context.emit(
                 ValidationReason::BitmapSummaryInvalid,
                 kind.object(),
@@ -492,33 +415,12 @@ fn in_range_mask(base: u64, limit: u64, kind: Kind) -> u64 {
     mask
 }
 
-fn summary_bit<P: ByteSource>(page: P, index: usize) -> bool {
-    u64_le(page, HEADER_SIZE + (index / 64) * 8) & (1u64 << (index % 64)) != 0
-}
-
 fn coverage(level: u16) -> Result<u64> {
-    let mut value = LEAF_BITS;
-    for _ in 0..level {
-        value = value
-            .checked_mul(BRANCH_CHILDREN as u64)
-            .ok_or(Error::ArithmeticOverflow("validation bitmap coverage"))?;
-    }
-    Ok(value)
+    bitmap_page::coverage(level)
 }
 
 fn required_level(limit: u64) -> Result<u16> {
-    for level in 0..=MAX_LEVEL {
-        if coverage(level)? >= limit {
-            return Ok(level);
-        }
-    }
-    Err(Error::ArithmeticOverflow("validation bitmap limit"))
-}
-
-#[derive(Clone, Copy)]
-struct Header {
-    level: u16,
-    item_count: usize,
+    bitmap_page::required_level(limit)
 }
 
 #[derive(Clone, Copy)]

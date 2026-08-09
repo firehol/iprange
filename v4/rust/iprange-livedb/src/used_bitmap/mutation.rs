@@ -1,11 +1,11 @@
 //! Copy-on-write sparse-bitmap mutation.
 
-use crate::contract::u64_le;
+use crate::bitmap_page::{leaf_word, set_leaf_word, MAX_LEVEL};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
+use crate::slotted_page::PageEdit;
 
-use super::page::{branch_child, set_branch_child, set_pointer, stamp_leaf, Header, MAX_LEVEL};
+use super::page::{branch_child, set_branch_child, set_pointer, stamp_leaf, Header};
 use super::search::{contains, find_lowest};
 use super::{
     add_child_base, child_index, coverage, leaf_word_index, require_bit, required_level,
@@ -253,14 +253,14 @@ fn set_leaf<S: Store>(
     kind: Kind,
     bit: u32,
 ) -> Result<()> {
-    let at = HEADER_SIZE + leaf_word_index(bit) * 8;
+    let word_index = leaf_word_index(bit);
     store.update_page(cursor.page_number, |page| {
-        let word = u64_le(page.view(), at);
+        let word = leaf_word(page.view(), word_index)?;
         let mask = 1u64 << (u64::from(bit) % 64);
         if word & mask != 0 {
             return Err(Error::Corrupt("used bitmap bit is already set"));
         }
-        page.put_u64(at, word | mask)?;
+        set_leaf_word(page, word_index, word | mask)?;
         stamp_leaf(page, cursor.header.item_count + usize::from(word == 0))
     })?;
     propagate(
@@ -282,15 +282,15 @@ fn clear_leaf<S: Store>(
     kind: Kind,
     bit: u32,
 ) -> Result<bool> {
-    let at = HEADER_SIZE + leaf_word_index(bit) * 8;
+    let word_index = leaf_word_index(bit);
     let count = store.update_page(cursor.page_number, |page| {
-        let word = u64_le(page.view(), at);
+        let word = leaf_word(page.view(), word_index)?;
         let mask = 1u64 << (u64::from(bit) % 64);
         if word & mask == 0 {
             return Err(Error::Corrupt("used bitmap bit disappeared"));
         }
         let next = word & !mask;
-        page.put_u64(at, next)?;
+        set_leaf_word(page, word_index, next)?;
         Ok(cursor.header.item_count - usize::from(next == 0))
     })?;
     if count == 0 {

@@ -65,7 +65,7 @@ assert_detects() {
 }
 
 reader_bridge_pattern='crate::(mapping|bootstrap|feed_catalog|membership_view|range_tree)|\b(Mapping|MetaV4|CursorState|ProjectionState)\b'
-capi_physical_pattern='iprange_livedb::(mapping|bootstrap|contract|fixed_tree|slotted_page|page_checksum|draft_store|writer_core|reader_core|feed_catalog|membership_(bitmap|dictionary|view)|range_mutation)'
+capi_physical_pattern='iprange_livedb::(mapping|bootstrap|contract|page_header|bitmap_page|fixed_tree|slotted_page|page_checksum|draft_store|writer_core|reader_core|feed_catalog|membership_(bitmap|dictionary|view)|range_mutation)'
 import_reader_pattern='crate::(mapping|feed_catalog|membership_view|range_cursor)|\b(Mapping|MetaV4|CursorState|ProjectionState)\b'
 raw_reader_parts_pattern='\b(import_parts|c_abi_parts)\b'
 writer_bypass_pattern='crate::(mapping|bootstrap)|crate::draft_store::(Draft|DraftStore)|crate::workflow::compare|\b(Mapping|MetaV4|Bootstrap|DraftStore|Draft)\b|\.(mapping|base|draft|budget|unproved_tail_end)\b'
@@ -77,6 +77,10 @@ untrusted_core_pattern='crate::(reader_core|writer_core|live_reader|live_writer)
 publication_bypass_pattern='Directory::open|\bdirectory\.(scan|entry|open_regular|verify_name|unlink_exact|require_absent|sync)\b|live_lock::lock_file_cancellable'
 sidecar_namespace_pattern='crate::publication::(namespace|security)|^pub\(crate\) fn (public_identity|parent_identity|identity|identity_any_link|verify_path_any_link|path_identity|open_rw|create_private|remove_exact|install_noreplace|install_replace_discarding|install_exchange|sync_parent|bind_path)\b'
 sidecar_lock_pattern='live_lock::(lock|try_lock|unlock|lock_cancellable).*sidecar\.file|live_sidecar::read_header.*sidecar\.file'
+untrusted_page_layout_pattern='PAGE_MAGIC|page_type::|u(16|32|64)_le\(page,[[:space:]]*(6|8|16|18|20|22|24)\)|page\.byte\((4|5)\)'
+untrusted_bitmap_layout_pattern='const (LEAF_WORDS|LEAF_BITS|BRANCH_CHILDREN|LEAF_END|BRANCH_END|MAX_LEVEL)|HEADER_SIZE[[:space:]]*\+.*(index|word)'
+untrusted_tree_layout_pattern='CellLayout::Fixed\([0-9]|minimum:[[:space:]]*[0-9]|maximum:[[:space:]]*[0-9]'
+untrusted_checksum_pattern='crc32c_source_with_zeroed\(page|u32_le\(page,[[:space:]]*28\)'
 
 assert_detects 'reader-adapter' "$reader_bridge_pattern" 'use crate::mapping::Mapping;'
 assert_detects 'public-C' "$capi_physical_pattern" 'use iprange_livedb::fixed_tree;'
@@ -91,6 +95,10 @@ assert_detects 'untrusted-inspector' "$untrusted_core_pattern" 'use crate::reade
 assert_detects 'publication-adapter' "$publication_bypass_pattern" 'Directory::open(path)'
 assert_detects 'sidecar-namespace' "$sidecar_namespace_pattern" 'pub(crate) fn open_rw()'
 assert_detects 'sidecar-lock' "$sidecar_lock_pattern" 'live_lock::lock(&sidecar.file)'
+assert_detects 'untrusted page layout' "$untrusted_page_layout_pattern" 'u32_le(page, 20)'
+assert_detects 'untrusted bitmap layout' "$untrusted_bitmap_layout_pattern" 'const LEAF_WORDS: usize = 507;'
+assert_detects 'untrusted tree layout' "$untrusted_tree_layout_pattern" 'CellLayout::Fixed(44)'
+assert_detects 'untrusted checksum layout' "$untrusted_checksum_pattern" 'u32_le(page, 28)'
 
 bridge="$source_root/c_abi_support.rs"
 import_workflow="$source_root/live_writer/membership_import.rs"
@@ -174,6 +182,18 @@ run scan 'The mapped sidecar owner also implements live namespace operations:' \
 run scan 'A sidecar caller bypasses the coordination lock/header API:' \
     "$sidecar_lock_pattern" \
     "${production_sources[@]}" || status=1
+run scan 'Validation or recovery redefines the common database-page header:' \
+    "$untrusted_page_layout_pattern" \
+    "${untrusted_inspectors[@]}" || status=1
+run scan 'Validation or recovery redefines bitmap-page geometry:' \
+    "$untrusted_bitmap_layout_pattern" \
+    "${untrusted_inspectors[@]}" || status=1
+run scan 'Validation or recovery hard-codes a tree-cell layout:' \
+    "$untrusted_tree_layout_pattern" \
+    "${untrusted_inspectors[@]}" || status=1
+run scan 'Validation or recovery reimplements the database-page checksum field:' \
+    "$untrusted_checksum_pattern" \
+    "${untrusted_inspectors[@]}" || status=1
 
 ((status == 0)) || fail 'Rust v4 ownership boundaries were bypassed'
 

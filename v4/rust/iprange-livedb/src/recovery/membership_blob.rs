@@ -1,23 +1,16 @@
 //! Complete CRC-checked recovery scan of one membership bitmap blob.
 
+use crate::blob_tree;
 use crate::cancellation::CancellationToken;
-use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
-use crate::crc32c;
+use crate::contract::{MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::Result;
-use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
 
 use super::page_set::PageSet;
 use super::report::{emit_page_unknown, RecoverySink, Reporter};
-use super::tree_scan::{self, CellLayout};
-
-const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
-const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
-const MEMBERSHIP_KIND: u32 = 1;
-const LEAF_DATA: usize = 48;
-const LEAF_CAPACITY: usize = PAGE_SIZE - LEAF_DATA;
+use super::tree_scan::CellLayout;
 
 #[derive(Clone, Copy)]
 struct Span {
@@ -104,9 +97,11 @@ where
         let Some(page) = self.load(page_number)? else {
             return Ok(None);
         };
-        match page.byte(4) {
-            Some(LEAF_TYPE) => self.leaf(page_number, page, expected_level, expected_start, length),
-            Some(BRANCH_TYPE) => self.branch(
+        match crate::page_header::page_type(page) {
+            Some(blob_tree::LEAF_TYPE) => {
+                self.leaf(page_number, page, expected_level, expected_start, length)
+            }
+            Some(blob_tree::BRANCH_TYPE) => self.branch(
                 page_number,
                 page,
                 expected_level,
@@ -161,7 +156,7 @@ where
                 return Ok(None);
             }
         };
-        if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+        if !crate::page_checksum::valid(page) {
             self.reject(page_number, ValidationReason::PageCrcMismatch, false)?;
             return Ok(None);
         }
@@ -176,21 +171,23 @@ where
         expected_start: u64,
         length: u64,
     ) -> Result<Option<Span>> {
-        let Some((start, end, data_len)) =
-            leaf_geometry(page, self.meta, expected_level, expected_start, length)
+        let Some(geometry) = leaf_geometry(page, self.meta, expected_level, expected_start, length)
         else {
             return self.reject(page_number, ValidationReason::BlobInvalid, false);
         };
-        if !page.all_zero(LEAF_DATA + data_len, PAGE_SIZE - LEAF_DATA - data_len) {
+        if !page.all_zero(
+            blob_tree::LEAF_DATA + geometry.data_len,
+            PAGE_SIZE - blob_tree::LEAF_DATA - geometry.data_len,
+        ) {
             return self.reject(page_number, ValidationReason::BlobInvalid, false);
         }
         self.reporter.page_accepted()?;
-        let bytes = ByteRange::new(page, LEAF_DATA, data_len)
+        let bytes = blob_tree::leaf_bytes(page, geometry)
             .expect("validated blob payload is inside its mapped page");
         (self.consume)(bytes)?;
         Ok(Some(Span {
-            start,
-            end,
+            start: geometry.start,
+            end: geometry.end,
             complete: true,
         }))
     }
@@ -209,13 +206,18 @@ where
         let header = match slotted_page::parse(
             page,
             self.meta.txn_id,
-            BRANCH_TYPE,
-            MEMBERSHIP_KIND,
+            blob_tree::BRANCH_TYPE,
+            blob_tree::MEMBERSHIP_KIND,
             expected_level,
         ) {
             Ok(header)
                 if header.level > 0
-                    && tree_scan::layout_valid(page, &header, CellLayout::Fixed(16)) =>
+                    && slotted_page::inspect_layout(
+                        page,
+                        &header,
+                        CellLayout::Fixed(blob_tree::BRANCH_RECORD_SIZE),
+                    )
+                    .is_some_and(|inspection| !inspection.reserved_nonzero) =>
             {
                 header
             }
@@ -247,13 +249,13 @@ where
         let mut complete = true;
         for index in 0..header.item_count {
             self.cancellation.check()?;
-            let cell = slotted_page::cell(page, &header, index, 16)?;
-            let offset = u64_le(cell, 0);
-            let child = u32_le(cell, 8);
+            let cell = slotted_page::cell(page, &header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+            let record = blob_tree::decode_branch_record(cell)
+                .expect("branch validation accepted this record");
             let Some(span) = self.node(
-                child,
+                record.child,
                 Some(header.level - 1),
-                offset,
+                record.offset,
                 length,
                 path,
                 depth + 1,
@@ -264,7 +266,7 @@ where
                 continue;
             };
             first.get_or_insert(span.start);
-            if span.start != offset || previous_end.is_some_and(|end| end != span.start) {
+            if span.start != record.offset || previous_end.is_some_and(|end| end != span.start) {
                 emit(
                     self.reporter,
                     ValidationReason::BlobInvalid,
@@ -312,48 +314,15 @@ fn leaf_geometry<P: ByteSource>(
     expected_level: Option<u16>,
     expected_start: u64,
     length: u64,
-) -> Option<(u64, u64, usize)> {
-    let data_len = usize::from(u16_le(page, 40));
-    let start = u64_le(page, 32);
-    let end = start.checked_add(data_len as u64)?;
-    let valid = leaf_identity_valid(page, meta)
-        && leaf_header_valid(page, expected_level, data_len)
-        && leaf_payload_valid(data_len, start, end, expected_start, length);
-    valid.then_some((start, end, data_len))
+) -> Option<blob_tree::LeafGeometry> {
+    if !leaf_identity_valid(page, meta) {
+        return None;
+    }
+    blob_tree::leaf_geometry(page, expected_level, expected_start, length).ok()
 }
 
 fn leaf_identity_valid<P: ByteSource>(page: P, meta: MetaV4) -> bool {
-    let born = u64_le(page, 8);
-    page.equals(0, &PAGE_MAGIC)
-        && page.byte(4) == Some(LEAF_TYPE)
-        && page.byte(5) == Some(0)
-        && u16_le(page, 6) == slotted_page::HEADER_SIZE as u16
-        && born != 0
-        && born <= meta.txn_id
-}
-
-fn leaf_header_valid<P: ByteSource>(page: P, expected_level: Option<u16>, data_len: usize) -> bool {
-    expected_level.map_or(true, |level| level == 0)
-        && u16_le(page, 16) == 1
-        && u16_le(page, 18) == 0
-        && usize::from(u16_le(page, 20)) == LEAF_DATA + data_len
-        && usize::from(u16_le(page, 22)) == PAGE_SIZE
-        && u32_le(page, 24) == MEMBERSHIP_KIND
-        && page.all_zero(42, LEAF_DATA - 42)
-}
-
-fn leaf_payload_valid(
-    data_len: usize,
-    start: u64,
-    end: u64,
-    expected_start: u64,
-    length: u64,
-) -> bool {
-    (1..=LEAF_CAPACITY).contains(&data_len)
-        && data_len % 8 == 0
-        && start == expected_start
-        && end <= length
-        && (end == length || data_len == LEAF_CAPACITY)
+    blob_tree::require_leaf_identity(page, meta.txn_id, Some(0)).is_ok()
 }
 
 fn branch_records_valid<P: ByteSource>(
@@ -365,13 +334,12 @@ fn branch_records_valid<P: ByteSource>(
 ) -> Result<bool> {
     let mut previous = None;
     for index in 0..header.item_count {
-        let cell = slotted_page::cell(page, header, index, 16)?;
-        let offset = u64_le(cell, 0);
-        let child = u32_le(cell, 8);
+        let cell = slotted_page::cell(page, header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+        let Ok(record) = blob_tree::decode_branch_record(cell) else {
+            return Ok(false);
+        };
         if !branch_record_valid(
-            cell,
-            child,
-            offset,
+            record,
             previous,
             index == 0,
             expected_start,
@@ -380,27 +348,24 @@ fn branch_records_valid<P: ByteSource>(
         ) {
             return Ok(false);
         }
-        previous = Some(offset);
+        previous = Some(record.offset);
     }
     Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn branch_record_valid<P: ByteSource>(
-    cell: P,
-    child: u32,
-    offset: u64,
+fn branch_record_valid(
+    record: blob_tree::BranchRecord,
     previous: Option<u64>,
     first: bool,
     expected_start: u64,
     length: u64,
     page_count: u64,
 ) -> bool {
-    u32_le(cell, 12) == 0
-        && page_in_bounds(child, page_count)
-        && offset < length
-        && previous.map_or(true, |prior| prior < offset)
-        && (!first || offset == expected_start)
+    page_in_bounds(record.child, page_count)
+        && record.offset < length
+        && previous.map_or(true, |prior| prior < record.offset)
+        && (!first || record.offset == expected_start)
 }
 
 fn emit<S: RecoverySink>(

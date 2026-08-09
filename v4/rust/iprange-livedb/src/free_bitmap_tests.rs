@@ -1,7 +1,7 @@
 //! Free bitmap tests across leaf and branch boundaries.
 
 use super::*;
-use crate::contract::PAGE_SIZE;
+use crate::contract::{u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::fixed_tree::{RetiredPages, Store};
 
 struct MemoryStore {

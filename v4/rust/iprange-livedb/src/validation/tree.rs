@@ -6,11 +6,7 @@ use super::context::Context;
 use super::page::{self, TreePageSpec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
 
-#[derive(Clone, Copy)]
-pub(crate) enum CellLayout {
-    Fixed(usize),
-    Variable { minimum: usize, maximum: usize },
-}
+pub(crate) use crate::slotted_page::CellLayout;
 
 pub(crate) trait Codec {
     type Key: Copy + Ord;
@@ -377,6 +373,8 @@ fn cell<'m>(
 ) -> Result<ByteRange<PageView<'m>>> {
     match layout {
         CellLayout::Fixed(length) => page::fixed_cell(page, header, index, length),
-        CellLayout::Variable { .. } => page::variable_cell(page, header, index),
+        CellLayout::Variable { minimum, maximum } => {
+            page::variable_cell(page, header, index, minimum, maximum)
+        }
     }
 }

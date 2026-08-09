@@ -9,12 +9,13 @@ use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
+use crate::page_header;
 use crate::slotted_page::PageEdit;
 
-const PAGE_TYPE: u8 = page_type::METADATA;
-const BODY_OFFSET: usize = 32;
+pub(crate) const PAGE_TYPE: u8 = page_type::METADATA;
+pub(crate) const HEADER_SIZE: usize = 32;
 pub(crate) const DATA_OFFSET: usize = 48;
-const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
+pub(crate) const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
 pub(crate) const MAX_PAGES: usize = 260;
 // Covers the pinned miniz backend's fixed workspace; allocation tests enforce it.
 pub(crate) const DEFLATE_HEAP_OVERHEAD: u64 = 512 * 1024;
@@ -258,19 +259,20 @@ pub(crate) fn parse_page<S: ByteSource>(
     remaining: u64,
 ) -> Result<ParsedPage<S>> {
     require_page_header(page, meta)?;
-    let next = u32_le(page, 32);
-    let length = usize::from(u16_le(page, 36));
-    let expected_length = std::cmp::min(remaining, CHUNK_CAPACITY as u64) as usize;
-    require_page_body(page, expected_offset, length, expected_length)?;
-    require_page_link(
+    let fields = chunk_fields(
+        page,
         page_number,
-        next,
         meta.page_count,
-        remaining == length as u64,
-    )?;
+        expected_offset,
+        remaining,
+    )
+    .ok_or(Error::Corrupt("metadata page body is invalid"))?;
+    if !reserved_zero(page, fields.length) {
+        return Err(Error::Corrupt("metadata page body is invalid"));
+    }
     Ok(ParsedPage {
-        next,
-        bytes: ByteRange::new(page, DATA_OFFSET, length)
+        next: fields.next,
+        bytes: chunk_bytes(page, fields.length)
             .ok_or(Error::Corrupt("metadata page body is invalid"))?,
     })
 }
@@ -281,57 +283,74 @@ fn require_page_header<S: ByteSource>(page: S, meta: &MetaV4) -> Result<()> {
 }
 
 fn require_page_identity<S: ByteSource>(page: S) -> Result<()> {
-    if !page.equals(0, &PAGE_MAGIC)
-        || page.byte(4) != Some(PAGE_TYPE)
-        || page.byte(5) != Some(0)
-        || u16_le(page, 6) != BODY_OFFSET as u16
-        || u32_le(page, 24) != 0
-    {
+    if !common_header_valid(page) || !metadata_identity_valid(page) {
         return Err(Error::Corrupt("metadata page header is invalid"));
     }
     Ok(())
 }
 
 fn require_page_generation<S: ByteSource>(page: S, meta: &MetaV4) -> Result<()> {
-    let born_txn = u64_le(page, 8);
-    if born_txn == 0 || born_txn > meta.txn_id || u16_le(page, 16) != 1 || u16_le(page, 18) != 0 {
+    if !born_valid(page, meta.txn_id) {
         return Err(Error::Corrupt("metadata page header is invalid"));
     }
     Ok(())
 }
 
-fn require_page_body<S: ByteSource>(
-    page: S,
-    expected_offset: u64,
-    length: usize,
-    expected_length: usize,
-) -> Result<()> {
-    if length != expected_length
-        || u16_le(page, 38) != 0
-        || u64_le(page, 40) != expected_offset
-        || usize::from(u16_le(page, 20)) != DATA_OFFSET + length
-        || usize::from(u16_le(page, 22)) != PAGE_SIZE
-    {
-        return Err(Error::Corrupt("metadata page body is invalid"));
-    }
-    if !page.all_zero(DATA_OFFSET + length, PAGE_SIZE - DATA_OFFSET - length) {
-        return Err(Error::Corrupt("metadata page body is invalid"));
-    }
-    Ok(())
+#[derive(Clone, Copy)]
+pub(crate) struct ChunkFields {
+    pub(crate) next: u32,
+    pub(crate) length: usize,
 }
 
-fn require_page_link(
+pub(crate) fn common_header_valid<S: ByteSource>(page: S) -> bool {
+    page_header::common_valid(page)
+}
+
+pub(crate) fn born_valid<S: ByteSource>(page: S, selected_txn: u64) -> bool {
+    page_header::born_valid(page, selected_txn)
+}
+
+pub(crate) fn metadata_identity_valid<S: ByteSource>(page: S) -> bool {
+    page_header::kind_valid(page, PAGE_TYPE, 0)
+}
+
+pub(crate) fn chunk_fields<S: ByteSource>(
+    page: S,
     page_number: u32,
-    next: u32,
     page_count: u64,
-    final_chunk: bool,
-) -> Result<()> {
-    if (final_chunk && next != 0)
-        || (!final_chunk && (next < 2 || next == page_number || u64::from(next) >= page_count))
+    expected_offset: u64,
+    remaining: u64,
+) -> Option<ChunkFields> {
+    let next = u32_le(page, 32);
+    let length = usize::from(u16_le(page, 36));
+    let expected_length = remaining.min(CHUNK_CAPACITY as u64) as usize;
+    let final_chunk = remaining == length as u64;
+    if length != expected_length
+        || length == 0
+        || u16_le(page, 38) != 0
+        || u64_le(page, 40) != expected_offset
+        || page_header::lower(page) != DATA_OFFSET + length
+        || page_header::upper(page) != PAGE_SIZE
+        || page_header::item_count(page) != 1
+        || page_header::level(page) != 0
+        || !link_valid(page_number, next, page_count, final_chunk)
     {
-        return Err(Error::Corrupt("metadata page link is invalid"));
+        return None;
     }
-    Ok(())
+    Some(ChunkFields { next, length })
+}
+
+fn link_valid(page_number: u32, next: u32, page_count: u64, final_chunk: bool) -> bool {
+    (final_chunk && next == 0)
+        || (!final_chunk && next >= 2 && next != page_number && u64::from(next) < page_count)
+}
+
+pub(crate) fn reserved_zero<S: ByteSource>(page: S, length: usize) -> bool {
+    page.all_zero(DATA_OFFSET + length, PAGE_SIZE - DATA_OFFSET - length)
+}
+
+pub(crate) fn chunk_bytes<S: ByteSource>(page: S, length: usize) -> Option<ByteRange<S>> {
+    ByteRange::new(page, DATA_OFFSET, length)
 }
 
 fn encode_page<P: PageEdit>(
@@ -343,12 +362,13 @@ fn encode_page<P: PageEdit>(
 ) -> Result<()> {
     page.fill(0);
     page.write(0, &PAGE_MAGIC)?;
-    page.set_byte(4, PAGE_TYPE)?;
-    page.put_u16(6, BODY_OFFSET as u16)?;
-    page.put_u64(8, born_txn)?;
-    page.put_u16(16, 1)?;
-    page.put_u16(20, (DATA_OFFSET + bytes.len()) as u16)?;
-    page.put_u16(22, PAGE_SIZE as u16)?;
+    page.set_byte(page_header::TYPE, PAGE_TYPE)?;
+    page.put_u16(page_header::HEADER_BYTES, HEADER_SIZE as u16)?;
+    page.put_u64(page_header::BORN_TXN, born_txn)?;
+    page.put_u16(page_header::ITEM_COUNT, 1)?;
+    page.put_u16(page_header::LEVEL, 0)?;
+    page.put_u16(page_header::LOWER, (DATA_OFFSET + bytes.len()) as u16)?;
+    page.put_u16(page_header::UPPER, PAGE_SIZE as u16)?;
     page.put_u32(32, next)?;
     page.put_u16(36, bytes.len() as u16)?;
     page.put_u64(40, logical_offset)?;

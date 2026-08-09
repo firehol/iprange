@@ -304,6 +304,29 @@ fn reverse_lookup_full_compares_equal_hash_candidates() {
 }
 
 #[test]
+fn reverse_lookup_crosses_hash_branch_pages() {
+    let mut store = MemoryStore::new();
+    let mut state = empty_state();
+    let mut ids = Vec::new();
+    for salt in 1..=160 {
+        let words = Pattern {
+            word_count: 1,
+            salt,
+        };
+        ids.push(intern(&mut store, &mut state, &words).unwrap().id);
+    }
+    for salt in [1, 80, 160] {
+        let words = Pattern {
+            word_count: 1,
+            salt,
+        };
+        let found = intern(&mut store, &mut state, &words).unwrap();
+        assert!(!found.created);
+        assert_eq!(found.id, ids[(salt - 1) as usize]);
+    }
+}
+
+#[test]
 fn committed_blob_pages_are_retired_without_being_overwritten() {
     let mut store = MemoryStore::new();
     let mut state = empty_state();

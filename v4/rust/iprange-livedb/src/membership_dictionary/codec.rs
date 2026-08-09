@@ -9,8 +9,12 @@ use crate::slotted_page::{self, Header};
 
 pub(crate) const ID_BRANCH: u8 = page_type::MEMBERSHIP_ID_BRANCH;
 pub(crate) const ID_LEAF: u8 = page_type::MEMBERSHIP_ID_LEAF;
-pub(super) const HASH_BRANCH: u8 = page_type::MEMBERSHIP_HASH_BRANCH;
-pub(super) const HASH_LEAF: u8 = page_type::MEMBERSHIP_HASH_LEAF;
+pub(crate) const HASH_BRANCH: u8 = page_type::MEMBERSHIP_HASH_BRANCH;
+pub(crate) const HASH_LEAF: u8 = page_type::MEMBERSHIP_HASH_LEAF;
+pub(crate) const ID_KEY_SIZE: usize = 4;
+pub(crate) const ID_BRANCH_SIZE: usize = ID_KEY_SIZE + 4;
+pub(crate) const HASH_KEY_SIZE: usize = 40;
+pub(crate) const HASH_BRANCH_SIZE: usize = HASH_KEY_SIZE + 4;
 pub(crate) const ID_BASE: usize = 64;
 pub(crate) const MAX_ID_RECORD: usize = PAGE_SIZE - slotted_page::HEADER_SIZE - 2;
 pub(crate) const MAX_WORD_COUNT: u32 = 67_108_864;
@@ -31,10 +35,10 @@ pub(crate) struct Record {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct HashKey {
-    pub(super) digest: [u8; 32],
-    pub(super) word_count: u32,
-    pub(super) id: u32,
+pub(crate) struct HashKey {
+    pub(crate) digest: [u8; 32],
+    pub(crate) word_count: u32,
+    pub(crate) id: u32,
 }
 
 pub(super) struct IdCodec;
@@ -45,15 +49,15 @@ impl Codec for IdCodec {
     const BRANCH_TYPE: u8 = ID_BRANCH;
     const LEAF_TYPE: u8 = ID_LEAF;
     const AUX: u32 = 0;
-    const KEY_SIZE: usize = 4;
+    const KEY_SIZE: usize = ID_KEY_SIZE;
     const LEAF_SIZE: usize = 0;
     const MAX_LEAF_SIZE: usize = MAX_ID_RECORD;
 
     fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
         if level == 0 {
-            decode(cell).map(|record| record.id)
+            decode_canonical(cell).map(|record| record.id)
         } else {
-            Ok(u32_le(cell, 0))
+            decode_id_branch(cell).map(|(id, _)| id)
         }
     }
 
@@ -62,7 +66,7 @@ impl Codec for IdCodec {
     }
 
     fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        decode(cell).map(|_| ())
+        decode_canonical(cell).map(|_| ())
     }
 
     fn leaf_cell<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<ByteRange<S>> {
@@ -78,11 +82,15 @@ impl Codec for HashCodec {
     const BRANCH_TYPE: u8 = HASH_BRANCH;
     const LEAF_TYPE: u8 = HASH_LEAF;
     const AUX: u32 = 0;
-    const KEY_SIZE: usize = 40;
-    const LEAF_SIZE: usize = 40;
+    const KEY_SIZE: usize = HASH_KEY_SIZE;
+    const LEAF_SIZE: usize = HASH_KEY_SIZE;
 
-    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
-        decode_hash(cell)
+    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
+        if level == 0 {
+            decode_hash(cell)
+        } else {
+            decode_hash_branch(cell).map(|(key, _)| key)
+        }
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
@@ -117,6 +125,14 @@ pub(crate) fn decode<S: ByteSource>(cell: S) -> Result<Record> {
     })
 }
 
+pub(crate) fn decode_canonical<S: ByteSource>(cell: S) -> Result<Record> {
+    let record = decode(cell)?;
+    if record.storage == Storage::Inline && u64_le(cell, cell.len() - 8) == 0 {
+        return Err(Error::Corrupt("membership bitmap is not canonical"));
+    }
+    Ok(record)
+}
+
 fn require_record_envelope<S: ByteSource>(cell: S) -> Result<()> {
     if cell.len() < ID_BASE || usize::from(u16_le(cell, 0)) != cell.len() || cell.byte(3) != Some(0)
     {
@@ -145,9 +161,6 @@ fn require_record_fields<S: ByteSource>(
 fn decode_storage<S: ByteSource>(cell: S, bitmap_len: u32, blob_root: u32) -> Result<Storage> {
     match cell.byte(2) {
         Some(0) if blob_root == 0 && cell.len() == ID_BASE + bitmap_len as usize => {
-            if u64_le(cell, cell.len() - 8) == 0 {
-                return Err(Error::Corrupt("membership bitmap is not canonical"));
-            }
             Ok(Storage::Inline)
         }
         Some(1) if blob_root >= 2 && cell.len() == ID_BASE => Ok(Storage::Blob(blob_root)),
@@ -155,8 +168,30 @@ fn decode_storage<S: ByteSource>(cell: S, bitmap_len: u32, blob_root: u32) -> Re
     }
 }
 
-pub(super) fn decode_hash<S: ByteSource>(cell: S) -> Result<HashKey> {
-    if cell.len() < 40 {
+pub(crate) fn inline_bytes<S: ByteSource>(cell: S, record: Record) -> Result<ByteRange<S>> {
+    if record.storage != Storage::Inline {
+        return Err(Error::Corrupt("membership dictionary entry is not inline"));
+    }
+    let length = usize::try_from(record.word_count)
+        .ok()
+        .and_then(|words| words.checked_mul(8))
+        .ok_or(Error::ArithmeticOverflow("membership inline length"))?;
+    ByteRange::new(cell, ID_BASE, length)
+        .ok_or(Error::Corrupt("membership inline bitmap is malformed"))
+}
+
+pub(crate) fn inline_page_offset<S: ByteSource>(
+    cell: ByteRange<S>,
+    record: Record,
+) -> Result<usize> {
+    inline_bytes(cell, record)?;
+    cell.source_offset()
+        .checked_add(ID_BASE)
+        .ok_or(Error::ArithmeticOverflow("membership inline offset"))
+}
+
+pub(crate) fn decode_hash<S: ByteSource>(cell: S) -> Result<HashKey> {
+    if cell.len() != HASH_KEY_SIZE {
         return Err(Error::Corrupt("membership hash record is too short"));
     }
     let digest = cell
@@ -174,8 +209,26 @@ pub(super) fn decode_hash<S: ByteSource>(cell: S) -> Result<HashKey> {
     })
 }
 
-pub(super) fn encode_hash(key: HashKey) -> [u8; 40] {
-    let mut record = [0; 40];
+pub(crate) fn decode_id_branch<S: ByteSource>(cell: S) -> Result<(u32, u32)> {
+    if cell.len() != ID_BRANCH_SIZE {
+        return Err(Error::Corrupt("membership ID branch record is malformed"));
+    }
+    Ok((u32_le(cell, 0), u32_le(cell, ID_KEY_SIZE)))
+}
+
+pub(crate) fn decode_hash_branch<S: ByteSource>(cell: S) -> Result<(HashKey, u32)> {
+    if cell.len() != HASH_BRANCH_SIZE {
+        return Err(Error::Corrupt("membership hash branch record is malformed"));
+    }
+    let key = decode_hash(
+        ByteRange::new(cell, 0, HASH_KEY_SIZE)
+            .ok_or(Error::Corrupt("membership hash branch record is malformed"))?,
+    )?;
+    Ok((key, u32_le(cell, HASH_KEY_SIZE)))
+}
+
+pub(super) fn encode_hash(key: HashKey) -> [u8; HASH_KEY_SIZE] {
+    let mut record = [0; HASH_KEY_SIZE];
     record[..32].copy_from_slice(&key.digest);
     record[32..36].copy_from_slice(&key.word_count.to_le_bytes());
     record[36..].copy_from_slice(&key.id.to_le_bytes());

@@ -19,7 +19,9 @@ pub(crate) const NAME_LEAF: u8 = page_type::FEED_NAME_LEAF;
 pub(crate) const INDEX_BRANCH: u8 = page_type::FEED_INDEX_BRANCH;
 pub(crate) const INDEX_LEAF: u8 = page_type::FEED_INDEX_LEAF;
 pub(crate) const NAME_RECORD_BASE: usize = 12;
+pub(crate) const MIN_NAME_RECORD: usize = NAME_RECORD_BASE + 1;
 pub(crate) const MAX_NAME_RECORD: usize = NAME_RECORD_BASE + MAX_FEED_NAME;
+pub(crate) const INDEX_BRANCH_SIZE: usize = 8;
 
 pub(crate) fn lookup(
     mapping: &Mapping,
@@ -297,7 +299,7 @@ fn lookup_leaf<S: ByteSource>(
 }
 
 fn decode_name_record<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<NameRecord> {
-    let record = slotted_page::record(page, header, index, 13, MAX_NAME_RECORD)?;
+    let record = slotted_page::record(page, header, index, MIN_NAME_RECORD, MAX_NAME_RECORD)?;
     decode_record(record)
 }
 
@@ -329,14 +331,22 @@ pub(crate) fn decode_entry<S: ByteSource>(record: S) -> Result<FeedEntry> {
     })
 }
 
+pub(crate) fn decode_index_branch<S: ByteSource>(record: S) -> Result<(u32, u32)> {
+    if record.len() != INDEX_BRANCH_SIZE {
+        return Err(Error::Corrupt("feed index branch record is malformed"));
+    }
+    Ok((u32_le(record, 0), u32_le(record, 4)))
+}
+
 fn index_child<S: ByteSource>(
     page: S,
     header: &Header,
     index: usize,
     page_count: u64,
 ) -> Result<u32> {
-    let record = slotted_page::cell(page, header, index, 8)?;
-    require_child(u32_le(record, 4), page_count)
+    let record = slotted_page::cell(page, header, index, INDEX_BRANCH_SIZE)?;
+    let (_, child) = decode_index_branch(record)?;
+    require_child(child, page_count)
 }
 
 fn require_child(child: u32, page_count: u64) -> Result<u32> {
@@ -351,9 +361,7 @@ fn parse_name_header<S: ByteSource>(
     selected_txn: u64,
     expected: Option<u16>,
 ) -> Result<Header> {
-    let level = u16_le(page, 18);
-    let page_type = if level == 0 { NAME_LEAF } else { NAME_BRANCH };
-    slotted_page::parse(page, selected_txn, page_type, 0, expected)
+    slotted_page::parse_tree(page, selected_txn, NAME_BRANCH, NAME_LEAF, 0, expected)
 }
 
 fn parse_index_header<S: ByteSource>(
@@ -361,9 +369,7 @@ fn parse_index_header<S: ByteSource>(
     selected_txn: u64,
     expected: Option<u16>,
 ) -> Result<Header> {
-    let level = u16_le(page, 18);
-    let page_type = if level == 0 { INDEX_LEAF } else { INDEX_BRANCH };
-    slotted_page::parse(page, selected_txn, page_type, 0, expected)
+    slotted_page::parse_tree(page, selected_txn, INDEX_BRANCH, INDEX_LEAF, 0, expected)
 }
 
 pub(crate) fn require_membership(meta: &MetaV4) -> Result<()> {

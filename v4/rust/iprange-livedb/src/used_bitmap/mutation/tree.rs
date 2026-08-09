@@ -1,13 +1,13 @@
 //! Sparse-bitmap structural edits.
 
-use crate::contract::u32_le;
+use crate::bitmap_page;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
-use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
+use crate::slotted_page::PageEdit;
 
 use super::super::page::{
     coverage_intersects, initialize, initialize_summary, parse, set_branch_child, stamp_leaf,
-    Header, BRANCH_END, BRANCH_TYPE, LEAF_END, LEAF_TYPE,
+    Header,
 };
 use super::super::{
     add_child_base, child_index, coverage, leaf_word_index, subtree_has_candidate, Kind,
@@ -38,7 +38,7 @@ pub(super) fn propagate<S: Store>(
                 parent_base,
                 limit,
             )?;
-            let child = u32_le(page.view(), HEADER_SIZE + 32 + frame.child_index * 4);
+            let child = bitmap_page::branch_child(page.view(), frame.child_index)?;
             set_branch_child(page, &header, frame.child_index, child, candidate)
         })?;
         child_page = frame.page_number;
@@ -60,7 +60,7 @@ pub(super) fn remove_empty_path<S: Store>(
         let frame = path.frames[depth];
         let parent_base = parent_base(frame)?;
         let span = coverage(frame.level - 1)?;
-        let candidate = coverage_intersects(frame.child_base, span, kind.first(), limit);
+        let candidate = coverage_intersects(frame.child_base, span, kind.first_candidate(), limit);
         let target_txn = store.target_txn();
         let remaining = store.update_page(frame.page_number, |page| {
             let header = parse(
@@ -111,9 +111,7 @@ pub(super) fn grow_root<S: Store>(
 ) -> Result<()> {
     let target_txn = store.target_txn();
     let mut level = store.inspect_page(*root, |page| {
-        let level = crate::contract::u16_le(page, 18);
-        parse(page, target_txn, kind, Some(level), 0, limit)?;
-        Ok(level)
+        Ok(parse(page, target_txn, kind, None, 0, limit)?.level)
     })?;
     if level > required {
         return Err(Error::Corrupt("used bitmap root level is too high"));
@@ -124,8 +122,8 @@ pub(super) fn grow_root<S: Store>(
         let child = *root;
         let next_level = level + 1;
         store.update_page(parent, |page| {
-            initialize(page, BRANCH_TYPE, target_txn, next_level, kind, BRANCH_END);
-            initialize_summary(page, 0, coverage(level)?, kind.first(), limit)?;
+            initialize(page, target_txn, next_level, kind);
+            initialize_summary(page, 0, coverage(level)?, kind.first_candidate(), limit)?;
             set_branch_child(
                 page,
                 &Header {
@@ -155,11 +153,8 @@ pub(super) fn new_subtree<S: Store>(
         let page_number = store.allocate()?;
         let txn = store.target_txn();
         store.update_page(page_number, |page| {
-            initialize(page, LEAF_TYPE, txn, 0, kind, LEAF_END);
-            page.put_u64(
-                HEADER_SIZE + leaf_word_index(bit) * 8,
-                1u64 << (u64::from(bit) % 64),
-            )?;
+            initialize(page, txn, 0, kind);
+            bitmap_page::set_leaf_word(page, leaf_word_index(bit), 1u64 << (u64::from(bit) % 64))?;
             stamp_leaf(page, 1)
         })?;
         return Ok(page_number);
@@ -173,8 +168,8 @@ pub(super) fn new_subtree<S: Store>(
     let page_number = store.allocate()?;
     let txn = store.target_txn();
     store.update_page(page_number, |page| {
-        initialize(page, BRANCH_TYPE, txn, level, kind, BRANCH_END);
-        initialize_summary(page, base, span, kind.first(), limit)?;
+        initialize(page, txn, level, kind);
+        initialize_summary(page, base, span, kind.first_candidate(), limit)?;
         set_branch_child(
             page,
             &Header {

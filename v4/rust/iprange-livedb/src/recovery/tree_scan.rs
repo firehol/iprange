@@ -1,8 +1,7 @@
 //! CRC-checked salvage traversal for reachable slotted trees.
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{u16_le, u32_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
-use crate::crc32c;
+use crate::contract::{MetaV4, MAX_TREE_LEVEL};
 use crate::error::Result;
 use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
@@ -10,11 +9,7 @@ use crate::validation::{ValidationObject, ValidationReason};
 
 use super::page_set::PageSet;
 
-#[derive(Clone, Copy)]
-pub(crate) enum CellLayout {
-    Fixed(usize),
-    Variable { minimum: usize, maximum: usize },
-}
+pub(crate) use crate::slotted_page::CellLayout;
 
 pub(crate) trait Codec {
     type Key: Copy + Ord;
@@ -188,32 +183,34 @@ fn read_page<'m, C: Codec, E: TreeEvents>(
     let Some(page) = load_page(context, page_number, events)? else {
         return Ok(None);
     };
-    let level = u16_le(page, 18);
-    let page_type = if level == 0 {
-        C::LEAF_TYPE
-    } else {
-        C::BRANCH_TYPE
+    let header = match slotted_page::parse_tree(
+        page,
+        context.meta.txn_id,
+        C::BRANCH_TYPE,
+        C::LEAF_TYPE,
+        C::AUX,
+        expected_level,
+    ) {
+        Ok(header) => header,
+        Err(_) => {
+            reject_page(
+                events,
+                context.object,
+                page_number,
+                header_reason::<C, _>(page),
+                false,
+            )?;
+            return Ok(None);
+        }
     };
-    let header =
-        match slotted_page::parse(page, context.meta.txn_id, page_type, C::AUX, expected_level) {
-            Ok(header) => header,
-            Err(_) => {
-                reject_page(
-                    events,
-                    context.object,
-                    page_number,
-                    header_reason::<C, _>(page),
-                    false,
-                )?;
-                return Ok(None);
-            }
-        };
-    let layout = if level == 0 {
+    let layout = if header.level == 0 {
         C::LEAF_LAYOUT
     } else {
         C::BRANCH_LAYOUT
     };
-    if !layout_valid(page, &header, layout) {
+    if !slotted_page::inspect_layout(page, &header, layout)
+        .is_some_and(|inspection| !inspection.reserved_nonzero)
+    {
         reject_page(
             events,
             context.object,
@@ -245,7 +242,7 @@ fn load_page<'m, E: TreeEvents>(
             return Ok(None);
         }
     };
-    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+    if !crate::page_checksum::valid(page) {
         reject_page(
             events,
             context.object,
@@ -259,12 +256,7 @@ fn load_page<'m, E: TreeEvents>(
 }
 
 fn header_reason<C: Codec, P: ByteSource>(page: P) -> ValidationReason {
-    let expected = if u16_le(page, 18) == 0 {
-        C::LEAF_TYPE
-    } else {
-        C::BRANCH_TYPE
-    };
-    if page.byte(4) != Some(expected) || u32_le(page, 24) != C::AUX {
+    if !slotted_page::tree_kind_valid(page, C::BRANCH_TYPE, C::LEAF_TYPE, C::AUX) {
         ValidationReason::PageTypeMismatch
     } else {
         ValidationReason::PageHeaderInvalid
@@ -404,56 +396,4 @@ fn cell<'a>(
             slotted_page::record(page, header, index, minimum, maximum)
         }
     }
-}
-
-pub(crate) fn layout_valid<P: ByteSource>(page: P, header: &Header, layout: CellLayout) -> bool {
-    let mut used = [0u64; PAGE_SIZE / 64];
-    let mut minimum = PAGE_SIZE;
-    for index in 0..header.item_count {
-        let slot = slotted_page::HEADER_SIZE + index * 2;
-        let start = usize::from(u16_le(page, slot));
-        let Some(length) = cell_length(page, start, layout) else {
-            return false;
-        };
-        let Some(end) = start.checked_add(length) else {
-            return false;
-        };
-        if start < header.upper || end > PAGE_SIZE || !mark(&mut used, start, end) {
-            return false;
-        }
-        minimum = minimum.min(start);
-    }
-    if minimum != header.upper
-        || !(header.lower..header.upper).all(|position| page.byte(position) == Some(0))
-    {
-        return false;
-    }
-    (header.upper..PAGE_SIZE)
-        .all(|position| marked(&used, position) || page.byte(position) == Some(0))
-}
-
-fn cell_length<P: ByteSource>(page: P, start: usize, layout: CellLayout) -> Option<usize> {
-    match layout {
-        CellLayout::Fixed(length) => Some(length),
-        CellLayout::Variable { minimum, maximum } => {
-            let length = usize::from(u16_le(page, start));
-            (minimum..=maximum).contains(&length).then_some(length)
-        }
-    }
-}
-
-fn mark(bits: &mut [u64; PAGE_SIZE / 64], start: usize, end: usize) -> bool {
-    for position in start..end {
-        let word = position / 64;
-        let mask = 1u64 << (position % 64);
-        if bits[word] & mask != 0 {
-            return false;
-        }
-        bits[word] |= mask;
-    }
-    true
-}
-
-fn marked(bits: &[u64; PAGE_SIZE / 64], position: usize) -> bool {
-    bits[position / 64] & (1u64 << (position % 64)) != 0
 }

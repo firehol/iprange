@@ -3,7 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4};
+use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::mapping::{ByteSource, Mapping};
 use crate::membership_dictionary::codec::{self, Record as StoredRecord, Storage as StoredStorage};
@@ -347,7 +347,7 @@ impl Codec for IdCodec {
     const BRANCH_TYPE: u8 = codec::ID_BRANCH;
     const LEAF_TYPE: u8 = codec::ID_LEAF;
     const AUX: u32 = 0;
-    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
+    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(codec::ID_BRANCH_SIZE);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
         minimum: codec::ID_BASE,
         maximum: codec::MAX_ID_RECORD,
@@ -355,7 +355,7 @@ impl Codec for IdCodec {
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipInvalid;
 
     fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)> {
-        Some((u32_le(cell, 0), u32_le(cell, 4)))
+        codec::decode_id_branch(cell).ok()
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {

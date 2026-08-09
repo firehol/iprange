@@ -1,18 +1,12 @@
-use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
+use crate::blob_tree;
+use crate::contract::{MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::Result;
-use crate::format::page_type;
 use crate::mapping::{ByteSource, BytesView, PageView};
+use crate::page_header::{self, CommonProblem};
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
-
-const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
-const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
-const MEMBERSHIP_KIND: u32 = 1;
-const HEADER_SIZE: usize = 32;
-const LEAF_DATA: usize = 48;
-const LEAF_CAPACITY: usize = PAGE_SIZE - LEAF_DATA;
 
 #[derive(Clone, Copy)]
 struct Span {
@@ -98,8 +92,8 @@ where
     else {
         return Ok(None);
     };
-    match page.byte(4) {
-        Some(LEAF_TYPE) => scan_leaf(
+    match crate::page_header::page_type(page) {
+        Some(blob_tree::LEAF_TYPE) => scan_leaf(
             context,
             page_number,
             page,
@@ -108,7 +102,7 @@ where
             length,
             consume,
         ),
-        Some(BRANCH_TYPE) => scan_branch(
+        Some(blob_tree::BRANCH_TYPE) => scan_branch(
             context,
             page_number,
             page,
@@ -145,8 +139,8 @@ where
         return Ok(None);
     };
     if !page.all_zero(
-        LEAF_DATA + geometry.data_len,
-        PAGE_SIZE - LEAF_DATA - geometry.data_len,
+        blob_tree::LEAF_DATA + geometry.data_len,
+        PAGE_SIZE - blob_tree::LEAF_DATA - geometry.data_len,
     ) {
         context.emit(
             ValidationReason::PageReservedNonzero,
@@ -156,11 +150,11 @@ where
             None,
         )?;
     }
-    let bytes = page
-        .range(LEAF_DATA, geometry.data_len)
-        .ok_or(crate::error::Error::Corrupt(
-            "membership blob bytes are invalid",
-        ))?;
+    let bytes =
+        page.range(blob_tree::LEAF_DATA, geometry.data_len)
+            .ok_or(crate::error::Error::Corrupt(
+                "membership blob bytes are invalid",
+            ))?;
     consume(context, bytes)?;
     Ok(Some(Span {
         start: geometry.start,
@@ -169,56 +163,13 @@ where
     }))
 }
 
-struct LeafGeometry {
-    start: u64,
-    end: u64,
-    data_len: usize,
-}
-
 fn leaf_geometry<P: ByteSource>(
     page: P,
     expected_level: Option<u16>,
     expected_start: u64,
     length: u64,
-) -> Option<LeafGeometry> {
-    let data_len = usize::from(u16_le(page, 40));
-    let start = u64_le(page, 32);
-    let end = start.checked_add(data_len as u64)?;
-    if !leaf_header_valid(page, expected_level, data_len) {
-        return None;
-    }
-    if !leaf_payload_valid(start, end, expected_start, length, data_len) {
-        return None;
-    }
-    Some(LeafGeometry {
-        start,
-        end,
-        data_len,
-    })
-}
-
-fn leaf_header_valid<P: ByteSource>(page: P, expected_level: Option<u16>, data_len: usize) -> bool {
-    expected_level.map_or(true, |level| level == 0)
-        && u16_le(page, 16) == 1
-        && u16_le(page, 18) == 0
-        && usize::from(u16_le(page, 20)) == LEAF_DATA + data_len
-        && usize::from(u16_le(page, 22)) == PAGE_SIZE
-        && u32_le(page, 24) == MEMBERSHIP_KIND
-        && page.all_zero(42, LEAF_DATA - 42)
-}
-
-fn leaf_payload_valid(
-    start: u64,
-    end: u64,
-    expected_start: u64,
-    length: u64,
-    data_len: usize,
-) -> bool {
-    (1..=LEAF_CAPACITY).contains(&data_len)
-        && data_len % 8 == 0
-        && start == expected_start
-        && end <= length
-        && (end == length || data_len == LEAF_CAPACITY)
+) -> Option<blob_tree::LeafGeometry> {
+    blob_tree::leaf_geometry(page, expected_level, expected_start, length).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -269,9 +220,9 @@ fn branch_header<S: ValidationSink>(
         page,
         ValidationObject::MembershipBlob,
         TreePageSpec {
-            branch_type: BRANCH_TYPE,
-            leaf_type: LEAF_TYPE,
-            aux: MEMBERSHIP_KIND,
+            branch_type: blob_tree::BRANCH_TYPE,
+            leaf_type: blob_tree::LEAF_TYPE,
+            aux: blob_tree::MEMBERSHIP_KIND,
             expected_level,
         },
     )?;
@@ -285,7 +236,7 @@ fn branch_header<S: ValidationSink>(
         page,
         ValidationObject::MembershipBlob,
         header,
-        16,
+        blob_tree::BRANCH_RECORD_SIZE,
     )?;
     if header.level == 0 || !cells_valid {
         context.mark_untraversable(false)?;
@@ -313,14 +264,14 @@ where
     let mut previous_end = None;
     let mut complete = true;
     for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, 16)?;
-        let offset = u64_le(cell, 0);
-        let child = u32_le(cell, 8);
+        let cell = page::fixed_cell(page, header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+        let record = blob_tree::decode_branch_record(cell)
+            .expect("branch validation accepted this fixed record");
         let result = scan_node(
             context,
-            child,
+            record.child,
             Some(header.level - 1),
-            offset,
+            record.offset,
             length,
             path,
             depth + 1,
@@ -332,7 +283,7 @@ where
             continue;
         };
         first.get_or_insert(span.start);
-        if span.start != offset || previous_end.is_some_and(|end| end != span.start) {
+        if span.start != record.offset || previous_end.is_some_and(|end| end != span.start) {
             finding(context, Some(page_number))?;
             complete = false;
         }
@@ -356,44 +307,34 @@ fn branch_records_valid<S: ValidationSink>(
 ) -> Result<bool> {
     let mut previous = None;
     for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, 16)?;
-        let offset = u64_le(cell, 0);
-        let child = u32_le(cell, 8);
-        if !branch_record_valid(
-            context,
-            cell,
-            offset,
-            child,
-            previous,
-            index,
-            expected_start,
-            length,
-        ) {
+        let cell = page::fixed_cell(page, header, index, blob_tree::BRANCH_RECORD_SIZE)?;
+        let Ok(record) = blob_tree::decode_branch_record(cell) else {
+            finding(context, Some(page_number))?;
+            return Ok(false);
+        };
+        if !branch_record_valid(context, record, previous, index, expected_start, length) {
             finding(context, Some(page_number))?;
             return Ok(false);
         }
-        previous = Some(offset);
+        previous = Some(record.offset);
     }
     Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn branch_record_valid<S: ValidationSink, P: ByteSource>(
+fn branch_record_valid<S: ValidationSink>(
     context: &Context<'_, S>,
-    cell: P,
-    offset: u64,
-    child: u32,
+    record: blob_tree::BranchRecord,
     previous: Option<u64>,
     index: usize,
     expected_start: u64,
     length: u64,
 ) -> bool {
-    u32_le(cell, 12) == 0
-        && child >= 2
-        && u64::from(child) < context.meta.page_count
-        && offset < length
-        && previous.map_or(true, |prior| prior < offset)
-        && (index != 0 || offset == expected_start)
+    record.child >= 2
+        && u64::from(record.child) < context.meta.page_count
+        && record.offset < length
+        && previous.map_or(true, |prior| prior < record.offset)
+        && (index != 0 || record.offset == expected_start)
 }
 
 fn common_identity<S: ValidationSink, P: ByteSource>(
@@ -401,16 +342,12 @@ fn common_identity<S: ValidationSink, P: ByteSource>(
     page_number: u32,
     page: P,
 ) -> Result<bool> {
-    if !page.equals(0, &PAGE_MAGIC)
-        || page.byte(5) != Some(0)
-        || u16_le(page, 6) != HEADER_SIZE as u16
-    {
-        invalid_page(context, page_number, ValidationReason::PageHeaderInvalid)?;
-        return Ok(false);
-    }
-    let born = u64_le(page, 8);
-    if born == 0 || born > context.meta.txn_id {
-        invalid_page(context, page_number, ValidationReason::PageBornTxnInvalid)?;
+    if let Some(problem) = page_header::common_problem(page, context.meta.txn_id) {
+        let reason = match problem {
+            CommonProblem::Header => ValidationReason::PageHeaderInvalid,
+            CommonProblem::Born => ValidationReason::PageBornTxnInvalid,
+        };
+        invalid_page(context, page_number, reason)?;
         return Ok(false);
     }
     Ok(true)

@@ -1,8 +1,7 @@
 //! Verified bitmap reads from recovered membership locators.
 
 use crate::blob_tree;
-use crate::contract::{u32_le, MetaV4};
-use crate::crc32c;
+use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::immutable_output::MembershipWords;
 use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
@@ -17,9 +16,9 @@ pub(crate) fn read_inline(
     mapping: &Mapping,
     meta: MetaV4,
     locator: Locator,
-) -> Result<ByteRange<PageView<'_>>> {
+) -> Result<ByteRange<ByteRange<PageView<'_>>>> {
     let page = mapping.page(locator.leaf_page, meta.page_count)?;
-    if crc32c::crc32c_source_with_zeroed(page, 28, 4) != Some(u32_le(page, 28)) {
+    if !crate::page_checksum::valid(page) {
         return Err(Error::RecoveryCandidateChanged);
     }
     let header = slotted_page::parse(page, meta.txn_id, codec::ID_LEAF, 0, Some(0))?;
@@ -34,12 +33,7 @@ pub(crate) fn read_inline(
     if !matches_inline(record, locator) {
         return Err(Error::RecoveryCandidateChanged);
     }
-    ByteRange::new(
-        page,
-        cell.source_offset() + codec::ID_BASE,
-        cell.len() - codec::ID_BASE,
-    )
-    .ok_or(Error::RecoveryCandidateChanged)
+    codec::inline_bytes(cell, record).map_err(|_| Error::RecoveryCandidateChanged)
 }
 
 fn matches_inline(record: StoredRecord, locator: Locator) -> bool {

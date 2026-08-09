@@ -1,4 +1,5 @@
 use super::*;
+use crate::contract::u32_le;
 
 impl PageSink for [u8; PAGE_SIZE] {
     fn fill(&mut self, value: u8) {

@@ -1,7 +1,7 @@
 //! Reconciliation of the redundant recovery-readable feed catalogs.
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{u32_le, MetaV4};
+use crate::contract::MetaV4;
 use crate::error::{Error, Result};
 use crate::feed::FeedName;
 use crate::feed_catalog;
@@ -168,7 +168,7 @@ impl Codec for NameCodec {
     const LEAF_TYPE: u8 = feed_catalog::NAME_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        minimum: feed_catalog::MIN_NAME_RECORD,
         maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_LAYOUT: CellLayout = Self::BRANCH_LAYOUT;
@@ -197,15 +197,15 @@ impl Codec for IndexCodec {
     const BRANCH_TYPE: u8 = feed_catalog::INDEX_BRANCH;
     const LEAF_TYPE: u8 = feed_catalog::INDEX_LEAF;
     const AUX: u32 = 0;
-    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
+    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(feed_catalog::INDEX_BRANCH_SIZE);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        minimum: feed_catalog::MIN_NAME_RECORD,
         maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogInvalid;
 
     fn branch<P: ByteSource>(cell: P) -> Option<(Self::Key, u32)> {
-        Some((u32_le(cell, 0), u32_le(cell, 4)))
+        feed_catalog::decode_index_branch(cell).ok()
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {

@@ -1,9 +1,9 @@
 use sha2::{Digest, Sha256};
 
-use crate::contract::{u32_le, ValueKind, PAGE_SIZE};
+use crate::contract::ValueKind;
 use crate::error::{Error, Result};
-use crate::format::page_type;
-use crate::mapping::{ByteRange, ByteSource};
+use crate::mapping::ByteSource;
+use crate::membership_dictionary::codec;
 use crate::membership_view;
 
 use super::bitmap::{self, Kind, WordCache};
@@ -15,10 +15,8 @@ use super::{ValidationObject, ValidationReason, ValidationSink};
 
 mod record;
 
-use record::{decode_hash, decode_record, HashKey, Record, Storage};
+use record::{decode_hash, decode_record, inline_bytes, HashKey, Record, Storage};
 
-const ID_BASE: usize = 64;
-const MAX_ID_RECORD: usize = PAGE_SIZE - 34;
 const COMPARE_WORDS: usize = 64;
 
 struct IdCodec;
@@ -26,22 +24,22 @@ struct IdCodec;
 impl Codec for IdCodec {
     type Key = u32;
 
-    const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_ID_BRANCH;
-    const LEAF_TYPE: u8 = page_type::MEMBERSHIP_ID_LEAF;
+    const BRANCH_TYPE: u8 = codec::ID_BRANCH;
+    const LEAF_TYPE: u8 = codec::ID_LEAF;
     const AUX: u32 = 0;
-    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
+    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(codec::ID_BRANCH_SIZE);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: ID_BASE,
-        maximum: MAX_ID_RECORD,
+        minimum: codec::ID_BASE,
+        maximum: codec::MAX_ID_RECORD,
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipBitmapInvalid;
 
     fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        Some(u32_le(cell, 0))
+        codec::decode_id_branch(cell).ok().map(|(id, _)| id)
     }
 
     fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
-        Some(u32_le(cell, 4))
+        codec::decode_id_branch(cell).ok().map(|(_, child)| child)
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
@@ -54,20 +52,20 @@ struct HashCodec;
 impl Codec for HashCodec {
     type Key = HashKey;
 
-    const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_HASH_BRANCH;
-    const LEAF_TYPE: u8 = page_type::MEMBERSHIP_HASH_LEAF;
+    const BRANCH_TYPE: u8 = codec::HASH_BRANCH;
+    const LEAF_TYPE: u8 = codec::HASH_LEAF;
     const AUX: u32 = 0;
-    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(44);
-    const LEAF_LAYOUT: CellLayout = CellLayout::Fixed(40);
+    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(codec::HASH_BRANCH_SIZE);
+    const LEAF_LAYOUT: CellLayout = CellLayout::Fixed(codec::HASH_KEY_SIZE);
     const BRANCH_INVALID: ValidationReason = ValidationReason::MembershipHashInvalid;
     const LEAF_INVALID: ValidationReason = ValidationReason::MembershipHashInvalid;
 
     fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        decode_hash(ByteRange::new(cell, 0, 40)?)
+        codec::decode_hash_branch(cell).ok().map(|(key, _)| key)
     }
 
     fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
-        Some(u32_le(cell, 40))
+        codec::decode_hash_branch(cell).ok().map(|(_, child)| child)
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
@@ -139,18 +137,21 @@ fn validate_record<S: ValidationSink, P: ByteSource>(
     ) {
         bitmap_finding(context, Some(page_number))?;
     }
-    validate_record_bitmap(context, page_number, record, feeds)
+    validate_record_bitmap(context, page_number, cell, record, feeds)
 }
 
 fn validate_record_bitmap<S: ValidationSink, P: ByteSource>(
     context: &mut Context<'_, S>,
     page_number: u32,
-    record: Record<P>,
+    cell: P,
+    record: Record,
     feeds: &mut WordCache,
 ) -> Result<()> {
     let mut scan = BitmapScan::new(feeds);
     let complete = match record.storage {
-        Storage::Inline(bytes) => {
+        Storage::Inline => {
+            let bytes = inline_bytes(cell, record)
+                .expect("the canonical decoder verified the inline bitmap range");
             scan.consume(context, bytes)?;
             true
         }

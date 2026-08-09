@@ -1,4 +1,4 @@
-use crate::contract::{u32_le, ValueKind};
+use crate::contract::ValueKind;
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog::{self, FeedCursor};
@@ -18,7 +18,7 @@ impl Codec for NameCodec {
     const LEAF_TYPE: u8 = feed_catalog::NAME_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        minimum: feed_catalog::MIN_NAME_RECORD,
         maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_LAYOUT: CellLayout = Self::BRANCH_LAYOUT;
@@ -52,19 +52,23 @@ impl Codec for IndexCodec {
     const BRANCH_TYPE: u8 = feed_catalog::INDEX_BRANCH;
     const LEAF_TYPE: u8 = feed_catalog::INDEX_LEAF;
     const AUX: u32 = 0;
-    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
+    const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(feed_catalog::INDEX_BRANCH_SIZE);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
-        minimum: feed_catalog::NAME_RECORD_BASE + 1,
+        minimum: feed_catalog::MIN_NAME_RECORD,
         maximum: feed_catalog::MAX_NAME_RECORD,
     };
     const LEAF_INVALID: ValidationReason = ValidationReason::CatalogNameInvalid;
 
     fn branch_key<P: ByteSource>(cell: P) -> Option<Self::Key> {
-        Some(u32_le(cell, 0))
+        feed_catalog::decode_index_branch(cell)
+            .ok()
+            .map(|(index, _)| index)
     }
 
     fn branch_child<P: ByteSource>(cell: P) -> Option<u32> {
-        Some(u32_le(cell, 4))
+        feed_catalog::decode_index_branch(cell)
+            .ok()
+            .map(|(_, child)| child)
     }
 
     fn leaf_key<P: ByteSource>(cell: P) -> Option<Self::Key> {

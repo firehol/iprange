@@ -589,6 +589,26 @@ Open decisions:
   approximately 63-78 ms with no private residue. Same-session before/after
   reader measurements show no wrapper regression; lookups remain
   allocation-free and scans remain within run noise of the preceding commit.
+- Centralized the remaining main-database page codecs. Common page headers,
+  page checksums, bitmap geometry, slotted-tree layout inspection, blob leaf
+  geometry, retirement records, feed-catalog branch records, and membership
+  ID/hash records now each have one lower-level authority. Healthy access,
+  mutation, validation, and recovery consume those authorities while validation
+  and recovery retain their distinct strict and best-effort traversal policies.
+- Removed the parallel physical-layout implementations from validation and
+  recovery. Permanent architecture checks now reject restored common-header
+  offsets, bitmap geometry, numeric tree-cell layouts, or checksum offsets in
+  those untrusted paths; operation-private recovery scratch formats remain
+  separate because they are not v4 database pages.
+- This consolidation exposed a latent membership lookup defect: a hash branch
+  cell was decoded as though it were a hash leaf record, so a sufficiently
+  large reverse-lookup tree could reject its valid branch. The canonical branch
+  decoder fixes the mismatch, and a permanent 160-membership test proves lookup
+  across split hash-branch pages.
+- The post-consolidation workspace passes 355 engine tests plus every
+  integration, C ABI, conformance, crash, recovery, snapshot, and workflow
+  suite. Warnings-denied Clippy, the architecture gate, four-target source
+  graph, and mmap-only source gate also pass.
 
 ## Validation
 

@@ -1,9 +1,7 @@
-use crate::contract::{u32_le, u64_le};
+use crate::bitmap_page;
 use crate::error::{Error, Result};
 
-use super::{
-    coverage, require_query_header, required_level, Kind, BRANCH_CHILDREN, HEADER_SIZE, LEAF_BITS,
-};
+use super::{coverage, require_query_header, required_level, Kind};
 use crate::validation::context::Context;
 use crate::validation::ValidationSink;
 
@@ -39,7 +37,7 @@ impl WordCache {
         if bit >= self.limit || self.root == 0 {
             return Ok(0);
         }
-        let leaf_base = bit / LEAF_BITS * LEAF_BITS;
+        let leaf_base = bit / bitmap_page::LEAF_BITS * bitmap_page::LEAF_BITS;
         if self.leaf_base != Some(leaf_base) {
             self.load_leaf(context, bit, leaf_base)?;
         }
@@ -53,7 +51,7 @@ impl WordCache {
             .ok_or(Error::Corrupt("validation bitmap leaf is missing"))?;
         let page = context.mapping.page(page_number, context.meta.page_count)?;
         require_query_header(page, context.meta.txn_id, self.kind, 0)?;
-        Ok(u64_le(page, HEADER_SIZE + local_word * 8))
+        bitmap_page::leaf_word(page, local_word)
     }
 
     fn load_leaf<S: ValidationSink>(
@@ -97,12 +95,12 @@ impl WordCache {
         let span = coverage(level - 1)?;
         let index = usize::try_from((bit - base) / span)
             .map_err(|_| Error::ArithmeticOverflow("validation bitmap word"))?;
-        if index >= BRANCH_CHILDREN {
+        if index >= bitmap_page::BRANCH_CHILDREN {
             return Err(Error::Corrupt(
                 "validated bitmap child is outside its branch",
             ));
         }
-        let child = u32_le(page, HEADER_SIZE + 32 + index * 4);
+        let child = bitmap_page::branch_child(page, index)?;
         let child_base = base
             .checked_add(
                 span.checked_mul(index as u64)
