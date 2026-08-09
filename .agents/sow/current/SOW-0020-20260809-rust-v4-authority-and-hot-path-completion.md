@@ -561,6 +561,13 @@ Open decisions:
   engine unit tests plus all integration, C ABI, conformance, crash, recovery,
   snapshot, and workflow tests. The four-target source graph, architecture
   boundary gate, mmap-only source gate, and warnings-denied Clippy also pass.
+- Replaced the raw membership ID/bitmap-width pair exposed through
+  `WriterEdit` and retained by high-level membership/feed workflows with one
+  opaque transaction-bound handle. Only the draft-store membership authority
+  can decode that handle; high-level code supplies feeds and logical algebra
+  operations. The architecture gate now rejects restoration of the raw
+  representation in those workflows, and the Rust/C membership test surfaces
+  pass unchanged.
 
 ## Validation
 

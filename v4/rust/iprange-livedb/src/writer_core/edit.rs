@@ -4,13 +4,12 @@ use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::contract::MembershipOperation;
 use crate::draft_store::{
-    DraftStore, FeedMerge, ImportCache, ImportMerge, ImportWords, RetentionMerge,
+    DraftStore, FeedMerge, ImportCache, ImportMerge, ImportWords, MembershipHandle, RetentionMerge,
     TranslatedMembership,
 };
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
-use crate::membership_dictionary::Interned;
 use crate::reader_core::MembershipToken;
 
 pub(crate) struct WriterEdit<'a> {
@@ -79,38 +78,34 @@ impl<'a> WriterEdit<'a> {
         self.store.rename_current_feed_known_available(feed, name)
     }
 
-    pub(crate) fn add_feed_index_to_membership(
+    pub(crate) fn add_feed_to_membership(
         &mut self,
-        id: u32,
-        words: u32,
-        feed_index: u32,
-    ) -> Result<Interned> {
-        self.store
-            .add_feed_index_to_membership(id, words, feed_index)
+        membership: MembershipHandle,
+        feed: FeedEntry,
+    ) -> Result<MembershipHandle> {
+        self.store.add_feed_to_membership(membership, feed)
     }
 
     pub(crate) fn apply_membership_v4(
         &mut self,
         from: Ipv4Key,
         to: Ipv4Key,
-        id: u32,
-        words: u32,
+        membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
         self.store
-            .apply_membership_v4(from, to, id, words, operation)
+            .apply_membership_v4(from, to, membership, operation)
     }
 
     pub(crate) fn apply_membership_v6(
         &mut self,
         from: Ipv6Key,
         to: Ipv6Key,
-        id: u32,
-        words: u32,
+        membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
         self.store
-            .apply_membership_v6(from, to, id, words, operation)
+            .apply_membership_v6(from, to, membership, operation)
     }
 
     pub(crate) fn add_feed_coverage<K: IpKey>(&mut self, from: K, to: K) -> Result<()> {
@@ -119,7 +114,7 @@ impl<'a> WriterEdit<'a> {
 
     pub(crate) fn merge_feed(
         &mut self,
-        member: Interned,
+        member: MembershipHandle,
         create: bool,
         cancellation: &CancellationToken,
     ) -> Result<FeedMerge> {

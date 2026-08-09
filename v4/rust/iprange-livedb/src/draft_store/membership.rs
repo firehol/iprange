@@ -10,20 +10,52 @@ use crate::range_mutation;
 
 use super::DraftStore;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MembershipHandle {
+    id: u32,
+    word_count: u32,
+}
+
+impl MembershipHandle {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            id: 0,
+            word_count: 0,
+        }
+    }
+
+    pub(crate) const fn is_empty(self) -> bool {
+        self.id == 0
+    }
+
+    pub(super) const fn stored(self) -> (u32, u32) {
+        (self.id, self.word_count)
+    }
+}
+
+impl From<Interned> for MembershipHandle {
+    fn from(value: Interned) -> Self {
+        Self {
+            id: value.id,
+            word_count: value.word_count,
+        }
+    }
+}
+
 impl DraftStore<'_> {
-    pub(crate) fn add_feed_index_to_membership(
+    pub(crate) fn add_feed_to_membership(
         &mut self,
-        base_id: u32,
-        base_words: u32,
-        feed_index: u32,
-    ) -> Result<Interned> {
+        base: MembershipHandle,
+        feed: FeedEntry,
+    ) -> Result<MembershipHandle> {
+        let (base_id, base_words) = base.stored();
         let mut state = self.membership_state();
         let interned = membership_dictionary::intern_added_bit(
-            self, &mut state, base_id, base_words, feed_index,
+            self, &mut state, base_id, base_words, feed.index,
         )?;
         self.track_new_membership(&interned)?;
         self.store_membership_state(state);
-        Ok(interned)
+        Ok(interned.into())
     }
 
     pub(crate) fn intern_membership<W>(&mut self, words: &W) -> Result<Interned>
@@ -41,10 +73,10 @@ impl DraftStore<'_> {
         &mut self,
         from: Ipv4Key,
         to: Ipv4Key,
-        membership_id: u32,
-        word_count: u32,
+        membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
+        let (membership_id, word_count) = membership.stored();
         self.apply_membership(from, to, membership_id, word_count, operation, &mut || {
             Ok(())
         })
@@ -54,10 +86,10 @@ impl DraftStore<'_> {
         &mut self,
         from: Ipv6Key,
         to: Ipv6Key,
-        membership_id: u32,
-        word_count: u32,
+        membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
+        let (membership_id, word_count) = membership.stored();
         self.apply_membership(from, to, membership_id, word_count, operation, &mut || {
             Ok(())
         })
@@ -76,14 +108,15 @@ impl DraftStore<'_> {
         F: FnMut() -> Result<()>,
     {
         checkpoint()?;
-        let member = self.add_feed_index_to_membership(0, 0, feed.index)?;
+        let member = self.add_feed_to_membership(MembershipHandle::empty(), feed)?;
+        let (member_id, member_words) = member.stored();
         match self.draft.meta.address_family {
             crate::contract::AddressFamily::Ipv4 => {
                 self.apply_membership(
                     Ipv4Key::MIN,
                     Ipv4Key::MAX,
-                    member.id,
-                    member.word_count,
+                    member_id,
+                    member_words,
                     MembershipOperation::Difference,
                     checkpoint,
                 )?;
@@ -92,8 +125,8 @@ impl DraftStore<'_> {
                 self.apply_membership(
                     Ipv6Key::MIN,
                     Ipv6Key::MAX,
-                    member.id,
-                    member.word_count,
+                    member_id,
+                    member_words,
                     MembershipOperation::Difference,
                     checkpoint,
                 )?;
@@ -103,7 +136,14 @@ impl DraftStore<'_> {
         self.remove_current_feed(feed)
     }
 
-    pub(crate) fn membership_reference_matches(&self, id: u32, word_count: u32) -> Result<bool> {
+    pub(crate) fn membership_reference_matches(
+        &self,
+        membership: MembershipHandle,
+    ) -> Result<bool> {
+        if membership.is_empty() {
+            return Ok(true);
+        }
+        let (id, word_count) = membership.stored();
         membership_dictionary::reference_matches(
             self,
             self.draft.meta.membership_id_root,

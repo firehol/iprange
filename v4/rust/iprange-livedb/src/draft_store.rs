@@ -42,6 +42,7 @@ pub(crate) struct PageBudget {
 pub(crate) use feed_merge::FeedMerge;
 pub(crate) use import_cache::{ImportCache, ImportWords};
 pub(crate) use import_merge::{ImportMerge, TranslatedMembership};
+pub(crate) use membership_ops::MembershipHandle;
 pub(crate) use retention::RetentionMerge;
 
 #[derive(Debug)]

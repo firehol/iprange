@@ -23,7 +23,9 @@ use crate::process_identity::ProcessIdentity;
 use crate::random;
 use crate::workflow::{compare, Comparison};
 
-pub(crate) use crate::draft_store::{ImportCache, ImportWords, TranslatedMembership};
+pub(crate) use crate::draft_store::{
+    FeedMerge, ImportCache, ImportWords, MembershipHandle, TranslatedMembership,
+};
 pub(crate) use edit::WriterEdit;
 pub(crate) use publication::{CommitAttempt, PublishOutcome};
 
@@ -195,7 +197,10 @@ impl WriterCore {
         FeedCursor::new(&self.mapping, &self.current_meta(), Some(owner))
     }
 
-    pub(crate) fn membership_reference_matches(&mut self, id: u32, words: u32) -> Result<bool> {
+    pub(crate) fn membership_reference_matches(
+        &mut self,
+        membership: MembershipHandle,
+    ) -> Result<bool> {
         let draft = self
             .draft
             .as_mut()
@@ -206,7 +211,7 @@ impl WriterCore {
             self.budget,
             draft,
         )
-        .membership_reference_matches(id, words)
+        .membership_reference_matches(membership)
     }
 
     pub(crate) fn metadata_json_len(&self) -> Option<u64> {

@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::feed_catalog::FeedCursor;
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::writer_core::MembershipHandle;
 
 use super::workflow::{check_transaction, require_transaction};
 use super::{CommitResult, LiveWriter};
@@ -27,17 +28,13 @@ pub struct FeedRef {
 pub struct MembershipRef {
     database_id: [u8; 16],
     operation_nonce: [u8; 16],
-    id: u32,
-    word_count: u32,
+    handle: MembershipHandle,
     catalog_epoch: u64,
 }
 
 impl fmt::Debug for MembershipRef {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
-        output
-            .debug_struct("MembershipRef")
-            .field("word_count", &self.word_count)
-            .finish_non_exhaustive()
+        output.debug_struct("MembershipRef").finish_non_exhaustive()
     }
 }
 
@@ -219,7 +216,7 @@ impl MembershipState {
     pub(crate) fn empty_membership(&mut self, writer: &mut LiveWriter) -> Result<MembershipRef> {
         self.require_active(writer)?;
         self.check_or_abort(writer)?;
-        Ok(self.membership_reference(0, 0))
+        Ok(self.membership_reference(MembershipHandle::empty()))
     }
 
     pub(crate) fn add_feed(
@@ -231,15 +228,10 @@ impl MembershipState {
         self.require_current_membership(writer, membership)?;
         self.require_current_feed(writer, feed)?;
         self.check_or_abort(writer)?;
-        let interned = writer.mutate(|store| {
-            store.add_feed_index_to_membership(
-                membership.id,
-                membership.word_count,
-                feed.entry.index,
-            )
-        })?;
+        let handle =
+            writer.mutate(|store| store.add_feed_to_membership(membership.handle, feed.entry))?;
         self.check_or_abort(writer)?;
-        Ok(self.membership_reference(interned.id, interned.word_count))
+        Ok(self.membership_reference(handle))
     }
 
     pub(crate) fn apply_v4(
@@ -253,9 +245,8 @@ impl MembershipState {
         self.require_family(writer, AddressFamily::Ipv4, from <= to)?;
         self.require_current_membership(writer, membership)?;
         self.check_or_abort(writer)?;
-        let changed = writer.mutate(|store| {
-            store.apply_membership_v4(from, to, membership.id, membership.word_count, operation)
-        })?;
+        let changed = writer
+            .mutate(|store| store.apply_membership_v4(from, to, membership.handle, operation))?;
         self.check_or_abort(writer)?;
         Ok(changed)
     }
@@ -271,9 +262,8 @@ impl MembershipState {
         self.require_family(writer, AddressFamily::Ipv6, from <= to)?;
         self.require_current_membership(writer, membership)?;
         self.check_or_abort(writer)?;
-        let changed = writer.mutate(|store| {
-            store.apply_membership_v6(from, to, membership.id, membership.word_count, operation)
-        })?;
+        let changed = writer
+            .mutate(|store| store.apply_membership_v6(from, to, membership.handle, operation))?;
         self.check_or_abort(writer)?;
         Ok(changed)
     }
@@ -360,12 +350,11 @@ impl MembershipState {
         }
     }
 
-    fn membership_reference(&self, id: u32, word_count: u32) -> MembershipRef {
+    fn membership_reference(&self, handle: MembershipHandle) -> MembershipRef {
         MembershipRef {
             database_id: self.database_id,
             operation_nonce: self.operation_nonce,
-            id,
-            word_count,
+            handle,
             catalog_epoch: self.membership_epoch,
         }
     }
@@ -405,9 +394,6 @@ impl MembershipState {
         if membership.catalog_epoch != self.membership_epoch {
             return Err(Error::StaleReference);
         }
-        if (membership.id == 0) != (membership.word_count == 0) {
-            return Err(Error::StaleReference);
-        }
         Ok(())
     }
 
@@ -417,7 +403,7 @@ impl MembershipState {
         membership: MembershipRef,
     ) -> Result<()> {
         self.require_membership_reference(writer, membership)?;
-        if writer.membership_reference_current(membership.id, membership.word_count)? {
+        if writer.membership_reference_current(membership.handle)? {
             Ok(())
         } else {
             Err(Error::StaleReference)
@@ -456,8 +442,8 @@ impl LiveWriter {
         Ok(self.core.lookup_current_feed(&entry.name)? == Some(entry))
     }
 
-    fn membership_reference_current(&mut self, id: u32, word_count: u32) -> Result<bool> {
-        self.core.membership_reference_matches(id, word_count)
+    fn membership_reference_current(&mut self, membership: MembershipHandle) -> Result<bool> {
+        self.core.membership_reference_matches(membership)
     }
 }
 

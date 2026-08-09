@@ -5,11 +5,11 @@ use crate::contract::{AddressFamily, ValueKind};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
-use crate::membership_dictionary::Interned;
 use crate::source::{RangeSource, SliceSource};
 use crate::workflow::{
     AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
+use crate::writer_core::{FeedMerge, MembershipHandle};
 
 use super::workflow::FinishedState;
 use super::workflow::{
@@ -37,7 +37,7 @@ pub(crate) struct ExactFeedState {
     cancellation: CancellationToken,
     workflow: WorkflowKind,
     create: bool,
-    member: Interned,
+    member: MembershipHandle,
     input_records: u64,
 }
 
@@ -231,7 +231,7 @@ impl ExactFeedState {
         })
     }
 
-    fn prepare_report(&self, merged: crate::draft_store::FeedMerge) -> Result<WorkflowReport> {
+    fn prepare_report(&self, merged: FeedMerge) -> Result<WorkflowReport> {
         let logical_change = if self.workflow == WorkflowKind::CreateFeed {
             LogicalChange::Changed
         } else {
@@ -266,10 +266,10 @@ fn setup_feed(
     existing: Option<FeedEntry>,
     create: bool,
     cancellation: &CancellationToken,
-) -> Result<Interned> {
+) -> Result<MembershipHandle> {
     cancellation.check()?;
     let feed = select_feed(store, name, existing, create)?;
-    let member = store.add_feed_index_to_membership(0, 0, feed.index)?;
+    let member = store.add_feed_to_membership(MembershipHandle::empty(), feed)?;
     cancellation.check()?;
     Ok(member)
 }

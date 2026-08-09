@@ -6,13 +6,12 @@ use crate::cardinality::Cardinality129;
 use crate::contract::{AddressFamily, MembershipOperation};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
-use crate::membership_dictionary::Interned;
 use crate::range_mutation;
 use crate::range_store_cursor::Cursor;
 use crate::workflow::{compare::ScannedComparison, Comparison};
 
 use super::range_merge::{self, Incoming, OrderedMerge, Policy};
-use super::DraftStore;
+use super::{DraftStore, MembershipHandle};
 
 pub(crate) struct FeedMerge {
     pub(crate) input_intervals: u64,
@@ -33,7 +32,7 @@ impl DraftStore<'_> {
     pub(crate) fn merge_feed(
         &mut self,
         base: &Bootstrap,
-        member: Interned,
+        member: MembershipHandle,
         create: bool,
         cancellation: &CancellationToken,
     ) -> Result<FeedMerge> {
@@ -49,7 +48,7 @@ impl DraftStore<'_> {
     fn merge_feed_family<K: IpKey>(
         &mut self,
         base: &Bootstrap,
-        member: Interned,
+        member: MembershipHandle,
         cancellation: &CancellationToken,
     ) -> Result<FeedMerge> {
         let mut coverage_meta = self.draft.meta;
@@ -99,7 +98,7 @@ fn empty_result() -> FeedMerge {
 }
 
 struct FeedPolicy<K> {
-    member: Interned,
+    member: MembershipHandle,
     cached: Option<CachedMembership>,
     projection: Projection<K>,
 }
@@ -112,7 +111,7 @@ struct CachedMembership {
 }
 
 impl<K> FeedPolicy<K> {
-    fn new(member: Interned) -> Self {
+    fn new(member: MembershipHandle) -> Self {
         Self {
             member,
             cached: None,
@@ -131,8 +130,9 @@ impl<K: IpKey> Policy<K, ()> for FeedPolicy<K> {
         incoming: Option<()>,
     ) -> Result<Option<u32>> {
         let covered = incoming.is_some();
+        let (member_id, member_words) = self.member.stored();
         let Some(old) = old else {
-            return Ok(covered.then_some(self.member.id));
+            return Ok(covered.then_some(member_id));
         };
         if let Some(cached) = self
             .cached
@@ -145,8 +145,7 @@ impl<K: IpKey> Policy<K, ()> for FeedPolicy<K> {
         } else {
             MembershipOperation::Difference
         };
-        let new =
-            store.combine_memberships(old, self.member.id, self.member.word_count, operation)?;
+        let new = store.combine_memberships(old, member_id, member_words, operation)?;
         self.cached = Some(CachedMembership { old, covered, new });
         Ok(new)
     }

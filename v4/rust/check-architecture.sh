@@ -70,6 +70,7 @@ import_reader_pattern='crate::(mapping|feed_catalog|membership_view|range_cursor
 raw_reader_parts_pattern='\b(import_parts|c_abi_parts)\b'
 writer_bypass_pattern='crate::(mapping|bootstrap)|crate::draft_store::(Draft|DraftStore)|crate::workflow::compare|\b(Mapping|MetaV4|Bootstrap|DraftStore|Draft)\b|\.(mapping|base|draft|budget|unproved_tail_end)\b'
 import_cache_pattern='(^|[[:space:]])mod cache\b|membership_import/cache\.rs'
+membership_representation_pattern='membership_dictionary::Interned|\bInterned\b|add_feed_index_to_membership|membership\.(id|word_count)\b|member\.(id|word_count)\b'
 untrusted_core_pattern='crate::(reader_core|writer_core|live_reader|live_writer)\b'
 publication_bypass_pattern='Directory::open|\bdirectory\.(scan|entry|open_regular|verify_name|unlink_exact|require_absent|sync)\b|live_lock::lock_file_cancellable'
 sidecar_namespace_pattern='crate::publication::(namespace|security)|^pub\(crate\) fn (public_identity|parent_identity|identity|identity_any_link|verify_path_any_link|path_identity|open_rw|create_private|remove_exact|install_noreplace|install_replace_discarding|install_exchange|sync_parent|bind_path)\b'
@@ -81,6 +82,7 @@ assert_detects 'membership-import reader' "$import_reader_pattern" 'use crate::r
 assert_detects 'raw-reader-parts' "$raw_reader_parts_pattern" 'reader.c_abi_parts()'
 assert_detects 'writer-adapter' "$writer_bypass_pattern" 'use crate::draft_store::DraftStore;'
 assert_detects 'membership-import cache' "$import_cache_pattern" 'mod cache;'
+assert_detects 'membership representation' "$membership_representation_pattern" 'membership.id'
 assert_detects 'untrusted-inspector' "$untrusted_core_pattern" 'use crate::reader_core;'
 assert_detects 'publication-adapter' "$publication_bypass_pattern" 'Directory::open(path)'
 assert_detects 'sidecar-namespace' "$sidecar_namespace_pattern" 'pub(crate) fn open_rw()'
@@ -139,6 +141,10 @@ run scan 'A writer adapter bypasses WriterCore:' \
 run scan 'Membership import owns its physical cache outside WriterCore:' \
     "$import_cache_pattern" \
     "$import_workflow" || status=1
+run scan 'A high-level membership workflow inspects physical membership representation:' \
+    "$membership_representation_pattern" \
+    "$source_root/live_writer/membership.rs" \
+    "$source_root/live_writer/feed_workflow.rs" || status=1
 run scan 'Untrusted validation or recovery imports a healthy-file core:' \
     "$untrusted_core_pattern" \
     "${untrusted_inspectors[@]}" || status=1
