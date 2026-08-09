@@ -35,8 +35,8 @@ builders. Sidecar coordination and filesystem namespace/publication are
 separate persistent concerns with separate owners.
 
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
-directions. The 2026-08-09 production-only audit counts 74,375 physical lines
-and 67,949 code lines across 282 inventoried Rust files. Of those physical
+directions. The 2026-08-09 production-only audit counts 74,384 physical lines
+and 67,956 code lines across 282 inventoried Rust files. Of those physical
 lines, 13,870 implement cross-platform namespace/publication, 10,012 the frozen
 C ABI, 9,762 explicit recovery, 5,303 the isolated fault worker, and 5,089
 explicit validation. The public Rust writer/workflow adapters account for
@@ -47,7 +47,7 @@ up the remainder.
 At a 15-line/100-token threshold, exact clone detection finds eight small
 shapes totaling 154 lines (0.21%). They are C entry-point forms, public
 typestate wrappers, and separate direct/membership recovery policies—not
-duplicate persistent-format operations. Across 4,117 production functions,
+duplicate persistent-format operations. Across 4,119 production functions,
 the averages are 13.6 lines and cyclomatic complexity 3.39. The largest is a
 191-line recovery-attempt state machine whose branches retain distinct cleanup
 and factual-outcome obligations. These measurements do not prove every line is
@@ -212,20 +212,20 @@ close, and explicit validation are outside the reader timer.
 
 | Scenario | Work | Median | Observed range | Median rate |
 |---|---:|---:|---:|---:|
-| Direct replacement, dispersed input | 1,000,000 ranges | 0.3464 s | 0.3356-0.6895 s | 2.89 million/s |
-| Retention refresh | 1,000,000 ranges | 0.4769 s | 0.4738-0.5337 s | 2.10 million/s |
-| Nested arrival-order overwrite | 1,000,000 ranges | 0.3026 s | 0.2977-0.4333 s | 3.30 million/s |
-| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.4315 s | 0.3462-0.7210 s | 2.32 million/s |
-| Membership import, 421 feeds | 1,000,000 ranges | 0.0575 s | 0.0538-0.0769 s | 17.38 million/s |
-| Compact snapshot | 1,000,000 ranges | 0.0588 s | 0.0560-0.0853 s | 17.02 million/s |
-| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0832 s | 0.0709-0.0875 s | 12.02 million/s |
-| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0629 s | 0.0589-0.0798 s | 15.89 million/s |
-| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1172 s | 0.1157-0.1283 s | 8.53 million/s |
-| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1141 s | 0.0951-0.1268 s | 8.76 million/s |
-| Live direct ordered scan | 1,000,000 ranges | 0.00835 s | 0.00821-0.00866 s | 119.76 million/s |
-| Immutable direct ordered scan | 1,000,000 ranges | 0.00682 s | 0.00652-0.00834 s | 146.71 million/s |
-| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01174 s | 0.00844-0.01483 s | 85.14 million/s |
-| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.00892 s | 0.00847-0.01340 s | 112.12 million/s |
+| Direct replacement, dispersed input | 1,000,000 ranges | 0.4951 s | 0.3443-0.6565 s | 2.02 million/s |
+| Retention refresh | 1,000,000 ranges | 0.3606 s | 0.3433-0.4737 s | 2.77 million/s |
+| Nested arrival-order overwrite | 1,000,000 ranges | 0.3010 s | 0.2749-0.3666 s | 3.32 million/s |
+| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.3486 s | 0.3295-0.4398 s | 2.87 million/s |
+| Membership import, 421 feeds | 1,000,000 ranges | 0.0668 s | 0.0456-0.0934 s | 14.97 million/s |
+| Compact snapshot | 1,000,000 ranges | 0.0816 s | 0.0663-0.0946 s | 12.26 million/s |
+| Live direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0968 s | 0.0866-0.1330 s | 10.33 million/s |
+| Immutable direct point lookup | 1,000,000 lookups over 100,000 ranges | 0.0815 s | 0.0740-0.1100 s | 12.28 million/s |
+| Live membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1248 s | 0.0885-0.1834 s | 8.01 million/s |
+| Immutable membership point check, 421 feeds | 1,000,000 checks over 100,000 ranges | 0.1094 s | 0.0808-0.1526 s | 9.14 million/s |
+| Live direct ordered scan | 1,000,000 ranges | 0.00835 s | 0.00712-0.01052 s | 119.75 million/s |
+| Immutable direct ordered scan | 1,000,000 ranges | 0.00777 s | 0.00677-0.00949 s | 128.73 million/s |
+| Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01199 s | 0.00874-0.01620 s | 83.40 million/s |
+| Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01146 s | 0.00814-0.01351 s | 87.25 million/s |
 
 All scale cases kept file descriptors stable, left zero private artifacts, and
 explicitly validated every output after timing. Direct, retention, nested,
