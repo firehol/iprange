@@ -35,7 +35,6 @@ pub fn snapshot_to(
 #[cfg(any(unix, windows))]
 mod platform {
     use crate::error::Error;
-    use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
     use crate::publication::cleanup;
     use crate::publication::output::{CreatedOutput, OutputAttempt};
     use crate::publication::problem::Problem;
@@ -169,52 +168,21 @@ mod platform {
         budget: &SnapshotBudget,
         cancellation: &CancellationToken,
     ) -> SnapshotOutcome {
-        let meta = source.meta();
-        let builder = match Builder::new_owned(
-            file,
-            output_spec(meta),
-            OutputBudget {
-                max_output_pages: budget.max_output_pages,
-            },
-        ) {
-            Ok(builder) => builder,
+        let finished = match build::copy(&source, file, budget, cancellation) {
+            Ok(finished) => finished,
             Err(failure) => return Err(fail_attempt(source, attempt, failure.file, failure.cause)),
         };
-        let finished = match build::copy(source.mapping(), meta, builder, budget, cancellation) {
-            Ok(finished) => finished,
-            Err(failure) => {
-                return Err(fail_attempt(
-                    source,
-                    attempt,
-                    failure.builder.into_file(),
-                    failure.cause,
-                ))
-            }
-        };
-        finish(source, attempt, meta, finished, policy, cancellation)
-    }
-
-    fn output_spec(meta: crate::contract::MetaV4) -> OutputSpec {
-        OutputSpec {
-            address_family: meta.address_family,
-            value_kind: meta.value_kind,
-            value_tag: meta.value_tag,
-            database_id: meta.database_id,
-            transaction_id: meta.txn_id,
-            commit_nonce: meta.commit_nonce,
-            feed_index_limit: meta.feed_index_limit,
-        }
+        finish(source, attempt, finished, policy, cancellation)
     }
 
     fn finish(
         source: Source,
         attempt: OutputAttempt,
-        source_meta: crate::contract::MetaV4,
         finished: crate::immutable_output::Finished,
         policy: SnapshotPublicationPolicy,
         cancellation: &CancellationToken,
     ) -> SnapshotOutcome {
-        let end = source.finish(source_meta, cancellation);
+        let end = source.finish_current(cancellation);
         if let Some(cause) = end.cause {
             let discarded = cleanup::discard_attempt(&attempt, &finished.file);
             return Err(Box::new(SnapshotPreparationFailure::discarded(

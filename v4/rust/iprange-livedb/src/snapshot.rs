@@ -3,6 +3,8 @@
 mod api;
 #[cfg(any(unix, windows))]
 mod build;
+#[cfg(any(unix, windows))]
+mod source;
 mod terminal;
 
 use crate::error::{Error, Result};

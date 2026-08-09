@@ -111,37 +111,37 @@ impl LiveReader {
     /// Look up one address in an IPv4 direct-value database.
     pub fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
         self.require_open()?;
-        self.core.lookup_direct_v4(address)
+        self.core.read().lookup_direct_v4(address)
     }
 
     /// Look up one address in an IPv6 direct-value database.
     pub fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
         self.require_open()?;
-        self.core.lookup_direct_v6(address)
+        self.core.read().lookup_direct_v6(address)
     }
 
     /// Open an ordered cursor over an IPv4 direct-value database.
     pub fn direct_cursor_v4(&self, direction: RangeDirection) -> Result<DirectCursorV4<'_>> {
         self.require_open()?;
-        self.core.direct_cursor_v4(direction)
+        self.core.read().direct_cursor_v4(direction)
     }
 
     /// Open an ordered cursor over an IPv6 direct-value database.
     pub fn direct_cursor_v6(&self, direction: RangeDirection) -> Result<DirectCursorV6<'_>> {
         self.require_open()?;
-        self.core.direct_cursor_v6(direction)
+        self.core.read().direct_cursor_v6(direction)
     }
 
     /// Look up one exact feed name in this pinned membership generation.
     pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
         self.require_open()?;
-        self.core.lookup_feed(name)
+        self.core.read().lookup_feed(name)
     }
 
     /// Enumerate this generation's feeds in ascending feed-index order.
     pub fn feed_cursor(&self) -> Result<FeedCursor<'_>> {
         self.require_open()?;
-        self.core.feed_cursor()
+        self.core.read().feed_cursor()
     }
 
     /// Open an ordered cursor over one exact IPv4 named feed.
@@ -151,7 +151,7 @@ impl LiveReader {
         direction: RangeDirection,
     ) -> Result<FeedRangeCursorV4<'_>> {
         self.require_open()?;
-        self.core.feed_range_cursor_v4(name, direction)
+        self.core.read().feed_range_cursor_v4(name, direction)
     }
 
     /// Open an ordered cursor over one exact IPv6 named feed.
@@ -161,37 +161,37 @@ impl LiveReader {
         direction: RangeDirection,
     ) -> Result<FeedRangeCursorV6<'_>> {
         self.require_open()?;
-        self.core.feed_range_cursor_v6(name, direction)
+        self.core.read().feed_range_cursor_v6(name, direction)
     }
 
     /// Look up one address in this pinned IPv4 membership generation.
     pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
-        self.core.lookup_membership_v4(address)
+        self.core.read().lookup_membership_v4(address)
     }
 
     /// Look up one address in this pinned IPv6 membership generation.
     pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
         self.require_open()?;
-        self.core.lookup_membership_v6(address)
+        self.core.read().lookup_membership_v6(address)
     }
 
     /// Exact decompressed metadata length, or absence.
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
         self.require_open()?;
-        Ok(self.core.metadata_json_len())
+        Ok(self.core.read().metadata_json_len())
     }
 
     /// Fill caller storage with this generation's exact opaque metadata bytes.
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
         self.require_open()?;
-        self.core.read_metadata_json(output)
+        self.core.read().read_metadata_json(output)
     }
 
     /// Return this generation's complete bounded metadata value, or absence.
     pub fn metadata_json(&self) -> Result<Option<Vec<u8>>> {
         self.require_open()?;
-        self.core.metadata_json()
+        self.core.read().metadata_json()
     }
 
     pub(crate) fn core(&self) -> Result<&ReaderCore> {

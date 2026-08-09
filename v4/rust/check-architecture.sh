@@ -71,6 +71,8 @@ raw_reader_parts_pattern='\b(import_parts|c_abi_parts)\b'
 writer_bypass_pattern='crate::(mapping|bootstrap)|crate::draft_store::(Draft|DraftStore)|crate::workflow::compare|\b(Mapping|MetaV4|Bootstrap|DraftStore|Draft)\b|\.(mapping|base|draft|budget|unproved_tail_end)\b'
 import_cache_pattern='(^|[[:space:]])mod cache\b|membership_import/cache\.rs'
 membership_representation_pattern='membership_dictionary::Interned|\bInterned\b|add_feed_index_to_membership|membership\.(id|word_count)\b|member\.(id|word_count)\b'
+snapshot_physical_pattern='crate::(mapping|feed_catalog|metadata)\b|\b(Mapping|MetaV4|CursorState|ProjectionState)\b|membership_view::by_id|source\.(mapping|meta)\('
+generation_constructor_pattern='GenerationReader::new'
 untrusted_core_pattern='crate::(reader_core|writer_core|live_reader|live_writer)\b'
 publication_bypass_pattern='Directory::open|\bdirectory\.(scan|entry|open_regular|verify_name|unlink_exact|require_absent|sync)\b|live_lock::lock_file_cancellable'
 sidecar_namespace_pattern='crate::publication::(namespace|security)|^pub\(crate\) fn (public_identity|parent_identity|identity|identity_any_link|verify_path_any_link|path_identity|open_rw|create_private|remove_exact|install_noreplace|install_replace_discarding|install_exchange|sync_parent|bind_path)\b'
@@ -83,6 +85,8 @@ assert_detects 'raw-reader-parts' "$raw_reader_parts_pattern" 'reader.c_abi_part
 assert_detects 'writer-adapter' "$writer_bypass_pattern" 'use crate::draft_store::DraftStore;'
 assert_detects 'membership-import cache' "$import_cache_pattern" 'mod cache;'
 assert_detects 'membership representation' "$membership_representation_pattern" 'membership.id'
+assert_detects 'snapshot physical access' "$snapshot_physical_pattern" 'source.mapping()'
+assert_detects 'generation constructor' "$generation_constructor_pattern" 'GenerationReader::new(mapping)'
 assert_detects 'untrusted-inspector' "$untrusted_core_pattern" 'use crate::reader_core;'
 assert_detects 'publication-adapter' "$publication_bypass_pattern" 'Directory::open(path)'
 assert_detects 'sidecar-namespace' "$sidecar_namespace_pattern" 'pub(crate) fn open_rw()'
@@ -116,6 +120,12 @@ mapfile -t production_sources < <(
     find "$source_root" -type f -name '*.rs' \
         ! -name '*_test.rs' ! -name '*_tests.rs' -print
 )
+mapfile -t generation_constructor_callers < <(
+    find "$source_root" -type f -name '*.rs' \
+        ! -path "$source_root/reader_core.rs" \
+        ! -path "$source_root/snapshot/source.rs" \
+        ! -name '*_test.rs' ! -name '*_tests.rs' -print
+)
 mapfile -t publication_maintenance < <(
     find "$source_root/publication/maintenance" -type f -name '*.rs' \
         ! -name 'common.rs' ! -name '*_test.rs' ! -name '*_tests.rs' -print
@@ -145,6 +155,13 @@ run scan 'A high-level membership workflow inspects physical membership represen
     "$membership_representation_pattern" \
     "$source_root/live_writer/membership.rs" \
     "$source_root/live_writer/feed_workflow.rs" || status=1
+run scan 'Snapshot orchestration or copying bypasses the logical generation reader:' \
+    "$snapshot_physical_pattern" \
+    "$source_root/snapshot/api.rs" \
+    "$source_root/snapshot/build.rs" || status=1
+run scan 'A module outside the two mapped-generation owners constructs a logical reader:' \
+    "$generation_constructor_pattern" \
+    "${generation_constructor_callers[@]}" || status=1
 run scan 'Untrusted validation or recovery imports a healthy-file core:' \
     "$untrusted_core_pattern" \
     "${untrusted_inspectors[@]}" || status=1

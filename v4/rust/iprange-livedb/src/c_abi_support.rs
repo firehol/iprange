@@ -52,51 +52,51 @@ impl Reader {
     }
 
     pub fn metadata_json_len(&self) -> Result<Option<u64>> {
-        Ok(self.core()?.metadata_json_len())
+        Ok(self.core()?.read().metadata_json_len())
     }
 
     pub fn lookup_direct_v4(&self, address: Ipv4Key) -> Result<Option<u32>> {
-        self.core()?.lookup_direct_v4(address)
+        self.core()?.read().lookup_direct_v4(address)
     }
 
     pub fn lookup_direct_v6(&self, address: Ipv6Key) -> Result<Option<u32>> {
-        self.core()?.lookup_direct_v6(address)
+        self.core()?.read().lookup_direct_v6(address)
     }
 
     pub fn lookup_feed(&self, name: &str) -> Result<Option<FeedEntry>> {
-        self.core()?.lookup_feed(name)
+        self.core()?.read().lookup_feed(name)
     }
 
     pub fn open_direct_cursor(&self, direction: RangeDirection) -> Result<ReaderCursor> {
-        self.core()?.open_direct_state(direction)
+        self.core()?.read().open_direct_state(direction)
     }
 
     pub fn open_membership_cursor(&self, direction: RangeDirection) -> Result<ReaderCursor> {
-        self.core()?.open_membership_state(direction)
+        self.core()?.read().open_membership_state(direction)
     }
 
     pub fn open_feed_cursor(&self, name: &str, direction: RangeDirection) -> Result<ReaderCursor> {
-        self.core()?.open_feed_state(name, direction)
+        self.core()?.read().open_feed_state(name, direction)
     }
 
     pub fn cursor_next(&self, cursor: &mut ReaderCursor) -> Result<Option<ReaderCursorItem>> {
-        self.core()?.cursor_next(cursor)
+        self.core()?.read().cursor_next(cursor)
     }
 
     pub fn cursor_seek_v4(&self, cursor: &mut ReaderCursor, target: Ipv4Key) -> Result<()> {
-        self.core()?.cursor_seek_v4(cursor, target)
+        self.core()?.read().cursor_seek_v4(cursor, target)
     }
 
     pub fn cursor_seek_v6(&self, cursor: &mut ReaderCursor, target: Ipv6Key) -> Result<()> {
-        self.core()?.cursor_seek_v6(cursor, target)
+        self.core()?.read().cursor_seek_v6(cursor, target)
     }
 
     pub fn lookup_membership_token_v4(&self, address: Ipv4Key) -> Result<Option<MembershipToken>> {
-        self.core()?.membership_token_v4(address)
+        self.core()?.read().membership_token_v4(address)
     }
 
     pub fn lookup_membership_token_v6(&self, address: Ipv6Key) -> Result<Option<MembershipToken>> {
-        self.core()?.membership_token_v6(address)
+        self.core()?.read().membership_token_v6(address)
     }
 
     pub fn membership_word_count(&self, token: MembershipToken) -> Result<u32> {
@@ -121,7 +121,7 @@ impl Reader {
     }
 
     pub fn enumerate_feeds(&self, mut sink: impl FnMut(FeedEntry) -> Result<bool>) -> Result<u64> {
-        let mut cursor = self.core()?.feed_cursor()?;
+        let mut cursor = self.core()?.read().feed_cursor()?;
         let mut count = 0u64;
         while let Some(feed) = cursor.next_feed()? {
             if !sink(feed)? {
@@ -209,7 +209,7 @@ impl Reader {
     }
 
     pub fn read_metadata_json(&self, output: &mut [u8]) -> Result<Option<usize>> {
-        self.core()?.read_metadata_json(output)
+        self.core()?.read().read_metadata_json(output)
     }
 
     pub fn close(&mut self) -> Result<()> {
@@ -242,7 +242,7 @@ impl Reader {
         address: Ipv4Key,
         operation: impl FnOnce(Option<crate::MembershipView<'_>>) -> Result<T>,
     ) -> Result<T> {
-        operation(self.core()?.lookup_membership_v4(address)?)
+        operation(self.core()?.read().lookup_membership_v4(address)?)
     }
 
     fn with_membership_v6<T>(
@@ -250,7 +250,7 @@ impl Reader {
         address: Ipv6Key,
         operation: impl FnOnce(Option<crate::MembershipView<'_>>) -> Result<T>,
     ) -> Result<T> {
-        operation(self.core()?.lookup_membership_v6(address)?)
+        operation(self.core()?.read().lookup_membership_v6(address)?)
     }
 
     fn core(&self) -> Result<&ReaderCore> {
@@ -266,7 +266,7 @@ impl Reader {
         token: MembershipToken,
         operation: impl FnOnce(crate::MembershipView<'_>) -> Result<T>,
     ) -> Result<T> {
-        operation(self.core()?.membership(token)?)
+        operation(self.core()?.read().membership(token)?)
     }
 }
 

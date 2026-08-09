@@ -1,148 +1,164 @@
 //! Bounded logical copy into one private immutable output.
 
-use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MetaV4, ValueKind};
-use crate::error::{Error, Result};
-use crate::feed_catalog::FeedCursor;
-use crate::immutable_output::{Builder, Finished, MembershipWords};
-use crate::membership_view::{self, MembershipView};
-use crate::metadata;
-use crate::range_cursor::{Cursor, RangeDirection};
+use std::fs::File;
 
-use super::SnapshotBudget;
+use crate::cancellation::CancellationToken;
+use crate::contract::{AddressFamily, ValueKind};
+use crate::error::{Error, Result};
+use crate::immutable_output::{Builder, Finished, MembershipWords, OutputBudget};
+use crate::membership_view::MembershipView;
+use crate::range_cursor::RangeDirection;
+use crate::reader_core::GenerationReader;
+use crate::recovery::source_guard::Source;
+
+use super::{source, SnapshotBudget};
 
 pub(super) struct Failure {
-    pub builder: Builder,
+    pub file: File,
     pub cause: Error,
 }
 
 pub(super) fn copy(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    source: &Source,
+    file: File,
+    budget: &SnapshotBudget,
+    cancellation: &CancellationToken,
+) -> std::result::Result<Finished, Box<Failure>> {
+    let reader = source::reader(source);
+    let builder = Builder::new_owned(
+        file,
+        reader.output_spec(),
+        OutputBudget {
+            max_output_pages: budget.max_output_pages,
+        },
+    )
+    .map_err(|failure| {
+        Box::new(Failure {
+            file: failure.file,
+            cause: failure.cause,
+        })
+    })?;
+    copy_into(reader, builder, budget, cancellation)
+}
+
+fn copy_into(
+    reader: GenerationReader<'_>,
     mut builder: Builder,
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> std::result::Result<Finished, Box<Failure>> {
-    let result = copy_logical(mapping, meta, &mut builder, budget, cancellation);
-    if let Err(cause) = result {
-        return Err(Box::new(Failure { builder, cause }));
+    if let Err(cause) = copy_logical(reader, &mut builder, budget, cancellation) {
+        return Err(Box::new(Failure {
+            file: builder.into_file(),
+            cause,
+        }));
     }
     builder.finish_owned().map_err(|failure| {
         Box::new(Failure {
-            builder: failure.builder,
+            file: failure.builder.into_file(),
             cause: failure.cause,
         })
     })
 }
 
 fn copy_logical(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    if meta.value_kind == ValueKind::Membership {
-        copy_feeds(mapping, meta, builder, cancellation)?;
+    let spec = reader.output_spec();
+    if spec.value_kind == ValueKind::Membership {
+        copy_feeds(reader, builder, cancellation)?;
     }
-    match (meta.address_family, meta.value_kind) {
-        (AddressFamily::Ipv4, ValueKind::Direct) => {
-            copy_direct_v4(mapping, meta, builder, cancellation)?
-        }
-        (AddressFamily::Ipv6, ValueKind::Direct) => {
-            copy_direct_v6(mapping, meta, builder, cancellation)?
-        }
+    match (spec.address_family, spec.value_kind) {
+        (AddressFamily::Ipv4, ValueKind::Direct) => copy_direct_v4(reader, builder, cancellation)?,
+        (AddressFamily::Ipv6, ValueKind::Direct) => copy_direct_v6(reader, builder, cancellation)?,
         (AddressFamily::Ipv4, ValueKind::Membership) => {
-            copy_membership_v4(mapping, meta, builder, cancellation)?
+            copy_membership_v4(reader, builder, cancellation)?
         }
         (AddressFamily::Ipv6, ValueKind::Membership) => {
-            copy_membership_v6(mapping, meta, builder, cancellation)?
+            copy_membership_v6(reader, builder, cancellation)?
         }
     }
-    copy_metadata(mapping, meta, builder, budget, cancellation)
+    copy_metadata(reader, builder, budget, cancellation)
 }
 
 fn copy_feeds(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = FeedCursor::new(mapping, &meta, None)?;
-    while let Some(feed) = next_feed(&mut cursor, cancellation)? {
+    let mut cursor = reader.feed_cursor()?;
+    loop {
+        cancellation.check()?;
+        let Some(feed) = cursor.next_feed()? else {
+            return Ok(());
+        };
         builder.push_feed(feed.name, feed.index)?;
     }
-    Ok(())
-}
-
-fn next_feed(
-    cursor: &mut FeedCursor<'_>,
-    cancellation: &CancellationToken,
-) -> Result<Option<crate::FeedEntry>> {
-    cancellation.check()?;
-    cursor.next_feed()
 }
 
 fn copy_direct_v4(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
-    while let Some(range) = next_range(&mut cursor, cancellation)? {
+    let mut cursor = reader.direct_cursor_v4(RangeDirection::Forward)?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next_range()? else {
+            return Ok(());
+        };
         builder.push_direct_v4(range.from, range.to, range.value)?;
     }
-    Ok(())
 }
 
 fn copy_direct_v6(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
-    while let Some(range) = next_range(&mut cursor, cancellation)? {
+    let mut cursor = reader.direct_cursor_v6(RangeDirection::Forward)?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next_range()? else {
+            return Ok(());
+        };
         builder.push_direct_v6(range.from, range.to, range.value)?;
     }
-    Ok(())
 }
 
 fn copy_membership_v4(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
-    while let Some(range) = next_range(&mut cursor, cancellation)? {
-        let words = SnapshotWords::new(mapping, meta, range.value, cancellation)?;
+    let mut cursor = reader.membership_ranges::<crate::Ipv4Key>()?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next()? else {
+            return Ok(());
+        };
+        let words = SnapshotWords::new(reader.membership(range.membership)?, cancellation)?;
         builder.push_membership_v4(range.from, range.to, &words)?;
     }
-    Ok(())
 }
 
 fn copy_membership_v6(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut cursor = Cursor::new(mapping, &meta, RangeDirection::Forward, None)?;
-    while let Some(range) = next_range(&mut cursor, cancellation)? {
-        let words = SnapshotWords::new(mapping, meta, range.value, cancellation)?;
+    let mut cursor = reader.membership_ranges::<crate::Ipv6Key>()?;
+    loop {
+        cancellation.check()?;
+        let Some(range) = cursor.next()? else {
+            return Ok(());
+        };
+        let words = SnapshotWords::new(reader.membership(range.membership)?, cancellation)?;
         builder.push_membership_v6(range.from, range.to, &words)?;
     }
-    Ok(())
-}
-
-fn next_range<K: crate::key::IpKey>(
-    cursor: &mut Cursor<'_, K>,
-    cancellation: &CancellationToken,
-) -> Result<Option<crate::DirectRange<K>>> {
-    cancellation.check()?;
-    cursor.next()
 }
 
 struct SnapshotWords<'a> {
@@ -152,14 +168,8 @@ struct SnapshotWords<'a> {
 }
 
 impl<'a> SnapshotWords<'a> {
-    fn new(
-        mapping: &'a crate::mapping::Mapping,
-        meta: MetaV4,
-        id: u32,
-        cancellation: &'a CancellationToken,
-    ) -> Result<Self> {
+    fn new(view: MembershipView<'a>, cancellation: &'a CancellationToken) -> Result<Self> {
         cancellation.check()?;
-        let view = membership_view::by_id(mapping, &meta, id, None)?;
         let word_count = view.word_count()?;
         Ok(Self {
             view,
@@ -185,17 +195,16 @@ impl MembershipWords for SnapshotWords<'_> {
 }
 
 fn copy_metadata(
-    mapping: &crate::mapping::Mapping,
-    meta: MetaV4,
+    reader: GenerationReader<'_>,
     builder: &mut Builder,
     budget: &SnapshotBudget,
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    if meta.metadata_root == 0 {
+    let Some(length) = reader.metadata_json_len() else {
         return Ok(());
-    }
+    };
     cancellation.check()?;
-    let length = usize::try_from(meta.metadata_uncompressed_len)
+    let length = usize::try_from(length)
         .map_err(|_| Error::Corrupt("metadata length is not addressable"))?;
     if length as u64 > budget.max_heap_bytes {
         return Err(Error::BudgetExceeded("snapshot metadata input heap"));
@@ -209,7 +218,7 @@ fn copy_metadata(
     if charged > budget.max_heap_bytes {
         return Err(Error::BudgetExceeded("snapshot metadata input heap"));
     }
-    if metadata::read(mapping, &meta, &mut input)? != Some(length) {
+    if reader.read_metadata_json(&mut input)? != Some(length) {
         return Err(Error::Corrupt("metadata length changed while copying"));
     }
     cancellation.check()?;

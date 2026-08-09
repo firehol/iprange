@@ -225,6 +225,13 @@ impl Source {
         }
     }
 
+    pub(crate) fn finish_current(mut self, cancellation: &CancellationToken) -> SourceEnd {
+        let used = self.meta();
+        let checked = self.final_check(used, cancellation);
+        let released = self.release();
+        terminal(self, checked, released)
+    }
+
     pub(crate) fn finish(mut self, used: MetaV4, cancellation: &CancellationToken) -> SourceEnd {
         let checked = self.final_check(used, cancellation);
         let released = self.release();

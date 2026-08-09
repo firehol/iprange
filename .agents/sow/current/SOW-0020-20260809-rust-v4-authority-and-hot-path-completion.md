@@ -568,6 +568,27 @@ Open decisions:
   operations. The architecture gate now rejects restoration of the raw
   representation in those workflows, and the Rust/C membership test surfaces
   pass unchanged.
+- Split selected-generation ownership from logical mapped reads. `ReaderCore`
+  is now a 70-line owner/lifecycle object and its `read()` capability is the
+  single implementation of healthy lookup, cursor, feed, membership, and
+  metadata reads. Rust public readers, membership import, the C ownership
+  bridge, and snapshot all use that same capability; the old forwarding layer
+  was removed rather than retained as a second API implementation.
+- Snapshot no longer reads `Mapping`, `MetaV4`, roots, raw range membership
+  values, or dictionary IDs. Its high-level path passes the protected source
+  into one bounded logical copier, which consumes reader-core streams and
+  writes through the canonical mapped immutable-output builder. Source
+  coordination retains the cached selected generation and performs the final
+  check/release without returning physical metadata to the snapshot adapter.
+- Permanent architecture checks reject direct physical access from snapshot
+  orchestration/copying and reject construction of a logical generation reader
+  outside the mapped owner and the one source-ownership bridge. The complete
+  all-feature/all-target test graph, warnings-denied Clippy, architecture gate,
+  and four-target source graph pass after this slice.
+- Pinned release snapshot construction streams one million direct ranges in
+  approximately 63-78 ms with no private residue. Same-session before/after
+  reader measurements show no wrapper regression; lookups remain
+  allocation-free and scans remain within run noise of the preceding commit.
 
 ## Validation
 

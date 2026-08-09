@@ -132,21 +132,21 @@ impl<'a> Source<'a> {
         Ok(Self {
             core,
             info: core.info(),
-            membership_entry_count: core.membership_entry_count(),
+            membership_entry_count: core.read().membership_entry_count(),
             identity: core.file_identity()?,
         })
     }
 
     fn feed_cursor(self) -> Result<FeedCursor<'a>> {
-        self.core.feed_cursor()
+        self.core.read().feed_cursor()
     }
 
     fn range_cursor<K: IpKey>(self) -> Result<MembershipRangeCursor<'a, K>> {
-        self.core.membership_ranges()
+        self.core.read().membership_ranges()
     }
 
     fn membership(self, token: MembershipToken) -> Result<MembershipView<'a>> {
-        self.core.membership(token)
+        self.core.read().membership(token)
     }
 }
 
@@ -242,7 +242,7 @@ fn record_feed(writer: &mut LiveWriter, stats: &mut ImportStats, created: bool) 
 }
 
 fn require_source_feed(writer: &mut LiveWriter, source: Source<'_>, feed: FeedEntry) -> Result<()> {
-    let by_name = external(writer, source.core.lookup_feed_name(&feed.name))?;
+    let by_name = external(writer, source.core.read().lookup_feed_name(&feed.name))?;
     if by_name == Some(feed) {
         Ok(())
     } else {
