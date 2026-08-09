@@ -212,9 +212,9 @@ fn parse_range_page<K: IpKey, E: RangeEvents<K>>(
 
 fn range_cell_len<K: IpKey>(level: u16) -> usize {
     if level == 0 {
-        K::WIDTH * 2 + 4
+        range_tree::record_size::<K>()
     } else {
-        K::WIDTH + 4
+        range_tree::branch_size::<K>()
     }
 }
 
@@ -237,19 +237,16 @@ fn scan_leaf<K: IpKey, E: RangeEvents<K>>(
     let mut first = None;
     let mut previous = None;
     for index in 0..header.item_count {
-        let cell = slotted_page::cell(page, &header, index, K::WIDTH * 2 + 4)?;
-        let from = K::read_le(cell, 0);
-        let to = K::read_le(cell, K::WIDTH);
+        let cell = slotted_page::cell(page, &header, index, range_tree::record_size::<K>())?;
+        let decoded = range_tree::decode_fields(cell)?;
+        let from = decoded.from;
+        let to = decoded.to;
         first.get_or_insert(from);
         if previous.is_some_and(|value| value >= from) {
             events.unknown(ValidationReason::TreeOrderInvalid, Some(page_number), false)?;
         }
         previous = Some(from);
-        let record = (from <= to).then(|| Record {
-            from,
-            to,
-            value: u32_le(cell, K::WIDTH * 2),
-        });
+        let record = (from <= to).then_some(decoded);
         if record.is_none() {
             events.unknown(ValidationReason::RangeReversed, Some(page_number), true)?;
         }
@@ -275,9 +272,8 @@ fn scan_branch<K: IpKey, E: RangeEvents<K>>(
     let mut previous = None;
     for index in 0..header.item_count {
         cancellation.check()?;
-        let cell = slotted_page::cell(page, &header, index, K::WIDTH + 4)?;
-        let key = K::read_le(cell, 0);
-        let child = u32_le(cell, K::WIDTH);
+        let cell = slotted_page::cell(page, &header, index, range_tree::branch_size::<K>())?;
+        let (key, child) = range_tree::decode_branch(cell)?;
         first.get_or_insert(key);
         if previous.is_some_and(|value| value >= key) {
             events.unknown(ValidationReason::TreeOrderInvalid, Some(page_number), false)?;

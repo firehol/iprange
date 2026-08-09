@@ -2,11 +2,12 @@
 
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::slotted_page::{self, Header};
 
-const ID_BRANCH: u8 = 7;
-const ID_LEAF: u8 = 8;
+const ID_BRANCH: u8 = page_type::MEMBERSHIP_ID_BRANCH;
+const ID_LEAF: u8 = page_type::MEMBERSHIP_ID_LEAF;
 const RECORD_BASE: usize = 64;
 const MAX_WORD_COUNT: u32 = 67_108_864;
 

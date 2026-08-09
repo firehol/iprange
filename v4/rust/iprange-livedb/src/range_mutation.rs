@@ -1,75 +1,94 @@
 //! Sequential direct-range assignment over the generic COW tree.
 
-use std::marker::PhantomData;
-
-use crate::contract::{u32_le, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::fixed_tree::{self, Codec, LeafBuf, RetiredPages, RetiringStore, Store};
+use crate::fixed_tree::{self, LeafBuf, RetiredPages, RetiringStore, Store};
 use crate::key::IpKey;
-use crate::mapping::ByteSource;
-
-const MAX_RANGE_CELL: usize = 36;
+use crate::range_tree::{self, RangeCodec, Record as Range};
 
 pub(crate) trait RangeStore: RetiringStore {
     fn range_record_added(&mut self, value: u32) -> Result<()>;
     fn range_record_removed(&mut self, value: u32) -> Result<()>;
 }
 
-struct RangeCodec<K>(PhantomData<K>);
+struct Untracked<'a, S>(&'a mut S);
 
-impl<K: IpKey> Codec for RangeCodec<K> {
-    type Key = K;
+impl<S: RetiringStore> Store for Untracked<'_, S> {
+    type ReadPage<'a>
+        = S::ReadPage<'a>
+    where
+        Self: 'a;
+    type WritePage<'a>
+        = S::WritePage<'a>
+    where
+        Self: 'a;
 
-    const BRANCH_TYPE: u8 = 1;
-    const LEAF_TYPE: u8 = 2;
-    const AUX: u32 = K::FAMILY as u32;
-    const KEY_SIZE: usize = K::WIDTH;
-    const LEAF_SIZE: usize = K::WIDTH * 2 + 4;
-
-    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
-        Ok(K::read_le(cell, 0))
+    fn target_txn(&self) -> u64 {
+        self.0.target_txn()
     }
 
-    fn write_key(key: Self::Key, output: &mut [u8]) {
-        key.write_le(output);
+    fn page_limit(&self) -> u64 {
+        self.0.page_limit()
     }
 
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        if cell.len() != Self::LEAF_SIZE {
-            return Err(Error::Corrupt("range leaf has the wrong record size"));
-        }
-        if K::read_le(cell, 0) > K::read_le(cell, K::WIDTH) {
-            return Err(Error::Corrupt("range leaf has reversed endpoints"));
-        }
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
+    {
+        self.0.inspect_page(page_number, inspect)
+    }
+
+    fn allocate(&mut self) -> Result<u32> {
+        self.0.allocate()
+    }
+
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        self.0.update_page(page_number, update)
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        self.0.copy_page(source, destination, copy)
+    }
+
+    fn discard_private(&mut self, page_number: u32) -> Result<()> {
+        self.0.discard_private(page_number)
+    }
+}
+
+impl<S: RetiringStore> RetiringStore for Untracked<'_, S> {
+    fn retire_pages(&mut self, pages: &[u32]) -> Result<()> {
+        self.0.retire_pages(pages)
+    }
+}
+
+impl<S: RetiringStore> RangeStore for Untracked<'_, S> {
+    fn range_record_added(&mut self, _value: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn range_record_removed(&mut self, _value: u32) -> Result<()> {
         Ok(())
     }
 }
 
-#[derive(Clone, Copy)]
-struct Range<K> {
-    from: K,
-    to: K,
-    value: u32,
-}
-
 struct EncodedRange {
-    bytes: [u8; MAX_RANGE_CELL],
+    bytes: [u8; range_tree::MAX_RECORD_SIZE],
     len: usize,
 }
 
 impl EncodedRange {
-    fn new<K: IpKey>(range: Range<K>) -> Self {
-        let len = K::WIDTH * 2 + 4;
+    fn new<K: IpKey>(range: Range<K>) -> Result<Self> {
         let mut encoded = Self {
-            bytes: [0; MAX_RANGE_CELL],
-            len,
+            bytes: [0; range_tree::MAX_RECORD_SIZE],
+            len: 0,
         };
-        range.from.write_le(&mut encoded.bytes);
-        range
-            .to
-            .write_le(&mut encoded.bytes[K::WIDTH..K::WIDTH * 2]);
-        encoded.bytes[K::WIDTH * 2..len].copy_from_slice(&range.value.to_le_bytes());
-        encoded
+        encoded.len = range_tree::encode_record(range, &mut encoded.bytes)?;
+        Ok(encoded)
     }
 
     fn as_slice(&self) -> &[u8] {
@@ -100,7 +119,7 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
         return Err(Error::InvalidArgument("range start is after its end"));
     }
     let range = Range { from, to, value };
-    let encoded = EncodedRange::new(range);
+    let encoded = EncodedRange::new(range)?;
     let mut retired = RetiredPages::new();
     match fixed_tree::insert_if_local_gap::<RangeCodec<K>, S, _>(
         store,
@@ -124,6 +143,17 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
             replace(store, root, record_count, from, to, Some(value))
         }
     }
+}
+
+pub(crate) fn assign_private_untracked<K: IpKey, S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    from: K,
+    to: K,
+    value: u32,
+) -> Result<bool> {
+    assign_private(&mut Untracked(store), root, record_count, from, to, value)
 }
 
 pub(crate) fn clear<K: IpKey, S: RangeStore>(
@@ -373,7 +403,7 @@ fn insert<K: IpKey, S: RangeStore>(
     record_count: &mut u64,
     range: Range<K>,
 ) -> Result<()> {
-    let encoded = EncodedRange::new(range);
+    let encoded = EncodedRange::new(range)?;
     let mut retired = RetiredPages::new();
     let inserted =
         fixed_tree::insert::<RangeCodec<K>, S>(store, root, encoded.as_slice(), &mut retired)?;
@@ -447,15 +477,8 @@ fn decode<K: IpKey>(cell: LeafBuf) -> Result<Range<K>> {
 }
 
 fn decode_cell<K: IpKey>(cell: &[u8]) -> Result<Range<K>> {
-    RangeCodec::<K>::validate_leaf(cell)?;
-    Ok(Range {
-        from: K::read_le(cell, 0),
-        to: K::read_le(cell, K::WIDTH),
-        value: u32_le(cell, K::WIDTH * 2),
-    })
+    range_tree::decode_cell(cell)
 }
-
-const _: () = assert!(MAX_RANGE_CELL <= PAGE_SIZE);
 
 #[cfg(test)]
 #[path = "range_mutation_tests.rs"]

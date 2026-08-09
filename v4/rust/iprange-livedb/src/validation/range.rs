@@ -1,15 +1,13 @@
-use crate::contract::{u32_le, AddressFamily, ValueKind, MAX_TREE_LEVEL};
+use crate::contract::{AddressFamily, ValueKind, MAX_TREE_LEVEL};
 use crate::error::Result;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::mapping::{ByteSource, PageView};
+use crate::range_tree::{self, Record as Range};
 
 use super::context::Context;
 use super::membership_table::InsertResult;
 use super::page::{self, TreePageSpec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
-
-const RANGE_BRANCH: u8 = 1;
-const RANGE_LEAF: u8 = 2;
 
 pub(crate) fn validate<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()> {
     if context.meta.range_root == 0 {
@@ -99,8 +97,8 @@ fn validate_range_page<K: IpKey, S: ValidationSink>(
         page,
         ValidationObject::RangeTree,
         TreePageSpec {
-            branch_type: RANGE_BRANCH,
-            leaf_type: RANGE_LEAF,
+            branch_type: range_tree::RANGE_BRANCH,
+            leaf_type: range_tree::RANGE_LEAF,
             aux: K::FAMILY as u32,
             expected_level,
         },
@@ -143,9 +141,9 @@ fn report_degenerate_root<S: ValidationSink>(
 
 fn range_cell_len<K: IpKey>(level: u16) -> usize {
     if level == 0 {
-        K::WIDTH * 2 + 4
+        range_tree::record_size::<K>()
     } else {
-        K::WIDTH + 4
+        range_tree::branch_size::<K>()
     }
 }
 
@@ -227,12 +225,8 @@ fn read_range_cell<K: IpKey, P: ByteSource>(
     header: page::SlottedHeader,
     index: usize,
 ) -> Result<Range<K>> {
-    let cell = page::fixed_cell(page, header, index, K::WIDTH * 2 + 4)?;
-    Ok(Range {
-        from: K::read_le(cell, 0),
-        to: K::read_le(cell, K::WIDTH),
-        value: u32_le(cell, K::WIDTH * 2),
-    })
+    let cell = page::fixed_cell(page, header, index, range_tree::record_size::<K>())?;
+    range_tree::decode_fields(cell)
 }
 
 fn increment_count<K>(state: &mut RangeState<K>) -> Result<()> {
@@ -334,9 +328,8 @@ fn validate_branch<K: IpKey, S: ValidationSink>(
     let mut first = None;
     let mut previous = None;
     for index in 0..header.item_count {
-        let cell = page::fixed_cell(page, header, index, K::WIDTH + 4)?;
-        let key = K::read_le(cell, 0);
-        let child = u32_le(cell, K::WIDTH);
+        let cell = page::fixed_cell(page, header, index, range_tree::branch_size::<K>())?;
+        let (key, child) = range_tree::decode_branch(cell)?;
         first.get_or_insert(key);
         if previous.is_some_and(|prior| prior >= key) {
             context.emit(
@@ -378,13 +371,6 @@ fn count_mismatch<S: ValidationSink>(context: &mut Context<'_, S>) -> Result<()>
         None,
         None,
     )
-}
-
-#[derive(Clone, Copy)]
-struct Range<K> {
-    from: K,
-    to: K,
-    value: u32,
 }
 
 struct RangeState<K> {

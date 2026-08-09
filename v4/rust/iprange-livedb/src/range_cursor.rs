@@ -110,8 +110,7 @@ impl<K: IpKey> CursorState<K> {
             if header.level == 0 {
                 return self.seek_leaf(mapping, page_number, page, header, target);
             }
-            let found =
-                range_tree::greatest_not_after::<K, _>(page, &header, K::WIDTH + 4, target)?;
+            let found = range_tree::greatest_not_after::<K, _>(page, &header, target)?;
             let index = match (found, self.direction) {
                 (Some(index), _) => index,
                 (None, RangeDirection::Forward) => 0,
@@ -136,8 +135,7 @@ impl<K: IpKey> CursorState<K> {
         header: Header,
         target: K,
     ) -> Result<()> {
-        let found =
-            range_tree::greatest_not_after::<K, _>(page, &header, K::WIDTH * 2 + 4, target)?;
+        let found = range_tree::greatest_not_after::<K, _>(page, &header, target)?;
         match self.direction {
             RangeDirection::Backward => match found {
                 Some(index) => self.set_leaf(page_number, header, index),

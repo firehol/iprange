@@ -1,13 +1,14 @@
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::Result;
+use crate::format::page_type;
 use crate::mapping::{ByteSource, BytesView, PageView};
 
 use super::context::Context;
 use super::page::{self, TreePageSpec};
 use super::{ValidationObject, ValidationReason, ValidationSink};
 
-const BRANCH_TYPE: u8 = 11;
-const LEAF_TYPE: u8 = 12;
+const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
+const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
 const MEMBERSHIP_KIND: u32 = 1;
 const HEADER_SIZE: usize = 32;
 const LEAF_DATA: usize = 48;

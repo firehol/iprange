@@ -2,6 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{u32_le, ValueKind, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource};
 use crate::membership_view;
 
@@ -25,8 +26,8 @@ struct IdCodec;
 impl Codec for IdCodec {
     type Key = u32;
 
-    const BRANCH_TYPE: u8 = 7;
-    const LEAF_TYPE: u8 = 8;
+    const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_ID_BRANCH;
+    const LEAF_TYPE: u8 = page_type::MEMBERSHIP_ID_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(8);
     const LEAF_LAYOUT: CellLayout = CellLayout::Variable {
@@ -53,8 +54,8 @@ struct HashCodec;
 impl Codec for HashCodec {
     type Key = HashKey;
 
-    const BRANCH_TYPE: u8 = 9;
-    const LEAF_TYPE: u8 = 10;
+    const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_HASH_BRANCH;
+    const LEAF_TYPE: u8 = page_type::MEMBERSHIP_HASH_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(44);
     const LEAF_LAYOUT: CellLayout = CellLayout::Fixed(40);

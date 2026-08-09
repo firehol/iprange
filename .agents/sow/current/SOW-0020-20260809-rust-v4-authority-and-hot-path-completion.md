@@ -515,6 +515,28 @@ Open decisions:
   from whole-page fit scans to repeated fixed-tree lower-bound searches. This
   confirms that exact workflows still need the planned ordered merge/build and
   that arbitrary nested mutation still needs another hot-path audit.
+- Added one persistent page-type registry and made range leaf/branch byte
+  encoding, checked healthy decoding, and tolerant raw decoding authoritative
+  in `range_tree`. Mutation, ordered construction, validation, and recovery now
+  consume those definitions instead of carrying independent range layouts.
+- Split fixed-tree read capability from mutation capability. A committed mapped
+  generation can now drive the canonical tree readers without implementing
+  allocation, COW, or retirement.
+- Replaced exact named-feed clear-plus-per-range mutation and the later compare
+  pass with destination-mapped input normalization followed by one ordered
+  old/input merge. The merge builds the final range tree directly, updates
+  membership refcounts, and calculates exact workflow statistics in that same
+  sweep. Permanent counters prove that ingestion performs no membership work
+  and finish performs exactly the two input streams and one output pass.
+- The new randomized feed property test exposed a transaction allocator defect:
+  a current-transaction scratch page freed and selected again through the free
+  bitmap could be registered twice in the dirty-page chain. Reuse now preserves
+  the page's existing chain link and budget charge. A direct regression test
+  proves that the page is sealed once and the transaction remains committable.
+- Exact feed replacement now measures approximately 0.98 to 1.13 seconds for
+  one million unordered ranges with 421 feeds on the pinned reference P-core,
+  down from the 2.50-second baseline. The complete all-feature/all-target Rust
+  workspace graph and the four-target source graph pass after this slice.
 
 ## Validation
 

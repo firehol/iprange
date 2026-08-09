@@ -5,6 +5,7 @@ use std::fmt;
 use crate::contract::{u16_le, u32_le, MetaV4, ValueKind, MAX_TREE_LEVEL};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
+use crate::format::page_type;
 use crate::mapping::{ByteSource, Mapping};
 use crate::process_identity::ProcessIdentity;
 use crate::slotted_page::{self, Header};
@@ -13,10 +14,10 @@ mod mutation;
 
 pub(crate) use mutation::{delete, insert, rename};
 
-pub(crate) const NAME_BRANCH: u8 = 3;
-pub(crate) const NAME_LEAF: u8 = 4;
-pub(crate) const INDEX_BRANCH: u8 = 5;
-pub(crate) const INDEX_LEAF: u8 = 6;
+pub(crate) const NAME_BRANCH: u8 = page_type::FEED_NAME_BRANCH;
+pub(crate) const NAME_LEAF: u8 = page_type::FEED_NAME_LEAF;
+pub(crate) const INDEX_BRANCH: u8 = page_type::FEED_INDEX_BRANCH;
+pub(crate) const INDEX_LEAF: u8 = page_type::FEED_INDEX_LEAF;
 pub(crate) const NAME_RECORD_BASE: usize = 12;
 pub(crate) const MAX_NAME_RECORD: usize = NAME_RECORD_BASE + MAX_FEED_NAME;
 

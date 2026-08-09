@@ -1,12 +1,13 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, PageView};
 use crate::metadata::Inflater;
 
 use super::context::Context;
 use super::{ValidationObject, ValidationReason, ValidationSink};
 
-const PAGE_TYPE: u8 = 13;
+const PAGE_TYPE: u8 = page_type::METADATA;
 const HEADER_SIZE: usize = 32;
 const DATA_OFFSET: usize = 48;
 const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;

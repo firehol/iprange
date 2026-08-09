@@ -228,3 +228,26 @@ fn mutation_defers_each_data_page_checksum_until_prepare() {
     }
     assert_eq!(crate::work::snapshot().pages_sealed, current_pages);
 }
+
+#[test]
+fn reusing_a_current_transaction_page_keeps_one_dirty_chain_entry() {
+    let mut test = TestFile::new();
+    test.mapping.resize((10 * PAGE_SIZE) as u64).unwrap();
+    let mut creation = empty_direct_meta(1);
+    creation.page_count = 10;
+    let budget = PageBudget {
+        max_heap_bytes: 0,
+        max_private_pages: 100,
+        max_growth_pages: 100,
+    };
+    let mut draft = Draft::new(creation, [3; 16]).unwrap();
+    let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
+
+    store.claim_allocated(5).unwrap();
+    store.discard_private(5).unwrap();
+    assert_eq!(store.pop_private().unwrap(), 5);
+    store.free_one(5).unwrap();
+    assert_eq!(Store::allocate(&mut store).unwrap(), 5);
+
+    store.seal_private_pages(&mut || Ok(())).unwrap();
+}

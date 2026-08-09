@@ -5,8 +5,6 @@ use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
 use crate::contract::MetaV4;
 use crate::error::{Error, Result};
-use crate::feed::FeedEntry;
-use crate::feed_range_cursor::ProjectionCursor;
 use crate::key::IpKey;
 use crate::mapping::Mapping;
 use crate::range_cursor::{Cursor, DirectRange, RangeDirection};
@@ -24,19 +22,6 @@ pub(crate) fn maps<K: IpKey>(
     Ok(Sweep::new(old, new, cancellation)?
         .run(cancellation)?
         .comparison)
-}
-
-pub(crate) fn feeds<K: IpKey>(
-    mapping: &Mapping,
-    before: &MetaV4,
-    before_feed: Option<FeedEntry>,
-    after: &MetaV4,
-    after_feed: FeedEntry,
-    cancellation: &CancellationToken,
-) -> Result<ScannedComparison> {
-    let old = FeedStream::<K>::new(mapping, before, before_feed)?;
-    let new = FeedStream::<K>::new(mapping, after, Some(after_feed))?;
-    Sweep::new(old, new, cancellation)?.run(cancellation)
 }
 
 pub(crate) struct ScannedComparison {
@@ -65,36 +50,6 @@ impl<K: IpKey> RangeStream<K> for MapStream<'_, K> {
     fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>> {
         cancellation.check()?;
         self.cursor.next()
-    }
-}
-
-struct FeedStream<'a, K> {
-    cursor: Option<ProjectionCursor<'a, K>>,
-}
-
-impl<'a, K: IpKey> FeedStream<'a, K> {
-    fn new(mapping: &'a Mapping, meta: &MetaV4, feed: Option<FeedEntry>) -> Result<Self> {
-        let cursor = feed
-            .map(|feed| {
-                ProjectionCursor::new(mapping, meta, feed.index, RangeDirection::Forward, None)
-            })
-            .transpose()?;
-        Ok(Self { cursor })
-    }
-}
-
-impl<K: IpKey> RangeStream<K> for FeedStream<'_, K> {
-    fn next(&mut self, cancellation: &CancellationToken) -> Result<Option<DirectRange<K>>> {
-        let Some(cursor) = &mut self.cursor else {
-            return Ok(None);
-        };
-        Ok(cursor
-            .next_with(&mut || cancellation.check())?
-            .map(|range| DirectRange {
-                from: range.from,
-                to: range.to,
-                value: 1,
-            }))
     }
 }
 

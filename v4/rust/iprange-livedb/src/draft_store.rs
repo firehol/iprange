@@ -2,6 +2,8 @@
 
 #[path = "draft_store/catalog.rs"]
 mod catalog_ops;
+#[path = "draft_store/feed_merge.rs"]
+mod feed_merge;
 #[path = "draft_store/membership.rs"]
 mod membership_ops;
 #[path = "draft_store/metadata.rs"]
@@ -31,6 +33,7 @@ pub(crate) struct PageBudget {
     pub(crate) max_growth_pages: u64,
 }
 
+pub(crate) use feed_merge::FeedMerge;
 pub(crate) use retention::RetentionMerge;
 
 #[derive(Debug)]
@@ -46,6 +49,8 @@ pub(crate) struct Draft {
     metadata_staged: bool,
     range_tree_private: bool,
     membership_delta_root: u32,
+    workflow_range_root: u32,
+    workflow_range_count: u64,
     workflow: WorkflowState,
     operation_abandoned: bool,
 }
@@ -77,6 +82,8 @@ impl Draft {
             metadata_staged: false,
             range_tree_private: false,
             membership_delta_root: 0,
+            workflow_range_root: 0,
+            workflow_range_count: 0,
             workflow: WorkflowState::None,
             operation_abandoned: false,
         })
@@ -483,7 +490,6 @@ impl<'a> DraftStore<'a> {
             return Err(Error::PageSpaceExhausted);
         }
         self.ensure_tail_capacity()?;
-        self.charge_private()?;
         let page_number = self.draft.meta.page_count as u32;
         self.draft.meta.page_count += 1;
         self.draft.growth_pages += 1;

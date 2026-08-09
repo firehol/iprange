@@ -9,11 +9,12 @@ use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
+use crate::format::page_type;
 use crate::mapping::ByteSource;
 use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
 
-const BITMAP_BRANCH: u8 = 14;
-const BITMAP_LEAF: u8 = 15;
+const BITMAP_BRANCH: u8 = page_type::USED_BITMAP_BRANCH;
+const BITMAP_LEAF: u8 = page_type::USED_BITMAP_LEAF;
 const FREE_AUX: u32 = 1;
 const LEAF_WORDS: usize = 500;
 const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;

@@ -86,6 +86,40 @@ pub(crate) trait Store {
     fn discard_private(&mut self, page_number: u32) -> Result<()>;
 }
 
+pub(crate) trait PageSource {
+    type Page<'a>: ByteSource
+    where
+        Self: 'a;
+
+    fn selected_txn(&self) -> u64;
+    fn selected_page_limit(&self) -> u64;
+    fn view_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::Page<'a>) -> Result<T>;
+}
+
+impl<T: Store> PageSource for T {
+    type Page<'a>
+        = T::ReadPage<'a>
+    where
+        Self: 'a;
+
+    fn selected_txn(&self) -> u64 {
+        Store::target_txn(self)
+    }
+
+    fn selected_page_limit(&self) -> u64 {
+        Store::page_limit(self)
+    }
+
+    fn view_page<'a, R, F>(&'a self, page_number: u32, inspect: F) -> Result<R>
+    where
+        F: FnOnce(Self::Page<'a>) -> Result<R>,
+    {
+        Store::inspect_page(self, page_number, inspect)
+    }
+}
+
 pub(crate) trait RetiringStore: Store {
     fn retire_pages(&mut self, pages: &[u32]) -> Result<()>;
 }

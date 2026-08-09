@@ -1,5 +1,6 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::ByteSource;
 
 use super::context::Context;
@@ -12,8 +13,8 @@ pub(crate) use query::contains;
 use query::require_header as require_query_header;
 pub(crate) use word_cache::WordCache;
 
-const BRANCH_TYPE: u8 = 14;
-const LEAF_TYPE: u8 = 15;
+const BRANCH_TYPE: u8 = page_type::USED_BITMAP_BRANCH;
+const LEAF_TYPE: u8 = page_type::USED_BITMAP_LEAF;
 const HEADER_SIZE: usize = 32;
 const LEAF_WORDS: usize = 500;
 const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;

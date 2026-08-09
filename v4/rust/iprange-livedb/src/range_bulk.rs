@@ -6,13 +6,12 @@ use crate::contract::ValueKind;
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
 use crate::key::IpKey;
+use crate::range_tree;
 use crate::slotted_page::{Appender, PageSink};
 
-const RANGE_BRANCH: u8 = 1;
-const RANGE_LEAF: u8 = 2;
+pub(crate) use crate::range_tree::Record;
+
 const BRANCH_LEVELS: usize = 6;
-const MAX_RANGE_CELL: usize = 36;
-const MAX_BRANCH_CELL: usize = 20;
 
 pub(crate) trait Sink {
     type WritePage<'a>: PageSink
@@ -41,13 +40,6 @@ impl<T: Store> Sink for T {
     {
         Store::update_page(self, page_number, update)
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Record<K> {
-    pub(crate) from: K,
-    pub(crate) to: K,
-    pub(crate) value: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -179,11 +171,8 @@ impl<K: IpKey> Builder<K> {
             .record_count
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow("range record count"))?;
-        let mut cell = [0; MAX_RANGE_CELL];
-        let cell_len = K::WIDTH * 2 + 4;
-        record.from.write_le(&mut cell);
-        record.to.write_le(&mut cell[K::WIDTH..]);
-        cell[K::WIDTH * 2..cell_len].copy_from_slice(&record.value.to_le_bytes());
+        let mut cell = [0; range_tree::MAX_RECORD_SIZE];
+        let cell_len = range_tree::encode_record(record, &mut cell)?;
         self.push_leaf_cell(sink, record.from, &cell[..cell_len])?;
         self.previous = Some(record);
         self.record_count = next_count;
@@ -193,16 +182,26 @@ impl<K: IpKey> Builder<K> {
 
     fn push_leaf_cell<S: Sink>(&mut self, sink: &mut S, first: K, cell: &[u8]) -> Result<()> {
         if !self.leaf.active() {
-            self.leaf
-                .start(sink, RANGE_LEAF, self.born_txn, 0, K::FAMILY as u32)?;
+            self.leaf.start(
+                sink,
+                range_tree::RANGE_LEAF,
+                self.born_txn,
+                0,
+                K::FAMILY as u32,
+            )?;
         }
         if self.leaf.push(sink, first, cell)? {
             return Ok(());
         }
         let node = self.leaf.finish(sink)?;
         self.push_node(sink, 0, node)?;
-        self.leaf
-            .start(sink, RANGE_LEAF, self.born_txn, 0, K::FAMILY as u32)?;
+        self.leaf.start(
+            sink,
+            range_tree::RANGE_LEAF,
+            self.born_txn,
+            0,
+            K::FAMILY as u32,
+        )?;
         if self.leaf.push(sink, first, cell)? {
             Ok(())
         } else {
@@ -268,7 +267,7 @@ impl<K: IpKey> Builder<K> {
     fn start_branch<S: Sink>(&mut self, sink: &mut S, level_index: usize) -> Result<()> {
         self.branches[level_index].page.start(
             sink,
-            RANGE_BRANCH,
+            range_tree::RANGE_BRANCH,
             self.born_txn,
             level_index as u16 + 1,
             K::FAMILY as u32,
@@ -281,10 +280,8 @@ impl<K: IpKey> Builder<K> {
         level_index: usize,
         node: Node<K>,
     ) -> Result<bool> {
-        let mut cell = [0; MAX_BRANCH_CELL];
-        let cell_len = K::WIDTH + 4;
-        node.first.write_le(&mut cell);
-        cell[K::WIDTH..cell_len].copy_from_slice(&node.page_number.to_le_bytes());
+        let mut cell = [0; range_tree::MAX_BRANCH_SIZE];
+        let cell_len = range_tree::encode_branch(node.first, node.page_number, &mut cell)?;
         self.branches[level_index]
             .page
             .push(sink, node.first, &cell[..cell_len])

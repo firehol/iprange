@@ -26,6 +26,7 @@ mod feed;
 mod feed_catalog;
 mod feed_range_cursor;
 mod fixed_tree;
+mod format;
 mod free_bitmap;
 mod immutable_output;
 pub mod key;

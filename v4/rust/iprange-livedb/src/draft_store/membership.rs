@@ -222,7 +222,7 @@ impl DraftStore<'_> {
         Ok(changed)
     }
 
-    fn combine_memberships(
+    pub(super) fn combine_memberships(
         &mut self,
         current: u32,
         supplied: u32,

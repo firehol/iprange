@@ -3,13 +3,14 @@
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Codec;
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource};
 use crate::slotted_page::{self, Header};
 
-pub(crate) const ID_BRANCH: u8 = 7;
-pub(crate) const ID_LEAF: u8 = 8;
-pub(super) const HASH_BRANCH: u8 = 9;
-pub(super) const HASH_LEAF: u8 = 10;
+pub(crate) const ID_BRANCH: u8 = page_type::MEMBERSHIP_ID_BRANCH;
+pub(crate) const ID_LEAF: u8 = page_type::MEMBERSHIP_ID_LEAF;
+pub(super) const HASH_BRANCH: u8 = page_type::MEMBERSHIP_HASH_BRANCH;
+pub(super) const HASH_LEAF: u8 = page_type::MEMBERSHIP_HASH_LEAF;
 pub(crate) const ID_BASE: usize = 64;
 pub(crate) const MAX_ID_RECORD: usize = PAGE_SIZE - slotted_page::HEADER_SIZE - 2;
 pub(crate) const MAX_WORD_COUNT: u32 = 67_108_864;

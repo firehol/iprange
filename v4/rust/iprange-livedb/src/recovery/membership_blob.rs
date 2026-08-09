@@ -4,6 +4,7 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::error::Result;
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
@@ -12,8 +13,8 @@ use super::page_set::PageSet;
 use super::report::{emit_page_unknown, RecoverySink, Reporter};
 use super::tree_scan::{self, CellLayout};
 
-const BRANCH_TYPE: u8 = 11;
-const LEAF_TYPE: u8 = 12;
+const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
+const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
 const MEMBERSHIP_KIND: u32 = 1;
 const LEAF_DATA: usize = 48;
 const LEAF_CAPACITY: usize = PAGE_SIZE - LEAF_DATA;

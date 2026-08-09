@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use iprange_livedb::{
-    create_live, AddressFamily, AddressRange, CancellationToken, Cardinality129, FeedName,
-    FinishedWorkflow, Ipv4Key, LiveReader, LiveWriter, LogicalChange, TransactionBudget, ValueKind,
-    ValueTag,
+    create_live, AddressFamily, AddressRange, CancellationToken, Cardinality129, CommitDurability,
+    FeedName, FinishedWorkflow, Ipv4Key, LiveReader, LiveWriter, LogicalChange, TransactionBudget,
+    ValueKind, ValueTag,
 };
 
 const DOMAIN: usize = 128;
@@ -96,7 +96,7 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
         other_expected[range.from.0 as usize..=range.to.0 as usize].fill(true);
     }
 
-    for _ in 0..100 {
+    for iteration in 0..100 {
         let record_count = random.below(24) as usize;
         let mut records = Vec::with_capacity(record_count);
         let mut after = [false; DOMAIN];
@@ -118,7 +118,7 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
         let finished = workflow.finish_input().unwrap();
         assert_report(finished.report(), &before, &after, record_count as u64);
         finish(finished);
-        assert_database(&files.main, &after, &other_expected);
+        assert_database(&files.main, &after, &other_expected, iteration);
         before = after;
     }
     writer.close().unwrap();
@@ -126,7 +126,12 @@ fn randomized_feed_replacement_matches_scalar_sets_and_preserves_other_feed() {
 
 fn finish(finished: FinishedWorkflow<'_>) {
     if let FinishedWorkflow::Changed(prepared) = finished {
-        prepared.commit().unwrap();
+        let committed = prepared.commit().unwrap();
+        assert_eq!(
+            committed.durability,
+            CommitDurability::Committed,
+            "{committed:?}"
+        );
     }
 }
 
@@ -178,7 +183,12 @@ fn paired_count(before: &[bool], after: &[bool], old: bool, new: bool) -> u64 {
         .count() as u64
 }
 
-fn assert_database(path: &PathBuf, target: &[bool; DOMAIN], other: &[bool; DOMAIN]) {
+fn assert_database(
+    path: &PathBuf,
+    target: &[bool; DOMAIN],
+    other: &[bool; DOMAIN],
+    iteration: usize,
+) {
     let mut reader = LiveReader::open(path, &CancellationToken::new()).unwrap();
     let target_index = reader.lookup_feed("target").unwrap().unwrap().index;
     let other_index = reader.lookup_feed("other").unwrap().unwrap().index;
@@ -186,19 +196,22 @@ fn assert_database(path: &PathBuf, target: &[bool; DOMAIN], other: &[bool; DOMAI
         let membership = reader
             .lookup_membership_v4(Ipv4Key(address as u32))
             .unwrap();
+        let word = membership.as_ref().and_then(|view| view.word(0).unwrap());
         assert_eq!(
             membership
                 .as_ref()
                 .map(|view| view.contains_index(target_index).unwrap())
                 .unwrap_or(false),
-            target[address]
+            target[address],
+            "target membership at address {address}, iteration {iteration}, word {word:?}"
         );
         assert_eq!(
             membership
                 .as_ref()
                 .map(|view| view.contains_index(other_index).unwrap())
                 .unwrap_or(false),
-            other[address]
+            other[address],
+            "other membership at address {address}, iteration {iteration}, word {word:?}"
         );
     }
     reader.close().unwrap();

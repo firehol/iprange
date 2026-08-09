@@ -45,7 +45,6 @@ impl Store for DraftStore<'_> {
         let mut retired = RetiredPages::new();
         let limit = self.committed_page_count;
         if let Some(page) = free_bitmap::take_lowest(self, &mut root, limit, &mut retired)? {
-            self.charge_private()?;
             self.draft.meta.free_bitmap_root = root;
             self.draft.allocator_retired.extend(retired.as_slice())?;
             self.claim_allocated(page)?;
@@ -177,11 +176,15 @@ impl DraftStore<'_> {
 
     pub(super) fn claim_allocated(&mut self, page_number: u32) -> Result<()> {
         require_page(page_number, self.draft.meta.page_count)?;
-        let tag = if self.draft.dirty_head == 0 {
+        let existing = self.existing_dirty_tag(page_number)?;
+        let tag = existing.unwrap_or(if self.draft.dirty_head == 0 {
             DIRTY_END
         } else {
             self.draft.dirty_head
-        };
+        });
+        if existing.is_none() {
+            self.charge_private()?;
+        }
         let txn = self.draft.meta.txn_id;
         let mut page = self
             .mapping
@@ -190,8 +193,10 @@ impl DraftStore<'_> {
         page.put_u32(0, PRIVATE_MAGIC)?;
         page.put_u64(8, txn)?;
         page.put_u32(28, tag)?;
-        self.draft.dirty_head = page_number;
-        crate::work::page_created(1);
+        if existing.is_none() {
+            self.draft.dirty_head = page_number;
+            crate::work::page_created(1);
+        }
         Ok(())
     }
 }
@@ -239,7 +244,6 @@ impl BitmapStore for DraftStore<'_> {
         {
             let page = *slot;
             *slot = 0;
-            self.charge_private()?;
             self.claim_allocated(page)?;
             return Ok(page);
         }

@@ -136,7 +136,7 @@ fn big_endian_portable_range_record_matches_literal_bytes() {
         to: Ipv4Key(0x0506_0708),
         value: 0x090a_0b0c,
     };
-    let encoded = EncodedRange::new(range);
+    let encoded = EncodedRange::new(range).unwrap();
     assert_eq!(
         encoded.as_slice(),
         &[4, 3, 2, 1, 8, 7, 6, 5, 0x0c, 0x0b, 0x0a, 9]

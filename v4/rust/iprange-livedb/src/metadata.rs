@@ -7,10 +7,11 @@ use crate::contract::{
 };
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
+use crate::format::page_type;
 use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::slotted_page::PageEdit;
 
-const PAGE_TYPE: u8 = 13;
+const PAGE_TYPE: u8 = page_type::METADATA;
 const BODY_OFFSET: usize = 32;
 pub(crate) const DATA_OFFSET: usize = 48;
 const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;

@@ -1,5 +1,6 @@
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::ByteSource;
 
 use super::context::Context;
@@ -23,8 +24,8 @@ struct RetirementCodec;
 impl Codec for RetirementCodec {
     type Key = Key;
 
-    const BRANCH_TYPE: u8 = 16;
-    const LEAF_TYPE: u8 = 17;
+    const BRANCH_TYPE: u8 = page_type::RETIREMENT_BRANCH;
+    const LEAF_TYPE: u8 = page_type::RETIREMENT_LEAF;
     const AUX: u32 = 0;
     const BRANCH_LAYOUT: CellLayout = CellLayout::Fixed(16);
     const LEAF_LAYOUT: CellLayout = CellLayout::Fixed(16);

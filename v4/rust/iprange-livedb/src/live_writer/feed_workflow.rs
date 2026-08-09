@@ -1,7 +1,7 @@
 //! Complete named-feed creation and replacement workflows.
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{AddressFamily, MembershipOperation, ValueKind};
+use crate::contract::{AddressFamily, ValueKind};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
@@ -36,7 +36,7 @@ pub struct ReplaceFeed<'a> {
 pub(crate) struct ExactFeedState {
     cancellation: CancellationToken,
     workflow: WorkflowKind,
-    feed: FeedEntry,
+    create: bool,
     member: Interned,
     input_records: u64,
 }
@@ -76,9 +76,8 @@ impl LiveWriter {
     ) -> Result<ExactFeedState> {
         let existing = self.check_feed_precondition(name, create, cancellation)?;
         self.start_feed_workflow_draft()?;
-        let family = self.core.base_info().address_family;
-        let setup =
-            self.mutate(|store| setup_feed(store, name, existing, create, family, cancellation))?;
+        let member =
+            self.mutate(|store| setup_feed(store, name, existing, create, cancellation))?;
         Ok(ExactFeedState {
             cancellation: cancellation.clone(),
             workflow: if create {
@@ -86,8 +85,8 @@ impl LiveWriter {
             } else {
                 WorkflowKind::ReplaceFeed
             },
-            feed: setup.0,
-            member: setup.1,
+            create,
+            member,
             input_records: 0,
         })
     }
@@ -195,9 +194,6 @@ impl ExactFeedState {
         S: RangeSource<AddressRange<K>>,
     {
         self.require_family(writer, family)?;
-        let id = self.member.id;
-        let words = self.member.word_count;
-        let cancellation = self.cancellation.clone();
         writer.mutate(|store| {
             drain_source(
                 source,
@@ -205,14 +201,7 @@ impl ExactFeedState {
                 &mut self.input_records,
                 |range| {
                     require_ordered(range.from, range.to)?;
-                    store.apply_membership_cancellable(
-                        range.from,
-                        range.to,
-                        id,
-                        words,
-                        MembershipOperation::Union,
-                        &mut || cancellation.check(),
-                    )?;
+                    store.add_feed_coverage(range.from, range.to)?;
                     Ok(())
                 },
             )
@@ -224,11 +213,13 @@ impl ExactFeedState {
         Ok(finished.bind(writer))
     }
 
-    pub(crate) fn finish_state(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
+    pub(crate) fn finish_state(self, writer: &mut LiveWriter) -> Result<FinishedState> {
         self.require_active(writer)?;
         let cancellation = self.cancellation.clone();
+        let merged =
+            writer.mutate(|store| store.merge_feed(self.member, self.create, &cancellation))?;
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
-        let report = self.prepare_report(writer)?;
+        let report = self.prepare_report(merged)?;
         if report.logical_change == LogicalChange::NoChange {
             writer.discard_draft()?;
             return Ok(FinishedState::NoChange(report));
@@ -240,28 +231,23 @@ impl ExactFeedState {
         })
     }
 
-    fn prepare_report(&mut self, writer: &mut LiveWriter) -> Result<WorkflowReport> {
-        let before_feed = (self.workflow == WorkflowKind::ReplaceFeed).then_some(self.feed);
-        let scanned = writer
-            .core
-            .compare_feed(before_feed, self.feed, &self.cancellation)
-            .map_err(|error| writer.abort_after(error))?;
+    fn prepare_report(&self, merged: crate::draft_store::FeedMerge) -> Result<WorkflowReport> {
         let logical_change = if self.workflow == WorkflowKind::CreateFeed {
             LogicalChange::Changed
         } else {
-            classify(&scanned.comparison)
+            classify(&merged.comparison.comparison)
         };
         Ok(WorkflowReport::replacement(
             ReplacementReportInput {
                 workflow: self.workflow,
                 logical_change,
                 input_record_count: self.input_records,
-                input_normalized_interval_count: scanned.after_intervals,
-                before_range_record_count: scanned.before_intervals,
-                after_range_record_count: scanned.after_intervals,
-                input_addresses: scanned.comparison.after,
+                input_normalized_interval_count: merged.input_intervals,
+                before_range_record_count: merged.comparison.before_intervals,
+                after_range_record_count: merged.comparison.after_intervals,
+                input_addresses: merged.input_addresses,
             },
-            scanned.comparison,
+            merged.comparison.comparison,
         ))
     }
 
@@ -279,17 +265,13 @@ fn setup_feed(
     name: FeedName,
     existing: Option<FeedEntry>,
     create: bool,
-    family: AddressFamily,
     cancellation: &CancellationToken,
-) -> Result<(FeedEntry, Interned)> {
+) -> Result<Interned> {
     cancellation.check()?;
     let feed = select_feed(store, name, existing, create)?;
     let member = store.add_feed_index_to_membership(0, 0, feed.index)?;
-    if !create {
-        clear_feed(store, family, &member, cancellation)?;
-    }
     cancellation.check()?;
-    Ok((feed, member))
+    Ok(member)
 }
 
 fn select_feed(
@@ -302,33 +284,6 @@ fn select_feed(
         return existing.ok_or(Error::Corrupt("replacement feed disappeared"));
     }
     store.insert_feed(name)
-}
-
-fn clear_feed(
-    store: &mut crate::writer_core::WriterEdit<'_>,
-    family: AddressFamily,
-    member: &Interned,
-    cancellation: &CancellationToken,
-) -> Result<()> {
-    match family {
-        AddressFamily::Ipv4 => store.apply_membership_cancellable(
-            Ipv4Key::MIN,
-            Ipv4Key::MAX,
-            member.id,
-            member.word_count,
-            MembershipOperation::Difference,
-            &mut || cancellation.check(),
-        )?,
-        AddressFamily::Ipv6 => store.apply_membership_cancellable(
-            Ipv6Key::MIN,
-            Ipv6Key::MAX,
-            member.id,
-            member.word_count,
-            MembershipOperation::Difference,
-            &mut || cancellation.check(),
-        )?,
-    };
-    Ok(())
 }
 
 fn require_feed_precondition(existing: Option<FeedEntry>, create: bool) -> Result<()> {

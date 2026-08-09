@@ -236,33 +236,6 @@ impl WriterCore {
         }
     }
 
-    pub(crate) fn compare_feed(
-        &self,
-        before_feed: Option<FeedEntry>,
-        after_feed: FeedEntry,
-        cancellation: &CancellationToken,
-    ) -> Result<compare::ScannedComparison> {
-        let after = self.current_meta();
-        match after.address_family {
-            AddressFamily::Ipv4 => compare::feeds::<Ipv4Key>(
-                &self.mapping,
-                &self.base.meta,
-                before_feed,
-                &after,
-                after_feed,
-                cancellation,
-            ),
-            AddressFamily::Ipv6 => compare::feeds::<Ipv6Key>(
-                &self.mapping,
-                &self.base.meta,
-                before_feed,
-                &after,
-                after_feed,
-                cancellation,
-            ),
-        }
-    }
-
     pub(crate) fn discard_unpublished(&mut self) -> Result<()> {
         self.require_unchanged_base()?;
         let physical_bytes = self.trim_unpublished_tail()?;

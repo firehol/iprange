@@ -2,13 +2,14 @@
 
 use crate::contract::{u16_le, u32_le, u64_le, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
+use crate::format::page_type;
 use crate::mapping::ByteSource;
 use crate::slotted_page::{PageEdit, PageSink, HEADER_SIZE};
 
 use super::Kind;
 
-pub(super) const BRANCH_TYPE: u8 = 14;
-pub(super) const LEAF_TYPE: u8 = 15;
+pub(super) const BRANCH_TYPE: u8 = page_type::USED_BITMAP_BRANCH;
+pub(super) const LEAF_TYPE: u8 = page_type::USED_BITMAP_LEAF;
 pub(super) const LEAF_WORDS: usize = 500;
 pub(super) const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;
 pub(super) const BRANCH_CHILDREN: usize = 256;

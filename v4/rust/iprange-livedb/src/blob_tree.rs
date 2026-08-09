@@ -3,11 +3,12 @@
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::Store;
+use crate::format::page_type;
 use crate::mapping::{ByteSource, Mapping};
 use crate::slotted_page::{self, Header, HEADER_SIZE};
 
-const BLOB_BRANCH: u8 = 11;
-const BLOB_LEAF: u8 = 12;
+const BLOB_BRANCH: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
+const BLOB_LEAF: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
 const MEMBERSHIP_BLOB: u32 = 1;
 const LEAF_DATA: usize = 48;
 const MAX_DATA: usize = PAGE_SIZE - LEAF_DATA;

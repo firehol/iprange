@@ -126,12 +126,8 @@ pub(crate) fn lookup_v4<'a>(
     owner_identity: Option<ProcessIdentity>,
 ) -> Result<Option<MembershipView<'a>>> {
     require_kind(meta, AddressFamily::Ipv4)?;
-    lookup(
-        mapping,
-        meta,
-        range_tree::lookup(mapping, meta, address)?,
-        owner_identity,
-    )
+    let id = range_tree::lookup(mapping, meta, address)?;
+    lookup(mapping, meta, id, owner_identity)
 }
 
 pub(crate) fn lookup_v6<'a>(

@@ -6,7 +6,7 @@ use crate::mapping::ByteSource;
 use crate::slotted_page;
 
 use super::page::{branch_child, codec_cell, key_at, lower_bound, parse};
-use super::{Codec, Store};
+use super::{Codec, PageSource};
 
 const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
 const MAX_COPIED_LEAF: usize = 512;
@@ -44,7 +44,7 @@ const EMPTY_FRAME: Frame = Frame {
     level: 0,
 };
 
-pub(crate) fn predecessor<C: Codec, S: Store>(
+pub(crate) fn predecessor<C: Codec, S: PageSource>(
     store: &S,
     root: u32,
     key: C::Key,
@@ -67,7 +67,7 @@ pub(crate) fn predecessor<C: Codec, S: Store>(
     })
 }
 
-pub(crate) fn predecessor_location<C: Codec, S: Store>(
+pub(crate) fn predecessor_location<C: Codec, S: PageSource>(
     store: &S,
     root: u32,
     key: C::Key,
@@ -75,7 +75,7 @@ pub(crate) fn predecessor_location<C: Codec, S: Store>(
     let Some((_, _, page_number, header)) = descend::<C, S>(store, root, key)? else {
         return Ok(None);
     };
-    store.inspect_page(page_number, |page| {
+    store.view_page(page_number, |page| {
         let (index, exists) = lower_bound::<C, _>(page, &header, key, true)?;
         let index = if exists {
             index
@@ -92,16 +92,16 @@ pub(crate) fn predecessor_location<C: Codec, S: Store>(
     })
 }
 
-pub(crate) fn inspect_leaf<'a, C: Codec, S: Store, T, F>(
+pub(crate) fn inspect_leaf<'a, C: Codec, S: PageSource, T, F>(
     store: &'a S,
     location: LeafLocation,
     inspect: F,
 ) -> Result<T>
 where
-    F: FnOnce(crate::mapping::ByteRange<S::ReadPage<'a>>) -> Result<T>,
+    F: FnOnce(crate::mapping::ByteRange<S::Page<'a>>) -> Result<T>,
 {
-    store.inspect_page(location.page_number, |page| {
-        let header = parse::<C, _>(page, store.target_txn(), Some(0))?;
+    store.view_page(location.page_number, |page| {
+        let header = parse::<C, _>(page, store.selected_txn(), Some(0))?;
         if header.item_count != location.header.item_count {
             return Err(Error::Corrupt("B+tree leaf changed during inspection"));
         }
@@ -111,7 +111,7 @@ where
     })
 }
 
-pub(crate) fn at_or_after<C: Codec, S: Store>(
+pub(crate) fn at_or_after<C: Codec, S: PageSource>(
     store: &S,
     root: u32,
     key: C::Key,
@@ -119,7 +119,7 @@ pub(crate) fn at_or_after<C: Codec, S: Store>(
     let Some((path, depth, page_number, header)) = descend::<C, S>(store, root, key)? else {
         return Ok(None);
     };
-    let found = store.inspect_page(page_number, |page| {
+    let found = store.view_page(page_number, |page| {
         let (index, _) = lower_bound::<C, _>(page, &header, key, true)?;
         if index < header.item_count {
             copy_leaf::<C, _>(page, &header, index).map(Some)
@@ -133,11 +133,11 @@ pub(crate) fn at_or_after<C: Codec, S: Store>(
     next_leaf::<C, S>(store, &path, depth)
 }
 
-pub(super) fn contains<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<bool> {
+pub(super) fn contains<C: Codec, S: PageSource>(store: &S, root: u32, key: C::Key) -> Result<bool> {
     let Some((_, _, page_number, header)) = descend::<C, S>(store, root, key)? else {
         return Ok(false);
     };
-    store.inspect_page(page_number, |page| {
+    store.view_page(page_number, |page| {
         let (index, exists) = lower_bound::<C, _>(page, &header, key, true)?;
         if !exists {
             return Ok(false);
@@ -146,7 +146,7 @@ pub(super) fn contains<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) ->
     })
 }
 
-fn next_leaf<C: Codec, S: Store>(
+fn next_leaf<C: Codec, S: PageSource>(
     store: &S,
     path: &[Frame; MAX_PATH],
     mut depth: usize,
@@ -162,21 +162,21 @@ fn next_leaf<C: Codec, S: Store>(
     Ok(None)
 }
 
-fn first_in_right_subtree<C: Codec, S: Store>(store: &S, frame: Frame) -> Result<LeafBuf> {
-    let target_txn = store.target_txn();
-    let page_limit = store.page_limit();
-    let child = store.inspect_page(frame.page_number, |page| {
+fn first_in_right_subtree<C: Codec, S: PageSource>(store: &S, frame: Frame) -> Result<LeafBuf> {
+    let target_txn = store.selected_txn();
+    let page_limit = store.selected_page_limit();
+    let child = store.view_page(frame.page_number, |page| {
         let header = parse::<C, _>(page, target_txn, Some(frame.level))?;
         branch_child::<C, _>(page, &header, frame.index + 1, page_limit)
     })?;
     crate::work::tree_descent(1);
     let (page_number, header) = descend_left::<C, S>(store, child, frame.level - 1)?;
-    store.inspect_page(page_number, |page| copy_leaf::<C, _>(page, &header, 0))
+    store.view_page(page_number, |page| copy_leaf::<C, _>(page, &header, 0))
 }
 
 type Descent = ([Frame; MAX_PATH], usize, u32, slotted_page::Header);
 
-fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Option<Descent>> {
+fn descend<C: Codec, S: PageSource>(store: &S, root: u32, key: C::Key) -> Result<Option<Descent>> {
     crate::work::tree_lookup(1);
     if root == 0 {
         return Ok(None);
@@ -186,9 +186,9 @@ fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Opti
     let mut page_number = root;
     let mut expected = None;
     loop {
-        let target_txn = store.target_txn();
-        let page_limit = store.page_limit();
-        let (header, selected) = store.inspect_page(page_number, |page| {
+        let target_txn = store.selected_txn();
+        let page_limit = store.selected_page_limit();
+        let (header, selected) = store.view_page(page_number, |page| {
             let header = parse::<C, _>(page, target_txn, expected)?;
             let selected = if header.level == 0 {
                 None
@@ -218,15 +218,15 @@ fn descend<C: Codec, S: Store>(store: &S, root: u32, key: C::Key) -> Result<Opti
     }
 }
 
-fn descend_left<C: Codec, S: Store>(
+fn descend_left<C: Codec, S: PageSource>(
     store: &S,
     mut page_number: u32,
     mut level: u16,
 ) -> Result<(u32, slotted_page::Header)> {
     loop {
-        let target_txn = store.target_txn();
-        let page_limit = store.page_limit();
-        let (header, child) = store.inspect_page(page_number, |page| {
+        let target_txn = store.selected_txn();
+        let page_limit = store.selected_page_limit();
+        let (header, child) = store.view_page(page_number, |page| {
             let header = parse::<C, _>(page, target_txn, Some(level))?;
             let child = if level == 0 {
                 None

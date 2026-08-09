@@ -3,7 +3,7 @@
 use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::contract::MembershipOperation;
-use crate::draft_store::{DraftStore, RetentionMerge};
+use crate::draft_store::{DraftStore, FeedMerge, RetentionMerge};
 use crate::error::Result;
 use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
@@ -123,6 +123,20 @@ impl<'a> WriterEdit<'a> {
     {
         self.store
             .apply_membership_cancellable(from, to, id, words, operation, checkpoint)
+    }
+
+    pub(crate) fn add_feed_coverage<K: IpKey>(&mut self, from: K, to: K) -> Result<()> {
+        self.store.add_feed_coverage(from, to)
+    }
+
+    pub(crate) fn merge_feed(
+        &mut self,
+        member: Interned,
+        create: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<FeedMerge> {
+        self.store
+            .merge_feed(&self.base, member, create, cancellation)
     }
 
     pub(crate) fn delete_current_feed_membership(&mut self, feed: FeedEntry) -> Result<()> {

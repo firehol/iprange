@@ -4,8 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::test_alloc::count_thread_allocations;
 use crate::{
-    create_live, AddressFamily, AddressRange, CancellationToken, FeedName, FinishedWorkflow,
-    Ipv4Key, LiveWriter, TransactionBudget, ValueKind, ValueTag,
+    create_live, AddressFamily, AddressRange, CancellationToken, CommitDurability, FeedName,
+    FinishedWorkflow, Ipv4Key, LiveWriter, TransactionBudget, ValueKind, ValueTag,
 };
 
 struct TestPair {
@@ -84,12 +84,20 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.source_passes, 1);
     assert_eq!(work.ranges_consumed, ranges.len() as u64);
-    assert!(work.membership_lookups > 0);
+    assert_eq!(work.membership_lookups, 0);
     assert_eq!(work.membership_interns, 0);
+    assert_eq!(work.output_passes, 0);
 
-    let (finished, allocations) = count_thread_allocations(|| workflow.finish_input());
+    let ((finished, work), allocations) =
+        count_thread_allocations(|| crate::work::measure(|| workflow.finish_input()));
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
+    assert_eq!(work.source_passes, 2);
+    assert_eq!(work.output_passes, 1);
+    assert_eq!(work.ranges_consumed, ranges.len() as u64);
+    assert_eq!(work.ranges_emitted, ranges.len() as u64);
+    assert_eq!(work.membership_lookups, 1);
+    assert_eq!(work.membership_interns, 0);
     assert!(matches!(&finished, FinishedWorkflow::Changed(_)));
     finished.abort().unwrap();
     writer.close().unwrap();
@@ -115,7 +123,8 @@ fn exact_feed_workflows_lookup_each_name_once() {
     let create = writer.begin_create_feed(name, &cancellation).unwrap();
     match create.finish_input().unwrap() {
         FinishedWorkflow::Changed(prepared) => {
-            prepared.commit().unwrap();
+            let committed = prepared.commit().unwrap();
+            assert_eq!(committed.durability, CommitDurability::Committed);
         }
         FinishedWorkflow::NoChange(_) => panic!("feed creation cannot be a no-op"),
     }

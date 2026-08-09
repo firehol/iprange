@@ -3,13 +3,14 @@
 use crate::contract::{u16_le, u32_le, u64_le, MAX_TREE_LEVEL, PAGE_MAGIC, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiringStore, Store};
+use crate::format::page_type;
 use crate::mapping::ByteSource;
 use crate::slotted_page::{self, put_u32, put_u64, Builder, PageSink, HEADER_SIZE};
 
 use super::Words;
 
-const BRANCH_TYPE: u8 = 11;
-const LEAF_TYPE: u8 = 12;
+const BRANCH_TYPE: u8 = page_type::MEMBERSHIP_BLOB_BRANCH;
+const LEAF_TYPE: u8 = page_type::MEMBERSHIP_BLOB_LEAF;
 const MEMBERSHIP_KIND: u32 = 1;
 const LEAF_DATA: usize = 48;
 const LEAF_BYTES: usize = PAGE_SIZE - LEAF_DATA;
