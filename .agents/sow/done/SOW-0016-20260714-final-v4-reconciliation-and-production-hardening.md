@@ -2,13 +2,13 @@
 
 ## Status
 
-Status: in-progress
+Status: closed
 
-Sub-state: the 2026-08-08 authoritative low-level ownership refactor and local
-performance proof are complete. The current source passes the complete local,
-MSRV, C, conformance, sanitizer, mmap-only, architecture, and cross-compiled
-platform gates. It has not been rerun natively on Windows, macOS, and FreeBSD
-after this refactor, so Rust remains unaccepted and Go remains blocked.
+Sub-state: closed on 2026-08-09 as superseded by focused SOW-0020. The final
+first-principles audit disproved this SOW's claims that the implementation had
+one authoritative physical-format owner and no removable hot-path work. Rust
+remains unaccepted and Go remains blocked. The unresolved work continues under
+SOW-0020 without treating this SOW as successfully completed.
 
 The prior local-completion and Rust-acceptance claims are withdrawn.
 A fresh compiled-path and release-profile audit found that ordinary range
@@ -14051,17 +14051,36 @@ Pending. Before SOW completion, this section must record:
 
 ## Outcome
 
-Pending.
+Closed as superseded, not completed. The SOW established the current exact v4
+contract, mmap-only implementation, public Rust and C surfaces, platform
+boundaries, and broad correctness evidence, but its final architecture and
+performance acceptance was false. The 2026-08-09 repeated audit found dominant
+avoidable fixed-tree edit work, inefficient exact feed replacement/import,
+an unnecessary direct-replacement pass, duplicated persistent codecs and
+traversals, and physical state above the intended internal engine boundary.
+SOW-0020 owns those unresolved findings and the clean-audit completion gate.
 
 ## Lessons Extracted
 
-Pending.
+- A facade named `ReaderCore` or `WriterCore` is not an authoritative layer when
+  byte layouts, traversal algorithms, identifiers, and physical state remain
+  duplicated or visible above it.
+- Green semantic tests, literal clone percentages, and import-pattern gates do
+  not prove minimum work or single authority. Representative worst-case
+  profiles and operation-derived necessary-work bounds are required.
+- A performance audit that omits million-range nested writes, million-range
+  feed replacement, and membership import cannot support an optimality claim.
+- Exact high-level workflows need ordered merge/build primitives that compute
+  their result and statistics together; repeated generic point/range mutation
+  is not an acceptable substitute.
 
 ## Followup
 
-Pending SOW-0017 is the authorized Phase-2 snapshot-signing follow-up. Complete
-the approved unsigned core-SDK scope here; map any other newly discovered valid
-work under the repository follow-up discipline before closing this SOW.
+Current SOW-0020 owns the unfinished Rust v4 authority, maintainability, and
+hot-path completion work. Pending SOW-0017 remains the authorized Phase-2
+snapshot-signing follow-up, and pending SOW-0018 remains the Phase-2 high-level
+multi-file algebra follow-up. Neither may begin before Rust passes SOW-0020 and
+the user accepts the result.
 
 ## Regression Log
 
