@@ -19,10 +19,15 @@ pub(crate) struct FeedMerge {
 }
 
 impl DraftStore<'_> {
-    pub(crate) fn add_feed_coverage<K: IpKey>(&mut self, from: K, to: K) -> Result<()> {
+    pub(crate) fn add_feed_coverage<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        state: &mut range_mutation::UnionState<K>,
+    ) -> Result<()> {
         let mut root = self.draft.workflow_range_root;
         let mut count = self.draft.workflow_range_count;
-        range_mutation::assign_private_untracked(self, &mut root, &mut count, from, to, 1)?;
+        range_mutation::union_private_untracked(self, &mut root, &mut count, from, to, state)?;
         self.draft.workflow_range_root = root;
         self.draft.workflow_range_count = count;
         Ok(())

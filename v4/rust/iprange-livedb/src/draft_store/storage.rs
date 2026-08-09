@@ -65,12 +65,11 @@ impl Store for DraftStore<'_> {
         F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
     {
         require_page(page_number, self.draft.meta.page_count)?;
-        let tag = self.dirty_tag(page_number)?;
         let mut page = self
             .mapping
             .page_mut(page_number, self.draft.meta.page_count)?;
+        let tag = private_tag(page.view(), self.draft.meta.txn_id)?;
         let result = update(&mut page)?;
-        require_private_output(page.view(), self.draft.meta.txn_id)?;
         page.put_u32(page_checksum::OFFSET, tag)?;
         Ok(result)
     }
@@ -81,12 +80,11 @@ impl Store for DraftStore<'_> {
     {
         require_page(source, self.draft.meta.page_count)?;
         require_page(destination, self.draft.meta.page_count)?;
-        let tag = self.dirty_tag(destination)?;
         let (source, mut destination) =
             self.mapping
                 .page_pair(source, destination, self.draft.meta.page_count)?;
+        let tag = private_tag(destination.view(), self.draft.meta.txn_id)?;
         let result = copy(source, &mut destination)?;
-        require_private_output(destination.view(), self.draft.meta.txn_id)?;
         destination.put_u32(page_checksum::OFFSET, tag)?;
         crate::work::page_copied(1);
         Ok(result)
@@ -116,7 +114,7 @@ impl Store for DraftStore<'_> {
         page.put_u32(PRIVATE_MAGIC_OFFSET, PRIVATE_MAGIC)?;
         page.put_u32(PRIVATE_NEXT_OFFSET, next)?;
         page.put_u64(PRIVATE_TXN_OFFSET, txn)?;
-        require_private_output(page.view(), txn)?;
+        private_tag(page.view(), txn)?;
         self.draft.private_head = page_number;
         Ok(())
     }
@@ -153,19 +151,6 @@ impl DraftStore<'_> {
         }
         self.draft.dirty_head = 0;
         Ok(())
-    }
-
-    fn dirty_tag(&mut self, page_number: u32) -> Result<u32> {
-        if let Some(tag) = self.existing_dirty_tag(page_number)? {
-            return Ok(tag);
-        }
-        let tag = if self.draft.dirty_head == 0 {
-            DIRTY_END
-        } else {
-            self.draft.dirty_head
-        };
-        self.draft.dirty_head = page_number;
-        Ok(tag)
     }
 
     fn existing_dirty_tag(&self, page_number: u32) -> Result<Option<u32>> {
@@ -213,14 +198,12 @@ impl DraftStore<'_> {
     }
 }
 
-fn require_private_output(page: PageView<'_>, target_txn: u64) -> Result<()> {
-    let data = page_header::owned_by(page, target_txn);
-    let private = is_private_page(page, target_txn);
-    let reserve = page.all_zero(0, page_checksum::OFFSET);
-    if data || private || reserve {
-        Ok(())
+fn private_tag(page: PageView<'_>, target_txn: u64) -> Result<u32> {
+    let tag = u32_le(page, page_checksum::OFFSET);
+    if (page_header::owned_by(page, target_txn) || is_private_page(page, target_txn)) && tag != 0 {
+        Ok(tag)
     } else {
-        Err(Error::Corrupt("draft update has the wrong transaction"))
+        Err(Error::Corrupt("draft update page is not private"))
     }
 }
 

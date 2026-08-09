@@ -1,6 +1,7 @@
 //! Generic mapped-page COW B+tree.
 
 use std::fmt;
+use std::mem::MaybeUninit;
 
 use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
@@ -11,6 +12,7 @@ use crate::slotted_page::{self, Header};
 
 mod cursor;
 mod delete;
+mod gap;
 mod insert;
 mod page;
 mod query;
@@ -23,10 +25,13 @@ pub(crate) use cursor::{
 #[cfg(test)]
 pub(crate) use delete::delete;
 pub(crate) use delete::delete_existing;
-pub(crate) use insert::{
-    insert, insert_if_local_gap, replace_leaf_with, replace_local_predecessor_with, LocalGap,
-    LocalInsert, LocalPrevious, LocalReject,
+pub(crate) use delete::remove_leaf_run;
+pub(crate) use gap::{
+    insert_if_edge_gap, insert_if_local_gap, insert_rejected_gap, replace_local_predecessor_with,
+    replace_local_run, root_position, Edge, EdgeInsert, LocalGap, LocalInsert, LocalNext,
+    LocalPrevious, LocalReject, LocalRun, PrivatePosition,
 };
+pub(crate) use insert::{insert, replace_leaf_with};
 use page::{branch_child, codec_cell, key_at, lower_bound, parse, CellBuf};
 pub(crate) use query::{query, LeafQuery};
 pub(crate) use read::{at_or_after, inspect_leaf, predecessor, predecessor_located, LeafLocation};
@@ -224,40 +229,52 @@ impl RetiredPages {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Frame {
     pub(super) page_number: u32,
     pub(super) index: usize,
     pub(super) item_count: usize,
 }
 
-const EMPTY_FRAME: Frame = Frame {
-    page_number: 0,
-    index: 0,
-    item_count: 0,
-};
-
 pub(super) struct Path {
-    pub(super) frames: [Frame; MAX_PATH],
+    frames: [MaybeUninit<Frame>; MAX_PATH],
     pub(super) depth: usize,
 }
 
 impl Path {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            frames: [EMPTY_FRAME; MAX_PATH],
+            frames: [MaybeUninit::uninit(); MAX_PATH],
             depth: 0,
         }
     }
 
+    #[inline]
     fn push(&mut self, frame: Frame) -> Result<()> {
         let slot = self
             .frames
             .get_mut(self.depth)
             .ok_or_else(|| Error::corrupt("B+tree exceeds its maximum height"))?;
-        *slot = frame;
+        slot.write(frame);
         self.depth += 1;
         Ok(())
+    }
+
+    #[inline(always)]
+    pub(super) fn as_slice(&self) -> &[Frame] {
+        // SAFETY: push initializes exactly the prefix counted by depth.
+        unsafe { std::slice::from_raw_parts(self.frames.as_ptr().cast(), self.depth) }
+    }
+
+    #[inline(always)]
+    pub(super) fn frame(&self, index: usize) -> Frame {
+        self.as_slice()[index]
+    }
+}
+
+impl fmt::Debug for Path {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.as_slice()).finish()
     }
 }
 

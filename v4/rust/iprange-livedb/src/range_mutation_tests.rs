@@ -130,6 +130,141 @@ fn ranges_v6(store: &MemoryStore, root: u32) -> Vec<(u128, u128, u32)> {
 }
 
 #[test]
+fn private_coverage_union_matches_a_scalar_reference() {
+    const SPACE: usize = 512;
+    let mut expected = [false; SPACE];
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut state = UnionState::default();
+    let mut random = 0x243f_6a88_u32;
+
+    for operation in 0..2_000 {
+        random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let first = random as usize % SPACE;
+        random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let second = random as usize % SPACE;
+        let from = first.min(second);
+        let to = first.max(second);
+        union_private(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(from as u32),
+            Ipv4Key(to as u32),
+            &mut state,
+        )
+        .unwrap();
+        expected[from..=to].fill(true);
+
+        let actual = ranges_v4(&store, root);
+        assert_eq!(count as usize, actual.len());
+        for (address, wanted) in expected.iter().enumerate() {
+            let found = actual
+                .iter()
+                .any(|range| range.0 <= address as u32 && address as u32 <= range.1);
+            assert_eq!(found, *wanted, "operation {operation}, address {address}");
+        }
+        assert!(actual.iter().all(|range| range.2 == 1));
+        assert!(actual.windows(2).all(|pair| pair[0].1 + 1 < pair[1].0));
+    }
+}
+
+#[test]
+fn private_coverage_union_reuses_monotonic_edges() {
+    for descending in [false, true] {
+        let mut store = MemoryStore::new();
+        let mut root = 0;
+        let mut count = 0;
+        let mut state = UnionState::default();
+        let (_, work) = crate::work::measure(|| {
+            for ordinal in 0..2_000_u32 {
+                let key = if descending { 1_999 - ordinal } else { ordinal } * 4;
+                union_private(
+                    &mut store,
+                    &mut root,
+                    &mut count,
+                    Ipv4Key(key),
+                    Ipv4Key(key + 1),
+                    &mut state,
+                )
+                .unwrap();
+            }
+        });
+        assert_eq!(count, 2_000);
+        assert!(work.pages_split > 0);
+        assert_eq!(
+            work.tree_lookups, work.pages_split,
+            "only split refreshes may descend a monotonic tree"
+        );
+    }
+}
+
+#[test]
+fn private_coverage_union_random_order_bounds_lookups_by_inputs_and_splits() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut state = UnionState::default();
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..2_000_u32 {
+            let key = (ordinal * 1_597 % 2_000) * 4;
+            union_private(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key),
+                Ipv4Key(key + 1),
+                &mut state,
+            )
+            .unwrap();
+        }
+    });
+    assert_eq!(count, 2_000);
+    assert!(
+        work.tree_lookups <= 2_000 + work.pages_split,
+        "random union repeated tree searches: {work:?}"
+    );
+}
+
+#[test]
+fn private_coverage_union_splices_a_large_run_without_per_record_searches() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut state = UnionState::default();
+    for ordinal in 0..2_000_u32 {
+        let key = ordinal * 4;
+        union_private(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(key),
+            Ipv4Key(key + 1),
+            &mut state,
+        )
+        .unwrap();
+    }
+
+    let (changed, work) = crate::work::measure(|| {
+        union_private(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(0),
+            Ipv4Key(8_000),
+            &mut state,
+        )
+    });
+    assert!(changed.unwrap());
+    assert_eq!(count, 1);
+    assert_eq!(ranges_v4(&store, root), vec![(0, 8_000, 1)]);
+    assert_eq!(work.ranges_coalesced, 2_000);
+    assert_eq!(work.tree_lookups, 8, "one lookup per affected leaf");
+    assert!(work.cell_probes < 2_200, "records were rescanned");
+}
+
+#[test]
 fn big_endian_portable_range_record_matches_literal_bytes() {
     let range = Range {
         from: Ipv4Key(0x0102_0304),

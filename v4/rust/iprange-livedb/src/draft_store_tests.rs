@@ -296,3 +296,38 @@ fn reusing_a_current_transaction_page_keeps_one_dirty_chain_entry() {
 
     store.seal_private_pages(&mut || Ok(())).unwrap();
 }
+
+#[test]
+fn direct_page_update_rejects_a_committed_page_before_mutation() {
+    let mut test = TestFile::new();
+    let creation = empty_direct_meta(1);
+    let budget = PageBudget {
+        max_heap_bytes: 0,
+        max_private_pages: 100,
+        max_growth_pages: 100,
+    };
+    let mut first = Draft::new(creation, [3; 16]).unwrap();
+    {
+        let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut first);
+        store.assign_v4(Ipv4Key(10), Ipv4Key(20), 7).unwrap();
+        store.prepare().unwrap();
+    }
+    let committed = first.meta;
+    let root = committed.range_root;
+    let before = test
+        .mapping
+        .page(root, committed.page_count)
+        .unwrap()
+        .byte(100);
+
+    let mut next = Draft::new(committed, [4; 16]).unwrap();
+    let mut store = DraftStore::new(&mut test.mapping, committed.page_count, budget, &mut next);
+    assert!(matches!(
+        store.update_page(root, |page| page.set_byte(100, 0xa5)),
+        Err(Error::Corrupt(_))
+    ));
+    assert_eq!(
+        store.inspect_page(root, |page| Ok(page.byte(100))).unwrap(),
+        before
+    );
+}

@@ -227,6 +227,28 @@ close, and explicit validation are outside the reader timer.
 | Live named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01199 s | 0.00874-0.01620 s | 83.40 million/s |
 | Immutable named-feed ordered scan, 421 feeds | 1,000,000 ranges | 0.01146 s | 0.00814-0.01351 s | 87.25 million/s |
 
+The feed-construction matrix also measures the input shapes that exercise the
+normalizer's edge and arbitrary-location paths. A first-feed timer includes
+empty-file creation, writer open, feed creation, one million inputs, finish,
+commit, and close. A second-feed timer creates and commits the first feed
+outside the timer, then reopens the same file and measures creation of the
+second feed. Result enumeration and explicit validation are outside both
+timers.
+
+| One-million-range input | First feed median | First range | Second feed median | Second range | Final ranges |
+|---|---:|---:|---:|---:|---:|
+| Ascending disjoint | 0.159 s | 0.128-0.220 s | 0.265 s | 0.218-0.319 s | 1,000,000 |
+| Descending disjoint | 0.261 s | 0.192-0.324 s | 0.341 s | 0.311-0.423 s | 1,000,000 |
+| Deterministic random disjoint | 0.356 s | 0.345-0.679 s | 0.474 s | 0.460-0.766 s | 1,000,000 |
+| Deterministic random overlap chain | 0.298 s | 0.282-0.392 s | 0.342 s | 0.285-0.411 s | 1 |
+
+The overlap chain deterministically permutes intervals whose neighbors overlap
+by half; it is one defined stress shape, not a claim about every random overlap
+distribution. First-feed cases use 39 fixed setup allocations totaling
+1,096-1,148 bytes; second-feed cases use 21 totaling 450-466 bytes. All eight
+cases keep file descriptors stable, leave no private artifact, and build pages
+directly in the mapped destination without a sorting file.
+
 All scale cases kept file descriptors stable, left zero private artifacts, and
 explicitly validated every output after timing. Direct, retention, nested,
 feed-replacement, import, and snapshot construction respectively made

@@ -147,6 +147,18 @@ fn scale_cases() -> Vec<Case> {
     }
     cases.push(case("feed-replace", 100_000, 421));
     cases.push(case("feed-replace", 1_000_000, 421));
+    for name in [
+        "feed-first-ascending",
+        "feed-second-ascending",
+        "feed-first-descending",
+        "feed-second-descending",
+        "feed-first-random",
+        "feed-second-random",
+        "feed-first-overlap",
+        "feed-second-overlap",
+    ] {
+        cases.push(case(name, 1_000_000, 0));
+    }
     cases.push(case("membership-import", 10_000, 421));
     cases.push(case("membership-import", 100_000, 421));
     cases.push(case("membership-import", 1_000_000, 421));

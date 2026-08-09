@@ -1,0 +1,389 @@
+//! Coverage-union ingestion for unordered feed ranges.
+
+use crate::error::{Error, Result};
+use crate::fixed_tree::{self, RetiringStore, Store};
+use crate::key::IpKey;
+use crate::range_tree::{RangeCodec, Record as Range};
+
+use super::{
+    account_private_insert, insert, insert_private_gap, insert_private_rejected, EncodedRange,
+    PrivateGap, RangeStore,
+};
+
+struct Untracked<'a, S>(&'a mut S);
+
+impl<S: RetiringStore> Store for Untracked<'_, S> {
+    type ReadPage<'a>
+        = S::ReadPage<'a>
+    where
+        Self: 'a;
+    type WritePage<'a>
+        = S::WritePage<'a>
+    where
+        Self: 'a;
+
+    fn target_txn(&self) -> u64 {
+        self.0.target_txn()
+    }
+
+    fn page_limit(&self) -> u64 {
+        self.0.page_limit()
+    }
+
+    fn inspect_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>) -> Result<T>,
+    {
+        self.0.inspect_page(page_number, inspect)
+    }
+
+    fn allocate(&mut self) -> Result<u32> {
+        self.0.allocate()
+    }
+
+    fn update_page<'a, T, F>(&'a mut self, page_number: u32, update: F) -> Result<T>
+    where
+        F: FnOnce(&mut Self::WritePage<'a>) -> Result<T>,
+    {
+        self.0.update_page(page_number, update)
+    }
+
+    fn copy_page<'a, T, F>(&'a mut self, source: u32, destination: u32, copy: F) -> Result<T>
+    where
+        F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>,
+    {
+        self.0.copy_page(source, destination, copy)
+    }
+
+    fn discard_private(&mut self, page_number: u32) -> Result<()> {
+        self.0.discard_private(page_number)
+    }
+}
+
+impl<S: RetiringStore> RetiringStore for Untracked<'_, S> {
+    fn retire_pages(&mut self, pages: &[u32]) -> Result<()> {
+        self.0.retire_pages(pages)
+    }
+}
+
+impl<S: RetiringStore> RangeStore for Untracked<'_, S> {
+    fn range_record_added(&mut self, _value: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn range_record_removed(&mut self, _value: u32) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UnionState<K> {
+    last_from: Option<K>,
+    order: UnionOrder,
+    position: Option<fixed_tree::PrivatePosition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnionOrder {
+    Unknown,
+    First,
+    Last,
+    General,
+}
+
+impl<K> Default for UnionState<K> {
+    fn default() -> Self {
+        Self {
+            last_from: None,
+            order: UnionOrder::Unknown,
+            position: None,
+        }
+    }
+}
+
+impl<K: IpKey> UnionState<K> {
+    fn plan(&self, from: K) -> (UnionOrder, Option<fixed_tree::Edge>) {
+        let Some(previous) = self.last_from else {
+            return (UnionOrder::Unknown, None);
+        };
+        match self.order {
+            UnionOrder::Unknown if from < previous => {
+                (UnionOrder::First, Some(fixed_tree::Edge::First))
+            }
+            UnionOrder::Unknown if from > previous => {
+                (UnionOrder::Last, Some(fixed_tree::Edge::Last))
+            }
+            UnionOrder::Unknown => (UnionOrder::Unknown, None),
+            UnionOrder::First if from <= previous => {
+                (UnionOrder::First, Some(fixed_tree::Edge::First))
+            }
+            UnionOrder::Last if from >= previous => {
+                (UnionOrder::Last, Some(fixed_tree::Edge::Last))
+            }
+            UnionOrder::General => (UnionOrder::General, None),
+            UnionOrder::First | UnionOrder::Last => (UnionOrder::General, None),
+        }
+    }
+
+    fn finish(
+        &mut self,
+        from: K,
+        order: UnionOrder,
+        position: Option<fixed_tree::PrivatePosition>,
+    ) {
+        self.last_from = Some(from);
+        self.order = order;
+        self.position = if order == UnionOrder::General {
+            None
+        } else {
+            position
+        };
+    }
+}
+
+fn insert_private_edge<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    range: Range<K>,
+    position: fixed_tree::PrivatePosition,
+    edge: fixed_tree::Edge,
+) -> Result<fixed_tree::EdgeInsert<Range<K>>> {
+    let encoded = EncodedRange::new(range)?;
+    let mut gap = PrivateGap { range };
+    let result = fixed_tree::insert_if_edge_gap::<RangeCodec<K>, S, _>(
+        store,
+        root,
+        encoded.as_slice(),
+        position,
+        edge,
+        &mut gap,
+    )?;
+    if matches!(result, fixed_tree::EdgeInsert::Inserted(_)) {
+        account_private_insert(store, record_count, range.value)?;
+    }
+    Ok(result)
+}
+
+pub(crate) fn union_private_untracked<K: IpKey, S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    from: K,
+    to: K,
+    state: &mut UnionState<K>,
+) -> Result<bool> {
+    union_private(&mut Untracked(store), root, record_count, from, to, state)
+}
+
+pub(super) fn union_private<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    from: K,
+    to: K,
+    state: &mut UnionState<K>,
+) -> Result<bool> {
+    if from > to {
+        return Err(Error::InvalidArgument("range start is after its end"));
+    }
+    let incoming = Range { from, to, value: 1 };
+    if state.order == UnionOrder::General {
+        let rejected = match insert_private_gap(store, root, record_count, incoming)? {
+            fixed_tree::LocalInsert::Inserted => return Ok(true),
+            fixed_tree::LocalInsert::General(rejected) => rejected,
+        };
+        return merge_rejected(store, root, record_count, incoming, rejected)
+            .map(|(changed, _)| changed);
+    }
+    let (order, edge) = state.plan(from);
+    let cached = edge.and_then(|edge| state.position.take().map(|position| (position, edge)));
+    let was_empty = *root == 0;
+    let rejected = if let Some((position, edge)) = cached {
+        match insert_private_edge(store, root, record_count, incoming, position, edge)? {
+            fixed_tree::EdgeInsert::Inserted(position) => {
+                state.finish(from, order, Some(position));
+                return Ok(true);
+            }
+            fixed_tree::EdgeInsert::General(rejected) => rejected,
+        }
+    } else {
+        match insert_private_gap(store, root, record_count, incoming)? {
+            fixed_tree::LocalInsert::Inserted => {
+                let position = was_empty.then(|| fixed_tree::root_position(*root));
+                state.finish(from, order, position);
+                return Ok(true);
+            }
+            fixed_tree::LocalInsert::General(rejected) => rejected,
+        }
+    };
+    let (changed, position) = merge_rejected(store, root, record_count, incoming, rejected)?;
+    state.finish(from, order, position);
+    Ok(changed)
+}
+
+fn merge_rejected<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    incoming: Range<K>,
+    rejected: fixed_tree::LocalReject<Range<K>>,
+) -> Result<(bool, Option<fixed_tree::PrivatePosition>)> {
+    let Some(plan) = local_union_plan(&rejected, incoming) else {
+        return union_run(store, root, record_count, incoming, rejected);
+    };
+    let LocalUnion::Replace {
+        range,
+        run,
+        removed,
+    } = plan
+    else {
+        return Ok((false, Some(rejected.into_position())));
+    };
+    let encoded = EncodedRange::new(range)?;
+    fixed_tree::replace_local_run::<RangeCodec<K>, S, _>(
+        store,
+        root,
+        &rejected,
+        run,
+        encoded.as_slice(),
+    )?;
+    *record_count = record_count
+        .checked_sub(removed - 1)
+        .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
+    crate::work::range_coalesced(removed);
+    crate::work::range_emitted(1);
+    Ok((true, Some(rejected.into_position())))
+}
+
+enum LocalUnion<K> {
+    NoChange,
+    Replace {
+        range: Range<K>,
+        run: fixed_tree::LocalRun,
+        removed: u64,
+    },
+}
+
+fn local_union_plan<K: IpKey>(
+    rejected: &fixed_tree::LocalReject<Range<K>>,
+    incoming: Range<K>,
+) -> Option<LocalUnion<K>> {
+    let predecessor = rejected.predecessor().copied();
+    if predecessor.is_some_and(|range| range.to >= incoming.to) {
+        return Some(LocalUnion::NoChange);
+    }
+    let use_predecessor = predecessor.is_some_and(|range| touches(range.to, incoming.from));
+    if !use_predecessor && predecessor.is_none() && !rejected.predecessor_complete() {
+        return None;
+    }
+
+    let mut range = incoming;
+    if let Some(predecessor) = predecessor.filter(|_| use_predecessor) {
+        range.from = predecessor.from;
+        range.to = range.to.max(predecessor.to);
+    }
+
+    let successor = rejected.successor().copied();
+    let use_successor = successor.is_some_and(|next| touches(range.to, next.from));
+    if use_successor {
+        let successor = successor.expect("selected local successor exists");
+        if range.to > successor.to {
+            return None;
+        }
+        range.to = successor.to;
+    } else if successor.is_none() && !rejected.successor_complete() {
+        return None;
+    }
+
+    let (run, removed) = match (use_predecessor, use_successor) {
+        (true, true) => (fixed_tree::LocalRun::Both, 2),
+        (true, false) => (fixed_tree::LocalRun::Predecessor, 1),
+        (false, true) => (fixed_tree::LocalRun::Successor, 1),
+        (false, false) => return None,
+    };
+    Some(LocalUnion::Replace {
+        range,
+        run,
+        removed,
+    })
+}
+
+fn touches<K: IpKey>(left_to: K, right_from: K) -> bool {
+    left_to >= right_from || left_to.checked_next() == Some(right_from)
+}
+
+fn union_run<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    incoming: Range<K>,
+    rejected: fixed_tree::LocalReject<Range<K>>,
+) -> Result<(bool, Option<fixed_tree::PrivatePosition>)> {
+    let predecessor = match rejected.predecessor().copied() {
+        Some(predecessor) => Some(predecessor),
+        None if rejected.predecessor_complete() => None,
+        None => rejected.external_predecessor::<RangeCodec<K>, S>(store)?,
+    };
+    if predecessor.is_some_and(|range| range.to >= incoming.to) {
+        return Ok((false, Some(rejected.into_position())));
+    }
+
+    let mut merged = incoming;
+    let mut first = predecessor.filter(|range| touches(range.to, incoming.from));
+    if let Some(range) = first {
+        merged.from = range.from;
+        merged.to = merged.to.max(range.to);
+    } else {
+        let successor = match rejected.successor().copied() {
+            Some(successor) => Some(successor),
+            None if rejected.successor_complete() => None,
+            None => rejected.external_successor::<RangeCodec<K>, S>(store)?,
+        };
+        first = successor.filter(|range| touches(merged.to, range.from));
+    }
+    let Some(first) = first else {
+        let position = insert_private_rejected(store, root, record_count, incoming, rejected)?;
+        return Ok((true, position));
+    };
+
+    let mut next_key = first.from;
+    let mut removed = 0u64;
+    loop {
+        let result =
+            fixed_tree::remove_leaf_run::<RangeCodec<K>, S, _>(store, root, next_key, |range| {
+                if range.value != 1 {
+                    return Err(Error::Corrupt(
+                        "coverage tree contains a non-coverage value",
+                    ));
+                }
+                if !touches(merged.to, range.from) {
+                    return Ok(false);
+                }
+                merged.from = merged.from.min(range.from);
+                merged.to = merged.to.max(range.to);
+                Ok(true)
+            })?;
+        removed = removed
+            .checked_add(result.removed)
+            .ok_or_else(|| Error::arithmetic_overflow("coverage removed ranges"))?;
+        *record_count = record_count
+            .checked_sub(result.removed)
+            .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
+        let Some(following) = result.following else {
+            break;
+        };
+        if !touches(merged.to, following.leaf.from) {
+            break;
+        }
+        next_key = following.key;
+    }
+    if removed == 0 {
+        return Err(Error::Corrupt(
+            "coverage run did not remove its first range",
+        ));
+    }
+    insert::<K, S>(store, root, record_count, merged)?;
+    crate::work::range_coalesced(removed);
+    Ok((true, None))
+}

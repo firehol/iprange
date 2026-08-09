@@ -8,8 +8,14 @@ use crate::slotted_page::{self, Header};
 use super::{query, LeafQuery};
 use super::{
     Codec, Cursor, CursorDirection as Direction, CursorItem as Item, CursorSeek as Seek,
-    PageSource, SeekPosition,
+    PageSource, Path, SeekPosition, Store,
 };
+
+#[derive(Clone, Copy)]
+pub(super) enum Adjacent {
+    Before,
+    After,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct LeafLocation {
@@ -83,6 +89,74 @@ where
         }
         inspect(C::leaf_cell(page, &header, location.index)?)
     })
+}
+
+pub(super) fn adjacent_leaf<C: Codec, S: Store>(
+    store: &S,
+    path: &Path,
+    direction: Adjacent,
+) -> Result<Option<(C::Key, C::Leaf)>> {
+    let mut depth = path.depth;
+    while depth > 0 {
+        depth -= 1;
+        let frame = path.frame(depth);
+        let sibling = match direction {
+            Adjacent::Before => frame.index.checked_sub(1),
+            Adjacent::After => (frame.index + 1 < frame.item_count).then_some(frame.index + 1),
+        };
+        let Some(sibling) = sibling else {
+            continue;
+        };
+        let (mut page_number, mut expected_level) =
+            store.inspect_page(frame.page_number, |page| {
+                let header = super::page::parse::<C, _>(page, store.target_txn(), None)?;
+                if header.item_count != frame.item_count || header.level == 0 {
+                    return Err(Error::Corrupt(
+                        "B+tree path changed during adjacent-leaf traversal",
+                    ));
+                }
+                let child =
+                    super::page::branch_child::<C, _>(page, &header, sibling, store.page_limit())?;
+                Ok((child, header.level - 1))
+            })?;
+        loop {
+            let step = store.inspect_page(page_number, |page| {
+                let header =
+                    super::page::parse::<C, _>(page, store.target_txn(), Some(expected_level))?;
+                let index = match direction {
+                    Adjacent::Before => header.item_count - 1,
+                    Adjacent::After => 0,
+                };
+                let cell = super::page::codec_cell::<C, _>(page, &header, index)?;
+                if header.level == 0 {
+                    return Ok(AdjacentStep::Leaf((
+                        C::read_key(cell, 0)?,
+                        C::read_leaf(cell)?,
+                    )));
+                }
+                Ok(AdjacentStep::Branch(super::page::branch_child::<C, _>(
+                    page,
+                    &header,
+                    index,
+                    store.page_limit(),
+                )?))
+            })?;
+            match step {
+                AdjacentStep::Leaf(leaf) => return Ok(Some(leaf)),
+                AdjacentStep::Branch(child) => {
+                    page_number = child;
+                    expected_level -= 1;
+                    crate::work::tree_descent(1);
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+enum AdjacentStep<K, L> {
+    Leaf((K, L)),
+    Branch(u32),
 }
 
 struct Previous;

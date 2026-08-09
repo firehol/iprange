@@ -40,6 +40,13 @@ pub(crate) struct ExactFeedState {
     create: bool,
     member: MembershipHandle,
     input_records: u64,
+    coverage: FeedCoverageState,
+}
+
+#[derive(Debug)]
+enum FeedCoverageState {
+    V4(crate::range_mutation::UnionState<Ipv4Key>),
+    V6(crate::range_mutation::UnionState<Ipv6Key>),
 }
 
 impl LiveWriter {
@@ -89,6 +96,10 @@ impl LiveWriter {
             create,
             member,
             input_records: 0,
+            coverage: match self.core.base_info().address_family {
+                AddressFamily::Ipv4 => FeedCoverageState::V4(Default::default()),
+                AddressFamily::Ipv6 => FeedCoverageState::V6(Default::default()),
+            },
         })
     }
 
@@ -128,16 +139,14 @@ impl<'a> CreateFeed<'a> {
     where
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
-        self.state
-            .add_ranges(self.writer, AddressFamily::Ipv4, source)
+        self.state.add_ranges_v4(self.writer, source)
     }
 
     pub fn add_ranges_v6<S>(&mut self, source: &mut S) -> Result<()>
     where
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
-        self.state
-            .add_ranges(self.writer, AddressFamily::Ipv6, source)
+        self.state.add_ranges_v6(self.writer, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
@@ -158,16 +167,14 @@ impl<'a> ReplaceFeed<'a> {
     where
         S: RangeSource<AddressRange<Ipv4Key>>,
     {
-        self.state
-            .add_ranges(self.writer, AddressFamily::Ipv4, source)
+        self.state.add_ranges_v4(self.writer, source)
     }
 
     pub fn add_ranges_v6<S>(&mut self, source: &mut S) -> Result<()>
     where
         S: RangeSource<AddressRange<Ipv6Key>>,
     {
-        self.state
-            .add_ranges(self.writer, AddressFamily::Ipv6, source)
+        self.state.add_ranges_v6(self.writer, source)
     }
 
     pub fn add_ranges_v4_slice(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
@@ -184,29 +191,42 @@ impl<'a> ReplaceFeed<'a> {
 }
 
 impl ExactFeedState {
-    pub(crate) fn add_ranges<K, S>(
-        &mut self,
-        writer: &mut LiveWriter,
-        family: AddressFamily,
-        source: &mut S,
-    ) -> Result<()>
+    pub(crate) fn add_ranges_v4<S>(&mut self, writer: &mut LiveWriter, source: &mut S) -> Result<()>
     where
-        K: IpKey,
-        S: RangeSource<AddressRange<K>>,
+        S: RangeSource<AddressRange<Ipv4Key>>,
     {
-        self.require_family(writer, family)?;
-        writer.mutate(|store| {
-            drain_source(
-                source,
-                &self.cancellation,
-                &mut self.input_records,
-                |range| {
-                    require_ordered(range.from, range.to)?;
-                    store.add_feed_coverage(range.from, range.to)?;
-                    Ok(())
-                },
-            )
-        })
+        require_input_family(writer, AddressFamily::Ipv4)?;
+        let FeedCoverageState::V4(state) = &mut self.coverage else {
+            return Err(
+                writer.abort_after(Error::Corrupt("feed coverage state address family changed"))
+            );
+        };
+        add_ranges(
+            writer,
+            source,
+            &self.cancellation,
+            &mut self.input_records,
+            state,
+        )
+    }
+
+    pub(crate) fn add_ranges_v6<S>(&mut self, writer: &mut LiveWriter, source: &mut S) -> Result<()>
+    where
+        S: RangeSource<AddressRange<Ipv6Key>>,
+    {
+        require_input_family(writer, AddressFamily::Ipv6)?;
+        let FeedCoverageState::V6(state) = &mut self.coverage else {
+            return Err(
+                writer.abort_after(Error::Corrupt("feed coverage state address family changed"))
+            );
+        };
+        add_ranges(
+            writer,
+            source,
+            &self.cancellation,
+            &mut self.input_records,
+            state,
+        )
     }
 
     pub(crate) fn finish<'a>(self, writer: &'a mut LiveWriter) -> Result<FinishedWorkflow<'a>> {
@@ -246,13 +266,29 @@ impl ExactFeedState {
         ))
     }
 
-    fn require_family(&mut self, writer: &mut LiveWriter, family: AddressFamily) -> Result<()> {
-        require_input_family(writer, family)
-    }
-
     pub(crate) fn require_active(&self, writer: &LiveWriter) -> Result<()> {
         require_input_active(writer)
     }
+}
+
+fn add_ranges<K, S>(
+    writer: &mut LiveWriter,
+    source: &mut S,
+    cancellation: &CancellationToken,
+    input_records: &mut u64,
+    state: &mut crate::range_mutation::UnionState<K>,
+) -> Result<()>
+where
+    K: IpKey,
+    S: RangeSource<AddressRange<K>>,
+{
+    writer.mutate(|store| {
+        drain_source(source, cancellation, input_records, |range| {
+            require_ordered(range.from, range.to)?;
+            store.add_feed_coverage(range.from, range.to, state)?;
+            Ok(())
+        })
+    })
 }
 
 fn setup_feed(

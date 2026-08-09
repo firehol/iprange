@@ -10,7 +10,55 @@ use crate::scenarios::{
     close_reader, close_writer, count_cursor, count_points, immutable_snapshot, reader_work,
     require_committed, require_count, result, ScenarioResult,
 };
-use crate::source::AddressSource;
+use crate::source::{AddressSource, FeedShape, FeedShapeSource};
+
+pub(super) fn shaped_feed(
+    name: &'static str,
+    size: usize,
+    shape: FeedShape,
+    second: bool,
+) -> Result<ScenarioResult, String> {
+    let database = TestDatabase::new(name)?;
+    if second {
+        create_membership_file(&database)?;
+        create_shaped_feed(&database, "first", size, shape)?;
+    }
+    let (operation, measured) = measure::operation(|| -> Result<_, String> {
+        if !second {
+            create_membership_file(&database)?;
+        }
+        create_shaped_feed(
+            &database,
+            if second { "second" } else { "first" },
+            size,
+            shape,
+        )
+    });
+    let report = operation?;
+    let expected = shape.expected_intervals(size);
+    if report.input_record_count != size as u64
+        || report.input_normalized_interval_count != expected
+    {
+        return Err(format!("unexpected shaped-feed report: {report:?}"));
+    }
+    let measured_result = result(
+        name,
+        size,
+        usize::from(second),
+        size as u64,
+        &database,
+        measured,
+        database.main(),
+    )?;
+    let expected_feeds = if second { 2 } else { 1 };
+    if measured_result.range_records != expected || measured_result.feeds != expected_feeds {
+        return Err(format!(
+            "{name} produced {} ranges and {} feeds; expected {expected} and {expected_feeds}",
+            measured_result.range_records, measured_result.feeds
+        ));
+    }
+    Ok(measured_result)
+}
 
 pub(super) fn replace_feed(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
     let feeds = feeds.max(1);
@@ -261,6 +309,51 @@ fn populated(label: &str, ranges: usize, feeds: usize) -> Result<TestDatabase, S
     require_committed(transaction.commit().map_err(display)?)?;
     close_writer(&mut writer)?;
     Ok(database)
+}
+
+fn create_membership_file(database: &TestDatabase) -> Result<(), String> {
+    create_live(
+        database.main(),
+        AddressFamily::Ipv4,
+        ValueKind::Membership,
+        ValueTag::new(b"membership").ok_or_else(|| "invalid benchmark value tag".to_owned())?,
+        1,
+        &CancellationToken::new(),
+    )
+    .map_err(display)?;
+    Ok(())
+}
+
+fn create_shaped_feed(
+    database: &TestDatabase,
+    name: &str,
+    size: usize,
+    shape: FeedShape,
+) -> Result<iprange_livedb::WorkflowReport, String> {
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(database.main(), transaction_budget(size, 2), &cancellation)
+        .map_err(display)?;
+    let report = {
+        let mut workflow = writer
+            .begin_create_feed(FeedName::new(name).map_err(display)?, &cancellation)
+            .map_err(display)?;
+        workflow
+            .add_ranges_v4(&mut FeedShapeSource::new(size, shape)?)
+            .map_err(display)?;
+        let finished = workflow.finish_input().map_err(display)?;
+        let report = *finished.report();
+        match finished {
+            FinishedWorkflow::Changed(prepared) => {
+                require_committed(prepared.commit().map_err(display)?)?;
+            }
+            FinishedWorkflow::NoChange(report) => {
+                return Err(format!("feed creation changed nothing: {report:?}"));
+            }
+        }
+        report
+    };
+    close_writer(&mut writer)?;
+    Ok(report)
 }
 
 fn feed_name(index: usize) -> Result<FeedName, String> {

@@ -370,6 +370,52 @@ pub(crate) fn remove<D: PageEdit>(
     Ok(())
 }
 
+pub(crate) fn remove_fixed_range<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    start: usize,
+    count: usize,
+    cell_len: usize,
+) -> Result<Header> {
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| Error::corrupt("slotted-page removal range overflows"))?;
+    if count == 0 || end > header.item_count || count >= header.item_count || cell_len == 0 {
+        return Err(Error::Corrupt("slotted-page removal range is invalid"));
+    }
+    let mut physical_to_logical = [u16::MAX; MAX_SLOT_COUNT];
+    let positions = fixed_positions(page.view(), header, cell_len, &mut physical_to_logical)?;
+
+    let remaining = header.item_count - count;
+    let mut destination = PAGE_SIZE;
+    for physical in (0..positions.len()).rev() {
+        let logical = usize::from(positions[physical]);
+        if logical < start || logical >= end {
+            let output = if logical < start {
+                logical
+            } else {
+                logical - count
+            };
+            let source = header.upper + physical * cell_len;
+            destination -= cell_len;
+            page.copy_within(source, destination, cell_len)?;
+            page.put_u16(HEADER_SIZE + output * 2, destination as u16)?;
+        }
+    }
+    let lower = HEADER_SIZE + remaining * 2;
+    page.zero(lower, header.lower - lower)?;
+    page.zero(header.upper, destination - header.upper)?;
+    page.put_u16(page_header::ITEM_COUNT, remaining as u16)?;
+    page.put_u16(page_header::LOWER, lower as u16)?;
+    page.put_u16(page_header::UPPER, destination as u16)?;
+    Ok(Header {
+        item_count: remaining,
+        level: header.level,
+        lower,
+        upper: destination,
+    })
+}
+
 pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) -> Result<Header> {
     if keep == 0 || keep > header.item_count {
         return Err(Error::Corrupt("slotted-page truncation is invalid"));
@@ -435,21 +481,43 @@ pub(crate) fn truncate_fixed<D: PageEdit>(
     if keep == header.item_count {
         return Ok(*header);
     }
+    let mut physical_to_logical = [u16::MAX; MAX_SLOT_COUNT];
+    let positions = fixed_positions(page.view(), header, cell_len, &mut physical_to_logical)?;
+
+    let mut destination = PAGE_SIZE;
+    for physical in (0..positions.len()).rev() {
+        let logical = usize::from(positions[physical]);
+        if logical < keep {
+            let start = header.upper + physical * cell_len;
+            destination -= cell_len;
+            page.copy_within(start, destination, cell_len)?;
+            page.put_u16(HEADER_SIZE + logical * 2, destination as u16)?;
+        }
+    }
+
+    finish_truncate(page, header, keep, destination)
+}
+
+fn fixed_positions<'a, S: ByteSource>(
+    page: S,
+    header: &Header,
+    cell_len: usize,
+    storage: &'a mut [u16; MAX_SLOT_COUNT],
+) -> Result<&'a [u16]> {
     let payload = header
         .item_count
         .checked_mul(cell_len)
         .and_then(|bytes| header.upper.checked_add(bytes))
         .ok_or_else(|| Error::corrupt("fixed slotted-page payload overflows"))?;
-    if payload != PAGE_SIZE {
+    if cell_len == 0 || payload != PAGE_SIZE {
         return Err(Error::Corrupt("fixed slotted-page payload is not packed"));
     }
-    let mut physical_to_logical = [u16::MAX; MAX_SLOT_COUNT];
-    let positions = physical_to_logical
+    let positions = storage
         .get_mut(..header.item_count)
         .ok_or_else(|| Error::corrupt("slotted-page slot count is invalid"))?;
     for logical in 0..header.item_count {
         crate::work::slot_scan_step(1);
-        let start = slot_start(page.view(), header, logical)?;
+        let start = slot_start(page, header, logical)?;
         let offset = start
             .checked_sub(header.upper)
             .ok_or_else(|| Error::corrupt("fixed slotted-page record is outside payload"))?;
@@ -468,19 +536,7 @@ pub(crate) fn truncate_fixed<D: PageEdit>(
     if positions.contains(&u16::MAX) {
         return Err(Error::Corrupt("fixed slotted-page payload has a gap"));
     }
-
-    let mut destination = PAGE_SIZE;
-    for physical in (0..positions.len()).rev() {
-        let logical = usize::from(positions[physical]);
-        if logical < keep {
-            let start = header.upper + physical * cell_len;
-            destination -= cell_len;
-            page.copy_within(start, destination, cell_len)?;
-            page.put_u16(HEADER_SIZE + logical * 2, destination as u16)?;
-        }
-    }
-
-    finish_truncate(page, header, keep, destination)
+    Ok(positions)
 }
 
 fn finish_truncate<D: PageEdit>(

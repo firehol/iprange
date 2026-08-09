@@ -108,8 +108,13 @@ impl<'a> WriterEdit<'a> {
             .apply_membership_v6(from, to, membership, operation)
     }
 
-    pub(crate) fn add_feed_coverage<K: IpKey>(&mut self, from: K, to: K) -> Result<()> {
-        self.store.add_feed_coverage(from, to)
+    pub(crate) fn add_feed_coverage<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        state: &mut crate::range_mutation::UnionState<K>,
+    ) -> Result<()> {
+        self.store.add_feed_coverage(from, to, state)
     }
 
     pub(crate) fn merge_feed(

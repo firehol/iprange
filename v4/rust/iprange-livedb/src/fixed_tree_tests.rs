@@ -62,8 +62,8 @@ impl LocalGap<U32Codec> for AcceptGap {
         Ok(LocalPrevious::Accept)
     }
 
-    fn next<B: ByteSource>(&mut self, _cell: Option<B>) -> Result<bool> {
-        Ok(true)
+    fn next<B: ByteSource>(&mut self, _cell: Option<B>) -> Result<LocalNext<Self::Reject>> {
+        Ok(LocalNext::Accept)
     }
 }
 

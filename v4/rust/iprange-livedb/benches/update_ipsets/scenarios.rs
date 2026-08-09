@@ -10,6 +10,7 @@ use iprange_livedb::{
 
 use crate::measure::{self, FileSize, Measurement};
 use crate::model::{snapshot_budget, TestDatabase};
+use crate::source::FeedShape;
 
 #[path = "scenarios/direct.rs"]
 mod direct;
@@ -40,6 +41,48 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "nested-overwrite" => direct::nested(size),
         "retention-refresh" => direct::retention(size),
         "feed-replace" => membership::replace_feed(size, auxiliary),
+        "feed-first-ascending" => membership::shaped_feed(
+            "feed-first-ascending",
+            size,
+            FeedShape::AscendingDisjoint,
+            false,
+        ),
+        "feed-second-ascending" => membership::shaped_feed(
+            "feed-second-ascending",
+            size,
+            FeedShape::AscendingDisjoint,
+            true,
+        ),
+        "feed-first-descending" => membership::shaped_feed(
+            "feed-first-descending",
+            size,
+            FeedShape::DescendingDisjoint,
+            false,
+        ),
+        "feed-second-descending" => membership::shaped_feed(
+            "feed-second-descending",
+            size,
+            FeedShape::DescendingDisjoint,
+            true,
+        ),
+        "feed-first-random" => {
+            membership::shaped_feed("feed-first-random", size, FeedShape::RandomDisjoint, false)
+        }
+        "feed-second-random" => {
+            membership::shaped_feed("feed-second-random", size, FeedShape::RandomDisjoint, true)
+        }
+        "feed-first-overlap" => membership::shaped_feed(
+            "feed-first-overlap",
+            size,
+            FeedShape::RandomOverlapChain,
+            false,
+        ),
+        "feed-second-overlap" => membership::shaped_feed(
+            "feed-second-overlap",
+            size,
+            FeedShape::RandomOverlapChain,
+            true,
+        ),
         "membership-import" => membership::import(size, auxiliary),
         "live-membership-lookup" => membership::live_lookup(size, auxiliary),
         "immutable-membership-lookup" => membership::immutable_lookup(size, auxiliary),

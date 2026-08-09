@@ -11,7 +11,7 @@ use crate::range_cursor::DirectRange;
 use crate::source::SliceSource;
 use crate::workflow::{AddressRange, WorkflowKind, WorkflowReport};
 use crate::{
-    AbortResult, AddressFamily, CancellationToken, CommitResult, FeedName, FeedRef, LiveWriter,
+    AbortResult, CancellationToken, CommitResult, FeedName, FeedRef, LiveWriter,
     MembershipOperation, MembershipRef, ReclaimResult, TransactionBudget,
 };
 
@@ -340,9 +340,7 @@ impl Writer {
     pub fn add_coverage_v4(&mut self, ranges: &[AddressRange<Ipv4Key>]) -> Result<()> {
         let mut source = SliceSource::new(ranges);
         match &mut self.operation {
-            Operation::ExactFeed(state) => {
-                state.add_ranges(&mut self.inner, AddressFamily::Ipv4, &mut source)
-            }
+            Operation::ExactFeed(state) => state.add_ranges_v4(&mut self.inner, &mut source),
             Operation::ExactDirect {
                 state,
                 retention_value: Some(value),
@@ -356,9 +354,7 @@ impl Writer {
     pub fn add_coverage_v6(&mut self, ranges: &[AddressRange<Ipv6Key>]) -> Result<()> {
         let mut source = SliceSource::new(ranges);
         match &mut self.operation {
-            Operation::ExactFeed(state) => {
-                state.add_ranges(&mut self.inner, AddressFamily::Ipv6, &mut source)
-            }
+            Operation::ExactFeed(state) => state.add_ranges_v6(&mut self.inner, &mut source),
             Operation::ExactDirect {
                 state,
                 retention_value: Some(value),

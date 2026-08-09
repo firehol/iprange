@@ -174,6 +174,40 @@ fn edits_preserve_logical_order_with_physically_unordered_records() {
 }
 
 #[test]
+fn fixed_run_removal_compacts_unordered_payload_once() {
+    for (start, count) in [(0, 3), (3, 4), (7, 3)] {
+        let mut page = fixed_unordered_page();
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        let output = remove_fixed_range(&mut page, &header, start, count, 4).unwrap();
+        let expected: Vec<u32> = (0..10)
+            .filter(|value| *value < start as u32 || *value >= (start + count) as u32)
+            .collect();
+        let actual: Vec<u32> = (0..output.item_count)
+            .map(|index| u32_le(cell(&page, &output, index, 4).unwrap(), 0))
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(page[output.lower..output.upper]
+            .iter()
+            .all(|byte| *byte == 0));
+        assert!(inspect_layout(&page, &output, CellLayout::Fixed(4)).is_some());
+    }
+}
+
+fn fixed_unordered_page() -> [u8; PAGE_SIZE] {
+    let mut page = [0; PAGE_SIZE];
+    let mut builder = Builder::new(&mut page, 2, 7, 0, 4);
+    for value in [0_u32, 3, 6, 9] {
+        builder.push(&value.to_le_bytes()).unwrap();
+    }
+    builder.finish().unwrap();
+    for value in [1_u32, 2, 4, 5, 7, 8] {
+        let header = parse(&page, 7, 2, 4, Some(0)).unwrap();
+        assert!(insert(&mut page, &header, value as usize, &value.to_le_bytes()).unwrap());
+    }
+    page
+}
+
+#[test]
 fn local_edit_avoids_structural_scan_while_truncate_validates_offsets() {
     let mut page = [0; PAGE_SIZE];
     let mut builder = Builder::new(&mut page, 2, 7, 0, 4);

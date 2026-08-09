@@ -171,6 +171,14 @@ inputs, nested arrival-order overwrites, exact feed inputs with 421 feeds,
 membership imports with 421 feeds, and snapshot ranges. It also includes one
 million real live and immutable direct lookups, membership lookups, direct
 cursor outputs, and named-feed cursor outputs.
+For feed normalization, additionally measure one million ascending disjoint,
+descending disjoint, deterministic random disjoint, and deterministic random
+overlap-chain inputs both as the first feed in a new file and as a second feed
+in that same file. Verify the exact final range count and feed count, enumerate
+the result, and run explicit validation outside the timer. The first-feed timer
+includes empty-file creation through committed close; the second-feed timer
+excludes construction of the already committed first feed and includes reopen
+through committed close for the second.
 Reader evidence must name live and immutable readers separately and time at
 least one million actual operations. Keep database construction, compact
 snapshot construction, open, close, and explicit validation outside the timed

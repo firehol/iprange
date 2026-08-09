@@ -89,6 +89,78 @@ pub(crate) struct AddressSource {
     batch: [AddressRange<Ipv4Key>; BATCH_CAPACITY],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FeedShape {
+    AscendingDisjoint,
+    DescendingDisjoint,
+    RandomDisjoint,
+    RandomOverlapChain,
+}
+
+impl FeedShape {
+    pub(crate) const fn expected_intervals(self, count: usize) -> u64 {
+        match self {
+            Self::RandomOverlapChain => 1,
+            Self::AscendingDisjoint | Self::DescendingDisjoint | Self::RandomDisjoint => {
+                count as u64
+            }
+        }
+    }
+}
+
+pub(crate) struct FeedShapeSource {
+    count: usize,
+    next: usize,
+    shape: FeedShape,
+    permutation: Permutation,
+    batch: [AddressRange<Ipv4Key>; BATCH_CAPACITY],
+}
+
+impl FeedShapeSource {
+    pub(crate) fn new(count: usize, shape: FeedShape) -> Result<Self, String> {
+        require_address_space(count, 0)?;
+        Ok(Self {
+            count,
+            next: 0,
+            shape,
+            permutation: Permutation::new(count, DISPERSED_SEED),
+            batch: [EMPTY_ADDRESS; BATCH_CAPACITY],
+        })
+    }
+}
+
+impl RangeSource<AddressRange<Ipv4Key>> for FeedShapeSource {
+    fn next_batch(&mut self) -> iprange_livedb::Result<Option<&[AddressRange<Ipv4Key>]>> {
+        if self.next == self.count {
+            return Ok(None);
+        }
+        let length = (self.count - self.next).min(BATCH_CAPACITY);
+        for offset in 0..length {
+            let ordinal = self.next + offset;
+            let index = match self.shape {
+                FeedShape::AscendingDisjoint => ordinal,
+                FeedShape::DescendingDisjoint => self.count - ordinal - 1,
+                FeedShape::RandomDisjoint | FeedShape::RandomOverlapChain => {
+                    self.permutation.at(ordinal)
+                }
+            };
+            let from = index as u32 * 4;
+            let to = match self.shape {
+                FeedShape::RandomOverlapChain => from + 7,
+                FeedShape::AscendingDisjoint
+                | FeedShape::DescendingDisjoint
+                | FeedShape::RandomDisjoint => from + 1,
+            };
+            self.batch[offset] = AddressRange {
+                from: Ipv4Key(from),
+                to: Ipv4Key(to),
+            };
+        }
+        self.next += length;
+        Ok(Some(&self.batch[..length]))
+    }
+}
+
 impl AddressSource {
     pub(crate) fn new(count: usize, phase: u32) -> Result<Self, String> {
         require_address_space(count, phase)?;

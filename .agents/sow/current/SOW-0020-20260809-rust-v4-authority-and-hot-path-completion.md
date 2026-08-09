@@ -2,12 +2,12 @@
 
 ## Status
 
-Status: completed
+Status: in-progress
 
-Sub-state: the superseded SOW-0016 remains closed without a successful-completion
-claim. This focused SOW completed its iterative repair after the exact final
-audit found no issue and the repaired source passed the full authorized native
-matrix. Rust acceptance and any Go work remain user decisions.
+Sub-state: regression repair. New feed-ingestion shape benchmarks disproved the
+completed claim that no avoidable writer hot-path work remained. The
+superseded SOW-0016 remains closed; Rust acceptance and all Go work remain
+blocked until this SOW repeats its audit and closes cleanly again.
 
 ## Requirements
 
@@ -1277,3 +1277,396 @@ work is represented by SOW-0017 and SOW-0018.
 ## Regression Log
 
 None yet.
+
+## Regression - 2026-08-09
+
+### What broke
+
+The final audit's workload matrix did not distinguish input ordering or an
+overlap-heavy union that collapses to far fewer output intervals. A later
+public-SDK benchmark of one million ranges found two missed classes of
+avoidable work:
+
+- sorted and reverse-sorted disjoint feed input still performs a root-to-leaf
+  location for each record instead of reusing the known destination edge; and
+- overlap-heavy feed input repeatedly locates, deletes, and reinserts covered
+  records instead of consuming one affected interval run through one coherent
+  low-level splice.
+
+This is a regression of the SOW's acceptance claim, not a change to the v4
+format or public semantics.
+
+### Evidence
+
+Exact source and environment:
+
+- commit `1a921b0744311a8b043dc199db4cd4773dc805ea`;
+- Rust 1.91.1 release build, Linux, one pinned Intel i9-12900K performance core;
+- five measured public-SDK runs after warmup;
+- each first-feed timer includes empty live creation, writer open, feed create,
+  one million inputs, finish, commit, and close;
+- each second-feed timer reopens the populated file and creates the same input
+  as a second feed; result checks and explicit validation are outside timing.
+
+| One-million-range input | First feed median | Second feed median | Final ranges |
+| --- | ---: | ---: | ---: |
+| ascending disjoint | 0.182 s | 0.323 s | 1,000,000 |
+| descending disjoint | 0.272 s | 0.413 s | 1,000,000 |
+| deterministic random disjoint | 0.403 s | 0.525 s | 1,000,000 |
+| deterministic random 50%-overlap chain | 1.862 s | 1.717 s | 1 |
+
+The overlap shape is an explicitly defined synthetic case: the same disjoint
+starts are deterministically permuted, each interval spans its own point and
+the next start, and the complete union is one interval. It is not claimed to
+represent every possible random-overlap distribution.
+
+Timed-stack frame-pointer profiles show:
+
+- random disjoint: `fixed_tree::page::lower_bound_by` is 47.73% first-feed and
+  42.50% second-feed; this is primarily the necessary arbitrary-location path;
+- overlap chain: lower-bound search is 26.28%, slotted-page removal 12.48%,
+  repeated page inspection about 17%, and repeated cursor/delete lookup about
+  8%; and
+- sorted input: lower-bound search, page inspection, and private-path selection
+  remain dominant even though every next input is known to be at the same tree
+  edge.
+
+The compiled call path is:
+
+- `live_writer/feed_workflow.rs`: each input calls the draft coverage owner;
+- `draft_store/feed_merge.rs`: coverage delegates to the authoritative private
+  range mutation;
+- `range_mutation.rs`: the generic replacement repeatedly finds predecessor and
+  following records, deletes them separately, then performs new predecessor/
+  successor searches while coalescing; and
+- `fixed_tree/insert.rs`: the ordinary insertion path locates a root-to-leaf
+  path even when the operation has already established monotonic edge order.
+
+### Why previous validation missed it
+
+- The permanent benchmark covered broad workflow types but not the four input
+  order/overlap shapes on both an empty and already populated membership file.
+- The final profile classified lower-bound and selected-page work as required
+  without stress-testing whether the caller's operation had already proved an
+  edge path or a contiguous affected run.
+- Necessary-work counters covered existing benchmark shapes and therefore did
+  not reject these repeated searches.
+
+### Regression pre-implementation gate
+
+Status: ready
+
+Problem / root-cause model:
+
+- Feed input normalization correctly uses the one low-level mapped range
+  engine, but it invokes the most general assignment operation for a
+  value-free coverage union.
+- The general operation preserves arbitrary direct arrival-order overwrite
+  semantics, which feed coverage does not need: union is idempotent and
+  commutative. Reusing that path causes repeated search/delete/coalescing work
+  when one input overlaps many already-normalized intervals.
+- The low-level engine discards useful bounded operation state after each
+  monotonic insertion, forcing a new tree descent for the next known-edge key.
+
+Affected contracts and surfaces:
+
+- Internal coverage normalization, range mutation, fixed-tree path/edit
+  primitives, test-only necessary-work accounting, the public update-ipsets
+  benchmark, Rust tests, the project Rust-v4 skill, README evidence, and this
+  SOW.
+- Exact v4 bytes, public Rust/C APIs, direct arrival-order semantics,
+  membership ownership, COW/durability, mmap-only storage, memory/resource
+  bounds, validation/recovery, and platform boundaries are unchanged.
+
+Existing patterns to reuse:
+
+- `fixed_tree` selected-path mutation and consuming cursor machinery;
+- `range_mutation` as the sole authority for canonical range changes;
+- `DraftStore` operation-private mapped state and test-only `work` counters;
+- existing feed workflow property tests and public-SDK benchmark measurement;
+- the shared ordered merge only at `FinishInput`, after normalization is
+  complete.
+
+Risk and blast radius:
+
+- A run splice can corrupt branch fences, record counts, membership refcounts,
+  or COW retirement if it becomes a second tree mutation implementation.
+- An edge hint can become stale after split, remap, order reversal, or fallback.
+  It must contain no borrowed mapped reference, update with tree edits, and
+  invalidate before the general path is used.
+- Optimizing union must not leak into direct arrival-order overwrite, change
+  input/error/cancellation atomicity, add a temporary file, allocate per range,
+  or stage a page outside its final mapping.
+- The changed low-level operations affect every high-level caller that reuses
+  them, so property, conformance, resource, sanitizer, and native proof remain
+  required before closure.
+
+Sensitive data handling plan:
+
+- Benchmarks and tests use deterministic synthetic ranges and generic feed
+  names only. Durable artifacts will contain no operational, customer,
+  credential, personal, or identifying network data.
+
+Approved minimal-complete implementation plan:
+
+1. Add the eight permanent one-million-input benchmark cases with exact shape,
+   timer, result, allocation, file-size, descriptor, and residue reporting.
+2. Add one coverage-union entry point inside the authoritative low-level range
+   engine. It selects the affected path once, consumes adjacent/overlapping
+   records sequentially, and emits the one canonical replacement while reusing
+   existing COW edit/retirement ownership. The public feed workflow remains a
+   thin caller.
+3. Add bounded low-level ascending/descending edge state for coverage input.
+   Reuse the current edge path while order and tree edits preserve it; on any
+   order change, split/remap invalidation, or uncertain state, discard the hint
+   and use the proven general path.
+4. Extend test-only necessary-work assertions to reject repeated tree descent,
+   delete lookup, and coalescing lookup on the shapes where they are provably
+   unnecessary. The counters remain absent from release binaries.
+5. Run focused semantic/property tests and profiles after each slice, then the
+   full local and authorized native gate matrix.
+6. Repeat the exact 11-section audit. Any remaining avoidable material work or
+   regression keeps SOW-0020 in progress and starts another repair iteration.
+
+Validation plan:
+
+- Exact comparison against a simple interval-union model for ascending,
+  descending, random, duplicate, adjacent, nested, partially overlapping,
+  full-address-space, cross-leaf, split, remap, and mixed-order transitions.
+- First-feed and second-feed result enumeration plus explicit validation for
+  all four benchmark shapes.
+- Necessary-work, allocation, mmap source/runtime, source-graph, architecture,
+  full workspace, Clippy, formatting, rustdoc, MSRV, Miri, C ABI, sanitizer,
+  Valgrind, conformance, crash/durability, and native platform gates required by
+  the project skill.
+- Five-run pinned measurements and timed-stack profiles; the overlap case must
+  meet the existing approximately-one-second target or remain an explicit
+  ranked finding requiring user decision.
+
+Artifact impact plan:
+
+- `AGENTS.md`: no expected change; its existing philosophy already prohibits
+  wasted hot-path work and duplicate physical authority.
+- Runtime project skill: add these order/overlap feed shapes to the permanent
+  candidate-complete performance matrix.
+- Specs: no expected semantic or byte change; update only if implementation
+  uncovers a missing normative requirement.
+- Rust README: replace performance evidence with the repeated final results.
+- End-user/operator skills: none exist.
+- SOW lifecycle: this file remains the sole current SOW until the repeated
+  final audit is clean.
+
+Open decisions:
+
+- None. The user approved both repairs: the authoritative coverage-union splice
+  and bounded monotonic edge-path reuse, with the general path as the semantic
+  fallback. Any newly discovered public semantic, format, durability, recovery,
+  or platform choice remains a blocking user decision.
+
+### Regression implementation
+
+- Feed ingestion now calls one coverage-union operation in the private range
+  engine. Direct-value arrival-order assignment remains separate because its
+  overwrite semantics are different.
+- Ascending and descending input retain one bounded tree-edge position. A
+  monotonic insert descends again only when a split changes the edge; an order
+  reversal or uncertain position discards the hint and uses the general path.
+- Random input selects one leaf and retains that selection through local gap
+  insertion or overlap handling. When a predecessor or successor is outside
+  the selected leaf, one shared path-based adjacent-leaf traversal obtains it;
+  the operation does not restart at the root.
+- An overlap run is removed a leaf at a time with one lookup per affected leaf,
+  then one canonical replacement is inserted. Local one- and two-record
+  overlaps use an in-leaf splice. Both reuse the existing fixed-tree COW,
+  branch-fence, page-retirement, allocator, and slotted-page authorities.
+- A final necessary-work audit found two extra searches at cross-leaf gaps: a
+  predecessor check could be followed by a second root search for the
+  successor, and a proven gap could then enter generic assignment and search a
+  third time. The selected path now supplies both adjacent checks and the
+  selected insertion target. The permanent random-order bound passes.
+- Wrong-address-family input still aborts the workflow atomically. The new
+  optimization state contains no mapped borrow and cannot survive fallback,
+  split refresh, finish, abort, or writer close incorrectly.
+
+Permanent necessary-work assertions require:
+
+- monotonic ingestion tree lookups equal page splits;
+- random ingestion performs at most one lookup per input plus split refreshes;
+- a 2,000-record overlap run uses one lookup per affected leaf and fewer than
+  2,200 cell probes; and
+- the complete union matches a scalar reference after every operation.
+
+## Regression Pre-Native Candidate Audit - 2026-08-09
+
+### TL;DR
+
+The repeated local audit is clean. All eight one-million-range feed cases are
+below one second, including a random overlap chain that fell from about 1.8
+seconds to about 0.3 seconds. No duplicate physical-format implementation or
+avoidable material hot-path work remains in the measured candidate.
+
+This is not the final completion claim. SOW-0020 remains in progress until the
+exact pushed commit passes native Windows, macOS, and FreeBSD testing and the
+same audit is repeated on that result.
+
+### Verdict
+
+Local pass; native proof pending. The candidate contains no measured implicit
+validation, pre-commit checksum work, repeated root search after a selected
+path, per-record allocation, temporary sorting file, persistent-content I/O,
+complete page image outside the map, or duplicated persistent mutation.
+
+This is an evidence-based result, not proof that future testing cannot expose
+a defect. Any native or repeated-audit finding keeps the SOW in progress.
+
+### Current performance
+
+Five Linux runs pinned to one Intel i9-12900K performance core produced these
+medians and observed ranges. The first-feed timer includes exact empty creation
+through commit and close. The second-feed timer creates the first feed outside
+the timer, then includes reopen through commit and close for the second feed.
+Result enumeration and explicit validation are outside both timers.
+
+| One-million-range input | First feed median | First range | Second feed median | Second range | Final ranges |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ascending disjoint | 0.159 s | 0.128-0.220 s | 0.265 s | 0.218-0.319 s | 1,000,000 |
+| descending disjoint | 0.261 s | 0.192-0.324 s | 0.341 s | 0.311-0.423 s | 1,000,000 |
+| deterministic random disjoint | 0.356 s | 0.345-0.679 s | 0.474 s | 0.460-0.766 s | 1,000,000 |
+| deterministic random overlap chain | 0.298 s | 0.282-0.392 s | 0.342 s | 0.285-0.411 s | 1 |
+
+First-feed cases use 39 fixed setup allocations totaling 1,096-1,148 bytes;
+second-feed cases use 21 totaling 450-466 bytes. File descriptors stay at four,
+private residue is zero, and result counts plus explicit validation pass. The
+overlap chain is one deterministic half-overlap stress shape, not a claim about
+every possible random distribution.
+
+### Ranked findings
+
+None in the local candidate. Native execution and the post-native repeated
+audit remain acceptance gates, not waived findings.
+
+### The two-level architecture
+
+- Public feed workflow code owns typed input, address-family selection,
+  cancellation, report sequencing, commit/abort state, and one opaque union
+  state. It does not inspect mappings, roots, pages, slots, membership IDs,
+  dictionary state, allocation, retirement, or checksums.
+- `DraftStore::add_feed_coverage` is the logical bridge into the private range
+  engine. `range_mutation::coverage` owns union semantics and bounded order
+  state. `fixed_tree` owns selected paths, adjacent-leaf traversal, local/run
+  edits, split/fence propagation, and COW page lifecycle. `slotted_page` owns
+  mapped record movement.
+- Direct arrival-order assignment and coverage union are distinct semantic
+  entry points over the same physical engine. The split avoids pretending that
+  a value-free commutative union needs arbitrary-value overwrite logic; it does
+  not create a second tree or page implementation.
+- Existing architecture and complete source-graph gates continue to reject a
+  high-level physical bypass or an unwired production file.
+
+### Physical-format authority
+
+No format bytes or public contract changed. The new union path calls the same
+canonical range codec, fixed-tree parser/query/edit/split operations, mapped
+page editor, allocator, retirement owner, checksum sealing, and commit owner as
+all other healthy mutations. Adjacent traversal and run removal are generic
+fixed-tree primitives, each implemented once. Validation and recovery remain
+explicit untrusted-input policies over the existing codecs.
+
+### Where production lines are
+
+Using the same production-only definition for candidate and baseline
+(`iprange-livedb/src` plus `iprange-capi/src`, excluding tests), the candidate
+contains 77,328 physical lines and 70,115 parsed code lines in 285 files and
+4,261 functions. The exact pre-regression baseline contains 76,264 physical
+lines, 69,121 code lines, 282 files, and 4,222 functions. The repair therefore
+adds 1,064 physical lines, 994 code lines, three logically separated files, and
+39 functions, including the new benchmark-independent engine and its shared
+primitives.
+
+Functions average 13.7 code lines and cyclomatic complexity 3.4. The largest
+function remains the existing cohesive 191-line recovery attempt. New high
+signals are the 83-line local-run splice, 90-line edge decision, and 72-line
+multi-leaf union, whose branches enforce one stateful physical decision each;
+splitting them would transfer the same state through helper chains without
+removing a responsibility or hot-path branch.
+
+Exact clone detection at 15 lines/100 tokens reports 12 small shapes, 218 lines,
+and 0.282% duplication. The exact baseline reports the same 12 shapes and 220
+lines. Manual inspection classifies them as frozen C report adapters,
+maintenance/public typestate forms, publication error conversion, and distinct
+recovery policy construction. None duplicates layout, tree traversal,
+mutation, allocation, retirement, sealing, or page construction.
+
+Local Codacy Analysis CLI reports 386 Lizard signals versus 375 on the exact
+baseline. The delta consists of the new cohesive tree/union decisions, moved
+existing functions, and three files crossing directional size thresholds.
+Semgrep's only changed-source warning is the reviewed `MaybeUninit` path-prefix
+slice: it replaces zero-initialization of 31 complete frames and exposes only
+the prefix initialized by the checked `push`. Four Semgrep parser warnings are
+tool limitations on stable Rust generic-associated-type syntax. No actionable
+security, dead-code, duplicate-authority, or maintainability defect was found.
+
+### Retention
+
+Retention is unchanged. It remains a special timestamp policy over the shared
+ordered merge: existing coverage keeps its original timestamp, new coverage
+gets the refresh timestamp, and missing coverage is removed. It does not use
+the value-free coverage-union path and no caller manages timestamp values or
+membership combinations directly.
+
+### Recovery
+
+Recovery is unchanged. It remains explicit, isolated, best-effort-capable, and
+separate from healthy reads/writes because damaged mappings require bounded
+fault containment and tolerant traversal. The optimization adds no recovery
+format, temporary sorting path, I/O fallback, or physical codec.
+
+### Implementation result
+
+Against the exact baseline, median overlap-chain construction improved from
+1.862 to 0.298 seconds for the first feed and 1.717 to 0.342 seconds for the
+second. Ascending improved from 0.182/0.323 to 0.159/0.265 seconds; random
+disjoint from 0.403/0.525 to 0.356/0.474 seconds. Sorted first-feed logical
+size fell from about 28.42 MB to 14.24 MB; the second-feed file fell from about
+42.64 MB to 28.46 MB.
+
+Exact timed-stack frame-pointer profiles show required work only:
+
+- monotonic input: edge insertion, fixed-page edit/split, fence propagation,
+  and final merge/output;
+- random input: one arbitrary-location lower-bound/selected-page path per
+  input, plus final merge/refcount work for a second feed; and
+- overlap input: one arbitrary location per input, bounded local or per-leaf
+  run splice, and final merge/refcount work.
+
+Commit-time checksum sealing is below one percent and absent from per-input
+page edits. Explicit validation is outside the timer. No material sample is an
+extra source/comparison pass, repeated root lookup after selection, per-record
+allocation, full-page reconstruction, cache layer, persistent-content I/O, or
+temporary sorting.
+
+### Acceptance gates
+
+- Both complete local workspace matrices (`all-features` and
+  `no-default-features`, all targets): pass; 368 active engine tests plus all
+  integration, C ABI, conformance, crash, recovery, snapshot, and workflow
+  suites pass.
+- Warnings-denied Clippy and rustdoc, formatting, and `git diff --check`: pass.
+- Architecture, mmap-only source, syscall-traced mmap runtime, and 382-source
+  Linux/Windows/macOS/FreeBSD compiler graph: pass.
+- Rust 1.74.1 complete workspace/all-features/all-targets matrix: pass.
+- Ten s390x Miri authoritative big-endian codec vectors: pass.
+- AddressSanitizer with the exact instrumented adjacent worker: 368 active
+  engine tests and 15 C-boundary tests pass with leak detection.
+- Raw-fork Valgrind with the matching preserved glibc: zero memory errors and
+  zero definite/indirect leaks.
+- Release counter absence by exact symbol/string inspection: pass.
+- Smoke and scale benchmark matrices, eight five-run feed measurements, result
+  enumeration, explicit validation, fixed allocation, stable descriptor, zero
+  residue, and timed-stack frame-pointer profiles: pass.
+- Production inventory, exact-clone comparison, complexity review, local
+  Codacy Lizard/Semgrep review, same-failure search, and manual physical-owner
+  audit: pass with no actionable finding.
+- Native Windows GNU, macOS ARM64, and FreeBSD 14 execution of the exact pushed
+  candidate: pending. SOW completion is prohibited until these pass and this
+  11-section audit is repeated.
