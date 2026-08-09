@@ -1,6 +1,5 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::contract::{u16_le, ValueTag, PAGE_SIZE};
@@ -25,13 +24,8 @@ struct Paths {
 
 impl Paths {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!(
-            "iprange-v4-membership-recovery-{label}-{}-{unique}",
-            std::process::id()
+        let base = crate::test_support_tests::unique_path(&format!(
+            "iprange-v4-membership-recovery-{label}"
         ));
         let scratch = base.with_extension("scratch");
         fs::create_dir(&scratch).unwrap();

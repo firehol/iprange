@@ -1,6 +1,5 @@
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
@@ -17,14 +16,8 @@ struct TestDirectory {
 
 impl TestDirectory {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "iprange-v4-public-recovery-{label}-{}-{unique}",
-            std::process::id()
-        ));
+        let path =
+            crate::test_support_tests::unique_path(&format!("iprange-v4-public-recovery-{label}"));
         fs::create_dir(&path).unwrap();
         Self { path }
     }

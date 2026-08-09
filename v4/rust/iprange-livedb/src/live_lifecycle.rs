@@ -76,7 +76,6 @@ pub struct LiveTransitionResult {
 #[cfg(all(test, target_os = "freebsd"))]
 mod freebsd_tests {
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::contract::{AddressFamily, ValueKind, ValueTag};
     use crate::error::ErrorCode;
@@ -87,14 +86,7 @@ mod freebsd_tests {
 
     #[test]
     fn result_bearing_live_resolvers_reject_before_path_access() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "iprange-v4-freebsd-live-resolvers-{}-{unique}",
-            std::process::id()
-        ));
+        let directory = crate::test_support_tests::unique_path("iprange-v4-freebsd-live-resolvers");
         fs::create_dir(&directory).unwrap();
         let main = directory.join("main.v4");
         let basename = LocalBasename::from_path(&main).unwrap();

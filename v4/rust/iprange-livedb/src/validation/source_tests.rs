@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::publication::{CleanupState, CoordinationCleanup};
@@ -14,14 +13,7 @@ struct TestFile {
 
 impl TestFile {
     fn new() -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let main = std::env::temp_dir().join(format!(
-            "iprange-v4-validation-cleanup-{}-{unique}",
-            std::process::id()
-        ));
+        let main = crate::test_support_tests::unique_path("iprange-v4-validation-cleanup");
         let saved_sidecar = main.with_extension("readers.saved");
         Self {
             main,

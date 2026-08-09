@@ -3,7 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use sha2::{Digest, Sha512};
 
@@ -212,14 +212,7 @@ struct TempDirectory {
 
 impl TempDirectory {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "iprange-v4-prepared-output-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = crate::test_support_tests::unique_path("iprange-v4-prepared-output");
         fs::create_dir(&path).unwrap();
         Self { path }
     }

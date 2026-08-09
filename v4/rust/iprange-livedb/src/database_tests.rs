@@ -6,19 +6,13 @@ use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
 use crate::error::Error;
 use crate::path;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestPath(std::path::PathBuf);
 
 impl TestPath {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        Self(std::env::temp_dir().join(format!(
-            "iprange-v4-{label}-{}-{unique}",
-            std::process::id()
+        Self(crate::test_support_tests::unique_path(&format!(
+            "iprange-v4-{label}"
         )))
     }
 }

@@ -4,7 +4,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bootstrap::{self, OpenMode};
 use crate::cancellation::CancellationToken;
@@ -430,15 +429,11 @@ pub(super) struct TempDirectory {
 
 impl TempDirectory {
     pub(super) fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "iprange-v4-publication-crash-{}-{}-{unique}",
-            std::process::id(),
+        let prefix = format!(
+            "iprange-v4-publication-crash-{}",
             label.rsplit('.').next().unwrap()
-        ));
+        );
+        let path = crate::test_support_tests::unique_path(&prefix);
         fs::create_dir(&path).unwrap();
         Self { path }
     }

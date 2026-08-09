@@ -1670,3 +1670,47 @@ temporary sorting.
 - Native Windows GNU, macOS ARM64, and FreeBSD 14 execution of the exact pushed
   candidate: pending. SOW completion is prohibited until these pass and this
   11-section audit is repeated.
+
+## Native Candidate Regression - 2026-08-09
+
+Pushed candidate `7833e40660d7fe045cca0a1d521d92d5fdea4afd` produced this
+native evidence:
+
+- FreeBSD 14 passed both complete feature matrices.
+- macOS ARM64 failed
+  `publication::output::tests::preparation_hashes_exact_bytes_and_retains_the_lifetime_lock`
+  because `TempDirectory::new` received `AlreadyExists` from `create_dir`.
+- Windows GNU passed the all-features matrix, then the no-default-features
+  matrix failed `membership_view::tests::live_view_rejects_a_foreign_process_owner`
+  because its expected fixture path did not exist when opened.
+
+Both failures had one test-only root cause: many unit-test fixtures independently
+formed names from process ID and wall-clock time. The native clocks can return
+the same value to concurrent tests in one process, so unrelated fixtures could
+share and remove the same path. Linux did not expose the collision; the earlier
+same-failure search was incomplete because it checked production namespaces and
+known atomic fixture helpers, not every unit-test timestamp constructor.
+
+The minimal-complete repair is one shared unit-test path authority at
+`v4/rust/iprange-livedb/src/test_support_tests.rs:10-19`. It combines process
+ID and wall-clock time with a process-wide atomic sequence. The 25 timestamp-only
+unit-test constructors now call it, including the two exposed sites at
+`publication/output_tests.rs:213-217` and `membership_view_tests.rs:16-21`.
+Existing constructors that already add their own atomic sequence remain
+unchanged. Production code, format bytes, public APIs, mmap behavior, and hot
+paths are unaffected; the repair removes 161 net test lines.
+
+Repaired-tree evidence before commit:
+
+- both complete local workspace feature matrices: pass;
+- warnings-denied Clippy and rustdoc, formatting, architecture, static/runtime
+  mmap, and the 382-source compiler graph: pass;
+- Rust 1.74.1 complete workspace matrix and ten s390x Miri codec vectors: pass;
+- AddressSanitizer with the exact adjacent instrumented worker: 368 active
+  engine tests and all 15 C-boundary tests pass with leak detection; and
+- raw-fork Valgrind with the matching preserved glibc: zero memory errors and
+  zero definite/indirect leaks.
+
+The SOW remains in progress. The repaired commit must pass both complete
+feature matrices on Windows GNU, macOS ARM64, and FreeBSD 14 before the final
+11-section audit may begin.

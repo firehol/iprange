@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::test_alloc::count_thread_allocations;
 use crate::{
@@ -16,14 +15,9 @@ struct TestPair {
 
 impl TestPair {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
         Self {
-            main: std::env::temp_dir().join(format!(
-                "iprange-v4-import-allocation-{label}-{}-{unique}",
-                std::process::id()
+            main: crate::test_support_tests::unique_path(&format!(
+                "iprange-v4-import-allocation-{label}"
             )),
         }
     }

@@ -1,7 +1,22 @@
-//! Shared adapters for in-memory unit-test pages.
+//! Shared unit-test support.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::contract::PAGE_SIZE;
 use crate::error::{Error, Result};
+
+static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn unique_path(prefix: &str) -> PathBuf {
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let sequence = NEXT_PATH.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}-{}-{time}-{sequence}", std::process::id()))
+}
 
 pub(crate) fn copy_pages<'a, T>(
     pages: &'a mut [[u8; PAGE_SIZE]],

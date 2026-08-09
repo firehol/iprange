@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     create_live, AddressFamily, CancellationToken, ImmutableReader, LiveReader, ValueKind, ValueTag,
@@ -15,15 +14,8 @@ struct Files {
 
 impl Files {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
         Self {
-            main: std::env::temp_dir().join(format!(
-                "iprange-v4-resolution-{label}-{}-{unique}",
-                std::process::id()
-            )),
+            main: crate::test_support_tests::unique_path(&format!("iprange-v4-resolution-{label}")),
             attempt_id: crate::random::nonzero_128().unwrap(),
         }
     }

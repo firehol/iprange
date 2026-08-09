@@ -10,20 +10,14 @@ use crate::slotted_page::{put_u16, put_u32, put_u64, Builder, HEADER_SIZE};
 use crate::test_alloc::count_thread_allocations;
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestPath(PathBuf);
 
 impl TestPath {
     fn new() -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        Self(std::env::temp_dir().join(format!(
-            "iprange-v4-membership-{}-{unique}",
-            std::process::id()
-        )))
+        Self(crate::test_support_tests::unique_path(
+            "iprange-v4-membership",
+        ))
     }
 }
 

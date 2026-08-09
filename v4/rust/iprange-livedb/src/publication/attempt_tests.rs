@@ -2,7 +2,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::contract::{AddressFamily, ValueKind, ValueTag};
@@ -537,14 +536,7 @@ struct TempDirectory {
 
 impl TempDirectory {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "iprange-v4-publication-attempt-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = crate::test_support_tests::unique_path("iprange-v4-publication-attempt");
         fs::create_dir(&path).unwrap();
         Self { path }
     }

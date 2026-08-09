@@ -73,7 +73,6 @@ fn exchange(
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::error::Error;
 
@@ -86,14 +85,7 @@ mod tests {
 
     impl Paths {
         fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let base = std::env::temp_dir().join(format!(
-                "iprange-v4-namespace-{}-{unique}",
-                std::process::id()
-            ));
+            let base = crate::test_support_tests::unique_path("iprange-v4-namespace");
             Self {
                 private: base.with_extension("private"),
                 canonical: base.with_extension("canonical"),

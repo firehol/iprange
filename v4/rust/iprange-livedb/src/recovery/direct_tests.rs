@@ -1,6 +1,5 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::construction::Construction;
 use super::super::direct_build::construct;
@@ -28,14 +27,8 @@ pub(super) struct Paths {
 
 impl Paths {
     pub(super) fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!(
-            "iprange-v4-direct-recovery-{label}-{}-{unique}",
-            std::process::id()
-        ));
+        let base =
+            crate::test_support_tests::unique_path(&format!("iprange-v4-direct-recovery-{label}"));
         let scratch = base.with_extension("scratch");
         fs::create_dir(&scratch).unwrap();
         Self {

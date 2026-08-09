@@ -2,7 +2,6 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::publication::{CreationSecurity, Housekeeping};
 use crate::validation::LocalFileIdentity;
@@ -363,14 +362,8 @@ struct TempDirectory(PathBuf);
 
 impl TempDirectory {
     fn new(label: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "iprange-v4-worker-scratch-{label}-{}-{unique}",
-            std::process::id()
-        ));
+        let path =
+            crate::test_support_tests::unique_path(&format!("iprange-v4-worker-scratch-{label}"));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
