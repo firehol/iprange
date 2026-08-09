@@ -3,29 +3,16 @@
 use crate::blob_tree;
 use crate::contract::u64_le;
 use crate::error::{Error, Result};
-use crate::fixed_tree::{self, LeafLocation, RetiredPages, RetiringStore, Store};
+use crate::fixed_tree::{self, LeafLocation, Store};
 
 use super::blob;
-use super::codec::{self, decode_canonical, IdCodec, Record, Storage, ID_BASE, MAX_ID_RECORD};
+use super::codec::{self, decode_canonical, Encoded, IdCodec, Record, Storage, INLINE_WORD_LIMIT};
 use super::Words;
-
-const MAX_INLINE_WORDS: u32 = ((MAX_ID_RECORD - ID_BASE) / 8) as u32;
-
-pub(super) struct Encoded {
-    bytes: [u8; MAX_ID_RECORD],
-    len: usize,
-}
 
 #[derive(Clone, Copy)]
 pub(super) struct Found {
     location: LeafLocation,
     pub(super) record: Record,
-}
-
-impl Encoded {
-    pub(super) fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len]
-    }
 }
 
 pub(super) fn encode<S: Store, W: Words<S>>(
@@ -34,28 +21,13 @@ pub(super) fn encode<S: Store, W: Words<S>>(
     id: u32,
     digest: [u8; 32],
 ) -> Result<Encoded> {
-    let inline = words.word_count() <= MAX_INLINE_WORDS;
-    let len = if inline {
-        ID_BASE + words.word_count() as usize * 8
+    let inline = words.word_count() <= INLINE_WORD_LIMIT;
+    let storage = if inline {
+        Storage::Inline
     } else {
-        ID_BASE
+        Storage::Blob(blob::build(store, words)?)
     };
-    let blob_root = if inline {
-        0
-    } else {
-        blob::build(store, words)?
-    };
-    let mut encoded = Encoded {
-        bytes: [0; MAX_ID_RECORD],
-        len,
-    };
-    encoded.bytes[..2].copy_from_slice(&(len as u16).to_le_bytes());
-    encoded.bytes[2] = u8::from(!inline);
-    encoded.bytes[4..8].copy_from_slice(&id.to_le_bytes());
-    encoded.bytes[16..20].copy_from_slice(&words.word_count().to_le_bytes());
-    encoded.bytes[20..24].copy_from_slice(&(words.word_count() * 8).to_le_bytes());
-    encoded.bytes[24..28].copy_from_slice(&blob_root.to_le_bytes());
-    encoded.bytes[32..64].copy_from_slice(&digest);
+    let mut encoded = Encoded::new(id, words.word_count(), digest, storage)?;
     if inline {
         encode_inline(store, words, &mut encoded)?;
     }
@@ -63,11 +35,16 @@ pub(super) fn encode<S: Store, W: Words<S>>(
 }
 
 fn encode_inline<S: Store, W: Words<S>>(store: &S, words: &W, encoded: &mut Encoded) -> Result<()> {
-    let mut values = [0u64; MAX_INLINE_WORDS as usize];
-    words.read_words(store, 0, &mut values[..words.word_count() as usize])?;
-    for (index, word) in values[..words.word_count() as usize].iter().enumerate() {
-        encoded.bytes[ID_BASE + index * 8..ID_BASE + index * 8 + 8]
-            .copy_from_slice(&word.to_le_bytes());
+    const WORD_BATCH: usize = 32;
+    let mut values = [0u64; WORD_BATCH];
+    let mut start = 0u32;
+    while start < words.word_count() {
+        let count = (words.word_count() - start).min(WORD_BATCH as u32) as usize;
+        words.read_words(store, start, &mut values[..count])?;
+        for (offset, word) in values[..count].iter().enumerate() {
+            encoded.put_inline_word(start as usize + offset, *word)?;
+        }
+        start += count as u32;
     }
     Ok(())
 }
@@ -77,13 +54,11 @@ pub(super) fn find<S: Store>(store: &S, root: u32, id: u32) -> Result<Option<Fou
     if id == 0 || root == 0 {
         return Ok(None);
     }
-    let Some(location) = fixed_tree::predecessor_location::<IdCodec, S>(store, root, id)? else {
+    let Some(found) = fixed_tree::predecessor_located::<IdCodec, S>(store, root, id)? else {
         return Ok(None);
     };
-    fixed_tree::inspect_leaf::<IdCodec, S, _, _>(store, location, |cell| {
-        let record = decode_canonical(cell)?;
-        Ok((record.id == id).then_some(Found { location, record }))
-    })
+    let (location, record) = found;
+    Ok((record.id == id).then_some(Found { location, record }))
 }
 
 pub(super) fn read_words<S: Store>(
@@ -130,15 +105,4 @@ pub(super) fn read_record_words<S: Store>(
             blob_tree::read_words_from(store, root, found.record.word_count, start, output)
         }
     }
-}
-
-pub(super) fn replace_refcount<S: RetiringStore>(
-    store: &mut S,
-    root: &mut u32,
-    id: u32,
-    refcount: u64,
-) -> Result<()> {
-    let mut retired = RetiredPages::new();
-    fixed_tree::replace_leaf_u64::<IdCodec, S>(store, root, id, 8, refcount, &mut retired)?;
-    store.retire_pages(retired.as_slice())
 }

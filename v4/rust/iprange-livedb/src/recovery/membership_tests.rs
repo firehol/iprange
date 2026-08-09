@@ -10,7 +10,7 @@ use crate::immutable_output::{MembershipWords, OutputBudget, OutputSpec};
 use crate::mapping::test_support as file_io;
 use crate::mapping::Mapping;
 use crate::membership_tree;
-use crate::recovery::{RecoverySinkControl, RecoveryUnknownEnvelope};
+use crate::recovery::{RecoveryReport, RecoverySinkControl, RecoveryUnknownEnvelope};
 use crate::validation::{
     validate, ValidationBudget, ValidationMode, ValidationObject, ValidationReason,
     ValidationSinkControl,

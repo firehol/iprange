@@ -139,8 +139,8 @@ impl<'a> WriterEdit<'a> {
     }
 
     pub(crate) fn cached_import_membership(
-        &self,
-        cache: &ImportCache,
+        &mut self,
+        cache: &mut ImportCache,
         source: MembershipToken,
     ) -> Result<Option<TranslatedMembership>> {
         cache.membership(&self.store, source)

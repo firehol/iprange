@@ -1,7 +1,7 @@
 //! Sequential direct-range assignment over the generic COW tree.
 
 use crate::error::{Error, Result};
-use crate::fixed_tree::{self, LeafBuf, RetiredPages, RetiringStore, Store};
+use crate::fixed_tree::{self, RetiredPages, RetiringStore, Store};
 use crate::key::IpKey;
 use crate::mapping::ByteSource;
 use crate::range_tree::{self, RangeCodec, Record as Range};
@@ -536,10 +536,8 @@ fn insert<K: IpKey, S: RangeStore>(
     range: Range<K>,
 ) -> Result<()> {
     let encoded = EncodedRange::new(range)?;
-    let mut retired = RetiredPages::new();
     let inserted =
-        fixed_tree::insert::<RangeCodec<K>, S>(store, root, encoded.as_slice(), &mut retired)?;
-    store.retire_pages(retired.as_slice())?;
+        fixed_tree::insert_retiring::<RangeCodec<K>, S>(store, root, encoded.as_slice())?;
     if inserted {
         *record_count = record_count
             .checked_add(1)
@@ -556,12 +554,7 @@ fn remove<K: IpKey, S: RangeStore>(
     record_count: &mut u64,
     range: Range<K>,
 ) -> Result<()> {
-    let mut retired = RetiredPages::new();
-    let deleted = fixed_tree::delete::<RangeCodec<K>, S>(store, root, range.from, &mut retired)?;
-    store.retire_pages(retired.as_slice())?;
-    if !deleted {
-        return Err(Error::Corrupt("range disappeared during mutation"));
-    }
+    fixed_tree::delete_retiring::<RangeCodec<K>, S>(store, root, range.from)?;
     *record_count = record_count
         .checked_sub(1)
         .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
@@ -569,21 +562,14 @@ fn remove<K: IpKey, S: RangeStore>(
 }
 
 fn read_predecessor<K: IpKey, S: Store>(store: &S, root: u32, key: K) -> Result<Option<Range<K>>> {
-    fixed_tree::predecessor::<RangeCodec<K>, S>(store, root, key)?
-        .map(decode::<K>)
-        .transpose()
+    fixed_tree::predecessor::<RangeCodec<K>, S>(store, root, key)
 }
 
 fn read_at_or_after<K: IpKey, S: Store>(store: &S, root: u32, key: K) -> Result<Option<Range<K>>> {
-    fixed_tree::at_or_after::<RangeCodec<K>, S>(store, root, key)?
-        .map(decode::<K>)
-        .transpose()
+    fixed_tree::at_or_after::<RangeCodec<K>, S>(store, root, key)
 }
 
-fn decode<K: IpKey>(cell: LeafBuf) -> Result<Range<K>> {
-    decode_cell(cell.as_slice())
-}
-
+#[cfg(test)]
 fn decode_cell<K: IpKey>(cell: &[u8]) -> Result<Range<K>> {
     range_tree::decode_cell(cell)
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::bootstrap::classify_recovery_meta;
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
-use crate::database;
+use crate::database_file;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
@@ -99,7 +99,7 @@ fn inspect_live(
     path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<RecoveryCandidateInspection> {
-    let file = database::open_read_only(path)?;
+    let file = database_file::open_read_only(path)?;
     let identity = crate::live_namespace::identity(&file)?;
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     crate::live_namespace::verify_path(path, identity)?;

@@ -1,43 +1,16 @@
 //! Ordered range traversal through a mutable mapped-page store.
 
-use std::marker::PhantomData;
-
-use crate::contract::{MetaV4, MAX_TREE_LEVEL};
+use crate::contract::MetaV4;
 use crate::error::{Error, Result};
-use crate::fixed_tree::Store;
+use crate::fixed_tree::{self, CursorDirection, PageSource, Store};
 use crate::key::IpKey;
-use crate::page_header;
-use crate::range_cursor::DirectRange;
-use crate::range_tree::{self, Header};
-
-const MAX_DEPTH: usize = MAX_TREE_LEVEL as usize;
-
-#[derive(Clone, Copy)]
-struct Frame {
-    page_number: u32,
-    next_child: usize,
-    child_count: usize,
-    level: u16,
-}
-
-const EMPTY_FRAME: Frame = Frame {
-    page_number: 0,
-    next_child: 0,
-    child_count: 0,
-    level: 0,
-};
+use crate::range_cursor::{DirectRange, RangeItem};
+use crate::range_tree::RangeCodec;
 
 pub(crate) struct Cursor<K> {
-    selected_txn: u64,
-    page_limit: u64,
+    meta: MetaV4,
     release_private: bool,
-    path: [Frame; MAX_DEPTH],
-    depth: usize,
-    leaf_page: Option<u32>,
-    leaf: Option<Header>,
-    index: usize,
-    finished: bool,
-    key: PhantomData<K>,
+    inner: fixed_tree::Cursor<RangeCodec<K>>,
 }
 
 impl<K: IpKey> Cursor<K> {
@@ -51,142 +24,73 @@ impl<K: IpKey> Cursor<K> {
                 "stored range cursor has the wrong address family",
             ));
         }
-        let mut cursor = Self {
-            selected_txn: meta.txn_id,
-            page_limit: meta.page_count,
-            release_private,
-            path: [EMPTY_FRAME; MAX_DEPTH],
-            depth: 0,
-            leaf_page: None,
-            leaf: None,
-            index: 0,
-            finished: meta.range_root == 0,
-            key: PhantomData,
-        };
-        if !cursor.finished {
-            cursor.descend_left(store, meta.range_root, None)?;
+        if release_private
+            && (meta.txn_id != store.target_txn() || meta.page_count != store.page_limit())
+        {
+            return Err(Error::Corrupt(
+                "consumed range tree is outside the draft generation",
+            ));
         }
-        crate::work::source_pass(1);
-        Ok(cursor)
+        let inner = if release_private {
+            fixed_tree::Cursor::new_consuming(store, meta.range_root, CursorDirection::Forward)?
+        } else {
+            fixed_tree::Cursor::new(
+                &SelectedStore::new(&*store, *meta),
+                meta.range_root,
+                CursorDirection::Forward,
+            )?
+        };
+        Ok(Self {
+            meta: *meta,
+            release_private,
+            inner,
+        })
     }
 
     pub(crate) fn next<S: Store>(&mut self, store: &mut S) -> Result<Option<DirectRange<K>>> {
-        if self.finished {
-            return Ok(None);
-        }
-        let page_number = self
-            .leaf_page
-            .ok_or(Error::Corrupt("stored range cursor has no leaf"))?;
-        let header = self
-            .leaf
-            .ok_or(Error::Corrupt("stored range cursor has no leaf"))?;
-        let index = self.index;
-        let result = store.inspect_page(page_number, |page| {
-            let record = range_tree::leaf_record::<K, _>(page, &header, index)?;
-            Ok(DirectRange {
-                from: record.from,
-                to: record.to,
-                value: record.value,
-            })
-        })?;
-        self.index += 1;
-        if self.index == header.item_count {
-            if self.release_private {
-                store.discard_private(page_number)?;
-            }
-            self.advance(store)?;
-        }
-        crate::work::range_consumed(1);
-        Ok(Some(result))
+        let next = if self.release_private {
+            self.inner.next_consuming(store, &mut RangeItem)?
+        } else {
+            self.inner
+                .next(&SelectedStore::new(&*store, self.meta), &mut RangeItem)?
+        };
+        crate::work::range_consumed(u64::from(next.is_some()));
+        Ok(next)
+    }
+}
+
+struct SelectedStore<'a, S> {
+    store: &'a S,
+    meta: MetaV4,
+}
+
+impl<'a, S> SelectedStore<'a, S> {
+    const fn new(store: &'a S, meta: MetaV4) -> Self {
+        Self { store, meta }
+    }
+}
+
+impl<S: Store> PageSource for SelectedStore<'_, S> {
+    type Page<'a>
+        = S::ReadPage<'a>
+    where
+        Self: 'a;
+
+    fn selected_txn(&self) -> u64 {
+        self.meta.txn_id
     }
 
-    fn descend_left<S: Store>(
-        &mut self,
-        store: &mut S,
-        mut page_number: u32,
-        mut expected_level: Option<u16>,
-    ) -> Result<()> {
-        loop {
-            let selected_txn = self.selected_txn;
-            let page_limit = self.page_limit;
-            let (header, child) = store.inspect_page(page_number, |page| {
-                let header = range_tree::parse_header::<K, _>(page, selected_txn, expected_level)?;
-                if self.release_private && page_header::born_txn(page) != selected_txn {
-                    return Err(Error::Corrupt(
-                        "consumed range tree contains a committed page",
-                    ));
-                }
-                let child = if header.level == 0 {
-                    None
-                } else {
-                    let child = range_tree::branch_child::<K, _>(page, &header, 0)?;
-                    if child < 2 || u64::from(child) >= page_limit {
-                        return Err(Error::Corrupt("stored range child is outside its source"));
-                    }
-                    Some(child)
-                };
-                Ok((header, child))
-            })?;
-            let Some(child) = child else {
-                self.leaf_page = Some(page_number);
-                self.leaf = Some(header);
-                self.index = 0;
-                self.finished = false;
-                return Ok(());
-            };
-            let frame = self
-                .path
-                .get_mut(self.depth)
-                .ok_or(Error::Corrupt("range tree exceeds its maximum height"))?;
-            *frame = Frame {
-                page_number,
-                next_child: 1,
-                child_count: header.item_count,
-                level: header.level,
-            };
-            self.depth += 1;
-            page_number = child;
-            expected_level = Some(header.level - 1);
-            crate::work::tree_descent(1);
-        }
+    fn selected_page_limit(&self) -> u64 {
+        self.meta.page_count
     }
 
-    fn advance<S: Store>(&mut self, store: &mut S) -> Result<()> {
-        self.leaf = None;
-        self.leaf_page = None;
-        loop {
-            let Some(slot) = self.depth.checked_sub(1) else {
-                self.finished = true;
-                return Ok(());
-            };
-            let mut frame = self.path[slot];
-            if frame.next_child < frame.child_count {
-                let selected_txn = self.selected_txn;
-                let page_limit = self.page_limit;
-                let child = store.inspect_page(frame.page_number, |page| {
-                    let header =
-                        range_tree::parse_header::<K, _>(page, selected_txn, Some(frame.level))?;
-                    if header.item_count != frame.child_count {
-                        return Err(Error::Corrupt(
-                            "range branch changed during stored traversal",
-                        ));
-                    }
-                    let child = range_tree::branch_child::<K, _>(page, &header, frame.next_child)?;
-                    if child < 2 || u64::from(child) >= page_limit {
-                        return Err(Error::Corrupt("stored range child is outside its source"));
-                    }
-                    Ok(child)
-                })?;
-                frame.next_child += 1;
-                self.path[slot] = frame;
-                self.depth = slot + 1;
-                crate::work::tree_descent(1);
-                return self.descend_left(store, child, Some(frame.level - 1));
-            }
-            self.depth = slot;
-            if self.release_private {
-                store.discard_private(frame.page_number)?;
-            }
+    fn view_page<'a, T, F>(&'a self, page_number: u32, inspect: F) -> Result<T>
+    where
+        F: FnOnce(Self::Page<'a>) -> Result<T>,
+    {
+        if page_number < 2 || u64::from(page_number) >= self.meta.page_count {
+            return Err(Error::Corrupt("stored range page is outside its source"));
         }
+        self.store.inspect_page(page_number, inspect)
     }
 }

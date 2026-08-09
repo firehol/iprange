@@ -6,6 +6,7 @@ use crate::contract::AddressFamily;
 use crate::error::{Error, Result};
 use crate::source::RangeSource;
 use crate::workflow::{Comparison, WorkflowReport};
+use crate::writer_core::WriterEdit;
 
 use super::{AbortResult, CommitResult, LiveWriter};
 
@@ -200,6 +201,23 @@ impl FinishedState {
             Self::NoChange(report) | Self::Changed { report, .. } => report,
         }
     }
+}
+
+pub(super) fn complete_workflow(
+    writer: &mut LiveWriter,
+    report: WorkflowReport,
+    cancellation: CancellationToken,
+    finish_changed: impl FnOnce(&mut WriterEdit<'_>, &CancellationToken) -> Result<()>,
+) -> Result<FinishedState> {
+    if report.logical_change == crate::workflow::LogicalChange::NoChange {
+        writer.discard_draft()?;
+        return Ok(FinishedState::NoChange(report));
+    }
+    writer.mutate(|edit| finish_changed(edit, &cancellation))?;
+    Ok(FinishedState::Changed {
+        report,
+        state: PreparedState::new(cancellation),
+    })
 }
 
 impl Drop for PreparedOperation<'_> {

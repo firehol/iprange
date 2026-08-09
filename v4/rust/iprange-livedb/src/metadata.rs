@@ -4,8 +4,8 @@ use flate2::{Compress, Compression, Decompress, FlushCompress, FlushDecompress, 
 
 use crate::contract::{u16_le, u32_le, u64_le, MetaV4, MAX_METADATA_UNCOMPRESSED, PAGE_SIZE};
 use crate::error::{Error, Result};
-use crate::fixed_tree::Store;
-use crate::format::page_type;
+use crate::fixed_tree::{PageSource, Store};
+use crate::format::{page_type, Generation};
 use crate::mapping::{ByteRange, ByteSource, Mapping};
 use crate::page_header;
 use crate::page_io::PageEdit;
@@ -16,6 +16,11 @@ pub(crate) const CHUNK_CAPACITY: usize = PAGE_SIZE - DATA_OFFSET;
 pub(crate) const MAX_PAGES: usize = 260;
 // Covers the pinned miniz backend's fixed workspace; allocation tests enforce it.
 pub(crate) const DEFLATE_HEAP_OVERHEAD: u64 = 512 * 1024;
+
+const NEXT_OFFSET: usize = 32;
+const LENGTH_OFFSET: usize = 36;
+const RESERVED_OFFSET: usize = 38;
+const LOGICAL_OFFSET: usize = 40;
 
 pub(crate) fn compressed_bound(uncompressed_len: usize) -> usize {
     let blocks = std::cmp::max(1, uncompressed_len.div_ceil(65_535));
@@ -153,27 +158,7 @@ pub(crate) fn collect_pages<S: Store>(store: &S, meta: &MetaV4) -> Result<ChainP
         pages: [0; MAX_PAGES],
         len: 0,
     };
-    let mut page_number = meta.metadata_root;
-    let mut logical_offset = 0u64;
-    let mut remaining = meta.metadata_compressed_len;
-    while remaining != 0 {
-        let slot = output
-            .pages
-            .get_mut(output.len)
-            .ok_or(Error::Corrupt("metadata chain exceeds its fixed bound"))?;
-        *slot = page_number;
-        output.len += 1;
-        let parsed = store.inspect_page(page_number, |page| {
-            let parsed = parse_page(page, page_number, meta, logical_offset, remaining)?;
-            Ok((parsed.next, parsed.bytes.len()))
-        })?;
-        logical_offset += parsed.1 as u64;
-        remaining -= parsed.1 as u64;
-        page_number = parsed.0;
-    }
-    if page_number != 0 {
-        return Err(Error::Corrupt("metadata chain has an extra page"));
-    }
+    walk_chain(store, meta, &mut output)?;
     Ok(output)
 }
 
@@ -185,6 +170,18 @@ pub(crate) struct ChainPages {
 impl ChainPages {
     pub(crate) fn as_slice(&self) -> &[u32] {
         &self.pages[..self.len]
+    }
+}
+
+impl ChunkVisitor for ChainPages {
+    fn visit<S: ByteSource>(&mut self, page_number: u32, _bytes: ByteRange<S>) -> Result<()> {
+        let slot = self
+            .pages
+            .get_mut(self.len)
+            .ok_or(Error::Corrupt("metadata chain exceeds its fixed bound"))?;
+        *slot = page_number;
+        self.len += 1;
+        Ok(())
     }
 }
 
@@ -201,7 +198,7 @@ pub(crate) fn read(mapping: &Mapping, meta: &MetaV4, output: &mut [u8]) -> Resul
     }
 
     let mut inflater = Inflater::new(&mut output[..required]);
-    walk_mapping(mapping, meta, &mut inflater)?;
+    walk_chain(&Generation::new(mapping, *meta), meta, &mut inflater)?;
     inflater.finish(meta.metadata_compressed_len)?;
     Ok(Some(required))
 }
@@ -219,7 +216,15 @@ pub(crate) fn read_vec(mapping: &Mapping, meta: &MetaV4) -> Result<Option<Vec<u8
     Ok(Some(output))
 }
 
-fn walk_mapping(mapping: &Mapping, meta: &MetaV4, inflater: &mut Inflater<'_>) -> Result<()> {
+trait ChunkVisitor {
+    fn visit<S: ByteSource>(&mut self, page_number: u32, bytes: ByteRange<S>) -> Result<()>;
+}
+
+fn walk_chain<S: PageSource, V: ChunkVisitor>(
+    source: &S,
+    meta: &MetaV4,
+    visitor: &mut V,
+) -> Result<()> {
     let mut page_number = meta.metadata_root;
     let mut logical_offset = 0u64;
     let mut remaining = meta.metadata_compressed_len;
@@ -228,13 +233,15 @@ fn walk_mapping(mapping: &Mapping, meta: &MetaV4, inflater: &mut Inflater<'_>) -
         if pages == MAX_PAGES {
             return Err(Error::Corrupt("metadata chain exceeds its fixed bound"));
         }
-        let page = mapping.page(page_number, meta.page_count)?;
-        let parsed = parse_page(page, page_number, meta, logical_offset, remaining)?;
-        let length = parsed.bytes.len();
-        inflater.feed_source(parsed.bytes)?;
-        logical_offset += length as u64;
-        remaining -= length as u64;
-        page_number = parsed.next;
+        let parsed = source.view_page(page_number, |page| {
+            let parsed = parse_page(page, page_number, meta, logical_offset, remaining)?;
+            let length = parsed.bytes.len();
+            visitor.visit(page_number, parsed.bytes)?;
+            Ok((parsed.next, length))
+        })?;
+        logical_offset += parsed.1 as u64;
+        remaining -= parsed.1 as u64;
+        page_number = parsed.0;
         pages += 1;
     }
     if page_number != 0 {
@@ -318,14 +325,14 @@ pub(crate) fn chunk_fields<S: ByteSource>(
     expected_offset: u64,
     remaining: u64,
 ) -> Option<ChunkFields> {
-    let next = u32_le(page, 32);
-    let length = usize::from(u16_le(page, 36));
+    let next = u32_le(page, NEXT_OFFSET);
+    let length = usize::from(u16_le(page, LENGTH_OFFSET));
     let expected_length = remaining.min(CHUNK_CAPACITY as u64) as usize;
     let final_chunk = remaining == length as u64;
     if length != expected_length
         || length == 0
-        || u16_le(page, 38) != 0
-        || u64_le(page, 40) != expected_offset
+        || u16_le(page, RESERVED_OFFSET) != 0
+        || u64_le(page, LOGICAL_OFFSET) != expected_offset
         || page_header::lower(page) != DATA_OFFSET + length
         || page_header::upper(page) != PAGE_SIZE
         || page_header::item_count(page) != 1
@@ -369,9 +376,9 @@ fn encode_page<P: PageEdit>(
             aux: 0,
         },
     )?;
-    page.put_u32(32, next)?;
-    page.put_u16(36, bytes.len() as u16)?;
-    page.put_u64(40, logical_offset)?;
+    page.put_u32(NEXT_OFFSET, next)?;
+    page.put_u16(LENGTH_OFFSET, bytes.len() as u16)?;
+    page.put_u64(LOGICAL_OFFSET, logical_offset)?;
     page.write(DATA_OFFSET, bytes)
 }
 
@@ -386,6 +393,12 @@ struct InflateStep {
     status: Status,
     consumed: usize,
     produced: usize,
+}
+
+impl ChunkVisitor for Inflater<'_> {
+    fn visit<S: ByteSource>(&mut self, _page_number: u32, bytes: ByteRange<S>) -> Result<()> {
+        self.feed_source(bytes)
+    }
 }
 
 impl<'a> Inflater<'a> {

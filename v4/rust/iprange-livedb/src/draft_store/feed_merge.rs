@@ -7,10 +7,9 @@ use crate::contract::{AddressFamily, MembershipOperation};
 use crate::error::{Error, Result};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::range_mutation;
-use crate::range_store_cursor::Cursor;
 use crate::workflow::{compare::ScannedComparison, Comparison};
 
-use super::range_merge::{self, Incoming, OrderedMerge, Policy};
+use super::range_merge::{self, Policy};
 use super::{DraftStore, MembershipHandle};
 
 pub(crate) struct FeedMerge {
@@ -54,26 +53,15 @@ impl DraftStore<'_> {
         let mut coverage_meta = self.draft.meta;
         coverage_meta.range_root = self.draft.workflow_range_root;
         coverage_meta.range_record_count = self.draft.workflow_range_count;
-        let mut coverage = Cursor::<K>::new(self, &coverage_meta, true)?;
         let policy = FeedPolicy::new(member);
-        let mut merge = OrderedMerge::new(self, base, policy, cancellation)?;
-        let mut input_intervals = 0u64;
-        while let Some(range) = coverage.next(self)? {
-            cancellation.check()?;
-            input_intervals = input_intervals
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("feed input intervals"))?;
-            merge.push(
-                self,
-                Incoming {
-                    from: range.from,
-                    to: range.to,
-                    value: (),
-                },
-                cancellation,
-            )?;
-        }
-        let finished = merge.finish(self, cancellation)?;
+        let (input_intervals, finished) = range_merge::merge_coverage::<K, _>(
+            self,
+            &coverage_meta,
+            base,
+            policy,
+            cancellation,
+            "feed input intervals",
+        )?;
         self.draft.workflow_range_root = 0;
         self.draft.workflow_range_count = 0;
         let input_addresses = finished.output.comparison.after;
@@ -243,5 +231,5 @@ impl<K: IpKey> Projection<K> {
 fn increment(value: u64, context: &'static str) -> Result<u64> {
     value
         .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow(context))
+        .ok_or_else(|| Error::arithmetic_overflow(context))
 }

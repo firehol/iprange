@@ -26,7 +26,7 @@ impl BasicSource {
     pub(super) fn open_current(path: &Path, cancellation: &CancellationToken) -> Result<Self> {
         let sidecar = crate::path::canonical_sidecar(path)?;
         require_sidecar_absent(Some(&sidecar))?;
-        let file = database::open_read_only(path)?;
+        let file = database_file::open_read_only(path)?;
         let identity = crate::live_namespace::identity_any_link(&file)?;
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
         finish_current_open(file, path, sidecar, identity, cancellation)
@@ -134,14 +134,14 @@ fn sidecar_path(path: &Path, immutable: bool) -> Result<Option<PathBuf>> {
 
 fn require_sidecar_absent(sidecar: Option<&Path>) -> Result<()> {
     if let Some(path) = sidecar {
-        database::require_sidecar_absent(path)?;
+        database_file::require_sidecar_absent(path)?;
     }
     Ok(())
 }
 
 fn open_file(path: &Path, immutable: bool) -> Result<File> {
     if immutable {
-        database::open_read_only(path)
+        database_file::open_read_only(path)
     } else {
         crate::live_namespace::open_rw(path)
     }
@@ -190,7 +190,8 @@ fn bind_current(
 ) -> Result<MetaV4> {
     verify_path(path, sidecar, identity)?;
     cancellation.check()?;
-    let meta = database::bootstrap_file(file, crate::bootstrap::OpenMode::ImmutableReader)?.meta;
+    let meta =
+        database_file::bootstrap_file(file, crate::bootstrap::OpenMode::ImmutableReader)?.meta;
     crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     verify_path(path, sidecar, identity)?;
     Ok(meta)
@@ -199,7 +200,7 @@ fn bind_current(
 fn verify_path(path: &Path, sidecar: Option<&Path>, identity: Identity) -> Result<()> {
     crate::live_namespace::verify_path_any_link(path, identity).map_err(candidate_changed)?;
     if let Some(path) = sidecar {
-        database::require_sidecar_absent(path).map_err(candidate_changed)?;
+        database_file::require_sidecar_absent(path).map_err(candidate_changed)?;
     }
     Ok(())
 }

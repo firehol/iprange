@@ -137,7 +137,7 @@ fn content_evidence(
         return Ok(None);
     }
     let mapping = Mapping::read_only_view(file, byte_length)?;
-    let bootstrap = match crate::database::bootstrap_mapping(
+    let bootstrap = match crate::database_file::bootstrap_mapping(
         &mapping,
         byte_length,
         OpenMode::ImmutableReader,

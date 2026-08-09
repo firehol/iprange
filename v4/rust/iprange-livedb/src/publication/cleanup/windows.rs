@@ -257,20 +257,8 @@ fn absorb(
     if let Some(problem) = retirement.problem {
         artifacts.push(seed.artifact(kind, slot, identity, problem));
     }
-    *housekeeping = merge_housekeeping(*housekeeping, retirement.housekeeping);
+    *housekeeping = housekeeping.merge(retirement.housekeeping);
     visible.extend(retirement.visible);
-}
-
-fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
-    }
 }
 
 const fn default_slot(location: ReservationLocation) -> NameSlot {

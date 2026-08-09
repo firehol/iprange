@@ -39,7 +39,7 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::publication::namespace::NamespaceError;
 
-const DOMAIN: &[u8; 8] = b"IPR4PSEC";
+use super::COMMITMENT_DOMAIN;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Profile {
@@ -327,7 +327,7 @@ impl Drop for Token {
 
 fn commitment(sid: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(DOMAIN);
+    hasher.update(COMMITMENT_DOMAIN);
     hasher.update((sid.len() as u32).to_le_bytes());
     hasher.update(sid);
     hasher.update(FILE_ALL_ACCESS.to_le_bytes());

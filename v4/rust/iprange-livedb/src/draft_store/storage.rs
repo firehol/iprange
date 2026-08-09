@@ -1,6 +1,6 @@
 //! Mapped page storage and allocator integration.
 
-use crate::contract::{u32_le, u64_le, MetaV4};
+use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, RetiringStore, Store};
 use crate::free_bitmap::{self, BitmapStore};
@@ -8,9 +8,14 @@ use crate::mapping::{ByteSource, PageMut, PageView};
 use crate::page_checksum;
 use crate::page_header;
 
-use super::{DraftStore, PRIVATE_MAGIC};
+use super::DraftStore;
 
 const DIRTY_END: u32 = 1;
+const PRIVATE_MAGIC: u32 = 0x5046_5245;
+const PRIVATE_MAGIC_OFFSET: usize = 0;
+const PRIVATE_NEXT_OFFSET: usize = 4;
+const PRIVATE_TXN_OFFSET: usize = 8;
+const PRIVATE_HEADER_SIZE: usize = 32;
 
 impl Store for DraftStore<'_> {
     type ReadPage<'a>
@@ -92,28 +97,26 @@ impl Store for DraftStore<'_> {
             return Err(Error::Corrupt("discarded private page is invalid"));
         }
         let txn = self.draft.meta.txn_id;
-        let dirty_tag = self.inspect_page(page_number, |page| {
-            if page_header::born_txn(page) != txn {
-                return Err(Error::Corrupt(
-                    "committed page cannot enter the private stack",
-                ));
-            }
-            let tag = u32_le(page, page_checksum::OFFSET);
-            if tag == 0 {
-                return Err(Error::Corrupt(
-                    "private page is absent from the dirty chain",
-                ));
-            }
-            Ok(tag)
-        })?;
+        require_page(page_number, self.draft.meta.page_count)?;
         let next = self.draft.private_head;
-        self.update_page(page_number, |page| {
-            page.fill(0);
-            page.put_u32(0, PRIVATE_MAGIC)?;
-            page.put_u32(4, next)?;
-            page.put_u64(8, txn)?;
-            page.put_u32(page_checksum::OFFSET, dirty_tag)
-        })?;
+        let mut page = self
+            .mapping
+            .page_mut(page_number, self.draft.meta.page_count)?;
+        let view = page.view();
+        if page_header::born_txn(view) != txn {
+            return Err(Error::Corrupt(
+                "committed page cannot enter the private stack",
+            ));
+        }
+        if u32_le(view, page_checksum::OFFSET) == 0 {
+            return Err(Error::Corrupt(
+                "private page is absent from the dirty chain",
+            ));
+        }
+        page.put_u32(PRIVATE_MAGIC_OFFSET, PRIVATE_MAGIC)?;
+        page.put_u32(PRIVATE_NEXT_OFFSET, next)?;
+        page.put_u64(PRIVATE_TXN_OFFSET, txn)?;
+        require_private_output(page.view(), txn)?;
         self.draft.private_head = page_number;
         Ok(())
     }
@@ -169,8 +172,7 @@ impl DraftStore<'_> {
         require_page(page_number, self.draft.meta.page_count)?;
         let page = self.mapping.page(page_number, self.draft.meta.page_count)?;
         let owned_data = page_header::owned_by(page, self.draft.meta.txn_id);
-        let private_stack =
-            u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == self.draft.meta.txn_id;
+        let private_stack = is_private_page(page, self.draft.meta.txn_id);
         let tag = u32_le(page, page_checksum::OFFSET);
         Ok(((owned_data || private_stack) && tag != 0).then_some(tag))
     }
@@ -190,9 +192,9 @@ impl DraftStore<'_> {
         let mut page = self
             .mapping
             .page_mut(page_number, self.draft.meta.page_count)?;
-        page.zero(0, 32)?;
-        page.put_u32(0, PRIVATE_MAGIC)?;
-        page.put_u64(8, txn)?;
+        page.zero(0, PRIVATE_HEADER_SIZE)?;
+        page.put_u32(PRIVATE_MAGIC_OFFSET, PRIVATE_MAGIC)?;
+        page.put_u64(PRIVATE_TXN_OFFSET, txn)?;
         page.put_u32(page_checksum::OFFSET, tag)?;
         if existing.is_none() {
             self.draft.dirty_head = page_number;
@@ -204,13 +206,25 @@ impl DraftStore<'_> {
 
 fn require_private_output(page: PageView<'_>, target_txn: u64) -> Result<()> {
     let data = page_header::owned_by(page, target_txn);
-    let private = u32_le(page, 0) == PRIVATE_MAGIC && u64_le(page, 8) == target_txn;
+    let private = is_private_page(page, target_txn);
     let reserve = page.all_zero(0, page_checksum::OFFSET);
     if data || private || reserve {
         Ok(())
     } else {
         Err(Error::Corrupt("draft update has the wrong transaction"))
     }
+}
+
+pub(super) fn private_stack_next<S: ByteSource>(page: S, target_txn: u64) -> Result<u32> {
+    if !is_private_page(page, target_txn) {
+        return Err(Error::Corrupt("private page stack link is invalid"));
+    }
+    Ok(u32_le(page, PRIVATE_NEXT_OFFSET))
+}
+
+fn is_private_page<S: ByteSource>(page: S, target_txn: u64) -> bool {
+    u32_le(page, PRIVATE_MAGIC_OFFSET) == PRIVATE_MAGIC
+        && u64_le(page, PRIVATE_TXN_OFFSET) == target_txn
 }
 
 fn require_page(page_number: u32, page_limit: u64) -> Result<()> {
@@ -254,7 +268,7 @@ impl BitmapStore for DraftStore<'_> {
     fn allocation_forbidden(&self, page_number: u32) -> bool {
         page_number < 2
             || self.draft.meta.allocator_reserve.contains(&page_number)
-            || roots(&self.draft.meta).contains(&page_number)
+            || self.draft.meta.roots().contains(&page_number)
     }
 }
 
@@ -265,19 +279,4 @@ impl RetiringStore for DraftStore<'_> {
         }
         self.drain_allocator_retired()
     }
-}
-
-fn roots(meta: &MetaV4) -> [u32; 10] {
-    [
-        meta.range_root,
-        meta.catalog_name_root,
-        meta.catalog_index_root,
-        meta.feed_used_root,
-        meta.membership_id_root,
-        meta.membership_hash_root,
-        meta.membership_used_root,
-        meta.metadata_root,
-        meta.free_bitmap_root,
-        meta.retirement_root,
-    ]
 }

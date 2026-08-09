@@ -119,52 +119,13 @@ fn complete_previous(
 }
 
 fn remove_previous(
-    mut base: BaseResolution,
+    base: BaseResolution,
     pair: Pair,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResult, Problem> {
     let main = pair.main.as_ref().expect("dispatch selected previous main");
     require_previous(main, base.header)?;
-    synchronize(main, &base.destination, cancellation)?;
-    let output = removable_output(pair.private.as_ref(), base.header)?;
-    let reservation = base.exact.as_ref().map(super::reservation_owner);
-    let summary =
-        cleanup::discard_recovered(&mut base.seed, &base.destination, output, reservation);
-    let verified = main.verify(&base.destination, &CancellationToken::new());
-    let cleanup_problem = first_problem(&summary.artifacts);
-    let cause = verified.as_ref().err().cloned().or(cleanup_problem);
-    let publication = if verified.is_ok() {
-        PublicationStatus::NotPublished
-    } else {
-        PublicationStatus::OutcomeUnknown
-    };
-    let result = base.seed.result_with_housekeeping(
-        FinalState {
-            reservation_identity: reservation_identity(base.header),
-            main_namespace_may_have_been_attempted: attempted(base.header.state),
-            publication,
-            destination_content: if publication == PublicationStatus::NotPublished {
-                DestinationContent::Previous
-            } else {
-                DestinationContent::Unclassified
-            },
-            main_access_policy: if verified.is_ok() {
-                main.access
-            } else {
-                AccessPolicy::Unclassified
-            },
-            coordination_access_policy: if verified.is_ok() {
-                coordination_access(&summary, base.exact.as_ref(), None)
-            } else {
-                AccessPolicy::Unclassified
-            },
-        },
-        summary.artifacts,
-        summary.housekeeping,
-        summary.visible_housekeeping,
-        cause,
-    );
-    Ok(record_cancellation(result, cancellation))
+    resolve_not_desired(base, pair, DestinationContent::Previous, cancellation)
 }
 
 fn resolve_desired(
@@ -238,11 +199,23 @@ fn resolve_desired(
 }
 
 fn resolve_other(
-    mut base: BaseResolution,
+    base: BaseResolution,
     pair: Pair,
     cancellation: &CancellationToken,
 ) -> Result<PublicationResult, Problem> {
-    let main = pair.main.as_ref().expect("dispatch selected other main");
+    resolve_not_desired(base, pair, DestinationContent::Other, cancellation)
+}
+
+fn resolve_not_desired(
+    mut base: BaseResolution,
+    pair: Pair,
+    content: DestinationContent,
+    cancellation: &CancellationToken,
+) -> Result<PublicationResult, Problem> {
+    let main = pair
+        .main
+        .as_ref()
+        .expect("dispatch selected a non-desired main");
     synchronize(main, &base.destination, cancellation)?;
     let output = removable_output(pair.private.as_ref(), base.header)?;
     let reservation = base.exact.as_ref().map(super::reservation_owner);
@@ -264,8 +237,8 @@ fn resolve_other(
             reservation_identity: reservation_identity(base.header),
             main_namespace_may_have_been_attempted: attempted(base.header.state),
             publication,
-            destination_content: if publication == PublicationStatus::NotPublished {
-                DestinationContent::Other
+            destination_content: if verified.is_ok() {
+                content
             } else {
                 DestinationContent::Unclassified
             },

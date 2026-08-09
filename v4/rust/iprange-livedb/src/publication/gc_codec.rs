@@ -15,10 +15,38 @@ pub(crate) const FILE_SIZE: usize = 2 * PAGE_SIZE;
 const MAGIC: [u8; 8] = *b"IPR4GCA1";
 const RECORD_SIZE: u16 = 512;
 const VERSION: u16 = 1;
+const MAGIC_OFFSET: usize = 0;
+const RECORD_SIZE_OFFSET: usize = 8;
+const VERSION_OFFSET: usize = 10;
+const KIND_OFFSET: usize = 12;
+const BASENAME_ENCODING_OFFSET: usize = 14;
+const ATTEMPT_ID_OFFSET: usize = 16;
+const ORDINAL_OFFSET: usize = 32;
+const DIRECTORY_IDENTITY_KIND_OFFSET: usize = 36;
+const ARTIFACT_IDENTITY_KIND_OFFSET: usize = 38;
+const DIRECTORY_IDENTITY_OFFSET: usize = 40;
+const SOURCE_COMMITMENT_OFFSET: usize = 72;
+const INERT_COMMITMENT_OFFSET: usize = 104;
+const PAYLOAD_PRESENT_OFFSET: usize = 136;
+const ARTIFACT_IDENTITY_OFFSET: usize = 144;
+const PAYLOAD_LENGTH_OFFSET: usize = 176;
+const PAYLOAD_SHA512_OFFSET: usize = 184;
+const PAYLOAD_DATABASE_ID_OFFSET: usize = 248;
+const PAYLOAD_TRANSACTION_ID_OFFSET: usize = 264;
+const PAYLOAD_COMMIT_NONCE_OFFSET: usize = 272;
+const CREATION_SECURITY_KIND_OFFSET: usize = 288;
+const DIRECTORY_ROLE_OFFSET: usize = 290;
+const CREATION_SECURITY_COMMITMENT_OFFSET: usize = 296;
 const CRC_OFFSET: usize = 508;
+const CRC_SIZE: usize = core::mem::size_of::<u32>();
 const SOURCE_LENGTH_OFFSET: usize = 328;
+const SEQUENCE_OFFSET: usize = 496;
 const SOURCE_OFFSET: usize = 512;
 const SOURCE_CAPACITY: usize = PAGE_SIZE - SOURCE_OFFSET;
+const PAYLOAD_RESERVED: (usize, usize) = (138, 6);
+const SECURITY_RESERVED: (usize, usize) = (292, 4);
+const HEADER_TAIL_RESERVED: (usize, usize) = (332, 164);
+const PRE_CRC_RESERVED: (usize, usize) = (504, 4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Payload {
@@ -63,37 +91,43 @@ impl Header {
             "GC source filename exceeds its fixed block"
         );
         block.fill(0);
-        block.write(0, &MAGIC)?;
-        block.put_u16(8, RECORD_SIZE)?;
-        block.put_u16(10, VERSION)?;
-        block.put_u16(12, kind_code(self.kind))?;
-        block.put_u16(14, self.basename_encoding)?;
-        block.write(16, &self.attempt_id)?;
-        block.put_u32(32, self.ordinal)?;
-        block.put_u16(36, self.directory_identity_kind)?;
-        block.put_u16(38, self.artifact_identity_kind)?;
-        block.write(40, &self.directory_identity)?;
-        block.write(72, &self.source_commitment)?;
-        block.write(104, &self.inert_commitment)?;
-        block.write(144, &self.artifact_identity)?;
+        block.write(MAGIC_OFFSET, &MAGIC)?;
+        block.put_u16(RECORD_SIZE_OFFSET, RECORD_SIZE)?;
+        block.put_u16(VERSION_OFFSET, VERSION)?;
+        block.put_u16(KIND_OFFSET, kind_code(self.kind))?;
+        block.put_u16(BASENAME_ENCODING_OFFSET, self.basename_encoding)?;
+        block.write(ATTEMPT_ID_OFFSET, &self.attempt_id)?;
+        block.put_u32(ORDINAL_OFFSET, self.ordinal)?;
+        block.put_u16(DIRECTORY_IDENTITY_KIND_OFFSET, self.directory_identity_kind)?;
+        block.put_u16(ARTIFACT_IDENTITY_KIND_OFFSET, self.artifact_identity_kind)?;
+        block.write(DIRECTORY_IDENTITY_OFFSET, &self.directory_identity)?;
+        block.write(SOURCE_COMMITMENT_OFFSET, &self.source_commitment)?;
+        block.write(INERT_COMMITMENT_OFFSET, &self.inert_commitment)?;
+        block.write(ARTIFACT_IDENTITY_OFFSET, &self.artifact_identity)?;
         if let Some(payload) = self.payload {
-            block.put_u16(136, 1)?;
-            block.put_u64(176, payload.byte_length)?;
-            block.write(184, &payload.sha512)?;
-            block.write(248, &payload.database_id)?;
-            block.put_u64(264, payload.transaction_id)?;
-            block.write(272, &payload.commit_nonce)?;
+            block.put_u16(PAYLOAD_PRESENT_OFFSET, 1)?;
+            block.put_u64(PAYLOAD_LENGTH_OFFSET, payload.byte_length)?;
+            block.write(PAYLOAD_SHA512_OFFSET, &payload.sha512)?;
+            block.write(PAYLOAD_DATABASE_ID_OFFSET, &payload.database_id)?;
+            block.put_u64(PAYLOAD_TRANSACTION_ID_OFFSET, payload.transaction_id)?;
+            block.write(PAYLOAD_COMMIT_NONCE_OFFSET, &payload.commit_nonce)?;
         }
-        block.put_u16(288, self.creation_security_kind)?;
-        block.put_u16(290, directory_role_code(self.directory_role))?;
-        block.write(296, &self.creation_security_commitment)?;
+        block.put_u16(CREATION_SECURITY_KIND_OFFSET, self.creation_security_kind)?;
+        block.put_u16(
+            DIRECTORY_ROLE_OFFSET,
+            directory_role_code(self.directory_role),
+        )?;
+        block.write(
+            CREATION_SECURITY_COMMITMENT_OFFSET,
+            &self.creation_security_commitment,
+        )?;
         block.put_u32(
             SOURCE_LENGTH_OFFSET,
             u32::try_from(self.source_basename.len()).expect("bounded GC source filename"),
         )?;
-        block.put_u64(496, self.sequence)?;
+        block.put_u64(SEQUENCE_OFFSET, self.sequence)?;
         block.write(SOURCE_OFFSET, &self.source_basename)?;
-        let checksum = crc32c::crc32c_source_with_zeroed(block.view(), CRC_OFFSET, 4)
+        let checksum = crc32c::crc32c_source_with_zeroed(block.view(), CRC_OFFSET, CRC_SIZE)
             .expect("fixed GC CRC field");
         block.put_u32(CRC_OFFSET, checksum)
     }
@@ -141,64 +175,68 @@ fn decode<P: ByteSource>(block: P) -> Option<Header> {
     if !fixed_valid(block) || !reserved_zero(block) || !checksum_valid(block) {
         return None;
     }
-    let kind = decode_kind(u16_le(block, 12))?;
+    let kind = decode_kind(u16_le(block, KIND_OFFSET))?;
     let payload = decode_payload(block)?;
     let source_basename = decode_source_basename(block)?;
     let header = Header {
         kind,
-        basename_encoding: u16_le(block, 14),
-        attempt_id: array(block, 16),
-        ordinal: u32_le(block, 32),
-        directory_identity_kind: u16_le(block, 36),
-        artifact_identity_kind: u16_le(block, 38),
-        directory_identity: array(block, 40),
-        source_commitment: array(block, 72),
-        inert_commitment: array(block, 104),
-        artifact_identity: array(block, 144),
+        basename_encoding: u16_le(block, BASENAME_ENCODING_OFFSET),
+        attempt_id: array(block, ATTEMPT_ID_OFFSET),
+        ordinal: u32_le(block, ORDINAL_OFFSET),
+        directory_identity_kind: u16_le(block, DIRECTORY_IDENTITY_KIND_OFFSET),
+        artifact_identity_kind: u16_le(block, ARTIFACT_IDENTITY_KIND_OFFSET),
+        directory_identity: array(block, DIRECTORY_IDENTITY_OFFSET),
+        source_commitment: array(block, SOURCE_COMMITMENT_OFFSET),
+        inert_commitment: array(block, INERT_COMMITMENT_OFFSET),
+        artifact_identity: array(block, ARTIFACT_IDENTITY_OFFSET),
         payload,
-        creation_security_kind: u16_le(block, 288),
-        directory_role: decode_directory_role(u16_le(block, 290))?,
-        creation_security_commitment: array(block, 296),
+        creation_security_kind: u16_le(block, CREATION_SECURITY_KIND_OFFSET),
+        directory_role: decode_directory_role(u16_le(block, DIRECTORY_ROLE_OFFSET))?,
+        creation_security_commitment: array(block, CREATION_SECURITY_COMMITMENT_OFFSET),
         source_basename,
-        sequence: u64_le(block, 496),
+        sequence: u64_le(block, SEQUENCE_OFFSET),
     };
     valid(&header).then_some(header)
 }
 
 fn fixed_valid<P: ByteSource>(block: P) -> bool {
-    block.equals(0, &MAGIC)
-        && u16_le(block, 8) == RECORD_SIZE
-        && u16_le(block, 10) == VERSION
-        && basename_encoding(u16_le(block, 14)).is_some()
+    block.equals(MAGIC_OFFSET, &MAGIC)
+        && u16_le(block, RECORD_SIZE_OFFSET) == RECORD_SIZE
+        && u16_le(block, VERSION_OFFSET) == VERSION
+        && basename_encoding(u16_le(block, BASENAME_ENCODING_OFFSET)).is_some()
 }
 
 fn reserved_zero<P: ByteSource>(block: P) -> bool {
-    block.all_zero(138, 6)
-        && block.all_zero(292, 4)
-        && block.all_zero(332, 164)
-        && block.all_zero(504, 4)
+    block.all_zero(PAYLOAD_RESERVED.0, PAYLOAD_RESERVED.1)
+        && block.all_zero(SECURITY_RESERVED.0, SECURITY_RESERVED.1)
+        && block.all_zero(HEADER_TAIL_RESERVED.0, HEADER_TAIL_RESERVED.1)
+        && block.all_zero(PRE_CRC_RESERVED.0, PRE_CRC_RESERVED.1)
 }
 
 fn checksum_valid<P: ByteSource>(block: P) -> bool {
-    crc32c::crc32c_source_with_zeroed(block, CRC_OFFSET, 4) == Some(u32_le(block, CRC_OFFSET))
+    crc32c::crc32c_source_with_zeroed(block, CRC_OFFSET, CRC_SIZE)
+        == Some(u32_le(block, CRC_OFFSET))
 }
 
 fn decode_payload<P: ByteSource>(block: P) -> Option<Option<Payload>> {
-    match u16_le(block, 136) {
+    match u16_le(block, PAYLOAD_PRESENT_OFFSET) {
         0 if payload_fields_zero(block) => Some(None),
         1 => Some(Some(Payload {
-            byte_length: u64_le(block, 176),
-            sha512: array(block, 184),
-            database_id: array(block, 248),
-            transaction_id: u64_le(block, 264),
-            commit_nonce: array(block, 272),
+            byte_length: u64_le(block, PAYLOAD_LENGTH_OFFSET),
+            sha512: array(block, PAYLOAD_SHA512_OFFSET),
+            database_id: array(block, PAYLOAD_DATABASE_ID_OFFSET),
+            transaction_id: u64_le(block, PAYLOAD_TRANSACTION_ID_OFFSET),
+            commit_nonce: array(block, PAYLOAD_COMMIT_NONCE_OFFSET),
         })),
         _ => None,
     }
 }
 
 fn payload_fields_zero<P: ByteSource>(block: P) -> bool {
-    block.all_zero(176, 112)
+    block.all_zero(
+        PAYLOAD_LENGTH_OFFSET,
+        CREATION_SECURITY_KIND_OFFSET - PAYLOAD_LENGTH_OFFSET,
+    )
 }
 
 fn decode_source_basename<P: ByteSource>(block: P) -> Option<Box<[u8]>> {

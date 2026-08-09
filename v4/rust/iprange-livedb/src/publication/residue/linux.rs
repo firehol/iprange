@@ -189,7 +189,7 @@ fn retry_retirement(handle: &mut Handle) -> Option<Problem> {
         handle.coordination_identity,
         *retirement_pending,
     );
-    *housekeeping = merge_housekeeping(*housekeeping, retried.housekeeping);
+    *housekeeping = housekeeping.merge(retried.housekeeping);
     visible.extend(retried.visible);
     *retirement_pending = retried.cause.is_some();
     retried.cause
@@ -418,18 +418,6 @@ fn incomplete(handle: Handle, cause: Problem) -> PublicationResidueRemoval {
         visible_housekeeping,
         handle: Some(PublicationResidueHandle { inner: handle }),
         cause: Some(cause),
-    }
-}
-
-const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }
 

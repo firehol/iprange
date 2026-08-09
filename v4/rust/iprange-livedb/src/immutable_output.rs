@@ -101,7 +101,15 @@ impl Builder {
             Err(cause) => return Err(NewFailure { file, cause }),
         };
         drop(file);
-        let meta = setup::empty_meta(spec);
+        let meta = crate::database_file::empty_meta(crate::database_file::EmptySpec {
+            address_family: spec.address_family,
+            value_kind: spec.value_kind,
+            value_tag: spec.value_tag,
+            database_id: spec.database_id,
+            transaction_id: spec.transaction_id,
+            commit_nonce: spec.commit_nonce,
+            feed_index_limit: spec.feed_index_limit,
+        });
         Ok(Self {
             mapping,
             meta,

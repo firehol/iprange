@@ -7,7 +7,7 @@ use iprange_livedb::c_abi_support::ReaderCursorItem;
 use iprange_livedb::{CancellationToken, Error};
 
 use crate::abi::{
-    Cancellation, CoverageSinkFn, DirectRange, DirectSinkFn, FeedSinkFn, MembershipRange,
+    CallbackFailure, Cancellation, CoverageSinkFn, DirectSinkFn, FeedSinkFn, MembershipRange,
     MembershipSinkFn, Range,
 };
 use crate::callback;
@@ -133,67 +133,18 @@ fn scan_direct(
     callback_fn: DirectSinkFn,
     context: *mut c_void,
 ) -> (u64, Result<(), CallError>) {
-    let mut batch = [DirectRange::default(); BATCH_CAPACITY];
-    let mut length = 0usize;
-    let mut count = 0u64;
-    loop {
-        if cancellation.is_cancelled() {
-            return (count, Err(Error::Cancelled.into()));
-        }
-        let item = cursor_handle.with_mut(|reader, cursor, borrowed, bounds| {
-            *borrowed = None;
-            cursor::next(reader, cursor, bounds)
-        });
-        let item = match item {
-            Ok(item) => item,
-            Err(error) => return (count, Err(error)),
-        };
-        match item {
-            Some(ReaderCursorItem::DirectV4(range)) => {
-                batch[length] = cursor::direct_v4(range);
-                length += 1;
-            }
-            Some(ReaderCursorItem::DirectV6(range)) => {
-                batch[length] = cursor::direct_v6(range);
-                length += 1;
-            }
-            Some(_) => return (count, Err(Error::WrongState("not a direct cursor").into())),
-            None => return flush_direct(callback_fn, context, &batch[..length], count),
-        }
-        if length == batch.len() {
-            let (next_count, result) = flush_direct(callback_fn, context, &batch, count);
-            if result.is_err() {
-                return (next_count, result);
-            }
-            count = next_count;
-            length = 0;
-        }
-    }
-}
-
-fn flush_direct(
-    callback_fn: DirectSinkFn,
-    context: *mut c_void,
-    batch: &[DirectRange],
-    count: u64,
-) -> (u64, Result<(), CallError>) {
-    if batch.is_empty() {
-        return (count, Ok(()));
-    }
-    match sink::direct(callback_fn, context, batch) {
-        Ok(control) => {
-            let count = match count.checked_add(batch.len() as u64) {
-                Some(count) => count,
-                None => return (count, Err(Error::ArithmeticOverflow("scan count").into())),
-            };
-            if control == Control::Stop {
-                (count, Err(Error::StoppedBySink.into()))
-            } else {
-                (count, Ok(()))
-            }
-        }
-        Err(error) => (count, Err(error)),
-    }
+    scan_plain(
+        cursor_handle,
+        cancellation,
+        callback_fn,
+        context,
+        |item| match item {
+            ReaderCursorItem::DirectV4(range) => Ok(cursor::direct_v4(range)),
+            ReaderCursorItem::DirectV6(range) => Ok(cursor::direct_v6(range)),
+            _ => Err(Error::WrongState("not a direct cursor").into()),
+        },
+        sink::direct,
+    )
 }
 
 fn scan_coverage(
@@ -202,7 +153,41 @@ fn scan_coverage(
     callback_fn: CoverageSinkFn,
     context: *mut c_void,
 ) -> (u64, Result<(), CallError>) {
-    let mut batch = [Range::default(); BATCH_CAPACITY];
+    scan_plain(
+        cursor_handle,
+        cancellation,
+        callback_fn,
+        context,
+        |item| match item {
+            ReaderCursorItem::FeedV4(range) => Ok(cursor::range_v4(range)),
+            ReaderCursorItem::FeedV6(range) => Ok(cursor::range_v6(range)),
+            _ => Err(Error::WrongState("not a feed cursor").into()),
+        },
+        sink::coverage,
+    )
+}
+
+type PlainSinkFn<T> = Option<
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        records: *const T,
+        count: u64,
+        failure: *mut CallbackFailure,
+    ) -> u32,
+>;
+
+type PlainEmitFn<T> =
+    fn(PlainSinkFn<T>, *mut c_void, &[T]) -> Result<Control, CallError>;
+
+fn scan_plain<T: Copy + Default>(
+    cursor_handle: &CursorHandle,
+    cancellation: &CancellationToken,
+    callback_fn: PlainSinkFn<T>,
+    context: *mut c_void,
+    decode: impl Fn(ReaderCursorItem) -> Result<T, CallError>,
+    emit: PlainEmitFn<T>,
+) -> (u64, Result<(), CallError>) {
+    let mut batch = [T::default(); BATCH_CAPACITY];
     let mut length = 0usize;
     let mut count = 0u64;
     loop {
@@ -218,19 +203,17 @@ fn scan_coverage(
             Err(error) => return (count, Err(error)),
         };
         match item {
-            Some(ReaderCursorItem::FeedV4(range)) => {
-                batch[length] = cursor::range_v4(range);
-                length += 1;
-            }
-            Some(ReaderCursorItem::FeedV6(range)) => {
-                batch[length] = cursor::range_v6(range);
-                length += 1;
-            }
-            Some(_) => return (count, Err(Error::WrongState("not a feed cursor").into())),
-            None => return flush_coverage(callback_fn, context, &batch[..length], count),
+            Some(item) => match decode(item) {
+                Ok(record) => {
+                    batch[length] = record;
+                    length += 1;
+                }
+                Err(error) => return (count, Err(error)),
+            },
+            None => return flush_plain(callback_fn, context, &batch[..length], count, emit),
         }
         if length == batch.len() {
-            let (next_count, result) = flush_coverage(callback_fn, context, &batch, count);
+            let (next_count, result) = flush_plain(callback_fn, context, &batch, count, emit);
             if result.is_err() {
                 return (next_count, result);
             }
@@ -240,18 +223,27 @@ fn scan_coverage(
     }
 }
 
-fn flush_coverage(
-    callback_fn: CoverageSinkFn,
+fn flush_plain<T>(
+    callback_fn: PlainSinkFn<T>,
     context: *mut c_void,
-    batch: &[Range],
+    batch: &[T],
     count: u64,
+    emit: PlainEmitFn<T>,
 ) -> (u64, Result<(), CallError>) {
     if batch.is_empty() {
         return (count, Ok(()));
     }
-    match sink::coverage(callback_fn, context, batch) {
+    finish_batch(count, batch.len(), emit(callback_fn, context, batch))
+}
+
+fn finish_batch(
+    count: u64,
+    length: usize,
+    result: Result<Control, CallError>,
+) -> (u64, Result<(), CallError>) {
+    match result {
         Ok(control) => {
-            let count = match count.checked_add(batch.len() as u64) {
+            let count = match count.checked_add(length as u64) {
                 Some(count) => count,
                 None => return (count, Err(Error::ArithmeticOverflow("scan count").into())),
             };
@@ -358,20 +350,11 @@ fn flush_membership(
     // SAFETY: exactly the first `length` records were initialized above.
     let records =
         unsafe { std::slice::from_raw_parts(records.as_ptr().cast::<MembershipRange>(), length) };
-    match sink::membership(callback_fn, context, records) {
-        Ok(control) => {
-            let count = match count.checked_add(length as u64) {
-                Some(count) => count,
-                None => return (count, Err(Error::ArithmeticOverflow("scan count").into())),
-            };
-            if control == Control::Stop {
-                (count, Err(Error::StoppedBySink.into()))
-            } else {
-                (count, Ok(()))
-            }
-        }
-        Err(error) => (count, Err(error)),
-    }
+    finish_batch(
+        count,
+        length,
+        sink::membership(callback_fn, context, records),
+    )
 }
 
 fn enumerate_feeds(

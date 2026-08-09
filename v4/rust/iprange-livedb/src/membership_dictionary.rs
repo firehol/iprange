@@ -13,11 +13,9 @@ use crate::membership_delta::Delta;
 use crate::used_bitmap::{self, Kind};
 
 use codec::{
-    decode_hash, encode_hash, HashCodec, HashKey, IdCodec, Record, Storage, MAX_WORD_COUNT,
+    encode_hash, HashCodec, HashKey, IdCodec, Record, Storage, MAX_WORD_COUNT, REFCOUNT_OFFSET,
 };
-use record::{
-    encode as encode_record, find as find_record, read_record_words, read_words, replace_refcount,
-};
+use record::{encode as encode_record, find as find_record, read_record_words, read_words};
 
 pub(crate) use algebra::combine;
 
@@ -118,14 +116,29 @@ pub(crate) fn apply_delta<S: RetiringStore>(
     state: &mut State,
     delta: Delta,
 ) -> Result<()> {
-    let found = find_record(store, state.id_root, delta.id)?
-        .ok_or(Error::Corrupt("membership delta ID is missing"))?;
-    let record = found.record;
-    let refcount = changed_refcount(record.refcount, delta.change)?;
-    if refcount != 0 {
-        return replace_refcount(store, &mut state.id_root, record.id, refcount);
+    crate::work::membership_lookup(1);
+    let mut next_refcount = 0;
+    let mut retired = RetiredPages::new();
+    let record = fixed_tree::mutate_leaf_u64::<IdCodec, S, _>(
+        store,
+        &mut state.id_root,
+        delta.id,
+        REFCOUNT_OFFSET,
+        &mut retired,
+        |record| {
+            next_refcount = changed_refcount(record.refcount, delta.change)?;
+            Ok(if next_refcount == 0 {
+                fixed_tree::LeafU64Mutation::Delete
+            } else {
+                fixed_tree::LeafU64Mutation::Replace(next_refcount)
+            })
+        },
+    )?;
+    store.retire_pages(retired.as_slice())?;
+    if next_refcount != 0 {
+        return Ok(());
     }
-    remove_record(store, state, &record)
+    finish_record_removal(store, state, &record)
 }
 
 pub(crate) fn reference_matches<S: Store>(
@@ -225,7 +238,7 @@ fn find_equal<S: Store, W: Words<S>>(
         else {
             return Ok(None);
         };
-        let candidate = decode_hash(found.as_slice())?;
+        let candidate = found;
         if candidate.digest != digest || candidate.word_count != words.word_count() {
             return Ok(None);
         }
@@ -316,19 +329,26 @@ fn mutate_insert<C: crate::fixed_tree::Codec, S: RetiringStore>(
     root: &mut u32,
     record: &[u8],
 ) -> Result<()> {
-    let mut retired = RetiredPages::new();
-    if !fixed_tree::insert::<C, S>(store, root, record, &mut retired)? {
+    if !fixed_tree::insert_retiring::<C, S>(store, root, record)? {
         return Err(Error::Corrupt("membership dictionary key already exists"));
     }
-    store.retire_pages(retired.as_slice())
+    Ok(())
 }
 
-fn remove_record<S: RetiringStore>(
+fn finish_record_removal<S: RetiringStore>(
     store: &mut S,
     state: &mut State,
     record: &Record,
 ) -> Result<()> {
-    remove_indexes(store, state, record)?;
+    fixed_tree::delete_retiring::<HashCodec, S>(
+        store,
+        &mut state.hash_root,
+        HashKey {
+            digest: record.digest,
+            word_count: record.word_count,
+            id: record.id,
+        },
+    )?;
     release_storage(store, record)?;
     clear_used_id(store, state, record.id)?;
     state.entry_count = state
@@ -337,23 +357,6 @@ fn remove_record<S: RetiringStore>(
         .ok_or(Error::ArithmeticOverflow("membership entry count"))?;
     state.id_limit = used_bitmap::shrink_membership(store, &mut state.used_root, state.id_limit)?;
     Ok(())
-}
-
-fn remove_indexes<S: RetiringStore>(
-    store: &mut S,
-    state: &mut State,
-    record: &Record,
-) -> Result<()> {
-    mutate_delete::<IdCodec, S>(store, &mut state.id_root, record.id)?;
-    mutate_delete::<HashCodec, S>(
-        store,
-        &mut state.hash_root,
-        HashKey {
-            digest: record.digest,
-            word_count: record.word_count,
-            id: record.id,
-        },
-    )
 }
 
 fn release_storage<S: RetiringStore>(store: &mut S, record: &Record) -> Result<()> {
@@ -375,18 +378,6 @@ fn clear_used_id<S: RetiringStore>(store: &mut S, state: &mut State, id: u32) ->
         &mut retired,
     )? {
         return Err(Error::Corrupt("membership used bit is missing"));
-    }
-    store.retire_pages(retired.as_slice())
-}
-
-fn mutate_delete<C: crate::fixed_tree::Codec, S: RetiringStore>(
-    store: &mut S,
-    root: &mut u32,
-    key: C::Key,
-) -> Result<()> {
-    let mut retired = RetiredPages::new();
-    if !fixed_tree::delete::<C, S>(store, root, key, &mut retired)? {
-        return Err(Error::Corrupt("membership dictionary key is missing"));
     }
     store.retire_pages(retired.as_slice())
 }

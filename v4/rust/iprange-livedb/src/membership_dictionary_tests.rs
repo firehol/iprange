@@ -262,6 +262,58 @@ fn added_bit_extends_across_a_word_boundary() {
 }
 
 #[test]
+fn refcount_change_and_removal_visit_each_required_index_once() {
+    let mut store = MemoryStore::new();
+    let mut state = empty_state();
+    let membership = intern(
+        &mut store,
+        &mut state,
+        &Pattern {
+            word_count: 4,
+            salt: 17,
+        },
+    )
+    .unwrap();
+
+    let (result, work) = crate::work::measure(|| {
+        apply_delta(
+            &mut store,
+            &mut state,
+            Delta {
+                id: membership.id,
+                change: 1,
+            },
+        )
+    });
+    result.unwrap();
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(
+        find_record(&store, state.id_root, membership.id)
+            .unwrap()
+            .unwrap()
+            .record
+            .refcount,
+        1
+    );
+
+    let (result, work) = crate::work::measure(|| {
+        apply_delta(
+            &mut store,
+            &mut state,
+            Delta {
+                id: membership.id,
+                change: -1,
+            },
+        )
+    });
+    result.unwrap();
+    assert_eq!(work.tree_lookups, 2);
+    assert!(find_record(&store, state.id_root, membership.id)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn reverse_lookup_full_compares_equal_hash_candidates() {
     let mut store = MemoryStore::new();
     let mut state = empty_state();

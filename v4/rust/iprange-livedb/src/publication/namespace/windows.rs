@@ -28,6 +28,10 @@ use super::{Entry, NamespaceError, Regular};
 pub(crate) const IDENTITY_KIND: u16 = 2;
 pub(crate) const BASENAME_ENCODING_KIND: u16 = 2;
 pub(crate) const CREATION_SECURITY_KIND: u16 = 2;
+const IDENTITY_VOLUME_OFFSET: usize = 0;
+const IDENTITY_FILE_OFFSET: usize = 8;
+const IDENTITY_PAYLOAD_END: usize = 24;
+const IDENTITY_SIZE: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
@@ -36,20 +40,29 @@ pub(crate) struct Identity {
 }
 
 impl Identity {
-    pub(crate) fn encode(self) -> [u8; 32] {
-        let mut bytes = [0; 32];
-        bytes[..8].copy_from_slice(&self.volume.to_le_bytes());
-        bytes[8..24].copy_from_slice(&self.file_id);
+    pub(crate) fn encode(self) -> [u8; IDENTITY_SIZE] {
+        let mut bytes = [0; IDENTITY_SIZE];
+        bytes[IDENTITY_VOLUME_OFFSET..IDENTITY_FILE_OFFSET]
+            .copy_from_slice(&self.volume.to_le_bytes());
+        bytes[IDENTITY_FILE_OFFSET..IDENTITY_PAYLOAD_END].copy_from_slice(&self.file_id);
         bytes
     }
 
-    pub(crate) fn decode(bytes: [u8; 32]) -> Option<Self> {
-        if bytes == [0; 32] || bytes[24..].iter().any(|&byte| byte != 0) {
+    pub(crate) fn decode(bytes: [u8; IDENTITY_SIZE]) -> Option<Self> {
+        if bytes == [0; IDENTITY_SIZE]
+            || bytes[IDENTITY_PAYLOAD_END..].iter().any(|&byte| byte != 0)
+        {
             return None;
         }
         Some(Self {
-            volume: u64::from_le_bytes(bytes[..8].try_into().expect("fixed volume identity")),
-            file_id: bytes[8..24].try_into().expect("fixed file identity"),
+            volume: u64::from_le_bytes(
+                bytes[IDENTITY_VOLUME_OFFSET..IDENTITY_FILE_OFFSET]
+                    .try_into()
+                    .expect("fixed volume identity"),
+            ),
+            file_id: bytes[IDENTITY_FILE_OFFSET..IDENTITY_PAYLOAD_END]
+                .try_into()
+                .expect("fixed file identity"),
         })
     }
 }

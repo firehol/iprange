@@ -474,12 +474,7 @@ fn floor_power_of_two(value: usize) -> usize {
 }
 
 fn hash(page: u32) -> usize {
-    let mut value = u64::from(page);
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
-    (value ^ (value >> 31)) as usize
+    super::tables::hash_u32(page) as usize
 }
 
 #[cfg(test)]

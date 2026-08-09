@@ -29,7 +29,7 @@ pub(crate) use fixed::ScratchFile;
 pub(super) mod format;
 #[cfg(test)]
 #[cfg(all(test, unix))]
-use format::hex;
+use crate::artifact_name::encode_nibble as hex;
 pub(crate) use format::HEADER_SIZE;
 use format::{header, scratch_name};
 
@@ -353,7 +353,7 @@ impl Scratch {
                     payload: None,
                 },
             );
-            housekeeping = merge_housekeeping(housekeeping, retirement.housekeeping);
+            housekeeping = housekeeping.merge(retirement.housekeeping);
             visible_housekeeping.extend(retirement.visible);
             if let Some(problem) = retirement.problem {
                 residues.push(cleanup::residue(
@@ -593,24 +593,6 @@ fn new_attempt(directory: &Directory) -> Result<[u8; 16]> {
         if !collision {
             return Ok(attempt_id);
         }
-    }
-}
-
-#[cfg(windows)]
-fn merge_housekeeping(
-    left: crate::publication::Housekeeping,
-    right: crate::publication::Housekeeping,
-) -> crate::publication::Housekeeping {
-    use crate::publication::Housekeeping;
-
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }
 

@@ -81,7 +81,7 @@ pub fn recover_live<S: RecoverySink>(
 mod platform {
     use crate::contract::{MetaV4, ValueKind};
     use crate::error::Error;
-    use crate::immutable_output::{Builder, Finished, OutputBudget, OutputSpec};
+    use crate::immutable_output::{Builder, OutputBudget, OutputSpec};
     use crate::publication::cleanup;
     use crate::publication::output::OutputAttempt;
     use crate::publication::problem::Problem;
@@ -89,6 +89,7 @@ mod platform {
     use crate::random;
 
     use super::*;
+    use crate::recovery::construction;
     use crate::recovery::direct_build;
     use crate::recovery::membership_build;
     use crate::recovery::source_guard::{problem, Source, SourceMode};
@@ -100,19 +101,6 @@ mod platform {
         Immutable,
         Offline,
         Live,
-    }
-
-    struct Built {
-        finished: Finished,
-        report: RecoveryReport,
-        scratch: Option<ScratchCleanup>,
-    }
-
-    struct BuildFailure {
-        builder: Builder,
-        cause: Error,
-        report: RecoveryReport,
-        scratch: Option<ScratchCleanup>,
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -291,39 +279,15 @@ mod platform {
         budget: &RecoveryBudget,
         cancellation: &CancellationToken,
         sink: &mut S,
-    ) -> std::result::Result<Built, Box<BuildFailure>> {
+    ) -> std::result::Result<construction::Construction, Box<construction::Failure>> {
         match meta.value_kind {
             ValueKind::Direct => {
                 direct_build::construct(mapping, meta, builder, budget, cancellation, sink)
-                    .map(|built| Built {
-                        finished: built.finished,
-                        report: built.report,
-                        scratch: built.scratch,
-                    })
-                    .map_err(|failure| {
-                        Box::new(BuildFailure {
-                            builder: failure.builder,
-                            cause: failure.cause,
-                            report: failure.report,
-                            scratch: failure.scratch,
-                        })
-                    })
+                    .map_err(Box::new)
             }
             ValueKind::Membership => {
                 membership_build::construct(mapping, meta, builder, budget, cancellation, sink)
-                    .map(|built| Built {
-                        finished: built.finished,
-                        report: built.report,
-                        scratch: built.scratch,
-                    })
-                    .map_err(|failure| {
-                        Box::new(BuildFailure {
-                            builder: failure.builder,
-                            cause: failure.cause,
-                            report: failure.report,
-                            scratch: failure.scratch,
-                        })
-                    })
+                    .map_err(Box::new)
             }
         }
     }
@@ -332,7 +296,7 @@ mod platform {
         source: Source,
         attempt: OutputAttempt,
         source_meta: MetaV4,
-        built: Built,
+        built: construction::Construction,
         cancellation: &CancellationToken,
     ) -> RecoveryOutcome {
         if let Err(cause) = crate::worker::checkpoint_recovery_progress(&built.report) {

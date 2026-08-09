@@ -22,17 +22,19 @@ fn parse<S: ByteSource>(
     page: S,
     selected_txn: u64,
     expected_level: Option<u16>,
-    verify_crc: bool,
+    verify_committed: bool,
 ) -> Result<Header> {
     let header = bitmap_page::inspect_header(page, selected_txn, Kind::Free, expected_level)
         .map_err(|_| Error::Corrupt("free bitmap header is invalid"))?;
-    verify_checksum(page, verify_crc)?;
-    validate_body(page, &header)?;
+    if verify_committed {
+        verify_checksum(page)?;
+        validate_body(page, &header)?;
+    }
     Ok(header)
 }
 
-fn verify_checksum<S: ByteSource>(page: S, required: bool) -> Result<()> {
-    if required && !crate::page_checksum::valid(page) {
+fn verify_checksum<S: ByteSource>(page: S) -> Result<()> {
+    if !crate::page_checksum::valid(page) {
         return Err(Error::Corrupt("free bitmap checksum is invalid"));
     }
     Ok(())
@@ -55,21 +57,13 @@ fn validate_body<S: ByteSource>(page: S, header: &Header) -> Result<()> {
     Ok(())
 }
 
-fn stamp<D: PageEdit>(page: &mut D) -> Result<()> {
-    let count = if crate::page_header::level(page.view()) == 0 {
-        bitmap_page::nonzero_leaf_words(page.view())
-    } else {
-        nonzero_children(page.view())?
-    };
-    page.put_u16(crate::page_header::ITEM_COUNT, count as u16)
-}
-
-fn set_branch_child<D: PageEdit>(page: &mut D, index: usize, child: u32) -> Result<()> {
-    if index >= BRANCH_CHILDREN {
-        return Err(Error::Corrupt("free bitmap child index is invalid"));
-    }
-    bitmap_page::set_branch_child(page, index, child)?;
-    bitmap_page::set_summary(page, index, child != 0)
+fn set_branch_child<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    index: usize,
+    child: u32,
+) -> Result<usize> {
+    bitmap_page::replace_branch_child(page, header, index, child, child != 0)
 }
 
 fn branch_child<S: ByteSource>(
@@ -78,14 +72,7 @@ fn branch_child<S: ByteSource>(
     index: usize,
     page_limit: u64,
 ) -> Result<u32> {
-    if header.level == 0 || index >= BRANCH_CHILDREN {
-        return Err(Error::Corrupt("free bitmap child lookup is invalid"));
-    }
-    let child = bitmap_page::branch_child(page, index)?;
-    if child != 0 && (child < 2 || u64::from(child) >= page_limit) {
-        return Err(Error::Corrupt("free bitmap child is outside page bounds"));
-    }
-    Ok(child)
+    bitmap_page::checked_branch_child(page, header, index, page_limit)
 }
 
 fn nonzero_children<S: ByteSource>(page: S) -> Result<usize> {

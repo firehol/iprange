@@ -7,6 +7,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
 
+mod artifact_name;
 mod bitmap_page;
 mod blob_tree;
 mod bootstrap;
@@ -19,6 +20,7 @@ mod contract;
 #[path = "checksum.rs"]
 mod crc32c;
 mod database;
+mod database_file;
 mod draft_store;
 #[path = "sdk_error.rs"]
 pub mod error;
@@ -38,6 +40,7 @@ mod live_namespace;
 mod live_reader;
 mod live_sidecar;
 mod live_writer;
+mod mapped_bytes;
 mod mapping;
 mod membership_delta;
 mod membership_dictionary;

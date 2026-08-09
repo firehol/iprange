@@ -126,38 +126,6 @@ pub(super) fn build_edit<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
     builder.finish()
 }
 
-pub(super) fn copy_page<C: Codec, S: ByteSource, D: PageSink + ?Sized>(
-    source: S,
-    header: &Header,
-    target_txn: u64,
-    page_limit: u64,
-    output: &mut D,
-) -> Result<()> {
-    let mut builder = Builder::new(
-        output,
-        page_type::<C>(header.level),
-        target_txn,
-        header.level,
-        C::AUX,
-    );
-    let mut previous = None;
-    for index in 0..header.item_count {
-        let cell = codec_cell::<C, _>(source, header, index)?;
-        let key = C::read_key(cell, header.level)?;
-        if previous.is_some_and(|prior| prior >= key) {
-            return Err(Error::Corrupt("B+tree page keys are not increasing"));
-        }
-        if header.level == 0 {
-            C::validate_leaf(cell)?;
-        } else {
-            require_child::<C, _>(cell, page_limit)?;
-        }
-        previous = Some(key);
-        builder.push(cell)?;
-    }
-    builder.finish()
-}
-
 pub(super) fn parse<C: Codec, S: ByteSource>(
     page: S,
     selected_txn: u64,
@@ -179,19 +147,46 @@ pub(super) fn lower_bound<C: Codec, S: ByteSource>(
     key: C::Key,
     insertion: bool,
 ) -> Result<(usize, bool)> {
+    lower_bound_by::<C, _>(header, key, insertion, |index| {
+        key_at::<C, _>(page, header, index)
+    })
+}
+
+pub(super) fn lower_bound_by<C: Codec, F>(
+    header: &Header,
+    key: C::Key,
+    insertion: bool,
+    mut key_at: F,
+) -> Result<(usize, bool)>
+where
+    F: FnMut(usize) -> Result<C::Key>,
+{
     let mut lower = 0;
     let mut upper = header.item_count;
+    let mut last = None;
     while lower < upper {
         let middle = lower + (upper - lower) / 2;
         crate::work::key_probe(1);
-        if key_at::<C, _>(page, header, middle)? < key {
+        let current = key_at(middle)?;
+        last = Some((middle, current));
+        if current < key {
             lower = middle + 1;
         } else {
             upper = middle;
         }
     }
-    let exists = lower < header.item_count && key_at::<C, _>(page, header, lower)? == key;
-    crate::work::key_probe(u64::from(lower < header.item_count));
+    let exists = if lower >= header.item_count {
+        false
+    } else {
+        let current = match last.filter(|(index, _)| *index == lower) {
+            Some((_, current)) => current,
+            None => {
+                crate::work::key_probe(1);
+                key_at(lower)?
+            }
+        };
+        current == key
+    };
     if insertion || exists || lower == 0 {
         Ok((lower, exists))
     } else {

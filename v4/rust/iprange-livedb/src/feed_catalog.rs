@@ -2,26 +2,26 @@
 
 use std::fmt;
 
-use crate::contract::{u16_le, u32_le, MetaV4, ValueKind, MAX_TREE_LEVEL};
+use crate::contract::{MetaV4, ValueKind};
 use crate::error::{Error, Result};
-use crate::feed::{FeedEntry, FeedName, MAX_FEED_NAME};
-use crate::format::page_type;
+use crate::feed::{FeedEntry, FeedName};
+use crate::fixed_tree::{self, CursorDirection, LeafQuery};
+use crate::format::Generation;
 use crate::mapping::{ByteSource, Mapping};
 use crate::process_identity::ProcessIdentity;
-use crate::slotted_page::{self, Header};
+use crate::slotted_page::Header;
 
+mod codec;
 mod mutation;
 
+#[cfg(test)]
+pub(crate) use codec::NAME_RECORD_BASE;
+pub(crate) use codec::{
+    decode_entry, decode_index_branch, INDEX_BRANCH, INDEX_BRANCH_SIZE, INDEX_LEAF,
+    MAX_NAME_RECORD, MIN_NAME_RECORD, NAME_BRANCH, NAME_LEAF,
+};
+use codec::{IndexCodec, NameCodec};
 pub(crate) use mutation::{delete, insert, rename};
-
-pub(crate) const NAME_BRANCH: u8 = page_type::FEED_NAME_BRANCH;
-pub(crate) const NAME_LEAF: u8 = page_type::FEED_NAME_LEAF;
-pub(crate) const INDEX_BRANCH: u8 = page_type::FEED_INDEX_BRANCH;
-pub(crate) const INDEX_LEAF: u8 = page_type::FEED_INDEX_LEAF;
-pub(crate) const NAME_RECORD_BASE: usize = 12;
-pub(crate) const MIN_NAME_RECORD: usize = NAME_RECORD_BASE + 1;
-pub(crate) const MAX_NAME_RECORD: usize = NAME_RECORD_BASE + MAX_FEED_NAME;
-pub(crate) const INDEX_BRANCH_SIZE: usize = 8;
 
 pub(crate) fn lookup(
     mapping: &Mapping,
@@ -29,63 +29,47 @@ pub(crate) fn lookup(
     name: &FeedName,
 ) -> Result<Option<FeedEntry>> {
     crate::work::catalog_lookup(1);
-    crate::work::tree_lookup(1);
-    if meta.catalog_name_root == 0 {
-        return Ok(None);
-    }
-    let mut page_number = meta.catalog_name_root;
-    let mut expected = None;
-    for _ in 0..=MAX_TREE_LEVEL {
-        let page = mapping.page(page_number, meta.page_count)?;
-        let header = parse_name_header(page, meta.txn_id, expected)?;
-        let (position, exact) = lower_bound_name(page, &header, name)?;
-        if header.level == 0 {
-            return lookup_leaf(page, &header, position, exact, meta.feed_index_limit);
-        }
-        let Some(position) = position.checked_sub(usize::from(!exact)) else {
+    fixed_tree::query::<NameCodec, _, _>(
+        &Generation::new(mapping, *meta),
+        meta.catalog_name_root,
+        *name,
+        &mut FeedLookup {
+            feed_index_limit: meta.feed_index_limit,
+        },
+    )
+}
+
+struct FeedLookup {
+    feed_index_limit: u64,
+}
+
+impl LeafQuery<NameCodec> for FeedLookup {
+    type Output = FeedEntry;
+
+    fn inspect<S: ByteSource>(
+        &mut self,
+        page: S,
+        header: &Header,
+        _page_number: u32,
+        position: usize,
+        exact: bool,
+    ) -> Result<Option<Self::Output>> {
+        if !exact {
             return Ok(None);
-        };
-        let record = decode_name_record(page, &header, position)?;
-        page_number = require_child(record.value, meta.page_count)?;
-        expected = Some(header.level - 1);
-        crate::work::tree_descent(1);
+        }
+        decode_leaf(page, header, position, self.feed_index_limit).map(Some)
     }
-    Err(Error::Corrupt("feed name tree exceeds its maximum height"))
 }
 
 /// Forward cursor over the numeric catalog tree.
 pub struct FeedCursor<'a> {
     mapping: &'a Mapping,
     meta: MetaV4,
-    path: [Frame; MAX_TREE_LEVEL as usize],
-    depth: usize,
-    leaf: Option<Leaf>,
-    index: usize,
+    inner: fixed_tree::Cursor<IndexCodec>,
     emitted: u64,
     previous: Option<u32>,
     finished: bool,
     owner_identity: Option<ProcessIdentity>,
-}
-
-#[derive(Clone, Copy)]
-struct Frame {
-    page_number: u32,
-    index: usize,
-    item_count: usize,
-    level: u16,
-}
-
-const EMPTY_FRAME: Frame = Frame {
-    page_number: 0,
-    index: 0,
-    item_count: 0,
-    level: 0,
-};
-
-#[derive(Clone, Copy)]
-struct Leaf {
-    page_number: u32,
-    header: Header,
 }
 
 impl<'a> FeedCursor<'a> {
@@ -94,23 +78,20 @@ impl<'a> FeedCursor<'a> {
         meta: &MetaV4,
         owner_identity: Option<ProcessIdentity>,
     ) -> Result<Self> {
-        let mut cursor = Self {
+        let source = Generation::new(mapping, *meta);
+        Ok(Self {
             mapping,
             meta: *meta,
-            path: [EMPTY_FRAME; MAX_TREE_LEVEL as usize],
-            depth: 0,
-            leaf: None,
-            index: 0,
+            inner: fixed_tree::Cursor::new(
+                &source,
+                meta.catalog_index_root,
+                CursorDirection::Forward,
+            )?,
             emitted: 0,
             previous: None,
             finished: meta.catalog_index_root == 0,
             owner_identity,
-        };
-        if !cursor.finished {
-            cursor.descend_left(meta.catalog_index_root, None)?;
-        }
-        crate::work::source_pass(1);
-        Ok(cursor)
+        })
     }
 
     /// Return the next catalog entry in ascending feed-index order.
@@ -127,15 +108,16 @@ impl<'a> FeedCursor<'a> {
         if self.finished {
             return Ok(None);
         }
-        if self.emitted != 0 {
-            self.advance()?;
-            if self.finished {
-                return Ok(None);
+        let Some(entry) = self.inner.next_leaf_mapped(self.mapping)? else {
+            self.finished = true;
+            if self.emitted != self.meta.active_feed_count {
+                return Err(Error::Corrupt("feed catalog count is incomplete"));
             }
+            return Ok(None);
+        };
+        if u64::from(entry.index) >= self.meta.feed_index_limit {
+            return Err(Error::Corrupt("feed index is outside the declared limit"));
         }
-        let leaf = self.leaf.expect("active feed cursor has a leaf");
-        let page = self.mapping.page(leaf.page_number, self.meta.page_count)?;
-        let entry = decode_leaf(page, &leaf.header, self.index, self.meta.feed_index_limit)?;
         if self
             .previous
             .is_some_and(|previous| previous >= entry.index)
@@ -147,83 +129,12 @@ impl<'a> FeedCursor<'a> {
         self.emitted = self
             .emitted
             .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("feed cursor count"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("feed cursor count"))?;
         if self.emitted > self.meta.active_feed_count {
             self.finished = true;
             return Err(Error::Corrupt("feed catalog exceeds its declared count"));
         }
         Ok(Some(entry))
-    }
-
-    fn advance(&mut self) -> Result<()> {
-        let item_count = self
-            .leaf
-            .as_ref()
-            .expect("active feed cursor has a leaf")
-            .header
-            .item_count;
-        if self.index + 1 < item_count {
-            self.index += 1;
-            return Ok(());
-        }
-        while self.depth > 0 {
-            let slot = self.depth - 1;
-            let mut frame = self.path[slot];
-            if frame.index + 1 >= frame.item_count {
-                self.depth = slot;
-                continue;
-            }
-            frame.index += 1;
-            self.path[slot] = frame;
-            self.depth = slot + 1;
-            let page = self.mapping.page(frame.page_number, self.meta.page_count)?;
-            let header = parse_index_header(page, self.meta.txn_id, Some(frame.level))?;
-            if header.item_count != frame.item_count {
-                return Err(Error::Corrupt("feed branch changed during traversal"));
-            }
-            let child = index_child(page, &header, frame.index, self.meta.page_count)?;
-            crate::work::tree_descent(1);
-            return self.descend_left(child, Some(frame.level - 1));
-        }
-        self.finished = true;
-        if self.emitted != self.meta.active_feed_count {
-            return Err(Error::Corrupt("feed catalog count is incomplete"));
-        }
-        Ok(())
-    }
-
-    fn descend_left(&mut self, mut page_number: u32, mut expected: Option<u16>) -> Result<()> {
-        loop {
-            let page = self.mapping.page(page_number, self.meta.page_count)?;
-            let header = parse_index_header(page, self.meta.txn_id, expected)?;
-            if header.level == 0 {
-                self.leaf = Some(Leaf {
-                    page_number,
-                    header,
-                });
-                self.index = 0;
-                return Ok(());
-            }
-            self.push(page_number, &header)?;
-            page_number = index_child(page, &header, 0, self.meta.page_count)?;
-            expected = Some(header.level - 1);
-            crate::work::tree_descent(1);
-        }
-    }
-
-    fn push(&mut self, page_number: u32, header: &Header) -> Result<()> {
-        let frame = self
-            .path
-            .get_mut(self.depth)
-            .ok_or(Error::Corrupt("feed index tree exceeds its maximum height"))?;
-        *frame = Frame {
-            page_number,
-            index: 0,
-            item_count: header.item_count,
-            level: header.level,
-        };
-        self.depth += 1;
-        Ok(())
     }
 
     fn require_owner(&self) -> Result<()> {
@@ -244,132 +155,17 @@ impl fmt::Debug for FeedCursor<'_> {
     }
 }
 
-struct NameRecord {
-    name: FeedName,
-    value: u32,
-}
-
-fn lower_bound_name<S: ByteSource>(
-    page: S,
-    header: &Header,
-    target: &FeedName,
-) -> Result<(usize, bool)> {
-    let mut lower = 0;
-    let mut upper = header.item_count;
-    while lower < upper {
-        let middle = lower + (upper - lower) / 2;
-        if decode_name_record(page, header, middle)?.name < *target {
-            lower = middle + 1;
-        } else {
-            upper = middle;
-        }
-    }
-    let exact =
-        lower < header.item_count && decode_name_record(page, header, lower)?.name == *target;
-    Ok((lower, exact))
-}
-
 fn decode_leaf<S: ByteSource>(
     page: S,
     header: &Header,
     index: usize,
     feed_index_limit: u64,
 ) -> Result<FeedEntry> {
-    let record = decode_name_record(page, header, index)?;
-    if u64::from(record.value) >= feed_index_limit {
+    let entry = codec::page_entry(page, header, index)?;
+    if u64::from(entry.index) >= feed_index_limit {
         return Err(Error::Corrupt("feed index is outside the declared limit"));
     }
-    Ok(FeedEntry {
-        name: record.name,
-        index: record.value,
-    })
-}
-
-fn lookup_leaf<S: ByteSource>(
-    page: S,
-    header: &Header,
-    position: usize,
-    exact: bool,
-    feed_index_limit: u64,
-) -> Result<Option<FeedEntry>> {
-    if !exact {
-        return Ok(None);
-    }
-    decode_leaf(page, header, position, feed_index_limit).map(Some)
-}
-
-fn decode_name_record<S: ByteSource>(page: S, header: &Header, index: usize) -> Result<NameRecord> {
-    let record = slotted_page::record(page, header, index, MIN_NAME_RECORD, MAX_NAME_RECORD)?;
-    decode_record(record)
-}
-
-fn decode_record<S: ByteSource>(record: S) -> Result<NameRecord> {
-    let entry = decode_entry(record)?;
-    Ok(NameRecord {
-        name: entry.name,
-        value: entry.index,
-    })
-}
-
-pub(crate) fn decode_entry<S: ByteSource>(record: S) -> Result<FeedEntry> {
-    let name_len = usize::from(
-        record
-            .byte(8)
-            .ok_or(Error::Corrupt("feed catalog record is malformed"))?,
-    );
-    if usize::from(u16_le(record, 0)) != NAME_RECORD_BASE + name_len
-        || u16_le(record, 2) != 0
-        || !record.all_zero(9, 3)
-    {
-        return Err(Error::Corrupt("feed catalog record is malformed"));
-    }
-    let name = FeedName::from_source(record, NAME_RECORD_BASE, name_len)
-        .ok_or(Error::Corrupt("feed catalog name is invalid"))?;
-    Ok(FeedEntry {
-        name,
-        index: u32_le(record, 4),
-    })
-}
-
-pub(crate) fn decode_index_branch<S: ByteSource>(record: S) -> Result<(u32, u32)> {
-    if record.len() != INDEX_BRANCH_SIZE {
-        return Err(Error::Corrupt("feed index branch record is malformed"));
-    }
-    Ok((u32_le(record, 0), u32_le(record, 4)))
-}
-
-fn index_child<S: ByteSource>(
-    page: S,
-    header: &Header,
-    index: usize,
-    page_count: u64,
-) -> Result<u32> {
-    let record = slotted_page::cell(page, header, index, INDEX_BRANCH_SIZE)?;
-    let (_, child) = decode_index_branch(record)?;
-    require_child(child, page_count)
-}
-
-fn require_child(child: u32, page_count: u64) -> Result<u32> {
-    if child < 2 || u64::from(child) >= page_count {
-        return Err(Error::Corrupt("feed catalog child is outside page bounds"));
-    }
-    Ok(child)
-}
-
-fn parse_name_header<S: ByteSource>(
-    page: S,
-    selected_txn: u64,
-    expected: Option<u16>,
-) -> Result<Header> {
-    slotted_page::parse_tree(page, selected_txn, NAME_BRANCH, NAME_LEAF, 0, expected)
-}
-
-fn parse_index_header<S: ByteSource>(
-    page: S,
-    selected_txn: u64,
-    expected: Option<u16>,
-) -> Result<Header> {
-    slotted_page::parse_tree(page, selected_txn, INDEX_BRANCH, INDEX_LEAF, 0, expected)
+    Ok(entry)
 }
 
 pub(crate) fn require_membership(meta: &MetaV4) -> Result<()> {

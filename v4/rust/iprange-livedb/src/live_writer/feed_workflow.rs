@@ -13,9 +13,10 @@ use crate::writer_core::{FeedMerge, MembershipHandle};
 
 use super::workflow::FinishedState;
 use super::workflow::{
-    classify, drain_source, require_input_active, require_input_family, require_ordered,
+    classify, complete_workflow, drain_source, require_input_active, require_input_family,
+    require_ordered,
 };
-use super::{FinishedWorkflow, LiveWriter, PreparedState};
+use super::{FinishedWorkflow, LiveWriter};
 
 /// Complete creation of one exact named feed.
 #[derive(Debug)]
@@ -220,14 +221,8 @@ impl ExactFeedState {
             writer.mutate(|store| store.merge_feed(self.member, self.create, &cancellation))?;
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
         let report = self.prepare_report(merged)?;
-        if report.logical_change == LogicalChange::NoChange {
-            writer.discard_draft()?;
-            return Ok(FinishedState::NoChange(report));
-        }
-        writer.mutate(|store| store.finish_membership_workflow(&cancellation))?;
-        Ok(FinishedState::Changed {
-            report,
-            state: PreparedState::new(cancellation),
+        complete_workflow(writer, report, cancellation, |edit, cancellation| {
+            edit.finish_membership_workflow(cancellation)
         })
     }
 

@@ -6,6 +6,7 @@
 mod cleanup;
 mod client;
 mod control;
+mod fault_memory;
 #[cfg(unix)]
 mod posix;
 #[cfg(windows)]
@@ -450,21 +451,22 @@ pub(crate) fn checkpoint_recovery(
 pub(crate) fn checkpoint_recovery_progress(
     report: &crate::recovery::RecoveryReport,
 ) -> crate::error::Result<()> {
-    let control = CURRENT_CONTROL.with(Cell::get);
-    if control.is_null() {
-        return Ok(());
-    }
-    let control = unsafe { &*control };
-    control.begin_callback_checkpoint();
-    let mut output = wire::Writer::new_callback_checkpoint(control);
-    wire_recovery::report(&mut output, report)?;
-    output.finish()?;
-    control.seal_callback_checkpoint(CallbackCheckpoint::RecoveryReport);
-    Ok(())
+    checkpoint_progress(CallbackCheckpoint::RecoveryReport, |output| {
+        wire_recovery::report(output, report)
+    })
 }
 
 pub(crate) fn checkpoint_validation_progress(
     progress: &crate::validation::ValidationProgress,
+) -> crate::error::Result<()> {
+    checkpoint_progress(CallbackCheckpoint::ValidationProgress, |output| {
+        wire::progress(output, progress)
+    })
+}
+
+fn checkpoint_progress(
+    checkpoint: CallbackCheckpoint,
+    write: impl FnOnce(&mut wire::Writer<'_>) -> crate::error::Result<()>,
 ) -> crate::error::Result<()> {
     let control = CURRENT_CONTROL.with(Cell::get);
     if control.is_null() {
@@ -473,9 +475,9 @@ pub(crate) fn checkpoint_validation_progress(
     let control = unsafe { &*control };
     control.begin_callback_checkpoint();
     let mut output = wire::Writer::new_callback_checkpoint(control);
-    wire::progress(&mut output, progress)?;
+    write(&mut output)?;
     output.finish()?;
-    control.seal_callback_checkpoint(CallbackCheckpoint::ValidationProgress);
+    control.seal_callback_checkpoint(checkpoint);
     Ok(())
 }
 

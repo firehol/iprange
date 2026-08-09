@@ -32,14 +32,6 @@ mod platform {
 
     use super::*;
 
-    pub(crate) fn lock(file: &File, offset: u64, mode: Mode) -> Result<()> {
-        set(file, offset, mode, true).map(|_| ())
-    }
-
-    pub(crate) fn try_lock(file: &File, offset: u64, mode: Mode) -> Result<bool> {
-        set(file, offset, mode, false)
-    }
-
     pub(crate) fn unlock(file: &File, offset: u64) -> Result<()> {
         let mut lock = flock(offset, libc::F_UNLCK as libc::c_short)?;
         loop {
@@ -54,7 +46,7 @@ mod platform {
         }
     }
 
-    fn set(file: &File, offset: u64, mode: Mode, wait: bool) -> Result<bool> {
+    pub(super) fn set(file: &File, offset: u64, mode: Mode, wait: bool) -> Result<bool> {
         let lock_type = match mode {
             Mode::Shared => libc::F_RDLCK,
             Mode::Exclusive => libc::F_WRLCK,
@@ -107,14 +99,6 @@ mod platform {
 
     use super::*;
 
-    pub(crate) fn lock(file: &File, offset: u64, mode: Mode) -> Result<()> {
-        set(file, offset, mode, true).map(|_| ())
-    }
-
-    pub(crate) fn try_lock(file: &File, offset: u64, mode: Mode) -> Result<bool> {
-        set(file, offset, mode, false)
-    }
-
     pub(crate) fn unlock(file: &File, offset: u64) -> Result<()> {
         let mut overlapped = overlapped(offset);
         let result =
@@ -126,7 +110,7 @@ mod platform {
         }
     }
 
-    fn set(file: &File, offset: u64, mode: Mode, wait: bool) -> Result<bool> {
+    pub(super) fn set(file: &File, offset: u64, mode: Mode, wait: bool) -> Result<bool> {
         let mut flags = match mode {
             Mode::Shared => 0,
             Mode::Exclusive => LOCKFILE_EXCLUSIVE_LOCK,
@@ -179,13 +163,7 @@ mod platform {
 mod platform {
     use super::*;
 
-    pub(crate) fn lock(_file: &File, _offset: u64, _mode: Mode) -> Result<()> {
-        Err(Error::Unsupported(
-            "live coordination is not implemented on this platform",
-        ))
-    }
-
-    pub(crate) fn try_lock(_file: &File, _offset: u64, _mode: Mode) -> Result<bool> {
+    pub(super) fn set(_file: &File, _offset: u64, _mode: Mode, _wait: bool) -> Result<bool> {
         Err(Error::Unsupported(
             "live coordination is not implemented on this platform",
         ))
@@ -198,7 +176,15 @@ mod platform {
     }
 }
 
-pub(crate) use platform::{lock, try_lock, unlock};
+pub(crate) use platform::unlock;
+
+pub(crate) fn lock(file: &File, offset: u64, mode: Mode) -> Result<()> {
+    platform::set(file, offset, mode, true).map(|_| ())
+}
+
+pub(crate) fn try_lock(file: &File, offset: u64, mode: Mode) -> Result<bool> {
+    platform::set(file, offset, mode, false)
+}
 
 /// Automatic-release lock for an artifact that has one logical lock.
 ///

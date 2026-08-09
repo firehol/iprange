@@ -276,6 +276,10 @@ fn forward_scan_counts_only_necessary_page_visits() {
     assert_eq!(work.ranges_consumed, 3);
     assert_eq!(work.tree_descents, 2);
     assert_eq!(work.pages_visited, 7);
+    assert_eq!(work.page_parses, 4);
+    assert_eq!(work.cell_probes, 5);
+    assert_eq!(work.slot_reads, 5);
+    assert_eq!(work.leaf_validations, 0);
 }
 
 #[test]

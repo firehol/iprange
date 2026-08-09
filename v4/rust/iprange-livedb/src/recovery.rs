@@ -5,6 +5,7 @@ mod budget;
 mod catalog;
 mod catalog_table;
 mod classify;
+mod construction;
 mod direct;
 mod direct_build;
 mod direct_output;
@@ -20,6 +21,7 @@ mod membership_words;
 mod metadata;
 mod page_set;
 mod range_build;
+mod range_components;
 mod range_scan;
 mod report;
 #[cfg(any(unix, windows))]

@@ -1,96 +1,32 @@
-use crate::cancellation::CancellationToken;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::immutable_output::Builder;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::range_tree::Record;
 use crate::validation::{ValidationAddressFence, ValidationObject, ValidationReason};
 
-use super::range_build::RangeOutput;
+use super::range_components::Policy;
 use super::report::{RecoverySink, Reporter, Unknown};
 
-pub(super) struct Components<'a, 'b, S, K> {
+pub(super) struct DirectOutput<'a, 'b, S, K> {
     builder: &'a mut Builder,
     reporter: &'a mut Reporter<'b, S>,
-    cancellation: &'a CancellationToken,
-    component: Option<Component<K>>,
     output: Option<Record<K>>,
 }
 
-#[derive(Clone, Copy)]
-struct Component<K> {
-    first: Record<K>,
-    maximum_to: K,
-    count: u64,
-}
-
-impl<'a, 'b, S: RecoverySink, K: DirectKey> Components<'a, 'b, S, K> {
-    pub(super) fn new(
-        builder: &'a mut Builder,
-        reporter: &'a mut Reporter<'b, S>,
-        cancellation: &'a CancellationToken,
-    ) -> Self {
+impl<'a, 'b, S: RecoverySink, K: DirectKey> DirectOutput<'a, 'b, S, K> {
+    pub(super) fn new(builder: &'a mut Builder, reporter: &'a mut Reporter<'b, S>) -> Self {
         Self {
             builder,
             reporter,
-            cancellation,
-            component: None,
             output: None,
         }
     }
 
-    pub(super) fn push(&mut self, record: Record<K>) -> Result<()> {
-        self.cancellation.check()?;
-        let Some(mut component) = self.component.take() else {
-            self.component = Some(Component::new(record));
-            return Ok(());
-        };
-        if record.from < component.first.from {
-            return Err(Error::RecoveryCandidateChanged);
-        }
-        if record.from <= component.maximum_to {
-            component.maximum_to = component.maximum_to.max(record.to);
-            component.count = component
-                .count
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("recovery overlap component"))?;
-            self.component = Some(component);
-            return Ok(());
-        }
-        self.finish_component(component)?;
-        self.component = Some(Component::new(record));
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        if let Some(component) = self.component.take() {
-            self.finish_component(component)?;
-        }
+    fn finish_output(&mut self) -> Result<()> {
         if let Some(record) = self.output.take() {
             K::push(self.builder, record)?;
         }
         Ok(())
-    }
-
-    fn finish_component(&mut self, component: Component<K>) -> Result<()> {
-        if component.count != 1 {
-            self.reporter.ranges_rejected(
-                component.count,
-                component.first.from,
-                component.maximum_to,
-            )?;
-            return self.reporter.unknown(Unknown {
-                reason: ValidationReason::RangeOverlap,
-                object: ValidationObject::RangeTree,
-                page_number: None,
-                physical_bytes: None,
-                address_fence: Some(K::fence(component.first.from, component.maximum_to)),
-                contributes_to_possible_span: false,
-                has_unbounded_extent: false,
-            });
-        }
-        self.reporter
-            .range_accepted(component.first.from, component.first.to)?;
-        self.coalesce(component.first)
     }
 
     fn coalesce(&mut self, record: Record<K>) -> Result<()> {
@@ -109,24 +45,43 @@ impl<'a, 'b, S: RecoverySink, K: DirectKey> Components<'a, 'b, S, K> {
     }
 }
 
-impl<S: RecoverySink, K: DirectKey> RangeOutput<K> for Components<'_, '_, S, K> {
-    fn push(&mut self, record: Record<K>) -> Result<()> {
-        Components::push(self, record)
+impl<S: RecoverySink, K: DirectKey> Policy<K> for DirectOutput<'_, '_, S, K> {
+    type Resolved = ();
+
+    fn resolve(&mut self, _record: Record<K>) -> Result<Option<Self::Resolved>> {
+        Ok(None)
+    }
+
+    fn accept(&mut self, record: Record<K>, _resolved: Option<Self::Resolved>) -> Result<()> {
+        self.reporter.range_accepted(record.from, record.to)?;
+        self.coalesce(record)
+    }
+
+    fn reject_overlap(&mut self, count: u64, from: K, to: K) -> Result<()> {
+        report_overlap(self.reporter, count, from, to)
     }
 
     fn finish(&mut self) -> Result<()> {
-        Components::finish(self)
+        self.finish_output()
     }
 }
 
-impl<K: Copy> Component<K> {
-    fn new(record: Record<K>) -> Self {
-        Self {
-            first: record,
-            maximum_to: record.to,
-            count: 1,
-        }
-    }
+pub(super) fn report_overlap<K: DirectKey, S: RecoverySink>(
+    reporter: &mut Reporter<'_, S>,
+    count: u64,
+    from: K,
+    to: K,
+) -> Result<()> {
+    reporter.ranges_rejected(count, from, to)?;
+    reporter.unknown(Unknown {
+        reason: ValidationReason::RangeOverlap,
+        object: ValidationObject::RangeTree,
+        page_number: None,
+        physical_bytes: None,
+        address_fence: Some(K::fence(from, to)),
+        contributes_to_possible_span: false,
+        has_unbounded_extent: false,
+    })
 }
 
 pub(super) trait DirectKey: IpKey {

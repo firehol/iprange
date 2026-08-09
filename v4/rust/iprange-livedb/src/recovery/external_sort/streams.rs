@@ -11,6 +11,9 @@ use super::super::direct_output::DirectKey;
 use super::super::scratch::{Scratch, ScratchSlot};
 
 const RUN_HEADER_SIZE: u64 = 16;
+const RUN_MAGIC: [u8; 8] = *b"IPR4RUN1";
+const RUN_MAGIC_OFFSET: usize = 0;
+const RUN_COUNT_OFFSET: usize = RUN_MAGIC.len();
 const BUFFER_SIZE: usize = 4096;
 
 pub(super) fn write_run<K: DirectKey>(
@@ -114,8 +117,8 @@ fn copy_left<K: DirectKey>(
 
 fn write_header(scratch: &mut Scratch, slot: ScratchSlot, at: u64, count: u64) -> Result<()> {
     let mut header = [0; RUN_HEADER_SIZE as usize];
-    header[..8].copy_from_slice(b"IPR4RUN1");
-    header[8..].copy_from_slice(&count.to_le_bytes());
+    header[RUN_MAGIC_OFFSET..RUN_COUNT_OFFSET].copy_from_slice(&RUN_MAGIC);
+    header[RUN_COUNT_OFFSET..].copy_from_slice(&count.to_le_bytes());
     scratch.write(slot, at, &header)
 }
 
@@ -129,10 +132,14 @@ pub(super) struct Run {
 pub(super) fn read_run<K: DirectKey>(scratch: &Scratch, slot: ScratchSlot, at: u64) -> Result<Run> {
     let mut header = [0; RUN_HEADER_SIZE as usize];
     scratch.read(slot, at, &mut header)?;
-    if &header[..8] != b"IPR4RUN1" {
+    if header[RUN_MAGIC_OFFSET..RUN_COUNT_OFFSET] != RUN_MAGIC {
         return Err(Error::Corrupt("scratch run header is malformed"));
     }
-    let count = u64::from_le_bytes(header[8..].try_into().expect("fixed run count"));
+    let count = u64::from_le_bytes(
+        header[RUN_COUNT_OFFSET..]
+            .try_into()
+            .expect("fixed run count"),
+    );
     if count == 0 {
         return Err(Error::Corrupt("scratch run is empty"));
     }

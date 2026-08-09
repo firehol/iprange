@@ -128,7 +128,7 @@ impl RecoveryPreparationFailure {
             creation_security,
         });
         let absorbed = absorb_scratch(scratch, &mut cleanup);
-        let housekeeping = merge_housekeeping(housekeeping, absorbed.housekeeping);
+        let housekeeping = housekeeping.merge(absorbed.housekeeping);
         let mut visible_housekeeping = visible_housekeeping.into_vec();
         visible_housekeeping.extend(absorbed.visible);
         Self {
@@ -156,7 +156,7 @@ impl RecoveryPreparationFailure {
             cleanup.push(artifact);
         }
         let absorbed = absorb_scratch(scratch, &mut cleanup);
-        let housekeeping = merge_housekeeping(discarded.housekeeping, absorbed.housekeeping);
+        let housekeeping = discarded.housekeeping.merge(absorbed.housekeeping);
         let mut visible_housekeeping = discarded.visible_housekeeping.into_vec();
         visible_housekeeping.extend(absorbed.visible);
         let coordination_cleanup = if source_cleanup.is_some() {
@@ -184,7 +184,7 @@ pub(crate) fn completed(
     mut publication: PublicationResult,
 ) -> RecoveryResult {
     let absorbed = absorb_scratch(scratch, &mut publication.cleanup);
-    publication.housekeeping = merge_housekeeping(publication.housekeeping, absorbed.housekeeping);
+    publication.housekeeping = publication.housekeeping.merge(absorbed.housekeeping);
     let mut visible = std::mem::take(&mut publication.visible_housekeeping).into_vec();
     visible.extend(absorbed.visible);
     publication.visible_housekeeping = visible.into_boxed_slice();
@@ -257,17 +257,5 @@ fn absorb_scratch(
         attempt: None,
         housekeeping: Housekeeping::None,
         visible: Vec::new(),
-    }
-}
-
-const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }

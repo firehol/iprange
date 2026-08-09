@@ -9,27 +9,34 @@ use crate::page_header;
 use crate::page_io::{PageEdit, PageSink};
 use crate::slotted_page::{self, Header};
 
+mod cursor;
 mod delete;
 mod insert;
 mod page;
+mod query;
 mod read;
 mod walk;
 
+pub(crate) use cursor::{
+    Cursor, Direction as CursorDirection, Item as CursorItem, Seek as CursorSeek, SeekPosition,
+};
+#[cfg(test)]
 pub(crate) use delete::delete;
+pub(crate) use delete::delete_existing;
 pub(crate) use insert::{
     insert, insert_if_local_gap, replace_leaf_with, replace_local_predecessor_with, LocalGap,
     LocalInsert, LocalPrevious, LocalReject,
 };
-use page::{branch_child, codec_cell, copy_page, key_at, lower_bound, parse, CellBuf};
-pub(crate) use read::{
-    at_or_after, inspect_leaf, predecessor, predecessor_location, LeafBuf, LeafLocation,
-};
+use page::{branch_child, codec_cell, key_at, lower_bound, parse, CellBuf};
+pub(crate) use query::{query, LeafQuery};
+pub(crate) use read::{at_or_after, inspect_leaf, predecessor, predecessor_located, LeafLocation};
 pub(crate) use walk::{discard_private_tree, retire_tree};
 
 const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
 
 pub(crate) trait Codec {
     type Key: Copy + Ord + fmt::Debug;
+    type Leaf: Copy;
 
     const BRANCH_TYPE: u8;
     const LEAF_TYPE: u8;
@@ -40,8 +47,13 @@ pub(crate) trait Codec {
     const MAX_LEAF_SIZE: usize = Self::LEAF_SIZE;
 
     fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key>;
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf>;
     fn write_key(key: Self::Key, output: &mut [u8]);
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()>;
+
+    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
+        crate::work::leaf_validation(1);
+        Self::read_leaf(cell).map(drop)
+    }
 
     fn fixed_cell_size(level: u16) -> Option<usize> {
         if level == 0 {
@@ -98,6 +110,15 @@ pub(crate) trait Store {
     where
         F: FnOnce(Self::ReadPage<'a>, &mut Self::WritePage<'a>) -> Result<T>;
     fn discard_private(&mut self, page_number: u32) -> Result<()>;
+
+    fn copy_for_cow(&mut self, source: u32, destination: u32) -> Result<()> {
+        let target_txn = self.target_txn();
+        self.copy_page(source, destination, |source, output| {
+            output.write_source(0, source)?;
+            output.put_u64(page_header::BORN_TXN, target_txn)?;
+            crate::page_checksum::clear(output)
+        })
+    }
 }
 
 pub(crate) trait PageSource {
@@ -136,6 +157,35 @@ impl<T: Store> PageSource for T {
 
 pub(crate) trait RetiringStore: Store {
     fn retire_pages(&mut self, pages: &[u32]) -> Result<()>;
+}
+
+pub(crate) fn insert_retiring<C: Codec, S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    record: &[u8],
+) -> Result<bool> {
+    let mut retired = RetiredPages::new();
+    let inserted = insert::<C, S>(store, root, record, &mut retired)?;
+    store.retire_pages(retired.as_slice())?;
+    Ok(inserted)
+}
+
+pub(crate) fn delete_retiring<C: Codec, S: RetiringStore>(
+    store: &mut S,
+    root: &mut u32,
+    key: C::Key,
+) -> Result<()> {
+    let mut retired = RetiredPages::new();
+    delete_existing::<C, S>(store, root, key, &mut retired)?;
+    store.retire_pages(retired.as_slice())
+}
+
+fn first_key<C: Codec, S: Store>(store: &S, page_number: u32, level: u16) -> Result<C::Key> {
+    let target_txn = store.target_txn();
+    store.inspect_page(page_number, |page| {
+        let header = parse::<C, _>(page, target_txn, Some(level))?;
+        key_at::<C, _>(page, &header, 0)
+    })
 }
 
 #[derive(Debug)]
@@ -274,6 +324,44 @@ impl<C: Codec, S: Store> LeafSelector<C, S> for KeySelector<C::Key> {
     }
 }
 
+struct ExistingLeafSelector<C: Codec> {
+    key: C::Key,
+    codec: std::marker::PhantomData<C>,
+}
+
+struct ExistingLeaf<L> {
+    index: usize,
+    offset: usize,
+    len: usize,
+    value: L,
+}
+
+impl<C: Codec, S: Store> LeafSelector<C, S> for ExistingLeafSelector<C> {
+    type Selection = ExistingLeaf<C::Leaf>;
+
+    fn select<'a>(
+        &mut self,
+        page: S::ReadPage<'a>,
+        header: &Header,
+        _path: &Path,
+    ) -> Result<Self::Selection>
+    where
+        S: 'a,
+    {
+        let (index, exact) = lower_bound::<C, _>(page, header, self.key, true)?;
+        if !exact {
+            return Err(Error::Corrupt("B+tree update key is missing"));
+        }
+        let cell = codec_cell::<C, _>(page, header, index)?;
+        Ok(ExistingLeaf {
+            index,
+            offset: cell.source_offset(),
+            len: cell.len(),
+            value: C::read_leaf(cell)?,
+        })
+    }
+}
+
 pub(super) fn private_path_select<C, S, L>(
     store: &mut S,
     root: &mut u32,
@@ -306,7 +394,7 @@ where
         let active_page = if private {
             page_number
         } else {
-            let copied = touch::<C, S>(store, page_number, &header, retired)?;
+            let copied = touch(store, page_number, retired)?;
             if let Some((parent_page, parent_index)) = parent {
                 replace_branch_child::<C, S>(store, parent_page, parent_index, copied)?;
             } else {
@@ -339,34 +427,54 @@ where
     }
 }
 
-pub(crate) fn replace_leaf_u64<C: Codec, S: Store>(
+pub(crate) enum LeafU64Mutation {
+    Replace(u64),
+    Delete,
+}
+
+pub(crate) fn mutate_leaf_u64<C, S, F>(
     store: &mut S,
     root: &mut u32,
     key: C::Key,
     field_offset: usize,
-    value: u64,
     retired: &mut RetiredPages,
-) -> Result<()> {
-    let leaf = private_path::<C, S>(store, root, key, retired)?;
-    let target_txn = store.target_txn();
-    store.update_page(leaf.page_number, |page| {
-        let header = parse::<C, _>(page.view(), target_txn, Some(0))?;
-        let (index, exact) = lower_bound::<C, _>(page.view(), &header, key, true)?;
-        if !exact {
-            return Err(Error::Corrupt("B+tree update key is missing"));
+    decide: F,
+) -> Result<C::Leaf>
+where
+    C: Codec,
+    S: Store,
+    F: FnOnce(C::Leaf) -> Result<LeafU64Mutation>,
+{
+    let mut selector = ExistingLeafSelector::<C> {
+        key,
+        codec: std::marker::PhantomData,
+    };
+    let leaf = private_path_select::<C, S, _>(store, root, key, retired, &mut selector)?;
+    let selected = leaf.selection;
+    match decide(selected.value)? {
+        LeafU64Mutation::Replace(replacement) => {
+            store.update_page(leaf.page_number, |page| {
+                if match field_offset.checked_add(8) {
+                    Some(end) => end > selected.len,
+                    None => true,
+                } {
+                    return Err(Error::Corrupt("B+tree update field is outside its leaf"));
+                }
+                page.put_u64(selected.offset + field_offset, replacement)
+            })?;
         }
-        let cell = codec_cell::<C, _>(page.view(), &header, index)?;
-        C::validate_leaf(cell)?;
-        if match field_offset.checked_add(8) {
-            Some(end) => end > cell.len(),
-            None => true,
-        } {
-            return Err(Error::Corrupt("B+tree update field is outside its leaf"));
-        }
-        let at = cell.source_offset() + field_offset;
-        page.put_u64(at, value)?;
-        C::validate_leaf(codec_cell::<C, _>(page.view(), &header, index)?)
-    })
+        LeafU64Mutation::Delete => delete::delete_target::<C, S>(
+            store,
+            root,
+            delete::Target {
+                path: leaf.path,
+                page_number: leaf.page_number,
+                header: leaf.header,
+                index: selected.index,
+            },
+        )?,
+    }
+    Ok(selected.value)
 }
 
 fn inspect<C, S, L>(
@@ -406,18 +514,9 @@ where
     })
 }
 
-fn touch<C: Codec, S: Store>(
-    store: &mut S,
-    page_number: u32,
-    header: &Header,
-    retired: &mut RetiredPages,
-) -> Result<u32> {
+fn touch<S: Store>(store: &mut S, page_number: u32, retired: &mut RetiredPages) -> Result<u32> {
     let private_page = store.allocate()?;
-    let target_txn = store.target_txn();
-    let page_limit = store.page_limit();
-    store.copy_page(page_number, private_page, |source, output| {
-        copy_page::<C, _, _>(source, header, target_txn, page_limit, output)
-    })?;
+    store.copy_for_cow(page_number, private_page)?;
     retired.push(page_number)?;
     Ok(private_page)
 }

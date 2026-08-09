@@ -152,7 +152,7 @@ pub(crate) fn id_contains_index(
     feed_index: u32,
 ) -> Result<bool> {
     let view = lookup(mapping, meta, Some(id), None)?
-        .ok_or(Error::Corrupt("range names an absent membership"))?;
+        .ok_or_else(|| Error::corrupt("range names an absent membership"))?;
     view.contains_index(feed_index)
 }
 
@@ -166,7 +166,7 @@ pub(crate) fn by_id<'a>(
         return Err(Error::Corrupt("range names the empty membership ID"));
     }
     lookup(mapping, meta, Some(id), owner_identity)?
-        .ok_or(Error::Corrupt("range names an absent membership ID"))
+        .ok_or_else(|| Error::corrupt("range names an absent membership ID"))
 }
 
 fn lookup<'a>(
@@ -179,7 +179,7 @@ fn lookup<'a>(
         return Ok(None);
     };
     let record = membership_tree::find(mapping, meta, id)?
-        .ok_or(Error::Corrupt("range names an absent membership ID"))?;
+        .ok_or_else(|| Error::corrupt("range names an absent membership ID"))?;
     Ok(Some(MembershipView {
         mapping,
         meta: *meta,

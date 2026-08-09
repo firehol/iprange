@@ -153,6 +153,25 @@ impl Directory {
         name: &Name,
         writable: bool,
     ) -> Result<Option<Regular>, NamespaceError> {
+        self.open_regular_with_links(name, writable, true, "open retained file")
+    }
+
+    #[cfg(any(target_os = "freebsd", test))]
+    pub(crate) fn open_regular_any_link(
+        &self,
+        name: &Name,
+        writable: bool,
+    ) -> Result<Option<Regular>, NamespaceError> {
+        self.open_regular_with_links(name, writable, false, "open retained transition file")
+    }
+
+    fn open_regular_with_links(
+        &self,
+        name: &Name,
+        writable: bool,
+        require_single_link: bool,
+        operation: &'static str,
+    ) -> Result<Option<Regular>, NamespaceError> {
         self.check_creator()?;
         let access = if writable {
             libc::O_RDWR
@@ -174,13 +193,14 @@ impl Directory {
             if is_nofollow_symlink(&source) {
                 return Err(NamespaceError::NotRegular);
             }
-            return Err(NamespaceError::IoAt {
-                operation: "open retained file",
-                source,
-            });
+            return Err(NamespaceError::IoAt { operation, source });
         }
         let file = unsafe { File::from_raw_fd(fd) };
-        let identity = regular_identity(&file, self.identity)?;
+        let identity = if require_single_link {
+            regular_identity(&file, self.identity)?
+        } else {
+            regular_identity_any_link(&file, self.identity)?
+        };
         Ok(Some(Regular { file, identity }))
     }
 

@@ -4,7 +4,7 @@ use crate::cancellation::CancellationToken;
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
 use crate::feed::FeedEntry;
-use crate::fixed_tree::{self, Codec, RetiredPages, RetiringStore, Store};
+use crate::fixed_tree::{self, Codec, RetiringStore, Store};
 use crate::mapping::ByteSource;
 use crate::membership_dictionary::{Interned, Words};
 use crate::reader_core::MembershipToken;
@@ -18,11 +18,16 @@ const CACHE_AUX: u32 = 0x494d_5043;
 const FEED_KEY: u64 = 1;
 const MEMBERSHIP_KEY: u64 = 2;
 const TRANSLATED_KEY: u64 = 3;
+const ENTRY_KEY_OFFSET: usize = 0;
+const ENTRY_VALUE_OFFSET: usize = 8;
+const ENTRY_WORDS_OFFSET: usize = 12;
+const ENTRY_SIZE: usize = 16;
 
 pub(crate) struct ImportCache {
     root: u32,
     source_memberships: u64,
     translated_memberships: u64,
+    last_membership: Option<(MembershipToken, TranslatedMembership)>,
 }
 
 pub(crate) struct ImportWords {
@@ -45,6 +50,7 @@ impl ImportCache {
             root: 0,
             source_memberships: 0,
             translated_memberships: 0,
+            last_membership: None,
         }
     }
 
@@ -66,16 +72,29 @@ impl ImportCache {
     }
 
     pub(crate) fn membership(
-        &self,
+        &mut self,
         store: &DraftStore<'_>,
         source: MembershipToken,
     ) -> Result<Option<TranslatedMembership>> {
-        Ok(lookup(
+        if let Some(translated) = self.last_translation(source) {
+            return Ok(Some(translated));
+        }
+        let translated = lookup(
             store,
             self.root,
             namespaced(MEMBERSHIP_KEY, source.cache_key()),
         )?
-        .map(|entry| TranslatedMembership::new(entry.value, entry.words)))
+        .map(|entry| TranslatedMembership::new(entry.value, entry.words));
+        if let Some(translated) = translated {
+            self.last_membership = Some((source, translated));
+        }
+        Ok(translated)
+    }
+
+    pub(crate) fn last_translation(&self, source: MembershipToken) -> Option<TranslatedMembership> {
+        self.last_membership
+            .filter(|(cached, _)| *cached == source)
+            .map(|(_, translated)| translated)
     }
 
     pub(crate) fn finish_membership(
@@ -108,6 +127,8 @@ impl ImportCache {
         )?;
         self.source_memberships =
             checked_increment(self.source_memberships, "source distinct membership count")?;
+        let translated = TranslatedMembership::new(destination_id, destination_words);
+        self.last_membership = Some((source, translated));
 
         let translated_key = namespaced(TRANSLATED_KEY, destination_id);
         if lookup(store, self.root, translated_key)?.is_none() {
@@ -123,7 +144,7 @@ impl ImportCache {
             self.translated_memberships =
                 checked_increment(self.translated_memberships, "translated membership count")?;
         }
-        Ok(TranslatedMembership::new(destination_id, destination_words))
+        Ok(translated)
     }
 
     pub(crate) fn map_word_batch(
@@ -187,6 +208,7 @@ impl ImportCache {
             cancellation.check()
         })?;
         self.root = 0;
+        self.last_membership = None;
         Ok(())
     }
 }
@@ -271,23 +293,24 @@ impl Words<DraftStore<'_>> for ImportWords {
 
 impl Codec for CacheCodec {
     type Key = u64;
+    type Leaf = Entry;
 
     const BRANCH_TYPE: u8 = CACHE_BRANCH;
     const LEAF_TYPE: u8 = CACHE_LEAF;
     const AUX: u32 = CACHE_AUX;
-    const KEY_SIZE: usize = 8;
-    const LEAF_SIZE: usize = 16;
+    const KEY_SIZE: usize = ENTRY_VALUE_OFFSET;
+    const LEAF_SIZE: usize = ENTRY_SIZE;
 
     fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
-        Ok(u64_le(cell, 0))
+        Ok(u64_le(cell, ENTRY_KEY_OFFSET))
+    }
+
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
+        Entry::decode(cell)
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
-        put_u64(output, 0, key);
-    }
-
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        Entry::decode(cell).map(|_| ())
+        put_u64(output, ENTRY_KEY_OFFSET, key);
     }
 }
 
@@ -305,21 +328,21 @@ impl Entry {
     }
 
     fn decode<S: ByteSource>(input: S) -> Result<Self> {
-        if input.len() != 16 {
+        if input.len() != ENTRY_SIZE {
             return Err(Error::Corrupt("import cache record length is invalid"));
         }
         Ok(Self {
-            key: u64_le(input, 0),
-            value: u32_le(input, 8),
-            words: u32_le(input, 12),
+            key: u64_le(input, ENTRY_KEY_OFFSET),
+            value: u32_le(input, ENTRY_VALUE_OFFSET),
+            words: u32_le(input, ENTRY_WORDS_OFFSET),
         })
     }
 
-    fn encode(self) -> [u8; 16] {
-        let mut output = [0; 16];
-        put_u64(&mut output, 0, self.key);
-        put_u32(&mut output, 8, self.value);
-        put_u32(&mut output, 12, self.words);
+    fn encode(self) -> [u8; ENTRY_SIZE] {
+        let mut output = [0; ENTRY_SIZE];
+        put_u64(&mut output, ENTRY_KEY_OFFSET, self.key);
+        put_u32(&mut output, ENTRY_VALUE_OFFSET, self.value);
+        put_u32(&mut output, ENTRY_WORDS_OFFSET, self.words);
         output
     }
 }
@@ -332,8 +355,7 @@ fn lookup<S: Store>(store: &S, root: u32, key: u64) -> Result<Option<Entry>> {
     let Some(found) = fixed_tree::at_or_after::<CacheCodec, S>(store, root, key)? else {
         return Ok(None);
     };
-    let entry = Entry::decode(found.as_slice())?;
-    Ok((entry.key == key).then_some(entry))
+    Ok((found.key == key).then_some(found))
 }
 
 fn insert_new<S: RetiringStore>(store: &mut S, root: &mut u32, entry: Entry) -> Result<()> {
@@ -344,9 +366,7 @@ fn insert_new<S: RetiringStore>(store: &mut S, root: &mut u32, entry: Entry) -> 
 }
 
 fn insert<S: RetiringStore>(store: &mut S, root: &mut u32, entry: Entry) -> Result<()> {
-    let mut retired = RetiredPages::new();
-    fixed_tree::insert::<CacheCodec, S>(store, root, &entry.encode(), &mut retired)?;
-    store.retire_pages(retired.as_slice())
+    fixed_tree::insert_retiring::<CacheCodec, S>(store, root, &entry.encode()).map(drop)
 }
 
 fn checked_increment(value: u64, label: &'static str) -> Result<u64> {

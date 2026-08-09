@@ -2,17 +2,14 @@
 
 use std::path::Path;
 
-use crate::bootstrap::OpenMode;
 use crate::cancellation::CancellationToken;
-use crate::database;
+use crate::database_file::{self, EmptySpec};
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
 use crate::live_sidecar::{Sidecar, State, MAIN_LIFETIME_LOCK};
-use crate::live_writer::{
-    empty_meta, write_empty_main, CreateResult, CreationState, LocalBasename,
-};
+use crate::live_writer::{CreateResult, CreationState, LocalBasename};
 use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
@@ -189,8 +186,7 @@ fn complete(
                 }
             };
             let public = crate::live_namespace::public_identity(created.identity);
-            let meta = expected_meta(supplied);
-            if let Err(cause) = write_empty_main(&created.file, meta)
+            if let Err(cause) = database_file::write_empty(&created.file, expected_spec(supplied))
                 .and_then(|()| crate::live_namespace::sync_parent(path))
             {
                 return Ok(unknown(
@@ -301,14 +297,9 @@ fn observe_main(
     }
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
     crate::live_namespace::verify_path(path, identity)?;
-    match database::bootstrap_file(&file, OpenMode::Writer) {
-        Ok(opened)
-            if opened.physical_bytes == opened.committed_bytes
-                && opened.meta == expected_meta(supplied) =>
-        {
-            Ok(Main::Exact { file, identity })
-        }
-        Ok(_) => Err(Error::Conflict(
+    match database_file::is_exact_empty(&file, expected_spec(supplied)) {
+        Ok(true) => Ok(Main::Exact { file, identity }),
+        Ok(false) => Err(Error::Conflict(
             "creation path contains another valid database",
         )),
         Err(Error::Format(_) | Error::Corrupt(_)) if supplied.main_identity == Some(public) => {
@@ -382,8 +373,7 @@ fn verify_created(
     crate::live_namespace::verify_path(path, main_identity)?;
     sidecar.verify_path()?;
     sidecar.verify_header()?;
-    let opened = database::bootstrap_file(main, OpenMode::Writer)?;
-    if opened.physical_bytes != opened.committed_bytes || opened.meta != expected_meta(supplied) {
+    if !database_file::is_exact_empty(main, expected_spec(supplied))? {
         return Err(Error::Conflict("created main changed during resolution"));
     }
     Ok(())
@@ -409,8 +399,8 @@ fn require_supplied(path: &Path, supplied: &CreateResult) -> Result<()> {
     Ok(())
 }
 
-fn expected_meta(supplied: &CreateResult) -> crate::contract::MetaV4 {
-    empty_meta(
+fn expected_spec(supplied: &CreateResult) -> EmptySpec {
+    EmptySpec::live(
         supplied.address_family,
         supplied.value_kind,
         supplied.value_tag,
@@ -511,7 +501,7 @@ fn unknown_after_private_failure(
     sidecar_identity: Option<LocalFileIdentity>,
     failure: crate::live_namespace::PrivateCreationFailure,
 ) -> CreateResult {
-    let housekeeping = merge_housekeeping(supplied.housekeeping, failure.cleanup.housekeeping);
+    let housekeeping = supplied.housekeeping.merge(failure.cleanup.housekeeping);
     let mut visible = supplied.visible_housekeeping.clone().into_vec();
     visible.extend(failure.cleanup.visible);
     let cause = match failure.cleanup.cause {
@@ -545,7 +535,7 @@ fn cleanup_result(
         CreationState::OutcomeUnknown
     };
     let residue_possible = !cleanup.is_clean();
-    let housekeeping = merge_housekeeping(supplied.housekeeping, cleanup.housekeeping);
+    let housekeeping = supplied.housekeeping.merge(cleanup.housekeeping);
     let mut visible = supplied.visible_housekeeping.clone().into_vec();
     visible.extend(cleanup.visible);
     result_with_housekeeping(
@@ -608,23 +598,6 @@ fn result_with_housekeeping(
         housekeeping,
         visible_housekeeping,
         cause,
-    }
-}
-
-const fn merge_housekeeping(
-    left: crate::publication::Housekeeping,
-    right: crate::publication::Housekeeping,
-) -> crate::publication::Housekeeping {
-    use crate::publication::Housekeeping;
-
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }
 

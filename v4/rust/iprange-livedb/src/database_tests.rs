@@ -1,7 +1,11 @@
 //! Immutable database open tests.
 
 use super::*;
-use crate::contract::MetaV4;
+use crate::bootstrap::{self, MetaSelection};
+use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
+use crate::error::Error;
+use crate::path;
+use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestPath(std::path::PathBuf);

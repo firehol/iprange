@@ -1,7 +1,7 @@
 //! Fixed bitmap-page encoding and selected-path checks.
 
 use crate::bitmap_page::{self, Kind};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::mapping::ByteSource;
 use crate::page_io::{PageEdit, PageSink};
 
@@ -25,18 +25,7 @@ pub(super) fn set_branch_child<D: PageEdit>(
     child: u32,
     candidate: bool,
 ) -> Result<()> {
-    if header.level == 0 || index >= BRANCH_CHILDREN {
-        return Err(Error::Corrupt("used bitmap child index is invalid"));
-    }
-    let old = bitmap_page::branch_child(page.view(), index)?;
-    bitmap_page::set_branch_child(page, index, child)?;
-    set_summary(page, index, candidate)?;
-    let count = header
-        .item_count
-        .checked_add(usize::from(old == 0 && child != 0))
-        .and_then(|count| count.checked_sub(usize::from(old != 0 && child == 0)))
-        .ok_or(Error::Corrupt("used bitmap child count underflows"))?;
-    page.put_u16(crate::page_header::ITEM_COUNT, count as u16)
+    bitmap_page::replace_branch_child(page, header, index, child, candidate).map(drop)
 }
 
 pub(super) fn set_pointer<D: PageEdit>(
@@ -55,14 +44,7 @@ pub(super) fn branch_child<S: ByteSource>(
     index: usize,
     page_limit: u64,
 ) -> Result<u32> {
-    if header.level == 0 || index >= BRANCH_CHILDREN {
-        return Err(Error::Corrupt("used bitmap child lookup is invalid"));
-    }
-    let child = bitmap_page::branch_child(page, index)?;
-    if child != 0 && (child < 2 || u64::from(child) >= page_limit) {
-        return Err(Error::Corrupt("used bitmap child is outside page bounds"));
-    }
-    Ok(child)
+    bitmap_page::checked_branch_child(page, header, index, page_limit)
 }
 
 pub(super) fn lowest_leaf<S: ByteSource>(

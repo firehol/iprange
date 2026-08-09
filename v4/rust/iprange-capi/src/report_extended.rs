@@ -215,22 +215,11 @@ impl ReportHandle {
     }
 
     pub(crate) fn recovery_preparation(failure: &recovery::RecoveryPreparationFailure) -> Self {
-        let scratch = failure.scratch.as_ref();
-        let body = RecoveryReport {
-            abi_version: 1,
-            struct_size: size_of::<RecoveryReport>() as u32,
-            facts: facts::recovery_facts(&failure.report),
-            scratch_present: u8::from(scratch.is_some()),
-            reserved: [0; 7],
-            scratch_attempt_id: scratch.map_or([0; 16], |value| value.attempt_id),
-            scratch_directory_identity: scratch.map_or_else(Default::default, |value| {
-                facts::identity(value.directory_identity)
-            }),
-            scratch_creation_security: scratch.map_or_else(Default::default, |value| {
-                facts::creation_security(Some(&value.creation_security))
-            }),
-            publication: Default::default(),
-        };
+        let body = encode_recovery_body(
+            &failure.report,
+            failure.scratch.as_ref(),
+            PublicationReport::default(),
+        );
         let mut report = Self::new(Body::Recovery(body));
         report.cause = Some(Box::new(ErrorHandle::from_publication_problem(
             failure.cause.clone(),
@@ -768,11 +757,22 @@ fn encode_live_transition(result: &LiveTransitionResult) -> LiveTransitionReport
 }
 
 fn encode_recovery(result: &recovery::RecoveryResult) -> RecoveryReport {
-    let scratch = result.scratch.as_ref();
+    encode_recovery_body(
+        &result.report,
+        result.scratch.as_ref(),
+        facts::publication(&result.publication),
+    )
+}
+
+fn encode_recovery_body(
+    report: &recovery::RecoveryReport,
+    scratch: Option<&recovery::RecoveryScratchAttempt>,
+    publication: PublicationReport,
+) -> RecoveryReport {
     RecoveryReport {
         abi_version: 1,
         struct_size: size_of::<RecoveryReport>() as u32,
-        facts: facts::recovery_facts(&result.report),
+        facts: facts::recovery_facts(report),
         scratch_present: u8::from(scratch.is_some()),
         reserved: [0; 7],
         scratch_attempt_id: scratch.map_or([0; 16], |value| value.attempt_id),
@@ -782,7 +782,7 @@ fn encode_recovery(result: &recovery::RecoveryResult) -> RecoveryReport {
         scratch_creation_security: scratch.map_or_else(Default::default, |value| {
             facts::creation_security(Some(&value.creation_security))
         }),
-        publication: facts::publication(&result.publication),
+        publication,
     }
 }
 

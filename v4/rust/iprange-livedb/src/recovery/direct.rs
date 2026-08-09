@@ -8,7 +8,7 @@ use super::metadata as recovery_metadata;
 use super::page_set::PageSet;
 use super::range_build::analyze_ranges;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
-use super::{RecoveryBudget, ScratchCleanup};
+use super::RecoveryBudget;
 
 pub(crate) struct DirectAnalysis {
     pub(crate) report: RecoveryReport,
@@ -16,12 +16,6 @@ pub(crate) struct DirectAnalysis {
     pub(crate) ordered: bool,
     pub(super) metadata: Option<Vec<u8>>,
     pub(super) pages: PageSet,
-}
-
-pub(crate) struct DirectAnalysisFailure {
-    pub(crate) cause: Error,
-    pub(crate) report: RecoveryReport,
-    pub(crate) scratch: Option<ScratchCleanup>,
 }
 
 // A partial report must survive sink, I/O, and budget failures without allocating then.
@@ -32,12 +26,16 @@ pub(crate) fn analyze<S: RecoverySink>(
     budget: &RecoveryBudget,
     cancellation: &CancellationToken,
     sink: &mut S,
-) -> std::result::Result<DirectAnalysis, DirectAnalysisFailure> {
+) -> std::result::Result<DirectAnalysis, super::construction::AnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
-        return Err(analysis_failure(cause, RecoveryReport::default(), None));
+        return Err(super::construction::analysis_failure(
+            cause,
+            RecoveryReport::default(),
+            None,
+        ));
     }
     if meta.value_kind != ValueKind::Direct {
-        return Err(analysis_failure(
+        return Err(super::construction::analysis_failure(
             Error::WrongValueKind("direct recovery requires direct values"),
             RecoveryReport::default(),
             None,
@@ -52,7 +50,13 @@ pub(crate) fn analyze<S: RecoverySink>(
         budget,
     ) {
         Ok(pages) => pages,
-        Err(cause) => return Err(analysis_failure(cause, reporter.finish(), None)),
+        Err(cause) => {
+            return Err(super::construction::analysis_failure(
+                cause,
+                reporter.finish(),
+                None,
+            ))
+        }
     };
     let ranges = match meta.address_family {
         AddressFamily::Ipv4 => {
@@ -82,30 +86,9 @@ pub(crate) fn analyze<S: RecoverySink>(
             metadata,
             pages,
         }),
-        Err(cause) => Err(analysis_failure_with_pages(pages, cause, report)),
-    }
-}
-
-fn analysis_failure(
-    cause: Error,
-    report: RecoveryReport,
-    scratch: Option<ScratchCleanup>,
-) -> DirectAnalysisFailure {
-    DirectAnalysisFailure {
-        cause,
-        report,
-        scratch,
-    }
-}
-
-fn analysis_failure_with_pages(
-    pages: PageSet,
-    cause: Error,
-    report: RecoveryReport,
-) -> DirectAnalysisFailure {
-    match pages.finish(Err(cause)) {
-        Err(failure) => analysis_failure(failure.cause, report, failure.cleanup),
-        Ok(_) => unreachable!("failed analysis cannot finish successfully"),
+        Err(cause) => Err(super::construction::analysis_failure_with_pages(
+            pages, cause, report,
+        )),
     }
 }
 

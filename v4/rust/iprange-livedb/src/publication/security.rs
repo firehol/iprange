@@ -1,5 +1,7 @@
 //! Platform creator-only creation and access-policy proof.
 
+const COMMITMENT_DOMAIN: &[u8; 8] = b"IPR4PSEC";
+
 #[cfg(unix)]
 #[path = "security/posix.rs"]
 mod platform;

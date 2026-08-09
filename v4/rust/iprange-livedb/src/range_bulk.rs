@@ -91,11 +91,11 @@ impl<K: Copy> PackedPage<K> {
     fn push<S: Sink>(&mut self, sink: &mut S, first: K, cell: &[u8]) -> Result<bool> {
         let page_number = self
             .page_number
-            .ok_or(Error::Corrupt("ordered range page has no output page"))?;
+            .ok_or_else(|| Error::corrupt("ordered range page has no output page"))?;
         let appender = self
             .appender
             .as_mut()
-            .ok_or(Error::Corrupt("ordered range page is not active"))?;
+            .ok_or_else(|| Error::corrupt("ordered range page is not active"))?;
         let appended = sink.update_page(page_number, |page| appender.try_push(page, cell))?;
         if appended && self.first.is_none() {
             self.first = Some(first);
@@ -107,16 +107,16 @@ impl<K: Copy> PackedPage<K> {
         let appender = self
             .appender
             .take()
-            .ok_or(Error::Corrupt("ordered range page is not active"))?;
+            .ok_or_else(|| Error::corrupt("ordered range page is not active"))?;
         let page_number = self
             .page_number
             .take()
-            .ok_or(Error::Corrupt("ordered range page has no output page"))?;
+            .ok_or_else(|| Error::corrupt("ordered range page has no output page"))?;
         sink.update_page(page_number, |page| appender.finish(page))?;
         let first = self
             .first
             .take()
-            .ok_or(Error::Corrupt("ordered range page has no first key"))?;
+            .ok_or_else(|| Error::corrupt("ordered range page has no first key"))?;
         Ok(Node { first, page_number })
     }
 
@@ -171,7 +171,7 @@ impl<K: IpKey> Builder<K> {
         let next_count = self
             .record_count
             .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow("range record count"))?;
+            .ok_or_else(|| Error::arithmetic_overflow("range record count"))?;
         let mut cell = [0; range_tree::MAX_RECORD_SIZE];
         let cell_len = range_tree::encode_record(record, &mut cell)?;
         self.push_leaf_cell(sink, record.from, &cell[..cell_len])?;

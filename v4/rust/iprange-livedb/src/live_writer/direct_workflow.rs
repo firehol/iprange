@@ -6,15 +6,14 @@ use crate::error::{Error, Result};
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::range_cursor::DirectRange;
 use crate::source::{RangeSource, SliceSource};
-use crate::workflow::{
-    AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
-};
+use crate::workflow::{AddressRange, ReplacementReportInput, WorkflowKind, WorkflowReport};
 
 use super::workflow::FinishedState;
 use super::workflow::{
-    classify, drain_source, require_input_active, require_input_family, require_ordered,
+    classify, complete_workflow, drain_source, require_input_active, require_input_family,
+    require_ordered,
 };
-use super::{FinishedWorkflow, LiveWriter, PreparedState};
+use super::{FinishedWorkflow, LiveWriter};
 
 /// Complete unordered direct-map replacement.
 #[derive(Debug)]
@@ -328,15 +327,8 @@ impl ExactDirectState {
     }
 
     fn complete(self, writer: &mut LiveWriter, report: WorkflowReport) -> Result<FinishedState> {
-        if report.logical_change == LogicalChange::NoChange {
-            writer.discard_draft()?;
-            return Ok(FinishedState::NoChange(report));
-        }
-        let cancellation = self.cancellation;
-        writer.mutate(|edit| edit.finish_direct_workflow(&cancellation))?;
-        Ok(FinishedState::Changed {
-            report,
-            state: PreparedState::new(cancellation),
+        complete_workflow(writer, report, self.cancellation, |edit, cancellation| {
+            edit.finish_direct_workflow(cancellation)
         })
     }
 }

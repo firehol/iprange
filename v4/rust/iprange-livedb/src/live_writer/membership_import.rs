@@ -13,12 +13,12 @@ use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::live_namespace::Identity;
 use crate::live_reader::LiveReader;
 use crate::reader_core::{MembershipRange, MembershipRangeCursor, MembershipToken, ReaderCore};
-use crate::workflow::{Comparison, LogicalChange};
+use crate::workflow::Comparison;
 use crate::writer_core::{ImportCache, ImportWords, TranslatedMembership};
 use crate::{FeedCursor, ImmutableReader, MembershipView};
 
-use super::workflow::FinishedState;
-use super::{FinishedWorkflow, LiveWriter, PreparedState};
+use super::workflow::{complete_workflow, FinishedState};
+use super::{FinishedWorkflow, LiveWriter};
 
 const WORD_BATCH: usize = 64;
 
@@ -104,14 +104,8 @@ pub(crate) fn finish_import_state(
     let cancellation = cancellation.clone();
     writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
     let report = report::prepare(writer, stats, &cancellation)?;
-    if report.logical_change == LogicalChange::NoChange {
-        writer.discard_draft()?;
-        return Ok(FinishedState::NoChange(report));
-    }
-    writer.mutate(|store| store.finish_membership_workflow(&cancellation))?;
-    Ok(FinishedState::Changed {
-        report,
-        state: PreparedState::new(cancellation),
+    complete_workflow(writer, report, cancellation, |edit, cancellation| {
+        edit.finish_membership_workflow(cancellation)
     })
 }
 
@@ -285,6 +279,9 @@ fn translate_membership(
     source_membership: MembershipToken,
     cancellation: &CancellationToken,
 ) -> Result<TranslatedMembership> {
+    if let Some(translated) = cache.last_translation(source_membership) {
+        return Ok(translated);
+    }
     if let Some(translated) =
         writer.mutate(|edit| edit.cached_import_membership(cache, source_membership))?
     {

@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::publication::namespace::NamespaceError;
 
+use super::COMMITMENT_DOMAIN;
+
 #[cfg(target_vendor = "apple")]
 #[path = "apple.rs"]
 mod acl;
@@ -18,7 +20,6 @@ mod acl;
 #[path = "linux.rs"]
 mod acl;
 
-const DOMAIN: &[u8; 8] = b"IPR4PSEC";
 pub(crate) const CREATOR_MODE: u32 = 0o600;
 
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +71,7 @@ fn creator_only_metadata(file: &File) -> Result<std::fs::Metadata, NamespaceErro
 
 fn commitment(uid: u32) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(DOMAIN);
+    hasher.update(COMMITMENT_DOMAIN);
     hasher.update(uid.to_le_bytes());
     hasher.update(CREATOR_MODE.to_le_bytes());
     hasher.finalize().into()

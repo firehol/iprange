@@ -135,8 +135,11 @@ fn committed_path_is_copied_once_and_checksum_checked() {
     assert_eq!(&store.pages[..committed.len()], committed.as_slice());
 
     let mut second = RetiredPages::new();
-    set_free(&mut store, &mut root, 100_000, 40_002, &mut second).unwrap();
+    let (result, work) =
+        crate::work::measure(|| set_free(&mut store, &mut root, 100_000, 40_002, &mut second));
+    result.unwrap();
     assert!(second.as_slice().is_empty());
+    assert_eq!(work.bitmap_probes, 2);
 
     let mut corrupt = MemoryStore::new(2);
     let mut corrupt_root = 0;

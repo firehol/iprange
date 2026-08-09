@@ -6,16 +6,17 @@ use crate::page_io::PageEdit;
 use crate::slotted_page;
 
 use super::insert::{propagate_first, propagate_first_from};
-use super::page::{branch_child, key_at, parse};
-use super::{private_path, Codec, Path, RetiredPages, Store};
+use super::page::{branch_child, parse};
+use super::{first_key, private_path, Codec, Path, RetiredPages, Store};
 
-struct Target {
-    path: Path,
-    page_number: u32,
-    header: crate::slotted_page::Header,
-    index: usize,
+pub(super) struct Target {
+    pub(super) path: Path,
+    pub(super) page_number: u32,
+    pub(super) header: crate::slotted_page::Header,
+    pub(super) index: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn delete<C: Codec, S: Store>(
     store: &mut S,
     root: &mut u32,
@@ -25,14 +26,31 @@ pub(crate) fn delete<C: Codec, S: Store>(
     if !super::read::contains::<C, S>(store, *root, key)? {
         return Ok(false);
     }
+    delete_existing::<C, S>(store, root, key, retired)?;
+    Ok(true)
+}
+
+pub(crate) fn delete_existing<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    key: C::Key,
+    retired: &mut RetiredPages,
+) -> Result<()> {
     let target = locate::<C, S>(store, root, key, retired)?;
+    delete_target::<C, S>(store, root, target)
+}
+
+pub(super) fn delete_target<C: Codec, S: Store>(
+    store: &mut S,
+    root: &mut u32,
+    target: Target,
+) -> Result<()> {
     if target.header.item_count > 1 {
         remove_leaf_record::<C, S>(store, root, target)?;
-        return Ok(true);
+        return Ok(());
     }
     store.discard_private(target.page_number)?;
-    remove_empty_child::<C, S>(store, root, &target.path)?;
-    Ok(true)
+    remove_empty_child::<C, S>(store, root, &target.path)
 }
 
 fn locate<C: Codec, S: Store>(
@@ -125,12 +143,4 @@ fn remove_at<C: Codec, D: PageEdit>(
 ) -> Result<()> {
     let old_len = super::page::codec_cell::<C, _>(page.view(), header, index)?.len();
     slotted_page::remove(page, header, index, old_len)
-}
-
-fn first_key<C: Codec, S: Store>(store: &S, page_number: u32, level: u16) -> Result<C::Key> {
-    let target_txn = store.target_txn();
-    store.inspect_page(page_number, |page| {
-        let header = parse::<C, _>(page, target_txn, Some(level))?;
-        key_at::<C, _>(page, &header, 0)
-    })
 }

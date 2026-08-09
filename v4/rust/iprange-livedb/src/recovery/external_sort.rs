@@ -8,7 +8,6 @@ use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::mapping::Mapping;
 use crate::range_tree::Record;
-use crate::validation::ValidationReason;
 
 use super::direct_output::DirectKey;
 use super::page_set::PageSet;
@@ -241,23 +240,6 @@ impl<K: DirectKey> ScanEvents<'_, K> {
 }
 
 impl<K: DirectKey> RangeEvents<K> for ScanEvents<'_, K> {
-    fn page_accepted(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
-        Ok(())
-    }
-
-    fn unknown(
-        &mut self,
-        _reason: ValidationReason,
-        _page: Option<u32>,
-        _unbounded: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     fn range(&mut self, _page: u32, record: Option<Record<K>>) -> Result<()> {
         let Some(record) = record else {
             return Ok(());

@@ -88,7 +88,7 @@ impl Outcome {
         if self.cause.is_none() {
             self.cause = other.cause.take();
         }
-        self.housekeeping = merge_housekeeping(self.housekeeping, other.housekeeping);
+        self.housekeeping = self.housekeeping.merge(other.housekeeping);
         self.visible.append(&mut other.visible);
     }
 }
@@ -285,17 +285,5 @@ fn remove_windows(path: &Path, file: &File, identity: Identity, authority: Autho
         cause: retirement.problem.map(|problem| problem.into_sdk()),
         housekeeping: retirement.housekeeping,
         visible: retirement.visible.into_iter().collect(),
-    }
-}
-
-const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }

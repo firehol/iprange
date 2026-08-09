@@ -1,6 +1,7 @@
 //! Explicit offline transitions between immutable and live operation.
 
 mod create_resolution;
+pub(crate) mod creation;
 mod namespace;
 mod residue;
 mod resolution;

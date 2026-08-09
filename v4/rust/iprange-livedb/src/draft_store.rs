@@ -21,16 +21,15 @@ mod storage;
 #[path = "draft_store/workflow.rs"]
 mod workflow_ops;
 
-use crate::contract::{u32_le, MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
+use crate::contract::{MetaV4, MAX_PAGE_COUNT, PAGE_SIZE};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
 use crate::free_bitmap;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
+use crate::membership_delta::Delta;
 use crate::range_mutation;
 use crate::retirement;
-
-const PRIVATE_MAGIC: u32 = 0x5046_5245;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PageBudget {
@@ -59,6 +58,7 @@ pub(crate) struct Draft {
     range_tree_private: bool,
     base_range_tree_retired: bool,
     membership_delta_root: u32,
+    membership_delta_pending: Option<Delta>,
     workflow_range_root: u32,
     workflow_range_count: u64,
     workflow: WorkflowState,
@@ -93,6 +93,7 @@ impl Draft {
             range_tree_private: false,
             base_range_tree_retired: false,
             membership_delta_root: 0,
+            membership_delta_pending: None,
             workflow_range_root: 0,
             workflow_range_count: 0,
             workflow: WorkflowState::None,
@@ -173,20 +174,14 @@ impl<'a> DraftStore<'a> {
     }
 
     pub(crate) fn assign_v4(&mut self, from: Ipv4Key, to: Ipv4Key, value: u32) -> Result<bool> {
-        let mut root = self.draft.meta.range_root;
-        let mut count = self.draft.meta.range_record_count;
-        let changed = if self.draft.range_tree_private {
-            range_mutation::assign_private(self, &mut root, &mut count, from, to, value)?
-        } else {
-            range_mutation::assign(self, &mut root, &mut count, from, to, value)?
-        };
-        self.draft.meta.range_root = root;
-        self.draft.meta.range_record_count = count;
-        self.draft.changed |= changed;
-        Ok(changed)
+        self.assign(from, to, value)
     }
 
     pub(crate) fn assign_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
+        self.assign(from, to, value)
+    }
+
+    fn assign<K: crate::key::IpKey>(&mut self, from: K, to: K, value: u32) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
         let changed = if self.draft.range_tree_private {
@@ -201,16 +196,14 @@ impl<'a> DraftStore<'a> {
     }
 
     pub(crate) fn clear_v4(&mut self, from: Ipv4Key, to: Ipv4Key) -> Result<bool> {
-        let mut root = self.draft.meta.range_root;
-        let mut count = self.draft.meta.range_record_count;
-        let changed = range_mutation::clear(self, &mut root, &mut count, from, to)?;
-        self.draft.meta.range_root = root;
-        self.draft.meta.range_record_count = count;
-        self.draft.changed |= changed;
-        Ok(changed)
+        self.clear(from, to)
     }
 
     pub(crate) fn clear_v6(&mut self, from: Ipv6Key, to: Ipv6Key) -> Result<bool> {
+        self.clear(from, to)
+    }
+
+    fn clear<K: crate::key::IpKey>(&mut self, from: K, to: K) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
         let changed = range_mutation::clear(self, &mut root, &mut count, from, to)?;
@@ -465,12 +458,7 @@ impl<'a> DraftStore<'a> {
             return Err(Error::Corrupt("private page stack is empty"));
         }
         let txn = self.draft.meta.txn_id;
-        let next = self.inspect_page(page_number, |page| {
-            if u32_le(page, 0) != PRIVATE_MAGIC || crate::contract::u64_le(page, 8) != txn {
-                return Err(Error::Corrupt("private page stack link is invalid"));
-            }
-            Ok(u32_le(page, 4))
-        })?;
+        let next = self.inspect_page(page_number, |page| storage::private_stack_next(page, txn))?;
         if next == page_number
             || (next != 0 && (next < 2 || u64::from(next) >= self.draft.meta.page_count))
         {

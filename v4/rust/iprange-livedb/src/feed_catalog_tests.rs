@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::bootstrap;
+use crate::contract::u16_le;
 use crate::contract::{AddressFamily, ValueTag, PAGE_MAGIC, PAGE_SIZE};
 use crate::crc32c;
 use crate::database::ImmutableReader;

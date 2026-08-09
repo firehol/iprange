@@ -130,7 +130,7 @@ fn open_file(
     cancellation: &CancellationToken,
     open_locked: impl FnOnce(File, Identity) -> std::result::Result<LiveSource, LiveOpenFailure>,
 ) -> std::result::Result<Source, SourceOpenFailure> {
-    let file = database::open_read_only(path).map_err(open_problem)?;
+    let file = database_file::open_read_only(path).map_err(open_problem)?;
     let identity = crate::live_namespace::identity(&file).map_err(open_problem)?;
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)
         .map_err(open_problem)?;
@@ -364,7 +364,7 @@ fn bind_current(
 ) -> Result<MetaV4> {
     crate::live_namespace::verify_path(path, identity).map_err(live_coordination)?;
     cancellation.check()?;
-    let meta = database::bootstrap_file(file, OpenMode::LiveReader)?.meta;
+    let meta = database_file::bootstrap_file(file, OpenMode::LiveReader)?.meta;
     crate::live_cleanup::require_main_available(path, identity, meta.database_id)?;
     crate::live_namespace::verify_path(path, identity).map_err(live_coordination)?;
     Ok(meta)

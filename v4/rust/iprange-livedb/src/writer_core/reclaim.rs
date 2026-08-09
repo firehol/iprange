@@ -4,13 +4,13 @@ use crate::cancellation::CancellationToken;
 use crate::draft_store::{Draft, DraftStore};
 use crate::error::Result;
 use crate::random;
-use crate::retirement::Reclamation;
 
 use super::{CommitAttempt, WriterCore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedReclamation {
-    pub(crate) selection: Reclamation,
+    pub(crate) transaction_count: u64,
+    pub(crate) page_count: u64,
     pub(crate) attempt: CommitAttempt,
 }
 
@@ -41,6 +41,8 @@ impl WriterCore {
             commit_nonce: draft.meta.commit_nonce,
         };
         self.draft = Some(draft);
+        let transaction_count = selection.transactions;
+        let page_count = selection.pages;
         DraftStore::new(
             &mut self.mapping,
             self.base.meta.page_count,
@@ -52,6 +54,10 @@ impl WriterCore {
         .apply_reclamation(selection, &mut checkpoint)?;
         self.prepare(cancellation)?;
         cancellation.check()?;
-        Ok(Some(PreparedReclamation { selection, attempt }))
+        Ok(Some(PreparedReclamation {
+            transaction_count,
+            page_count,
+            attempt,
+        }))
     }
 }

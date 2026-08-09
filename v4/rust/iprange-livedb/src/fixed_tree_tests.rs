@@ -11,6 +11,7 @@ struct U32Codec;
 
 impl Codec for U32Codec {
     type Key = u32;
+    type Leaf = [u8; 8];
 
     const BRANCH_TYPE: u8 = 1;
     const LEAF_TYPE: u8 = 2;
@@ -22,20 +23,33 @@ impl Codec for U32Codec {
         Ok(u32_le(cell, 0))
     }
 
-    fn write_key(key: Self::Key, output: &mut [u8]) {
-        output[..4].copy_from_slice(&key.to_le_bytes());
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
+        cell.array(0)
+            .ok_or(Error::Corrupt("test leaf size is invalid"))
     }
 
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        if cell.len() == Self::LEAF_SIZE {
-            Ok(())
-        } else {
-            Err(Error::Corrupt("test leaf size is invalid"))
-        }
+    fn write_key(key: Self::Key, output: &mut [u8]) {
+        output[..4].copy_from_slice(&key.to_le_bytes());
     }
 }
 
 struct AcceptGap;
+
+struct U32Item;
+
+impl CursorItem<U32Codec> for U32Item {
+    type Output = [u8; 8];
+
+    fn read<S: ByteSource>(
+        &mut self,
+        page: S,
+        header: &slotted_page::Header,
+        _page_number: u32,
+        index: usize,
+    ) -> Result<Self::Output> {
+        U32Codec::read_leaf(U32Codec::leaf_cell(page, header, index)?)
+    }
+}
 
 impl LocalGap<U32Codec> for AcceptGap {
     type Reject = ();
@@ -57,6 +71,7 @@ struct WideCodec;
 
 impl Codec for WideCodec {
     type Key = [u8; 56];
+    type Leaf = [u8; 64];
 
     const BRANCH_TYPE: u8 = 1;
     const LEAF_TYPE: u8 = 2;
@@ -69,16 +84,13 @@ impl Codec for WideCodec {
             .ok_or(Error::Corrupt("test wide key is truncated"))
     }
 
-    fn write_key(key: Self::Key, output: &mut [u8]) {
-        output[..56].copy_from_slice(&key);
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
+        cell.array(0)
+            .ok_or(Error::Corrupt("test leaf size is invalid"))
     }
 
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        if cell.len() == Self::LEAF_SIZE {
-            Ok(())
-        } else {
-            Err(Error::Corrupt("test leaf size is invalid"))
-        }
+    fn write_key(key: Self::Key, output: &mut [u8]) {
+        output[..56].copy_from_slice(&key);
     }
 }
 
@@ -92,6 +104,7 @@ struct VariableCodec;
 
 impl Codec for VariableCodec {
     type Key = VarKey;
+    type Leaf = (VarKey, u32);
 
     const BRANCH_TYPE: u8 = 1;
     const LEAF_TYPE: u8 = 2;
@@ -105,11 +118,11 @@ impl Codec for VariableCodec {
         decode_variable(cell).map(|(key, _)| key)
     }
 
-    fn write_key(_key: Self::Key, _output: &mut [u8]) {}
-
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        decode_variable(cell).map(|_| ())
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
+        decode_variable(cell)
     }
+
+    fn write_key(_key: Self::Key, _output: &mut [u8]) {}
 
     fn leaf_cell<S: ByteSource>(
         page: S,
@@ -408,6 +421,68 @@ fn inserts_replace_and_split_without_losing_order() {
 }
 
 #[test]
+fn one_shot_reads_visit_each_path_page_once_without_starting_a_scan() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in 0..1_000 {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key + 10),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    let root_header =
+        page::parse::<U32Codec, _>(&store.pages[root as usize], store.target_txn, None).unwrap();
+    let path_pages = u64::from(root_header.level) + 1;
+
+    store.inspections.set(0);
+    let (found, work) = crate::work::measure(|| {
+        predecessor::<U32Codec, _>(&store, root, 501)
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(u32_le(&found, 0), 501);
+    assert_eq!(store.inspections.get(), path_pages);
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(work.tree_descents + 1, path_pages);
+    assert_eq!(work.source_passes, 0);
+
+    store.inspections.set(0);
+    let (found, work) = crate::work::measure(|| {
+        at_or_after::<U32Codec, _>(&store, root, 501)
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(u32_le(&found, 0), 501);
+    assert_eq!(store.inspections.get(), path_pages);
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(work.tree_descents + 1, path_pages);
+    assert_eq!(work.source_passes, 0);
+}
+
+#[test]
+fn lower_bound_reuses_its_final_probe() {
+    let header = slotted_page::Header {
+        item_count: 8,
+        level: 0,
+        lower: 0,
+        upper: 0,
+    };
+    let mut calls = 0;
+    let (result, work) = crate::work::measure(|| {
+        page::lower_bound_by::<U32Codec, _>(&header, 5, true, |index| {
+            calls += 1;
+            Ok(index as u32)
+        })
+    });
+    assert_eq!(result.unwrap(), (5, true));
+    assert_eq!(calls, 3);
+    assert_eq!(work.key_probes, 3);
+}
+
+#[test]
 fn fixed_replacement_uses_one_capacity_probe_and_no_slot_scan() {
     let mut store = MemoryStore::new();
     let mut root = 0;
@@ -453,7 +528,11 @@ fn next_transaction_copies_only_its_selected_path() {
     store.target_txn = 2;
 
     let mut retired = RetiredPages::new();
-    insert::<U32Codec, _>(&mut store, &mut root, &record(1_000, 99), &mut retired).unwrap();
+    let (inserted, work) = crate::work::measure(|| {
+        insert::<U32Codec, _>(&mut store, &mut root, &record(1_000, 99), &mut retired)
+    });
+    inserted.unwrap();
+    assert_eq!(work.leaf_validations, 1);
     assert_ne!(root, old_root);
     assert_eq!(retired.as_slice().len(), 2);
     assert_eq!(&store.pages[..committed.len()], committed.as_slice());
@@ -523,6 +602,39 @@ fn private_tree_release_visits_every_page_once() {
 }
 
 #[test]
+fn consuming_cursor_reads_in_order_without_per_record_tree_lookups() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in (0..1_000).rev() {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    let page_count = store.pages.len() as u32;
+    store.discarded.clear();
+
+    let (values, work) = crate::work::measure(|| {
+        let mut cursor =
+            Cursor::<U32Codec>::new_consuming(&mut store, root, CursorDirection::Forward).unwrap();
+        let mut values = Vec::new();
+        while let Some(cell) = cursor.next_consuming(&mut store, &mut U32Item).unwrap() {
+            values.push((u32_le(&cell, 0), u32_le(&cell, 4)));
+        }
+        values
+    });
+
+    assert_eq!(values, (0..1_000).map(|key| (key, key)).collect::<Vec<_>>());
+    assert_eq!(work.tree_lookups, 0);
+    assert_eq!(work.source_passes, 1);
+    store.discarded.sort_unstable();
+    assert_eq!(store.discarded, (2..page_count).collect::<Vec<_>>());
+}
+
+#[test]
 fn deletion_removes_empty_children_and_collapses_the_root() {
     let mut store = MemoryStore::new();
     let mut root = 0;
@@ -547,6 +659,28 @@ fn deletion_removes_empty_children_and_collapses_the_root() {
     }
     assert_eq!(root, 0);
     assert!(!store.discarded.is_empty());
+}
+
+#[test]
+fn known_deletion_uses_one_tree_lookup() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in 0..900 {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+
+    let (result, work) = crate::work::measure(|| {
+        delete_existing::<U32Codec, _>(&mut store, &mut root, 451, &mut RetiredPages::new())
+    });
+    result.unwrap();
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(lookup(&store, root, 451).unwrap(), None);
 }
 
 #[test]

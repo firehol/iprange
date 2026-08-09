@@ -91,6 +91,20 @@ pub enum Housekeeping {
     Visible,
 }
 
+impl Housekeeping {
+    pub(crate) const fn merge(self, other: Self) -> Self {
+        if matches!(self, Self::Visible) || matches!(other, Self::Visible) {
+            Self::Visible
+        } else if matches!(self, Self::CrashReappearancePossible)
+            || matches!(other, Self::CrashReappearancePossible)
+        {
+            Self::CrashReappearancePossible
+        } else {
+            Self::None
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HousekeepingState {
     MovePending,

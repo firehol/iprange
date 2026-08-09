@@ -6,18 +6,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 mod header;
+mod slot;
 
 use crate::cancellation::CancellationToken;
-use crate::contract::{u64_le, PAGE_SIZE};
+use crate::contract::PAGE_SIZE;
 use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::{self, Identity, PrivateCreationFailure};
-use crate::mapping::{ByteSource, Mapping};
+use crate::mapping::Mapping;
 use crate::path;
 use crate::publication::{ArtifactKind, DirectoryRole};
 
-const SLOT_SIZE: u16 = 16;
+use slot::SIZE as SLOT_SIZE;
 const GATE_LOCK: u64 = 0;
 const WRITER_LOCK: u64 = 1;
 pub(crate) const MAIN_LIFETIME_LOCK: u64 = 1u64 << 44;
@@ -62,13 +63,6 @@ impl Sidecar {
         sidecar_id: [u8; 16],
         capacity: u32,
     ) -> core::result::Result<Self, PrivateCreationFailure> {
-        if capacity == 0 {
-            return Err(PrivateCreationFailure {
-                cause: Error::InvalidArgument("reader capacity must be greater than zero"),
-                cleanup: live_cleanup::Outcome::clean(),
-                identity: None,
-            });
-        }
         let path = path::canonical_sidecar(main).map_err(|cause| PrivateCreationFailure {
             cause,
             cleanup: live_cleanup::Outcome::clean(),
@@ -295,8 +289,7 @@ impl Sidecar {
                     .as_mut()
                     .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
                 let mut active = mapping.bytes_mut(offset, SLOT_SIZE as usize)?;
-                active.put_u64(0, txn)?;
-                active.put_u64(8, !txn)
+                slot::write(&mut active, txn)
             })();
             if let Err(cause) = written {
                 return Err(combine_errors(cause, live_lock::unlock(&self.file, offset)));
@@ -457,11 +450,7 @@ impl Sidecar {
             .as_ref()
             .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
         let bytes = mapping.bytes(offset, SLOT_SIZE as usize)?;
-        let txn = u64_le(bytes, 0);
-        if txn == 0 || u64_le(bytes, 8) != !txn {
-            return Err(Error::Corrupt("active reader slot is malformed"));
-        }
-        Ok(Some(txn))
+        Ok(Some(slot::active_transaction(bytes)?))
     }
 
     fn clear_stale(&self, offset: u64) -> Result<()> {
@@ -470,10 +459,7 @@ impl Sidecar {
             let mapping = guard
                 .as_mut()
                 .ok_or(Error::WrongState("reader table mapping is unavailable"))?;
-            if !mapping
-                .bytes(offset, SLOT_SIZE as usize)?
-                .all_zero(0, SLOT_SIZE as usize)
-            {
+            if !slot::is_clear(mapping.bytes(offset, SLOT_SIZE as usize)?) {
                 mapping.bytes_mut(offset, SLOT_SIZE as usize)?.fill(0);
             }
             Ok(())

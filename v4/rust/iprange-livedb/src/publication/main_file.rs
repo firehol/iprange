@@ -485,24 +485,11 @@ fn verify_retired(owner: &mut RetiringMain) -> Result<(), Error> {
 
 #[cfg(windows)]
 fn absorb_gc(owner: &mut RetiringMain, retirement: super::gc::Retirement) -> Result<(), Error> {
-    owner.housekeeping = merge_housekeeping(owner.housekeeping, retirement.housekeeping);
+    owner.housekeeping = owner.housekeeping.merge(retirement.housekeeping);
     owner.visible_housekeeping.extend(retirement.visible);
     match retirement.problem {
         Some(problem) => Err(Error::Gc(problem)),
         None => Ok(()),
-    }
-}
-
-#[cfg(windows)]
-fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }
 

@@ -11,7 +11,7 @@ use std::fs::File;
 use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, MetaV4, ValueKind, ValueTag, PAGE_SIZE};
-use crate::database;
+use crate::database_file;
 use crate::draft_store::{Draft, DraftStore, PageBudget};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
@@ -172,6 +172,7 @@ impl WriterCore {
         Ok(())
     }
 
+    #[inline]
     pub(crate) fn edit<T>(
         &mut self,
         operation: impl FnOnce(&mut WriterEdit<'_>) -> Result<T>,
@@ -252,7 +253,7 @@ impl WriterCore {
     pub(crate) fn require_unchanged_base(&self) -> Result<()> {
         let physical_bytes = self.mapping.file().metadata()?.len();
         let selected =
-            database::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
+            database_file::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
         if selected.meta != self.base.meta {
             return Err(Error::WrongMode(
                 "committed generation changed under the writer",

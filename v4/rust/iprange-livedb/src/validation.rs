@@ -22,7 +22,7 @@ use std::path::Path;
 use crate::bootstrap::{BootstrapError, MetaProblem, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, PAGE_SIZE};
-use crate::database;
+use crate::database_file;
 use crate::error::{Error, Result};
 use crate::mapping::Mapping;
 use crate::publication::{CleanupArtifacts, CoordinationCleanup};
@@ -44,12 +44,7 @@ pub fn validate<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    if mode == ValidationMode::LiveCurrent {
-        if let Err(cause) = crate::live_lock::require_live_supported() {
-            return Err(failure(cause, ValidationProgress::new()));
-        }
-    }
-    if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
+    if let Err(cause) = preflight(&mode, budget, cancellation) {
         return Err(failure(cause, ValidationProgress::new()));
     }
     crate::worker::validate(path.as_ref(), &mode, budget, cancellation, sink)
@@ -62,12 +57,7 @@ pub(crate) fn validate_local<S: ValidationSink>(
     cancellation: &CancellationToken,
     sink: &mut S,
 ) -> std::result::Result<ValidationResult, ValidationFailure> {
-    if mode == ValidationMode::LiveCurrent {
-        if let Err(cause) = crate::live_lock::require_live_supported() {
-            return Err(failure(cause, ValidationProgress::new()));
-        }
-    }
-    if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
+    if let Err(cause) = preflight(&mode, budget, cancellation) {
         return Err(failure(cause, ValidationProgress::new()));
     }
     match mode {
@@ -93,6 +83,18 @@ pub(crate) fn validate_local<S: ValidationSink>(
             validate_offline(path, &candidate, budget, cancellation, sink)
         }
     }
+}
+
+fn preflight(
+    mode: &ValidationMode,
+    budget: &ValidationBudget,
+    cancellation: &CancellationToken,
+) -> Result<()> {
+    if matches!(mode, &ValidationMode::LiveCurrent) {
+        crate::live_lock::require_live_supported()?;
+    }
+    budget.validate()?;
+    cancellation.check()
 }
 
 fn validate_offline<S: ValidationSink>(
@@ -260,7 +262,7 @@ fn validate_immutable<S: ValidationSink>(
     let source = ImmutableSource::open(path, cancellation)
         .map_err(|cause| failure(cause, ValidationProgress::new()))?;
     let bootstrap =
-        match database::bootstrap_file_faultable(&source.file, OpenMode::ImmutableReader) {
+        match database_file::bootstrap_file_faultable(&source.file, OpenMode::ImmutableReader) {
             Ok(bootstrap) => bootstrap,
             Err(Error::Format(problem)) => {
                 require_bound_source_available(&source)
@@ -473,17 +475,6 @@ fn generation(meta: MetaV4) -> ValidatedGeneration {
         transaction_id: meta.txn_id,
         commit_nonce: meta.commit_nonce,
         page_count: meta.page_count,
-        roots: [
-            meta.range_root,
-            meta.catalog_name_root,
-            meta.catalog_index_root,
-            meta.feed_used_root,
-            meta.membership_id_root,
-            meta.membership_hash_root,
-            meta.membership_used_root,
-            meta.metadata_root,
-            meta.free_bitmap_root,
-            meta.retirement_root,
-        ],
+        roots: meta.roots(),
     }
 }

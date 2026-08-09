@@ -17,7 +17,7 @@ use super::membership_words::read_inline;
 use super::page_set::PageSet;
 use super::report::{emit_page_unknown as emit, RecoverySink, Reporter};
 use super::tables::Tables;
-use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
+use super::tree_scan::{self, CellLayout, Codec, CountPolicy, LeafCounter, TreeEvents};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Locator {
@@ -36,7 +36,7 @@ pub(crate) fn count(
     pages: &mut PageSet,
     cancellation: &CancellationToken,
 ) -> Result<u64> {
-    let mut events = CountEvents { meta, count: 0 };
+    let mut events = LeafCounter::<MembershipCount>::new(meta);
     tree_scan::scan::<IdCodec, _>(
         mapping,
         meta,
@@ -45,7 +45,7 @@ pub(crate) fn count(
         cancellation,
         &mut events,
     )?;
-    Ok(events.count)
+    Ok(events.count())
 }
 
 pub(crate) fn recover<S: RecoverySink>(
@@ -153,40 +153,13 @@ fn record_fields_valid(record: StoredRecord, meta: MetaV4) -> bool {
         }
 }
 
-struct CountEvents {
-    meta: MetaV4,
-    count: u64,
-}
+struct MembershipCount;
 
-impl TreeEvents for CountEvents {
-    fn page_accepted(&mut self) -> Result<()> {
-        Ok(())
-    }
+impl CountPolicy for MembershipCount {
+    const OVERFLOW: &'static str = "recovery membership count";
 
-    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
-        Ok(())
-    }
-
-    fn unknown(
-        &mut self,
-        _reason: ValidationReason,
-        _object: ValidationObject,
-        _page: Option<u32>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn leaf<P: ByteSource>(&mut self, _page: u32, _index: usize, cell: Option<P>) -> Result<()> {
-        let Some(record) = cell.and_then(|cell| codec::decode(cell).ok()) else {
-            return Ok(());
-        };
-        if record_fields_valid(record, self.meta) {
-            self.count = self
-                .count
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("recovery membership count"))?;
-        }
-        Ok(())
+    fn accept<P: ByteSource>(meta: MetaV4, cell: P) -> bool {
+        codec::decode(cell).is_ok_and(|record| record_fields_valid(record, meta))
     }
 }
 

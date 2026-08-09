@@ -7,7 +7,7 @@ use crate::page_io::{PageEdit, PageSink};
 
 use super::{
     branch_child, first_leaf_word, first_summary, parse, require_bit, required_level,
-    set_branch_child, stamp, BitmapStore, Header,
+    set_branch_child, BitmapStore, Header,
 };
 
 #[derive(Clone, Copy)]
@@ -75,12 +75,18 @@ fn descend_for_insert<S: BitmapStore>(
     })?;
     if child == 0 {
         let child = new_subtree(store, cursor.header.level - 1, bit)?;
-        replace_child(store, cursor.page_number, index, child)?;
+        replace_child(store, cursor.page_number, &cursor.header, index, child)?;
         return Ok(None);
     }
     let next = touch_cursor(store, child, cursor.header.level - 1, retired)?;
     if next.page_number != child {
-        replace_child(store, cursor.page_number, index, next.page_number)?;
+        replace_child(
+            store,
+            cursor.page_number,
+            &cursor.header,
+            index,
+            next.page_number,
+        )?;
     }
     Ok(Some(next))
 }
@@ -88,13 +94,15 @@ fn descend_for_insert<S: BitmapStore>(
 fn replace_child<S: BitmapStore>(
     store: &mut S,
     page_number: u32,
+    header: &Header,
     index: usize,
     child: u32,
 ) -> Result<()> {
-    store.update_page(page_number, |page| {
-        set_branch_child(page, index, child)?;
-        stamp(page)
-    })
+    store
+        .update_page(page_number, |page| {
+            set_branch_child(page, header, index, child)
+        })
+        .map(drop)
 }
 
 fn mark_leaf_free<S: BitmapStore>(store: &mut S, cursor: Cursor, bit: u32) -> Result<()> {
@@ -106,7 +114,10 @@ fn mark_leaf_free<S: BitmapStore>(store: &mut S, cursor: Cursor, bit: u32) -> Re
             return Err(Error::Corrupt("page is already free"));
         }
         bitmap_page::set_leaf_word(page, word_index, word | mask)?;
-        stamp(page)
+        page.put_u16(
+            crate::page_header::ITEM_COUNT,
+            (cursor.header.item_count + usize::from(word == 0)) as u16,
+        )
     })
 }
 
@@ -169,7 +180,13 @@ fn descend_lowest<S: BitmapStore>(
         }
         let next = touch_cursor(store, child, cursor.header.level - 1, retired)?;
         if next.page_number != child {
-            replace_child(store, cursor.page_number, index, next.page_number)?;
+            replace_child(
+                store,
+                cursor.page_number,
+                &cursor.header,
+                index,
+                next.page_number,
+            )?;
         }
         cursor = next;
         depth += 1;
@@ -231,13 +248,15 @@ fn clear_leaf_bit<S: BitmapStore>(
     bit_in_word: u64,
 ) -> Result<bool> {
     let nonempty = store.update_page(leaf.page_number, |page| {
-        bitmap_page::set_leaf_word(page, word_index, word & !(1u64 << bit_in_word))?;
-        if first_leaf_word(page.view()).is_some() {
-            stamp(page)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        let next = word & !(1u64 << bit_in_word);
+        bitmap_page::set_leaf_word(page, word_index, next)?;
+        let count = leaf
+            .header
+            .item_count
+            .checked_sub(usize::from(next == 0))
+            .ok_or(Error::Corrupt("free bitmap leaf count underflows"))?;
+        page.put_u16(crate::page_header::ITEM_COUNT, count as u16)?;
+        Ok(count != 0)
     })?;
     if !nonempty {
         store.discard_private(leaf.page_number)?;
@@ -264,14 +283,8 @@ fn prune_empty_path<S: BitmapStore>(
 fn prune_parent<S: BitmapStore>(store: &mut S, frame: Frame) -> Result<bool> {
     let target_txn = store.target_txn();
     let nonempty = store.update_page(frame.page_number, |page| {
-        parse(page.view(), target_txn, Some(frame.level), false)?;
-        set_branch_child(page, frame.child_index, 0)?;
-        if first_summary(page.view()).is_some() {
-            stamp(page)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        let header = parse(page.view(), target_txn, Some(frame.level), false)?;
+        Ok(set_branch_child(page, &header, frame.child_index, 0)? != 0)
     })?;
     if !nonempty {
         store.discard_private(frame.page_number)?;
@@ -322,12 +335,7 @@ fn touch_cursor<S: BitmapStore>(
     }
 
     let private_page = store.allocate_bitmap_page()?;
-    store.copy_page(page_number, private_page, |source, output| {
-        output.write_source(0, source)?;
-        output.put_u64(crate::page_header::BORN_TXN, target_txn)?;
-        crate::page_checksum::clear(output)?;
-        stamp(output)
-    })?;
+    store.copy_for_cow(page_number, private_page)?;
     retired.push(page_number)?;
     Ok(Cursor {
         page_number: private_page,
@@ -351,8 +359,16 @@ fn grow_root<S: BitmapStore>(store: &mut S, root: &mut u32, required: u16) -> Re
         let next_level = level + 1;
         store.update_page(parent, |page| {
             bitmap_page::initialize(page, target_txn, next_level, bitmap_page::Kind::Free);
-            set_branch_child(page, 0, child)?;
-            stamp(page)
+            set_branch_child(
+                page,
+                &Header {
+                    level: next_level,
+                    item_count: 0,
+                },
+                0,
+                child,
+            )
+            .map(drop)
         })?;
         *root = parent;
         level = next_level;
@@ -368,7 +384,7 @@ fn new_subtree<S: BitmapStore>(store: &mut S, level: u16, bit: u32) -> Result<u3
         store.update_page(page_number, |page| {
             bitmap_page::initialize(page, txn, 0, bitmap_page::Kind::Free);
             bitmap_page::set_leaf_word(page, word, 1u64 << (u64::from(bit) % 64))?;
-            stamp(page)
+            page.put_u16(crate::page_header::ITEM_COUNT, 1)
         })?;
         return Ok(page_number);
     }
@@ -379,8 +395,16 @@ fn new_subtree<S: BitmapStore>(store: &mut S, level: u16, bit: u32) -> Result<u3
     let index = bitmap_page::child_index(bit, level)?;
     store.update_page(page_number, |page| {
         bitmap_page::initialize(page, txn, level, bitmap_page::Kind::Free);
-        set_branch_child(page, index, child)?;
-        stamp(page)
+        set_branch_child(
+            page,
+            &Header {
+                level,
+                item_count: 0,
+            },
+            index,
+            child,
+        )
+        .map(drop)
     })?;
     Ok(page_number)
 }

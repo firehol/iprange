@@ -17,7 +17,7 @@ use super::page_set::PageSet;
 use super::range_build::analyze_ranges;
 use super::report::{RecoveryReport, RecoverySink, Reporter};
 use super::tables::{Counts, Tables};
-use super::{RecoveryBudget, ScratchCleanup};
+use super::RecoveryBudget;
 
 pub(crate) struct MembershipAnalysis {
     pub(crate) report: RecoveryReport,
@@ -30,12 +30,6 @@ pub(crate) struct MembershipAnalysis {
     pub(crate) pages: PageSet,
 }
 
-pub(crate) struct MembershipAnalysisFailure {
-    pub(crate) cause: Error,
-    pub(crate) report: RecoveryReport,
-    pub(crate) scratch: Option<ScratchCleanup>,
-}
-
 #[allow(clippy::result_large_err)]
 pub(crate) fn analyze<S: RecoverySink>(
     mapping: &Mapping,
@@ -43,12 +37,16 @@ pub(crate) fn analyze<S: RecoverySink>(
     budget: &RecoveryBudget,
     cancellation: &CancellationToken,
     sink: &mut S,
-) -> std::result::Result<MembershipAnalysis, MembershipAnalysisFailure> {
+) -> std::result::Result<MembershipAnalysis, super::construction::AnalysisFailure> {
     if let Err(cause) = budget.validate().and_then(|()| cancellation.check()) {
-        return Err(failure(cause, RecoveryReport::default(), None));
+        return Err(super::construction::analysis_failure(
+            cause,
+            RecoveryReport::default(),
+            None,
+        ));
     }
     if meta.value_kind != ValueKind::Membership {
-        return Err(failure(
+        return Err(super::construction::analysis_failure(
             Error::WrongValueKind("membership recovery requires membership values"),
             RecoveryReport::default(),
             None,
@@ -60,7 +58,13 @@ pub(crate) fn analyze<S: RecoverySink>(
     let mut pages =
         match PageSet::for_recovery(page_heap, meta.page_count.min(physical_pages), meta, budget) {
             Ok(pages) => pages,
-            Err(cause) => return Err(failure(cause, reporter.finish(), None)),
+            Err(cause) => {
+                return Err(super::construction::analysis_failure(
+                    cause,
+                    reporter.finish(),
+                    None,
+                ))
+            }
         };
     let result = analyze_graphs(
         mapping,
@@ -84,7 +88,9 @@ pub(crate) fn analyze<S: RecoverySink>(
                 pages,
             })
         }
-        Err(cause) => Err(failure_with_pages(pages, cause, report)),
+        Err(cause) => Err(super::construction::analysis_failure_with_pages(
+            pages, cause, report,
+        )),
     }
 }
 
@@ -193,27 +199,4 @@ fn required_table_heap_reserve(meta: MetaV4) -> Result<u64> {
     metadata
         .checked_add(range)
         .ok_or(Error::ArithmeticOverflow("recovery table heap reserve"))
-}
-
-fn failure(
-    cause: Error,
-    report: RecoveryReport,
-    scratch: Option<ScratchCleanup>,
-) -> MembershipAnalysisFailure {
-    MembershipAnalysisFailure {
-        cause,
-        report,
-        scratch,
-    }
-}
-
-fn failure_with_pages(
-    pages: PageSet,
-    cause: Error,
-    report: RecoveryReport,
-) -> MembershipAnalysisFailure {
-    match pages.finish(Err(cause)) {
-        Err(failed) => failure(failed.cause, report, failed.cleanup),
-        Ok(_) => unreachable!("failed analysis cannot finish successfully"),
-    }
 }

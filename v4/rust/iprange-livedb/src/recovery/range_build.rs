@@ -401,23 +401,6 @@ impl<K, F> Events<K, F> {
 }
 
 impl<K: IpKey, F: FnMut(Record<K>) -> Result<()>> RangeEvents<K> for Events<K, F> {
-    fn page_accepted(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
-        Ok(())
-    }
-
-    fn unknown(
-        &mut self,
-        _reason: ValidationReason,
-        _page: Option<u32>,
-        _unbounded: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     fn range(&mut self, _page: u32, record: Option<Record<K>>) -> Result<()> {
         let Some(record) = record else {
             return Ok(());

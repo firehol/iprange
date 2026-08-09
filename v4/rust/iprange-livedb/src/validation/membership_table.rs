@@ -153,24 +153,19 @@ impl Table {
     }
 
     fn find(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
-        if self.slots.is_empty() || id == 0 {
-            return Ok(None);
-        }
-        let mut index = hash(id) & self.mask;
-        for probe in 0..self.slots.len() {
-            if probe & 63 == 0 {
-                cancellation.check()?;
-            }
-            match self.slots[index].id {
-                0 => return Ok(None),
-                found if found == id => return Ok(Some(index)),
-                _ => index = (index + 1) & self.mask,
-            }
-        }
-        Ok(None)
+        self.probe(id, false, cancellation)
     }
 
     fn find_or_empty(&self, id: u32, cancellation: &CancellationToken) -> Result<Option<usize>> {
+        self.probe(id, true, cancellation)
+    }
+
+    fn probe(
+        &self,
+        id: u32,
+        accept_empty: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<usize>> {
         if self.slots.is_empty() || id == 0 {
             return Ok(None);
         }
@@ -180,8 +175,11 @@ impl Table {
                 cancellation.check()?;
             }
             let found = self.slots[index].id;
-            if found == 0 || found == id {
+            if found == id || (accept_empty && found == 0) {
                 return Ok(Some(index));
+            }
+            if found == 0 {
+                return Ok(None);
             }
             index = (index + 1) & self.mask;
         }

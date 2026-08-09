@@ -76,16 +76,23 @@ impl DraftStore<'_> {
         membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
-        let (membership_id, word_count) = membership.stored();
-        self.apply_membership(from, to, membership_id, word_count, operation, &mut || {
-            Ok(())
-        })
+        self.apply_membership_handle(from, to, membership, operation)
     }
 
     pub(crate) fn apply_membership_v6(
         &mut self,
         from: Ipv6Key,
         to: Ipv6Key,
+        membership: MembershipHandle,
+        operation: MembershipOperation,
+    ) -> Result<bool> {
+        self.apply_membership_handle(from, to, membership, operation)
+    }
+
+    fn apply_membership_handle<K: IpKey>(
+        &mut self,
+        from: K,
+        to: K,
         membership: MembershipHandle,
         operation: MembershipOperation,
     ) -> Result<bool> {
@@ -155,9 +162,12 @@ impl DraftStore<'_> {
     pub(super) fn track_membership_refcount(&mut self, id: u32, change: i64) -> Result<()> {
         if self.draft.meta.value_kind == ValueKind::Membership {
             let mut root = self.draft.membership_delta_root;
-            membership_delta::track(self, &mut root, id, change)?;
+            let mut pending = self.draft.membership_delta_pending;
+            let result =
+                membership_delta::track_buffered(self, &mut root, &mut pending, id, change);
             self.draft.membership_delta_root = root;
-            Ok(())
+            self.draft.membership_delta_pending = pending;
+            result
         } else {
             Ok(())
         }
@@ -171,22 +181,38 @@ impl DraftStore<'_> {
         F: FnMut() -> Result<()>,
     {
         if self.draft.meta.value_kind != ValueKind::Membership {
-            return require_empty_delta(self.draft.membership_delta_root);
+            return require_empty_delta(
+                self.draft.membership_delta_root,
+                self.draft.membership_delta_pending,
+            );
+        }
+        let mut root = self.draft.membership_delta_root;
+        let mut pending = self.draft.membership_delta_pending;
+        let flushed = membership_delta::flush(self, &mut root, &mut pending);
+        self.draft.membership_delta_root = root;
+        self.draft.membership_delta_pending = pending;
+        flushed?;
+        if self.draft.membership_delta_root == 0 {
+            return Ok(());
         }
         let mut state = self.membership_state();
-        let mut root = self.draft.membership_delta_root;
-        while let Some(delta) = membership_delta::take_first(self, &mut root)? {
+        let mut deltas = membership_delta::Drain::new(self, self.draft.membership_delta_root)?;
+        while let Some(delta) = deltas.next(self)? {
             checkpoint()?;
             membership_dictionary::apply_delta(self, &mut state, delta)?;
         }
-        self.draft.membership_delta_root = root;
+        self.draft.membership_delta_root = 0;
+        self.draft.membership_delta_pending = None;
         self.store_membership_state(state);
         if self.draft.meta.membership_entry_count > self.draft.meta.range_record_count {
             return Err(Error::Corrupt(
                 "membership dictionary exceeds the range-record count",
             ));
         }
-        require_empty_delta(self.draft.membership_delta_root)
+        require_empty_delta(
+            self.draft.membership_delta_root,
+            self.draft.membership_delta_pending,
+        )
     }
 
     fn membership_state(&self) -> State {
@@ -211,10 +237,7 @@ impl DraftStore<'_> {
         if !interned.created {
             return Ok(());
         }
-        let mut root = self.draft.membership_delta_root;
-        membership_delta::track(self, &mut root, interned.id, 0)?;
-        self.draft.membership_delta_root = root;
-        Ok(())
+        self.track_membership_refcount(interned.id, 0)
     }
 
     fn apply_membership<K: IpKey, F>(
@@ -279,8 +302,8 @@ impl range_mutation::RangeStore for DraftStore<'_> {
     }
 }
 
-fn require_empty_delta(root: u32) -> Result<()> {
-    if root == 0 {
+fn require_empty_delta(root: u32, pending: Option<membership_delta::Delta>) -> Result<()> {
+    if root == 0 && pending.is_none() {
         Ok(())
     } else {
         Err(Error::Corrupt(

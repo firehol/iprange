@@ -474,21 +474,7 @@ fn absent_with_main(main: &LockedMain) -> LiveResidueResult {
 }
 
 fn ready(main: &LockedMain, kind: LiveResidueKind, sidecar: &Sidecar) -> LiveResidueResult {
-    LiveResidueResult {
-        status: LiveResidueStatus::Ready,
-        kind: Some(kind),
-        database_id: Some(sidecar.header.database_id),
-        sidecar_id: Some(sidecar.header.sidecar_id),
-        reader_capacity: Some(sidecar.header.capacity),
-        main_identity: Some(main.public_identity),
-        sidecar_identity: Some(crate::live_namespace::public_identity(
-            sidecar.local_identity(),
-        )),
-        residue_possible: false,
-        housekeeping: Housekeeping::None,
-        visible_housekeeping: Box::default(),
-        cause: None,
-    }
+    sidecar_result(main, kind, sidecar, LiveResidueStatus::Ready)
 }
 
 fn completed_result(
@@ -496,8 +482,17 @@ fn completed_result(
     kind: LiveResidueKind,
     sidecar: &Sidecar,
 ) -> LiveResidueResult {
+    sidecar_result(main, kind, sidecar, LiveResidueStatus::Completed)
+}
+
+fn sidecar_result(
+    main: &LockedMain,
+    kind: LiveResidueKind,
+    sidecar: &Sidecar,
+    status: LiveResidueStatus,
+) -> LiveResidueResult {
     LiveResidueResult {
-        status: LiveResidueStatus::Completed,
+        status,
         kind: Some(kind),
         database_id: Some(sidecar.header.database_id),
         sidecar_id: Some(sidecar.header.sidecar_id),
@@ -570,22 +565,10 @@ fn with_cleanup(
             result.status = LiveResidueStatus::OutcomeUnknown;
         }
     }
-    result.housekeeping = merge_housekeeping(result.housekeeping, cleanup.housekeeping);
+    result.housekeeping = result.housekeeping.merge(cleanup.housekeeping);
     let mut visible = result.visible_housekeeping.into_vec();
     visible.extend(cleanup.visible);
     result.visible_housekeeping = visible.into_boxed_slice();
     result.cause = cleanup.cause;
     result
-}
-
-const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
-    }
 }

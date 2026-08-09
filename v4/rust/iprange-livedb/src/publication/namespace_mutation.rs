@@ -3,12 +3,12 @@
 use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
-#[cfg(any(target_os = "freebsd", test))]
-use std::os::fd::FromRawFd;
 
-use super::{errno, Directory, Identity, Name, NamespaceError};
+#[cfg(target_os = "freebsd")]
+use super::regular_identity_any_link;
 #[cfg(any(target_os = "freebsd", test))]
-use super::{is_nofollow_symlink, regular_identity_any_link, Entry, Regular};
+use super::Entry;
+use super::{errno, Directory, Identity, Name, NamespaceError};
 
 #[cfg(any(target_os = "freebsd", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,20 +54,12 @@ impl Directory {
                     libc::RENAME_EXCL,
                 )
             };
-            if result == 0 {
-                return Ok(());
-            }
-            let source = io::Error::last_os_error();
-            match source.raw_os_error() {
-                Some(libc::EEXIST) => Err(NamespaceError::Exists),
-                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
-                    Err(NamespaceError::Unsupported)
-                }
-                _ => Err(NamespaceError::IoAt {
-                    operation: "publish name without replacement",
-                    source,
-                }),
-            }
+            rename_result(
+                result,
+                libc::EEXIST,
+                NamespaceError::Exists,
+                "publish name without replacement",
+            )
         }
         #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
         Err(NamespaceError::Unsupported)
@@ -102,20 +94,12 @@ impl Directory {
                     libc::RENAME_SWAP,
                 )
             };
-            if result == 0 {
-                return Ok(());
-            }
-            let source = io::Error::last_os_error();
-            match source.raw_os_error() {
-                Some(libc::ENOENT) => Err(NamespaceError::Missing),
-                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
-                    Err(NamespaceError::Unsupported)
-                }
-                _ => Err(NamespaceError::IoAt {
-                    operation: "atomically exchange publication names",
-                    source,
-                }),
-            }
+            rename_result(
+                result,
+                libc::ENOENT,
+                NamespaceError::Missing,
+                "atomically exchange publication names",
+            )
         }
         #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
         Err(NamespaceError::Unsupported)
@@ -138,20 +122,12 @@ impl Directory {
                     destination.c_str().as_ptr(),
                 )
             };
-            if result == 0 {
-                return Ok(());
-            }
-            let source = io::Error::last_os_error();
-            match source.raw_os_error() {
-                Some(libc::ENOENT) => Err(NamespaceError::Missing),
-                Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => {
-                    Err(NamespaceError::Unsupported)
-                }
-                _ => Err(NamespaceError::IoAt {
-                    operation: "atomically replace and discard publication destination",
-                    source,
-                }),
-            }
+            rename_result(
+                result,
+                libc::ENOENT,
+                NamespaceError::Missing,
+                "atomically replace and discard publication destination",
+            )
         }
         #[cfg(not(any(target_os = "linux", target_vendor = "apple", target_os = "freebsd")))]
         Err(NamespaceError::Unsupported)
@@ -216,43 +192,6 @@ impl Directory {
         self.sync()?;
         crate::fault::crash("publication.freebsd.after_noreplace_alias_sync");
         self.prove_link_complete(source, destination, expected)
-    }
-
-    #[cfg(any(target_os = "freebsd", test))]
-    pub(crate) fn open_regular_any_link(
-        &self,
-        name: &Name,
-        writable: bool,
-    ) -> Result<Option<Regular>, NamespaceError> {
-        self.check_creator()?;
-        let access = if writable {
-            libc::O_RDWR
-        } else {
-            libc::O_RDONLY
-        };
-        let fd = unsafe {
-            libc::openat(
-                self.file.as_raw_fd(),
-                name.c_str().as_ptr(),
-                access | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-            )
-        };
-        if fd < 0 {
-            let source = io::Error::last_os_error();
-            if source.raw_os_error() == Some(libc::ENOENT) {
-                return Ok(None);
-            }
-            if is_nofollow_symlink(&source) {
-                return Err(NamespaceError::NotRegular);
-            }
-            return Err(NamespaceError::IoAt {
-                operation: "open retained transition file",
-                source,
-            });
-        }
-        let file = unsafe { File::from_raw_fd(fd) };
-        let identity = regular_identity_any_link(&file, self.identity)?;
-        Ok(Some(Regular { file, identity }))
     }
 
     #[cfg(target_os = "freebsd")]
@@ -355,6 +294,23 @@ impl Directory {
                 }
             }
         })
+    }
+}
+
+fn rename_result(
+    result: libc::c_int,
+    conflict_errno: i32,
+    conflict: NamespaceError,
+    operation: &'static str,
+) -> Result<(), NamespaceError> {
+    if result == 0 {
+        return Ok(());
+    }
+    let source = io::Error::last_os_error();
+    match source.raw_os_error() {
+        Some(errno) if errno == conflict_errno => Err(conflict),
+        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) => Err(NamespaceError::Unsupported),
+        _ => Err(NamespaceError::IoAt { operation, source }),
     }
 }
 

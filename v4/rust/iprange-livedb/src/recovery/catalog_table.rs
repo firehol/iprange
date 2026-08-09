@@ -8,12 +8,21 @@ use crate::validation::{ValidationObject, ValidationReason};
 use super::report::emit_page_unknown as emit;
 use super::report::{RecoverySink, Reporter};
 use super::tables::{
-    Layout, Region, Tables, CATALOG_INDEX_SLOT_SIZE, CATALOG_NAME_SLOT_SIZE, CATALOG_RECORD_SIZE,
+    hash_u32, Layout, Region, Tables, CATALOG_INDEX_SLOT_SIZE, CATALOG_NAME_SLOT_SIZE,
+    CATALOG_RECORD_SIZE,
 };
 
 const RECORD_SIZE: usize = CATALOG_RECORD_SIZE as usize;
 const NAME_SLOT_SIZE: usize = CATALOG_NAME_SLOT_SIZE as usize;
 const INDEX_SLOT_SIZE: usize = CATALOG_INDEX_SLOT_SIZE as usize;
+const SLOT_OCCUPIED_OFFSET: usize = 0;
+const SLOT_CONFLICT_OFFSET: usize = 1;
+const SLOT_VALUE_OFFSET: usize = 4;
+const SLOT_RECORD_OFFSET: usize = 8;
+const NAME_OCCURRENCES_OFFSET: usize = 16;
+const RECORD_NAME_LENGTH_OFFSET: usize = 0;
+const RECORD_INDEX_OFFSET: usize = 4;
+const RECORD_NAME_OFFSET: usize = 8;
 
 pub(crate) struct Catalog {
     records: Region,
@@ -78,18 +87,22 @@ impl<'a> Builder<'a> {
         reporter: &mut Reporter<'_, S>,
     ) -> Result<()> {
         let (slot_index, mut slot) = self.name_slot(&entry.name)?;
-        if slot[0] == 0 {
-            slot[0] = 1;
-            slot[8..16].copy_from_slice(&record_index.to_le_bytes());
-            slot[16..24].copy_from_slice(&1u64.to_le_bytes());
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
+            slot[SLOT_OCCUPIED_OFFSET] = 1;
+            slot[SLOT_RECORD_OFFSET..NAME_OCCURRENCES_OFFSET]
+                .copy_from_slice(&record_index.to_le_bytes());
+            slot[NAME_OCCURRENCES_OFFSET..NAME_SLOT_SIZE].copy_from_slice(&1u64.to_le_bytes());
         } else {
-            let occurrences = u64_le(&slot, 16)
+            let occurrences = u64_le(&slot, NAME_OCCURRENCES_OFFSET)
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow("recovery catalog occurrences"))?;
-            slot[16..24].copy_from_slice(&occurrences.to_le_bytes());
-            let first = self.catalog.record(self.tables, u64_le(&slot, 8))?;
-            if first.index != entry.index && slot[1] == 0 {
-                slot[1] = 1;
+            slot[NAME_OCCURRENCES_OFFSET..NAME_SLOT_SIZE]
+                .copy_from_slice(&occurrences.to_le_bytes());
+            let first = self
+                .catalog
+                .record(self.tables, u64_le(&slot, SLOT_RECORD_OFFSET))?;
+            if first.index != entry.index && slot[SLOT_CONFLICT_OFFSET] == 0 {
+                slot[SLOT_CONFLICT_OFFSET] = 1;
                 emit(
                     reporter,
                     ValidationReason::CatalogInvalid,
@@ -124,14 +137,16 @@ impl<'a> Builder<'a> {
                 [0; INDEX_SLOT_SIZE],
             ),
         };
-        if slot[0] == 0 {
-            slot[0] = 1;
-            slot[4..8].copy_from_slice(&entry.index.to_le_bytes());
-            slot[8..16].copy_from_slice(&record_index.to_le_bytes());
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
+            slot[SLOT_OCCUPIED_OFFSET] = 1;
+            slot[SLOT_VALUE_OFFSET..SLOT_RECORD_OFFSET].copy_from_slice(&entry.index.to_le_bytes());
+            slot[SLOT_RECORD_OFFSET..INDEX_SLOT_SIZE].copy_from_slice(&record_index.to_le_bytes());
         } else {
-            let first = self.catalog.record(self.tables, u64_le(&slot, 8))?;
-            if first.name != entry.name && slot[1] == 0 {
-                slot[1] = 1;
+            let first = self
+                .catalog
+                .record(self.tables, u64_le(&slot, SLOT_RECORD_OFFSET))?;
+            if first.name != entry.name && slot[SLOT_CONFLICT_OFFSET] == 0 {
+                slot[SLOT_CONFLICT_OFFSET] = 1;
                 emit(
                     reporter,
                     ValidationReason::CatalogInvalid,
@@ -155,7 +170,7 @@ impl Catalog {
             let Some((_, slot)) = find_name(tables, self, &entry.name)? else {
                 continue;
             };
-            if u64_le(&slot, 8) == record_index {
+            if u64_le(&slot, SLOT_RECORD_OFFSET) == record_index {
                 if let Some((entry, _)) = self.accepted_name_slot(tables, &slot)? {
                     emit_entry(entry)?;
                 }
@@ -168,10 +183,10 @@ impl Catalog {
         let Some((_, slot)) = find_index(tables, self, index)? else {
             return Ok(false);
         };
-        if slot[1] != 0 {
+        if slot[SLOT_CONFLICT_OFFSET] != 0 {
             return Ok(false);
         }
-        let entry = self.record(tables, u64_le(&slot, 8))?;
+        let entry = self.record(tables, u64_le(&slot, SLOT_RECORD_OFFSET))?;
         let Some((_, name_slot)) = find_name(tables, self, &entry.name)? else {
             return Ok(false);
         };
@@ -199,18 +214,18 @@ impl Catalog {
         tables: &Tables,
         slot: &[u8; NAME_SLOT_SIZE],
     ) -> Result<Option<(FeedEntry, u64)>> {
-        if slot[0] == 0 || slot[1] != 0 {
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 || slot[SLOT_CONFLICT_OFFSET] != 0 {
             return Ok(None);
         }
-        let entry = self.record(tables, u64_le(slot, 8))?;
+        let entry = self.record(tables, u64_le(slot, SLOT_RECORD_OFFSET))?;
         let Some((_, index_slot)) = find_index(tables, self, entry.index)? else {
             return Ok(None);
         };
-        if index_slot[1] != 0 {
+        if index_slot[SLOT_CONFLICT_OFFSET] != 0 {
             return Ok(None);
         }
-        let indexed = self.record(tables, u64_le(&index_slot, 8))?;
-        Ok((indexed == entry).then_some((entry, u64_le(slot, 16))))
+        let indexed = self.record(tables, u64_le(&index_slot, SLOT_RECORD_OFFSET))?;
+        Ok((indexed == entry).then_some((entry, u64_le(slot, NAME_OCCURRENCES_OFFSET))))
     }
 
     fn record(&self, tables: &Tables, index: u64) -> Result<FeedEntry> {
@@ -251,10 +266,10 @@ fn probe_name(
     for _ in 0..catalog.names.slots {
         let mut slot = [0; NAME_SLOT_SIZE];
         tables.read(catalog.names, index, &mut slot)?;
-        if slot[0] == 0 {
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
             return Ok(empty.then_some((index, slot)));
         }
-        let entry = catalog.record(tables, u64_le(&slot, 8))?;
+        let entry = catalog.record(tables, u64_le(&slot, SLOT_RECORD_OFFSET))?;
         if entry.name == *name {
             return Ok((!empty).then_some((index, slot)));
         }
@@ -291,10 +306,10 @@ fn probe_index(
     for _ in 0..catalog.indexes.slots {
         let mut slot = [0; INDEX_SLOT_SIZE];
         tables.read(catalog.indexes, index, &mut slot)?;
-        if slot[0] == 0 {
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
             return Ok(empty.then_some((index, slot)));
         }
-        if u32_le(&slot, 4) == value {
+        if u32_le(&slot, SLOT_VALUE_OFFSET) == value {
             return Ok((!empty).then_some((index, slot)));
         }
         index = (index + 1) & mask;
@@ -304,23 +319,24 @@ fn probe_index(
 
 fn encode_record(entry: FeedEntry) -> [u8; RECORD_SIZE] {
     let mut output = [0; RECORD_SIZE];
-    output[0] = entry.name.as_bytes().len() as u8;
-    output[4..8].copy_from_slice(&entry.index.to_le_bytes());
-    output[8..8 + entry.name.as_bytes().len()].copy_from_slice(entry.name.as_bytes());
+    output[RECORD_NAME_LENGTH_OFFSET] = entry.name.as_bytes().len() as u8;
+    output[RECORD_INDEX_OFFSET..RECORD_NAME_OFFSET].copy_from_slice(&entry.index.to_le_bytes());
+    output[RECORD_NAME_OFFSET..RECORD_NAME_OFFSET + entry.name.as_bytes().len()]
+        .copy_from_slice(entry.name.as_bytes());
     output
 }
 
 fn decode_record(bytes: &[u8; RECORD_SIZE]) -> Result<FeedEntry> {
-    let length = usize::from(bytes[0]);
+    let length = usize::from(bytes[RECORD_NAME_LENGTH_OFFSET]);
     let name = FeedName::from_stored(
         bytes
-            .get(8..8 + length)
+            .get(RECORD_NAME_OFFSET..RECORD_NAME_OFFSET + length)
             .ok_or(Error::Corrupt("recovery catalog name length is invalid"))?,
     )
     .ok_or(Error::Corrupt("recovery catalog name is invalid"))?;
     Ok(FeedEntry {
         name,
-        index: u32_le(bytes, 4),
+        index: u32_le(bytes, RECORD_INDEX_OFFSET),
     })
 }
 
@@ -331,13 +347,4 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
-}
-
-fn hash_u32(value: u32) -> u64 {
-    let mut value = u64::from(value);
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }

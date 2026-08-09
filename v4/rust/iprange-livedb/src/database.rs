@@ -1,44 +1,17 @@
-//! Immutable database bootstrap.
+//! Public immutable database reader.
 
-use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-
-use crate::bootstrap::{self, Bootstrap, MetaSelection, OpenMode};
-use crate::contract::{AddressFamily, ValueKind, ValueTag, PAGE_SIZE};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::feed::FeedEntry;
 use crate::feed_catalog::FeedCursor;
 use crate::feed_range_cursor::{FeedRangeCursorV4, FeedRangeCursorV6};
 use crate::key::{Ipv4Key, Ipv6Key};
-use crate::mapping::Mapping;
 use crate::membership_view::MembershipView;
-use crate::path;
 use crate::range_cursor::{DirectCursorV4, DirectCursorV6, RangeDirection};
 use crate::reader_core::ReaderCore;
-use crate::{
-    live_lock::{self, Mode},
-    live_sidecar::MAIN_LIFETIME_LOCK,
-};
 
-/// Public logical identity and selected generation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DatabaseInfo {
-    pub address_family: AddressFamily,
-    pub value_kind: ValueKind,
-    pub value_tag: ValueTag,
-    pub database_id: [u8; 16],
-    pub transaction_id: u64,
-    pub commit_nonce: [u8; 16],
-    pub page_count: u64,
-    pub range_record_count: u64,
-    pub active_feed_count: u64,
-    pub meta_selection: MetaSelection,
-}
+pub use crate::reader_core::DatabaseInfo;
 
 /// Reader pinned to one immutable file generation.
 #[derive(Debug)]
@@ -49,14 +22,8 @@ pub struct ImmutableReader {
 impl ImmutableReader {
     /// Open a sidecar-free immutable v4 file without validating its page graph.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let sidecar = path::canonical_sidecar(path)?;
-        require_sidecar_absent(&sidecar)?;
-
-        let (file, identity) = open_immutable_source(path, &sidecar)?;
-        let (mapping, bootstrap) = select_immutable_generation(path, &sidecar, file, identity)?;
         Ok(Self {
-            core: ReaderCore::new(mapping, bootstrap, None),
+            core: ReaderCore::open_immutable(path.as_ref())?,
         })
     }
 
@@ -141,184 +108,6 @@ impl ImmutableReader {
     pub(crate) fn core(&self) -> &ReaderCore {
         &self.core
     }
-}
-
-fn open_immutable_source(
-    path: &Path,
-    sidecar: &Path,
-) -> Result<(File, crate::live_namespace::Identity)> {
-    let file = open_read_only(path)?;
-    let identity = crate::live_namespace::identity_any_link(&file)?;
-    live_lock::lock_file(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
-    crate::live_namespace::verify_path_any_link(path, identity)?;
-    require_sidecar_absent(sidecar)?;
-    Ok((file, identity))
-}
-
-fn select_immutable_generation(
-    path: &Path,
-    sidecar: &Path,
-    file: File,
-    identity: crate::live_namespace::Identity,
-) -> Result<(Mapping, Bootstrap)> {
-    let (mapping, bootstrap) = map_reader(file, OpenMode::ImmutableReader)?;
-    crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
-    crate::live_namespace::verify_path_any_link(path, identity)?;
-    require_sidecar_absent(sidecar)?;
-    Ok((mapping, bootstrap))
-}
-
-pub(crate) fn map_reader(file: File, mode: OpenMode) -> Result<(Mapping, Bootstrap)> {
-    require_regular_file(&file)?;
-    let physical_bytes = file.metadata()?.len();
-    bootstrap::require_geometry(physical_bytes)?;
-    let mut mapping = Mapping::read_only(file, (2 * PAGE_SIZE) as u64)?;
-    let bootstrap = bootstrap_mapping(&mapping, physical_bytes, mode)?;
-    mapping.remap(bootstrap.committed_bytes)?;
-    Ok((mapping, bootstrap))
-}
-
-pub(crate) fn map_writer(file: File) -> Result<(Mapping, Bootstrap)> {
-    require_regular_file(&file)?;
-    let physical_bytes = file.metadata()?.len();
-    bootstrap::require_geometry(physical_bytes)?;
-    let mut mapping = Mapping::read_write(file, (2 * PAGE_SIZE) as u64)?;
-    let bootstrap = bootstrap_mapping(&mapping, physical_bytes, OpenMode::Writer)?;
-    mapping.remap(bootstrap.committed_bytes)?;
-    Ok((mapping, bootstrap))
-}
-
-pub(crate) fn bootstrap_mapping(
-    mapping: &Mapping,
-    physical_bytes: u64,
-    mode: OpenMode,
-) -> Result<Bootstrap> {
-    let page0 = mapping.page(0, 2)?;
-    let page1 = mapping.page(1, 2)?;
-    Ok(bootstrap::open_meta_pages(
-        page0,
-        page1,
-        physical_bytes,
-        mode,
-    )?)
-}
-
-pub(crate) fn bootstrap_file(file: &File, mode: OpenMode) -> Result<Bootstrap> {
-    require_regular_file(file)?;
-    let physical_bytes = file.metadata()?.len();
-    bootstrap::require_geometry(physical_bytes)?;
-    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
-    bootstrap_mapping(&mapping, physical_bytes, mode)
-}
-
-pub(crate) fn bootstrap_file_faultable(file: &File, mode: OpenMode) -> Result<Bootstrap> {
-    require_regular_file(file)?;
-    let physical_bytes = file.metadata()?.len();
-    bootstrap::require_geometry(physical_bytes)?;
-    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
-    crate::worker::probe_source(&mapping, || {
-        let pages = faultable_meta_pages(&mapping)?;
-        Ok(bootstrap::open_meta_pages(
-            pages[0],
-            pages[1],
-            physical_bytes,
-            mode,
-        )?)
-    })
-}
-
-pub(crate) fn database_id_from_file_faultable(file: &File) -> Result<[u8; 16]> {
-    let mapping = Mapping::read_only_view(file, (2 * PAGE_SIZE) as u64)?;
-    crate::worker::probe_source(&mapping, || {
-        let pages = faultable_meta_pages(&mapping)?;
-        Ok(bootstrap::database_id_from_meta_pages(pages[0], pages[1])?)
-    })
-}
-
-#[derive(Clone, Copy)]
-enum FaultableMetaPage<'a> {
-    Mapped(crate::mapping::PageView<'a>),
-    Unreadable,
-}
-
-impl crate::mapping::ByteSource for FaultableMetaPage<'_> {
-    fn len(self) -> usize {
-        match self {
-            Self::Mapped(_) => PAGE_SIZE,
-            Self::Unreadable => 0,
-        }
-    }
-
-    fn byte(self, at: usize) -> Option<u8> {
-        match self {
-            Self::Mapped(page) => page.byte(at),
-            Self::Unreadable => None,
-        }
-    }
-}
-
-fn faultable_meta_pages(mapping: &Mapping) -> Result<[FaultableMetaPage<'_>; 2]> {
-    let page = |number| {
-        if crate::worker::source_page_unreadable(number) {
-            Ok(FaultableMetaPage::Unreadable)
-        } else {
-            mapping.page(number, 2).map(FaultableMetaPage::Mapped)
-        }
-    };
-    Ok([page(0)?, page(1)?])
-}
-
-pub(crate) fn require_regular_file(file: &File) -> Result<()> {
-    if !file.metadata()?.file_type().is_file() {
-        return Err(Error::InvalidArgument(
-            "database path is not a regular file",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn require_sidecar_absent(sidecar: &Path) -> Result<()> {
-    match fs::symlink_metadata(sidecar) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-        Ok(_) => Err(Error::WrongMode(
-            "immutable open requires the canonical .readers sidecar to be absent",
-        )),
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn open_read_only(path: &Path) -> Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    Ok(options.open(path)?)
-}
-
-#[cfg(windows)]
-pub(crate) fn open_read_only(path: &Path) -> Result<File> {
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    let file = options.open(path)?;
-    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(Error::WrongMode("database path is a Windows reparse point"));
-    }
-    Ok(file)
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn open_read_only(_path: &Path) -> Result<File> {
-    Err(Error::Unsupported(
-        "safe no-follow file open is unavailable",
-    ))
 }
 
 #[cfg(test)]

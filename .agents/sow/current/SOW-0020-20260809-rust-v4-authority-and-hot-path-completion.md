@@ -643,6 +643,141 @@ Open decisions:
   architecture gate, 266-file mmap source scan, syscall-traced mmap runtime
   gate, and 361-source Linux/Windows/macOS/FreeBSD compile graph pass after this
   slice. The final clean-audit loop and native target runs remain pending.
+- The cold-path authority audit found that `database.rs` mixes the public
+  immutable-reader adapter with the mapped-file bootstrap/open primitives used
+  by writers, lifecycle resolution, publication maintenance, validation, and
+  recovery. It also found two independent empty-metadata constructors and live
+  creation exporting mapped-file initialization through the public-writer
+  module. The repair is to extract one private database-file authority for
+  mapping, bootstrap, exact-empty construction/inspection, and geometry while
+  leaving `database.rs` as a logical reader adapter. Architecture checks will
+  cover `live_writer/create.rs` instead of exempting it.
+- The same audit found an exact POSIX `openat`/identity clone between the normal
+  retained-file opener and FreeBSD interrupted-transition opener. The repair is
+  one Unix platform helper parameterized only by the required link-count policy;
+  name-mutation code will no longer own a second retained-file opener.
+- Healthy fixed-tree descent and leaf search are independently implemented in
+  range lookup, feed lookup, membership lookup, and their cursors despite the
+  existing generic fixed-tree codecs. After the file/lifecycle boundary repair,
+  point lookup will move to one policy-driven fixed-tree query that keeps mapped
+  bytes borrowed only for the call. Cursor consolidation will follow only where
+  it deletes physical traversal authority without adding allocation or a
+  generic abstraction to untrusted recovery traversal.
+- Extracted one private database-file authority for mapped open/bootstrap,
+  exact-empty construction and inspection, faultable open, sidecar absence,
+  and database geometry. The public immutable-reader adapter no longer owns an
+  empty metadata constructor, live creation delegates exact-empty construction,
+  and the architecture gate no longer exempts that creation path. The duplicate
+  Unix retained-file opener is now one helper parameterized by link-count
+  policy.
+- Replaced three independent healthy point-query descents with one generic
+  fixed-tree query and one ordered lower-bound implementation. Range, feed-name,
+  and membership lookup retain their typed codecs and result policies but no
+  longer own page descent or cell search.
+- Replaced the independent range, feed-catalog, and transaction-range traversal
+  implementations with one allocation-free fixed-tree cursor. The cursor pins
+  the selected generation, supports forward/backward iteration and seek, and
+  has both shared and consuming sources so transaction output may grow without
+  weakening the original generation bounds. The full engine library passes 355
+  tests with four intentional ignores after this consolidation.
+- The next boundary audit found a source-gate defect: `database.rs` and
+  `live_reader.rs` still import mapped bootstrap/storage types and perform
+  immutable open or live reader registration directly, while the gate checks
+  those adapters only for two obsolete accessor names. The repair is to move
+  immutable open and registered-reader lifecycle into `reader_core`, leave both
+  public reader types as logical adapters, and make the gate reject physical
+  dependencies in the complete adapter sources.
+- Moved immutable open and the complete registered-live-reader state machine
+  into `reader_core`. `database.rs` and `live_reader.rs` now contain only public
+  logical calls and close-result translation; a new architecture detector
+  rejects mapped-file, bootstrap, sidecar, and namespace ownership in either
+  adapter. The complete workspace passes 355 engine tests with four intentional
+  ignores plus every integration and C ABI suite after this repair.
+- Split mapping lifecycle from mapped byte/page access and replaced the repeated
+  page/range raw reads and writes with one checked mapped-access implementation.
+  `PageView` remains one pointer wide, no page is copied out of the map, and the
+  four-target warnings-denied source graph passes. POSIX SIGBUS and Windows
+  in-page-error handlers now share one volatile mapped fault-record accessor
+  instead of maintaining identical unsafe implementations.
+- Removed the remaining physical types from public writer orchestration. Public
+  transaction budgets are translated inside `WriterCore`, reclamation returns
+  logical transaction/page counts instead of a retirement record, and the
+  public create function delegates to the live-lifecycle owner. The writer
+  architecture detector now rejects all mapped/database/page/tree/allocator/
+  retirement module imports across every public writer source.
+- Split the recovery/validation worker client and C-ABI error/support modules by
+  responsibility without changing their wire protocol or public symbols. The
+  target source graph now compiles the actual Unix, Windows, macOS, and FreeBSD
+  configurations instead of hiding invalid conditional imports behind the
+  Linux build.
+- Removed duplicate blob, metadata, feed-catalog, membership-dictionary, and
+  retirement record traversal/encoding. Healthy access, mutation, validation,
+  and recovery now consume their canonical physical codecs; tolerant recovery
+  behavior remains a separate policy over those codecs.
+- Replaced fixed-tree first-touch reconstruction with one mapped-to-mapped COW
+  page copy that changes only transaction ownership and checksum state. A
+  permanent work assertion proves that copying a valid committed leaf does not
+  revalidate or rebuild every cell during an ordinary write.
+- Preserved the required committed free-bitmap validation before destructive
+  reuse while removing repeated scans of transaction-private bitmap pages.
+  Leaf and branch counts and summaries now update from the changed word/child,
+  and a permanent counter proves a same-transaction update performs two scalar
+  bitmap probes rather than rescanning the page.
+- Removed the page-sized membership encoder image. Small memberships use a
+  bounded 512-byte staging buffer; larger legal values use the existing mapped
+  blob representation. Readers continue to accept either exact format
+  representation, and the mmap source gate rejects restoration of a
+  `MAX_ID_RECORD` stack or heap page image.
+- Consolidated direct and membership recovery's identical ordered overlap-
+  component state machine. One engine now owns cancellation, order checking,
+  overlap grouping, overflow handling, and component completion; the two small
+  policies retain only their genuinely different value resolution, reporting,
+  and coalescing rules. All 43 focused recovery tests pass with the matched
+  versioned worker.
+- Removed avoidable private-page cleanup and reader ownership work. Discarding
+  an unpublished transaction page no longer zeros bytes that can never become
+  committed, and supported Linux live-handle checks now read one fork-wiped
+  mapped marker rather than repeatedly querying process identity. The real fork
+  subprocess tests still reject inherited handles.
+- Replaced membership-delta's repeated lowest-key lookup/delete loop with one
+  consuming fixed-tree cursor. Consecutive changes to one membership aggregate
+  in one fixed pending record, spill only when the membership changes, and the
+  temporary mapped tree is released once. Permanent work assertions require no
+  per-range delta-tree lookup and exactly one final source pass.
+- Kept arbitrary membership-import translation in bounded mapped state while
+  adding one fixed last-translation entry for the common consecutive-ID case.
+  The high-level importer now avoids entering the writer engine for that hit;
+  the mapped cache remains authoritative for nonconsecutive recurrence.
+- Replaced eager construction and destruction of the large SDK error enum on
+  successful hot paths with the existing cold constructors. The final feed
+  profile contains no error-drop cost above one percent, and warnings-denied
+  Clippy passes without a broad lint exemption.
+- Five pinned release runs at one million records place the medians at 0.511 s
+  direct replacement, 0.487 s retention refresh, 0.376 s nested overwrite,
+  0.501 s 421-feed replacement, 0.063 s 421-feed membership import, and 0.060 s
+  snapshot construction. Every timed writer performs only 20-31 fixed setup
+  allocations and leaves no private artifact.
+- Five pinned one-million-operation reader runs place the medians at 0.074/0.064
+  s live/immutable direct lookup, 0.098/0.090 s live/immutable 421-feed
+  membership lookup, 0.0071/0.0076 s direct scan, and 0.0110/0.0086 s named-feed
+  scan. Every timed reader reports zero allocations.
+- Final-candidate frame-pointer profiles retain only required work: unordered
+  feed normalization is dominated by B+tree lower-bound and selected-page
+  access; nested overwrite by selected-path mutation and fixed-page edits;
+  ordered import by source scanning, merge, and direct output construction;
+  reader lookup by mapped page access and the required typed tree descents; and
+  feed scan by the range cursor and membership projection. No profile contains
+  implicit validation, per-record allocation, persistent-content I/O, page
+  checksum work before commit, temporary sorting, cache churn, or delta-tree
+  churn as a material cost.
+- The repeated production-source audit counts 74,380 physical production lines
+  in 282 inventoried Rust files before parser-empty exclusions. At a meaningful
+  15-line/100-token threshold, clone detection finds eight small clones totaling
+  154 lines (0.21%): frozen C entry-point shapes, public typestate wrappers, and
+  direct/membership recovery policy dispatch. None duplicates a persistent
+  format operation. The largest function remains the 191-line recovery worker
+  state machine; the next is the 122-line live-reset resolution state machine.
+  Both are cohesive terminal-outcome coordinators, not duplicate format logic.
 
 ## Validation
 
@@ -653,7 +788,12 @@ Acceptance criteria evidence:
 Tests or equivalent validation:
 
 - Baseline benchmark and profile evidence is recorded above.
-- Full post-change validation pending.
+- Final exact-commit and native-platform validation remain pending. The current
+  local candidate passes both all-target workspace feature matrices, 361 engine
+  tests with four intentional subprocess/runtime-gate ignores, every integration
+  and C ABI suite, warnings-denied Clippy, warnings-denied rustdoc, formatting,
+  the four-target source graph, architecture boundary gate, mmap-only source
+  gate, and syscall-traced mmap runtime gate.
 - The first hot-path slice passes the complete all-features/all-targets workspace
   test graph when the exact matched worker target is built. A narrower library-
   only invocation failed validation/recovery tests solely because it did not
@@ -672,8 +812,9 @@ Real-use evidence:
 
 - The update-ipsets-shaped release benchmark covers one million direct,
   retention, nested, exact-feed, import, lookup, scan, and snapshot operations.
-  Final repeated measurements and authorized native-target evidence remain
-  pending.
+  Five-run pinned local measurements and exact timed-window profiles are
+  recorded in the execution log. Authorized native-target evidence on the exact
+  pushed final commit remains pending.
 
 Reviewer findings:
 
@@ -682,7 +823,11 @@ Reviewer findings:
 
 Same-failure scan:
 
-- Pending per implementation slice.
+- The architecture gate rejects physical high-level imports, duplicate database
+  creation, copied fixed-tree leaves, and repeated membership-delta search/delete.
+  The mmap source gate rejects persistent-content I/O and complete page images.
+  Clone, source-graph, eager-hot-error, and duplicate-layout searches are clean
+  for the current candidate; repeat once more on the exact final commit.
 
 Sensitive data gate:
 

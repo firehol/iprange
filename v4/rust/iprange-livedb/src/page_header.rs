@@ -6,6 +6,7 @@ use crate::mapping::ByteSource;
 use crate::page_io::PageSink;
 
 pub(crate) const SIZE: usize = 32;
+const MAGIC: usize = 0;
 pub(crate) const TYPE: usize = 4;
 pub(crate) const FLAGS: usize = 5;
 pub(crate) const HEADER_BYTES: usize = 6;
@@ -35,7 +36,7 @@ pub(crate) struct Fields {
 
 pub(crate) fn initialize<D: PageSink + ?Sized>(page: &mut D, fields: Fields) -> Result<()> {
     page.fill(0);
-    page.write(0, &PAGE_MAGIC)?;
+    page.write(MAGIC, &PAGE_MAGIC)?;
     page.set_byte(TYPE, fields.page_type)?;
     page.put_u16(HEADER_BYTES, SIZE as u16)?;
     page.put_u64(BORN_TXN, fields.born_txn)?;
@@ -64,7 +65,7 @@ pub(crate) fn common_valid<S: ByteSource>(page: S) -> bool {
 }
 
 pub(crate) fn has_magic<S: ByteSource>(page: S) -> bool {
-    page.equals(0, &PAGE_MAGIC)
+    page.equals(MAGIC, &PAGE_MAGIC)
 }
 
 pub(crate) fn owned_by<S: ByteSource>(page: S, txn: u64) -> bool {

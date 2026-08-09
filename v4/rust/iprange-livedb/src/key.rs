@@ -67,7 +67,7 @@ impl IpKey for Ipv4Key {
 
     #[inline]
     fn write_le(self, output: &mut [u8]) {
-        output[..4].copy_from_slice(&self.0.to_le_bytes());
+        output[..Self::WIDTH].copy_from_slice(&self.0.to_le_bytes());
     }
 
     #[inline]
@@ -161,8 +161,11 @@ impl IpKey for Ipv6Key {
 
     #[inline]
     fn read_le<S: ByteSource>(src: S, at: usize) -> Self {
+        const LIMB_WIDTH: usize = core::mem::size_of::<u64>();
         let l = src.array(at).expect("validated IPv6 low limb");
-        let h = src.array(at + 8).expect("validated IPv6 high limb");
+        let h = src
+            .array(at + LIMB_WIDTH)
+            .expect("validated IPv6 high limb");
         Ipv6Key {
             hi: u64::from_le_bytes(h),
             lo: u64::from_le_bytes(l),
@@ -171,8 +174,9 @@ impl IpKey for Ipv6Key {
 
     #[inline]
     fn write_le(self, output: &mut [u8]) {
-        output[..8].copy_from_slice(&self.lo.to_le_bytes());
-        output[8..16].copy_from_slice(&self.hi.to_le_bytes());
+        const LIMB_WIDTH: usize = core::mem::size_of::<u64>();
+        output[..LIMB_WIDTH].copy_from_slice(&self.lo.to_le_bytes());
+        output[LIMB_WIDTH..Self::WIDTH].copy_from_slice(&self.hi.to_le_bytes());
     }
 
     #[inline]

@@ -84,7 +84,6 @@ impl<K: IpKey> ProjectionState<K> {
         F: FnMut() -> Result<()>,
     {
         loop {
-            checkpoint()?;
             let Some(current) = self.next_member(mapping, checkpoint)? else {
                 return Ok(self.pending.take());
             };

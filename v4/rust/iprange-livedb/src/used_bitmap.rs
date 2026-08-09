@@ -3,7 +3,6 @@
 use crate::bitmap_page::{child_index, coverage, leaf_word_index, required_level, LEAF_BITS};
 use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiredPages, Store};
-use crate::page_io::PageSink;
 
 mod mutation;
 mod page;
@@ -36,11 +35,7 @@ fn touch<S: Store>(
         return Ok((page_number, header));
     }
     let private = store.allocate()?;
-    store.copy_page(page_number, private, |source, output| {
-        output.write_source(0, source)?;
-        output.put_u64(crate::page_header::BORN_TXN, target_txn)?;
-        crate::page_checksum::clear(output)
-    })?;
+    store.copy_for_cow(page_number, private)?;
     retired.push(page_number)?;
     Ok((private, header))
 }

@@ -79,7 +79,7 @@ scan() {
 }
 
 content_io='\b(read_at|write_at|seek_read|seek_write|read_exact_at|write_exact_at|ReadFile|WriteFile|copy_file_range|sendfile|pread|pwrite|preadv|pwritev|readv|writev|BufReader|BufWriter)\b|std::os::(unix|windows)::fs::(FileExt|\{[^}]*FileExt)|std::io::(Read|Write|Seek)\b|std::io::\{[^}]*(Read|Write|Seek)\b|\b(std::)?fs::(read|read_to_string|write|copy)\b|std::io::copy\b|libc::(read|readv|pread|preadv|write|writev|pwrite|pwritev|sendfile|copy_file_range)\b'
-owned_page='\[[^];]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|4096)[[:space:]]*\]|vec!\[[^]]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|4096)[[:space:]]*\]'
+owned_page='\[[^];]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|MAX_ID_RECORD|4096)[[:space:]]*\]|vec!\[[^]]*;[[:space:]]*([0-9]+[[:space:]]*\*[[:space:]]*)?(PAGE_SIZE|MAX_ID_RECORD|4096)[[:space:]]*\]'
 
 status=0
 run scan 'Forbidden persistent-content I/O symbols:' "$content_io" || status=1

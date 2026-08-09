@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
-use crate::database;
+use crate::database_file;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;

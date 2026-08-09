@@ -2,7 +2,8 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::super::direct_build::{construct, DirectConstruction};
+use super::super::construction::Construction;
+use super::super::direct_build::construct;
 use super::*;
 use crate::cardinality::Cardinality129;
 use crate::contract::{ValueTag, PAGE_SIZE};
@@ -66,7 +67,7 @@ fn ordered_direct_recovery_streams_a_canonical_output() {
     let output = output_builder(&paths.output);
     let mut unknown = Vec::new();
 
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,
@@ -113,7 +114,7 @@ fn crc_damaged_leaf_is_skipped_and_reported_as_unbounded() {
     let source = File::open(&paths.source).unwrap();
     let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,
@@ -151,7 +152,7 @@ fn an_overlap_component_is_rejected_whole() {
     let source = File::open(&paths.source).unwrap();
     let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,
@@ -189,7 +190,7 @@ fn disordered_readable_records_are_sorted_with_bounded_heap() {
     let source = File::open(&paths.source).unwrap();
     let source = Mapping::read_only(source, meta.page_count * PAGE_SIZE as u64).unwrap();
     let mut unknown = Vec::new();
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,
@@ -301,7 +302,7 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     drop(finished.file);
 
     let source = source_mapping(&clean.source);
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,
@@ -335,7 +336,7 @@ fn complete_metadata_is_preserved_and_damaged_metadata_is_omitted() {
     );
     let mut unknown = Vec::new();
     let source = source_mapping(&damaged.source);
-    let DirectConstruction {
+    let Construction {
         finished, report, ..
     } = construct(
         &source,

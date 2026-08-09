@@ -7,12 +7,12 @@ use crate::page_io::PageEdit;
 use crate::slotted_page::{self, Builder};
 
 use super::page::{
-    self, branch_child, build_edit, build_replacement, key_at, lower_bound, parse, require_codec,
-    CellBuf, Edit, Replacement,
+    self, branch_child, build_edit, build_replacement, lower_bound, parse, require_codec, CellBuf,
+    Edit, Replacement,
 };
 use super::{
-    private_path, private_path_select, Codec, Frame, LeafSelector, Path, PrivateLeaf, RetiredPages,
-    Store,
+    first_key, private_path, private_path_select, Codec, Frame, LeafSelector, Path, PrivateLeaf,
+    RetiredPages, Store,
 };
 
 struct BranchSplit<K> {
@@ -93,7 +93,7 @@ pub(crate) fn replace_local_predecessor_with<C: Codec, S: Store, R>(
     require_replacement::<C>(key, cells)?;
     let (index, _) = rejected
         .predecessor
-        .ok_or(Error::Corrupt("B+tree local predecessor is unavailable"))?;
+        .ok_or_else(|| Error::corrupt("B+tree local predecessor is unavailable"))?;
     let mut target = rejected.target;
     target.index = index;
     target.exists = true;
@@ -759,40 +759,10 @@ fn replace_first_branch<C: Codec, S: Store>(
         Ok((header, child))
     })?;
     let replacement = CellBuf::branch::<C>(key, child)?;
-    let edit = Edit {
+    let cells = [replacement.as_slice()];
+    let edit = Replacement {
         index: frame.index,
-        replace: true,
-        cell: replacement.as_slice(),
+        cells: &cells,
     };
-    let fits = store.inspect_page(frame.page_number, |source| {
-        page::edit_fits::<C, _>(source, &header, edit)
-    })?;
-    if fits {
-        apply_leaf_edit::<C, S>(store, frame.page_number, &header, edit)?;
-        return Ok(None);
-    }
-
-    let middle = store.inspect_page(frame.page_number, |source| {
-        page::split_index::<C, _>(source, &header, edit)
-    })?;
-    let right_page = store.allocate()?;
-    store.copy_page(frame.page_number, right_page, |source, output| {
-        build_edit::<C, _, _>(source, &header, edit, middle, header.item_count, output)
-    })?;
-    keep_left_edit::<C, S>(store, frame.page_number, &header, edit, middle)?;
-    crate::work::page_split(1);
-    Ok(Some(BranchSplit {
-        right_page,
-        right_first: first_key::<C, S>(store, right_page, header.level)?,
-        left_first: first_key::<C, S>(store, frame.page_number, header.level)?,
-        level: header.level,
-    }))
-}
-
-fn first_key<C: Codec, S: Store>(store: &S, page_number: u32, level: u16) -> Result<C::Key> {
-    let target_txn = store.target_txn();
-    store.inspect_page(page_number, |page| {
-        let header = parse::<C, _>(page, target_txn, Some(level))?;
-        key_at::<C, _>(page, &header, 0)
-    })
+    apply_replacement::<C, S>(store, frame.page_number, &header, edit)
 }

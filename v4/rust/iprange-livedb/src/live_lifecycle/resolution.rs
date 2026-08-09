@@ -6,7 +6,7 @@ use crate::cancellation::CancellationToken;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_sidecar::{Sidecar, State};
-use crate::publication::{ArtifactKind, DirectoryRole, Housekeeping};
+use crate::publication::{ArtifactKind, DirectoryRole};
 use crate::validation::LocalFileIdentity;
 
 #[cfg(unix)]
@@ -471,7 +471,7 @@ fn resolved_after_cleanup(
         },
     );
     result.residue_possible = !clean;
-    result.housekeeping = merge_housekeeping(result.housekeeping, cleanup.housekeeping);
+    result.housekeeping = result.housekeeping.merge(cleanup.housekeeping);
     let mut visible = result.visible_housekeeping.into_vec();
     visible.extend(cleanup.visible);
     result.visible_housekeeping = visible.into_boxed_slice();
@@ -490,18 +490,6 @@ fn remove_previous(path: &Path, identity: crate::live_namespace::Identity) -> Re
         Err(Error::Unresolvable(
             "rollback-safe previous coordination cleanup is unavailable",
         ))
-    }
-}
-
-const fn merge_housekeeping(left: Housekeeping, right: Housekeeping) -> Housekeeping {
-    if matches!(left, Housekeeping::Visible) || matches!(right, Housekeeping::Visible) {
-        Housekeeping::Visible
-    } else if matches!(left, Housekeeping::CrashReappearancePossible)
-        || matches!(right, Housekeeping::CrashReappearancePossible)
-    {
-        Housekeeping::CrashReappearancePossible
-    } else {
-        Housekeeping::None
     }
 }
 

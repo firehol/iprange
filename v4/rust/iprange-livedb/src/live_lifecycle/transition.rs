@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::bootstrap::{Bootstrap, OpenMode};
 use crate::cancellation::CancellationToken;
-use crate::database;
+use crate::database_file;
 use crate::error::{Error, Result};
 use crate::live_cleanup::{self, Authority as CleanupAuthority};
 use crate::live_lock::{self, Mode};
@@ -53,7 +53,7 @@ pub fn initialize_live(
     require_capacity(reader_capacity)?;
     let main = LockedMain::open(path.as_ref(), cancellation)?;
     let canonical = crate::path::canonical_sidecar(&main.path)?;
-    database::require_sidecar_absent(&canonical)?;
+    database_file::require_sidecar_absent(&canonical)?;
     let attempt = Attempt::new(
         LiveTransitionOperation::Initialize,
         None,
@@ -200,7 +200,7 @@ impl LockedMain {
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Exclusive, cancellation)?;
         cancellation.check()?;
         crate::live_namespace::verify_path(&path, identity)?;
-        let bootstrap = database::bootstrap_file(&file, OpenMode::Writer)?;
+        let bootstrap = database_file::bootstrap_file(&file, OpenMode::Writer)?;
         live_cleanup::require_main_available(&path, identity, bootstrap.meta.database_id)?;
         if bootstrap.physical_bytes != bootstrap.committed_bytes {
             return Err(Error::WrongState(
@@ -220,7 +220,7 @@ impl LockedMain {
 
     pub(super) fn verify(&self) -> Result<()> {
         crate::live_namespace::verify_path(&self.path, self.identity)?;
-        let current = database::bootstrap_file(&self.file, OpenMode::Writer)?;
+        let current = database_file::bootstrap_file(&self.file, OpenMode::Writer)?;
         if current.meta != self.bootstrap.meta
             || current.committed_bytes != self.bootstrap.committed_bytes
             || current.physical_bytes != self.bootstrap.physical_bytes

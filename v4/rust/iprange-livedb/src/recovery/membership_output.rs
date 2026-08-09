@@ -1,38 +1,27 @@
 //! Whole-component rejection and canonical membership-range output.
 
-use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::immutable_output::Builder;
 use crate::key::{Ipv4Key, Ipv6Key};
 use crate::mapping::Mapping;
 use crate::range_tree::Record;
 use crate::validation::{ValidationObject, ValidationReason};
 
-use super::direct_output::DirectKey;
+use super::direct_output::{report_overlap, DirectKey};
 use super::membership_index::{Locator, MembershipIndex};
-use super::range_build::RangeOutput;
+use super::range_components::Policy;
 use super::report::{RecoverySink, Reporter, Unknown};
 use super::tables::Tables;
 
-pub(crate) struct Components<'a, 'b, S, K> {
+pub(super) struct MembershipOutput<'a, 'b, S, K> {
     mapping: &'a Mapping,
     meta: MetaV4,
     memberships: &'a MembershipIndex,
     tables: &'a Tables,
     builder: &'a mut Builder,
     reporter: &'a mut Reporter<'b, S>,
-    cancellation: &'a CancellationToken,
-    component: Option<Component<K>>,
     output: Option<OutputRange<K>>,
-}
-
-#[derive(Clone, Copy)]
-struct Component<K> {
-    first: Record<K>,
-    first_membership: Option<Locator>,
-    maximum_to: K,
-    count: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -42,15 +31,14 @@ struct OutputRange<K> {
     membership: Locator,
 }
 
-impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
-    pub(crate) fn new(
+impl<'a, 'b, S: RecoverySink, K: MembershipKey> MembershipOutput<'a, 'b, S, K> {
+    pub(super) fn new(
         mapping: &'a Mapping,
         meta: MetaV4,
         memberships: &'a MembershipIndex,
         tables: &'a Tables,
         builder: &'a mut Builder,
         reporter: &'a mut Reporter<'b, S>,
-        cancellation: &'a CancellationToken,
     ) -> Self {
         Self {
             mapping,
@@ -59,40 +47,11 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
             tables,
             builder,
             reporter,
-            cancellation,
-            component: None,
             output: None,
         }
     }
 
-    pub(crate) fn push(&mut self, record: Record<K>) -> Result<()> {
-        self.cancellation.check()?;
-        let membership = self.resolve(record)?;
-        let Some(mut component) = self.component.take() else {
-            self.component = Some(Component::new(record, membership));
-            return Ok(());
-        };
-        if record.from < component.first.from {
-            return Err(Error::RecoveryCandidateChanged);
-        }
-        if record.from <= component.maximum_to {
-            component.maximum_to = component.maximum_to.max(record.to);
-            component.count = component
-                .count
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("recovery overlap component"))?;
-            self.component = Some(component);
-            return Ok(());
-        }
-        self.finish_component(component)?;
-        self.component = Some(Component::new(record, membership));
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        if let Some(component) = self.component.take() {
-            self.finish_component(component)?;
-        }
+    fn finish_output(&mut self) -> Result<()> {
         if let Some(output) = self.output.take() {
             self.push_output(output)?;
         }
@@ -113,40 +72,6 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
             })?;
         }
         Ok(membership)
-    }
-
-    fn finish_component(&mut self, component: Component<K>) -> Result<()> {
-        if component.count != 1 {
-            self.reporter.ranges_rejected(
-                component.count,
-                component.first.from,
-                component.maximum_to,
-            )?;
-            return self.reporter.unknown(Unknown {
-                reason: ValidationReason::RangeOverlap,
-                object: ValidationObject::RangeTree,
-                page_number: None,
-                physical_bytes: None,
-                address_fence: Some(<K as DirectKey>::fence(
-                    component.first.from,
-                    component.maximum_to,
-                )),
-                contributes_to_possible_span: false,
-                has_unbounded_extent: false,
-            });
-        }
-        let Some(membership) = component.first_membership else {
-            return self
-                .reporter
-                .ranges_rejected(1, component.first.from, component.first.to);
-        };
-        self.reporter
-            .range_accepted(component.first.from, component.first.to)?;
-        self.coalesce(OutputRange {
-            from: component.first.from,
-            to: component.first.to,
-            membership,
-        })
     }
 
     fn coalesce(&mut self, current: OutputRange<K>) -> Result<()> {
@@ -175,24 +100,31 @@ impl<'a, 'b, S: RecoverySink, K: MembershipKey> Components<'a, 'b, S, K> {
     }
 }
 
-impl<S: RecoverySink, K: MembershipKey> RangeOutput<K> for Components<'_, '_, S, K> {
-    fn push(&mut self, record: Record<K>) -> Result<()> {
-        Components::push(self, record)
+impl<S: RecoverySink, K: MembershipKey> Policy<K> for MembershipOutput<'_, '_, S, K> {
+    type Resolved = Locator;
+
+    fn resolve(&mut self, record: Record<K>) -> Result<Option<Self::Resolved>> {
+        MembershipOutput::resolve(self, record)
+    }
+
+    fn accept(&mut self, record: Record<K>, membership: Option<Self::Resolved>) -> Result<()> {
+        let Some(membership) = membership else {
+            return self.reporter.ranges_rejected(1, record.from, record.to);
+        };
+        self.reporter.range_accepted(record.from, record.to)?;
+        self.coalesce(OutputRange {
+            from: record.from,
+            to: record.to,
+            membership,
+        })
+    }
+
+    fn reject_overlap(&mut self, count: u64, from: K, to: K) -> Result<()> {
+        report_overlap(self.reporter, count, from, to)
     }
 
     fn finish(&mut self) -> Result<()> {
-        Components::finish(self)
-    }
-}
-
-impl<K: Copy> Component<K> {
-    fn new(first: Record<K>, first_membership: Option<Locator>) -> Self {
-        Self {
-            first,
-            first_membership,
-            maximum_to: first.to,
-            count: 1,
-        }
+        self.finish_output()
     }
 }
 

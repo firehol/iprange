@@ -10,14 +10,20 @@ use crate::validation::ValidationReason;
 use super::page_set::PageSet;
 
 pub(crate) trait RangeEvents<K> {
-    fn page_accepted(&mut self) -> Result<()>;
-    fn page_rejected(&mut self, io_unreadable: bool) -> Result<()>;
+    fn page_accepted(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
+        Ok(())
+    }
     fn unknown(
         &mut self,
-        reason: ValidationReason,
-        page: Option<u32>,
-        unbounded: bool,
-    ) -> Result<()>;
+        _reason: ValidationReason,
+        _page: Option<u32>,
+        _unbounded: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
     fn range(&mut self, page: u32, record: Option<Record<K>>) -> Result<()>;
 }
 

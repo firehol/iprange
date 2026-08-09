@@ -259,34 +259,24 @@ pub(crate) struct ArmedReservation {
 
 impl ArmedReservation {
     pub(crate) fn verify_before_main(&self, output: &PreparedOutput) -> Result<(), Error> {
-        let _probe = crate::worker::enter_output(&self.mapping).map_err(Error::Sdk)?;
-        verify_canonical(
-            &self.file,
-            &self.mapping,
-            output,
-            canonical_expected(
-                self.identity,
-                &self.name,
-                self.header,
-                1,
-                OutputLocation::Private,
-            ),
-        )
+        self.verify_at(output, OutputLocation::Private)
     }
 
     pub(crate) fn verify_after_main(&self, output: &PreparedOutput) -> Result<(), Error> {
+        self.verify_at(output, OutputLocation::Main)
+    }
+
+    fn verify_at(
+        &self,
+        output: &PreparedOutput,
+        output_location: OutputLocation,
+    ) -> Result<(), Error> {
         let _probe = crate::worker::enter_output(&self.mapping).map_err(Error::Sdk)?;
         verify_canonical(
             &self.file,
             &self.mapping,
             output,
-            canonical_expected(
-                self.identity,
-                &self.name,
-                self.header,
-                1,
-                OutputLocation::Main,
-            ),
+            canonical_expected(self.identity, &self.name, self.header, 1, output_location),
         )
     }
 }

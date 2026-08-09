@@ -16,6 +16,39 @@ pub const PAGE_MAGIC: [u8; 4] = *b"IP4P";
 
 pub const META_CRC_OFFSET: usize = 252;
 
+const META_MAGIC_OFFSET: usize = 0;
+const META_SIZE_OFFSET: usize = 8;
+const PAGE_SHIFT_OFFSET: usize = 10;
+const ADDRESS_FAMILY_OFFSET: usize = 11;
+const VALUE_KIND_OFFSET: usize = 12;
+const VALUE_TAG_OFFSET: usize = 16;
+const DATABASE_ID_OFFSET: usize = 32;
+const TXN_ID_OFFSET: usize = 48;
+const COMMIT_NONCE_OFFSET: usize = 56;
+const PAGE_COUNT_OFFSET: usize = 72;
+const RANGE_RECORD_COUNT_OFFSET: usize = 80;
+const ACTIVE_FEED_COUNT_OFFSET: usize = 88;
+const FEED_INDEX_LIMIT_OFFSET: usize = 96;
+const MEMBERSHIP_ENTRY_COUNT_OFFSET: usize = 104;
+const MEMBERSHIP_ID_LIMIT_OFFSET: usize = 112;
+const METADATA_UNCOMPRESSED_LEN_OFFSET: usize = 120;
+const METADATA_COMPRESSED_LEN_OFFSET: usize = 128;
+const RETIRED_EXTENT_COUNT_OFFSET: usize = 136;
+const RANGE_ROOT_OFFSET: usize = 144;
+const CATALOG_NAME_ROOT_OFFSET: usize = 148;
+const CATALOG_INDEX_ROOT_OFFSET: usize = 152;
+const FEED_USED_ROOT_OFFSET: usize = 156;
+const MEMBERSHIP_ID_ROOT_OFFSET: usize = 160;
+const MEMBERSHIP_HASH_ROOT_OFFSET: usize = 164;
+const MEMBERSHIP_USED_ROOT_OFFSET: usize = 168;
+const METADATA_ROOT_OFFSET: usize = 172;
+const FREE_BITMAP_ROOT_OFFSET: usize = 176;
+const RETIREMENT_ROOT_OFFSET: usize = 180;
+const ALLOCATOR_RESERVE_OFFSET: usize = 184;
+const RESERVED_HEADER_OFFSET: usize = 13;
+const RESERVED_HEADER_LEN: usize = 3;
+const RESERVED_BODY_OFFSET: usize = 200;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum AddressFamily {
@@ -135,75 +168,78 @@ impl MetaV4 {
 
     fn encode_fields<D: PageSink + ?Sized>(&self, page: &mut D) -> Result<()> {
         page.fill(0);
-        page.write(0, &META_MAGIC)?;
-        page.put_u16(8, META_SIZE)?;
-        page.set_byte(10, PAGE_SHIFT)?;
-        page.set_byte(11, self.address_family as u8)?;
-        page.set_byte(12, self.value_kind as u8)?;
-        page.write(16, self.value_tag.as_wire())?;
-        page.write(32, &self.database_id)?;
-        page.put_u64(48, self.txn_id)?;
-        page.write(56, &self.commit_nonce)?;
-        page.put_u64(72, self.page_count)?;
-        page.put_u64(80, self.range_record_count)?;
-        page.put_u64(88, self.active_feed_count)?;
-        page.put_u64(96, self.feed_index_limit)?;
-        page.put_u64(104, self.membership_entry_count)?;
-        page.put_u64(112, self.membership_id_limit)?;
-        page.put_u64(120, self.metadata_uncompressed_len)?;
-        page.put_u64(128, self.metadata_compressed_len)?;
-        page.put_u64(136, self.retired_extent_count)?;
-        page.put_u32(144, self.range_root)?;
-        page.put_u32(148, self.catalog_name_root)?;
-        page.put_u32(152, self.catalog_index_root)?;
-        page.put_u32(156, self.feed_used_root)?;
-        page.put_u32(160, self.membership_id_root)?;
-        page.put_u32(164, self.membership_hash_root)?;
-        page.put_u32(168, self.membership_used_root)?;
-        page.put_u32(172, self.metadata_root)?;
-        page.put_u32(176, self.free_bitmap_root)?;
-        page.put_u32(180, self.retirement_root)?;
+        page.write(META_MAGIC_OFFSET, &META_MAGIC)?;
+        page.put_u16(META_SIZE_OFFSET, META_SIZE)?;
+        page.set_byte(PAGE_SHIFT_OFFSET, PAGE_SHIFT)?;
+        page.set_byte(ADDRESS_FAMILY_OFFSET, self.address_family as u8)?;
+        page.set_byte(VALUE_KIND_OFFSET, self.value_kind as u8)?;
+        page.write(VALUE_TAG_OFFSET, self.value_tag.as_wire())?;
+        page.write(DATABASE_ID_OFFSET, &self.database_id)?;
+        page.put_u64(TXN_ID_OFFSET, self.txn_id)?;
+        page.write(COMMIT_NONCE_OFFSET, &self.commit_nonce)?;
+        page.put_u64(PAGE_COUNT_OFFSET, self.page_count)?;
+        page.put_u64(RANGE_RECORD_COUNT_OFFSET, self.range_record_count)?;
+        page.put_u64(ACTIVE_FEED_COUNT_OFFSET, self.active_feed_count)?;
+        page.put_u64(FEED_INDEX_LIMIT_OFFSET, self.feed_index_limit)?;
+        page.put_u64(MEMBERSHIP_ENTRY_COUNT_OFFSET, self.membership_entry_count)?;
+        page.put_u64(MEMBERSHIP_ID_LIMIT_OFFSET, self.membership_id_limit)?;
+        page.put_u64(
+            METADATA_UNCOMPRESSED_LEN_OFFSET,
+            self.metadata_uncompressed_len,
+        )?;
+        page.put_u64(METADATA_COMPRESSED_LEN_OFFSET, self.metadata_compressed_len)?;
+        page.put_u64(RETIRED_EXTENT_COUNT_OFFSET, self.retired_extent_count)?;
+        page.put_u32(RANGE_ROOT_OFFSET, self.range_root)?;
+        page.put_u32(CATALOG_NAME_ROOT_OFFSET, self.catalog_name_root)?;
+        page.put_u32(CATALOG_INDEX_ROOT_OFFSET, self.catalog_index_root)?;
+        page.put_u32(FEED_USED_ROOT_OFFSET, self.feed_used_root)?;
+        page.put_u32(MEMBERSHIP_ID_ROOT_OFFSET, self.membership_id_root)?;
+        page.put_u32(MEMBERSHIP_HASH_ROOT_OFFSET, self.membership_hash_root)?;
+        page.put_u32(MEMBERSHIP_USED_ROOT_OFFSET, self.membership_used_root)?;
+        page.put_u32(METADATA_ROOT_OFFSET, self.metadata_root)?;
+        page.put_u32(FREE_BITMAP_ROOT_OFFSET, self.free_bitmap_root)?;
+        page.put_u32(RETIREMENT_ROOT_OFFSET, self.retirement_root)?;
         for (index, page_number) in self.allocator_reserve.iter().enumerate() {
-            page.put_u32(184 + index * 4, *page_number)?;
+            page.put_u32(ALLOCATOR_RESERVE_OFFSET + index * 4, *page_number)?;
         }
         Ok(())
     }
 
     pub(crate) fn decode_unchecked<S: ByteSource>(page: S) -> Option<Self> {
-        let tag = page.array(16)?;
-        let database_id = page.array(32)?;
-        let commit_nonce = page.array(56)?;
+        let tag = page.array(VALUE_TAG_OFFSET)?;
+        let database_id = page.array(DATABASE_ID_OFFSET)?;
+        let commit_nonce = page.array(COMMIT_NONCE_OFFSET)?;
         Some(Self {
-            address_family: AddressFamily::from_wire(page.byte(11)?)?,
-            value_kind: ValueKind::from_wire(page.byte(12)?)?,
+            address_family: AddressFamily::from_wire(page.byte(ADDRESS_FAMILY_OFFSET)?)?,
+            value_kind: ValueKind::from_wire(page.byte(VALUE_KIND_OFFSET)?)?,
             value_tag: ValueTag::from_wire(tag)?,
             database_id,
-            txn_id: u64_source(page, 48)?,
+            txn_id: u64_source(page, TXN_ID_OFFSET)?,
             commit_nonce,
-            page_count: u64_source(page, 72)?,
-            range_record_count: u64_source(page, 80)?,
-            active_feed_count: u64_source(page, 88)?,
-            feed_index_limit: u64_source(page, 96)?,
-            membership_entry_count: u64_source(page, 104)?,
-            membership_id_limit: u64_source(page, 112)?,
-            metadata_uncompressed_len: u64_source(page, 120)?,
-            metadata_compressed_len: u64_source(page, 128)?,
-            retired_extent_count: u64_source(page, 136)?,
-            range_root: u32_source(page, 144)?,
-            catalog_name_root: u32_source(page, 148)?,
-            catalog_index_root: u32_source(page, 152)?,
-            feed_used_root: u32_source(page, 156)?,
-            membership_id_root: u32_source(page, 160)?,
-            membership_hash_root: u32_source(page, 164)?,
-            membership_used_root: u32_source(page, 168)?,
-            metadata_root: u32_source(page, 172)?,
-            free_bitmap_root: u32_source(page, 176)?,
-            retirement_root: u32_source(page, 180)?,
+            page_count: u64_source(page, PAGE_COUNT_OFFSET)?,
+            range_record_count: u64_source(page, RANGE_RECORD_COUNT_OFFSET)?,
+            active_feed_count: u64_source(page, ACTIVE_FEED_COUNT_OFFSET)?,
+            feed_index_limit: u64_source(page, FEED_INDEX_LIMIT_OFFSET)?,
+            membership_entry_count: u64_source(page, MEMBERSHIP_ENTRY_COUNT_OFFSET)?,
+            membership_id_limit: u64_source(page, MEMBERSHIP_ID_LIMIT_OFFSET)?,
+            metadata_uncompressed_len: u64_source(page, METADATA_UNCOMPRESSED_LEN_OFFSET)?,
+            metadata_compressed_len: u64_source(page, METADATA_COMPRESSED_LEN_OFFSET)?,
+            retired_extent_count: u64_source(page, RETIRED_EXTENT_COUNT_OFFSET)?,
+            range_root: u32_source(page, RANGE_ROOT_OFFSET)?,
+            catalog_name_root: u32_source(page, CATALOG_NAME_ROOT_OFFSET)?,
+            catalog_index_root: u32_source(page, CATALOG_INDEX_ROOT_OFFSET)?,
+            feed_used_root: u32_source(page, FEED_USED_ROOT_OFFSET)?,
+            membership_id_root: u32_source(page, MEMBERSHIP_ID_ROOT_OFFSET)?,
+            membership_hash_root: u32_source(page, MEMBERSHIP_HASH_ROOT_OFFSET)?,
+            membership_used_root: u32_source(page, MEMBERSHIP_USED_ROOT_OFFSET)?,
+            metadata_root: u32_source(page, METADATA_ROOT_OFFSET)?,
+            free_bitmap_root: u32_source(page, FREE_BITMAP_ROOT_OFFSET)?,
+            retirement_root: u32_source(page, RETIREMENT_ROOT_OFFSET)?,
             allocator_reserve: [
-                u32_source(page, 184)?,
-                u32_source(page, 188)?,
-                u32_source(page, 192)?,
-                u32_source(page, 196)?,
+                u32_source(page, ALLOCATOR_RESERVE_OFFSET)?,
+                u32_source(page, ALLOCATOR_RESERVE_OFFSET + 4)?,
+                u32_source(page, ALLOCATOR_RESERVE_OFFSET + 8)?,
+                u32_source(page, ALLOCATOR_RESERVE_OFFSET + 12)?,
             ],
         })
     }
@@ -214,6 +250,50 @@ impl MetaV4 {
             && self.value_tag == other.value_tag
             && self.database_id == other.database_id
     }
+
+    pub(crate) const fn roots(&self) -> [u32; 10] {
+        [
+            self.range_root,
+            self.catalog_name_root,
+            self.catalog_index_root,
+            self.feed_used_root,
+            self.membership_id_root,
+            self.membership_hash_root,
+            self.membership_used_root,
+            self.metadata_root,
+            self.free_bitmap_root,
+            self.retirement_root,
+        ]
+    }
+}
+
+pub(crate) fn meta_magic_valid<S: ByteSource>(page: S) -> bool {
+    page.len() == PAGE_SIZE && page.equals(META_MAGIC_OFFSET, &META_MAGIC)
+}
+
+pub(crate) fn meta_fixed_values_valid<S: ByteSource>(page: S) -> bool {
+    u16_source(page, META_SIZE_OFFSET) == Some(META_SIZE)
+        && page.byte(PAGE_SHIFT_OFFSET) == Some(PAGE_SHIFT)
+        && page
+            .byte(ADDRESS_FAMILY_OFFSET)
+            .and_then(AddressFamily::from_wire)
+            .is_some()
+        && page
+            .byte(VALUE_KIND_OFFSET)
+            .and_then(ValueKind::from_wire)
+            .is_some()
+}
+
+pub(crate) fn meta_reserved_zero<S: ByteSource>(page: S) -> bool {
+    page.all_zero(RESERVED_HEADER_OFFSET, RESERVED_HEADER_LEN)
+        && page.all_zero(RESERVED_BODY_OFFSET, META_CRC_OFFSET - RESERVED_BODY_OFFSET)
+        && page.all_zero(META_SIZE as usize, PAGE_SIZE - META_SIZE as usize)
+}
+
+pub(crate) fn meta_checksum_valid<S: ByteSource>(page: S) -> bool {
+    u32_source(page, META_CRC_OFFSET).is_some_and(|stored| {
+        crc32c::crc32c_source_with_zeroed(page, META_CRC_OFFSET, 4) == Some(stored)
+    })
 }
 
 #[inline]

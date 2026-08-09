@@ -1,11 +1,12 @@
 use std::ffi::{c_int, c_void};
 use std::mem::{self, MaybeUninit};
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::error::{Error, Result};
 
 use super::control::{Control, State, OWNED_FAULT_EXIT};
+use super::fault_memory::{atomic_u32, read_u32, read_u64, write_i32, write_u32, write_u64};
 
 const UNOWNED_REDISPATCH_FAILED: c_int = 198;
 
@@ -339,36 +340,6 @@ fn restore_action(previous: &libc::sigaction) {
 fn restore_stack(previous: &libc::stack_t) {
     // SAFETY: Best-effort restoration during worker teardown.
     let _ = unsafe { libc::sigaltstack(previous, ptr::null_mut()) };
-}
-
-fn read_u32(base: *mut u8, at: usize) -> u32 {
-    // SAFETY: Fixed aligned field in the mapped control record.
-    unsafe { ptr::read_volatile(base.add(at).cast::<u32>()) }
-}
-
-fn read_u64(base: *mut u8, at: usize) -> u64 {
-    // SAFETY: Fixed aligned field in the mapped control record.
-    unsafe { ptr::read_volatile(base.add(at).cast::<u64>()) }
-}
-
-fn write_u32(base: *mut u8, at: usize, value: u32) {
-    // SAFETY: Fixed aligned field in the mapped control record.
-    unsafe { ptr::write_volatile(base.add(at).cast::<u32>(), value) }
-}
-
-fn write_i32(base: *mut u8, at: usize, value: i32) {
-    // SAFETY: Fixed aligned field in the mapped control record.
-    unsafe { ptr::write_volatile(base.add(at).cast::<i32>(), value) }
-}
-
-fn write_u64(base: *mut u8, at: usize, value: u64) {
-    // SAFETY: Fixed aligned field in the mapped control record.
-    unsafe { ptr::write_volatile(base.add(at).cast::<u64>(), value) }
-}
-
-fn atomic_u32(base: *mut u8, at: usize) -> &'static AtomicU32 {
-    // SAFETY: Fixed aligned atomic field in the mapped control record.
-    unsafe { &*base.add(at).cast::<AtomicU32>() }
 }
 
 #[cfg(test)]

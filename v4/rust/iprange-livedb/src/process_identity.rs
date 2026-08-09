@@ -3,20 +3,30 @@
 #[cfg(target_os = "linux")]
 mod platform {
     use std::ptr::{self, NonNull};
-    use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
-    const FORKED: u8 = 0;
-    const READY: u8 = 1;
-    const ADVANCING: u8 = 2;
+    static MARKER: AtomicPtr<AtomicU32> = AtomicPtr::new(ptr::null_mut());
 
-    static MARKER: AtomicPtr<AtomicU8> = AtomicPtr::new(ptr::null_mut());
-    static GENERATION: AtomicU32 = AtomicU32::new(1);
-
+    #[inline]
     pub(super) fn current() -> u32 {
+        let marker = MARKER.load(Ordering::Acquire);
+        if !marker.is_null() && marker != unsupported_marker() {
+            // SAFETY: Published markers are process-lifetime anonymous mappings.
+            let identity = unsafe { &*marker }.load(Ordering::Acquire);
+            if identity != 0 {
+                return identity;
+            }
+        }
+        current_slow(marker)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn current_slow(mut marker: *mut AtomicU32) -> u32 {
         loop {
-            let marker = MARKER.load(Ordering::Acquire);
             if marker.is_null() {
                 install_marker();
+                marker = MARKER.load(Ordering::Acquire);
                 continue;
             }
             if marker == unsupported_marker() {
@@ -24,24 +34,19 @@ mod platform {
             }
 
             // SAFETY: Published markers are process-lifetime anonymous mappings.
-            let state = unsafe { &*marker }.load(Ordering::Acquire);
-            match state {
-                READY => return GENERATION.load(Ordering::Acquire),
-                FORKED => {
-                    // SAFETY: See the load above. Only one child thread advances.
-                    if unsafe { &*marker }
-                        .compare_exchange(FORKED, ADVANCING, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        let generation = advance_generation();
-                        // Publish the generation before allowing another check.
-                        unsafe { &*marker }.store(READY, Ordering::Release);
-                        return generation;
-                    }
-                }
-                ADVANCING => std::hint::spin_loop(),
-                _ => unreachable!("private fork marker has an invalid state"),
+            let identity = unsafe { &*marker }.load(Ordering::Acquire);
+            if identity != 0 {
+                return identity;
             }
+
+            // MADV_WIPEONFORK clears the marker in the child. Re-seed it once
+            // with that process's nonzero identity; concurrent callers agree
+            // through the compare-exchange.
+            let identity = super::pid();
+            // SAFETY: See the load above.
+            return unsafe { &*marker }
+                .compare_exchange(0, identity, Ordering::AcqRel, Ordering::Acquire)
+                .unwrap_or_else(|current| current);
         }
     }
 
@@ -68,23 +73,12 @@ mod platform {
         }
     }
 
-    fn advance_generation() -> u32 {
-        let previous = GENERATION.fetch_add(1, Ordering::AcqRel);
-        let next = previous.wrapping_add(1);
-        if next != 0 {
-            next
-        } else {
-            GENERATION.store(1, Ordering::Release);
-            1
-        }
-    }
-
-    fn unsupported_marker() -> *mut AtomicU8 {
-        NonNull::<AtomicU8>::dangling().as_ptr()
+    fn unsupported_marker() -> *mut AtomicU32 {
+        NonNull::<AtomicU32>::dangling().as_ptr()
     }
 
     struct Candidate {
-        marker: *mut AtomicU8,
+        marker: *mut AtomicU32,
         len: usize,
         published: bool,
     }
@@ -121,9 +115,10 @@ mod platform {
                 return None;
             }
 
-            let marker = address.cast::<AtomicU8>();
-            // SAFETY: AtomicU8 has byte alignment and fits in the fresh mapping.
-            unsafe { marker.write(AtomicU8::new(READY)) };
+            let marker = address.cast::<AtomicU32>();
+            // SAFETY: The anonymous mapping is suitably aligned and large
+            // enough for one AtomicU32.
+            unsafe { marker.write(AtomicU32::new(super::pid())) };
             Some(Self {
                 marker,
                 len,

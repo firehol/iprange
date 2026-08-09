@@ -1,7 +1,8 @@
 //! Bootstrap classification and selection tests.
 
 use super::*;
-use crate::contract::ValueTag;
+use crate::contract::{ValueTag, META_CRC_OFFSET};
+use crate::crc32c;
 use std::{vec, vec::Vec};
 
 pub(crate) fn empty_direct_meta(txn_id: u64) -> MetaV4 {

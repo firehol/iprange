@@ -4,12 +4,11 @@ use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
 use crate::contract::AddressFamily;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
-use crate::range_store_cursor::Cursor;
 use crate::workflow::Comparison;
 
-use super::range_merge::{Incoming, MapComparison, OrderedMerge, Policy};
+use super::range_merge::{self, MapComparison, Policy};
 use super::DraftStore;
 
 pub(crate) struct RetentionMerge {
@@ -42,26 +41,15 @@ impl DraftStore<'_> {
         cancellation: &CancellationToken,
     ) -> Result<RetentionMerge> {
         let input_meta = self.draft.meta;
-        let mut coverage = Cursor::<K>::new(self, &input_meta, true)?;
         let policy = RetentionPolicy::new(refresh_value);
-        let mut merge = OrderedMerge::new(self, base, policy, cancellation)?;
-        let mut input_intervals = 0u64;
-        while let Some(range) = coverage.next(self)? {
-            cancellation.check()?;
-            input_intervals = input_intervals
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("retention input intervals"))?;
-            merge.push(
-                self,
-                Incoming {
-                    from: range.from,
-                    to: range.to,
-                    value: (),
-                },
-                cancellation,
-            )?;
-        }
-        let finished = merge.finish(self, cancellation)?;
+        let (input_intervals, finished) = range_merge::merge_coverage::<K, _>(
+            self,
+            &input_meta,
+            base,
+            policy,
+            cancellation,
+            "retention input intervals",
+        )?;
         let input_addresses = finished.output.after;
         Ok(RetentionMerge {
             input_intervals,

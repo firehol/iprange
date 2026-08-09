@@ -12,6 +12,8 @@ pub(crate) struct Snapshot {
     pub(crate) page_parses: u64,
     pub(crate) key_probes: u64,
     pub(crate) cell_probes: u64,
+    pub(crate) leaf_validations: u64,
+    pub(crate) bitmap_probes: u64,
     pub(crate) slot_reads: u64,
     pub(crate) slot_scan_steps: u64,
     pub(crate) edit_fit_probes: u64,
@@ -68,6 +70,8 @@ event!(page_visited, pages_visited);
 event!(page_parse, page_parses);
 event!(key_probe, key_probes);
 event!(cell_probe, cell_probes);
+event!(leaf_validation, leaf_validations);
+event!(bitmap_probe, bitmap_probes);
 event!(slot_read, slot_reads);
 event!(slot_scan_step, slot_scan_steps);
 event!(edit_fit_probe, edit_fit_probes);

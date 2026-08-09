@@ -1,7 +1,7 @@
 //! Mapped main-file cleanup used by retryable writer close.
 
 use crate::bootstrap::{Bootstrap, OpenMode};
-use crate::database;
+use crate::database_file;
 use crate::error::{Error, Result};
 
 use super::WriterCore;
@@ -21,7 +21,7 @@ impl WriterCore {
     pub(crate) fn prepare_close(&self) -> Result<ClosePlan> {
         let physical_bytes = self.mapping.file().metadata()?.len();
         let selected =
-            database::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
+            database_file::bootstrap_mapping(&self.mapping, physical_bytes, OpenMode::Writer)?;
         if selected.meta.database_id != self.base.meta.database_id {
             return Err(Error::WrongMode("live database identity changed"));
         }

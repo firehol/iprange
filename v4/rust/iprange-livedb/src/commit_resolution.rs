@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::bootstrap::{self, Bootstrap, CommitAttemptResolution, OpenMode};
 use crate::cancellation::CancellationToken;
 use crate::contract::PAGE_SIZE;
-use crate::database;
+use crate::database_file;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
@@ -102,7 +102,7 @@ pub fn resolve_commit(
     match mode {
         CommitResolutionMode::Immutable => {
             let sidecar = crate::path::canonical_sidecar(path)?;
-            database::require_sidecar_absent(&sidecar)?;
+            database_file::require_sidecar_absent(&sidecar)?;
             let mut result = resolve_locked(path, attempt, &opened, None, cancellation, relation)?;
             if let Err(cause) = live_lock::unlock_file(&opened.file, MAIN_LIFETIME_LOCK) {
                 record_postcondition_failure(&mut result, cause);
@@ -220,7 +220,7 @@ fn resolve_locked(
             sidecar.verify_path()?;
             sidecar.verify_header()?;
         }
-        None => database::require_sidecar_absent(&crate::path::canonical_sidecar(path)?)?,
+        None => database_file::require_sidecar_absent(&crate::path::canonical_sidecar(path)?)?,
     }
     Ok(resolve_tail(
         path, attempt, opened, sidecar, relation, first,
@@ -308,7 +308,7 @@ fn trim_tail(
             sidecar.verify_path()?;
             sidecar.verify_header()
         }
-        None => database::require_sidecar_absent(&crate::path::canonical_sidecar(path)?),
+        None => database_file::require_sidecar_absent(&crate::path::canonical_sidecar(path)?),
     }
 }
 

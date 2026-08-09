@@ -2,11 +2,9 @@
 
 use std::os::windows::ffi::OsStringExt;
 
-use crate::path;
+use crate::{artifact_name, path};
 
-use super::super::namespace::{
-    private_name, Name, OUTPUT_PREFIX, PRIVATE_SUFFIX, RESERVATION_PREFIX,
-};
+use super::super::namespace::{private_name, Name, OUTPUT_PREFIX, RESERVATION_PREFIX};
 use super::super::{ArtifactKind, DirectoryRole};
 
 pub(super) const fn role_matches(kind: ArtifactKind, role: DirectoryRole) -> bool {
@@ -45,22 +43,8 @@ pub(super) fn name_matches(
 }
 
 fn scratch_name(attempt_id: [u8; 16], ordinal: u32) -> Name {
-    let mut bytes = Vec::with_capacity(62);
-    bytes.extend_from_slice(b".iprange-scratch-");
-    push_attempt(&mut bytes, attempt_id);
-    bytes.push(b'-');
-    for shift in (0..8).rev() {
-        bytes.push(hex(((ordinal >> (shift * 4)) & 0x0f) as u8));
-    }
-    bytes.extend_from_slice(PRIVATE_SUFFIX);
+    let bytes = artifact_name::scratch_name(attempt_id, ordinal);
     Name::new(&bytes).expect("fixed GC-bound scratch name")
-}
-
-fn push_attempt(bytes: &mut Vec<u8>, attempt_id: [u8; 16]) {
-    for byte in attempt_id {
-        bytes.push(hex(byte >> 4));
-        bytes.push(hex(byte & 0x0f));
-    }
 }
 
 fn coordination_source(source: &Name) -> bool {
@@ -87,11 +71,4 @@ fn main_source(source: &Name) -> bool {
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect::<Vec<_>>();
     path::validate_main_name(&std::ffi::OsString::from_wide(&units)).is_ok()
-}
-
-const fn hex(value: u8) -> u8 {
-    match value {
-        0..=9 => b'0' + value,
-        _ => b'a' + value - 10,
-    }
 }

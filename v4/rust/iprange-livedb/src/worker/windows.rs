@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use windows_sys::Win32::Foundation::EXCEPTION_IN_PAGE_ERROR;
 use windows_sys::Win32::System::Diagnostics::Debug::{
@@ -12,6 +12,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess}
 use crate::error::{Error, Result};
 
 use super::control::{Control, State, OWNED_FAULT_EXIT};
+use super::fault_memory::{atomic_u32, read_u32, read_u64, write_i32, write_u32, write_u64};
 
 static ACTIVE_CONTROL: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
 
@@ -115,28 +116,4 @@ unsafe extern "system" fn exception_handler(pointers: *mut EXCEPTION_POINTERS) -
     // SAFETY: Owned faults terminate only this isolated worker.
     unsafe { TerminateProcess(GetCurrentProcess(), OWNED_FAULT_EXIT as u32) };
     EXCEPTION_CONTINUE_SEARCH
-}
-
-fn read_u32(base: *mut u8, at: usize) -> u32 {
-    unsafe { ptr::read_volatile(base.add(at).cast::<u32>()) }
-}
-
-fn read_u64(base: *mut u8, at: usize) -> u64 {
-    unsafe { ptr::read_volatile(base.add(at).cast::<u64>()) }
-}
-
-fn write_u32(base: *mut u8, at: usize, value: u32) {
-    unsafe { ptr::write_volatile(base.add(at).cast::<u32>(), value) }
-}
-
-fn write_i32(base: *mut u8, at: usize, value: i32) {
-    unsafe { ptr::write_volatile(base.add(at).cast::<i32>(), value) }
-}
-
-fn write_u64(base: *mut u8, at: usize, value: u64) {
-    unsafe { ptr::write_volatile(base.add(at).cast::<u64>(), value) }
-}
-
-fn atomic_u32(base: *mut u8, at: usize) -> &'static AtomicU32 {
-    unsafe { &*base.add(at).cast::<AtomicU32>() }
 }

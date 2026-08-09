@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::bootstrap::tests::empty_direct_meta;
+use crate::contract::u32_le;
 use crate::database::ImmutableReader;
 use crate::mapping::{ByteSource, Mapping};
 use std::fs::{self, OpenOptions};
@@ -244,7 +245,17 @@ fn reusing_a_current_transaction_page_keeps_one_dirty_chain_entry() {
     let mut store = DraftStore::new(&mut test.mapping, creation.page_count, budget, &mut draft);
 
     store.claim_allocated(5).unwrap();
+    store
+        .update_page(5, |page| page.set_byte(100, 0xa5))
+        .unwrap();
+    crate::work::reset();
     store.discard_private(5).unwrap();
+    let discard_work = crate::work::snapshot();
+    assert_eq!(discard_work.bytes_zeroed, 0);
+    assert_eq!(
+        store.inspect_page(5, |page| Ok(page.byte(100))).unwrap(),
+        Some(0xa5)
+    );
     assert_eq!(store.pop_private().unwrap(), 5);
     store.free_one(5).unwrap();
     assert_eq!(Store::allocate(&mut store).unwrap(), 5);

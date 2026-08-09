@@ -2,9 +2,9 @@
 
 use std::marker::PhantomData;
 
-use crate::contract::{u32_le, MetaV4, MAX_TREE_LEVEL};
+use crate::contract::{u32_le, MetaV4};
 use crate::error::{Error, Result};
-use crate::fixed_tree::{Codec, PageSource};
+use crate::fixed_tree::{self, Codec, LeafQuery};
 use crate::format::{page_type, Generation};
 use crate::key::IpKey;
 use crate::mapping::{ByteSource, Mapping};
@@ -27,6 +27,7 @@ pub(crate) struct RangeCodec<K>(PhantomData<K>);
 
 impl<K: IpKey> Codec for RangeCodec<K> {
     type Key = K;
+    type Leaf = Record<K>;
 
     const BRANCH_TYPE: u8 = RANGE_BRANCH;
     const LEAF_TYPE: u8 = RANGE_LEAF;
@@ -34,20 +35,16 @@ impl<K: IpKey> Codec for RangeCodec<K> {
     const KEY_SIZE: usize = K::WIDTH;
     const LEAF_SIZE: usize = K::WIDTH * 2 + 4;
 
-    fn read_key<S: ByteSource>(cell: S, level: u16) -> Result<Self::Key> {
-        if level == 0 {
-            decode_cell(cell).map(|record| record.from)
-        } else {
-            Ok(K::read_le(cell, 0))
-        }
+    fn read_key<S: ByteSource>(cell: S, _level: u16) -> Result<Self::Key> {
+        Ok(K::read_le(cell, 0))
+    }
+
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
+        decode_cell(cell)
     }
 
     fn write_key(key: Self::Key, output: &mut [u8]) {
         key.write_le(output);
-    }
-
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
-        decode_cell::<K, _>(cell).map(|_| ())
     }
 }
 
@@ -111,73 +108,42 @@ pub(crate) fn lookup<K: IpKey>(mapping: &Mapping, meta: &MetaV4, target: K) -> R
             "lookup address family does not match the database",
         ));
     }
-    lookup_in(&Generation::new(mapping, *meta), meta.range_root, target)
+    fixed_tree::query::<RangeCodec<K>, _, _>(
+        &Generation::new(mapping, *meta),
+        meta.range_root,
+        target,
+        &mut RangeLookup { target },
+    )
 }
 
-pub(crate) fn lookup_in<K: IpKey, S: PageSource>(
-    source: &S,
-    root: u32,
+struct RangeLookup<K> {
     target: K,
-) -> Result<Option<u32>> {
-    crate::work::tree_lookup(1);
-    if root == 0 {
-        return Ok(None);
-    }
+}
 
-    let mut page_number = root;
-    let mut expected_level = None;
-    for _ in 0..=MAX_TREE_LEVEL {
-        let selected_txn = source.selected_txn();
-        let page_limit = source.selected_page_limit();
-        let step = source.view_page(page_number, |page| {
-            let header = parse_header::<K, _>(page, selected_txn, expected_level)?;
-            if header.level == 0 {
-                return Ok(LookupStep::Found(lookup_leaf::<K, _>(
-                    page, &header, target,
-                )?));
-            }
-            let Some(index) = greatest_not_after::<K, _>(page, &header, target)? else {
-                return Ok(LookupStep::Found(None));
-            };
-            let child = branch_child::<K, _>(page, &header, index)?;
-            if child < 2 || u64::from(child) >= page_limit {
-                return Err(Error::Corrupt(
-                    "range child is outside the selected generation",
-                ));
-            }
-            Ok(LookupStep::Descend(child, header.level - 1))
-        })?;
-        match step {
-            LookupStep::Found(result) => return Ok(result),
-            LookupStep::Descend(child, level) => {
-                page_number = child;
-                expected_level = Some(level);
-            }
+impl<K: IpKey> LeafQuery<RangeCodec<K>> for RangeLookup<K> {
+    type Output = u32;
+
+    fn inspect<S: ByteSource>(
+        &mut self,
+        page: S,
+        header: &Header,
+        _page_number: u32,
+        position: usize,
+        exact: bool,
+    ) -> Result<Option<Self::Output>> {
+        let index = if exact {
+            position
+        } else if let Some(previous) = position.checked_sub(1) {
+            previous
+        } else {
+            return Ok(None);
+        };
+        let record = leaf_record::<K, _>(page, header, index)?;
+        if self.target > record.to {
+            return Ok(None);
         }
-        crate::work::tree_descent(1);
+        Ok(Some(record.value))
     }
-
-    Err(Error::Corrupt("range tree exceeds its maximum height"))
-}
-
-enum LookupStep {
-    Found(Option<u32>),
-    Descend(u32, u16),
-}
-
-fn lookup_leaf<K: IpKey, S: ByteSource>(
-    page: S,
-    header: &Header,
-    target: K,
-) -> Result<Option<u32>> {
-    let Some(index) = greatest_not_after::<K, _>(page, header, target)? else {
-        return Ok(None);
-    };
-    let record = leaf_record::<K, _>(page, header, index)?;
-    if target > record.to {
-        return Ok(None);
-    }
-    Ok(Some(record.value))
 }
 
 pub(crate) fn parse_header<K: IpKey, S: ByteSource>(
@@ -195,30 +161,7 @@ pub(crate) fn parse_header<K: IpKey, S: ByteSource>(
     )
 }
 
-pub(crate) fn greatest_not_after<K: IpKey, S: ByteSource>(
-    page: S,
-    header: &Header,
-    target: K,
-) -> Result<Option<usize>> {
-    let cell_len = if header.level == 0 {
-        record_size::<K>()
-    } else {
-        branch_size::<K>()
-    };
-    let mut lower = 0;
-    let mut upper = header.item_count;
-    while lower < upper {
-        let middle = lower + (upper - lower) / 2;
-        let key = K::read_le(slotted_page::cell(page, header, middle, cell_len)?, 0);
-        if key <= target {
-            lower = middle + 1;
-        } else {
-            upper = middle;
-        }
-    }
-    Ok(lower.checked_sub(1))
-}
-
+#[cfg(test)]
 pub(crate) fn branch_child<K: IpKey, S: ByteSource>(
     page: S,
     header: &Header,

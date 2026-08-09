@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 
 use crate::cancellation::CancellationToken;
 use crate::contract::{AddressFamily, ValueKind, MAX_METADATA_UNCOMPRESSED};
-use crate::draft_store::PageBudget;
 use crate::error::{finish_with_cleanup, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
@@ -27,7 +26,6 @@ use crate::validation::LocalFileIdentity;
 use crate::writer_core::{WriterCore, WriterEdit};
 
 pub use create::{create_live, CreateResult, CreationState};
-pub(crate) use create::{empty_meta, write_empty_main};
 pub(crate) use direct::DirectState;
 pub use direct::DirectTransaction;
 pub(crate) use direct_workflow::ExactDirectState;
@@ -63,14 +61,6 @@ impl TransactionBudget {
             ));
         }
         Ok(self)
-    }
-
-    fn pages(self) -> PageBudget {
-        PageBudget {
-            max_heap_bytes: self.max_heap_bytes,
-            max_private_pages: self.max_private_pages,
-            max_growth_pages: self.max_file_growth_pages,
-        }
     }
 }
 
@@ -120,7 +110,7 @@ impl LiveWriter {
         live_lock::require_live_supported()?;
         cancellation.check()?;
         let budget = budget.validate()?;
-        let main = open_main(path.as_ref(), budget.pages(), cancellation)?;
+        let main = open_main(path.as_ref(), budget, cancellation)?;
         let sidecar = Sidecar::open(&main.path, main.core.base_info().database_id)?;
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
         let mut core = main.core;
@@ -244,6 +234,7 @@ impl LiveWriter {
         }
     }
 
+    #[inline]
     pub(crate) fn mutate<T>(
         &mut self,
         operation: impl FnOnce(&mut WriterEdit<'_>) -> Result<T>,
@@ -415,7 +406,7 @@ fn open_locked(
 
 fn open_main(
     path: &Path,
-    budget: PageBudget,
+    budget: TransactionBudget,
     cancellation: &CancellationToken,
 ) -> Result<OpenedMain> {
     let path = path.to_path_buf();
@@ -426,7 +417,12 @@ fn open_main(
     let basename = LocalBasename::from_path(&path)?;
     live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
     crate::live_namespace::verify_path(&path, identity)?;
-    let core = WriterCore::map_writer(file, budget)?;
+    let core = WriterCore::map_writer(
+        file,
+        budget.max_heap_bytes,
+        budget.max_private_pages,
+        budget.max_file_growth_pages,
+    )?;
     crate::live_cleanup::require_main_available(&path, identity, core.base_info().database_id)?;
     Ok(OpenedMain {
         path,

@@ -55,33 +55,15 @@ pub(super) fn desired_result(
         .err()
         .cloned()
         .or_else(|| first_problem(&summary.artifacts));
-    let publication = if verification.is_ok() {
-        PublicationStatus::Published
-    } else {
-        PublicationStatus::OutcomeUnknown
-    };
-    let verified = verification.is_ok();
     seed.result_with_housekeeping(
-        FinalState {
-            reservation_identity: reservation_identity(header),
-            main_namespace_may_have_been_attempted: true,
-            publication,
-            destination_content: if publication == PublicationStatus::Published {
-                DestinationContent::Desired
-            } else {
-                DestinationContent::Unclassified
-            },
-            main_access_policy: if verified {
-                main.access
-            } else {
-                AccessPolicy::Unclassified
-            },
-            coordination_access_policy: if verified {
-                coordination_access(&summary, reservation, later)
-            } else {
-                AccessPolicy::Unclassified
-            },
-        },
+        desired_state(
+            header,
+            main,
+            &summary,
+            reservation,
+            later,
+            verification.is_ok(),
+        ),
         summary.artifacts,
         summary.housekeeping,
         summary.visible_housekeeping,
@@ -125,43 +107,52 @@ pub(super) fn published_output_result(
         later,
         main,
     } = context;
-    let coordination = coordination_access(&summary, reservation, later);
     let verified = main
         .verify(destination)
         .and_then(|()| verify_later(later, destination))
         .is_ok();
-    let publication = if verified {
-        PublicationStatus::Published
-    } else {
-        PublicationStatus::OutcomeUnknown
-    };
     seed.result_with_housekeeping(
-        FinalState {
-            reservation_identity: reservation_identity(header),
-            main_namespace_may_have_been_attempted: true,
-            publication,
-            destination_content: if publication == PublicationStatus::Published {
-                DestinationContent::Desired
-            } else {
-                DestinationContent::Unclassified
-            },
-            main_access_policy: if verified {
-                main.access
-            } else {
-                AccessPolicy::Unclassified
-            },
-            coordination_access_policy: if verified {
-                coordination
-            } else {
-                AccessPolicy::Unclassified
-            },
-        },
+        desired_state(header, main, &summary, reservation, later, verified),
         summary.artifacts,
         summary.housekeeping,
         summary.visible_housekeeping,
         Some(problem),
     )
     .with_later(later)
+}
+
+fn desired_state(
+    header: Header,
+    main: &file_inspection::Inspected,
+    summary: &cleanup::Summary,
+    reservation: Option<&Inspected>,
+    later: Option<&Inspected>,
+    verified: bool,
+) -> FinalState {
+    FinalState {
+        reservation_identity: reservation_identity(header),
+        main_namespace_may_have_been_attempted: true,
+        publication: if verified {
+            PublicationStatus::Published
+        } else {
+            PublicationStatus::OutcomeUnknown
+        },
+        destination_content: if verified {
+            DestinationContent::Desired
+        } else {
+            DestinationContent::Unclassified
+        },
+        main_access_policy: if verified {
+            main.access
+        } else {
+            AccessPolicy::Unclassified
+        },
+        coordination_access_policy: if verified {
+            coordination_access(summary, reservation, later)
+        } else {
+            AccessPolicy::Unclassified
+        },
+    }
 }
 
 pub(super) fn coordination_access(

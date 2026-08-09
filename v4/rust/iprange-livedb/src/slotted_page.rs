@@ -380,7 +380,7 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
     let mut storage = [PhysicalRecord::EMPTY; MAX_SLOT_COUNT];
     let records = storage
         .get_mut(..header.item_count)
-        .ok_or(Error::Corrupt("slotted-page slot count is invalid"))?;
+        .ok_or_else(|| Error::corrupt("slotted-page slot count is invalid"))?;
     for (index, record) in records.iter_mut().enumerate() {
         crate::work::slot_scan_step(1);
         let start = slot_start(page.view(), header, index)?;
@@ -420,18 +420,7 @@ pub(crate) fn truncate<D: PageEdit>(page: &mut D, header: &Header, keep: usize) 
         }
     }
 
-    let lower = HEADER_SIZE + keep * 2;
-    page.zero(lower, header.lower - lower)?;
-    page.zero(header.upper, destination - header.upper)?;
-    page.put_u16(page_header::ITEM_COUNT, keep as u16)?;
-    page.put_u16(page_header::LOWER, lower as u16)?;
-    page.put_u16(page_header::UPPER, destination as u16)?;
-    Ok(Header {
-        item_count: keep,
-        level: header.level,
-        lower,
-        upper: destination,
-    })
+    finish_truncate(page, header, keep, destination)
 }
 
 pub(crate) fn truncate_fixed<D: PageEdit>(
@@ -457,20 +446,20 @@ pub(crate) fn truncate_fixed<D: PageEdit>(
     let mut physical_to_logical = [u16::MAX; MAX_SLOT_COUNT];
     let positions = physical_to_logical
         .get_mut(..header.item_count)
-        .ok_or(Error::Corrupt("slotted-page slot count is invalid"))?;
+        .ok_or_else(|| Error::corrupt("slotted-page slot count is invalid"))?;
     for logical in 0..header.item_count {
         crate::work::slot_scan_step(1);
         let start = slot_start(page.view(), header, logical)?;
-        let offset = start.checked_sub(header.upper).ok_or(Error::Corrupt(
-            "fixed slotted-page record is outside payload",
-        ))?;
+        let offset = start
+            .checked_sub(header.upper)
+            .ok_or_else(|| Error::corrupt("fixed slotted-page record is outside payload"))?;
         if offset % cell_len != 0 {
             return Err(Error::Corrupt("fixed slotted-page record is misaligned"));
         }
         let physical = offset / cell_len;
-        let slot = positions.get_mut(physical).ok_or(Error::Corrupt(
-            "fixed slotted-page record is outside payload",
-        ))?;
+        let slot = positions
+            .get_mut(physical)
+            .ok_or_else(|| Error::corrupt("fixed slotted-page record is outside payload"))?;
         if *slot != u16::MAX {
             return Err(Error::Corrupt("fixed slotted-page records overlap"));
         }
@@ -491,17 +480,26 @@ pub(crate) fn truncate_fixed<D: PageEdit>(
         }
     }
 
+    finish_truncate(page, header, keep, destination)
+}
+
+fn finish_truncate<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    keep: usize,
+    upper: usize,
+) -> Result<Header> {
     let lower = HEADER_SIZE + keep * 2;
     page.zero(lower, header.lower - lower)?;
-    page.zero(header.upper, destination - header.upper)?;
+    page.zero(header.upper, upper - header.upper)?;
     page.put_u16(page_header::ITEM_COUNT, keep as u16)?;
     page.put_u16(page_header::LOWER, lower as u16)?;
-    page.put_u16(page_header::UPPER, destination as u16)?;
+    page.put_u16(page_header::UPPER, upper as u16)?;
     Ok(Header {
         item_count: keep,
         level: header.level,
         lower,
-        upper: destination,
+        upper,
     })
 }
 

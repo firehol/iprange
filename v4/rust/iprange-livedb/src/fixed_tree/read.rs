@@ -1,20 +1,15 @@
-//! Bounded mapped-page tree searches.
+//! One-shot reads through the canonical ordered tree traversal.
 
-use crate::contract::MAX_TREE_LEVEL;
 use crate::error::{Error, Result};
 use crate::mapping::ByteSource;
-use crate::slotted_page;
+use crate::slotted_page::{self, Header};
 
-use super::page::{branch_child, codec_cell, key_at, lower_bound, parse};
-use super::{Codec, PageSource};
-
-const MAX_PATH: usize = MAX_TREE_LEVEL as usize;
-const MAX_COPIED_LEAF: usize = 512;
-
-pub(crate) struct LeafBuf {
-    bytes: [u8; MAX_COPIED_LEAF],
-    len: usize,
-}
+#[cfg(test)]
+use super::{query, LeafQuery};
+use super::{
+    Codec, Cursor, CursorDirection as Direction, CursorItem as Item, CursorSeek as Seek,
+    PageSource, SeekPosition,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct LeafLocation {
@@ -23,73 +18,54 @@ pub(crate) struct LeafLocation {
     pub(super) index: usize,
 }
 
-impl LeafBuf {
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len]
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Frame {
-    page_number: u32,
-    index: usize,
-    item_count: usize,
-    level: u16,
-}
-
-const EMPTY_FRAME: Frame = Frame {
-    page_number: 0,
-    index: 0,
-    item_count: 0,
-    level: 0,
-};
-
 pub(crate) fn predecessor<C: Codec, S: PageSource>(
     store: &S,
     root: u32,
     key: C::Key,
-) -> Result<Option<LeafBuf>> {
-    let Some(location) = predecessor_location::<C, S>(store, root, key)? else {
-        return Ok(None);
-    };
-    inspect_leaf::<C, S, _, _>(store, location, |cell| {
-        if cell.len() > C::MAX_LEAF_SIZE || cell.len() > MAX_COPIED_LEAF {
-            return Err(Error::Unsupported("B+tree leaf is too large to copy"));
-        }
-        let mut output = LeafBuf {
-            bytes: [0; MAX_COPIED_LEAF],
-            len: cell.len(),
-        };
-        if !cell.copy_range_to(0, &mut output.bytes[..cell.len()]) {
-            return Err(Error::Corrupt("B+tree leaf source changed"));
-        }
-        Ok(Some(output))
-    })
+) -> Result<Option<C::Leaf>> {
+    Cursor::<C>::lookup(
+        store,
+        root,
+        Direction::Backward,
+        key,
+        &mut Previous,
+        &mut ReadLeaf,
+    )
 }
 
-pub(crate) fn predecessor_location<C: Codec, S: PageSource>(
+pub(crate) fn predecessor_located<C: Codec, S: PageSource>(
     store: &S,
     root: u32,
     key: C::Key,
-) -> Result<Option<LeafLocation>> {
-    let Some((_, _, page_number, header)) = descend::<C, S>(store, root, key)? else {
-        return Ok(None);
-    };
-    store.view_page(page_number, |page| {
-        let (index, exists) = lower_bound::<C, _>(page, &header, key, true)?;
-        let index = if exists {
-            index
-        } else if let Some(index) = index.checked_sub(1) {
-            index
-        } else {
-            return Ok(None);
-        };
-        Ok(Some(LeafLocation {
-            page_number,
-            header,
-            index,
-        }))
-    })
+) -> Result<Option<(LeafLocation, C::Leaf)>> {
+    Cursor::<C>::lookup(
+        store,
+        root,
+        Direction::Backward,
+        key,
+        &mut Previous,
+        &mut ReadLocated,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn contains<C: Codec, S: PageSource>(store: &S, root: u32, key: C::Key) -> Result<bool> {
+    query::<C, S, _>(store, root, key, &mut Exact).map(|found| found.is_some())
+}
+
+pub(crate) fn at_or_after<C: Codec, S: PageSource>(
+    store: &S,
+    root: u32,
+    key: C::Key,
+) -> Result<Option<C::Leaf>> {
+    Cursor::<C>::lookup(
+        store,
+        root,
+        Direction::Forward,
+        key,
+        &mut CurrentOrNext,
+        &mut ReadLeaf,
+    )
 }
 
 pub(crate) fn inspect_leaf<'a, C: Codec, S: PageSource, T, F>(
@@ -101,165 +77,108 @@ where
     F: FnOnce(crate::mapping::ByteRange<S::Page<'a>>) -> Result<T>,
 {
     store.view_page(location.page_number, |page| {
-        let header = parse::<C, _>(page, store.selected_txn(), Some(0))?;
+        let header = super::page::parse::<C, _>(page, store.selected_txn(), Some(0))?;
         if header.item_count != location.header.item_count {
             return Err(Error::Corrupt("B+tree leaf changed during inspection"));
         }
-        let cell = codec_cell::<C, _>(page, &header, location.index)?;
-        C::validate_leaf(cell)?;
-        inspect(cell)
+        inspect(C::leaf_cell(page, &header, location.index)?)
     })
 }
 
-pub(crate) fn at_or_after<C: Codec, S: PageSource>(
-    store: &S,
-    root: u32,
-    key: C::Key,
-) -> Result<Option<LeafBuf>> {
-    let Some((path, depth, page_number, header)) = descend::<C, S>(store, root, key)? else {
-        return Ok(None);
-    };
-    let found = store.view_page(page_number, |page| {
-        let (index, _) = lower_bound::<C, _>(page, &header, key, true)?;
-        if index < header.item_count {
-            copy_leaf::<C, _>(page, &header, index).map(Some)
+struct Previous;
+
+impl<C: Codec> Seek<C> for Previous {
+    fn select<S: ByteSource>(
+        &mut self,
+        _page: S,
+        _header: &Header,
+        position: usize,
+        exact: bool,
+        _direction: Direction,
+    ) -> Result<SeekPosition> {
+        if exact {
+            Ok(SeekPosition::Index(position))
         } else {
-            Ok(None)
+            Ok(position
+                .checked_sub(1)
+                .map_or(SeekPosition::Finished, SeekPosition::Index))
         }
-    })?;
-    if found.is_some() {
-        return Ok(found);
-    }
-    next_leaf::<C, S>(store, &path, depth)
-}
-
-pub(super) fn contains<C: Codec, S: PageSource>(store: &S, root: u32, key: C::Key) -> Result<bool> {
-    let Some((_, _, page_number, header)) = descend::<C, S>(store, root, key)? else {
-        return Ok(false);
-    };
-    store.view_page(page_number, |page| {
-        let (index, exists) = lower_bound::<C, _>(page, &header, key, true)?;
-        if !exists {
-            return Ok(false);
-        }
-        Ok(key_at::<C, _>(page, &header, index)? == key)
-    })
-}
-
-fn next_leaf<C: Codec, S: PageSource>(
-    store: &S,
-    path: &[Frame; MAX_PATH],
-    mut depth: usize,
-) -> Result<Option<LeafBuf>> {
-    while depth > 0 {
-        depth -= 1;
-        let frame = path[depth];
-        if frame.index + 1 >= frame.item_count {
-            continue;
-        }
-        return first_in_right_subtree::<C, S>(store, frame).map(Some);
-    }
-    Ok(None)
-}
-
-fn first_in_right_subtree<C: Codec, S: PageSource>(store: &S, frame: Frame) -> Result<LeafBuf> {
-    let target_txn = store.selected_txn();
-    let page_limit = store.selected_page_limit();
-    let child = store.view_page(frame.page_number, |page| {
-        let header = parse::<C, _>(page, target_txn, Some(frame.level))?;
-        branch_child::<C, _>(page, &header, frame.index + 1, page_limit)
-    })?;
-    crate::work::tree_descent(1);
-    let (page_number, header) = descend_left::<C, S>(store, child, frame.level - 1)?;
-    store.view_page(page_number, |page| copy_leaf::<C, _>(page, &header, 0))
-}
-
-type Descent = ([Frame; MAX_PATH], usize, u32, slotted_page::Header);
-
-fn descend<C: Codec, S: PageSource>(store: &S, root: u32, key: C::Key) -> Result<Option<Descent>> {
-    crate::work::tree_lookup(1);
-    if root == 0 {
-        return Ok(None);
-    }
-    let mut path = [EMPTY_FRAME; MAX_PATH];
-    let mut depth = 0;
-    let mut page_number = root;
-    let mut expected = None;
-    loop {
-        let target_txn = store.selected_txn();
-        let page_limit = store.selected_page_limit();
-        let (header, selected) = store.view_page(page_number, |page| {
-            let header = parse::<C, _>(page, target_txn, expected)?;
-            let selected = if header.level == 0 {
-                None
-            } else {
-                let (index, _) = lower_bound::<C, _>(page, &header, key, false)?;
-                let child = branch_child::<C, _>(page, &header, index, page_limit)?;
-                Some((index, child))
-            };
-            Ok((header, selected))
-        })?;
-        let Some((index, child)) = selected else {
-            return Ok(Some((path, depth, page_number, header)));
-        };
-        let frame = path
-            .get_mut(depth)
-            .ok_or_else(|| Error::corrupt("B+tree exceeds its maximum height"))?;
-        *frame = Frame {
-            page_number,
-            index,
-            item_count: header.item_count,
-            level: header.level,
-        };
-        depth += 1;
-        page_number = child;
-        expected = Some(header.level - 1);
-        crate::work::tree_descent(1);
     }
 }
 
-fn descend_left<C: Codec, S: PageSource>(
-    store: &S,
-    mut page_number: u32,
-    mut level: u16,
-) -> Result<(u32, slotted_page::Header)> {
-    loop {
-        let target_txn = store.selected_txn();
-        let page_limit = store.selected_page_limit();
-        let (header, child) = store.view_page(page_number, |page| {
-            let header = parse::<C, _>(page, target_txn, Some(level))?;
-            let child = if level == 0 {
-                None
-            } else {
-                Some(branch_child::<C, _>(page, &header, 0, page_limit)?)
-            };
-            Ok((header, child))
-        })?;
-        let Some(child) = child else {
-            return Ok((page_number, header));
-        };
-        page_number = child;
-        level -= 1;
-        crate::work::tree_descent(1);
+struct CurrentOrNext;
+
+impl<C: Codec> Seek<C> for CurrentOrNext {
+    fn select<S: ByteSource>(
+        &mut self,
+        _page: S,
+        header: &Header,
+        position: usize,
+        _exact: bool,
+        _direction: Direction,
+    ) -> Result<SeekPosition> {
+        Ok(if position < header.item_count {
+            SeekPosition::Index(position)
+        } else {
+            SeekPosition::NextLeaf
+        })
     }
 }
 
-pub(super) fn copy_leaf<C: Codec, S: ByteSource>(
-    page: S,
-    header: &slotted_page::Header,
-    index: usize,
-) -> Result<LeafBuf> {
-    let source = codec_cell::<C, _>(page, header, index)?;
-    if source.len() > C::MAX_LEAF_SIZE || source.len() > MAX_COPIED_LEAF {
-        return Err(Error::Unsupported("B+tree leaf is too large to copy"));
+#[cfg(test)]
+struct Exact;
+
+#[cfg(test)]
+impl<C: Codec> LeafQuery<C> for Exact {
+    type Output = ();
+
+    fn inspect<S: ByteSource>(
+        &mut self,
+        _page: S,
+        _header: &Header,
+        _page_number: u32,
+        _position: usize,
+        exact: bool,
+    ) -> Result<Option<Self::Output>> {
+        Ok(exact.then_some(()))
     }
-    C::validate_leaf(source)?;
-    let mut output = LeafBuf {
-        bytes: [0; MAX_COPIED_LEAF],
-        len: source.len(),
-    };
-    if !source.copy_range_to(0, &mut output.bytes[..source.len()]) {
-        return Err(Error::Corrupt("B+tree leaf source changed"));
+}
+
+struct ReadLeaf;
+
+impl<C: Codec> Item<C> for ReadLeaf {
+    type Output = C::Leaf;
+
+    fn read<S: ByteSource>(
+        &mut self,
+        page: S,
+        header: &Header,
+        _page_number: u32,
+        index: usize,
+    ) -> Result<Self::Output> {
+        C::read_leaf(C::leaf_cell(page, header, index)?)
     }
-    Ok(output)
+}
+
+struct ReadLocated;
+
+impl<C: Codec> Item<C> for ReadLocated {
+    type Output = (LeafLocation, C::Leaf);
+
+    fn read<S: ByteSource>(
+        &mut self,
+        page: S,
+        header: &Header,
+        page_number: u32,
+        index: usize,
+    ) -> Result<Self::Output> {
+        Ok((
+            LeafLocation {
+                page_number,
+                header: *header,
+                index,
+            },
+            C::read_leaf(C::leaf_cell(page, header, index)?)?,
+        ))
+    }
 }

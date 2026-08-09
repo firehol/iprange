@@ -113,7 +113,7 @@ fn open_import_processing_allocates_no_heap() {
     let ((finished, work), finish_allocations) =
         count_thread_allocations(|| crate::work::measure(|| import.unwrap().finish_input()));
     assert_eq!(finish_allocations, 0);
-    assert_eq!(work.source_passes, 3);
+    assert_eq!(work.source_passes, 4);
     assert_eq!(work.output_passes, 1);
     assert_eq!(work.ranges_consumed, source_records);
     assert_eq!(work.ranges_emitted, source_records);

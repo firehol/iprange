@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::fixed_tree::{RetiringStore, Store};
 use crate::mapping::ByteSource;
 use crate::page_io::PageSink;
-use crate::slotted_page::{self, put_u32, put_u64, Builder, HEADER_SIZE};
+use crate::slotted_page::{self, Builder, HEADER_SIZE};
 
 use super::Words;
 
@@ -265,9 +265,10 @@ fn flush<S: Store>(store: &mut S, level: &mut Level) -> Result<Node> {
             blob_tree::MEMBERSHIP_KIND,
         );
         for node in &level.nodes[..level.len] {
-            let mut record = [0; 16];
-            put_u64(&mut record, 0, node.offset);
-            put_u32(&mut record, 8, node.page);
+            let record = blob_tree::encode_branch_record(blob_tree::BranchRecord {
+                offset: node.offset,
+                child: node.page,
+            });
             builder.push(&record)?;
         }
         builder.finish()

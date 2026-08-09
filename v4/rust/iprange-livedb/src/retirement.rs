@@ -2,7 +2,7 @@
 
 use crate::contract::{u32_le, u64_le};
 use crate::error::{Error, Result};
-use crate::fixed_tree::{self, Codec, LeafBuf, RetiredPages, Store};
+use crate::fixed_tree::{self, Codec, RetiredPages, Store};
 use crate::format::page_type;
 use crate::mapping::ByteSource;
 
@@ -11,6 +11,10 @@ pub(crate) const LEAF_TYPE: u8 = page_type::RETIREMENT_LEAF;
 pub(crate) const AUX: u32 = 0;
 pub(crate) const KEY_SIZE: usize = 12;
 pub(crate) const CELL_SIZE: usize = 16;
+
+const TXN_OFFSET: usize = 0;
+const FIRST_OFFSET: usize = 8;
+const COUNT_OFFSET: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Key {
@@ -72,6 +76,7 @@ struct RetirementCodec;
 
 impl Codec for RetirementCodec {
     type Key = Key;
+    type Leaf = Extent;
 
     const BRANCH_TYPE: u8 = BRANCH_TYPE;
     const LEAF_TYPE: u8 = LEAF_TYPE;
@@ -83,12 +88,7 @@ impl Codec for RetirementCodec {
         decode_key(cell)
     }
 
-    fn write_key(key: Self::Key, output: &mut [u8]) {
-        output[..8].copy_from_slice(&key.txn.to_le_bytes());
-        output[8..12].copy_from_slice(&key.first.to_le_bytes());
-    }
-
-    fn validate_leaf<S: ByteSource>(cell: S) -> Result<()> {
+    fn read_leaf<S: ByteSource>(cell: S) -> Result<Self::Leaf> {
         let extent = decode_slice(cell)?;
         if extent.key.txn <= 1 || extent.key.first < 2 || extent.count == 0 {
             return Err(Error::Corrupt("retirement extent has invalid fields"));
@@ -97,7 +97,11 @@ impl Codec for RetirementCodec {
         if end > (1u64 << 32) {
             return Err(Error::Corrupt("retirement extent endpoint overflow"));
         }
-        Ok(())
+        Ok(extent)
+    }
+
+    fn write_key(key: Self::Key, output: &mut [u8]) {
+        encode_key(key, output);
     }
 }
 
@@ -106,11 +110,15 @@ struct Encoded([u8; CELL_SIZE]);
 impl Encoded {
     fn new(extent: Extent) -> Self {
         let mut bytes = [0; CELL_SIZE];
-        bytes[..8].copy_from_slice(&extent.key.txn.to_le_bytes());
-        bytes[8..12].copy_from_slice(&extent.key.first.to_le_bytes());
-        bytes[12..].copy_from_slice(&extent.count.to_le_bytes());
+        encode_key(extent.key, &mut bytes);
+        bytes[COUNT_OFFSET..].copy_from_slice(&extent.count.to_le_bytes());
         Self(bytes)
     }
+}
+
+fn encode_key(key: Key, output: &mut [u8]) {
+    output[TXN_OFFSET..FIRST_OFFSET].copy_from_slice(&key.txn.to_le_bytes());
+    output[FIRST_OFFSET..COUNT_OFFSET].copy_from_slice(&key.first.to_le_bytes());
 }
 
 pub(crate) fn add_page<S: Store>(
@@ -480,9 +488,7 @@ fn remove<S: Store>(
     retired: &mut RetiredPages,
 ) -> Result<()> {
     let mut removed = RetiredPages::new();
-    if !fixed_tree::delete::<RetirementCodec, S>(store, root, key, &mut removed)? {
-        return Err(Error::Corrupt("retirement extent disappeared"));
-    }
+    fixed_tree::delete_existing::<RetirementCodec, S>(store, root, key, &mut removed)?;
     retired.extend(removed.as_slice())?;
     *extent_count = extent_count
         .checked_sub(1)
@@ -491,19 +497,11 @@ fn remove<S: Store>(
 }
 
 fn predecessor<S: Store>(store: &S, root: u32, key: Key) -> Result<Option<Extent>> {
-    fixed_tree::predecessor::<RetirementCodec, S>(store, root, key)?
-        .map(decode)
-        .transpose()
+    fixed_tree::predecessor::<RetirementCodec, S>(store, root, key)
 }
 
 fn at_or_after<S: Store>(store: &S, root: u32, key: Key) -> Result<Option<Extent>> {
-    fixed_tree::at_or_after::<RetirementCodec, S>(store, root, key)?
-        .map(decode)
-        .transpose()
-}
-
-fn decode(cell: LeafBuf) -> Result<Extent> {
-    decode_slice(cell.as_slice())
+    fixed_tree::at_or_after::<RetirementCodec, S>(store, root, key)
 }
 
 fn decode_slice<S: ByteSource>(cell: S) -> Result<Extent> {
@@ -511,13 +509,7 @@ fn decode_slice<S: ByteSource>(cell: S) -> Result<Extent> {
 }
 
 pub(crate) fn decode_key<S: ByteSource>(cell: S) -> Result<Key> {
-    if cell.len() < KEY_SIZE {
-        return Err(Error::Corrupt("retirement key is truncated"));
-    }
-    Ok(Key {
-        txn: u64_le(cell, 0),
-        first: u32_le(cell, 8),
-    })
+    decode_key_raw(cell).ok_or(Error::Corrupt("retirement key is truncated"))
 }
 
 pub(crate) fn decode_branch_child<S: ByteSource>(cell: S) -> Option<u32> {
@@ -525,12 +517,19 @@ pub(crate) fn decode_branch_child<S: ByteSource>(cell: S) -> Option<u32> {
 }
 
 pub(crate) fn decode_raw<S: ByteSource>(cell: S) -> Option<Extent> {
-    (cell.len() == CELL_SIZE).then(|| Extent {
-        key: Key {
-            txn: u64_le(cell, 0),
-            first: u32_le(cell, 8),
-        },
-        count: u32_le(cell, 12),
+    if cell.len() != CELL_SIZE {
+        return None;
+    }
+    Some(Extent {
+        key: decode_key_raw(cell)?,
+        count: u32_le(cell, COUNT_OFFSET),
+    })
+}
+
+fn decode_key_raw<S: ByteSource>(cell: S) -> Option<Key> {
+    (cell.len() >= KEY_SIZE).then(|| Key {
+        txn: u64_le(cell, TXN_OFFSET),
+        first: u32_le(cell, FIRST_OFFSET),
     })
 }
 

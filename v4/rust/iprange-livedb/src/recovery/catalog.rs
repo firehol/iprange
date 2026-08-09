@@ -2,7 +2,7 @@
 
 use crate::cancellation::CancellationToken;
 use crate::contract::MetaV4;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::feed::FeedName;
 use crate::feed_catalog;
 use crate::mapping::{ByteSource, Mapping};
@@ -13,7 +13,7 @@ pub(crate) use super::catalog_table::Catalog;
 use super::page_set::PageSet;
 use super::report::{emit_page_unknown as emit, RecoverySink, Reporter};
 use super::tables::Tables;
-use super::tree_scan::{self, CellLayout, Codec, TreeEvents};
+use super::tree_scan::{self, CellLayout, Codec, CountPolicy, LeafCounter, TreeEvents};
 
 pub(crate) fn count(
     mapping: &Mapping,
@@ -21,7 +21,7 @@ pub(crate) fn count(
     pages: &mut PageSet,
     cancellation: &CancellationToken,
 ) -> Result<u64> {
-    let mut events = CountEvents { meta, count: 0 };
+    let mut events = LeafCounter::<CatalogCount>::new(meta);
     tree_scan::scan::<NameCodec, _>(
         mapping,
         meta,
@@ -38,7 +38,7 @@ pub(crate) fn count(
         cancellation,
         &mut events,
     )?;
-    Ok(events.count)
+    Ok(events.count())
 }
 
 pub(crate) fn recover<S: RecoverySink>(
@@ -121,40 +121,14 @@ impl<S: RecoverySink> TreeEvents for Events<'_, '_, '_, S> {
     }
 }
 
-struct CountEvents {
-    meta: MetaV4,
-    count: u64,
-}
+struct CatalogCount;
 
-impl TreeEvents for CountEvents {
-    fn page_accepted(&mut self) -> Result<()> {
-        Ok(())
-    }
+impl CountPolicy for CatalogCount {
+    const OVERFLOW: &'static str = "recovery catalog count";
 
-    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
-        Ok(())
-    }
-
-    fn unknown(
-        &mut self,
-        _reason: ValidationReason,
-        _object: ValidationObject,
-        _page: Option<u32>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    fn leaf<P: ByteSource>(&mut self, _page: u32, _index: usize, cell: Option<P>) -> Result<()> {
-        let Some(entry) = cell.and_then(|cell| feed_catalog::decode_entry(cell).ok()) else {
-            return Ok(());
-        };
-        if u64::from(entry.index) < self.meta.feed_index_limit {
-            self.count = self
-                .count
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow("recovery catalog count"))?;
-        }
-        Ok(())
+    fn accept<P: ByteSource>(meta: MetaV4, cell: P) -> bool {
+        feed_catalog::decode_entry(cell)
+            .is_ok_and(|entry| u64::from(entry.index) < meta.feed_index_limit)
     }
 }
 

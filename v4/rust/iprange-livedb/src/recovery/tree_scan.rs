@@ -1,8 +1,10 @@
 //! CRC-checked salvage traversal for reachable slotted trees.
 
+use std::marker::PhantomData;
+
 use crate::cancellation::CancellationToken;
 use crate::contract::{MetaV4, MAX_TREE_LEVEL};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::mapping::{ByteRange, ByteSource, Mapping, PageView};
 use crate::slotted_page::{self, Header};
 use crate::validation::{ValidationObject, ValidationReason};
@@ -37,6 +39,61 @@ pub(crate) trait TreeEvents {
         page: Option<u32>,
     ) -> Result<()>;
     fn leaf<P: ByteSource>(&mut self, page: u32, index: usize, cell: Option<P>) -> Result<()>;
+}
+
+pub(crate) trait CountPolicy {
+    const OVERFLOW: &'static str;
+
+    fn accept<P: ByteSource>(meta: MetaV4, cell: P) -> bool;
+}
+
+pub(crate) struct LeafCounter<P> {
+    meta: MetaV4,
+    count: u64,
+    policy: PhantomData<P>,
+}
+
+impl<P> LeafCounter<P> {
+    pub(crate) const fn new(meta: MetaV4) -> Self {
+        Self {
+            meta,
+            count: 0,
+            policy: PhantomData,
+        }
+    }
+
+    pub(crate) const fn count(&self) -> u64 {
+        self.count
+    }
+}
+
+impl<P: CountPolicy> TreeEvents for LeafCounter<P> {
+    fn page_accepted(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn page_rejected(&mut self, _io_unreadable: bool) -> Result<()> {
+        Ok(())
+    }
+
+    fn unknown(
+        &mut self,
+        _reason: ValidationReason,
+        _object: ValidationObject,
+        _page: Option<u32>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn leaf<S: ByteSource>(&mut self, _page: u32, _index: usize, cell: Option<S>) -> Result<()> {
+        if cell.is_some_and(|cell| P::accept(self.meta, cell)) {
+            self.count = self
+                .count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow(P::OVERFLOW))?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn scan<C: Codec, E: TreeEvents>(

@@ -5,10 +5,26 @@ use crate::error::{Error, Result};
 use crate::membership_dictionary::codec::Storage;
 
 use super::membership_index::Locator;
-use super::tables::{Layout, Region, Tables, MEMBERSHIP_ID_SLOT_SIZE, MEMBERSHIP_RECORD_SIZE};
+use super::tables::{
+    hash_u32, Layout, Region, Tables, MEMBERSHIP_ID_SLOT_SIZE, MEMBERSHIP_RECORD_SIZE,
+};
 
 const RECORD_SIZE: usize = MEMBERSHIP_RECORD_SIZE as usize;
 const ID_SLOT_SIZE: usize = MEMBERSHIP_ID_SLOT_SIZE as usize;
+const RECORD_PRESENT_OFFSET: usize = 0;
+const RECORD_STORAGE_OFFSET: usize = 1;
+const RECORD_LEAF_INDEX_OFFSET: usize = 2;
+const RECORD_ID_OFFSET: usize = 4;
+const RECORD_WORD_COUNT_OFFSET: usize = 8;
+const RECORD_LEAF_PAGE_OFFSET: usize = 12;
+const RECORD_BLOB_ROOT_OFFSET: usize = 16;
+const RECORD_REJECTED_OFFSET: usize = 20;
+const RECORD_DIGEST_OFFSET: usize = 24;
+const RECORD_DIGEST_END: usize = 56;
+const SLOT_OCCUPIED_OFFSET: usize = 0;
+const SLOT_CONFLICT_OFFSET: usize = 1;
+const SLOT_ID_OFFSET: usize = 4;
+const SLOT_RECORD_OFFSET: usize = 8;
 
 pub(crate) struct MembershipIndex {
     records: Region,
@@ -71,18 +87,18 @@ impl MembershipIndex {
             Some(found) => found,
             None => (empty_id_slot(tables, self, id)?, [0; ID_SLOT_SIZE]),
         };
-        if slot[0] == 0 {
-            slot[0] = 1;
-            slot[4..8].copy_from_slice(&id.to_le_bytes());
-            slot[8..16].copy_from_slice(&record_index.to_le_bytes());
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
+            slot[SLOT_OCCUPIED_OFFSET] = 1;
+            slot[SLOT_ID_OFFSET..SLOT_RECORD_OFFSET].copy_from_slice(&id.to_le_bytes());
+            slot[SLOT_RECORD_OFFSET..ID_SLOT_SIZE].copy_from_slice(&record_index.to_le_bytes());
             tables.write(self.ids, slot_index, &slot)?;
             return Ok(Insert::First);
         }
-        let newly_conflicted = slot[1] == 0;
-        slot[1] = 1;
+        let newly_conflicted = slot[SLOT_CONFLICT_OFFSET] == 0;
+        slot[SLOT_CONFLICT_OFFSET] = 1;
         tables.write(self.ids, slot_index, &slot)?;
         Ok(Insert::Duplicate {
-            first: u64_le(&slot, 8),
+            first: u64_le(&slot, SLOT_RECORD_OFFSET),
             newly_conflicted,
         })
     }
@@ -91,10 +107,10 @@ impl MembershipIndex {
         let Some((_, slot)) = find_id(tables, self, id)? else {
             return Ok(None);
         };
-        if slot[1] != 0 {
+        if slot[SLOT_CONFLICT_OFFSET] != 0 {
             return Ok(None);
         }
-        let locator = self.record(tables, u64_le(&slot, 8))?;
+        let locator = self.record(tables, u64_le(&slot, SLOT_RECORD_OFFSET))?;
         Ok((!locator.rejected).then_some(locator))
     }
 
@@ -131,10 +147,10 @@ fn probe_id(
     for _ in 0..membership.ids.slots {
         let mut slot = [0; ID_SLOT_SIZE];
         tables.read(membership.ids, index, &mut slot)?;
-        if slot[0] == 0 {
+        if slot[SLOT_OCCUPIED_OFFSET] == 0 {
             return Ok(empty.then_some((index, slot)));
         }
-        if u32_le(&slot, 4) == id {
+        if u32_le(&slot, SLOT_ID_OFFSET) == id {
             return Ok((!empty).then_some((index, slot)));
         }
         index = (index + 1) & mask;
@@ -144,30 +160,33 @@ fn probe_id(
 
 fn encode(locator: Locator) -> [u8; RECORD_SIZE] {
     let mut output = [0; RECORD_SIZE];
-    output[0] = 1;
+    output[RECORD_PRESENT_OFFSET] = 1;
     let root = match locator.storage {
         Storage::Inline => 0,
         Storage::Blob(root) => {
-            output[1] = 1;
+            output[RECORD_STORAGE_OFFSET] = 1;
             root
         }
     };
-    output[2..4].copy_from_slice(&locator.leaf_index.to_le_bytes());
-    output[4..8].copy_from_slice(&locator.id.to_le_bytes());
-    output[8..12].copy_from_slice(&locator.word_count.to_le_bytes());
-    output[12..16].copy_from_slice(&locator.leaf_page.to_le_bytes());
-    output[16..20].copy_from_slice(&root.to_le_bytes());
-    output[20] = u8::from(locator.rejected);
-    output[24..56].copy_from_slice(&locator.digest);
+    output[RECORD_LEAF_INDEX_OFFSET..RECORD_ID_OFFSET]
+        .copy_from_slice(&locator.leaf_index.to_le_bytes());
+    output[RECORD_ID_OFFSET..RECORD_WORD_COUNT_OFFSET].copy_from_slice(&locator.id.to_le_bytes());
+    output[RECORD_WORD_COUNT_OFFSET..RECORD_LEAF_PAGE_OFFSET]
+        .copy_from_slice(&locator.word_count.to_le_bytes());
+    output[RECORD_LEAF_PAGE_OFFSET..RECORD_BLOB_ROOT_OFFSET]
+        .copy_from_slice(&locator.leaf_page.to_le_bytes());
+    output[RECORD_BLOB_ROOT_OFFSET..RECORD_REJECTED_OFFSET].copy_from_slice(&root.to_le_bytes());
+    output[RECORD_REJECTED_OFFSET] = u8::from(locator.rejected);
+    output[RECORD_DIGEST_OFFSET..RECORD_DIGEST_END].copy_from_slice(&locator.digest);
     output
 }
 
 fn decode(bytes: &[u8; RECORD_SIZE]) -> Result<Locator> {
-    if bytes[0] != 1 || bytes[1] > 1 {
+    if bytes[RECORD_PRESENT_OFFSET] != 1 || bytes[RECORD_STORAGE_OFFSET] > 1 {
         return Err(Error::Corrupt("recovery membership locator is malformed"));
     }
-    let root = u32_le(bytes, 16);
-    let storage = match (bytes[1], root) {
+    let root = u32_le(bytes, RECORD_BLOB_ROOT_OFFSET);
+    let storage = match (bytes[RECORD_STORAGE_OFFSET], root) {
         (0, 0) => Storage::Inline,
         (1, root) if root >= 2 => Storage::Blob(root),
         _ => {
@@ -177,23 +196,14 @@ fn decode(bytes: &[u8; RECORD_SIZE]) -> Result<Locator> {
         }
     };
     let mut digest = [0; 32];
-    digest.copy_from_slice(&bytes[24..56]);
+    digest.copy_from_slice(&bytes[RECORD_DIGEST_OFFSET..RECORD_DIGEST_END]);
     Ok(Locator {
-        id: u32_le(bytes, 4),
-        word_count: u32_le(bytes, 8),
+        id: u32_le(bytes, RECORD_ID_OFFSET),
+        word_count: u32_le(bytes, RECORD_WORD_COUNT_OFFSET),
         digest,
-        leaf_page: u32_le(bytes, 12),
-        leaf_index: u16_le(bytes, 2),
+        leaf_page: u32_le(bytes, RECORD_LEAF_PAGE_OFFSET),
+        leaf_index: u16_le(bytes, RECORD_LEAF_INDEX_OFFSET),
         storage,
-        rejected: bytes[20] != 0,
+        rejected: bytes[RECORD_REJECTED_OFFSET] != 0,
     })
-}
-
-fn hash_u32(value: u32) -> u64 {
-    let mut value = u64::from(value);
-    value ^= value >> 30;
-    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value ^= value >> 27;
-    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }

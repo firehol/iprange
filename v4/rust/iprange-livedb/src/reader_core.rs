@@ -2,19 +2,39 @@
 
 mod cursor;
 mod generation;
+mod live;
 
 use std::fs::File;
+use std::path::Path;
 
-use crate::bootstrap::Bootstrap;
-use crate::database::DatabaseInfo;
+use crate::bootstrap::{Bootstrap, MetaSelection, OpenMode};
+use crate::contract::{AddressFamily, ValueKind, ValueTag};
 use crate::error::Result;
+use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
+use crate::live_sidecar::MAIN_LIFETIME_LOCK;
 use crate::mapping::Mapping;
 use crate::process_identity::ProcessIdentity;
 
 pub(crate) use cursor::{MembershipRange, MembershipRangeCursor};
 pub use cursor::{MembershipToken, ReaderCursor, ReaderCursorItem};
 pub(crate) use generation::GenerationReader;
+pub(crate) use live::{LiveReaderClose, LiveReaderCore};
+
+/// Public logical identity and selected generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DatabaseInfo {
+    pub address_family: AddressFamily,
+    pub value_kind: ValueKind,
+    pub value_tag: ValueTag,
+    pub database_id: [u8; 16],
+    pub transaction_id: u64,
+    pub commit_nonce: [u8; 16],
+    pub page_count: u64,
+    pub range_record_count: u64,
+    pub active_feed_count: u64,
+    pub meta_selection: MetaSelection,
+}
 
 #[derive(Debug)]
 pub(crate) struct ReaderCore {
@@ -24,7 +44,7 @@ pub(crate) struct ReaderCore {
 }
 
 impl ReaderCore {
-    pub(crate) fn new(
+    fn new(
         mapping: Mapping,
         bootstrap: Bootstrap,
         owner_identity: Option<ProcessIdentity>,
@@ -34,6 +54,24 @@ impl ReaderCore {
             bootstrap,
             owner_identity,
         }
+    }
+
+    pub(crate) fn open_immutable(path: &Path) -> Result<Self> {
+        let sidecar = crate::path::canonical_sidecar(path)?;
+        crate::database_file::require_sidecar_absent(&sidecar)?;
+
+        let file = crate::database_file::open_read_only(path)?;
+        let identity = crate::live_namespace::identity_any_link(&file)?;
+        live_lock::lock_file(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+        crate::live_namespace::verify_path_any_link(path, identity)?;
+        crate::database_file::require_sidecar_absent(&sidecar)?;
+
+        let (mapping, bootstrap) =
+            crate::database_file::map_reader(file, OpenMode::ImmutableReader)?;
+        crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
+        crate::live_namespace::verify_path_any_link(path, identity)?;
+        crate::database_file::require_sidecar_absent(&sidecar)?;
+        Ok(Self::new(mapping, bootstrap, None))
     }
 
     pub(crate) fn info(&self) -> DatabaseInfo {

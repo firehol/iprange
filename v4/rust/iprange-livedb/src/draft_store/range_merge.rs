@@ -3,7 +3,7 @@
 use crate::bootstrap::Bootstrap;
 use crate::cancellation::CancellationToken;
 use crate::cardinality::Cardinality129;
-use crate::contract::ValueKind;
+use crate::contract::{MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::key::IpKey;
 use crate::range_bulk::{Builder, Record};
@@ -60,6 +60,39 @@ pub(crate) struct OrderedMerge<K, V, P> {
     base_count: u64,
     input_seen: bool,
     value: std::marker::PhantomData<V>,
+}
+
+pub(crate) fn merge_coverage<K, P>(
+    store: &mut DraftStore<'_>,
+    source: &MetaV4,
+    base: &Bootstrap,
+    policy: P,
+    cancellation: &CancellationToken,
+    count_context: &'static str,
+) -> Result<(u64, Finished<P::Output>)>
+where
+    K: IpKey,
+    P: Policy<K, ()>,
+{
+    let mut coverage = Cursor::<K>::new(store, source, true)?;
+    let mut merge = OrderedMerge::new(store, base, policy, cancellation)?;
+    let mut input_intervals = 0u64;
+    while let Some(range) = coverage.next(store)? {
+        cancellation.check()?;
+        input_intervals = input_intervals
+            .checked_add(1)
+            .ok_or_else(|| Error::arithmetic_overflow(count_context))?;
+        merge.push(
+            store,
+            Incoming {
+                from: range.from,
+                to: range.to,
+                value: (),
+            },
+            cancellation,
+        )?;
+    }
+    Ok((input_intervals, merge.finish(store, cancellation)?))
 }
 
 impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
@@ -213,7 +246,7 @@ impl<K: IpKey, V: Copy, P: Policy<K, V>> OrderedMerge<K, V, P> {
         if !self.old_accounted {
             let value = self
                 .old
-                .ok_or(Error::Corrupt("ordered merge lost its old range"))?
+                .ok_or_else(|| Error::corrupt("ordered merge lost its old range"))?
                 .value;
             store.track_membership_refcount(value, -1)?;
             self.old_accounted = true;
@@ -342,9 +375,10 @@ pub(crate) fn add(left: Cardinality129, right: Cardinality129) -> Result<Cardina
 
 fn previous<K: IpKey>(key: K, context: &'static str) -> Result<K> {
     key.checked_previous()
-        .ok_or(Error::ArithmeticOverflow(context))
+        .ok_or_else(|| Error::arithmetic_overflow(context))
 }
 
 fn next<K: IpKey>(key: K, context: &'static str) -> Result<K> {
-    key.checked_next().ok_or(Error::ArithmeticOverflow(context))
+    key.checked_next()
+        .ok_or_else(|| Error::arithmetic_overflow(context))
 }

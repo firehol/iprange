@@ -1,10 +1,10 @@
 //! Constant-time v4 meta classification and selection.
 
 use crate::contract::{
-    u16_source, u32_source, AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED,
-    MAX_PAGE_COUNT, META_CRC_OFFSET, META_MAGIC, META_SIZE, PAGE_SHIFT, PAGE_SIZE,
+    meta_checksum_valid, meta_fixed_values_valid, meta_magic_valid, meta_reserved_zero,
+    AddressFamily, MetaV4, ValueKind, MAX_METADATA_UNCOMPRESSED, MAX_PAGE_COUNT, META_SIZE,
+    PAGE_SIZE,
 };
-use crate::crc32c;
 use crate::mapping::ByteSource;
 
 mod recovery_meta;
@@ -245,26 +245,20 @@ fn identity_readable<S: ByteSource>(page: S) -> Result<IdentityReadable, MetaPro
 }
 
 fn require_identity_header<S: ByteSource>(page: S) -> Result<(), MetaProblem> {
-    if page.len() != PAGE_SIZE || !page.equals(0, &META_MAGIC) {
+    if !meta_magic_valid(page) {
         return Err(MetaProblem::Magic);
     }
-    if u16_source(page, 8) != Some(META_SIZE) || page.byte(10) != Some(PAGE_SHIFT) {
-        return Err(MetaProblem::FixedValue);
-    }
-    if page.byte(11).and_then(AddressFamily::from_wire).is_none()
-        || page.byte(12).and_then(ValueKind::from_wire).is_none()
-    {
+    if !meta_fixed_values_valid(page) {
         return Err(MetaProblem::FixedValue);
     }
     Ok(())
 }
 
 fn require_identity_body<S: ByteSource>(page: S) -> Result<(), MetaProblem> {
-    if !page.all_zero(13, 3) || !page.all_zero(200, 52) || !page.all_zero(256, PAGE_SIZE - 256) {
+    if !meta_reserved_zero(page) {
         return Err(MetaProblem::Reserved);
     }
-    let stored_crc = u32_source(page, META_CRC_OFFSET).ok_or(MetaProblem::FixedValue)?;
-    if crc32c::crc32c_source_with_zeroed(page, META_CRC_OFFSET, 4) != Some(stored_crc) {
+    if !meta_checksum_valid(page) {
         return Err(MetaProblem::Checksum);
     }
     Ok(())
@@ -315,7 +309,7 @@ fn validate_declared_page_count(meta: &MetaV4) -> Result<(), MetaProblem> {
 }
 
 fn validate_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
-    for root in roots(meta) {
+    for root in meta.roots() {
         if root != 0 && (root < 2 || u64::from(root) >= meta.page_count) {
             return Err(MetaProblem::RootBounds);
         }
@@ -391,7 +385,7 @@ fn metadata_lengths_valid(meta: &MetaV4) -> Result<bool, MetaProblem> {
 }
 
 fn validate_allocator_reserve(meta: &MetaV4) -> Result<(), MetaProblem> {
-    let roots = roots(meta);
+    let roots = meta.roots();
     for (index, page_number) in meta.allocator_reserve.iter().copied().enumerate() {
         if page_number == 0 {
             continue;
@@ -492,21 +486,6 @@ fn validate_membership_roots(meta: &MetaV4) -> Result<(), MetaProblem> {
         return Err(MetaProblem::KindInvariant);
     }
     Ok(())
-}
-
-fn roots(meta: &MetaV4) -> [u32; 10] {
-    [
-        meta.range_root,
-        meta.catalog_name_root,
-        meta.catalog_index_root,
-        meta.feed_used_root,
-        meta.membership_id_root,
-        meta.membership_hash_root,
-        meta.membership_used_root,
-        meta.metadata_root,
-        meta.free_bitmap_root,
-        meta.retirement_root,
-    ]
 }
 
 fn select_pair<S: ByteSource>(

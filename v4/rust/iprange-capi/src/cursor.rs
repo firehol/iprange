@@ -442,23 +442,7 @@ fn clip_v4(
     let (Key::V4(lower), Key::V4(upper)) = (bounds.from, bounds.to) else {
         return Err(Clip::End);
     };
-    if *to < lower {
-        return Err(if bounds.direction == RangeDirection::Forward {
-            Clip::Skip
-        } else {
-            Clip::End
-        });
-    }
-    if *from > upper {
-        return Err(if bounds.direction == RangeDirection::Forward {
-            Clip::End
-        } else {
-            Clip::Skip
-        });
-    }
-    *from = (*from).max(lower);
-    *to = (*to).min(upper);
-    Ok(())
+    clip_range(from, to, lower, upper, bounds.direction)
 }
 
 fn clip_v6(
@@ -469,15 +453,25 @@ fn clip_v6(
     let (Key::V6(lower), Key::V6(upper)) = (bounds.from, bounds.to) else {
         return Err(Clip::End);
     };
+    clip_range(from, to, lower, upper, bounds.direction)
+}
+
+fn clip_range<K: Copy + Ord>(
+    from: &mut K,
+    to: &mut K,
+    lower: K,
+    upper: K,
+    direction: RangeDirection,
+) -> Result<(), Clip> {
     if *to < lower {
-        return Err(if bounds.direction == RangeDirection::Forward {
+        return Err(if direction == RangeDirection::Forward {
             Clip::Skip
         } else {
             Clip::End
         });
     }
     if *from > upper {
-        return Err(if bounds.direction == RangeDirection::Forward {
+        return Err(if direction == RangeDirection::Forward {
             Clip::End
         } else {
             Clip::Skip

@@ -3,7 +3,6 @@
 use crate::cancellation::CancellationToken;
 use crate::error::{combine_errors, Error, Result};
 use crate::live_lock::Mode;
-use crate::retirement::Reclamation;
 
 use super::{verify_pair, CommitResult, LiveWriter, State};
 
@@ -53,7 +52,7 @@ impl LiveWriter {
 
     fn finish_reclaim(
         &mut self,
-        operation: Result<Option<(Reclamation, CommitResult)>>,
+        operation: Result<Option<(u64, u64, CommitResult)>>,
     ) -> Result<ReclaimResult> {
         match operation {
             Ok(None) => {
@@ -63,12 +62,12 @@ impl LiveWriter {
                 }
                 Ok(ReclaimResult::NoChange)
             }
-            Ok(Some((selection, mut commit))) => {
+            Ok(Some((transaction_count, page_count, mut commit))) => {
                 let unlock = self.sidecar.unlock_gate();
                 self.apply_commit_unlock(&mut commit, unlock);
                 Ok(ReclaimResult::Commit {
-                    transaction_count: selection.transactions,
-                    page_count: selection.pages,
+                    transaction_count,
+                    page_count,
                     commit,
                 })
             }
@@ -96,7 +95,7 @@ impl LiveWriter {
         max_transactions: u64,
         max_pages: u64,
         cancellation: &CancellationToken,
-    ) -> Result<Option<(Reclamation, CommitResult)>> {
+    ) -> Result<Option<(u64, u64, CommitResult)>> {
         cancellation.check()?;
         verify_pair(&self.main_path, self.main_identity, &self.sidecar)?;
         self.core.require_unchanged_base()?;
@@ -115,7 +114,8 @@ impl LiveWriter {
             return Ok(None);
         };
         Ok(Some((
-            prepared.selection,
+            prepared.transaction_count,
+            prepared.page_count,
             self.finish_commit_locked(prepared.attempt, cancellation),
         )))
     }

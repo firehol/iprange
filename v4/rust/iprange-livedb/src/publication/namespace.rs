@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+use crate::artifact_name::{decode_attempt, write_attempt};
 use crate::name_binding::basename_commitment;
 use crate::path;
 use crate::publication::security;
@@ -85,7 +86,7 @@ impl Directory {
 pub(crate) const OUTPUT_PREFIX: &[u8] = b".iprange-publish-";
 pub(crate) const RESERVATION_PREFIX: &[u8] = b".iprange-reservation-";
 pub(crate) const PRIVATE_SUFFIX: &[u8] = b".tmp";
-pub(crate) const ENCODED_ATTEMPT_LEN: usize = 32;
+pub(crate) const ENCODED_ATTEMPT_LEN: usize = crate::artifact_name::ATTEMPT_HEX_SIZE;
 
 #[derive(Debug)]
 pub(crate) struct Destination {
@@ -175,10 +176,9 @@ pub(crate) fn private_name(prefix: &[u8], attempt: [u8; 16]) -> Result<Name, Nam
     }
     let mut bytes = Vec::with_capacity(prefix.len() + ENCODED_ATTEMPT_LEN + PRIVATE_SUFFIX.len());
     bytes.extend_from_slice(prefix);
-    for byte in attempt {
-        bytes.push(hex(byte >> 4));
-        bytes.push(hex(byte & 0x0f));
-    }
+    let start = bytes.len();
+    bytes.resize(start + ENCODED_ATTEMPT_LEN, 0);
+    write_attempt(attempt, &mut bytes[start..]);
     bytes.extend_from_slice(PRIVATE_SUFFIX);
     Name::new(&bytes)
 }
@@ -188,10 +188,7 @@ pub(crate) fn private_attempt(prefix: &[u8], bytes: &[u8]) -> Option<[u8; 16]> {
     if encoded.len() != ENCODED_ATTEMPT_LEN {
         return None;
     }
-    let mut attempt = [0; 16];
-    for (slot, pair) in attempt.iter_mut().zip(encoded.chunks_exact(2)) {
-        *slot = unhex(pair[0])?.checked_mul(16)? + unhex(pair[1])?;
-    }
+    let attempt = decode_attempt(encoded)?;
     (attempt != [0; 16]).then_some(attempt)
 }
 
@@ -199,21 +196,6 @@ fn parent(path: &Path) -> &Path {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
-    }
-}
-
-fn hex(value: u8) -> u8 {
-    match value {
-        0..=9 => b'0' + value,
-        _ => b'a' + value - 10,
-    }
-}
-
-fn unhex(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        _ => None,
     }
 }
 

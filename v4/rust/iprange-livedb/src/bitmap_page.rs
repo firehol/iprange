@@ -12,8 +12,12 @@ pub(crate) const LEAF_TYPE: u8 = page_type::USED_BITMAP_LEAF;
 pub(crate) const LEAF_WORDS: usize = 500;
 pub(crate) const LEAF_BITS: u64 = (LEAF_WORDS * 64) as u64;
 pub(crate) const BRANCH_CHILDREN: usize = 256;
-pub(crate) const LEAF_END: usize = page_header::SIZE + LEAF_WORDS * 8;
-pub(crate) const BRANCH_END: usize = page_header::SIZE + 32 + BRANCH_CHILDREN * 4;
+const LEAF_WORDS_OFFSET: usize = page_header::SIZE;
+const BRANCH_SUMMARY_OFFSET: usize = page_header::SIZE;
+const BRANCH_SUMMARY_SIZE: usize = 32;
+const BRANCH_CHILDREN_OFFSET: usize = BRANCH_SUMMARY_OFFSET + BRANCH_SUMMARY_SIZE;
+pub(crate) const LEAF_END: usize = LEAF_WORDS_OFFSET + LEAF_WORDS * 8;
+pub(crate) const BRANCH_END: usize = BRANCH_CHILDREN_OFFSET + BRANCH_CHILDREN * 4;
 pub(crate) const MAX_LEVEL: u16 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,42 +145,83 @@ pub(crate) fn leaf_word<S: ByteSource>(page: S, index: usize) -> Result<u64> {
     if index >= LEAF_WORDS {
         return Err(Error::Corrupt("bitmap word index is invalid"));
     }
-    Ok(u64_le(page, page_header::SIZE + index * 8))
+    crate::work::bitmap_probe(1);
+    Ok(u64_le(page, LEAF_WORDS_OFFSET + index * 8))
 }
 
 pub(crate) fn set_leaf_word<D: PageEdit>(page: &mut D, index: usize, word: u64) -> Result<()> {
     if index >= LEAF_WORDS {
         return Err(Error::Corrupt("bitmap word index is invalid"));
     }
-    page.put_u64(page_header::SIZE + index * 8, word)
+    page.put_u64(LEAF_WORDS_OFFSET + index * 8, word)
 }
 
 pub(crate) fn branch_child<S: ByteSource>(page: S, index: usize) -> Result<u32> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap child index is invalid"));
     }
-    Ok(u32_le(page, page_header::SIZE + 32 + index * 4))
+    crate::work::bitmap_probe(1);
+    Ok(u32_le(page, BRANCH_CHILDREN_OFFSET + index * 4))
 }
 
 pub(crate) fn set_branch_child<D: PageEdit>(page: &mut D, index: usize, child: u32) -> Result<()> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap child index is invalid"));
     }
-    page.put_u32(page_header::SIZE + 32 + index * 4, child)
+    page.put_u32(BRANCH_CHILDREN_OFFSET + index * 4, child)
+}
+
+pub(crate) fn checked_branch_child<S: ByteSource>(
+    page: S,
+    header: &Header,
+    index: usize,
+    page_limit: u64,
+) -> Result<u32> {
+    if header.level == 0 || index >= BRANCH_CHILDREN {
+        return Err(Error::Corrupt("bitmap child lookup is invalid"));
+    }
+    let child = branch_child(page, index)?;
+    if child != 0 && (child < 2 || u64::from(child) >= page_limit) {
+        return Err(Error::Corrupt("bitmap child is outside page bounds"));
+    }
+    Ok(child)
+}
+
+pub(crate) fn replace_branch_child<D: PageEdit>(
+    page: &mut D,
+    header: &Header,
+    index: usize,
+    child: u32,
+    summary: bool,
+) -> Result<usize> {
+    if header.level == 0 || index >= BRANCH_CHILDREN {
+        return Err(Error::Corrupt("bitmap child index is invalid"));
+    }
+    let old = branch_child(page.view(), index)?;
+    set_branch_child(page, index, child)?;
+    set_summary(page, index, summary)?;
+    let count = header
+        .item_count
+        .checked_add(usize::from(old == 0 && child != 0))
+        .and_then(|count| count.checked_sub(usize::from(old != 0 && child == 0)))
+        .ok_or(Error::Corrupt("bitmap child count underflows"))?;
+    page.put_u16(page_header::ITEM_COUNT, count as u16)?;
+    Ok(count)
 }
 
 pub(crate) fn summary_bit<S: ByteSource>(page: S, index: usize) -> Result<bool> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap summary index is invalid"));
     }
-    Ok(u64_le(page, page_header::SIZE + (index / 64) * 8) & (1u64 << (index % 64)) != 0)
+    crate::work::bitmap_probe(1);
+    Ok(u64_le(page, BRANCH_SUMMARY_OFFSET + (index / 64) * 8) & (1u64 << (index % 64)) != 0)
 }
 
 pub(crate) fn set_summary<D: PageEdit>(page: &mut D, index: usize, value: bool) -> Result<()> {
     if index >= BRANCH_CHILDREN {
         return Err(Error::Corrupt("bitmap summary index is invalid"));
     }
-    let at = page_header::SIZE + (index / 64) * 8;
+    let at = BRANCH_SUMMARY_OFFSET + (index / 64) * 8;
     let mask = 1u64 << (index % 64);
     let word = u64_le(page.view(), at);
     page.put_u64(at, if value { word | mask } else { word & !mask })
@@ -187,7 +232,8 @@ pub(crate) fn first_summary<S: ByteSource>(page: S, start: usize) -> Option<usiz
         return None;
     }
     let mut word_index = start / 64;
-    let mut word = u64_le(page, page_header::SIZE + word_index * 8) & (u64::MAX << (start % 64));
+    let mut word =
+        u64_le(page, BRANCH_SUMMARY_OFFSET + word_index * 8) & (u64::MAX << (start % 64));
     loop {
         if word != 0 {
             return Some(word_index * 64 + word.trailing_zeros() as usize);
@@ -196,7 +242,7 @@ pub(crate) fn first_summary<S: ByteSource>(page: S, start: usize) -> Option<usiz
         if word_index == 4 {
             return None;
         }
-        word = u64_le(page, page_header::SIZE + word_index * 8);
+        word = u64_le(page, BRANCH_SUMMARY_OFFSET + word_index * 8);
     }
 }
 

@@ -199,6 +199,15 @@ fn hash_slots(records: u64) -> Result<u64> {
         .ok_or(Error::ArithmeticOverflow("recovery table slots"))
 }
 
+pub(super) fn hash_u32(value: u32) -> u64 {
+    let mut value = u64::from(value);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 fn heap_bytes(length: u64, available: u64) -> Option<Vec<u8>> {
     if length > available {
         return None;
