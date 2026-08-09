@@ -35,22 +35,19 @@ builders. Sidecar coordination and filesystem namespace/publication are
 separate persistent concerns with separate owners.
 
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
-directions. The 2026-08-09 production-only audit counts 74,384 physical lines
-and 67,956 code lines across 282 inventoried Rust files. Of those physical
-lines, 13,870 implement cross-platform namespace/publication, 10,012 the frozen
-C ABI, 9,762 explicit recovery, 5,303 the isolated fault worker, and 5,089
-explicit validation. The public Rust writer/workflow adapters account for
-3,691 lines and the public reader adapters for 262; mapped storage, trees,
-codecs, reader/writer cores, output construction, and shared logical types make
-up the remainder.
+directions. The final 2026-08-10 inventory counts tracked implementation files
+under the two library `src/` trees while excluding dedicated test modules. It
+contains 285 files and 77,503 newline-counted source lines; Lizard reports
+70,274 code lines across 4,273 functions. Functions average 13.7 code lines and
+cyclomatic complexity 3.4. The largest is a 191-line recovery-attempt state
+machine. Thirty-nine files exceed the directional 500-line target, while the
+largest file has 859 lines and no file reaches 1,000.
 
-At a 15-line/100-token threshold, exact clone detection finds eight small
-shapes totaling 154 lines (0.21%). They are C entry-point forms, public
-typestate wrappers, and separate direct/membership recovery policies—not
-duplicate persistent-format operations. Across 4,119 production functions,
-the averages are 13.6 lines and cyclomatic complexity 3.39. The largest is a
-191-line recovery-attempt state machine whose branches retain distinct cleanup
-and factual-outcome obligations. These measurements do not prove every line is
+At a strict 15-line/100-token threshold, exact clone detection finds 12 small
+shapes totaling 218 lines (0.28%). They are frozen C-report and entry-point
+forms, public workflow/typestate adapters, two page-source adapters, distinct
+publication-file setup, and separate damaged-input policies—not duplicate
+persistent-format operations. These measurements do not prove every line is
 intrinsically required; they make the remaining size and review boundary
 explicit.
 

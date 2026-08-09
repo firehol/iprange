@@ -2,12 +2,13 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: regression repair. New feed-ingestion shape benchmarks disproved the
-completed claim that no avoidable writer hot-path work remained. The
-superseded SOW-0016 remains closed; Rust acceptance and all Go work remain
-blocked until this SOW repeats its audit and closes cleanly again.
+Sub-state: feed-shape regression repaired. Exact implementation commit
+`0e906e90ac237d54a98bd0fac147581e34ee3ec4` passes the repeated clean audit,
+all local proof gates, both complete native feature matrices on Windows GNU,
+macOS ARM64, and FreeBSD 14, and all hosted checks. Rust awaits the user's
+product-acceptance decision; no Go or Phase-2 work started.
 
 ## Requirements
 
@@ -1861,3 +1862,253 @@ The SOW remains in progress. The exact candidate must be committed, pushed,
 and pass both complete feature matrices on native Windows GNU, macOS ARM64,
 and FreeBSD 14. The required 11-section audit then restarts on that exact
 revision; any finding triggers another repair iteration.
+
+## Final Audit After Feed-Shape Repairs - 2026-08-10
+
+### TL;DR
+
+The repeated audit of pushed implementation commit
+`0e906e90ac237d54a98bd0fac147581e34ee3ec4` is clean. All eight requested
+million-range feed-creation workloads complete below 0.4 seconds at the median,
+the exact timed-stack profiles contain no material avoidable work, the two API
+levels and single mapped-format authority remain enforced, and both complete
+feature matrices pass on Linux, Windows GNU, macOS ARM64, and FreeBSD 14.
+
+The first closure pass found stale README source metrics and an inconsistent
+clone-selection method in the dated local-candidate text above. The README now
+uses one reproduced production-source definition. The corrected figures and
+the audit below supersede those candidate-only figures.
+
+### Verdict
+
+Pass. No actionable correctness, performance, ownership, duplication,
+resource, portability, documentation, or maintainability finding remains.
+
+This is a measured result for the implemented workloads and supported systems,
+not a claim that future evidence cannot expose a defect. Any later regression
+reopens this SOW under the project regression rules.
+
+### Current performance
+
+Five release runs pinned to one Intel i9-12900K performance core produced:
+
+| One-million-range input | First feed median | First observed range | Second feed median | Second observed range | Final ranges |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ascending disjoint | 0.136 s | 0.133-0.143 s | 0.144 s | 0.139-0.148 s | 1,000,000 |
+| descending disjoint | 0.146 s | 0.144-0.168 s | 0.160 s | 0.150-0.213 s | 1,000,000 |
+| deterministic random disjoint | 0.363 s | 0.351-0.620 s | 0.388 s | 0.360-0.472 s | 1,000,000 |
+| deterministic random overlap chain | 0.258 s | 0.258-0.263 s | 0.252 s | 0.250-0.323 s | 1 |
+
+All result counts and explicit post-timing validation pass. First-feed cases
+make 39 fixed setup allocations totaling 1,096-1,148 bytes; second-feed cases
+make 21 totaling 450-466 bytes. Descriptors remain four, private residue is
+zero, and no case creates a sorting file. The complete 41-case scale matrix
+passes; its slowest writer sample is 0.438 seconds. Exact 421-feed replacement
+has a 0.3515-second median and 421-feed membership import 0.0441 seconds.
+
+### Ranked findings
+
+None.
+
+### The two-level architecture
+
+- Public semantic APIs own typed input, feed names, workflow sequencing,
+  cancellation, reports, commit/abort state, Rust handles, and the frozen C
+  translation. They do not own mappings, roots, pages, allocator state,
+  membership IDs, dictionary state, checksums, or publication bytes.
+- `DraftStore::add_feed_coverage` and `finish_feed_coverage` are the logical
+  bridge for feed union. `range_mutation::coverage` owns arrival-order union
+  state. `fixed_tree` owns paths, mapped edits, splits, fence propagation, and
+  COW page lifecycle. `slotted_page` owns record movement inside mapped pages.
+- `ReaderCore` remains the single healthy selected-generation reader and
+  `WriterCore` over `DraftStore` the single healthy mutation owner. Validation
+  and recovery remain a separate untrusted-input policy boundary over shared
+  codecs and mapped output builders.
+- The architecture and complete four-target source-graph gates pass and cover
+  every production source. They reject high-level physical access and unwired
+  production files.
+
+### Physical-format authority
+
+The repair changed no persistent byte, v4 semantic, public Rust API, C ABI,
+durability point, validation/recovery rule, or supported-platform boundary.
+The feed path uses the same canonical range codec, mapped page access,
+fixed-tree parser/query/edit/split code, allocator, retirement owner, checksum
+sealer, and generation publisher as every other healthy mutation.
+
+Each page layout, record codec, healthy traversal, COW mutation, allocation,
+retirement, sealing, and generation-publication operation has one owner.
+Validation and recovery reuse byte definitions but keep the independent
+tolerant policies required for corrupt input. No complete database page exists
+outside a file-backed mapping and no persistent-content transfer I/O is used.
+
+### Where the production lines are
+
+The reproduced inventory counts tracked implementation files under
+`iprange-livedb/src` and `iprange-capi/src`, excluding dedicated test modules.
+It contains 285 files and 77,503 newline-counted source lines. Lizard reports
+70,274 code lines and 4,273 functions, averaging 13.7 code lines and cyclomatic
+complexity 3.4. The largest function remains the cohesive 191-line recovery
+attempt. Thirty-nine files exceed the directional 500-line target; the largest
+has 859 lines and no file reaches 1,000.
+
+Strict exact-clone detection at 15 lines/100 tokens reports 12 shapes totaling
+218 lines, or 0.28%. Manual inspection classifies them as frozen C report and
+entry-point forms, public workflow/typestate adapters, two page-source
+adapters, distinct main/reservation publication setup, and distinct
+direct/membership damaged-input policies. None duplicates layout, healthy tree
+traversal, mutation, allocation, retirement, sealing, or page construction.
+
+The final full Codacy Analysis CLI result contains 389 Lizard review signals,
+614 generic Semgrep unsafe/security pattern signals, and four Semgrep parser
+warnings on supported generic-associated-type syntax. The only source changed
+after that full scan, `fixed_tree/gap.rs`, was rerun separately: eight Lizard
+signals, zero Semgrep signals, and zero parser errors. Manual review found no
+actionable dead code, unsafe-boundary defect, duplicate physical authority, or
+function split that would reduce responsibility rather than add indirection.
+
+The implementation remains far above the directional 5,000-line goal. The
+audit does not pretend that metrics prove every line necessary; it establishes
+that no concrete removable mechanism or duplicated persistent operation was
+found, and keeps the size visible as a future regression signal.
+
+### Retention
+
+Retention is unchanged and remains a special timestamp policy over the shared
+ordered merge. Existing coverage keeps its original timestamp, new coverage
+gets the refresh timestamp, and missing coverage is removed. The caller never
+manages timestamps as arbitrary range values or membership combinations.
+
+### Recovery
+
+Recovery is unchanged. It remains explicit, isolated, and best-effort-capable
+because damaged mappings require bounded fault containment and tolerant
+traversal. It reuses canonical codecs, range-component processing, and mapped
+output construction. This repair adds no recovery format, ordinary-ingestion
+scratch, temporary sort, I/O fallback, or healthy-path validation.
+
+### Implementation result
+
+- Monotonic feed input now reuses one private edge path. Non-structural
+  ancestor-fence writes are deferred until that cached edge must be flushed;
+  structural split/delete fences remain immediate.
+- Overlap input consumes and replaces the affected local or multi-leaf run
+  through the fixed-tree authority instead of repeatedly deleting and
+  reinserting individual intervals.
+- Membership deltas use two fixed, heap-free pending slots. Consecutive equal
+  old/output membership IDs are submitted as one checked refcount batch rather
+  than once per range.
+- Test-only work counters prove one edge-path check, fence work bounded by
+  structural changes, and constant refcount/delta submission for uniform
+  million-range feeds. Release symbol and string inspection proves the counters
+  are absent from the production benchmark.
+
+Fresh frame-pointer profiles built from the exact committed source and filtered
+to `update_ipsets::measure::operation` show mapped edge insertion and mapped
+record/output work for monotonic input, and the required lower-bound plus local
+overlap work for arbitrary input. The removed per-record delta mutation,
+refcount submission, and monotonic ancestor propagation do not appear.
+`propagate_first_from` accounts for 0.09% in one overlap profile solely through
+the required `remove_leaf_run` structural-fence path. Validation appears only
+after the timer and disappears from the timed-stack report.
+
+### Acceptance gates
+
+- Both complete local workspace matrices (`all-features` and
+  `no-default-features`, all targets): pass, including 369 active engine tests
+  plus every integration, C ABI, conformance, crash, recovery, snapshot,
+  workflow, and benchmark target.
+- Formatting, warnings-denied Clippy and rustdoc, diff hygiene, architecture,
+  mmap-only source, syscall-traced mmap runtime, and the 382-source/four-target
+  compiler graph: pass. The four architecture/storage/source gates were
+  repeated after native execution.
+- Rust 1.74.1 complete workspace matrix and ten s390x Miri authoritative codec
+  vectors: pass.
+- AddressSanitizer with leak detection: 369 active engine tests and all 15 C
+  boundary tests pass. Raw-fork Valgrind reports zero memory errors and zero
+  definite/indirect leaks.
+- Release necessary-work counter absence, 41-case scale matrix, eight five-run
+  feed measurements, exact timed-stack profiles, allocation/descriptor/residue
+  checks, result enumeration, and explicit validation: pass.
+- Both complete native feature matrices pass on exact commit
+  `0e906e90ac237d54a98bd0fac147581e34ee3ec4` on Windows GNU, macOS ARM64, and
+  FreeBSD 14. Each native clone reports that exact revision.
+- All five hosted workflows for the exact pushed commit pass: push matrix,
+  big-endian, security, Scorecard, and publication workflow.
+- Reproduced production inventory, strict clone review, complexity review,
+  Codacy full-plus-final-delta review, same-failure search, sensitive-data gate,
+  and manual physical-authority audit: pass with no open finding.
+
+## Final Validation - 2026-08-10
+
+Acceptance criteria evidence:
+
+- The exact 11-section audit above has no ranked finding.
+- Every requested million-range writer median is below 0.4 seconds and every
+  observed run is below one second. Necessary-work tests and exact timed-stack
+  profiles show no material avoidable reader or writer work.
+- Compiled dependency gates and manual call-path review prove two API levels
+  over one physical-format authority.
+
+Tests and real-use evidence:
+
+- The complete local, sanitizer, MSRV, big-endian, source-graph, and native
+  platform matrices pass as recorded above.
+- The release benchmark exercises update-ipsets-shaped direct, retention,
+  nested, feed, import, lookup, scan, snapshot, and all eight feed-shape cases.
+  Outputs are enumerated and explicitly validated outside timing.
+
+Reviewer and same-failure evidence:
+
+- No subagent or external reviewer was used, as required by the user.
+- Searches cover all edge-fence callers, membership-delta submissions,
+  refcount accounting, persistent-content I/O, complete page images, physical
+  high-level imports, duplicate layouts, and unwired production sources.
+
+Sensitive-data gate:
+
+- Durable changes contain repository paths, synthetic workloads, generic
+  platform names, and public commit identifiers only. No raw sensitive or
+  operational data is present.
+
+Artifact maintenance gate:
+
+- `AGENTS.md`: reviewed; its mmap-only, two-level, lean, measured-performance,
+  and Rust-first philosophy already covers the repaired behavior.
+- Runtime project skill: reviewed; it already contains the eight-case matrix,
+  timed-stack profiling, necessary-work, mmap, source, sanitizer, and native
+  proof workflow. No new workflow was introduced.
+- Specs: reviewed; bytes, semantics, APIs, ABI, durability, recovery, and
+  platform contracts did not change, so no normative update is required.
+- End-user/operator docs: `v4/rust/README.md` records the final performance,
+  resource shape, architecture, platform proof, and corrected reproducible
+  source/clone metrics.
+- End-user/operator skills: none exist in this repository.
+- SOW lifecycle: the regression and every repair iteration remain recorded;
+  this SOW moves to `done/` with `Status: completed` in the closure commit.
+
+Lessons:
+
+- Work counters must prove operation shape, not only timing. They exposed
+  range-proportional fence, delta, and refcount maintenance directly.
+- Profiles must be restricted to the benchmark's timed stack; whole-process
+  profiles include intentional post-timing validation and can misclassify it.
+- Source-size reports need one named selection method. Mixing inventories can
+  make documentation disagree even when the code did not.
+
+Follow-up mapping:
+
+- SOW-0017 remains the real Phase-2 signing work item.
+- SOW-0018 remains the real Phase-2 multi-file algebra work item.
+- The Go port remains intentionally blocked until explicit user acceptance of
+  the Rust result. No Go or Phase-2 implementation was started here.
+- The pre-close `defer|later|follow-up|future|TODO|pending` search finds dated
+  historical states, algorithmic pending buffers, and the two mapped Phase-2
+  items above; it finds no untracked unfinished SOW-0020 work.
+
+## Final Outcome - 2026-08-10
+
+The feed-shape regression is repaired. The exact pushed implementation passes
+the repeated clean audit, all local and native proof gates, and every requested
+performance case. Rust is ready for the user's product-acceptance decision;
+the decision itself and the Go port are outside this implementation SOW.
