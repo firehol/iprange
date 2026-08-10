@@ -131,6 +131,36 @@ CARGO_TARGET_DIR=/tmp/iprange-v4-msrv \
   --workspace --all-features --all-targets
 ```
 
+AddressSanitizer must build the exact adjacent worker with the same
+instrumentation. Run the Rust library boundaries directly, then give the native
+C fixture linker the ASan runtime explicitly; a plain `cc` cannot link an
+ASan-instrumented Rust shared library:
+
+```bash
+CARGO_TARGET_DIR=/tmp/iprange-v4-asan \
+  RUSTFLAGS='-Zsanitizer=address' \
+  cargo +nightly build --manifest-path v4/rust/Cargo.toml \
+  --target x86_64-unknown-linux-gnu -p iprange-livedb \
+  --all-features --bin iprange-v4-worker
+CARGO_TARGET_DIR=/tmp/iprange-v4-asan \
+  RUSTFLAGS='-Zsanitizer=address' \
+  ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+  cargo +nightly test --manifest-path v4/rust/Cargo.toml \
+  --target x86_64-unknown-linux-gnu -p iprange-livedb --all-features --lib
+CARGO_TARGET_DIR=/tmp/iprange-v4-asan \
+  RUSTFLAGS='-Zsanitizer=address' \
+  ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+  cargo +nightly test --manifest-path v4/rust/Cargo.toml \
+  --target x86_64-unknown-linux-gnu -p iprange-capi --all-features --lib
+CARGO_TARGET_DIR=/tmp/iprange-v4-asan \
+  RUSTFLAGS='-Zsanitizer=address' \
+  ASAN_OPTIONS='detect_leaks=1:halt_on_error=1' \
+  CC='cc -fsanitize=address' \
+  cargo +nightly test --manifest-path v4/rust/Cargo.toml \
+  --target x86_64-unknown-linux-gnu -p iprange-capi \
+  --all-features --test native_behavior
+```
+
 For a C ABI change, additionally prove:
 
 - generated header and manifest equal the committed files;

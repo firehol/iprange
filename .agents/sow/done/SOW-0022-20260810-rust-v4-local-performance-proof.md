@@ -2,11 +2,11 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: reopened after a fresh random-access audit found unmeasured reader
-work and actionable writer navigation cost; repair and repeated audit are in
-progress.
+Sub-state: the random-access regression is repaired, the exact final audit has
+no finding, and the pushed implementation passed the complete local and native
+platform gates.
 
 ## Requirements
 
@@ -984,19 +984,19 @@ construction and random IPv4 mutation. The 79-case local matrix, 14-case CI
 matrix, exact profiles, work counters, static analysis, clone review, and the
 22.6-million-input public replay expose no remaining actionable local finding.
 
-This is a local pass, not SOW closure. Exact final-source native Windows GNU,
-macOS ARM64, and FreeBSD matrices remain required after the implementation
-milestone is pushed.
+The validated implementation was pushed as
+`510e4d254a0d42203623d92fa177e793875bfed0`. Both exact feature matrices pass
+from that commit on Windows GNU, macOS ARM64, and FreeBSD 14, so the regression
+acceptance gates are complete.
 
 ### Verdict
 
-Local pass. No actionable correctness, performance, ownership, duplication,
-resource, or maintainability finding remains in the audited source and
-workloads.
+Pass. No actionable correctness, performance, ownership, duplication,
+resource, portability, or maintainability finding remains in the audited
+source and workloads.
 
 The claim is empirical and structural, not a mathematical claim that no future
-hardware or workload can reveal another improvement. Native-platform evidence
-is still pending and keeps this SOW in progress.
+hardware or workload can reveal another improvement.
 
 ### Current performance
 
@@ -1043,8 +1043,7 @@ validation takes 27.2 ms median.
 
 None.
 
-Exact final-source native platform execution remains an uncompleted acceptance
-gate, not a discovered implementation defect.
+Exact final-source native platform execution found no defect.
 
 ### The two-level architecture
 
@@ -1187,10 +1186,34 @@ leak detection for 397 active engine tests and 19 C-boundary tests. The exact
 version-matched worker was built beside the tests with the same sanitizer
 instrumentation.
 
-Pending before completion:
+Exact pushed-commit native evidence:
 
-- push the validated implementation milestone;
-- run both exact feature matrices natively on Windows GNU, macOS ARM64, and
-  FreeBSD from that pushed commit;
-- update final validation evidence, complete and move this SOW, then commit and
-  push the lifecycle closure.
+- Windows 11/MSYS x86_64, explicitly using
+  `stable-x86_64-pc-windows-gnu`: both complete feature matrices pass, including
+  the generated C11/C++17 header and native Windows C caller;
+- macOS Darwin 25.5.0 ARM64: both complete feature matrices pass;
+- FreeBSD 14.1 amd64: both complete feature matrices pass, including the
+  permanent proof that immutable validation, recovery, and publication work
+  while every live entry rejects before mutation;
+- every host ran commit `510e4d254a0d42203623d92fa177e793875bfed0`
+  and retained no tracked source change.
+
+Final validation and closure:
+
+- AddressSanitizer with leak detection passes 397 active engine tests, 19 Rust
+  C-boundary tests, and all eight native C behavior programs. The exact worker
+  and shared library use the same instrumentation; the native C linker carries
+  the ASan runtime explicitly.
+- The repeated same-failure, release-symbol, mmap-only, architecture, clone,
+  complexity, source-graph, and sensitive-data scans remain clean. No subagent
+  or external reviewer was used, as required by the user.
+- `AGENTS.md` and all normative specifications remain accurate because no
+  format, API, ABI, semantic, durability, recovery, or platform contract
+  changed. `v4/rust/README.md` contains the final public performance evidence,
+  and the runtime project skill now preserves the random-reader, locator,
+  compiler-layout, benchmark, and exact sanitizer workflows.
+- The only follow-up is already tracked signing work in pending SOW-0017. The
+  Go port remains blocked on the user's explicit acceptance of Rust; it is not
+  deferred work inside this SOW.
+- The SOW moves to `done/` with this completed status. No implementation work
+  remains for SOW-0022.
