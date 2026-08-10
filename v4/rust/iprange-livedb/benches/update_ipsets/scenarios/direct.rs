@@ -6,7 +6,7 @@ use iprange_livedb::{
 use crate::measure;
 use crate::model::{transaction_budget, TestDatabase};
 use crate::scenarios::{close_writer, require_committed, result, ScenarioResult};
-use crate::source::{AddressSource, DirectSource};
+use crate::source::{AddressSource, DirectSource, DirectSourceV6};
 
 pub(super) fn replace(size: usize) -> Result<ScenarioResult, String> {
     let database = create_direct("direct", direct_tag(b"timestamp")?, 1)?;
@@ -15,6 +15,22 @@ pub(super) fn replace(size: usize) -> Result<ScenarioResult, String> {
     operation?;
     result(
         "direct-replace",
+        size,
+        0,
+        size as u64,
+        &database,
+        measured,
+        database.main(),
+    )
+}
+
+pub(super) fn replace_v6(size: usize) -> Result<ScenarioResult, String> {
+    let database = create_direct_v6("direct-v6", direct_tag(b"timestamp")?, 1)?;
+    let (operation, measured) =
+        measure::operation(|| apply_direct_v6(&database, DirectSourceV6::unordered(size)?, size));
+    operation?;
+    result(
+        "direct-replace-v6",
         size,
         0,
         size as u64,
@@ -139,6 +155,24 @@ fn create_direct(label: &str, tag: ValueTag, reader_capacity: u32) -> Result<Tes
     Ok(database)
 }
 
+fn create_direct_v6(
+    label: &str,
+    tag: ValueTag,
+    reader_capacity: u32,
+) -> Result<TestDatabase, String> {
+    let database = TestDatabase::new(label)?;
+    create_live(
+        database.main(),
+        AddressFamily::Ipv6,
+        ValueKind::Direct,
+        tag,
+        reader_capacity,
+        &CancellationToken::new(),
+    )
+    .map_err(display)?;
+    Ok(database)
+}
+
 fn apply_direct(
     database: &TestDatabase,
     mut input: DirectSource,
@@ -152,6 +186,33 @@ fn apply_direct(
             .begin_direct_replacement(&cancellation)
             .map_err(display)?;
         workflow.add_ranges_v4(&mut input).map_err(display)?;
+        match workflow.finish_input().map_err(display)? {
+            FinishedWorkflow::Changed(prepared) => {
+                require_committed(prepared.commit().map_err(display)?)?;
+            }
+            FinishedWorkflow::NoChange(report) => {
+                return Err(format!(
+                    "replacement unexpectedly changed nothing: {report:?}"
+                ));
+            }
+        }
+    }
+    close_writer(&mut writer)
+}
+
+fn apply_direct_v6(
+    database: &TestDatabase,
+    mut input: DirectSourceV6,
+    size: usize,
+) -> Result<(), String> {
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(database.main(), transaction_budget(size, 1), &cancellation)
+        .map_err(display)?;
+    {
+        let mut workflow = writer
+            .begin_direct_replacement(&cancellation)
+            .map_err(display)?;
+        workflow.add_ranges_v6(&mut input).map_err(display)?;
         match workflow.finish_input().map_err(display)? {
             FinishedWorkflow::Changed(prepared) => {
                 require_committed(prepared.commit().map_err(display)?)?;

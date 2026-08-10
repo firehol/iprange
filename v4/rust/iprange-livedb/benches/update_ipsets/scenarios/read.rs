@@ -12,8 +12,8 @@ use crate::model::snapshot_budget;
 use crate::scenarios::direct::seeded_direct;
 use crate::scenarios::membership::populated_rotating;
 use crate::scenarios::{
-    close_reader, count_cursor, count_points, immutable_snapshot, reader_work, require_count,
-    result, ScenarioResult,
+    close_reader, count_cursor, count_points, count_random_points, immutable_snapshot,
+    random_points, reader_work, require_count, result, ScenarioResult,
 };
 
 pub(super) fn live_direct_lookup(size: usize) -> Result<ScenarioResult, String> {
@@ -61,6 +61,67 @@ pub(super) fn immutable_direct_lookup(size: usize) -> Result<ScenarioResult, Str
     drop(reader);
     result(
         "immutable-direct-lookup",
+        size,
+        0,
+        work_units,
+        &database,
+        measured,
+        &snapshot,
+    )
+}
+
+pub(super) fn live_direct_random_lookup(size: usize) -> Result<ScenarioResult, String> {
+    let database = seeded_direct("live-direct-random-lookup", size, 1)?;
+    let points = random_points(size)?;
+    let mut reader =
+        LiveReader::open(database.main(), &CancellationToken::new()).map_err(display)?;
+    let (repetitions, work_units) = reader_work(size)?;
+    let (operation, measured) = measure::operation(|| {
+        count_random_points(&points, repetitions, |address| {
+            reader
+                .lookup_direct_v4(address)
+                .map(|value| value.is_some())
+                .map_err(display)
+        })
+    });
+    let hits = operation?;
+    require_count("live random direct lookup", hits, work_units, "addresses")?;
+    close_reader(&mut reader)?;
+    result(
+        "live-direct-random-lookup",
+        size,
+        0,
+        work_units,
+        &database,
+        measured,
+        database.main(),
+    )
+}
+
+pub(super) fn immutable_direct_random_lookup(size: usize) -> Result<ScenarioResult, String> {
+    let database = seeded_direct("immutable-direct-random-lookup", size, 1)?;
+    let snapshot = immutable_snapshot(&database, size)?;
+    let points = random_points(size)?;
+    let reader = ImmutableReader::open(&snapshot).map_err(display)?;
+    let (repetitions, work_units) = reader_work(size)?;
+    let (operation, measured) = measure::operation(|| {
+        count_random_points(&points, repetitions, |address| {
+            reader
+                .lookup_direct_v4(address)
+                .map(|value| value.is_some())
+                .map_err(display)
+        })
+    });
+    let hits = operation?;
+    require_count(
+        "immutable random direct lookup",
+        hits,
+        work_units,
+        "addresses",
+    )?;
+    drop(reader);
+    result(
+        "immutable-direct-random-lookup",
         size,
         0,
         work_units,

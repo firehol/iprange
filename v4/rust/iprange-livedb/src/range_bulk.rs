@@ -167,7 +167,18 @@ impl<K: IpKey> Builder<K> {
     }
 
     pub(crate) fn push<S: Sink>(&mut self, sink: &mut S, record: Record<K>) -> Result<()> {
-        self.require_record(record)?;
+        if !self.try_push(sink, record)? {
+            return Err(Error::InvalidArgument(
+                "ordered output ranges are not canonical",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_push<S: Sink>(&mut self, sink: &mut S, record: Record<K>) -> Result<bool> {
+        if !self.can_append(record)? {
+            return Ok(false);
+        }
         let next_count = self
             .record_count
             .checked_add(1)
@@ -178,7 +189,7 @@ impl<K: IpKey> Builder<K> {
         self.previous = Some(record);
         self.record_count = next_count;
         crate::work::range_emitted(1);
-        Ok(())
+        Ok(true)
     }
 
     fn push_leaf_cell<S: Sink>(&mut self, sink: &mut S, first: K, cell: &[u8]) -> Result<()> {
@@ -210,7 +221,7 @@ impl<K: IpKey> Builder<K> {
         }
     }
 
-    fn require_record(&self, record: Record<K>) -> Result<()> {
+    fn can_append(&self, record: Record<K>) -> Result<bool> {
         if record.from > record.to {
             return Err(Error::InvalidArgument("range start is after its end"));
         }
@@ -218,19 +229,15 @@ impl<K: IpKey> Builder<K> {
             return Err(Error::Corrupt("membership range value is zero"));
         }
         let Some(previous) = self.previous else {
-            return Ok(());
+            return Ok(true);
         };
         if previous.to >= record.from {
-            return Err(Error::InvalidArgument(
-                "ordered output ranges are not strictly increasing",
-            ));
+            return Ok(false);
         }
         if previous.value == record.value && previous.to.checked_next() == Some(record.from) {
-            return Err(Error::InvalidArgument(
-                "adjacent equal ranges are not canonical",
-            ));
+            return Ok(false);
         }
-        Ok(())
+        Ok(true)
     }
 
     fn push_node<S: Sink>(
@@ -290,6 +297,10 @@ impl<K: IpKey> Builder<K> {
 
     pub(crate) fn finish<S: Sink>(&mut self, sink: &mut S) -> Result<(u32, u64)> {
         crate::work::output_pass(1);
+        self.finish_inline(sink)
+    }
+
+    pub(crate) fn finish_inline<S: Sink>(&mut self, sink: &mut S) -> Result<(u32, u64)> {
         if self.record_count == 0 {
             return Ok((0, 0));
         }

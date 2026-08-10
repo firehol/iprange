@@ -178,6 +178,9 @@ representative subset against the committed baseline. Its roughly 2x limits
 plus absolute noise allowance detect disasters; they do not establish local
 optimality. Component floors classify mapped access, page search/build,
 checksum, digest, and durability costs but are not full-operation targets.
+The SOW-0022 result contains 79 local cases and 14 CI cases; when a case is
+added or its identity changes, update the accepted baseline, README evidence,
+and both runners together.
 
 Record elapsed time, records per second, counted allocations and bytes, peak
 RSS, open file descriptors, logical and physical file size, page counts, and
@@ -189,8 +192,11 @@ feeds, membership imports with 421 feeds, immutable unordered construction,
 multi-window history projection, named point matches, overlap aggregation,
 both provider joins, global algebra analysis/publication, the complete
 publisher-shaped workflow, and snapshot ranges. It also includes one million
-real live and immutable direct lookups, membership lookups, direct cursor
-outputs, and named-feed cursor outputs.
+actual live and immutable direct lookups, membership lookups, direct cursor
+outputs, and named-feed cursor outputs. Point evidence must include both the
+repeated sequential shape and a true one-million-range tree with one million
+deterministically shuffled queries; the former cannot support a random-reader
+claim.
 For feed normalization, additionally measure one million ascending disjoint,
 descending disjoint, deterministic random disjoint, and deterministic random
 overlap-chain inputs both as the first feed in a new file and as a second feed
@@ -213,6 +219,20 @@ membership work, mapping changes, and durability calls. These counters are
 proof machinery, not a public observability API. A final release build must have
 no `iprange_livedb::work` symbol, counter field string, counter storage, or
 counter call left in the benchmark executable.
+
+A private navigation accelerator may retain only bounded scalar facts. It must
+not retain mapped bytes, a complete page, a reference into a remappable region,
+or correctness authority. Every candidate use must re-prove the current mapped
+page and local edit conditions, then fall back to the canonical tree path on
+ambiguity. Keep enabled/disabled differential tests, committed-page rejection,
+split/overlap transitions, and necessary-work checks permanent. Release its
+heap before later workflow stages.
+
+Treat compiler layout as part of hot-path validation. Moving a proven hot
+function across modules or removing an inline annotation requires the same
+focused benchmark before and after. Retain forced inlining only when repeated
+A/B evidence shows a material stable gain; record that evidence so a later
+cleanup does not silently restore the regression.
 
 For a candidate-complete performance claim, profile the exact timed regions of
 unordered immutable construction, timestamp refresh, representative query/join,

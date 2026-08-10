@@ -184,6 +184,26 @@ impl<'a> DraftStore<'a> {
         self.assign(from, to, value)
     }
 
+    pub(crate) fn assign_input_v4(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        value: u32,
+        input: &mut range_mutation::AssignmentInput<Ipv4Key>,
+    ) -> Result<bool> {
+        self.assign_input(from, to, value, input)
+    }
+
+    pub(crate) fn assign_input_v6(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        value: u32,
+        input: &mut range_mutation::AssignmentInput<Ipv6Key>,
+    ) -> Result<bool> {
+        self.assign_input(from, to, value, input)
+    }
+
     fn assign<K: crate::key::IpKey>(&mut self, from: K, to: K, value: u32) -> Result<bool> {
         let mut root = self.draft.meta.range_root;
         let mut count = self.draft.meta.range_record_count;
@@ -192,6 +212,29 @@ impl<'a> DraftStore<'a> {
         } else {
             range_mutation::assign(self, &mut root, &mut count, from, to, value)?
         };
+        self.draft.meta.range_root = root;
+        self.draft.meta.range_record_count = count;
+        self.draft.changed |= changed;
+        Ok(changed)
+    }
+
+    fn assign_input<K: crate::key::IpKey>(
+        &mut self,
+        from: K,
+        to: K,
+        value: u32,
+        input: &mut range_mutation::AssignmentInput<K>,
+    ) -> Result<bool> {
+        if !self.draft.range_tree_private {
+            return Err(Error::Corrupt(
+                "private assignment input has a shared range tree",
+            ));
+        }
+        let mut root = self.draft.meta.range_root;
+        let mut count = self.draft.meta.range_record_count;
+        let changed = range_mutation::assign_private_input(
+            self, &mut root, &mut count, from, to, value, input,
+        )?;
         self.draft.meta.range_root = root;
         self.draft.meta.range_record_count = count;
         self.draft.changed |= changed;

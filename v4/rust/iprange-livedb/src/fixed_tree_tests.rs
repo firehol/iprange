@@ -611,13 +611,68 @@ fn private_local_insert_inspects_and_updates_without_copying_the_leaf() {
     )
     .unwrap();
 
-    assert!(matches!(result, LocalInsert::Inserted));
+    assert!(matches!(result, LocalInsert::Inserted(_)));
     assert!(retired.as_slice().is_empty());
     assert_eq!(store.inspections.get(), 2);
     assert_eq!(store.reads.get(), 0);
     assert_eq!(store.updates, 1);
     assert_eq!(store.writes, 0);
     assert_eq!(lookup(&store, root, 501).unwrap(), Some(7));
+}
+
+#[test]
+fn cached_leaf_insert_accepts_only_a_valid_private_interior_gap() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    for key in [0, 2, 4] {
+        insert::<U32Codec, _>(
+            &mut store,
+            &mut root,
+            &record(key, key),
+            &mut RetiredPages::new(),
+        )
+        .unwrap();
+    }
+    let (_, work) = crate::work::measure(|| {
+        insert_if_cached_interior_gap::<U32Codec, _, _>(
+            &mut store,
+            root,
+            &record(3, 3),
+            &mut AcceptGap,
+        )
+    });
+    assert_eq!(work.tree_lookups, 0);
+    assert_eq!(lookup(&store, root, 3).unwrap(), Some(3));
+    assert_eq!(
+        insert_if_cached_interior_gap::<U32Codec, _, _>(
+            &mut store,
+            root,
+            &record(5, 5),
+            &mut AcceptGap,
+        )
+        .unwrap(),
+        CachedInsert::Miss
+    );
+
+    store.target_txn = 2;
+    assert!(insert_if_cached_interior_gap::<U32Codec, _, _>(
+        &mut store,
+        root,
+        &record(1, 1),
+        &mut AcceptGap,
+    )
+    .is_err());
+    store.target_txn = 1;
+
+    store.pages[root as usize][slotted_page::HEADER_SIZE..slotted_page::HEADER_SIZE + 2]
+        .copy_from_slice(&0u16.to_le_bytes());
+    assert!(insert_if_cached_interior_gap::<U32Codec, _, _>(
+        &mut store,
+        root,
+        &record(1, 1),
+        &mut AcceptGap,
+    )
+    .is_err());
 }
 
 #[test]

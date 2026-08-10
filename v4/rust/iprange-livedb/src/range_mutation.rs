@@ -8,11 +8,16 @@ use crate::range_tree::{self, RangeCodec, Record as Range};
 
 mod assign;
 mod coverage;
+mod locator;
 
-pub(crate) use assign::{assign, assign_private, clear, retire_tree, transform};
+pub(crate) use assign::{
+    assign, assign_private, assign_private_input, clear, retire_tree, transform,
+};
 pub(crate) use coverage::{finish_input_untracked, push_private_untracked, UnionInput};
 #[cfg(test)]
 use coverage::{finish_private, union_private, UnionState};
+pub(crate) use locator::AssignmentInput;
+use locator::{insert_private_input_gap, PrivateInputInsert, UnionAssignmentInput};
 
 pub(crate) trait RangeStore: RetiringStore {
     fn range_record_added(&mut self, value: u32) -> Result<()>;
@@ -100,7 +105,7 @@ fn insert_private_gap<K: IpKey, S: RangeStore>(
         &mut retired,
         &mut gap,
     )?;
-    if matches!(result, fixed_tree::LocalInsert::Inserted) {
+    if matches!(result, fixed_tree::LocalInsert::Inserted(_)) {
         if !retired.as_slice().is_empty() {
             return Err(Error::Corrupt("private range insertion retired a page"));
         }

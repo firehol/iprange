@@ -132,6 +132,7 @@ fn smoke_cases() -> Vec<Case> {
     vec![
         case("direct-replace", 1_000, 0),
         case("direct-replace", 4_000, 0),
+        case("direct-replace-v6", 4_000, 0),
         case("direct-commit", 4_000, 0),
         case("nested-overwrite", 1_000, 0),
         case("nested-overwrite", 4_000, 0),
@@ -144,10 +145,14 @@ fn smoke_cases() -> Vec<Case> {
         case("membership-import", 1_000, 64),
         case("live-membership-lookup", 4_000, 64),
         case("immutable-membership-lookup", 4_000, 64),
+        case("live-membership-random-lookup", 4_000, 64),
+        case("immutable-membership-random-lookup", 4_000, 64),
         case("live-feed-scan", 4_000, 64),
         case("immutable-feed-scan", 4_000, 64),
         case("live-direct-lookup", 4_000, 0),
         case("immutable-direct-lookup", 4_000, 0),
+        case("live-direct-random-lookup", 4_000, 0),
+        case("immutable-direct-random-lookup", 4_000, 0),
         case("live-direct-scan", 4_000, 0),
         case("immutable-direct-scan", 4_000, 0),
         case("live-open", 4_000, 1),
@@ -179,6 +184,7 @@ fn scale_cases() -> Vec<Case> {
         cases.push(case("first-seen-refresh", size, 0));
         cases.push(case("last-seen-refresh", size, 0));
     }
+    cases.push(case("direct-replace-v6", 1_000_000, 0));
     cases.push(case("direct-commit", 1_000_000, 0));
     for size in [10_000, 100_000, 1_000_000] {
         cases.push(case("nested-overwrite", size, 0));
@@ -210,6 +216,14 @@ fn scale_cases() -> Vec<Case> {
     cases.push(case("immutable-feed-scan", 100_000, 421));
     cases.push(case("live-direct-lookup", 100_000, 0));
     cases.push(case("immutable-direct-lookup", 100_000, 0));
+    cases.push(case("live-direct-random-lookup", 100_000, 0));
+    cases.push(case("immutable-direct-random-lookup", 100_000, 0));
+    cases.push(case("live-membership-random-lookup", 100_000, 421));
+    cases.push(case("immutable-membership-random-lookup", 100_000, 421));
+    cases.push(case("live-direct-random-lookup", 1_000_000, 0));
+    cases.push(case("immutable-direct-random-lookup", 1_000_000, 0));
+    cases.push(case("live-membership-random-lookup", 1_000_000, 421));
+    cases.push(case("immutable-membership-random-lookup", 1_000_000, 421));
     cases.push(case("live-direct-scan", 100_000, 0));
     cases.push(case("immutable-direct-scan", 100_000, 0));
     cases.push(case("live-open", 100_000, 1));
@@ -249,8 +263,10 @@ fn ci_cases() -> Vec<Case> {
         case("feed-first-ascending", 1_000_000, 0),
         case("feed-first-random", 1_000_000, 0),
         case("live-direct-lookup", 100_000, 0),
+        case("live-direct-random-lookup", 100_000, 0),
         case("live-direct-scan", 100_000, 0),
         case("live-membership-lookup", 100_000, 421),
+        case("live-membership-random-lookup", 100_000, 421),
         case("live-feed-scan", 100_000, 421),
         case("membership-cardinalities", 1_000_000, 64),
         case("live-validation", 1_000_000, 0),

@@ -16,8 +16,25 @@ use super::{private_path_select, Codec, LeafSelector, Path, PrivateLeaf, Retired
 // inserts. General insertion has no positioned return payload.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum LocalInsert<R> {
-    Inserted,
+    Inserted(LocalInserted),
     General(LocalReject<R>),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalInserted {
+    page_number: u32,
+}
+
+impl LocalInserted {
+    pub(crate) const fn page_number(self) -> u32 {
+        self.page_number
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CachedInsert {
+    Inserted,
+    Miss,
 }
 
 pub(crate) enum EdgeInsert<K, R> {
@@ -159,8 +176,9 @@ where
 {
     require_leaf::<C>(leaf_cell)?;
     if *root == 0 {
-        *root = new_leaf::<C, S>(store, leaf_cell)?;
-        return Ok(LocalInsert::Inserted);
+        let page_number = new_leaf::<C, S>(store, leaf_cell)?;
+        *root = page_number;
+        return Ok(LocalInsert::Inserted(LocalInserted { page_number }));
     }
 
     let key = C::read_key(leaf_cell, 0)?;
@@ -193,8 +211,55 @@ where
         index,
         exists: false,
     };
-    insert_gap_target::<C, S>(store, root, leaf_cell, target, key, fits)?;
-    Ok(LocalInsert::Inserted)
+    let page_number = target.page_number;
+    let positioned = insert_gap_target::<C, S>(store, root, leaf_cell, target, key, fits)?;
+    Ok(LocalInsert::Inserted(LocalInserted {
+        page_number: positioned.map_or(page_number, |position| position.page_number),
+    }))
+}
+
+pub(crate) fn insert_if_cached_interior_gap<C, S, G>(
+    store: &mut S,
+    page_number: u32,
+    leaf_cell: &[u8],
+    gap: &mut G,
+) -> Result<CachedInsert>
+where
+    C: Codec,
+    S: Store,
+    G: LocalGap<C>,
+{
+    require_leaf::<C>(leaf_cell)?;
+    let key = C::read_key(leaf_cell, 0)?;
+    let selected = store.inspect_page(page_number, |page| {
+        let header = parse::<C, _>(page, store.target_txn(), Some(0))?;
+        if crate::page_header::born_txn(page) != store.target_txn() {
+            return Err(Error::Corrupt("leaf locator selected a committed page"));
+        }
+        let (index, exists) = lower_bound::<C, _>(page, &header, key, true)?;
+        if exists || index == 0 || index == header.item_count {
+            return Ok(None);
+        }
+        let mut selector = GapSelector::<C, G>::new(key, leaf_cell.len(), gap);
+        match selector.select_at(page, &header, &Path::new(), index, false)? {
+            GapDecision::Insert { fits: true, .. } => Ok(Some((header, index))),
+            GapDecision::Insert { fits: false, .. } | GapDecision::General { .. } => Ok(None),
+        }
+    })?;
+    let Some((header, index)) = selected else {
+        return Ok(CachedInsert::Miss);
+    };
+    apply_leaf_edit::<C, S>(
+        store,
+        page_number,
+        &header,
+        Edit {
+            index,
+            replace: false,
+            cell: leaf_cell,
+        },
+    )?;
+    Ok(CachedInsert::Inserted)
 }
 
 pub(crate) fn insert_rejected_gap<C: Codec, S: Store, R>(

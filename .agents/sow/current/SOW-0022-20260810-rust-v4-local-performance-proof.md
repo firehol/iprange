@@ -2,10 +2,11 @@
 
 ## Status
 
-Status: completed
+Status: in-progress
 
-Sub-state: implementation, optimization, repeated performance/architecture
-audit, portability proof, documentation, and lifecycle gates are complete.
+Sub-state: reopened after a fresh random-access audit found unmeasured reader
+work and actionable writer navigation cost; repair and repeated audit are in
+progress.
 
 ## Requirements
 
@@ -853,4 +854,343 @@ SOW does not make that decision or start Go.
 
 ## Regression Log
 
+## Regression - 2026-08-10
+
+### What broke
+
+- The completed audit classified one root-to-leaf descent per random input as
+  required work and declared no actionable performance finding. A fresh exact
+  timed-region profile shows that classification was too strong: fixed-page
+  search, mapped page inspection, and private-path selection account for about
+  74% of one-million-range random direct replacement. The B+tree remains the
+  sole authority, but transaction-private navigation hints may safely avoid
+  repeated upper-level descent when a candidate private leaf proves a local
+  interior insertion.
+- The committed point benchmarks enumerate addresses in ascending order at
+  `v4/rust/iprange-livedb/benches/update_ipsets/scenarios.rs:144-156`. They prove
+  sequential point throughput, not random point throughput. The previous
+  reader conclusion therefore omitted a material access shape.
+- Ordered empty-tree construction still inserts canonical records through the
+  incremental edge editor even though the existing authoritative
+  `range_bulk::Builder` can pack an already proven ascending prefix directly
+  into final mapped pages.
+
+### Evidence and why prior validation missed it
+
+- Fresh one-million random direct profile: fixed-tree lower-bound search 49.38%,
+  `DraftStore::inspect_page` 14.32%, and `private_path_select` 10.23%; leaf
+  insertion is about 0.72% and whole-operation checksum sealing about 0.14%.
+- Fresh hardware counters report about 1.50 billion cycles, 2.89 billion
+  instructions, 508 million branches, and 11.1 million branch misses for one
+  million random direct inputs.
+- The clean pre-change seven-sample medians on the pinned local performance core
+  are 311.873 ms for random direct replacement, 113.835 ms for first-feed
+  ascending, 136.800 ms for first-feed descending, 352.205 ms for first-feed
+  random disjoint, and 289.209 ms for first-feed random overlap.
+- The prior audit profiled random mutation but treated repeated tree descent as
+  inherently required, and its point generator happened to be ordered. It did
+  not test a bounded untrusted leaf-navigation accelerator or a truly random
+  point-query order.
+
+### Approved minimal-complete repair
+
+1. Reuse the existing mapped ordered range builder for a demonstrably ascending
+   canonical prefix. If later input becomes unordered or overlapping, finalize
+   that prefix in the same private destination and continue through the one
+   authoritative mutation path. No input is reordered, buffered as a feed, or
+   written to scratch.
+2. Add a bounded, operation-private scalar leaf locator for private exact
+   workflows. It stores no page bytes and is not persistent or authoritative.
+   A hit may edit only a currently mapped private leaf after proving that the
+   key is strictly inside that leaf, both adjacent records are local, the gap is
+   valid, and the edit fits without a split or first-key change. Every stale,
+   ambiguous, boundary, overlap, split, or full-leaf case falls back to the
+   canonical root-to-leaf path. Correctness must be identical with the locator
+   disabled.
+3. Add permanent random-order direct and membership point benchmarks while
+   retaining the existing sequential cases. Add test-only locator hit, miss,
+   fallback, and necessary-work counters; they must compile out of release
+   binaries.
+4. Measure each change with interleaved repeated A/B runs. Retain only simple
+   variants with stable material gains; delete unsuccessful prototypes. Repeat
+   profiles, correctness/resource/architecture gates, synthetic feed shapes,
+   and sanitized real-feed replay after the final change.
+
+### Constraints and risk
+
+- No on-disk byte, public API, C ABI, durability point, recovery behavior,
+  format version, or Go code may change.
+- The locator is a cache of scalar navigation facts, not a cache of mapped
+  content. The mmap remains the only database-content cache, and no complete
+  page may exist outside it.
+- The locator's retained heap is capped by the existing transaction heap budget
+  and by a small implementation ceiling; insufficient budget disables the
+  optimization without changing behavior. It is released before later workflow
+  stages can retain other heap state.
+- The largest correctness risk is allowing a stale leaf hint to become storage
+  authority. The restricted fast path, full local proof, and mandatory fallback
+  prevent that. Corruption tests must prove malformed mapped content is not
+  hidden by a cache miss.
+- The ordered-builder risk is changing arrival-order overwrite semantics. It is
+  allowed only while the consumed prefix is already canonical and strictly
+  ascending; transition to general mutation applies every later input in its
+  original order.
+
+### Artifact and validation plan
+
+- Production: shared low-level range/fixed-tree code only; public workflows may
+  retain opaque operation state but may not inspect pages or hints.
+- Benchmarks: add random point cases and refresh the accepted local baseline only
+  after the repeated final audit is clean. CI limits remain deliberately loose.
+- Tests: model/property tests for IPv4/IPv6, ordered-to-general transition,
+  splits, first-key changes, overlaps, stale hints, tiny/zero heap budgets,
+  cancellation/abort, and exact final ranges; necessary-work assertions for
+  avoided descents and mandatory fallbacks.
+- Gates: full project-v4-rust correctness, architecture, mmap, source graph,
+  MSRV, sanitizer, Miri codec, docs, static/same-failure, and local performance
+  workflow. Native cross-platform reruns are required only if shared source
+  changes survive A/B and before re-completion.
+- Specs and public docs: the contract is unchanged. Update performance evidence
+  and the runtime project skill if the optimized workflow or benchmark commands
+  change; otherwise record why each artifact is unaffected at closure.
+- Sensitive data: real-feed evidence remains aggregate and sanitized; no names,
+  paths, literal ranges, credentials, operational configuration, personal data,
+  private endpoints, or proprietary data enter durable artifacts.
+
+### Decisions
+
+1. The user approved all recommended repairs after the locator explanation:
+   ordered bulk construction, the bounded untrusted transaction-private leaf
+   locator with mandatory fallback, and permanent random-reader coverage.
+2. The B+tree remains the sole correctness authority. A locator miss or disabled
+   locator must execute the exact canonical path and produce identical bytes and
+   semantics permitted by the format.
+3. This regression reopens SOW-0022. It is not a new feature SOW and does not
+   authorize signing or the Go port.
+4. A successful ordered empty-map build may carry its exact interval
+   cardinality into the workflow report. This removes the otherwise redundant
+   post-build full-tree scan; unordered or late-disordered input retains the
+   authoritative comparison scan. The optimization must survive repeated A/B
+   measurement and exact-report tests or be removed.
+
+## Regression Final Audit - 2026-08-10
+
+### TL;DR
+
+The repeated local audit is clean after the regression repair. The final
+implementation preserves one physical-format authority, adds no page cache or
+second mutation algorithm, and removes substantial avoidable work from ordered
+construction and random IPv4 mutation. The 79-case local matrix, 14-case CI
+matrix, exact profiles, work counters, static analysis, clone review, and the
+22.6-million-input public replay expose no remaining actionable local finding.
+
+This is a local pass, not SOW closure. Exact final-source native Windows GNU,
+macOS ARM64, and FreeBSD matrices remain required after the implementation
+milestone is pushed.
+
+### Verdict
+
+Local pass. No actionable correctness, performance, ownership, duplication,
+resource, or maintainability finding remains in the audited source and
+workloads.
+
+The claim is empirical and structural, not a mathematical claim that no future
+hardware or workload can reveal another improvement. Native-platform evidence
+is still pending and keeps this SOW in progress.
+
+### Current performance
+
+The preserved baseline and final repeat use a generic optimized Rust 1.91.1
+build on x86_64 Linux with an Intel i9-12900K, one untimed warm-up, and five
+isolated samples per case. All 79 final-repeat cases produced identical
+semantic results and remained within the loose disaster limits.
+
+| Operation | Accepted median | Final-repeat median |
+| --- | ---: | ---: |
+| direct replacement, 1M IPv4 ranges | 0.262 s | 0.260 s |
+| direct replacement, 1M IPv6 ranges | 0.511 s | 0.501 s |
+| first-seen refresh, 1M ranges | 0.337 s | 0.337 s |
+| last-seen refresh, 1M ranges | 0.343 s | 0.350 s |
+| exact feed replacement, 1M ranges / 421 feeds | 0.326 s | 0.308 s |
+| membership import, 1M ranges / 421 feeds | 0.0414 s | 0.0407 s |
+| compact snapshot, 1M ranges | 0.0427 s | 0.0456 s |
+| complete publisher workflow | 1.217 s | 1.102 s |
+
+| One-million-range feed input | First feed accepted median | Second feed accepted median | Final ranges |
+| --- | ---: | ---: | ---: |
+| ascending disjoint | 0.0368 s | 0.0683 s | 1,000,000 |
+| descending disjoint | 0.129 s | 0.155 s | 1,000,000 |
+| deterministic random disjoint | 0.361 s | 0.382 s | 1,000,000 |
+| deterministic random overlap chain | 0.275 s | 0.278 s | 1 |
+
+The true-random reader cases use a one-million-range tree and one million
+deterministically shuffled point queries. Accepted medians are 0.223 s live and
+0.202 s immutable for direct lookup, and 0.307 s live and 0.234 s immutable for
+membership lookup with 421 feeds. Ordered scans emit one million records in
+6-8 ms. Readers therefore remain materially cheaper than equivalent writers.
+
+Final seven-run component-floor medians are 0.327 ms for a one-million-record
+mapped scan, 24.5 ms for one million fixed-page searches, 4.41 ms for 64 MiB of
+mapped page construction, 5.57 ms for CRC32C, 80.3 ms for SHA-512, and 23.5 ms
+for mapped dirty/flush/sync.
+
+The largest authorized public input was repeated three times on the final
+source. It normalizes 22,637,111 inputs to 3,094,652 ranges in a 1.079-second
+median including parsing, creation, commit, and close. Separate explicit full
+validation takes 27.2 ms median.
+
+### Ranked findings
+
 None.
+
+Exact final-source native platform execution remains an uncompleted acceptance
+gate, not a discovered implementation defect.
+
+### The two-level architecture
+
+- Public Rust and C APIs still own typed inputs, feed names, workflow choice,
+  cancellation, reports, and commit/abort sequencing only.
+- `WriterCore` over `DraftStore` remains the sole healthy mapped mutation and
+  transaction boundary. `ReaderCore` remains the sole healthy selected-
+  generation reader boundary.
+- `range_mutation` owns normalization and arrival-order semantics once;
+  `fixed_tree` owns mapped search, COW paths, local edits, splits, deletion, and
+  fences once; `slotted_page` owns physical record movement once.
+- The new locator is private low-level state inside `range_mutation`. Higher-
+  level workflows cannot inspect hints, roots, pages, or mappings.
+- Validation and recovery remain separate untrusted policies over shared codecs
+  and mapped builders. They do not enter healthy access paths.
+- The architecture gate and release symbol/string inspection pass. Optimized
+  binaries contain no test work-counter symbol, field string, storage, or call.
+
+### Physical-format authority
+
+No on-disk byte, format version, public Rust API, C ABI, durability point,
+recovery rule, or supported-platform boundary changed.
+
+The ordered fast path reuses the authoritative mapped `range_bulk::Builder` at
+final offsets. The locator retains only bounded scalar `{first key, page
+number}` hints. Every candidate is rechecked against a currently mapped private
+leaf and may edit only a fully proved strict interior gap; committed, stale,
+boundary, overlap, split, full-leaf, or ambiguous cases fall back to the
+canonical root-to-leaf operation. No complete page, mapped byte, or ordinary
+reference into a remappable region enters the locator.
+
+Page checksums remain commit/final-output work. Ordinary ingestion performs no
+implicit validation, external sort, scratch creation, persistent-content I/O,
+or off-mapping page construction.
+
+### Where the production lines are
+
+The exact production inventory contains 315 files and 90,225 newline-counted
+lines under the two Rust library `src/` trees, excluding dedicated tests.
+Lizard reports 81,840 code lines across 4,871 functions, with averages of 13.9
+code lines and cyclomatic complexity 3.5. The largest function remains a
+cohesive 191-line recovery state machine. Forty-nine files exceed the
+directional 500-line target; the largest has 950 lines and none reaches 1,000.
+
+The repair's two initially oversized responsibilities were split by purpose:
+`assign.rs` is 424 physical lines, `coverage.rs` is 492,
+`coverage/input.rs` owns streamed input and ordered-prefix construction, and
+`locator.rs` owns bounded navigation hints. The former 82-line/CCN-24 locator
+insertion is now three single-purpose operations; the largest has NLOC 45 and
+CCN 12. Removing forced inlining from `push_ordered` after the module split
+regressed ascending construction from about 37 ms to about 150 ms. Restoring
+the measured annotation returned it to 31-35 ms, so that one annotation is
+retained as performance evidence rather than style.
+
+Exact clone detection at 15 lines/100 tokens finds 11 groups totaling 237 lines
+or 0.26%. Manual review classifies them as C maintenance wrappers, typed
+workflow wrappers, reader facades, and separate direct/membership recovery
+orchestration. None duplicates layout, traversal, mutation, allocation,
+retirement, sealing, or page construction.
+
+Codacy-compatible analysis reports 503 Lizard review signals, 733 Semgrep
+matches, and zero Trivy findings. The Semgrep result is 725 generic unsafe-code
+matches plus eight unchanged path/process warnings; its eight parser errors are
+tool limitations on accepted Rust syntax. Manual review found no actionable
+issue. The implementation remains far above the directional 5,000-line goal;
+this audit makes the narrower defensible claim that it found no concrete
+removable mechanism or duplicated physical operation.
+
+### Retention
+
+First-seen and last-seen remain typed special workflows over the same direct
+range authority. The caller never owns arbitrary internal timestamp values or
+membership combinations. Ordered input uses the shared mapped prefix builder;
+late disorder continues through the authoritative arrival-order assignment
+path. Full-delta and timestamp semantics are unchanged and model-tested.
+
+### Recovery
+
+Recovery is unchanged. It remains explicit, worker-contained, bounded, and
+best-effort-capable for damaged mappings. Its external sort and scratch support
+are recovery-only and never enter ordinary ingestion. It reuses canonical
+codecs and mapped output construction without becoming a second healthy-file
+authority.
+
+### Implementation result
+
+- A proven ascending canonical prefix is packed directly into final mapped
+  pages. The second pending range establishes order; disorder finalizes that
+  prefix in the same destination and applies every later input in arrival
+  order through the canonical general path.
+- Successful ordered empty-map feed creation carries exact `Cardinality129`
+  into its report, removing one redundant post-build comparison scan. General
+  input retains the authoritative comparison.
+- The IPv4 locator is capped at 256 KiB. Direct assignment enables it once;
+  feed union allocates it lazily only after general input. Eight consecutive
+  local overlap conflicts release it, avoiding overhead on overwrite runs.
+  IPv6 leaves did not benefit in controlled tests, so IPv6 retains the normal
+  path without locator allocation.
+- Random feed construction falls from about 3.04 billion instructions with the
+  locator disabled to about 2.36 billion enabled, roughly 22% less. Overlap and
+  nested overwrite instructions remain flat because the adaptive policy exits.
+- Permanent tests compare enabled and disabled results across random disjoint
+  inserts, splits, and later overlaps; reject committed-page hints; cover the
+  ordered-to-general transition; and assert necessary feed work.
+- Permanent benchmarks now separate repeated sequential point queries from
+  true one-million-tree random queries for both direct and membership readers.
+
+Rejected prototypes were deleted: following an incomplete hint was incorrect
+and a property test caught record loss; teaching split results to the locator
+was negligible; routing feed coverage through direct assignment regressed to
+about 1.6 seconds; following-key variants added code without stable gain; and
+the unannotated module split caused the measured ordered regression above.
+
+The final random-feed profile attributes 41.7% to required fixed-page lower-
+bound search. Locator learning and cached insertion together are below 5%; the
+remaining dominant stacks are canonical fallback, mapped inspection, and
+required edit work. No dominant cost is unclassified.
+
+### Acceptance gates
+
+Passed on exact local source:
+
+- 79-case local and 14-case CI benchmark matrices, zero limit failures;
+- seven-repeat component floors and three-repeat largest public-feed replay;
+- allocation, descriptor, artifact-residue, result-shape, and explicit-
+  validation checks;
+- enabled/disabled differential, transition, corruption, and necessary-work
+  tests;
+- exact production static analysis, 11-clone manual review, file/function
+  complexity review, same-failure searches, and release counter inspection;
+- no dead-code suppression, premature page seal, persistent-content I/O,
+  off-mapping complete page, healthy-path validation, ordinary-ingestion sort,
+  high-level physical bypass, or release work counter.
+
+The organized final source also passes both complete current-Rust feature
+matrices, formatting, warnings-denied Clippy and rustdoc, architecture, mmap
+source and runtime enforcement, the four-target source graph, the complete
+Rust 1.74.1 matrix, all ten s390x Miri codec vectors, and AddressSanitizer with
+leak detection for 397 active engine tests and 19 C-boundary tests. The exact
+version-matched worker was built beside the tests with the same sanitizer
+instrumentation.
+
+Pending before completion:
+
+- push the validated implementation milestone;
+- run both exact feature matrices natively on Windows GNU, macOS ARM64, and
+  FreeBSD from that pushed commit;
+- update final validation evidence, complete and move this SOW, then commit and
+  push the lifecycle closure.

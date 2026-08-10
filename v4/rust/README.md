@@ -37,19 +37,18 @@ separate persistent concerns with separate owners.
 [`check-architecture.sh`](check-architecture.sh) enforces those dependency
 directions. The final 2026-08-10 inventory counts tracked implementation files
 under the two library `src/` trees while excluding dedicated test modules. It
-contains 313 files and 89,579 newline-counted source lines; Lizard reports
-81,259 code lines across 4,838 functions. Functions average 13.9 code lines and
+contains 315 files and 90,225 newline-counted source lines; Lizard reports
+81,840 code lines across 4,871 functions. Functions average 13.9 code lines and
 cyclomatic complexity 3.5. The largest is a 191-line recovery-attempt state
-machine. Fifty files exceed the directional 500-line target, while the largest
-file has 950 lines and no file reaches 1,000.
+machine. Forty-nine files exceed the directional 500-line target, while the
+largest file has 950 lines and no file reaches 1,000.
 
-At a strict 15-line/100-token threshold, exact clone detection finds 18 small
-shapes totaling 352 lines (0.39%). They are frozen C-report forms, maintenance,
-typestate, and typed-family wrappers, source adapters, output error plumbing,
-lifecycle-state wrappers, publication setup, and separate direct/membership recovery
-policies—not duplicate persistent-format operations. These measurements do not
-prove every line is intrinsically required; they make the remaining size and
-review boundary explicit.
+At a 15-line/100-token threshold, exact clone detection finds 11 small shapes
+totaling 237 lines (0.26%). They are frozen C maintenance forms, typed workflow
+wrappers, reader facades, and separate direct/membership recovery policies—not
+duplicate persistent-format operations. These measurements do not prove every
+line is intrinsically required; they make the remaining size and review
+boundary explicit.
 
 ## Database model
 
@@ -232,47 +231,49 @@ plus an absolute noise allowance, so it is a disaster gate rather than the
 performance acceptance authority.
 
 The preserved 2026-08-10 baseline used a generic optimized build with Rust
-1.91.1 on x86_64 Linux and an Intel i9-12900K. Each row below is five samples;
-the range is minimum to maximum.
+1.91.1 on x86_64 Linux and an Intel i9-12900K. The accepted baseline and the
+independent final repeat both use one warm-up and five isolated samples. All 79
+final-repeat cases stayed within the deliberately loose limits.
 
-| Scenario | Work | Median | Range |
+| Scenario | Work | Accepted median | Final-repeat median |
 |---|---:|---:|---:|
-| Direct replacement | 1,000,000 ranges | 0.395 s | 0.387-0.445 s |
-| First-seen refresh | 1,000,000 ranges | 0.405 s | 0.395-0.846 s |
-| Last-seen refresh | 1,000,000 ranges | 0.437 s | 0.422-0.517 s |
-| Nested arrival-order overwrite | 1,000,000 ranges | 0.297 s | 0.279-0.365 s |
-| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.403 s | 0.380-0.416 s |
-| Membership import, 421 feeds | 1,000,000 ranges | 0.0450 s | 0.0423-0.0507 s |
-| Compact snapshot | 1,000,000 ranges | 0.0557 s | 0.0494-0.0786 s |
-| Seven-window history projection | 1,000,000 ranges | 0.0864 s | 0.0768-0.129 s |
-| Point-match name enumeration | 4,000,000 names | 0.660 s | 0.643-0.667 s |
-| Feed cardinalities | 1,000,000 ranges, 64 feeds | 0.0336 s | 0.0299-0.0642 s |
-| Direct-provider join | 1,000,000 ranges, 421 feeds | 0.159 s | 0.144-0.300 s |
-| Membership-provider join | 1,000,000 ranges, 421 feeds | 0.115 s | 0.108-0.131 s |
-| Global algebra count | 2,000,000 inputs, 421 feeds | 0.163 s | 0.156-0.200 s |
-| Preserve-feed algebra publication | 2,000,000 inputs | 0.228 s | 0.223-0.252 s |
-| Complete publisher-shaped workflow | 13,600,000 work units | 1.439 s | 1.344-1.929 s |
+| Direct replacement | 1,000,000 ranges | 0.262 s | 0.260 s |
+| First-seen refresh | 1,000,000 ranges | 0.337 s | 0.337 s |
+| Last-seen refresh | 1,000,000 ranges | 0.343 s | 0.350 s |
+| IPv6 direct replacement | 1,000,000 ranges | 0.511 s | 0.501 s |
+| Nested arrival-order overwrite | 1,000,000 ranges | 0.315 s | 0.292 s |
+| Exact feed replacement, 421 feeds | 1,000,000 ranges | 0.326 s | 0.308 s |
+| Membership import, 421 feeds | 1,000,000 ranges | 0.0414 s | 0.0407 s |
+| Compact snapshot | 1,000,000 ranges | 0.0427 s | 0.0456 s |
+| Seven-window history projection | 1,000,000 ranges | 0.0697 s | 0.0755 s |
+| Point-match name enumeration | 4,000,000 names | 0.710 s | 0.622 s |
+| Feed cardinalities | 1,000,000 ranges, 64 feeds | 0.0292 s | 0.0291 s |
+| Direct-provider join | 1,000,000 ranges, 421 feeds | 0.0975 s | 0.103 s |
+| Membership-provider join | 1,000,000 ranges, 421 feeds | 0.0989 s | 0.104 s |
+| Global algebra count | 2,000,000 inputs, 421 feeds | 0.131 s | 0.130 s |
+| Preserve-feed algebra publication | 2,000,000 inputs | 0.252 s | 0.222 s |
+| Complete publisher-shaped workflow | 13,600,000 work units | 1.217 s | 1.102 s |
 
 The complete workflow combines construction, both timestamp refreshes,
 central/history updates, aggregation, both provider joins, algebra, and final
 enumeration. It is not one primitive's latency.
 
-Mapped readers are materially faster than writers. Point-query cases perform
-one million independent root-to-leaf lookups; scan cases enumerate one million
-ranges with one bounded cursor.
+Mapped readers are materially faster than writers. The random point cases
+build a one-million-range tree and issue one million deterministically shuffled
+queries. The scan cases enumerate one million records through bounded cursors.
 
-| Reader operation | Live median | Immutable median |
+| Reader operation | Live accepted median | Immutable accepted median |
 |---|---:|---:|
-| Direct point lookup | 0.0653 s | 0.0549 s |
-| Membership point lookup, 421 feeds | 0.0913 s | 0.0829 s |
-| Direct ordered scan | 0.00697 s | 0.00646 s |
-| Named-feed ordered scan, 421 feeds | 0.00700 s | 0.0106 s |
+| Random direct point lookup | 0.223 s | 0.202 s |
+| Random membership point lookup, 421 feeds | 0.307 s | 0.234 s |
+| Direct ordered scan | 0.00673 s | 0.00627 s |
+| Named-feed ordered scan, 421 feeds | 0.00808 s | 0.00795 s |
 
 Explicit whole-file validation is separate from open and normal access. One
-million direct ranges validate in 0.0126 s, one million membership ranges with
-421 feeds in 0.0168 s, and the equivalent immutable direct snapshot in
-0.0115 s. A commit that seals one million already-built direct ranges takes
-0.00728 s median; page checksums are commit work, not ingestion work.
+million direct ranges validate in 0.0103 s, one million membership ranges with
+421 feeds in 0.0145 s, and the equivalent immutable direct snapshot in
+0.00823 s. A commit that seals one million already-built direct ranges takes
+0.00730 s median; page checksums are commit work, not ingestion work.
 
 The feed-construction matrix also measures the input shapes that exercise the
 normalizer's edge and arbitrary-location paths. A first-feed timer includes
@@ -282,33 +283,35 @@ outside the timer, then reopens the same file and measures creation of the
 second feed. Result enumeration and explicit validation are outside both
 timers.
 
-| One-million-range input | First feed median | First range | Second feed median | Second range | Final ranges |
-|---|---:|---:|---:|---:|---:|
-| Ascending disjoint | 0.135 s | 0.115-0.186 s | 0.155 s | 0.147-0.218 s | 1,000,000 |
-| Descending disjoint | 0.134 s | 0.130-0.138 s | 0.186 s | 0.162-0.192 s | 1,000,000 |
-| Deterministic random disjoint | 0.470 s | 0.431-0.483 s | 0.479 s | 0.449-0.696 s | 1,000,000 |
-| Deterministic random overlap chain | 0.301 s | 0.283-0.329 s | 0.285 s | 0.272-0.370 s | 1 |
+| One-million-range input | First feed accepted median | Second feed accepted median | Final ranges |
+|---|---:|---:|---:|
+| Ascending disjoint | 0.0368 s | 0.0683 s | 1,000,000 |
+| Descending disjoint | 0.129 s | 0.155 s | 1,000,000 |
+| Deterministic random disjoint | 0.361 s | 0.382 s | 1,000,000 |
+| Deterministic random overlap chain | 0.275 s | 0.278 s | 1 |
 
 The overlap chain deterministically permutes intervals whose neighbors overlap
 by half; it is one defined stress shape, not a claim about every random overlap
-distribution. First-feed cases use 39 fixed setup allocations totaling
-1,096-1,148 bytes; second-feed cases use 21 totaling 450-466 bytes. All eight
-cases keep file descriptors stable, leave no private artifact, and build pages
-directly in the mapped destination without a sorting file.
+distribution. Ordered first-feed cases use 39 fixed setup allocations totaling
+1,135-1,148 bytes; ordered second-feed cases use 21 totaling 462-466 bytes.
+Random and overlap cases add one lazy, operation-private scalar locator capped
+at 256 KiB. It stores only first keys and page numbers, never mapped content.
+All eight cases keep file descriptors stable, leave no private artifact, and
+build pages directly in the mapped destination without a sorting file.
 
 All scale cases keep file descriptors stable, leave zero private artifacts,
 and explicitly validate every output after timing. Direct, first-seen,
 last-seen, nested, feed-replacement, import, and snapshot construction make
-21/21/21/21/22/20/31 fixed setup allocations totaling
-406/422/418/406/436/474/939 bytes. Those counts are constant rather than per
-range. Timed lookup and scan paths allocate nothing.
+22/22/22/22/23/20/31 fixed setup allocations totaling about
+263/263/263/263/263/0.5/0.9 KiB. Those counts and bounded bytes are constant
+rather than per range. Timed lookup and scan paths allocate nothing.
 
-The component kernels measure physical floors without v4 semantics. Seven-run
-medians were 0.622 ms to scan one million mapped 8-byte records, 22.4 ms for
-one million binary searches in a 512-key mapped page, 5.28 ms to rebuild 64
-MiB of mapped pages, 7.49 ms to CRC32C 64 MiB, 83.4 ms to SHA-512 64 MiB, and
-35.4 ms to dirty, flush, and sync 64 MiB. They classify profile costs; no full
-SDK operation is expected to equal a component floor.
+The component kernels measure physical floors without v4 semantics. Final
+seven-run medians were 0.327 ms to scan one million mapped 8-byte records, 24.5
+ms for one million binary searches in a 512-key mapped page, 4.41 ms to build
+64 MiB of mapped pages, 5.57 ms to CRC32C 64 MiB, 80.3 ms to SHA-512 64 MiB,
+and 23.5 ms to dirty, flush, and sync 64 MiB. They classify profile costs; no
+full SDK operation is expected to equal a component floor.
 
 A read-only inventory of the authorized public update-ipsets corpus found
 1,457 feed artifacts and about 48.2 million source lines. A separate mapped
@@ -316,8 +319,8 @@ source harness included parsing, creation, commit, and close. The median-ranked
 shape had 168 parsed records, normalized to 148 ranges, and completed in about
 1.53 ms. The p99-ranked shape had 318,373 records, normalized to 261,610, and
 completed in about 47.8 ms. The largest shape had 22,637,111 records,
-normalized to 3,094,652, and completed in about 1.20 s; separate validation
-took about 34.8 ms. Its profile spent about 62% in the harness parser and
+normalized to 3,094,652, and completed in a 1.079 s three-run median; separate
+validation took 27.2 ms. Its profile spent about 62% in the harness parser and
 batching, while no SDK function reached 5%, so the SDK was not the limiting
 component of that replay. Names, paths, and literal ranges are intentionally
 not recorded.

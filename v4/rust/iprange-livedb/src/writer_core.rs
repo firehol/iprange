@@ -94,6 +94,10 @@ impl WriterCore {
         self.base.meta.into()
     }
 
+    pub(crate) fn max_heap_bytes(&self) -> u64 {
+        self.budget.max_heap_bytes
+    }
+
     pub(crate) fn current_info(&self) -> WriterInfo {
         self.current_meta().into()
     }

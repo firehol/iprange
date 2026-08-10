@@ -1,10 +1,15 @@
-use iprange_livedb::{AddressRange, DirectRange, Ipv4Key, RangeSource};
+use iprange_livedb::{AddressRange, DirectRange, Ipv4Key, Ipv6Key, RangeSource};
 
 const BATCH_CAPACITY: usize = 1024;
 const DISPERSED_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 const EMPTY_DIRECT: DirectRange<Ipv4Key> = DirectRange {
     from: Ipv4Key(0),
     to: Ipv4Key(0),
+    value: 0,
+};
+const EMPTY_DIRECT_V6: DirectRange<Ipv6Key> = DirectRange {
+    from: Ipv6Key::MIN,
+    to: Ipv6Key::MIN,
     value: 0,
 };
 const EMPTY_ADDRESS: AddressRange<Ipv4Key> = AddressRange {
@@ -74,6 +79,45 @@ impl RangeSource<DirectRange<Ipv4Key>> for DirectSource {
                     to: Ipv4Key(end - index as u32),
                     value: index as u32 % 2 + 1,
                 },
+            };
+        }
+        self.next += length;
+        Ok(Some(&self.batch[..length]))
+    }
+}
+
+pub(crate) struct DirectSourceV6 {
+    count: usize,
+    next: usize,
+    permutation: Permutation,
+    batch: [DirectRange<Ipv6Key>; BATCH_CAPACITY],
+}
+
+impl DirectSourceV6 {
+    pub(crate) fn unordered(count: usize) -> Result<Self, String> {
+        require_address_space(count, 0)?;
+        Ok(Self {
+            count,
+            next: 0,
+            permutation: Permutation::new(count, DISPERSED_SEED),
+            batch: [EMPTY_DIRECT_V6; BATCH_CAPACITY],
+        })
+    }
+}
+
+impl RangeSource<DirectRange<Ipv6Key>> for DirectSourceV6 {
+    fn next_batch(&mut self) -> iprange_livedb::Result<Option<&[DirectRange<Ipv6Key>]>> {
+        if self.next == self.count {
+            return Ok(None);
+        }
+        let length = (self.count - self.next).min(BATCH_CAPACITY);
+        for offset in 0..length {
+            let index = self.permutation.at(self.next + offset);
+            let start = index as u128 * 4;
+            self.batch[offset] = DirectRange {
+                from: Ipv6Key::from_u128(start),
+                to: Ipv6Key::from_u128(start + 1),
+                value: index as u32 % 251 + 1,
             };
         }
         self.next += length;

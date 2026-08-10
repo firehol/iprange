@@ -7,8 +7,9 @@ use iprange_livedb::{
 use crate::measure;
 use crate::model::{transaction_budget, TestDatabase};
 use crate::scenarios::{
-    close_reader, close_writer, count_cursor, count_points, immutable_snapshot, reader_work,
-    require_committed, require_count, result, ScenarioResult,
+    close_reader, close_writer, count_cursor, count_points, count_random_points,
+    immutable_snapshot, random_points, reader_work, require_committed, require_count, result,
+    ScenarioResult,
 };
 use crate::source::{AddressSource, FeedShape, FeedShapeSource};
 
@@ -186,6 +187,70 @@ pub(super) fn immutable_lookup(size: usize, feeds: usize) -> Result<ScenarioResu
     drop(reader);
     result(
         "immutable-membership-lookup",
+        size,
+        feeds,
+        work_units,
+        &database,
+        measured,
+        &snapshot,
+    )
+}
+
+pub(super) fn live_random_lookup(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let database = populated("live-membership-random-lookup", size, feeds)?;
+    let points = random_points(size)?;
+    let mut reader =
+        LiveReader::open(database.main(), &CancellationToken::new()).map_err(display)?;
+    let (target, repetitions, work_units) =
+        membership_reader_work(size, feeds, |name| reader.lookup_feed(name))?;
+    let (operation, measured) = measure::operation(|| {
+        count_random_points(&points, repetitions, |address| {
+            membership_contains(reader.lookup_membership_v4(address), target)
+        })
+    });
+    let hits = operation?;
+    require_count(
+        "live random membership lookup",
+        hits,
+        work_units,
+        "addresses",
+    )?;
+    close_reader(&mut reader)?;
+    result(
+        "live-membership-random-lookup",
+        size,
+        feeds,
+        work_units,
+        &database,
+        measured,
+        database.main(),
+    )
+}
+
+pub(super) fn immutable_random_lookup(size: usize, feeds: usize) -> Result<ScenarioResult, String> {
+    let feeds = feeds.max(1);
+    let database = populated("immutable-membership-random-lookup", size, feeds)?;
+    let snapshot = immutable_snapshot(&database, size)?;
+    let points = random_points(size)?;
+    let reader = ImmutableReader::open(&snapshot).map_err(display)?;
+    let (target, repetitions, work_units) =
+        membership_reader_work(size, feeds, |name| reader.lookup_feed(name))?;
+    let (operation, measured) = measure::operation(|| {
+        count_random_points(&points, repetitions, |address| {
+            membership_contains(reader.lookup_membership_v4(address), target)
+        })
+    });
+    let hits = operation?;
+    require_count(
+        "immutable random membership lookup",
+        hits,
+        work_units,
+        "addresses",
+    )?;
+    drop(reader);
+    result(
+        "immutable-membership-random-lookup",
         size,
         feeds,
         work_units,

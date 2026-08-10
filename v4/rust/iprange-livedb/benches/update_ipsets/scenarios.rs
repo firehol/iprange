@@ -49,6 +49,7 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
     }
     match name {
         "direct-replace" => direct::replace(size),
+        "direct-replace-v6" => direct::replace_v6(size),
         "direct-commit" => direct::commit(size),
         "nested-overwrite" => direct::nested(size),
         "first-seen-refresh" => direct::first_seen(size),
@@ -99,10 +100,16 @@ pub(crate) fn run(name: &str, size: usize, auxiliary: usize) -> Result<ScenarioR
         "membership-import" => membership::import(size, auxiliary),
         "live-membership-lookup" => membership::live_lookup(size, auxiliary),
         "immutable-membership-lookup" => membership::immutable_lookup(size, auxiliary),
+        "live-membership-random-lookup" => membership::live_random_lookup(size, auxiliary),
+        "immutable-membership-random-lookup" => {
+            membership::immutable_random_lookup(size, auxiliary)
+        }
         "live-feed-scan" => membership::live_scan(size, auxiliary),
         "immutable-feed-scan" => membership::immutable_scan(size, auxiliary),
         "live-direct-lookup" => read::live_direct_lookup(size),
         "immutable-direct-lookup" => read::immutable_direct_lookup(size),
+        "live-direct-random-lookup" => read::live_direct_random_lookup(size),
+        "immutable-direct-random-lookup" => read::immutable_direct_random_lookup(size),
         "live-direct-scan" => read::live_direct_scan(size),
         "immutable-direct-scan" => read::immutable_direct_scan(size),
         "live-open" => read::live_open(size, auxiliary),
@@ -154,6 +161,51 @@ pub(crate) fn count_points(
         }
     }
     Ok(black_box(hits))
+}
+
+pub(crate) fn count_random_points(
+    points: &[Ipv4Key],
+    repetitions: usize,
+    mut present: impl FnMut(Ipv4Key) -> Result<bool, String>,
+) -> Result<u64, String> {
+    let mut hits = 0u64;
+    for _ in 0..repetitions {
+        for &address in points {
+            hits += u64::from(present(address)?);
+        }
+    }
+    Ok(black_box(hits))
+}
+
+pub(crate) fn random_points(size: usize) -> Result<Vec<Ipv4Key>, String> {
+    let mut points = Vec::new();
+    points
+        .try_reserve_exact(size)
+        .map_err(|_| "random point benchmark allocation failed".to_owned())?;
+    for index in 0..size {
+        let index = u32::try_from(index)
+            .map_err(|_| "random point benchmark exceeds the IPv4 workload space".to_owned())?;
+        let address = index
+            .checked_mul(4)
+            .ok_or_else(|| "random point benchmark exceeds the IPv4 workload space".to_owned())?;
+        points.push(Ipv4Key(address));
+    }
+
+    let mut state = 0x6a09_e667_f3bc_c909u64;
+    for upper in (1..points.len()).rev() {
+        let random = splitmix64(&mut state);
+        let index = ((u128::from(random) * (upper + 1) as u128) >> 64) as usize;
+        points.swap(upper, index);
+    }
+    Ok(points)
+}
+
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut value = *state;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 pub(crate) fn count_cursor<C>(

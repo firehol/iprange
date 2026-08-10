@@ -27,9 +27,10 @@ pub(crate) use delete::delete;
 pub(crate) use delete::delete_existing;
 pub(crate) use delete::remove_leaf_run;
 pub(crate) use gap::{
-    flush_edge, insert_if_edge_gap, insert_if_local_gap, insert_rejected_gap,
-    replace_local_predecessor_with, replace_local_run, root_edge, Edge, EdgeInsert, LocalGap,
-    LocalInsert, LocalNext, LocalPrevious, LocalReject, LocalRun, PrivateEdge, PrivatePosition,
+    flush_edge, insert_if_cached_interior_gap, insert_if_edge_gap, insert_if_local_gap,
+    insert_rejected_gap, replace_local_predecessor_with, replace_local_run, root_edge,
+    CachedInsert, Edge, EdgeInsert, LocalGap, LocalInsert, LocalNext, LocalPrevious, LocalReject,
+    LocalRun, PrivateEdge, PrivatePosition,
 };
 pub(crate) use insert::{insert, replace_leaf_with};
 use page::{branch_child, codec_cell, key_at, lower_bound, parse, CellBuf};
@@ -189,6 +190,20 @@ fn first_key<C: Codec, S: Store>(store: &S, page_number: u32, level: u16) -> Res
     let target_txn = store.target_txn();
     store.inspect_page(page_number, |page| {
         let header = parse::<C, _>(page, target_txn, Some(level))?;
+        key_at::<C, _>(page, &header, 0)
+    })
+}
+
+pub(crate) fn private_leaf_first<C: Codec, S: Store>(
+    store: &S,
+    page_number: u32,
+) -> Result<C::Key> {
+    let target_txn = store.target_txn();
+    store.inspect_page(page_number, |page| {
+        let header = parse::<C, _>(page, target_txn, Some(0))?;
+        if page_header::born_txn(page) != target_txn {
+            return Err(Error::Corrupt("leaf locator learned a committed page"));
+        }
         key_at::<C, _>(page, &header, 0)
     })
 }

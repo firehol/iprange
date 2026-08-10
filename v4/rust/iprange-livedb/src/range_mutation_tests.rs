@@ -3,8 +3,9 @@
 use std::cell::Cell;
 
 use super::*;
-use crate::contract::PAGE_SIZE;
+use crate::contract::{ValueKind, PAGE_SIZE};
 use crate::key::{Ipv4Key, Ipv6Key};
+use crate::Cardinality129;
 
 struct MemoryStore {
     target_txn: u64,
@@ -178,7 +179,7 @@ fn buffered_coverage_union_matches_a_scalar_reference() {
     let mut store = MemoryStore::new();
     let mut root = 0;
     let mut count = 0;
-    let mut input = UnionInput::default();
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
     let mut random = 0x243f_6a88_u32;
 
     for _ in 0..2_000 {
@@ -219,7 +220,7 @@ fn buffered_coverage_rechecks_a_gap_when_a_later_range_bridges_it() {
     let mut store = MemoryStore::new();
     let mut root = 0;
     let mut count = 0;
-    let mut input = UnionInput::default();
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
     for (from, to) in [(35, 45), (15, 32), (30, 38)] {
         push_private_untracked(
             &mut store,
@@ -244,7 +245,7 @@ fn buffered_ordered_coverage_persists_only_normalized_intervals() {
     let mut store = MemoryStore::new();
     let mut root = 0;
     let mut count = 0;
-    let mut input = UnionInput::default();
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
     let (_, work) = crate::work::measure(|| {
         for key in 0..INPUTS {
             push_private_untracked(
@@ -266,6 +267,86 @@ fn buffered_ordered_coverage_persists_only_normalized_intervals() {
     assert_eq!(work.ranges_emitted, 1);
     assert_eq!(work.ranges_coalesced, u64::from(INPUTS - 1));
     assert_eq!(work.tree_lookups, 0);
+}
+
+#[test]
+fn buffered_ascending_coverage_builds_packed_pages_without_tree_searches() {
+    const INPUTS: u32 = 2_000;
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..INPUTS {
+            let key = ordinal * 4;
+            push_private_untracked(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key),
+                Ipv4Key(key + 1),
+                42,
+                &mut input,
+            )
+            .unwrap();
+        }
+        finish_input_untracked(&mut store, &mut root, &mut count, &mut input).unwrap();
+    });
+
+    assert_eq!(count, u64::from(INPUTS));
+    assert_eq!(ranges_v4(&store, root).len(), INPUTS as usize);
+    assert_eq!(work.tree_lookups, 0, "packed construction descended a tree");
+    assert_eq!(work.pages_split, 0, "packed construction split a page");
+    assert_eq!(work.output_passes, 0, "inline construction added a pass");
+    assert_eq!(
+        input.ordered_addresses(),
+        Some(Cardinality129::from_u64(u64::from(INPUTS) * 2))
+    );
+}
+
+#[test]
+fn buffered_ordered_prefix_falls_back_for_late_overlap_in_both_families() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
+    for (from, to) in [(0, 1), (4, 5), (8, 9), (2, 10), (20, 21)] {
+        push_private_untracked(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv4Key(from),
+            Ipv4Key(to),
+            7,
+            &mut input,
+        )
+        .unwrap();
+    }
+    finish_input_untracked(&mut store, &mut root, &mut count, &mut input).unwrap();
+    assert!(input.is_general());
+    assert_eq!(input.ordered_addresses(), None);
+    assert_eq!(ranges_v4(&store, root), vec![(0, 10, 7), (20, 21, 7)]);
+
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
+    for (from, to) in [(0, 1), (4, 5), (8, 9), (2, 10), (20, 21)] {
+        push_private_untracked(
+            &mut store,
+            &mut root,
+            &mut count,
+            Ipv6Key::from_u128(from),
+            Ipv6Key::from_u128(to),
+            7,
+            &mut input,
+        )
+        .unwrap();
+    }
+    finish_input_untracked(&mut store, &mut root, &mut count, &mut input).unwrap();
+    assert!(input.is_general());
+    assert_eq!(input.ordered_addresses(), None);
+    assert_eq!(ranges_v6(&store, root), vec![(0, 10, 7), (20, 21, 7)]);
 }
 
 #[test]
@@ -349,6 +430,264 @@ fn private_coverage_union_random_order_bounds_lookups_by_inputs_and_splits() {
         work.tree_lookups <= 2_000 + work.pages_split,
         "random union repeated tree searches: {work:?}"
     );
+}
+
+#[test]
+fn buffered_random_disjoint_coverage_reuses_private_leaf_hints() {
+    const INPUTS: u32 = 20_000;
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = UnionInput::new(ValueKind::Direct, 256 * 1024);
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..INPUTS {
+            let key = (ordinal * 15_997 % INPUTS) * 4;
+            push_private_untracked(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key),
+                Ipv4Key(key + 1),
+                1,
+                &mut input,
+            )
+            .unwrap();
+        }
+        finish_input_untracked(&mut store, &mut root, &mut count, &mut input).unwrap();
+    });
+
+    assert_eq!(count, u64::from(INPUTS));
+    assert_eq!(ranges_v4(&store, root).len(), INPUTS as usize);
+    assert!(
+        work.leaf_locator_hits > u64::from(INPUTS / 4),
+        "coverage locator hit too few private leaves: {work:?}"
+    );
+    assert!(
+        work.tree_lookups <= work.leaf_locator_fallbacks * 2 + work.pages_split,
+        "coverage fallback repeated tree descent: {work:?}"
+    );
+}
+
+#[test]
+fn private_assignment_locator_avoids_ipv4_descent_without_adding_ipv6_work() {
+    const INPUTS: u32 = 100_000;
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = AssignmentInput::new(256 * 1024);
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..INPUTS {
+            let key = (ordinal * 1_597 % INPUTS) * 4;
+            assign_private_input(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key),
+                Ipv4Key(key + 1),
+                ordinal,
+                &mut input,
+            )
+            .unwrap();
+        }
+    });
+    assert_eq!(count, u64::from(INPUTS));
+    assert_eq!(ranges_v4(&store, root).len(), INPUTS as usize);
+    assert!(
+        work.leaf_locator_hits > u64::from(INPUTS / 3),
+        "IPv4 locator hit too few private leaves: {work:?}"
+    );
+    assert_eq!(
+        work.leaf_locator_hits + work.leaf_locator_fallbacks,
+        u64::from(INPUTS - 1)
+    );
+    assert!(
+        work.tree_lookups <= work.leaf_locator_fallbacks * 2,
+        "IPv4 fallback repeated tree descent: {work:?}"
+    );
+
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = AssignmentInput::new(256 * 1024);
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..INPUTS {
+            let key = u128::from((ordinal * 1_597 % INPUTS) * 4);
+            assign_private_input(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv6Key::from_u128(key),
+                Ipv6Key::from_u128(key + 1),
+                ordinal,
+                &mut input,
+            )
+            .unwrap();
+        }
+    });
+    assert_eq!(count, u64::from(INPUTS));
+    assert_eq!(ranges_v6(&store, root).len(), INPUTS as usize);
+    assert_eq!(work.leaf_locator_hits, 0);
+    assert_eq!(work.leaf_locator_misses, 0);
+    assert_eq!(work.leaf_locator_fallbacks, 0);
+    assert!(
+        work.tree_lookups > 0,
+        "IPv6 skipped canonical descent: {work:?}"
+    );
+}
+
+#[test]
+fn private_assignment_locator_is_optional_and_clears_before_general_rewrites() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = AssignmentInput::new(0);
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..1_000_u32 {
+            let key = (ordinal * 317 % 1_000) * 4;
+            assign_private_input(
+                &mut store,
+                &mut root,
+                &mut count,
+                Ipv4Key(key),
+                Ipv4Key(key + 1),
+                ordinal,
+                &mut input,
+            )
+            .unwrap();
+        }
+    });
+    assert_eq!(work.leaf_locator_hits, 0);
+    assert_eq!(work.leaf_locator_misses, 0);
+    assert_eq!(work.leaf_locator_fallbacks, 0);
+    assert_eq!(ranges_v4(&store, root).len(), 1_000);
+
+    let mut input = AssignmentInput::new(256 * 1024);
+    assert!(assign_private_input(
+        &mut store,
+        &mut root,
+        &mut count,
+        Ipv4Key(0),
+        Ipv4Key(4_000),
+        9_999,
+        &mut input,
+    )
+    .unwrap());
+    assert_eq!(ranges_v4(&store, root), vec![(0, 4_000, 9_999)]);
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn private_assignment_locator_matches_disabled_path_across_splits() {
+    const INPUTS: u32 = 10_000;
+    let mut located = MemoryStore::new();
+    let mut located_root = 0;
+    let mut located_count = 0;
+    let mut located_input = AssignmentInput::new(256 * 1024);
+    let mut canonical = MemoryStore::new();
+    let mut canonical_root = 0;
+    let mut canonical_count = 0;
+    let mut canonical_input = AssignmentInput::new(0);
+
+    for ordinal in 0..INPUTS {
+        let key = (ordinal * 1_597 % INPUTS) * 4;
+        let value = ordinal % 251 + 1;
+        assign_private_input(
+            &mut located,
+            &mut located_root,
+            &mut located_count,
+            Ipv4Key(key),
+            Ipv4Key(key + 1),
+            value,
+            &mut located_input,
+        )
+        .unwrap();
+        assign_private_input(
+            &mut canonical,
+            &mut canonical_root,
+            &mut canonical_count,
+            Ipv4Key(key),
+            Ipv4Key(key + 1),
+            value,
+            &mut canonical_input,
+        )
+        .unwrap();
+    }
+    for (from, to, value) in [(100, 400, 9001), (150, 350, 9002), (0, 40_000, 9003)] {
+        assign_private_input(
+            &mut located,
+            &mut located_root,
+            &mut located_count,
+            Ipv4Key(from),
+            Ipv4Key(to),
+            value,
+            &mut located_input,
+        )
+        .unwrap();
+        assign_private_input(
+            &mut canonical,
+            &mut canonical_root,
+            &mut canonical_count,
+            Ipv4Key(from),
+            Ipv4Key(to),
+            value,
+            &mut canonical_input,
+        )
+        .unwrap();
+    }
+
+    assert_eq!(located_count, canonical_count);
+    assert_eq!(
+        ranges_v4(&located, located_root),
+        ranges_v4(&canonical, canonical_root)
+    );
+}
+
+#[test]
+fn adaptive_private_locator_suspends_probes_during_overwrite_runs() {
+    let mut store = MemoryStore::new();
+    let mut root = 0;
+    let mut count = 0;
+    let mut input = UnionAssignmentInput::lazy(256 * 1024);
+    input.enable();
+    for (from, to, value) in [(0, 1, 1), (4, 5, 2)] {
+        let range = Range {
+            from: Ipv4Key(from),
+            to: Ipv4Key(to),
+            value,
+        };
+        match insert_private_input_gap(&mut store, &mut root, &mut count, range, &mut input)
+            .unwrap()
+        {
+            PrivateInputInsert::Inserted => {}
+            PrivateInputInsert::General(rejected) => {
+                assign::assign_with_hint(&mut store, &mut root, &mut count, range, rejected)
+                    .unwrap();
+            }
+        }
+    }
+
+    let (_, work) = crate::work::measure(|| {
+        for ordinal in 0..10 {
+            let from = ordinal.min(2);
+            let to = 5 - ordinal.min(2);
+            let range = Range {
+                from: Ipv4Key(from),
+                to: Ipv4Key(to),
+                value: ordinal + 3,
+            };
+            match insert_private_input_gap(&mut store, &mut root, &mut count, range, &mut input)
+                .unwrap()
+            {
+                PrivateInputInsert::Inserted => {}
+                PrivateInputInsert::General(rejected) => {
+                    assign::assign_with_hint(&mut store, &mut root, &mut count, range, rejected)
+                        .unwrap();
+                }
+            }
+        }
+    });
+    assert_eq!(work.leaf_locator_fallbacks, 1);
+    assert!(input.disabled());
 }
 
 #[test]

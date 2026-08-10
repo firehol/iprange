@@ -22,6 +22,9 @@ pub(crate) struct Snapshot {
     pub(crate) pages_split: u64,
     pub(crate) first_fence_updates: u64,
     pub(crate) edge_path_checks: u64,
+    pub(crate) leaf_locator_hits: u64,
+    pub(crate) leaf_locator_misses: u64,
+    pub(crate) leaf_locator_fallbacks: u64,
     pub(crate) pages_retired: u64,
     pub(crate) pages_reclaimed: u64,
     pub(crate) pages_sealed: u64,
@@ -94,6 +97,9 @@ event!(page_copied, pages_copied);
 event!(page_split, pages_split);
 event!(first_fence_update, first_fence_updates);
 event!(edge_path_check, edge_path_checks);
+event!(leaf_locator_hit, leaf_locator_hits);
+event!(leaf_locator_miss, leaf_locator_misses);
+event!(leaf_locator_fallback, leaf_locator_fallbacks);
 event!(page_retired, pages_retired);
 event!(page_reclaimed, pages_reclaimed);
 event!(page_sealed, pages_sealed);

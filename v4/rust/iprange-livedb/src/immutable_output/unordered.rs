@@ -193,7 +193,7 @@ where
     K: FeedKey,
     S: RangeSource<AddressRange<K>>,
 {
-    let normalized = normalize::<K, S>(workspace, source, cancellation)?;
+    let normalized = normalize::<K, S>(workspace, source, max_heap_bytes, cancellation)?;
     write_normalized::<K>(
         workspace,
         builder,
@@ -209,6 +209,7 @@ where
 fn normalize<K, S>(
     workspace: &mut Workspace,
     source: &mut S,
+    max_heap_bytes: u64,
     cancellation: &CancellationToken,
 ) -> Result<Normalized>
 where
@@ -218,7 +219,7 @@ where
     let mut input_record_count = 0u64;
     let mut root = 0u32;
     let mut record_count = 0u64;
-    let mut union = UnionInput::default();
+    let mut union = UnionInput::new(ValueKind::Membership, max_heap_bytes);
     source::drain(source, cancellation, &mut input_record_count, |range| {
         range_mutation::push_private_untracked(
             workspace,

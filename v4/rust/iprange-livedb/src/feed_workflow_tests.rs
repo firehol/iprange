@@ -86,9 +86,15 @@ fn slice_ingestion_and_feed_comparison_allocate_nothing_per_record() {
     let finished = finished.unwrap();
     assert_eq!(allocations, 0);
     assert_eq!(work.tree_lookups, 1);
-    assert_eq!(work.source_passes, 3);
+    assert_eq!(
+        work.source_passes, 1,
+        "ordered empty-map creation rescanned the completed range tree"
+    );
     assert_eq!(work.output_passes, 0);
-    assert_eq!(work.ranges_consumed, ranges.len() as u64);
+    assert_eq!(
+        work.ranges_consumed, 0,
+        "ordered empty-map creation decoded the completed ranges again"
+    );
     assert_eq!(work.ranges_emitted, 1);
     assert_eq!(work.membership_lookups, 1);
     assert_eq!(work.membership_interns, 0);

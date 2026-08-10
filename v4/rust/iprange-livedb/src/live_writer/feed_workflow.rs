@@ -7,7 +7,7 @@ use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::source::{RangeSource, SliceSource};
 use crate::workflow::{
-    AddressRange, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
+    AddressRange, Comparison, LogicalChange, ReplacementReportInput, WorkflowKind, WorkflowReport,
 };
 use crate::writer_core::{FeedMerge, MembershipHandle};
 
@@ -45,6 +45,9 @@ pub(crate) struct ExactFeedState {
 }
 
 #[derive(Debug)]
+// Feed ingestion owns one bounded inline page-builder state; boxing it would
+// add heap work to every workflow.
+#[allow(clippy::large_enum_variant)]
 enum FeedCoverageState {
     V4(crate::range_mutation::UnionInput<Ipv4Key>),
     V6(crate::range_mutation::UnionInput<Ipv6Key>),
@@ -83,6 +86,7 @@ impl LiveWriter {
         create: bool,
         cancellation: &CancellationToken,
     ) -> Result<ExactFeedState> {
+        let max_heap_bytes = self.core.max_heap_bytes();
         let existing = self.check_feed_precondition(name, create, cancellation)?;
         let empty_map_create = create && self.core.base_info().range_record_count == 0;
         self.start_feed_workflow_draft()?;
@@ -105,8 +109,12 @@ impl LiveWriter {
             member,
             input_records: 0,
             coverage: match self.core.base_info().address_family {
-                AddressFamily::Ipv4 => FeedCoverageState::V4(Default::default()),
-                AddressFamily::Ipv6 => FeedCoverageState::V6(Default::default()),
+                AddressFamily::Ipv4 => FeedCoverageState::V4(
+                    crate::range_mutation::UnionInput::new(ValueKind::Membership, max_heap_bytes),
+                ),
+                AddressFamily::Ipv6 => FeedCoverageState::V6(
+                    crate::range_mutation::UnionInput::new(ValueKind::Membership, max_heap_bytes),
+                ),
             },
         })
     }
@@ -283,17 +291,24 @@ impl ExactFeedState {
 
     fn finish_empty_map_create(mut self, writer: &mut LiveWriter) -> Result<FinishedState> {
         let cancellation = self.cancellation.clone();
-        writer.mutate(|store| match &mut self.coverage {
+        let ordered_addresses = writer.mutate(|store| match &mut self.coverage {
             FeedCoverageState::V4(state) => store.finish_empty_map_feed_ranges(self.member, state),
             FeedCoverageState::V6(state) => store.finish_empty_map_feed_ranges(self.member, state),
         })?;
         writer.mutate(|store| store.finalize_membership_workflow(&cancellation))?;
         let before = writer.core.base_info();
         let after = writer.core.current_info();
-        let comparison = writer
-            .core
-            .compare_maps(&cancellation)
-            .map_err(|error| writer.abort_after(error))?;
+        let comparison = match ordered_addresses {
+            Some(addresses) => Comparison {
+                after: addresses,
+                added: addresses,
+                ..Comparison::default()
+            },
+            None => writer
+                .core
+                .compare_maps(&cancellation)
+                .map_err(|error| writer.abort_after(error))?,
+        };
         let report = WorkflowReport::replacement(
             ReplacementReportInput {
                 workflow: self.workflow,

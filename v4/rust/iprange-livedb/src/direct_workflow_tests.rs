@@ -149,10 +149,10 @@ fn first_seen_ingestion_and_merge_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.source_passes, 1);
     assert_eq!(work.ranges_consumed, second.len() as u64);
-    assert_eq!(work.edge_path_checks, 1);
-    assert!(
-        work.tree_lookups < second.len() as u64 / 10,
-        "ordered timestamp ingestion descended per range: {work:?}"
+    assert_eq!(work.edge_path_checks, 0);
+    assert_eq!(
+        work.tree_lookups, 0,
+        "ordered timestamp ingestion descended a tree: {work:?}"
     );
 
     let ((finished, work), allocations) =
@@ -217,10 +217,10 @@ fn last_seen_ingestion_and_merge_allocate_nothing_per_record() {
     assert_eq!(allocations, 0);
     assert_eq!(work.source_passes, 1);
     assert_eq!(work.ranges_consumed, second.len() as u64);
-    assert_eq!(work.edge_path_checks, 1);
-    assert!(
-        work.tree_lookups < second.len() as u64 / 10,
-        "ordered timestamp ingestion descended per range: {work:?}"
+    assert_eq!(work.edge_path_checks, 0);
+    assert_eq!(
+        work.tree_lookups, 0,
+        "ordered timestamp ingestion descended a tree: {work:?}"
     );
 
     let ((finished, work), allocations) =

@@ -45,15 +45,16 @@ impl DraftStore<'_> {
         &mut self,
         member: MembershipHandle,
         state: &mut range_mutation::UnionInput<K>,
-    ) -> Result<()> {
+    ) -> Result<Option<Cardinality129>> {
         self.finish_private_constant_ranges(state)?;
+        let ordered_addresses = state.ordered_addresses();
         let (value, _) = member.stored();
         let count = i64::try_from(self.draft.meta.range_record_count)
             .map_err(|_| Error::arithmetic_overflow("membership range refcount"))?;
         if count != 0 {
             self.track_membership_refcount(value, count)?;
         }
-        Ok(())
+        Ok(ordered_addresses)
     }
 
     pub(crate) fn add_feed_coverage<K: IpKey>(

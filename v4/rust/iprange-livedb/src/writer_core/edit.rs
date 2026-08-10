@@ -12,6 +12,7 @@ use crate::feed::{FeedEntry, FeedName};
 use crate::key::{IpKey, Ipv4Key, Ipv6Key};
 use crate::reader_core::MembershipToken;
 use crate::workflow::FirstSeenRemovalSink;
+use crate::Cardinality129;
 
 pub(crate) struct WriterEdit<'a> {
     pub(super) store: DraftStore<'a>,
@@ -31,6 +32,28 @@ impl<'a> WriterEdit<'a> {
     #[inline]
     pub(crate) fn assign_v6(&mut self, from: Ipv6Key, to: Ipv6Key, value: u32) -> Result<bool> {
         self.store.assign_v6(from, to, value)
+    }
+
+    #[inline]
+    pub(crate) fn assign_input_v4(
+        &mut self,
+        from: Ipv4Key,
+        to: Ipv4Key,
+        value: u32,
+        input: &mut crate::range_mutation::AssignmentInput<Ipv4Key>,
+    ) -> Result<bool> {
+        self.store.assign_input_v4(from, to, value, input)
+    }
+
+    #[inline]
+    pub(crate) fn assign_input_v6(
+        &mut self,
+        from: Ipv6Key,
+        to: Ipv6Key,
+        value: u32,
+        input: &mut crate::range_mutation::AssignmentInput<Ipv6Key>,
+    ) -> Result<bool> {
+        self.store.assign_input_v6(from, to, value, input)
     }
 
     #[inline]
@@ -145,7 +168,7 @@ impl<'a> WriterEdit<'a> {
         &mut self,
         member: MembershipHandle,
         state: &mut crate::range_mutation::UnionInput<K>,
-    ) -> Result<()> {
+    ) -> Result<Option<Cardinality129>> {
         self.store.finish_empty_map_feed_ranges(member, state)
     }
 

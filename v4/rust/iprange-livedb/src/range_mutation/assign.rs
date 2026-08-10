@@ -6,7 +6,8 @@ use crate::key::IpKey;
 use crate::range_tree::{RangeCodec, Record as Range};
 
 use super::{
-    insert, insert_private_gap, read_at_or_after, read_predecessor, EncodedRange, RangeStore,
+    insert, insert_private_gap, insert_private_input_gap, read_at_or_after, read_predecessor,
+    AssignmentInput, EncodedRange, PrivateInputInsert, RangeStore,
 };
 
 pub(crate) fn assign<K: IpKey, S: RangeStore>(
@@ -33,8 +34,29 @@ pub(crate) fn assign_private<K: IpKey, S: RangeStore>(
     }
     let range = Range { from, to, value };
     match insert_private_gap(store, root, record_count, range)? {
-        fixed_tree::LocalInsert::Inserted => Ok(true),
+        fixed_tree::LocalInsert::Inserted(_) => Ok(true),
         fixed_tree::LocalInsert::General(rejected) => {
+            assign_with_hint(store, root, record_count, range, rejected)
+        }
+    }
+}
+
+pub(crate) fn assign_private_input<K: IpKey, S: RangeStore>(
+    store: &mut S,
+    root: &mut u32,
+    record_count: &mut u64,
+    from: K,
+    to: K,
+    value: u32,
+    input: &mut AssignmentInput<K>,
+) -> Result<bool> {
+    if input.disabled() {
+        return assign_private(store, root, record_count, from, to, value);
+    }
+    let range = Range { from, to, value };
+    match insert_private_input_gap(store, root, record_count, range, input)? {
+        PrivateInputInsert::Inserted => Ok(true),
+        PrivateInputInsert::General(rejected) => {
             assign_with_hint(store, root, record_count, range, rejected)
         }
     }

@@ -6,9 +6,14 @@ use crate::key::IpKey;
 use crate::range_tree::{RangeCodec, Record as Range};
 
 use super::{
-    account_private_insert, insert, insert_private_gap, insert_private_rejected, EncodedRange,
-    PrivateGap, RangeStore,
+    account_private_insert, insert, insert_private_gap, insert_private_input_gap,
+    insert_private_rejected, EncodedRange, PrivateGap, PrivateInputInsert, RangeStore,
+    UnionAssignmentInput,
 };
+
+mod input;
+
+pub(crate) use input::{finish_input_untracked, push_private_untracked, UnionInput};
 
 struct Untracked<'a, S>(&'a mut S);
 
@@ -106,6 +111,12 @@ impl<K: IpKey> UnionState<K> {
         self.order == UnionOrder::General
     }
 
+    fn start_general(&mut self) {
+        self.last_from = None;
+        self.order = UnionOrder::General;
+        self.edge = None;
+    }
+
     fn plan(&self, from: K) -> (UnionOrder, Option<fixed_tree::Edge>) {
         let Some(previous) = self.last_from else {
             return (UnionOrder::Unknown, None);
@@ -137,71 +148,6 @@ impl<K: IpKey> UnionState<K> {
         } else {
             edge
         };
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct UnionInput<K> {
-    pending: Option<Range<K>>,
-    pending_gap: Option<fixed_tree::Edge>,
-    union: UnionState<K>,
-}
-
-impl<K> Default for UnionInput<K> {
-    fn default() -> Self {
-        Self {
-            pending: None,
-            pending_gap: None,
-            union: UnionState::default(),
-        }
-    }
-}
-
-impl<K: IpKey> UnionInput<K> {
-    pub(crate) fn is_general(&self) -> bool {
-        self.union.is_general()
-    }
-
-    #[inline]
-    fn queue(&mut self, incoming: Range<K>) -> Option<(Range<K>, Option<fixed_tree::Edge>)> {
-        let Some(mut pending) = self.pending else {
-            self.pending = Some(incoming);
-            return None;
-        };
-        let touching = if incoming.from >= pending.from {
-            touches(pending.to, incoming.from)
-        } else {
-            touches(incoming.to, pending.from)
-        };
-        if pending.value == incoming.value && touching {
-            let extends_toward_previous = match self.pending_gap {
-                Some(fixed_tree::Edge::First) => incoming.to > pending.to,
-                Some(fixed_tree::Edge::Last) => incoming.from < pending.from,
-                None => false,
-            };
-            if extends_toward_previous {
-                self.pending_gap = None;
-            }
-            pending.from = pending.from.min(incoming.from);
-            pending.to = pending.to.max(incoming.to);
-            self.pending = Some(pending);
-            crate::work::range_coalesced(1);
-            return None;
-        }
-        let pending_gap = self.pending_gap;
-        self.pending = Some(incoming);
-        self.pending_gap = (!touching).then_some(if incoming.from > pending.from {
-            fixed_tree::Edge::Last
-        } else {
-            fixed_tree::Edge::First
-        });
-        Some((pending, pending_gap))
-    }
-
-    fn take_pending(&mut self) -> Option<(Range<K>, Option<fixed_tree::Edge>)> {
-        let pending = self.pending.take()?;
-        let gap = self.pending_gap.take();
-        Some((pending, gap))
     }
 }
 
@@ -252,16 +198,28 @@ fn union_private_untracked_gap<K: IpKey, S: RetiringStore>(
     )
 }
 
+#[inline(never)]
 fn union_private_untracked_general<K: IpKey, S: RetiringStore>(
     store: &mut S,
     root: &mut u32,
     record_count: &mut u64,
     incoming: Range<K>,
+    input: &mut UnionAssignmentInput<K>,
 ) -> Result<bool> {
     if incoming.from > incoming.to {
         return Err(Error::InvalidArgument("range start is after its end"));
     }
-    apply_general(&mut Untracked(store), root, record_count, incoming)
+    if input.disabled() {
+        return apply_general(&mut Untracked(store), root, record_count, incoming);
+    }
+    let mut store = Untracked(store);
+    match insert_private_input_gap(&mut store, root, record_count, incoming, input)? {
+        PrivateInputInsert::Inserted => Ok(true),
+        PrivateInputInsert::General(rejected) => {
+            merge_rejected(&mut store, root, record_count, incoming, rejected)
+                .map(|(changed, _)| changed)
+        }
+    }
 }
 
 pub(crate) fn finish_private_untracked<K: IpKey, S: RetiringStore>(
@@ -281,76 +239,6 @@ pub(super) fn finish_private<K: IpKey, S: RangeStore>(
         Some(edge) => fixed_tree::flush_edge::<RangeCodec<K>, _>(store, root, edge),
         None => Ok(()),
     }
-}
-
-#[inline]
-pub(crate) fn push_private_untracked<K: IpKey, S: RetiringStore>(
-    store: &mut S,
-    root: &mut u32,
-    record_count: &mut u64,
-    from: K,
-    to: K,
-    value: u32,
-    input: &mut UnionInput<K>,
-) -> Result<bool> {
-    if input.is_general() {
-        debug_assert!(input.pending.is_none());
-        return union_private_untracked_general(
-            store,
-            root,
-            record_count,
-            Range { from, to, value },
-        );
-    }
-    if from > to {
-        return Err(Error::InvalidArgument("range start is after its end"));
-    }
-    let Some((pending, known_gap)) = input.queue(Range { from, to, value }) else {
-        return Ok(false);
-    };
-    let was_general = input.is_general();
-    let mut changed = union_private_untracked_gap(
-        store,
-        root,
-        record_count,
-        pending,
-        known_gap,
-        &mut input.union,
-    )?;
-    if !was_general && input.is_general() {
-        if let Some((pending, known_gap)) = input.take_pending() {
-            changed |= union_private_untracked_gap(
-                store,
-                root,
-                record_count,
-                pending,
-                known_gap,
-                &mut input.union,
-            )?;
-        }
-    }
-    Ok(changed)
-}
-
-pub(crate) fn finish_input_untracked<K: IpKey, S: RetiringStore>(
-    store: &mut S,
-    root: &mut u32,
-    record_count: &mut u64,
-    input: &mut UnionInput<K>,
-) -> Result<bool> {
-    let changed = match input.take_pending() {
-        Some((pending, known_gap)) => union_private_untracked_gap(
-            store,
-            root,
-            record_count,
-            pending,
-            known_gap,
-            &mut input.union,
-        )?,
-        None => false,
-    };
-    finish_private_untracked(store, root, &mut input.union)?;
-    Ok(changed)
 }
 
 #[cfg(test)]
@@ -408,7 +296,7 @@ fn apply_private<K: IpKey, S: RangeStore>(
         }
     } else {
         match insert_private_gap(store, root, record_count, incoming)? {
-            fixed_tree::LocalInsert::Inserted => {
+            fixed_tree::LocalInsert::Inserted(_) => {
                 let edge = was_empty.then(|| fixed_tree::root_edge(*root));
                 state.finish(incoming.from, order, edge);
                 return Ok(true);
@@ -432,7 +320,7 @@ fn apply_general<K: IpKey, S: RangeStore>(
     incoming: Range<K>,
 ) -> Result<bool> {
     let rejected = match insert_private_gap(store, root, record_count, incoming)? {
-        fixed_tree::LocalInsert::Inserted => return Ok(true),
+        fixed_tree::LocalInsert::Inserted(_) => return Ok(true),
         fixed_tree::LocalInsert::General(rejected) => rejected,
     };
     merge_rejected(store, root, record_count, incoming, rejected).map(|(changed, _)| changed)
