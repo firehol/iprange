@@ -2,10 +2,12 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: local candidate implemented and audited. Exact pushed-revision
-Windows GNU, macOS ARM64, and FreeBSD native proof remains before closure.
+Sub-state: delivered. Exact implementation candidate
+`1fa819acab95d55eb31f577cf2c22c196d09ea55` is implemented, audited, pushed,
+and clean on Linux, Windows GNU, macOS ARM64, and FreeBSD 14. This SOW move and
+status are committed together as the closure record.
 
 ## Requirements
 
@@ -507,6 +509,22 @@ Open decisions:
   successful early second-stage match could make the first `rg` exit on
   `SIGPIPE`. The proof now uses one `awk` process. Ten consecutive repetitions
   pass and the traced SDK paths contain no persistent-content transfer call.
+- Committed and pushed the complete implementation as
+  `788c137052c1cbb012ec2e7e017e97c3a2c49b09`.
+- Native FreeBSD execution then found one test-portability defect: three new C
+  SDK tests unconditionally constructed live databases even though the
+  documented FreeBSD boundary deliberately rejects live coordination. The
+  production SDK returned `LiveCoordinationUnsupported` before mutation, as
+  required; the tests had the wrong platform assumption.
+- Reviewed every new C SDK test for the same assumption. The repair excludes
+  only those three live-dependent cases on FreeBSD, keeps the supported
+  immutable C workflow active there, and keeps the permanent C test that proves
+  live creation returns error code 44 without creating database or sidecar
+  artifacts. Linux, Windows, and macOS continue to run all three live tests.
+- Committed and pushed the repair as
+  `1fa819acab95d55eb31f577cf2c22c196d09ea55`, then restarted the complete local,
+  native, hosted, architecture, mmap, source, and final-audit gates on that exact
+  implementation revision.
 
 ## Validation
 
@@ -552,6 +570,13 @@ Tests or equivalent validation:
   same error-exit gate.
 - The release benchmark binary contains none of the 49 necessary-work field
   strings and no `iprange_livedb::work` symbol or call.
+- Both complete native feature matrices pass on exact implementation commit
+  `1fa819acab95d55eb31f577cf2c22c196d09ea55` on Windows GNU, macOS ARM64, and
+  FreeBSD 14. The same matrices pass locally on Linux. FreeBSD runs 297 active
+  engine tests with one explicit probe ignored and proves immutable Rust/C
+  operation plus clean rejection of every unsupported live entry.
+- All five hosted workflows for that exact pushed commit pass: push matrix,
+  big-endian, security, Scorecard, and publication.
 
 Real-use evidence:
 
@@ -581,6 +606,10 @@ Reviewer findings:
 
 - No subagent or external reviewer will be used, per user instruction. The final
   audit is local and first-principles.
+- The local audit found and repaired the two allocation-before-budget defects,
+  the mmap proof-script defect, and the FreeBSD test-platform assumption
+  recorded above. The audit was restarted after each repair; none remains in
+  the final pass.
 
 Same-failure scan:
 
@@ -595,6 +624,9 @@ Same-failure scan:
 - Exact-clone review inspected all 17 strict 15-line/100-token shapes. None owns
   persistent layout, traversal, mutation, allocation, retirement, sealing, or
   page construction.
+- Every new C SDK test was checked for a hidden live-coordination assumption.
+  The three live-only cases are now platform-qualified; the immutable workflow
+  and explicit unsupported-boundary proof remain active on FreeBSD.
 
 Local architecture and source-quality audit:
 
@@ -683,10 +715,195 @@ Follow-up mapping:
 - Signing remains tracked by SOW-0017.
 - Every former SOW-0018 item is implemented or rejected with evidence here.
 
+## Final Audit After Native Repair - 2026-08-10
+
+### TL;DR
+
+The repeated audit of exact implementation commit
+`1fa819acab95d55eb31f577cf2c22c196d09ea55` is clean. The required
+update-ipsets workflows use the existing mapped engine and mapped output owner,
+all individual million-range linear operations remain below one second on the
+pinned reference core, and the complete 13.6-million-work-unit publisher
+scenario completes in 1.506 seconds.
+
+The first native pass found a real FreeBSD test-platform defect. Production
+correctly rejected unsupported live coordination; three new C tests assumed it
+was available. That test defect was repaired, the full audit restarted, and
+both complete feature matrices now pass on Linux, Windows GNU, macOS ARM64, and
+FreeBSD 14.
+
+### Verdict
+
+Pass. No actionable correctness, performance, ownership, duplication,
+resource, portability, documentation, or maintainability finding remains in
+the approved SOW scope.
+
+This is a measured result for the implemented workloads and supported systems,
+not proof that future workloads cannot expose another defect. Rust acceptance
+and authorization to start Go remain user decisions.
+
+### Current performance
+
+Final release measurements pinned to one Intel i9-12900K performance core are:
+
+| Million-range operation | Elapsed |
+| --- | ---: |
+| direct replacement | 0.355 s |
+| first-seen refresh | 0.382 s |
+| last-seen refresh | 0.463 s |
+| nested arrival-order overwrite | 0.507 s |
+| unordered immutable feed construction | 0.388 s |
+| seven-window history projection | 0.075 s |
+| one million named membership checks, four million names emitted | 0.674 s |
+| selected cardinalities | 0.030 s |
+| selected-pair / all-pair overlap | 0.042 / 0.046 s |
+| direct / membership provider join | 0.055 / 0.060 s |
+| algebra count / comparison | 0.109 / 0.120 s |
+| preserved / flat v4 algebra publication | 0.182 / 0.183 s |
+| complete update-ipsets-shaped workflow | 1.506 s |
+
+One-million-range feed construction, including normal commit, measures:
+
+| Input order | First feed | Second feed | Final ranges |
+| --- | ---: | ---: | ---: |
+| ascending disjoint | 0.151 s | 0.143 s | 1,000,000 |
+| descending disjoint | 0.152 s | 0.158 s | 1,000,000 |
+| deterministic random disjoint | 0.414 s | 0.455 s | 1,000,000 |
+| deterministic random overlap chain | 0.299 s | 0.320 s | 1 |
+
+The 66-case scale matrix passes with exact result enumeration and explicit
+post-timing validation. The complete workflow makes 250 setup/output-
+proportional allocations totaling 2,446,063 bytes, keeps four descriptors
+before and after, and leaves no private residue. The FreeBSD repair changed
+test selection only; production source and these timed paths are unchanged.
+
+### Ranked findings
+
+None.
+
+### The two-level architecture
+
+- Public semantic adapters own typed workflows, names/scopes, cancellation,
+  reports, commit/abort sequencing, Rust handles, and frozen C translation.
+  They do not inspect mappings, roots, pages, raw membership IDs, bitmaps,
+  allocator state, retirement, records, or checksums.
+- `ReaderCore::read()` is the one healthy selected-generation read authority.
+  `WriterCore` over `DraftStore` is the one healthy mapped mutation authority.
+  `immutable_output::Builder` is the one canonical mapped result-construction
+  authority.
+- Timestamp refresh, feed refresh, history, queries, joins, and algebra compose
+  those private authorities through logical cursors and ordered sources. The C
+  layer translates ownership and values; it implements no second algorithm.
+- The architecture gate and four-target source graph cover every production
+  source and reject high-level physical access or an unwired implementation.
+
+### Physical-format authority
+
+No persistent page, root, record, index, journal, or alternate format was
+added. `first_seen` and `last_seen` use the existing canonical 16-byte value
+tag. Existing byte codecs, mapped access, fixed-tree traversal/mutation, COW
+allocation, transaction-grouped retirement, checksum sealing, and generation
+publication each retain one owner.
+
+No complete database page exists outside a file-backed mapping. Static review
+of 321 production files and the syscall-traced runtime path find no persistent-
+content read/write/seek operation. Validation and recovery reuse canonical
+codecs and mapped output while remaining isolated from healthy open/read/write.
+
+### Where the production lines are
+
+The reproduced production-only inventory contains 313 files and 88,712
+newline-counted lines. Lizard parses 80,518 code lines in 4,795 functions, with
+average function length 13.9 code lines and average cyclomatic complexity 3.46.
+Forty-eight files exceed the directional 500-line target; the largest is 859
+lines and none reaches 1,000. Fifty-six functions exceed 60 code lines, five
+exceed 100, and the largest is the existing cohesive 191-line recovery state
+machine.
+
+Strict exact-clone detection at 15 lines/100 tokens reports 17 shapes totaling
+328 lines, or 0.37%. Manual inspection classifies them as frozen C report forms,
+maintenance/typestate wrappers, source adapters, output error plumbing,
+lifecycle/publication setup, and distinct direct/membership damaged-input
+policies. None duplicates persistent layout, traversal, mutation, allocation,
+retirement, sealing, or page construction.
+
+Mutually exclusive responsibility accounting is 24,432 lines of mapped engine
+and utilities, 18,895 lifecycle/coordination/publication, 20,643 explicit
+validation/recovery, 11,749 public semantic workflows/adapters, and 12,993
+Rust-owned C ABI. The implementation remains far above the directional
+5,000-line goal. This audit does not claim that a metric proves every line is
+necessary; it establishes that no concrete duplicate physical owner, dead
+implementation, or safe removable mechanism was found and keeps size visible
+as a maintenance cost.
+
+### First-seen and last-seen
+
+- `first_seen` preserves the timestamp of continuously present old coverage,
+  assigns the refresh time only to new coverage, and removes absent coverage.
+- `last_seen` assigns current coverage the greater of its old value and refresh
+  time, retains absent coverage only while it is newer than the cutoff, and
+  serves every configured history window from one file and one scan.
+- Both are policies over the one ordered old/input merge. Exact transition
+  reports and optional first-seen removal batches are produced during that
+  required merge, without a second comparison pass.
+- Generic direct tags remain opaque. The obsolete experimental `retention` tag
+  and API are not retained as compatibility.
+
+### Recovery
+
+Recovery is unchanged: explicit, isolated, budgeted, and best-effort-capable.
+Healthy open/read/write performs no implicit validation. Damaged mapped input is
+handled by the version-matched worker and canonical codecs; recovered output is
+built through the mapped output authority. This SOW adds no recovery format,
+healthy-path fallback, sorting file, page buffer, or content-I/O path.
+
+### Implementation result
+
+- Added exact first-seen and last-seen full-snapshot refreshes and reports.
+- Added direct mapped v4-to-v4 sources and one-inode unordered immutable feed
+  construction without text, sorting files, or intermediate databases.
+- Added one-scan multiwindow history projection, named membership lookup and
+  aggregation, ordered provider joins, and global same-name feed algebra with
+  analytical and preserved/flat v4 results.
+- Added the same surface through the Rust-provided C ABI: 158 exact functions,
+  14 opaque handles, and 18 callbacks, all backed by the Rust implementation.
+- Test-only necessary-work counters prove bounded passes, tree/page work,
+  decodes, combinations, joins, mapping changes, durability, and publication.
+  Release inspection proves all counter state, symbols, calls, and 49 field
+  strings compile out.
+- Timed-stack profiles show required cursor/tree/normalization/mapped-output/
+  SHA-512 work. They contain no implicit validation, pre-commit checksum,
+  per-record allocation, page reconstruction, repeated source/comparison pass,
+  content I/O, or temporary materialization.
+
+### Acceptance gates
+
+- Both complete local workspace matrices, all targets, with all features and
+  with no default features: pass. Linux has 379 active engine tests plus every
+  integration, property, conformance, crash, recovery, publication, native C,
+  and benchmark target; four explicit probe entry points remain ignored.
+- Formatting, warnings-denied Clippy and rustdoc, diff hygiene, architecture,
+  static mmap, syscall-traced mmap runtime, and the 428-source/four-target
+  compiler graph: pass after the final repair.
+- Rust 1.74.1 complete workspace matrix, ten s390x Miri codec vectors,
+  AddressSanitizer leak detection, and Valgrind/C caller gates: pass.
+- The 66-case scale matrix, five-run medians, exact timed-stack profiles,
+  allocations, descriptors, residue, result enumeration, and release-counter
+  absence: pass.
+- Both complete native feature matrices pass on exact implementation commit
+  `1fa819acab95d55eb31f577cf2c22c196d09ea55` on Windows GNU, macOS ARM64, and
+  FreeBSD 14. Every clone reports that revision; FreeBSD proves its documented
+  immutable-supported/live-unsupported boundary.
+- All five hosted workflows for that exact pushed commit pass: push matrix,
+  big-endian, security, Scorecard, and publication.
+- Same-failure searches, source/complexity/clone review, sensitive-data gate,
+  artifact maintenance, follow-up mapping, and the repeated physical-authority
+  audit: pass with no open finding.
+
 ## Outcome
 
-Local candidate implemented and clean. Commit/push and exact native Windows GNU,
-macOS ARM64, and FreeBSD execution remain before final audit and completion.
+Implementation, proof, and the repeated audit are complete. Rust acceptance and
+any Go work remain separate user decisions.
 
 ## Lessons Extracted
 
